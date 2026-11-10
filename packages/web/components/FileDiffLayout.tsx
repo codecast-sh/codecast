@@ -300,7 +300,7 @@ function FileDiffContent({
                 <button
                   onClick={onToggleSidebar}
                   className="p-1 -ml-1 rounded hover:bg-sol-bg-alt/50 text-sol-text-dim hover:text-sol-text-muted transition-colors shrink-0"
-                  title={sidebarOpen ? "Hide file tree (b)" : "Show file tree (b)"}
+                  title={withShortcut(sidebarOpen ? "Hide file tree" : "Show file tree", "diff.toggleFileTree")}
                 >
                   {sidebarOpen ? (
                     <PanelLeftClose className="w-4 h-4" />
@@ -311,7 +311,7 @@ function FileDiffContent({
               )}
               <span
                 className={cn(
-                  "w-5 h-5 rounded text-[11px] font-bold flex items-center justify-center shrink-0",
+                  "w-5 h-5 rounded text-meta font-bold flex items-center justify-center shrink-0",
                   status.bgColor,
                   status.color
                 )}
@@ -356,7 +356,7 @@ function FileDiffContent({
             <button
               onClick={onToggleSidebar}
               className="p-0.5 -ml-0.5 rounded hover:bg-sol-bg-alt/50 text-sol-text-dim hover:text-sol-text-muted transition-colors shrink-0"
-              title={sidebarOpen ? "Hide file tree (b)" : "Show file tree (b)"}
+              title={withShortcut(sidebarOpen ? "Hide file tree" : "Show file tree", "diff.toggleFileTree")}
             >
               {sidebarOpen ? (
                 <PanelLeftClose className="w-3.5 h-3.5" />
@@ -365,19 +365,19 @@ function FileDiffContent({
               )}
             </button>
           )}
-          <span className={cn("text-[10px] font-bold shrink-0", status.color)}>
+          <span className={cn("text-meta font-bold shrink-0", status.color)}>
             {status.label}
           </span>
           <FileHeaderName file={file} fileHref={fileHref} />
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <span className="text-[11px] text-sol-text-dim">
+          <span className="text-meta text-sol-text-dim">
             <span className="text-sol-green">+{file.additions}</span>
             <span className="mx-0.5 text-sol-text-dim/30">/</span>
             <span className="text-sol-red">-{file.deletions}</span>
           </span>
           {showNav && (
-            <span className="text-[11px] text-sol-text-dim/50">
+            <span className="text-meta text-sol-text-dim/50">
               {fileIndex + 1}/{totalFiles}
             </span>
           )}
@@ -440,7 +440,7 @@ function ViewedToggle({
     <ShortcutTooltip label={viewed ? "Clear the viewed mark" : "Mark viewed: it folds until it changes again"} action="diff.toggleSeen">
     <label
       className={cn(
-        "inline-flex items-center gap-1.5 cursor-pointer select-none text-[11px] transition-colors",
+        "inline-flex items-center gap-1.5 cursor-pointer select-none text-meta transition-colors",
         viewed ? "text-sol-green" : "text-sol-text-dim hover:text-sol-text-muted",
         className,
       )}
@@ -543,12 +543,12 @@ function UnifiedDiffView({
                 >
                   {shut ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                 </button>
-                <span className={cn("text-[10px] font-bold shrink-0", status.color)}>
+                <span className={cn("text-meta font-bold shrink-0", status.color)}>
                   {status.label}
                 </span>
                 <FileHeaderName file={file} fileHref={fileHref} className={cn(shut && viewed && "opacity-60")} />
               </div>
-              <span className="flex items-center gap-2 text-[11px] text-sol-text-dim shrink-0">
+              <span className="flex items-center gap-2 text-meta text-sol-text-dim shrink-0">
                 <span>
                   <span className="text-sol-green">+{file.additions}</span>
                   <span className="mx-0.5 text-sol-text-dim/30">/</span>
@@ -602,7 +602,7 @@ function CopyLinkButton({ url, label, children }: { url: string; label: string; 
       className={cn(
         "inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded transition-colors",
         children
-          ? "border border-sol-cyan/40 bg-sol-cyan/10 px-1.5 py-0.5 text-[11px] text-sol-cyan hover:bg-sol-cyan/20"
+          ? "border border-sol-cyan/40 bg-sol-cyan/10 px-1.5 py-0.5 text-meta text-sol-cyan hover:bg-sol-cyan/20"
           : "p-1 text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60",
       )}
       title={label}
@@ -807,7 +807,7 @@ function FlowDiffView({
             type="button"
             onClick={onToggleSidebar}
             className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-sol-border/60 px-2 py-1 hover:text-sol-text hover:border-sol-border transition-colors"
-            title={sidebarOpen ? "Hide the file tree (b)" : "Show the file tree (b)"}
+            title={withShortcut(sidebarOpen ? "Hide the file tree" : "Show the file tree", "diff.toggleFileTree")}
           >
             {sidebarOpen ? <PanelLeftClose className="w-3.5 h-3.5" /> : <PanelLeft className="w-3.5 h-3.5" />}
             Files
@@ -815,7 +815,7 @@ function FlowDiffView({
           <span className="min-w-0 truncate">
             {files.length} {files.length === 1 ? "file" : "files"} changed
             {commonPrefix && (
-              <span className="ml-2 font-mono text-[11px] text-sol-text-dim" title={commonPrefix}>
+              <span className="ml-2 font-mono text-meta text-sol-text-dim" title={commonPrefix}>
                 in {shortenPrefix(commonPrefix)}/
               </span>
             )}
@@ -870,7 +870,7 @@ function FlowDiffView({
                   >
                     {shut ? <ChevronRight className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                   </button>
-                  <span className={cn("text-[10px] font-bold shrink-0", status.color)} title={file.status}>
+                  <span className={cn("text-meta font-bold shrink-0", status.color)} title={file.status}>
                     {status.label}
                   </span>
                   <span className="flex items-center gap-1 min-w-0 flex-1 basis-[16rem]">
@@ -883,7 +883,7 @@ function FlowDiffView({
                       <CopyLinkButton url={flow.shareUrl(flow.fileAnchorHref(path))} label="Copy a link to this file" />
                     )}
                   </span>
-                  <span className="flex items-center gap-3 text-[11px] text-sol-text-dim shrink-0">
+                  <span className="flex items-center gap-3 text-meta text-sol-text-dim shrink-0">
                     <span>
                       <span className="text-sol-green">+{file.additions}</span>
                       <span className="mx-0.5 text-sol-text-dim/40">/</span>
@@ -1086,7 +1086,7 @@ export function FileDiffLayout({
         setSelectedFile(nextFile.filename);
         setCurrentFileIndex(currentFileIndex + 1);
       }
-    } else if (e.key === "v") {
+    } else if (plain && e.key === "v") {
       e.preventDefault();
       toggleViewMode();
     } else if (help) {

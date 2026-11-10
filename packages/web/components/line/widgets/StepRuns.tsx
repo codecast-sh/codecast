@@ -5,6 +5,7 @@
 // went next and how long it took. Opening a row shows the step's own words,
 // the fields it reported and the links to the run, the problem and the session.
 import { memo, useMemo, useState } from "react";
+import Link from "next/link";
 import { ArrowRight, ChevronRight, CornerDownRight } from "lucide-react";
 import type { CaseDecisions, LineModel, LineStep, StepDecision, StepKind } from "../../../lib/line/lineModel";
 import { closeBackWords, decisionKey, tallyDecisions, tallyKey } from "../../../lib/line/lineModel";
@@ -205,7 +206,7 @@ function StepRunDetail({ d, shown }: { d: StepDecision; shown: string | null }) 
       <div className="sr-links">
         <NavLink className="lw-act" href={nav.runHref(d.runId, d.caseId)} onOpen={() => nav.openRun(d.runId, d.caseId)}>Open the run</NavLink>
         {d.caseId && nav.openCase && <NavLink className="lw-act" href={nav.caseHref?.(d.caseId) ?? null} onOpen={() => nav.openCase!(d.caseId!)}>The problem</NavLink>}
-        {d.received.href && <a className="lw-act" href={d.received.href}>Its session</a>}
+        {d.received.href && <Link className="lw-act" href={d.received.href}>Its session</Link>}
       </div>
     </div>
   );

@@ -20,13 +20,13 @@
 .ops-seg button[data-status="regressed"] .iss-seg-n { color: var(--sol-orange); }
 .ops-seg button[data-on="true"] .iss-seg-n { color: var(--sol-text-muted); }
 .iss-facet {
-  display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 4px 0 8px; font-size: 11.5px;
+  display: inline-flex; align-items: center; gap: 4px; height: 26px; padding: 0 4px 0 8px; font-size: var(--fs-meta);
   border: 1px solid var(--osx-line); border-radius: 6px; color: var(--sol-text);
 }
 .iss-facet[data-on="true"] { border-color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 8%, transparent); }
-.iss-facet select { background: transparent; color: var(--sol-text); font-size: 11.5px; max-width: 160px; outline: none; cursor: pointer; }
+.iss-facet select { background: transparent; color: var(--sol-text); font-size: var(--fs-meta); max-width: 160px; outline: none; cursor: pointer; }
 .iss-facet select option { background: var(--sol-bg); }
-.iss-clear { font-size: 11.5px; color: var(--sol-text-muted); }
+.iss-clear { font-size: var(--fs-meta); color: var(--sol-text-muted); }
 .iss-clear:hover { color: var(--sol-text); }
 
 .iss-bulk {
@@ -57,7 +57,7 @@
 .iss-row > * { min-width: 0; }
 .iss-head {
   position: sticky; top: 0; z-index: 2; padding-top: 8px; padding-bottom: 8px; background: var(--sol-bg);
-  font-size: 10.5px; font-weight: 500; letter-spacing: 0.03em; text-transform: uppercase; color: var(--sol-text-dim);
+  font-size: var(--fs-mark); font-weight: 500; letter-spacing: 0.03em; text-transform: uppercase; color: var(--sol-text-dim);
   border-bottom-color: var(--sol-border);
 }
 .iss-bulk + .iss-table .iss-head { top: 44px; }
@@ -76,14 +76,14 @@
 .iss-c-events, .iss-c-users, .iss-c-seen { text-align: right; }
 .iss-c-title { display: flex; flex-direction: column; gap: 2px; }
 .iss-title { color: var(--sol-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.iss-sub { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; }
+.iss-sub { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; }
 .iss-sub > * { flex-shrink: 0; }
 .iss-sub-cut { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .iss-sub-src { display: inline-flex; align-items: center; gap: 4px; }
 .iss-narrow-meta { display: none; }
-.iss-fix { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; white-space: nowrap; }
+.iss-fix { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-meta); white-space: nowrap; }
 .iss-fix-label { overflow: hidden; text-overflow: ellipsis; }
-.iss-keys { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 12px; font-size: 11px; }
+.iss-keys { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 12px; font-size: var(--fs-meta); }
 .iss-none { padding: 40px 0; text-align: center; }
 .iss-older { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 12px 0 4px; font-size: 12px; }
 
@@ -125,7 +125,7 @@
 .iss-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 .iss-actions .ops-btn kbd, .iss-actions .ops-btn [data-keycap] { margin-left: 2px; }
 .iss-h1[data-clamp="true"] { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.iss-more { font-size: 11.5px; color: var(--sol-link, var(--sol-blue)); }
+.iss-more { font-size: var(--fs-meta); color: var(--sol-link, var(--sol-blue)); }
 .iss-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--sol-text-muted); }
 .iss-meta b { color: var(--sol-text); font-weight: 600; }
 
@@ -140,7 +140,7 @@
 .iss-chart { margin-top: 14px; padding: 10px 12px 6px; }
 .iss-chart-head { display: flex; align-items: center; gap: 10px; font-size: 12px; margin-bottom: 6px; }
 .iss-chart-plot { position: relative; height: 92px; margin-left: 34px; margin-top: 16px; }
-.iss-chart-y { position: absolute; left: -34px; width: 28px; text-align: right; font-size: 10px; color: var(--sol-text-dim); transform: translateY(-50%); }
+.iss-chart-y { position: absolute; left: -34px; width: 28px; text-align: right; font-size: var(--fs-meta); color: var(--sol-text-dim); transform: translateY(-50%); }
 .iss-chart-grid { position: absolute; left: 0; right: 0; border-top: 1px dashed color-mix(in srgb, var(--sol-border) 80%, transparent); }
 .iss-chart-bars { position: absolute; inset: 0; display: flex; align-items: flex-end; gap: 1px; }
 .iss-chart-bar { flex: 1; min-width: 0; height: 100%; display: flex; align-items: flex-end; cursor: crosshair; }
@@ -150,23 +150,23 @@
 .iss-chart-since { position: absolute; top: 0; bottom: 0; right: 0; background: color-mix(in srgb, var(--sol-green) 7%, transparent); pointer-events: none; }
 .iss-chart-mark { position: absolute; top: -4px; bottom: 0; border-left: 1px dashed var(--ink); pointer-events: none; }
 .iss-chart-mark span {
-  position: absolute; top: -12px; left: 2px; font-size: 9.5px; padding: 0 4px; border-radius: 3px; white-space: nowrap;
+  position: absolute; top: -12px; left: 2px; font-size: var(--fs-meta); padding: 0 4px; border-radius: 3px; white-space: nowrap;
   color: var(--ink); background: color-mix(in srgb, var(--ink) 14%, var(--sol-bg));
 }
 .iss-chart-mark[data-edge="end"] span { left: auto; right: 2px; }
-.iss-chart-x { position: relative; height: 16px; margin-left: 34px; font-size: 10px; color: var(--sol-text-dim); }
+.iss-chart-x { position: relative; height: 20px; margin-left: 34px; font-size: var(--fs-meta); color: var(--sol-text-dim); }
 .iss-chart-x span { position: absolute; top: 3px; transform: translateX(-50%); white-space: nowrap; }
 /* Deploys that explain nothing in particular: a tick on the axis, a count where several share one bar. */
-.iss-chart-x[data-deploys="true"] { height: 24px; }
+.iss-chart-x[data-deploys="true"] { height: 28px; }
 .iss-chart-x[data-deploys="true"] span { top: 10px; }
 .iss-chart-deploy { position: absolute; top: 0; width: 1px; height: 6px; margin-left: -0.5px; background: color-mix(in srgb, var(--sol-green) 75%, transparent); }
-.iss-chart-deploy b { position: absolute; top: -1px; left: 3px; transform: none; font-size: 8.5px; font-weight: 500; line-height: 1; color: var(--sol-green); font-variant-numeric: tabular-nums; }
-.iss-chart-read { margin-left: auto; font-size: 11.5px; color: var(--sol-text-muted); font-variant-numeric: tabular-nums; }
+.iss-chart-deploy b { position: absolute; top: -1px; left: 3px; transform: none; font-size: var(--fs-mark); font-weight: 500; line-height: 1; color: var(--sol-green); font-variant-numeric: tabular-nums; }
+.iss-chart-read { margin-left: auto; font-size: var(--fs-meta); color: var(--sol-text-muted); font-variant-numeric: tabular-nums; }
 
 /* The event the page is on: its header and the way between events. */
 .iss-event { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; font-size: 12px; }
 .iss-event-nav { display: inline-flex; border: 1px solid var(--osx-line); border-radius: 6px; overflow: hidden; }
-.iss-event-nav button { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; font-size: 11.5px; color: var(--sol-text-muted); }
+.iss-event-nav button { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px; font-size: var(--fs-meta); color: var(--sol-text-muted); }
 .iss-event-nav button + button { border-left: 1px solid var(--osx-line); }
 .iss-event-nav button:hover:not(:disabled) { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
 .iss-event-nav button:disabled { opacity: 0.4; cursor: default; }
@@ -180,14 +180,14 @@
 .iss-index-row:hover { background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
 .iss-index-row[data-on="true"] { background: color-mix(in srgb, var(--sol-red) 8%, transparent); box-shadow: inset 2px 0 0 var(--sol-red); }
 .iss-index-row + .iss-index-row, .iss-index-group + .iss-index-group { border-top: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent); }
-.iss-index-row[data-member="true"] { padding-left: 24px; font-size: 11.5px; }
+.iss-index-row[data-member="true"] { padding-left: 24px; font-size: var(--fs-meta); }
 
 .iss-skel { height: 12px; border-radius: 4px; background: color-mix(in srgb, var(--sol-text-muted) 14%, transparent); animation: iss-pulse 1.4s ease-in-out infinite; }
 @keyframes iss-pulse { 50% { opacity: 0.45; } }
 @media (prefers-reduced-motion: reduce) { .iss-skel { animation: none; } }
 
 /* The stack as frames. */
-.iss-frames { font-size: 11.5px; }
+.iss-frames { font-size: var(--fs-meta); }
 .iss-frame + .iss-frame, .iss-frame + .iss-lib, .iss-lib + .iss-frame, .iss-msg + .iss-frame, .iss-msg + .iss-lib { border-top: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent); }
 .iss-msg { padding: 8px 12px; font-weight: 600; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--sol-text); }
 .iss-frame-line { display: grid; grid-template-columns: 14px minmax(0, auto) minmax(0, 1fr) auto; gap: 8px; align-items: baseline; width: 100%; padding: 5px 12px; text-align: left; }
@@ -198,15 +198,15 @@
 .iss-frame-file { color: var(--sol-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
 .iss-frame-file > bdi { direction: ltr; }
 .iss-frame-detail { padding: 4px 12px 10px 34px; display: flex; flex-direction: column; gap: 6px; }
-.iss-lib-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 12px; font-size: 11px; color: var(--sol-text-dim); text-align: left; }
+.iss-lib-toggle { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 12px; font-size: var(--fs-meta); color: var(--sol-text-dim); text-align: left; }
 .iss-lib-toggle:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
 .iss-lib .iss-frame { padding-left: 10px; }
-.iss-raw { margin: 0; padding: 10px 12px; font-size: 11.5px; line-height: 1.6; white-space: pre; overflow-x: auto; }
+.iss-raw { margin: 0; padding: 10px 12px; font-size: var(--fs-meta); line-height: 1.6; white-space: pre; overflow-x: auto; }
 
 /* The tag breakdown: each key's top values as bars. */
 .iss-tag + .iss-tag { margin-top: 10px; }
-.iss-tag-key { display: flex; justify-content: space-between; font-size: 11px; color: var(--sol-text-dim); margin-bottom: 3px; }
-.iss-tag-val { position: relative; display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 2px 6px; font-size: 11.5px; border-radius: 4px; text-align: left; overflow: hidden; }
+.iss-tag-key { display: flex; justify-content: space-between; font-size: var(--fs-meta); color: var(--sol-text-dim); margin-bottom: 3px; }
+.iss-tag-val { position: relative; display: flex; justify-content: space-between; gap: 8px; width: 100%; padding: 2px 6px; font-size: var(--fs-meta); border-radius: 4px; text-align: left; overflow: hidden; }
 .iss-tag-val > i { position: absolute; inset: 0 auto 0 0; background: color-mix(in srgb, var(--sol-blue) 14%, transparent); }
 .iss-tag-val > span { position: relative; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iss-tag-val:hover > i { background: color-mix(in srgb, var(--sol-blue) 24%, transparent); }
@@ -221,15 +221,15 @@
 
 /* The issue's life under the hourly chart: first seen to now, its flips and the source's deploys. */
 .iss-life {
-  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: 10px;
+  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: 8px; font-size: var(--fs-meta);
   margin: 12px 0 2px; padding-top: 8px; border-top: 1px dashed color-mix(in srgb, var(--sol-border) 70%, transparent);
 }
-.iss-life-h { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-text-dim); }
+.iss-life-h { font-size: var(--fs-mark); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-text-dim); }
 .iss-life-axis { position: relative; height: 18px; border-top: 1px solid color-mix(in srgb, var(--sol-border) 80%, transparent); margin-top: 9px; }
 .iss-life-deploy { position: absolute; top: -4px; width: 1px; height: 7px; background: color-mix(in srgb, var(--sol-green) 70%, transparent); }
 .iss-life-mark { position: absolute; top: -4px; width: 7px; height: 7px; margin-left: -3px; border-radius: 50%; background: var(--ink); }
 .iss-life-mark span {
-  position: absolute; top: 6px; left: 0; font-size: 9.5px; padding: 0 4px; border-radius: 3px; white-space: nowrap;
+  position: absolute; top: 6px; left: 0; font-size: var(--fs-meta); padding: 0 4px; border-radius: 3px; white-space: nowrap;
   color: var(--ink); background: color-mix(in srgb, var(--ink) 14%, var(--sol-bg));
 }
 .iss-life-k { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--sol-text-muted); }
@@ -243,32 +243,32 @@
 
 /* The card that leads a check, job or metric issue. */
 .iss-kindcard[data-failing="true"] { border-color: color-mix(in srgb, var(--sol-red) 45%, var(--sol-border)); }
-.iss-kind-state { font-size: 11px; font-weight: 600; }
+.iss-kind-state { font-size: var(--fs-meta); font-weight: 600; }
 .iss-kind-state[data-state="failing"] { color: var(--sol-red); }
 .iss-kind-state[data-state="passing"] { color: var(--sol-green); }
 .iss-kind-state[data-state="quiet"] { color: var(--sol-text-muted); }
 .iss-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 10px; padding: 10px 12px; }
 .iss-figure { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .iss-figure-v { font-size: 15px; font-weight: 600; color: var(--sol-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.iss-figure-k { font-size: 10.5px; color: var(--sol-text-dim); }
+.iss-figure-k { font-size: var(--fs-meta); color: var(--sol-text-dim); }
 
 /* The Fix card's problem task: its title, id and status, and the presses that re-point or unlink it. */
 .iss-chain dd.iss-task { flex-direction: column; align-items: flex-start; gap: 3px; }
 .iss-task-title { color: var(--sol-text); font-size: 12px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .iss-task-title:hover { text-decoration: underline; }
-.iss-task-meta { display: inline-flex; align-items: center; gap: 2px 6px; font-size: 11px; flex-wrap: wrap; }
+.iss-task-meta { display: inline-flex; align-items: center; gap: 2px 6px; font-size: var(--fs-meta); flex-wrap: wrap; }
 /* Each fact ("ct-61747", "dissolved", "19h ago") keeps its words together; the row wraps between facts, never inside one. */
 .iss-task-meta > * { white-space: nowrap; }
 .iss-task-status { color: var(--sol-text-muted); }
 .iss-task-status[data-task-status="dropped"] { color: var(--sol-orange); }
 .iss-task-status[data-task-status="in_progress"] { color: var(--sol-blue); }
 .iss-task-status[data-task-status="in_review"] { color: var(--sol-violet); }
-.iss-task-act { display: inline-flex; align-items: center; color: var(--sol-text-dim); font-size: 11px; }
+.iss-task-act { display: inline-flex; align-items: center; color: var(--sol-text-dim); font-size: var(--fs-meta); }
 .iss-task-act:hover { color: var(--sol-text); }
-.iss-task-note { font-size: 11px; color: var(--sol-text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.iss-task-note { font-size: var(--fs-meta); color: var(--sol-text-muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .iss-task-form { display: flex; gap: 6px; width: 100%; }
 .iss-task-form input {
-  flex: 1; min-width: 0; height: 24px; padding: 0 6px; font-size: 11.5px; border-radius: 5px;
+  flex: 1; min-width: 0; height: 24px; padding: 0 6px; font-size: var(--fs-meta); border-radius: 5px;
   border: 1px solid var(--osx-line); background: var(--sol-bg); color: var(--sol-text); outline: none;
 }
 .iss-task-form input[data-missing="true"] { border-color: var(--sol-red); }
@@ -323,7 +323,7 @@
 
 /* A row's lane mark and its state pill's release or age. */
 .iss-lane {
-  display: inline-flex; align-items: center; gap: 3px; height: 16px; padding: 0 5px; border-radius: 4px; font-size: 10.5px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 3px; height: 18px; padding: 0 5px; border-radius: 4px; font-size: var(--fs-meta); font-weight: 600;
 }
 .iss-lane[data-lane="new"] { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 13%, transparent); }
 .iss-lane[data-lane="escalating"] { color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 15%, transparent); }
@@ -363,8 +363,8 @@
 .iss-verdict[data-held="false"] { color: var(--sol-text); background: color-mix(in srgb, var(--sol-orange) 12%, transparent); }
 .iss-verdict[data-held="false"] svg, .iss-verdict[data-held="false"] b { color: var(--sol-orange); }
 .iss-verdict svg { margin-top: 2px; }
-.iss-noproof { font-size: 11px; color: var(--sol-orange); }
-.iss-mismatch { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--sol-orange); }
+.iss-noproof { font-size: var(--fs-meta); color: var(--sol-orange); }
+.iss-mismatch { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-meta); color: var(--sol-orange); }
 .iss-task[data-mismatch="true"] .iss-task-title { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--sol-orange) 60%, transparent); }
 
 /* The chart's quiet line, its uncounted days, and its head at any width. */
@@ -379,7 +379,7 @@
   background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--sol-text-muted) 14%, transparent) 0 3px, transparent 3px 6px);
 }
 .iss-chart-bars[data-daily="true"] { gap: 2px; }
-.iss-chart-note { display: flex; align-items: center; gap: 6px; margin: 2px 0 0 34px; font-size: 10.5px; }
+.iss-chart-note { display: flex; align-items: center; gap: 6px; margin: 2px 0 0 34px; font-size: var(--fs-meta); }
 .iss-chart-note i { width: 10px; height: 10px; border-radius: 2px; background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--sol-text-muted) 30%, transparent) 0 3px, transparent 3px 6px); }
 @container (max-width: 520px) {
   .iss-chart-read { display: none; }
@@ -422,7 +422,7 @@
 .iss-src-lands { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
 .iss-src-land { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border: 1px solid var(--osx-line); border-radius: 8px; font-size: 12px; }
 .iss-src-land:hover { border-color: color-mix(in srgb, var(--sol-blue) 50%, var(--sol-border)); }
-.iss-src-land-k { color: var(--sol-text-muted); font-size: 11px; }
+.iss-src-land-k { color: var(--sol-text-muted); font-size: var(--fs-meta); }
 .iss-src-land b { color: var(--sol-text); font-weight: 600; font-size: 15px; }
 
 /* The exception's value under the title: what went wrong, before any stack. */
@@ -433,10 +433,10 @@
 .iss-page .ops-kv dd.ops-mono { overflow-wrap: anywhere; }
 
 /* A dropped or dissolved problem: the state as structure, the note one press away. */
-.iss-task-drop { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; flex-wrap: wrap; }
+.iss-task-drop { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-meta); flex-wrap: wrap; }
 .iss-task-drop button { color: var(--sol-text-muted); text-decoration: underline dotted; text-underline-offset: 2px; }
 .iss-task-drop button:hover { color: var(--sol-text); }
-.iss-task-notefull { display: block; margin-top: 4px; padding: 6px 8px; border-radius: 6px; background: var(--sol-bg); font-size: 11.5px; line-height: 1.45; color: var(--sol-text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.iss-task-notefull { display: block; margin-top: 4px; padding: 6px 8px; border-radius: 6px; background: var(--sol-bg); font-size: var(--fs-meta); line-height: 1.45; color: var(--sol-text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .iss-banner[data-tone="flapping"] { border-color: color-mix(in srgb, var(--sol-yellow) 45%, var(--sol-border)); background: color-mix(in srgb, var(--sol-yellow) 8%, transparent); }
 .iss-banner[data-tone="flapping"] b { color: var(--sol-yellow); }
 
@@ -462,9 +462,9 @@
 .iss-assign-list button[data-on="true"] { background: color-mix(in srgb, var(--sol-blue) 12%, transparent); }
 .iss-assign-list button[data-current="true"] { font-weight: 600; }
 .iss-assign-none { padding: 8px 6px; font-size: 12px; }
-.iss-assign-float { position: fixed; right: 24px; bottom: 24px; z-index: 30; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; font-size: 11.5px; }
+.iss-assign-float { position: fixed; right: 24px; bottom: 24px; z-index: 30; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; font-size: var(--fs-meta); }
 .iss-assign-float .iss-assign-menu { position: static; }
-.iss-mine { height: 26px; padding: 0 10px; border: 1px solid var(--osx-line); border-radius: 6px; font-size: 11.5px; color: var(--sol-text-muted); }
+.iss-mine { height: 26px; padding: 0 10px; border: 1px solid var(--osx-line); border-radius: 6px; font-size: var(--fs-meta); color: var(--sol-text-muted); }
 .iss-mine:hover { color: var(--sol-text); }
 .iss-mine[data-on="true"] { color: var(--sol-text); border-color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 10%, transparent); }
 
@@ -482,7 +482,7 @@
 .iss-suspect { display: flex; flex-direction: column; gap: 5px; padding: 8px 10px; border-radius: 6px; font-size: 12px; background: color-mix(in srgb, var(--sol-text-muted) 7%, transparent); }
 .iss-suspect-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .iss-suspect-k { font-weight: 600; color: var(--sol-text); }
-.iss-suspect-cmp { display: inline-flex; align-items: center; gap: 3px; margin-left: auto; font-size: 11px; color: var(--sol-link, var(--sol-blue)); }
+.iss-suspect-cmp { display: inline-flex; align-items: center; gap: 3px; margin-left: auto; font-size: var(--fs-meta); color: var(--sol-link, var(--sol-blue)); }
 .iss-suspect-msg { color: var(--sol-text); overflow-wrap: anywhere; line-height: 1.45; }
 .iss-suspect-refs { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .iss-suspect-open { height: 22px; margin-left: auto; }
@@ -510,7 +510,7 @@
 .iss-readings { list-style: none; margin: 0; padding: 2px 0 6px; max-height: 360px; overflow-y: auto; }
 .iss-reading { display: grid; grid-template-columns: 128px 10px minmax(0, 1fr) 56px; align-items: center; gap: 8px; padding: 4px 12px; font-size: 12px; }
 .iss-reading + .iss-reading { border-top: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent); }
-.iss-reading-at { display: inline-flex; gap: 6px; color: var(--sol-text-muted); white-space: nowrap; font-size: 11.5px; }
+.iss-reading-at { display: inline-flex; gap: 6px; color: var(--sol-text-muted); white-space: nowrap; font-size: var(--fs-meta); }
 .iss-reading-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--sol-text-dim); }
 .iss-reading[data-failing="true"] .iss-reading-dot { background: var(--sol-red); }
 .iss-reading[data-failing="false"] .iss-reading-dot { background: var(--sol-green); }
@@ -525,28 +525,28 @@
 .iss-reading-run { display: inline-flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; }
 .iss-reading-concl { color: var(--sol-red); }
 .iss-reading[data-failing="false"] .iss-reading-concl { color: var(--sol-green); }
-.iss-reading-link { display: inline-flex; align-items: center; gap: 3px; color: var(--sol-link, var(--sol-blue)); font-size: 11.5px; }
+.iss-reading-link { display: inline-flex; align-items: center; gap: 3px; color: var(--sol-link, var(--sol-blue)); font-size: var(--fs-meta); }
 .iss-reading-link:hover { text-decoration: underline; }
 /* An app check's moving figures: a column each, under one head row; the sentence it reports said once above. */
 .iss-reading-figs { display: grid; gap: 8px; min-width: 0; }
 .iss-reading-figs > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .iss-reading-figs b { font-weight: 600; color: var(--sol-text); }
 .iss-reading[data-failing="true"] .iss-reading-figs > span:first-child b { color: var(--sol-red); }
-.iss-reading-head { padding-top: 6px; padding-bottom: 2px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-text-dim); }
+.iss-reading-head { padding-top: 6px; padding-bottom: 2px; font-size: var(--fs-mark); text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-text-dim); }
 .iss-reading-head + .iss-reading { border-top: none; }
 .iss-trend-dots { fill: none; stroke: var(--sol-red); stroke-width: 4; stroke-linecap: round; }
 .iss-trend { padding: 4px 0 6px; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent); }
 .iss-trend-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 0 12px 4px; font-size: 12px; }
 .iss-trend-head b { font-weight: 600; color: var(--sol-text); }
-.iss-trend-key { display: inline-flex; align-items: center; gap: 5px; color: var(--sol-text-dim); font-size: 11px; }
+.iss-trend-key { display: inline-flex; align-items: center; gap: 5px; color: var(--sol-text-dim); font-size: var(--fs-meta); }
 .iss-trend-key > i { width: 14px; border-top: 1px dashed var(--sol-text-muted); }
-.iss-trend-zero { margin-left: auto; color: var(--sol-red); font-size: 11.5px; font-weight: 500; }
+.iss-trend-zero { margin-left: auto; color: var(--sol-red); font-size: var(--fs-meta); font-weight: 500; }
 .iss-trend-plot { display: block; width: calc(100% - 24px); height: 72px; margin: 0 12px; overflow: visible; }
 .iss-trend-path { fill: none; stroke: var(--sol-red); stroke-width: 1.5; stroke-linejoin: round; }
 .iss-trend-line { stroke: var(--sol-text-muted); stroke-width: 1; stroke-dasharray: 3 3; }
 .iss-trend-proj { stroke: var(--sol-red); stroke-width: 1; stroke-dasharray: 2 3; opacity: 0.7; }
-.iss-trend-x { display: flex; justify-content: space-between; padding: 2px 12px 0; font-size: 10px; color: var(--sol-text-dim); }
-.iss-reading-n { font-size: 11px; color: var(--sol-text-dim); text-align: right; white-space: nowrap; }
+.iss-trend-x { display: flex; justify-content: space-between; padding: 2px 12px 0; font-size: var(--fs-meta); color: var(--sol-text-dim); }
+.iss-reading-n { font-size: var(--fs-meta); color: var(--sol-text-dim); text-align: right; white-space: nowrap; }
 .iss-trend-pick button { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 560px) {
   .iss-reading { grid-template-columns: 10px minmax(0, 1fr) 56px; }
@@ -564,7 +564,7 @@
 .iss-contrib-title:hover { text-decoration: underline; }
 .iss-contrib-row[data-on="true"] { background: color-mix(in srgb, var(--sol-blue) 8%, transparent); }
 button.iss-contrib-title { font: inherit; padding: 0; background: none; border: 0; cursor: pointer; }
-.iss-contrib-meta { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; font-size: 11.5px; }
+.iss-contrib-meta { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; font-size: var(--fs-meta); }
 .iss-contrib-fix { height: 22px; padding: 0 7px; }
 @media (max-width: 560px) {
   .iss-contrib-row { grid-template-columns: minmax(0, 1fr); }
@@ -578,12 +578,12 @@ button.iss-contrib-title { font: inherit; padding: 0; background: none; border: 
 .iss-session[data-state="working"] .iss-session-dot { background: var(--sol-green); opacity: 1; }
 .iss-session[data-state="shipped"] .iss-session-dot { background: var(--sol-violet); opacity: 1; }
 .iss-session[data-state="unknown"] .iss-session-dot { background: transparent; border: 1px solid var(--sol-text-dim); }
-.iss-watch-query { max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: 11.5px; }
+.iss-watch-query { max-height: 220px; overflow: auto; white-space: pre-wrap; word-break: break-word; font-size: var(--fs-meta); }
 
 /* A dropped fix in a row opens its Fix card: it reads as a control. */
 .iss-fix-open { display: inline-flex; border-radius: 4px; padding: 1px 3px; margin: -1px -3px; }
 .iss-fix-open:hover { background: color-mix(in srgb, var(--sol-orange) 12%, transparent); text-decoration: underline; text-underline-offset: 2px; }
-.iss-fix-close { align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-muted); border: 1px solid var(--osx-line); padding: 1px 6px; margin: -2px 0; }
+.iss-fix-close { align-items: center; gap: 5px; font-size: var(--fs-meta); color: var(--sol-text-muted); border: 1px solid var(--osx-line); padding: 1px 6px; margin: -2px 0; }
 .iss-fix-close .iss-fix-label { font-weight: 500; color: var(--sol-text); }
 .iss-fix-close:hover { background: color-mix(in srgb, var(--sol-green) 12%, transparent); text-decoration: none; }
 
@@ -592,7 +592,7 @@ button.iss-contrib-title { font: inherit; padding: 0; background: none; border: 
 .iss-row[data-state="ignored"] .iss-c-fix, .iss-row[data-state="ignored"] .iss-c-events, .iss-row[data-state="ignored"] .iss-c-users { opacity: 0.6; }
 
 /* A CI run as GitHub tells it (issueCiRun.tsx). */
-.iss-ci-concl { font-size: 11px; font-weight: 500; color: var(--sol-red); }
+.iss-ci-concl { font-size: var(--fs-meta); font-weight: 500; color: var(--sol-red); }
 .iss-ci-concl[data-ok="true"] { color: var(--sol-green); }
 .iss-ci-body { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px 12px; min-width: 0; }
 .iss-ci-meta { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--sol-text-muted); min-width: 0; }
@@ -603,32 +603,32 @@ button.iss-contrib-title { font: inherit; padding: 0; background: none; border: 
 .iss-ci-step { color: var(--sol-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iss-ci-link { color: var(--sol-text-dim); }
 .iss-ci-link:hover { color: var(--sol-text); }
-.iss-ci-rest { display: flex; gap: 12px; font-size: 11.5px; }
+.iss-ci-rest { display: flex; gap: 12px; font-size: var(--fs-meta); }
 .iss-ci-notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .iss-ci-note { display: flex; flex-direction: column; gap: 2px; padding-left: 8px; border-left: 2px solid var(--sol-red); font-size: 12px; min-width: 0; }
 .iss-ci-note[data-level="warning"] { border-left-color: var(--sol-yellow); }
-.iss-ci-where { color: var(--sol-text-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
+.iss-ci-where { color: var(--sol-text-muted); font-size: var(--fs-meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; }
 .iss-ci-msg { color: var(--sol-text); white-space: pre-wrap; word-break: break-word; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .iss-ci-log { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.iss-ci-log-head { display: flex; justify-content: space-between; align-items: baseline; font-size: 11px; }
-.iss-ci-pre { max-height: 320px; overflow: auto; font-size: 11px; line-height: 1.5; }
+.iss-ci-log-head { display: flex; justify-content: space-between; align-items: baseline; font-size: var(--fs-meta); }
+.iss-ci-pre { max-height: 320px; overflow: auto; font-size: var(--fs-meta); line-height: 1.5; }
 .iss-ci-pre [data-error] { color: var(--sol-red); }
 /* Log lines wrap, so the error that explains a failure is never past the box's right edge. */
 .iss-ci-pre { white-space: pre-wrap; overflow-wrap: anywhere; overflow-x: hidden; }
 .iss-ci-pre [data-error="first"] { background: color-mix(in srgb, var(--sol-red) 14%, transparent); font-weight: 600; }
-.iss-ci-short { font-size: 11.5px; }
+.iss-ci-short { font-size: var(--fs-meta); }
 .iss-reading[data-pickable] { cursor: pointer; }
 .iss-reading[data-pickable]:hover, .iss-reading[data-on] { background: color-mix(in srgb, var(--sol-blue) 8%, transparent); }
 .iss-fix-lead { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: baseline; gap: 8px; font-size: 12px; padding: 6px 8px; border-radius: 6px; background: color-mix(in srgb, var(--sol-red) 7%, transparent); }
-.iss-fix-lead-k { color: var(--sol-text-muted); font-size: 11px; }
+.iss-fix-lead-k { color: var(--sol-text-muted); font-size: var(--fs-meta); }
 .iss-fix-lead-title { color: var(--sol-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .iss-fix-lead-title:hover { text-decoration: underline; }
 .iss-fix-lead-n { white-space: nowrap; }
-.iss-contrib-sub { padding: 6px 12px 0; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-text-dim); }
+.iss-contrib-sub { padding: 6px 12px 0; font-size: var(--fs-mark); text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-text-dim); }
 .iss-contrib-note { padding: 6px 12px; font-size: 12px; }
 .iss-contrib[data-context="true"] .iss-contrib-title { color: var(--sol-text-muted); }
-.iss-unit { color: var(--sol-text-dim); font-size: 10.5px; }
-.iss-na { font-size: 10.5px; }
+.iss-unit { color: var(--sol-text-dim); font-size: var(--fs-meta); }
+.iss-na { font-size: var(--fs-meta); }
 .iss-c-events { white-space: nowrap; }
 /* A count column too narrow for its unit keeps the number; the unit is in its hover. */
 .iss-unit-tiny { display: none; }
@@ -647,7 +647,7 @@ button.iss-contrib-title { font: inherit; padding: 0; background: none; border: 
   .iss-list kbd, .iss-list .iss-keys { display: none; }
 }
 .iss-chart-base { position: absolute; left: 0; right: 0; height: 0; border-top: 1px dashed color-mix(in srgb, var(--sol-text-muted) 70%, transparent); pointer-events: none; }
-.iss-chart-key { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; }
+.iss-chart-key { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; }
 .iss-chart-key > i { width: 14px; border-top: 1px dashed color-mix(in srgb, var(--sol-text-muted) 70%, transparent); }
 @container (max-width: 480px) {
   .iss-row .iss-c-fix { overflow: hidden; }
@@ -678,7 +678,7 @@ button.iss-contrib-title { font: inherit; padding: 0; background: none; border: 
 }
 
 /* A contributor that is known noise: tagged, and Leave out is its suggested press. */
-.iss-noise-tag { display: inline-flex; align-items: center; height: 16px; padding: 0 6px; border-radius: 8px; font-size: 10px; font-weight: 500; white-space: nowrap; color: var(--sol-text-muted); background: color-mix(in srgb, var(--sol-text-muted) 14%, transparent); }
+.iss-noise-tag { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 9px; font-size: var(--fs-meta); font-weight: 500; white-space: nowrap; color: var(--sol-text-muted); background: color-mix(in srgb, var(--sol-text-muted) 14%, transparent); }
 .iss-contrib-fix[data-tone="primary"] { background: var(--sol-red); border-color: var(--sol-red); color: var(--sol-bg); }
 @container (max-width: 560px) { .iss-chart-x span[data-edge="true"] { display: none; } }
 /* The meta line wraps rather than cut a word: a source, release or fix state reads whole or moves to the next line. */
@@ -729,7 +729,7 @@ button.iss-contrib-title { font: inherit; padding: 0; background: none; border: 
 }
 /* Nobody on it, in the wide Fix cell: the ring, with words where no stage word sits beside it; its meaning is in the column head. */
 .iss-nobody-mark { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
-.iss-nobody-word { font-size: 11.5px; color: var(--sol-orange); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.iss-nobody-word { font-size: var(--fs-meta); color: var(--sol-orange); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .iss-fix-legend { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--sol-orange); }
 .iss-fix-legend .iss-nobody-ring { width: 10px; height: 10px; }
 /* The State strip's dates thin to every other one where seven no longer fit side by side. */

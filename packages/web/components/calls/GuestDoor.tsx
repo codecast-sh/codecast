@@ -68,8 +68,8 @@ export function GuestRemoveButton({
   const who = firstName(name);
   const tile = variant === "tile";
   const base = tile
-    ? "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[11px] backdrop-blur transition-all"
-    : "inline-flex items-center gap-1 rounded-full px-1.5 py-px font-mono text-[10px] transition-all";
+    ? "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-meta backdrop-blur transition-all"
+    : "inline-flex items-center gap-1 rounded-full px-1.5 py-px font-mono text-meta transition-all";
   const out = (revokeLink: boolean) => (e: React.MouseEvent) => {
     e.stopPropagation();
     setConfirm(false);
@@ -284,7 +284,7 @@ function GuestInvitePanel({ roomKey, onClose }: { roomKey: string; onClose: () =
         </Button>
       </div>
       {/* What a guest gets, as facts to scan rather than a paragraph. */}
-      <ul className="mt-2.5 space-y-1 text-[11.5px] text-sol-text-muted">
+      <ul className="mt-2.5 space-y-1 text-meta text-sol-text-muted">
         {GUEST_FACTS.map(({ icon: Icon, text }) => (
           <li key={text} className="flex items-center gap-2">
             <Icon className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" />
@@ -306,7 +306,7 @@ function GuestInvitePanel({ roomKey, onClose }: { roomKey: string; onClose: () =
                   value={guestLinkUrl(mine.path).replace(/^https?:\/\//, "")}
                   onFocus={(e) => e.currentTarget.select()}
                   aria-label="Guest link"
-                  className="min-w-0 flex-1 bg-transparent font-mono text-[11.5px] text-sol-text-secondary outline-none"
+                  className="min-w-0 flex-1 bg-transparent font-mono text-meta text-sol-text-secondary outline-none"
                   style={{ fontVariantLigatures: "none" }}
                 />
                 <Button size="xs" variant={copied ? "green" : "yellow"} onClick={() => void copy(mine.path)} className="shrink-0">
@@ -314,7 +314,7 @@ function GuestInvitePanel({ roomKey, onClose }: { roomKey: string; onClose: () =
                   {copied ? "Copied" : "Copy"}
                 </Button>
               </div>
-              <div className="mt-1.5 flex items-center gap-2 px-0.5 font-mono text-[10.5px] text-sol-text-muted">
+              <div className="mt-1.5 flex items-center gap-2 px-0.5 font-mono text-meta text-sol-text-muted">
                 <span className="min-w-0 truncate">
                   {copyFailed ? (
                     <span className="text-sol-orange">couldn't copy: the link is selected, copy it with a key</span>
@@ -343,7 +343,7 @@ function GuestInvitePanel({ roomKey, onClose }: { roomKey: string; onClose: () =
           {/* How long the next link stays open: always in sight, because a
               replacement is a new choice, not the old link's. */}
           <div className={`flex items-center gap-2 ${mine ? "mt-3 border-t border-sol-border/50 pt-3" : "mt-3"}`}>
-            <span className="w-14 shrink-0 text-[11px] text-sol-text-dim">{mine ? "New link" : "Expires"}</span>
+            <span className="w-[62px] shrink-0 text-meta text-sol-text-dim">{mine ? "New link" : "Expires"}</span>
             <div role="radiogroup" aria-label="Link lasts" className="flex flex-1 rounded-md bg-sol-bg p-0.5 ring-1 ring-sol-border/60">
               {GUEST_LINK_TTL_CHOICES.map((c) => (
                 <button
@@ -352,7 +352,7 @@ function GuestInvitePanel({ roomKey, onClose }: { roomKey: string; onClose: () =
                   role="radio"
                   aria-checked={ttl === c.ms}
                   onClick={() => setTtl(c.ms)}
-                  className={`flex-1 rounded px-1.5 py-1 text-[11px] transition-colors ${
+                  className={`flex-1 rounded px-1.5 py-1 text-meta transition-colors ${
                     ttl === c.ms ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text"
                   }`}
                 >
@@ -380,10 +380,10 @@ function GuestInvitePanel({ roomKey, onClose }: { roomKey: string; onClose: () =
             </Button>
           )}
           {!mine && copyFailed && (
-            <p className="mt-1.5 px-0.5 font-mono text-[10.5px] text-sol-orange">The link was made but not copied. Press copy above.</p>
+            <p className="mt-1.5 px-0.5 font-mono text-meta text-sol-orange">The link was made but not copied. Press copy above.</p>
           )}
           {seenAs && (
-            <p className="mt-2 truncate text-[11px] text-sol-text-dim">
+            <p className="mt-2 truncate text-meta text-sol-text-dim">
               Shown to guests as <span className="text-sol-text-muted">{seenAs}</span>
             </p>
           )}
@@ -392,9 +392,9 @@ function GuestInvitePanel({ roomKey, onClose }: { roomKey: string; onClose: () =
 
       {others.length > 0 && (
         <div className="mt-3 border-t border-sol-border/50 pt-2">
-          <div className="mb-1 text-[11px] text-sol-text-dim">Other open links</div>
+          <div className="mb-1 text-meta text-sol-text-dim">Other open links</div>
           {others.map((l) => (
-            <div key={l.link_id} className="flex items-center gap-2 rounded-md px-0.5 py-1 font-mono text-[11px] text-sol-text-muted">
+            <div key={l.link_id} className="flex items-center gap-2 rounded-md px-0.5 py-1 font-mono text-meta text-sol-text-muted">
               <span className="min-w-0 flex-1 truncate">
                 {l.mine ? "your older link" : `${firstName(l.created_by_name)}'s link`} · {guestLinkExpiry(l.expires_at, now)}
                 {l.waiting > 0 && <span className="text-sol-yellow"> · {l.waiting} waiting</span>}

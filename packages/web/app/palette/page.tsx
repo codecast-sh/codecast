@@ -97,5 +97,8 @@ function ReadyPaletteRoot() {
   if (mode === "compose") {
     return <ComposeView key={composeNonce} initialQuery={composeQuery} />;
   }
-  return <CommandPalette standalone />;
+  // Keyed per show: the palette snapshots its search index and recents when it
+  // mounts (as the main window's does on every open), and this window never
+  // closes, so each show starts a fresh instance with fresh data.
+  return <CommandPalette standalone key={searchNonce} />;
 }

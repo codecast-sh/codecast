@@ -20,7 +20,7 @@ const CITED = new Map<number, "first" | "final">([[88, "first"], [139, "final"],
 function Core() {
   return (
     <div className="mb-5" aria-hidden>
-      <div className="flex items-center justify-between font-mono text-[11px] mb-1.5" style={{ color: SOL.base1 }}>
+      <div className="flex items-center justify-between font-mono text-meta mb-1.5" style={{ color: SOL.base1 }}>
         <span>msg 1</span>
         <span className="hidden sm:inline">jx7k2qa · Retry cap for failed webhooks</span>
         <span>msg {TOTAL}</span>
@@ -37,10 +37,10 @@ function Core() {
             />
           );
         })}
-        <span className="absolute font-mono text-[10.5px] px-1.5 rounded" style={{ left: `calc(${(87 / TOTAL) * 100}% - 46px)`, top: 2, color: SOL.base3, backgroundColor: VIOLET }}>msg 88</span>
-        <span className="absolute font-mono text-[10.5px] px-1.5 rounded" style={{ left: `calc(${(141 / TOTAL) * 100}% + 6px)`, bottom: 2, color: SOL.base3, backgroundColor: SOL.orange }}>msg 139–141</span>
+        <span className="absolute font-mono text-meta px-1.5 rounded" style={{ left: `calc(${(87 / TOTAL) * 100}% - 46px)`, top: 2, color: SOL.base3, backgroundColor: VIOLET }}>msg 88</span>
+        <span className="absolute font-mono text-meta px-1.5 rounded" style={{ left: `calc(${(141 / TOTAL) * 100}% + 6px)`, bottom: 2, color: SOL.base3, backgroundColor: SOL.orange }}>msg 139–141</span>
       </div>
-      <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 font-mono text-[11px]" style={{ color: SOL.base01 }}>
+      <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2 font-mono text-meta" style={{ color: SOL.base01 }}>
         <span><span className="inline-block w-2 h-2 mr-1.5 align-middle" style={{ backgroundColor: `color-mix(in srgb, ${SOL.base01} 35%, transparent)` }} />lines the model was shown</span>
         <span><span className="inline-block w-2 h-2 mr-1.5 align-middle" style={{ backgroundColor: VIOLET }} />first answer</span>
         <span><span className="inline-block w-2 h-2 mr-1.5 align-middle" style={{ backgroundColor: SOL.orange }} />the later line that replaced it</span>
@@ -164,7 +164,7 @@ function Mini({ cmd, d }: { cmd: string; d: string }) {
   return (
     <div className="rounded-lg px-3 py-2.5" style={{ backgroundColor: `color-mix(in srgb, ${VIOLET} 6%, ${SOL.base3})`, border: `1px solid color-mix(in srgb, ${VIOLET} 18%, transparent)` }}>
       <div className="break-words" style={{ color: SOL.base02 }}>{cmd}</div>
-      <div className="text-[11.5px] mt-0.5" style={{ color: SOL.base1 }}>{d}</div>
+      <div className="text-meta mt-0.5" style={{ color: SOL.base1 }}>{d}</div>
     </div>
   );
 }

@@ -78,7 +78,7 @@ export function ValueFields({
         </Row>
       ) : (
         <div className="flex min-w-0 items-start gap-2">
-          <span className="w-16 shrink-0 pt-1.5 text-[11.5px] text-sol-text-dim">{label}</span>
+          <span className="w-16 shrink-0 pt-1.5 text-meta text-sol-text-dim">{label}</span>
           {field}
         </div>
       );
@@ -228,7 +228,7 @@ function TypedValueEditor({ row, mode, review, onStart, onDone, onCancel, autoFo
           {actions}
         </div>
       )}
-      {error ? <div className="text-[11.5px] text-sol-red">{error}</div> : null}
+      {error ? <div className="text-meta text-sol-red">{error}</div> : null}
     </form>
     {reviewing && review && <SwitchReview ledger={review} onClose={() => setReviewing(false)} onConfirm={() => void save()} />}
     </>

@@ -4,6 +4,7 @@
 // blocker's own clause and its description the station's words whole, in the blocked problem's project.
 // Nothing is filed until the person confirms; once filed, the task is the act (it names the file).
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { blockerClause, fixTaskFor } from "../../../../lib/line/blocker";
 import { useInboxStore } from "../../../../store/inboxStore";
 import { workspaceRows } from "../../../../hooks/useWorkspaceCollection";
@@ -49,7 +50,7 @@ export function BlockerFix({ file, reason, step, problems }: {
   if (fix) {
     return (
       <span className="lw-closed-acts sp-fix" data-line-blocker-fix={fix.ref ?? fix.id}>
-        <a className="lw-act" data-primary="" href={`/tasks/${fix.ref ?? fix.id}`}>Open the fix</a>
+        <Link className="lw-act" data-primary="" href={`/tasks/${fix.ref ?? fix.id}`}>Open the fix</Link>
         <span className="sp-fix-name"><span className="lw-num">{fix.ref}</span> {fix.title}</span>
       </span>
     );

@@ -421,7 +421,7 @@ export const DiffView = memo(function DiffView({
       {needsTruncation && (
         <button
           onClick={() => setFullyExpanded(true)}
-          className="block w-full text-center py-2 sm:py-1 text-xs sm:text-[11px] text-sol-blue hover:text-sol-cyan transition-colors"
+          className="block w-full text-center py-2 sm:py-1 text-xs sm:text-meta text-sol-blue hover:text-sol-cyan transition-colors"
         >
           show {shownRows - maxLines} more lines
         </button>
@@ -429,7 +429,7 @@ export const DiffView = memo(function DiffView({
       {fullyExpanded && shownRows > maxLines && (
         <button
           onClick={() => setFullyExpanded(false)}
-          className="block w-full text-center py-1 text-[11px] text-sol-text-dim hover:text-sol-text-muted transition-colors"
+          className="block w-full text-center py-1 text-meta text-sol-text-dim hover:text-sol-text-muted transition-colors"
         >
           collapse
         </button>
@@ -484,14 +484,14 @@ function LineCommentChip({ conversationId, comment }: { conversationId: string; 
       <div className="flex items-center gap-2 opacity-0 group-hover/chip:opacity-100 transition-opacity">
         <button
           type="button"
-          className="text-[11px] text-sol-text-dim hover:text-sol-cyan"
+          className="text-meta text-sol-text-dim hover:text-sol-cyan"
           onClick={() => useInboxStore.getState().setReviewEditingId(comment.id)}
         >
           {comment.body ? "Edit" : "Add note"}
         </button>
         <button
           type="button"
-          className="text-[11px] text-sol-text-dim hover:text-sol-red"
+          className="text-meta text-sol-text-dim hover:text-sol-red"
           onClick={() => useInboxStore.getState().removeReviewComment(conversationId, comment.id)}
         >
           Remove
@@ -558,13 +558,13 @@ function LineCommentEditor({
         }}
       />
       <div className="flex items-center justify-end gap-2 mt-1">
-        <button type="button" className="text-[11px] text-sol-text-dim hover:text-sol-text" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>
+        <button type="button" className="text-meta text-sol-text-dim hover:text-sol-text" onMouseDown={(e) => e.preventDefault()} onClick={cancel}>
           Cancel <KeyCap size="xs">Esc</KeyCap>
         </button>
         {canPost && (
           <button
             type="button"
-            className="text-[11px] text-sol-cyan hover:text-sol-blue font-medium"
+            className="text-meta text-sol-cyan hover:text-sol-blue font-medium"
             title="Post as a team comment on this line — teammates see it, and the agent can reply in its thread"
             onMouseDown={(e) => e.preventDefault()}
             onClick={post}
@@ -574,7 +574,7 @@ function LineCommentEditor({
         )}
         <button
           type="button"
-          className="text-[11px] text-sol-blue hover:text-sol-cyan font-medium"
+          className="text-meta text-sol-blue hover:text-sol-cyan font-medium"
           title="Attach to your next reply to the agent"
           onMouseDown={(e) => e.preventDefault()}
           onClick={save}

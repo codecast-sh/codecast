@@ -93,7 +93,7 @@ export function TemplateSections({ roleId, canEdit, teamId, inSheet }: { roleId:
               const hasGuide = !!(s.guide || s.how);
               const shown = hasGuide && (guides[s.id] ?? (s.status === "open" && s.id === instance.ask?.id));
               const mark = (status: "done" | "skipped" | "open") => void act(s.id, () => markSetup(instance.instance_key, s.id, status));
-              const quiet = "shrink-0 rounded-md border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text-muted hover:bg-sol-bg-highlight hover:text-sol-text disabled:opacity-50";
+              const quiet = "shrink-0 rounded-md border border-sol-border/50 px-2 py-0.5 text-meta text-sol-text-muted hover:bg-sol-bg-highlight hover:text-sol-text disabled:opacity-50";
               return (
                 <li key={s.id} data-template-setup-item={s.id} data-status={s.status}>
                   {/* The actions wrap under the title in the narrow rail and sit beside it on a wide page. */}
@@ -102,9 +102,9 @@ export function TemplateSections({ roleId, canEdit, teamId, inSheet }: { roleId:
                     <span className={`min-w-[12rem] flex-1 ${s.status === "open" ? "text-sol-text" : "text-sol-text-muted"}`}>{s.title}{s.price ? <span className="text-sol-text-dim"> · {s.price}</span> : null}</span>
                     {(hasGuide || mine) && (
                       <span className="ml-auto flex shrink-0 items-center gap-1.5">
-                        {hasGuide && <button type="button" aria-expanded={shown} onClick={() => setGuides({ ...guides, [s.id]: !shown })} className="inline-flex shrink-0 items-center gap-0.5 rounded-md px-1 py-0.5 text-[11px] text-sol-cyan hover:bg-sol-bg-highlight" data-template-guide-toggle={s.id}><ChevronRight className={`h-3 w-3 transition-transform duration-150 ${shown ? "rotate-90" : ""}`} />How</button>}
+                        {hasGuide && <button type="button" aria-expanded={shown} onClick={() => setGuides({ ...guides, [s.id]: !shown })} className="inline-flex shrink-0 items-center gap-0.5 rounded-md px-1 py-0.5 text-meta text-sol-cyan hover:bg-sol-bg-highlight" data-template-guide-toggle={s.id}><ChevronRight className={`h-3 w-3 transition-transform duration-150 ${shown ? "rotate-90" : ""}`} />How</button>}
                         {mine && s.status === "open" && <button type="button" disabled={busy === s.id} onClick={() => mark("skipped")} className={quiet}>Skip</button>}
-                        {mine && s.status === "open" && <button type="button" disabled={busy === s.id} onClick={() => mark("done")} className="shrink-0 rounded-md border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text hover:bg-sol-bg-highlight disabled:opacity-50">Done</button>}
+                        {mine && s.status === "open" && <button type="button" disabled={busy === s.id} onClick={() => mark("done")} className="shrink-0 rounded-md border border-sol-border/50 px-2 py-0.5 text-meta text-sol-text hover:bg-sol-bg-highlight disabled:opacity-50">Done</button>}
                         {mine && s.status !== "open" && <button type="button" disabled={busy === s.id} onClick={() => mark("open")} className={quiet}>Reopen</button>}
                       </span>
                     )}
@@ -186,7 +186,7 @@ export function TemplateSections({ roleId, canEdit, teamId, inSheet }: { roleId:
           {((instance.tools ?? []) as any[]).length > 0 && (
             <li className="flex flex-wrap items-baseline gap-1" data-template-tools={(instance.tools as any[]).length}>
               <span>Tools:</span>
-              {(instance.tools as any[]).map((t) => <span key={t.id} className={`rounded px-1 py-px text-[11px] ${t.kind === "command" ? "text-sol-text" : "text-sol-text-muted"}`} style={{ fontFamily: "var(--font-mono)", background: t.kind === "command" ? "color-mix(in srgb, var(--sol-cyan) 12%, transparent)" : "color-mix(in srgb, var(--sol-border) 22%, transparent)" }} title={t.summary ?? undefined}>{t.id}</span>)}
+              {(instance.tools as any[]).map((t) => <span key={t.id} className={`rounded px-1 py-px text-meta ${t.kind === "command" ? "text-sol-text" : "text-sol-text-muted"}`} style={{ fontFamily: "var(--font-mono)", background: t.kind === "command" ? "color-mix(in srgb, var(--sol-cyan) 12%, transparent)" : "color-mix(in srgb, var(--sol-border) 22%, transparent)" }} title={t.summary ?? undefined}>{t.id}</span>)}
             </li>
           )}
           {((instance.secrets ?? []) as any[]).map((s) => <li key={s.key} data-template-secret={s.key} data-bound={s.bound}>{s.label}: {s.bound ? <span className="text-sol-green">set</span> : <span className="text-sol-yellow">missing</span>}</li>)}
@@ -222,7 +222,7 @@ function UpdateCardView({ card, to, status, proposed, busy, onPropose }: { card:
   const [latest, ...earlier] = card.changelogs;
   const section = (c: { version: string; text: string }) => (
     <div key={c.version} className="mt-1" data-template-changelog={c.version}>
-      <p className="text-[11px] text-sol-text-dim">{c.version}</p>
+      <p className="text-meta text-sol-text-dim">{c.version}</p>
       <MarkdownRenderer content={c.text} className="cc-cmt-md prose-headings:mb-1 prose-headings:mt-1 prose-headings:text-[12px] prose-ol:pl-4 prose-ul:pl-4" />
     </div>
   );
@@ -234,8 +234,8 @@ function UpdateCardView({ card, to, status, proposed, busy, onPropose }: { card:
           {card.heading && <span className={`block font-semibold ${tone}`} data-update-heading>{card.heading}</span>}
           {status && <span className="block text-sol-text-dim">{status}</span>}
         </p>
-        {onPropose && card.action && <button type="button" disabled={busy} onClick={onPropose} className="shrink-0 rounded-md border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text hover:bg-sol-bg-highlight disabled:opacity-50" data-template-update-propose>{card.action}</button>}
-        {proposed && <Link href={`/org?proposal=${proposed}`} className="shrink-0 text-[11px] text-sol-cyan hover:underline">decide it</Link>}
+        {onPropose && card.action && <button type="button" disabled={busy} onClick={onPropose} className="shrink-0 rounded-md border border-sol-border/50 px-2 py-0.5 text-meta text-sol-text hover:bg-sol-bg-highlight disabled:opacity-50" data-template-update-propose>{card.action}</button>}
+        {proposed && <Link href={`/org?proposal=${proposed}`} className="shrink-0 text-meta text-sol-cyan hover:underline">decide it</Link>}
       </div>
       {card.changes.length > 0 && <ul className="mt-1 list-disc space-y-0.5 pl-4 text-sol-text" data-update-changes>{card.changes.map((line) => <li key={line}>{line}</li>)}</ul>}
       {card.note && <p className="mt-1 text-sol-text-muted" data-update-note>{card.note}</p>}
@@ -243,7 +243,7 @@ function UpdateCardView({ card, to, status, proposed, busy, onPropose }: { card:
       {latest && section(latest)}
       {earlier.length > 0 && (
         <details className="mt-1" data-template-changelog-earlier={earlier.length}>
-          <summary className="cursor-pointer select-none text-[11px] text-sol-cyan">{earlier.length} earlier release{earlier.length === 1 ? "" : "s"}</summary>
+          <summary className="cursor-pointer select-none text-meta text-sol-cyan">{earlier.length} earlier release{earlier.length === 1 ? "" : "s"}</summary>
           {earlier.map(section)}
         </details>
       )}
@@ -319,27 +319,27 @@ function HostStep({ instance, canEdit, purpose }: { instance: any; canEdit: bool
           {!device && <p className="mt-1 text-sol-yellow" data-host-reason>{host?.reason ?? "No machine can run this yet."}</p>}
           {canEdit && device && secrets.length > 0 && (
             <div className="mt-2 flex flex-col gap-2 rounded-lg border border-sol-border/50 bg-sol-bg-alt/60 p-2.5" data-host-secrets>
-              <p className="flex items-start gap-1.5 text-[11.5px] text-sol-text"><Lock className="mt-[3px] h-3 w-3 shrink-0 text-sol-text-dim" /> {purpose === "setup" ? "Secrets stay on that machine. Enter them here once, or leave one blank and add it later." : "Enter the value once; it is sealed to that machine and never stored here."}</p>
+              <p className="flex items-start gap-1.5 text-meta text-sol-text"><Lock className="mt-[3px] h-3 w-3 shrink-0 text-sol-text-dim" /> {purpose === "setup" ? "Secrets stay on that machine. Enter them here once, or leave one blank and add it later." : "Enter the value once; it is sealed to that machine and never stored here."}</p>
               {secrets.map((s) => (
                 <label key={s.key} className="flex flex-col gap-1">
-                  <span className="text-[11px] text-sol-text-muted">{s.label}{s.bound ? <span className="text-sol-green"> · set</span> : null}</span>
+                  <span className="text-meta text-sol-text-muted">{s.label}{s.bound ? <span className="text-sol-green"> · set</span> : null}</span>
                   {/* A textarea, masked, never <input type=password>: a password input strips newlines, which breaks a pasted PEM key or multi-line JSON. */}
                   <textarea rows={2} autoComplete="off" spellCheck={false} name={`secret:${s.key}`} value={values[s.key] ?? ""} onChange={(e) => setValues({ ...values, [s.key]: e.target.value })} placeholder={s.bound ? "replace…" : "paste the credential, key or JSON"} className="min-h-8 w-full resize-y rounded-md border border-sol-border/50 bg-sol-bg px-2 py-1.5 text-[12px] text-sol-text outline-none focus:border-sol-cyan" style={{ fontFamily: "var(--font-mono)", WebkitTextSecurity: "disc" } as CSSProperties} />
                 </label>
               ))}
-              {typed.length > 0 && !device.can_receive_secrets && <p className="text-[11px] text-sol-yellow">{device.label} runs a codecast too old to receive a secret from here. Update it there, or bind the secret from its terminal.</p>}
+              {typed.length > 0 && !device.can_receive_secrets && <p className="text-meta text-sol-yellow">{device.label} runs a codecast too old to receive a secret from here. Update it there, or bind the secret from its terminal.</p>}
             </div>
           )}
           {canEdit && device && (
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <Button type="button" variant="violet" size="sm" onClick={() => void run()} disabled={busy || (purpose === "secrets" && typed.length === 0) || (typed.length > 0 && !device.can_receive_secrets)} className="rounded-lg" data-host-run>{busy ? "Sending…" : step.state === "failed" ? `Try again on ${device.label}` : label}</Button>
-              <span className="text-[11px] text-sol-text-dim">{device.online ? "online" : "offline: queued until it wakes"}{host?.dir ? ` · ${host.dir}` : ""}</span>
+              <span className="text-meta text-sol-text-dim">{device.online ? "online" : "offline: queued until it wakes"}{host?.dir ? ` · ${host.dir}` : ""}</span>
             </div>
           )}
           {error && <p className="mt-1 text-sol-red" role="alert">{error}</p>}
         </>
       )}
-      <details className="mt-2 text-[11px] text-sol-text-dim">
+      <details className="mt-2 text-meta text-sol-text-dim">
         <summary className="cursor-pointer select-none">Prefer the terminal?</summary>
         <p className="mt-1">On the machine that runs this role, in the project&apos;s folder: <code style={{ fontFamily: "var(--font-mono)" }}>{cli}</code></p>
       </details>
@@ -355,7 +355,7 @@ function AnswerRow({ need, value, canEdit, busy, onSave }: { need: SetupNeed; va
     <li className="flex items-baseline gap-2" data-template-answer-row={need.key}>
       <span className="w-2/5 shrink-0 truncate text-sol-text-muted" title={need.key}>{need.label}</span>
       <span className={`min-w-0 flex-1 truncate tabular-nums ${value ? "text-sol-text" : "text-sol-yellow"}`} title={value}>{value ? (need.kind === "money" ? `$${value}` : value) : "not set"}</span>
-      {canEdit && <button type="button" disabled={busy} onClick={() => setEditing(true)} className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] text-sol-cyan hover:bg-sol-bg-highlight disabled:opacity-50" data-template-answer-edit={need.key}>{value ? "Edit" : "Set"}</button>}
+      {canEdit && <button type="button" disabled={busy} onClick={() => setEditing(true)} className="shrink-0 rounded-md px-1.5 py-0.5 text-meta text-sol-cyan hover:bg-sol-bg-highlight disabled:opacity-50" data-template-answer-edit={need.key}>{value ? "Edit" : "Set"}</button>}
     </li>
   );
 }
@@ -372,8 +372,8 @@ function AnswerField({ need, initial = "", busy, onSave, onCancel }: { need: Set
       {need.kind === "choice"
         ? <select value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={keys} autoFocus={!!onCancel} className={field}><option value="" />{(need.choices ?? []).map((c) => <option key={c} value={c}>{c}</option>)}</select>
         : <input value={value} onChange={(e) => setValue(e.target.value)} onKeyDown={keys} autoFocus={!!onCancel} inputMode={need.kind === "number" || need.kind === "money" ? "decimal" : undefined} className={field} spellCheck={false} aria-label={need.label} aria-invalid={!!problem} title={problem ?? undefined} />}
-      <button type="submit" disabled={busy || !value.trim() || !!problem} className="shrink-0 rounded-md border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text hover:bg-sol-bg-highlight disabled:opacity-50">Save</button>
-      {onCancel && <button type="button" onClick={onCancel} className="shrink-0 rounded-md px-1.5 py-0.5 text-[11px] text-sol-text-muted hover:bg-sol-bg-highlight">Cancel</button>}
+      <button type="submit" disabled={busy || !value.trim() || !!problem} className="shrink-0 rounded-md border border-sol-border/50 px-2 py-0.5 text-meta text-sol-text hover:bg-sol-bg-highlight disabled:opacity-50">Save</button>
+      {onCancel && <button type="button" onClick={onCancel} className="shrink-0 rounded-md px-1.5 py-0.5 text-meta text-sol-text-muted hover:bg-sol-bg-highlight">Cancel</button>}
     </form>
   );
 }

@@ -19,7 +19,7 @@ export function CursorArrow({ color, label }: { color: string; label?: string })
       {label && (
         <span
           data-sv-cursor-label
-          className="absolute left-5 top-7 max-w-[160px] truncate rounded-full px-2 py-px text-[11px] font-mono font-medium text-white whitespace-nowrap shadow-[0_1px_2px_rgba(0,0,0,0.35)]"
+          className="absolute left-5 top-7 max-w-[160px] truncate rounded-full px-2 py-px text-meta font-mono font-medium text-white whitespace-nowrap shadow-[0_1px_2px_rgba(0,0,0,0.35)]"
           style={{ backgroundColor: color }}
         >
           {label}

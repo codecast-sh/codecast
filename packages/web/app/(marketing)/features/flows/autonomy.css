@@ -37,7 +37,7 @@
 .flx-root .flx-rate-dot { position: absolute; width: 10px; height: 10px; border-radius: 50%; border: 1.5px solid #93a1a1; background: #fffaf0; transition: background-color .3s, border-color .3s, box-shadow .3s; }
 .flx-root .flx-rate-dot[data-in] { background: #2aa198; border-color: #2aa198; }
 .flx-root .flx-rate-dot[data-top] { background: #073642; border-color: #073642; box-shadow: 0 0 0 3px #fffaf0, 0 0 0 4.5px #073642; z-index: 1; }
-.flx-root .flx-rate-dot-tag { position: absolute; transform: translateX(-50%); font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; font-weight: 700; color: #073642; white-space: nowrap; transition: left .5s ease, bottom .5s ease; }
+.flx-root .flx-rate-dot-tag { position: absolute; transform: translateX(-50%); font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-meta); font-weight: 700; color: #073642; white-space: nowrap; transition: left .5s ease, bottom .5s ease; }
 .flx-root .flx-rate-empty { position: absolute; left: 0; right: 0; bottom: 40%; text-align: center; font-family: var(--font-mono, ui-monospace, monospace); font-size: 13px; color: #93a1a1; }
 @keyframes flx-rate-drop { from { opacity: 0; transform: translateY(-26px); } 70% { opacity: 1; transform: translateY(2px); } to { opacity: 1; transform: none; } }
 .flx-root [data-play] .flx-rate-dot { animation: flx-rate-drop .5s cubic-bezier(.3, .7, .3, 1) var(--d, 0s) both; }
@@ -117,7 +117,7 @@
 .flx-root .flx-rate-row[data-st="regret"] .flx-rate-sq { background: #dc322f; }
 .flx-root .flx-rate-hit { position: absolute; top: -2px; width: 3px; height: 13px; margin-left: -1.5px; background: #dc322f; border-radius: 1px; }
 .flx-root .flx-rate-late { position: absolute; top: -2px; width: 3px; height: 13px; margin-left: -1.5px; background: #dc322f; opacity: .55; border-radius: 1px; }
-.flx-root .flx-rate-sha { position: absolute; top: 50%; transform: translate(calc(-100% - 8px), -50%); font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; font-weight: 700; line-height: 1; color: #93a1a1; white-space: nowrap; transition: color .3s; }
+.flx-root .flx-rate-sha { position: absolute; top: 50%; transform: translate(calc(-100% - 8px), -50%); font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-meta); font-weight: 700; line-height: 1; color: #93a1a1; white-space: nowrap; transition: color .3s; }
 .flx-root .flx-rate-row[data-st="regret"] .flx-rate-sha { color: #dc322f; }
 @keyframes flx-rate-flash { from { transform: scale(2.2); opacity: .2; } to { transform: none; opacity: 1; } }
 .flx-root [data-play] .flx-rate-row[data-st="regret"] .flx-rate-hit { animation: flx-rate-flash .45s ease-out both; }
@@ -161,7 +161,7 @@
 .flx-root .flx-auto-meter-gap { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(135deg, rgba(220, 50, 47, .75) 0 2px, rgba(220, 50, 47, .2) 2px 4px); border-radius: 0 4px 4px 0; }
 .flx-root .flx-auto-meter[data-off] .flx-auto-meter-fill { background: #93a1a1; }
 .flx-root .flx-auto-meter-tick { position: absolute; top: -4px; bottom: -4px; width: 0; border-left: 2px solid #073642; transition: left .3s ease; }
-.flx-root .flx-auto-meter-tick em { position: absolute; top: 15px; left: 0; transform: translateX(-50%); font-style: normal; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; color: #586e75; white-space: nowrap; }
+.flx-root .flx-auto-meter-tick em { position: absolute; top: 15px; left: 0; transform: translateX(-50%); font-style: normal; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-meta); color: #586e75; white-space: nowrap; }
 .flx-root .flx-auto-cause { margin-top: 2px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 7px 10px; border-radius: 8px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12px; color: #93a1a1; background: rgba(147, 161, 161, .08); transition: background-color .3s, color .3s; }
 .flx-root .flx-auto-cause code { font-weight: 700; color: #93a1a1; }
 .flx-root .flx-auto-cause[data-st="partial"] { color: #586e75; }
@@ -254,7 +254,7 @@
 .flx-root .flx-lib-card[aria-pressed="true"] { border-color: #2aa198; background: #fffdf8; box-shadow: 0 0 0 3px rgba(42, 161, 152, .16), 0 12px 24px -18px rgba(0, 43, 54, .5); }
 .flx-root .flx-lib-card-name { font-family: var(--font-mono, ui-monospace, monospace); font-size: 14px; font-weight: 700; color: #073642; }
 .flx-root .flx-lib-mini { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 0; }
-.flx-root .flx-lib-mini i { font-style: normal; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; font-weight: 600; line-height: 1; padding: 4px 6px; border-radius: 5px; border: 1px solid rgba(88, 110, 117, .3); background: #fffdf7; color: #586e75; white-space: nowrap; }
+.flx-root .flx-lib-mini i { font-style: normal; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-meta); font-weight: 600; line-height: 1; padding: 4px 6px; border-radius: 5px; border: 1px solid rgba(88, 110, 117, .3); background: #fffdf7; color: #586e75; white-space: nowrap; }
 .flx-root .flx-lib-mini i + i { margin-left: 9px; position: relative; }
 .flx-root .flx-lib-mini i + i::before { content: ""; position: absolute; right: 100%; top: 50%; width: 7px; height: 1px; margin-right: 1px; background: rgba(147, 161, 161, .8); }
 .flx-root .flx-lib-mini i[data-kind="agent"] { border-color: rgba(42, 161, 152, .5); }
@@ -265,7 +265,7 @@
 .flx-root .flx-lib-mini i[data-kind="exit"] { border: 1px dashed rgba(133, 153, 0, .7); color: #5f6e00; border-radius: 999px; background: transparent; }
 .flx-root .flx-lib-mini i[data-kind="live"] { border: 1px dashed rgba(42, 161, 152, .8); color: #1f7f78; border-radius: 999px; background: rgba(42, 161, 152, .08); }
 .flx-root .flx-lib-outs { display: flex; flex-wrap: wrap; gap: 4px; }
-.flx-root .flx-lib-outs i { font-style: normal; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; font-weight: 600; line-height: 1; padding: 3px 6px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
+.flx-root .flx-lib-outs i { font-style: normal; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-meta); font-weight: 600; line-height: 1; padding: 3px 6px; border-radius: 999px; border: 1px solid; white-space: nowrap; }
 .flx-root .flx-lib-outs i[data-tone="bad"] { color: #dc322f; border-color: rgba(220, 50, 47, .35); background: rgba(220, 50, 47, .06); }
 .flx-root .flx-lib-outs i[data-tone="back"], .flx-root .flx-lib-outs i[data-tone="loop"] { color: #6c71c4; border-color: rgba(108, 113, 196, .4); border-radius: 5px; }
 .flx-root .flx-lib-outs i[data-tone="loop"] { border-style: dashed; }

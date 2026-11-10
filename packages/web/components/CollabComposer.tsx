@@ -103,7 +103,7 @@ function SendTogether({ candidates, mineEmpty, onSend }: { candidates: JointCand
       onMouseDown={(e) => e.preventDefault()}
       onClick={onSend}
       title="One turn, each part under its author's name"
-      className="ml-auto shrink-0 inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full border border-sol-cyan/40 bg-sol-cyan/10 text-sol-cyan text-[11px] font-medium not-italic hover:bg-sol-cyan/20 transition-colors"
+      className="ml-auto shrink-0 inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full border border-sol-cyan/40 bg-sol-cyan/10 text-sol-cyan text-meta font-medium not-italic hover:bg-sol-cyan/20 transition-colors"
     >
       {label}
       <span className="inline-flex items-center gap-0.5">
@@ -139,7 +139,7 @@ export function CollabPresenceBar({ present, showHere, boxed = false, joint, sha
     >
       <div className="min-h-0 overflow-hidden">
         {open && (
-          <div className={`flex items-center gap-2 px-4 py-1 text-[11px] text-sol-text-muted min-w-0 ${!writer || coWriters.length > 0 ? "mb-0.5" : boxed ? "mb-1 rounded-xl border border-sol-cyan/25 bg-sol-cyan/5" : "border-t border-sol-border/20 bg-sol-bg-alt/30"}`}>
+          <div className={`flex items-center gap-2 px-4 py-1 text-meta text-sol-text-muted min-w-0 ${!writer || coWriters.length > 0 ? "mb-0.5" : boxed ? "mb-1 rounded-xl border border-sol-cyan/25 bg-sol-cyan/5" : "border-t border-sol-border/20 bg-sol-bg-alt/30"}`}>
             {coWriters.length > 0 ? (
               // One draft, several hands: who is in it, and who is typing now.
               <span data-sv-shared-draft className="inline-flex items-center gap-2 min-w-0">
@@ -443,11 +443,11 @@ export const CollabComposer = memo(function CollabComposer({
         shared={shared.active ? { editors: shared.editors } : null}
         chat={people.length > 0 ? <ConversationChat conversationId={conversation._id.toString()} people={people} /> : null}
       />
-      {(strip || sentHint) && <div className={`flex items-center gap-2 px-4 py-1.5 text-[11px] border-t ${toneClass}`}>
+      {(strip || sentHint) && <div className={`flex items-center gap-2 px-4 py-1.5 text-meta border-t ${toneClass}`}>
         {strip && <span className="shrink-0">{strip.icon}</span>}
         {strip && <span className="truncate">{strip.text}</span>}
         {sentHint && (
-          <span className="ml-auto inline-flex items-center gap-1 text-[10px] font-medium text-sol-green shrink-0">
+          <span className="ml-auto inline-flex items-center gap-1 text-meta font-medium text-sol-green shrink-0">
             <Check className="w-3 h-3" />{sentHint}
           </span>
         )}
@@ -576,13 +576,13 @@ export const CollabRequestBanner = memo(function CollabRequestBanner({
         {granted.map((r) => (
           <div key={r.grant_id} className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl border border-sol-border/40 bg-sol-bg-alt/50">
             <Avatar name={r.grantee_name} image={r.grantee_image} />
-            <span className="text-[11px] text-sol-text-muted flex-1 min-w-0 truncate">
+            <span className="text-meta text-sol-text-muted flex-1 min-w-0 truncate">
               <b className="text-sol-text">{r.grantee_name || "A teammate"}</b> can send into this session
             </span>
             <button
               onClick={() => act(() => revoke({ grant_id: r.grant_id }), r.grant_id)}
               disabled={busyId === r.grant_id}
-              className="shrink-0 h-6 px-2.5 rounded-full text-[11px] font-medium border border-sol-border text-sol-text-dim hover:text-sol-red hover:border-sol-red/40 disabled:opacity-50 transition-colors"
+              className="shrink-0 h-6 px-2.5 rounded-full text-meta font-medium border border-sol-border text-sol-text-dim hover:text-sol-red hover:border-sol-red/40 disabled:opacity-50 transition-colors"
             >Revoke</button>
           </div>
         ))}
@@ -608,7 +608,7 @@ function GuestSuggestionCard({ suggestion }: { suggestion: { _id: string; guest_
     <div data-guest-suggestion className="flex items-start gap-2.5 px-3 py-2 rounded-xl border border-sol-violet/30 bg-sol-violet/10 shadow-lg">
       <Avatar name={suggestion.guest_name} />
       <div className="flex-1 min-w-0">
-        <div className="text-[11px] text-sol-text-muted">
+        <div className="text-meta text-sol-text-muted">
           <b className="text-sol-violet">{suggestion.guest_name}</b> <span className="text-sol-text-dim">guest</span>
         </div>
         {editing ? (
@@ -655,7 +655,7 @@ function Avatar({ name, image }: { name?: string; image?: string }) {
       alt={name || ""}
       className="w-6 h-6 rounded-full shrink-0 object-cover"
       fallback={
-        <div className="w-6 h-6 rounded-full shrink-0 grid place-items-center bg-sol-cyan/20 text-sol-cyan text-[11px] font-semibold">
+        <div className="w-6 h-6 rounded-full shrink-0 grid place-items-center bg-sol-cyan/20 text-sol-cyan text-meta font-semibold">
           {initial}
         </div>
       }

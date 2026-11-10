@@ -20,10 +20,10 @@ export function ReadingDemo({ children }: { children?: ReactNode }) {
         <div className="mt-8 space-y-4 text-[15px] leading-relaxed" style={{ color: SOL.base00 }}>{children}</div>
       </div>
       <div className="rounded-xl overflow-hidden" style={{ backgroundColor: SOL.base03, border: "1px solid #094959" }}>
-        <div className="px-4 py-2.5 font-mono text-[11px] truncate" style={{ backgroundColor: SOL.base02, color: SOL.base01, borderBottom: "1px solid #094959" }}>
+        <div className="px-4 py-2.5 font-mono text-meta truncate" style={{ backgroundColor: SOL.base02, color: SOL.base01, borderBottom: "1px solid #094959" }}>
           <span style={{ color: SOL.green }}>$</span> <span style={{ color: SOL.base2 }}>cast computer get-app-state --app com.apple.finder --no-screenshot</span>
         </div>
-        <div className="py-3 font-mono text-[11.5px] sm:text-[12px] leading-[1.7]">
+        <div className="py-3 font-mono text-meta sm:text-[12px] leading-[1.7]">
           {FINDER_HEADER.map((l, i) => (
             <div key={i} className="px-4 whitespace-pre-wrap" style={{ color: i === 0 ? SOL.base1 : SOL.base01 }}>{l}</div>
           ))}
@@ -81,7 +81,7 @@ function FinderMock({ hot, setHot }: { hot: string | null; setHot: (k: string) =
         </Region>
         <div className="grid grid-cols-[38%_1fr] sm:grid-cols-[150px_1fr] min-h-[250px]">
           <Region k="sidebar" hot={hot} setHot={setHot} className="!rounded-none px-2 py-3 space-y-0.5" style={{ backgroundColor: "#efe9da" }}>
-            <div className="px-2 pb-1 text-[11px] font-semibold" style={{ color: "#a59e8e" }}>Favorites</div>
+            <div className="px-2 pb-1 text-meta font-semibold" style={{ color: "#a59e8e" }}>Favorites</div>
             {side.map(([k, name]) => (
               <Region key={k} k={k} hot={hot} setHot={setHot} className="px-2 py-1 truncate" style={{ backgroundColor: k === "docs" ? "rgba(0,0,0,0.08)" : undefined, color: "#3b3a36" }}>
                 {name}
@@ -89,7 +89,7 @@ function FinderMock({ hot, setHot }: { hot: string | null; setHot: (k: string) =
             ))}
           </Region>
           <Region k="list" hot={hot} setHot={setHot} className="!rounded-none p-2">
-            <div className="grid grid-cols-[1fr_auto] px-2 pb-1.5 text-[11px]" style={{ color: "#a59e8e", borderBottom: "1px solid rgba(0,0,0,0.06)" }}>
+            <div className="grid grid-cols-[1fr_auto] px-2 pb-1.5 text-meta" style={{ color: "#a59e8e", borderBottom: "1px solid rgba(0,0,0,0.06)" }}>
               <span>Name</span>
               <span className="hidden sm:block">Date modified</span>
             </div>

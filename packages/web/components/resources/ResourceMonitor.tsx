@@ -16,6 +16,7 @@ import {
   type Freshness, type GroupBy, type Sort, type SortBy, type TableRow, type Usage,
 } from "./resourceModel";
 import type { ResourceMachine, ResourceMonitorProps, ResourceSessionState } from "./types";
+import "./resources.css";
 
 const FRESH_DOT: Record<Freshness, string> = {
   live: "bg-sol-green",
@@ -41,7 +42,7 @@ function Seg<T extends string>({ value, options, onChange, label }: { value: T; 
           role="radio"
           aria-checked={value === v}
           onClick={() => onChange(v)}
-          className={cn("rounded-[3px] px-1.5 py-0.5 text-[11px]", value === v ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text")}
+          className={cn("rounded-[3px] px-1.5 py-0.5 text-meta", value === v ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text")}
         >
           {l}
         </button>
@@ -66,7 +67,7 @@ function Composition({ machines }: { machines: ResourceMachine[] }) {
   if (!total.cpu && !total.rss) return null;
   const bar = (f: (u: Usage) => number, t: number, label: string) => (
     <div className="flex items-center gap-2">
-      <span className="w-14 shrink-0 text-[10px] uppercase tracking-wide text-sol-text-dim">{label}</span>
+      <span className="w-14 shrink-0 text-mark uppercase tracking-wide text-sol-text-dim">{label}</span>
       <div className="flex h-2 min-w-0 flex-1 overflow-hidden rounded-sm bg-sol-bg-highlight/60">
         {KINDS.map((k) => {
           const u = byKind.get(k); if (!u || !t) return null;
@@ -79,7 +80,7 @@ function Composition({ machines }: { machines: ResourceMachine[] }) {
     <div className="space-y-1 border-b border-sol-border/30 px-4 py-2">
       {bar((u) => u.cpu, total.cpu, "CPU")}
       {bar((u) => u.rss, total.rss, "Resident")}
-      <div className="flex flex-wrap gap-x-3 gap-y-0.5 pl-16 text-[10px] text-sol-text-muted">
+      <div className="flex flex-wrap gap-x-3 gap-y-0.5 pl-16 text-meta text-sol-text-muted">
         {KINDS.filter((k) => byKind.has(k)).map((k) => (
           <span key={k} className="inline-flex items-center gap-1"><span className={cn("h-1.5 w-1.5 rounded-sm", KIND_TONE[k])} />{KIND_LABEL[k]} {fmtBytes(byKind.get(k)!.rss)}</span>
         ))}
@@ -95,20 +96,20 @@ function MachineList({ machines, now, onPick }: { machines: ResourceMachine[]; n
         const f = freshness(m, now);
         const p = m.snapshot?.sample;
         return (
-          <button key={m.deviceId} type="button" onClick={() => onPick(m.deviceId)} className={cn("grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 border-b border-sol-border/15 px-4 py-2 text-left last:border-b-0 hover:bg-sol-bg-highlight/40 sm:grid-cols-[minmax(0,14rem)_1fr_1fr_auto]", f !== "live" && "opacity-70")}>
+          <button key={m.deviceId} type="button" onClick={() => onPick(m.deviceId)} className={cn("res-machine grid w-full items-center gap-x-4 border-b border-sol-border/15 px-4 py-2 text-left last:border-b-0 hover:bg-sol-bg-highlight/40", f !== "live" && "opacity-70")}>
             <span className="flex min-w-0 items-center gap-2 text-[12px] text-sol-text">
               <MachineIcon m={m} className="h-3.5 w-3.5 shrink-0 text-sol-text-muted" />
               <span className="truncate">{m.name}</span>
             </span>
-            <span className="hidden items-center gap-2 text-[11px] tabular-nums text-sol-blue sm:flex">
+            <span className="res-sm-flex items-center gap-2 text-meta tabular-nums text-sol-blue">
               <MiniTrace points={m.history} f={(q) => q.cpuPercent} max={100} />
               {p?.cpuPercent !== undefined ? `${p.cpuPercent.toFixed(0)}% CPU` : ""}
             </span>
-            <span className="hidden items-center gap-2 text-[11px] tabular-nums text-sol-violet sm:flex">
+            <span className="res-sm-flex items-center gap-2 text-meta tabular-nums text-sol-violet">
               <MiniTrace points={m.history} f={memoryUsedPct} max={100} />
               {p ? `${fmtBytes(memoryUsed(p))} / ${fmtBytes(p.memoryTotal)}` : ""}
             </span>
-            <span className="flex items-center gap-1.5 text-[10px] text-sol-text-muted">
+            <span className="flex items-center gap-1.5 text-meta text-sol-text-muted">
               <span className={cn("h-1.5 w-1.5 rounded-full", FRESH_DOT[f])} />
               {m.asleep && !m.online ? "asleep" : f === "live" ? `${p?.pressure ?? ""} pressure` : f === "stale" || f === "offline" ? `${FRESH_LABEL[f]} · ${fmtAgo(m.receivedAt, now)}` : FRESH_LABEL[f]}
             </span>
@@ -182,9 +183,9 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
 
   if (!ready && machines.length === 0) {
     return (
-      <div className="flex h-full flex-col bg-sol-bg" aria-busy="true">
+      <div className="res-root flex h-full flex-col bg-sol-bg" aria-busy="true">
         <div className="h-11 border-b border-sol-border/30" />
-        <div className="grid grid-cols-2 gap-px border-b border-sol-border/30 sm:grid-cols-3 xl:grid-cols-6">
+        <div className="res-health gap-px border-b border-sol-border/30">
           {Array.from({ length: 6 }, (_, i) => <div key={i} className="h-[88px] animate-pulse bg-sol-bg-highlight/30" />)}
         </div>
         {Array.from({ length: 8 }, (_, i) => <div key={i} className="mx-3 my-1.5 h-6 animate-pulse rounded bg-sol-bg-highlight/25" />)}
@@ -193,17 +194,17 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
   }
 
   return (
-    <div className="flex h-full min-h-0 bg-sol-bg text-sol-text">
-      <div className={cn("flex min-w-0 flex-1 flex-col", reviewing && "hidden lg:flex")}>
+    <div className="res-root flex h-full min-h-0 bg-sol-bg text-sol-text">
+      <div className="res-list flex min-w-0 flex-1 flex-col" data-reviewing={reviewing ? "" : undefined}>
         {sampleNotice && (
-          <div className="border-b border-sol-yellow/30 bg-sol-yellow/10 px-4 py-1 text-[11px] text-sol-yellow" role="note">{sampleNotice}</div>
+          <div className="border-b border-sol-yellow/30 bg-sol-yellow/10 px-4 py-1 text-meta text-sol-yellow" role="note">{sampleNotice}</div>
         )}
         <header className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-sol-border/30 px-4 py-2">
           <h1 className="text-[13px] font-semibold">Resources</h1>
           {machines.length > 0 && (
             <nav className="-mb-px flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto" aria-label="Machines">
               {machines.length > 1 && (
-                <button type="button" onClick={() => setMachineId("all")} className={cn("shrink-0 rounded px-2 py-1 text-[11px]", machineId === "all" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text")}>
+                <button type="button" onClick={() => setMachineId("all")} className={cn("shrink-0 rounded px-2 py-1 text-meta", machineId === "all" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text")}>
                   All machines
                 </button>
               )}
@@ -217,7 +218,7 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
                     onClick={() => setMachineId(m.deviceId)}
                     aria-current={machineId === m.deviceId ? "true" : undefined}
                     title={`${m.name}: ${m.asleep && !m.online ? "asleep" : FRESH_LABEL[f]}`}
-                    className={cn("inline-flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-[11px]", machineId === m.deviceId ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text")}
+                    className={cn("inline-flex shrink-0 items-center gap-1.5 rounded px-2 py-1 text-meta", machineId === m.deviceId ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text")}
                   >
                     <MachineIcon m={m} className="h-3 w-3" />
                     <span className="max-w-[11rem] truncate">{m.name}</span>
@@ -228,7 +229,7 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
             </nav>
           )}
           {plan && !incident && !reviewing && (
-            <button type="button" onClick={() => setReviewing({ deviceId: plan.deviceId })} className="inline-flex shrink-0 items-center gap-1.5 rounded border border-sol-border/50 px-2 py-1 text-[11px] text-sol-text hover:bg-sol-bg-highlight">
+            <button type="button" onClick={() => setReviewing({ deviceId: plan.deviceId })} className="inline-flex shrink-0 items-center gap-1.5 rounded border border-sol-border/50 px-2 py-1 text-meta text-sol-text hover:bg-sol-bg-highlight">
               <CloudUpload className="h-3.5 w-3.5 text-sol-cyan" />Move load to cloud
             </button>
           )}
@@ -237,9 +238,9 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
         <div className="min-h-0 flex-1 overflow-y-auto">
           {machines.length === 0 ? (
             <div className="px-6 py-16 text-center">
-              <p className="text-[13px] text-sol-text">No machine has reported resources yet.</p>
-              <p className="mx-auto mt-1 max-w-md text-[11px] leading-relaxed text-sol-text-muted">
-                Each machine running the codecast daemon reports its CPU, memory and processes about every 30 seconds once it is on a version with resource reporting. Update the daemon on a machine and it appears here.
+              <p className="text-[13px] text-sol-text">No machine has reported resources yet</p>
+              <p className="mx-auto mt-1 max-w-md text-meta leading-relaxed text-sol-text-muted" title="A machine reports its CPU, memory and processes about every 30 seconds once its daemon has resource reporting">
+                Update the daemon on a machine to see it here
               </p>
             </div>
           ) : (
@@ -256,7 +257,7 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
                     })()}
                   </span>
                   {plan && (
-                    <button type="button" onClick={() => setReviewing({ deviceId: plan.deviceId })} className="rounded bg-sol-text px-2 py-0.5 text-[11px] font-semibold text-sol-bg hover:opacity-90">
+                    <button type="button" onClick={() => setReviewing({ deviceId: plan.deviceId })} className="rounded bg-sol-text px-2 py-0.5 text-meta font-semibold text-sol-bg hover:opacity-90">
                       Move load to cloud
                     </button>
                   )}
@@ -268,20 +269,20 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
 
               <div className="sticky top-0 z-[2] flex flex-wrap items-center gap-2 border-b border-sol-border/30 bg-sol-bg px-3 py-1.5">
                 <Seg label="Group by" value={groupBy} onChange={setGroupBy} options={[["session", "Session"], ["project", "Project"], ["kind", "Kind"], ...(machines.length > 1 ? [["machine", "Machine"] as [GroupBy, string]] : [])]} />
-                <select aria-label="Session state" value={stateFilter} onChange={(e) => setStateFilter(e.target.value as StateFilter)} className="rounded border border-sol-border/40 bg-sol-bg px-1 py-0.5 text-[11px] text-sol-text">
+                <select aria-label="Session state" value={stateFilter} onChange={(e) => setStateFilter(e.target.value as StateFilter)} className="rounded border border-sol-border/40 bg-sol-bg px-1 py-0.5 text-meta text-sol-text">
                   <option value="all">All states</option>
                   <option value="working">Working</option>
                   <option value="needs_input">Needs you</option>
                   <option value="idle">Idle</option>
                   <option value="hibernated">Parked</option>
                 </select>
-                <label className="flex min-w-[9rem] flex-1 items-center gap-1 rounded border border-sol-border/40 px-1.5 py-0.5 sm:max-w-[16rem]">
+                <label className="res-filter flex min-w-[9rem] flex-1 items-center gap-1 rounded border border-sol-border/40 px-1.5 py-0.5">
                   <Search className="h-3 w-3 text-sol-text-dim" />
-                  <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter sessions, projects, processes" className="min-w-0 flex-1 bg-transparent text-[11px] text-sol-text outline-none placeholder:text-sol-text-dim" />
+                  <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter sessions, projects, processes" className="min-w-0 flex-1 bg-transparent text-meta text-sol-text outline-none placeholder:text-sol-text-dim" />
                   {query && <button type="button" aria-label="Clear filter" onClick={() => setQuery("")}><X className="h-3 w-3 text-sol-text-dim" /></button>}
                 </label>
                 {selected.size > 0 && (
-                  <div className="flex w-full items-center gap-1 text-[11px] sm:ml-auto sm:w-auto">
+                  <div className="res-selbar flex items-center gap-1 text-meta">
                     <span className="font-semibold">{selected.size} selected</span>
                     <button type="button" disabled={!actions?.onPark || !parkable.length} title={!actions?.onPark ? off : !parkable.length ? "Only idle sessions or ones waiting on you can be parked" : undefined} onClick={() => actions?.onPark?.(parkable.map((s) => s.sessionId))} className="rounded px-1.5 py-0.5 hover:bg-sol-bg-highlight disabled:cursor-not-allowed disabled:opacity-40">Park {parkable.length || ""}</button>
                     {resumable.length > 0 && <button type="button" disabled={!actions?.onResume} title={!actions?.onResume ? off : undefined} onClick={() => actions?.onResume?.(resumable.map((s) => s.sessionId))} className="rounded px-1.5 py-0.5 hover:bg-sol-bg-highlight disabled:cursor-not-allowed disabled:opacity-40">Resume {resumable.length}</button>}
@@ -300,17 +301,16 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
               </div>
 
               {scope.some((m) => processesUnavailable(m.snapshot)) && (
-                <div className="border-b border-sol-border/20 bg-sol-bg-alt/60 px-4 py-2 text-[11px] text-sol-text-muted">
-                  <span className="text-sol-text-secondary">Process details are unavailable in the latest sample{scope.length > 1 ? ` from ${scope.filter((m) => processesUnavailable(m.snapshot)).map((m) => m.name).join(", ")}` : ""}.</span>{" "}
-                  CPU, memory and load are current, but listing processes did not finish in time. Sessions are listed without usage; you can still park, open or move them.
+                <div className="border-b border-sol-border/20 bg-sol-bg-alt/60 px-4 py-2 text-meta text-sol-text-muted" title="Listing processes did not finish in time. CPU, memory and load are current; sessions are listed without usage and can still be parked, opened or moved.">
+                  <span className="text-sol-text-secondary">Process details unavailable in the latest sample{scope.length > 1 ? ` from ${scope.filter((m) => processesUnavailable(m.snapshot)).map((m) => m.name).join(", ")}` : ""}</span>
                 </div>
               )}
               {scope.every((m) => !m.snapshot) ? (
-                <div className="px-4 py-8 text-center text-[11px] text-sol-text-muted">
+                <div className="px-4 py-8 text-center text-meta text-sol-text-muted">
                   {machine ? `${machine.name} has not sent a process sample yet, so nothing can be attributed.` : "No machine has sent a process sample yet."}
                 </div>
               ) : rows.length === 0 ? (
-                <div className="px-4 py-8 text-center text-[11px] text-sol-text-muted">Nothing matches this filter.</div>
+                <div className="px-4 py-8 text-center text-meta text-sol-text-muted">Nothing matches this filter.</div>
               ) : (
                 <ResourceTable
                   rows={rows}
@@ -329,7 +329,7 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
                 />
               )}
               {machine?.snapshot && machine.snapshot.limitations.length > 0 && (
-                <ul className="px-3 pb-4 text-[10px] text-sol-text-dim">
+                <ul className="px-3 pb-4 text-meta text-sol-text-dim">
                   {machine.snapshot.limitations.map((l) => <li key={l}>{l}</li>)}
                 </ul>
               )}
@@ -338,7 +338,7 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
         </div>
       </div>
       {reviewing && (reviewing.launched || plan) && (
-        <aside className="fixed inset-0 z-30 flex flex-col lg:static lg:z-auto lg:w-[34rem] lg:shrink-0 lg:border-l lg:border-sol-border/30">
+        <aside className="res-review">
           {reviewing.launched ? (
             <OffloadProgress
               runs={launchedRuns}

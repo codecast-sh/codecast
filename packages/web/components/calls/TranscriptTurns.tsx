@@ -149,7 +149,7 @@ export function TranscriptTurnList({
         >
           {compact ? (
             <div className="flex gap-3">
-              <span className="w-10 shrink-0 pt-0.5 font-mono text-[11px] tabular-nums text-sol-text-dim">
+              <span className="w-11 shrink-0 pt-0.5 font-mono text-meta tabular-nums text-sol-text-dim">
                 {formatCallTime(t.t0)}
               </span>
               <div className="min-w-0 flex-1">
@@ -163,7 +163,7 @@ export function TranscriptTurnList({
             </div>
           ) : (
             <>
-              <div className={`text-[11px] font-medium ${speakerColor(t.speaker_id)}`}>
+              <div className={`text-meta font-medium ${speakerColor(t.speaker_id)}`}>
                 {firstName(t.speaker_name)}
                 <ParticipantTag identity={t.speaker_id} name={t.speaker_name} className="ml-1.5 align-[1px]" />
                 <span className="ml-2 font-normal text-sol-text-dim">{formatCallTime(t.t0)}</span>
@@ -207,14 +207,14 @@ export function CallTranscriptDisclosure({
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text-muted transition-colors"
+          className="flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text-muted transition-colors"
         >
           {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           transcript
         </button>
         <a
           href={`/calls/${transcriptId}`}
-          className="flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text-muted transition-colors"
+          className="flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text-muted transition-colors"
           title="Open the call page"
         >
           <ExternalLink className="w-3 h-3" /> call page

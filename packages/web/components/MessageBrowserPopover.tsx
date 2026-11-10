@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, useSyncExternalStore } from "react";
+import type { ScrollProgressSignal } from "./conversation/scrollProgressSignal";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { MessagePromptPreview } from "./MessagePromptPreview";
@@ -125,17 +126,17 @@ function HoverPreview({ message, conversationId, rect, onMouseEnter, onMouseLeav
       >
         <div className="flex items-center gap-2 p-3 pb-1 flex-shrink-0">
           {message.kind === "user" ? (
-            <span className="text-[10px] text-sol-text-dim tabular-nums">#{message.originalIndex + 1}</span>
+            <span className="text-meta text-sol-text-dim tabular-nums">#{message.originalIndex + 1}</span>
           ) : (
-            <span className="text-[10px] text-sol-violet/80 flex items-center gap-1">
+            <span className="text-meta text-sol-violet/80 flex items-center gap-1">
               <MachineKindIcon kind={message.kind} />
               {message.source && <MachineSourceLabel kind={message.kind} source={message.source} />}
             </span>
           )}
           <span className="text-sol-text-dim/30">·</span>
-          <span className="text-sol-text-dim text-[10px]">{formatTimeAgo(message.timestamp)}</span>
+          <span className="text-sol-text-dim text-meta">{formatTimeAgo(message.timestamp)}</span>
           {message.commentCount > 0 && (
-            <span className="text-[10px] text-sol-cyan flex items-center gap-0.5">
+            <span className="text-meta text-sol-cyan flex items-center gap-0.5">
               <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
               </svg>
@@ -153,11 +154,11 @@ function HoverPreview({ message, conversationId, rect, onMouseEnter, onMouseLeav
         </div>
         {showFooter && (
           <div className="flex-shrink-0 border-t border-sol-border/30 px-3 py-1.5 flex items-center justify-between gap-2">
-            <span className="text-[10px] text-sol-text-dim">{loadingBody ? "Loading full message" : `${body.length.toLocaleString()} chars`}</span>
+            <span className="text-meta text-sol-text-dim">{loadingBody ? "Loading full message" : `${body.length.toLocaleString()} chars`}</span>
             {(expanded || overflows) && (
               <button
                 type="button"
-                className="text-[11px] text-sol-cyan hover:text-sol-text transition-colors"
+                className="text-meta text-sol-cyan hover:text-sol-text transition-colors"
                 onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
               >
                 {expanded ? "Show less" : "Show more"}
@@ -351,7 +352,7 @@ function NavDropdown({
                 onClick={(e) => { e.stopPropagation(); setShowMachine(v => !v); }}
                 aria-pressed={showMachine}
                 title={`${showMachine ? "Hide" : "Show"} ${machineCount} message${machineCount !== 1 ? "s" : ""} delivered by triggers, other sessions, or teammates, plus bare "continue" messages`}
-                className={`flex items-center gap-1 px-2 py-1.5 rounded-lg border text-[11px] tabular-nums transition-colors flex-shrink-0 ${
+                className={`flex items-center gap-1 px-2 py-1.5 rounded-lg border text-meta tabular-nums transition-colors flex-shrink-0 ${
                   showMachine
                     ? "bg-sol-violet/15 border-sol-violet/40 text-sol-violet hover:bg-sol-violet/20"
                     : "border-sol-border/30 text-sol-text-dim/60 hover:text-sol-text-muted hover:border-sol-border/50"
@@ -371,7 +372,7 @@ function NavDropdown({
           <div className="flex border-b border-sol-border/20 px-3">
             <button
               onClick={() => onTabChange("messages")}
-              className={`text-[11px] py-1.5 px-2 transition-colors border-b-2 ${
+              className={`text-meta py-1.5 px-2 transition-colors border-b-2 ${
                 tab === "messages"
                   ? "text-sol-text border-sol-cyan font-medium"
                   : "text-sol-text-dim hover:text-sol-text-muted border-transparent"
@@ -381,7 +382,7 @@ function NavDropdown({
             </button>
             <button
               onClick={() => onTabChange("comments")}
-              className={`text-[11px] py-1.5 px-2 transition-colors border-b-2 flex items-center gap-1 ${
+              className={`text-meta py-1.5 px-2 transition-colors border-b-2 flex items-center gap-1 ${
                 tab === "comments"
                   ? "text-sol-text border-sol-cyan font-medium"
                   : "text-sol-text-dim hover:text-sol-text-muted border-transparent"
@@ -425,10 +426,10 @@ function NavDropdown({
                       </span>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-1.5">
-                          <span className="text-[10px] text-sol-violet/80 flex-shrink-0">
+                          <span className="text-meta text-sol-violet/80 flex-shrink-0">
                             {MACHINE_KIND_LABEL[m.kind]}
                           </span>
-                          <span className="text-[11px] text-sol-text-muted truncate min-w-0">
+                          <span className="text-meta text-sol-text-muted truncate min-w-0">
                             {m.source && <MachineSourceLabel kind={m.kind} source={m.source} />}
                           </span>
                         </div>
@@ -440,13 +441,13 @@ function NavDropdown({
                           </div>
                         )}
                         <div className="flex items-center gap-1.5 mt-1">
-                          <span className="text-[10px] text-sol-text-dim/50 tabular-nums">
+                          <span className="text-meta text-sol-text-dim/50 tabular-nums">
                             {formatTimeAgo(m.timestamp)}
                           </span>
                           {m.commentCount > 0 && (
                             <>
                               <span className="text-sol-text-dim/20">·</span>
-                              <span className="text-[10px] text-sol-cyan flex items-center gap-0.5">
+                              <span className="text-meta text-sol-cyan flex items-center gap-0.5">
                                 <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
                                 </svg>
@@ -477,7 +478,7 @@ function NavDropdown({
                   }`}
                 >
                   <div className="flex items-start gap-2">
-                    <span className={`text-[10px] tabular-nums w-4 text-right flex-shrink-0 pt-[2px] ${
+                    <span className={`text-meta tabular-nums w-4 text-right flex-shrink-0 pt-[2px] ${
                       isActive || isCurrent ? "text-sol-cyan" : "text-sol-blue/40"
                     }`}>
                       {m.originalIndex + 1}
@@ -487,13 +488,13 @@ function NavDropdown({
                         isActive || isCurrent ? "text-sol-text" : "text-sol-text-secondary"
                       } ${m.isCmd ? "font-mono" : ""} ${isCurrent ? "font-medium" : ""}`} />
                       <div className="flex items-center gap-1.5 mt-1">
-                        <span className="text-[10px] text-sol-text-dim/50 tabular-nums">
+                        <span className="text-meta text-sol-text-dim/50 tabular-nums">
                           {formatTimeAgo(m.timestamp)}
                         </span>
                         {m.commentCount > 0 && (
                           <>
                             <span className="text-sol-text-dim/20">·</span>
-                            <span className="text-[10px] text-sol-cyan flex items-center gap-0.5">
+                            <span className="text-meta text-sol-cyan flex items-center gap-0.5">
                               <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
                               </svg>
@@ -536,13 +537,13 @@ function NavDropdown({
                       alt=""
                       className="w-4 h-4 rounded-full"
                       fallback={
-                        <div className="w-4 h-4 rounded-full bg-sol-blue/30 flex items-center justify-center text-[8px] text-sol-blue">
+                        <div className="w-[18px] h-[18px] rounded-full bg-sol-blue/30 flex items-center justify-center text-mark text-sol-blue">
                           {displayName[0]?.toUpperCase()}
                         </div>
                       }
                     />
-                    <span className="text-[11px] text-sol-text-secondary font-medium">{displayName}</span>
-                    <span className="text-[10px] text-sol-text-dim/60 ml-auto">{formatTimeAgo(c.created_at)}</span>
+                    <span className="text-meta text-sol-text-secondary font-medium">{displayName}</span>
+                    <span className="text-meta text-sol-text-dim/60 ml-auto">{formatTimeAgo(c.created_at)}</span>
                   </div>
                   <div className="text-[12px] text-sol-text-muted line-clamp-2 pl-[22px]">
                     {c.content}
@@ -564,16 +565,21 @@ function NavDropdown({
 /** The fewest asks a message rail is drawn for. */
 const MIN_RAIL = 2;
 
+const NO_PROGRESS = (): (() => void) => () => {};
+
 export function MessageNavButton({
   conversationId,
   currentMessageId,
-  scrollProgress = 1,
+  scrollProgress,
   onScrollToMessage,
   loadedMessages,
 }: {
   conversationId: string;
   currentMessageId: string | null;
-  scrollProgress?: number;
+  /** The transcript's scroll position (1 when absent). Read through a
+   *  subscription, so a scroll frame redraws the rail only when it moves the
+   *  active tick. */
+  scrollProgress?: ScrollProgressSignal;
   onScrollToMessage?: (messageId: string) => void;
   loadedMessages?: Parameters<typeof mergeNavigatorSources>[1];
 }) {
@@ -649,7 +655,8 @@ export function MessageNavButton({
   const humanTotal = processed.filter((m) => m.kind === "user").length;
   const machineTotal = total - humanTotal;
   const effectiveId = currentMessageId === "__fallback__" ? null : currentMessageId;
-  const activeIndex = activeTickIndex(processed, effectiveId, scrollProgress);
+  const tickAt = () => activeTickIndex(processed, effectiveId, scrollProgress?.get() ?? 1);
+  const activeIndex = useSyncExternalStore(scrollProgress?.subscribe ?? NO_PROGRESS, tickAt, tickAt);
 
   const scheduleOpen = useCallback(() => {
     if (closeTimerRef.current) clearTimeout(closeTimerRef.current);

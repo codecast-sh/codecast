@@ -78,7 +78,7 @@ export function DecisionAnswerQuote({ decision, conversationId, timestamp }: { d
           aria-expanded={open}
           className="flex items-start gap-1.5 min-w-0 flex-1 text-left text-sol-text-muted hover:text-sol-text transition-colors"
         >
-          <span className="uppercase tracking-wide text-[10px] leading-[18px] text-sol-text-dim shrink-0">decision</span>
+          <span className="uppercase tracking-wide text-mark leading-[18px] text-sol-text-dim shrink-0">decision</span>
           {question ? (
             <span className={`leading-[18px] ${open ? "" : "line-clamp-2"}`}>{question}</span>
           ) : (
@@ -93,7 +93,7 @@ export function DecisionAnswerQuote({ decision, conversationId, timestamp }: { d
           onClick={() => void jump()}
           title="Go to the ask in the conversation"
           aria-label="Go to the ask in the conversation"
-          className="flex items-center gap-1 shrink-0 leading-[18px] text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
+          className="flex items-center gap-1 shrink-0 leading-[18px] text-meta text-sol-text-dim hover:text-sol-text transition-colors"
         >
           <CornerUpLeft className="w-3 h-3" />
           the ask
@@ -111,7 +111,7 @@ export function DecisionAnswerQuote({ decision, conversationId, timestamp }: { d
                 return (
                   <li key={i} className={`flex items-start gap-2 ${picked ? "text-sol-text" : "text-sol-text-dim"}`}>
                     <span className="w-3.5 h-3.5 mt-0.5 shrink-0 flex items-center justify-center">
-                      {rank ? <span className="text-[10px] text-sol-green">{rank}</span> : picked ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <span className="text-[10px]">{i + 1}</span>}
+                      {rank ? <span className="text-meta text-sol-green">{rank}</span> : picked ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <span className="text-meta">{i + 1}</span>}
                     </span>
                     <span className="min-w-0">
                       <span className={picked ? "font-medium" : ""}>{opt.label}</span>
@@ -137,7 +137,7 @@ export function DecisionAnswerQuote({ decision, conversationId, timestamp }: { d
           )}
           {row?.report_slug && <PublishedPageEmbed slug={row.report_slug} decision={row._id} />}
           {row && (
-            <Link href={decisionHref(row)} className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text hover:underline">
+            <Link href={decisionHref(row)} className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text hover:underline">
               the decision page <ArrowUpRight className="w-3 h-3" />
             </Link>
           )}
@@ -158,7 +158,7 @@ export function HostedAnswerStrip({ question, onJump }: { question: string; onJu
         type="button"
         onClick={onJump}
         title={LANE_COPY.approval.showQuestionTip}
-        className="flex shrink-0 items-center gap-1 text-[11px] text-sol-text-dim transition-colors hover:text-sol-text hover:underline"
+        className="flex shrink-0 items-center gap-1 text-meta text-sol-text-dim transition-colors hover:text-sol-text hover:underline"
       >
         <CornerUpLeft className="h-3 w-3" />
         {LANE_COPY.approval.showQuestion}

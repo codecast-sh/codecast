@@ -40,7 +40,7 @@ export function FollowPill() {
     return (
       <span
         data-sv-follow-pill="following"
-        className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-sol-cyan/40 bg-sol-cyan/10 pl-1 pr-1 text-[11px] text-sol-text"
+        className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-sol-cyan/40 bg-sol-cyan/10 pl-1 pr-1 text-meta text-sol-text"
         role="status"
       >
         <CommentAvatar name={name} image={memberAvatarUrl(leader)} size={20} />
@@ -91,7 +91,7 @@ function FollowersPill({ followers }: { followers: FollowerRow[] }) {
               </span>
             ))}
             {more > 0 && (
-              <span className="-ml-1.5 grid h-5 min-w-5 place-items-center rounded-full bg-sol-cyan/15 px-1 font-mono text-[10px] text-sol-cyan ring-2 ring-sol-bg">
+              <span className="-ml-1.5 grid h-5 min-w-5 place-items-center rounded-full bg-sol-cyan/15 px-1 font-mono text-meta text-sol-cyan ring-2 ring-sol-bg">
                 +{more}
               </span>
             )}
@@ -121,7 +121,7 @@ function FollowersMenu({ followers }: { followers: FollowerRow[] }) {
   };
   return (
     <div data-sv-follow-menu>
-      <div className="px-2 pb-1.5 pt-1 text-[11px] text-sol-text-muted">
+      <div className="px-2 pb-1.5 pt-1 text-meta text-sol-text-muted">
         <Eye className="mr-1 inline h-3 w-3 -translate-y-px text-sol-cyan" />
         {followersLabel(followers)}
       </div>

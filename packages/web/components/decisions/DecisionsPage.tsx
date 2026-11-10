@@ -33,7 +33,7 @@ const GUIDE_URL = "https://codecast.sh/a/uwp726v59XIX";
 /** A decision whole, beside the list: a flow's in the flows' reader, any other as its document. */
 export function DecisionPeek({ d, onClose }: { d: SessionDecisionItem; onClose: () => void }) {
   return (
-    <div className="w-[min(560px,48vw)] h-full border-l border-sol-border/40 overflow-y-auto bg-sol-bg" data-decision-peek={d.short_id ?? d._id}>
+    <div className="w-[560px] min-w-0 flex-shrink h-full border-l border-sol-border/40 overflow-y-auto bg-sol-bg" data-decision-peek={d.short_id ?? d._id}>
       <ErrorBoundary name="DecisionPeek" level="panel">
         {isFlowDecision(d) ? <LineDecision id={d._id} quiet inline onClose={onClose} /> : <DecisionDocument id={d.short_id ?? d._id} />}
       </ErrorBoundary>
@@ -62,7 +62,7 @@ export function DecisionsList({ activeId }: { activeId?: string }) {
 
   const mineControls: ReactNode = state.view.tab === "mine" ? (
     <div>
-      <div className="text-[10px] uppercase tracking-wider text-sol-text-dim px-1 mb-1">View</div>
+      <div className="text-mark uppercase tracking-wider text-sol-text-dim px-1 mb-1">View</div>
       <SegmentedToggle fullWidth value={cards ? "cards" : "list"} onChange={(v) => setCards(v === "cards")}
         items={[{ key: "list", label: "List", icon: LayoutList }, { key: "cards", label: "Cards", icon: Rows3 }]} />
     </div>

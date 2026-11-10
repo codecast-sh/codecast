@@ -43,18 +43,18 @@ export function PRTabBar({ repository, number, title, tab, family, filesCount, n
           <Icon className="pr-tab-icon w-3.5 h-3.5" />
           {label}
           {key === "files" && filesCount > 0 && (
-            <span className="text-[11px] text-sol-text-dim">{filesCount}</span>
+            <span className="text-meta text-sol-text-dim">{filesCount}</span>
           )}
           {key === "files" && notesCount > 0 && (
-            <span className="rounded-full border border-dashed border-sol-yellow/60 px-1.5 text-[10px] text-sol-yellow" title="Notes in your review, not sent yet">
+            <span className="rounded-full border border-dashed border-sol-yellow/60 px-1.5 text-meta text-sol-yellow" title="Notes in your review, not sent yet">
               {notesCount}
             </span>
           )}
           {key === "commits" && commitsCount > 0 && (
-            <span className="text-[11px] text-sol-text-dim">{commitsCount}</span>
+            <span className="text-meta text-sol-text-dim">{commitsCount}</span>
           )}
           {key === "checks" && checksCount > 0 && (
-            <span className="text-[11px] text-sol-text-dim">{checksCount}</span>
+            <span className="text-meta text-sol-text-dim">{checksCount}</span>
           )}
           <span className="pr-tab-key opacity-0 group-hover:opacity-100 transition-opacity">
             <KeyCap size="xs">{digit}</KeyCap>

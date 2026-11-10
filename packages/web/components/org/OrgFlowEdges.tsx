@@ -52,7 +52,7 @@ function Count({ x, y, text, color, strong }: { x: number; y: number; text: stri
   return (
     <EdgeLabelRenderer>
       <div
-        className="nodrag nopan pointer-events-none absolute rounded-full px-1.5 h-[18px] inline-flex items-center text-[10.5px] font-semibold tabular-nums border whitespace-nowrap"
+        className="nodrag nopan pointer-events-none absolute rounded-full px-1.5 h-[18px] inline-flex items-center text-meta font-semibold tabular-nums border whitespace-nowrap"
         style={{ transform: `translate(-50%, -50%) translate(${x}px, ${y}px)`, color, borderColor: `color-mix(in srgb, ${color} 40%, transparent)`, background: "var(--sol-bg)", opacity: strong ? 1 : 0.35 }}
       >
         {text}

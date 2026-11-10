@@ -14,7 +14,7 @@ export function GuideCard({ guide }: { guide: Guide }) {
     >
       <div className="font-mono text-sm font-semibold mb-1" style={{ color: SOL.base03 }}>{guide.title}</div>
       <div className="text-[13px] leading-relaxed" style={{ color: SOL.base00 }}>{guide.dek}</div>
-      <time dateTime={guide.published} className="block mt-2 font-mono text-[11px]" style={{ color: SOL.base1 }}>
+      <time dateTime={guide.published} className="block mt-2 font-mono text-meta" style={{ color: SOL.base1 }}>
         {formatGuideDate(guide.published)}
       </time>
     </Link>

@@ -43,7 +43,7 @@ export function WatchMock() {
     <Pane
       machine="host"
       title={<>browser watch · <span style={{ color: SOL.base0 }}>dashboard.stripe.com/login</span></>}
-      right={<span className="px-2 py-0.5 rounded border text-[11px]" style={{ borderColor: "#0b4a5a", color: SOL.base2 }}>Take the wheel</span>}
+      right={<span className="px-2 py-0.5 rounded border text-meta" style={{ borderColor: "#0b4a5a", color: SOL.base2 }}>Take the wheel</span>}
       bodyClassName="p-0"
     >
       <div className="relative h-[190px] overflow-hidden" style={{ backgroundColor: "#f4f6f8" }}>

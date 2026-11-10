@@ -14,7 +14,7 @@ export function DatePill({ iso, label: storedLabel }: { iso: string; label?: str
       <Calendar className="w-3.5 h-3.5 flex-shrink-0 text-sol-orange" />
       <span className="text-[13px] font-medium leading-[1.3] text-sol-text">{label}</span>
       {resolved && (
-        <span className="text-[11px] font-mono text-sol-text-dim opacity-80">{resolved}</span>
+        <span className="text-meta font-mono text-sol-text-dim opacity-80">{resolved}</span>
       )}
     </span>
   );

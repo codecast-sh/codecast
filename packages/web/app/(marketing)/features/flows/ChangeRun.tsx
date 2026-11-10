@@ -290,7 +290,7 @@ function Snapshots({ beats, beat }: { beats: Beat[]; beat: number }) {
                   <svg width={10} height={10} viewBox="0 0 10 10" aria-hidden><circle cx={5} cy={5} r={3} fill="none" stroke="currentColor" strokeWidth={1.5} /></svg>
                   {on ? b.sha : "·······"}
                 </span>
-                <div className="mt-1 text-[11.5px]" style={{ color: on ? MUTED : DIM }}>{on ? note : "next"}</div>
+                <div className="mt-1 text-meta" style={{ color: on ? MUTED : DIM }}>{on ? note : "next"}</div>
               </div>
               {k < shown.length - 1 && <span className="mt-[12px] w-4 h-px shrink-0" style={{ backgroundColor: on ? tint(BACK, 50) : HAIR }} />}
             </li>
@@ -309,7 +309,7 @@ function Log({ beats, beat, ghosts }: { beats: Beat[]; beat: number; ghosts: num
         const on = !!b && i <= beat;
         return (
           <li key={i} className="flx-run-row flex items-center gap-2.5 min-h-[25px] px-2 rounded-md" data-on={on || undefined} data-now={(on && i === beat) || undefined}>
-            <span className="w-5 shrink-0 tabular-nums text-[11.5px]" style={{ color: DIM }}>{String(i + 1).padStart(2, "0")}</span>
+            <span className="w-5 shrink-0 tabular-nums text-meta" style={{ color: DIM }}>{String(i + 1).padStart(2, "0")}</span>
             {on ? (
               <>
                 <span className="font-semibold shrink-0" style={{ color: b.via ? BACK : b.step === "decide" || b.step === "session" ? PERSON : INK }}>{b.log.name}</span>
@@ -447,7 +447,7 @@ function ChangeRun() {
             <button key={name} type="button" onClick={() => jump(c)} aria-current={state === "now" ? "step" : undefined}
               className="flx-run-btn flx-run-chap text-left rounded-md px-2 pt-1.5 pb-2" data-state={state}>
               <span className="flex items-center gap-1.5 font-mono text-[12.5px]">
-                <span className="flx-run-chap-n inline-flex items-center justify-center w-[18px] h-[18px] rounded-full text-[11px] tabular-nums shrink-0">
+                <span className="flx-run-chap-n inline-flex items-center justify-center w-[18px] h-[18px] rounded-full text-meta tabular-nums shrink-0">
                   {state === "played" ? (
                     <svg width={9} height={9} viewBox="0 0 10 10" aria-hidden><path d="M1.5 5.2 L4 7.6 L8.5 2.6" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" /></svg>
                   ) : c + 1}

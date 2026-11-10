@@ -73,13 +73,13 @@ export function CloudPlacementStrip({ sessionId }: { sessionId?: string }) {
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <Cloud className="h-3.5 w-3.5 shrink-0 text-sol-violet" aria-hidden />
         <span className="font-medium text-sol-text">{hostName(p.host_device_id, p.host_id)}</span>
-        {load && <span className={`font-mono text-[11px] ${load.tight ? "text-sol-yellow" : "text-sol-text-dim"}`}>{formatHostLoad(load)}</span>}
+        {load && <span className={`font-mono text-meta ${load.tight ? "text-sol-yellow" : "text-sol-text-dim"}`}>{formatHostLoad(load)}</span>}
         {p.moved_from && (
-          <span className="text-[11px] text-sol-text-muted" title={p.moved_from.host_id}>
+          <span className="text-meta text-sol-text-muted" title={p.moved_from.host_id}>
             instead of {hostName(p.moved_from.host_device_id, p.moved_from.host_id)} · <span className="text-sol-yellow">{p.moved_from.why}</span>
           </span>
         )}
-        <span className="ml-auto font-mono text-[11px] text-sol-text-dim">{span(total)}</span>
+        <span className="ml-auto font-mono text-meta text-sol-text-dim">{span(total)}</span>
       </div>
       <ol className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
         {steps.map(({ step, state, ms }) => (
@@ -89,19 +89,19 @@ export function CloudPlacementStrip({ sessionId }: { sessionId?: string }) {
               : state === "failed" ? <X className="h-3 w-3" aria-hidden />
               : <span className="mx-[3px] h-1.5 w-1.5 rounded-full bg-current" aria-hidden />}
             <span>{CLOUD_PLACEMENT_STEP_LABEL[step]}</span>
-            {ms !== undefined && <span className="font-mono text-[10px] opacity-70">{span(ms)}</span>}
+            {ms !== undefined && <span className="font-mono text-meta opacity-70">{span(ms)}</span>}
           </li>
         ))}
         {p.lines.length > 0 && (
           <li className="ml-auto">
-            <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="text-[11px] text-sol-text-muted underline decoration-dotted underline-offset-2 hover:text-sol-text">
+            <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="text-meta text-sol-text-muted underline decoration-dotted underline-offset-2 hover:text-sol-text">
               {open ? "Hide log" : `Log · ${p.lines.length}`}
             </button>
           </li>
         )}
       </ol>
       {open && (
-        <pre className="mt-1.5 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded bg-sol-bg-alt px-2 py-1.5 font-mono text-[10.5px] leading-relaxed text-sol-text-secondary">
+        <pre className="mt-1.5 max-h-60 overflow-auto whitespace-pre-wrap break-words rounded bg-sol-bg-alt px-2 py-1.5 font-mono text-meta leading-relaxed text-sol-text-secondary">
           {p.lines.join("\n")}
         </pre>
       )}

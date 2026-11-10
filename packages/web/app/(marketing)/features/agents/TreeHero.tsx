@@ -75,7 +75,7 @@ function Who({ who, children }: { who: string; children: ReactNode }) {
   const human = who === "you";
   return (
     <div className="text-[13px] leading-[1.55]" style={{ color: SOL.base01 }}>
-      <span className="mr-2 font-mono text-[11px] font-semibold" style={{ color: human ? SOL.orange : AGENT_COLOR[who] }}>{who}</span>
+      <span className="mr-2 font-mono text-meta font-semibold" style={{ color: human ? SOL.orange : AGENT_COLOR[who] }}>{who}</span>
       {children}
     </div>
   );
@@ -84,10 +84,10 @@ function Who({ who, children }: { who: string; children: ReactNode }) {
 function CmdLine({ children, note }: { children: ReactNode; note?: ReactNode }) {
   return (
     <div>
-      <div className="agx-card inline-block max-w-full rounded-md px-2.5 py-1.5 font-mono text-[11.5px] leading-[1.5] [overflow-wrap:anywhere]" style={{ backgroundColor: SOL.base03, color: SOL.base2 }}>
+      <div className="agx-card inline-block max-w-full rounded-md px-2.5 py-1.5 font-mono text-meta leading-[1.5] [overflow-wrap:anywhere]" style={{ backgroundColor: SOL.base03, color: SOL.base2 }}>
         <span style={{ color: SOL.green }}>$ </span>{typeof children === "string" ? <Whole text={children} /> : children}
       </div>
-      {note && <div className="mt-1 text-[11.5px] leading-[1.5]" style={{ color: SOL.base1 }}>{note}</div>}
+      {note && <div className="mt-1 text-meta leading-[1.5]" style={{ color: SOL.base1 }}>{note}</div>}
     </div>
   );
 }
@@ -100,10 +100,10 @@ function WorkerCard({ agent, title, doneAt, result }: { agent: string; title: st
         <AgentTag agent={agent} size="xs" />
         <span className="font-mono text-[12px] font-medium" style={{ color: SOL.base02 }}>{title}</span>
         <span className="agx-chips ml-auto" style={{ ["--done" as string]: doneAt }}>
-          <span className="agx-chip-working inline-flex items-center gap-1 font-mono text-[10px]" style={{ color: SOL.yellow }}>
+          <span className="agx-chip-working inline-flex items-center gap-1 font-mono text-meta" style={{ color: SOL.yellow }}>
             <span className="agx-pulse h-1.5 w-1.5 rounded-full" style={{ backgroundColor: SOL.yellow }} />working
           </span>
-          <span className="agx-chip-done inline-flex items-center gap-1 font-mono text-[10px]" style={{ color: SOL.green }}>
+          <span className="agx-chip-done inline-flex items-center gap-1 font-mono text-meta" style={{ color: SOL.green }}>
             <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: SOL.green }} />done
           </span>
         </span>
@@ -158,9 +158,9 @@ const ROWS: Row[] = [
     content: (
       <div className="agx-card rounded-lg px-3 py-2" style={{ backgroundColor: "#fffdf6", border: `1px solid ${BLUE}55` }}>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="font-mono text-[11px] font-semibold" style={{ color: BLUE }}>branch</span>
+          <span className="font-mono text-meta font-semibold" style={{ color: BLUE }}>branch</span>
           <span className="font-mono text-[12px] font-medium" style={{ color: SOL.base02 }}>move retries to a queue</span>
-          <span className="ml-auto font-mono text-[10px]" style={{ color: SOL.base1 }}>its own inbox card</span>
+          <span className="ml-auto font-mono text-meta" style={{ color: SOL.base1 }}>its own inbox card</span>
         </div>
         <div className="mt-1 text-[12px]" style={{ color: SOL.base00 }}>Prototype works. Needs a schema change, so it waits for you.</div>
       </div>
@@ -172,7 +172,7 @@ const ROWS: Row[] = [
     curves: [{ lane: 2, dir: "in", color: CODEX, dashed: true }, { lane: 3, dir: "in", color: GEMINI, dashed: true }],
     content: (
       <div className="agx-card rounded-md px-3 py-1.5" style={{ borderLeft: `2px solid ${SOL.cyan}`, backgroundColor: "rgba(42,161,152,0.07)" }}>
-        <div className="font-mono text-[11.5px] font-semibold" style={{ color: SOL.cyan }}>2 workers settled</div>
+        <div className="font-mono text-meta font-semibold" style={{ color: SOL.cyan }}>2 workers settled</div>
         <div className="text-[12px]" style={{ color: SOL.base01 }}>Read the result with <span className="font-mono">cast read &lt;id&gt;</span> and act on it.</div>
       </div>
     ),
@@ -188,7 +188,7 @@ const ROWS: Row[] = [
     content: (
       <div>
         <CmdLine>cast switch --agent codex</CmdLine>
-        <div className="mt-2 flex items-center gap-2 font-mono text-[10.5px]" style={{ color: SOL.base1 }}>
+        <div className="mt-2 flex items-center gap-2 font-mono text-meta" style={{ color: SOL.base1 }}>
           <span className="h-px flex-1" style={{ backgroundColor: SOL.base2 }} />
           now using Codex
           <span className="h-px flex-1" style={{ backgroundColor: SOL.base2 }} />
@@ -209,7 +209,7 @@ export function TreeHero() {
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5" style={{ borderBottom: `1px solid ${SOL.base2}`, backgroundColor: SOL.base3 }}>
         <span className="font-mono text-[12px] font-semibold" style={{ color: SOL.base02 }}>Webhook retries</span>
         <AgentTag agent="claude" size="xs" />
-        <span className="ml-auto flex items-center gap-3 font-mono text-[10px]" style={{ color: SOL.base1 }}>
+        <span className="ml-auto flex items-center gap-3 font-mono text-meta" style={{ color: SOL.base1 }}>
           <span className="flex items-center gap-1.5"><svg width="18" height="4" aria-hidden><line x1="1" x2="17" y1="2" y2="2" stroke={SOL.base00} strokeWidth="2" strokeLinecap="round" /></svg>carries history</span>
           <span className="flex items-center gap-1.5"><svg width="18" height="4" aria-hidden><line x1="1" x2="17" y1="2" y2="2" stroke={SOL.base00} strokeWidth="2" strokeDasharray="3 4" strokeLinecap="round" /></svg>starts fresh</span>
         </span>

@@ -288,18 +288,18 @@ function RowChips({ chips, cols }: { chips: Chip[]; cols: string }) {
     <span ref={ref} className="flex min-w-0 flex-nowrap items-center gap-1 overflow-hidden">
       {chips.slice(0, count).map((c) =>
         c.look === "site" ? (
-          <span key={c.x} className="inline-flex shrink-0 items-center gap-1 rounded bg-sol-bg-alt px-1.5 py-[1px] text-[11px] text-sol-text-muted" title={c.x} data-vault-chip data-vault-row-site>
+          <span key={c.x} className="inline-flex shrink-0 items-center gap-1 rounded bg-sol-bg-alt px-1.5 py-[1px] text-meta text-sol-text-muted" title={c.x} data-vault-chip data-vault-row-site>
             <Globe size={10} className="shrink-0" />
             {c.x}
           </span>
         ) : (
-          <span key={c.x} className={`shrink-0 whitespace-nowrap rounded border border-sol-border/70 px-1.5 py-[1px] font-mono text-[11px] ${c.look === "implied" ? "border-dashed text-sol-text-dim" : "text-sol-text-muted"}`} title={c.title} data-vault-chip>
+          <span key={c.x} className={`shrink-0 whitespace-nowrap rounded border border-sol-border/70 px-1.5 py-[1px] font-mono text-meta ${c.look === "implied" ? "border-dashed text-sol-text-dim" : "text-sol-text-muted"}`} title={c.title} data-vault-chip>
             {c.x}
           </span>
         ),
       )}
       {rest.length ? (
-        <span className="shrink-0 rounded px-1 font-mono text-[11px] tabular-nums text-sol-text-dim" title={rest.map((c) => c.title ?? c.x).join(", ")} data-vault-chips-more>
+        <span className="shrink-0 rounded px-1 font-mono text-meta tabular-nums text-sol-text-dim" title={rest.map((c) => c.title ?? c.x).join(", ")} data-vault-chips-more>
           +{rest.length}
         </span>
       ) : null}
@@ -338,7 +338,7 @@ function SecretRow({ row, teamName, showScope, onlyMe, cols, detailOpen, active,
             </span>
           ) : null}
           {row.has_otp ? (
-            <span className="shrink-0 rounded border border-sol-border/70 px-1 text-[10px] font-medium leading-[14px] text-sol-text-muted" title="Has a 2FA code" data-vault-otp-mark>
+            <span className="shrink-0 rounded border border-sol-border/70 px-1 text-meta font-medium leading-[14px] text-sol-text-muted" title="Has a 2FA code" data-vault-otp-mark>
               2FA
             </span>
           ) : null}
@@ -348,15 +348,15 @@ function SecretRow({ row, teamName, showScope, onlyMe, cols, detailOpen, active,
             </span>
           ) : null}
           {row.note ? (
-            <span className="ml-0.5 min-w-0 flex-[1_1_0%] truncate text-[11.5px] text-sol-text-dim">{row.note}</span>
+            <span className="ml-0.5 min-w-0 flex-[1_1_0%] truncate text-meta text-sol-text-dim">{row.note}</span>
           ) : fit === "narrow" && chips.length ? (
             // No column for them when narrow: what it fills or opens takes the note's place.
-            <span className="ml-0.5 min-w-0 flex-[1_1_0%] truncate font-mono text-[11px] text-sol-text-dim" data-vault-row-where>{groups.map((g) => g.map((c) => c.x).join(" ")).filter(Boolean).join(" · ")}</span>
+            <span className="ml-0.5 min-w-0 flex-[1_1_0%] truncate font-mono text-meta text-sol-text-dim" data-vault-row-where>{groups.map((g) => g.map((c) => c.x).join(" ")).filter(Boolean).join(" · ")}</span>
           ) : null}
         </span>
         {fit !== "narrow" && <RowChips chips={chips} cols={cols} />}
         {showScope && <ScopeMark row={row} teamName={teamName} quietTeam />}
-        <span className="flex min-w-0 items-center justify-end gap-1.5 text-[11.5px] text-sol-text-dim">
+        <span className="flex min-w-0 items-center justify-end gap-1.5 text-meta text-sol-text-dim">
           <UsedCell row={row} fit={fit} now={now} detailOpen={detailOpen} />
         </span>
       </button>
@@ -433,7 +433,7 @@ function SecretMissing({ refName, over, onClose }: { refName: string; over: bool
       <header className="flex items-start gap-3 border-b border-sol-border/50 px-4 pb-3 pt-3.5">
         <div className="min-w-0 flex-1">
           <div className="truncate font-mono text-[15px] font-semibold text-sol-text">{refName}</div>
-          <div className="mt-0.5 text-[11.5px] text-sol-text-muted">Not in your workspaces</div>
+          <div className="mt-0.5 text-meta text-sol-text-muted">Not in your workspaces</div>
         </div>
         {!over && (
           <button type="button" onClick={onClose} aria-label="Close" className="inline-flex shrink-0 items-center gap-1 rounded p-1 text-sol-text-dim hover:text-sol-text">
@@ -585,7 +585,8 @@ function VaultBody({ fit }: { fit: Fit }) {
       e.preventDefault();
       setCursor((c) => Math.max(0, c - 1));
       setKeyed(true);
-    } else if (e.key === "Enter" && order[cursor] && !target?.closest?.("button, a[href]")) {
+    // Enter opens the lit row only: with no row drawn as the cursor, it opens nothing.
+    } else if (e.key === "Enter" && keyed && order[cursor] && !target?.closest?.("button, a[href]")) {
       e.preventDefault();
       openRow(order[cursor]!);
     } else if (e.key === "Escape" && panelOpen) {
@@ -600,7 +601,7 @@ function VaultBody({ fit }: { fit: Fit }) {
     <div ref={titlebarRef} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-sol-border/40 px-5 pb-2.5 pt-4">
       <h1 className="text-xl font-semibold text-sol-text">Vault</h1>
       {sample && (
-        <span className="self-center rounded border border-sol-violet/50 px-1.5 text-[11px] font-medium leading-[18px] text-sol-violet" data-vault-sample>
+        <span className="self-center rounded border border-sol-violet/50 px-1.5 text-meta font-medium leading-[18px] text-sol-violet" data-vault-sample>
           Sample
         </span>
       )}
@@ -691,7 +692,7 @@ function VaultBody({ fit }: { fit: Fit }) {
               {ready.length > 0 && (
                 <section className="pt-2">
                   {listFit !== "narrow" && (
-                    <div className="grid gap-3 px-5 pb-1 text-[11px] text-sol-text-dim [&>span]:truncate [&>span]:whitespace-nowrap" style={{ gridTemplateColumns: cols }}>
+                    <div className="grid gap-3 px-5 pb-1 text-meta text-sol-text-dim [&>span]:truncate [&>span]:whitespace-nowrap" style={{ gridTemplateColumns: cols }}>
                       <span />
                       <span>Name</span>
                       <span>Env vars · sites</span>

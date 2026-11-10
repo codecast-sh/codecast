@@ -54,23 +54,40 @@ export function CompactionProgressCard({
   progress,
   elapsed: elapsedProp,
   className,
+  live = false,
 }: {
   progress: CompactionProgress | null;
   /** Clock text when the screen itself didn't print one. */
   elapsed?: string | null;
   className?: string;
+  /** The session is compacting now (the row above the composer). A transcript
+   *  row is a snapshot of a screen that has since moved on: it draws still,
+   *  with no bar, and never claims to be in progress. */
+  live?: boolean;
 }) {
   const elapsed = progress?.elapsed ?? elapsedProp ?? null;
   const percent = progress?.percent ?? null;
+  if (!live) {
+    return (
+      <div className={`rounded-md border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2 ${className ?? ""}`}>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0" />
+          <span className="text-xs font-medium text-amber-500 shrink-0">Compaction</span>
+          <span className="flex-1" />
+          {elapsed && <span className="text-meta tabular-nums text-sol-text-dim shrink-0">{elapsed}</span>}
+        </div>
+      </div>
+    );
+  }
   return (
     <div className={`rounded-md border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2 ${className ?? ""}`}>
       <div className="flex items-center gap-2 min-w-0">
         <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse motion-reduce:animate-none shrink-0" />
         <span className="text-xs font-medium text-amber-500 shrink-0">Compacting conversation</span>
         <span className="flex-1" />
-        {elapsed && <span className="text-[11px] tabular-nums text-sol-text-dim shrink-0">{elapsed}</span>}
+        {elapsed && <span className="text-meta tabular-nums text-sol-text-dim shrink-0">{elapsed}</span>}
         {percent != null && (
-          <span className="text-[11px] tabular-nums text-amber-500/80 shrink-0">{percent}%</span>
+          <span className="text-meta tabular-nums text-amber-500/80 shrink-0">{percent}%</span>
         )}
       </div>
       <div
@@ -91,7 +108,7 @@ export function CompactionProgressCard({
         )}
       </div>
       {progress?.tip && (
-        <p className="mt-1.5 text-[11px] leading-snug text-sol-text-dim line-clamp-2">
+        <p className="mt-1.5 text-meta leading-snug text-sol-text-dim line-clamp-2">
           {progress.tip}
         </p>
       )}
@@ -116,7 +133,7 @@ export function LiveCompactionCard({ conversationId, expanded }: { conversationI
   const elapsed = progress?.elapsed ? null : snap.startedAt ? formatElapsed(now - snap.startedAt) : null;
   return (
     <div className={`mx-auto px-2 sm:px-4 mb-2 ${expanded ? "conv-col" : "max-w-md"}`}>
-      <CompactionProgressCard progress={progress} elapsed={elapsed} />
+      <CompactionProgressCard progress={progress} elapsed={elapsed} live />
     </div>
   );
 }

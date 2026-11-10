@@ -455,11 +455,12 @@ export const ROUTES: RouteEntry[] = [
   { path: "ops/*", component: cast(Ops), layout: "dashboardShell", tab: "/ops/*" },
 
   // -- Standalone shell pages (outside the shared shell) --
-  // `windows` is NOT in DashboardShell in App.tsx, yet TabContent CAN render it in
-  // place — so it carries a `tab` here even though its layout is "standalone".
+  // `windows` and `orchestration` are NOT in DashboardShell in App.tsx, yet TabContent
+  // CAN render them in place — so they carry a `tab` here even though their layout is
+  // "standalone". Without one, a tab that adopted /orchestration drew an empty stage.
   { path: "explore", component: cast(Explore), layout: "standalone" },
   { path: "windows", component: cast(Windows), layout: "standalone", tab: "/windows", fullWidth: true },
-  { path: "orchestration", component: cast(Orchestration), layout: "standalone" },
+  { path: "orchestration", component: cast(Orchestration), layout: "standalone", tab: "/orchestration" },
   { path: "cli", component: cast(Cli), layout: "standalone" },
 
   // -- Sharing (no AuthGuard → public) --

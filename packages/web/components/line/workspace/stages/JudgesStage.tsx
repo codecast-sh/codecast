@@ -7,11 +7,13 @@
 // every run on a moment, and its versions with the A/B each fix measured.
 // "Improve this judge" starts the session that brings a fix as one card.
 import { useMemo } from "react";
+import Link from "next/link";
 import { useLineStages, type LineJudge as LineJudgeRow } from "../../../../hooks/useLineStages";
 import { useTrialCards, useTrialHref } from "../../../../hooks/useSyncTrial";
 import { startJudgingSetup } from "../../../../lib/line/setupJudging";
 import { agoWords, usd, wrongShare } from "../../../../lib/line/flowStages";
-import { StartSessionButton, improveJudgeWhat } from "../StartSessionButton";
+import { StartSessionButton, improveJudgeLedger } from "../StartSessionButton";
+import { useRunCost } from "../../../consequential/useRunCost";
 import { useFinders } from "../views/finder/FindTable";
 import { FinderPage } from "../views/finder/FinderPage";
 import { dayWords } from "../../widgets";
@@ -98,6 +100,7 @@ function JudgePage({ j, finder, wrong, ...props }: LineViewProps & { projectId: 
   const now = ws.now;
   // Marks a person made wrong on this judge's findings: the cases "Improve this judge" starts from.
   const marked = wrong?.wrong ?? 0;
+  const cost = useRunCost(projectId);
   return (
     <div className="sd" data-line-stage="judges" data-line-judge-page={j.name}>
       <Back label="Judges" onBack={() => select({ item: null, finding: null, tab: null })} href={href({ item: null, finding: null, tab: null })} />
@@ -119,7 +122,7 @@ function JudgePage({ j, finder, wrong, ...props }: LineViewProps & { projectId: 
           </div>
           <span className="sd-spacer" />
           {projectId && (
-            <StartSessionButton primary={marked > 0} what={improveJudgeWhat(j.name, marked)} start={() => startJudgingSetup(projectId, { judge: j.name })} data={{ "data-line-improve-judge": j.name }}>
+            <StartSessionButton primary={marked > 0} ledger={improveJudgeLedger(j.name, marked, cost)} start={() => startJudgingSetup(projectId, { judge: j.name })} data={{ "data-line-improve-judge": j.name }}>
               Improve this judge{marked ? ` · ${marked} marked wrong` : ""}
             </StartSessionButton>
           )}
@@ -224,7 +227,7 @@ function AbRow({ c, projectId }: { c: { _id: string; short_id: string; status: s
   const pct = (n: number, of: number) => (of ? `${Math.round((n / of) * 100)}%` : "–");
   return (
     <tr data-verdict={ab.verdict}>
-      <td><a className="lw-link lw-mono" href={href}>{c.short_id}</a></td>
+      <td><Link className="lw-link lw-mono" href={href}>{c.short_id}</Link></td>
       <td className="sd-row-t" title={c.judge_fix.change}>{c.judge_fix.change}</td>
       <td className="sd-n lw-num">{pct(ab.ruled.base, ab.ruled.runs)} → {pct(ab.ruled.arm, ab.ruled.runs)}</td>
       <td className="sd-n lw-num">{pct(ab.controls.base, ab.controls.runs)} → {pct(ab.controls.arm, ab.controls.runs)}</td>

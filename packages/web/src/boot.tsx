@@ -140,21 +140,12 @@ idle(() => {
 armChunkReloadGuardReset();
 
 // Warm the cache for the most-visited app routes so the first navigation
-// (or direct landing) doesn't pay a chunk-fetch waterfall. Skip for visitors
-// who almost certainly won't enter the app (no auth, on a marketing path).
+// (or direct landing) doesn't pay a chunk-fetch waterfall. Only for app users,
+// the same gate as the offline shell above: a signed-out reader of the blog,
+// pricing, a profile or a share link never enters the app, and a list of
+// "marketing paths" to exempt went stale every time a public page was added.
 idle(() => {
-  const path = window.location.pathname;
-  const onAppPath = !/^\/($|about|features|documentation|changelog|privacy|security|support|terms|login|signup|forgot-password|reset-password)(\/|$)/.test(path);
-  const hasAuth = (() => {
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && k.includes("convex") && k.toLowerCase().includes("auth")) return true;
-      }
-    } catch {}
-    return false;
-  })();
-  if (!onAppPath && !hasAuth) return;
+  if (!hasStoredAuthToken() && !isDesktop()) return;
   void import("@/app/inbox/page");
   void import("@/app/team/activity/page");
   // The decision stepper opens on every inbox question card's click: it must

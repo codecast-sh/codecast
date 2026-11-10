@@ -27,7 +27,7 @@
 }
 .lset-index-link {
   position: relative;
-  font-size: 11px; line-height: 26px;
+  font-size: var(--fs-meta); line-height: 26px;
   color: var(--sol-text-dim);
   white-space: nowrap;
 }
@@ -55,11 +55,11 @@
 .lset-plate[data-away="true"] { border-left-color: color-mix(in srgb, var(--sol-yellow) 70%, transparent); }
 .lset-plate[data-writable="false"] { border-left-color: color-mix(in srgb, var(--sol-text-dim) 60%, transparent); }
 .lset-plate-file { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.lset-plate-path { font-size: 13px; font-weight: 600; color: var(--sol-text); }
-.lset-plate-root { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.lset-plate-path { font-size: 13px; font-weight: 600; color: var(--sol-text); min-width: 0; overflow-wrap: anywhere; }
+.lset-plate-root { font-size: var(--fs-meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .lset-plate-says { font-size: 12px; line-height: 1.55; color: var(--sol-text-muted); }
 .lset-plate-says b { color: var(--sol-text); font-weight: 600; }
-.lset-plate-warn { font-size: 11px; color: var(--sol-orange); }
+.lset-plate-warn { font-size: var(--fs-meta); color: var(--sol-orange); }
 
 .lset-section { scroll-margin-top: 12px; }
 .lset-section-title {
@@ -82,10 +82,10 @@
 }
 .lset-key { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .lset-label { font-size: 13px; color: var(--sol-text); font-weight: 600; }
-.lset-what { font-size: 11px; line-height: 1.5; color: var(--sol-text-dim); }
+.lset-what { font-size: var(--fs-meta); line-height: 1.5; color: var(--sol-text-dim); }
 .lset-val { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
 .lset-val-line { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.lset-unit { font-size: 11px; color: var(--sol-text-dim); }
+.lset-unit { font-size: var(--fs-meta); color: var(--sol-text-dim); }
 
 /* The value: plain text that becomes a field. A default recedes. */
 .lset-value {
@@ -120,13 +120,13 @@
   resize: vertical;
 }
 .lset-input[aria-invalid="true"] { border-color: var(--sol-red); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-red) 18%, transparent); }
-.lset-field-error { font-size: 11px; color: var(--sol-red); }
-.lset-field-hint { display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px; color: var(--sol-text-dim); }
+.lset-field-error { font-size: var(--fs-meta); color: var(--sol-red); }
+.lset-field-hint { display: inline-flex; align-items: center; gap: 3px; font-size: var(--fs-meta); color: var(--sol-text-dim); }
 
 /* Back to the default: beside the "file" mark, the click form of backspace. */
 .lset-to-default {
   flex-shrink: 0;
-  font-size: 10.5px; line-height: 16px;
+  font-size: var(--fs-meta); line-height: 16px;
   padding: 0 6px; border-radius: 9999px;
   color: var(--sol-text-dim);
   border: 1px solid transparent;
@@ -143,7 +143,7 @@
 /* Where it came from: a file value is marked, a default only named. */
 .lset-src {
   flex-shrink: 0; margin-left: auto;
-  font-size: 10px; line-height: 16px;
+  font-size: var(--fs-meta); line-height: 16px;
   padding: 0 6px; border-radius: 9999px;
   color: var(--sol-text-dim);
   border: 1px dashed color-mix(in srgb, var(--sol-border) 90%, transparent);
@@ -154,11 +154,11 @@
   background: color-mix(in srgb, var(--line-belt) 12%, transparent);
   border-color: color-mix(in srgb, var(--line-belt) 40%, transparent);
 }
-.lset-note { font-size: 11px; line-height: 1.5; color: var(--sol-text-dim); }
+.lset-note { font-size: var(--fs-meta); line-height: 1.5; color: var(--sol-text-dim); }
 .lset-note::before { content: "until set: "; color: var(--sol-text-muted); }
 
 /* An edit's journey. */
-.lset-status { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--sol-text-dim); }
+.lset-status { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-meta); color: var(--sol-text-dim); }
 .lset-lamp { width: 7px; height: 7px; border-radius: 9999px; background: var(--line-belt); animation: lset-travel 1.4s ease-in-out infinite; }
 .lset-status[data-state="saved"] { color: var(--sol-green); animation: lset-fade 2.6s ease-in forwards; }
 .lset-status[data-state="saved"]::before { content: ""; width: 7px; height: 7px; border-radius: 9999px; background: var(--sol-green); }
@@ -189,23 +189,23 @@
 .lset-finder[data-silent="true"] { box-shadow: inset 2px 0 0 color-mix(in srgb, var(--sol-orange) 70%, transparent); }
 .lset-finder-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; flex-wrap: wrap; }
 .lset-finder-source { font-size: 14px; font-weight: 600; color: var(--sol-text); }
-.lset-finder-id { font-size: 11px; color: var(--sol-text-dim); }
-.lset-finder-health { margin-left: auto; font-size: 11px; color: var(--sol-text-muted); white-space: nowrap; }
+.lset-finder-id { font-size: var(--fs-meta); color: var(--sol-text-dim); }
+.lset-finder-health { margin-left: auto; font-size: var(--fs-meta); color: var(--sol-text-muted); white-space: nowrap; }
 .lset-finder-health b { color: var(--sol-text); font-weight: 700; }
 .lset-silent { color: var(--sol-orange); }
-.lset-finder-latest { font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lset-finder-latest { font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lset-finder-fields { display: grid; grid-template-columns: 1fr; gap: 2px 18px; }
 @container line-floor (min-width: 700px) { .lset-finder-fields { grid-template-columns: 1fr 1fr; } }
 .lset-finder-field { display: flex; align-items: flex-start; gap: 10px; min-width: 0; padding: 2px 0; }
-.lset-finder-field dt { width: 150px; flex-shrink: 0; display: flex; flex-direction: column; gap: 1px; font-size: 11px; color: var(--sol-text-muted); }
-.lset-finder-field dt .lset-what, .lset-add-field > span .lset-what { font-size: 10.5px; line-height: 1.35; }
+.lset-finder-field dt { width: 150px; flex-shrink: 0; display: flex; flex-direction: column; gap: 1px; font-size: var(--fs-meta); color: var(--sol-text-muted); }
+.lset-finder-field dt .lset-what, .lset-add-field > span .lset-what { font-size: var(--fs-meta); line-height: 1.35; }
 .lset-finder-field dd { min-width: 0; flex: 1; display: flex; }
 .lset-finder-field .lset-value { font-size: 12px; }
-.lset-remove { margin-left: 4px; font-size: 11px; color: var(--sol-text-dim); }
+.lset-remove { margin-left: 4px; font-size: var(--fs-meta); color: var(--sol-text-dim); }
 .lset-remove:hover { color: var(--sol-text); }
 .lset-remove[data-armed="true"] { color: var(--sol-red); }
-.lset-undeclared { font-size: 11px; color: var(--sol-text-dim); font-style: italic; }
-.lset-finders-foot { display: flex; align-items: center; gap: 12px; font-size: 11px; }
+.lset-undeclared { font-size: var(--fs-meta); color: var(--sol-text-dim); font-style: italic; }
+.lset-finders-foot { display: flex; align-items: center; gap: 12px; font-size: var(--fs-meta); }
 .lset-finders-foot .lset-src { margin-left: 0; }
 .lset-add { margin-left: auto; font-size: 12px; color: var(--line-belt); }
 .lset-add:hover, .lset-add:focus-visible { text-decoration: underline; text-underline-offset: 3px; outline: none; }
@@ -215,7 +215,7 @@
   border: 1px dashed color-mix(in srgb, var(--line-belt) 50%, transparent);
 }
 @container line-floor (min-width: 700px) { .lset-add-form { grid-template-columns: 1fr 1fr; } }
-.lset-add-field { display: flex; align-items: flex-start; gap: 10px; font-size: 11px; color: var(--sol-text-dim); }
+.lset-add-field { display: flex; align-items: flex-start; gap: 10px; font-size: var(--fs-meta); color: var(--sol-text-dim); }
 .lset-add-field > span { width: 150px; flex-shrink: 0; display: flex; flex-direction: column; gap: 1px; color: var(--sol-text-muted); }
 .lset-add-field .lset-input { margin-left: 0; box-shadow: none; border-color: color-mix(in srgb, var(--sol-border) 80%, transparent); }
 .lset-add-field .lset-input:focus { border-color: var(--line-belt); }
@@ -254,19 +254,19 @@
 [data-station-panel] .lset-row { border-bottom: 0; padding-bottom: 0; }
 /* A source filing here without a finder: one click declares it (LX5). */
 .lset-declare { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; padding: 7px 10px; border-radius: 8px; border: 1px dashed color-mix(in srgb, var(--sol-border) 85%, transparent); }
-.lset-declare-words { font-size: 11.5px; color: var(--sol-text-muted); line-height: 1.45; min-width: 0; flex: 1 1 220px; }
+.lset-declare-words { font-size: var(--fs-meta); color: var(--sol-text-muted); line-height: 1.45; min-width: 0; flex: 1 1 220px; }
 .lset-declare-words b { color: var(--sol-text); font-weight: 600; }
 .lset-declare .lset-add { margin-left: 0; white-space: nowrap; }
 
 /* A source in words: its state first, then what it watches, then what it reported. */
-.lset-source-state { margin-left: auto; font-size: 11px; white-space: nowrap; padding: 0 6px; border-radius: 4px; }
+.lset-source-state { margin-left: auto; font-size: var(--fs-meta); white-space: nowrap; padding: 0 6px; border-radius: 4px; }
 .lset-source-state[data-tone="ok"] { color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 12%, transparent); }
 .lset-source-state[data-tone="quiet"] { color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 12%, transparent); }
 .lset-source-state[data-tone="new"] { color: var(--sol-text-dim); background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
 .lset-source-says { font-size: 12.5px; line-height: 1.5; color: var(--sol-text); margin-top: 4px; }
-.lset-source-count { font-size: 11.5px; color: var(--sol-text-muted); margin-top: 2px; }
+.lset-source-count { font-size: var(--fs-mark); color: var(--sol-text-muted); margin-top: 2px; }
 .lset-source-more { margin-top: 6px; }
-.lset-source-more > summary { cursor: pointer; font-size: 11px; color: var(--sol-text-dim); list-style: none; }
+.lset-source-more > summary { cursor: pointer; font-size: var(--fs-meta); color: var(--sol-text-dim); list-style: none; }
 .lset-source-more > summary::-webkit-details-marker { display: none; }
 .lset-source-more > summary::before { content: "▸ "; }
 .lset-source-more[open] > summary::before { content: "▾ "; }

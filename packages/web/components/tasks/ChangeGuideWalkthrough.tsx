@@ -21,7 +21,7 @@ function StepLocation({ step }: { step: ChangeGuide["steps"][number] }) {
   const dir = parts.join("/");
   const range = stepLocation(step).slice(step.file.length);
   return (
-    <span className="inline-flex items-baseline min-w-0 max-w-full font-mono text-[11px] leading-5" title={stepLocation(step)}>
+    <span className="inline-flex items-baseline min-w-0 max-w-full font-mono text-meta leading-5" title={stepLocation(step)}>
       {dir && <span className="text-sol-text-dim truncate">{dir}/</span>}
       <span className="text-sol-text-muted shrink-0">{name}</span>
       {range && <span className="text-sol-cyan shrink-0">{range}</span>}
@@ -49,7 +49,7 @@ export function ChangeGuideWalkthrough({ guide, className, compact = false }: { 
               {/* The rail: a numbered stop per step, joined to the next. */}
               <div className="relative flex justify-center">
                 {!last && <span className="absolute top-6 bottom-0 w-px bg-sol-border/60" aria-hidden />}
-                <span className="relative z-[1] mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border border-sol-cyan/50 bg-sol-bg text-[10px] font-semibold tabular-nums text-sol-cyan">
+                <span className="relative z-[1] mt-0.5 flex h-5 w-5 items-center justify-center rounded-full border border-sol-cyan/50 bg-sol-bg text-meta font-semibold tabular-nums text-sol-cyan">
                   {i + 1}
                 </span>
               </div>
@@ -63,11 +63,11 @@ export function ChangeGuideWalkthrough({ guide, className, compact = false }: { 
                   <div className="mt-2 rounded-md border border-sol-border/40 bg-sol-bg/60 overflow-hidden">
                     <FilePatchDiff patch={step.hunk} fileName={step.file} showLineNumbers wrap maxLines={compact ? 24 : 60} />
                     {step.truncated && (
-                      <div className="px-2 py-1 text-[10px] text-sol-text-dim border-t border-sol-border/30">Cut to fit; the full change is in the diff.</div>
+                      <div className="px-2 py-1 text-meta text-sol-text-dim border-t border-sol-border/30">Cut to fit; the full change is in the diff.</div>
                     )}
                   </div>
                 ) : (
-                  <div className="mt-1.5 text-[11px] text-sol-text-dim">No diff for this range at handoff.</div>
+                  <div className="mt-1.5 text-meta text-sol-text-dim">No diff for this range at handoff.</div>
                 )}
               </div>
             </li>

@@ -105,7 +105,7 @@ export function Section({ id, title, lede, children, band = false, dark = false 
 export function Frame({ children, className = "", style, label }: { children: ReactNode; className?: string; style?: CSSProperties; label?: ReactNode }) {
   return (
     <div className={`rounded-2xl border overflow-hidden ${className}`} style={{ borderColor: LINE, backgroundColor: "#fffdf6", boxShadow: "0 30px 70px -40px rgba(0,43,54,.45)", ...style }}>
-      {label && <div className="px-4 h-9 flex items-center gap-2 border-b text-[11.5px] font-mono" style={{ borderColor: LINE, color: MUTED, backgroundColor: tint(SAND, 50) }}>{label}</div>}
+      {label && <div className="px-4 h-9 flex items-center gap-2 border-b text-meta font-mono" style={{ borderColor: LINE, color: MUTED, backgroundColor: tint(SAND, 50) }}>{label}</div>}
       {children}
     </div>
   );

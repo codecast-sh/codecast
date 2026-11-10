@@ -180,7 +180,7 @@ const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onFo
   };
   return (
     <div className="bg-sol-bg">
-      <div className="flex items-center gap-2 px-4 py-1.5 text-[11px] text-sol-violet border-t border-sol-violet/15 bg-sol-violet/5">
+      <div className="flex items-center gap-2 px-4 py-1.5 text-meta text-sol-violet border-t border-sol-violet/15 bg-sol-violet/5">
         <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101" />
           <path strokeLinecap="round" strokeLinejoin="round" d="M10.172 13.828a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.102 1.101" />
@@ -2693,7 +2693,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       <button
                         type="button"
                         onClick={handleCancelMessage}
-                        className="text-[11px] text-sol-text-dim/60 hover:text-sol-orange underline underline-offset-2 transition-colors"
+                        className="text-meta text-sol-text-dim/60 hover:text-sol-orange underline underline-offset-2 transition-colors"
                         title="Stop retrying and discard this message"
                       >
                         Cancel
@@ -2795,8 +2795,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                           dot for the full name. */}
                       {permissionMode !== "default" && (
                         <span
-                          className={`text-[10px] font-mono transition-[opacity,transform] duration-150 ease-out overflow-hidden whitespace-nowrap ${
-                            showModeLabel ? "max-w-[80px] opacity-100 translate-x-0" : "max-w-0 opacity-0 -translate-x-1"
+                          className={`text-meta font-mono transition-[opacity,transform] duration-150 ease-out overflow-hidden whitespace-nowrap ${
+                            showModeLabel ? "max-w-[96px] opacity-100 translate-x-0" : "max-w-0 opacity-0 -translate-x-1"
                           } ${
                             permissionMode === "plan" ? "text-sol-blue" :
                             permissionMode === "acceptEdits" ? "text-emerald-400" :
@@ -2815,7 +2815,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                       )}
                     </button>
                     {modeTooltip && (
-                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded bg-sol-bg border border-sol-border/60 shadow-lg whitespace-nowrap text-[10px] pointer-events-none flex items-center gap-1.5">
+                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded bg-sol-bg border border-sol-border/60 shadow-lg whitespace-nowrap text-meta pointer-events-none flex items-center gap-1.5">
                         <span className={
                           permissionMode === "plan" ? "text-sol-blue" :
                           permissionMode === "acceptEdits" ? "text-emerald-400" :
@@ -2875,7 +2875,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       </>}
       fieldTop={<>
               {isSelectionActive && (
-                <div className="flex items-center gap-2 pb-1.5 mb-1.5 border-b border-sol-cyan/20 text-[10px] text-sol-cyan">
+                <div className="flex items-center gap-2 pb-1.5 mb-1.5 border-b border-sol-cyan/20 text-meta text-sol-cyan">
                   <span className="font-medium">Rewriting message</span>
                   <span className="text-sol-text-dim">Enter to fork &amp; send</span>
                   <span className="text-sol-text-dim">Esc to cancel</span>
@@ -2888,7 +2888,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   {queuedMessages.map((qMsg, idx) => (
                     <div
                       key={idx}
-                      className={`group flex items-center gap-1.5 px-2 py-1 rounded text-[11px] cursor-pointer transition-colors ${
+                      className={`group flex items-center gap-1.5 px-2 py-1 rounded text-meta cursor-pointer transition-colors ${
                         selectedQueueIndex === idx
                           ? "bg-sol-blue/15 border border-sol-blue/40 text-sol-text"
                           : "bg-sol-bg/50 border border-sol-border/30 text-sol-text-secondary hover:border-sol-border/60"
@@ -2898,7 +2898,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                         textareaRef.current?.focus();
                       }}
                     >
-                      <span className="text-sol-text-dim text-[9px] font-mono shrink-0">{idx + 1}</span>
+                      <span className="text-sol-text-dim text-meta font-mono shrink-0">{idx + 1}</span>
                       <span className="truncate flex-1 font-mono">{qMsg}</span>
                       <button
                         type="button"
@@ -2917,7 +2917,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     </div>
                   ))}
                   {selectedQueueIndex !== null && (
-                    <span className="text-[9px] text-sol-text-dim flex items-center gap-2 pl-1">
+                    <span className="text-meta text-sol-text-dim flex items-center gap-2 pl-1">
                       <span className="inline-flex items-center gap-1"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap> navigate</span>
                       <span className="inline-flex items-center gap-1"><KeyCap size="xs">Del</KeyCap> remove</span>
                       <span className="inline-flex items-center gap-1"><KeyCap size="xs">Enter</KeyCap> edit</span>
@@ -2957,7 +2957,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     </div>
                   ))}
                   {selectedImageIndex !== null && (
-                    <span className="text-[10px] text-sol-text-dim ml-1 flex items-center gap-2">
+                    <span className="text-meta text-sol-text-dim ml-1 flex items-center gap-2">
                       <span className="inline-flex items-center gap-1"><KeyCap size="xs">←</KeyCap><KeyCap size="xs">→</KeyCap> navigate</span>
                       <span className="inline-flex items-center gap-1"><KeyCap size="xs">Space</KeyCap> preview</span>
                       <span className="inline-flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> exit</span>
@@ -3019,7 +3019,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                     </Suspense>
                   </div>
                   <div className="flex items-center justify-between pt-2 mt-1 border-t border-sol-border/20">
-                    <span className="text-[10px] text-sol-text-dim/50 select-none">
+                    <span className="text-meta text-sol-text-dim/50 select-none">
                       {navigator.platform?.includes("Mac") ? "Cmd" : "Ctrl"}+Enter send &middot; Esc collapse
                     </span>
                     <div ref={sendRef} className="flex items-center gap-1.5">

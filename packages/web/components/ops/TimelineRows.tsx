@@ -89,7 +89,7 @@ export function Rows(p: {
         </button>
       )}
       <div className="otl-row otl-row-head" aria-hidden>
-        <span>Time</span><span>Source</span><span>What</span><span>Title</span><span>Issue</span><span>Codecast</span>
+        <span>Time</span><span>Source</span><span>What</span><span>Title</span><span>Issue</span><span>Fix</span>
       </div>
       {p.events.slice(0, limit).map((e) => (
         <Row key={e._id} e={e} span={p.span} dated={p.dated} now={rowNow} group={e.data?.group_short_id ? p.groupOf.get(e.data.group_short_id) : undefined} taskOf={p.taskOf} provider={p.providerOf.get(eventSourceName(e))} on={p.open === e._id} cursor={p.cursor === e._id} onOpen={() => p.setOpen(p.open === e._id ? null : e._id)} />

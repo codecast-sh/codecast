@@ -45,7 +45,7 @@ export function Tip({ text, children, side = "top", whenClipped = false }: {
   return (
     <Tooltip open={open} onOpenChange={(o) => setOpen(o && (!whenClipped || isClipped(trigger.current)))}>
       <TooltipTrigger asChild ref={trigger as any}>{children}</TooltipTrigger>
-      <TooltipContent side={side} className="max-w-[320px] border border-sol-border/40 bg-sol-bg px-2 py-1 font-mono text-[10px] leading-relaxed text-sol-text shadow-md">
+      <TooltipContent side={side} className="max-w-[320px] border border-sol-border/40 bg-sol-bg px-2 py-1 font-mono text-meta leading-relaxed text-sol-text shadow-md">
         {text}
       </TooltipContent>
     </Tooltip>
@@ -61,7 +61,7 @@ export function AreaDot({ area }: { area: string }) {
 /** A 6px square in the area color, then the area name. */
 export function AreaTag({ area, className = "" }: { area: string; className?: string }) {
   return (
-    <span className={`inline-flex items-center gap-1.5 font-mono text-[11px] text-sol-text/60 ${className}`}>
+    <span className={`inline-flex items-center gap-1.5 font-mono text-meta text-sol-text/60 ${className}`}>
       <AreaDot area={area} />
       {areaLabel(area)}
     </span>
@@ -147,7 +147,7 @@ export function RiskLine({ story, full = false, className = "" }: { story: Pick<
             </Tip>
           );
         })}
-        {more > 0 && <span className="chg-risk-more mt-0.5 block font-mono text-[11px] text-sol-text/55">+{more} more</span>}
+        {more > 0 && <span className="chg-risk-more mt-0.5 block font-mono text-meta text-sol-text-muted">+{more} more</span>}
       </span>
     </span>
   );
@@ -158,7 +158,7 @@ export function NoMatch({ what, onClear }: { what: string; onClear: () => void }
   return (
     <div className="rounded-lg border border-dashed border-sol-border/40 px-5 py-8 text-center">
       <p className="chg-ui text-[14px] text-sol-text/70">No {what} match these filters.</p>
-      <button type="button" onClick={onClear} className="mt-2 font-mono text-[11px] text-sol-text/60 underline-offset-2 hover:text-sol-text hover:underline">
+      <button type="button" onClick={onClear} className="mt-2 font-mono text-meta text-sol-text/60 underline-offset-2 hover:text-sol-text hover:underline">
         clear filters
       </button>
     </div>
@@ -196,7 +196,7 @@ export function Timing({ story, live = [] }: { story: TimingFacts; live?: readon
   const r = story.release;
   const waiting = r ? [] : waitingOn(story, live);
   return (
-    <span className="inline-flex flex-wrap items-center gap-x-1.5 font-mono text-[11px] tabular-nums text-sol-text/55">
+    <span className="inline-flex flex-wrap items-center gap-x-1.5 font-mono text-meta tabular-nums text-sol-text-muted">
       <span>landed {stampOf(story.last_at, story.date)}</span>
       {r ? (
         <>
@@ -205,7 +205,7 @@ export function Timing({ story, live = [] }: { story: TimingFacts; live?: readon
             {(r.kind ?? (r.version ? "release" : "deploy")) === "deploy" ? "deployed" : "released"} {r.surface}
             {r.version ? ` ${r.version}` : ""} {stampOf(r.at, story.date)}
           </span>
-          <span className="text-sol-text/40">+{gapOf(r.at - story.last_at)}</span>
+          <span className="text-sol-text-dim">+{gapOf(r.at - story.last_at)}</span>
           {r.deploy && <EntityIdPill type="deploy" id={r.deploy} compact />}
         </>
       ) : waiting.length > 0 ? (
@@ -266,7 +266,7 @@ export function Provenance({ story, className = "" }: { story: WhyFacts; classNa
     // "notes pending" only while notes can still come (StoryContext.proseLive): never on a capped, failed or old day.
     body = <>{story.prose_status === "pending" && proseLive ? "written from commit subjects; notes pending" : "written from commit subjects"}</>;
   }
-  return <span className={`inline-flex min-w-0 flex-wrap items-center gap-1 font-mono text-[11px] text-sol-text/55 ${className}`}>{body}</span>;
+  return <span className={`inline-flex min-w-0 flex-wrap items-center gap-1 font-mono text-meta text-sol-text-muted ${className}`}>{body}</span>;
 }
 
 type StoryPeople = Pick<StoryRow, "actor_user_ids" | "author_names">;
@@ -289,7 +289,7 @@ function Faces({ people, size, max }: { people: Face[]; size: number; max: numbe
           {p.role ? <RoleFace role={p.role} size={size} title={p.name} /> : <AuthorAvatar name={p.name} avatar={p.image} size={size} />}
         </span>
       ))}
-      {people.length > max && <span className="ml-1 font-mono text-[10px] text-sol-text/45">+{people.length - max}</span>}
+      {people.length > max && <span className="ml-1 font-mono text-meta text-sol-text-dim">+{people.length - max}</span>}
     </span>
   );
 }
@@ -328,12 +328,12 @@ export function Byline({ story }: { story: StoryPeople }) {
 export function SessionPills({ story, max = 3, className = "" }: { story: { conversation_ids: readonly string[] }; max?: number; className?: string }) {
   if (!story.conversation_ids.length) return null;
   return (
-    <span className={`inline-flex flex-wrap items-center gap-1 font-mono text-[11px] text-sol-text/55 ${className}`}>
+    <span className={`inline-flex flex-wrap items-center gap-1 font-mono text-meta text-sol-text-muted ${className}`}>
       {story.conversation_ids.slice(0, max).map((id) => (
         <EntityIdPill key={String(id)} type="session" id={String(id)} compact />
       ))}
       {story.conversation_ids.length > max && (
-        <span className="font-mono text-[10px] text-sol-text/45">+{story.conversation_ids.length - max}</span>
+        <span className="font-mono text-meta text-sol-text-dim">+{story.conversation_ids.length - max}</span>
       )}
     </span>
   );

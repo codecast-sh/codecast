@@ -110,7 +110,7 @@ export function Views() {
   const peers = <div className="flex flex-col gap-1.5">{chip("leo")}{chip("ines")}<Kids>{owned("p:ines")}</Kids></div>;
   const noGoal = (
     <div className="mt-8 pt-4 border-t font-mono" style={{ borderColor: LINE }}>
-      <div className="text-[11.5px] mb-3" style={{ color: DIM }}>{underNoGoal.length} projects under no goal</div>
+      <div className="text-meta mb-3" style={{ color: DIM }}>{underNoGoal.length} projects under no goal</div>
       <div className="flex flex-wrap gap-3">{underNoGoal.map((x) => <div key={x.id}>{item(x.id)}</div>)}</div>
     </div>
   );
@@ -164,7 +164,7 @@ export function Views() {
           <label className="flex shrink-0 whitespace-nowrap items-center gap-1.5 h-8 px-2.5 rounded-lg border w-[200px] sm:w-[230px]" style={{ borderColor: LINE, background: "#fffdf6" }}>
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={DIM} strokeWidth="2.2" aria-hidden><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
             <input value={q} onChange={(e) => { setQ(e.target.value); setFocus(0); }} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); step(e.shiftKey ? -1 : 1); } }} placeholder="Find on the chart" aria-label="Find on the chart" className="min-w-0 flex-1 bg-transparent outline-none text-[12px]" style={{ color: TEXT }} />
-            {q.trim() && <span className="shrink-0 tabular-nums text-[11px]" style={{ color: hits.length ? MUTED : SOL.red }}>{hits.length ? `${(focus % hits.length) + 1} of ${hits.length}` : "none"}</span>}
+            {q.trim() && <span className="shrink-0 tabular-nums text-meta" style={{ color: hits.length ? MUTED : SOL.red }}>{hits.length ? `${(focus % hits.length) + 1} of ${hits.length}` : "none"}</span>}
             {hits.length > 1 && (
               <span className="flex shrink-0">
                 <button type="button" aria-label="Previous match" onClick={() => step(-1)} className="w-5 h-5 rounded hover:bg-black/5" style={{ color: MUTED }}>‹</button>
@@ -187,7 +187,7 @@ export function Views() {
           <div className="sm:hidden og-grid px-3 py-4" style={{ ["--og-views-w" as string]: "100%" }}>{list}</div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2.5 border-t font-mono text-[11.5px]" style={{ borderColor: LINE, background: tint(SAND, 35) }}>
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 px-3 py-2.5 border-t font-mono text-meta" style={{ borderColor: LINE, background: tint(SAND, 35) }}>
           <div className="flex items-center gap-1.5">
             <ZoomBtn label="Zoom out" onClick={() => zoomTo(zoom - 0.15)}>−</ZoomBtn>
             <input type="range" min={0.5} max={1.6} step={0.05} value={zoom} onChange={(e) => zoomTo(Number(e.target.value))} aria-label="Zoom" className="w-[120px] accent-[#268bd2]" />

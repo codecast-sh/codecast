@@ -50,6 +50,8 @@
   .pn-item { grid-template-columns: 16px; padding: 8px; justify-content: center; }
   .pn-label, .pn-n, .pn-key, .pn-state { display: none; }
   .pn-rail::before { display: none; }
+  /* Decisions waiting stay said: their count rides the icon's corner. */
+  .pn-item .pn-n[data-tone="ask"] { display: block; position: absolute; top: 1px; right: 1px; min-width: 16px; padding: 0 4px; border-radius: 999px; line-height: 16px; text-align: center; color: var(--lw-paper); background: var(--lw-person); }
 }
 /* Until the feeds answer, the numbers are the cache's: dim, so one about to move never reads as settled. */
 .pn[data-settling] .pn-n { opacity: .55; transition: opacity var(--lw-med); }

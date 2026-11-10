@@ -226,7 +226,7 @@ export function ReviewMenu({
           <div className="flex items-baseline gap-2">
             <h3 className="text-[13px] font-medium text-sol-text">{count ? "Finish your review" : "Review"}</h3>
             {count > 0 && (
-              <span className="ml-auto text-[11px] text-sol-text-dim tabular-nums">
+              <span className="ml-auto text-meta text-sol-text-dim tabular-nums">
                 {count} {count === 1 ? "note" : "notes"}
               </span>
             )}
@@ -239,7 +239,7 @@ export function ReviewMenu({
               {!!openThreads && onWalk && (
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1.5 rounded-full bg-sol-cyan/10 px-2.5 py-1 text-[11px] text-sol-cyan hover:bg-sol-cyan/20 transition-colors"
+                  className="inline-flex items-center gap-1.5 rounded-full bg-sol-cyan/10 px-2.5 py-1 text-meta text-sol-cyan hover:bg-sol-cyan/20 transition-colors"
                   onClick={() => { setOpen(false); onWalk(); }}
                 >
                   Start with the {openThreads} open {openThreads === 1 ? "thread" : "threads"}
@@ -257,7 +257,7 @@ export function ReviewMenu({
                     onClick={() => { setOpen(false); onNavigate(note); }}
                     title="Show this note on its line"
                   >
-                    <span className="font-mono text-[11px] text-sol-text-dim shrink-0">{notePlace(note)}</span>
+                    <span className="font-mono text-meta text-sol-text-dim shrink-0">{notePlace(note)}</span>
                     <span className="text-[12px] text-sol-text truncate">{note.content}</span>
                   </button>
                 </li>
@@ -297,7 +297,7 @@ export function ReviewMenu({
                   disabled={disabled}
                   title={disabled ? "It is your pull request: GitHub takes a comment from you, not a verdict" : hint}
                   onClick={() => setVerdict(key)}
-                  className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-35 ${
+                  className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2.5 py-1 text-meta font-medium transition-colors disabled:opacity-35 ${
                     active ? "" : "border-sol-border/60 text-sol-text-muted hover:text-sol-text hover:border-sol-border"
                   }`}
                   style={active ? { color, borderColor: color, background: `color-mix(in srgb, ${color} 12%, transparent)` } : undefined}
@@ -310,14 +310,14 @@ export function ReviewMenu({
           </div>
           {picking && !shepherd && (
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-[11px] text-sol-text-dim">Send the notes to</span>
+              <span className="text-meta text-sol-text-dim">Send the notes to</span>
               {sessionChoices.map((session) => (
                 <button
                   key={session.id}
                   type="button"
                   disabled={busy !== null}
                   onClick={() => run("hand", session.id)}
-                  className="rounded-full border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text-muted hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors max-w-[220px] truncate"
+                  className="rounded-full border border-sol-border/50 px-2 py-0.5 text-meta text-sol-text-muted hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors max-w-[220px] truncate"
                 >
                   {session.title}
                 </button>
@@ -328,7 +328,7 @@ export function ReviewMenu({
 
         <div className="px-4 py-2.5 border-t border-sol-border/50 bg-sol-bg-alt/30">
           {handResult && (
-            <div className="mb-2 flex items-center gap-2 text-[11px] text-sol-red" data-pr-hand-outcome={handResult.outcome.kind}>
+            <div className="mb-2 flex items-center gap-2 text-meta text-sol-red" data-pr-hand-outcome={handResult.outcome.kind}>
               <span className="min-w-0 flex-1 truncate" title={describeSendOutcome(handResult.outcome, { to: handResult.to })}>
                 {describeSendOutcome(handResult.outcome, { to: handResult.to })}
               </span>
@@ -372,7 +372,7 @@ export function ReviewMenu({
                 role="switch"
                 aria-checked={resolveOnSend}
                 onClick={() => setResolveOnSend((v) => !v)}
-                className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-meta transition-colors ${
                   resolveOnSend ? "border-sol-cyan/50 text-sol-cyan bg-sol-cyan/10" : "border-sol-border/60 text-sol-text-dim hover:text-sol-text"
                 }`}
                 title="Resolve the notes once the session has them: they leave your review and never go to GitHub"
@@ -399,7 +399,7 @@ export function ReviewMenu({
             </button>
           </div>
           {!openPr && (
-            <p className="mt-1.5 text-[11px] text-sol-text-dim">
+            <p className="mt-1.5 text-meta text-sol-text-dim">
               This pull request is {pr.state === "merged" ? "merged" : "closed"}, so GitHub takes no more reviews.
             </p>
           )}
@@ -505,7 +505,7 @@ export function MergeMenu({ pr }: { pr: any }) {
       >
         <GitMerge className="w-3.5 h-3.5" />
         {busy ? "Working" : "Merge"}
-        {autoOn && <span className="rounded-full bg-sol-violet/15 px-1.5 text-[10px]" title={`GitHub merges it once checks pass${pr.auto_merge.enabled_by ? `, set by ${pr.auto_merge.enabled_by}` : ""}`}>auto</span>}
+        {autoOn && <span className="rounded-full bg-sol-violet/15 px-1.5 text-meta" title={`GitHub merges it once checks pass${pr.auto_merge.enabled_by ? `, set by ${pr.auto_merge.enabled_by}` : ""}`}>auto</span>}
       </button>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -524,7 +524,7 @@ export function MergeMenu({ pr }: { pr: any }) {
                 {method === m.key ? <Check className="w-3 h-3 text-sol-cyan" /> : <span className="w-3" />}
                 {m.label}
               </span>
-              <span className="pl-5 text-[11px] text-sol-text-dim">{m.hint}</span>
+              <span className="pl-5 text-meta text-sol-text-dim">{m.hint}</span>
             </DropdownMenuItem>
           ))}
           <DropdownMenuSeparator className="bg-sol-border" />
@@ -698,7 +698,7 @@ export function MoreMenu({
           )}
 
           <DropdownMenuSeparator className="bg-sol-border" />
-          <div className="px-2 py-1.5 text-[10px] text-sol-text-dim flex items-center gap-1.5 flex-wrap">
+          <div className="px-2 py-1.5 text-meta text-sol-text-dim flex items-center gap-1.5 flex-wrap">
             <MenuKeyCaps action="pr.review" className="contents" /> review <MenuKeyCaps action="pr.nextThread" className="contents" /> <MenuKeyCaps action="pr.prevThread" className="contents" /> threads <MenuKeyCaps action="diff.markViewed" className="contents" /> viewed
           </div>
         </DropdownMenuContent>
@@ -718,7 +718,7 @@ export function MoreMenu({
               setAsking(false);
             }}
           >
-            <div className="text-[10px] uppercase tracking-wider text-sol-text-dim">Request a review</div>
+            <div className="text-mark uppercase tracking-wider text-sol-text-dim">Request a review</div>
             <input
               autoFocus
               value={login}

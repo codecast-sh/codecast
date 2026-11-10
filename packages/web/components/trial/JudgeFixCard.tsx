@@ -37,7 +37,7 @@ function Shift({ label, group, wants }: { label: string; group: JudgeFixGroup; w
   const good = wants === "fewer" ? after < before : after >= before;
   return (
     <div className="grid grid-cols-[7.5rem_1fr_4.5rem] items-center gap-x-3 gap-y-1 text-[12px]" data-judge-fix-group={wants}>
-      <span className="row-span-2 text-sol-text-muted">{label}<span className="block text-[11px] text-sol-text-dim">{group.messages !== undefined ? `${group.messages} message${group.messages === 1 ? "" : "s"}` : `${group.moments} moments`}</span></span>
+      <span className="row-span-2 text-sol-text-muted">{label}<span className="block text-meta text-sol-text-dim">{group.messages !== undefined ? `${group.messages} message${group.messages === 1 ? "" : "s"}` : `${group.moments} moments`}</span></span>
       <span className="relative h-2 rounded-full bg-sol-border/30"><span className="absolute inset-y-0 left-0 rounded-full bg-sol-text-dim/50" style={{ width: `${before}%` }} /></span>
       <span className="tabular-nums text-sol-text-dim">{group.base}/{group.runs}</span>
       <span className="relative h-2 rounded-full bg-sol-border/30"><span className={cn("absolute inset-y-0 left-0 rounded-full", good ? "bg-sol-green" : "bg-sol-red")} style={{ width: `${after}%` }} /></span>
@@ -59,7 +59,7 @@ function CaseList({ title, cases, moved }: { title: string; cases: JudgeFixCase[
   if (!cases.length) return null;
   return (
     <section className="mt-6" data-judge-fix-cases={moved ? "moved" : "unmoved"}>
-      <h2 className={cn("text-[11px] font-medium uppercase tracking-wide", moved ? "text-sol-green" : "text-sol-text-dim")}>{title} · {cases.length}</h2>
+      <h2 className={cn("text-mark font-medium uppercase tracking-wide", moved ? "text-sol-green" : "text-sol-text-dim")}>{title} · {cases.length}</h2>
       <ul className="mt-1.5 divide-y divide-sol-border/30 border-y border-sol-border/30">
         {cases.map((c) => (
           <li key={`${c.finding}-${c.expectation}`} className="grid grid-cols-[1fr_auto] gap-x-4 py-2.5 text-[12px]">
@@ -71,7 +71,7 @@ function CaseList({ title, cases, moved }: { title: string; cases: JudgeFixCase[
               <span className="text-sol-text-dim">{c.base}/{c.reps}</span>
               <span className="mx-1 text-sol-text-dim">→</span>
               <span className={moved ? "text-sol-green" : "text-sol-text-dim"}>{c.arm}/{c.reps}</span>
-              <span className="mt-0.5 block font-mono text-[10.5px] text-sol-text-dim">{[c.moment, ...(c.twins ?? []).map((t) => t.moment)].join(" · ")}</span>
+              <span className="mt-0.5 block font-mono text-meta text-sol-text-dim">{[c.moment, ...(c.twins ?? []).map((t) => t.moment)].join(" · ")}</span>
             </span>
           </li>
         ))}
@@ -86,14 +86,14 @@ function Rests({ rests }: { rests: NonNullable<JudgeFixCard["ab"]["rests"]> }) {
   const emptied = rests.filter(restEmptied).length;
   return (
     <section className="mt-6" data-judge-fix-rests>
-      <h2 className={cn("text-[11px] font-medium uppercase tracking-wide", emptied ? "text-sol-red" : "text-sol-text-dim")}>Waiting proposals · {emptied ? `${emptied} emptied` : `${rests.length} kept`}</h2>
+      <h2 className={cn("text-mark font-medium uppercase tracking-wide", emptied ? "text-sol-red" : "text-sol-text-dim")}>Waiting proposals · {emptied ? `${emptied} emptied` : `${rests.length} kept`}</h2>
       <ul className="mt-1.5 divide-y divide-sol-border/30 border-y border-sol-border/30">
         {rests.map((r) => {
           const gone = restEmptied(r);
           return (
             <li key={r.card} className="grid grid-cols-[4rem_1fr_auto] items-baseline gap-x-3 py-2 text-[12px]" data-judge-fix-rest={gone ? "emptied" : "kept"}>
-              <span className="font-mono text-[11px] text-sol-text-muted">{r.card}</span>
-              <span className={cn("min-w-0 truncate font-mono text-[11px] text-sol-text-dim", gone && "text-sol-red line-through decoration-sol-red/50")}>{r.finding} · {r.moment} · {r.problem}</span>
+              <span className="font-mono text-meta text-sol-text-muted">{r.card}</span>
+              <span className={cn("min-w-0 truncate font-mono text-meta text-sol-text-dim", gone && "text-sol-red line-through decoration-sol-red/50")}>{r.finding} · {r.moment} · {r.problem}</span>
               <span className="tabular-nums">
                 <span className="text-sol-text-dim">{r.base}/{r.reps}</span>
                 <span className="mx-1 text-sol-text-dim">→</span>
@@ -112,7 +112,7 @@ export function JudgeFixCardView({ card, answer, problem, overlaps }: { card: Ju
   const cost = perRun(card);
   return (
     <div data-judge-fix={card.problem}>
-      <div className="flex flex-wrap items-baseline gap-x-3 text-[11.5px]">
+      <div className="flex flex-wrap items-baseline gap-x-3 text-meta">
         {partsOf(card).map((p) => <span key={p} className="rounded bg-sol-cyan/15 px-1.5 py-0.5 text-sol-cyan">{p}</span>)}
         <span className={cn("font-medium", v.tone)} data-judge-fix-verdict={card.ab.verdict}>{v.label}</span>
         <span className="tabular-nums text-sol-text-muted" data-judge-fix-moved>fixes {card.cases.filter(caseMoved).length} of {card.cases.length}</span>
@@ -124,7 +124,7 @@ export function JudgeFixCardView({ card, answer, problem, overlaps }: { card: Ju
       <div className="mt-3"><CardFacts overlaps={overlaps} after={(card.builds_on ?? []).map((b) => ({ card: b.card, where: b.files.map((f) => f.split("/").pop()).join(", ") }))} /></div>
 
       <section className="mt-5 space-y-3 rounded-md border border-sol-border/40 px-4 py-3">
-        <div className="grid grid-cols-[7.5rem_1fr_4.5rem] gap-x-3 text-[10.5px] text-sol-text-dim"><span /><span>published now, then this edit</span><span>runs</span></div>
+        <div className="grid grid-cols-[7.5rem_1fr_4.5rem] gap-x-3 text-meta text-sol-text-dim"><span /><span>published now, then this edit</span><span>runs</span></div>
         <Shift label="Ruled wrong" group={card.ab.ruled} wants="fewer" />
         <Shift label="Kept findings" group={card.ab.controls} wants="more" />
       </section>
@@ -134,8 +134,8 @@ export function JudgeFixCardView({ card, answer, problem, overlaps }: { card: Ju
       <section className="mt-6 space-y-3" data-judge-fix-diff>
         {card.diff.map((d) => (
           <div key={d.file} className="overflow-hidden rounded-md border border-sol-border/40">
-            <div className="border-b border-sol-border/40 bg-sol-bg-alt/40 px-3 py-1 font-mono text-[11px] text-sol-text-dim">{d.file}</div>
-            <pre className="overflow-x-auto px-3 py-2 font-mono text-[11.5px] leading-relaxed">
+            <div className="border-b border-sol-border/40 bg-sol-bg-alt/40 px-3 py-1 font-mono text-meta text-sol-text-dim">{d.file}</div>
+            <pre className="overflow-x-auto px-3 py-2 font-mono text-meta leading-relaxed">
               {d.removed.map((l, i) => <div key={`r${i}`} className="whitespace-pre-wrap text-sol-red"><span className="select-none opacity-60">− </span>{l}</div>)}
               {d.added.map((l, i) => <div key={`a${i}`} className="whitespace-pre-wrap text-sol-green"><span className="select-none opacity-60">+ </span>{l}</div>)}
             </pre>

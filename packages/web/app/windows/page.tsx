@@ -4,6 +4,7 @@ import { SessionWindow } from "@/components/SessionWindow";
 import { WindowTaskbar } from "@/components/WindowTaskbar";
 import { useWindowManager } from "@/store/windowManagerStore";
 import { useTrackedStore, isSessionEffectivelyIdle, filterInboxScopeFromState, type InboxSession } from "@/store/inboxStore";
+import { makeCollectionSig } from "@/store/wakeSig";
 import { cleanTitle } from "@/lib/conversationProcessor";
 import { Plus, MousePointerClick } from "lucide-react";
 
@@ -24,9 +25,26 @@ function getContainerViewport(el: HTMLDivElement | null): { width: number; heigh
   return { width: window.innerWidth, height: window.innerHeight };
 }
 
+// What the empty state draws of each row with messages: its name, its dot,
+// and who owns it (the scope rule). A heartbeat moves none of these, so the
+// page wakes only when the list it shows changes.
+const windowRowsSig = makeCollectionSig<InboxSession>((r) =>
+  r.message_count > 0 ? `${r.title ?? ""}|${isSessionEffectivelyIdle(r) ? 1 : 0}|${r.user_id ?? ""}|${r.owner_user_id ?? ""}` : null);
+
+/** How many windows "open the newest" opens at once. */
+const OPEN_ALL_CAP = 8;
+
 function WindowManagerView() {
   const { windows, focusedWindowId, openWindow, autoArrange } = useWindowManager();
-  const s = useTrackedStore([s => s.sessions]);
+  const s = useTrackedStore([
+    (st) => windowRowsSig(st.sessions),
+    // The scope pref lives in the UI prefs; the chokepoint reads it from there.
+    (st) => st.clientState.ui,
+    (st) => st.currentUser?._id?.toString?.() ?? null,
+    (st) => st.teamInboxIds,
+    (st) => st.currentSessionId,
+  ]);
+  const rowsSig = windowRowsSig(s.sessions);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const windowList = useMemo(
@@ -41,9 +59,13 @@ function WindowManagerView() {
     [windows],
   );
   // Scoped enumeration — the cache holds rows from other inbox scopes/teams.
+  // Newest first, so "open the newest" and the list below agree.
   const availableSessions = useMemo(
-    () => Object.values(filterInboxScopeFromState(s)).filter(sess => !openSessionIds.has(sess._id) && sess.message_count > 0),
-    [s.sessions, openSessionIds],
+    () => Object.values(filterInboxScopeFromState(s))
+      .filter(sess => !openSessionIds.has(sess._id) && sess.message_count > 0)
+      .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rowsSig stands in for the churny sessions ref
+    [rowsSig, s.clientState.ui, s.currentUser?._id, s.teamInboxIds, s.currentSessionId, openSessionIds],
   );
 
   const handleOpenSession = useCallback((sessionId: string) => {
@@ -54,7 +76,7 @@ function WindowManagerView() {
   }, [openWindow, autoArrange]);
 
   const handleOpenAll = useCallback(() => {
-    const toOpen = availableSessions.slice(0, 8);
+    const toOpen = availableSessions.slice(0, OPEN_ALL_CAP);
     toOpen.forEach(sess => openWindow(sess._id));
     setTimeout(() => {
       autoArrange("tile", getContainerViewport(containerRef.current));
@@ -98,30 +120,22 @@ function EmptyState({
   onOpenSession: (id: string) => void;
   onOpenAll: () => void;
 }) {
-  const needsInput = sessions.filter(s => isSessionEffectivelyIdle(s));
-  const working = sessions.filter(s => !isSessionEffectivelyIdle(s));
-
   return (
     <div className="h-full flex flex-col items-center justify-center gap-6 px-8">
       <div className="text-center space-y-2">
-        <MousePointerClick className="w-10 h-10 mx-auto text-sol-text-dim/30" />
+        <MousePointerClick className="w-10 h-10 mx-auto text-sol-text-dim" />
         <h2 className="text-lg font-medium text-sol-text-muted">Window Manager</h2>
-        <p className="text-sm text-sol-text-dim/60 max-w-md">
-          Open sessions as floating windows to monitor and interact with multiple conversations at once.
-        </p>
       </div>
 
       {sessions.length > 0 ? (
         <div className="w-full max-w-lg space-y-3">
-          {(needsInput.length > 0 || working.length > 0) && (
-            <button
-              onClick={onOpenAll}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-sol-cyan/30 bg-sol-cyan/8 text-sol-cyan hover:bg-sol-cyan/15 transition-colors text-sm font-medium"
-            >
-              <Plus className="w-4 h-4" />
-              Open all active sessions ({needsInput.length + working.length})
-            </button>
-          )}
+          <button
+            onClick={onOpenAll}
+            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-sol-cyan/30 bg-sol-cyan/8 text-sol-cyan hover:bg-sol-cyan/15 transition-colors text-sm font-medium"
+          >
+            <Plus className="w-4 h-4" />
+            {sessions.length === 1 ? "Open it" : `Open the ${Math.min(OPEN_ALL_CAP, sessions.length)} newest`}
+          </button>
 
           <div className="max-h-[300px] overflow-y-auto space-y-1 rounded-lg border border-sol-border/20 p-2">
             {sessions.slice(0, 20).map(sess => {
@@ -132,29 +146,22 @@ function EmptyState({
                   onClick={() => onOpenSession(sess._id)}
                   className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md hover:bg-sol-text-dim/8 transition-colors text-left group"
                 >
-                  <span className="relative flex h-2 w-2 flex-shrink-0">
-                    {!idle && (
-                      <span
-                        className="animate-ping absolute inline-flex h-full w-full rounded-full opacity-40"
-                        style={{ backgroundColor: "var(--sol-green)", animationDuration: "1.5s" }}
-                      />
-                    )}
-                    <span
-                      className="relative inline-flex rounded-full h-2 w-2"
-                      style={{ backgroundColor: idle ? "var(--sol-text-dim)" : "var(--sol-green)" }}
-                    />
-                  </span>
+                  <span
+                    className="inline-flex rounded-full h-2 w-2 flex-shrink-0"
+                    title={idle ? "Idle" : "Working"}
+                    style={{ backgroundColor: idle ? "var(--sol-text-dim)" : "var(--sol-green)" }}
+                  />
                   <span className="flex-1 min-w-0 truncate text-sm text-sol-text-muted group-hover:text-sol-text">
                     {cleanTitle(sess.title || "New Session")}
                   </span>
-                  <Plus className="w-3.5 h-3.5 text-sol-text-dim/30 group-hover:text-sol-cyan transition-colors" />
+                  <Plus className="w-3.5 h-3.5 text-sol-text-dim group-hover:text-sol-cyan transition-colors" />
                 </button>
               );
             })}
           </div>
         </div>
       ) : (
-        <p className="text-sm text-sol-text-dim/40">No active sessions to display</p>
+        <p className="text-sm text-sol-text-dim">No sessions</p>
       )}
     </div>
   );

@@ -36,10 +36,10 @@ export const CheckoutPage = forwardRef<HTMLDivElement, Props & { cardRef?: React
             {/* Site header: signed in, because this is the human's own Chrome. */}
             <div className="flex items-center gap-2 px-4 sm:px-5 h-11 border-b border-[#eceef1]">
               <span className="font-bold tracking-tight text-[15px]">acme</span>
-              <span className="rounded px-1.5 py-[1px] text-[9.5px] font-semibold" style={{ backgroundColor: "#fff3c4", color: "#8a6100" }}>staging</span>
-              <span className="ml-auto flex items-center gap-1.5 text-[11px] text-[#5b6875]">
+              <span className="rounded px-1.5 py-[1px] text-meta font-semibold" style={{ backgroundColor: "#fff3c4", color: "#8a6100" }}>staging</span>
+              <span className="ml-auto flex items-center gap-1.5 text-meta text-[#5b6875]">
                 <span className={narrow ? "hidden" : "hidden sm:inline"}>dana@acme.dev</span>
-                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-bold text-white" style={{ backgroundColor: SOL.violet }}>D</span>
+                <span className="inline-flex h-5 w-5 items-center justify-center rounded-full text-meta font-bold text-white" style={{ backgroundColor: SOL.violet }}>D</span>
               </span>
             </div>
             <div className={`grid gap-5 px-4 py-4 ${narrow ? "" : "sm:grid-cols-[1fr_1.15fr] sm:px-5"}`}>
@@ -54,7 +54,7 @@ export const CheckoutPage = forwardRef<HTMLDivElement, Props & { cardRef?: React
               </div>
               <div className="relative space-y-2.5">
                 {phase === 5 && (
-                  <div className="bx-pop rounded-md px-3 py-2 text-[11.5px] leading-snug" style={{ backgroundColor: "#fdecea", color: "#a1261d", border: "1px solid #f5c2bd" }}>
+                  <div className="bx-pop rounded-md px-3 py-2 text-meta leading-snug" style={{ backgroundColor: "#fdecea", color: "#a1261d", border: "1px solid #f5c2bd" }}>
                     <span className="font-semibold">We couldn&apos;t place your order.</span> Please try again.
                   </div>
                 )}
@@ -67,7 +67,7 @@ export const CheckoutPage = forwardRef<HTMLDivElement, Props & { cardRef?: React
                 <Field label="Shipping" refN={5} annotate={annotate} showRef={showRefs} hl={highlight === 5} select>
                   <span>Standard, 3 to 5 days</span>
                 </Field>
-                <div className="relative flex items-center gap-2 text-[11.5px] text-[#3b4652] pt-0.5 rounded" style={highlight === 6 ? HL : undefined}>
+                <div className="relative flex items-center gap-2 text-meta text-[#3b4652] pt-0.5 rounded" style={highlight === 6 ? HL : undefined}>
                   <span className="h-3.5 w-3.5 rounded-[3px] border border-[#b8c0c9]" />
                   Save this card
                   <RefTag n={6} annotate={annotate} on={showRefs} style={{ right: 4, top: -2 }} />
@@ -116,7 +116,7 @@ function Field({ label, refN, showRef, children, focus = false, select = false, 
 }) {
   return (
     <div className="relative">
-      <div className="text-[10.5px] font-medium text-[#5b6875] mb-1">{label}</div>
+      <div className="text-meta font-medium text-[#5b6875] mb-1">{label}</div>
       <div
         ref={innerRef}
         className="flex h-8 items-center rounded-md px-2.5 text-[12px] font-mono tabular-nums"

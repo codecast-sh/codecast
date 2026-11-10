@@ -46,7 +46,7 @@ export const shortDate: (ts: number, now: number) => string = formatShortDate;
 export function HealthChip({ health, at, now, bare, lower, className }: { health: InitiativeHealth; at?: number; now: number; /** The dot alone, its word as the title (a far card on the org chart). */ bare?: boolean; /** The word in lowercase, as every state cell of a line and a sheet's facts says it. */ lower?: boolean; className?: string }) {
   const color = HEALTH_COLOR[health];
   return (
-    <span className={cn("inline-flex items-center gap-1.5 text-[11.5px] whitespace-nowrap", className)} style={{ color: health === "none" ? color : "var(--sol-text-secondary)" }} title={bare ? INITIATIVE_HEALTH_LABEL[health] : undefined} data-initiative-health={health}>
+    <span className={cn("inline-flex items-center gap-1.5 text-meta whitespace-nowrap", className)} style={{ color: health === "none" ? color : "var(--sol-text-secondary)" }} title={bare ? INITIATIVE_HEALTH_LABEL[health] : undefined} data-initiative-health={health}>
       <span className="w-[7px] h-[7px] rounded-full shrink-0" style={health === "none" ? { border: `1px solid ${color}` } : { background: color }} aria-hidden />
       {!bare && (lower ? INITIATIVE_HEALTH_LABEL[health].toLowerCase() : INITIATIVE_HEALTH_LABEL[health])}
       {!bare && health !== "none" && at ? <span style={{ color: "var(--sol-text-dim)" }} data-health-date>{shortDate(at, now)}</span> : null}
@@ -68,7 +68,7 @@ export function ProgressBar({ progress, partial, bare, className }: { progress: 
         <span className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-300" style={{ width: `${moving}%`, background: `color-mix(in srgb, ${INITIATIVE_ACCENT} 30%, transparent)` }} />
         <span className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-300" style={{ width: `${pct}%`, background: INITIATIVE_ACCENT }} />
       </span>
-      {!bare && <span className={cn("shrink-0 text-[11px] tabular-nums", partial && "italic")} style={{ color: "var(--sol-text-dim)" }}>{partial ? "counting" : progress.total === 0 ? "no tasks" : `${progress.done}/${progress.total}`}</span>}
+      {!bare && <span className={cn("shrink-0 text-meta tabular-nums", partial && "italic")} style={{ color: "var(--sol-text-dim)" }}>{partial ? "counting" : progress.total === 0 ? "no tasks" : `${progress.done}/${progress.total}`}</span>}
     </span>
   );
 }
@@ -81,9 +81,9 @@ export function OwnerChip({ owner, size = 16, nameless, className }: { owner: In
   const roster = useTeamRosterIdentity();
   const s = useTrackedStore([(st) => st.currentUser?._id]);
   const info = resolveAssigneeInfo(ownerId(owner), undefined, roster as any, s.currentUser as any, roles as any);
-  if (!info) return <span className={cn("text-[11.5px] italic", className)} style={{ color: "var(--sol-text-dim)" }} data-initiative-owner="none">No owner</span>;
+  if (!info) return <span className={cn("text-meta italic", className)} style={{ color: "var(--sol-text-dim)" }} data-initiative-owner="none">No owner</span>;
   return (
-    <span className={cn("inline-flex items-center gap-1.5 min-w-0 text-[11.5px]", className)} style={{ color: "var(--sol-text-secondary)" }} data-initiative-owner={owner?.kind}>
+    <span className={cn("inline-flex items-center gap-1.5 min-w-0 text-meta", className)} style={{ color: "var(--sol-text-secondary)" }} data-initiative-owner={owner?.kind}>
       <AssigneeFace info={info} size={size} />
       {!nameless && <span className="truncate">{info.name}</span>}
     </span>
@@ -98,7 +98,7 @@ export function TargetDate({ ts, now, done, local, className }: { ts?: number; n
   if (!ts) return null;
   const late = !done && (local ? ts < now : targetDayPassed(ts, now));
   return (
-    <span className={cn("text-[11.5px] tabular-nums whitespace-nowrap", className)} style={{ color: late ? "var(--sol-red)" : "var(--sol-text-dim)" }} title={late ? "Past its target" : "Target"} data-initiative-target={late ? "late" : "ahead"}>
+    <span className={cn("text-meta tabular-nums whitespace-nowrap", className)} style={{ color: late ? "var(--sol-red)" : "var(--sol-text-dim)" }} title={late ? "Past its target" : "Target"} data-initiative-target={late ? "late" : "ahead"}>
       {local ? shortDate(ts, now) : formatTargetDay(ts, now)}
     </span>
   );
@@ -156,7 +156,7 @@ export function MetricTile({ reading, trend, now, size = "tile", named = true, c
   const series = trend?.series.map((p) => p.n) ?? [];
   if (size === "chip") {
     return (
-      <span className={cn("inline-flex items-center gap-1 min-w-0 max-w-full text-[11.5px] tabular-nums whitespace-nowrap", className)} title={metricLine(reading, now)} data-metric={reading.key} data-metric-size="chip">
+      <span className={cn("inline-flex items-center gap-1 min-w-0 max-w-full text-meta tabular-nums whitespace-nowrap", className)} title={metricLine(reading, now)} data-metric={reading.key} data-metric-size="chip">
         <MetricStandingDot standing={reading.standing} />
         {named && <span className="truncate max-w-[18ch]" style={{ color: "var(--sol-text-muted)" }} data-metric-name>{reading.name}</span>}
         {unreported
@@ -177,13 +177,13 @@ export function MetricTile({ reading, trend, now, size = "tile", named = true, c
           ? <SparkLine values={series} target={metricNumber(reading.target)} width={48} height={14} tone={standingColor} className="text-sol-text-dim" />
           : <MetricBar reading={reading} className="w-[56px] shrink-0" />}
         {reading.guardrail && <GuardrailMark />}
-        {reading.live ? <LiveMark reading={reading} now={now} /> : named && reading.observed_at ? <span className="whitespace-nowrap text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{shortDate(reading.observed_at, now)}</span> : null}
+        {reading.live ? <LiveMark reading={reading} now={now} /> : named && reading.observed_at ? <span className="whitespace-nowrap text-meta" style={{ color: "var(--sol-text-dim)" }}>{shortDate(reading.observed_at, now)}</span> : null}
       </span>
     );
   }
   return (
     <div className={cn("min-w-0 rounded-xl border px-3 py-2.5", className)} style={{ borderColor: "color-mix(in srgb, var(--sol-border) 26%, transparent)" }} data-metric={reading.key} data-metric-size="tile" data-metric-standing={reading.standing}>
-      <div className="flex items-center gap-1.5 text-[11px] min-w-0" style={{ color: "var(--sol-text-muted)" }}>
+      <div className="flex items-center gap-1.5 text-meta min-w-0" style={{ color: "var(--sol-text-muted)" }}>
         <MetricStandingDot standing={reading.standing} />
         <span className="truncate">{reading.name}</span>
         {reading.guardrail && <GuardrailMark />}
@@ -197,7 +197,7 @@ export function MetricTile({ reading, trend, now, size = "tile", named = true, c
         {series.length >= 2 && <SparkLine values={series} target={metricNumber(reading.target)} width={72} height={20} tone={standingColor} className="text-sol-text-dim" />}
       </div>
       <MetricBar reading={reading} className="mt-2 block w-full" />
-      <div className="mt-1.5 text-[11px] flex items-center gap-2" style={{ color: "var(--sol-text-dim)" }}>
+      <div className="mt-1.5 text-meta flex items-center gap-2" style={{ color: "var(--sol-text-dim)" }}>
         <span>{reading.standing === "met" ? "Met" : reading.standing === "behind" ? "Behind" : unreported ? "Not reported yet" : metricNumber(reading.value) === null ? "Not a number" : "No number in the target"}</span>
         {reading.observed_at && !reading.live ? <span>read {shortDate(reading.observed_at, now)}</span> : null}
         {trend?.delta !== null && trend?.delta !== undefined && trend.direction !== "flat" && <span className="tabular-nums">{trend.delta > 0 ? "+" : ""}{formatMetricNumber(trend.delta)} since last</span>}
@@ -210,7 +210,7 @@ export function MetricTile({ reading, trend, now, size = "tile", named = true, c
 function LiveMark({ reading, now }: { reading: MetricReading; now: number }) {
   const age = reading.observed_at ? compactAge(Math.max(0, now - reading.observed_at)) : null;
   return (
-    <span className="inline-flex items-center gap-1 whitespace-nowrap text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={reading.source ?? reading.series} data-metric-live={reading.series}>
+    <span className="inline-flex items-center gap-1 whitespace-nowrap text-meta tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={reading.source ?? reading.series} data-metric-live={reading.series}>
       <span className="h-1.5 w-1.5 rounded-full" style={{ background: "var(--sol-cyan)" }} />
       live{age ? ` · ${age}` : ""}
     </span>
@@ -219,17 +219,17 @@ function LiveMark({ reading, now }: { reading: MetricReading; now: number }) {
 
 /** A number the work must not make worse while it moves the others. */
 function GuardrailMark() {
-  return <span className="whitespace-nowrap rounded px-1 text-[10.5px]" style={{ color: "var(--sol-text-muted)", background: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }} data-metric-guardrail>guardrail</span>;
+  return <span className="whitespace-nowrap rounded px-1 text-meta" style={{ color: "var(--sol-text-muted)", background: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }} data-metric-guardrail>guardrail</span>;
 }
 
 /** The next milestone and its day: red when its day has passed and it is not reached; "no milestone" when none is set. */
 export function NextMilestoneChip({ milestone, now, counts, className }: { milestone: InitiativeMilestone | null; now: number; counts?: { done: number; total: number }; className?: string }) {
   if (!milestone) {
-    return counts?.total ? <span className={cn("text-[11.5px]", className)} style={{ color: "var(--sol-text-dim)" }} data-initiative-milestone="all-reached">{counts.total === 1 ? "Its milestone is reached" : `All ${counts.total} milestones reached`}</span> : null;
+    return counts?.total ? <span className={cn("text-meta", className)} style={{ color: "var(--sol-text-dim)" }} data-initiative-milestone="all-reached">{counts.total === 1 ? "Its milestone is reached" : `All ${counts.total} milestones reached`}</span> : null;
   }
   const late = !!milestone.date && targetDayPassed(milestone.date, now);
   return (
-    <span className={cn("inline-flex items-center gap-1.5 min-w-0 text-[11.5px]", className)} title={`Next milestone${counts ? `, ${counts.done} of ${counts.total} reached` : ""}`} data-initiative-milestone={late ? "late" : "next"}>
+    <span className={cn("inline-flex items-center gap-1.5 min-w-0 text-meta", className)} title={`Next milestone${counts ? `, ${counts.done} of ${counts.total} reached` : ""}`} data-initiative-milestone={late ? "late" : "next"}>
       <Flag className="w-3 h-3 shrink-0" style={{ color: late ? HEALTH_COLOR.off_track : INITIATIVE_ACCENT }} />
       <span className="truncate" style={{ color: "var(--sol-text-secondary)" }}>{milestone.title}</span>
       {milestone.date ? <span className="tabular-nums whitespace-nowrap" style={{ color: late ? HEALTH_COLOR.off_track : "var(--sol-text-dim)" }}>{formatTargetDay(milestone.date, now)}</span> : null}
@@ -276,7 +276,7 @@ export function SourceLink({ source, now, bare, className }: { source: IntentSou
   const href = intentSourceHref(source);
   const words = source.kind === "note" ? source.quote : undefined;
   const body = (
-    <span className={cn("inline-flex items-center gap-1.5 min-w-0 max-w-full text-[11px]", className)} style={{ color: "var(--sol-text-dim)" }} data-intent-source={source.kind}>
+    <span className={cn("inline-flex items-center gap-1.5 min-w-0 max-w-full text-meta", className)} style={{ color: "var(--sol-text-dim)" }} data-intent-source={source.kind}>
       <span className={cn(words ? "truncate max-w-[40ch]" : "shrink-0", href && "underline decoration-dotted underline-offset-2")} title={href ? undefined : source.quote} data-intent-source-label>{words ?? intentSourceLabel(source)}</span>
       {!bare && <ByChip by={source.by} />}
       {!bare && source.at ? <span className="tabular-nums whitespace-nowrap">{shortDate(source.at, now)}</span> : null}
@@ -293,7 +293,7 @@ export function UpdateLine({ update, now, className }: { update: { health: Initi
   if (!update) return null;
   const first = stripMachineText(update.body).split("\n").map((l) => stripMarkdown(l)).find(Boolean) ?? "";
   return (
-    <span className={cn("inline-flex items-center gap-1.5 min-w-0 text-[11.5px]", className)} title={first} data-initiative-update-line={update.health}>
+    <span className={cn("inline-flex items-center gap-1.5 min-w-0 text-meta", className)} title={first} data-initiative-update-line={update.health}>
       <span className="w-[7px] h-[7px] rounded-full shrink-0" style={{ background: HEALTH_COLOR[update.health] }} aria-hidden />
       <span className="whitespace-nowrap" style={{ color: "var(--sol-text-secondary)" }}>{INITIATIVE_HEALTH_LABEL[update.health]}</span>
       <span className="tabular-nums whitespace-nowrap" style={{ color: "var(--sol-text-dim)" }}>{compactAge(Math.max(0, now - update.at))}</span>

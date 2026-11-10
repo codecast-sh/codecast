@@ -18,7 +18,7 @@ import { LocalDaemonUnreachable } from "../LocalDaemonUnreachable";
 import { MemoryIndexView } from "./MemoryIndexView";
 import { MemoryListView } from "./MemoryListView";
 import { MemoryHealthView } from "./MemoryHealthView";
-import { MemoryEditor, NEW_MEMORY } from "./MemoryEditor";
+import { MemoryEditor, NEW_MEMORY, type MemoryLeaveGuard } from "./MemoryEditor";
 import { BudgetMeter } from "./parts";
 import { MEMORY_VIEWS, TYPE_TONE, healthAlarm, memoryHealth, memoryHref, noteMatches, toneCss, typeKey, type MemoryView } from "./memoryView";
 import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
@@ -39,7 +39,7 @@ const projectName = (p: { path: string }) => p.path.split("/").filter(Boolean).s
 function ProjectRail({ projects, activeId, onSelect }: { projects: MemoryProjectSummary[]; activeId: string | null; onSelect: (id: string) => void }) {
   return (
     <nav className="w-56 shrink-0 border-r border-sol-border/40 bg-sol-bg-alt/40 overflow-y-auto py-2">
-      <div className="px-3 pb-2 text-[11px] text-sol-text-dim">Projects</div>
+      <div className="px-3 pb-2 text-meta text-sol-text-dim">Projects</div>
       {projects.map((p) => {
         const over = p.index.cutAt !== null;
         return (
@@ -52,12 +52,12 @@ function ProjectRail({ projects, activeId, onSelect }: { projects: MemoryProject
           >
             <div className="flex items-baseline gap-2">
               <span className={`flex-1 truncate text-[13px] ${p.id === activeId ? "text-sol-text font-medium" : "text-sol-text-muted"}`}>{projectName(p)}</span>
-              <span className="font-mono text-[10.5px] text-sol-text-dim tabular-nums">{p.count}</span>
+              <span className="font-mono text-meta text-sol-text-dim tabular-nums">{p.count}</span>
             </div>
             <div className="mt-1.5 h-0.5 rounded-full bg-sol-border/30 overflow-hidden">
               <div className={`h-full ${over ? "bg-sol-red" : "bg-sol-text-dim/60"}`} style={{ width: `${Math.min(100, (p.index.bytes / p.index.maxBytes) * 100)}%` }} />
             </div>
-            {over && <div className="mt-1 text-[10.5px] text-sol-red">index cut at line {p.index.cutAt}</div>}
+            {over && <div className="mt-1 text-meta text-sol-red">index cut at line {p.index.cutAt}</div>}
           </button>
         );
       })}
@@ -146,8 +146,14 @@ function MemoryBody({ fit }: { fit: Fit }) {
     return counts;
   }, [atlas]);
 
-  const open = useCallback((file: string) => go({ file }), [go]);
-  const close = useCallback(() => go({ file: null }), [go]);
+  // Every way out of the open editor asks it first: with unsaved edits it holds the exit and offers Save / Discard.
+  const leaveGuard: MemoryLeaveGuard = useRef<((next: () => void) => boolean) | null>(null);
+  const guarded = useCallback((next: () => void) => {
+    if (!leaveGuard.current?.(next)) next();
+  }, []);
+  const open = useCallback((file: string) => guarded(() => go({ file })), [go, guarded]);
+  const close = useCallback(() => guarded(() => go({ file: null })), [go, guarded]);
+  const pickProject = useCallback((id: string) => guarded(() => go({ project: id, file: null })), [go, guarded]);
   const jumpToLine = useCallback(
     (line: number) => {
       setFocusLine(line);
@@ -191,7 +197,7 @@ function MemoryBody({ fit }: { fit: Fit }) {
 
   return (
     <div className="relative h-full min-h-0 flex">
-      {fit !== "narrow" && <ProjectRail projects={projects} activeId={activeId} onSelect={(id) => go({ project: id, file: null })} />}
+      {fit !== "narrow" && <ProjectRail projects={projects} activeId={activeId} onSelect={pickProject} />}
 
       <div className="flex-1 min-w-0 flex flex-col">
         <div ref={titlebarRef} className="flex items-end gap-6 px-5 pt-4 pb-3">
@@ -199,7 +205,7 @@ function MemoryBody({ fit }: { fit: Fit }) {
             {fit === "narrow" ? (
               <select
                 value={activeId ?? ""}
-                onChange={(e) => go({ project: e.target.value, file: null })}
+                onChange={(e) => pickProject(e.target.value)}
                 className="max-w-full bg-transparent text-lg font-semibold text-sol-text outline-none cursor-pointer"
               >
                 {projects.map((p) => (
@@ -211,7 +217,7 @@ function MemoryBody({ fit }: { fit: Fit }) {
             ) : (
               <h1 className="text-xl font-semibold text-sol-text truncate">{summary ? projectName(summary) : "Memory"}</h1>
             )}
-            <div className="font-mono text-[11px] text-sol-text-dim truncate">{project?.dir.replace(/^\/Users\/[^/]+/, "~")}</div>
+            <div className="font-mono text-meta text-sol-text-dim truncate">{project?.dir.replace(/^\/Users\/[^/]+/, "~")}</div>
           </div>
           {atlas && (
             <>
@@ -234,7 +240,7 @@ function MemoryBody({ fit }: { fit: Fit }) {
               >
                 {v.label}
                 {v.id === "health" && health && healthAlarm(health) > 0 && (
-                  <span className={`rounded-full px-1.5 text-[10px] tabular-nums ${view === "health" ? "bg-sol-bg/25" : "bg-sol-red/15 text-sol-red"}`}>{healthAlarm(health)}</span>
+                  <span className={`rounded-full px-1.5 text-meta tabular-nums ${view === "health" ? "bg-sol-bg/25" : "bg-sol-red/15 text-sol-red"}`}>{healthAlarm(health)}</span>
                 )}
               </button>
             ))}
@@ -254,7 +260,7 @@ function MemoryBody({ fit }: { fit: Fit }) {
                       return next;
                     })
                   }
-                  className={`inline-flex items-center gap-1.5 rounded-full border border-sol-border/50 px-2 py-0.5 text-[11px] transition-opacity ${off ? "opacity-40" : "text-sol-text-muted hover:text-sol-text"}`}
+                  className={`inline-flex items-center gap-1.5 rounded-full border border-sol-border/50 px-2 py-0.5 text-meta transition-opacity ${off ? "opacity-40" : "text-sol-text-muted hover:text-sol-text"}`}
                 >
                   <span className="w-1.5 h-1.5 rounded-full" style={{ background: toneCss(TYPE_TONE[t]) }} />
                   {t}
@@ -299,7 +305,7 @@ function MemoryBody({ fit }: { fit: Fit }) {
 
       {atlas && openFile && (openFile === NEW_MEMORY || openFile === MEMORY_INDEX_FILE || atlas.byFile.has(openFile)) && (
         <EditorSlot fit={fit}>
-          <MemoryEditor key={`${activeId}/${openFile}`} atlas={atlas} file={openFile} onOpen={open} onClose={close} onJumpToLine={jumpToLine} />
+          <MemoryEditor key={`${activeId}/${openFile}`} atlas={atlas} file={openFile} onOpen={open} onClose={close} onJumpToLine={jumpToLine} leaveGuard={leaveGuard} />
         </EditorSlot>
       )}
     </div>
@@ -310,7 +316,7 @@ function Stat({ value, label, alarm, onClick }: { value: number; label: string; 
   const body = (
     <>
       <div className={`text-lg font-semibold tabular-nums leading-tight ${alarm ? "text-sol-red" : "text-sol-text"}`}>{value}</div>
-      <div className="text-[11px] text-sol-text-dim">{label}</div>
+      <div className="text-meta text-sol-text-dim">{label}</div>
     </>
   );
   return onClick ? (

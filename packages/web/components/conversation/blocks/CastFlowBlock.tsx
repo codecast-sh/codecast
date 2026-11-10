@@ -34,10 +34,10 @@ export function CastFlowBlock({ subcommand, args, rawCmd, output, isError }: { s
       ) : null}
       {/* A dry run started nothing: what it would have run on is its whole message. */}
       {target.dryRun && !expanded ? (
-        <pre className="mt-1 max-w-[860px] overflow-x-auto rounded-md bg-sol-bg-alt/50 p-2 text-[11px] text-sol-text-muted whitespace-pre-wrap">{stripAnsi(output).trim()}</pre>
+        <pre className="mt-1 max-w-[860px] overflow-x-auto rounded-md bg-sol-bg-alt/50 p-2 text-meta text-sol-text-muted whitespace-pre-wrap">{stripAnsi(output).trim()}</pre>
       ) : null}
       {expanded ? (
-        <pre className="mt-1 max-w-[860px] overflow-x-auto rounded-md bg-sol-bg-alt/50 p-2 text-[11px] text-sol-text-muted whitespace-pre-wrap">{`$ ${rawCmd}\n${stripAnsi(output)}`}</pre>
+        <pre className="mt-1 max-w-[860px] overflow-x-auto rounded-md bg-sol-bg-alt/50 p-2 text-meta text-sol-text-muted whitespace-pre-wrap">{`$ ${rawCmd}\n${stripAnsi(output)}`}</pre>
       ) : null}
     </div>
   );

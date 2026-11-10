@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import type { NudgeState } from './useTips';
 import { formatShortcutParts, getShortcutsForAction } from '../shortcuts/registry';
+import { KeyCap } from '../components/KeyCap';
 
 interface TipNudgeProps {
   nudge: NudgeState | null;
@@ -64,7 +65,9 @@ export function TipNudge({ nudge, onDismiss }: TipNudgeProps) {
         transform: `translateY(${opacity ? 0 : 8}px)`,
         opacity,
         transition: 'opacity 200ms ease, transform 200ms ease',
-        zIndex: 500,
+        // Under the call dock that shares this corner (z 155-160 in
+        // DashboardLayout): a tip must never cover the call's controls.
+        zIndex: 150,
       };
 
   return createPortal(
@@ -74,20 +77,14 @@ export function TipNudge({ nudge, onDismiss }: TipNudgeProps) {
           <p className="text-sm text-sol-text">{nudge.tip.content}</p>
           {shortcutLabel && (
             <div className="flex items-center gap-1 mt-1.5">
-              {shortcutLabel.map((part, i) => (
-                <span
-                  key={i}
-                  className="inline-block min-w-[1.25rem] px-1 py-0.5 text-[10px] font-mono text-center text-sol-cyan bg-sol-bg rounded border border-sol-border/60 leading-none"
-                >
-                  {part}
-                </span>
-              ))}
+              {shortcutLabel.map((part, i) => <KeyCap key={i} size="xs">{part}</KeyCap>)}
             </div>
           )}
         </div>
         <button
           onClick={() => onDismiss(nudge.tip.id)}
           className="p-1 text-sol-text-dim hover:text-sol-text transition-colors flex-shrink-0"
+          aria-label="Dismiss tip"
         >
           <X className="w-3.5 h-3.5" />
         </button>

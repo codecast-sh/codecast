@@ -71,7 +71,7 @@
   align-items: center;
   gap: 3px;
   margin-left: auto;
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
   opacity: 0;
   transition: opacity 140ms ease;

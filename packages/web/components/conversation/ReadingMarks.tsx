@@ -77,7 +77,7 @@ export const ReaderFaces = memo(function ReaderFaces({ conversationId, messageId
       {here.map((r) => (
         <HoverCard key={r.user_id} card={<ReaderCard row={r} now={now} />} side="left" align="start" className="w-64" triggerClassName="flex flex-col items-end">
           <PresenceAvatar person={r} size={18} title="" />
-          <span className="mt-0.5 whitespace-nowrap text-[9px] leading-none text-sol-text-dim">{sinceLabel(r, now)}</span>
+          <span className="mt-0.5 whitespace-nowrap text-meta leading-none text-sol-text-dim">{sinceLabel(r, now)}</span>
         </HoverCard>
       ))}
     </span>
@@ -168,7 +168,7 @@ export const ReadingMarks = memo(function ReadingMarks({
             key={dir}
             type="button"
             onClick={() => onJump(rows[0].anchor!.message_id)}
-            className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-sol-border bg-sol-bg-alt py-0.5 pl-0.5 pr-2.5 text-[11px] text-sol-text-muted shadow-lg transition-colors hover:text-sol-text animate-in fade-in"
+            className="pointer-events-auto flex items-center gap-1.5 rounded-full border border-sol-border bg-sol-bg-alt py-0.5 pl-0.5 pr-2.5 text-meta text-sol-text-muted shadow-lg transition-colors hover:text-sol-text animate-in fade-in"
           >
             <span className="flex -space-x-1.5">
               {rows.slice(0, 3).map((r) => <PresenceAvatar key={r.user_id} person={r} size={18} title="" />)}

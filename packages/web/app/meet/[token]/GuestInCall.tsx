@@ -220,7 +220,7 @@ export function GuestInCall({
         </span>
         <span className="min-w-0 truncate font-mono text-[12.5px] text-sol-text-secondary">{title}</span>
         <span
-          className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-px font-mono text-[10.5px] text-sol-text-muted"
+          className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-px font-mono text-meta text-sol-text-muted"
           title={agents ? `${people} ${people === 1 ? "person" : "people"} and ${agents} AI ${agents === 1 ? "agent" : "agents"} in the call` : "People in the call"}
         >
           {people}
@@ -238,7 +238,7 @@ export function GuestInCall({
               aria-checked={view === v.key}
               onClick={() => setView(v.key)}
               title={v.hint}
-              className={`flex items-center gap-1 rounded-md px-2 py-1 font-mono text-[11px] transition-colors ${
+              className={`flex items-center gap-1 rounded-md px-2 py-1 font-mono text-meta transition-colors ${
                 view === v.key ? "bg-white/10 text-sol-text" : "text-sol-text-muted hover:text-sol-text"
               }`}
             >

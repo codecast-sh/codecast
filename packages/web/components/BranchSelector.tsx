@@ -130,7 +130,7 @@ export function BranchSelector({
     <div className="mt-3 ml-8 mr-4">
       <div className="flex items-center gap-1.5 mb-1.5">
         <BranchIcon className="w-3.5 h-3.5 text-sol-cyan" />
-        <span className="text-[10px] text-sol-text-dim uppercase tracking-wider font-medium">
+        <span className="text-mark text-sol-text-dim uppercase tracking-wider font-medium">
           {familyHeading(forkChildren)}
         </span>
       </div>
@@ -164,7 +164,7 @@ export function BranchSelector({
                 <span className="truncate">{label}</span>
                 {size > 0 && (
                   <span
-                    className={`text-[10px] tabular-nums flex-shrink-0 inline-flex items-center gap-0.5 ${
+                    className={`text-meta tabular-nums flex-shrink-0 inline-flex items-center gap-0.5 ${
                       allUnread
                         ? "text-sol-cyan font-semibold"
                         : isActive ? "text-sol-cyan/70" : "text-sol-text-dim"
@@ -176,7 +176,7 @@ export function BranchSelector({
                   </span>
                 )}
                 {partialUnread && (
-                  <span className="text-[10px] tabular-nums flex-shrink-0 px-1 rounded-full bg-sol-cyan text-sol-bg font-semibold leading-tight">
+                  <span className="text-meta tabular-nums flex-shrink-0 px-1 rounded-full bg-sol-cyan text-sol-bg font-semibold leading-tight">
                     +{unread}
                   </span>
                 )}
@@ -199,7 +199,7 @@ export function BranchSelector({
 
       {hoveredFork && tooltipPos && !previewsOff && createPortal(
         <div
-          className="fixed z-[9999] px-3 py-2 rounded-lg bg-sol-bg border border-sol-border shadow-xl text-[11px] text-sol-text-secondary pointer-events-none ring-1 ring-black/5 max-w-[300px]"
+          className="fixed z-[9999] px-3 py-2 rounded-lg bg-sol-bg border border-sol-border shadow-xl text-meta text-sol-text-secondary pointer-events-none ring-1 ring-black/5 max-w-[300px]"
           style={{ top: tooltipPos.top, left: tooltipPos.left }}
         >
           <div className="font-medium text-sol-text truncate">{hoveredFork.title || "Untitled fork"}</div>

@@ -68,7 +68,7 @@ export function TokenConnectForm({
       <div className="grid gap-2 sm:grid-cols-2">
         {fields.map((f) => (
           <label key={f.key} className="block">
-            <span className="text-[10px] uppercase tracking-wider text-sol-text-dim">{f.label}</span>
+            <span className="text-mark uppercase tracking-wider text-sol-text-dim">{f.label}</span>
             <input
               type="text"
               name={`cc-${descriptor.id}-setting-${f.key}`}
@@ -83,17 +83,17 @@ export function TokenConnectForm({
         ))}
       </div>
       {help && (
-        <div className="flex flex-wrap items-center gap-1.5 text-[11px]" data-token-help>
+        <div className="flex flex-wrap items-center gap-1.5 text-meta" data-token-help>
           <a href={help.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sol-link hover:underline">
             Create {descriptor.tokenLabel?.toLowerCase() ?? "token"} <ExternalLink className="h-3 w-3" aria-hidden />
           </a>
           {help.scopes.map((sc) => (
-            <span key={sc} className="rounded bg-sol-bg-alt px-1.5 font-mono text-[10.5px] text-sol-text-muted" data-token-scope>{sc}</span>
+            <span key={sc} className="rounded bg-sol-bg-alt px-1.5 font-mono text-meta text-sol-text-muted" data-token-scope>{sc}</span>
           ))}
         </div>
       )}
       <label className="block">
-        <span className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-sol-text-dim">
+        <span className="flex items-center gap-1.5 text-mark uppercase tracking-wider text-sol-text-dim">
           {descriptor.tokenLabel ?? "Token"}
           {descriptor.tokenOptional ? " (optional)" : ""}
           <span

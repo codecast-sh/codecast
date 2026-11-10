@@ -14,7 +14,7 @@ export function DetailPopover({ label, about, className, small = false, children
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <button type="button" className={`inline-flex shrink-0 items-center gap-1 text-center ${small ? "text-[10px]" : "text-[11px]"} ${className}`}>
+        <button type="button" className={`inline-flex shrink-0 items-center gap-1 text-center ${small ? "text-meta" : "text-meta"} ${className}`}>
           {label}
           <Info className={`${small ? "h-2.5 w-2.5" : "h-3 w-3"} shrink-0`} aria-label={about} />
         </button>
@@ -50,7 +50,7 @@ export function CloudAgentConnectedSync({ spec, onNavigate }: { spec: CloudAgent
   const source = CLOUD_SESSION_SOURCES[spec.syncSource];
   const on = useInboxStore((s) => cloudSessionSyncOn(source.field, (s.currentUser as Record<string, unknown> | null)?.[source.field] as boolean | undefined));
   return (
-    <p className="text-[11px] text-sol-text-dim">
+    <p className="text-meta text-sol-text-dim">
       {on ? `Your ${source.label} from the last ${CLOUD_AGENT_BACKFILL_DAYS} days sync into your inbox.` : (
         <>
           To bring your {source.label} into your inbox, turn on{" "}

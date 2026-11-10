@@ -26,7 +26,7 @@ import { ReactMarkdown } from "../markdown";
 // it's machine plumbing, not something the user should wade through).
 function FoldToggle({ label, open, onToggle }: { label: string; open: boolean; onToggle: () => void }) {
   return (
-    <button onClick={onToggle} className="flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text-muted transition-colors">
+    <button onClick={onToggle} className="flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text-muted transition-colors">
       {open ? <ChevronDown className="w-2.5 h-2.5" /> : <ChevronRight className="w-2.5 h-2.5" />}
       {label}
     </button>
@@ -101,7 +101,7 @@ function RoleWakeBlock({ frame, timestamp }: { frame: ScheduledTaskFrame; timest
           </span>
         )}
         {c && <span className="min-w-0 shrink truncate text-sol-text-dim" data-area-change={c.kind}>{changeWords(c)}</span>}
-        <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        <span className="ml-auto shrink-0 text-meta text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         {open ? <ChevronDown className="w-3 h-3 shrink-0 text-sol-text-dim" /> : <ChevronRight className="w-3 h-3 shrink-0 text-sol-text-dim" />}
       </div>
       {open && (
@@ -148,7 +148,7 @@ function WorkerReportRow({ worker: w, timestamp, first }: { worker: WaitingSessi
         <span className="shrink-0" onClick={(e) => e.stopPropagation()}><EntityIdPill shortId={w.short_id} compact /></span>
         <span className={`shrink-0 ${WORKER_TONE[w.why] ?? "text-sol-text-dim"}`}>{WORKER_SETTLE_WORDS[w.why] ?? w.why.replace(/_/g, " ")}</span>
         {!open && w.state && <span className="min-w-0 flex-1 truncate text-sol-text-dim">{w.state}</span>}
-        <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{first ? formatRelativeTime(timestamp) : null}</span>
+        <span className="ml-auto shrink-0 text-meta text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{first ? formatRelativeTime(timestamp) : null}</span>
         {w.state && (open ? <ChevronDown className="w-3 h-3 shrink-0 text-sol-text-dim" /> : <ChevronRight className="w-3 h-3 shrink-0 text-sol-text-dim" />)}
       </div>
       {open && <p className="pb-1.5 pl-[30px] pr-2.5 text-sol-text-muted break-words" data-worker-state>{w.state}</p>}
@@ -205,11 +205,11 @@ export function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = fa
     <div className="mb-3 rounded border-l-2 border-sol-orange/60 bg-sol-orange/5">
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
         {!frame?.trigger && <Zap className="w-3.5 h-3.5 text-sol-orange/70 shrink-0" />}
-        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-orange/70 shrink-0">{spawned ? "Trigger run" : "Trigger"}</span>
+        <span className="text-mark font-medium tracking-wide uppercase text-sol-orange/70 shrink-0">{spawned ? "Trigger run" : "Trigger"}</span>
         {/* Apply is the norm and unmarked; read-only runs get the chip. */}
         {spawned && spawned.mode !== "apply" && (
           <ShortcutTooltip label="Read-only run — investigates and reports, changes nothing" hint="file-editing tools are disabled">
-            <span className="px-1 py-0 rounded border text-[9px] font-semibold shrink-0 border-sol-cyan/40 text-sol-cyan/90 bg-sol-cyan/10">
+            <span className="px-1 py-0 rounded border text-meta font-semibold shrink-0 border-sol-cyan/40 text-sol-cyan/90 bg-sol-cyan/10">
               read-only
             </span>
           </ShortcutTooltip>
@@ -217,7 +217,7 @@ export function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = fa
         {/* The trigger's pill carries its title and opens it, where the person
             edits, pauses or cancels it; a run without one names itself. */}
         {frame?.trigger ? <span className="min-w-0 truncate"><EntityIdPill shortId={frame.trigger} /></span> : <span className="text-xs text-sol-text-muted truncate">{title}</span>}
-        <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        <span className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
       {frame?.waiting && <WaitingSessionLine waiting={frame.waiting} firedAt={timestamp} />}
       {/* The prompt is authored markdown in both wire formats (spawn header
@@ -242,13 +242,13 @@ export function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = fa
         </CollapsibleBody>
       )}
       {spawned?.contextSummary && (
-        <div className="mx-3 mb-2 rounded border border-sol-border/30 bg-sol-bg/40 px-2 py-1.5 text-[11px] leading-relaxed text-sol-text-muted">
+        <div className="mx-3 mb-2 rounded border border-sol-border/30 bg-sol-bg/40 px-2 py-1.5 text-meta leading-relaxed text-sol-text-muted">
           <span className="font-medium text-sol-text-dim">Context from originating session: </span>
           {spawned.contextSummary}
         </div>
       )}
       {spawned?.previousRun && (
-        <div className={`mx-3 mb-2 rounded border px-2 py-1.5 text-[11px] leading-relaxed ${prevFailed ? "border-sol-red/30 bg-sol-red/5 text-sol-red/90" : "border-sol-border/30 bg-sol-bg/40 text-sol-text-muted"}`}>
+        <div className={`mx-3 mb-2 rounded border px-2 py-1.5 text-meta leading-relaxed ${prevFailed ? "border-sol-red/30 bg-sol-red/5 text-sol-red/90" : "border-sol-border/30 bg-sol-bg/40 text-sol-text-muted"}`}>
           <span className={`font-medium ${prevFailed ? "text-sol-red" : "text-sol-text-dim"}`}>Previous run ({spawned.previousRun.ago}): </span>
           {spawned.previousRun.summary}
         </div>
@@ -257,7 +257,7 @@ export function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = fa
         <div className="px-3 pb-2">
           <FoldToggle label="run instructions" open={showPlumbing} onToggle={() => setShowPlumbing(!showPlumbing)} />
           {showPlumbing && (
-            <pre className="mt-1 whitespace-pre-wrap break-words rounded border border-sol-border/30 bg-sol-bg/60 p-2 text-[10px] leading-relaxed text-sol-text-dim font-mono">{spawned.instructions}</pre>
+            <pre className="mt-1 whitespace-pre-wrap break-words rounded border border-sol-border/30 bg-sol-bg/60 p-2 text-meta leading-relaxed text-sol-text-dim font-mono">{spawned.instructions}</pre>
           )}
         </div>
       )}

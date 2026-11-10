@@ -17,7 +17,7 @@ const STATE: Record<string, string> = {
 function StateDot({ state }: { state: string }) {
   const c = STATE[state];
   return (
-    <span className="inline-flex shrink-0 items-center gap-1 font-mono text-[10.5px]" style={{ color: c }}>
+    <span className="inline-flex shrink-0 items-center gap-1 font-mono text-meta" style={{ color: c }}>
       <span className={`h-1.5 w-1.5 rounded-full${state === "working" ? " agx-pulse" : ""}`} style={{ backgroundColor: c }} />
       {state}
     </span>
@@ -33,7 +33,7 @@ export function InboxNestMock() {
   ];
   return (
     <div className="rounded-xl overflow-hidden font-mono" style={frame} role="img" aria-label="An inbox row with three nested worker sessions on Codex, Gemini and Cursor">
-      <div className="flex items-center gap-2 px-3.5 py-2 text-[11px]" style={{ borderBottom: `1px solid ${SOL.base2}`, color: SOL.base1 }}>
+      <div className="flex items-center gap-2 px-3.5 py-2 text-meta" style={{ borderBottom: `1px solid ${SOL.base2}`, color: SOL.base1 }}>
         <span className="font-semibold" style={{ color: SOL.base01 }}>Inbox</span>
         <span className="ml-auto">workers stay nested</span>
       </div>
@@ -43,13 +43,13 @@ export function InboxNestMock() {
           <span className="min-w-0 flex-1 truncate text-[13px] font-semibold" style={{ color: SOL.base03 }}>Webhook retries</span>
           <StateDot state="dormant" />
         </div>
-        <div className="mt-1 pl-1 text-[11.5px]" style={{ color: SOL.base1 }}>waiting on 3 workers; woken when they settle</div>
+        <div className="mt-1 pl-1 text-meta" style={{ color: SOL.base1 }}>waiting on 3 workers; woken when they settle</div>
         <div className="mt-2.5 ml-3 pl-4" style={{ borderLeft: `2px dashed ${SOL.base2}` }}>
           {workers.map((w) => (
             <div key={w.id} className="flex items-center gap-2 py-1.5">
               <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: AGENT_COLOR[w.agent] }} />
               <span className="min-w-0 flex-1 truncate text-[12px]" style={{ color: SOL.base02 }}>{w.title}</span>
-              <span className="hidden sm:inline text-[10.5px]" style={{ color: SOL.base1 }}>{w.id}</span>
+              <span className="hidden sm:inline text-meta" style={{ color: SOL.base1 }}>{w.id}</span>
               <StateDot state={w.state} />
             </div>
           ))}
@@ -72,7 +72,7 @@ export function SettleMock() {
         <div className="mt-2 grid grid-cols-1 gap-2">
           {rows.map((r) => (
             <div key={r.id} className="rounded-lg px-3 py-2" style={{ backgroundColor: PAPER, border: `1px solid ${SOL.base2}` }}>
-              <div className="flex flex-wrap items-center gap-2 font-mono text-[11.5px]">
+              <div className="flex flex-wrap items-center gap-2 font-mono text-meta">
                 <span className="h-2 w-2 rounded-full" style={{ backgroundColor: AGENT_COLOR[r.agent] }} />
                 <span style={{ color: SOL.base02 }}>{r.title}</span>
                 <span style={{ color: r.why === "finished" ? SOL.green : SOL.orange }}>{r.why}</span>
@@ -125,16 +125,16 @@ export function ForkHistoryMock() {
       <div className="grid grid-cols-1 gap-1.5">
         {history.map(([who, text], i) => (
           <div key={i} className="flex items-baseline gap-2.5 text-[12.5px]">
-            <span className="w-5 shrink-0 text-right font-mono text-[10.5px]" style={{ color: SOL.base1 }}>{i + 1}</span>
-            <span className="w-12 shrink-0 font-mono text-[11px] font-semibold" style={{ color: who === "you" ? SOL.orange : AGENT_COLOR.claude }}>{who}</span>
+            <span className="w-5 shrink-0 text-right font-mono text-meta" style={{ color: SOL.base1 }}>{i + 1}</span>
+            <span className="w-12 shrink-0 font-mono text-meta font-semibold" style={{ color: who === "you" ? SOL.orange : AGENT_COLOR.claude }}>{who}</span>
             <span style={{ color: SOL.base01 }}>{text}</span>
           </div>
         ))}
         <div className="flex items-baseline gap-2.5 text-[12.5px]">
-          <span className="w-5 shrink-0 text-right font-mono text-[10.5px]" style={{ color: SOL.base1 }}>5</span>
-          <span className="w-12 shrink-0 font-mono text-[11px] font-semibold" style={{ color: SOL.orange }}>you</span>
+          <span className="w-5 shrink-0 text-right font-mono text-meta" style={{ color: SOL.base1 }}>5</span>
+          <span className="w-12 shrink-0 font-mono text-meta font-semibold" style={{ color: SOL.orange }}>you</span>
           <span className="line-through decoration-1" style={{ color: SOL.base1 }}>fork it three ways</span>
-          <span className="ml-1 rounded px-1.5 font-mono text-[10px]" style={{ color: SOL.base1, backgroundColor: SOL.base2 }}>not copied</span>
+          <span className="ml-1 rounded px-1.5 font-mono text-meta" style={{ color: SOL.base1, backgroundColor: SOL.base2 }}>not copied</span>
         </div>
       </div>
       <svg className="my-2 block w-full" height="36" viewBox="0 0 300 36" preserveAspectRatio="none" aria-hidden>
@@ -145,9 +145,9 @@ export function ForkHistoryMock() {
       <div className="grid grid-cols-3 gap-2">
         {branches.map((b, i) => (
           <div key={b.dir} className="rounded-lg px-2.5 py-2" style={{ backgroundColor: i === 0 ? "rgba(38,139,210,0.08)" : SOL.base3, border: `1px solid ${i === 0 ? "rgba(38,139,210,0.35)" : SOL.base2}` }}>
-            <div className="font-mono text-[10px]" style={{ color: i === 0 ? AGENT_COLOR.claude : SOL.base1 }}>{b.who}</div>
+            <div className="font-mono text-meta" style={{ color: i === 0 ? AGENT_COLOR.claude : SOL.base1 }}>{b.who}</div>
             <div className="mt-0.5 text-[12px] font-medium leading-snug" style={{ color: SOL.base02 }}>{b.dir}</div>
-            <div className="mt-1 font-mono text-[10px]" style={{ color: SOL.base1 }}>1–4 carried · {b.note}</div>
+            <div className="mt-1 font-mono text-meta" style={{ color: SOL.base1 }}>1–4 carried · {b.note}</div>
           </div>
         ))}
       </div>
@@ -158,7 +158,7 @@ export function ForkHistoryMock() {
 function Msg({ who, children }: { who: string; children: ReactNode }) {
   return (
     <div className="text-[13px] leading-[1.6]" style={{ color: SOL.base01 }}>
-      <span className="mr-2 font-mono text-[11px] font-semibold" style={{ color: who === "you" ? SOL.orange : AGENT_COLOR[who] }}>{who}</span>
+      <span className="mr-2 font-mono text-meta font-semibold" style={{ color: who === "you" ? SOL.orange : AGENT_COLOR[who] }}>{who}</span>
       {children}
     </div>
   );
@@ -168,17 +168,17 @@ function Msg({ who, children }: { who: string; children: ReactNode }) {
 export function SwitchMock() {
   return (
     <div className="rounded-xl overflow-hidden" style={frame} role="img" aria-label="A conversation that continues on Codex after a switch, with a divider marking the change">
-      <div className="flex items-center gap-2 px-3.5 py-2 font-mono text-[11px]" style={{ borderBottom: `1px solid ${SOL.base2}`, color: SOL.base1 }}>
+      <div className="flex items-center gap-2 px-3.5 py-2 font-mono text-meta" style={{ borderBottom: `1px solid ${SOL.base2}`, color: SOL.base1 }}>
         <span className="font-semibold" style={{ color: SOL.base02 }}>Webhook retries</span>
         <span className="ml-auto">jx7r3tq</span>
       </div>
       <div className="grid grid-cols-1 gap-3 px-3.5 py-3.5">
         <Msg who="claude">Backoff doubles up to 60s now. Load test passes.</Msg>
         <Msg who="you">Get a second pair of eyes on it before I merge.</Msg>
-        <div className="self-start rounded-md px-2.5 py-1.5 font-mono text-[11.5px]" style={{ backgroundColor: SOL.base2, color: SOL.base02 }}>
+        <div className="self-start rounded-md px-2.5 py-1.5 font-mono text-meta" style={{ backgroundColor: SOL.base2, color: SOL.base02 }}>
           model menu <span style={{ color: SOL.base1 }}>→</span> Switch agent <span style={{ color: SOL.base1 }}>→</span> <span style={{ color: AGENT_COLOR.codex }}>Codex</span>
         </div>
-        <div className="flex items-center gap-2 font-mono text-[10.5px]" style={{ color: SOL.base1 }}>
+        <div className="flex items-center gap-2 font-mono text-meta" style={{ color: SOL.base1 }}>
           <span className="h-px flex-1" style={{ backgroundColor: SOL.base2 }} />
           now using Codex
           <span className="h-px flex-1" style={{ backgroundColor: SOL.base2 }} />
@@ -200,18 +200,18 @@ export function HandoffMock() {
   ];
   return (
     <div className="rounded-xl overflow-hidden" style={frame} role="img" aria-label="A handoff brief with goal, decisions, verified, open questions and next steps, starting a linked Codex session">
-      <div className="flex items-center gap-2 px-3.5 py-2 font-mono text-[11px]" style={{ borderBottom: `1px solid ${SOL.base2}`, color: SOL.base1 }}>
+      <div className="flex items-center gap-2 px-3.5 py-2 font-mono text-meta" style={{ borderBottom: `1px solid ${SOL.base2}`, color: SOL.base1 }}>
         <span style={{ color: SOL.base02 }}>Hand off to Codex</span>
       </div>
       <div className="grid grid-cols-1 gap-2.5 px-3.5 py-3.5">
         {sections.map(([k, v]) => (
           <div key={k} className="grid grid-cols-[104px_1fr] gap-2 text-[12.5px] leading-[1.5]">
-            <span className="font-mono text-[11px] font-semibold pt-px" style={{ color: SOL.base00 }}>{k}</span>
+            <span className="font-mono text-meta font-semibold pt-px" style={{ color: SOL.base00 }}>{k}</span>
             <span style={{ color: SOL.base01 }}>{v}</span>
           </div>
         ))}
       </div>
-      <div className="flex flex-wrap items-center gap-2 px-3.5 py-2.5 font-mono text-[11px]" style={{ borderTop: `1px solid ${SOL.base2}`, backgroundColor: SOL.base3 }}>
+      <div className="flex flex-wrap items-center gap-2 px-3.5 py-2.5 font-mono text-meta" style={{ borderTop: `1px solid ${SOL.base2}`, backgroundColor: SOL.base3 }}>
         <span className="inline-flex items-center gap-1.5" style={{ color: SOL.base1 }}>
           <span className="h-2 w-2 rounded-full" style={{ backgroundColor: AGENT_COLOR.claude }} />source <span style={{ color: SOL.green }}>done</span>
         </span>

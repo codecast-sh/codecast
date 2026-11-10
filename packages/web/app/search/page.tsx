@@ -81,10 +81,10 @@ function ResultSkeleton() {
 function GroupHeading({ label, count, more, onMore }: { label: string; count?: number | string; more?: boolean; onMore?: () => void }) {
   return (
     <div className="mb-1 flex items-baseline gap-2 px-3">
-      <h2 className="text-[11px] font-medium uppercase tracking-wider text-sol-text-muted">{label}</h2>
-      {count != null && <span className="text-[11px] tabular-nums text-sol-text-dim">{count}</span>}
+      <h2 className="text-mark font-medium uppercase tracking-wider text-sol-text-muted">{label}</h2>
+      {count != null && <span className="text-meta tabular-nums text-sol-text-dim">{count}</span>}
       {more && onMore && (
-        <button onClick={onMore} className="ml-auto text-[11px] text-sol-text-dim hover:text-sol-text">
+        <button onClick={onMore} className="ml-auto text-meta text-sol-text-dim hover:text-sol-text">
           All {count}
         </button>
       )}
@@ -444,7 +444,7 @@ export default function SearchPage() {
                   range exceeds the window. */}
               {searchActive && parsedQuery.text && searchData?.contentTier === "recent" &&
                 (range === "all" || SEARCH_RANGE_MS[range] > (searchData.contentWindowDays ?? 30) * 86_400_000) && (
-                <p className="mb-1 px-3 text-[11px] text-sol-text-dim">
+                <p className="mb-1 px-3 text-meta text-sol-text-dim">
                   Messages from the last {searchData.contentWindowDays ?? 30} days. Older sessions match by title and summary.
                 </p>
               )}
@@ -495,7 +495,7 @@ export default function SearchPage() {
               <p className="text-sm text-sol-text-dim">
                 Sessions, tasks, plans, docs, routines, people and chat across {mineOnly ? "your" : "your team's"} workspace.
               </p>
-              <p className="text-[11px] text-sol-text-dim/70">
+              <p className="text-meta text-sol-text-dim/70">
                 Open this page from anywhere with{" "}
                 <MenuKeyCaps action="palette.toggle" className="inline-flex items-center gap-0.5" /> then{" "}
                 <span className="inline-flex items-center gap-0.5"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">↵</KeyCap></span>
@@ -512,7 +512,7 @@ export default function SearchPage() {
                       autocomplete.resetCaret();
                       inputRef.current?.focus();
                     }}
-                    className="rounded border border-sol-border/60 bg-sol-bg-alt px-1.5 py-0.5 font-mono text-[11px] text-sol-text-secondary transition-colors hover:border-sol-text/30 hover:text-sol-text"
+                    className="rounded border border-sol-border/60 bg-sol-bg-alt px-1.5 py-0.5 font-mono text-meta text-sol-text-secondary transition-colors hover:border-sol-text/30 hover:text-sol-text"
                   >
                     {o.op}
                   </button>

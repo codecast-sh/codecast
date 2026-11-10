@@ -7,7 +7,8 @@
 // session together, with an undo (z), or assigned (a). Each row shows its
 // owner (the problem task's assignee), and Mine keeps the ones the viewer
 // answers for. j and k move, Enter opens, / searches.
-import { useMemo, useRef, useState, type MouseEvent } from "react";
+import { memo, useCallback, useMemo, useRef, useState, type MouseEvent } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Check, Search, SlidersHorizontal, UserPlus, Wand2, X } from "lucide-react";
@@ -24,6 +25,7 @@ import { opsHref } from "./opsPaths";
 import { KIND_LOOK, KindGlyph, ProviderIcon, useOpsFeed } from "./parts";
 import type { OpsGroup, OpsSource } from "./opsTypes";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useMountEffect } from "../../hooks/useMountEffect";
 import {
   DEFAULT_QUERY,
   effectiveSort,
@@ -33,6 +35,7 @@ import {
   FIX_STAGE_LABEL,
   FIX_STAGE_SHORT,
   resolverOf,
+  resolverWords,
   FLAP_DAYS,
   FLAP_MIN,
   ISSUE_SORTS,
@@ -77,6 +80,7 @@ import {
   type IssueLane,
   type IssueSort,
   type LaneFilter,
+  type Resolver,
   type StatusFilter,
   knownRelease,
 } from "./issuesModel";
@@ -85,7 +89,8 @@ import { FixReview, FixStageGlyph, IssueStatePill, LaneTag } from "./issueParts"
 import { AssignMenu, OwnerFace } from "./issueOwner";
 import { assignIssues, ownerInfo, useOwnerOptions, type OwnerOption } from "./issueAssign";
 import { TRIAGE_CONFIRM_AT, setTaskStatusUndoable, triage, undoTriage } from "./issueUndo";
-import { useFixSessions, useResolverWords } from "./useIssueFix";
+import { useFixSessions } from "./useIssueFix";
+import { memberDisplayName } from "../../lib/liveEntities";
 import { issueListFocus, rememberIssueFocus, rememberIssueList } from "./issueNav";
 import { IssuesEmpty, SourceNoIssues } from "./issueEmpty";
 import "./issues.css";
@@ -108,6 +113,41 @@ function useTaskFacts(groups: OpsGroup[]): (id: string) => FixTask | undefined {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sig stands in for the task rows
   }, [ids, sig]);
 }
+
+/** Who resolved the shown rows, named once for the list: one read of the roster, never a store selector per row. */
+function useResolverNames(groups: OpsGroup[]): ReadonlyMap<string, string> {
+  const ids = useMemo(() => {
+    const by = new Set<string>();
+    for (const g of groups) {
+      if (issueState(g) !== "resolved") continue;
+      const r = resolverOf(g);
+      if (r.via === "person" && r.by) by.add(r.by);
+    }
+    return [...by];
+  }, [groups]);
+  const sig = useInboxStore((s) => {
+    if (!ids.length) return "";
+    const me = (s as any).currentUser?._id as string | undefined;
+    const members = new Map((s.teamMembers as any[]).filter(Boolean).map((m) => [String(m._id), m]));
+    return ids.map((id) => (id === me ? "you" : members.has(id) ? memberDisplayName(members.get(id)) : "")).join("\u0000");
+  });
+  return useMemo(() => {
+    const names = sig ? sig.split("\u0000") : [];
+    return new Map(ids.flatMap((id, i) => (names[i] ? [[id, names[i]] as const] : [])));
+  }, [ids, sig]);
+}
+
+/** What a row draws that the list knows: computed once per list change, so a j/k press re-renders only the rows it moves between. */
+type RowFacts = {
+  stage: ReturnType<typeof issueFixStage>;
+  onIt: boolean;
+  lane: IssueLane | null;
+  flaps: number;
+  owner: OwnerOption | null;
+  release: string | null;
+  task?: TaskFacts | string;
+  resolvedBy: string;
+};
 
 export function IssuesTab({ source }: { source: string | null }) {
   // A record is never an issue (a CI run filed as its own group, a check that never failed); the server's lists and counts leave them out too.
@@ -201,6 +241,21 @@ export function IssuesTab({ source }: { source: string | null }) {
     };
   }, [all, query, ctx, now]);
   const order = useMemo(() => groups.map(ref), [groups]);
+  const resolverNames = useResolverNames(groups);
+  const rowFacts = useMemo(() => new Map<string, RowFacts>(groups.map((g) => {
+    const state = issueState(g);
+    const resolver: Resolver = state === "resolved" ? resolverOf(g) : { via: null };
+    return [g._id, {
+      stage: issueFixStage(g, ctx),
+      onIt: issueOnIt(g, ctx),
+      lane: laneOf(g, now, ctx),
+      flaps: failures(g),
+      owner: ownerInfo(owners, issueOwner(g, ctx)),
+      release: state === "regressed" ? regressedIn(g, events) : null,
+      task: g.signal_task_id ? (ctx.taskStatus(g.signal_task_id) as TaskFacts | string | undefined) : undefined,
+      resolvedBy: resolverWords(resolver, resolver.by ? resolverNames.get(resolver.by) ?? null : null, g.external?.provider),
+    }];
+  })), [groups, ctx, now, failures, owners, events, resolverNames]);
 
   const [focusId, setFocusId] = useState<string | null>(() => issueListFocus());
   const focus = Math.max(0, focusId ? order.indexOf(focusId) : 0);
@@ -225,6 +280,31 @@ export function IssuesTab({ source }: { source: string | null }) {
     router.replace(`${pathname}?${qs.toString()}`, { scroll: false });
   };
   const filtered = query.q.trim() !== "" || !!query.kind || Object.keys(query.facets).length > 0 || query.mine || !!query.nobody;
+
+  // The search box is the person's; the address, and the list it filters, follow 200ms behind, so a keystroke never
+  // re-filters and re-facets every issue.
+  const [qDraft, setQDraft] = useState(query.q);
+  const qWritten = useRef(query.q);
+  const qTimer = useRef<number | null>(null);
+  const latestSetQuery = useRef(setQuery);
+  latestSetQuery.current = setQuery;
+  const writeQ = (v: string) => {
+    if (qTimer.current !== null) { window.clearTimeout(qTimer.current); qTimer.current = null; }
+    setQDraft(v);
+    qWritten.current = v;
+    latestSetQuery.current({ q: v });
+  };
+  const typeQ = (v: string) => {
+    setQDraft(v);
+    if (qTimer.current !== null) window.clearTimeout(qTimer.current);
+    qTimer.current = window.setTimeout(() => { qTimer.current = null; qWritten.current = v; latestSetQuery.current({ q: v }); }, 200);
+  };
+  const flushQ = () => { if (qTimer.current !== null) writeQ(qDraft); };
+  // The address moved by itself (Clear, a step back, a link): the box follows it.
+  useWatchEffect(() => {
+    if (query.q !== qWritten.current) { qWritten.current = query.q; setQDraft(query.q); }
+  }, [query.q]);
+  useMountEffect(() => () => { if (qTimer.current !== null) window.clearTimeout(qTimer.current); });
 
   // The page walks the list it came from, and comes back to it focused where it left.
   useWatchEffect(() => {
@@ -253,6 +333,11 @@ export function IssuesTab({ source }: { source: string | null }) {
     });
     setAnchor(id);
   };
+  // The rows take handlers that never change, so a memoized row re-renders only when its own facts do.
+  const rowActs = useRef({ open, toggle });
+  rowActs.current = { open, toggle };
+  const openRow = useCallback((g: OpsGroup) => rowActs.current.open(g), []);
+  const selectRow = useCallback((g: OpsGroup, range: boolean) => rowActs.current.toggle(ref(g), range), []);
 
   useWatchEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -321,7 +406,7 @@ export function IssuesTab({ source }: { source: string | null }) {
   // The ring's meaning sits in the Fix column's head whenever a shown row wears it.
   const anyNobody = groups.some((g) => g.status === "open" && !issueOnIt(g, ctx));
   const activeFacets = (query.kind ? 1 : 0) + Object.values(query.facets).filter(Boolean).length;
-  const clearAll = () => setQuery({ ...DEFAULT_QUERY, status: query.status, lane: query.lane, sort: query.sort, range: query.range, facets: { level: "", type: "", release: "", fix: "" }, mine: false, nobody: false });
+  const clearAll = () => { if (qTimer.current !== null) { window.clearTimeout(qTimer.current); qTimer.current = null; } setQDraft(""); qWritten.current = ""; setQuery({ ...DEFAULT_QUERY, status: query.status, lane: query.lane, sort: query.sort, range: query.range, facets: { level: "", type: "", release: "", fix: "" }, mine: false, nobody: false }); };
   const pickOwner = (o: OwnerOption) => {
     if (assignFor) assignIssues(assignFor, o, sourceById);
     setAssignFor(null);
@@ -370,13 +455,14 @@ export function IssuesTab({ source }: { source: string | null }) {
           <input
             ref={searchRef}
             type="search"
-            value={query.q}
+            value={qDraft}
             placeholder="Search issues"
             aria-label="Search issues"
-            onChange={(e) => setQuery({ q: e.target.value })}
+            onChange={(e) => typeQ(e.target.value)}
+            onBlur={flushQ}
           />
-          {query.q ? (
-            <button type="button" aria-label="Clear search" onClick={() => setQuery({ q: "" })}><X className="w-3 h-3" /></button>
+          {qDraft ? (
+            <button type="button" aria-label="Clear search" onClick={() => writeQ("")}><X className="w-3 h-3" /></button>
           ) : (
             <KeyCap size="xs">/</KeyCap>
           )}
@@ -445,7 +531,7 @@ export function IssuesTab({ source }: { source: string | null }) {
                 <button type="button" className="ops-btn" data-tone="primary" autoFocus onClick={() => setStatus(targets(), confirm, true)}>
                   {confirm === "resolved" ? "Resolve" : "Ignore"} {targets().length.toLocaleString()} <KeyCap size="xs" tone="onAccent">Enter</KeyCap>
                 </button>
-                <button type="button" className="ops-btn" onClick={() => setConfirm(null)}>Cancel <KeyCap size="xs">esc</KeyCap></button>
+                <button type="button" className="ops-btn" onClick={() => setConfirm(null)}>Cancel <KeyCap size="xs">Esc</KeyCap></button>
               </div>
             ) : selected.size > 0 && (
               <div className="iss-bulk" role="toolbar" aria-label="Selected issues">
@@ -459,7 +545,7 @@ export function IssuesTab({ source }: { source: string | null }) {
                   {assignFor && <AssignMenu options={owners} onPick={pickOwner} onClose={() => setAssignFor(null)} />}
                 </span>
                 <div className="flex-1" />
-                <button type="button" className="ops-btn" onClick={() => setSelected(new Set())}>Clear <KeyCap size="xs">esc</KeyCap></button>
+                <button type="button" className="ops-btn" onClick={() => setSelected(new Set())}>Clear <KeyCap size="xs">Esc</KeyCap></button>
               </div>
             )}
           </div>
@@ -475,16 +561,10 @@ export function IssuesTab({ source }: { source: string | null }) {
                 source={sourceById.get(g.source_id)}
                 countsPeople={peopleSources.has(g.source_id)}
                 lead={leads.get(g._id) ?? 0}
-                stage={issueFixStage(g, ctx)}
-                onIt={issueOnIt(g, ctx)}
+                facts={rowFacts.get(g._id)!}
                 agentAwake={!!g.fix_conversation_id && awake.has(g.fix_conversation_id)}
-                lane={laneOf(g, now, ctx)}
-                flaps={failures(g)}
-                owner={ownerInfo(owners, issueOwner(g, ctx))}
-                release={issueState(g) === "regressed" ? regressedIn(g, events) : null}
-                task={g.signal_task_id ? (ctx.taskStatus(g.signal_task_id) as TaskFacts | string | undefined) : undefined}
-                onOpen={() => open(g)}
-                onSelect={(e) => toggle(ref(g), e.shiftKey)}
+                onOpen={openRow}
+                onSelect={selectRow}
               />
             ))}
           </div>
@@ -508,11 +588,13 @@ export function IssuesTab({ source }: { source: string | null }) {
         <KeyCap size="xs">j</KeyCap><KeyCap size="xs">k</KeyCap> move <KeyCap size="xs">Enter</KeyCap> open <KeyCap size="xs">x</KeyCap> select <KeyCap size="xs">e</KeyCap> resolve <KeyCap size="xs">i</KeyCap> ignore <KeyCap size="xs">a</KeyCap> assign <KeyCap size="xs">z</KeyCap> undo <KeyCap size="xs">f</KeyCap> fix <KeyCap size="xs">/</KeyCap> search
       </div>
 
-      {assignFor && !selected.size && (
+      {/* On the window's corner, through a portal: the list is a size container, which would hold a fixed box at its own foot. */}
+      {assignFor && !selected.size && typeof document !== "undefined" && createPortal(
         <div className="iss-assign-float">
           <span className="ops-dim">Assign {assignFor.map(ref).slice(0, 2).join(", ")}{assignFor.length > 2 ? "…" : ""}</span>
           <AssignMenu options={owners} onPick={pickOwner} onClose={() => setAssignFor(null)} />
-        </div>
+        </div>,
+        document.body,
       )}
       {fixFor && <FixReview groups={fixFor} source={sourceById.get(fixFor[0].source_id)} onClose={() => setFixFor(null)} onStarted={() => setSelected(new Set())} />}
     </div>
@@ -599,9 +681,9 @@ function FacetSelect({ label, value, options, onChange, always, disabled }: { la
   );
 }
 
-function IssueRow({ group: g, now, range, focused, selected, source, countsPeople, lead, stage, onIt, agentAwake, lane, flaps, owner, release, task, onOpen, onSelect }: {
-  /** Someone is on it (someoneOnIt): an open row nobody is on shows the empty ring. */
-  onIt: boolean;
+const IssueRow = memo(function IssueRow({ group: g, now, range, focused, selected, source, countsPeople, lead, facts, agentAwake, onOpen: openRow, onSelect: selectRow }: {
+  /** The list's facts about this row (RowFacts): its fix stage, who is on it, its lane, flaps, owner, regressed release, task and resolver. */
+  facts: RowFacts;
   /** The fix session started from this issue is working now. */
   agentAwake: boolean;
   group: OpsGroup;
@@ -609,24 +691,20 @@ function IssueRow({ group: g, now, range, focused, selected, source, countsPeopl
   lead: number;
   /** Its source sends people with its events. */
   countsPeople: boolean;
-  task?: TaskFacts | string;
   now: number;
   range: IssueQuery["range"];
   focused: boolean;
   selected: boolean;
   source?: OpsSource;
-  stage: ReturnType<typeof issueFixStage>;
-  lane: IssueLane | null;
-  flaps: number;
-  owner: OwnerOption | null;
-  release: string | null;
-  onOpen: () => void;
-  onSelect: (e: MouseEvent) => void;
+  onOpen: (g: OpsGroup) => void;
+  onSelect: (g: OpsGroup, range: boolean) => void;
 }) {
+  const { stage, onIt, lane, flaps, owner, release, task, resolvedBy } = facts;
+  const onOpen = () => openRow(g);
+  const onSelect = (e: MouseEvent) => selectRow(g, e.shiftKey);
   const series = useMemo(() => sparkSeries(g, now, range), [g, now, range]);
   const daily = range === "30d";
   const state = issueState(g);
-  const resolvedBy = useResolverWords(state === "resolved" ? resolverOf(g) : { via: null }, g.external?.provider);
   const closable = state === "resolved" && typeof task === "object" && task.short_id && (stage === "filed" || stage === "review") ? task : null;
   // An open issue nobody is on: the Overview's Nobody on it, drawn as an empty ring where an owner's face would be.
   const nobody = g.status === "open" && !onIt;
@@ -712,4 +790,4 @@ function IssueRow({ group: g, now, range, focused, selected, source, countsPeopl
       <span className="iss-c-status" role="cell"><IssueStatePill group={g} release={release} now={now} flaps={isFlapping(g, flaps) ? flaps : undefined} row stage={stage} resolvedBy={resolvedBy} /></span>
     </div>
   );
-}
+});

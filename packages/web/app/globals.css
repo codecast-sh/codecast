@@ -65,14 +65,14 @@
    title loses — and real labels are phrases, not tags (median 14 characters,
    three or four per task), so spelling all of them out would cost a row ~290px.
    Instead the names come in one at a time as the list panel widens: the first at
-   1000px, the second at 1400px, the rest stay dots at every width. A chip is one
+   1200px, the second at 1680px, the rest stay dots at every width. A chip is one
    element either way — it always carries the label's tint and border color, and
    picks up the border width and side padding that make it read as a pill only
    once its name is showing, so the dot never moves. The query container is the
    list panel itself (DetailSplitLayout), so splitting the detail panel open
    folds the names away on its own. */
 .cq-label-name { display: none; }
-@container (min-width: 1000px) {
+@container (min-width: 1200px) {
   .cq-label-t1 {
     border-width: 1px !important;
     padding-left: 0.375rem !important;
@@ -80,7 +80,7 @@
   }
   .cq-label-t1 > .cq-label-name { display: inline !important; }
 }
-@container (min-width: 1400px) {
+@container (min-width: 1680px) {
   .cq-label-t2 {
     border-width: 1px !important;
     padding-left: 0.375rem !important;
@@ -114,15 +114,16 @@
    machine and owner names, message count, session duration, the tmux copy
    sub-button). Level 2 drops the words that icons already say (tmux, join,
    Parent, the session age) and narrows the branch chip. Level 3 drops the
-   metadata cluster, the plan/task badges and the status word. Level 4 folds
-   the plain icon actions (search, density, copy link, send to chat) into the
-   header's overflow menu, where the same items appear while folded. Level 5
+   metadata cluster, the plan/task badges and the status word. Level 4 drops
+   the faces of who else has the session open. Level 5
    lets the title shrink, down to a floor scaled to the header (cqi = the
    header's width, the query container on [data-sv-convhead]) so it still
    holds a readable run of words. Level 6 folds the chips the overflow menu
-   already repeats (the parent link and the branch map). Level 7 drops the
-   title floor: the title gives up its last words to the ellipsis so the
-   controls keep their single row.
+   already repeats (the parent link and the branch map). Level 7 is the last:
+   the title drops its floor and gives up its last words first, and then the
+   action cluster gives way from its start (justify-end clips its leftmost
+   live pills), so share and the session menu, which repeats what the row
+   sheds, stay on screen in the narrowest pane.
 
    The row NEVER wraps. A header that grows to two lines is a bug, not a
    fallback: it moves the whole transcript down, and it reads as a broken
@@ -134,7 +135,7 @@
 [data-squeeze~="3"] .cq-sq3,
 [data-squeeze~="4"] .cq-sq4,
 [data-squeeze~="6"] .cq-sq6 { display: none !important; }
-[data-squeeze~="2"] .cq-sq2-tight { max-width: 9rem !important; }
+[data-squeeze~="2"] .cq-sq2-tight { max-width: 10.25rem !important; }
 [data-sv-convhead] .cq-squeeze-row .cc-panel__title {
   flex: 0 0 auto;
   min-width: 0;
@@ -151,6 +152,21 @@
   min-width: clamp(6rem, 32cqi, 22rem);
 }
 [data-sv-convhead] [data-squeeze~="7"] .cc-panel__title { min-width: 0; }
+/* Past the title, the action cluster gives way from its start, never the
+   menu at its end (see the level ladder above). The title still yields
+   first: its shrink weight dwarfs the cluster's. */
+[data-sv-convhead] [data-squeeze~="7"] .cc-panel__title { flex-shrink: 1000; }
+[data-sv-convhead] [data-squeeze~="7"] [data-cc-conv-actions] {
+  flex-shrink: 1;
+  min-width: 0;
+  justify-content: flex-end;
+}
+/* The in-conversation search box sizes to the header, not the window: a
+   narrow pane in a wide window keeps the narrow box. */
+[data-sv-convhead] [data-cc-conv-search-input] { width: 6rem; }
+@container (min-width: 600px) {
+  [data-sv-convhead] [data-cc-conv-search-input] { width: 8rem; }
+}
 
 /* The header's grammar: text for facts, pills for what is alive right now,
    icons for actions.
@@ -163,7 +179,7 @@
    still a hover target and still opens what it opened before. */
 [data-sv-convhead] [data-cc-facts] {
   gap: 0;
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
   /* The strip yields before anything else on the row: it shrinks and its
      tail fades out, item by item from the least useful (age and size, last)
@@ -171,14 +187,14 @@
      once it is down to its floor; level 6 removes it whole, after the title
      has already yielded at level 5. */
   flex: 0 1 auto;
-  min-width: 5.5rem;
+  min-width: 6.25rem;
   overflow: hidden;
   padding-right: 14px;
   mask-image: linear-gradient(to right, #000 calc(100% - 14px), transparent);
 }
 [data-sv-convhead] [data-cc-facts] > * { flex: 0 0 auto; }
 /* One size for every fact: the model control carries its own text-xs. */
-[data-sv-convhead] [data-cc-facts] :is(div, span, a, button) { font-size: 10.5px !important; }
+[data-sv-convhead] [data-cc-facts] :is(div, span, a, button) { font-size: var(--fs-meta) !important; }
 /* The branch keeps its name and its dirty mark; the commit and the
    ahead/behind counts stay in its hover title, so the task and the plan
    get the room. No dividers inside a fact. */
@@ -222,7 +238,7 @@
   border-radius: 9999px;
   border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
   overflow: hidden;
-  font-size: 10px;
+  font-size: var(--fs-meta);
 }
 [data-sv-convhead] [data-cc-runner]:empty { display: none; }
 [data-sv-convhead] [data-cc-runner] > * { align-items: stretch; }
@@ -245,7 +261,7 @@
   align-items: center;
 }
 [data-sv-convhead] [data-cc-runner] [data-daemon-pill] > span {
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 500;
 }
 [data-sv-convhead] [data-cc-runner] [data-tmux-pill] > * + * {
@@ -258,11 +274,12 @@
 /* Status tabs swap a multi-pill segmented control for a single compact dropdown
    once the header is too tight to show every pill on one row alongside the
    toolbar. Measured for the Tasks header (the widest consumer: ~52 title + ~452
-   pills + ~626 toolbar), the pills stop fitting one row just under ~1205px and
-   wrap to a second; below the threshold the dropdown instead keeps every status
+   pills + ~626 toolbar; ~473 pills once their counts reached 12px), the pills
+   stop fitting one row just under ~1226px and wrap to a second; below the
+   threshold the dropdown instead keeps every status
    one click away on a single tidy row, never wrapped or scrolled out of reach. */
 .cq-tabs-compact { display: none; }
-@container (max-width: 1210px) {
+@container (max-width: 1235px) {
   .cq-tabs-pills { display: none !important; }
   .cq-tabs-compact { display: flex !important; }
 }
@@ -332,6 +349,20 @@
    webContents.goBack() and is unaffected by overscroll-behavior. */
 html, body {
   overscroll-behavior-x: none;
+}
+
+/* The type scale, for stylesheets: the same seven steps as tailwind.config.ts
+   fontSize (text-mark ... text-display). 12px is the floor for words; mark
+   (11px) is for glyph-like marks only: counts in small badges, key caps,
+   avatar initials, labels set in capitals. */
+:root {
+  --fs-mark: 11px;
+  --fs-meta: 12px;
+  --fs-ui: 13px;
+  --fs-body: 14px;
+  --fs-read: 15px;
+  --fs-title: 18px;
+  --fs-display: 24px;
 }
 
 :root, .hero-sandbox {
@@ -448,8 +479,8 @@ html, body {
   --sol-border: #d9d9d5;
   --sol-text: #1f1f1f;
   --sol-text-secondary: #353535;
-  --sol-text-muted: #666663;
-  --sol-text-dim: #8a8a85;
+  --sol-text-muted: #595957;
+  --sol-text-dim: #72726f;
   --sol-text-muted0: #a4a49f;
   --logo-c: #333333;
   --sol-yellow: #a86f13;
@@ -518,7 +549,7 @@ html, body {
   --sol-text: #e7e5e0;
   --sol-text-secondary: #d2d0ca;
   --sol-text-muted: #a19f98;
-  --sol-text-dim: #7c7a74;
+  --sol-text-dim: #898781;
   --sol-text-muted0: #6c6a65;
   --logo-c: #d2d0ca;
   --sol-yellow: #dcb25a;
@@ -1074,13 +1105,15 @@ html[data-idle] *::after {
 .cc-session-beacon[data-dir="down"]:hover .cc-session-beacon__arrow {
   transform: translateY(1.5px);
 }
-/* Quiet breathing dot: marks the pill as pointing at the LIVE open session. */
+/* Quiet breathing dot: marks the pill as pointing at the LIVE open session.
+   It breathes a few times as the pill appears, then holds still: an endless
+   loop on a blurred pill re-layers the rail on every frame. */
 .cc-session-beacon__dot {
   width: 4px;
   height: 4px;
   border-radius: 9999px;
   background: var(--beacon);
-  animation: ccBeaconDot 2s ease-in-out infinite;
+  animation: ccBeaconDot 2s ease-in-out 3;
 }
 /* Message rail ticks. The "you are here" tick is brighter and longer; its
    neighbors swell a little, so when the current message changes the bump
@@ -1675,6 +1708,15 @@ diffs-container {
   to { transform: none; opacity: 1; }
 }
 
+/* A long unbroken token (a hash, a path, an identifier in backticks) breaks
+   inside the transcript column instead of pushing past it. Keyed on the
+   column, not the viewport, so a split pane on a wide window wraps too.
+   break-word, not anywhere: min-content sizing stays as it was, and code
+   blocks (white-space: pre) are untouched. */
+[data-sv-feed] {
+  overflow-wrap: break-word;
+}
+
 /* ============================================================
    SIMPLE VIEW — the minimal reskin.
    Design source: the layout-directions prototype — small type, cream
@@ -1691,16 +1733,18 @@ diffs-container {
   opacity: 0.55;
 }
 
-/* ---- Conversation feed: smaller, quieter type ---- */
+/* ---- Conversation feed: quieter chrome, reading-size type ----
+   The transcript reads at the scale's body step. text-xs keeps its own 12px
+   (no override: 12px is the floor for words); text-sm sits a step under the
+   prose at the ui step. */
 .simple-view [data-sv-feed] {
-  font-size: 12.5px;
+  font-size: var(--fs-body);
 }
 .simple-view [data-sv-feed] .prose {
-  font-size: 12.5px;
+  font-size: var(--fs-body);
   line-height: 1.6;
 }
-.simple-view [data-sv-feed] .text-sm { font-size: 12px; }
-.simple-view [data-sv-feed] .text-xs { font-size: 10.5px; }
+.simple-view [data-sv-feed] .text-sm { font-size: var(--fs-ui); }
 
 /* User messages: small note cards, distinct from the page but still
    solarized — a blue tint over the page background (the same blue identity
@@ -1728,11 +1772,10 @@ diffs-container {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
   backdrop-filter: none;
-  font-size: 12.5px;
+  font-size: var(--fs-body);
 }
-.simple-view [data-sv-sticky] .prose { font-size: 12.5px; line-height: 1.6; }
-.simple-view [data-sv-sticky] .text-sm { font-size: 12px; }
-.simple-view [data-sv-sticky] .text-xs { font-size: 10.5px; }
+.simple-view [data-sv-sticky] .prose { font-size: var(--fs-body); line-height: 1.6; }
+.simple-view [data-sv-sticky] .text-sm { font-size: var(--fs-ui); }
 
 /* The message body indent under the avatar row flattens — the card itself
    is the container now. */
@@ -1782,7 +1825,7 @@ diffs-container {
 
 /* ---- Conversation header: one slim line ---- */
 .simple-view [data-sv-convhead] {
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .simple-view [data-sv-convhead] .px-2 {
   padding-left: 8px;
@@ -1811,7 +1854,7 @@ diffs-container {
 
 /* ---- Session rail: calm cards on a quiet ground ---- */
 .simple-view [data-sv-rail] {
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   /* Card grounds, shared with the fade overlays below so gradients always
      land on the card's actual color. */
   --sv-card-bg: var(--sol-bg);
@@ -1929,7 +1972,7 @@ diffs-container {
   padding: 8px 12px 6px;
 }
 .simple-view [data-sv-rail] [data-sv-sec] span {
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   letter-spacing: 0.12em;
 }
 /* The chip/filter strip above the list quiets down until you reach for it.
@@ -1940,6 +1983,11 @@ diffs-container {
   transition: opacity 0.15s;
 }
 .simple-view [data-sv-rail] > div:first-child:not([data-sel-bar]):hover {
+  opacity: 1;
+}
+/* The Dormant section wears its own [data-sv-rail] (for the compact rules);
+   the quieting above is meant for the chip strip, never for that section. */
+.simple-view [data-dormant-section] > [data-sv-rail] > div:first-child {
   opacity: 1;
 }
 
@@ -2046,6 +2094,17 @@ diffs-container {
 :root .inbox-compact [data-sv-rail] [data-session-id] [data-sv-fade] {
   background: linear-gradient(to right, transparent, var(--sv-card-bg) 60%) !important;
 }
+/* The card's hover toolbar stacks its four actions in a column, which a one
+   line row (about 30px) clips after the first. On the line they sit side by
+   side, centred on it. */
+.inbox-compact [data-sv-rail] [data-session-id] > [data-sv-fade] {
+  flex-direction: row;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 2px;
+  padding-block: 0;
+}
 /* The declared state reads as a colored word. Its box was the second
    rectangle on every line. */
 :root .inbox-compact [data-sv-rail] [data-sv-status-chip] {
@@ -2121,12 +2180,12 @@ diffs-container {
 .inbox-compact [data-sv-rail] [data-sv-status] > :not(.truncate) {
   flex-shrink: 0;
 }
-/* The fork, plan and task chips (the ones simple view drops) need about 300px
-   on their own, so on a rail row narrower than 480px they leave the line. */
+/* The fork, plan and task chips (the ones simple view drops) need about 370px
+   on their own at 12px, so on a rail row narrower than 550px they leave the line. */
 .inbox-compact [data-sv-rail] [data-session-id] {
   container: sv-row / inline-size;
 }
-@container sv-row (max-width: 480px) {
+@container sv-row (max-width: 550px) {
   .inbox-compact [data-sv-rail] [data-sv-status] > [data-simple-hide] {
     display: none;
   }
@@ -2177,14 +2236,17 @@ diffs-container {
 .simple-view [data-sv-nav] {
   font-size: 12px;
 }
-/* Rows carry .text-sm for the normal layout; simple view stays at its own scale. */
+/* Rows carry .text-sm for the normal layout; simple view sets them at the
+   scale's ui step, the same 13px the nested section rows already use. */
 .simple-view [data-sv-nav] .text-sm {
-  font-size: 12px;
+  font-size: var(--fs-ui);
 }
+/* Group labels (RailHeading and its two siblings in Sidebar) are capitals,
+   so they take the mark step, in full muted ink with no fade on top. */
 .simple-view [data-sv-nav] .uppercase {
-  font-size: 9px;
+  font-size: var(--fs-mark);
   letter-spacing: 0.18em;
-  opacity: 0.65;
+  color: var(--sol-text-muted);
   margin-top: 4px;
 }
 /* Nav rows tighten; the mock's 5px rhythm. */
@@ -2204,9 +2266,9 @@ diffs-container {
    and rendered them as right-aligned pale badges. */
 .simple-view [data-sv-nav] [data-sv-count] {
   margin-left: auto;
-  min-width: 16px;
-  height: 16px;
-  font-size: 9.5px;
+  min-width: 18px;
+  height: 18px;
+  font-size: var(--fs-mark);
   background: color-mix(in srgb, var(--sol-cyan) 18%, transparent);
   color: var(--sol-cyan);
   font-weight: 600;
@@ -2546,7 +2608,7 @@ diffs-container {
   padding: 0 0.2rem;
   display: grid;
   place-items: center;
-  font-size: 0.55rem;
+  font-size: var(--fs-mark);
   font-weight: 700;
   border-radius: 999px;
   background: var(--sol-cyan);
@@ -2588,7 +2650,7 @@ diffs-container {
 }
 .cc-quote-state {
   font-weight: 600;
-  font-size: 0.74rem;
+  font-size: var(--fs-meta);
   line-height: 1.4;
   margin-right: 0.4rem;
   color: var(--sol-text-muted);
@@ -2620,7 +2682,7 @@ diffs-container {
   justify-content: center;
   background: var(--sol-bg-highlight);
   color: var(--sol-text-muted);
-  font-size: 0.62rem;
+  font-size: var(--fs-mark);
   font-weight: 700;
 }
 .cc-comment-main {
@@ -2699,7 +2761,7 @@ diffs-container {
   align-items: center;
   gap: 0.3rem;
   padding: 0.1rem 0.4rem;
-  font-size: 0.72rem;
+  font-size: var(--fs-meta);
   font-weight: 500;
   border: none;
   border-radius: 4px;
@@ -2801,7 +2863,7 @@ diffs-container {
   align-items: center;
   gap: 0.45rem;
   color: var(--sol-text);
-  font-size: 0.74rem;
+  font-size: var(--fs-meta);
   font-weight: 500;
   min-width: 0;
 }
@@ -2870,7 +2932,7 @@ diffs-container {
    words) leads: full-strength text behind a cyan reply arrow. */
 .cc-review-tray-quote {
   color: var(--sol-text-dim);
-  font-size: 0.72rem;
+  font-size: var(--fs-meta);
   font-style: italic;
   line-height: 1.4;
   display: -webkit-box;
@@ -2981,7 +3043,7 @@ diffs-container {
 .cc-cmt-continued { padding-top: 0.05rem; margin-top: -0.25rem; }
 .cc-cmt-gutter {
   flex-shrink: 0; width: 22px; padding-top: 0.2rem;
-  font-size: 0.56rem; font-variant-numeric: tabular-nums; text-align: right; color: var(--sol-text-dim);
+  font-size: var(--fs-meta); font-variant-numeric: tabular-nums; text-align: right; color: var(--sol-text-dim);
   opacity: 0; transition: opacity 100ms ease;
 }
 .cc-cmt-continued:hover .cc-cmt-gutter { opacity: 1; }
@@ -3007,7 +3069,7 @@ diffs-container {
 .cc-cmt-name-link:hover { text-decoration: underline; text-underline-offset: 2px; }
 .cc-cmt-time {
   flex-shrink: 0;
-  font-size: 0.66rem;
+  font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
   color: var(--sol-text-dim);
 }
@@ -3018,7 +3080,7 @@ diffs-container {
   align-items: center;
   gap: 0.25rem;
   align-self: center;
-  font-size: 0.66rem;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
 }
 .cc-cmt-failed { color: var(--sol-red); }
@@ -3033,7 +3095,7 @@ diffs-container {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: 0.66rem;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
 }
 .cc-cmt-replying svg { flex-shrink: 0; color: var(--cc-accent); }
@@ -3075,7 +3137,7 @@ diffs-container {
   height: 1.45rem;
   padding: 0 0.3rem;
   border-radius: 6px;
-  font-size: 0.68rem;
+  font-size: var(--fs-meta);
   font-weight: 600;
   color: var(--sol-text-muted);
   transition: color 100ms ease, background 100ms ease;
@@ -3087,18 +3149,18 @@ diffs-container {
 .cc-cmt-tool-resolved { color: var(--sol-green); }
 .cc-cmt-tools-sep { width: 1px; align-self: stretch; margin: 0.25rem 0.15rem; background: color-mix(in srgb, var(--sol-border) 70%, transparent); }
 .cc-cmt-tools-sep:first-child { display: none; }
-.cc-cmt-tools .cc-ping-tool { display: inline-flex; gap: 0.25rem; padding: 0 0.35rem; font-size: 0.66rem; }
+.cc-cmt-tools .cc-ping-tool { display: inline-flex; gap: 0.25rem; padding: 0 0.35rem; font-size: var(--fs-meta); }
 /* Inside the PR timeline's outlined box, the box is the card: no second tint. */
 .pr-cmt-box .cc-cmt:hover, .pr-cmt-box .cc-cmt:focus-within { background: transparent; }
 
 /* A failed agent reply: "no reply · Retry" in the head, the reason quiet below. */
 .cc-cmt-retry {
   flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.2rem; align-self: center;
-  font-size: 0.66rem; font-weight: 600; color: var(--sol-text-muted);
+  font-size: var(--fs-meta); font-weight: 600; color: var(--sol-text-muted);
   padding: 0 0.3rem; border-radius: 5px; transition: color 100ms ease, background 100ms ease;
 }
 .cc-cmt-retry:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
-.cc-cmt-body-failed, .cc-cmt-body-failed .cc-cmt-md.prose { font-size: 0.72rem; color: var(--sol-text-dim); }
+.cc-cmt-body-failed, .cc-cmt-body-failed .cc-cmt-md.prose { font-size: var(--fs-meta); color: var(--sol-text-dim); }
 
 /* Tighten the shared markdown pipeline for the comment scale. */
 .cc-cmt-md.prose { font-size: 0.8rem; line-height: 1.5; }
@@ -3154,13 +3216,13 @@ diffs-container {
 .cc-thread-fold {
   display: flex; align-items: center; gap: 0.4rem; width: 100%; min-width: 0;
   padding: 0.25rem 0.4rem; border-radius: 7px; text-align: left;
-  font-size: 0.72rem; color: var(--sol-text-dim);
+  font-size: var(--fs-meta); color: var(--sol-text-dim);
   transition: background 110ms ease, color 110ms ease;
 }
 .cc-thread-fold:hover { color: var(--sol-text-muted); background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
 .cc-thread-fold-icon { width: 0.8rem; height: 0.8rem; flex-shrink: 0; color: var(--sol-green); }
 .cc-thread-fold-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cc-thread-fold-count { flex-shrink: 0; font-size: 0.66rem; font-variant-numeric: tabular-nums; }
+.cc-thread-fold-count { flex-shrink: 0; font-size: var(--fs-mark); font-variant-numeric: tabular-nums; }
 .cc-thread-resolve-btn { margin-left: auto; }
 .cc-thread-resolve-btn.is-resolved { color: var(--sol-green); }
 .cc-thread-reopen-mark { opacity: 0; margin-left: -0.1rem; transition: opacity 100ms ease; }
@@ -3178,11 +3240,11 @@ diffs-container {
 .cc-cmt-mi [data-sv-composer] { position: static; pointer-events: auto; }
 .cc-cmt-mi [data-sv-composer] > .bg-gradient-to-t { display: none; }
 .cc-cmt-mi [data-sv-composer] > .pointer-events-auto { background: transparent; padding-bottom: 0; }
-.cc-cmt-signedout { font-size: 0.74rem; color: var(--sol-text-dim); padding: 0.5rem; }
+.cc-cmt-signedout { font-size: var(--fs-meta); color: var(--sol-text-dim); padding: 0.5rem; }
 
 .cc-cmt-typing {
   display: flex; align-items: center; gap: 0.35rem;
-  font-size: 0.66rem; color: var(--sol-text-muted); padding: 0 0.2rem 0.3rem; min-width: 0;
+  font-size: var(--fs-meta); color: var(--sol-text-muted); padding: 0 0.2rem 0.3rem; min-width: 0;
 }
 .cc-cmt-typing > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cc-cmt-typing-preview { font-style: italic; color: var(--sol-text-dim); }
@@ -3193,7 +3255,7 @@ diffs-container {
 
 .cc-cmt-replyto {
   display: flex; align-items: center; gap: 0.35rem;
-  font-size: 0.68rem; color: var(--sol-text-muted);
+  font-size: var(--fs-meta); color: var(--sol-text-muted);
   padding: 0 0.15rem 0.3rem;
 }
 .cc-cmt-replyto b { color: var(--sol-text); font-weight: 600; }
@@ -3204,7 +3266,7 @@ diffs-container {
 /* Where the reader's news starts, and the news itself. */
 .cc-thread-new {
   display: flex; align-items: center; gap: 0.4rem; margin: 0.15rem 0.45rem;
-  font-size: 0.6rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-cyan);
+  font-size: var(--fs-mark); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-cyan);
 }
 .cc-thread-new::after { content: ""; flex: 1; height: 1px; background: color-mix(in srgb, var(--sol-cyan) 45%, transparent); }
 .cc-cmt-new .cc-cmt-name::before {
@@ -3213,7 +3275,7 @@ diffs-container {
 }
 /* A thread event (a hand-off): the author and what they did, on one line. */
 .cc-cmt-event .cc-cmt-main { padding-left: 0.1rem; }
-.cc-cmt-event-words { font-size: 0.72rem; color: var(--sol-text-muted); }
+.cc-cmt-event-words { font-size: var(--fs-meta); color: var(--sol-text-muted); }
 
 /* Composer Cancel footer. */
 .cc-cmt-composer-foot { display: flex; justify-content: flex-end; margin-top: 0.25rem; }
@@ -3270,8 +3332,8 @@ diffs-container {
   background: var(--cc-panel-head-bg);
 }
 .cc-railx-head .cc-panel__actions { margin-left: auto; }
-.cc-railx-title { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; color: var(--sol-text-muted); }
-.cc-railx-count { font-size: 11px; font-variant-numeric: tabular-nums; color: var(--sol-text-dim); }
+.cc-railx-title { font-size: var(--fs-meta); font-weight: 600; letter-spacing: 0.04em; color: var(--sol-text-muted); }
+.cc-railx-count { font-size: var(--fs-mark); font-variant-numeric: tabular-nums; color: var(--sol-text-dim); }
 
 /* Anchored threads, one row each: where, opening words, size, resolve. */
 .cc-railx-threads {
@@ -3288,12 +3350,12 @@ diffs-container {
 .cc-railx-row-main {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 0.45rem;
   padding: 0.3rem 0.35rem; text-align: left;
-  font-size: 0.74rem; color: var(--sol-text-secondary);
+  font-size: var(--fs-meta); color: var(--sol-text-secondary);
 }
 .cc-railx-row-icon { width: 0.8rem; height: 0.8rem; flex-shrink: 0; color: var(--sol-text-dim); }
 .cc-railx-row-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cc-railx-row-where { color: var(--sol-text-muted); margin-right: 0.4rem; }
-.cc-railx-row-count { flex-shrink: 0; font-size: 0.66rem; font-variant-numeric: tabular-nums; color: var(--sol-text-dim); }
+.cc-railx-row-count { flex-shrink: 0; font-size: var(--fs-mark); font-variant-numeric: tabular-nums; color: var(--sol-text-dim); }
 .cc-railx-row-resolve {
   flex-shrink: 0; display: grid; place-items: center; width: 1.5rem; height: 1.5rem; margin-right: 0.15rem;
   border-radius: 6px; color: var(--sol-text-dim); opacity: 0; transition: opacity 100ms ease, color 100ms ease, background 100ms ease;
@@ -3659,7 +3721,7 @@ diffs-container {
   flex: 0 0 auto;
 }
 .cc-panel__title {
-  font-size: 11px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   letter-spacing: 0.04em;
   color: var(--sol-text-muted);
@@ -3959,7 +4021,7 @@ diffs-container {
   background: var(--sol-bg);
   border: 1px solid color-mix(in srgb, var(--sol-cyan) 55%, transparent);
   box-shadow: 0 6px 20px color-mix(in srgb, var(--sol-cyan) 14%, transparent);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   line-height: 1;
   white-space: nowrap;
   animation: stage-chip-in 160ms cubic-bezier(.2,.8,.25,1);
@@ -4024,14 +4086,14 @@ diffs-container {
   z-index: 5;
 }
 .stage-pick__title { color: var(--sol-text); font-weight: 600; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.stage-pick__hint { color: var(--sol-text-dim); font-size: 11px; }
+.stage-pick__hint { color: var(--sol-text-dim); font-size: var(--fs-meta); }
 .stage-pick__action {
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 3px 10px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-cyan);
   border: 1px solid color-mix(in srgb, var(--sol-cyan) 40%, transparent);
   transition: background-color 130ms;
@@ -4061,7 +4123,6 @@ diffs-container {
    onto the scale. */
 .minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar]) :is(.text-xs, .text-\[12px\]) { font-size: var(--t-sub); }
 .minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar]) .text-sm { font-size: var(--t-ui); }
-.minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar], [data-cc-conversation]) :is(.text-\[9px\], .text-\[10px\], .text-\[11px\], .text-\[10\.5px\]) { font-size: var(--t-mark); }
 .minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar], [data-cc-conversation]) :is(.font-bold, .font-extrabold, .font-semibold) { font-weight: 600; }
 .minimal-style :is([data-sv-nav], [data-sv-rail], [data-cc-topbar], [data-cc-tabbar], [data-cc-conversation]) :is(.tracking-wide, .tracking-wider, .tracking-widest) { letter-spacing: 0; }
 
@@ -4730,8 +4791,8 @@ diffs-container {
   opacity: 0.86;
 }
 
-.minimal-style [data-sv-rail] [data-sv-meta] .text-\[10px\],
-.minimal-style [data-sv-rail] [data-sv-meta] .text-\[9px\] {
+.minimal-style [data-sv-rail] [data-sv-meta] .text-meta,
+.minimal-style [data-sv-rail] [data-sv-meta] .text-mark {
   font-size: 11px;
   line-height: 1.35;
 }
@@ -5238,8 +5299,8 @@ diffs-container {
   font-size: var(--t-mark);
   opacity: 1;
 }
-.minimal-style [data-sv-rail] [data-sv-meta] .text-\[10px\],
-.minimal-style [data-sv-rail] [data-sv-meta] .text-\[9px\],
+.minimal-style [data-sv-rail] [data-sv-meta] .text-meta,
+.minimal-style [data-sv-rail] [data-sv-meta] .text-mark,
 .minimal-style [data-sv-rail] [data-sv-status] .tabular-nums {
   font-size: var(--t-mark);
   font-weight: 400;
@@ -5281,15 +5342,15 @@ diffs-container {
 .minimal-style [data-sv-rail] [data-schedstrip] > svg {
   color: var(--sol-text-dim);
 }
-.minimal-style [data-sv-rail] [data-schedstrip] :is(.text-\[11px\], .text-\[10px\]) {
+.minimal-style [data-sv-rail] [data-schedstrip] .text-meta {
   font-size: var(--t-sub);
   font-weight: 400;
   color: var(--sol-text-dim);
 }
-.minimal-style [data-sv-rail] [data-schedstrip] .text-\[11px\] {
+.minimal-style [data-sv-rail] [data-schedstrip] [data-sched-title] {
   color: var(--sol-text-muted);
 }
-.minimal-style [data-sv-rail] [data-schedstrip] .text-\[11px\]:has(+ .text-\[10px\]) {
+.minimal-style [data-sv-rail] [data-schedstrip] [data-sched-title]:has(+ .text-meta) {
   flex-shrink: 0;
 }
 .minimal-style [data-sv-rail] :is([data-schedrow], [data-schedstrip]) [data-sv-wake-badge] {
@@ -5362,10 +5423,6 @@ diffs-container {
 .minimal-style [data-cc-conversation] [data-sv-sticky] .prose {
   font-size: var(--t-read);
   line-height: 1.55;
-}
-.minimal-style [data-cc-conversation] [data-sv-feed] .text-\[10px\],
-.minimal-style [data-cc-conversation] [data-sv-feed] .text-\[11px\] {
-  font-size: var(--t-mark);
 }
 .minimal-style [data-cc-conversation] [data-sv-composer] textarea,
 .minimal-style [data-cc-conversation] [data-sv-composer] [data-composer-ghost] {
@@ -5453,10 +5510,6 @@ diffs-container {
   padding-inline: 0;
   font-family: var(--font-ui);
   font-size: var(--t-sub);
-}
-.minimal-style [data-cc-thread-state] .text-\[10px\],
-.minimal-style [data-cc-thread-state] .text-\[11px\] {
-  font-size: var(--t-mark);
 }
 
 /* ==== Minimal: one ink =====================================================
@@ -6090,7 +6143,7 @@ diffs-container {
 .rise-card-face { flex-shrink: 0; align-self: flex-start; display: flex; border-radius: 9999px; box-shadow: 0 0 0 2px var(--sol-card), 0 0 0 3px color-mix(in srgb, var(--rise-accent, var(--sol-violet)) 30%, transparent); }
 .rise-card-body { min-width: 0; flex: 1; }
 .rise-card-title { font-family: var(--font-serif); font-size: 16px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; color: var(--sol-text); }
-.rise-card-copy { margin: 5px 0 0; font-size: 11.5px; line-height: 1.45; color: var(--sol-text-muted); }
+.rise-card-copy { margin: 5px 0 0; font-size: var(--fs-meta); line-height: 1.45; color: var(--sol-text-muted); }
 .rise-card-actions { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .rise-card-later { padding: 5px 9px; border-radius: 8px; font-size: 12px; color: var(--sol-text-muted); transition: color 120ms, background 120ms; }
 .rise-card-later:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-bg-highlight) 70%, transparent); }
@@ -6221,7 +6274,7 @@ diffs-container {
   border-radius: 6px;
   color: var(--sol-text-muted);
   text-decoration: none;
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .object-reveal__open-small:hover,
 .object-reveal__open-small:focus-visible {
@@ -6332,7 +6385,7 @@ diffs-container {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
   opacity: 0;
   transition: opacity 120ms;
@@ -6371,7 +6424,7 @@ diffs-container {
   border-top: 1px solid color-mix(in srgb, var(--reveal-accent) 18%, var(--sol-border));
   background: color-mix(in srgb, var(--reveal-accent) 7%, var(--sol-bg));
   color: var(--sol-text-muted);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   user-select: none;
   cursor: pointer;
   outline: none;
@@ -6700,7 +6753,7 @@ diffs-container {
   min-height: 22px !important;
   max-height: 22px !important;
   padding-block: 2px !important;
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 /* A pill that can reveal is split in two: the label is the link, and the
    caret after it is its own button that opens the full page in a band under

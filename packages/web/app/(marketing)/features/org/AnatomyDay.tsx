@@ -118,7 +118,7 @@ function Stage({ on, setOn }: { on: number | null; setOn: (i: number | null) => 
 
       {ticks.map((h) => (
         <At key={h} px={x(h)} py={H - 12}>
-          <span className="font-mono text-[10.5px]" style={{ color: DIM }}>{clock(h)}</span>
+          <span className="font-mono text-meta" style={{ color: DIM }}>{clock(h)}</span>
         </At>
       ))}
 
@@ -136,7 +136,7 @@ function Stage({ on, setOn }: { on: number | null; setOn: (i: number | null) => 
             </At>
             <div className="absolute og-d-a og-d-fade whitespace-nowrap font-mono leading-[15px]" style={{ left: pct(x(w.from) - 4, W), top: pct(ly - 42, H), ["--d" as string]: `${t + 0.25}s` } as CSSProperties}>
               <span className="block text-[12.5px]" style={{ color: TEXT }}>{w.title}</span>
-              <span className="block text-[11.5px] font-semibold" style={{ color: SOL.cyan }}>{dur(w)}</span>
+              <span className="block text-meta font-semibold" style={{ color: SOL.cyan }}>{dur(w)}</span>
             </div>
           </div>
         );
@@ -144,7 +144,7 @@ function Stage({ on, setOn }: { on: number | null; setOn: (i: number | null) => 
 
       {DAY.map((m, i) => (
         <At key={`l${i}`} px={x(m.h)} py={m.row < 0 ? BELOW_Y : LABEL_Y[m.row]}>
-          <span className="og-d-a og-d-fade block whitespace-nowrap font-mono text-[10.5px] text-center leading-tight" style={{ color: m.kind === "skip" ? DIM : KIND[m.kind].color, ["--d" as string]: `${tOf(m.h) + 0.1}s` } as CSSProperties}>
+          <span className="og-d-a og-d-fade block whitespace-nowrap font-mono text-meta text-center leading-tight" style={{ color: m.kind === "skip" ? DIM : KIND[m.kind].color, ["--d" as string]: `${tOf(m.h) + 0.1}s` } as CSSProperties}>
             <span style={{ color: DIM }}>{clock(m.h)}</span>{m.row < 0 ? <br /> : " "}{m.label}
           </span>
         </At>

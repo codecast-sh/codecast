@@ -156,5 +156,5 @@ function StatePill({ tone, children }: { tone: "ok" | "warn" | "info" | "muted";
         : tone === "info"
           ? "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30"
           : "bg-sol-bg-alt text-sol-text-muted border-sol-border";
-  return <span className={`shrink-0 text-[11px] px-2 py-0.5 rounded-full border tabular-nums ${cls}`}>{children}</span>;
+  return <span className={`shrink-0 text-meta px-2 py-0.5 rounded-full border tabular-nums ${cls}`}>{children}</span>;
 }

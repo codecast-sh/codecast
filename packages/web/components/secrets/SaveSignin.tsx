@@ -263,7 +263,7 @@ function Outcome({ ways: w }: { ways: SigninWaysState }) {
     );
   }
   if (w.state === "failed") return <div className="text-[12px] text-sol-red" data-vault-signin-state="failed">{w.failed}</div>;
-  if (w.blocked && w.host) return <div className="text-[11.5px] text-sol-text-dim">{w.blocked}</div>;
+  if (w.blocked && w.host) return <div className="text-meta text-sol-text-dim">{w.blocked}</div>;
   return null;
 }
 
@@ -296,14 +296,14 @@ export function SaveSigninDialog({ scope, rows, onClose, onSaved }: { scope: Vau
           <DialogTitle className="text-[15px] font-semibold tracking-normal text-sol-text">Save a sign-in</DialogTitle>
           <DialogDescription className="sr-only">Store a site's sign-in so every agent's browser starts signed in.</DialogDescription>
         </header>
-        <div className="flex flex-col px-5 py-3">
+        <div className="flex min-h-0 flex-col overflow-y-auto px-5 py-3">
           <Row label="Site" align="input">
             <input value={siteText} onChange={(e) => setSiteText(e.target.value)} placeholder="vercel.com" spellCheck={false} autoFocus className={FIELD_MONO} data-vault-signin-site />
           </Row>
           <Row label="Name" align="input">
             <div className="flex items-center gap-2">
               <input value={name} onChange={(e) => setTypedName(e.target.value.toLowerCase())} placeholder="vercel-signin" spellCheck={false} className={`${FIELD_MONO} ${nameBad ? "border-sol-red/70" : ""}`} />
-              {nameState && <span className={`shrink-0 text-[11.5px] ${nameBad ? "text-sol-red" : clash ? "text-sol-orange" : "text-sol-green"}`}>{nameState}</span>}
+              {nameState && <span className={`shrink-0 text-meta ${nameBad ? "text-sol-red" : clash ? "text-sol-orange" : "text-sol-green"}`}>{nameState}</span>}
             </div>
           </Row>
           <Row label="Who can use it" align="input">

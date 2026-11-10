@@ -82,10 +82,10 @@ function PreviewCard({
       onMouseLeave={onLeave}
       data-vault-hover-preview
     >
-      <div className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-sol-text-muted bg-sol-bg-alt/60 border-b border-sol-border/30">
+      <div className="flex items-center gap-1.5 px-3 py-1.5 text-meta font-medium text-sol-text-muted bg-sol-bg-alt/60 border-b border-sol-border/30">
         <FileText className="w-3 h-3" />
         <span className="truncate">{noteDisplayName(path.split("/").pop()!)}</span>
-        <span className="ml-auto text-[10px] text-sol-text-dim truncate max-w-[45%]">
+        <span className="ml-auto text-meta text-sol-text-dim truncate max-w-[45%]">
           {path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ""}
         </span>
       </div>

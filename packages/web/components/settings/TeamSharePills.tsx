@@ -48,7 +48,7 @@ export function TeamSharePills({
             aria-pressed={on}
             onClick={() => (on ? onClose(t) : setAsking(t))}
             title={on ? `Stop sharing with ${t.name}` : `Share with ${t.name}`}
-            className={`group inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] transition-all duration-200 active:scale-95 ${
+            className={`group inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-meta transition-all duration-200 active:scale-95 ${
               on
                 ? "border-sol-cyan/60 bg-sol-cyan/15 text-sol-text shadow-[0_0_0_3px_color-mix(in_srgb,var(--sol-cyan)_10%,transparent)]"
                 : "border-dashed border-sol-border text-sol-text-muted hover:border-sol-text-muted hover:text-sol-text"

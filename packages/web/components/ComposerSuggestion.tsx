@@ -84,7 +84,7 @@ export const ComposerSuggestion = memo(forwardRef<ComposerSuggestionHandle, {
   return (
     <div data-composer-ghost className="pointer-events-none [grid-area:1/1] flex items-start gap-2 py-1 min-w-0 text-sm leading-relaxed animate-in fade-in-0 duration-200">
       <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sol-text-dim">{text}</span>
-      <span className="shrink-0 flex items-center gap-1.5 h-[calc(0.875rem*1.625)] text-[9px] text-sol-text-dim/70 select-none">
+      <span className="shrink-0 flex items-center gap-1.5 h-[calc(0.875rem*1.625)] text-meta text-sol-text-dim/70 select-none">
         {count > 1 && <span className="tabular-nums">{index + 1}/{count}</span>}
         <button
           type="button"

@@ -32,7 +32,7 @@ function RunCard({ run }: { run: any }) {
       <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-sol-cyan/15">
         <Workflow className="w-4 h-4 text-sol-cyan flex-shrink-0" />
         <span className="text-sm font-semibold text-sol-text truncate">{flowName({ label: run.workflow_label, name: run.workflow_name }, "workflow")}</span>
-        <div className="ml-auto flex items-center gap-3 text-[11px] text-sol-text-dim flex-shrink-0">
+        <div className="ml-auto flex items-center gap-3 text-meta text-sol-text-dim flex-shrink-0">
           <span>{agentCount} agents</span>
           {run.total_tokens ? <span>{wfFmtTokens(run.total_tokens)} tok</span> : null}
           <span>{timeAgo(run.updated_at || run.created_at)}</span>
@@ -70,16 +70,12 @@ export function WorkflowsDashboardContent() {
         <div ref={titlebarRef} className="flex items-baseline gap-2 mb-5">
           <Workflow className="w-4 h-4 text-sol-cyan self-center" />
           <h1 className="text-lg font-semibold text-sol-text">Workflows</h1>
-          <span className="text-xs text-sol-text-dim">dynamic agent runs</span>
           <span className="ml-auto text-xs text-sol-text-dim font-mono">{runs.length}</span>
         </div>
         {runs.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 py-24 text-center">
             <Workflow className="w-8 h-8 text-sol-text-dim" />
             <p className="text-sm text-sol-text-muted">No workflow runs yet</p>
-            <p className="text-xs text-sol-text-dim max-w-xs">
-              Run a dynamic workflow in any session (e.g. <code className="font-mono text-sol-text-muted">ultracode</code>) and it appears here.
-            </p>
           </div>
         ) : (
           <div className="flex flex-col gap-3">

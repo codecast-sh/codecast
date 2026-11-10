@@ -14,7 +14,7 @@ import { DIM, LINE, MUTED, TEXT, V, at, tint } from "./theme";
 export function BlockFrame({ mod, lang, children, icon }: { mod: string; lang: string; children: ReactNode; icon?: ReactNode }) {
   return (
     <div className="rounded-lg border overflow-hidden" style={{ borderColor: tint(V, 28), backgroundColor: "#fffdf6" }}>
-      <div className="h-8 px-2.5 flex items-center gap-2 border-b text-[11px]" style={{ borderColor: tint(V, 18), backgroundColor: tint(V, 7), color: MUTED }}>
+      <div className="h-8 px-2.5 flex items-center gap-2 border-b text-meta" style={{ borderColor: tint(V, 18), backgroundColor: tint(V, 7), color: MUTED }}>
         <span className="w-5 h-5 rounded grid place-items-center" style={{ backgroundColor: tint(V, 14), color: V }}>{icon ?? <Puzzle className="w-3 h-3" />}</span>
         <span className="font-medium" style={{ color: TEXT }}>{mod}</span>
         <span style={{ color: DIM }}>·</span>
@@ -33,7 +33,7 @@ export function Stat({ label, value, tone, sub }: { label: string; value: string
   return (
     <div className="min-w-0 rounded-md px-2.5 py-2" style={{ backgroundColor: tone ? tint(tone, 8) : "rgba(238,232,213,.55)" }}>
       <div className="font-mono text-[17px] font-semibold leading-none tabular-nums" style={{ color: tone ?? TEXT }}>{value}</div>
-      <div className="mt-1 text-[10.5px] truncate" style={{ color: MUTED }}>{label}{sub && <span style={{ color: DIM }}> · {sub}</span>}</div>
+      <div className="mt-1 text-meta truncate" style={{ color: MUTED }}>{label}{sub && <span style={{ color: DIM }}> · {sub}</span>}</div>
     </div>
   );
 }
@@ -61,8 +61,8 @@ export function RolloutBlock({ d = 0 }: { d?: number }) {
     <BlockFrame mod="Releases" lang="rollout" icon={<Rocket className="w-3 h-3" />}>
       <div className="flex items-baseline gap-2 mb-2.5">
         <span className="text-[13px] font-semibold" style={{ color: TEXT }}>payments-api</span>
-        <span className="text-[11.5px] font-mono" style={{ color: MUTED }}>v412 canary</span>
-        <span className="ml-auto inline-flex items-center gap-1 text-[10.5px] font-medium" style={{ color: SOL.green }}>
+        <span className="text-meta font-mono" style={{ color: MUTED }}>v412 canary</span>
+        <span className="ml-auto inline-flex items-center gap-1 text-meta font-medium" style={{ color: SOL.green }}>
           <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: SOL.green }} />holding
         </span>
       </div>
@@ -72,13 +72,13 @@ export function RolloutBlock({ d = 0 }: { d?: number }) {
         <Stat label="errors" sub="v413" value="6.1%" tone={SOL.red} />
       </div>
       <div className="mt-2.5">
-        <div className="flex justify-between text-[10px] font-mono mb-1" style={{ color: DIM }}><span>error rate, last 40m</span><span>canary at 2:31</span></div>
+        <div className="flex justify-between text-meta font-mono mb-1" style={{ color: DIM }}><span>error rate, last 40m</span><span>canary at 2:31</span></div>
         <Spark points={ERRORS} color={SOL.red} d={d} marker={8} />
       </div>
       <div className="mt-3 flex flex-wrap gap-1.5">
-        <span className="rounded-md px-2.5 py-1 text-[11.5px] font-medium" style={{ backgroundColor: V, color: SOL.base3 }}>Promote to 50%</span>
-        <span className="rounded-md px-2.5 py-1 text-[11.5px] font-medium border" style={{ borderColor: LINE, color: TEXT }}>Roll back</span>
-        <span className="rounded-md px-2.5 py-1 text-[11.5px]" style={{ color: MUTED }}>Open deploy</span>
+        <span className="rounded-md px-2.5 py-1 text-meta font-medium" style={{ backgroundColor: V, color: SOL.base3 }}>Promote to 50%</span>
+        <span className="rounded-md px-2.5 py-1 text-meta font-medium border" style={{ borderColor: LINE, color: TEXT }}>Roll back</span>
+        <span className="rounded-md px-2.5 py-1 text-meta" style={{ color: MUTED }}>Open deploy</span>
       </div>
     </BlockFrame>
   );
@@ -91,8 +91,8 @@ export function FindingBlock({ filed }: { filed?: ReactNode }) {
       <div className="text-[13px] font-semibold" style={{ color: TEXT }}>Refund webhooks retry with no cap</div>
       <p className="mt-1 text-[12px] leading-relaxed" style={{ color: MUTED }}>Same pattern as the payments worker: a provider outage multiplies into a retry storm. Not fixing it in this session.</p>
       <div className="mt-2.5 flex items-center gap-2 flex-wrap">
-        <span className="rounded-full px-2 py-[1px] text-[10.5px] font-medium" style={{ color: SOL.orange, backgroundColor: tint(SOL.orange, 12) }}>sev-3</span>
-        <span className="text-[11px] font-mono" style={{ color: DIM }}>refunds-worker</span>
+        <span className="rounded-full px-2 py-[1px] text-meta font-medium" style={{ color: SOL.orange, backgroundColor: tint(SOL.orange, 12) }}>sev-3</span>
+        <span className="text-meta font-mono" style={{ color: DIM }}>refunds-worker</span>
         <span className="ml-auto">{filed}</span>
       </div>
     </BlockFrame>

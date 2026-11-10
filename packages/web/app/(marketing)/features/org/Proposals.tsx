@@ -48,7 +48,7 @@ function Band({ verdict, waits, onUndo }: { verdict: Verdict; waits: boolean; on
         <b style={{ color: ok ? SOL.green : SOL.red }}>{ok ? "Approved." : "Rejected."}</b>{" "}
         {ok ? (waits ? "Applies once Head of Platform is approved." : "Applies when you send.") : "Goes to Head of People when you send."}
       </span>
-      <button type="button" className={`${btn} -mr-1.5 h-6 text-[11px]`} style={{ color: MUTED }} onClick={onUndo}>Undo</button>
+      <button type="button" className={`${btn} -mr-1.5 h-6 text-meta`} style={{ color: MUTED }} onClick={onUndo}>Undo</button>
     </div>
   );
 }
@@ -57,8 +57,8 @@ function ReplyField({ text, onSend, onClose }: { text: string; onSend: () => voi
   return (
     <div className="og-prop-in mt-2.5 flex items-center gap-2 rounded-md border px-2.5 py-1.5" style={{ borderColor: tint(VIOLET, 55) }}>
       <span className="min-w-0 flex-1 truncate text-[12.5px]" style={{ color: TEXT }}>{text}<span aria-hidden className="og-prop-caret" style={{ color: VIOLET }}>|</span></span>
-      <button type="button" className={`${btn} h-6 text-[11px]`} style={{ color: MUTED }} onClick={onClose}>Close</button>
-      <button type="button" className={`${btn} h-6 text-[11px]`} style={{ backgroundColor: INK, color: "#fffdf6" }} onClick={onSend} autoFocus>Send reply</button>
+      <button type="button" className={`${btn} h-6 text-meta`} style={{ color: MUTED }} onClick={onClose}>Close</button>
+      <button type="button" className={`${btn} h-6 text-meta`} style={{ backgroundColor: INK, color: "#fffdf6" }} onClick={onSend} autoFocus>Send reply</button>
     </div>
   );
 }
@@ -66,7 +66,7 @@ function ReplyField({ text, onSend, onClose }: { text: string; onSend: () => voi
 /** A change that applies only once the hire it depends on is approved. */
 function NeedsChip() {
   return (
-    <span className="mr-auto inline-flex h-[22px] items-center gap-1.5 rounded-full border pl-0.5 pr-2 text-[11px]" style={{ borderColor: tint(VIOLET, 35), color: VIOLET, backgroundColor: tint(VIOLET, 6) }}>
+    <span className="mr-auto inline-flex h-[22px] items-center gap-1.5 rounded-full border pl-0.5 pr-2 text-meta" style={{ borderColor: tint(VIOLET, 35), color: VIOLET, backgroundColor: tint(VIOLET, 6) }}>
       <Tile k="server rack" size={16} style={{ borderRadius: 999, opacity: 0.6 }} />
       Needs Head of Platform
     </span>
@@ -75,7 +75,7 @@ function NeedsChip() {
 
 function Face({ s }: { s: Subject }) {
   if ("k" in s.face) return <Tile k={s.face.k} size={18} style={{ verticalAlign: "-4px", marginRight: 6 }} />;
-  return <span className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-md px-1 mr-1.5 font-mono text-[9.5px] font-bold" style={{ backgroundColor: tint(VIOLET, 12), color: VIOLET, verticalAlign: "1px" }}>{s.face.sessions}</span>;
+  return <span className="inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-md px-1 mr-1.5 font-mono text-meta font-bold" style={{ backgroundColor: tint(VIOLET, 12), color: VIOLET, verticalAlign: "1px" }}>{s.face.sessions}</span>;
 }
 
 function Sentence({ s }: { s: Subject }) {
@@ -100,14 +100,14 @@ function Entry({ s, n, state, lit, replying, answered, onLit, onAnswer, onUndo, 
       onMouseEnter={() => onLit(true)} onMouseLeave={() => onLit(false)} onFocus={() => onLit(true)} onBlur={() => onLit(false)}
     >
       <div className="grid grid-cols-[18px_minmax(0,1fr)] gap-x-2">
-        <span className="font-mono text-[11px] leading-[22px] tabular-nums" style={{ color: DIM }}>{n}</span>
+        <span className="font-mono text-meta leading-[22px] tabular-nums" style={{ color: DIM }}>{n}</span>
         <div className="min-w-0">
           <div className="flex items-start justify-between gap-3">
             <p key={s.sentence} className={`m-0 min-w-0 text-[14px] leading-[22px] ${revised ? "og-prop-in" : ""}`} style={{ color: outcome === "rejected" ? DIM : TEXT }}><Face s={s} /><Sentence s={s} /></p>
             {outcome && <span className="og-prop-in shrink-0 text-[12.5px] leading-[22px] font-medium" style={{ color: outcome === "applied" ? SOL.green : DIM }}>{outcome === "applied" ? "Applied" : "Rejected"}</span>}
           </div>
           {revised && open && (
-            <div className="og-prop-in mt-1.5 text-[11.5px] leading-[17px]">
+            <div className="og-prop-in mt-1.5 text-meta leading-[17px]">
               <span className="font-semibold" style={{ color: VIOLET }}>Revised</span>
               <span style={{ color: MUTED }}> · removed </span><s style={{ color: DIM }}>{REVISION_NOTE.removed}</s>
               <span style={{ color: MUTED }}> · added </span><span style={{ color: TEXT }}>{REVISION_NOTE.added}</span>
@@ -126,7 +126,7 @@ function Entry({ s, n, state, lit, replying, answered, onLit, onAnswer, onUndo, 
               {open && (
                 <Row label="Sources">
                   <span className="flex flex-wrap gap-1">
-                    {s.evidence.map((e) => <span key={e} className="rounded-md border px-1.5 text-[11px] leading-[18px]" style={{ borderColor: LINE, color: MUTED, backgroundColor: tint(SAND, 40) }}>{e}</span>)}
+                    {s.evidence.map((e) => <span key={e} className="rounded-md border px-1.5 text-meta leading-[18px]" style={{ borderColor: LINE, color: MUTED, backgroundColor: tint(SAND, 40) }}>{e}</span>)}
                   </span>
                 </Row>
               )}
@@ -156,7 +156,7 @@ function Entry({ s, n, state, lit, replying, answered, onLit, onAnswer, onUndo, 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <>
-      <dt className="whitespace-nowrap text-[11.5px]" style={{ color: DIM }}>{label}</dt>
+      <dt className="whitespace-nowrap text-meta" style={{ color: DIM }}>{label}</dt>
       <dd className="m-0 min-w-0">{children}</dd>
     </>
   );
@@ -190,7 +190,7 @@ function ProposalCard({ state, setState, lit, setLit }: { state: State; setState
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
           <div className="font-mono font-bold text-[15px] leading-snug" style={{ color: INK }}>Give Platform an owner and file 12 loose sessions</div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px]" style={{ color: MUTED }}>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-meta" style={{ color: MUTED }}>
             <span key={metaWords(state)} className="og-prop-in">{metaWords(state)}</span>
             <span aria-hidden style={{ color: DIM }}>·</span>
             <span style={{ color: DIM }}>from</span>
@@ -200,7 +200,7 @@ function ProposalCard({ state, setState, lit, setLit }: { state: State; setState
             </span>
           </div>
         </div>
-        <span className="font-mono text-[11px] rounded-md px-1.5 py-0.5" style={{ color: VIOLET, backgroundColor: tint(VIOLET, 10) }}>op-7</span>
+        <span className="font-mono text-meta rounded-md px-1.5 py-0.5" style={{ color: VIOLET, backgroundColor: tint(VIOLET, 10) }}>op-7</span>
       </div>
 
       <p className="m-0 mt-3 text-[13px] leading-[20px]" style={{ color: BODY }}>
@@ -258,7 +258,7 @@ function History({ state, setState }: { state: State; setState: (s: State) => vo
   const row = "flex items-center gap-2.5 px-3 h-9 border-t first:border-t-0 text-[12px]";
   return (
     <div className="rounded-xl border overflow-hidden" style={{ borderColor: LINE, backgroundColor: "#fffdf6" }}>
-      <div className="flex items-center px-3 h-8 border-b font-mono text-[11px]" style={{ borderColor: LINE, color: MUTED, backgroundColor: tint(SAND, 40) }}>
+      <div className="flex items-center px-3 h-8 border-b font-mono text-meta" style={{ borderColor: LINE, color: MUTED, backgroundColor: tint(SAND, 40) }}>
         <span style={{ color: TEXT }}>History</span>
         <span className="ml-auto">{applied.length + PAST.length} changes</span>
       </div>
@@ -266,17 +266,17 @@ function History({ state, setState }: { state: State; setState: (s: State) => vo
         <div key={`${s.id}-${state.sends}`} className={`${row} og-prop-in`} style={{ borderColor: tint(LINE, 70), backgroundColor: tint(SOL.green, 5, "#fffdf6") }}>
           <span aria-hidden style={{ color: SOL.green }}>✓</span>
           <span className="min-w-0 flex-1 truncate" style={{ color: TEXT }}>{s.sentence.replace(/\.$/, "")}</span>
-          <span className="font-mono text-[10.5px]" style={{ color: VIOLET }}>op-7</span>
-          <span className="text-[11px] w-12 text-right" style={{ color: DIM }}>just now</span>
-          <button type="button" className={`${btn} -mr-1.5 h-6 text-[11px]`} style={{ color: MUTED }} onClick={() => undo(s.id)}>Undo</button>
+          <span className="font-mono text-meta" style={{ color: VIOLET }}>op-7</span>
+          <span className="text-meta w-12 text-right" style={{ color: DIM }}>just now</span>
+          <button type="button" className={`${btn} -mr-1.5 h-6 text-meta`} style={{ color: MUTED }} onClick={() => undo(s.id)}>Undo</button>
         </div>
       ))}
       {PAST.map((p) => (
         <div key={p.ref} className={row} style={{ borderColor: tint(LINE, 70) }}>
           <span aria-hidden style={{ color: DIM }}>✓</span>
           <span className="min-w-0 flex-1 truncate" style={{ color: BODY }}>{p.what}</span>
-          <span className="font-mono text-[10.5px]" style={{ color: DIM }}>{p.ref}</span>
-          <span className="text-[11px] w-12 text-right" style={{ color: DIM }}>{p.when}</span>
+          <span className="font-mono text-meta" style={{ color: DIM }}>{p.ref}</span>
+          <span className="text-meta w-12 text-right" style={{ color: DIM }}>{p.when}</span>
           <span aria-hidden className="w-[38px] shrink-0" />
         </div>
       ))}
@@ -305,7 +305,7 @@ export function Proposals() {
             <Tile k="org chart" size={16} />
             <span>Head of People</span>
             <span style={{ color: DIM }}>· weekly Company review</span>
-            <button type="button" className="og-press ml-auto rounded px-2 h-6 font-mono text-[11px] disabled:opacity-40" style={{ color: MUTED }} disabled={!changed} onClick={() => { setState(START); setLit(null); setGen(gen + 1); }}>Reset</button>
+            <button type="button" className="og-press ml-auto rounded px-2 h-6 font-mono text-meta disabled:opacity-40" style={{ color: MUTED }} disabled={!changed} onClick={() => { setState(START); setLit(null); setGen(gen + 1); }}>Reset</button>
           </>
         }
       >
@@ -314,7 +314,7 @@ export function Proposals() {
             <ProposalCard state={state} setState={setState} lit={lit} setLit={setLit} />
           </div>
           <div className="min-w-0 og-grid border-t lg:border-t-0 flex flex-col" style={{ borderColor: LINE }}>
-            <div className="flex items-center gap-3 px-4 h-9 border-b font-mono text-[11px]" style={{ borderColor: LINE, color: MUTED, backgroundColor: tint(SAND, 35) }}>
+            <div className="flex items-center gap-3 px-4 h-9 border-b font-mono text-meta" style={{ borderColor: LINE, color: MUTED, backgroundColor: tint(SAND, 35) }}>
               <span style={{ color: TEXT }}>Org</span>
               <span className="inline-flex items-center gap-1.5"><i className="inline-block h-2 w-2 rounded-sm" style={{ backgroundColor: tint(VIOLET, 30), boxShadow: `inset 0 0 0 1px ${VIOLET}` }} />proposed</span>
               <span className="ml-auto">{counts(state).applied ? `${counts(state).applied} applied` : "nothing applied yet"}</span>

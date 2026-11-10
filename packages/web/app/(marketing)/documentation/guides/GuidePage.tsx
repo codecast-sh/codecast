@@ -214,7 +214,7 @@ function MoreGuides({ current }: { current: Guide }) {
   const others = GUIDES.filter((g) => g.slug !== current.slug);
   return (
     <div className="mt-16 pt-8" style={{ borderTop: `1px solid ${SOL.base2}` }}>
-      <div className="text-[11px] font-mono uppercase tracking-wider mb-4" style={{ color: SOL.base01 }}>
+      <div className="text-mark font-mono uppercase tracking-wider mb-4" style={{ color: SOL.base01 }}>
         More guides
       </div>
       <div className="grid sm:grid-cols-2 gap-3">
@@ -265,7 +265,7 @@ export default function GuidePage() {
         </Link>
 
         <header className="mb-10">
-          <div className="text-[11px] font-mono uppercase tracking-wider mb-3" style={{ color: SOL.base01 }}>
+          <div className="text-mark font-mono uppercase tracking-wider mb-3" style={{ color: SOL.base01 }}>
             {guide.category}
           </div>
           <h1 className="text-4xl font-bold leading-[1.15] tracking-tight font-mono" style={{ color: SOL.base03 }}>

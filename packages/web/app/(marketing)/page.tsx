@@ -75,6 +75,8 @@ const PLATFORM_CHIPS = [
   { label: "CLI", href: "/features", color: "#6c71c4" },
 ];
 
+const LONGEST_TYPING_PHRASE = TYPING_PHRASES.reduce((a, b) => (b.length > a.length ? b : a), "");
+
 function TypingEffect() {
   const [phraseIndex, setPhraseIndex] = useState(0);
   const [charIndex, setCharIndex] = useState(0);
@@ -215,30 +217,36 @@ export default function LandingPage() {
           <HeroFlythrough />
         </div>
         <div className="flex flex-wrap gap-3 justify-center items-center mt-8">
-          <Link href="/signup">
-            <Button className="text-[15px] px-6 h-11 font-semibold text-[#fdf6e3] border-0 transition-all hover:-translate-y-px hover:brightness-110" style={{ background: 'linear-gradient(135deg, #e86c5d 0%, #cb4b16 100%)', boxShadow: '0 6px 20px -6px rgba(203,75,22,0.55)' }}>
-              Get started free
-            </Button>
-          </Link>
-          <Link href="/download">
-            <Button className="text-[15px] px-6 h-11 font-semibold gap-2 text-[#fdf6e3] border-0 transition-all hover:-translate-y-px hover:brightness-125" style={{ backgroundColor: '#002b36', boxShadow: '0 6px 20px -8px rgba(0,43,54,0.6)' }}>
+          <Button asChild className="text-[15px] px-6 h-11 font-semibold text-[#fdf6e3] border-0 transition-all hover:-translate-y-px hover:brightness-110" style={{ background: 'linear-gradient(135deg, #e86c5d 0%, #cb4b16 100%)', boxShadow: '0 6px 20px -6px rgba(203,75,22,0.55)' }}>
+            <Link href="/signup">Get started free</Link>
+          </Button>
+          <Button asChild className="text-[15px] px-6 h-11 font-semibold gap-2 text-[#fdf6e3] border-0 transition-all hover:-translate-y-px hover:brightness-125" style={{ backgroundColor: '#002b36', boxShadow: '0 6px 20px -8px rgba(0,43,54,0.6)' }}>
+            <Link href="/download">
               <AppleIcon className="w-4 h-4" />
               Download for Mac
-            </Button>
-          </Link>
-          <Link href="#tour">
-            <Button variant="outline" className="bg-transparent text-[15px] px-6 h-11 font-semibold gap-2 border-[#93a1a1] text-[#586e75] hover:bg-[#eee8d5] hover:text-[#002b36] transition-colors">
+            </Link>
+          </Button>
+          <Button asChild variant="outline" className="bg-transparent text-[15px] px-6 h-11 font-semibold gap-2 border-[#93a1a1] text-[#586e75] hover:bg-[#eee8d5] hover:text-[#002b36] transition-colors">
+            <Link href="#tour">
               <svg className="w-3 h-3" viewBox="0 0 10 10" fill="currentColor" aria-hidden><path d="M2 1.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1L2.9.7a.6.6 0 0 0-.9.5z" /></svg>
               Watch the tour
-            </Button>
-          </Link>
+            </Link>
+          </Button>
         </div>
       </section>
 
       <section className="max-w-6xl mx-auto px-6 pt-6 pb-20">
         <div className="text-center max-w-3xl mx-auto">
-          <p className="text-lg mb-8 font-mono min-h-[28px]" style={{ color: '#586e75' }}>
-            Imagine <TypingEffect />
+          {/* The longest phrase sits invisibly under the one being typed, so
+              the line holds its final height and nothing below it moves as
+              a phrase wraps onto more lines and back. */}
+          <p className="grid text-lg mb-8 font-mono" style={{ color: '#586e75' }}>
+            <span aria-hidden className="invisible col-start-1 row-start-1">
+              Imagine {LONGEST_TYPING_PHRASE}|
+            </span>
+            <span className="col-start-1 row-start-1">
+              Imagine <TypingEffect />
+            </span>
           </p>
 
           <div className="flex flex-wrap gap-3 justify-center">
@@ -246,7 +254,7 @@ export default function LandingPage() {
               const chip = (
                 <>
                   <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }}></span>
-                  <span className="tracking-wider font-mono text-[11px] uppercase font-medium">{label}</span>
+                  <span className="tracking-wider font-mono text-mark uppercase font-medium">{label}</span>
                 </>
               );
               const className = "inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md transition-all hover:brightness-95";
@@ -281,7 +289,7 @@ export default function LandingPage() {
               <div className="flex items-center justify-between mb-4">
                 <span className="w-9 h-9 rounded-lg flex items-center justify-center font-mono text-lg transition-transform group-hover:-rotate-6" style={{ backgroundColor: `color-mix(in srgb, ${color} 13%, transparent)`, color }} aria-hidden>{mark}</span>
                 {early ? (
-                  <a href="#org" className="font-mono text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded hover:brightness-95" style={{ color: '#6c71c4', backgroundColor: 'rgba(108,113,196,0.1)' }}>Early access</a>
+                  <a href="#org" className="font-mono text-mark uppercase tracking-wider px-1.5 py-0.5 rounded hover:brightness-95" style={{ color: '#6c71c4', backgroundColor: 'rgba(108,113,196,0.1)' }}>Early access</a>
                 ) : chapter ? (
                   <WatchChapter title={chapter} compact />
                 ) : null}
@@ -347,11 +355,11 @@ export default function LandingPage() {
                   { who: "Retry failed webhooks", kind: "claude", color: "#cb4b16", text: <>One call for a person: exponential or fixed backoff? Queued for <span style={{ color: '#b58900' }}>@ashot</span>.</> },
                 ].map((m, i) => (
                   <div key={i} className="flex gap-3">
-                    <div className="w-6 h-6 rounded flex items-center justify-center text-[11px] font-bold shrink-0" style={{ backgroundColor: m.color, color: '#fdf6e3' }}>{m.who[0].toUpperCase()}</div>
+                    <div className="w-6 h-6 rounded flex items-center justify-center text-meta font-bold shrink-0" style={{ backgroundColor: m.color, color: '#fdf6e3' }}>{m.who[0].toUpperCase()}</div>
                     <div className="min-w-0">
                       <div className="flex items-baseline gap-2 mb-0.5">
                         <span style={{ color: '#eee8d5' }}>{m.who}</span>
-                        <span className="text-[11px]" style={{ color: '#586e75' }}>{m.kind === "person" ? "" : m.kind}</span>
+                        <span className="text-meta" style={{ color: '#586e75' }}>{m.kind === "person" ? "" : m.kind}</span>
                       </div>
                       <p className="leading-relaxed" style={{ color: '#93a1a1' }}>{m.text}</p>
                     </div>
@@ -453,14 +461,14 @@ export default function LandingPage() {
                     <span>Decision &middot; Retry failed webhooks</span>
                   </div>
                   <p className="text-[#eee8d5] text-[13px] leading-snug">Exponential or fixed backoff?</p>
-                  <p className="text-[#839496] text-[11px] leading-relaxed">
+                  <p className="text-[#839496] text-meta leading-relaxed">
                     A fork tried both. Fixed backoff retried 40% faster but hammered acme&apos;s endpoint during their outage.
                   </p>
-                  <div className="space-y-1.5 pt-1 text-[11px]">
+                  <div className="space-y-1.5 pt-1 text-meta">
                     <div className="px-2.5 py-1.5 rounded" style={{ backgroundColor: 'rgba(133,153,0,0.18)', color: '#859900' }}>Exponential, cap at 10 min</div>
                     <div className="px-2.5 py-1.5 rounded bg-[#073642] text-[#839496]">Fixed, every 30s</div>
                   </div>
-                  <p className="text-[#586e75] text-[10px] pt-1">3 agents keep working while you decide</p>
+                  <p className="text-[#586e75] text-meta pt-1">3 agents keep working while you decide</p>
                 </div>
             </PhoneFrame>
           </div>
@@ -473,7 +481,7 @@ export default function LandingPage() {
           <div>
             <div className="flex items-center gap-3 font-mono text-sm mb-4" style={{ color: '#6c71c4' }}>
               <span>04</span>
-              <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded" style={{ backgroundColor: 'rgba(108,113,196,0.14)' }}>Next &middot; early access</span>
+              <span className="text-mark uppercase tracking-wider px-1.5 py-0.5 rounded" style={{ backgroundColor: 'rgba(108,113,196,0.14)' }}>Next &middot; early access</span>
             </div>
             <h2 className="text-3xl font-bold text-[#002b36] mb-4 font-mono [text-wrap:balance]">
               From a team of agents to an org
@@ -509,7 +517,7 @@ export default function LandingPage() {
           <div className="font-mono text-[13px]" role="img" aria-label="An org chart: you at the top, a Head of People, an Executive Assistant and two leads with their sessions, and a proposal to split one lead in two">
             <div className="rounded-xl p-5" style={{ backgroundColor: '#fdf6e3', border: '1px solid #e4ddc8' }}>
               <div className="flex items-center gap-2.5 mb-3">
-                <span className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold" style={{ backgroundColor: '#268bd2', color: '#fdf6e3' }}>Y</span>
+                <span className="w-7 h-7 rounded-full flex items-center justify-center text-meta font-bold" style={{ backgroundColor: '#268bd2', color: '#fdf6e3' }}>Y</span>
                 <span style={{ color: '#002b36' }}>You</span>
               </div>
               <div className="ml-3.5 pl-5 space-y-2.5" style={{ borderLeft: '1px solid #d6cfb8' }}>
@@ -520,17 +528,17 @@ export default function LandingPage() {
                   { name: "Growth lead", note: "5 sessions", status: "overloaded", color: "#cb4b16" },
                 ].map((r) => (
                   <div key={r.name} className="flex items-center gap-2.5">
-                    <span className="w-6 h-6 rounded-md flex items-center justify-center text-[10px] font-bold shrink-0" style={{ backgroundColor: `color-mix(in srgb, ${r.color} 16%, transparent)`, color: r.color }}>{r.name[0]}</span>
+                    <span className="w-6 h-6 rounded-md flex items-center justify-center text-meta font-bold shrink-0" style={{ backgroundColor: `color-mix(in srgb, ${r.color} 16%, transparent)`, color: r.color }}>{r.name[0]}</span>
                     <span style={{ color: '#073642' }}>{r.name}</span>
-                    <span className="text-[11px] hidden sm:inline" style={{ color: '#93a1a1' }}>{r.note}</span>
-                    <span className="ml-auto text-[11px]" style={{ color: r.status === "on track" ? '#859900' : '#cb4b16' }}>{r.status}</span>
+                    <span className="text-meta hidden sm:inline" style={{ color: '#93a1a1' }}>{r.note}</span>
+                    <span className="ml-auto text-meta" style={{ color: r.status === "on track" ? '#859900' : '#cb4b16' }}>{r.status}</span>
                   </div>
                 ))}
                 <div className="ml-8 pl-4 space-y-2" style={{ borderLeft: '1px dashed #6c71c4' }}>
                   {["Paid lead", "Organic lead"].map((name) => (
                     <div key={name} className="flex items-center gap-2.5 rounded-md px-2 py-1" style={{ border: '1px dashed rgba(108,113,196,0.6)', color: '#6c71c4' }}>
                       <span>+ {name}</span>
-                      <span className="ml-auto text-[11px]">proposed</span>
+                      <span className="ml-auto text-meta">proposed</span>
                     </div>
                   ))}
                 </div>
@@ -538,7 +546,7 @@ export default function LandingPage() {
             </div>
 
             <div className="rounded-xl p-5 -mt-3 ml-6 sm:ml-12 relative shadow-lg" style={{ backgroundColor: '#fffbee', border: '1px solid rgba(108,113,196,0.45)' }}>
-              <div className="text-[11px] mb-2" style={{ color: '#6c71c4' }}>Head of People proposes</div>
+              <div className="text-meta mb-2" style={{ color: '#6c71c4' }}>Head of People proposes</div>
               <p className="text-[14px] mb-1.5" style={{ color: '#002b36' }}>Split Growth into Paid and Organic</p>
               <p className="text-[12px] leading-relaxed mb-3 font-sans" style={{ color: '#657b83' }}>
                 More reached the growth lead this week than one role can answer, and most of it was ad spend.
@@ -600,7 +608,7 @@ export default function LandingPage() {
         <div className="text-center mb-12">
           <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md mb-6" style={{ backgroundColor: 'rgba(133,153,0,0.1)', color: '#859900' }}>
             <span className="h-2 w-2 rounded-full" style={{ backgroundColor: '#859900' }}></span>
-            <span className="tracking-wider font-mono text-[11px] uppercase font-medium">Privacy-first</span>
+            <span className="tracking-wider font-mono text-mark uppercase font-medium">Privacy-first</span>
           </div>
           <h2 className="text-3xl font-bold text-[#002b36] mb-4 font-mono">
             Your code stays yours

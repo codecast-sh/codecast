@@ -24,13 +24,14 @@ import {
   PlanExternalEvents,
   PLAN_STATUS_CONFIG,
 } from "../../../components/PlanDetailPanel";
+import { usePlanStoreTasks } from "../../../components/work/planWakeRows";
 import { WorkflowContextPanel } from "../../../components/WorkflowContextPanel";
 import { PlanBoardView } from "../../../components/PlanBoardView";
 import { PlanOriginSession } from "../../../components/PlanOriginSession";
 import { EntryTimeline } from "../../../components/EntryTimeline";
 import { PlanGraphView } from "../../../components/PlanGraphView";
 import { LivenessDot } from "../../../components/LivenessDot";
-import { mergeLiveTasks, computePlanProgress, findEntityInStore } from "../../../lib/liveEntities";
+import { mergeLiveTasks, computePlanProgress, lookup } from "../../../lib/liveEntities";
 import { CharterBlock } from "../../../components/charter/CharterBlock";
 import { charterOf, type CharterPatch } from "../../../components/charter/charterMeta";
 import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
@@ -110,11 +111,7 @@ function EnsureDocTrigger({ planId }: { planId: any }) {
   useMountEffect(() => {
     ensureDoc(planId);
   });
-  return (
-    <div className="flex items-center justify-center h-64 text-sol-text-dim text-sm">
-      Initializing plan document...
-    </div>
-  );
+  return <AppLoader className="min-h-[16rem] h-full" />;
 }
 
 export default function PlanDetailPage() {
@@ -138,10 +135,17 @@ export default function PlanDetailPage() {
   // show here until the query re-runs. Overlay the live store rows (canonical
   // helper) so dragged cards, status circles, assignee avatars, the progress
   // bar and the plan status pill all update instantly — same as PlanDetailPanel.
-  const storeTasks = useInboxStore((s) => s.tasks);
   const teamMembers = useInboxStore((s) => s.teamMembers);
   const currentUser = useInboxStore((s) => s.currentUser);
-  const storePlans = useInboxStore((s) => s.plans);
+  // The one plan row the address names (by id or short id), not the whole
+  // plans collection.
+  const cachedRow = useInboxStore((s) => (id ? ((lookup(s.plans, id) as any) ?? null) : null));
+  // The plan's own tasks, woken only by a change to one of them.
+  const planTaskIds = useMemo(
+    () => ((queryPlan as any)?.tasks?.map((t: any) => String(t._id)) ?? (cachedRow?.task_ids ?? []).map(String)) as string[],
+    [queryPlan, cachedRow],
+  );
+  const storeTasks = usePlanStoreTasks(planTaskIds);
 
   const [activeTab, setActiveTab] = useState<PlanTab>("overview");
 
@@ -151,14 +155,13 @@ export default function PlanDetailPage() {
   // answer is an access verdict — never masked by cache.
   const plan = useMemo(() => {
     if (queryPlan !== undefined || !id) return queryPlan;
-    const cachedRow = findEntityInStore({ plans: storePlans }, "plan", id) as any;
     if (!cachedRow) return undefined;
     const tasks = (cachedRow.task_ids ?? [])
       .map((tid: any) => storeTasks[String(tid)])
       .filter((t: any) => t && !t.parent_id)
       .map((t: any) => ({ ...t, activeSession: null }));
     return { ...cachedRow, tasks };
-  }, [queryPlan, id, storePlans, storeTasks]);
+  }, [queryPlan, id, cachedRow, storeTasks]);
 
   const liveTasks = useMemo(
     () => mergeLiveTasks((plan as any)?.tasks, storeTasks, teamMembers as any[], currentUser as any),
@@ -168,12 +171,11 @@ export default function PlanDetailPage() {
     if (!Array.isArray(liveTasks)) return (plan as any)?.progress;
     return { ...((plan as any)?.progress || {}), ...computePlanProgress(liveTasks) };
   }, [liveTasks, plan]);
-  const storePlan = useMemo(() => {
+  // The store row for the plan on screen (the route id, else the snapshot's ids).
+  const storePlan = useInboxStore((s) => {
     if (!plan) return undefined;
-    return Object.values(storePlans).find(
-      (p: any) => p.short_id === plan.short_id || p._id === plan._id
-    ) as any;
-  }, [plan, storePlans]);
+    return (lookup(s.plans, plan._id) ?? (plan.short_id ? lookup(s.plans, plan.short_id) : undefined)) as any;
+  });
   const liveStatus = storePlan?.status ?? plan?.status;
 
   // The charter (org-staffing.md S7): the store row first, so an inline edit
@@ -256,6 +258,22 @@ export default function PlanDetailPage() {
               <PlanOriginSession plan={plan} className="mb-3" />
               <RepositoryLinks planId={plan._id} sessions={plan.sessions || []} conversationIds={plan.conversation_ids || []} />
               <CharterBlock kind="plan" title={plan.title} charter={charter} canEdit onChange={handleCharterChange} roles={charterRoles} className="mt-2" />
+              {/* The plan's bar for done, in the body where it is read, not behind the Info toggle. */}
+              {plan.acceptance_criteria?.length > 0 && (
+                <div className="mt-3">
+                  <h3 className="text-xs font-medium text-sol-text-dim uppercase tracking-wider mb-1">
+                    Acceptance Criteria
+                  </h3>
+                  <ul className="text-sm text-sol-text-muted space-y-0.5">
+                    {plan.acceptance_criteria.map((c: string, i: number) => (
+                      <li key={i} className="flex items-start gap-2">
+                        <span className="text-sol-text-dim mt-0.5">-</span>
+                        <span>{c}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </>
           }
           topBarLeft={
@@ -291,21 +309,6 @@ export default function PlanDetailPage() {
                   <span>Updated {formatDate(plan.updated_at)}</span>
                 )}
               </div>
-              {plan.acceptance_criteria?.length > 0 && (
-                <div className="mt-3">
-                  <h3 className="text-xs font-medium text-sol-text-dim uppercase tracking-wider mb-1">
-                    Acceptance Criteria
-                  </h3>
-                  <ul className="text-sm text-sol-text-muted space-y-0.5">
-                    {plan.acceptance_criteria.map((c: string, i: number) => (
-                      <li key={i} className="flex items-start gap-2">
-                        <span className="text-sol-text-dim mt-0.5">-</span>
-                        <span>{c}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
               {(() => {
                 const refs = (plan.comments || []).filter((e: any) => e.type === "reference");
                 return refs.length > 0 ? (
@@ -332,7 +335,7 @@ export default function PlanDetailPage() {
           )}
 
           {(plan as any).workflow_id && !(plan as any).workflow_run_id && (
-            <StartWorkflowButton workflowId={(plan as any).workflow_id} planId={plan._id} />
+            <StartWorkflowButton workflowId={(plan as any).workflow_id} planId={plan._id} planTitle={plan.title} />
           )}
 
           {(plan as any).workflow_run_id && (
@@ -358,7 +361,7 @@ export default function PlanDetailPage() {
                       : "text-sol-text-dim border-transparent hover:text-sol-text-muted"
                   }`}
                 >
-                  <Icon className={`w-3.5 h-3.5 ${key === "orchestration" && hasActiveSessions ? "text-emerald-600 dark:text-emerald-400" : ""}`} />
+                  <Icon className={`w-3.5 h-3.5 ${key === "orchestration" && hasActiveSessions ? "text-sol-green" : ""}`} />
                   {label}
                   {key === "orchestration" && hasActiveSessions && (
                     <LivenessDot state="active" size="xs" />

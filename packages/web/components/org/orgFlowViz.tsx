@@ -83,23 +83,23 @@ export function RoleWeekBody({ f, days, headless }: { f: RoleFlow; days: string[
       {!headless && <div className="flex items-center gap-2 min-w-0">
         <RoleFace role={f.role} size={26} className="shrink-0" />
         <span className="min-w-0 flex-1 truncate text-[14px] leading-tight font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{f.role.name}</span>
-        <span className="shrink-0 text-[10.5px] font-semibold" style={{ color: f.color }}>{f.statusWord}</span>
+        <span className="shrink-0 text-meta font-semibold" style={{ color: f.color }}>{f.statusWord}</span>
       </div>}
       <div className="flex items-end gap-3">
         <span className="flex items-baseline gap-1.5 tabular-nums">
           <span className="text-[26px] leading-none font-semibold" style={{ color: FLOW_TONE.reached }}>{f.wakesTotal}</span>
-          <span className="text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}>in</span>
+          <span className="text-meta" style={{ color: "var(--sol-text-dim)" }}>in</span>
           <span className="text-[15px] leading-none mx-0.5" style={{ color: "var(--sol-text-dim)" }}>→</span>
           <span className="text-[26px] leading-none font-semibold" style={{ color: FLOW_TONE.closed }}>{f.doneTotal}</span>
-          <span className="text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}>closed</span>
+          <span className="text-meta" style={{ color: "var(--sol-text-dim)" }}>closed</span>
         </span>
         <span className="ml-auto"><InOutBars inn={f.wakes} out={f.done} days={days} width={62} height={26} /></span>
       </div>
       <div className="flex flex-wrap gap-1 min-h-[18px]">
         {signals.length === 0 ? (
-          <span className="text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}>keeping up</span>
+          <span className="text-meta" style={{ color: "var(--sol-text-dim)" }}>keeping up</span>
         ) : signals.slice(0, 3).map((s) => (
-          <span key={s.key} className="inline-flex items-center h-[18px] px-1.5 rounded text-[10.5px] font-medium" style={{ background: `color-mix(in srgb, ${s.tone} 14%, transparent)`, color: s.tone }} data-week-signal={s.key}>{s.text}</span>
+          <span key={s.key} className="inline-flex items-center h-[18px] px-1.5 rounded text-meta font-medium" style={{ background: `color-mix(in srgb, ${s.tone} 14%, transparent)`, color: s.tone }} data-week-signal={s.key}>{s.text}</span>
         ))}
       </div>
     </div>

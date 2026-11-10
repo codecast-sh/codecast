@@ -1,47 +1,68 @@
-import { useMemo } from "react";
+import { useMemo, useRef, useState } from "react";
 import { inferHomeDir } from "../lib/utils";
 import { namedAbsolutePaths } from "../lib/filePathLinks";
 import { typedPollAnswerTexts } from "../lib/pollPayload";
 import type { SentFileData } from "../components/tools/SentFileBlock";
 import type { ImageData, Message, ToolResult } from "../components/conversation/types";
 import type { ConversationData } from "../components/conversation/types";
+import { ToolCallMemo, keepIfSameRecord, sameElements } from "./toolCallMemo";
+
+// Every tool result by its call id, with the typed answer of a declined poll.
+export function toolResultMapOf(messages: readonly Message[]): Record<string, ToolResult> {
+  const map: Record<string, ToolResult> = {};
+  for (const msg of messages) {
+    if (msg.tool_results) {
+      for (const tr of msg.tool_results) {
+        map[tr.tool_use_id] = tr;
+      }
+    }
+  }
+  for (const [id, typed_answer] of Object.entries(typedPollAnswerTexts(messages))) {
+    if (map[id]) map[id] = { ...map[id], typed_answer };
+  }
+  return map;
+}
+
+// A result carrying a typed answer is a fresh copy on every pass; it is the
+// same result when every field is.
+function sameToolResult(a: ToolResult, b: ToolResult): boolean {
+  if (a === b) return true;
+  if (a.typed_answer === undefined || b.typed_answer === undefined) return false;
+  const keys = Object.keys(a) as Array<keyof ToolResult>;
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((k) => Object.prototype.hasOwnProperty.call(b, k) && Object.is(a[k], b[k]));
+}
+
+/**
+ * The absolute paths the transcript's tool calls name, sorted, one per line:
+ * namedAbsolutePaths over every call input, with each call's paths memoized
+ * so a streamed update parses only the calls it added or changed.
+ */
+export function knownPathsKeyOf(messages: readonly Message[], home: string | undefined, memo: ToolCallMemo<string[]>): string {
+  memo.begin(home);
+  const out = new Set<string>();
+  for (const msg of messages) {
+    for (const tc of msg.tool_calls ?? []) {
+      for (const p of memo.get(tc, (call) => namedAbsolutePaths([call.input], home))) out.add(p);
+    }
+  }
+  memo.end();
+  return [...out].sort().join("\n");
+}
 
 export function useToolResultMaps({ conversation, codeRepository, pullRequestIds }: {
   conversation: ConversationData | null | undefined;
   codeRepository: string | null;
   pullRequestIds?: ReadonlySet<string>;
 }) {
-  const toolCallMap = useMemo(() => {
-    const map: Record<string, string> = {};
-    const sources = [conversation?.messages].filter(Boolean) as Message[][];
-    for (const msgs of sources) {
-      for (const msg of msgs) {
-        if (msg.tool_calls) {
-          for (const tc of msg.tool_calls) {
-            map[tc.id] = tc.name;
-          }
-        }
-      }
-    }
-    return map;
-  }, [conversation?.messages]);
-
+  // Each map keeps its identity across a pass that changed nothing in it: every
+  // AssistantBlock takes the image and file maps (and, condensed, the result
+  // map) as props, so a fresh map per streamed update re-rendered them all.
+  const toolResultMapRef = useRef<Record<string, ToolResult> | undefined>(undefined);
   const globalToolResultMap = useMemo(() => {
-    const map: Record<string, ToolResult> = {};
-    const sources = [conversation?.messages].filter(Boolean) as Message[][];
-    for (const msgs of sources) {
-      for (const msg of msgs) {
-        if (msg.tool_results) {
-          for (const tr of msg.tool_results) {
-            map[tr.tool_use_id] = tr;
-          }
-        }
-      }
-      for (const [id, typed_answer] of Object.entries(typedPollAnswerTexts(msgs))) {
-        if (map[id]) map[id] = { ...map[id], typed_answer };
-      }
-    }
-    return map;
+    const next = keepIfSameRecord(toolResultMapRef.current, toolResultMapOf(conversation?.messages ?? []), sameToolResult);
+    toolResultMapRef.current = next;
+    return next;
   }, [conversation?.messages]);
 
   // Tool images live on the tool_result message, not the assistant message
@@ -51,29 +72,33 @@ export function useToolResultMaps({ conversation, codeRepository, pullRequestIds
   // Sent files (SendUserFile) ride the same index, for the same reason: a
   // condensed row renders tool blocks from OTHER messages, so binding by tool
   // id is what keeps a folded delivery attached to its own card.
+  const mediaMapsRef = useRef<{ globalImageMap: Record<string, ImageData[]>; globalFileMap: Record<string, SentFileData[]> } | undefined>(undefined);
   const { globalImageMap, globalFileMap } = useMemo(() => {
     const map: Record<string, ImageData[]> = {};
     const fileMap: Record<string, SentFileData[]> = {};
-    const sources = [conversation?.messages].filter(Boolean) as Message[][];
-    for (const msgs of sources) {
-      for (const msg of msgs) {
-        if (msg.images) {
-          for (const img of msg.images) {
-            if (img.tool_use_id) {
-              (map[img.tool_use_id] ??= []).push(img);
-            }
+    for (const msg of conversation?.messages ?? []) {
+      if (msg.images) {
+        for (const img of msg.images) {
+          if (img.tool_use_id) {
+            (map[img.tool_use_id] ??= []).push(img);
           }
         }
-        if (msg.files) {
-          for (const file of msg.files) {
-            if (file.tool_use_id) {
-              (fileMap[file.tool_use_id] ??= []).push(file);
-            }
+      }
+      if (msg.files) {
+        for (const file of msg.files) {
+          if (file.tool_use_id) {
+            (fileMap[file.tool_use_id] ??= []).push(file);
           }
         }
       }
     }
-    return { globalImageMap: map, globalFileMap: fileMap };
+    const prev = mediaMapsRef.current;
+    const next = {
+      globalImageMap: keepIfSameRecord(prev?.globalImageMap, map, sameElements),
+      globalFileMap: keepIfSameRecord(prev?.globalFileMap, fileMap, sameElements),
+    };
+    mediaMapsRef.current = next;
+    return next;
   }, [conversation?.messages]);
 
   // toolCallId → page URL + tab id for every `cast browser` row, carrying the
@@ -89,13 +114,11 @@ export function useToolResultMaps({ conversation, codeRepository, pullRequestIds
   const filePathBase = conversation?.project_path || conversation?.git_root || undefined;
   const gitRoot = conversation?.git_root || null;
   const home = inferHomeDir([filePathBase]);
-  const knownPathsKey = useMemo(() => {
-    const inputs: string[] = [];
-    for (const msg of conversation?.messages ?? []) {
-      for (const tc of msg.tool_calls ?? []) inputs.push(tc.input);
-    }
-    return namedAbsolutePaths(inputs, home).join("\n");
-  }, [conversation?.messages, home]);
+  const [knownPathsMemo] = useState(() => new ToolCallMemo<string[]>());
+  const knownPathsKey = useMemo(
+    () => knownPathsKeyOf(conversation?.messages ?? [], home, knownPathsMemo),
+    [conversation?.messages, home, knownPathsMemo],
+  );
   const filePathCtx = useMemo(
     () => ({
       base: filePathBase,

@@ -10,6 +10,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useLocalAuth } from "../../lib/localAuth";
 import { useEmailAuth } from "../../hooks/useEmailAuth";
 import { Button } from "../../components/ui/button";
+import { safeReturnTo } from "../login/returnTo";
 
 function SignUpForm() {
   const { isAuthenticated, isLoading } = useConvexAuth();
@@ -17,7 +18,7 @@ function SignUpForm() {
   const searchParams = useSearchParams();
   const returnTo = searchParams.get("return_to");
   // A new account with nowhere else to go starts in the setup flow.
-  const redirectTo = returnTo ? decodeURIComponent(returnTo) : "/start";
+  const redirectTo = safeReturnTo(returnTo, "/start");
 
   const { email, setEmail, password, setPassword, confirmPassword, setConfirmPassword, error, loading, submit: handleSubmit, pendingVerification, verified, startOver } = useEmailAuth("signUp", redirectTo);
 
@@ -81,7 +82,9 @@ function SignUpForm() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-sol-cyan/50 focus:border-transparent transition-all"
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? "auth-error" : undefined}
                 placeholder="you@example.com"
               />
             </div>
@@ -101,7 +104,9 @@ function SignUpForm() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-sol-cyan/50 focus:border-transparent transition-all"
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? "auth-error" : undefined}
                 placeholder="Create a password"
               />
             </div>
@@ -121,14 +126,16 @@ function SignUpForm() {
                 required
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-sol-cyan/50 focus:border-transparent transition-all"
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? "auth-error" : undefined}
                 placeholder="Confirm your password"
               />
             </div>
           </div>
 
           {error && (
-            <p className="mt-4 text-sm text-red-400 text-center">{error}</p>
+            <p id="auth-error" role="alert" className="mt-4 rounded-md border border-sol-red/40 bg-sol-red/10 px-3 py-2 text-sm text-sol-text text-center">{error}</p>
           )}
 
             <Button
@@ -146,7 +153,7 @@ function SignUpForm() {
             Already have an account?{" "}
             <Link
               href={returnTo ? `/login?return_to=${encodeURIComponent(returnTo)}` : "/login"}
-              className="text-amber-400 hover:text-amber-300 font-medium transition-colors"
+              className="font-medium text-sol-text-secondary underline decoration-sol-orange/70 underline-offset-2 hover:text-sol-text hover:decoration-sol-orange transition-colors"
             >
               Sign In
             </Link>

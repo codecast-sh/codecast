@@ -221,7 +221,7 @@ export function TabBar() {
               onDragStart={(e) => startPaneDrag(e, { path: tab.path, title, from: { kind: "tab", tabId: tab.id } })}
               title={title}
               className={`
-                group relative flex items-center gap-1.5 pl-2.5 pr-1.5 h-[25px] rounded-md text-[11px] leading-none
+                group relative flex items-center gap-1.5 pl-2.5 pr-1.5 h-[26px] rounded-md text-meta leading-none
                 max-w-[220px] min-w-[76px] flex-shrink-0 transition-colors duration-100
                 ${
                   isActive

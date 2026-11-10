@@ -260,7 +260,7 @@ export function SettingsOptionGroup({
               <>
                 <div className={cn("text-sm font-medium", active && "text-sol-cyan")}>{opt.label}</div>
                 {opt.description && <div className="mt-0.5 text-xs leading-snug opacity-70">{opt.description}</div>}
-                {opt.mono && <div className="mt-1 font-mono text-[10px] opacity-50">{opt.mono}</div>}
+                {opt.mono && <div className="mt-1 font-mono text-meta opacity-50">{opt.mono}</div>}
               </>
             ) : (
               opt.label
@@ -269,6 +269,37 @@ export function SettingsOptionGroup({
         );
       })}
     </div>
+  );
+}
+
+export type SettingsBadgeTone = "neutral" | "muted" | "cyan" | "green" | "yellow" | "red" | "violet";
+
+const BADGE_TONE: Record<SettingsBadgeTone, string> = {
+  neutral: "bg-sol-bg-alt text-sol-text-dim",
+  muted: "bg-sol-bg-alt text-sol-text-muted",
+  cyan: "bg-sol-cyan/10 text-sol-cyan",
+  green: "bg-sol-green/10 text-sol-green",
+  yellow: "bg-sol-yellow/10 text-sol-yellow",
+  red: "bg-sol-red/10 text-sol-red",
+  violet: "bg-sol-violet/10 text-sol-violet",
+};
+
+/** A small state pill inside a row: a plan, "managed", "installed", "read
+ *  only", whose a shared account is. One shape for the same kind of fact in
+ *  every panel; the tone is the only thing a panel picks. */
+export function SettingsBadge({
+  tone = "neutral",
+  className,
+  children,
+  ...rest
+}: { tone?: SettingsBadgeTone; className?: string; children: React.ReactNode } & Omit<
+  React.HTMLAttributes<HTMLSpanElement>,
+  "className" | "children"
+>) {
+  return (
+    <span className={cn("inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-meta", BADGE_TONE[tone], className)} {...rest}>
+      {children}
+    </span>
   );
 }
 

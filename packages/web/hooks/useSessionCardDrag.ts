@@ -34,7 +34,7 @@ export function useSessionCardDrag({
     e.dataTransfer.effectAllowed = "move";
     onPaneDragStart?.(e, title);
     const ghost = document.createElement("div");
-    ghost.className = "flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-sol-bg text-sol-text border border-sol-cyan/60 shadow-xl";
+    ghost.className = "flex items-center gap-1.5 px-2.5 py-1 rounded-full text-meta font-medium bg-sol-bg text-sol-text border border-sol-cyan/60 shadow-xl";
     ghost.style.cssText = "position:fixed;top:-1000px;left:-1000px;max-width:220px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;z-index:9999";
     const dot = document.createElement("span");
     dot.className = `w-1.5 h-1.5 rounded-full flex-shrink-0 ${getLabelColor(project).dot}`;

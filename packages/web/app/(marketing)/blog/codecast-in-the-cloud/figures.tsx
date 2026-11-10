@@ -126,7 +126,7 @@ export function TravelFigure() {
             {STAYS.map(([s, why], i) => (
               <li key={s} className="bj-rise flex items-baseline justify-between gap-3 text-[12.5px] leading-snug" style={t(0.9 + i * 0.1, undefined, { color: SOL.base01 })}>
                 <span>{s}</span>
-                <span className="shrink-0 text-[11px] px-1.5 py-px rounded" style={{ backgroundColor: SOL.base2, color: SOL.base00 }}>{why}</span>
+                <span className="shrink-0 text-meta px-1.5 py-px rounded" style={{ backgroundColor: SOL.base2, color: SOL.base00 }}>{why}</span>
               </li>
             ))}
           </ul>

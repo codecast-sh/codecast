@@ -7,6 +7,7 @@ import { isConvexId } from "../lib/entityLinks";
 import type { ChatMember } from "../lib/chatViews";
 
 import { useWatchEffect } from "./useWatchEffect";
+import { memberListSig } from "./useTeamRoster";
 // Typing presence, client half. Deliberately OUTSIDE the store: these rows
 // live for seconds, nothing persists them, and their only reader is the
 // composer strip of the channel on screen. Running them through syncTable/IDB
@@ -104,12 +105,15 @@ export function useTypingMembers(
     return () => clearInterval(t);
   }, [rowCount]);
 
+  // The roster's identity fields (what the strip renders), not the array a
+  // teammate's presence moves about once a minute each.
   const s = useTrackedStore([
-    (st: any) => st.teamMembers,
+    (st: any) => memberListSig(st.teamMembers),
     (st: any) => st.currentUser?._id,
   ]);
   const viewerId = String(s.currentUser?._id ?? "");
   const members: ChatMember[] = s.teamMembers ?? [];
+  const rosterSig = memberListSig(members);
 
   const wantKey = threadRootId ?? "";
   const cutoff = Date.now() - TYPING_TTL_MS;
@@ -132,6 +136,6 @@ export function useTypingMembers(
     return ids
       .split(",")
       .map((id) => byId.get(id) ?? ({ _id: id } as ChatMember));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ids, members]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- rosterSig stands in for the churny roster
+  }, [ids, rosterSig]);
 }

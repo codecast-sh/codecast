@@ -17,10 +17,10 @@
 .lwg-lane[data-half="fix"] { fill: color-mix(in srgb, var(--lw-person) 5%, var(--lw-card)); fill-opacity: .6; }
 .lwg-lane-title { font-family: var(--lw-ui); font-weight: 800; font-size: 26px; letter-spacing: -.03em; fill: var(--lw-ink); }
 .lwg-lane-sub { font-family: var(--lw-mono); font-size: 12px; font-variant-numeric: tabular-nums; fill: var(--lw-ink-3); }
-.lwg-stage { font-family: var(--lw-ui); font-size: 11.5px; font-weight: 700; fill: var(--lw-ink-2); letter-spacing: .02em; }
+.lwg-stage { font-family: var(--lw-ui); font-size: var(--fs-meta); font-weight: 700; fill: var(--lw-ink-2); letter-spacing: .02em; }
 .lwg-terminus circle { fill: var(--lw-ink); }
 .lwg-terminus .lwg-terminus-ring { fill: none; stroke: var(--lw-ink); stroke-width: 1.4; }
-.lwg-terminus text { font-family: var(--lw-ui); font-size: 11.5px; fill: var(--lw-ink-2); font-weight: 600; }
+.lwg-terminus text { font-family: var(--lw-ui); font-size: var(--fs-meta); fill: var(--lw-ink-2); font-weight: 600; }
 
 /* ── edges ─────────────────────────────────────────────────────────────── */
 
@@ -135,11 +135,11 @@
 .lwg-node[data-on-run][data-dot] .lwg-shape { fill: var(--lw-agent); stroke: var(--lw-agent); }
 /* A step whose closes did not hold (BackBadge): the Timeline's "Came back" red, so the two read as one fact. */
 .lwg-back rect { fill: color-mix(in srgb, var(--lw-bad) 22%, var(--lw-paper)); stroke: color-mix(in srgb, var(--lw-bad) 70%, transparent); stroke-width: 1; }
-.lwg-back text { fill: var(--lw-bad); font: 700 11px var(--lw-ui); }
+.lwg-back text { fill: var(--lw-bad); font: 700 var(--fs-meta) var(--lw-ui); }
 .lwg-order rect { fill: var(--lw-agent); }
-.lwg-order text { fill: var(--lw-on-accent); font: 700 10px var(--lw-ui); }
+.lwg-order text { fill: var(--lw-on-accent); font: 700 var(--fs-meta) var(--lw-ui); }
 .lwg-order .lwg-times { fill: var(--lw-ink); }
-.lwg-order .lwg-times-t { fill: var(--lw-paper); font: 700 9.5px var(--lw-ui); }
+.lwg-order .lwg-times-t { fill: var(--lw-paper); font: 700 var(--fs-meta) var(--lw-ui); }
 .lwg-node[data-dim] { opacity: .18; }
 .lwg-node[data-soft] { opacity: .42; }
 /* A step the stage edge cuts through: faded to a trace, named on the edge arrow instead. After dim and soft, which it overrides. */
@@ -254,7 +254,8 @@
 
 /* The tooltip: dark, quick, out of the pointer's way. */
 .lwg-tip {
-  position: fixed; z-index: 60; max-width: 300px; padding: 8px 10px; border-radius: 8px; pointer-events: none;
+  /* Absolute in .lwg (a size container would hold a fixed box anyway), placed from the pointer by tipStyle. */
+  position: absolute; z-index: 60; max-width: min(300px, calc(100% - 16px)); padding: 8px 10px; border-radius: 8px; pointer-events: none;
   background: var(--lw-ink); color: var(--lw-paper); font-size: var(--lw-fs-xs); line-height: 1.45;
   box-shadow: 0 8px 24px rgba(0, 0, 0, .18); animation: lwg-fade 120ms var(--lw-ease) both;
 }
@@ -288,7 +289,7 @@
    else's. The badge opens the step's Waiting list. */
 .lwg-wait { cursor: pointer; }
 .lwg-wait rect { fill: var(--lw-card); stroke: var(--lw-rule); stroke-width: 1; }
-.lwg-wait text { fill: var(--lw-ink-2); font: 700 11px var(--lw-ui); }
+.lwg-wait text { fill: var(--lw-ink-2); font: 700 var(--fs-meta) var(--lw-ui); }
 .lwg-wait[data-mine] rect { fill: var(--lw-person); stroke: none; }
 .lwg-wait[data-mine] text { fill: var(--lw-on-accent); }
 .lwg-wait:hover rect { filter: brightness(1.08); }
@@ -303,7 +304,7 @@
    out, the edges' funnel) shows on hover and on the open step, so the graph reads as where work is now. */
 .lwg-live rect { fill: color-mix(in srgb, var(--lw-live) 16%, var(--lw-card)); stroke: color-mix(in srgb, var(--lw-live) 55%, transparent); stroke-width: 1; }
 .lwg-live circle { fill: var(--lw-live); }
-.lwg-live text { fill: var(--lw-ink); font: 700 11px var(--lw-ui); font-variant-numeric: tabular-nums; }
+.lwg-live text { fill: var(--lw-ink); font: 700 var(--fs-meta) var(--lw-ui); font-variant-numeric: tabular-nums; }
 .lwg-live[data-stalled] rect { fill: color-mix(in srgb, var(--lw-bad) 18%, var(--lw-card)); stroke: color-mix(in srgb, var(--lw-bad) 60%, transparent); }
 .lwg-live[data-stalled] circle { fill: var(--lw-bad); }
 .lwg-canvas[data-live] .lwg-exits,

@@ -151,14 +151,14 @@ function GenericAnswerControls({
   // is already proceeding with on an advisory ask.
   const tags = (i: number) => (
     <>
-      {recommendation === i && <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-cyan/40 text-sol-cyan">recommended</span>}
-      {decision.default_option === i && !decision.blocking && <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">{ANSWER_WORDS.proceeding}</span>}
+      {recommendation === i && <span className="text-meta px-1.5 py-0.5 rounded border border-sol-cyan/40 text-sol-cyan">recommended</span>}
+      {decision.default_option === i && !decision.blocking && <span className="text-meta px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">{ANSWER_WORDS.proceeding}</span>}
     </>
   );
   const openOther = () => { setOtherOpen(true); setTimeout(() => otherRef.current?.focus(), 0); };
 
   const dismissBtn = onDismiss && (
-    <button onClick={onDismiss} className="flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-red transition-colors" title="Dismiss without answering — the agent is not told">
+    <button onClick={onDismiss} className="flex items-center gap-1.5 text-meta text-sol-text-dim hover:text-sol-red transition-colors" title="Dismiss without answering — the agent is not told">
       {keys && <KeyCap size="xs">x</KeyCap>}<span>Dismiss</span>
     </button>
   );
@@ -200,7 +200,7 @@ function GenericAnswerControls({
               </span>
             )}
           />
-          <div className="flex items-center gap-3 pt-1">{submitBtn}<span className="text-[11px] text-sol-text-dim">{picked.length} picked</span></div>
+          <div className="flex items-center gap-3 pt-1">{submitBtn}<span className="text-meta text-sol-text-dim">{picked.length} picked</span></div>
         </div>
       );
     }
@@ -213,7 +213,7 @@ function GenericAnswerControls({
             options={ordered}
             compact={compact}
             tags={(pos) => tags(order[pos])}
-            leading={(pos) => <span className="font-mono text-[11px] text-sol-text-dim w-5">{pos + 1}.</span>}
+            leading={(pos) => <span className="font-mono text-meta text-sol-text-dim w-5">{pos + 1}.</span>}
             trailing={(pos) => (
               <>
                 <button onClick={() => move(pos, -1)} disabled={pos === 0} className="p-1 rounded hover:bg-sol-card disabled:opacity-30" title="Move up"><ArrowUp className="w-3.5 h-3.5" /></button>
@@ -221,7 +221,7 @@ function GenericAnswerControls({
               </>
             )}
           />
-          <div className="flex items-center gap-3 pt-1">{submitBtn}<span className="text-[11px] text-sol-text-dim">first is most preferred</span></div>
+          <div className="flex items-center gap-3 pt-1">{submitBtn}<span className="text-meta text-sol-text-dim">first is most preferred</span></div>
         </div>
       );
     }
@@ -231,7 +231,7 @@ function GenericAnswerControls({
       <div className="space-y-2.5">
         {fields.map((f) => (
           <label key={f.key} className="block">
-            <span className="block text-[11px] uppercase tracking-wide text-sol-text-dim mb-1">{f.label}</span>
+            <span className="block text-mark uppercase tracking-wide text-sol-text-dim mb-1">{f.label}</span>
             {f.type === "bool" ? (
               <button onClick={() => setValue(f.key, (v) => !v)} className="flex items-center gap-2 text-sm text-sol-text">
                 {values[f.key] ? <CheckSquare className="w-4 h-4 text-sol-yellow" /> : <Square className="w-4 h-4 text-sol-text-dim" />}
@@ -271,14 +271,14 @@ function GenericAnswerControls({
               if (e.key === "Escape") setOtherOpen(false);
             }}
           />
-          <div className="flex items-center gap-2 mt-1 text-[11px] text-sol-text-dim">
+          <div className="flex items-center gap-2 mt-1 text-meta text-sol-text-dim">
             <button onClick={answerText} className="flex items-center gap-1 hover:text-sol-text"><KeyCap size="xs">return</KeyCap><span>send</span></button>
             <button onClick={() => setOtherOpen(false)} className="flex items-center gap-1 hover:text-sol-text"><KeyCap size="xs">esc</KeyCap><span>cancel</span></button>
           </div>
         </div>
       )}
       {dismissBtn && (
-        <div className="mt-3 flex items-center gap-4 text-[11px] text-sol-text-dim">
+        <div className="mt-3 flex items-center gap-4 text-meta text-sol-text-dim">
           {canPass && <PassDecision decisionId={decision._id} open={passOpen} onOpenChange={setPassOpen} keys={keys} />}
           {dismissBtn}
         </div>
@@ -307,7 +307,7 @@ export function DecisionRecordedAnswer({ decision }: { decision: Pick<SessionDec
     <ol className="space-y-1">
       {list.map((i, pos) => (
         <li key={i} className="flex items-center gap-2 text-sm text-sol-text">
-          {kind === "rank" ? <span className="font-mono text-[11px] text-sol-text-dim w-5">{pos + 1}.</span> : <Check className="w-3.5 h-3.5 text-sol-green" />}
+          {kind === "rank" ? <span className="font-mono text-meta text-sol-text-dim w-5">{pos + 1}.</span> : <Check className="w-3.5 h-3.5 text-sol-green" />}
           <span>{decision.options[i]?.label ?? `option ${i + 1}`}</span>
         </li>
       ))}

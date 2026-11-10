@@ -147,7 +147,7 @@ function GuestConversationView({
     end: (
       <a
         href={`/login?return_to=${encodeURIComponent(window.location.pathname + window.location.search)}`}
-        className="ml-1 text-[11px] font-medium px-2.5 py-0.5 rounded-full bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 transition-colors whitespace-nowrap"
+        className="ml-1 text-meta font-medium px-2.5 py-0.5 rounded-full bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 transition-colors whitespace-nowrap"
       >
         Sign in
       </a>

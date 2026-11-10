@@ -157,7 +157,7 @@ function TaskCombineDialog({ source, target, onClose }: {
         <div className="text-sm font-medium text-sol-text mb-3">Combine tasks</div>
         <div className="space-y-1.5 mb-4">
           <TaskMiniCard task={source} />
-          <div className="flex items-center gap-1.5 pl-2 text-[10px] text-sol-text-dim uppercase tracking-wide">
+          <div className="flex items-center gap-1.5 pl-2 text-mark text-sol-text-dim uppercase tracking-wide">
             <CornerDownRight className="w-3 h-3" /> dropped onto
           </div>
           <TaskMiniCard task={target} />
@@ -171,7 +171,7 @@ function TaskCombineDialog({ source, target, onClose }: {
             <CornerDownRight className="w-3.5 h-3.5 text-sol-cyan mt-0.5 flex-shrink-0" />
             <span className="min-w-0">
               <span className="block text-xs font-medium text-sol-text">Add as subtask</span>
-              <span className="block text-[11px] text-sol-text-muted">
+              <span className="block text-meta text-sol-text-muted">
                 {source.short_id} files under {target.short_id}; both stay open.
               </span>
             </span>
@@ -183,7 +183,7 @@ function TaskCombineDialog({ source, target, onClose }: {
             <Copy className="w-3.5 h-3.5 text-sol-text-muted mt-0.5 flex-shrink-0" />
             <span className="min-w-0">
               <span className="block text-xs font-medium text-sol-text">Mark as duplicate</span>
-              <span className="block text-[11px] text-sol-text-muted">
+              <span className="block text-meta text-sol-text-muted">
                 {source.short_id} is dropped and linked to {target.short_id} as the original.
               </span>
             </span>
@@ -203,6 +203,9 @@ function TaskCombineDialog({ source, target, onClose }: {
 }
 
 const COLUMN_DRAG_TYPE = "application/x-codecast-kanban-column";
+// A column mounts this many cards, then a "Show more" footer: every card holds
+// several store subscriptions, and Done or Backlog can hold thousands.
+const KANBAN_COLUMN_PAGE = 50;
 
 function KanbanView({
   statuses,
@@ -239,6 +242,8 @@ function KanbanView({
   const [dragging, setDragging] = useState<string | null>(null);
   const [draggingCol, setDraggingCol] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<string | null>(null);
+  // How many cards each column shows (KANBAN_COLUMN_PAGE until "Show more").
+  const [columnLimits, setColumnLimits] = useState<Record<string, number>>({});
 
   const onDragStart = useCallback((e: React.DragEvent, shortId: string) => {
     e.dataTransfer.setData("text/plain", shortId);
@@ -318,6 +323,8 @@ function KanbanView({
           const cfg = statusVisual(col, statuses);
           const Icon = cfg.icon;
           const tasks = grouped[status] || [];
+          const limit = columnLimits[status] ?? KANBAN_COLUMN_PAGE;
+          const shown = tasks.length > limit ? tasks.slice(0, limit) : tasks;
           return (
             <div
               key={status}
@@ -336,26 +343,28 @@ function KanbanView({
               >
                 <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${cfg.color}`} />
                 <span className="text-sm font-medium text-sol-text">{cfg.label}</span>
-                <span className="text-[11px] text-sol-text-dim tabular-nums">{tasks.length}</span>
+                <span className="text-meta text-sol-text-dim tabular-nums">{tasks.length}</span>
                 <div className="ml-auto flex items-center">
                   <button
                     onClick={() => onToggleHidden(status)}
                     title="Hide column"
-                    className="w-6 h-6 flex items-center justify-center rounded hover:bg-sol-bg-alt text-sol-text-dim/50 hover:text-sol-text-dim transition-colors"
+                    aria-label={`Hide ${cfg.label} column`}
+                    className="w-6 h-6 flex items-center justify-center rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text transition-colors"
                   >
                     <EyeOff className="w-3 h-3" />
                   </button>
                   <button
                     onClick={() => onAddTask(status)}
                     title="Add task"
-                    className="w-6 h-6 flex items-center justify-center rounded hover:bg-sol-bg-alt text-sol-text-dim/50 hover:text-sol-text-dim transition-colors"
+                    aria-label="Add task"
+                    className="w-6 h-6 flex items-center justify-center rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text transition-colors"
                   >
                     <Plus className="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>
               <div className="flex-1 overflow-y-auto space-y-2 pr-1">
-                {tasks.map((task) => (
+                {shown.map((task) => (
                   <KanbanCard
                     key={task._id}
                     task={task}
@@ -368,8 +377,16 @@ function KanbanView({
                     parentChip={parentChipFor?.(task)}
                   />
                 ))}
+                {tasks.length > shown.length && (
+                  <button
+                    onClick={() => setColumnLimits((m) => ({ ...m, [status]: limit + KANBAN_COLUMN_PAGE }))}
+                    className="w-full py-2 text-meta text-sol-text-dim hover:text-sol-text rounded hover:bg-sol-bg-alt transition-colors"
+                  >
+                    Show {Math.min(KANBAN_COLUMN_PAGE, tasks.length - shown.length)} more · {tasks.length - shown.length} hidden
+                  </button>
+                )}
                 {tasks.length === 0 && (
-                  <div className="text-[11px] text-sol-text-dim/40 text-center py-6">No tasks</div>
+                  <div className="text-meta text-sol-text-dim text-center py-6">No tasks</div>
                 )}
               </div>
             </div>
@@ -379,7 +396,7 @@ function KanbanView({
 
       {hiddenWithTasks.length > 0 && (
         <div className="w-44 border-l border-sol-border/20 px-3 py-4 flex-shrink-0 flex flex-col gap-1">
-          <p className="text-[10px] text-sol-text-dim uppercase tracking-widest mb-2 font-medium">Hidden columns</p>
+          <p className="text-mark text-sol-text-dim uppercase tracking-widest mb-2 font-medium">Hidden columns</p>
           {hiddenWithTasks.map((col) => {
             const cfg = statusVisual(col, statuses);
             const Icon = cfg.icon;
@@ -391,7 +408,7 @@ function KanbanView({
               >
                 <Icon className={`w-3 h-3 flex-shrink-0 ${cfg.color}`} />
                 <span className="flex-1 truncate">{cfg.label}</span>
-                <span className="text-[10px] text-sol-text-dim tabular-nums">{grouped[col.id]?.length || 0}</span>
+                <span className="text-meta text-sol-text-dim tabular-nums">{grouped[col.id]?.length || 0}</span>
               </button>
             );
           })}
@@ -594,6 +611,17 @@ export type TaskListScope = { projectIds: string[]; planIds: string[] };
 
 const RUNS_FEED_ARGS = { limit: 200 };
 
+// Stable list callbacks: inline ones made GenericListView rebuild its row
+// model, focus map and drop maps on every render of the page.
+const taskItemId = (t: TaskItem) => t._id;
+const taskSearchText = (t: TaskItem) => `${t.short_id} ${t.title}`;
+const taskComposeRef = (t: TaskItem) => t.short_id;
+const renderTaskPreview = (t: TaskItem, onClose: () => void, onOpen: () => void) => (
+  <ErrorBoundary name="TaskPeek" level="panel">
+    <TaskDetailContent taskId={t._id} variant="inline" onClose={onClose} onOpen={onOpen} />
+  </ErrorBoundary>
+);
+
 export function TaskListContent({ projectId, scope }: { projectId?: string; scope?: TaskListScope } = {}) {
   const router = useRouter();
   const params = useParams();
@@ -615,7 +643,6 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // wakes on the signature of those answers, not on every task write.
   const blockerSig = useInboxStore(useCallback((s) => readySig(wsTasks, s.tasks), [wsTasks]));
   const projects = useInboxStore((s) => s.projects);
-  const taskActiveSessions = useInboxStore((s) => s.taskActiveSessions);
   const taskOriginBadges = useInboxStore((s) => s.taskOriginBadges);
   const showCreate = useInboxStore((s) => s.createModal === 'task');
   const openCreateModal = useInboxStore((s) => s.openCreateModal);
@@ -643,6 +670,11 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
     const url = buildShareUrl();
     return projectId ? url.replace("/tasks", `/projects/${projectId}`) : url;
   }, [buildShareUrl, projectId]);
+  // A project's list opens its tasks inside the project.
+  const taskRoute = useCallback(
+    (t: TaskItem) => (projectId ? `/projects/${projectId}/${t._id}` : `/tasks/${t._id}`),
+    [projectId],
+  );
 
   // One status selection, two controls over it (the preset pills and the Status
   // filter). `status` holds it: "" is the default (active work), "all" is
@@ -885,23 +917,28 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
   // heartbeat-churned taskActiveSessions map only forces recompute when this
   // filter is actually engaged (otherwise the base list passes through by
   // reference and downstream groupings stay stable).
-  const taskHasSession = useCallback(
-    (t: TaskItem) => !!taskActiveSessions[t._id] || !!t.origin_session || (t.session_count ?? 0) > 0,
-    [taskActiveSessions]
-  );
-  const filteredTasks = useMemo(() => {
-    const base = (sessionFilter !== "has" && sessionFilter !== "none")
-      ? baseFilteredTasks
-      : baseFilteredTasks.filter(sessionFilter === "has" ? taskHasSession : (t) => !taskHasSession(t));
-    // Derive assignee_info from the live roster so an optimistic re-assignment
-    // (updateTask sets only the raw `assignee` id) shows the right person
-    // instantly. Keep the same task reference when nothing changed so the
-    // downstream sort/group memos stay referentially stable.
-    return base.map((t) => {
+  // The page subscribes to that map only while the filter is engaged: every
+  // session push replaces it, and an unconditional read re-filtered, re-sorted
+  // and re-grouped the whole list on each one.
+  const sessionFiltering = sessionFilter === "has" || sessionFilter === "none";
+  const taskActiveSessions = useInboxStore((s) => (sessionFiltering ? s.taskActiveSessions : null));
+  // Derive assignee_info from the live roster so an optimistic re-assignment
+  // (updateTask sets only the raw `assignee` id) shows the right person
+  // instantly. Keep the same task reference when nothing changed so the
+  // downstream sort/group memos stay referentially stable.
+  const assigneeResolvedTasks = useMemo(() => {
+    const out = baseFilteredTasks.map((t) => {
       const info = resolveAssigneeInfo(t.assignee, t.assignee_info, teamMembers as any[], currentUser, orgRoles);
       return sameAssigneeInfo(info, t.assignee_info) ? t : ({ ...t, assignee_info: info } as TaskItem);
     });
-  }, [baseFilteredTasks, sessionFilter, taskHasSession, teamMembers, currentUser, orgRoles]);
+    // Nothing re-derived: hand the base list on by reference.
+    return out.every((t, i) => t === baseFilteredTasks[i]) ? baseFilteredTasks : out;
+  }, [baseFilteredTasks, teamMembers, currentUser, orgRoles]);
+  const filteredTasks = useMemo(() => {
+    if (!sessionFiltering || !taskActiveSessions) return assigneeResolvedTasks;
+    const taskHasSession = (t: TaskItem) => !!taskActiveSessions[t._id] || !!t.origin_session || (t.session_count ?? 0) > 0;
+    return assigneeResolvedTasks.filter(sessionFilter === "has" ? taskHasSession : (t) => !taskHasSession(t));
+  }, [assigneeResolvedTasks, sessionFiltering, sessionFilter, taskActiveSessions]);
 
   // One comparator drives both the flat list and within-group ordering, so the
   // chosen sort field + direction applies everywhere. Ties fall back to a stable
@@ -1227,7 +1264,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           }
           activeItemId={(projectId ? params?.taskId : params?.id) as string | undefined}
           paletteTargetType="task"
-          getComposeRef={(t) => t.short_id}
+          getComposeRef={taskComposeRef}
           title={projectId ? "Project tasks" : scope ? "Tasks in scope" : "Tasks"}
           tabs={[
             // The answers worth a click: the live work, what can start now,
@@ -1347,14 +1384,10 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           flatItems={displayFlat}
           disableKeyboard={showCreate}
           renderRow={renderTaskRow}
-          renderPreview={(t, onClose, onOpen) => (
-            <ErrorBoundary name="TaskPeek" level="panel">
-              <TaskDetailContent taskId={t._id} variant="inline" onClose={onClose} onOpen={onOpen} />
-            </ErrorBoundary>
-          )}
-          getItemId={(t) => t._id}
-          getItemRoute={(t) => (projectId ? `/projects/${projectId}/${t._id}` : `/tasks/${t._id}`)}
-          getSearchText={(t) => `${t.short_id} ${t.title}`}
+          renderPreview={renderTaskPreview}
+          getItemId={taskItemId}
+          getItemRoute={taskRoute}
+          getSearchText={taskSearchText}
           emptyIcon={statusFilter === UNBLOCKED_VIEW ? <CirclePlay className="w-8 h-8 opacity-30" /> : <Circle className="w-8 h-8 opacity-30" />}
           emptyMessage={
             // An empty Unblocked view is an answer, not a broken filter, unless
@@ -1391,7 +1424,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           }}
           displayExtra={
             <div>
-              <div className="text-[10px] uppercase tracking-wider text-sol-text-dim px-1 mb-1">View</div>
+              <div className="text-mark uppercase tracking-wider text-sol-text-dim px-1 mb-1">View</div>
               <SegmentedToggle
                 fullWidth
                 value={viewMode}
@@ -1406,7 +1439,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
           contextMenuContent={(items) => (
             <TaskMenuItems
               tasks={items}
-              onOpen={(t) => router.push(projectId ? `/projects/${projectId}/${t._id}` : `/tasks/${t._id}`)}
+              onOpen={(t) => router.push(taskRoute(t))}
             />
           )}
           customContent={viewMode === "kanban" ? ({ openContextMenuForItems }) => (
@@ -1422,7 +1455,7 @@ export function TaskListContent({ projectId, scope }: { projectId?: string; scop
                 if (next.has(s)) next.delete(s); else next.add(s);
                 return next;
               })}
-              onCardClick={(t) => router.push(`/tasks/${t._id}`)}
+              onCardClick={(t) => router.push(taskRoute(t))}
               onContextMenu={(e, task) => openContextMenuForItems(e, [task])}
               onAddTask={() => openCreateModal('task', projectId ? { project_id: projectId } : undefined)}
               onStatusChange={(task, newStatusKey) => {

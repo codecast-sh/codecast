@@ -43,7 +43,7 @@ function ProgressBar({ progress }: { progress?: { total: number; done: number; i
           <div className="bg-sol-yellow transition-all" style={{ width: `${ipPct}%` }} />
         </div>
       </div>
-      <span className="text-[10px] text-sol-text-dim tabular-nums whitespace-nowrap">
+      <span className="text-meta text-sol-text-dim tabular-nums whitespace-nowrap">
         {progress.done}/{progress.total}
       </span>
     </div>
@@ -53,10 +53,10 @@ function ProgressBar({ progress }: { progress?: { total: number; done: number; i
 function StatCard({ label, value, color, sub }: { label: string; value: number; color: string; sub?: string }) {
   return (
     <div className="px-3 py-2.5 rounded-lg bg-sol-bg-alt/50">
-      <div className="text-[10px] text-sol-text-dim uppercase tracking-wider mb-0.5">{label}</div>
+      <div className="text-mark text-sol-text-dim uppercase tracking-wider mb-0.5">{label}</div>
       <div className="flex items-baseline gap-1.5">
         <span className={`text-xl font-semibold tabular-nums ${color}`}>{value}</span>
-        {sub && <span className="text-[10px] text-sol-text-dim">{sub}</span>}
+        {sub && <span className="text-meta text-sol-text-dim">{sub}</span>}
       </div>
     </div>
   );
@@ -77,12 +77,12 @@ function PlanCard({ plan }: { plan: any }) {
       <div className="flex items-center gap-2 mb-1.5">
         <CircleDot className={`w-3.5 h-3.5 flex-shrink-0 ${isActive ? "text-sol-cyan" : "text-sol-text-dim"}`} />
         <span className="text-sm text-sol-text font-medium truncate">{plan.title}</span>
-        <ShortId id={plan.short_id} className="text-[10px] text-sol-text-dim ml-auto" />
+        <ShortId id={plan.short_id} className="text-meta text-sol-text-dim ml-auto" />
       </div>
 
       {hasProgress && <ProgressBar progress={progress} />}
 
-      <div className="flex items-center gap-3 mt-1.5 text-[10px] text-sol-text-dim">
+      <div className="flex items-center gap-3 mt-1.5 text-meta text-sol-text-dim">
         {hasProgress && (
           <>
             <span className="flex items-center gap-0.5">
@@ -109,14 +109,14 @@ function ActiveAgentCard({ task }: { task: any }) {
   return (
     <Link
       href={`/conversation/${task.activeSession.session_id}`}
-      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500/8 border border-emerald-500/20 hover:bg-emerald-500/15 transition-colors group"
+      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-sol-green/[0.06] border border-sol-green/20 hover:bg-sol-green/15 transition-colors group"
     >
       <LivenessDot state="active" size="sm" />
       <ShortId id={task.short_id} className="text-xs text-sol-text-dim" />
-      <span className="text-xs text-emerald-300/80 truncate group-hover:text-emerald-200 transition-colors">
+      <span className="text-xs text-sol-green truncate group-hover:text-sol-text transition-colors">
         {task.title}
       </span>
-      <ExternalLink className="w-2.5 h-2.5 text-emerald-400/40 group-hover:text-emerald-400/80 ml-auto flex-shrink-0 transition-colors" />
+      <ExternalLink className="w-2.5 h-2.5 text-sol-green/60 group-hover:text-sol-green ml-auto flex-shrink-0 transition-colors" />
     </Link>
   );
 }
@@ -213,14 +213,14 @@ export function OrchestrationDashboard({ className }: OrchestrationDashboardProp
   return (
     <div className={className}>
       <div className={`rounded-lg border overflow-hidden mb-6 ${
-        hasActiveWork ? "border-emerald-500/30 bg-emerald-950/8" : "border-sol-border/20 bg-sol-bg-alt/15"
+        hasActiveWork ? "border-sol-green/30 bg-sol-green/[0.04]" : "border-sol-border/20 bg-sol-bg-alt/15"
       }`}>
         <div className="px-4 py-3 flex items-center gap-2 border-b border-sol-border/10">
-          <Zap className={`w-4 h-4 ${hasActiveWork ? "text-emerald-400" : "text-sol-text-dim"}`} />
-          <span className={`text-xs font-semibold uppercase tracking-wider ${hasActiveWork ? "text-emerald-400" : "text-sol-text-dim"}`}>
+          <Zap className={`w-4 h-4 ${hasActiveWork ? "text-sol-green" : "text-sol-text-dim"}`} />
+          <span className={`text-xs font-semibold uppercase tracking-wider ${hasActiveWork ? "text-sol-green" : "text-sol-text-dim"}`}>
             Orchestration Overview
           </span>
-          {hasActiveWork && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
+          {hasActiveWork && <span className="w-1.5 h-1.5 rounded-full bg-sol-green" />}
         </div>
 
         <div className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -239,7 +239,7 @@ export function OrchestrationDashboard({ className }: OrchestrationDashboardProp
       {stats.activeAgents.length > 0 && (
         <div className="mb-6">
           <h3 className="flex items-center gap-2 text-xs font-semibold text-sol-text-dim uppercase tracking-wider mb-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className="w-2 h-2 rounded-full bg-sol-green" />
             Active Agents ({stats.activeAgents.length})
           </h3>
           <div className="grid gap-2">
@@ -258,11 +258,11 @@ export function OrchestrationDashboard({ className }: OrchestrationDashboardProp
           </h3>
           <div className="space-y-1.5">
             {stats.blockedTasks.map((t: any) => (
-              <div key={t._id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-sol-red/5 border border-sol-red/15">
+              <Link key={t._id} href={`/tasks/${t.short_id ?? t._id}`} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-sol-red/5 border border-sol-red/15 hover:bg-sol-red/10 transition-colors">
                 <TaskStatusBadge status={t.execution_status} type="execution" />
                 <ShortId id={t.short_id} className="text-xs text-sol-text-dim" />
                 <span className="text-xs text-sol-text truncate">{t.title}</span>
-              </div>
+              </Link>
             ))}
           </div>
         </div>

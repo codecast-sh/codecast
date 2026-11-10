@@ -32,7 +32,7 @@ const CODEX_SEND_3 = `Live backlog fully recovered after reload: all 27 stuck fi
 function Message({ from, to, children }: { from: string; to: string; children: ReactNode }) {
   return (
     <div className="rounded-xl border my-6 overflow-hidden" style={{ borderColor: SOL.base2, backgroundColor: SOL.base3 }}>
-      <div className="px-4 py-2 font-mono text-[11px] uppercase tracking-wider" style={{ color: SOL.base1, borderBottom: `1px solid ${SOL.base2}` }}>
+      <div className="px-4 py-2 font-mono text-mark uppercase tracking-wider" style={{ color: SOL.base1, borderBottom: `1px solid ${SOL.base2}` }}>
         Message from {from} <span aria-hidden>&rarr;</span> {to}
       </div>
       <p className="px-4 py-3 text-[15px] leading-7 whitespace-pre-wrap" style={{ color: SOL.base01 }}>{children}</p>

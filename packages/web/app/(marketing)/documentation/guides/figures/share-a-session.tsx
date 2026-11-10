@@ -24,7 +24,7 @@ export function ShareNeedsFigure() {
         <div className="grid gap-1.5" style={{ gridTemplateColumns: "1.25fr repeat(4, 1fr)" }}>
           <div />
           {TOOLS.map((tool, i) => (
-            <div key={tool} className="text-[11px] font-bold px-2 pb-1 bj-fade" style={{ ...t(0.1 + i * 0.08), color: i === 3 ? SOL.cyan : SOL.base02 }}>{tool}</div>
+            <div key={tool} className="text-meta font-bold px-2 pb-1 bj-fade" style={{ ...t(0.1 + i * 0.08), color: i === 3 ? SOL.cyan : SOL.base02 }}>{tool}</div>
           ))}
           {NEEDS.map((row, r) => (
             <div key={row.need} className="contents">
@@ -32,7 +32,7 @@ export function ShareNeedsFigure() {
               {row.cells.map((cell, c) => (
                 <div
                   key={c}
-                  className={`rounded-md px-2 py-2 text-[10.5px] leading-snug ${cell ? "bj-pop" : "bj-fade"}`}
+                  className={`rounded-md px-2 py-2 text-meta leading-snug ${cell ? "bj-pop" : "bj-fade"}`}
                   style={{
                     ...t(0.6 + r * 0.5 + c * 0.1),
                     backgroundColor: cell ? (c === 3 ? `${SOL.cyan}1a` : `${SOL.green}14`) : "transparent",

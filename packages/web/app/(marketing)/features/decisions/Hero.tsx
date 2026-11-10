@@ -90,7 +90,7 @@ function Swap({ t, before, after }: { t: number; before: ReactNode; after: React
 export function SessionsPanel() {
   return (
     <div className="dq-in rounded-xl border overflow-hidden" style={at(0.5, { borderColor: LINE, backgroundColor: "rgba(253,246,227,.7)" })}>
-      <div className="px-4 h-9 flex items-center border-b text-[11px] font-mono" style={{ borderColor: LINE, color: DIM }}>
+      <div className="px-4 h-9 flex items-center border-b text-meta font-mono" style={{ borderColor: LINE, color: DIM }}>
         your sessions
       </div>
       <ul>
@@ -106,11 +106,11 @@ export function SessionsPanel() {
             </span>
             <span className="min-w-0 flex-1">
               <span className="block text-[13px] truncate" style={{ color: TEXT }}>{s.title}</span>
-              <span className="block text-[11.5px]" style={{ color: MUTED }}>
+              <span className="block text-meta" style={{ color: MUTED }}>
                 {s.t !== undefined ? <Swap t={s.t} before={s.waiting} after={s.after} /> : s.waiting}
               </span>
             </span>
-            {i === 2 && <span className="mt-0.5 text-[10px] font-mono shrink-0" style={{ color: Y }}>on top</span>}
+            {i === 2 && <span className="mt-0.5 text-meta font-mono shrink-0" style={{ color: Y }}>on top</span>}
           </li>
         ))}
       </ul>

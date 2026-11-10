@@ -49,7 +49,7 @@ export function CopyButton({ get, label = "Copy", className = "", withLabel, hel
       disabled={!!held}
       title={held ?? (words || (gated ? `${label} with Touch ID` : label))}
       aria-label={label}
-      className={`inline-flex h-6 shrink-0 items-center justify-center rounded text-[11px] transition-[color,background-color,transform] duration-150 active:scale-[0.94] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 ${withLabel ? "px-1.5" : "w-6"} ${held ? "text-sol-text-dim" : state === "copied" ? "text-sol-green" : state === "failed" ? "text-sol-red" : "text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text"} ${className}`}
+      className={`inline-flex h-6 shrink-0 items-center justify-center rounded text-meta transition-[color,background-color,transform] duration-150 active:scale-[0.94] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 ${withLabel ? "px-1.5" : "w-6"} ${held ? "text-sol-text-dim" : state === "copied" ? "text-sol-green" : state === "failed" ? "text-sol-red" : "text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text"} ${className}`}
       data-vault-copy
     >
       <span aria-hidden className="grid [&>*]:col-start-1 [&>*]:row-start-1">
@@ -70,7 +70,7 @@ export function CommandDisclosure({ label, text, ...rest }: { label: string; tex
   return (
     <div className="min-w-0" {...rest}>
       <div className="flex items-center gap-1">
-        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-[11.5px] text-sol-text-dim hover:text-sol-text">
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="inline-flex items-center gap-1 rounded px-1 py-0.5 text-meta text-sol-text-dim hover:text-sol-text">
           <ChevronRight size={12} className={`transition-transform duration-[120ms] ease-out ${open ? "rotate-90" : ""}`} />
           {label}
         </button>
@@ -171,7 +171,7 @@ export function MaskedField({
       ) : (
         <span className="flex min-w-0 items-baseline gap-2 pt-0.5 font-mono text-[12.5px]">
           <span className="tracking-[0.15em] text-sol-text-dim">{DOTS}</span>
-          {hint ? <span className="truncate text-[11px] text-sol-text-muted">{hint}</span> : null}
+          {hint ? <span className="truncate text-meta text-sol-text-muted">{hint}</span> : null}
         </span>
       )}
     </Row>
@@ -331,7 +331,7 @@ export function TotpCode({ seed, fetchSeed, fetching, held, gated }: { seed: str
               <circle cx={10} cy={10} r={r} fill="none" stroke="var(--sol-border)" strokeWidth={2.5} />
               <circle cx={10} cy={10} r={r} fill="none" stroke={tone} strokeWidth={2.5} strokeDasharray={c} strokeDashoffset={c * (1 - frac)} strokeLinecap="round" style={{ transition: now.refill ? "none" : "stroke-dashoffset 1s linear" }} />
             </svg>
-            <span className="w-5 text-[11px] tabular-nums text-sol-text-dim">{now.remaining}s</span>
+            <span className="w-5 text-meta tabular-nums text-sol-text-dim">{now.remaining}s</span>
           </>
         )}
       </span>
@@ -367,7 +367,7 @@ export function FieldProblem({ issue, className = "mt-0.5" }: { issue: string | 
   if (!issue) return null;
   const { problem, why } = typeof issue === "string" ? { problem: issue, why: undefined } : issue;
   return (
-    <div className={`text-[11.5px] text-sol-red ${className}`} data-vault-field-problem>
+    <div className={`text-meta text-sol-red ${className}`} data-vault-field-problem>
       {problem}
       {why ? (
         <TooltipProvider delayDuration={150}>
@@ -377,7 +377,7 @@ export function FieldProblem({ issue, className = "mt-0.5" }: { issue: string | 
                 <CircleHelp size={12} />
               </button>
             </TooltipTrigger>
-            <TooltipContent side="bottom" className="max-w-[18rem] border border-sol-border/60 bg-sol-bg-alt px-2 py-1 text-[11px] text-sol-text shadow-md">
+            <TooltipContent side="bottom" className="max-w-[18rem] border border-sol-border/60 bg-sol-bg-alt px-2 py-1 text-meta text-sol-text shadow-md">
               {why}
             </TooltipContent>
           </Tooltip>
@@ -392,7 +392,7 @@ export function FieldProblem({ issue, className = "mt-0.5" }: { issue: string | 
 export function ScopeMark({ row, teamName, className = "", quietTeam = false }: { row: SecretMeta; teamName?: string; className?: string; quietTeam?: boolean }) {
   const team = row.workspace.startsWith("team:");
   return (
-    <span className={`inline-flex min-w-0 items-center gap-1 text-[11px] ${team && quietTeam ? "text-sol-text-dim" : "text-sol-text-muted"} ${className}`} title={team ? "Every agent in the team" : "Only you and your agents"} data-vault-scope-mark={team ? "team" : "personal"}>
+    <span className={`inline-flex min-w-0 items-center gap-1 text-meta ${team && quietTeam ? "text-sol-text-dim" : "text-sol-text-muted"} ${className}`} title={team ? "Every agent in the team" : "Only you and your agents"} data-vault-scope-mark={team ? "team" : "personal"}>
       {team ? <Users size={11} className="shrink-0" /> : <UserRound size={11} className="shrink-0" />}
       <span className="truncate">{team ? teamName ?? "Team" : "Only me"}</span>
     </span>
@@ -415,7 +415,7 @@ export function ScopeTag({ row }: { row: SecretMeta }) {
  */
 export function RequestHead({ row, kind, name, fallback, compact = false }: { row?: SecretMeta; kind: SecretKind; name: ReactNode; fallback?: ReactNode; compact?: boolean }) {
   const asker = row && (
-    <span className={`flex min-w-0 shrink items-center gap-1.5 text-[11.5px] text-sol-text-muted ${compact ? "mt-0.5 pl-[34px]" : "ml-auto"}`} data-vault-request-asker>
+    <span className={`flex min-w-0 shrink items-center gap-1.5 text-meta text-sol-text-muted ${compact ? "mt-0.5 pl-[34px]" : "ml-auto"}`} data-vault-request-asker>
       {row.requested_from_conversation ? (
         <span className="min-w-0 truncate">
           <EntityIdPill id={row.requested_from_conversation} type="session" wide />
@@ -433,11 +433,11 @@ export function RequestHead({ row, kind, name, fallback, compact = false }: { ro
         <div className="flex min-h-6 min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5" data-vault-request-head>
           {name}
           <span className="flex min-w-0 flex-[1_1_15rem] items-center gap-2">
-            <span className="shrink-0 text-[11.5px] text-sol-text-dim">{KIND[kind].short}</span>
+            <span className="shrink-0 text-meta text-sol-text-dim">{KIND[kind].short}</span>
             {row ? (
               <>
                 <ScopeTag row={row} />
-                {row.env?.length && !compact ? <span className="hidden min-w-0 truncate font-mono text-[11px] text-sol-text-dim sm:inline">{row.env.join(" ")}</span> : null}
+                {row.env?.length && !compact ? <span className="hidden min-w-0 truncate font-mono text-meta text-sol-text-dim sm:inline">{row.env.join(" ")}</span> : null}
                 {compact ? null : asker}
               </>
             ) : fallback ? (

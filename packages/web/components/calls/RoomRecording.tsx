@@ -162,7 +162,7 @@ export function CallCardRecordingMark({ tell = false, inert = false }: { tell?: 
         >
           <RecordingMark size="dot" status={status} by={by} shared={!!live?.video_shared} />
           {telling === runId && live && (
-            <span className="whitespace-nowrap font-mono text-[10px] text-sol-text-secondary" role="status">
+            <span className="whitespace-nowrap font-mono text-meta text-sol-text-secondary" role="status">
               {firstName(live.started_by.name)} is recording
             </span>
           )}
@@ -385,7 +385,7 @@ function RecordConfirm({
         <button
           type="button"
           onClick={onCancel}
-          className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 font-mono text-[11.5px] text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text"
+          className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 font-mono text-meta text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text"
         >
           Cancel <KeyCap size="xs">Esc</KeyCap>
         </button>
@@ -572,7 +572,7 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
           />
           <div className="min-w-0 flex-1">
             <div className="font-mono text-[12px] text-sol-text">{words.title}</div>
-            {words.body && <div className="mt-0.5 text-[11.5px] leading-snug text-sol-text-muted">{words.body}</div>}
+            {words.body && <div className="mt-0.5 text-meta leading-snug text-sol-text-muted">{words.body}</div>}
             {(href || sticky) && (
               <div className="mt-2 flex items-center gap-1.5">
                 {again && (
@@ -582,7 +582,7 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
                       setShown(null);
                       void setRoomRecording(roomKey, true);
                     }}
-                    className="rounded-md bg-sol-red/15 px-2 py-0.5 font-mono text-[11px] text-sol-red transition-colors hover:bg-sol-red/25"
+                    className="rounded-md bg-sol-red/15 px-2 py-0.5 font-mono text-meta text-sol-red transition-colors hover:bg-sol-red/25"
                     title="Start recording this huddle again. Everyone in it is told"
                   >
                     Record again
@@ -595,7 +595,7 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
                       setShown(null);
                       openCall(href);
                     }}
-                    className="rounded-md bg-white/[0.06] px-2 py-0.5 font-mono text-[11px] text-sol-text transition-colors hover:bg-white/10"
+                    className="rounded-md bg-white/[0.06] px-2 py-0.5 font-mono text-meta text-sol-text transition-colors hover:bg-white/10"
                     title="Open the call page at the recording"
                   >
                     Open
@@ -605,7 +605,7 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
                   <button
                     type="button"
                     onClick={() => setShown(null)}
-                    className="rounded-md px-2 py-0.5 font-mono text-[11px] text-sol-text-muted transition-colors hover:bg-white/10 hover:text-sol-text"
+                    className="rounded-md px-2 py-0.5 font-mono text-meta text-sol-text-muted transition-colors hover:bg-white/10 hover:text-sol-text"
                   >
                     Dismiss
                   </button>
@@ -617,14 +617,14 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
                 <button
                   type="button"
                   onClick={() => setShown(null)}
-                  className="rounded-md bg-white/[0.06] px-2 py-0.5 font-mono text-[11px] text-sol-text transition-colors hover:bg-white/10"
+                  className="rounded-md bg-white/[0.06] px-2 py-0.5 font-mono text-meta text-sol-text transition-colors hover:bg-white/10"
                 >
                   Got it
                 </button>
                 <button
                   type="button"
                   onClick={() => setShown({ ...shown, mode: "confirm" })}
-                  className="rounded-md px-2 py-0.5 font-mono text-[11px] text-sol-text-muted transition-colors hover:bg-sol-red/10 hover:text-sol-red"
+                  className="rounded-md px-2 py-0.5 font-mono text-meta text-sol-text-muted transition-colors hover:bg-sol-red/10 hover:text-sol-red"
                 >
                   {STOP_RECORDING_ASK.stop}
                 </button>

@@ -44,12 +44,15 @@ import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { problemListName } from "../../lib/line/problemTable";
 import { outcomeLineInWords } from "../../lib/line/stepWork";
 import { overviewWindow } from "../../lib/line/problemsOverview";
-import { RAISE_PICKS, limitsHit, raiseLimitsLedger, raisedLimits, trialRunLimit, trialStationName, type TrialLimits } from "../../lib/line/trialStopLedgers";
-import { SwitchReview } from "../consequential/ConsequentialSwitch";
+import { RAISE_PICKS, limitsHit, newApproachLedger, raiseLimitsLedger, raisedLimits, trialRunLimit, trialStationName, type TrialLimits } from "../../lib/line/trialStopLedgers";
+import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
+import { useRunCost } from "../consequential/useRunCost";
+import type { RunCost } from "../consequential/lineStartLedger";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { TrialStopActs, approachFailed, useStationReport } from "./TrialStopActs";
 import { TrialHeldLink } from "./TrialHeldLink";
 import { Button } from "../ui/button";
+import { ShareControl } from "../ShareControl";
 
 type Filter = "waiting" | "tooling" | "held" | "running" | "empty" | "failed" | "stopped" | "answered" | "closed" | "all" | "superseded";
 
@@ -252,13 +255,14 @@ function TrialReview({ askedProject, from, spaces, scope, onPick, onNoTrial }: {
           {/* A trial read outside the app's workspace names whose it is. */}
           {elsewhere && spaces.length < 2 && <span className="text-[12px] text-sol-text-dim" data-trial-workspace>{elsewhere}</span>}
         </div>
-        {owed && <span className="rounded border border-sol-yellow/40 px-1.5 py-0.5 text-[11px] text-sol-yellow" title="The trial never runs a change's evals: they write to the database they point at. A card that owes them says so beside its answer." data-trial-evals>Evals not run in the trial</span>}
+        {owed && <span className="rounded border border-sol-yellow/40 px-1.5 py-0.5 text-meta text-sol-yellow" title="The trial never runs a change's evals: they write to the database they point at. A card that owes them says so beside its answer." data-trial-evals>Evals not run in the trial</span>}
         {/* Whether the dispatcher is held and by which limit, the act that lifts it, and the spend against its cap. */}
         <TrialLimitsBar spend={spend} project={project} held={dispatchHeld} heldHref={project ? `/flows?view=problems&status=notstarted&project=${encodeURIComponent(lineFilterParam(project, projects))}` : null} />
       </header>
 
       <div className="flex min-h-0 flex-1">
-        <aside className="flex w-[20rem] shrink-0 flex-col border-r border-sol-border/40" data-trial-list>
+        {/* A share of the page, not a fixed 20rem: opened in a split pane beside a conversation, the card keeps most of it. */}
+        <aside className="flex w-[clamp(13rem,38%,20rem)] shrink-0 flex-col border-r border-sol-border/40" data-trial-list>
           <div className="px-3 py-2" role="tablist">
             {/* Card tabs, which add up to All; then runs that ended with no card and replaced cards, which All does not hold. */}
             {[CARD_TABS, OTHER_TABS].map((tabs, i) => {
@@ -298,22 +302,22 @@ function TrialReview({ askedProject, from, spaces, scope, onPick, onNoTrial }: {
                   <span className="min-w-0">
                     {/* The problem by the one name every list gives it (problemListName); the fix it proposes under it. */}
                     <span className="line-clamp-2 text-[12.5px] leading-snug text-sol-text" data-trial-problem>{problemListName({ title: c.task_title, name: c.task_name })}</span>
-                    {(c.card?.headline || c.proposal?.question) && <span className="mt-0.5 block truncate text-[11.5px] text-sol-text-muted" data-trial-fix>{c.card?.headline || c.proposal?.question}</span>}
-                    <span className="mt-1 flex items-center gap-1.5 text-[11px] text-sol-text-dim">
+                    {(c.card?.headline || c.proposal?.question) && <span className="mt-0.5 block truncate text-meta text-sol-text-muted" data-trial-fix>{c.card?.headline || c.proposal?.question}</span>}
+                    <span className="mt-1 flex items-center gap-1.5 text-meta text-sol-text-dim">
                       <span className="shrink-0 font-mono">{c.short_id}</span>
                       {!c.superseded && <RowVerdict card={c} />}
                       {!c.superseded && <RowSize card={c} counted={sizes.get(c.task_id)?.size ?? 0} />}
                       <RowState card={c} />
                     </span>
                   </span>
-                  <span className="text-[11px] tabular-nums text-sol-text-dim">{formatTimeAgo(c.created_at, now)}</span>
+                  <span className="text-meta tabular-nums text-sol-text-dim">{formatTimeAgo(c.created_at, now)}</span>
                 </button>
                 {/* The same problem's earlier cards, newest first: each opens, and none reads as the current one. */}
                 {earlier.length > 0 && (
                   <ul className="pb-1.5 pl-8 pr-3" data-trial-earlier>
                     {earlier.map((x) => (
                       <li key={x._id}>
-                        <button type="button" onClick={() => openCard(x)} className={cn("flex w-full items-center gap-1.5 rounded px-1.5 py-0.5 text-left text-[11px] text-sol-text-dim hover:bg-sol-bg-alt/30 hover:text-sol-text", selected?._id === x._id && "bg-sol-bg-alt/60 text-sol-text")} data-trial-card={x.short_id}>
+                        <button type="button" onClick={() => openCard(x)} className={cn("flex w-full items-center gap-1.5 rounded px-1.5 py-0.5 text-left text-meta text-sol-text-dim hover:bg-sol-bg-alt/30 hover:text-sol-text", selected?._id === x._id && "bg-sol-bg-alt/60 text-sol-text")} data-trial-card={x.short_id}>
                           <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", STATE_TONE[x.status])} />
                           <span className="shrink-0 font-mono">{x.short_id}</span>
                           <span className="shrink-0">{x.kind === "card" ? "Change" : "Proposal"}</span>
@@ -353,7 +357,7 @@ function DropAll({ cards }: { cards: TrialCardRow[] }) {
   });
   if (!drops.length) return null;
   return (
-    <div className="flex items-center gap-2 border-b border-sol-border/30 px-3 pb-2 text-[11.5px] text-sol-text-dim" data-trial-drop-all>
+    <div className="flex items-center gap-2 border-b border-sol-border/30 px-3 pb-2 text-meta text-sol-text-dim" data-trial-drop-all>
       <span className="min-w-0 flex-1">No finding left behind {drops.length === 1 ? "this fix" : `these ${drops.length} fixes`}</span>
       <button
         type="button"
@@ -393,29 +397,40 @@ function FailedRunRow({ run: r, week, selected, now, onSelect }: { run: TrialRun
         className={cn("grid w-full grid-cols-[0.5rem_1fr_auto] items-start gap-x-2.5 border-l-2 px-3 py-2.5 text-left transition-colors", selected ? "border-sol-blue bg-sol-bg-alt/60" : "border-transparent hover:bg-sol-bg-alt/30")}
         data-trial-failed-run={r.task_short_id}
       >
-        <span className={cn("mt-1.5 h-2 w-2 rounded-full", failed ? "bg-sol-red" : stopped ? "bg-sol-orange" : "animate-pulse bg-sol-blue")} />
+        <span className={cn("mt-1.5 h-2 w-2 rounded-full", failed ? "bg-sol-red" : stopped ? "bg-sol-orange" : "bg-sol-blue")} />
         <span className="min-w-0">
           <span className="block truncate text-[12.5px] text-sol-text">{problemListName({ title: r.task_title, name: r.task_name })}</span>
-          <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-sol-text-dim">
+          <span className="mt-0.5 flex items-center gap-1.5 text-meta text-sol-text-dim">
             <span className={cn("shrink-0 rounded px-1", failed ? "bg-sol-red/15 text-sol-red" : stopped ? "bg-sol-orange/15 text-sol-orange" : "bg-sol-blue/15 text-sol-blue")}>{failed ? "Failed" : stopped ? "Stopped" : "Rerunning"}</span>
             <span className="shrink-0 whitespace-nowrap font-mono">{r.task_short_id}</span>
             <span className="truncate">{failed ? failWords(r.fail_reason, r.lost_at_gate) : stopped ? stopWords(r, week) : stationName(r.node_id)}</span>
           </span>
         </span>
-        <span className="text-[11px] tabular-nums text-sol-text-dim">{formatTimeAgo(r.updated_at, now)}</span>
+        <span className="text-meta tabular-nums text-sol-text-dim">{formatTimeAgo(r.updated_at, now)}</span>
       </button>
     </li>
   );
 }
 
+/** A failed run's rerun, reviewed as a stopped run's is. A run lost at its own card picks up there (trialSlice
+ *  trialRerun), the same run, so the runs-used limit does not hold it (lineTrial rerunRefusal). */
+function failedRerunLedger(r: TrialRunRow, cost: RunCost | null, runLimit: string | null): SwitchLedger {
+  const lost = r.lost_at_gate;
+  const ledger = newApproachLedger({ problem: problemListName({ title: r.task_title, name: r.task_name }), station: stationName(r.node_id), cost, blocked: lost && runLimit && /runs used/.test(runLimit) ? null : runLimit, rerun: true });
+  if (!lost) return ledger;
+  return { ...ledger, name: `Pick up at ${lost.card}`, rows: ledger.rows.flatMap((row) => (row.k === "Investigates" ? [] : row.k === "From" ? [{ k: "From", v: lost.card }] : [row])) };
+}
+
 /** A failed run: where it stopped, why, the cards it left, and the rerun (lineTrial.rerun, from a fresh branch). */
 function FailedRunPane({ run: r, week, runLimit, cards, now, onOpenCard }: { run: TrialRunRow; week: number; runLimit: string | null; cards: TrialCardRow[]; now: number; onOpenCard: (id: string) => void }) {
   const trialRerun = useInboxStore((s) => s.trialRerun);
+  const cost = useRunCost(r.project_id);
+  const [reviewing, setReviewing] = useState(false);
   const failed = r.status === "failed";
   const stop = r.stopped;
   return (
     <article className="decision-doc mx-auto max-w-5xl px-6 pb-16 pt-5" data-trial-run-pane={r.task_short_id}>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-sol-text-dim">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-sol-text-dim">
         <span className={failed ? "text-sol-red" : stop ? "text-sol-orange" : "text-sol-blue"}>{failed ? `Failed ${formatTimeAgo(r.updated_at, now)}` : stop ? `Stopped ${formatTimeAgo(r.updated_at, now)} · no card, problem still open` : `Rerunning · ${stationName(r.node_id)}`}</span>
         <Link href={`/tasks/${r.task_short_id}`} className="inline-flex items-center gap-1 hover:text-sol-text">the problem <ExternalLink className="h-3 w-3" /></Link>
         <Link href={`/workflows/runs/${r.run_id}`} className="ml-auto inline-flex items-center gap-1 opacity-70 hover:text-sol-text hover:opacity-100">the run <ExternalLink className="h-3 w-3" /></Link>
@@ -425,11 +440,13 @@ function FailedRunPane({ run: r, week, runLimit, cards, now, onOpenCard }: { run
         <section className="mt-5 flex flex-wrap items-center gap-4 rounded-md border border-sol-red/30 bg-sol-red/5 px-4 py-3">
           <div className="min-w-0 flex-1" title={r.fail_reason ?? undefined}>
             <div className="text-[13px] font-medium text-sol-text">{failWords(r.fail_reason, r.lost_at_gate)}</div>
-            {!r.lost_at_gate && r.fail_reason && failWords(r.fail_reason) !== r.fail_reason && <div className="mt-0.5 font-mono text-[11px] text-sol-text-dim">{r.fail_reason}</div>}
+            {!r.lost_at_gate && r.fail_reason && failWords(r.fail_reason) !== r.fail_reason && <div className="mt-0.5 font-mono text-meta text-sol-text-dim">{r.fail_reason}</div>}
           </div>
-          <Button type="button" variant="blue" size="sm" onClick={() => trialRerun(r._id)} data-trial-rerun={r.task_short_id}>
-            <RotateCcw className="h-3.5 w-3.5" /> {r.lost_at_gate ? `Pick up at ${r.lost_at_gate.card}` : "Rerun from main"}
+          {/* The same review a stopped run's rerun opens (TrialStopActs): it starts an agent run, so it is never one bare press. */}
+          <Button type="button" variant="blue" size="sm" onClick={() => setReviewing(true)} aria-haspopup="dialog" data-trial-rerun={r.task_short_id}>
+            <RotateCcw className="h-3.5 w-3.5" /> {r.lost_at_gate ? `Pick up at ${r.lost_at_gate.card}…` : "Rerun from main…"}
           </Button>
+          {reviewing && <SwitchReview ledger={failedRerunLedger(r, cost, runLimit)} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); trialRerun(r._id); }} />}
         </section>
       )}
       {stop && <StoppedBand run={r} week={week} runLimit={runLimit} />}
@@ -437,7 +454,7 @@ function FailedRunPane({ run: r, week, runLimit, cards, now, onOpenCard }: { run
         <ul className="mt-6 divide-y divide-sol-border/30 border-y border-sol-border/30 text-[12px]">
           {cards.map((c) => (
             <li key={c._id} className="flex items-center gap-2 py-2">
-              <span className={cn("rounded px-1 text-[11px]", c.kind === "card" ? "bg-sol-blue/15 text-sol-blue" : "bg-sol-violet/15 text-sol-violet")}>{c.kind === "card" ? "Change" : "Proposal"}</span>
+              <span className={cn("rounded px-1 text-meta", c.kind === "card" ? "bg-sol-blue/15 text-sol-blue" : "bg-sol-violet/15 text-sol-violet")}>{c.kind === "card" ? "Change" : "Proposal"}</span>
               <button type="button" onClick={() => onOpenCard(c._id)} className="min-w-0 flex-1 truncate text-left text-sol-text hover:underline">{c.card?.headline || c.question}</button>
               {c.answer && <span className={answerTone(c)}>{c.answer.label} <span className="text-sol-text-dim">{answererWords(c)}</span></span>}
               <span className="tabular-nums text-sol-text-dim">{formatTimeAgo(c.created_at, now)}</span>
@@ -498,7 +515,7 @@ function RowVerdict({ card: row }: { card: TrialCardRow }) {
   const card = cardAsRead(row);
   // The lane decides the mark: a card with nothing left reads as its drop, never as a build or a hold it no longer has.
   if (trialLane(row) === "empty") return <span className="font-medium text-sol-red" data-row-verdict="drop">{emptyWords(row)}</span>;
-  if (trialLane(row) === "running") return <span className="inline-flex items-center gap-1 font-medium text-sol-blue" data-row-hold="running"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sol-blue" />{trialHold(row)?.words}</span>;
+  if (trialLane(row) === "running") return <span className="inline-flex items-center gap-1 font-medium text-sol-blue" data-row-hold="running"><span className="h-1.5 w-1.5 rounded-full bg-sol-blue" />{trialHold(row)?.words}</span>;
   const hold = trialHold(row);
   if (hold) return <span className="font-medium text-sol-yellow" data-row-hold={hold.kind}>{hold.words}</span>;
   if (!card) {
@@ -538,14 +555,14 @@ function ProposalRow({ p, selected, now, onSelect }: { p: ExpectationProposalVie
         <span className="mt-1.5 h-2 w-2 rounded-full bg-sol-yellow" />
         <span className="min-w-0">
           <span className="line-clamp-2 text-[12.5px] leading-snug text-sol-text">{p.summary}</span>
-          <span className="mt-1 flex items-center gap-1.5 text-[11px] text-sol-text-dim">
+          <span className="mt-1 flex items-center gap-1.5 text-meta text-sol-text-dim">
             <span className="rounded bg-sol-cyan/15 px-1 text-sol-cyan">Expectations</span>
             <span className="font-mono">{p.short_id}</span>
             <span className="tabular-nums">{p.changes} {p.changes === 1 ? "change" : "changes"}</span>
             {p.refused && <span className="text-sol-orange">cannot apply</span>}
           </span>
         </span>
-        <span className="text-[11px] tabular-nums text-sol-text-dim">{formatTimeAgo(p.created_at, now)}</span>
+        <span className="text-meta tabular-nums text-sol-text-dim">{formatTimeAgo(p.created_at, now)}</span>
       </button>
     </li>
   );
@@ -555,7 +572,7 @@ function ExpectationProposalPane({ projectId, row, p }: { projectId: string; row
   const byId = useMemo(() => new Map((row.doc?.items ?? []).map((e) => [e.id, e])), [row.doc?.items]);
   return (
     <article className="decision-doc mx-auto max-w-5xl px-6 pb-16 pt-5" data-trial-proposal-pane={p.short_id}>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-sol-text-dim">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-sol-text-dim">
         <span className="text-sol-text-muted">Our review tooling: the expectations judges grade against, version {row.current_version}</span>
         <Link href={`/projects/${projectId}?tab=expectations`} className="ml-auto inline-flex items-center gap-1 opacity-70 hover:text-sol-text hover:opacity-100">all expectations <ExternalLink className="h-3 w-3" /></Link>
       </div>
@@ -576,7 +593,7 @@ function TrialLimitsBar({ spend, project, held, heldHref }: { spend: TrialSpendR
   const limits: TrialLimits | null = d && spend ? { runs: spend.runs, maxRuns: d.max_runs, spent: spend.billed.usd, cap: d.cap_usd, perRun: spend.runs ? spend.billed.run_sessions.usd / spend.runs : 0 } : null;
   const hit = limits ? limitsHit(limits) : null;
   return (
-    <div className="ml-auto flex items-center gap-4 text-[12px] tabular-nums text-sol-text-dim" data-trial-limits>
+    <div className="ml-auto flex flex-wrap items-center justify-end gap-x-4 gap-y-1 text-[12px] tabular-nums text-sol-text-dim" data-trial-limits>
       {/* The hold leads, and opens the problems it keeps waiting. */}
       {held && heldHref && project && (d ? <TrialHeldLink projectId={project._id} href={heldHref} why={held.why} /> : <Link href={heldHref} title={held.why} className="font-semibold text-sol-yellow hover:underline" data-trial-dispatch-held>{held.short}</Link>)}
       {limits?.maxRuns != null && (
@@ -616,18 +633,18 @@ function BilledFold({ spend, cap, over }: { spend: TrialSpendRow; cap: number | 
           Billed <b className={cn("font-semibold", over ? "text-sol-red" : "text-sol-text")}>{usd(b.usd)}</b>{cap != null && <> of {usd(cap)}</>}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[26rem] border-sol-border bg-sol-bg p-0 text-[12px] text-sol-text" data-trial-billed-parts>
+      <PopoverContent align="end" className="max-h-[min(70vh,32rem)] w-[26rem] max-w-[calc(100vw-2rem)] overflow-y-auto border-sol-border bg-sol-bg p-0 text-[12px] text-sol-text" data-trial-billed-parts>
         <table className="w-full tabular-nums">
           <tbody className={PART_ROWS}>
             <tr data-trial-billed-part="model">
-              <td>Model calls<div className="text-[11px] text-sol-text-dim">{m.calls.toLocaleString("en-US")} calls · judge {usd(m.by_purpose.judge)} · calls {usd(m.by_purpose.call)} · grouping {usd(m.by_purpose.grouping)}</div><div className="text-[11px] text-sol-text-dim">team budget {monthShort(m.team_budget.month)} {usd(m.team_budget.spent_usd)} of {usd(m.team_budget.cap_usd)}{m.team_budget.refused ? ` · ${m.team_budget.refused} refused` : ""}</div></td>
+              <td>Model calls<div className="text-meta text-sol-text-dim">{m.calls.toLocaleString("en-US")} calls · judge {usd(m.by_purpose.judge)} · calls {usd(m.by_purpose.call)} · grouping {usd(m.by_purpose.grouping)}</div><div className="text-meta text-sol-text-dim">team budget {monthShort(m.team_budget.month)} {usd(m.team_budget.spent_usd)} of {usd(m.team_budget.cap_usd)}{m.team_budget.refused ? ` · ${m.team_budget.refused} refused` : ""}</div></td>
               <td className="text-right align-top">{usd(m.usd)}</td>
             </tr>
             {b.keys.map((k) => (
               <tr key={k.billed_by} data-trial-billed-part={k.billed_by}>
                 <td>
                   {k.billed_by}
-                  <details className="text-[11px] text-sol-text-dim">
+                  <details className="text-meta text-sol-text-dim">
                     <summary className="cursor-pointer hover:text-sol-text">{k.entries} {k.entries === 1 ? "entry" : "entries"}</summary>
                     <ul className="mt-1 max-h-48 space-y-1 overflow-y-auto pr-1">
                       {spend.outside.filter((o) => o.billed_by === k.billed_by).map((o) => <li key={o.at} className="flex gap-2"><span className="shrink-0 text-sol-text-muted">{usd(o.usd)}</span><span className="min-w-0">{o.what}</span></li>)}
@@ -639,7 +656,7 @@ function BilledFold({ spend, cap, over }: { spend: TrialSpendRow; cap: number | 
             ))}
             {b.run_sessions.sessions > 0 && (
               <tr data-trial-billed-part="run-keys">
-                <td>Run sessions on API keys<div className="text-[11px] text-sol-text-dim">{b.run_sessions.sessions} sessions · {tokenCount(b.run_sessions.tokens)} tokens</div></td>
+                <td>Run sessions on API keys<div className="text-meta text-sol-text-dim">{b.run_sessions.sessions} sessions · {tokenCount(b.run_sessions.tokens)} tokens</div></td>
                 <td className="text-right align-top">{usd(b.run_sessions.usd)}</td>
               </tr>
             )}
@@ -671,15 +688,15 @@ function SubscriptionFold({ spend }: { spend: TrialSpendRow }) {
           Quota <b className={cn("font-semibold", quotaTone(worst))}>{worst == null ? "?" : `${Math.round(worst)}%`}</b> · {sub.sessions} sessions
         </button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-[26rem] border-sol-border bg-sol-bg p-0 text-[12px] text-sol-text" data-trial-subscription-parts>
+      <PopoverContent align="end" className="max-h-[min(70vh,32rem)] w-[26rem] max-w-[calc(100vw-2rem)] overflow-y-auto border-sol-border bg-sol-bg p-0 text-[12px] text-sol-text" data-trial-subscription-parts>
         {quota.map((q) => (
           <div key={`${q.device}:${q.provider}:${q.account}`} className="border-b border-sol-border/40 px-3 py-2" data-trial-quota={q.account}>
             <div className="flex items-baseline gap-2">
               <span className="font-medium">{q.account}</span>
-              <span className="text-[11px] text-sol-text-dim">{q.provider === "claude" ? "Claude" : "Codex"} · {q.device}</span>
-              {q.fetched_at != null && <span className="ml-auto text-[11px] text-sol-text-dim">{formatTimeAgo(q.fetched_at, now)}</span>}
+              <span className="text-meta text-sol-text-dim">{q.provider === "claude" ? "Claude" : "Codex"} · {q.device}</span>
+              {q.fetched_at != null && <span className="ml-auto text-meta text-sol-text-dim">{formatTimeAgo(q.fetched_at, now)}</span>}
             </div>
-            <div className="mt-1.5 grid grid-cols-[6.5rem_1fr_2.5rem_4rem] items-center gap-x-2 gap-y-1 text-[11px] tabular-nums">
+            <div className="mt-1.5 grid grid-cols-[6.5rem_1fr_2.5rem_4rem] items-center gap-x-2 gap-y-1 text-meta tabular-nums">
               {q.windows.map((w) => (
                 <Fragment key={w.label}>
                   <span className="text-sol-text-muted">{w.label}</span>
@@ -694,8 +711,8 @@ function SubscriptionFold({ spend }: { spend: TrialSpendRow }) {
         <table className="w-full tabular-nums">
           <tbody className={PART_ROWS}>
             <tr><td>Sessions</td><td className="text-right">{sub.sessions} in {spend.runs} runs</td></tr>
-            <tr><td>Tokens{sub.unpriced_tokens > 0 && <div className="text-[11px] text-sol-text-dim">{tokenCount(sub.unpriced_tokens)} on unpriced models</div>}</td><td className="text-right align-top">{tokenCount(sub.tokens)}</td></tr>
-            <tr className="text-sol-text-dim" data-trial-list-equivalent><td>At API list price<div className="text-[11px]">equivalent, not billed</div></td><td className="text-right align-top">{usd(sub.list_usd)}</td></tr>
+            <tr><td>Tokens{sub.unpriced_tokens > 0 && <div className="text-meta text-sol-text-dim">{tokenCount(sub.unpriced_tokens)} on unpriced models</div>}</td><td className="text-right align-top">{tokenCount(sub.tokens)}</td></tr>
+            <tr className="text-sol-text-dim" data-trial-list-equivalent><td>At API list price<div className="text-meta">equivalent, not billed</div></td><td className="text-right align-top">{usd(sub.list_usd)}</td></tr>
           </tbody>
         </table>
       </PopoverContent>
@@ -723,13 +740,14 @@ function TrialCardPane({ card: c, now, left }: { card: TrialCardRow; now: number
   return (
     <article className="decision-doc mx-auto max-w-5xl px-6 pb-16 pt-5" data-trial-pane={c.short_id}>
       {c.superseded ? <div className="mb-4 rounded-md border border-sol-border/40 bg-sol-bg-alt/50 px-3 py-2 text-[12px]" data-trial-replaced><SupersededNote superseded={c.superseded} /></div> : left && <LeftBanner card={c} left={left} now={now} />}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-sol-text-dim">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-sol-text-dim">
         <span className={waiting || c.rebuilding ? (trialLane(c) === "waiting" ? "text-sol-yellow" : "text-sol-text-muted") : c.status === "answered" ? answerTone(c) : ""}>{waiting || c.rebuilding ? PANE_STATE[trialLane(c) ?? "waiting"](c) : record}</span>
         <span className="font-mono text-sol-text-muted" data-trial-card-id>{c.short_id}</span>
         <span>asked {formatTimeAgo(c.created_at, now)}</span>
         <Link href={`/tasks/${c.task_short_id}`} className="inline-flex items-center gap-1 hover:text-sol-text" data-trial-problem>the problem <ExternalLink className="h-3 w-3" /></Link>
         {c.superseded_by?.card && <Link href={`/trial?card=${c.superseded_by.card}`} className="inline-flex items-center gap-1 text-sol-blue hover:underline" data-trial-superseded>{c.superseded_by.card}</Link>}
-        <Link href={`/workflows/runs/${c.run_id}`} className="ml-auto inline-flex items-center gap-1 opacity-70 hover:text-sol-text hover:opacity-100" title={c.card ? `${c.short_id}: built in ${c.card.cost.minutes} agent min, +${c.card.diff.added} −${c.card.diff.removed} lines in ${c.card.diff.files} files (${c.run_status})` : `${c.short_id}: the run that built it (${c.run_status})`} data-trial-run>how it was built <ExternalLink className="h-3 w-3" /></Link>
+        <ShareControl label="trial card" path={`/trial?card=${c.short_id}`} className="ml-auto" />
+        <Link href={`/workflows/runs/${c.run_id}`} className="inline-flex items-center gap-1 opacity-70 hover:text-sol-text hover:opacity-100" title={c.card ? `${c.short_id}: built in ${c.card.cost.minutes} agent min, +${c.card.diff.added} −${c.card.diff.removed} lines in ${c.card.diff.files} files (${c.run_status})` : `${c.short_id}: the run that built it (${c.run_status})`} data-trial-run>how it was built <ExternalLink className="h-3 w-3" /></Link>
       </div>
       <div className="mt-3">
         <TrialCardBody card={c} now={now} />

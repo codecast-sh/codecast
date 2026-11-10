@@ -86,18 +86,21 @@ export function SectionRow({ row, className }: { row: SectionRowSpec; className?
           row's width — otherwise the name of the row you are pointing at is the
           first thing to truncate. */}
       {row.trailing && (
-        <span className={row.actions?.length ? "flex group-hover/v:hidden" : "flex"}>
+        <span className={row.actions?.length ? "flex group-hover/v:hidden group-focus-within/v:hidden" : "flex"}>
           {row.trailing}
         </span>
       )}
       {!!row.actions?.length && (
-        <span className="hidden group-hover/v:flex items-center flex-shrink-0">
+        // Shown on hover, and while focus is in the row, so a keyboard can
+        // Tab from the row onto its actions.
+        <span className="hidden group-hover/v:flex group-focus-within/v:flex items-center flex-shrink-0">
           {row.actions.map((action) => (
             <button
               key={action.key}
               onClick={(e) => { e.stopPropagation(); action.onClick(e); }}
               className="p-1 rounded text-sol-text-dim hover:text-sol-text flex-shrink-0"
               title={action.title}
+              aria-label={action.title}
             >
               {action.icon}
             </button>
@@ -121,7 +124,7 @@ export function NavCount({ n, tone, small, kind }: { n: number; tone: string; sm
   return (
     <span
       data-sv-count={kind ?? ""}
-      className={`${small ? "min-w-[16px] h-[15px] px-1 text-[9.5px]" : "-ml-0.5 min-w-[20px] h-[20px] px-1.5 text-[11px]"} flex items-center justify-center font-bold rounded-full flex-shrink-0 ${tone}`}
+      className={`${small ? "min-w-[18px] h-[18px] px-1 text-mark" : "-ml-0.5 min-w-[20px] h-[20px] px-1.5 text-mark"} flex items-center justify-center font-bold rounded-full flex-shrink-0 ${tone}`}
     >
       {n > 99 ? "99+" : n}
     </span>

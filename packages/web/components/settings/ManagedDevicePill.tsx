@@ -12,7 +12,7 @@ export function ManagedDevicePill({ d }: { d: Device }) {
   if (!m) return null;
   const removed = m.state === "removed";
   const Icon = removed ? ShieldOff : ShieldCheck;
-  const className = `inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-[10.5px] ${
+  const className = `inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-meta ${
     removed ? "border-sol-red/30 text-sol-red" : "border-sol-cyan/30 text-sol-cyan"
   }`;
   const label = removed ? `Removed by ${m.team_name}` : `Managed by ${m.team_name}`;

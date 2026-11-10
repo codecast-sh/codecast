@@ -4,8 +4,7 @@ import { commitPageHref } from "../../../lib/repoView";
 import { commandLeavesCheckout, gitToolOutcome, type GitToolOutcome } from "../../../lib/gitToolOutcome";
 import Link from "next/link";
 import { canOpenBeside, openBrowserPane } from "../../../lib/stage";
-import { useRouter } from "next/navigation";
-import { useRef, useState, useMemo } from "react";
+import { useRef, useState, useMemo, type ReactNode } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { createPortal } from "react-dom";
 import { BrowserTabPill } from "../../browser/BrowserTabPill";
@@ -41,10 +40,11 @@ import { ChevronDown, ChevronUp, SquareCheck, Workflow, MoveHorizontal, GitCommi
 import { ImageBlock } from "./interactiveBlocks";
 import { PlanBlock } from "./planBlock";
 import { FooterIconButton, FullscreenIcon, NestedStepList } from "./shared";
+import { pressable } from "../../ops/parts";
 import { toolColorClass } from "../../../lib/conversationBlockStyles";
 import { findMatchingChild, getFileExtension, parseSpawnResult, summarizeBashCommand } from "../classify";
 import { renderAnsi, safeString } from "../../../lib/conversationFormat";
-import { MD_COMPONENTS_CODE_LINK, MD_COMPONENTS_NO_PRE } from "../../../lib/conversationMarkdown";
+import { MD_COMPONENTS_NO_PRE } from "../../../lib/conversationMarkdown";
 import { ReactMarkdown } from "../markdown";
 import type { ImageData, TaskRecordMaps, ToolCall, ToolChangeRange, ToolResult } from "../types";
 
@@ -67,7 +67,6 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
   const runInBackground = Boolean(parsedInput.run_in_background || parsedInput.background);
 
   const resolvedChildId = childConversationId || findMatchingChild(prompt, childConversations);
-  const router = useRouter();
 
   const subagentColors: Record<string, { bg: string; border: string; text: string }> = {
     Explore: { bg: "bg-sol-green/20", border: "border-sol-green/50", text: "text-sol-green" },
@@ -92,22 +91,31 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
   if (isCompleted && spawnInfo) {
     return (
       <div className="my-0.5">
-        <div
-          className={`flex items-center gap-1.5 text-xs${resolvedChildId ? " cursor-pointer rounded px-1.5 py-1 -mx-1 hover:bg-sol-bg-highlight/50 transition-colors" : ""}`}
-          onClick={resolvedChildId ? () => router.push(`/conversation/${resolvedChildId}`) : undefined}
-        >
-          <span className="text-emerald-400 text-[10px]">{"\u2713"}</span>
-          <span className={`font-mono text-xs ${colors.text}`}>Task</span>
-          <span className={`px-1 py-0.5 rounded text-[10px] font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
-            {subagentType}
-          </span>
-          {(spawnInfo.agentName || name) && (
-            <span className="text-[10px] px-1 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 font-mono">
-              @{spawnInfo.agentName || name}
-            </span>
-          )}
-          {description && <span className="text-sol-text-dim truncate flex-1">{description}</span>}
-        </div>
+        {(() => {
+          const body = (
+            <>
+              <span className="text-emerald-400 text-meta">{"\u2713"}</span>
+              <span className={`font-mono text-xs ${colors.text}`}>Task</span>
+              <span className={`px-1 py-0.5 rounded text-meta font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
+                {subagentType}
+              </span>
+              {(spawnInfo.agentName || name) && (
+                <span className="text-meta px-1 py-0.5 rounded bg-emerald-500/15 text-emerald-400 border border-emerald-500/20 font-mono">
+                  @{spawnInfo.agentName || name}
+                </span>
+              )}
+              {description && <span className="text-sol-text-dim truncate flex-1">{description}</span>}
+            </>
+          );
+          // A real link, so it is reachable by Tab and opens in a new tab on a modified click.
+          return resolvedChildId ? (
+            <Link href={`/conversation/${resolvedChildId}`} className="flex items-center gap-1.5 text-xs cursor-pointer rounded px-1.5 py-1 -mx-1 hover:bg-sol-bg-highlight/50 transition-colors">
+              {body}
+            </Link>
+          ) : (
+            <div className="flex items-center gap-1.5 text-xs">{body}</div>
+          );
+        })()}
       </div>
     );
   }
@@ -116,16 +124,17 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
     return (
       <div className={`my-3 rounded-lg ${result?.is_error ? "bg-sol-red/10 border-sol-red/30" : `${colors.bg} ${colors.border}`} border`}>
         <div
-          className="px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-sol-bg-highlight/50 transition-colors"
-          onClick={() => setExpanded(!expanded)}
+          className="px-3 py-2 flex flex-wrap items-center gap-x-2 gap-y-1 cursor-pointer hover:bg-sol-bg-highlight/50 transition-colors"
+          {...pressable(() => setExpanded(!expanded))}
+          aria-expanded={expanded}
         >
-          <span className={`text-[10px] ${result?.is_error ? "text-sol-red" : "text-emerald-400"}`}>
+          <span className={`text-meta ${result?.is_error ? "text-sol-red" : "text-emerald-400"}`}>
             {result?.is_error ? "\u2717" : "\u2713"}
           </span>
           <span className={`font-mono text-xs font-medium ${result?.is_error ? "text-sol-red" : colors.text}`}>
             Task
           </span>
-          <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
+          <span className={`px-1.5 py-0.5 rounded text-meta font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
             {subagentType}
           </span>
           {description && (
@@ -133,7 +142,7 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
               {description}
             </span>
           )}
-          <span className="text-sol-text-dim text-[10px] ml-auto">
+          <span className="text-sol-text-dim text-meta ml-auto">
             {expanded ? "collapse" : "expand"}
           </span>
         </div>
@@ -142,7 +151,7 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
           <>
             {prompt && (
               <div className="border-t border-sol-border/30 px-3 py-2">
-                <div className="text-[10px] text-sol-text-dim mb-1">Prompt</div>
+                <div className="text-meta text-sol-text-dim mb-1">Prompt</div>
                 <div className="text-sol-text-dim text-xs font-mono whitespace-pre-wrap break-words leading-relaxed max-h-40 overflow-y-auto">
                   {prompt}
                 </div>
@@ -150,12 +159,12 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
             )}
             {result && (
               <div className="border-t border-sol-border/30 px-3 py-2">
-                <div className="text-[10px] text-sol-text-dim mb-1">Result</div>
+                <div className="text-meta text-sol-text-dim mb-1">Result</div>
                 <div className={`text-xs max-h-96 overflow-y-auto ${
-                  result.is_error ? "text-sol-red font-mono whitespace-pre-wrap" : "text-sol-text-secondary prose prose-sm prose-invert max-w-none [&_pre]:bg-sol-bg/50 [&_pre]:border [&_pre]:border-sol-border/30 [&_pre]:rounded [&_pre]:text-[11px] [&_code]:text-[11px] [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_h1]:mt-2 [&_h2]:mt-2 [&_h3]:mt-1"
+                  result.is_error ? "text-sol-red font-mono whitespace-pre-wrap" : "text-sol-text-secondary prose prose-sm prose-invert max-w-none [&_pre]:bg-sol-bg/50 [&_pre]:border [&_pre]:border-sol-border/30 [&_pre]:rounded [&_pre]:text-meta [&_code]:text-meta [&_p]:my-1 [&_ul]:my-1 [&_ol]:my-1 [&_li]:my-0 [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-xs [&_h1]:mt-2 [&_h2]:mt-2 [&_h3]:mt-1"
                 }`}>
                   {result.is_error ? safeString(result.content) : (
-                    <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_CODE_LINK}>
+                    <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>
                       {safeString(result.content)}
                     </ReactMarkdown>
                   )}
@@ -167,15 +176,16 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
 
         {resolvedChildId && (
           <div className="border-t border-sol-border/30 px-2 py-1.5 flex justify-end">
-            <span
+            <Link
+              href={`/conversation/${resolvedChildId}`}
               className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium cursor-pointer hover:brightness-125 transition ${colors.text} ${colors.bg} border ${colors.border}`}
-              onClick={(e) => { e.stopPropagation(); router.push(`/conversation/${resolvedChildId}`); }}
+              onClick={(e) => e.stopPropagation()}
             >
               open
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
               </svg>
-            </span>
+            </Link>
           </div>
         )}
       </div>
@@ -187,14 +197,15 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
   return (
     <div className={`my-3 rounded-lg ${colors.bg} border ${colors.border}`}>
       <div
-        className="px-3 py-2 flex items-center gap-2 cursor-pointer hover:bg-sol-bg-highlight/50 transition-colors"
-        onClick={() => setExpanded(!expanded)}
+        className="px-3 py-2 flex flex-wrap items-center gap-x-2 gap-y-1 cursor-pointer hover:bg-sol-bg-highlight/50 transition-colors"
+        {...pressable(() => setExpanded(!expanded))}
+        aria-expanded={expanded}
       >
-        <span className={`w-2.5 h-2.5 rounded-full border border-current border-t-transparent animate-spin ${colors.text} opacity-60`} />
+        <span className={`w-2.5 h-2.5 rounded-full border border-current border-t-transparent ${colors.text} opacity-60`} />
         <span className={`font-mono text-xs font-semibold ${colors.text}`}>
           Task
         </span>
-        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
+        <span className={`px-1.5 py-0.5 rounded text-meta font-medium ${colors.bg} border ${colors.border} ${colors.text}`}>
           {subagentType}
         </span>
         {description && (
@@ -203,19 +214,19 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
           </span>
         )}
         {model && (
-          <span className="text-sol-text-dim text-[10px] font-mono">
+          <span className="text-sol-text-dim text-meta font-mono">
             {formatModel(model)}
           </span>
         )}
         {name && (
-          <span className="text-sol-text-dim text-[10px] font-mono">
+          <span className="text-sol-text-dim text-meta font-mono">
             {name}
           </span>
         )}
         {runInBackground && (
-          <span className="text-sol-text-dim text-[10px]">background</span>
+          <span className="text-sol-text-dim text-meta">background</span>
         )}
-        <span className="text-sol-text-dim text-[10px] ml-auto">
+        <span className="text-sol-text-dim text-meta ml-auto">
           {expanded ? "collapse" : "expand"}
         </span>
       </div>
@@ -227,7 +238,7 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
         {prompt.length > 300 && !expanded && (
           <button
             onClick={() => setExpanded(true)}
-            className="text-[10px] text-sol-text-dim hover:text-sol-text-muted mt-1"
+            className="text-meta text-sol-text-dim hover:text-sol-text-muted mt-1"
           >
             show more
           </button>
@@ -236,15 +247,16 @@ export function TaskToolBlock({ tool, result, childConversationId, childConversa
 
       {resolvedChildId && (
         <div className="border-t border-sol-border/30 px-2 py-1.5 flex justify-end">
-          <span
+          <Link
+            href={`/conversation/${resolvedChildId}`}
             className={`flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium cursor-pointer hover:brightness-125 transition ${colors.text} ${colors.bg} border ${colors.border}`}
-            onClick={(e) => { e.stopPropagation(); router.push(`/conversation/${resolvedChildId}`); }}
+            onClick={(e) => e.stopPropagation()}
           >
             open
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
             </svg>
-          </span>
+          </Link>
         </div>
       )}
     </div>
@@ -299,41 +311,42 @@ export function WorkflowToolBlock({ tool, result, conversationId }: { tool: Tool
     <div data-cc-feed-card className={`my-2 rounded-lg border ${frame.border} ${frame.bg} overflow-hidden`}>
       <div
         className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-sol-bg-highlight/40 transition-colors"
-        onClick={() => setExpanded(!expanded)}
+        {...pressable(() => setExpanded(!expanded))}
+        aria-expanded={expanded}
       >
         <Workflow className={`w-3.5 h-3.5 flex-shrink-0 ${isError ? "text-sol-red" : "text-sol-cyan"}`} />
-        <span data-cc-tech className={`text-[10px] uppercase tracking-wider font-semibold ${isError ? "text-sol-red" : "text-sol-cyan"}`}>
+        <span data-cc-tech className={`text-mark uppercase tracking-wider font-semibold ${isError ? "text-sol-red" : "text-sol-cyan"}`}>
           Workflow
         </span>
         <span className="text-xs text-sol-text-muted truncate">{name}</span>
         {resumeFromRunId && (
-          <span data-cc-tech className="px-1 py-0.5 rounded text-[10px] font-medium bg-sol-cyan/15 border border-sol-cyan/25 text-sol-cyan flex-shrink-0">
+          <span data-cc-tech className="px-1 py-0.5 rounded text-meta font-medium bg-sol-cyan/15 border border-sol-cyan/25 text-sol-cyan flex-shrink-0">
             resume
           </span>
         )}
         <div className="ml-auto flex items-center gap-2 flex-shrink-0">
-          {run?.agent_count != null && <span data-cc-tech className="text-[10px] text-sol-text-dim">{run.agent_count} agents</span>}
-          {run?.total_tokens ? <span data-cc-tech className="text-[10px] text-sol-text-dim/70">{wfFmtTokens(run.total_tokens)} tok</span> : null}
-          {launch.taskId && <span data-cc-tech className="text-[10px] text-sol-text-dim/70 font-mono">{launch.taskId}</span>}
+          {run?.agent_count != null && <span data-cc-tech className="text-meta text-sol-text-dim">{run.agent_count} agents</span>}
+          {run?.total_tokens ? <span data-cc-tech className="text-meta text-sol-text-dim/70">{wfFmtTokens(run.total_tokens)} tok</span> : null}
+          {launch.taskId && <span data-cc-tech className="text-meta text-sol-text-dim/70 font-mono">{launch.taskId}</span>}
           {isError ? (
-            <span className="text-[10px] flex items-center gap-1 text-sol-red">{"✗"} failed</span>
+            <span className="text-meta flex items-center gap-1 text-sol-red">{"✗"} failed</span>
           ) : run ? (
-            <span className={`text-[10px] flex items-center gap-1 ${sm.cls}`}>
+            <span className={`text-meta flex items-center gap-1 ${sm.cls}`}>
               {sm.dot ? <span className={`w-1.5 h-1.5 rounded-full ${sm.dot}`} /> : sm.icon}
               {stopped ? "stopped" : run.status}
             </span>
           ) : result ? (
-            <span className="text-[10px] flex items-center gap-1 text-sol-cyan/80">
+            <span className="text-meta flex items-center gap-1 text-sol-cyan/80">
               <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan/60" />
               launched
             </span>
           ) : (
-            <span className="text-[10px] flex items-center gap-1 text-sol-text-dim">
-              <span className="w-2.5 h-2.5 rounded-full border border-current border-t-transparent animate-spin text-sol-cyan opacity-60" />
+            <span className="text-meta flex items-center gap-1 text-sol-text-dim">
+              <span className="w-2.5 h-2.5 rounded-full border border-current border-t-transparent text-sol-cyan opacity-60" />
               launching
             </span>
           )}
-          <span data-cc-tech className="text-sol-text-dim text-[10px]">{expanded ? "collapse" : "expand"}</span>
+          <span data-cc-tech className="text-sol-text-dim text-meta">{expanded ? "collapse" : "expand"}</span>
         </div>
       </div>
 
@@ -355,30 +368,30 @@ export function WorkflowToolBlock({ tool, result, conversationId }: { tool: Tool
         <>
           {script && (
             <div className={`border-t ${frame.divider} px-3 py-2`}>
-              <div className="text-[10px] text-sol-text-dim mb-1">Script</div>
-              <div className="text-sol-text-secondary text-[11px] font-mono whitespace-pre-wrap break-words leading-relaxed max-h-80 overflow-y-auto">
+              <div className="text-meta text-sol-text-dim mb-1">Script</div>
+              <div className="text-sol-text-secondary text-meta font-mono whitespace-pre-wrap break-words leading-relaxed max-h-80 overflow-y-auto">
                 {script}
               </div>
             </div>
           )}
           {(launch.scriptFile || scriptPath) && (
             <div className={`border-t ${frame.divider} px-3 py-2`}>
-              <div className="text-[10px] text-sol-text-dim mb-1">Script file</div>
-              <div className="text-sol-text-dim text-[11px] font-mono break-all">{launch.scriptFile || scriptPath}</div>
+              <div className="text-meta text-sol-text-dim mb-1">Script file</div>
+              <div className="text-sol-text-dim text-meta font-mono break-all">{launch.scriptFile || scriptPath}</div>
             </div>
           )}
           {parsedInput.args !== undefined && (
             <div className={`border-t ${frame.divider} px-3 py-2`}>
-              <div className="text-[10px] text-sol-text-dim mb-1">Args</div>
-              <div className="text-sol-text-dim text-[11px] font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+              <div className="text-meta text-sol-text-dim mb-1">Args</div>
+              <div className="text-sol-text-dim text-meta font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
                 {JSON.stringify(parsedInput.args, null, 2)}
               </div>
             </div>
           )}
           {result && (
             <div className={`border-t ${frame.divider} px-3 py-2`}>
-              <div className="text-[10px] text-sol-text-dim mb-1">{isError ? "Error" : "Result"}</div>
-              <div className={`text-[11px] font-mono whitespace-pre-wrap break-words leading-relaxed max-h-60 overflow-y-auto ${isError ? "text-sol-red" : "text-sol-text-dim"}`}>
+              <div className="text-meta text-sol-text-dim mb-1">{isError ? "Error" : "Result"}</div>
+              <div className={`text-meta font-mono whitespace-pre-wrap break-words leading-relaxed max-h-60 overflow-y-auto ${isError ? "text-sol-red" : "text-sol-text-dim"}`}>
                 {safeString(result.content)}
               </div>
             </div>
@@ -390,7 +403,7 @@ export function WorkflowToolBlock({ tool, result, conversationId }: { tool: Tool
               <button
                 type="button"
                 onClick={(e) => { e.stopPropagation(); useInboxStore.getState().sendMessage(String(conversationId), addToFlowsMessage(name, externalRunId)); }}
-                className="text-[10px] text-sol-blue hover:underline underline-offset-2"
+                className="text-meta text-sol-blue hover:underline underline-offset-2"
                 data-add-to-flows={externalRunId}
               >
                 add to flows
@@ -399,7 +412,7 @@ export function WorkflowToolBlock({ tool, result, conversationId }: { tool: Tool
             <Link
               href="/workflows"
               onClick={(e) => e.stopPropagation()}
-              className="text-[10px] text-sol-cyan hover:underline underline-offset-2"
+              className="text-meta text-sol-cyan hover:underline underline-offset-2"
             >
               all workflows {"→"}
             </Link>
@@ -420,7 +433,7 @@ function GitOutcomeRow({ outcome, repository }: { outcome: GitToolOutcome; repos
   const label = outcome.kind === "commit"
     ? <><span className="font-mono">{outcome.hash.slice(0, 7)}</span>{outcome.subject && <span className="truncate">{outcome.subject}</span>}</>
     : <span className="font-mono">{outcome.ref}</span>;
-  const plain = "inline-flex items-center gap-1.5 min-w-0 max-w-full text-[11px] text-sol-text-muted hover:text-sol-text";
+  const plain = "inline-flex items-center gap-1.5 min-w-0 max-w-full text-meta text-sol-text-muted hover:text-sol-text";
   const fallback = outcome.kind === "commit"
     ? repository
       ? <Link href={commitPageHref(repository, outcome.hash)} className={plain} onClick={(e) => e.stopPropagation()}><GitCommitHorizontal className="w-3 h-3 shrink-0 text-sol-yellow" />{label}</Link>
@@ -430,7 +443,7 @@ function GitOutcomeRow({ outcome, repository }: { outcome: GitToolOutcome; repos
   // Sits in the tool card's header strip, so it reads on a collapsed card; the
   // click must not toggle the card.
   return (
-    <span className="inline-flex items-center gap-1.5 min-w-0 max-w-[24rem] text-[11px]" onClick={(e) => e.stopPropagation()}>
+    <span className="inline-flex items-center gap-1.5 min-w-0 max-w-[24rem] text-meta" onClick={(e) => e.stopPropagation()}>
       <span className="text-sol-text-dim flex-shrink-0">{outcome.kind === "commit" ? "committed" : "opened"}</span>
       {ref ? <EntityIdPill type={outcome.kind} id={ref} fallback={fallback} /> : fallback}
     </span>
@@ -459,12 +472,29 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
   const isGrep = isGrepTool(tool.name);
   const isCodeSearch = tool.name === "code_search" || tool.name === "code_analysis";
 
-  const { selectedChangeIndex, rangeStart, rangeEnd, selectChange, selectRange } = useDiffViewerStore();
+  const targetStart = changeRange?.start ?? changeIndex;
+  const targetEnd = changeRange?.end ?? changeIndex;
+  const hasTargetRange = targetStart !== undefined && targetEnd !== undefined;
+  const isClickable = isEdit && hasTargetRange;
+  // One boolean off the diff viewer, not the whole store: its change list and
+  // bodies fill in progressively, and every visible edit row redrew its diff
+  // on each of those writes.
+  const isSelected = useDiffViewerStore((s) => isClickable && (
+    (s.selectedChangeIndex !== null &&
+      s.selectedChangeIndex >= targetStart! &&
+      s.selectedChangeIndex <= targetEnd!) ||
+    (s.rangeStart !== null &&
+      s.rangeEnd !== null &&
+      Math.max(s.rangeStart, targetStart!) <= Math.min(s.rangeEnd, targetEnd!))
+  ));
 
-  let parsedInput: Record<string, unknown> = {};
-  try {
-    parsedInput = JSON.parse(tool.input);
-  } catch {}
+  const parsedInput = useMemo<Record<string, unknown>>(() => {
+    try {
+      return JSON.parse(tool.input);
+    } catch {
+      return {};
+    }
+  }, [tool.input]);
   // A wrapper tool call (Codex `exec`, the extension's `browser_batch`) renders
   // as its inner steps: the row is named after the one step when there is one,
   // summarised by the steps otherwise, and expands to a per-step list.
@@ -487,8 +517,19 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
   // live conversation; comments land in the shared review batch keyed by the
   // conversation and ride out on the user's next reply. Per-file anchor so a
   // multi-file patch keeps each file's comments separate.
-  const lineCommentCtx = (path: string) =>
-    conversationId ? { conversationId: String(conversationId), anchorKey: `diff:${tool.id}:${path}`, filePath: getRelativePath(path) } : undefined;
+  // One object per path for the row's life, so memo(DiffView) can bail out.
+  const lineCommentCtx = useMemo(() => {
+    const byPath = new Map<string, { conversationId: string; anchorKey: string; filePath: string }>();
+    return (path: string) => {
+      if (!conversationId) return undefined;
+      let ctx = byPath.get(path);
+      if (!ctx) {
+        ctx = { conversationId: String(conversationId), anchorKey: `diff:${tool.id}:${path}`, filePath: getRelativePath(path) };
+        byPath.set(path, ctx);
+      }
+      return ctx;
+    };
+  }, [conversationId, tool.id]);
   const language = getFileExtension(filePath);
   const applyPatchInput = patchInputs.join("\n");
   const fileChangePaths = useMemo(
@@ -789,29 +830,13 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
 
   const toolColor = toolColorClass(isApplyPatch ? "apply_patch" : tool.name);
 
-  const targetStart = changeRange?.start ?? changeIndex;
-  const targetEnd = changeRange?.end ?? changeIndex;
-  const hasTargetRange = targetStart !== undefined && targetEnd !== undefined;
-  const isClickable = isEdit && hasTargetRange;
-  const isSelected = isClickable && (
-    (selectedChangeIndex !== null &&
-      targetStart !== undefined &&
-      targetEnd !== undefined &&
-      selectedChangeIndex >= targetStart &&
-      selectedChangeIndex <= targetEnd) ||
-    (rangeStart !== null &&
-      rangeEnd !== null &&
-      targetStart !== undefined &&
-      targetEnd !== undefined &&
-      Math.max(rangeStart, targetStart) <= Math.min(rangeEnd, targetEnd))
-  );
-
-  const handleClick = (e: React.MouseEvent) => {
+  const handleClick = (e: React.MouseEvent | React.KeyboardEvent) => {
     if (shareSelectionMode) {
       return;
     }
     if (isClickable && targetStart !== undefined && targetEnd !== undefined) {
       e.stopPropagation();
+      const { selectedChangeIndex, selectChange, selectRange } = useDiffViewerStore.getState();
       if (e.metaKey || e.ctrlKey) {
         if (selectedChangeIndex !== null) {
           selectRange(selectedChangeIndex, targetEnd);
@@ -859,7 +884,18 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
             ? 'bg-sol-blue/10 border border-sol-blue/30 rounded px-1 -mx-1'
             : ''
         }`}
+        role="button"
+        tabIndex={0}
+        aria-expanded={isClickable ? undefined : expanded}
+        aria-pressed={isClickable ? isSelected : undefined}
         onClick={handleClick}
+        onKeyDown={(e) => {
+          // A key on the file link inside stays the link's.
+          if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+          e.preventDefault();
+          e.stopPropagation();
+          handleClick(e);
+        }}
       >
         <span className={`font-mono flex-shrink-0 group-hover:underline ${toolColor}`}>{displayToolName}</span>
         {summary && (
@@ -909,14 +945,14 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
           {isMarkdown && (isRead || (isWriteTool(tool.name) && Boolean(parsedInput.content))) && (
             <div className="flex items-center justify-between px-2 py-1 border-b border-sol-border/20 bg-sol-bg-highlight/30">
               <div className="flex items-center gap-2">
-                <span className="text-[10px] text-sol-text-dim">{language}</span>
+                <span className="text-meta text-sol-text-dim">{language}</span>
                 {isPlan && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-sol-bg-highlight text-sol-text-muted font-medium">
+                  <span className="text-meta px-1.5 py-0.5 rounded bg-sol-bg-highlight text-sol-text-muted font-medium">
                     PLAN
                   </span>
                 )}
               </div>
-              <div className="flex items-center gap-1 text-[10px]">
+              <div className="flex items-center gap-1 text-meta">
                 <button
                   onClick={(e) => { e.stopPropagation(); setViewMode('raw'); }}
                   className={`px-1.5 py-0.5 rounded transition-colors ${
@@ -1041,7 +1077,7 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
                   return (
                     <div key={`${diff.filePath}-${idx}`} className={idx > 0 ? "border-t border-sol-border/20" : ""}>
                       <div className="px-2 py-1 border-b border-sol-border/20 bg-sol-bg-highlight/20">
-                        <span className="text-xs font-mono text-sol-text-dim truncate">{getRelativePath(diff.filePath)}</span>
+                        <span className="block text-xs font-mono text-sol-text-dim truncate" title={getRelativePath(diff.filePath)}>{getRelativePath(diff.filePath)}</span>
                       </div>
                       <DiffView
                         oldStr={diff.oldContent}
@@ -1074,12 +1110,12 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
           ) : isBash && (parsedInput.command || parsedInput.cmd) ? (
             <div className="max-h-80 overflow-auto">
               <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
-                <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
+                <pre className="text-meta sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
                   $ {unwrapShellCommand(String(parsedInput.command || parsedInput.cmd || ""))}
                 </pre>
               </div>
               {processedContent && processedContent.trim() ? (
-                <pre className={`p-1.5 sm:p-2 text-[11px] sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : "text-sol-text-secondary"}`}>
+                <pre className={`p-1.5 sm:p-2 text-meta sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${result?.is_error ? "text-sol-red" : "text-sol-text-secondary"}`}>
                   {renderAnsi(processedContent)}
                 </pre>
               ) : (
@@ -1161,7 +1197,7 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
               ) : (
                 <>
                   {!isMarkdown && language && (
-                    <div className="text-[10px] px-2 py-1 border-b border-sol-border/20 text-sol-text-dim">
+                    <div className="text-meta px-2 py-1 border-b border-sol-border/20 text-sol-text-dim">
                       {language}
                     </div>
                   )}
@@ -1231,7 +1267,7 @@ export function TodoWriteBlock({ tool }: { tool: ToolCall }) {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
               </svg>
             ) : todo.status === 'in_progress' ? (
-              <svg className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <svg className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             ) : (
@@ -1254,7 +1290,6 @@ export function TodoWriteBlock({ tool }: { tool: ToolCall }) {
 }
 
 export function TaskListBlock({ tool, result, taskRecordMap }: { tool: ToolCall; result?: ToolResult; taskRecordMap?: TaskRecordMaps }) {
-  const router = useRouter();
   if (!result) return null;
   const lines = result.content.split("\n");
   const items: Array<{ id: string; status: string; subject: string; owner?: string; blockedBy?: string[] }> = [];
@@ -1287,18 +1322,15 @@ export function TaskListBlock({ tool, result, taskRecordMap }: { tool: ToolCall;
           const isBlocked = task.blockedBy && task.blockedBy.length > 0;
           const matched = taskRecordMap?.byTitle[task.subject] || taskRecordMap?.byLocalId[task.id];
           const clickable = !!matched;
-          return (
-            <div
-              key={task.id}
-              className={`flex items-start gap-2 text-sm ${isBlocked ? "opacity-50" : ""}${clickable ? " cursor-pointer rounded px-1.5 py-0.5 -mx-1 hover:bg-sol-bg-highlight/50 transition-colors" : ""}`}
-              onClick={clickable ? () => router.push(`/tasks/${matched._id}`) : undefined}
-            >
+          const rowClass = `flex items-start gap-2 text-sm ${isBlocked ? "opacity-50" : ""}${clickable ? " cursor-pointer rounded px-1.5 py-0.5 -mx-1 hover:bg-sol-bg-highlight/50 transition-colors" : ""}`;
+          const body = (
+            <>
               {task.status === "completed" ? (
                 <svg className="w-4 h-4 text-emerald-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
               ) : task.status === "in_progress" ? (
-                <svg className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <svg className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
               ) : isBlocked ? (
@@ -1319,16 +1351,22 @@ export function TaskListBlock({ tool, result, taskRecordMap }: { tool: ToolCall;
                 {task.subject}
               </span>
               {task.owner && (
-                <span className="text-[10px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20 font-mono">
+                <span className="text-meta px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20 font-mono">
                   @{task.owner}
                 </span>
               )}
               {isBlocked && (
-                <span className="text-[10px] text-sol-text-dim mt-0.5">
+                <span className="text-meta text-sol-text-dim mt-0.5">
                   blocked by {task.blockedBy!.map(id => `#${id}`).join(", ")}
                 </span>
               )}
-            </div>
+            </>
+          );
+          // A real link: reachable by Tab, and a modified click opens a new tab.
+          return clickable ? (
+            <Link key={task.id} href={`/tasks/${matched._id}`} className={rowClass}>{body}</Link>
+          ) : (
+            <div key={task.id} className={rowClass}>{body}</div>
           );
         })}
       </div>
@@ -1339,7 +1377,6 @@ export function TaskListBlock({ tool, result, taskRecordMap }: { tool: ToolCall;
 export function TaskCreateUpdateBlock({ tool, result, taskSubjectMap, taskRecordMap }: { tool: ToolCall; result?: ToolResult; taskSubjectMap?: Record<string, string>; taskRecordMap?: TaskRecordMaps }) {
   let parsedInput: Record<string, any> = {};
   try { parsedInput = JSON.parse(tool.input); } catch {}
-  const router = useRouter();
 
   const isCreate = tool.name === "TaskCreate";
   const subject = parsedInput.subject;
@@ -1361,23 +1398,21 @@ export function TaskCreateUpdateBlock({ tool, result, taskSubjectMap, taskRecord
     ? taskRecordMap?.byLocalId[String(taskId)]
     : undefined;
   const isClickable = !!matchedTask;
-
-  const handleClick = () => {
-    if (matchedTask) router.push(`/tasks/${matchedTask._id}`);
-  };
+  const rowClass = `flex items-center gap-1.5 text-xs${isClickable ? " cursor-pointer rounded px-1.5 py-0.5 -mx-1 hover:bg-sol-bg-highlight/50 transition-colors" : ""}`;
+  // A matched task's row is a real link: reachable by Tab, and a modified click opens a new tab.
+  const row = (body: ReactNode) => matchedTask
+    ? <Link href={`/tasks/${matchedTask._id}`} className={rowClass}>{body}</Link>
+    : <div className={rowClass}>{body}</div>;
 
   const displaySubject = resolvedSubject || matchedTask?.title;
 
   if (!isCreate && displaySubject) {
     return (
       <div className="my-0.5">
-        <div
-          className={`flex items-center gap-1.5 text-xs${isClickable ? " cursor-pointer rounded px-1.5 py-0.5 -mx-1 hover:bg-sol-bg-highlight/50 transition-colors" : ""}`}
-          onClick={isClickable ? handleClick : undefined}
-        >
+        {row(<>
           <span className="text-sol-text-muted">{String(displaySubject).slice(0, 60)}</span>
           {status && (
-            <span className={`px-1 py-0.5 rounded text-[10px] font-mono ${
+            <span className={`px-1 py-0.5 rounded text-meta font-mono ${
               status === "completed" ? "bg-emerald-500/15 text-emerald-400" :
               status === "in_progress" ? "bg-amber-500/15 text-amber-400" :
               status === "deleted" ? "bg-red-500/15 text-red-400" :
@@ -1386,18 +1421,15 @@ export function TaskCreateUpdateBlock({ tool, result, taskSubjectMap, taskRecord
               {status}
             </span>
           )}
-          {owner && <span className="text-[10px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20 font-mono">@{owner}</span>}
-        </div>
+          {owner && <span className="text-meta px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20 font-mono">@{owner}</span>}
+        </>)}
       </div>
     );
   }
 
   return (
     <div className="my-0.5">
-      <div
-        className={`flex items-center gap-1.5 text-xs${isClickable ? " cursor-pointer rounded px-1.5 py-0.5 -mx-1 hover:bg-sol-bg-highlight/50 transition-colors" : ""}`}
-        onClick={isClickable ? handleClick : undefined}
-      >
+      {row(<>
         <span className="font-mono text-emerald-500/80">{tool.name}</span>
         {isCreate ? (
           <>
@@ -1409,7 +1441,7 @@ export function TaskCreateUpdateBlock({ tool, result, taskSubjectMap, taskRecord
           <>
             {taskId && <span className="text-sol-text-dim font-mono">#{taskId}</span>}
             {status && (
-              <span className={`px-1 py-0.5 rounded text-[10px] font-mono ${
+              <span className={`px-1 py-0.5 rounded text-meta font-mono ${
                 status === "completed" ? "bg-emerald-500/15 text-emerald-400" :
                 status === "in_progress" ? "bg-amber-500/15 text-amber-400" :
                 status === "deleted" ? "bg-red-500/15 text-red-400" :
@@ -1418,10 +1450,10 @@ export function TaskCreateUpdateBlock({ tool, result, taskSubjectMap, taskRecord
                 {status}
               </span>
             )}
-            {owner && <span className="text-[10px] px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20 font-mono">@{owner}</span>}
+            {owner && <span className="text-meta px-1 py-0.5 rounded bg-blue-500/15 text-blue-400 border border-blue-500/20 font-mono">@{owner}</span>}
           </>
         )}
-      </div>
+      </>)}
     </div>
   );
 }
@@ -1482,7 +1514,7 @@ export function BrowserWatchButton({ conversationId }: { conversationId: Id<"con
         <button
           type="button"
           onClick={dock}
-          className="text-[10px] leading-4 px-0.5 rounded-full text-sol-text-dim hover:text-sol-text-muted"
+          className="text-meta leading-4 px-0.5 rounded-full text-sol-text-dim hover:text-sol-text-muted"
           title="Dock the live view above the transcript instead"
           aria-label="Dock the live view above the transcript"
         >
@@ -1520,19 +1552,19 @@ export function SendMessageBlock({ tool, agentNameToChildMap }: { tool: ToolCall
         <span className={typeConfig.color}>{typeConfig.icon}</span>
         {isShutdown ? (
           <>
-            {recipient && <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/20 font-mono">@{recipient}</span>}
+            {recipient && <span className="text-meta px-1.5 py-0.5 rounded bg-red-500/15 text-red-400 border border-red-500/20 font-mono">@{recipient}</span>}
             <span className="text-red-400/80 font-medium text-xs">shutdown request</span>
           </>
         ) : (
           <>
             {recipient && (
               childId ? (
-                <Link href={`/conversation/${childId}`} className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20 font-mono hover:bg-amber-500/25 hover:text-amber-300 transition-colors" onClick={e => e.stopPropagation()}>@{recipient}</Link>
+                <Link href={`/conversation/${childId}`} className="text-meta px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20 font-mono hover:bg-amber-500/25 hover:text-amber-300 transition-colors" onClick={e => e.stopPropagation()}>@{recipient}</Link>
               ) : (
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20 font-mono">@{recipient}</span>
+                <span className="text-meta px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 border border-amber-500/20 font-mono">@{recipient}</span>
               )
             )}
-            {isBroadcast && <span className="text-[10px] px-1 py-0.5 rounded bg-orange-500/15 text-orange-400 font-mono">all</span>}
+            {isBroadcast && <span className="text-meta px-1 py-0.5 rounded bg-orange-500/15 text-orange-400 font-mono">all</span>}
             {displayText && <span className="text-sol-text-muted truncate">{displayText}</span>}
           </>
         )}
@@ -1557,7 +1589,7 @@ export function TeamCreateBlock({ tool }: { tool: ToolCall }) {
           {isDelete ? "Team dissolved" : "Team created"}
         </span>
         {parsedInput.team_name && (
-          <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-cyan-500/15 text-cyan-400 border border-cyan-500/20">
+          <span className="px-1.5 py-0.5 rounded text-meta font-mono bg-cyan-500/15 text-cyan-400 border border-cyan-500/20">
             {parsedInput.team_name}
           </span>
         )}
@@ -1575,7 +1607,7 @@ export function SkillBlock({ tool }: { tool: ToolCall }) {
     <div className="my-0.5">
       <div className="flex items-center gap-1.5 text-xs">
         <span className="font-mono text-sol-cyan/80">/{skillName}</span>
-        {parsedInput.args && <span className="text-sol-text-dim">{parsedInput.args}</span>}
+        {parsedInput.args && <span className="text-sol-text-dim min-w-0 break-words">{parsedInput.args}</span>}
       </div>
     </div>
   );
@@ -1604,15 +1636,16 @@ function ResultProse({ text, className = "" }: { text: string; className?: strin
 }
 
 function ResultPill({ text, tone }: { text: string; tone: StructuredTone }) {
-  return <span className={`px-1.5 py-px rounded border text-[10px] font-semibold uppercase tracking-wide whitespace-nowrap ${RESULT_TONE[tone].pill}`}>{text.replace(/_/g, " ")}</span>;
+  return <span className={`px-1.5 py-px rounded border text-mark font-semibold uppercase tracking-wide whitespace-nowrap ${RESULT_TONE[tone].pill}`}>{text.replace(/_/g, " ")}</span>;
 }
 
 function ResultFields({ fields }: { fields: StructuredField[] }) {
   return (
     <>
       {fields.map((f) => (
-        <span key={f.label} className="text-[11px] whitespace-nowrap">
-          <span className="text-sol-text-dim">{f.label} </span>
+        // A long value wraps inside the card instead of being clipped by it.
+        <span key={f.label} className="text-meta min-w-0 break-words">
+          <span className="text-sol-text-dim whitespace-nowrap">{f.label} </span>
           <span className={f.tone ? RESULT_TONE[f.tone].text : "text-sol-text-muted"}>{f.value}</span>
         </span>
       ))}
@@ -1626,14 +1659,14 @@ function ResultRecord({ rec }: { rec: StructuredRecord }) {
       {rec.badge && <span className="shrink-0 pt-0.5"><ResultPill text={rec.badge.text} tone={rec.badge.tone} /></span>}
       <div className="min-w-0 flex-1 space-y-1">
         {rec.location && (
-          <FilePathLink path={rec.location.path} line={rec.location.line} className="block font-mono text-[11px] text-sol-text-dim hover:text-sol-blue truncate">
+          <FilePathLink path={rec.location.path} line={rec.location.line} className="block font-mono text-meta text-sol-text-dim hover:text-sol-blue truncate">
             {rec.location.display}
           </FilePathLink>
         )}
         {rec.title && <ResultProse text={rec.title} />}
         {rec.texts.map((t) => (
           <div key={t.label} className="flex gap-2 text-sol-text-muted">
-            <span className="shrink-0 text-[11px] text-sol-text-dim pt-0.5">{t.label}</span>
+            <span className="shrink-0 text-meta text-sol-text-dim pt-0.5">{t.label}</span>
             <ResultProse text={t.text} className="text-sol-text-muted" />
           </div>
         ))}
@@ -1648,8 +1681,8 @@ function ResultSection({ section }: { section: StructuredSection }) {
   return (
     <section>
       <div className="flex items-baseline gap-1.5 mb-1">
-        <span className="text-[11px] font-semibold text-sol-text-muted">{section.label}</span>
-        {count !== undefined && <span className="text-[11px] tabular-nums text-sol-text-dim">{count || "none"}</span>}
+        <span className="text-meta font-semibold text-sol-text-muted">{section.label}</span>
+        {count !== undefined && <span className="text-meta tabular-nums text-sol-text-dim">{count || "none"}</span>}
       </div>
       {section.kind === "text" ? (
         <ResultProse text={section.text} />
@@ -1659,7 +1692,7 @@ function ResultSection({ section }: { section: StructuredSection }) {
         count ? (
           <ul className={`space-y-0.5 ${section.paths ? "" : "list-disc pl-4 marker:text-sol-text-dim"}`}>
             {section.items.map((item, i) => (
-              <li key={i} className={section.paths ? "font-mono text-[11px] text-sol-text-muted truncate" : "text-sm text-sol-text"}>
+              <li key={i} className={section.paths ? "font-mono text-meta text-sol-text-muted truncate" : "text-sm text-sol-text"}>
                 {section.paths ? <FilePathLink path={item} className="hover:text-sol-blue">{item}</FilePathLink> : <ResultProse text={item} />}
               </li>
             ))}
@@ -1697,20 +1730,20 @@ export function StructuredResultBlock({ tool, result }: { tool: ToolCall; result
         <span className={`text-xs font-semibold ${t.text}`}>{rejected ? "Result rejected" : "Result"}</span>
         {model?.status && !rejected && <ResultPill text={model.status.text} tone={model.status.tone} />}
         {model && !rejected && <ResultFields fields={model.fields} />}
-        {!payload && !rejected && <span className="text-[11px] text-sol-text-dim">{structuredPayloadKeysFromRaw(tool.input) || "returning a result"}</span>}
+        {!payload && !rejected && <span className="text-meta text-sol-text-dim">{structuredPayloadKeysFromRaw(tool.input) || "returning a result"}</span>}
         {payload && (
           <button
             type="button"
             onClick={() => setShowJson((v) => !v)}
             aria-pressed={showJson}
-            className={`ml-auto text-[10px] font-mono px-1.5 py-0.5 rounded border transition-colors ${showJson ? "border-sol-cyan/40 text-sol-cyan bg-sol-cyan/10" : "border-sol-border/40 text-sol-text-dim hover:text-sol-text-muted"}`}
+            className={`ml-auto text-meta font-mono px-1.5 py-0.5 rounded border transition-colors ${showJson ? "border-sol-cyan/40 text-sol-cyan bg-sol-cyan/10" : "border-sol-border/40 text-sol-text-dim hover:text-sol-text-muted"}`}
           >
             JSON
           </button>
         )}
       </div>
       {rejected && result?.content && (
-        <pre className="px-3 pb-2 text-xs font-mono whitespace-pre-wrap text-sol-red">{renderAnsi(safeString(result.content))}</pre>
+        <pre className="px-3 pb-2 text-xs font-mono whitespace-pre-wrap break-words text-sol-red">{renderAnsi(safeString(result.content))}</pre>
       )}
       {showJson && payload ? (
         <div className="max-h-96 overflow-auto px-3 pb-2">

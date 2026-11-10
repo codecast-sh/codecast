@@ -6,7 +6,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import type { FunctionReturnType } from "convex/server";
 import { AuthGuard } from "../../../components/AuthGuard";
-import Link from "next/link";
+import { toast } from "sonner";
 import { Button } from "../../../components/ui/button";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
@@ -37,10 +37,10 @@ function formatDate(ts: number): string {
 }
 
 const LEVEL_STYLES: Record<LogLevel, { bg: string; text: string; dot: string }> = {
-  error: { bg: "bg-red-950/60", text: "text-red-400", dot: "bg-red-500" },
-  warn: { bg: "bg-amber-950/40", text: "text-amber-400", dot: "bg-amber-500" },
-  info: { bg: "bg-sky-950/30", text: "text-sky-400", dot: "bg-sky-500" },
-  debug: { bg: "bg-zinc-800/40", text: "text-zinc-500", dot: "bg-zinc-600" },
+  error: { bg: "bg-sol-red/10", text: "text-sol-red", dot: "bg-sol-red" },
+  warn: { bg: "bg-sol-amber/10", text: "text-sol-amber", dot: "bg-sol-amber" },
+  info: { bg: "bg-sol-blue/10", text: "text-sol-blue", dot: "bg-sol-blue" },
+  debug: { bg: "bg-sol-bg-highlight", text: "text-sol-text-muted", dot: "bg-sol-text-dim" },
 };
 
 function LogLevelDot({ level }: { level: LogLevel }) {
@@ -65,6 +65,8 @@ function CommandPanel({
   const commands = useQuery(api.users.getPendingCommands, { user_id: userId });
   const [sending, setSending] = useState<Command | null>(null);
   const [expandedCmd, setExpandedCmd] = useState<string | null>(null);
+  // Restart and Force update act on someone else's daemon: the press asks once, in place.
+  const [arming, setArming] = useState<Command | null>(null);
 
   const handleSend = useCallback(
     async (command: Command) => {
@@ -72,7 +74,7 @@ function CommandPanel({
       try {
         await sendCommand({ user_id: userId, command });
       } catch (e) {
-        console.error("Failed to send command:", e);
+        toast.error(`${command} did not go out: ${e instanceof Error ? e.message : String(e)}`);
       } finally {
         setTimeout(() => setSending(null), 500);
       }
@@ -93,20 +95,20 @@ function CommandPanel({
   ];
 
   return (
-    <div className="bg-zinc-900/80 rounded-lg border border-zinc-800 overflow-hidden">
-      <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
+    <div className="bg-sol-bg-alt rounded-lg border border-sol-border overflow-hidden">
+      <div className="px-4 py-3 border-b border-sol-border flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <span className="text-xs font-mono uppercase tracking-wider text-zinc-500">
+          <span className="text-xs font-mono uppercase tracking-wider text-sol-text-muted">
             Remote Control
           </span>
-          <span className="text-xs text-zinc-600">/</span>
-          <span className="text-sm text-zinc-300">{userName}</span>
+          <span className="text-xs text-sol-text-dim">/</span>
+          <span className="text-sm text-sol-text-secondary">{userName}</span>
         </div>
         <span
           className={`text-xs px-2 py-0.5 rounded-full ${
             isOnline
-              ? "bg-emerald-950/50 text-emerald-400 border border-emerald-800/50"
-              : "bg-zinc-800 text-zinc-500 border border-zinc-700"
+              ? "bg-sol-green/10 text-sol-green border border-sol-green/30"
+              : "bg-sol-bg-highlight text-sol-text-muted border border-sol-border"
           }`}
         >
           {isOnline ? "connected" : "offline"}
@@ -114,38 +116,50 @@ function CommandPanel({
       </div>
 
       <div className="p-4">
-        <div className="grid grid-cols-4 gap-2">
+        {arming && (
+          <div className="mb-2 flex flex-wrap items-center gap-2 rounded-md border border-sol-red/30 bg-sol-red/10 px-3 py-2 text-xs" role="group" aria-label={`${arming} ${userName}'s daemon?`}>
+            <span className="min-w-0 flex-1 truncate text-sol-text" title={userName}>
+              {arming === "restart" ? "Restart" : "Force update"} {userName}&apos;s daemon?
+            </span>
+            <Button type="button" variant="ghost" size="xs" onClick={() => setArming(null)} autoFocus>Keep it running</Button>
+            <Button type="button" variant="red" size="xs" onClick={() => { const cmd = arming; setArming(null); void handleSend(cmd); }}>
+              {arming === "restart" ? "Restart" : "Force update"}
+            </Button>
+          </div>
+        )}
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(7rem,1fr))] gap-2">
           {commandButtons.map(({ cmd, label, desc, destructive }) => (
             <button
+              type="button"
               key={cmd}
-              onClick={() => handleSend(cmd)}
+              onClick={() => (destructive ? setArming(cmd) : handleSend(cmd))}
               disabled={sending !== null}
               className={`group relative px-3 py-2.5 rounded-md text-left transition-all ${
                 destructive
-                  ? "bg-zinc-800/60 hover:bg-red-950/40 border border-zinc-700/50 hover:border-red-800/50"
-                  : "bg-zinc-800/60 hover:bg-zinc-700/60 border border-zinc-700/50 hover:border-zinc-600"
+                  ? "bg-sol-bg-highlight hover:bg-sol-red/10 border border-sol-border hover:border-sol-red/40"
+                  : "bg-sol-bg-highlight hover:bg-sol-bg-highlight border border-sol-border hover:border-sol-text-dim"
               } ${sending === cmd ? "opacity-60" : ""} disabled:cursor-not-allowed`}
             >
               <div
                 className={`text-sm font-medium ${
-                  destructive ? "text-zinc-300 group-hover:text-red-300" : "text-zinc-300"
+                  destructive ? "text-sol-text-secondary group-hover:text-sol-red" : "text-sol-text-secondary"
                 }`}
               >
                 {sending === cmd ? "..." : label}
               </div>
-              <div className="text-[11px] text-zinc-500 mt-0.5">{desc}</div>
+              <div className="text-meta text-sol-text-muted mt-0.5">{desc}</div>
             </button>
           ))}
         </div>
       </div>
 
       {recentCommands.length > 0 && (
-        <div className="border-t border-zinc-800">
+        <div className="border-t border-sol-border">
           <div className="px-4 py-2 flex items-center justify-between">
-            <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-600">
+            <span className="text-mark font-mono uppercase tracking-wider text-sol-text-dim">
               Command History
             </span>
-            <span className="text-[11px] text-zinc-600">{recentCommands.length} recent</span>
+            <span className="text-meta text-sol-text-dim">{recentCommands.length} recent</span>
           </div>
           <div className="max-h-[280px] overflow-y-auto">
             {recentCommands.map((cmd) => {
@@ -156,8 +170,8 @@ function CommandPanel({
               return (
                 <div
                   key={cmd._id}
-                  className={`px-4 py-2 border-t border-zinc-800/50 cursor-pointer transition-colors ${
-                    isExpanded ? "bg-zinc-800/40" : "hover:bg-zinc-800/20"
+                  className={`px-4 py-2 border-t border-sol-border cursor-pointer transition-colors ${
+                    isExpanded ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight"
                   }`}
                   onClick={() => setExpandedCmd(isExpanded ? null : cmd._id)}
                 >
@@ -165,32 +179,32 @@ function CommandPanel({
                     <span
                       className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                         isPending
-                          ? "bg-amber-500 animate-pulse"
+                          ? "bg-sol-amber animate-pulse"
                           : hasError
-                            ? "bg-red-500"
-                            : "bg-emerald-500"
+                            ? "bg-sol-red"
+                            : "bg-sol-green"
                       }`}
                     />
-                    <span className="text-xs font-mono text-zinc-300 w-24">
+                    <span className="text-xs font-mono text-sol-text-secondary w-24">
                       {cmd.command}
                     </span>
-                    <span className="text-[11px] text-zinc-600 flex-1">
+                    <span className="text-meta text-sol-text-dim flex-1">
                       {formatRelativeTime(cmd.created_at)}
                     </span>
                     {isPending && (
-                      <span className="text-[11px] text-amber-500/80">waiting...</span>
+                      <span className="text-meta text-sol-amber">waiting...</span>
                     )}
                     {cmd.executed_at && !hasError && (
-                      <span className="text-[11px] text-zinc-600">
+                      <span className="text-meta text-sol-text-dim">
                         {Math.round((cmd.executed_at - cmd.created_at) / 1000)}s
                       </span>
                     )}
                     {hasError && (
-                      <span className="text-[11px] text-red-400">failed</span>
+                      <span className="text-meta text-sol-red">failed</span>
                     )}
                   </div>
                   {isExpanded && (cmd.result || cmd.error) && (
-                    <pre className="mt-2 ml-[18px] p-3 bg-zinc-950 rounded text-[11px] leading-relaxed font-mono text-zinc-400 whitespace-pre-wrap break-words max-h-[200px] overflow-y-auto">
+                    <pre className="mt-2 ml-[18px] p-3 bg-sol-bg rounded text-meta leading-relaxed font-mono text-sol-text-muted whitespace-pre-wrap break-words max-h-[200px] overflow-y-auto">
                       {(() => {
                         const raw = cmd.error || cmd.result || "";
                         try {
@@ -251,9 +265,9 @@ function EmailLabel({ text, className = "" }: { text: string; className?: string
 function CountBadge({ n, tone }: { n: number; tone: "error" | "warn" }) {
   if (n <= 0) return null;
   const cls = tone === "error"
-    ? "bg-red-950/50 text-red-400 border-red-900/30"
-    : "bg-amber-950/50 text-amber-400 border-amber-900/30";
-  return <span className={`px-1.5 rounded text-[10px] leading-4 font-mono border tabular-nums ${cls}`}>{n}</span>;
+    ? "bg-sol-red/10 text-sol-red border-sol-red/30"
+    : "bg-sol-amber/10 text-sol-amber border-sol-amber/30";
+  return <span className={`px-1.5 rounded text-meta leading-4 font-mono border tabular-nums ${cls}`}>{n}</span>;
 }
 
 function UserListItem({
@@ -274,20 +288,20 @@ function UserListItem({
       onClick={onClick}
       className={`w-full text-left px-2.5 py-2 rounded-md transition-colors border ${
         isSelected
-          ? "bg-sky-950/50 border-sky-800/40 text-white"
-          : "text-zinc-300 hover:bg-zinc-800/60 border-transparent"
+          ? "bg-sol-blue/10 border-sol-blue/30 text-sol-text"
+          : "text-sol-text-secondary hover:bg-sol-bg-highlight border-transparent"
       }`}
     >
       <div className="flex items-center gap-2 text-[13px]">
         <span
           className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-            online ? "bg-emerald-500" : stale ? "bg-zinc-700" : "bg-zinc-500"
+            online ? "bg-sol-green" : stale ? "bg-sol-text-dim/40" : "bg-sol-text-muted"
           }`}
         />
         <EmailLabel text={labelOf(user)} className="flex-1" />
       </div>
-      <div className="ml-3.5 mt-0.5 flex items-center gap-1.5 text-[11px] text-zinc-600">
-        <span className={`tabular-nums ${online ? "text-zinc-500" : stale ? "text-zinc-600" : "text-amber-500/70"}`}>
+      <div className="ml-3.5 mt-0.5 flex items-center gap-1.5 text-meta text-sol-text-dim">
+        <span className={`tabular-nums ${online ? "text-sol-text-muted" : stale ? "text-sol-text-dim" : "text-sol-amber"}`}>
           {lastSeen ? formatRelativeTime(lastSeen) : "never"}
         </span>
         {user.cli_version && <span>· v{user.cli_version}</span>}
@@ -342,8 +356,8 @@ function MetricsChart({ logs }: { logs: { message: string; timestamp: number }[]
 
   if (metrics.length < 2) {
     return (
-      <div className="bg-zinc-900/60 rounded-lg border border-zinc-800/60 px-4 py-6 text-center">
-        <span className="text-[11px] font-mono text-zinc-600">Collecting metrics...</span>
+      <div className="bg-sol-bg-alt rounded-lg border border-sol-border px-4 py-6 text-center">
+        <span className="text-meta font-mono text-sol-text-dim">Collecting metrics...</span>
       </div>
     );
   }
@@ -373,32 +387,32 @@ function MetricsChart({ logs }: { logs: { message: string; timestamp: number }[]
   const fdPoints = metrics.map((m) => `${x(m.timestamp)},${yFd(m.fds)}`).join(" ");
 
   return (
-    <div className="bg-zinc-900/60 rounded-lg border border-zinc-800/60 overflow-hidden">
-      <div className="px-4 py-2.5 border-b border-zinc-800/60 flex items-center justify-between">
-        <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-600">
+    <div className="bg-sol-bg-alt rounded-lg border border-sol-border overflow-hidden">
+      <div className="px-4 py-2.5 border-b border-sol-border flex items-center justify-between">
+        <span className="text-mark font-mono uppercase tracking-wider text-sol-text-dim">
           System Metrics
         </span>
-        <div className="flex items-center gap-4 text-[11px]">
+        <div className="flex items-center gap-4 text-meta">
           <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-1 rounded-sm bg-sky-500/60" />
-            <span className="text-zinc-500">RSS</span>
+            <span className="w-2.5 h-1 rounded-sm bg-sol-blue/60" />
+            <span className="text-sol-text-muted">RSS</span>
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-0.5 rounded-sm bg-amber-500" />
-            <span className="text-zinc-500">FDs</span>
+            <span className="w-2.5 h-0.5 rounded-sm bg-sol-amber" />
+            <span className="text-sol-text-muted">FDs</span>
           </span>
         </div>
       </div>
       <div className="px-4 py-3">
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 120 }} preserveAspectRatio="none">
-          <polygon points={rssAreaPoints} fill="rgba(56,189,248,0.12)" />
-          <polyline points={rssPoints} fill="none" stroke="rgba(56,189,248,0.5)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-          <polyline points={fdPoints} fill="none" stroke="rgba(245,158,11,0.7)" strokeWidth="1.5" strokeDasharray="4 2" vectorEffect="non-scaling-stroke" />
+          <polygon points={rssAreaPoints} fill="var(--sol-blue)" fillOpacity={0.12} />
+          <polyline points={rssPoints} fill="none" stroke="var(--sol-blue)" strokeOpacity={0.5} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+          <polyline points={fdPoints} fill="none" stroke="var(--sol-amber)" strokeOpacity={0.7} strokeWidth="1.5" strokeDasharray="4 2" vectorEffect="non-scaling-stroke" />
           {showRssWarn && (
             <line
               x1={PAD.left} y1={yRss(RSS_WARN)}
               x2={PAD.left + cw} y2={yRss(RSS_WARN)}
-              stroke="rgba(239,68,68,0.4)" strokeWidth="1" strokeDasharray="6 3"
+              stroke="var(--sol-red)" strokeOpacity={0.4} strokeWidth="1" strokeDasharray="6 3"
               vectorEffect="non-scaling-stroke"
             />
           )}
@@ -406,27 +420,27 @@ function MetricsChart({ logs }: { logs: { message: string; timestamp: number }[]
             <line
               x1={PAD.left} y1={yFd(FD_WARN)}
               x2={PAD.left + cw} y2={yFd(FD_WARN)}
-              stroke="rgba(239,68,68,0.3)" strokeWidth="1" strokeDasharray="6 3"
+              stroke="var(--sol-red)" strokeOpacity={0.3} strokeWidth="1" strokeDasharray="6 3"
               vectorEffect="non-scaling-stroke"
             />
           )}
           {metrics.map((m, i) => (
-            <circle key={i} cx={x(m.timestamp)} cy={yRss(m.rss_mb)} r="2" fill="rgba(56,189,248,0.7)" />
+            <circle key={i} cx={x(m.timestamp)} cy={yRss(m.rss_mb)} r="2" fill="var(--sol-blue)" fillOpacity={0.7} />
           ))}
         </svg>
       </div>
-      <div className="px-4 py-2.5 border-t border-zinc-800/60 flex items-center gap-6 text-[11px] font-mono">
-        <span className="text-zinc-500">
-          RSS <span className={`${latest.rss_mb >= RSS_WARN ? "text-red-400" : "text-sky-400"}`}>{latest.rss_mb}MB</span>
+      <div className="px-4 py-2.5 border-t border-sol-border flex items-center gap-6 text-meta font-mono">
+        <span className="text-sol-text-muted">
+          RSS <span className={`${latest.rss_mb >= RSS_WARN ? "text-sol-red" : "text-sol-blue"}`}>{latest.rss_mb}MB</span>
         </span>
-        <span className="text-zinc-500">
-          Heap <span className="text-zinc-300">{latest.heap_mb}/{latest.heap_max_mb}MB</span>
+        <span className="text-sol-text-muted">
+          Heap <span className="text-sol-text-secondary">{latest.heap_mb}/{latest.heap_max_mb}MB</span>
         </span>
-        <span className="text-zinc-500">
-          FDs <span className={`${latest.fds >= FD_WARN ? "text-red-400" : "text-amber-400"}`}>{latest.fds}</span>
+        <span className="text-sol-text-muted">
+          FDs <span className={`${latest.fds >= FD_WARN ? "text-sol-red" : "text-sol-amber"}`}>{latest.fds}</span>
         </span>
-        <span className="text-zinc-500">
-          Uptime <span className="text-zinc-300">{latest.uptime_min >= 60 ? `${Math.round(latest.uptime_min / 60)}h` : `${latest.uptime_min}m`}</span>
+        <span className="text-sol-text-muted">
+          Uptime <span className="text-sol-text-secondary">{latest.uptime_min >= 60 ? `${Math.round(latest.uptime_min / 60)}h` : `${latest.uptime_min}m`}</span>
         </span>
       </div>
     </div>
@@ -486,15 +500,15 @@ function SegmentedButtons<T extends string>({
   activeClass?: (v: T) => string | undefined;
 }) {
   return (
-    <div className="flex rounded-md border border-zinc-800/60 overflow-hidden shrink-0">
+    <div className="flex rounded-md border border-sol-border overflow-hidden shrink-0">
       {options.map((o) => (
         <button
           key={o.value}
           onClick={() => onChange(o.value)}
-          className={`px-2.5 py-1.5 text-[11px] font-mono transition-colors ${
+          className={`px-2.5 py-1.5 text-meta font-mono transition-colors ${
             value === o.value
-              ? activeClass?.(o.value) ?? "bg-zinc-800 text-zinc-200"
-              : "bg-zinc-900/40 text-zinc-500 hover:text-zinc-300"
+              ? activeClass?.(o.value) ?? "bg-sol-bg-highlight text-sol-text"
+              : "bg-sol-bg-alt text-sol-text-muted hover:text-sol-text"
           }`}
         >
           {o.label}
@@ -506,7 +520,7 @@ function SegmentedButtons<T extends string>({
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-2.5 pt-3 pb-1 text-[10px] font-mono uppercase tracking-wider text-zinc-600">{children}</div>
+    <div className="px-2.5 pt-3 pb-1 text-mark font-mono uppercase tracking-wider text-sol-text-dim">{children}</div>
   );
 }
 
@@ -597,39 +611,34 @@ function AdminDaemonLogs() {
 
   if (logsResult === undefined) {
     return (
-      <div className="h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
-        <div className="text-zinc-500 font-mono text-sm">loading...</div>
+      <div className="h-screen bg-sol-bg text-sol-text flex items-center justify-center">
+        <div className="text-sol-text-muted font-mono text-sm">loading...</div>
       </div>
     );
   }
 
   if (!logsResult.isAdmin) {
     return (
-      <div className="h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
+      <div className="h-screen bg-sol-bg text-sol-text flex items-center justify-center">
         <div className="text-center">
-          <h1 className="text-xl font-medium text-red-400 mb-2">Access Denied</h1>
-          <p className="text-zinc-500 text-sm">This page is for Codecast staff.</p>
+          <h1 className="text-xl font-medium text-sol-red mb-2">Access Denied</h1>
+          <p className="text-sol-text-muted text-sm">This page is for Codecast staff.</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="h-screen flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden">
+    <div className="h-screen flex flex-col bg-sol-bg text-sol-text overflow-hidden">
       <div className="w-full max-w-[1600px] mx-auto px-6 pt-5 pb-4 shrink-0">
         {/* Header */}
         <div className="flex items-center gap-4 mb-4">
-          <Link href="/inbox" className="text-zinc-500 hover:text-zinc-300 transition-colors">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-            </svg>
-          </Link>
           <h1 className="text-lg font-medium tracking-tight">Daemon Admin</h1>
-          <div className="flex items-center gap-3 text-xs text-zinc-500 tabular-nums">
+          <div className="flex items-center gap-3 text-xs text-sol-text-muted tabular-nums">
             <span>
-              <span className="text-emerald-500">{onlineTotal}</span>/{totalUsers} online
+              <span className="text-sol-green">{onlineTotal}</span>/{totalUsers} online
             </span>
-            <span className="text-zinc-700">|</span>
+            <span className="text-sol-text-dim">|</span>
             <span>{filteredLogs.length} logs</span>
           </div>
         </div>
@@ -649,42 +658,42 @@ function AdminDaemonLogs() {
                   onClick={() => { setTimeFilter(label); toTop(); }}
                   className={`text-left rounded-lg px-4 py-3 border transition-colors ${
                     timeFilter === label
-                      ? "bg-zinc-900 border-zinc-700"
-                      : "bg-zinc-900/60 border-zinc-800/60 hover:border-zinc-700/80"
+                      ? "bg-sol-bg-highlight border-sol-border"
+                      : "bg-sol-bg-alt border-sol-border hover:border-sol-text-dim"
                   }`}
                 >
                   <div className="flex items-baseline justify-between">
-                    <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-600">{label}</span>
-                    <span className="text-[11px] text-zinc-600">{data.uniqueUsers} users</span>
+                    <span className="text-mark font-mono uppercase tracking-wider text-sol-text-dim">{label}</span>
+                    <span className="text-meta text-sol-text-dim">{data.uniqueUsers} users</span>
                   </div>
                   <div
-                    className="text-2xl font-light text-zinc-200 mt-1 tabular-nums"
+                    className="text-2xl font-light text-sol-text mt-1 tabular-nums"
                     title={floor ? `At least this many: the count reads the newest ${data.total.toLocaleString()} rows` : undefined}
                   >
-                    {data.total.toLocaleString()}{floor && <span className="text-zinc-600">+</span>}
+                    {data.total.toLocaleString()}{floor && <span className="text-sol-text-dim">+</span>}
                   </div>
-                  <div className="flex gap-3 mt-1 text-[11px] tabular-nums">
-                    {data.error > 0 && <span className="text-red-400">{data.error.toLocaleString()} err</span>}
-                    {data.warn > 0 && <span className="text-amber-400">{data.warn.toLocaleString()} warn</span>}
-                    {data.error === 0 && data.warn === 0 && <span className="text-zinc-600">clean</span>}
+                  <div className="flex gap-3 mt-1 text-meta tabular-nums">
+                    {data.error > 0 && <span className="text-sol-red">{data.error.toLocaleString()} err</span>}
+                    {data.warn > 0 && <span className="text-sol-amber">{data.warn.toLocaleString()} warn</span>}
+                    {data.error === 0 && data.warn === 0 && <span className="text-sol-text-dim">clean</span>}
                   </div>
                 </button>
               );
             })}
-            <div className="bg-zinc-900/60 rounded-lg px-4 py-3 border border-zinc-800/60 min-w-0">
-              <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-600">Top Errors</span>
+            <div className="bg-sol-bg-alt rounded-lg px-4 py-3 border border-sol-border min-w-0">
+              <span className="text-mark font-mono uppercase tracking-wider text-sol-text-dim">Top Errors</span>
               {stats.topErrors.length === 0 ? (
-                <div className="text-[11px] text-zinc-600 mt-2">No errors</div>
+                <div className="text-meta text-sol-text-dim mt-2">No errors</div>
               ) : (
                 <div className="mt-1.5">
                   {stats.topErrors.slice(0, 3).map((err) => (
                     <button
                       key={err.message}
                       onClick={() => { setSearchQuery(err.message.split(/<path>|<id>|\bN\b/)[0].trim()); toTop(); }}
-                      className="w-full flex gap-1.5 text-left text-[11px] text-zinc-500 hover:text-zinc-300 py-0.5"
+                      className="w-full flex gap-1.5 text-left text-meta text-sol-text-muted hover:text-sol-text py-0.5"
                       title={err.message}
                     >
-                      <span className="text-red-400/80 font-mono tabular-nums shrink-0">{err.count}x</span>
+                      <span className="text-sol-red font-mono tabular-nums shrink-0">{err.count}x</span>
                       <span className="truncate">{err.message}</span>
                     </button>
                   ))}
@@ -696,16 +705,16 @@ function AdminDaemonLogs() {
       </div>
 
       {/* Main grid: each column scrolls on its own inside the viewport */}
-      <div className="flex-1 min-h-0 w-full max-w-[1600px] mx-auto px-6 pb-6 grid grid-cols-[320px_minmax(0,1fr)] gap-4">
+      <div className="flex-1 min-h-0 w-full max-w-[1600px] mx-auto px-6 pb-6 grid grid-cols-[minmax(13rem,320px)_minmax(0,1fr)] gap-4">
         {/* Users */}
-        <div className="flex flex-col min-h-0 bg-zinc-900/60 rounded-lg border border-zinc-800/60 overflow-hidden">
-          <div className="px-2 py-2 border-b border-zinc-800/60 shrink-0">
+        <div className="flex flex-col min-h-0 bg-sol-bg-alt rounded-lg border border-sol-border overflow-hidden">
+          <div className="px-2 py-2 border-b border-sol-border shrink-0">
             <input
               type="text"
               placeholder={`Filter ${totalUsers} users...`}
               value={userQuery}
               onChange={(e) => setUserQuery(e.target.value)}
-              className="w-full px-2.5 py-1.5 bg-zinc-950/60 border border-zinc-800/60 rounded text-[12px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-600 font-mono"
+              className="w-full px-2.5 py-1.5 bg-sol-bg border border-sol-border rounded text-[12px] text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan font-mono"
             />
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto p-1.5 [overflow-anchor:none]">
@@ -713,8 +722,8 @@ function AdminDaemonLogs() {
               onClick={() => selectUser(undefined)}
               className={`w-full text-left px-2.5 py-2 rounded-md text-[13px] transition-colors border ${
                 !selectedUserId
-                  ? "bg-sky-950/50 border-sky-800/40 text-white"
-                  : "text-zinc-400 hover:bg-zinc-800/60 border-transparent"
+                  ? "bg-sol-blue/10 border-sol-blue/30 text-sol-text"
+                  : "text-sol-text-muted hover:bg-sol-bg-highlight border-transparent"
               }`}
             >
               All users
@@ -728,7 +737,7 @@ function AdminDaemonLogs() {
               <UserListItem key={user._id} user={user} isSelected={selectedUserId === user._id} onClick={() => selectUser(user._id as Id<"users">)} />
             ))}
             {online.length + offline.length === 0 && (
-              <div className="px-3 py-6 text-center text-[12px] text-zinc-600">No users match</div>
+              <div className="px-3 py-6 text-center text-[12px] text-sol-text-dim">No users match</div>
             )}
           </div>
         </div>
@@ -755,22 +764,22 @@ function AdminDaemonLogs() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => { if (e.key === "Escape") setSearchQuery(""); }}
-              className="flex-1 min-w-0 px-3 py-1.5 bg-zinc-900/60 border border-zinc-800/60 rounded-md text-[13px] text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-600 font-mono"
+              className="flex-1 min-w-0 px-3 py-1.5 bg-sol-bg-alt border border-sol-border rounded-md text-[13px] text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan font-mono"
             />
             <SegmentedButtons
               options={LEVEL_BUTTONS}
               value={levelFilter}
               onChange={(v) => { setLevelFilter(v); toTop(); }}
-              activeClass={(v) => v === "error" ? "bg-red-950/50 text-red-400" : v === "warn" ? "bg-amber-950/50 text-amber-400" : undefined}
+              activeClass={(v) => v === "error" ? "bg-sol-red/10 text-sol-red" : v === "warn" ? "bg-sol-amber/10 text-sol-amber" : undefined}
             />
             <SegmentedButtons options={TIME_BUTTONS} value={timeFilter} onChange={(v) => { setTimeFilter(v); toTop(); }} />
             {selectedUserId && (
               <button
                 onClick={() => setShowCommands(!showCommands)}
-                className={`px-2.5 py-1.5 text-[11px] font-mono rounded-md border transition-colors shrink-0 ${
+                className={`px-2.5 py-1.5 text-meta font-mono rounded-md border transition-colors shrink-0 ${
                   showCommands
-                    ? "bg-sky-950/40 text-sky-400 border-sky-800/40"
-                    : "bg-zinc-900/40 text-zinc-500 border-zinc-800/60 hover:text-zinc-300"
+                    ? "bg-sol-blue/10 text-sol-blue border-sol-blue/30"
+                    : "bg-sol-bg-alt text-sol-text-muted border-sol-border hover:text-sol-text"
                 }`}
                 title="Toggle remote commands panel"
               >
@@ -779,7 +788,7 @@ function AdminDaemonLogs() {
             )}
           </div>
 
-          <div className="relative flex-1 min-h-0 bg-zinc-900/40 rounded-lg border border-zinc-800/60 overflow-hidden">
+          <div className="relative flex-1 min-h-0 bg-sol-bg-alt rounded-lg border border-sol-border overflow-hidden">
             {newCount > 0 && (
               <Button variant="blue" size="xs" onClick={toTop} className="absolute top-2 left-1/2 z-10 -translate-x-1/2 rounded-full font-mono">
                 {newCount} new · jump to latest
@@ -788,10 +797,10 @@ function AdminDaemonLogs() {
             <div
               ref={scrollRef}
               onScroll={onLogScroll}
-              className="h-full overflow-y-auto divide-y divide-zinc-800/40 [overflow-anchor:none]"
+              className="h-full overflow-y-auto divide-y divide-sol-border/60 [overflow-anchor:none]"
             >
               {groups.length === 0 ? (
-                <div className="p-12 text-center text-zinc-600 text-sm">No logs matching filters</div>
+                <div className="p-12 text-center text-sol-text-dim text-sm">No logs matching filters</div>
               ) : (
                 groups.map(({ log, count, oldest }) => {
                   const user = userMap.get(log.user_id);
@@ -802,47 +811,47 @@ function AdminDaemonLogs() {
                   return (
                     <div
                       key={log._id}
-                      className={`px-4 py-2.5 hover:bg-zinc-800/30 transition-colors ${log.level === "error" ? "bg-red-950/10" : ""}`}
+                      className={`px-4 py-2.5 hover:bg-sol-bg-highlight transition-colors ${log.level === "error" ? "bg-sol-red/5" : ""}`}
                     >
                       <div className="flex items-start gap-2.5">
                         <LogLevelDot level={log.level as LogLevel} />
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 text-[11px] text-zinc-500 mb-0.5 min-w-0">
+                          <div className="flex items-center gap-2 text-meta text-sol-text-muted mb-0.5 min-w-0">
                             {!selectedUserId && (
                               <button
                                 onClick={() => selectUser(log.user_id)}
-                                className="text-zinc-400 font-medium hover:text-sky-300 min-w-0 max-w-[45%]"
+                                className="text-sol-text-muted font-medium hover:text-sol-blue min-w-0 max-w-[45%]"
                               >
                                 <EmailLabel text={labelOf(user)} />
                               </button>
                             )}
-                            <span className="text-zinc-600 tabular-nums shrink-0">
+                            <span className="text-sol-text-dim tabular-nums shrink-0">
                               {count > 1 ? `${when(oldest)} – ${formatTimestamp(log.timestamp)}` : when(log.timestamp)}
                             </span>
-                            {log.daemon_version && <span className="text-zinc-700 shrink-0">v{log.daemon_version}</span>}
+                            {log.daemon_version && <span className="text-sol-text-dim shrink-0">v{log.daemon_version}</span>}
                             {count > 1 && (
-                              <span className="px-1.5 rounded bg-zinc-800 text-zinc-400 font-mono tabular-nums shrink-0">×{count}</span>
+                              <span className="px-1.5 rounded bg-sol-bg-highlight text-sol-text-muted font-mono tabular-nums shrink-0">×{count}</span>
                             )}
                           </div>
-                          <pre className="text-[13px] text-zinc-300 whitespace-pre-wrap break-words font-mono leading-relaxed">
+                          <pre className="text-[13px] text-sol-text-secondary whitespace-pre-wrap break-words font-mono leading-relaxed">
                             {log.message}
                           </pre>
                           {log.metadata?.error_code && (
-                            <span className={`inline-block mt-1 text-[11px] font-mono px-1.5 py-0.5 rounded ${style.bg} ${style.text}`}>
+                            <span className={`inline-block mt-1 text-meta font-mono px-1.5 py-0.5 rounded ${style.bg} ${style.text}`}>
                               {log.metadata.error_code}
                             </span>
                           )}
                           {log.metadata?.session_id && (
-                            <div className="mt-0.5 text-[11px] text-zinc-600 font-mono">
+                            <div className="mt-0.5 text-meta text-sol-text-dim font-mono">
                               session: {log.metadata.session_id.slice(0, 12)}...
                             </div>
                           )}
                           {log.metadata?.stack && (
                             <details className="mt-1.5">
-                              <summary className="text-[11px] text-zinc-600 cursor-pointer hover:text-zinc-400 font-mono">
+                              <summary className="text-meta text-sol-text-dim cursor-pointer hover:text-sol-text font-mono">
                                 stack trace
                               </summary>
-                              <pre className="mt-1.5 p-2.5 bg-zinc-950 rounded text-[11px] text-zinc-500 overflow-x-auto font-mono leading-relaxed">
+                              <pre className="mt-1.5 p-2.5 bg-sol-bg rounded text-meta text-sol-text-muted overflow-x-auto font-mono leading-relaxed">
                                 {log.metadata.stack}
                               </pre>
                             </details>

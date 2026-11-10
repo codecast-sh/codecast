@@ -96,7 +96,7 @@ export function RoleCard({ role, line, state, at: box, ghost, spot, className = 
         <Face avatar={r.avatar} size={30} />
         <div className="min-w-0 flex-1">
           <div className="text-[12.5px] font-semibold truncate leading-tight">{r.name}</div>
-          <div className="text-[11px] gs-dim truncate leading-tight mt-0.5 flex items-center gap-1.5">{state && <Dot state={state} size={6} />}{line ?? `@${r.handle}`}</div>
+          <div className="text-meta gs-dim truncate leading-tight mt-0.5 flex items-center gap-1.5">{state && <Dot state={state} size={6} />}{line ?? `@${r.handle}`}</div>
         </div>
       </div>
       {children}
@@ -131,7 +131,7 @@ export function Count({ value, className = "" }: { value: number; className?: st
 
 /** A small chip: a project, a trigger, a tag. */
 export function Chip({ children, color = "var(--sol-text-muted)", style }: { children: ReactNode; color?: string; style?: CSSProperties }) {
-  return <span className="inline-flex items-center gap-1 h-[22px] px-2 rounded-md text-[11px] whitespace-nowrap" style={{ color, background: `color-mix(in srgb, ${color} 11%, transparent)`, border: `1px solid color-mix(in srgb, ${color} 22%, transparent)`, ...style }}>{children}</span>;
+  return <span className="inline-flex items-center gap-1 h-[22px] px-2 rounded-md text-meta whitespace-nowrap" style={{ color, background: `color-mix(in srgb, ${color} 11%, transparent)`, border: `1px solid color-mix(in srgb, ${color} 22%, transparent)`, ...style }}>{children}</span>;
 }
 
 /** A message in a role's or a session's thread. */

@@ -248,7 +248,7 @@ export const TriggerRowItem = memo(function TriggerRowItem({
   const dot = "text-sol-text-dim/60";
   const sep = <span className={`shrink-0 ${dot}`}>·</span>;
   const outcomeLine = isPseudo ? null : (
-    <div className={`flex items-center gap-1.5 min-w-0 ${page ? "text-[11px]" : "text-[10px]"} tabular-nums`}>
+    <div className={`flex items-center gap-1.5 min-w-0 ${page ? "text-meta" : "text-meta"} tabular-nums`}>
       {ago ? (
         <>
           <outcome.Icon className={`w-3 h-3 shrink-0 ${outcome.tone}`} />
@@ -349,10 +349,10 @@ export const TriggerRowItem = memo(function TriggerRowItem({
                     </Link>
                   </ShortcutTooltip>
                 )}
-                {isNext && <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wider text-sol-cyan">next up</span>}
+                {isNext && <span className="shrink-0 text-mark font-semibold uppercase tracking-wider text-sol-cyan">next up</span>}
                 {unread && !attached && (
                   <ShortcutTooltip label="Outcome landed since you last opened this list">
-                    <span className="shrink-0 px-1 rounded-full text-[9px] font-medium bg-sol-amber/15 text-sol-amber">new</span>
+                    <span className="shrink-0 px-1 rounded-full text-meta font-medium bg-sol-amber/15 text-sol-amber">new</span>
                   </ShortcutTooltip>
                 )}
                 {/* Cadence text stays off attached rows (the countdown is
@@ -360,7 +360,7 @@ export const TriggerRowItem = memo(function TriggerRowItem({
                 {(row.kind === "loop" || !attached) && (
                   // Capped and truncating: a long cadence ("on pull request
                   // comment") must never take the title's width in the sidebar.
-                  <span className="ml-auto min-w-0 max-w-[40%] truncate text-[10px] font-medium text-sol-text-muted">
+                  <span className="ml-auto min-w-0 max-w-[40%] truncate text-meta font-medium text-sol-text-muted">
                     {row.kind === "loop" ? "loop" : describeTaskCadence(task)}
                   </span>
                 )}
@@ -369,10 +369,10 @@ export const TriggerRowItem = memo(function TriggerRowItem({
               {/* ── Line 2: what each run does (+ outcome meta when attached) ── */}
               <div className="flex items-center gap-1.5 min-w-0">
                 <ShortcutTooltip label={gist} hint={task.display_summary ? undefined : "a summary is on its way"}>
-                  <span className={`block min-w-0 flex-1 truncate ${page ? "text-xs" : "text-[11px]"} leading-snug text-sol-text-dim`}>{gist}</span>
+                  <span className={`block min-w-0 flex-1 truncate ${page ? "text-xs" : "text-meta"} leading-snug text-sol-text-dim`}>{gist}</span>
                 </ShortcutTooltip>
                 {attached && ago && !isPseudo && wrapTip(
-                  <span className={`shrink-0 inline-flex items-center gap-1 text-[10px] tabular-nums ${outcome.tone}`}>
+                  <span className={`shrink-0 inline-flex items-center gap-1 text-meta tabular-nums ${outcome.tone}`}>
                     <outcome.Icon className="w-3 h-3" />
                     <span className="text-sol-text-dim">{ago}</span>
                   </span>,
@@ -465,9 +465,9 @@ export const TriggerRowItem = memo(function TriggerRowItem({
       {runsOpen && !isPseudo && (
         <div className={`${page ? "pl-4" : arrow ? "pl-6" : "pl-2.5"} pr-2 pb-1.5`} onClick={stop}>
           {runs === undefined ? (
-            <div className="text-[10px] text-sol-text-dim py-1 pl-1.5">Loading runs…</div>
+            <div className="text-meta text-sol-text-dim py-1 pl-1.5">Loading runs…</div>
           ) : runs.length === 0 ? (
-            <div className="text-[10px] text-sol-text-dim py-1 pl-1.5">No runs recorded yet</div>
+            <div className="text-meta text-sol-text-dim py-1 pl-1.5">No runs recorded yet</div>
           ) : (
             <TriggerRunList runs={runs} now={now} currentConversationId={activeSessionId} onOpened={onNavigated} ensureInboxRoute={page} onOpenRun={history?.open} />
           )}
@@ -525,7 +525,7 @@ export function TriggerHomeHeader({ group, home, now, isActive, showProject, onO
   const project = showProject && projectPath ? getProjectName(undefined, projectPath) : undefined;
   const projectChip = project ? (
     <ShortcutTooltip label={projectPath!}>
-      <span className={`shrink-0 px-1 rounded text-[9px] font-medium border ${getLabelColor(project).bg} ${getLabelColor(project).text} ${getLabelColor(project).border}`}>
+      <span className={`shrink-0 px-1 rounded text-meta font-medium border ${getLabelColor(project).bg} ${getLabelColor(project).text} ${getLabelColor(project).border}`}>
         {project}
       </span>
     </ShortcutTooltip>
@@ -533,7 +533,7 @@ export function TriggerHomeHeader({ group, home, now, isActive, showProject, onO
   // A count only when there is something to count: "1 trigger" on every
   // header would be the roster's most repeated words.
   const countEl = (
-    <span className="ml-auto shrink-0 text-[10px] tabular-nums text-sol-text-dim">
+    <span className="ml-auto shrink-0 text-meta tabular-nums text-sol-text-dim">
       {count > 1 ? `${count} ${group.rows.every((r) => r.kind === "loop") ? "loops" : "triggers"}` : ""}
     </span>
   );
@@ -547,7 +547,7 @@ export function TriggerHomeHeader({ group, home, now, isActive, showProject, onO
         <ShortcutTooltip label="Every run starts a fresh session (--spawn)" hint="opens the newest run">
           <span aria-hidden className="w-2 h-2 shrink-0 rounded-full border border-dashed border-sol-amber/70" />
         </ShortcutTooltip>
-        <span className="text-[11px] font-medium text-sol-text-muted truncate min-w-0">Fresh session per run</span>
+        <span className="text-meta font-medium text-sol-text-muted truncate min-w-0">Fresh session per run</span>
         {projectChip}
         {countEl}
       </button>
@@ -566,8 +566,8 @@ export function TriggerHomeHeader({ group, home, now, isActive, showProject, onO
     <ShortcutTooltip label={stateLine ?? title} hint={stateLine ? `${meta.label} · open session` : "open session"} side="top">
       <button onClick={onOpen} className={shell} data-trigger-home={group.homeId}>
         <StatusDot color={meta.color} ping={ws === "working"} />
-        <span className={`text-[11px] font-medium truncate min-w-0 ${hidden ? "text-sol-text-muted" : "text-sol-text"}`}>{title}</span>
-        <span className="shrink-0 text-[10px]" style={{ color: meta.color }}>{stateWord}</span>
+        <span className={`text-meta font-medium truncate min-w-0 ${hidden ? "text-sol-text-muted" : "text-sol-text"}`}>{title}</span>
+        <span className="shrink-0 text-meta" style={{ color: meta.color }}>{stateWord}</span>
         {projectChip}
         {countEl}
       </button>

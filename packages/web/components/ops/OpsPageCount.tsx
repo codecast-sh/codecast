@@ -14,7 +14,7 @@ import { useReplayTotal } from "./useReplayTotals";
 function Chip({ n, alert, more, title }: { n: number; alert?: boolean; more?: boolean; title?: string }) {
   if (!n) return null;
   return (
-    <span className={`flex-shrink-0 rounded-full px-1.5 text-[10.5px] font-semibold tabular-nums leading-[16px] ${alert ? "bg-sol-red text-white" : "bg-sol-bg-alt text-sol-text-muted"}`} title={title} data-ops-page-count={n}>
+    <span className={`flex-shrink-0 rounded-full px-1.5 text-meta font-semibold tabular-nums leading-[16px] ${alert ? "bg-sol-red text-white" : "bg-sol-bg-alt text-sol-text-muted"}`} title={title} data-ops-page-count={n}>
       {n.toLocaleString()}{more ? "+" : ""}
     </span>
   );

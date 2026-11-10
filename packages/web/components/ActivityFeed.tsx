@@ -160,17 +160,17 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor, shareTeamI
           {isActive && (
             <span className="flex items-center gap-1 shrink-0">
               <LivePulseDot className="w-1.5 h-1.5" still />
-              <span className="text-[8px] font-medium uppercase tracking-wider text-sol-green/70">live</span>
+              <span className="text-mark font-medium uppercase tracking-wider text-sol-green">live</span>
             </span>
           )}
           <span className="flex-1" />
-          <span className="text-[10px] font-mono text-sol-text-dim/45 tabular-nums shrink-0">{relTime(conv.updated_at)}</span>
+          <span className="text-meta font-mono text-sol-text-dim tabular-nums shrink-0">{relTime(conv.updated_at)}</span>
         </div>
 
         {summary && (
           <p
             ref={summaryRef}
-            className={`mt-1 text-[11.5px] leading-relaxed text-sol-text-muted/85 whitespace-pre-line break-words ${expanded ? "" : "line-clamp-2"}`}
+            className={`mt-1 text-meta leading-relaxed text-sol-text-muted/85 whitespace-pre-line break-words ${expanded ? "" : "line-clamp-2"}`}
           >
             {summary}
           </p>
@@ -178,16 +178,16 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor, shareTeamI
         {(clamped || expanded) && (
           <button
             onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
-            className="mt-0.5 flex items-center gap-1 text-[10px] font-mono text-sol-text-dim/50 hover:text-sol-yellow transition-colors"
+            className="mt-0.5 flex items-center gap-1 text-meta font-mono text-sol-text-dim hover:text-sol-yellow transition-colors"
           >
             <span className={`inline-block transition-transform ${expanded ? "rotate-180" : ""}`}>&#x25BE;</span>
             {expanded ? "less" : "more"}
           </button>
         )}
 
-        <div className="mt-1.5 flex items-center gap-x-2.5 gap-y-1 text-[10px] font-mono text-sol-text-dim/40 flex-wrap">
-          {showActor && author && <span className="text-sol-text-dim/55">{author}</span>}
-          {project && <span className={`rounded px-1 py-px ${projectColor || "text-sol-text-dim/45"}`}>{project}</span>}
+        <div className="mt-1.5 flex items-center gap-x-2.5 gap-y-1 text-meta font-mono text-sol-text-dim flex-wrap">
+          {showActor && author && <span className="text-sol-text-muted">{author}</span>}
+          {project && <span className={`rounded px-1 py-px ${projectColor || "text-sol-text-dim"}`}>{project}</span>}
           {msgs > 0 && <HeatStat value={msgs} breaks={MSG_BREAKS}>{formatMsgCount(msgs)} msg</HeatStat>}
           {dur && <HeatStat value={conv.duration_ms / 60000} breaks={DUR_MIN_BREAKS}>{dur}</HeatStat>}
           {/* Your own row on the team feed: what the team sees of it, and the
@@ -252,7 +252,7 @@ function PeopleRow({ people, onSelect, selectedId }: {
       <button
         key={p.id}
         onClick={() => onSelect(isSel ? undefined : (p.id as Id<"users">))}
-        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] transition-colors shrink-0 ring-1 ${isSel ? "bg-sol-bg-alt text-sol-text ring-sol-border/40" : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 ring-transparent"}`}
+        className={`flex items-center gap-1.5 px-2 py-1 rounded-md text-meta transition-colors shrink-0 ring-1 ${isSel ? "bg-sol-bg-alt text-sol-text ring-sol-border/40" : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 ring-transparent"}`}
       >
         <span className={`rounded-full ring-2 ${AVATAR_RING[hashIndex(p.id, AVATAR_RING.length)]}`}>
           <Avatar name={p.name} image={p.image} size={20} />
@@ -262,7 +262,7 @@ function PeopleRow({ people, onSelect, selectedId }: {
       </button>
     );
   };
-  const moreClass = "flex items-center px-2 py-1 rounded-md text-[11px] font-medium tabular-nums shrink-0 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 data-[state=open]:bg-sol-bg-alt data-[state=open]:text-sol-text transition-colors";
+  const moreClass = "flex items-center px-2 py-1 rounded-md text-meta font-medium tabular-nums shrink-0 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt/50 data-[state=open]:bg-sol-bg-alt data-[state=open]:text-sol-text transition-colors";
   return (
     <div className="relative">
       <div ref={measureRef} aria-hidden className="absolute left-0 top-0 flex invisible pointer-events-none" style={{ gap: PEOPLE_GAP }}>
@@ -318,19 +318,19 @@ function RollupHeader({ convs, compact }: {
     <div className={`flex flex-wrap items-center gap-x-3 gap-y-1.5 ${compact ? "px-1" : ""}`}>
       <div className="flex items-baseline gap-1.5">
         <span className="text-lg font-semibold text-sol-text tabular-nums">{stats.sessions}</span>
-        <span className="text-[11px] text-sol-text-dim">session{stats.sessions !== 1 ? "s" : ""}</span>
+        <span className="text-meta text-sol-text-dim">session{stats.sessions !== 1 ? "s" : ""}</span>
       </div>
-      {stats.people > 1 && <span className="text-[11px] text-sol-text-dim/70 tabular-nums">{stats.people} people</span>}
+      {stats.people > 1 && <span className="text-meta text-sol-text-dim tabular-nums">{stats.people} people</span>}
       {stats.active > 0 && (
-        <span className="flex items-center gap-1 text-[11px] text-sol-green/70 font-medium">
-          <LivePulseDot className="w-1.5 h-1.5" />{stats.active} live
+        <span className="flex items-center gap-1 text-meta text-sol-green/70 font-medium">
+          <LivePulseDot className="w-1.5 h-1.5" still />{stats.active} live
         </span>
       )}
-      {stats.msgs > 0 && <span className="text-[11px] text-sol-text-dim/50 tabular-nums">{formatMsgCount(stats.msgs)} msgs</span>}
+      {stats.msgs > 0 && <span className="text-meta text-sol-text-dim tabular-nums">{formatMsgCount(stats.msgs)} msgs</span>}
       {stats.topProjects.length > 0 && (
         <div className="flex items-center gap-1 overflow-x-auto">
           {stats.topProjects.map(([p, n]) => (
-            <span key={p} className="font-mono text-[9px] text-sol-text-dim/55 bg-sol-bg-alt/50 rounded px-1 py-px whitespace-nowrap">
+            <span key={p} className="font-mono text-meta text-sol-text-dim bg-sol-bg-alt/50 rounded px-1 py-px whitespace-nowrap">
               {p}<span className="opacity-40"> {n}</span>
             </span>
           ))}
@@ -338,7 +338,7 @@ function RollupHeader({ convs, compact }: {
       )}
       <Link
         href="/team/charts"
-        className="ml-auto text-[11px] text-sol-cyan/60 hover:text-sol-cyan transition-colors whitespace-nowrap"
+        className="ml-auto text-meta text-sol-cyan/60 hover:text-sol-cyan transition-colors whitespace-nowrap"
       >
         Charts
       </Link>
@@ -437,11 +437,11 @@ export function DaySection({ date, entries, showActor, onNavigate, compact, proj
   return (
     <div className={compact ? "py-0.5" : "py-1"}>
       <div className="flex items-center gap-3 mb-2 cursor-pointer select-none" onClick={() => setCollapsed(!collapsed)}>
-        <span className={`text-sol-text-dim/30 text-[10px] transition-transform ${collapsed ? "" : "rotate-90"}`}>&#x25B6;</span>
+        <span className={`text-sol-text-dim text-meta transition-transform ${collapsed ? "" : "rotate-90"}`}>&#x25B6;</span>
         <span className={`font-semibold tracking-tight text-sol-text ${compact ? "text-[13px]" : "text-[15px]"}`}>{label}</span>
         {active > 0 && (
-          <span className="flex items-center gap-1 text-[9px] text-sol-green/60 font-medium">
-            <LivePulseDot className="w-1 h-1" />{active} active
+          <span className="flex items-center gap-1 text-meta text-sol-green/60 font-medium">
+            <LivePulseDot className="w-1 h-1" still />{active} active
           </span>
         )}
         <div className="h-px flex-1 bg-sol-border/15" />
@@ -450,14 +450,14 @@ export function DaySection({ date, entries, showActor, onNavigate, compact, proj
             <button
               key={p}
               onClick={(e) => { e.stopPropagation(); onProjectFilter?.(p); }}
-              className={`font-mono rounded px-1 py-px text-[9px] hover:ring-1 hover:ring-sol-cyan/30 transition-all ${projectColors[p] || "bg-sol-bg-alt text-sol-text-dim/40"}`}
+              className={`font-mono rounded px-1 py-px text-meta hover:ring-1 hover:ring-sol-cyan/30 transition-all ${projectColors[p] || "bg-sol-bg-alt text-sol-text-dim"}`}
             >
               {p}
             </button>
           ))}
-          <span className="text-sol-text-dim/30 tabular-nums text-[10px] flex items-center gap-1.5">
-            {showActor && people > 1 && <span className="text-sol-text-dim/25">{people}p</span>}
-            {convs.length}s
+          <span className="text-sol-text-dim tabular-nums text-meta flex items-center gap-1.5">
+            {showActor && people > 1 && <span>{people} people ·</span>}
+            {convs.length} {convs.length === 1 ? "session" : "sessions"}
           </span>
         </div>
       </div>
@@ -691,7 +691,7 @@ function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, ha
           {projectFilter && (
             <button
               onClick={() => setProjectFilter(null)}
-              className="flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] bg-sol-bg-alt/60 text-sol-text-muted hover:text-sol-text transition-colors"
+              className="flex items-center gap-1.5 px-2 py-0.5 rounded-md text-meta bg-sol-bg-alt/60 text-sol-text-muted hover:text-sol-text transition-colors"
             >
               <span className="font-mono">{projectFilter}</span>
               <span className="text-sol-text-dim/40">×</span>
@@ -701,7 +701,7 @@ function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, ha
             <button
               onClick={() => setShowGit((v) => !v)}
               title={showGit ? "Hide events from GitHub and Linear" : "Show events from GitHub and Linear"}
-              className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md text-[11px] transition-colors ${showGit ? "bg-sol-bg-alt/60 text-sol-text-muted hover:text-sol-text" : "bg-sol-bg-alt/30 text-sol-text-dim/50 hover:text-sol-text-muted"}`}
+              className={`flex items-center gap-1.5 px-2 py-0.5 rounded-md text-meta transition-colors ${showGit ? "bg-sol-bg-alt/60 text-sol-text-muted hover:text-sol-text" : "bg-sol-bg-alt/30 text-sol-text-dim/50 hover:text-sol-text-muted"}`}
             >
               <span className="font-mono">Git &amp; issues</span>
               <span className="tabular-nums text-sol-text-dim/40">{gitInView.length}</span>
@@ -742,7 +742,7 @@ function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, ha
           {/* A filter can hide every loaded session while older pages still hold
               matches — keep "Load more" reachable so any filter can paginate. */}
           {displayConvs.length === 0 && (
-            <p className="text-center text-[11px] text-sol-text-dim/50 py-3">
+            <p className="text-center text-meta text-sol-text-dim/50 py-3">
               {actorFilter || projectFilter ? "No matches in the sessions loaded so far." : "No sessions yet."}
             </p>
           )}
@@ -759,7 +759,7 @@ function FeedBody({ source, sourceConvs, externalEvents = NO_EXTERNAL_EVENTS, ha
             {isLoadingMore ? (
               <Spinner className="text-sol-text-dim/70" />
             ) : (canReveal || hasMore) && (
-              <span className="flex items-center gap-1.5 text-[10px] font-mono text-sol-text-dim/40">
+              <span className="flex items-center gap-1.5 text-meta font-mono text-sol-text-dim">
                 <span className="w-1 h-1 rounded-full bg-sol-text-dim/50" />
                 more
               </span>

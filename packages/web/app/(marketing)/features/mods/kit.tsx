@@ -54,7 +54,7 @@ export function Label({ children, color = DIM }: { children: ReactNode; color?: 
 export function AppFrame({ title, right, children, className = "", style }: { title: ReactNode; right?: ReactNode; children: ReactNode; className?: string; style?: CSSProperties }) {
   return (
     <div className={`rounded-xl border ${className}`} style={{ borderColor: LINE, backgroundColor: "#fffdf6", boxShadow: "0 24px 60px -34px rgba(0,43,54,.45)", ...style }}>
-      <div className="h-9 px-3.5 rounded-t-xl flex items-center gap-2 border-b text-[11.5px] font-mono" style={{ borderColor: LINE, color: DIM, backgroundColor: "rgba(238,232,213,.45)" }}>
+      <div className="h-9 px-3.5 rounded-t-xl flex items-center gap-2 border-b text-meta font-mono" style={{ borderColor: LINE, color: DIM, backgroundColor: "rgba(238,232,213,.45)" }}>
         <span className="flex gap-1.5 mr-1.5">
           <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: "rgba(147,161,161,.45)" }} />
           <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: "rgba(147,161,161,.45)" }} />
@@ -96,7 +96,7 @@ export function Code({ file, code, mark = [], className = "", size = 12.5 }: { f
   const lines = code.replace(/\n$/, "").split("\n");
   return (
     <div className={`rounded-xl overflow-hidden border ${className}`} style={{ backgroundColor: SOL.base03, borderColor: "#0b4a5a", boxShadow: "0 24px 60px -32px rgba(0,0,0,.55)" }}>
-      <div className="h-9 px-4 flex items-center border-b font-mono text-[11.5px]" style={{ borderColor: "#0b4a5a", color: SOL.base01, backgroundColor: SOL.base02 }}>
+      <div className="h-9 px-4 flex items-center border-b font-mono text-meta" style={{ borderColor: "#0b4a5a", color: SOL.base01, backgroundColor: SOL.base02 }}>
         {file}
       </div>
       <pre className="py-3.5 overflow-x-auto font-mono leading-[1.7]" style={{ fontSize: size, color: SOL.base0 }}>

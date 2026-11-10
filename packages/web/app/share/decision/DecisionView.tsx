@@ -38,7 +38,7 @@ export function DecisionOptions({ d }: { d: SharedDecision }) {
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-              <span style={{ fontSize: 11, color: "var(--ink-dim)" }}>{i + 1}</span>
+              <span style={{ fontSize: 12, color: "var(--ink-dim)" }}>{i + 1}</span>
               <span style={{ fontFamily: "var(--serif)", fontSize: 19, fontWeight: 600, color: "var(--ink)" }}>{o.label}</span>
               {chosen && <Pill tone="green"><Check size={11} /> Chosen</Pill>}
               {recommended && <Pill tone="cyan"><Star size={11} /> Recommended</Pill>}

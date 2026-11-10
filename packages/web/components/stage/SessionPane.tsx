@@ -3,10 +3,10 @@
 // band inside another conversation (components/ObjectReveal). The host owns
 // what close and expand DO — the stage closes the leaf / takes the stage, the
 // reveal collapses the band / opens the session — so both arrive as
-// callbacks. The row subscription is only this session's row, never the whole
-// map.
+// callbacks. It subscribes to the few fields of this session's row it passes
+// on, never the whole row or the whole map.
 
-import { lazy, memo, Suspense } from "react";
+import { lazy, memo, Suspense, useCallback, useMemo } from "react";
 import { useTrackedStore, useInboxStore, getSessionRenderKey } from "../../store/inboxStore";
 import { animatedHideSession } from "../../store/undoActions";
 import { useMissingSessionLookup } from "../../hooks/useMissingSessionRow";
@@ -40,8 +40,14 @@ export const SessionPane = memo(function SessionPane({
   /** A `#msg-<id>` deep link: the pane opens scrolled to that message. */
   targetMessageId?: string;
 }) {
+  // Only the fields this pane passes on: the row's identity flips on every
+  // liveness beat (about once a second while its agent works), and a wake
+  // here rebuilds the whole conversation under it.
   const s = useTrackedStore([
-    (st) => st.sessions[sessionId],
+    (st) => getSessionRenderKey(st.sessions[sessionId]),
+    (st) => st.sessions[sessionId]?.is_idle,
+    (st) => st.sessions[sessionId]?.last_user_message,
+    (st) => st.sessions[sessionId]?.session_error,
     (st) => st.pending[`sessions:${sessionId}`]?.type === "exclude",
   ]);
   const session = s.sessions[sessionId] ?? null;
@@ -52,6 +58,12 @@ export const SessionPane = memo(function SessionPane({
   useWatchEffect(() => {
     if (missing) useInboxStore.getState().seedSession(missing);
   }, [missing]);
+  // Stable, so the memoized conversation below holds across this pane's renders.
+  const onSendAndDismiss = useCallback(() => animatedHideSession(sessionId, "stash"), [sessionId]);
+  const headerEnd = useMemo(
+    () => (onClose || onExpand ? <PaneControls onExpand={onExpand} onClose={onClose} /> : undefined),
+    [onClose, onExpand],
+  );
   if (!session) {
     if (!killed && missing !== null) return <ConversationPlaceholder id={sessionId} />;
     // Killed here, or the server will not hand it over (deleted, private):
@@ -66,11 +78,11 @@ export const SessionPane = memo(function SessionPane({
           sessionId={sessionId}
           isIdle={session.is_idle}
           onSendAndAdvance={noop}
-          onSendAndDismiss={() => animatedHideSession(sessionId, "stash")}
+          onSendAndDismiss={onSendAndDismiss}
           lastUserMessage={session.last_user_message}
           sessionError={session.session_error}
           targetMessageId={targetMessageId}
-          headerEnd={onClose || onExpand ? <PaneControls onExpand={onExpand} onClose={onClose} /> : undefined}
+          headerEnd={headerEnd}
         />
       </Suspense>
     </ErrorBoundary>

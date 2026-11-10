@@ -50,7 +50,8 @@ describe("ChatMessage", () => {
       />,
     );
     expect(html).toContain('href="/conversation/jx7c12zp5w6xg1z6evdbyvkezs8dadbn"');
-    expect(html).toContain('title="Open session"');
+    // The name ellipsizes in a narrow pane, so the link's title carries it whole.
+    expect(html).toContain('title="C3 attrition carve-out decision · open session"');
     expect(html).toContain("C3 attrition carve-out decision");
     expect(html).toContain("via Ashot Petrosian");
   });

@@ -179,11 +179,11 @@ function TaskHoverContent({ task }: { task: any }) {
             {task.title || task.short_id}
           </div>
           <div className="flex items-center gap-2 mt-1">
-            <span className={`text-[10px] font-medium ${statusColor}`}>{statusLabel}</span>
+            <span className={`text-meta font-medium ${statusColor}`}>{statusLabel}</span>
             {priority && (
               <>
-                <span className="text-gray-600">·</span>
-                <span className={`inline-flex items-center gap-0.5 text-[10px] ${priority.color}`}>
+                <span className="text-sol-text-dim/60">·</span>
+                <span className={`inline-flex items-center gap-0.5 text-meta ${priority.color}`}>
                   <priority.icon className="w-2.5 h-2.5" />
                   {priority.label}
                 </span>
@@ -191,8 +191,8 @@ function TaskHoverContent({ task }: { task: any }) {
             )}
             {kind && (
               <>
-                <span className="text-gray-600">·</span>
-                <span className="text-[10px] text-gray-400 capitalize">{kind}</span>
+                <span className="text-sol-text-dim/60">·</span>
+                <span className="text-meta text-sol-text-muted capitalize">{kind}</span>
               </>
             )}
           </div>
@@ -200,7 +200,7 @@ function TaskHoverContent({ task }: { task: any }) {
       </div>
 
       {task.description && (
-        <p className="text-[11px] text-gray-400 line-clamp-2 leading-relaxed pl-[22px]">
+        <p className="text-meta text-sol-text-muted line-clamp-2 leading-relaxed pl-[22px]">
           {stripMarkdown(task.description).slice(0, 200)}
         </p>
       )}
@@ -211,7 +211,7 @@ function TaskHoverContent({ task }: { task: any }) {
         {labels.length > 0 && (
           <div className="flex flex-wrap gap-1 pt-0.5">
             {labels.map((l) => (
-              <span key={l} className="rounded bg-sol-magenta/10 px-1.5 text-[10px] leading-[1.6] text-sol-magenta">
+              <span key={l} className="rounded bg-sol-magenta/10 px-1.5 text-meta leading-[1.6] text-sol-magenta">
                 {l}
               </span>
             ))}
@@ -219,25 +219,25 @@ function TaskHoverContent({ task }: { task: any }) {
         )}
       </div>
 
-      <div className="flex items-center justify-between gap-2 pt-1 border-t border-white/5">
-        <span className="flex items-center gap-1.5 min-w-0 whitespace-nowrap text-[10px] text-gray-500">
+      <div className="flex items-center justify-between gap-2 pt-1 border-t border-sol-border/40">
+        <span className="flex items-center gap-1.5 min-w-0 whitespace-nowrap text-meta text-sol-text-dim">
           <ShortId id={task.short_id} />
           {commentCount > 0 && (
             <span className="inline-flex items-center gap-0.5">
-              <span className="text-gray-600">·</span>
+              <span className="text-sol-text-dim/60">·</span>
               <MessageSquare className="w-2.5 h-2.5" />
               {commentCount}
             </span>
           )}
           {sessionCount > 0 && (
             <span>
-              <span className="text-gray-600">· </span>
+              <span className="text-sol-text-dim/60">· </span>
               {sessionCount} {sessionCount === 1 ? "session" : "sessions"}
             </span>
           )}
         </span>
-        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5 flex-shrink-0">
-          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+        <span className="text-meta text-sol-text-dim inline-flex items-center gap-0.5 flex-shrink-0">
+          Open <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>
     </div>
@@ -245,7 +245,7 @@ function TaskHoverContent({ task }: { task: any }) {
 }
 
 function PlanHoverContent({ plan }: { plan: any }) {
-  const statusColor = STATUS_COLOR[plan.status || "active"] || "text-gray-400";
+  const statusColor = STATUS_COLOR[plan.status || "active"] || "text-sol-text-muted";
   const statusLabel = STATUS_LABEL[plan.status] || plan.status;
 
   const tasks = plan.tasks || [];
@@ -261,25 +261,25 @@ function PlanHoverContent({ plan }: { plan: any }) {
           <div className="text-xs font-medium text-sol-text leading-snug">
             {plan.title || plan.short_id}
           </div>
-          <span className={`text-[10px] font-medium ${statusColor}`}>{statusLabel}</span>
+          <span className={`text-meta font-medium ${statusColor}`}>{statusLabel}</span>
         </div>
       </div>
 
       {plan.goal && (
-        <p className="text-[11px] text-gray-400 line-clamp-2 leading-relaxed pl-[22px]">
+        <p className="text-meta text-sol-text-muted line-clamp-2 leading-relaxed pl-[22px]">
           {stripMarkdown(plan.goal).slice(0, 200)}
         </p>
       )}
 
       {total > 0 && (
         <div className="flex items-center gap-2 pl-[22px]">
-          <div className="flex-1 h-1.5 rounded-full bg-white/5 overflow-hidden">
+          <div className="flex-1 h-1.5 rounded-full bg-sol-border/30 overflow-hidden">
             <div
               className="h-full rounded-full bg-sol-green transition-all"
               style={{ width: `${pct}%` }}
             />
           </div>
-          <span className="text-[10px] text-gray-500 font-mono">
+          <span className="text-meta text-sol-text-dim font-mono">
             {doneCount}/{total}
           </span>
         </div>
@@ -290,24 +290,24 @@ function PlanHoverContent({ plan }: { plan: any }) {
           {tasks.slice(0, 6).map((t: any) => {
             const { icon: Icon, color } = taskVisual(t.status);
             return (
-              <div key={t._id} className="flex items-center gap-1.5 py-0.5 text-[10px]">
+              <div key={t._id} className="flex items-center gap-1.5 py-0.5 text-meta">
                 <Icon className={`w-2.5 h-2.5 flex-shrink-0 ${color}`} />
-                <span className={`truncate ${t.status === "done" ? "line-through text-gray-500" : "text-gray-400"}`}>
+                <span className={`truncate ${t.status === "done" ? "line-through text-sol-text-dim" : "text-sol-text-muted"}`}>
                   {t.title}
                 </span>
               </div>
             );
           })}
           {tasks.length > 6 && (
-            <div className="text-[10px] text-gray-500 pt-0.5">+{tasks.length - 6} more</div>
+            <div className="text-meta text-sol-text-dim pt-0.5">+{tasks.length - 6} more</div>
           )}
         </div>
       )}
 
-      <div className="flex items-center justify-between pt-1 border-t border-white/5">
-        <ShortId id={plan.short_id} className="text-[10px] text-gray-500" />
-        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
-          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+      <div className="flex items-center justify-between pt-1 border-t border-sol-border/40">
+        <ShortId id={plan.short_id} className="text-meta text-sol-text-dim" />
+        <span className="text-meta text-sol-text-dim inline-flex items-center gap-0.5">
+          Open <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>
     </div>
@@ -337,33 +337,33 @@ function DecisionHoverContent({ decision }: { decision: SessionDecisionItem }) {
         <Signpost className={`w-3.5 h-3.5 flex-shrink-0 mt-0.5 ${state.color}`} />
         <div className="min-w-0 flex-1">
           <div className="text-xs font-medium text-sol-text leading-snug line-clamp-3">{decision.question}</div>
-          <div className="flex items-center gap-2 mt-1 text-[10px]">
+          <div className="flex items-center gap-2 mt-1 text-meta">
             <span className={`font-medium ${state.color}`}>{state.label}</span>
             {decision.status === "pending" && !decision.blocking && <span className="text-sol-blue">advisory</span>}
             {decision.status === "answered" && decision.answer_text && !chosen.size && (
-              <span className="text-gray-400 truncate">{decision.answer_text}</span>
+              <span className="text-sol-text-muted truncate">{decision.answer_text}</span>
             )}
-            <span className="text-gray-500">{relativeTime(decision.resolved_at ?? decision.created_at)}</span>
+            <span className="text-sol-text-dim">{relativeTime(decision.resolved_at ?? decision.created_at)}</span>
           </div>
         </div>
       </div>
       {shown.length > 0 && (
         <div className="space-y-1 pl-[22px]">
           {shown.map((option, i) => (
-            <div key={i} className={`flex items-start gap-1.5 text-[11px] leading-snug ${chosen.has(i) ? "text-sol-green" : "text-sol-text-muted"}`}>
-              {chosen.has(i) ? <Check className="w-3 h-3 mt-px flex-shrink-0" /> : <span className="w-3 flex-shrink-0 text-center font-mono text-[10px] text-sol-text-dim">{i + 1}</span>}
+            <div key={i} className={`flex items-start gap-1.5 text-meta leading-snug ${chosen.has(i) ? "text-sol-green" : "text-sol-text-muted"}`}>
+              {chosen.has(i) ? <Check className="w-3 h-3 mt-px flex-shrink-0" /> : <span className="w-3 flex-shrink-0 text-center font-mono text-meta text-sol-text-dim">{i + 1}</span>}
               <span className="line-clamp-2">{option.label.replace(" (Recommended)", "")}</span>
             </div>
           ))}
           {decision.options.length > shown.length && (
-            <div className="text-[10px] text-gray-500 pl-[18px]">+{decision.options.length - shown.length} more</div>
+            <div className="text-meta text-sol-text-dim pl-[18px]">+{decision.options.length - shown.length} more</div>
           )}
         </div>
       )}
-      <div className="flex items-center justify-between pt-1 border-t border-white/5">
-        {decision.short_id ? <ShortId id={decision.short_id} className="text-[10px] text-gray-500" /> : <span />}
-        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
-          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+      <div className="flex items-center justify-between pt-1 border-t border-sol-border/40">
+        {decision.short_id ? <ShortId id={decision.short_id} className="text-meta text-sol-text-dim" /> : <span />}
+        <span className="text-meta text-sol-text-dim inline-flex items-center gap-0.5">
+          Open <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>
     </div>
@@ -381,20 +381,20 @@ function SourceHoverContent({ source }: { source: any }) {
         <ProviderIcon provider={source.provider} className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
         <div className="min-w-0 flex-1">
           <div className="text-xs font-medium text-sol-text leading-snug">{source.name}</div>
-          <div className="flex items-center gap-2 mt-1 text-[10px]">
+          <div className="flex items-center gap-2 mt-1 text-meta">
             <span className={`font-medium ${state.ink}`}>{state.label}</span>
-            <span className="text-gray-600">·</span>
-            <span className="text-gray-400">{SOURCE_PROVIDER_LABEL[source.provider as keyof typeof SOURCE_PROVIDER_LABEL] ?? source.provider}</span>
+            <span className="text-sol-text-dim/60">·</span>
+            <span className="text-sol-text-muted">{SOURCE_PROVIDER_LABEL[source.provider as keyof typeof SOURCE_PROVIDER_LABEL] ?? source.provider}</span>
           </div>
         </div>
       </div>
       {source.last_error && (
-        <p className="text-[11px] text-sol-red line-clamp-3 leading-relaxed pl-[22px]">{source.last_error}</p>
+        <p className="text-meta text-sol-red line-clamp-3 leading-relaxed pl-[22px]">{source.last_error}</p>
       )}
-      <div className="pl-[22px] text-[10px] text-gray-500">{sourceFacts(source).join(" · ")}</div>
-      <div className="flex items-center justify-between pt-1 border-t border-white/5">
-        <ShortId id={source.short_id} className="text-[10px] text-gray-500" />
-        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
+      <div className="pl-[22px] text-meta text-sol-text-dim">{sourceFacts(source).join(" · ")}</div>
+      <div className="flex items-center justify-between pt-1 border-t border-sol-border/40">
+        <ShortId id={source.short_id} className="text-meta text-sol-text-dim" />
+        <span className="text-meta text-sol-text-dim inline-flex items-center gap-0.5">
           Open in Ops <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>
@@ -408,10 +408,10 @@ function FlowHoverContent({ flow }: { flow: any }) {
   const path = (flow.stations ?? []).filter((s: any) => s.main).map((s: any) => s.label).join(" → ");
   return (
     <div className="min-w-0">
-      <div className="text-xs font-medium text-sol-text leading-snug">{flow.label}<span className="ml-1.5 text-[10px] uppercase tracking-wide text-gray-500">{flow.kind === "segment" ? "Segment" : "Flow"}</span></div>
-      {flow.description ? <div className="mt-1 text-[11px] text-gray-400 leading-snug">{flow.description}</div> : null}
-      {path ? <div className="mt-1.5 text-[11px] text-sol-text-muted leading-snug">{path}</div> : null}
-      <ShortId id={flow.short_id} className="mt-1.5 text-[10px] text-gray-500" />
+      <div className="text-xs font-medium text-sol-text leading-snug">{flow.label}<span className="ml-1.5 text-mark uppercase tracking-wide text-sol-text-dim">{flow.kind === "segment" ? "Segment" : "Flow"}</span></div>
+      {flow.description ? <div className="mt-1 text-meta text-sol-text-muted leading-snug">{flow.description}</div> : null}
+      {path ? <div className="mt-1.5 text-meta text-sol-text-muted leading-snug">{path}</div> : null}
+      <ShortId id={flow.short_id} className="mt-1.5 text-meta text-sol-text-dim" />
     </div>
   );
 }
@@ -428,12 +428,12 @@ function ReplayHoverContent({ replay, rawId }: { replay: any; rawId: string }) {
         <Film className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-magenta" />
         <div className="min-w-0 flex-1">
           <div className="text-xs font-medium text-sol-text leading-snug break-all">{replayTitle(replay) ?? replay.short_id}</div>
-          <div className="mt-1 text-[10px] text-gray-400">{replayFacts(replay).join(" · ")}</div>
+          <div className="mt-1 text-meta text-sol-text-muted">{replayFacts(replay).join(" · ")}</div>
         </div>
       </div>
-      <div className="flex items-center justify-between pt-1 border-t border-white/5">
-        <ShortId id={at != null ? replayRefId(replay.short_id, at) : replay.short_id} className="text-[10px] text-gray-500" />
-        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
+      <div className="flex items-center justify-between pt-1 border-t border-sol-border/40">
+        <ShortId id={at != null ? replayRefId(replay.short_id, at) : replay.short_id} className="text-meta text-sol-text-dim" />
+        <span className="text-meta text-sol-text-dim inline-flex items-center gap-0.5">
           {at != null ? `Open at ${formatCallTime(at)}` : "Open in Ops"} <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>
@@ -465,32 +465,32 @@ function TriggerHoverContent({ trigger }: { trigger: any }) {
             {trigger.display_title || trigger.title || trigger.short_id}
           </div>
           <div className="flex items-center gap-2 mt-1">
-            <span className={`text-[10px] font-medium ${stateColor}`}>{cadence}</span>
-            <span className="text-gray-600">·</span>
-            <span className="text-[10px] text-gray-400">{state}</span>
+            <span className={`text-meta font-medium ${stateColor}`}>{cadence}</span>
+            <span className="text-sol-text-dim/60">·</span>
+            <span className="text-meta text-sol-text-muted">{state}</span>
           </div>
         </div>
       </div>
 
       {(trigger.display_summary || trigger.prompt) && (
-        <p className="text-[11px] text-gray-400 line-clamp-3 leading-relaxed pl-[22px]">
+        <p className="text-meta text-sol-text-muted line-clamp-3 leading-relaxed pl-[22px]">
           {stripMarkdown(trigger.display_summary || trigger.prompt).slice(0, 220)}
         </p>
       )}
 
       {trigger.last_run_at && (
-        <div className="pl-[22px] text-[10px] text-gray-500">
+        <div className="pl-[22px] text-meta text-sol-text-dim">
           <span className={failing ? "text-sol-red" : ""}>
             {failing ? "Last run failed" : "Last run"} {relativeTime(trigger.last_run_at)}
           </span>
-          {trigger.run_count > 0 && <span className="text-gray-600"> · {trigger.run_count} runs</span>}
+          {trigger.run_count > 0 && <span className="text-sol-text-dim"> · {trigger.run_count} runs</span>}
         </div>
       )}
 
-      <div className="flex items-center justify-between pt-1 border-t border-white/5">
-        <ShortId id={trigger.short_id} className="text-[10px] text-gray-500" />
-        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
-          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+      <div className="flex items-center justify-between pt-1 border-t border-sol-border/40">
+        <ShortId id={trigger.short_id} className="text-meta text-sol-text-dim" />
+        <span className="text-meta text-sol-text-dim inline-flex items-center gap-0.5">
+          Open <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>
     </div>
@@ -508,18 +508,18 @@ function PullRequestHoverContent({ pr }: { pr: any }) {
         <GitPullRequest className={`w-3.5 h-3.5 flex-shrink-0 mt-0.5 ${state.color}`} />
         <div className="min-w-0 flex-1">
           <div className="text-xs font-medium text-sol-text leading-snug">{pr.title || `#${pr.number}`}</div>
-          <div className="flex items-center gap-2 mt-1 text-[10px]">
+          <div className="flex items-center gap-2 mt-1 text-meta">
             <span className={`font-medium ${state.color}`}>{state.label}</span>
             {pr.author_github_username && (
               <>
-                <span className="text-gray-600">·</span>
-                <span className="text-gray-400 truncate">{pr.author_github_username}</span>
+                <span className="text-sol-text-dim/60">·</span>
+                <span className="text-sol-text-muted truncate">{pr.author_github_username}</span>
               </>
             )}
             {when && (
               <>
-                <span className="text-gray-600">·</span>
-                <span className="text-gray-400">{when}</span>
+                <span className="text-sol-text-dim/60">·</span>
+                <span className="text-sol-text-muted">{when}</span>
               </>
             )}
           </div>
@@ -527,7 +527,7 @@ function PullRequestHoverContent({ pr }: { pr: any }) {
       </div>
 
       {pr.body && (
-        <p className="text-[11px] text-gray-400 line-clamp-2 leading-relaxed pl-[22px]">
+        <p className="text-meta text-sol-text-muted line-clamp-2 leading-relaxed pl-[22px]">
           {stripMarkdown(pr.body).slice(0, 200)}
         </p>
       )}
@@ -535,7 +535,7 @@ function PullRequestHoverContent({ pr }: { pr: any }) {
       {/* Where the review stands, in the three words a reader wants before
           opening it: the verdict, the checks, and what is still open. */}
       {(pr.review_decision || pr.checks_state || pr.unresolved_review_count) && (
-        <div className="flex items-center gap-2 pl-[22px] text-[10px] min-w-0 flex-wrap">
+        <div className="flex items-center gap-2 pl-[22px] text-meta min-w-0 flex-wrap">
           {pr.review_decision && pr.review_decision !== "none" && (
             <span className={pr.review_decision === "approved" ? "text-sol-green" : pr.review_decision === "changes_requested" ? "text-sol-red" : "text-sol-yellow"}>
               {pr.review_decision === "approved" ? "approved" : pr.review_decision === "changes_requested" ? "changes requested" : "review needed"}
@@ -553,13 +553,13 @@ function PullRequestHoverContent({ pr }: { pr: any }) {
       )}
 
       {(pr.head_ref || pr.additions != null || pr.changed_files != null) && (
-        <div className="flex items-center gap-2 pl-[22px] text-[10px] font-mono text-gray-500 min-w-0">
+        <div className="flex items-center gap-2 pl-[22px] text-meta font-mono text-sol-text-dim min-w-0">
           {pr.head_ref && (
             <span className="truncate">
               <span className="text-sol-green">{pr.head_ref}</span>
               {pr.base_ref && (
                 <>
-                  <span className="text-gray-600"> → </span>
+                  <span className="text-sol-text-dim/60"> → </span>
                   <span className="text-sol-blue">{pr.base_ref}</span>
                 </>
               )}
@@ -569,10 +569,10 @@ function PullRequestHoverContent({ pr }: { pr: any }) {
         </div>
       )}
 
-      <div className="flex items-center justify-between pt-1 border-t border-white/5">
-        <span className="text-[10px] text-gray-500 font-mono truncate">{repoObjectRefOf("pr", pr)}</span>
-        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5 flex-shrink-0">
-          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+      <div className="flex items-center justify-between pt-1 border-t border-sol-border/40">
+        <span className="text-meta text-sol-text-dim font-mono truncate">{repoObjectRefOf("pr", pr)}</span>
+        <span className="text-meta text-sol-text-dim inline-flex items-center gap-0.5 flex-shrink-0">
+          Open <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>
     </div>
@@ -594,10 +594,10 @@ function RepoObjectUnknownHoverContent({ rawId, served }: { rawId: string; serve
         <Icon className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-text-muted" />
         <div className="min-w-0 flex-1">
           <div className="text-xs font-medium text-sol-text leading-snug">{name}</div>
-          {ref && <div className="mt-1 text-[10px] font-mono text-gray-400 truncate">{ref.repository}</div>}
+          {ref && <div className="mt-1 text-meta font-mono text-sol-text-muted truncate">{ref.repository}</div>}
         </div>
       </div>
-      <p className="text-[11px] text-gray-400 leading-relaxed pl-[22px]">
+      <p className="text-meta text-sol-text-muted leading-relaxed pl-[22px]">
         {served
           ? `Not in codecast. This ${what} is in a repository the GitHub App is not installed on, or it has not synced yet.`
           : `Looking this ${what} up…`}
@@ -619,18 +619,18 @@ function CommitHoverContent({ commit }: { commit: any }) {
         <GitCommitHorizontal className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-yellow" />
         <div className="min-w-0 flex-1">
           <div className="text-xs font-medium text-sol-text leading-snug">{subject || commit.sha.slice(0, 7)}</div>
-          <div className="flex items-center gap-2 mt-1 text-[10px] min-w-0">
-            {commit.author_name && <span className="text-gray-400 truncate">{commit.author_name}</span>}
+          <div className="flex items-center gap-2 mt-1 text-meta min-w-0">
+            {commit.author_name && <span className="text-sol-text-muted truncate">{commit.author_name}</span>}
             {when && (
               <>
-                <span className="text-gray-600">·</span>
-                <span className="text-gray-400">{when}</span>
+                <span className="text-sol-text-dim/60">·</span>
+                <span className="text-sol-text-muted">{when}</span>
               </>
             )}
             {commit.branch && (
               <>
-                <span className="text-gray-600">·</span>
-                <span className="text-gray-400 font-mono truncate">{commit.branch}</span>
+                <span className="text-sol-text-dim/60">·</span>
+                <span className="text-sol-text-muted font-mono truncate">{commit.branch}</span>
               </>
             )}
           </div>
@@ -638,18 +638,18 @@ function CommitHoverContent({ commit }: { commit: any }) {
       </div>
 
       {body && (
-        <p className="text-[11px] text-gray-400 line-clamp-3 leading-relaxed pl-[22px] whitespace-pre-line">
+        <p className="text-meta text-sol-text-muted line-clamp-3 leading-relaxed pl-[22px] whitespace-pre-line">
           {body.slice(0, 220)}
         </p>
       )}
 
-      <div className="flex items-center justify-between pt-1 border-t border-white/5">
-        <span className="text-[10px] text-gray-500 font-mono inline-flex items-center gap-2 min-w-0">
+      <div className="flex items-center justify-between pt-1 border-t border-sol-border/40">
+        <span className="text-meta text-sol-text-dim font-mono inline-flex items-center gap-2 min-w-0">
           <span className="truncate">{commit.repository ? `${commit.repository}@` : ""}{commit.sha.slice(0, 7)}</span>
           <DiffStat additions={commit.insertions} deletions={commit.deletions} files={commit.files_changed} />
         </span>
-        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5 flex-shrink-0">
-          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+        <span className="text-meta text-sol-text-dim inline-flex items-center gap-0.5 flex-shrink-0">
+          Open <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>
     </div>
@@ -668,13 +668,13 @@ function MentionPill({ name, entityId }: { name: string; entityId?: string }) {
   }
   if (entityId?.startsWith("label:")) {
     return (
-      <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[11px] font-medium leading-[1.4] bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 align-baseline">
+      <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-meta font-medium leading-[1.4] bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 align-baseline">
         @{name}
       </span>
     );
   }
   const namePill = (
-    <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[11px] font-medium leading-[1.4] bg-sol-blue/10 text-sol-blue border border-sol-blue/20 align-baseline">
+    <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-meta font-medium leading-[1.4] bg-sol-blue/10 text-sol-blue border border-sol-blue/20 align-baseline">
       @{name}
     </span>
   );
@@ -900,7 +900,7 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
   if (href?.startsWith("mention://")) {
     const name = decodeURIComponent(href.slice(10));
     return (
-      <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-[11px] font-medium leading-[1.4] bg-sol-blue/10 text-sol-blue border border-sol-blue/20 align-baseline">
+      <span className="inline-flex items-center gap-0.5 px-1.5 py-0 rounded text-meta font-medium leading-[1.4] bg-sol-blue/10 text-sol-blue border border-sol-blue/20 align-baseline">
         @{name}
       </span>
     );
@@ -1077,11 +1077,11 @@ function DocHoverContent({ doc }: { doc: any }) {
         <div className="min-w-0 flex-1">
           <div className="text-xs font-medium text-sol-text leading-snug">{genericTitle(doc)}</div>
           <div className="flex items-center gap-2 mt-1">
-            <span className="text-[10px] font-medium text-sol-green">{typeLabel}</span>
+            <span className="text-meta font-medium text-sol-green">{typeLabel}</span>
             {doc.created_at && (
               <>
-                <span className="text-gray-600">·</span>
-                <DocDates doc={doc} variant="full" className="text-[10px] text-gray-400" />
+                <span className="text-sol-text-dim/60">·</span>
+                <DocDates doc={doc} variant="full" className="text-meta text-sol-text-muted" />
               </>
             )}
           </div>
@@ -1090,14 +1090,14 @@ function DocHoverContent({ doc }: { doc: any }) {
 
       {preview && (
         <div className="relative pl-[22px] max-h-44 overflow-hidden">
-          <p className="text-[11px] text-gray-400 leading-relaxed whitespace-pre-line">{preview}</p>
+          <p className="text-meta text-sol-text-muted leading-relaxed whitespace-pre-line">{preview}</p>
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-sol-bg to-transparent" />
         </div>
       )}
 
-      <div className="flex items-center justify-end pt-1 border-t border-white/5">
-        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
-          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+      <div className="flex items-center justify-end pt-1 border-t border-sol-border/40">
+        <span className="text-meta text-sol-text-dim inline-flex items-center gap-0.5">
+          Open <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>
     </div>
@@ -1127,7 +1127,7 @@ function CallHoverContent({ call, rawId }: { call: any; rawId: string }) {
           <CallTurns call={call} limit={3} />
         </div>
       ) : call.summary ? (
-        <p className="text-[11px] text-gray-400 line-clamp-3 leading-relaxed pl-[22px]">
+        <p className="text-meta text-sol-text-muted line-clamp-3 leading-relaxed pl-[22px]">
           {stripMarkdown(call.summary).slice(0, 300)}
         </p>
       ) : null}
@@ -1144,17 +1144,17 @@ function GenericHoverContent({ entity, type }: { entity: any; type: EntityType }
         <Icon className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-text-muted" />
         <div className="min-w-0 flex-1">
           <div className="text-xs font-medium text-sol-text leading-snug">{genericTitle(entity)}</div>
-          <span className="text-[10px] font-medium text-sol-text-dim">{TYPE_LABEL[type]}</span>
+          <span className="text-meta font-medium text-sol-text-dim">{TYPE_LABEL[type]}</span>
         </div>
       </div>
       {summary && (
-        <p className="text-[11px] text-gray-400 line-clamp-2 leading-relaxed pl-[22px]">
+        <p className="text-meta text-sol-text-muted line-clamp-2 leading-relaxed pl-[22px]">
           {stripMarkdown(summary).slice(0, 200)}
         </p>
       )}
-      <div className="flex items-center justify-end pt-1 border-t border-white/5">
-        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
-          Click to open <ArrowUpRight className="w-2.5 h-2.5" />
+      <div className="flex items-center justify-end pt-1 border-t border-sol-border/40">
+        <span className="text-meta text-sol-text-dim inline-flex items-center gap-0.5">
+          Open <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>
     </div>
@@ -1493,7 +1493,7 @@ export function EntityIdPill({
           ) : (isPr || isCommit) ? (
             <RepoObjectUnknownHoverContent rawId={rawId} served={served} />
           ) : (
-            <div className="text-[11px] text-gray-500">{pillLabel}</div>
+            <div className="text-meta text-sol-text-dim">{pillLabel}</div>
           )}
         </Link>}
         {/* A repository object codecast holds no row for lives on GitHub; the
@@ -1504,7 +1504,7 @@ export function EntityIdPill({
               href={githubHref}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-[10px] text-sol-text-muted hover:text-sol-text no-underline"
+              className="inline-flex items-center gap-1 text-meta text-sol-text-muted hover:text-sol-text no-underline"
             >
               Open on GitHub <ArrowUpRight className="w-2.5 h-2.5" />
             </a>
@@ -1514,10 +1514,10 @@ export function EntityIdPill({
             place. Said once here, where a reader hovering for the first time
             is looking, so the split pill reads before they click. */}
         {canReveal && (
-          <div className="flex items-center justify-between gap-2 border-t border-sol-border/60 px-3 py-1.5 text-[10px] text-sol-text-dim">
+          <div className="flex items-center justify-between gap-2 border-t border-sol-border/60 px-3 py-1.5 text-meta text-sol-text-dim">
             <span className="inline-flex min-w-0 items-center gap-1.5">
               <ChevronDown className="h-3 w-3 shrink-0" />
-              <span className="truncate">The arrow opens it here</span>
+              <span className="truncate">Opens here</span>
             </span>
             <RevealOpenLink href={href} label={openLabel} onOpen={handleOpen} variant="compact" />
           </div>

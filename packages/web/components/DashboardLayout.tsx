@@ -31,7 +31,7 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { ComposeHost } from "./ComposeHost";
 import { subscribeComposeOptimistic } from "../lib/composeBridge";
 import { NEW_SESSION_EVENT } from "../lib/utils";
-import { PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight } from "lucide-react";
+import { PanelLeft, PanelRight, Menu, MessageSquare, SquareTerminal, ChevronLeft, ChevronRight, Search } from "lucide-react";
 import { SetupPromptBanner } from "./SetupPromptBanner";
 import { TeamDomainBanner } from "./TeamDomainBanner";
 import { SeatBanner } from "./team/SeatBanner";
@@ -72,7 +72,8 @@ import { useSyncSecrets } from "../hooks/useSyncSecrets";
 import { useSyncInitiatives } from "../hooks/useInitiatives";
 import { useSyncOrgProposals } from "../hooks/useSyncOrgProposals";
 import { useSyncOrgTreeFeeder } from "../hooks/useSyncOrgTree";
-import { featurePageRedirect, useWorkspaceFeature } from "../lib/teamFeatures";
+import { featurePageRedirect, useCallsAvailable, useTeamFeature, useWorkspaceFeature } from "../lib/teamFeatures";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useSyncSettings } from "../hooks/useSyncSettings";
 import { useIsSyncHost, useSyncReplication } from "../hooks/useSyncRole";
 import { useSessionCommandResults } from "../hooks/useSessionCommands";
@@ -83,7 +84,7 @@ import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader, SlowBootNote } from "./AppLoader";
 import { freshHomeLaunchPending, settleFreshHomeLaunch } from "../store/viewNav";
-import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, placeInboxRows, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, filterInboxScope, isSub } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, type CreateModalKind, sessionsWakeSig, pendingSendWakeSig, getProjectName, resolveShowOld, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, placeInboxRows, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, filterInboxScope, isSub } from "../store/inboxStore";
 import { newConversationAgentType } from "../lib/defaultAgent";
 import { ConnectToast } from "./simple/ConnectToast";
 import { agentFleetCounts } from "../lib/liveness";
@@ -155,6 +156,18 @@ const RecordingPill = lazy(() =>
 );
 const ElsewhereCallPill = lazy(() =>
   import("./calls/ElsewhereCallPill").then((module) => ({ default: module.ElsewhereCallPill })),
+);
+const CreateTaskModal = lazy(() =>
+  import("./CreateTaskModal").then((module) => ({ default: module.CreateTaskModal })),
+);
+const CreateDocModal = lazy(() =>
+  import("./CreateDocModal").then((module) => ({ default: module.CreateDocModal })),
+);
+const CreateChannelModal = lazy(() =>
+  import("./CreateChannelModal").then((module) => ({ default: module.CreateChannelModal })),
+);
+const NewMessageModal = lazy(() =>
+  import("./chat/NewMessageModal").then((module) => ({ default: module.NewMessageModal })),
 );
 
 interface DashboardLayoutProps {
@@ -254,6 +267,401 @@ const ActiveAgentsBadge = memo(function ActiveAgentsBadge({ isOnInboxPage }: { i
 });
 
 const noop = () => {};
+
+// The create dialogs (New → Task, Doc, Plan, Channel, Huddle; the palette's
+// Create group; the board's "+"). One host for the window, mounted at every
+// width: it used to live inside the desktop Sidebar, which a phone does not
+// mount, so every create there did nothing. It reads the roster and the rest
+// only while a dialog is open.
+function CreateModalHost() {
+  const kind = useInboxStore((s) => s.createModal);
+  if (!kind) return null;
+  return (
+    // A crash costs the dialog, not the shell; the fallback closes it so the
+    // next open starts clean.
+    <ErrorBoundary name="Create dialog" fallback={<CloseCreateModalOnCrash />}>
+      <CreateModal kind={kind} />
+    </ErrorBoundary>
+  );
+}
+
+function CloseCreateModalOnCrash() {
+  useMountEffect(() => useInboxStore.getState().closeCreateModal());
+  return null;
+}
+
+function CreateModal({ kind }: { kind: CreateModalKind }) {
+  const router = useRouter();
+  const { user: currentUser } = useCurrentUser();
+  const teamMembers = useInboxStore((s) => s.teamMembers);
+  const defaults = useInboxStore((s) => s.createModalDefaults);
+  const closeCreateModal = useInboxStore((s) => s.closeCreateModal);
+  // Per-team opt-ins: no channel dialog without chat, no huddle without calls.
+  const chatOn = useTeamFeature("chat");
+  const callsOn = useCallsAvailable();
+  const close = () => closeCreateModal();
+  return (
+    <Suspense fallback={null}>
+      {kind === "task" && (
+        <CreateTaskModal onClose={close} teamMembers={teamMembers ?? []} currentUser={currentUser} defaults={defaults} />
+      )}
+      {kind === "doc" && <CreateDocModal onClose={close} initialType="note" />}
+      {kind === "plan" && <CreateDocModal onClose={close} initialType="plan" />}
+      {kind === "chat" && chatOn && (
+        <CreateChannelModal
+          onClose={close}
+          // The stub id is what the rail already shows; the tab path follows the
+          // supersede when the server row lands (rekeyId).
+          onCreated={(channelId) => router.push(`/chat/${channelId}`)}
+        />
+      )}
+      {/* "New huddle" is the new-message field with a huddle intent: the
+          same people/rooms search, ending in a ring instead of a room. */}
+      {kind === "huddle" && callsOn && <NewMessageModal intent="huddle" onClose={close} />}
+    </Suspense>
+  );
+}
+
+// The palette and the people wall each mount only while open. Their open
+// flags live in these leaves, so opening one re-renders the leaf, not the shell.
+function PaletteHost() {
+  const open = useInboxStore((s) => s.palette.open);
+  if (!open) return null;
+  return (
+    <ErrorBoundary name="CommandPalette" level="inline">
+      <Suspense fallback={null}><CommandPalette /></Suspense>
+    </ErrorBoundary>
+  );
+}
+
+// The wall of faces, over the main window. Mounted here rather than on a
+// route because it is a gesture, not a place: you open it, hold somebody,
+// and it goes away. It renders nothing and subscribes to nothing while shut.
+function PeopleWallHost() {
+  const open = useInboxStore((s) => s.peopleWallOpen);
+  if (!open) return null;
+  return (
+    <ErrorBoundary name="PeopleWallModal" level="panel">
+      <Suspense fallback={null}><PeopleWallModal /></Suspense>
+    </ErrorBoundary>
+  );
+}
+
+type ShellState = ReturnType<typeof useInboxStore.getState>;
+
+/** The session the rail lights. Which pointer it reads comes from the shared
+ *  helper (sessionFocusKind), so whatever MOVES this highlight (the workbench
+ *  filter's eviction) reads the same answer. On conversation pages the id
+ *  comes from the URL, so non-owner viewers (ViewerView), who never set
+ *  currentSessionId, still get the right row lit. */
+function sessionListActiveIdOf(st: ShellState, pathname: string | null): string | null {
+  const isOnConversationPage = pathname?.includes("/conversation/") ?? false;
+  const conversationPageId = isOnConversationPage && pathname
+    ? pathname.replace('/conversation/', '').split(/[/?#]/)[0]
+    : null;
+  const focusKind = sessionFocusKind(pathname, st.currentConversation?.source);
+  return focusKind === "current"
+    ? (st.viewingDismissedId ?? st.currentSessionId)
+    : focusKind === "url"
+    ? (conversationPageId ?? st.currentSessionId)
+    : st.sidePanelSessionId;
+}
+
+// The session list, wherever the shell draws it (the rail, the right peek,
+// the phone drawer). It reads its own highlight pointers, so a session switch
+// re-renders the list, not the shell around it.
+const SessionRailList = memo(function SessionRailList({ pathname, onSessionSelect }: { pathname: string | null; onSessionSelect: (id: string) => void }) {
+  const activeSessionId = useInboxStore((st) => sessionListActiveIdOf(st, pathname));
+  return <SessionListPanel onSessionSelect={onSessionSelect} activeSessionId={activeSessionId} />;
+});
+
+// The teammate comment rail's header toggle. A conversation-scoped overlay, so
+// it shows only while a conversation is on screen. The comment tools are
+// opt-in (off by default), but a conversation that already has comments still
+// surfaces the toggle so you can open it to read and reply. A leaf: a comment
+// anywhere and every session switch wake this button, not the shell.
+const CommentsToggle = memo(function CommentsToggle({ isOnConversationPage, isOnInboxPage }: { isOnConversationPage: boolean; isOnInboxPage: boolean }) {
+  const s = useTrackedStore([
+    s => s.currentSessionId,
+    s => s.viewingDismissedId,
+    s => selectCommentRailOpen(s),
+    s => resolveCommentsEnabled(s.clientState.ui),
+    // The comments map REF (an O(1) Object.is compare), not a scan: comments
+    // is low-churn (heartbeats never touch it), so the ref is stable between
+    // comment syncs, and the "does the viewed conversation have comments"
+    // answer is derived below off the same ref.
+    s => s.comments,
+  ]);
+  const tipActions = useTipActions();
+  // Conversation ids that carry at least one comment, indexed once per
+  // comments-map change (not per render), so the check below is a Set lookup.
+  const commentedConvIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of Object.values(s.comments) as { conversation_id?: string }[]) {
+      if (c.conversation_id) set.add(c.conversation_id);
+    }
+    return set;
+  }, [s.comments]);
+  const isViewingConversation = isOnConversationPage || (isOnInboxPage && !!(s.currentSessionId || s.viewingDismissedId));
+  const commentRailOpen = selectCommentRailOpen(s);
+  const viewedConvIds = [s.currentSessionId, s.viewingDismissedId].filter(Boolean) as string[];
+  const convHasComments = viewedConvIds.some((id) => commentedConvIds.has(id));
+  if (!isViewingConversation || !(resolveCommentsEnabled(s.clientState.ui) || convHasComments)) return null;
+  return (
+    <ShortcutTooltip label={commentRailOpen ? "Hide comments" : "Show comments"} action="sidebar.toggleComments">
+      <TopbarButton
+        onClick={(e) => { s.setCommentRailOpen(!commentRailOpen); tipActions.whisper('sidebar.toggleComments', e); }}
+        active={commentRailOpen}
+        aria-label={commentRailOpen ? "Hide comments" : "Show comments"}
+      >
+        <MessageSquare />
+      </TopbarButton>
+    </ShortcutTooltip>
+  );
+});
+
+// The window title's one writer, as a leaf: the title moves with every
+// session switch and every mention, and that must not re-render the shell.
+// A navigation inside a tab (tabNavigate) writes the browser history
+// directly, and react-router's location does not hear it; the active tab's
+// path wakes this, so the render sees the address the window shows.
+function WindowTitle() {
+  const routerLocation = useLocation();
+  useInboxStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.path);
+  useWindowTitle(typeof window === "undefined" ? routerLocation.pathname + routerLocation.search : window.location.pathname + window.location.search);
+  return null;
+}
+
+// The shell's prop-less chrome, grouped into memo leaves: each part reads the
+// store itself, so a shell render (a navigation, a layout change) skips them.
+
+const HeaderPresence = memo(function HeaderPresence() {
+  return <>
+    <ErrorBoundary name="TeamAvatarBar" level="inline">
+      <Suspense fallback={null}><TeamAvatarBar /></Suspense>
+    </ErrorBoundary>
+    <ErrorBoundary name="FollowPill" level="inline">
+      <FollowPill />
+    </ErrorBoundary>
+  </>;
+});
+
+const HeaderSearch = memo(function HeaderSearch() {
+  return <>
+    <ErrorBoundary name="GlobalSearch" level="inline">
+      <GlobalSearch />
+    </ErrorBoundary>
+    {/* Making something pairs with finding it. */}
+    <ErrorBoundary name="NewMenu" level="inline">
+      <NewMenu />
+    </ErrorBoundary>
+  </>;
+});
+
+const HeaderStatus = memo(function HeaderStatus({ isOnInboxPage }: { isOnInboxPage: boolean }) {
+  return <TopbarTray>
+    {/* The sync light leads, the steady facts follow, and an alert
+        (the daemon) comes last, where the row's eye lands. */}
+    <ErrorBoundary name="SyncStatusChip" level="inline">
+      <SyncStatusChip />
+    </ErrorBoundary>
+    {/* The Claude Code account behind agent sessions. */}
+    <ErrorBoundary name="AccountUsageChip" level="inline">
+      <AccountUsageChip />
+    </ErrorBoundary>
+    <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
+    <ErrorBoundary name="DaemonStatusChip" level="inline">
+      <DaemonStatusChip />
+    </ErrorBoundary>
+  </TopbarTray>;
+});
+
+const openPaletteFromHeader = () => useInboxStore.getState().openPalette();
+
+const HeaderActions = memo(function HeaderActions() {
+  return <>
+    {/* A phone's bar has no search zone (TopbarRow hides it under sm), so
+        search and New come back as two icons: the palette searches
+        everything and runs every command. */}
+    <TopbarButton onClick={openPaletteFromHeader} className="sm:hidden" aria-label="Search and commands">
+      <Search />
+    </TopbarButton>
+    <div className="flex sm:hidden">
+      <ErrorBoundary name="NewMenu" level="inline">
+        <NewMenu compact />
+      </ErrorBoundary>
+    </div>
+    <ErrorBoundary name="HeaderPins" level="inline">
+      <HeaderPins />
+    </ErrorBoundary>
+    <ErrorBoundary name="ResourcePressureGauge" level="inline" fallback={<ResourcePressureFallback />}>
+      <ResourcePressureGauge />
+    </ErrorBoundary>
+    <ErrorBoundary name="NotificationBell" level="inline">
+      <NotificationBell />
+    </ErrorBoundary>
+    <ErrorBoundary name="UserMenu" level="inline">
+      <UserMenu />
+    </ErrorBoundary>
+  </>;
+});
+
+const ShellBanners = memo(function ShellBanners() {
+  return <>
+    {/* A phone's top bar has no face row, so a call's card has its own line. */}
+    <PhoneCallStrip />
+
+    {/* Status notices (connection, storage, CLI offline, tmux missing) render
+        nothing here — they publish to StatusNoticeStack, fixed to a corner,
+        so a status that flaps never shifts the layout. The onboarding strips
+        still sit in the flow. */}
+    <ErrorBoundary name="Banners" level="inline">
+      <StatusNoticeStack />
+      <ConnectionBanner />
+      <StorageHealthBanner />
+      <SetupPromptBanner />
+      <NewSnippetsBanner />
+      <OrgIntroAnywhere />
+      <FeatureOfferAnywhere />
+      <ThemeIntroAnywhere />
+      <CliOfflineBanner />
+      <TmuxMissingBanner />
+      <SeatBanner />
+      {/* The nudges share one slot, in priority order: only the first that
+          renders shows (globals.css [data-nudge-slot]), and dismissing it
+          brings up the next. Stacked, a new account met four at once. */}
+      <div data-nudge-slot>
+        <NativeAppBanner />
+        <TeamDomainBanner />
+        <NotificationNudgeBanner />
+        <SharingSetupBanner />
+        <TeamSharingNudgeBanner />
+      </div>
+      <DeviceSetupDialog />
+    </ErrorBoundary>
+  </>;
+});
+
+const ShellTabBar = memo(function ShellTabBar() {
+  return (
+    <ErrorBoundary name="TabBar" level="inline">
+      <TabBar />
+    </ErrorBoundary>
+  );
+});
+
+// The triage verbs, one home under the composer. The bar gates itself to
+// inbox session views, so it draws nothing elsewhere. Compact is a corner
+// button with no layout height. Own boundary: a bar crash must cost the bar,
+// never the stage.
+const StageTriageBar = memo(function StageTriageBar() {
+  return (
+    <ErrorBoundary name="TriageBar" level="inline">
+      <TriageBar />
+    </ErrorBoundary>
+  );
+});
+
+// The shortcuts column and the anchor slide-over, beside the stage. The
+// anchor panel is scoped to the content area so it starts below the
+// header/banners/tab bar and covers the stage, not the chrome.
+const StageSidePanels = memo(function StageSidePanels() {
+  return <>
+    <KeyboardShortcutsPanel />
+    <ErrorBoundary name="AnchorPanel" level="panel">
+      <AnchorPanel />
+    </ErrorBoundary>
+  </>;
+});
+
+const ShellDocks = memo(function ShellDocks({ isMobile }: { isMobile: boolean }) {
+  return <>
+    {/* Integrated terminal, docked across the bottom (ctrl+`). Mounts lazily
+        on first open, then stays mounted (hidden) so terminals survive
+        close/reopen. Desktop-only surface. */}
+    {!isMobile && (
+      <ErrorBoundary name="TerminalPanel" level="panel">
+        <TerminalDock />
+      </ErrorBoundary>
+    )}
+    {!isMobile && (
+      <ErrorBoundary name="VaultQuickSwitcher" level="panel">
+        <VaultQuickSwitcherDock />
+        <FilePathMenuHost />
+        <LinkMenuHost />
+      </ErrorBoundary>
+    )}
+
+    <ErrorBoundary name="SettingsModal" level="panel">
+      <Suspense fallback={null}><SettingsModal /></Suspense>
+    </ErrorBoundary>
+
+    <PeopleWallHost />
+  </>;
+});
+
+const ShellOverlays = memo(function ShellOverlays() {
+  return <>
+    <PaletteHost />
+    <ErrorBoundary name="TriageNux" level="inline">
+      <TriageNuxGate />
+    </ErrorBoundary>
+    <ErrorBoundary name="Tours" level="inline">
+      <ToursPanel />
+      <Suspense fallback={null}><TourLayer /></Suspense>
+      <GuideLayer />
+    </ErrorBoundary>
+    {/* The dock portals to <body>, so this wrapper is empty (and hidden)
+        until the boundary trips. A dock crash used to degrade into the
+        default inline fallback rendered here in normal flow — the bottom of
+        the shell, effectively invisible — so the call window "just
+        vanished" with no way back (Jason, 2026-08-24). The fallback is a
+        floating chip where the dock lived: retry re-renders, hang up also
+        frees the seat, and the ErrorBoundary toast still carries the trace. */}
+    <div className="fixed bottom-20 right-4 z-[160] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt shadow-xl">
+      <ErrorBoundary
+        name="Call window"
+        fallback={({ retry }) => (
+          <div className="flex items-center gap-2 px-3 py-2 text-xs">
+            <span className="text-sol-red">The call window crashed</span>
+            <button onClick={retry} className="text-sol-cyan hover:underline">
+              retry
+            </button>
+            <button
+              onClick={() => {
+                void import("../lib/calls/callManager").then((module) => module.leaveCall());
+                retry();
+              }}
+              className="text-sol-text-muted hover:text-sol-red hover:underline"
+            >
+              hang up
+            </button>
+          </div>
+        )}
+      >
+        <Suspense fallback={null}><CallDock /></Suspense>
+      </ErrorBoundary>
+    </div>
+    {/* The huddle the people window (or a detached tab) is hosting. The dock
+        above reads THIS window's call and correctly shows nothing, which
+        without a word left the main window looking as though no call were
+        running at all — and the first thing that invites is starting a second
+        one. It sits where the dock would, and says only where to look. */}
+    <div className="fixed bottom-20 right-4 z-[155] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt px-3 py-2 shadow-xl">
+      <Suspense fallback={null}><ElsewhereCallPill /></Suspense>
+    </div>
+    {/* A recording in progress, wherever the person has wandered to. It
+        portals to the body and renders nothing unless one is running. */}
+    <Suspense fallback={null}><RecordingPill /></Suspense>
+    <GlobalCloseGuardDialog />
+    <ComposeHost />
+    <CreateModalHost />
+    <ErrorBoundary name="FindBar" level="inline">
+      <FindBar />
+    </ErrorBoundary>
+    <RecentSwitcherHost />
+  </>;
+});
 
 export function DashboardLayout(props: DashboardLayoutProps) {
   const isNested = useContext(DashboardNestCtx);
@@ -479,31 +887,17 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     // apply them imperatively.
     s => s.workspace.nav.size,
     s => s.workspace.context.size,
-    s => s.workspace.context.pane?.kind,
     // The terminal toggle lights while the dock is open.
     s => s.workspace.dock.pane != null,
     s => s.currentConversation?.source,
     s => selectSessionRailOpen(s),
-    s => s.sidePanelSessionId,
-    s => s.currentSessionId,
-    s => s.viewingDismissedId,
-    s => selectCommentRailOpen(s),
-    s => resolveCommentsEnabled(s.clientState.ui),
+    // The session pointers, the comments map, and the palette's and people
+    // wall's open flags are read by leaves of their own (SessionRailList,
+    // CommentsToggle, PaletteHost, PeopleWallHost), so a session switch, a
+    // comment or opening Cmd+K re-renders those leaves, not the shell.
     s => resolveSimpleView(s.clientState.ui),
     s => resolveInboxCompact(s.clientState.ui),
     s => resolveVisualStyle(s.clientState.ui),
-    // Re-render the header toggle when comments change, so a teammate's comment on
-    // the viewed conversation surfaces the toggle even with the tools off. Subscribe
-    // to the comments map REF (O(1) Object.is compare), not a full scan: comments is
-    // low-churn (heartbeats never touch it, so the ref is stable between comment
-    // syncs), and the actual "does the viewed conversation have comments" boolean is
-    // derived below off the same ref. Scanning all comments here re-ran on every ~1s
-    // store heartbeat notification app-wide. The viewed conversation id is already a
-    // dep (currentSessionId / viewingDismissedId above).
-    s => s.comments,
-    s => s.palette.open,
-    s => s.peopleWallOpen,
-    s => s.settingsModalSection,
     s => s.tabs.length,
     s => s.activeTabId,
     s => s.tabs.find(t => t.id === s.activeTabId)?.path,
@@ -549,10 +943,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // actually mounted, not the tab the user last worked in.
   const routerLocation = useLocation();
   const router = useRouter();
-  // A navigation inside a tab (tabNavigate) writes the browser history
-  // directly, and react-router's location does not hear it; the active tab's
-  // path is a dep above, so this render sees the address the window shows.
-  useWindowTitle(typeof window === "undefined" ? routerLocation.pathname + routerLocation.search : window.location.pathname + window.location.search);
   // The route guard for the Flows app's pages while the workspace has Flows
   // off: the rail and the palette already leave them out, and a typed
   // address, an old link or the back button lands on the Flows landing.
@@ -562,8 +952,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     if (hiddenRedirect) router.replace(hiddenRedirect);
   }, [hiddenRedirect, routerLocation.pathname]);
 
-  const [desktopClass, setDesktopClass] = useState("");
-  const [isDesktopApp, setIsDesktopApp] = useState(false);
+  // Read on the first render, so the header clears the traffic lights from
+  // its first paint; the mount effect below re-checks for a late bridge.
+  const [desktopClass, setDesktopClass] = useState(desktopHeaderClass);
+  const [isDesktopApp, setIsDesktopApp] = useState(isElectron);
   const headerRef = useRef<HTMLElement>(null);
   const prevWasInboxRef = useRef(false);
   const prevPathnameRef = useRef(pathname);
@@ -635,27 +1027,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // explicit because it is source-aware, not just path-based.
   const isFullWidthPage = isOnConversationPage || isOnCommitPage || isOnPRPage || isOnInboxPage || isOnTasksPage || isOnWorkflowsPage || isOnRoutinesPage || isOnTriggersPage || isOnSchedulesPage || isOnPlansPage || isOnGoalsPage || isOnCallsPage || isOnDocsPage || isOnCapabilitiesPage || isOnFilesPage || isOnVaultPage || isOnProjectsPage || isOnWindowsPage || isOnCrosstalkPage || isOnSessionMapPage || isOnRepoPage || isOnOrgPage || isOnChangesPage || isOnDeploysPage || isOnPromptsPage || isOnModPage || isOnModObjectsPage || isOnModObjectPage || isFullWidthRoute(pathname ?? "");
 
-  // The teammate comment rail is a conversation-scoped overlay, so its header
-  // toggle only makes sense when a conversation is actually on screen.
-  const isViewingConversation = isOnConversationPage || (isOnInboxPage && !!(s.currentSessionId || s.viewingDismissedId));
-  const commentRailOpen = selectCommentRailOpen(s);
-  // The comment tools are opt-in (off by default), but a conversation that already
-  // has comments still surfaces the toggle so you can open it to read + reply.
-  const commentsEnabled = resolveCommentsEnabled(s.clientState.ui);
-  const viewedConvIds = [s.currentSessionId, s.viewingDismissedId].filter(Boolean) as string[];
-  // Conversation ids that carry at least one comment, indexed once per comments-map
-  // change (not per render) so the toggle check below is an O(1) Set lookup.
-  const commentedConvIds = useMemo(() => {
-    const set = new Set<string>();
-    for (const c of Object.values(s.comments) as { conversation_id?: string }[]) {
-      if (c.conversation_id) set.add(c.conversation_id);
-    }
-    return set;
-  }, [s.comments]);
-  const convHasComments = viewedConvIds.some((id) => commentedConvIds.has(id));
-  const showCommentsToggle = isViewingConversation && (commentsEnabled || convHasComments);
-
-
   // The rail is ONLY ever the session list — a conversation never renders
   // inside it (clicking a session promotes it to the stage instead; see
   // resolveSessionSelectKind). sidePanelSessionId survives purely as the
@@ -684,22 +1055,6 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // No route carries a conversation along as a second column any more: the
   // page takes the full stage, and side by side is the tab's split layout,
   // entered by a deliberate drag onto the stage (components/stage).
-
-  // On conversation pages, derive active ID from the URL so non-owner viewers
-  // (ViewerView) get correct sidebar highlighting — they don't set currentSessionId.
-  const conversationPageId = isOnConversationPage && pathname
-    ? pathname.replace('/conversation/', '').split(/[/?#]/)[0]
-    : null;
-
-  // Which pointer the rail highlights comes from the shared helper, so
-  // whatever MOVES this highlight (the workbench filter's eviction) reads the
-  // same answer.
-  const focusKind = sessionFocusKind(pathname, s.currentConversation?.source);
-  const sessionListActiveId = focusKind === "current"
-    ? (s.viewingDismissedId ?? s.currentSessionId)
-    : focusKind === "url"
-    ? (conversationPageId ?? s.currentSessionId)
-    : s.sidePanelSessionId;
 
   // The one select-kind-aware open path (hooks/useOpenSession): in place on
   // the inbox, leave for the inbox from every other surface. Shared with the
@@ -792,7 +1147,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     // A label chip nulls activeProjectPath — derive the label's directory instead.
     const activeProjectPath = store.chipFilterExclude ? null : store.activeProjectPath ?? bucketProjectPath(store);
     // Ctrl+N clones the selected session's project path (preserving its worktree /
-    // subdirectory) — the session the user sees highlighted (sessionListActiveId).
+    // subdirectory) — the session the user sees highlighted (sessionListActiveIdOf).
     // But a project-filter chip is an explicit "I'm working in this project": when
     // one is active, the focused session only wins if it actually lives inside that
     // project, so a stale focus from elsewhere can't pull a new session out of it.
@@ -804,6 +1159,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     // The project the person saved as their default outranks every guess below.
     const saved = savedDefaultProject(store.clientState.ui, liveMachineRoster(store));
     if (saved) return { path: saved, gitRoot: saved, agentType: store.currentConversation.agentType };
+    const sessionListActiveId = sessionListActiveIdOf(store, pathname ?? null);
     const selected = sessionListActiveId
       ? (store.sessions[sessionListActiveId]
           ?? store.conversations[sessionListActiveId])
@@ -845,7 +1201,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     return lastRoot
       ? { path: lastRoot, gitRoot: lastRoot, agentType: ctx.agentType ?? last?.agent_type }
       : { path: undefined, gitRoot: undefined, agentType: ctx.agentType };
-  }, [directoryFilter, sessionListActiveId]);
+  }, [directoryFilter, pathname]);
 
   // Every "New Session" affordance opens the floating compose popup (ComposeView
   // in an overlay) — the same surface the command palette uses. ComposeView owns
@@ -1155,6 +1511,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   if (isGuest || isStandaloneCommunityPath(routerLocation.pathname)) {
     return (
       <div className="bg-sol-bg flex flex-col overflow-hidden simple-view" style={{ height: '100vh' }}>
+        <WindowTitle />
         <div className="flex-1 min-h-0">
           <div className="h-full">{children}</div>
         </div>
@@ -1183,6 +1540,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   if (PANE_EMBED) {
     return (
       <div data-cc-shell data-cc-embed className={`bg-sol-bg h-dvh overflow-hidden${shellModeClass}`}>
+        <WindowTitle />
         <ErrorBoundary name="DashboardSync" level="inline" fallback={null}>
           <DashboardSyncEffects />
         </ErrorBoundary>
@@ -1199,13 +1557,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     <div className="h-full flex flex-col min-h-0">
       <BreadcrumbBar />
       <div className="flex-1 min-h-0">{pageBody}</div>
-      {/* The triage verbs, one home under the composer. The bar gates itself
-          to inbox session views, so it draws nothing elsewhere. Compact is a
-          corner button with no layout height. Own boundary: a bar crash must
-          cost the bar, never the stage. */}
-      <ErrorBoundary name="TriageBar" level="inline">
-        <TriageBar />
-      </ErrorBoundary>
+      <StageTriageBar />
     </div>
   );
 
@@ -1231,10 +1583,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             {!isMobile && (
               <ErrorBoundary name="SessionList" level="panel">
                 <div className="w-full h-full border-l border-sol-border/30">
-                  <SessionListPanel
-                    onSessionSelect={sessionListOnSelect}
-                    activeSessionId={sessionListActiveId}
-                  />
+                  <SessionRailList pathname={pathname ?? null} onSessionSelect={sessionListOnSelect} />
                 </div>
               </ErrorBoundary>
             )}
@@ -1249,6 +1598,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
 
   return (
     <div data-cc-shell className={`bg-sol-bg h-dvh flex flex-col overflow-hidden${shellModeClass}`}>
+      <WindowTitle />
       <ErrorBoundary name="DashboardSync" level="inline" fallback={null}>
         <DashboardSyncEffects />
       </ErrorBoundary>
@@ -1320,65 +1670,13 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 <TeamSwitcher />
               </ErrorBoundary>
             )}
-            <ErrorBoundary name="TeamAvatarBar" level="inline">
-              <Suspense fallback={null}><TeamAvatarBar /></Suspense>
-            </ErrorBoundary>
-            <ErrorBoundary name="FollowPill" level="inline">
-              <FollowPill />
-            </ErrorBoundary>
+            <HeaderPresence />
           </>}
-          search={
-            <>
-              <ErrorBoundary name="GlobalSearch" level="inline">
-                <GlobalSearch />
-              </ErrorBoundary>
-              {/* Making something pairs with finding it. */}
-              <ErrorBoundary name="NewMenu" level="inline">
-                <NewMenu />
-              </ErrorBoundary>
-            </>
-          }
-          status={<TopbarTray>
-            {/* The sync light leads, the steady facts follow, and an alert
-                (the daemon) comes last, where the row's eye lands. */}
-            <ErrorBoundary name="SyncStatusChip" level="inline">
-              <SyncStatusChip />
-            </ErrorBoundary>
-            {/* The Claude Code account behind agent sessions. */}
-            <ErrorBoundary name="AccountUsageChip" level="inline">
-              <AccountUsageChip />
-            </ErrorBoundary>
-            <ActiveAgentsBadge isOnInboxPage={isOnInboxPage} />
-            <ErrorBoundary name="DaemonStatusChip" level="inline">
-              <DaemonStatusChip />
-            </ErrorBoundary>
-          </TopbarTray>}
-          actions={<>
-            <ErrorBoundary name="HeaderPins" level="inline">
-              <HeaderPins />
-            </ErrorBoundary>
-            <ErrorBoundary name="ResourcePressureGauge" level="inline" fallback={<ResourcePressureFallback />}>
-              <ResourcePressureGauge />
-            </ErrorBoundary>
-            <ErrorBoundary name="NotificationBell" level="inline">
-              <NotificationBell />
-            </ErrorBoundary>
-            <ErrorBoundary name="UserMenu" level="inline">
-              <UserMenu />
-            </ErrorBoundary>
-          </>}
+          search={<HeaderSearch />}
+          status={<HeaderStatus isOnInboxPage={isOnInboxPage} />}
+          actions={<HeaderActions />}
           panels={<>
-            {showCommentsToggle && (
-              <ShortcutTooltip label={commentRailOpen ? "Hide comments" : "Show comments"} action="sidebar.toggleComments">
-                <TopbarButton
-                  onClick={(e) => { s.setCommentRailOpen(!commentRailOpen); tipActions.whisper('sidebar.toggleComments', e); }}
-                  active={commentRailOpen}
-                  aria-label={commentRailOpen ? "Hide comments" : "Show comments"}
-                >
-                  <MessageSquare />
-                </TopbarButton>
-              </ShortcutTooltip>
-            )}
+            <CommentsToggle isOnConversationPage={isOnConversationPage} isOnInboxPage={isOnInboxPage} />
             {!isMobile && (
               <ShortcutTooltip label="Toggle terminal" action="terminal.toggle">
                 <TopbarButton
@@ -1409,42 +1707,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
           </>}
         />
       </header>
-      {/* A phone's top bar has no face row, so a call's card has its own line. */}
-      <PhoneCallStrip />
+      <ShellBanners />
 
-      {/* Status notices (connection, storage, CLI offline, tmux missing) render
-          nothing here — they publish to StatusNoticeStack, fixed to the
-          bottom-left corner, so a status that flaps never shifts the layout
-          or covers the header, transcript or composer. The onboarding strips
-          still sit in the flow. */}
-      <ErrorBoundary name="Banners" level="inline">
-        <StatusNoticeStack />
-        <ConnectionBanner />
-        <StorageHealthBanner />
-        <SetupPromptBanner />
-        <NewSnippetsBanner />
-        <OrgIntroAnywhere />
-        <FeatureOfferAnywhere />
-        <ThemeIntroAnywhere />
-        <CliOfflineBanner />
-        <TmuxMissingBanner />
-        <SeatBanner />
-        {/* The nudges share one slot, in priority order: only the first that
-            renders shows (globals.css [data-nudge-slot]), and dismissing it
-            brings up the next. Stacked, a new account met four at once. */}
-        <div data-nudge-slot>
-          <NativeAppBanner />
-          <TeamDomainBanner />
-          <NotificationNudgeBanner />
-          <SharingSetupBanner />
-          <TeamSharingNudgeBanner />
-        </div>
-        <DeviceSetupDialog />
-      </ErrorBoundary>
-
-      <ErrorBoundary name="TabBar" level="inline">
-        <TabBar />
-      </ErrorBoundary>
+      <ShellTabBar />
 
       {/* Content area with sidebar and main. Group is always mounted; sidebar Panel
           collapses imperatively so toggling zen/sidebar/mobile doesn't remount {rightArea}. */}
@@ -1464,10 +1729,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         <EdgePeek side="right" enabled={rightPeekEnabled} width={320}>
           <ErrorBoundary name="SessionListPeek" level="panel">
             <div className="w-full h-full border-l border-sol-border/30">
-              <SessionListPanel
-                onSessionSelect={sessionListOnSelect}
-                activeSessionId={sessionListActiveId}
-              />
+              <SessionRailList pathname={pathname ?? null} onSessionSelect={sessionListOnSelect} />
             </div>
           </ErrorBoundary>
         </EdgePeek>
@@ -1517,44 +1779,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             <Panel id="main" minSize={400}>{rightArea}</Panel>
           </Group>
         </div>
-        <KeyboardShortcutsPanel />
-        {/* The anchor slide-over: scoped to the content area so it starts
-            below the header/banners/tab bar and covers the stage, not the
-            chrome. */}
-        <ErrorBoundary name="AnchorPanel" level="panel">
-          <AnchorPanel />
-        </ErrorBoundary>
+        <StageSidePanels />
       </div>
 
-      {/* Integrated terminal, docked across the bottom (ctrl+`). Mounts lazily
-          on first open, then stays mounted (hidden) so terminals survive
-          close/reopen. Desktop-only surface. */}
-      {!isMobile && (
-        <ErrorBoundary name="TerminalPanel" level="panel">
-          <TerminalDock />
-        </ErrorBoundary>
-      )}
-      {!isMobile && (
-        <ErrorBoundary name="VaultQuickSwitcher" level="panel">
-          <VaultQuickSwitcherDock />
-          <FilePathMenuHost />
-          <LinkMenuHost />
-        </ErrorBoundary>
-      )}
-
-      <ErrorBoundary name="SettingsModal" level="panel">
-        <Suspense fallback={null}><SettingsModal /></Suspense>
-      </ErrorBoundary>
-
-      {/* The wall of faces, over the main window. Mounted here rather than on a
-          route because it is a gesture, not a place: you open it, hold somebody,
-          and it goes away. It renders nothing and subscribes to nothing while
-          shut. */}
-      {s.peopleWallOpen && (
-        <ErrorBoundary name="PeopleWallModal" level="panel">
-          <Suspense fallback={null}><PeopleWallModal /></Suspense>
-        </ErrorBoundary>
-      )}
+      <ShellDocks isMobile={isMobile} />
 
       {/* Phone drawers: the nav slides in from the left, the session list from
           the right. Each is the single render point of its rail on small
@@ -1572,73 +1800,10 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       )}
       <MobileDrawer open={showMobileSessionList} onOpenChange={setIsMobileSessionListOpen} side="right" title="Sessions" className={shellModeClass}>
         <ErrorBoundary name="SessionList" level="panel">
-          <SessionListPanel
-            onSessionSelect={selectFromMobileSessionList}
-            activeSessionId={sessionListActiveId}
-          />
+          <SessionRailList pathname={pathname ?? null} onSessionSelect={selectFromMobileSessionList} />
         </ErrorBoundary>
       </MobileDrawer>
-      {s.palette.open && (
-        <ErrorBoundary name="CommandPalette" level="inline">
-          <Suspense fallback={null}><CommandPalette /></Suspense>
-        </ErrorBoundary>
-      )}
-      <ErrorBoundary name="TriageNux" level="inline">
-        <TriageNuxGate />
-      </ErrorBoundary>
-      <ErrorBoundary name="Tours" level="inline">
-        <ToursPanel />
-        <Suspense fallback={null}><TourLayer /></Suspense>
-        <GuideLayer />
-      </ErrorBoundary>
-      {/* The dock portals to <body>, so this wrapper is empty (and hidden)
-          until the boundary trips. A dock crash used to degrade into the
-          default inline fallback rendered here in normal flow — the bottom of
-          the shell, effectively invisible — so the call window "just
-          vanished" with no way back (Jason, 2026-08-24). The fallback is a
-          floating chip where the dock lived: retry re-renders, hang up also
-          frees the seat, and the ErrorBoundary toast still carries the trace. */}
-      <div className="fixed bottom-20 right-4 z-[160] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt shadow-xl">
-        <ErrorBoundary
-          name="Call window"
-          fallback={({ retry }) => (
-            <div className="flex items-center gap-2 px-3 py-2 text-xs">
-              <span className="text-sol-red">The call window crashed</span>
-              <button onClick={retry} className="text-sol-cyan hover:underline">
-                retry
-              </button>
-              <button
-                onClick={() => {
-                  void import("../lib/calls/callManager").then((module) => module.leaveCall());
-                  retry();
-                }}
-                className="text-sol-text-muted hover:text-sol-red hover:underline"
-              >
-                hang up
-              </button>
-            </div>
-          )}
-        >
-          <Suspense fallback={null}><CallDock /></Suspense>
-        </ErrorBoundary>
-      </div>
-      {/* The huddle the people window (or a detached tab) is hosting. The dock
-          above reads THIS window's call and correctly shows nothing, which
-          without a word left the main window looking as though no call were
-          running at all — and the first thing that invites is starting a second
-          one. It sits where the dock would, and says only where to look. */}
-      <div className="fixed bottom-20 right-4 z-[155] empty:hidden rounded-lg border border-sol-border bg-sol-bg-alt px-3 py-2 shadow-xl">
-        <Suspense fallback={null}><ElsewhereCallPill /></Suspense>
-      </div>
-      {/* A recording in progress, wherever the person has wandered to. It
-          portals to the body and renders nothing unless one is running. */}
-      <Suspense fallback={null}><RecordingPill /></Suspense>
-      <GlobalCloseGuardDialog />
-      <ComposeHost />
-      <ErrorBoundary name="FindBar" level="inline">
-        <FindBar />
-      </ErrorBoundary>
-      <RecentSwitcherHost />
+      <ShellOverlays />
     </div>
   );
 }

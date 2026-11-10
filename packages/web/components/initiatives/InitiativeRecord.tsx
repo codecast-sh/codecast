@@ -26,7 +26,7 @@ export type { RecordPart } from "./recordModel";
 
 const HAIRLINE = "color-mix(in srgb, var(--sol-border) 26%, transparent)";
 const FIELD = "h-7 min-w-0 rounded-md border bg-transparent px-2 text-[12.5px] outline-none placeholder:text-sol-text-dim focus:border-sol-cyan/60";
-const META = "flex items-center gap-x-2.5 gap-y-0.5 flex-wrap text-[11px]";
+const META = "flex items-center gap-x-2.5 gap-y-0.5 flex-wrap text-meta";
 
 /** A section of a goal's sheet: the small heading every sheet section wears,
  *  a count, one control on the right. The sheet's own sections wear the same
@@ -47,7 +47,7 @@ export function SectionHead({ label, count, action }: { label: string; count?: n
   return (
     <div className="flex items-center gap-2 mb-1.5 min-h-[24px]">
       <h3 className="text-[12px] font-normal" style={{ color: "var(--sol-text-dim)" }}>{label}</h3>
-      {count ? <span className="text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{count}</span> : null}
+      {count ? <span className="text-meta tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{count}</span> : null}
       <span className="flex-1" />
       {action}
     </div>
@@ -76,7 +76,7 @@ export function InitiativeRecord({ initiative, now, start }: { initiative: Initi
       {shown("sources") && <Sources initiative={initiative} now={now} record={record} start={begun("sources")} />}
       {missing.length > 0 && (
         <div className="flex items-center gap-1 flex-wrap" data-initiative-record-add>
-          <span className="mr-1 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>Add</span>
+          <span className="mr-1 text-meta" style={{ color: "var(--sol-text-dim)" }}>Add</span>
           {missing.map((p) => <Ghost key={p} icon={Plus} onClick={() => setOpened(new Set([...opened, p]))} data-initiative-add-part={p}>{PART_ADD[p]}</Ghost>)}
         </div>
       )}
@@ -91,7 +91,7 @@ type DataProps = { [K in `data-${string}`]?: string };
 
 function Ghost({ icon: Icon, children, onClick, ...rest }: { icon: LucideIcon; children: ReactNode; onClick?: () => void } & DataProps) {
   return (
-    <button type="button" onClick={onClick} className="h-6 inline-flex items-center gap-1 px-2 rounded-md text-[11.5px] font-medium hover:bg-sol-bg-highlight/70 transition-colors" style={{ color: "var(--sol-text-muted)" }} {...rest}>
+    <button type="button" onClick={onClick} className="h-6 inline-flex items-center gap-1 px-2 rounded-md text-meta font-medium hover:bg-sol-bg-highlight/70 transition-colors" style={{ color: "var(--sol-text-muted)" }} {...rest}>
       <Icon className="w-3 h-3" /> {children}
     </button>
   );
@@ -274,7 +274,7 @@ function Clamped({ children }: { children: ReactNode }) {
     <div data-clamped={all ? "open" : cut ? "cut" : "whole"}>
       <div ref={box} className={cn("text-[13px]", !all && "max-h-[11.4em] overflow-hidden")} style={fade ? { maskImage: fade, WebkitMaskImage: fade } : undefined}>{children}</div>
       {(cut || all) && (
-        <button type="button" onClick={() => setAll(!all)} className="mt-0.5 -ml-1.5 h-6 inline-flex items-center px-1.5 rounded-md text-[11.5px] hover:bg-sol-bg-highlight/70 transition-colors" style={{ color: "var(--sol-text-muted)" }} data-clamp-toggle>
+        <button type="button" onClick={() => setAll(!all)} className="mt-0.5 -ml-1.5 h-6 inline-flex items-center px-1.5 rounded-md text-meta hover:bg-sol-bg-highlight/70 transition-colors" style={{ color: "var(--sol-text-muted)" }} data-clamp-toggle>
           {all ? "Show less" : "Read all"}
         </button>
       )}
@@ -311,7 +311,7 @@ function Milestones({ initiative, now, record, start }: { initiative: Initiative
           {rows.map((m, i) => <MilestoneRow key={m.key} milestone={m} state={milestoneState(m, next, now)} isNext={next?.key === m.key} last={i === rows.length - 1} now={now} record={record} />)}
         </ol>
       )}
-      {counts.total > 0 && <p className="mt-1.5 pl-[26px] text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }} data-initiative-milestone-counts>{counts.done} of {counts.total} reached</p>}
+      {counts.total > 0 && <p className="mt-1.5 pl-[26px] text-meta tabular-nums" style={{ color: "var(--sol-text-dim)" }} data-initiative-milestone-counts>{counts.done} of {counts.total} reached</p>}
       {adding && (
         <EntryForm
           name="milestones"
@@ -345,7 +345,7 @@ function MilestoneRow({ milestone: m, state, isNext, last, now, record }: { mile
       </span>
       <span className="min-w-0 flex-1 flex items-baseline gap-x-2.5 gap-y-0 flex-wrap py-1">
         <span className={cn("text-[12.5px] leading-snug", isNext && "font-medium")} style={{ color: state === "reached" ? "var(--sol-text-muted)" : "var(--sol-text)" }}>{m.title}</span>
-        {isNext && <span className="text-[10.5px] uppercase tracking-wide" style={{ color: state === "late" ? HEALTH_COLOR.off_track : INITIATIVE_ACCENT }}>{state === "late" ? "overdue" : "next"}</span>}
+        {isNext && <span className="text-mark uppercase tracking-wide" style={{ color: state === "late" ? HEALTH_COLOR.off_track : INITIATIVE_ACCENT }}>{state === "late" ? "overdue" : "next"}</span>}
         {m.source && <SourceLink source={m.source} now={now} />}
       </span>
       <RowActions>
@@ -355,7 +355,7 @@ function MilestoneRow({ milestone: m, state, isNext, last, now, record }: { mile
         <EditAction list="milestones" onClick={() => setEditing(true)} />
         <RowAction icon={X} label="Remove this milestone" onClick={() => record({ list: "milestones", action: "remove", key: m.key })} data-initiative-remove="" />
       </RowActions>
-      <span className="shrink-0 text-[11.5px] tabular-nums whitespace-nowrap text-right" style={{ color: state === "late" ? HEALTH_COLOR.off_track : "var(--sol-text-dim)" }} data-initiative-milestone-date>
+      <span className="shrink-0 text-meta tabular-nums whitespace-nowrap text-right" style={{ color: state === "late" ? HEALTH_COLOR.off_track : "var(--sol-text-dim)" }} data-initiative-milestone-date>
         {m.done_at ? `reached ${shortDate(m.done_at, now)}` : m.date ? formatTargetDay(m.date, now) : ""}
       </span>
     </li>
@@ -385,7 +385,7 @@ function Questions({ initiative, now, record, start }: { initiative: InitiativeR
       )}
       {answered.length > 0 && (
         <details className="mt-2.5 group/answered" data-initiative-answered>
-          <summary className="cursor-pointer select-none text-[11.5px] list-none inline-flex items-center gap-1.5 rounded-md hover:text-sol-text" style={{ color: "var(--sol-text-dim)" }}>
+          <summary className="cursor-pointer select-none text-meta list-none inline-flex items-center gap-1.5 rounded-md hover:text-sol-text" style={{ color: "var(--sol-text-dim)" }}>
             <Check className="w-3 h-3" aria-hidden /> {answered.length} answered
           </summary>
           <ul className="mt-2 space-y-2.5">

@@ -152,8 +152,8 @@ export function DecisionLadder({ decision, detail, now }: { decision: SessionDec
                 ) : (
                   <span className="text-sol-text-dim">a retired role</span>
                 )}
-                {holds && <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border border-sol-green/40 text-sol-green"><ShieldCheck className="w-3 h-3" />holds it</span>}
-                <span className="text-[11px] text-sol-text-dim">{formatTimeAgo(hop.at, now)}</span>
+                {holds && <span className="inline-flex items-center gap-1 text-meta px-1.5 py-0.5 rounded border border-sol-green/40 text-sol-green"><ShieldCheck className="w-3 h-3" />holds it</span>}
+                <span className="text-meta text-sol-text-dim">{formatTimeAgo(hop.at, now)}</span>
               </div>
               <div className="text-[12px] text-sol-text-muted mt-0.5">
                 {hop.recommendation !== undefined
@@ -171,7 +171,7 @@ export function DecisionLadder({ decision, detail, now }: { decision: SessionDec
         <div className="flex items-center gap-2 flex-wrap text-sm">
           <User className="w-3.5 h-3.5 text-sol-text-dim" />
           <span className="text-sol-text">{detail.asked_users.map((u) => u.name).join(", ") || "its people"}</span>
-          {decision.holder?.kind !== "role" && pending && <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-green/40 text-sol-green">holds it</span>}
+          {decision.holder?.kind !== "role" && pending && <span className="text-meta px-1.5 py-0.5 rounded border border-sol-green/40 text-sol-green">holds it</span>}
         </div>
       </li>
     </ol>

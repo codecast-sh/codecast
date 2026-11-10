@@ -393,10 +393,10 @@ export function TeammateItem({
       <MemberFace member={row.member} size={16} title="" showHuddle={false} />
       <div className="flex-1 min-w-0">
         <div className="truncate">{row.name}</div>
-        <div className="truncate text-[11px] text-sol-text-dim mt-0.5">{following ? `following · ${where}` : where}</div>
+        <div className="truncate text-meta text-sol-text-dim mt-0.5">{following ? `following · ${where}` : where}</div>
       </div>
       {row.since !== undefined && Date.now() - row.since >= 60_000 && (
-        <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">for {compactDuration(Date.now() - row.since)}</span>
+        <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0">for {compactDuration(Date.now() - row.since)}</span>
       )}
       <ChevronRight className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />
     </CommandPrimitive.Item>
@@ -1298,7 +1298,7 @@ export function ActionSubmenu({
           <span className="text-xs text-sol-text-dim font-mono">· {targetSummary}</span>
         </div>
         <div className="p-4">
-          <label className="block text-[10px] font-semibold uppercase tracking-widest text-sol-text-dim/70 mb-2">
+          <label className="block text-mark font-semibold uppercase tracking-widest text-sol-text-dim/70 mb-2">
             {handoff ? "Direction" : "Initial message"}
           </label>
           <textarea
@@ -1319,7 +1319,7 @@ export function ActionSubmenu({
             className="w-full resize-none rounded-lg bg-sol-bg-alt/40 border border-sol-border/40 px-3 py-2 text-sm text-sol-text placeholder:text-sol-text-dim/60 outline-none focus:border-sol-cyan/50 transition-colors"
           />
           {handoff && (
-            <p className="mt-2 text-[10px] leading-snug text-sol-text-dim">{HANDOFF_EXPLAINER}</p>
+            <p className="mt-2 text-meta leading-snug text-sol-text-dim">{HANDOFF_EXPLAINER}</p>
           )}
           <button
             onClick={launch}
@@ -1329,7 +1329,7 @@ export function ActionSubmenu({
             {handoff ? `Hand off to ${agentLabel}` : count === 1 ? `Launch ${agentLabel}` : `Launch ${count} ${agentLabel} runs`}
           </button>
         </div>
-        <div className="flex items-center gap-3 px-4 py-2 border-t border-sol-border/30 text-[10px] text-sol-text-dim">
+        <div className="flex items-center gap-3 px-4 py-2 border-t border-sol-border/30 text-meta text-sol-text-dim">
           <span className="flex items-center gap-1">
             <KeyCap size="xs">&#9166;</KeyCap>
             launch
@@ -1416,7 +1416,7 @@ export function ActionSubmenu({
                   alt={item.label}
                   className="w-4 h-4 rounded-full flex-shrink-0"
                   fallback={
-                    <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
+                    <div className="w-[18px] h-[18px] rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-mark font-medium text-sol-text-muted">
                       {item.label.replace(" (you)", "").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
                     </div>
                   }
@@ -1455,28 +1455,28 @@ export function ActionSubmenu({
                 <span className={`text-xs flex-shrink-0 ${item.warn ? "text-sol-red" : "text-sol-text-dim"}`}>{item.hint}</span>
               )}
               {mode === "view" && item.kind === "project" && (
-                <span className="text-[10px] text-sol-text-dim/60 flex-shrink-0">project</span>
+                <span className="text-meta text-sol-text-dim/60 flex-shrink-0">project</span>
               )}
               {typeof item.count === "number" && (
-                <span className="text-[10px] tabular-nums text-sol-text-dim/70 flex-shrink-0">{item.count}</span>
+                <span className="text-meta tabular-nums text-sol-text-dim/70 flex-shrink-0">{item.count}</span>
               )}
               {item.active && <Check className="w-4 h-4 text-sol-cyan flex-shrink-0" />}
               {mode === "snooze" ? <KeyCap size="xs">{item.key.toUpperCase()}</KeyCap> : i < 9 && <span className="flex gap-0.5"><KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap><KeyCap size="xs">{i + 1}</KeyCap></span>}
               {item.type === "agent" && mode === "agent_run" && (
-                <span className="text-[10px] text-sol-text-dim font-mono">&rarr;</span>
+                <span className="text-meta text-sol-text-dim font-mono">&rarr;</span>
               )}
             </button>
           );
           if (!heading) return row;
           return (
             <div key={item.key}>
-              <div className="px-4 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-widest text-sol-text-dim/70">{heading}</div>
+              <div className="px-4 pt-2 pb-1 text-mark font-semibold uppercase tracking-widest text-sol-text-dim/70">{heading}</div>
               {row}
             </div>
           );
         })}
       </div>
-      <div className="flex items-center gap-3 px-4 py-2 border-t border-sol-border/30 text-[10px] text-sol-text-dim">
+      <div className="flex items-center gap-3 px-4 py-2 border-t border-sol-border/30 text-meta text-sol-text-dim">
         <span className="flex items-center gap-1">
           <KeyCap size="xs">&uarr;</KeyCap>
           <KeyCap size="xs">&darr;</KeyCap>
@@ -1542,10 +1542,11 @@ const EMPTY_VAULT_FILES: Record<string, { dir?: boolean; mtime: number }> = {};
 
 const MARKDOWN_RE = /\.(md|markdown)$/i;
 
-// Memoized: this overlay is ALWAYS mounted inside DashboardLayout, which
-// re-renders on every heartbeat. Its only prop (`standalone`) is stable, so memo
-// severs the parent-cascade — combined with snapshotting session data at open
-// (above), the palette now re-renders only on its OWN state, not on session churn.
+// Memoized: in the main window it mounts only while open (DashboardLayout's
+// PaletteHost); in the desktop's own palette window it is always mounted,
+// keyed per show (app/palette). Its only prop (`standalone`) is stable, so memo
+// severs any parent cascade — combined with snapshotting session data at mount
+// (above), the palette re-renders only on its OWN state, not on session churn.
 function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const [query, setQuery] = useState("");
   const [actionSearch, setActionSearch] = useState("");
@@ -2511,11 +2512,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           onClick={() => setPickChosen(null)}
           className="mx-3 mt-3 flex min-w-0 items-center gap-2 rounded-lg border border-sol-border/60 bg-sol-bg-alt/50 px-3 py-2 text-left hover:bg-sol-bg-highlight focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/40"
         >
-          <span className="text-[11px] text-sol-text-dim">To</span>
+          <span className="text-meta text-sol-text-dim">To</span>
           {icon}
           <span className="truncate flex-1 text-sm text-sol-text">{label}</span>
-          {tag && <span className="hidden text-[10px] text-sol-text-dim flex-shrink-0 sm:inline">{tag}</span>}
-          <span className="text-[11px] text-sol-text-muted flex-shrink-0">change</span>
+          {tag && <span className="hidden text-meta text-sol-text-dim flex-shrink-0 sm:inline">{tag}</span>}
+          <span className="text-meta text-sol-text-muted flex-shrink-0">change</span>
         </button>
         <div className="px-3 pt-3">
           <div
@@ -2551,7 +2552,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           </div>
         </div>
         <div className="px-3 py-3 flex items-center justify-between">
-          <span className="flex items-center gap-1 text-[10px] text-sol-text-dim">
+          <span className="flex items-center gap-1 text-meta text-sol-text-dim">
             <KeyCap size="xs">&#9003;</KeyCap>
             back
           </span>
@@ -2734,7 +2735,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               <CommandPrimitive.Item
                 value="__search__ content-loading"
                 disabled
-                className="px-4 py-2 text-center text-[11px] text-sol-text-dim animate-pulse cursor-default"
+                className="px-4 py-2 text-center text-meta text-sol-text-dim animate-pulse cursor-default"
               >
                 Searching message content...
               </CommandPrimitive.Item>
@@ -2812,9 +2813,12 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         />
       </PaletteSearchBar>
       <CommandPaletteList>
-        {!query.trim() && (
+        {/* Only a typed query can match nothing: the always-match rows below
+            (compose, ask) step aside while the server search is out, so the
+            list says it is still looking rather than going blank. */}
+        {query.trim() && (
           <CommandPrimitive.Empty className="py-6 text-center text-sm text-sol-text-dim">
-            No results found.
+            {searchAwaiting ? "Searching…" : "No results found."}
           </CommandPrimitive.Empty>
         )}
 
@@ -2851,7 +2855,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 >
                   <span className="flex w-4 flex-shrink-0 justify-center">{r.o.face}</span>
                   <span className="truncate flex-1">{r.o.label}</span>
-                  {r.o.hint && <span className="text-[10px] text-sol-text-dim flex-shrink-0">{r.o.hint}</span>}
+                  {r.o.hint && <span className="text-meta text-sol-text-dim flex-shrink-0">{r.o.hint}</span>}
                 </CommandPrimitive.Item>
               ))}
             </CommandPrimitive.Group>
@@ -2876,7 +2880,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 )}
                 <div className="flex-1 min-w-0">
                   <div className="truncate">{x.label}</div>
-                  {x.description && <div className="truncate text-[11px] text-sol-text-dim mt-0.5">{x.description}</div>}
+                  {x.description && <div className="truncate text-meta text-sol-text-dim mt-0.5">{x.description}</div>}
                 </div>
               </CommandPrimitive.Item>
             ))}
@@ -2937,8 +2941,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               >
                 <RecentVisitGlyph item={row} className="w-4 h-4 flex-shrink-0" />
                 <span className="truncate flex-1">{row.title}</span>
-                <span className="text-[10px] text-sol-text-dim flex-shrink-0">{visitObjectLabel(row.objectType).toLowerCase()}</span>
-                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{visitTimeAgo(row.ts)}</span>
+                <span className="text-meta text-sol-text-dim flex-shrink-0">{visitObjectLabel(row.objectType).toLowerCase()}</span>
+                <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0">{visitTimeAgo(row.ts)}</span>
               </CommandPrimitive.Item>
             ))}
           </CommandPrimitive.Group>
@@ -3068,7 +3072,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               >
                 <Flag className="w-4 h-4 flex-shrink-0 text-sol-magenta" />
                 <span className="truncate flex-1">{g.title || "Untitled"}</span>
-                <ShortId id={g.short_id} className="text-[10px] text-sol-text-dim tabular-nums" />
+                <ShortId id={g.short_id} className="text-meta text-sol-text-dim tabular-nums" />
               </CommandPrimitive.Item>
             ))}
           </CommandPrimitive.Group>
@@ -3086,7 +3090,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
               >
                 <RoleFace role={r} size={16} className="flex-shrink-0" />
                 <span className="truncate flex-1">{r.name}</span>
-                <span className="text-[10px] text-sol-text-dim font-mono flex-shrink-0">@{r.handle}</span>
+                <span className="text-meta text-sol-text-dim font-mono flex-shrink-0">@{r.handle}</span>
               </CommandPrimitive.Item>
             ))}
           </CommandPrimitive.Group>
@@ -3118,8 +3122,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                   fallback={<span className="text-amber-400 flex-shrink-0"><NavIcon type="star" /></span>}
                 />
                 <SessionIdentityLine row={identityRowOf(fav)} title={sessionCardTitle(fav)} className="flex-1" />
-                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{fav.message_count} msgs</span>
-                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(fav.updated_at, Date.now())}</span>
+                <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0">{fav.message_count} msgs</span>
+                <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(fav.updated_at, Date.now())}</span>
               </CommandPrimitive.Item>
             ))}
           </CommandPrimitive.Group>
@@ -3193,7 +3197,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                   <Hash className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
                 )}
                 <span className="truncate flex-1">{c.label}</span>
-                <span className="text-[10px] text-sol-text-dim flex-shrink-0">
+                <span className="text-meta text-sol-text-dim flex-shrink-0">
                   {c.kind === "dm" ? "direct message" : c.kind === "person" ? "new direct message" : "channel"}
                 </span>
               </CommandPrimitive.Item>
@@ -3222,10 +3226,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <FileText className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
                 <span className="truncate flex-1">{d.title || "Untitled"}</span>
                 {d.source_file && (
-                  <span className="text-[10px] text-sol-text-dim/70 font-mono truncate max-w-[140px] flex-shrink-0">{d.source_file.split("/").pop()}</span>
+                  <span className="text-meta text-sol-text-dim/70 font-mono truncate max-w-[140px] flex-shrink-0">{d.source_file.split("/").pop()}</span>
                 )}
-                <span className="text-[10px] text-sol-text-dim flex-shrink-0 capitalize">{d.doc_type || "note"}</span>
-                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(d.updated_at, Date.now())}</span>
+                <span className="text-meta text-sol-text-dim flex-shrink-0 capitalize">{d.doc_type || "note"}</span>
+                <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(d.updated_at, Date.now())}</span>
               </CommandPrimitive.Item>
             ))}
           </CommandPrimitive.Group>
@@ -3245,9 +3249,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 >
                   <MapIcon className="w-4 h-4 flex-shrink-0 text-sol-yellow" />
                   <span className="truncate flex-1">{p.title || "Untitled"}</span>
-                  {st && <span className={`text-[10px] flex-shrink-0 ${st.color}`}>{st.label}</span>}
-                  <ShortId id={p.short_id} className="text-[10px] text-sol-text-dim tabular-nums" />
-                  <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(p.updated_at, Date.now())}</span>
+                  {st && <span className={`text-meta flex-shrink-0 ${st.color}`}>{st.label}</span>}
+                  <ShortId id={p.short_id} className="text-meta text-sol-text-dim tabular-nums" />
+                  <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(p.updated_at, Date.now())}</span>
                 </CommandPrimitive.Item>
               );
             })}
@@ -3292,10 +3296,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 )}
                 <span className="truncate flex-1">{t.title || "Untitled trigger"}</span>
                 {t.status === "paused" && (
-                  <span className="text-[10px] text-sol-yellow flex-shrink-0">paused</span>
+                  <span className="text-meta text-sol-yellow flex-shrink-0">paused</span>
                 )}
                 {t.short_id && (
-                  <ShortId id={t.short_id} className="text-[10px] text-sol-text-dim tabular-nums" />
+                  <ShortId id={t.short_id} className="text-meta text-sol-text-dim tabular-nums" />
                 )}
               </CommandPrimitive.Item>
             ))}
@@ -3314,11 +3318,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <FileText className="w-4 h-4 flex-shrink-0 text-sol-cyan" />
                 <span className="truncate flex-1">{n.base}</span>
                 {n.path.includes("/") && (
-                  <span className="text-[10px] text-sol-text-dim/70 font-mono truncate max-w-[180px] flex-shrink-0">
+                  <span className="text-meta text-sol-text-dim/70 font-mono truncate max-w-[180px] flex-shrink-0">
                     {n.path.slice(0, n.path.lastIndexOf("/"))}
                   </span>
                 )}
-                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(n.mtime)}</span>
+                <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(n.mtime)}</span>
               </CommandPrimitive.Item>
             ))}
           </CommandPrimitive.Group>
@@ -3472,7 +3476,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                   <NavIcon type="folder" />
                 </span>
                 <span className="truncate">{getShortPath(dir)}</span>
-                <span className="text-[10px] text-sol-text-dim truncate ml-auto max-w-[200px]">{dir}</span>
+                <span className="text-meta text-sol-text-dim truncate ml-auto max-w-[200px]">{dir}</span>
               </CommandPrimitive.Item>
             ))}
           </CommandPrimitive.Group>
@@ -3490,11 +3494,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 <MessageSquare className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
                 <div className="flex-1 min-w-0">
                   <div className="truncate text-sm">{h.snippet}</div>
-                  <div className="truncate text-[11px] text-sol-text-dim mt-0.5">
+                  <div className="truncate text-meta text-sol-text-dim mt-0.5">
                     {chatAuthorName(h)} · {h.channel_kind === "dm" ? "direct message" : `#${h.channel_name}`}
                   </div>
                 </div>
-                <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(h.created_at)}</span>
+                <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0">{formatDateSmart(h.created_at)}</span>
               </CommandPrimitive.Item>
             ))}
           </CommandPrimitive.Group>
@@ -3603,7 +3607,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
 
       {/* Key hints only where there is room and, usually, a keyboard: at
           phone width they broke mid-word ("navigat e"). */}
-      <div className="px-3 py-2 border-t border-sol-border/60 hidden sm:flex items-center justify-between text-[10px] text-sol-text-dim bg-sol-bg-alt/40 whitespace-nowrap">
+      <div className="px-3 py-2 border-t border-sol-border/60 hidden sm:flex items-center justify-between text-meta text-sol-text-dim bg-sol-bg-alt/40 whitespace-nowrap">
         <div className="flex items-center gap-3">
           <span className="flex items-center gap-1">
             <KeyCap size="xs">&#8593;</KeyCap>

@@ -51,7 +51,7 @@ export function VaultRequestCard({ name, kind, why, output, isError }: { name: s
         kind={k}
         name={<Link href={href} className="min-w-0 font-mono text-[13px] font-semibold [overflow-wrap:anywhere] text-sol-text hover:underline underline-offset-2">{row?.name ?? name}</Link>}
         fallback={
-          <span className={`rounded px-1.5 py-0.5 text-[10.5px] font-medium ${failed ? "bg-sol-red/10 text-sol-red" : "bg-sol-magenta/10 text-sol-magenta"}`}>
+          <span className={`rounded px-1.5 py-0.5 text-meta font-medium ${failed ? "bg-sol-red/10 text-sol-red" : "bg-sol-magenta/10 text-sol-magenta"}`}>
             {failed ? "not sent" : "needs a value"}
           </span>
         }
@@ -59,7 +59,7 @@ export function VaultRequestCard({ name, kind, why, output, isError }: { name: s
       {reason ? <div className="mt-1 pl-[34px] text-[12.5px] leading-snug text-sol-text">{reason}</div> : null}
       <div className="mt-2 pl-[34px]">
         {failed ? (
-          <pre className="whitespace-pre-wrap font-mono text-[11.5px] text-sol-red">{stripAnsiCodes(output).trim() || "The request failed"}</pre>
+          <pre className="whitespace-pre-wrap font-mono text-meta text-sol-red">{stripAnsiCodes(output).trim() || "The request failed"}</pre>
         ) : !row ? (
           // A request still on its way (the command has not printed its id, or
           // the Vault has not loaded here yet): the Vault page is where it is filled.

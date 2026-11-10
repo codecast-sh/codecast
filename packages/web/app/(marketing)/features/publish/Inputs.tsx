@@ -27,7 +27,7 @@ function BundleTree() {
           <div key={t.path} className="flex items-center gap-3" style={{ paddingLeft: t.depth * 16 }}>
             <span style={{ color, textDecoration: skip ? "line-through" : undefined, textDecorationColor: "rgba(220,50,47,.6)" }}>{t.path}</span>
             {t.note && (
-              <span className="ml-auto text-[10.5px]" style={{ color: skip ? "rgba(220,50,47,.75)" : color }}>{t.note}</span>
+              <span className="ml-auto text-meta" style={{ color: skip ? "rgba(220,50,47,.75)" : color }}>{t.note}</span>
             )}
           </div>
         );
@@ -63,7 +63,7 @@ function FileToken({ name, glyph, kind }: { name: string; glyph: string; kind: "
   return (
     <div>
     <div className="inline-flex items-center gap-2.5">
-      <span className="relative inline-flex h-11 w-9 items-end justify-center rounded-[3px] pb-1 font-mono text-[8.5px] font-bold" style={{ backgroundColor: "#fff", border: "1px solid rgba(88,110,117,.3)", color: CYAN, clipPath: "polygon(0 0, 70% 0, 100% 22%, 100% 100%, 0 100%)" }}>
+      <span className="relative inline-flex h-11 w-9 items-end justify-center rounded-[3px] pb-1 font-mono text-meta font-bold" style={{ backgroundColor: "#fff", border: "1px solid rgba(88,110,117,.3)", color: CYAN, clipPath: "polygon(0 0, 70% 0, 100% 22%, 100% 100%, 0 100%)" }}>
         {glyph}
       </span>
       <span className="font-mono text-[15px] font-semibold" style={{ color: SOL.base03 }}>{name}</span>

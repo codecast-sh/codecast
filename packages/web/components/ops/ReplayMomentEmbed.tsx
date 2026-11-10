@@ -136,7 +136,7 @@ export function ReplayMomentEmbed({
 
   if (served && !entity) {
     return (
-      <div className="my-1 w-fit max-w-full rounded-lg border border-sol-border/40 px-3 py-2 text-[11.5px] text-sol-text-dim">
+      <div className="my-1 w-fit max-w-full rounded-lg border border-sol-border/40 px-3 py-2 text-meta text-sol-text-dim">
         <span className="font-mono">{rawId}</span> · not available to you
       </div>
     );
@@ -157,7 +157,7 @@ export function ReplayMomentEmbed({
       {noCapture || problem ? (
         <div className="flex flex-col items-center justify-center gap-1.5 px-6 py-6 text-center">
           <Film className="h-4 w-4 text-sol-text-dim" />
-          <span className="text-[11.5px] leading-snug text-sol-text-muted">
+          <span className="text-meta leading-snug text-sol-text-muted">
             {problem ?? `This replay kept no page capture. Its events at ${time} are on the replay page.`}
           </span>
         </div>
@@ -181,13 +181,13 @@ export function ReplayMomentEmbed({
             <button
               type="button"
               onClick={() => setClicked(true)}
-              className="absolute inset-0 flex items-center justify-center gap-2 text-[11.5px] text-sol-text-muted hover:text-sol-text"
+              className="absolute inset-0 flex items-center justify-center gap-2 text-meta text-sol-text-muted hover:text-sol-text"
             >
               <Play className="h-4 w-4" />
               Play the page at {time}
             </button>
           ) : !size ? (
-            <div className="absolute inset-0 flex items-center justify-center text-[11.5px] text-sol-text-dim">
+            <div className="absolute inset-0 flex items-center justify-center text-meta text-sol-text-dim">
               {served || entity ? "Loading the page capture…" : "Opening the replay…"}
             </div>
           ) : null}
@@ -209,8 +209,8 @@ export function ReplayMomentEmbed({
       <Link href={href} className="group flex items-center gap-2 px-2.5 py-1.5 hover:bg-sol-bg-highlight/40" title={`Open ${title} at ${time}`}>
         <Film className="h-3.5 w-3.5 shrink-0 text-sol-magenta" />
         <span className="min-w-0 flex-1 truncate text-[12px] text-sol-text">{title}</span>
-        <span className="shrink-0 font-mono text-[10.5px] tabular-nums text-sol-text-dim">{time}</span>
-        <span className="shrink-0 font-mono text-[10.5px] text-sol-text-dim">{ref?.replay ?? rawId}</span>
+        <span className="shrink-0 font-mono text-meta tabular-nums text-sol-text-dim">{time}</span>
+        <span className="shrink-0 font-mono text-meta text-sol-text-dim">{ref?.replay ?? rawId}</span>
         <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-sol-text-dim transition-colors group-hover:text-sol-text" />
       </Link>
     </div>

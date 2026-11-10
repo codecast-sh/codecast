@@ -36,7 +36,7 @@ export function AssignedPingStrip({
             {/* The note is the REASON for the handoff — clamped for the list,
                 tap the body to read all of it without opening the session. */}
             <div
-              className={`min-w-0 flex-1 text-[11px] leading-snug ${session.assigned_ping.note ? "cursor-pointer" : ""}`}
+              className={`min-w-0 flex-1 text-meta leading-snug ${session.assigned_ping.note ? "cursor-pointer" : ""}`}
               onClick={session.assigned_ping.note ? (e) => { e.stopPropagation(); setPingExpanded((v) => !v); } : undefined}
             >
               <span className="font-semibold text-sol-violet">
@@ -56,7 +56,7 @@ export function AssignedPingStrip({
             <button
               type="button"
               onClick={(e) => { e.stopPropagation(); onAckAssignment?.(session._id); }}
-              className="flex-shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium bg-sol-violet/20 text-sol-violet border border-sol-violet/40 hover:bg-sol-violet/30 transition-colors"
+              className="flex-shrink-0 px-1.5 py-0.5 rounded text-meta font-medium bg-sol-violet/20 text-sol-violet border border-sol-violet/40 hover:bg-sol-violet/30 transition-colors"
             >
               Got it
             </button>
@@ -72,7 +72,7 @@ export function CardStartupLine({ session }: { session: InboxSession }) {
   // A hosted conversation has no machine to connect: it is getting started
   // until its first reply, in the words its status line uses.
   if (isHostedAgentType(session.agent_type)) {
-    return <div className="mt-0.5 text-[11px] text-sol-text-dim">Getting started…</div>;
+    return <div className="mt-0.5 text-meta text-sol-text-dim">Getting started…</div>;
   }
   const startup = sessionStartupState({
     isConnected: session.is_connected,
@@ -80,7 +80,7 @@ export function CardStartupLine({ session }: { session: InboxSession }) {
   });
   if (startup === "ready") {
     return (
-      <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-green/70">
+      <div className="flex items-center gap-1.5 mt-0.5 text-meta text-sol-green/70">
         <span className="w-1.5 h-1.5 rounded-full bg-sol-green/70" />
         <span>Ready</span>
       </div>
@@ -88,7 +88,7 @@ export function CardStartupLine({ session }: { session: InboxSession }) {
   }
   if (startup === "starting") {
     return (
-      <div className="flex items-center gap-1.5 mt-0.5 text-[11px] text-sol-cyan/60">
+      <div className="flex items-center gap-1.5 mt-0.5 text-meta text-sol-cyan/60">
         <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
@@ -98,7 +98,7 @@ export function CardStartupLine({ session }: { session: InboxSession }) {
     );
   }
   return (
-    <div className="text-[11px] text-sol-text-dim/60 mt-0.5">
+    <div className="text-meta text-sol-text-dim/60 mt-0.5">
       Waiting for connection
     </div>
   );
@@ -124,7 +124,7 @@ export function CommentThreadsChip({
   return (
     <button
       type="button"
-      className={`inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold border transition-colors max-w-[9rem] ${
+      className={`inline-flex items-center gap-0.5 px-1 py-0 rounded text-meta font-semibold border transition-colors min-w-0 overflow-hidden max-w-[9rem] ${
         waitingOnViewer
           ? "bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30 hover:bg-sol-cyan/20"
           : "bg-sol-bg-alt/60 text-sol-text-dim border-sol-border/40 hover:bg-sol-bg-alt"
@@ -176,33 +176,33 @@ export function CardStatusSignals({
     <>
             {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
             {session.session_error && session.pending_api_error_kind !== "safety" && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
+              <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-sol-red" title={session.session_error} />
             )}
             {session.is_unresponsive && !session.session_error && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" title="Session unresponsive" />
+              <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-sol-orange" title="Session unresponsive" />
             )}
             {session.has_pending && !session.is_unresponsive && !isPendingWorking && !isRowRestarting && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow" title="Message pending" />
+              <span className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-sol-yellow" title="Message pending" />
             )}
             {/* Settled with content gets the gray idle dot. Keyed on !isLive (now
                 staleness-aware) rather than the raw is_idle flag, so a frozen
                 is_idle:false row that's really finished shows idle, not nothing. */}
             {!isWorking && !isLive && !dismissed && !showBlockedBadge && !session.session_error && !session.is_unresponsive && !session.has_pending && !isPendingWorking && !isRowRestarting && session.message_count > 0 && (
-              <span data-sv-idle-dot className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Idle" />
+              <span data-sv-idle-dot className="flex-shrink-0 w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Idle" />
             )}
             {/* A kill+restart owns the row's signal while it runs: the re-pended
                 message and the not-yet-live status are both part of the restart,
                 so the pending chip and dots yield to this one. isLive flipping
                 true retires it in favor of the green working dot. */}
             {isRowRestarting && (
-              <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-sol-orange/10 text-sol-orange border border-sol-orange/30" title="Kill & restart in flight">
-                <span className="w-1 h-1 rounded-full bg-sol-orange animate-pulse" />
+              <span className="inline-flex flex-shrink-0 items-center gap-0.5 px-1 py-0 rounded text-meta font-semibold bg-sol-orange/10 text-sol-orange border border-sol-orange/30" title="Kill & restart in flight">
+                <span className="w-1 h-1 rounded-full bg-sol-orange" />
                 restarting
               </span>
             )}
             {isPendingWorking && !isRowRestarting && !hosted && (
-              <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-sol-yellow/10 text-sol-yellow border border-sol-yellow/30" title="Sent — waiting to confirm delivery">
-                <span className="w-1 h-1 rounded-full bg-sol-yellow animate-pulse" />
+              <span className="inline-flex flex-shrink-0 items-center gap-0.5 px-1 py-0 rounded text-meta font-semibold bg-sol-yellow/10 text-sol-yellow border border-sol-yellow/30" title="Sent — waiting to confirm delivery">
+                <span className="w-1 h-1 rounded-full bg-sol-yellow" />
                 pending
               </span>
             )}
@@ -210,7 +210,7 @@ export function CardStatusSignals({
               // A solid dot, no ping halo: a card is one of many, and one running
               // halo per working agent makes the browser re-layer the page on
               // every frame, keystrokes included.
-              <span data-sv-working-dot className="relative flex h-2 w-2" title="Working">
+              <span data-sv-working-dot className="relative flex flex-shrink-0 h-2 w-2" title="Working">
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-sol-green" />
               </span>
             )}
@@ -242,7 +242,7 @@ export function CardParentLinks({
           // lead) — same affordance shape as the implementation-session row.
           <div
             data-sv-spawned
-            className="mt-1 flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-cyan cursor-pointer transition-colors"
+            className="mt-1 flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-cyan cursor-pointer transition-colors"
             onClick={(e) => {
               e.stopPropagation();
               onOpenParent?.(spawnedById);
@@ -260,7 +260,7 @@ export function CardParentLinks({
         )}
         {session.implementation_session && (
           <div
-            className="mt-1 flex items-center gap-1 text-[11px] text-sol-cyan hover:text-sol-cyan/80 cursor-pointer"
+            className="mt-1 flex items-center gap-1 text-meta text-sol-cyan hover:text-sol-cyan/80 cursor-pointer"
             onClick={(e) => {
               e.stopPropagation();
               if (onNavigateToSession) onNavigateToSession(session.implementation_session!._id);
@@ -321,7 +321,9 @@ export function CardPinMark({ session, onPin }: { session: InboxSession; onPin?:
   );
 }
 
-/** The hover toolbar on a live card: pin, kill, label, stash. */
+/** The hover toolbar on a live card: pin, kill, label, stash. A card too
+ *  short for the four in one column (most cards: 92px of buttons on a 72 to
+ *  76px card) wraps them into a second column, so Stash is never clipped. */
 export function CardHoverToolbar({
   session,
   labels,
@@ -341,7 +343,7 @@ export function CardHoverToolbar({
   onStash?: (id: string, e: React.MouseEvent) => void;
 }) {
   return (
-        <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col items-center justify-between py-1 opacity-0 group-hover:opacity-100 transition-opacity pl-10 pr-2 pointer-events-none ${fadeGround ? '' : 'bg-gradient-to-r from-transparent via-[color-mix(in_srgb,var(--sol-bg-alt)_50%,transparent)] to-[color-mix(in_srgb,var(--sol-bg-alt)_85%,transparent)]'}`} style={fadeGround ? { background: `linear-gradient(to right, transparent, color-mix(in srgb, ${fadeGround} 50%, transparent), color-mix(in srgb, ${fadeGround} 85%, transparent))` } : undefined}>
+        <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col flex-wrap-reverse content-start items-center justify-between py-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity pl-10 pr-2 pointer-events-none ${fadeGround ? '' : 'bg-gradient-to-r from-transparent via-[color-mix(in_srgb,var(--sol-bg-alt)_50%,transparent)] to-[color-mix(in_srgb,var(--sol-bg-alt)_85%,transparent)]'}`} style={fadeGround ? { background: `linear-gradient(to right, transparent, color-mix(in srgb, ${fadeGround} 50%, transparent), color-mix(in srgb, ${fadeGround} 85%, transparent))` } : undefined}>
           {/* Pin first, so it anchors the top of the toolbar: Pin on a free
               row, Unpin (filled) on a pinned one. */}
           {onPin && (
@@ -413,10 +415,11 @@ export function CardRestoreCluster({
   onRestore?: (id: string) => void;
 }) {
   return (
-        <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-[4]">
+        <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity z-[4]">
           {onKill && (
             <ShortcutTooltip label={isStashed ? "Kill" : "Remove from list"} action={isStashed ? "session.kill" : undefined} side="left">
               <button
+                aria-label={isStashed ? "Kill" : "Remove from list"}
                 onClick={(e) => { e.stopPropagation(); onKill(session._id); }}
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-red bg-sol-bg/95 shadow-sm border border-sol-border/30"
               >
@@ -427,6 +430,7 @@ export function CardRestoreCluster({
           {onRestore && (
             <ShortcutTooltip label={variant === "snoozed" ? "Move to Needs You now" : "Restore"} side="left">
               <button
+                aria-label={variant === "snoozed" ? "Move to Needs You now" : "Restore"}
                 onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan bg-sol-bg/95 shadow-sm border border-sol-border/30"
               >
@@ -528,7 +532,7 @@ export function SessionProjectChip({ project, label, directory, className = "", 
     );
   return (
     <span
-      className={`flex items-center min-w-0 text-[10px] font-medium ${getLabelColor(label ?? project).text}${className ? ` ${className}` : ""}`}
+      className={`flex items-center min-w-0 text-meta font-medium ${getLabelColor(label ?? project).text}${className ? ` ${className}` : ""}`}
       title={`${project} · ${directory || "no directory"}`}
     >
       {nested ? (

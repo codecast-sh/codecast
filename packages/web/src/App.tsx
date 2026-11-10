@@ -488,9 +488,9 @@ export function App() {
             <Route path="integrations" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
             {/* The non-developer funnel's address: the landing with For everyone first. */}
             <Route path="everyone" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
-            {/* Renamed pages' old addresses (lib/renamedPages.ts): the company's
-                list pages are the Org screen's read views now (/goals is
-                /org/goals), and a goal opens in its panel there. */}
+            {/* Renamed pages' old addresses (lib/renamedPages.ts): initiatives
+                and the roadmap are Goals (/goals, its own page), and the team
+                directory and company document are the Org screen. */}
             <Route path="initiatives" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
             <Route path="initiatives/:id" element={<E name="LaneRedirect"><LaneRedirect /></E>} />
             <Route path="team" element={<E name="LaneRedirect"><LaneRedirect /></E>} />

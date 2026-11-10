@@ -16,7 +16,7 @@ const HOURS = ["1pm", "2pm", "3pm", "4pm", "5pm"];
 function Track({ who, segs, marks = [], d }: { who: string; segs: Seg[]; marks?: { at: number; label: string; color: string }[]; d: number }) {
   return (
     <div className="grid grid-cols-[72px_1fr] sm:grid-cols-[96px_1fr] items-center gap-3">
-      <span className="text-[11.5px] font-mono text-right" style={{ color: DIM }}>{who}</span>
+      <span className="text-meta font-mono text-right" style={{ color: DIM }}>{who}</span>
       <div className="relative h-7 rounded-md" style={{ backgroundColor: "rgba(147,161,161,.12)" }}>
         {segs.map((s, i) => (
           <span
@@ -27,7 +27,7 @@ function Track({ who, segs, marks = [], d }: { who: string; segs: Seg[]; marks?:
               backgroundImage: s.striped ? "repeating-linear-gradient(135deg, rgba(255,255,255,.28) 0 5px, transparent 5px 10px)" : undefined,
             })}
           >
-            {s.label && <span className="hidden sm:inline text-[10px] font-mono whitespace-nowrap truncate" style={{ color: SOL.base3 }}>{s.label}</span>}
+            {s.label && <span className="hidden sm:inline text-meta font-mono whitespace-nowrap truncate" style={{ color: SOL.base3 }}>{s.label}</span>}
           </span>
         ))}
         {marks.map((m, i) => (
@@ -61,7 +61,7 @@ export function ThreeWays() {
     >
       <div className="grid grid-cols-[72px_1fr] sm:grid-cols-[96px_1fr] gap-3 mb-2">
         <span />
-        <div className="flex justify-between text-[10.5px] font-mono" style={{ color: DIM }}>
+        <div className="flex justify-between text-meta font-mono" style={{ color: DIM }}>
           {HOURS.map((h) => <span key={h}>{h}</span>)}
         </div>
       </div>
@@ -144,9 +144,9 @@ export function Modes() {
           <div className="flex items-center gap-2 mb-1"><Dot tier={1} /><span className="font-mono font-bold text-[15px]" style={{ color: TEXT }}>blocking</span></div>
           <Note className="mb-4">The session is waiting on your decision. The queue opens it as the full sheet, and it sorts to the top while the session can still take an answer.</Note>
           <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: LINE }}>
-            <div className="text-[11px] font-mono" style={{ color: DIM }}>in the session</div>
+            <div className="text-meta font-mono" style={{ color: DIM }}>in the session</div>
             <div className="flex items-center gap-2 text-[12.5px]" style={{ color: TEXT }}><Dot tier={1} />Waiting on your decision</div>
-            <div className="text-[11px] font-mono" style={{ color: DIM }}>when you answer</div>
+            <div className="text-meta font-mono" style={{ color: DIM }}>when you answer</div>
             <AnswerBubble label="Hold" question="Approve dropping agent_runs_v1?" />
           </div>
         </div>
@@ -154,7 +154,7 @@ export function Modes() {
           <div className="flex items-center gap-2 mb-1"><Dot tier={3} /><span className="font-mono font-bold text-[15px]" style={{ color: B }}>advisory</span></div>
           <Note className="mb-4">The agent keeps working on its default. In the session view the ask folds to one pill above the composer, so the thread stays the main event. It sorts after every blocking ask in the queue.</Note>
           <div className="rounded-lg border p-3 space-y-3" style={{ borderColor: LINE }}>
-            <div className="text-[11px] font-mono" style={{ color: DIM }}>above the composer, folded</div>
+            <div className="text-meta font-mono" style={{ color: DIM }}>above the composer, folded</div>
             <div className="flex justify-end"><FoldPill label="Asked for your steer" /></div>
             <div className="space-y-1.5">
               <OptionRow compact n={0} primary option={{ label: "Back off" }} tag={<DefaultTag />} />
@@ -186,7 +186,7 @@ function OptionPage({ n, name, rows, tone }: { n: number; name: string; rows: nu
       </div>
       <div className="px-3 py-2 flex items-center gap-2 text-[12.5px]">
         <KeyCap size="xs">{String(n)}</KeyCap><span style={{ color: TEXT }}>{name}</span>
-        <span className="ml-auto text-[11px]" style={{ color: B }}>open ↗</span>
+        <span className="ml-auto text-meta" style={{ color: B }}>open ↗</span>
       </div>
     </div>
   );
@@ -208,7 +208,7 @@ export function Evidence() {
         </div>
         <div className="min-w-0 rounded-xl border p-4 sm:p-5" style={{ borderColor: LINE, backgroundColor: SOL.base3 }}>
           <div className="mb-3"><Question size="sm">Which layout?</Question></div>
-          <div className="text-[11px] mb-2" style={{ color: DIM }}>the options, as pages</div>
+          <div className="text-meta mb-2" style={{ color: DIM }}>the options, as pages</div>
           <div className="grid grid-cols-2 gap-3 mb-4">
             <OptionPage n={1} name="Dense" rows={9} tone={SOL.cyan} />
             <OptionPage n={2} name="Roomy" rows={5} tone={SOL.violet} />
@@ -334,7 +334,7 @@ export function KeepTrue() {
           <Label>withdrawn</Label>
           <div className="rounded-lg border px-4 py-3 flex items-center gap-3" style={{ borderColor: LINE, backgroundColor: "rgba(253,246,227,.55)" }}>
             <span className="text-[13.5px] line-through truncate" style={{ color: DIM }}>Rebuild the search index tonight or after the freeze?</span>
-            <span className="ml-auto shrink-0 text-[11px] font-mono px-1.5 py-0.5 rounded border" style={{ borderColor: LINE, color: DIM }}>withdrawn</span>
+            <span className="ml-auto shrink-0 text-meta font-mono px-1.5 py-0.5 rounded border" style={{ borderColor: LINE, color: DIM }}>withdrawn</span>
           </div>
           <Note className="mt-3">It leaves your queue, and the transcript keeps the ask with its withdrawn mark.</Note>
         </div>

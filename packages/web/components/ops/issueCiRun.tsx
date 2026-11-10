@@ -21,11 +21,11 @@ export function CiRunCard({ row, state, repository, now, newest }: { row: CiRunR
       <div className="ops-card-head">
         <span className="inline-flex items-center gap-2 min-w-0">
           Run
-          <span className="ops-mono ops-dim font-normal text-[11px]">{row.run_id}</span>
+          <span className="ops-mono ops-dim font-normal text-meta">{row.run_id}</span>
           <span className="iss-ci-concl" data-ok={row.ok ? "true" : "false"}>{row.conclusion}</span>
-          {!newest && <span className="ops-dim font-normal text-[11px]">{formatRelative(row.at, now)}</span>}
+          {!newest && <span className="ops-dim font-normal text-meta">{formatRelative(row.at, now)}</span>}
         </span>
-        {row.url && <a href={row.url} target="_blank" rel="noopener noreferrer" className="ops-dim font-normal text-[11px] inline-flex items-center gap-1 hover:text-sol-text">GitHub <ExternalLink className="w-3 h-3" /></a>}
+        {row.url && <a href={row.url} target="_blank" rel="noopener noreferrer" className="ops-dim font-normal text-meta inline-flex items-center gap-1 hover:text-sol-text">GitHub <ExternalLink className="w-3 h-3" /></a>}
       </div>
       {run ? (
         <div className="iss-ci-body">

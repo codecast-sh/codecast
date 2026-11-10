@@ -265,8 +265,8 @@ function MachineRow({
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-2">
             <span className="font-mono text-[13px] text-sol-text truncate">{row.identity}</span>
-            {showKind && <span className="text-[10px] text-sol-text-dim">{meta?.label}</span>}
-            {shared && <span className="text-[10px] text-sol-blue">shared</span>}
+            {showKind && <span className="text-meta text-sol-text-dim">{meta?.label}</span>}
+            {shared && <span className="text-meta text-sol-blue">shared</span>}
           </span>
           {row.description && (
             <span className="block text-xs text-sol-text-muted truncate">{row.description}</span>

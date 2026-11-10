@@ -32,7 +32,7 @@ export function WrittenVsRead() {
     >
       <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-2 gap-5 items-stretch">
         <div className="rounded-xl border overflow-hidden flex flex-col" style={{ backgroundColor: SOL.base03, borderColor: "#0b4a5a" }}>
-          <div className="h-9 px-4 flex items-center justify-between border-b font-mono text-[11.5px]" style={{ borderColor: "#0b4a5a", color: SOL.base01, backgroundColor: SOL.base02 }}>
+          <div className="h-9 px-4 flex items-center justify-between border-b font-mono text-meta" style={{ borderColor: "#0b4a5a", color: SOL.base01, backgroundColor: SOL.base02 }}>
             <span>what the agent wrote</span>
             <span className="tabular-nums">{SOURCE_CHARS} characters</span>
           </div>
@@ -53,7 +53,7 @@ export function WrittenVsRead() {
           </div>
         </div>
         <div className="rounded-xl border p-5 text-[14px] leading-7 space-y-3" style={{ borderColor: LINE, backgroundColor: "#fffdf6", color: TEXT }}>
-          <div className="font-mono text-[11.5px] -mt-1 mb-1" style={{ color: DIM }}>what you read</div>
+          <div className="font-mono text-meta -mt-1 mb-1" style={{ color: DIM }}>what you read</div>
           {REPLY.map((para, i) =>
             para[0] && typeof para[0] !== "string" && "block" in para[0] ? (
               <div key={i} {...hover("rollout")} className="md-hot" data-on={hot === "rollout"}><RolloutBlock /></div>
@@ -104,10 +104,10 @@ export function StaysTrue() {
               style={{ borderColor: m === i ? V : LINE, backgroundColor: m === i ? tint(V, 8) : SOL.base3 }}
             >
               <span className="block font-mono text-[13px] font-semibold" style={{ color: m === i ? V : TEXT }}>{label}</span>
-              <span className="block text-[11.5px] mt-0.5" style={{ color: MUTED }}>{at3(i, "the reply arrives", "revert merged", "the incident closed")}</span>
+              <span className="block text-meta mt-0.5" style={{ color: MUTED }}>{at3(i, "the reply arrives", "revert merged", "the incident closed")}</span>
             </button>
           ))}
-          <div className="hidden lg:block mt-3 pl-1 font-mono text-[11px]" style={{ color: DIM }}>same message, never edited</div>
+          <div className="hidden lg:block mt-3 pl-1 font-mono text-meta" style={{ color: DIM }}>same message, never edited</div>
         </div>
         <AppFrame title="Checkout failing for some customers" right={<span>{MOMENTS[m]}</span>}>
           <div className="p-5 text-[14.5px] leading-8" style={{ color: TEXT }}>
@@ -154,7 +154,7 @@ export function Vocabulary() {
                   <I className="w-3.5 h-3.5" style={{ color: b.color }} />
                   <span className="text-[13px] font-semibold" style={{ color: TEXT }}>{b.kind}</span>
                 </span>
-                <span className="block mt-1.5 font-mono text-[11.5px] truncate" style={{ color: on ? b.color : DIM }}>{b.id}</span>
+                <span className="block mt-1.5 font-mono text-meta truncate" style={{ color: on ? b.color : DIM }}>{b.id}</span>
               </button>
             );
           })}
@@ -210,12 +210,12 @@ export function Depths() {
               <ChevronDown className="w-3.5 h-3.5 ml-auto shrink-0 transition-transform" style={{ color: V, transform: open ? "rotate(180deg)" : undefined }} />
             </button>
             <div className="px-3 py-2.5 space-y-2">
-              <div className="flex items-center gap-2"><StatusBadge label="mitigating" color={tone} /><span className="text-[11px]" style={{ color: DIM }}>sev-2 · payments-api</span></div>
+              <div className="flex items-center gap-2"><StatusBadge label="mitigating" color={tone} /><span className="text-meta" style={{ color: DIM }}>sev-2 · payments-api</span></div>
               <p className={`text-[12px] leading-relaxed ${open ? "" : "line-clamp-2"}`} style={{ color: MUTED }}>
                 {INC7.body} {open && "Commander Dana. Customer impact: failed card charges for accounts on the Scale plan; retries succeed once the canary takes them."}
               </p>
               {open && (
-                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[11px] pt-1">
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-meta pt-1">
                   {(INC7.facts ?? []).map(([k, v]) => <span key={k}><span style={{ color: DIM }}>{k} </span><span style={{ color: MUTED }}><FactValue v={v} /></span></span>)}
                 </div>
               )}
@@ -224,21 +224,21 @@ export function Depths() {
         </Depth>
         <Depth n={3} title="Its own page" note="Every field, editable. The mod can draw its own view above them.">
           <div className="rounded-xl border p-4" style={{ borderColor: LINE, backgroundColor: "#fffdf6" }}>
-            <div className="flex items-center gap-1 text-[10.5px] font-mono mb-2" style={{ color: DIM }}>Incidents <ChevronRight className="w-3 h-3" /> inc-7</div>
+            <div className="flex items-center gap-1 text-meta font-mono mb-2" style={{ color: DIM }}>Incidents <ChevronRight className="w-3 h-3" /> inc-7</div>
             <div className="text-[15px] font-semibold leading-snug" style={{ color: TEXT }}>{INC7.title}</div>
             <div className="mt-2 flex gap-1 flex-wrap">
               {INC_STATUSES.map((s) => {
                 const on = s === "mitigating";
                 const t = statusTone(INC_STATUSES, s);
-                return <span key={s} className="rounded-full px-2 py-[1px] text-[10.5px] font-medium border" style={{ color: on ? t : DIM, borderColor: on ? t : LINE, backgroundColor: on ? tint(t, 12) : undefined }}>{s}</span>;
+                return <span key={s} className="rounded-full px-2 py-[1px] text-meta font-medium border" style={{ color: on ? t : DIM, borderColor: on ? t : LINE, backgroundColor: on ? tint(t, 12) : undefined }}>{s}</span>;
               })}
             </div>
-            <div className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[11.5px]">
+            <div className="mt-3 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-meta">
               {(INC7.facts ?? []).map(([k, v]) => (
                 <div key={k} className="contents"><span style={{ color: DIM }}>{k}</span><span className="rounded px-1.5 -mx-1.5" style={{ color: TEXT, backgroundColor: "rgba(238,232,213,.5)" }}><FactValue v={v} /></span></div>
               ))}
             </div>
-            <p className="mt-3 pt-2 border-t text-[11.5px] leading-relaxed" style={{ borderColor: LINE, color: MUTED }}>{INC7.body}</p>
+            <p className="mt-3 pt-2 border-t text-meta leading-relaxed" style={{ borderColor: LINE, color: MUTED }}>{INC7.body}</p>
           </div>
         </Depth>
       </div>

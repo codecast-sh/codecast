@@ -20,7 +20,7 @@ export function TakeoverEdit({ phrase, leave, onLeave, className }: {
   className?: string;
 }) {
   return (
-    <div className={cn("rounded-md border px-2 py-1.5 text-[11.5px] leading-snug", className)} style={{ borderColor: "color-mix(in srgb, var(--sol-yellow) 40%, transparent)", background: "color-mix(in srgb, var(--sol-yellow) 8%, transparent)" }} data-takeover data-takeover-leave={leave ? "1" : "0"}>
+    <div className={cn("rounded-md border px-2 py-1.5 text-meta leading-snug", className)} style={{ borderColor: "color-mix(in srgb, var(--sol-yellow) 40%, transparent)", background: "color-mix(in srgb, var(--sol-yellow) 8%, transparent)" }} data-takeover data-takeover-leave={leave ? "1" : "0"}>
       <p className={cn("flex items-start gap-1.5", leave && "line-through opacity-60")} style={{ color: "var(--sol-text-secondary)" }} data-takeover-phrase>
         <ArrowRightLeft className="w-3 h-3 shrink-0 mt-[2px]" style={{ color: "var(--sol-yellow)" }} />
         <span className="min-w-0">{phrase}.</span>
@@ -65,7 +65,7 @@ export function TakeoverGate({ workspace, ask, what, confirmLabel, onConfirm, on
       <p className="text-[12px] leading-snug" style={{ color: "var(--sol-text)" }}>{what}</p>
       {preview
         ? <TakeoverEdit phrase={preview.phrase} leave={leave} onLeave={setLeave} />
-        : <p className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-takeover-counting>Counting the sessions this moves</p>}
+        : <p className="text-meta" style={{ color: "var(--sol-text-dim)" }} data-takeover-counting>Counting the sessions this moves</p>}
       <div className="flex items-center gap-1.5">
         <OrgButton primary size="sm" disabled={!ready} onClick={() => confirm(leave)} data-takeover-confirm>{confirmLabel}</OrgButton>
         <OrgButton size="sm" onClick={onCancel} data-takeover-cancel>Cancel</OrgButton>

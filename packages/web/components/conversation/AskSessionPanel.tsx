@@ -33,7 +33,7 @@ function CiteAwareLink(props: { href?: string; children?: ReactNode }) {
       type="button"
       data-cite-id={target}
       onClick={() => onCite(target)}
-      className="inline-flex items-baseline mx-[1px] px-1 rounded border border-sol-cyan/30 bg-sol-cyan/10 text-sol-cyan font-mono text-[0.85em] leading-snug hover:bg-sol-cyan/20 hover:border-sol-cyan/60 transition-colors cursor-pointer whitespace-nowrap"
+      className="inline-flex items-baseline mx-[1px] px-1 rounded border border-sol-cyan/30 bg-sol-cyan/10 text-sol-cyan font-mono text-[length:max(0.85em,11px)] leading-snug hover:bg-sol-cyan/20 hover:border-sol-cyan/60 transition-colors cursor-pointer whitespace-nowrap"
       title="Jump to this message"
     >
       {props.children}
@@ -59,7 +59,7 @@ function Elapsed({ since }: { since: number }) {
 
 function PartialNote() {
   return (
-    <div className="mt-2 inline-flex px-1.5 py-0.5 rounded border border-sol-yellow/40 bg-sol-yellow/10 text-[11px] text-sol-text-dim">
+    <div className="mt-2 inline-flex px-1.5 py-0.5 rounded border border-sol-yellow/40 bg-sol-yellow/10 text-meta text-sol-text-dim">
       Long session: its middle was not read
     </div>
   );
@@ -71,7 +71,7 @@ function Entry({ row, now, onAskAgain }: { row: SideAnswerRow; now: number; onAs
     <div className="py-3 first:pt-1" data-side-answer={row.status}>
       <div className="flex items-baseline gap-2 mb-1.5">
         <div className="flex-1 min-w-0 text-[12px] font-medium text-sol-text-secondary break-words line-clamp-3" title={row.question}>{row.question}</div>
-        <span className="shrink-0 text-[11px] tabular-nums text-sol-text-dim" title={formatDateFull(row.created_at)}>{relTimeShort(row.created_at, now)}</span>
+        <span className="shrink-0 text-meta tabular-nums text-sol-text-dim" title={formatDateFull(row.created_at)}>{relTimeShort(row.created_at, now)}</span>
       </div>
       {view.kind === "answered" ? (
         <>
@@ -84,7 +84,7 @@ function Entry({ row, now, onAskAgain }: { row: SideAnswerRow; now: number; onAs
           <button
             type="button"
             onClick={() => onAskAgain(row.question)}
-            className="shrink-0 px-1.5 rounded text-[11px] text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors"
+            className="shrink-0 px-1.5 rounded text-meta text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors"
           >
             Ask again
           </button>
@@ -185,7 +185,7 @@ export function AskSessionPanel({
           onClick={submit}
           disabled={!draft.trim()}
           aria-label="Ask"
-          className="flex items-center gap-1 h-6 pl-1 pr-1.5 rounded text-[11px] text-sol-text-dim enabled:hover:text-sol-cyan enabled:hover:bg-sol-cyan/10 disabled:opacity-40 transition-colors"
+          className="flex items-center gap-1 h-6 pl-1 pr-1.5 rounded text-meta text-sol-text-dim enabled:hover:text-sol-cyan enabled:hover:bg-sol-cyan/10 disabled:opacity-40 transition-colors"
         >
           <KeyCap size="xs">↵</KeyCap>
           Ask

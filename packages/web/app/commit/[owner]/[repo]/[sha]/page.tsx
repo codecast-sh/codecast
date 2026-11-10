@@ -200,7 +200,7 @@ function CommitHeader({
           )}
 
           <div
-            className="repo-rise mt-2.5 flex items-center gap-3 flex-wrap text-[11px] text-sol-text-dim"
+            className="repo-rise mt-2.5 flex items-center gap-3 flex-wrap text-meta text-sol-text-dim"
             style={{ ["--d" as string]: "120ms" }}
           >
             <ShaCopy sha={commit.sha} />

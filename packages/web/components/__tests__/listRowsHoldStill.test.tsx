@@ -7,6 +7,7 @@ import { expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { CardStatusSignals } from "../inbox/SessionCardParts";
 import { LivePulseDot } from "../SessionActivityLine";
+import { LivenessDot } from "../LivenessDot";
 
 const MOTION = /animate-(ping|pulse)/;
 
@@ -32,4 +33,17 @@ test("a card with a message pending holds still", () => {
 test("the live dot holds still when a list row asks", () => {
   expect(renderToStaticMarkup(<LivePulseDot still />)).not.toMatch(MOTION);
   expect(renderToStaticMarkup(<LivePulseDot />)).toMatch(MOTION);
+});
+
+test("a card whose send is pending delivery, or that is restarting, holds still", () => {
+  const pending = signals(row(), { isPendingWorking: true });
+  expect(pending).toContain("pending");
+  expect(pending).not.toMatch(MOTION);
+  const restarting = signals(row(), { isRowRestarting: true });
+  expect(restarting).toContain("restarting");
+  expect(restarting).not.toMatch(MOTION);
+});
+
+test("a running liveness dot (board tiles, task rows) holds still", () => {
+  expect(renderToStaticMarkup(<LivenessDot state="active" />)).not.toMatch(MOTION);
 });

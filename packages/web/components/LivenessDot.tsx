@@ -28,12 +28,12 @@ const SIZE_MAP = { xs: "h-1.5 w-1.5", sm: "h-2 w-2", md: "h-2.5 w-2.5" };
 export function LivenessDot({ state, size = "sm", className }: LivenessDotProps) {
   const style = STATE_STYLES[state];
 
+  // Running reads as a solid dot inside a still ring. Never an animation: the
+  // dot is drawn once per row (board tiles, task rows, plan rows), and one
+  // ping per running agent re-layers the page on every frame.
   if (style.pulse) {
     return (
-      <span className={cn("relative flex flex-shrink-0", SIZE_MAP[size], className)}>
-        <span className={cn("animate-ping absolute inline-flex h-full w-full rounded-full opacity-75", style.tailwind)} />
-        <span className={cn("relative inline-flex rounded-full", SIZE_MAP[size], style.tailwind)} />
-      </span>
+      <span className={cn("rounded-full flex-shrink-0 ring-2 ring-sol-green/30", SIZE_MAP[size], style.tailwind, className)} />
     );
   }
 
@@ -131,7 +131,7 @@ export function ActiveSessionBadge({ session, compact, dormant, className }: Act
       onClick={handleClick}
       className={cn(
         "inline-flex items-center gap-1 cursor-pointer transition-colors flex-shrink-0 max-w-[160px]",
-        compact ? "px-1.5 py-0.5 rounded-full text-[9px]" : "px-1.5 py-0.5 rounded-full text-[10px]",
+        compact ? "px-1.5 py-0.5 rounded-full text-meta" : "px-1.5 py-0.5 rounded-full text-meta",
         badgeClass,
         className,
       )}

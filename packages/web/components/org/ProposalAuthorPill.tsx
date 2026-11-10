@@ -36,7 +36,7 @@ export function ProposalAuthorPill({ author, onOpenSession, className, size = "s
   const view = useProposalAuthor(author);
   const openLinked = useOpenLinkedSession();
   const open = onOpenSession ?? ((id: string) => openLinked({ _id: id, title: view.kind === "session" ? view.title : undefined, short_id: view.kind === "session" ? view.shortId ?? undefined : undefined, updated_at: Date.now() }));
-  const h = size === "md" ? "h-[24px] text-[12px]" : "h-[20px] text-[11px]";
+  const h = size === "md" ? "h-[24px] text-[12px]" : "h-[20px] text-meta";
   const base = cn("inline-flex items-center gap-1.5 max-w-full pl-1 pr-1.5 rounded-md border transition-colors", h, className);
   if (view.kind === "session") {
     return (

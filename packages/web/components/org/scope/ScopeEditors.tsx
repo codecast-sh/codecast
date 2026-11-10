@@ -27,7 +27,7 @@ import { isMac } from "../../../shortcuts";
 export function SectionLabel({ children, right }: { children: React.ReactNode; right?: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between mt-5 mb-2">
-      <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>{children}</span>
+      <span className="text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>{children}</span>
       {right}
     </div>
   );
@@ -41,9 +41,9 @@ export function DocRow({ d, now }: { d: DocItem; now: number }) {
       <FileText className="w-4 h-4 shrink-0" style={{ color: "var(--sol-text-dim)" }} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[12.5px] font-medium" style={{ color: "var(--sol-text)" }}>{title}</span>
-        <span className="block truncate text-[10.5px] mt-[1px]" style={{ color: "var(--sol-text-dim)" }}>page · {d.doc_type.replace(/_/g, " ")}</span>
+        <span className="block truncate text-meta mt-[1px]" style={{ color: "var(--sol-text-dim)" }}>page · {d.doc_type.replace(/_/g, " ")}</span>
       </span>
-      <span className="text-[10.5px] tabular-nums shrink-0" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - d.updated_at)}</span>
+      <span className="text-meta tabular-nums shrink-0" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - d.updated_at)}</span>
     </Link>
   );
 }
@@ -120,7 +120,7 @@ export function ScopeEditor({ role, canEdit, onChange, changes, focusChangeId, o
     <div>
       <div className="flex flex-wrap gap-1.5">
         {empty && (
-          <span className="inline-flex items-center h-[22px] px-2 rounded-md border text-[11px]" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-text-muted)" }}>
+          <span className="inline-flex items-center h-[22px] px-2 rounded-md border text-meta" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-text-muted)" }}>
             {isHeadOfPeopleRole(role) ? "whole workspace" : "no area of its own"}
           </span>
         )}
@@ -164,7 +164,7 @@ export function ScopeEditor({ role, canEdit, onChange, changes, focusChangeId, o
 export function Chip({ children, tone, mono, href, object, onRemove }: { children: React.ReactNode; tone: "blue" | "magenta"; mono?: boolean; href: string; /** An Org object: inside the screen the chip opens its sheet (D10). */ object?: { kind: "project"; ref: string }; onRemove?: () => void }) {
   const color = tone === "blue" ? "var(--sol-blue)" : "var(--sol-magenta)";
   return (
-    <span className="inline-flex items-center h-[22px] rounded-md overflow-hidden text-[11px] font-medium" style={{ background: `color-mix(in srgb, ${color} 12%, transparent)`, color, fontFamily: mono ? "var(--font-mono)" : undefined }}>
+    <span className="inline-flex items-center h-[22px] rounded-md overflow-hidden text-meta font-medium" style={{ background: `color-mix(in srgb, ${color} 12%, transparent)`, color, fontFamily: mono ? "var(--font-mono)" : undefined }}>
       {object
         ? <OrgObjectLink kind={object.kind} objRef={object.ref} className="px-2 hover:underline truncate max-w-[160px]">{children}</OrgObjectLink>
         : <Link href={href} className="px-2 hover:underline truncate max-w-[160px]">{children}</Link>}

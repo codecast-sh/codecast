@@ -1,4 +1,6 @@
-import { useState, useMemo, Fragment } from "react";
+import { useState, Fragment } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { pressable } from "../../ops/parts";
 import { Button } from "../../ui/button";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { hasDecodedSrc, markSrcDecoded } from "../../../hooks/useStorageImageUrl";
@@ -43,8 +45,13 @@ export function MonitorBlock({ tool, conversationId }: { tool: ToolCall; convers
   let input: { command?: string; description?: string; timeout_ms?: number; persistent?: boolean } = {};
   try { input = JSON.parse(tool.input); } catch {}
   const [showCommand, setShowCommand] = useState(false);
-  const messages = useInboxStore((s) => (conversationId ? s.messages[conversationId] : undefined));
-  const row = useMemo(() => monitorRowsFor(messages).find((r) => r.toolUseId === tool.id), [messages, tool.id]);
+  // This watch's own row, not the conversation's message array: the scan is
+  // shared and memoized per array, and a row of plain fields compared
+  // shallowly re-renders the card only when its own watch changed, never on
+  // every streamed message.
+  const row = useInboxStore(useShallow((s) =>
+    conversationId ? monitorRowsFor(s.messages[conversationId]).find((r) => r.toolUseId === tool.id) : undefined,
+  ));
   const now = useCoarseNow(30_000);
   // Background rows carry no timeout, so the scanner's defensive expiry never
   // fires for them — without this gate a dead session's block would claim
@@ -83,23 +90,23 @@ export function MonitorBlock({ tool, conversationId }: { tool: ToolCall; convers
     <div data-cc-monitor-card className={`my-1 rounded border-l-2 ${watching ? "border-sol-blue/60 bg-sol-blue/5" : "border-sol-border/60 bg-sol-bg-alt/30"}`}>
       <div className="flex items-center gap-2 px-3 pt-2 pb-1 min-w-0">
         <Icon className={`w-3.5 h-3.5 shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`} />
-        <span data-cc-tech className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`}>{isBackground ? "Background" : "Monitor"}</span>
+        <span data-cc-tech className={`text-mark font-medium tracking-wide uppercase shrink-0 ${watching ? "text-sol-blue/70" : "text-sol-text-dim"}`}>{isBackground ? "Background" : "Monitor"}</span>
         {input.persistent && (
           <ShortcutTooltip label="Runs until TaskStop or session end — not a one-shot watch">
-            <span data-cc-tech className="px-1 py-0 rounded border text-[9px] font-semibold shrink-0 border-sol-blue/40 text-sol-blue/90 bg-sol-blue/10">persistent</span>
+            <span data-cc-tech className="px-1 py-0 rounded border text-meta font-semibold shrink-0 border-sol-blue/40 text-sol-blue/90 bg-sol-blue/10">persistent</span>
           </ShortcutTooltip>
         )}
         <span className="text-xs text-sol-text truncate min-w-0">{input.description || (isBackground ? "background command" : "background watch")}</span>
         {(row?.eventCount ?? 0) > 0 && (
-          <span data-cc-tech className="ml-auto shrink-0 text-[10px] text-sol-text-dim tabular-nums">
+          <span data-cc-tech className="ml-auto shrink-0 text-meta text-sol-text-dim tabular-nums">
             {row!.eventCount} event{row!.eventCount === 1 ? "" : "s"}
           </span>
         )}
         <span
-          className={`${(row?.eventCount ?? 0) > 0 ? "" : "ml-auto "}shrink-0 inline-flex items-center gap-1 px-1.5 py-0 rounded text-[9px] font-semibold border ${badge.cls}`}
+          className={`${(row?.eventCount ?? 0) > 0 ? "" : "ml-auto "}shrink-0 inline-flex items-center gap-1 px-1.5 py-0 rounded text-meta font-semibold border ${badge.cls}`}
           title={input.timeout_ms !== undefined ? `Timeout: ${fmtDuration(input.timeout_ms)}` : undefined}
         >
-          {watching && <LivePulseDot />}
+          {watching && <LivePulseDot still />}
           {badge.label}
         </span>
       </div>
@@ -107,7 +114,7 @@ export function MonitorBlock({ tool, conversationId }: { tool: ToolCall; convers
         <button
           data-cc-tech
           onClick={() => setShowCommand((v) => !v)}
-          className="w-full text-left px-3 pb-1.5 font-mono text-[11px] text-sol-text-dim hover:text-sol-text-muted transition-colors"
+          className="w-full text-left px-3 pb-1.5 font-mono text-meta text-sol-text-dim hover:text-sol-text-muted transition-colors"
           title={showCommand ? "Collapse the watch command" : "Show the full watch command"}
         >
           {showCommand ? (
@@ -118,13 +125,13 @@ export function MonitorBlock({ tool, conversationId }: { tool: ToolCall; convers
         </button>
       )}
       {row?.lastEvent && (
-        <div data-cc-tech className="mx-3 mb-2 flex items-baseline gap-1.5 min-w-0 text-[11px] leading-snug">
+        <div data-cc-tech className="mx-3 mb-2 flex items-baseline gap-1.5 min-w-0 text-meta leading-snug">
           <span className={`truncate min-w-0 font-medium ${watching ? "text-sol-text-muted" : "text-sol-text-dim"}`}>
             <span className="mr-0.5 text-sol-blue/50">&gt;</span>
             {row.lastEvent}
           </span>
           {row.lastEventAt !== undefined && (
-            <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim whitespace-nowrap" title={formatFullTimestamp(row.lastEventAt)}>
+            <span className="ml-auto shrink-0 text-meta text-sol-text-dim whitespace-nowrap" title={formatFullTimestamp(row.lastEventAt)}>
               {formatRelativeTime(row.lastEventAt)}
             </span>
           )}
@@ -167,8 +174,8 @@ export function PlanModeBlock({ tool, result, conversationId, messageId, onSendM
         <svg className="w-3 h-3 text-sol-violet/80" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
         </svg>
-        <span className="font-mono text-sol-violet font-semibold text-[11px]">Plan Mode</span>
-        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-sol-violet/15 text-sol-violet border border-sol-violet/30">
+        <span className="font-mono text-sol-violet font-semibold text-meta">Plan Mode</span>
+        <span className="text-meta font-mono px-1.5 py-0.5 rounded bg-sol-violet/15 text-sol-violet border border-sol-violet/30">
           {isEnter ? "enter" : "exit"}
         </span>
       </div>
@@ -187,13 +194,13 @@ export function PlanModeBlock({ tool, result, conversationId, messageId, onSendM
           <div className="flex items-center gap-1.5 mt-2 ml-0.5 flex-wrap">
             <button
               onClick={() => { setSent(true); onSendMessage(JSON.stringify({ __cc_poll: true, keys: ["1"], display: "Start (clear context)" })); }}
-              className="text-[11px] px-2.5 py-1 rounded border border-sol-border/40 bg-sol-bg-alt text-sol-text hover:border-sol-green/40 hover:bg-sol-green/10 hover:text-sol-green transition-colors cursor-pointer"
+              className="text-meta px-2.5 py-1 rounded border border-sol-border/40 bg-sol-bg-alt text-sol-text hover:border-sol-green/40 hover:bg-sol-green/10 hover:text-sol-green transition-colors cursor-pointer"
             >
               Start (clear context)
             </button>
             <button
               onClick={() => { setSent(true); onSendMessage(JSON.stringify({ __cc_poll: true, keys: ["3"], display: "Start (keep context)" })); }}
-              className="text-[11px] px-2.5 py-1 rounded border border-sol-border/40 bg-sol-bg-alt text-sol-text hover:border-sol-green/40 hover:bg-sol-green/10 hover:text-sol-green transition-colors cursor-pointer"
+              className="text-meta px-2.5 py-1 rounded border border-sol-border/40 bg-sol-bg-alt text-sol-text hover:border-sol-green/40 hover:bg-sol-green/10 hover:text-sol-green transition-colors cursor-pointer"
             >
               Start (keep context)
             </button>
@@ -201,13 +208,13 @@ export function PlanModeBlock({ tool, result, conversationId, messageId, onSendM
               onClick={requestChanges}
               disabled={canReview && pendingCount === 0}
               title={canReview && pendingCount === 0 ? "Quote a section of the plan first" : undefined}
-              className="text-[11px] px-2.5 py-1 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed enabled:cursor-pointer border-sol-yellow/40 bg-sol-yellow/5 text-sol-yellow enabled:hover:bg-sol-yellow/15 enabled:hover:border-sol-yellow/60"
+              className="text-meta px-2.5 py-1 rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed enabled:cursor-pointer border-sol-yellow/40 bg-sol-yellow/5 text-sol-yellow enabled:hover:bg-sol-yellow/15 enabled:hover:border-sol-yellow/60"
             >
               Request changes{pendingCount > 0 ? ` (${pendingCount})` : ""}
             </button>
           </div>
           {canReview && (
-            <div className="text-[10px] text-sol-text-dim mt-1.5 ml-0.5 italic">
+            <div className="text-meta text-sol-text-dim mt-1.5 ml-0.5 italic">
               {pendingCount > 0
                 ? `${pendingCount} note${pendingCount === 1 ? "" : "s"} will be sent to the agent.`
                 : "Hover any part of the plan to quote it, then request changes."}
@@ -216,7 +223,7 @@ export function PlanModeBlock({ tool, result, conversationId, messageId, onSendM
         </>
       )}
       {sent && (
-        <div className="text-[10px] text-sol-text-dim mt-1 ml-0.5 italic">Message sent</div>
+        <div className="text-meta text-sol-text-dim mt-1 ml-0.5 italic">Message sent</div>
       )}
     </div>
   );
@@ -329,7 +336,7 @@ function AskUserQuestionCard({ tool, result, onSendMessage, parsedInput, deadlin
           <div key={i} className="space-y-2">
             {q.header && (
               <div>
-                <span className="inline-block text-[9px] uppercase tracking-[0.09em] font-semibold px-1.5 py-0.5 rounded bg-sol-violet/15 text-sol-violet">
+                <span className="inline-block text-mark uppercase tracking-[0.09em] font-semibold px-1.5 py-0.5 rounded bg-sol-violet/15 text-sol-violet">
                   {q.header}
                 </span>
               </div>
@@ -337,7 +344,7 @@ function AskUserQuestionCard({ tool, result, onSendMessage, parsedInput, deadlin
             <div className="text-[13px] leading-snug font-medium text-sol-text-secondary">
               {q.question}
               {q.multiSelect && isInteractive && (
-                <span className="ml-2 text-[10px] font-normal uppercase tracking-[0.07em] text-sol-text-dim">select all that apply</span>
+                <span className="ml-2 text-mark font-normal uppercase tracking-[0.07em] text-sol-text-dim">select all that apply</span>
               )}
             </div>
             {q.detail && (
@@ -379,7 +386,7 @@ function AskUserQuestionCard({ tool, result, onSendMessage, parsedInput, deadlin
                 // multiSelect renders the index slot as an empty checkbox outline so the
                 // rows read as toggles, not a pick-one menu.
                 const marker = (
-                  <span className={`mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-md text-[10px] font-semibold tabular-nums leading-none transition-colors ${
+                  <span className={`mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-md text-meta font-semibold tabular-nums leading-none transition-colors ${
                     on
                       ? isInteractive ? "bg-sol-violet text-white" : "bg-sol-green text-white"
                       : q.multiSelect && isInteractive ? "border border-sol-violet/40 text-sol-violet/80 group-hover/opt:bg-sol-violet/15"
@@ -526,7 +533,7 @@ function AskUserQuestionCard({ tool, result, onSendMessage, parsedInput, deadlin
                 </Button>
                 <button
                   onClick={() => setOtherOpen(prev => ({ ...prev, [i]: false }))}
-                  className="text-[11px] px-1.5 py-1.5 text-sol-text-dim hover:text-sol-text transition-colors cursor-pointer"
+                  className="text-meta px-1.5 py-1.5 text-sol-text-dim hover:text-sol-text transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -536,9 +543,9 @@ function AskUserQuestionCard({ tool, result, onSendMessage, parsedInput, deadlin
         );
       })}
       {closedLabel ? (
-        <div className="text-[11px] text-sol-text-dim">{closedLabel}</div>
+        <div className="text-meta text-sol-text-dim">{closedLabel}</div>
       ) : isInteractive && deadline ? (
-        <div className="text-[11px] text-sol-yellow tabular-nums">Auto-denies in {deadline.left}</div>
+        <div className="text-meta text-sol-yellow tabular-nums">Auto-denies in {deadline.left}</div>
       ) : null}
       {isInteractive && needsSubmit && (
         <div className="pt-0.5">
@@ -574,7 +581,7 @@ export function ThinkingBlock({ content }: { content: string }) {
     <div className="my-0.5 opacity-50">
       <div
         className={`flex items-start gap-1 ${isLong ? "cursor-pointer" : ""}`}
-        onClick={() => isLong && setExpanded(!expanded)}
+        {...(isLong ? { ...pressable(() => setExpanded(!expanded)), "aria-expanded": expanded } : {})}
       >
         {isLong && (
           <svg
@@ -627,7 +634,7 @@ export function ImageBlock({ image }: { image: ImageData }) {
         role="status"
       >
         <span className="text-sol-text-muted text-xs">Image unavailable</span>
-        <span className="text-sol-text-dim text-[10px]">
+        <span className="text-sol-text-dim text-meta">
           {errored ? "The stored image could not be decoded." : "The stored image could not be found."}
         </span>
       </div>
@@ -646,7 +653,8 @@ export function ImageBlock({ image }: { image: ImageData }) {
     <div
       className="my-2 cursor-pointer relative max-w-md"
       style={{ minHeight: IMAGE_COLLAPSED_HEIGHT }}
-      onClick={() => gallery?.open(src)}
+      {...pressable(() => gallery?.open(src))}
+      aria-label="Open image"
     >
       {!loaded && (
         <div className="absolute inset-0 rounded-t border-x border-t border-sol-border bg-sol-bg-alt flex items-center justify-center z-10" style={{ height: IMAGE_COLLAPSED_HEIGHT }}>
@@ -659,7 +667,7 @@ export function ImageBlock({ image }: { image: ImageData }) {
       >
         <img
           src={src}
-          alt="User provided image"
+          alt={image.tool_use_id ? "Image from a tool" : "Attached image"}
           className="w-full"
           style={loaded ? undefined : { width: 0, height: 0, overflow: 'hidden', position: 'absolute' }}
           onLoad={() => { markSrcDecoded(src); setLoaded(true); }}

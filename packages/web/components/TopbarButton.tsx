@@ -53,7 +53,7 @@ export const TopbarChip = forwardRef<
       {...props}
       data-topbar-chip={tinted ? "alert" : ""}
       className={cn(
-        "flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium tabular-nums select-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/60",
+        "flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-meta font-medium tabular-nums select-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/60",
         tinted ? "hover:brightness-110" : "text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text",
         className,
       )}

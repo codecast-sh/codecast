@@ -112,11 +112,11 @@ function Story({ task, runs, allRuns }: { task: StoryTask; runs: ReportRun[]; al
     <span className="inline-flex items-baseline gap-3 min-w-0">
       <span className={cn("text-[13px] font-medium", TONE[where.tone])} data-cause-where>{where.text}</span>
       {(offLine || switchOpen) && (
-        <button type="button" onClick={() => setSwitchOpen((o) => !o)} aria-expanded={switchOpen} className="shrink-0 text-[11.5px] text-sol-blue hover:underline" data-cause-start-switch>
+        <button type="button" onClick={() => setSwitchOpen((o) => !o)} aria-expanded={switchOpen} className="shrink-0 text-meta text-sol-blue hover:underline" data-cause-start-switch>
           {switchOpen ? "Hide the switch" : "Start problems on their own"}
         </button>
       )}
-      <Link href={lineRefHref(task.short_id || task._id)} className="shrink-0 inline-flex items-center gap-0.5 text-[11.5px] text-sol-text-dim hover:text-sol-blue" title="This problem's life in its flow: every report, every attempt to fix it, ships, deploys and what came back" data-cause-trace>Timeline<ArrowUpRight className="w-3 h-3" /></Link>
+      <Link href={lineRefHref(task.short_id || task._id)} className="shrink-0 inline-flex items-center gap-0.5 text-meta text-sol-text-dim hover:text-sol-blue" title="This problem's life in its flow: every report, every attempt to fix it, ships, deploys and what came back" data-cause-trace>Timeline<ArrowUpRight className="w-3 h-3" /></Link>
     </span>
   );
   // Readiness is about admission: once the cause is closed it has no more to say.
@@ -155,7 +155,7 @@ function Story({ task, runs, allRuns }: { task: StoryTask; runs: ReportRun[]; al
             </div>
             <ul className="mt-1 space-y-0.5">
               {signals.slice(0, SIGNALS_SHOWN).map((s) => <SignalRow key={s._id} s={s} now={now} />)}
-              {signals.length > SIGNALS_SHOWN && <li className="text-[11px] text-sol-text-dim pl-1">and {signals.length - SIGNALS_SHOWN} more in the last two weeks</li>}
+              {signals.length > SIGNALS_SHOWN && <li className="text-meta text-sol-text-dim pl-1">and {signals.length - SIGNALS_SHOWN} more in the last two weeks</li>}
             </ul>
           </div>
         )}
@@ -232,8 +232,8 @@ function SignalRow({ s, now }: { s: LineSignal; now: number }) {
           {s.reopened && <span className="shrink-0 text-sol-red">reopened it</span>}
           <span className="ml-auto shrink-0 text-sol-text-dim tabular-nums">{ageShort(now - s.created_at)} ago</span>
         </span>
-        {said && <span className="block pl-[9rem] truncate text-[11.5px] text-sol-text-muted" title={said} data-signal-said>{said}</span>}
-        {review && <span className={cn("block pl-[9rem] text-[11.5px] leading-snug", s.judge_review?.state === "failed" ? "text-sol-red" : s.judge_review?.state === "diagnosed" ? "text-sol-text-muted" : "text-sol-yellow")} data-signal-review>{review}</span>}
+        {said && <span className="block pl-[9rem] truncate text-meta text-sol-text-muted" title={said} data-signal-said>{said}</span>}
+        {review && <span className={cn("block pl-[9rem] text-meta leading-snug", s.judge_review?.state === "failed" ? "text-sol-red" : s.judge_review?.state === "diagnosed" ? "text-sol-text-muted" : "text-sol-yellow")} data-signal-review>{review}</span>}
       </Link>
       {judge && !s.case_of && <WrongControl s={s} judge={judge} />}
       {s.evidence_url && (
@@ -261,10 +261,10 @@ export function WrongControl({ s, judge }: { s: LineSignal; judge: string }) {
     return null;
   });
   const label = (verdict: "wrong" | null) => useInboxStore.getState().labelDecision(s._id, step, verdict);
-  const btn = "shrink-0 rounded border border-sol-border/50 px-1.5 py-0.5 text-[11px] text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-blue/40";
+  const btn = "shrink-0 rounded border border-sol-border/50 px-1.5 py-0.5 text-meta text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-blue/40";
   if (mine === "wrong") {
     return (
-      <span className="shrink-0 inline-flex items-baseline gap-1 text-[11px]" data-signal-marked>
+      <span className="shrink-0 inline-flex items-baseline gap-1 text-meta" data-signal-marked>
         <span className="text-sol-yellow">Marked wrong</span>
         <button type="button" onClick={() => label(null)} className={btn}>Undo</button>
       </span>

@@ -3,12 +3,15 @@
 // `cast send` from one session to another is a durable row in pending_messages;
 // this page reads that ledger, draws the network of who-talks-to-whom as an
 // animated constellation, and streams the actual messages alongside it.
-import { useMemo, useState, useCallback, Component, type ReactNode } from "react";
+import { memo, useMemo, useState, useCallback, Component, type ReactNode } from "react";
 import Link from "next/link";
 import { agentFeatureHref } from "../../lib/agentFeatureHref";
 import { useRouter } from "next/navigation";
 import { useSessionThreads } from "../../hooks/useSyncSessionThreads";
-import { useTrackedStore } from "../../store/inboxStore";
+import { useTrackedStore, type InboxSession } from "../../store/inboxStore";
+import { makeCollectionSig } from "../../store/wakeSig";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { formatRelativeTime } from "../../lib/conversationFormat";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { MarkdownRenderer } from "../../components/tools/MarkdownRenderer";
@@ -58,20 +61,15 @@ type Node0 = {
 };
 
 const GRAPH_NODE_CAP = 60;
+/** The stream shows the newest messages; older ones are a press away. */
+const STREAM_PAGE = 100;
 
-function relTime(ts: number): string {
-  const d = Date.now() - ts;
-  if (d < 0) return "now";
-  const s = Math.floor(d / 1000);
-  if (s < 45) return "just now";
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const days = Math.floor(h / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
+// The graph reads one fact per session from the store: is it live. Sessions
+// heartbeat about once a second, so the page subscribes to a signature of that
+// fact alone (store/wakeSig.ts), and a heartbeat rebuilds nothing. Only live
+// sessions enter the signature, so a session going live or quiet wakes it.
+// It reads the same fields the model's overlay reads (`is_active` arrives on the row untyped).
+const liveSig = makeCollectionSig<InboxSession>((ses) => ((ses as { is_active?: boolean }).is_active && !ses.is_idle ? "1" : null));
 
 function dayKey(ts: number): string {
   return new Date(ts).toLocaleDateString(undefined, {
@@ -162,20 +160,26 @@ function CrosstalkInner() {
   const data = (threads ?? undefined) as { links: Link0[]; nodes: Node0[] } | undefined;
 
   const s = useTrackedStore([
-    (st) => st.sessions,
+    (st) => liveSig(st.sessions),
     (st) => st.teamMembers,
     (st) => st.currentUser,
   ]);
+  const liveKey = liveSig(s.sessions);
+  // The store says nothing for a session it does not hold, so a node is also live while its row was updated in the
+  // last 3 minutes; that is time, not a field change, so a coarse clock re-reads it.
+  const now = useCoarseNow(30_000);
 
   const [selected, setSelected] = useState<string | null>(null);
   const [pulseKey, setPulseKey] = useState<string | null>(null);
+
+  // The nodes by id, rebuilt only when the threads do, so the stream's rows stay put when liveness changes.
+  const nodeById = useMemo(() => new Map((data?.nodes ?? []).map((n) => [n._id, n])), [data]);
+  const [streamLimit, setStreamLimit] = useState(STREAM_PAGE);
 
   // Build the graph model: live-status overlay from the store, node weights,
   // and edges aggregated per ordered session pair.
   const model = useMemo(() => {
     if (!data) return null;
-    const now = Date.now();
-    const nodeById = new Map(data.nodes.map((n) => [n._id, n]));
 
     const sent = new Map<string, number>();
     const recv = new Map<string, number>();
@@ -247,7 +251,9 @@ function CrosstalkInner() {
       liveCount: liveIds.size,
       busiest,
     };
-  }, [data, s.sessions]);
+    // `liveKey` stands in for s.sessions: it changes exactly when a liveness the model reads does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, nodeById, liveKey, now]);
 
   // Stream: newest first, optionally filtered to the selected session.
   const stream = useMemo(() => {
@@ -289,11 +295,8 @@ function CrosstalkInner() {
                     onSelect={setSelected}
                     onOpen={onOpen}
                   />
-                  <div className="pointer-events-none absolute bottom-3 left-4 text-[11px] text-sol-text-dim font-mono">
-                    click a node to filter · double-click to open
-                  </div>
                   {model.nodes.length >= GRAPH_NODE_CAP && (
-                    <div className="pointer-events-none absolute top-3 right-4 text-[11px] text-sol-text-dim">
+                    <div className="pointer-events-none absolute top-3 right-4 text-meta text-sol-text-dim">
                       showing {GRAPH_NODE_CAP} busiest sessions
                     </div>
                   )}
@@ -325,7 +328,7 @@ function CrosstalkInner() {
                 {selected && (
                   <button
                     onClick={() => setSelected(null)}
-                    className="flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
+                    className="flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors"
                   >
                     <X className="w-3 h-3" /> clear
                   </button>
@@ -338,13 +341,26 @@ function CrosstalkInner() {
                 ) : stream.length === 0 ? (
                   <StreamEmpty hasAny={(data.links.length ?? 0) > 0} />
                 ) : (
-                  <MessageStream
-                    links={stream}
-                    nodeById={model?.nodeById ?? new Map()}
-                    teamMembers={s.teamMembers}
-                    onPulse={setPulseKey}
-                    onSelectNode={setSelected}
-                  />
+                  <>
+                    <MessageStream
+                      links={stream.length > streamLimit ? stream.slice(0, streamLimit) : stream}
+                      nodeById={nodeById}
+                      teamMembers={s.teamMembers}
+                      onPulse={setPulseKey}
+                      onSelectNode={setSelected}
+                    />
+                    {stream.length > streamLimit && (
+                      <div className="px-4 pb-6">
+                        <button
+                          type="button"
+                          onClick={() => setStreamLimit((n) => n + STREAM_PAGE)}
+                          className="w-full rounded-lg border border-sol-border/30 py-1.5 text-xs text-sol-text-muted hover:border-sol-border/60 hover:text-sol-text transition-colors"
+                        >
+                          Show older · {stream.length - streamLimit}
+                        </button>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </div>
@@ -407,7 +423,7 @@ function StatChip({
       <Icon className={`w-3.5 h-3.5 ${tint} ${pulse ? "animate-pulse" : ""}`} />
       <div className="leading-none">
         <span className="text-base font-semibold tabular-nums">{value}</span>
-        <span className="ml-1.5 text-[11px] text-sol-text-dim">{label}</span>
+        <span className="ml-1.5 text-meta text-sol-text-dim">{label}</span>
       </div>
     </div>
   );
@@ -438,7 +454,7 @@ function SessionPill({
       <span className="truncate text-[12.5px] font-medium" style={{ color: "var(--sol-text)" }}>
         {title}
       </span>
-      <span className="font-mono text-[10px] text-sol-text-dim flex-shrink-0">{n?.short_id ?? id.slice(0, 7)}</span>
+      <span className="font-mono text-meta text-sol-text-dim flex-shrink-0">{n?.short_id ?? id.slice(0, 7)}</span>
     </span>
   );
   if (ghost || !n) {
@@ -482,7 +498,7 @@ function MessageStream({
       {groups.map((g) => (
         <div key={g.day} className="mb-1">
           <div className="sticky top-0 z-10 -mx-3 sm:-mx-4 px-4 py-1.5 bg-sol-bg/85 backdrop-blur-sm">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-sol-text-dim">
+            <span className="text-mark font-semibold uppercase tracking-wider text-sol-text-dim">
               {g.day}
             </span>
           </div>
@@ -505,7 +521,7 @@ function MessageStream({
   );
 }
 
-function MessageCard({
+const MessageCard = memo(function MessageCard({
   link,
   nodeById,
   teamMembers,
@@ -547,19 +563,19 @@ function MessageCard({
           <SessionPill id={link.to_id} nodeById={nodeById} onSelectNode={onSelectNode} />
           <div className="ml-auto flex items-center gap-2 flex-shrink-0">
             {link.cross_user && senderName && (
-              <span className="hidden sm:inline-flex items-center gap-1 text-[10px] text-sol-text-dim">
+              <span className="hidden sm:inline-flex items-center gap-1 text-meta text-sol-text-dim">
                 <Users className="w-3 h-3" />
                 {senderName}
               </span>
             )}
             <span
-              className={`flex items-center gap-1 text-[10px] ${meta.tint}`}
+              className={`flex items-center gap-1 text-meta ${meta.tint}`}
               title={meta.label}
             >
               <StatusIcon className={`w-3 h-3 ${link.status === "pending" ? "animate-pulse" : ""}`} />
             </span>
-            <span className="text-[11px] text-sol-text-dim tabular-nums whitespace-nowrap">
-              {relTime(link.created_at)}
+            <span className="text-meta text-sol-text-dim tabular-nums whitespace-nowrap">
+              {formatRelativeTime(link.created_at)}
             </span>
           </div>
         </div>
@@ -577,7 +593,7 @@ function MessageCard({
         {long && (
           <button
             onClick={() => setExpanded((v) => !v)}
-            className="mt-1 text-[11px] text-sol-blue hover:underline"
+            className="mt-1 text-meta text-sol-blue hover:underline"
           >
             {expanded ? "show less" : "show more"}
           </button>
@@ -585,7 +601,7 @@ function MessageCard({
       </div>
     </div>
   );
-}
+});
 
 function GraphEmpty({ loading }: { loading: boolean }) {
   return (

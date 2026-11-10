@@ -18,8 +18,10 @@ export const PipelineNav = memo(function PipelineNav({ figures, at, open, settli
   const item = (stage: PipelineStage) => {
     const f = figures[stage];
     const Icon = ICONS[stage];
+    // Its name stays on the button when a narrow window folds the nav to icons (pipeline.css hides the label).
+    const name = [PIPELINE_LABELS[stage], f.n?.toLocaleString(), stage !== "decisions" ? f.unit : null, ...f.state.map((s) => s.words)].filter(Boolean).join(" ");
     return (
-      <button key={stage} type="button" className="pn-item" aria-current={at === stage ? "page" : undefined} aria-keyshortcuts={`G ${PIPELINE_KEYS[stage].toUpperCase()}`} onClick={() => open(stage)} data-pipeline-stage={stage}>
+      <button key={stage} type="button" className="pn-item" aria-label={name} title={PIPELINE_LABELS[stage]} aria-current={at === stage ? "page" : undefined} aria-keyshortcuts={`G ${PIPELINE_KEYS[stage].toUpperCase()}`} onClick={() => open(stage)} data-pipeline-stage={stage}>
         <Icon className="pn-icon" aria-hidden />
         <span className="pn-label">{PIPELINE_LABELS[stage]}</span>
         <b className="pn-n lw-num" data-tone={stage === "decisions" && f.n ? "ask" : undefined}>{f.n == null ? "–" : f.n.toLocaleString()}</b>

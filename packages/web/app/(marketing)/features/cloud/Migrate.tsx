@@ -25,13 +25,13 @@ const ROWS: { id: string; title: string; at: number; note: string; tone: string 
 function StageList() {
   return (
     <ul className="md:hidden rounded-2xl border overflow-hidden" style={{ borderColor: "#e3dcc6", backgroundColor: SOL.base3 }}>
-      <li className="px-4 py-2.5 font-mono text-[11.5px] border-b" style={{ color: SOL.base01, borderColor: "#e3dcc6", backgroundColor: SOL.base2 }}>batch mg-4k7q2z9a</li>
+      <li className="px-4 py-2.5 font-mono text-meta border-b" style={{ color: SOL.base01, borderColor: "#e3dcc6", backgroundColor: SOL.base2 }}>batch mg-4k7q2z9a</li>
       {ROWS.map((r) => (
         <li key={r.id} className="px-4 py-3 border-b last:border-b-0" style={{ borderColor: "#eee5cc" }}>
           <div className="flex items-baseline gap-2">
-            <span className="font-mono text-[11.5px]" style={{ color: SOL.base1 }}>{r.id}</span>
+            <span className="font-mono text-meta" style={{ color: SOL.base1 }}>{r.id}</span>
             <span className="text-[14px] truncate" style={{ color: SOL.base02 }}>{r.title}</span>
-            <span className="ml-auto font-mono text-[11.5px] font-semibold shrink-0" style={{ color: r.tone === SOL.base1 ? SOL.base01 : r.tone }}>
+            <span className="ml-auto font-mono text-meta font-semibold shrink-0" style={{ color: r.tone === SOL.base1 ? SOL.base01 : r.tone }}>
               {r.at < 0 ? "queued" : r.at >= 5 ? "done" : STAGES[r.at].name}
             </span>
           </div>
@@ -40,7 +40,7 @@ function StageList() {
               <span key={i} className="h-1 flex-1 rounded-full" style={{ backgroundColor: i < r.at || r.at >= 5 ? r.tone : i === r.at ? `color-mix(in srgb, ${r.tone} 45%, transparent)` : "#eee5cc" }} />
             ))}
           </div>
-          <div className="mt-1.5 font-mono text-[11.5px] leading-5" style={{ color: SOL.base01 }}>{r.note}</div>
+          <div className="mt-1.5 font-mono text-meta leading-5" style={{ color: SOL.base01 }}>{r.note}</div>
         </li>
       ))}
     </ul>
@@ -53,7 +53,7 @@ function StageTrack() {
       <div className="overflow-x-auto">
         <div className="min-w-[760px]">
           <div className="grid grid-cols-[200px_repeat(5,1fr)] border-b" style={{ borderColor: "#e3dcc6", backgroundColor: SOL.base2 }}>
-            <div className="px-4 py-3 font-mono text-[11.5px]" style={{ color: SOL.base01 }}>batch mg-4k7q2z9a</div>
+            <div className="px-4 py-3 font-mono text-meta" style={{ color: SOL.base01 }}>batch mg-4k7q2z9a</div>
             {STAGES.map((s, i) => (
               <div key={s.name} className="px-3 py-3 font-mono text-[12.5px] font-semibold border-l" style={{ color: SOL.base02, borderColor: "#e3dcc6" }}>
                 <span className="tabular-nums mr-1.5 font-normal" style={{ color: BLUE }}>{i + 1}</span>{s.name}
@@ -83,7 +83,7 @@ function StageTrack() {
                       className={`w-3 h-3 rounded-full border-2 shrink-0 ${r.at > 0 && r.at < 5 ? "cl-breathe" : ""}`}
                       style={{ borderColor: r.tone, backgroundColor: r.at === 5 ? r.tone : SOL.base3 }}
                     />
-                    <span className="font-mono text-[11.5px] whitespace-nowrap px-1.5 rounded" style={{ color: r.tone === SOL.base1 ? SOL.base01 : r.tone, backgroundColor: "rgba(253,246,227,.92)" }}>{r.note}</span>
+                    <span className="font-mono text-meta whitespace-nowrap px-1.5 rounded" style={{ color: r.tone === SOL.base1 ? SOL.base01 : r.tone, backgroundColor: "rgba(253,246,227,.92)" }}>{r.note}</span>
                   </div>
                 </div>
               </div>
@@ -100,15 +100,15 @@ function Divider() {
   return (
     <div className="rounded-xl border px-5 py-5" style={{ borderColor: "#e3dcc6", backgroundColor: "#fffbf0" }}>
       <div className="text-[13.5px] leading-6" style={{ color: SOL.base01 }}>
-        <span className="font-mono text-[11.5px] mr-2" style={{ color: SOL.base1 }}>you</span>also add the v2 rate limits
+        <span className="font-mono text-meta mr-2" style={{ color: SOL.base1 }}>you</span>also add the v2 rate limits
       </div>
       <div className="flex items-center gap-3 my-4">
         <span className="flex-1 h-px" style={{ backgroundColor: BLUE, opacity: 0.4 }} />
-        <span className="font-mono text-[11.5px] text-center [text-wrap:balance]" style={{ color: BLUE }}>[codecast] Now running on {HOST} (was {LAPTOP}).</span>
+        <span className="font-mono text-meta text-center [text-wrap:balance]" style={{ color: BLUE }}>[codecast] Now running on {HOST} (was {LAPTOP}).</span>
         <span className="flex-1 h-px" style={{ backgroundColor: BLUE, opacity: 0.4 }} />
       </div>
       <div className="text-[13.5px] leading-6" style={{ color: SOL.base02 }}>
-        <span className="font-mono text-[11.5px] mr-2" style={{ color: SOL.base1 }}>claude</span>Picking up the rate limits in src/routes/v2/limits.ts.
+        <span className="font-mono text-meta mr-2" style={{ color: SOL.base1 }}>claude</span>Picking up the rate limits in src/routes/v2/limits.ts.
       </div>
     </div>
   );

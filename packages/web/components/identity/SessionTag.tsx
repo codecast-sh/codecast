@@ -12,7 +12,7 @@ import { identityRowOf, type IdentityRow } from "../../lib/sessionIdentity";
 export type SessionTagSize = "xs" | "sm" | "md" | "lg";
 
 const SIZES: Record<SessionTagSize, { face: number; icon: string; text: string; gap: string }> = {
-  xs: { face: 14, icon: "w-3 h-3", text: "text-[11px]", gap: "gap-1" },
+  xs: { face: 14, icon: "w-3 h-3", text: "text-meta", gap: "gap-1" },
   sm: { face: 16, icon: "w-3.5 h-3.5", text: "text-xs", gap: "gap-1.5" },
   md: { face: 20, icon: "w-4 h-4", text: "text-xs", gap: "gap-1.5" },
   lg: { face: 28, icon: "w-5 h-5", text: "text-sm", gap: "gap-2" },

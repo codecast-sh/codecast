@@ -7,6 +7,7 @@
 // to it. While a run is in flight, or once one has ended, the chip says where
 // the change is and the panel shows that run, with the person's part in it.
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { Rocket } from "lucide-react";
 import { useWorkspaceFeature } from "../../../lib/teamFeatures";
 import { useInboxStore } from "../../../store/inboxStore";
@@ -117,9 +118,9 @@ function RunPanel({ run, flow, journey, onAgain }: { run: any; flow: AppFlow; jo
     <div className="shp" data-ship-run={run._id}>
       <header className="shp-head">
         <b>{flow.label}</b>
-        {run.task_short_id ? <a className="shp-task" href={`/tasks/${run.task_short_id}`}>{run.task_short_id}</a> : null}
+        {run.task_short_id ? <Link className="shp-task" href={`/tasks/${run.task_short_id}`}>{run.task_short_id}</Link> : null}
         <span className="shp-sub">{run.task_title ?? ""}</span>
-        <a className="shp-link" href={`/workflows/runs/${run._id}`}>Open run</a>
+        <Link className="shp-link" href={`/workflows/runs/${run._id}`}>Open run</Link>
       </header>
       <JourneyView journey={journey} run={run} now_ms={now} actions={
         live

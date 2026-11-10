@@ -4,13 +4,13 @@
 .ops-connect-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; column-gap: 8px; row-gap: 2px; font-size: 13.5px; }
 .ops-connect-title { display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 10px; row-gap: 2px; min-width: 0; }
 .ops-connect-title b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
-.ops-connect-step { font-size: 11.5px; white-space: nowrap; }
+.ops-connect-step { font-size: var(--fs-meta); white-space: nowrap; }
 .ops-connect-x { align-self: start; height: 26px; width: auto; gap: 5px; padding: 0 6px; justify-content: center; }
 .ops-connect-row { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
 .ops-connect-ok { color: var(--sol-green); }
 .ops-connect-vendor { display: flex; flex-direction: column; gap: 4px; max-width: 520px; }
-.ops-connect-where { font-size: 11.5px; }
-.ops-connect-err { font-size: 11.5px; color: var(--sol-red); overflow-wrap: anywhere; }
+.ops-connect-where { font-size: var(--fs-meta); }
+.ops-connect-err { font-size: var(--fs-meta); color: var(--sol-red); overflow-wrap: anywhere; }
 .ops-connect .ops-card { border: 0; padding: 0; background: transparent; }
 /* The kinds are their own row; narrow, the row scrolls sideways rather than wrapping under itself. */
 .ops-connect-kinds { align-self: flex-start; flex-wrap: wrap; max-width: 100%; }
@@ -26,7 +26,7 @@
 /* A vendor already connected: its sources, what each reads, Open; adding another sits under them. */
 .ops-connect-existing { display: flex; flex-direction: column; gap: 8px; }
 .ops-connect-name { font-weight: 500; white-space: nowrap; }
-.ops-connect-reads { font-size: 11.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ops-connect-reads { font-size: var(--fs-meta); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ops-connect-bad { color: var(--sol-red); flex-shrink: 0; }
 .ops-connect-wait-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .ops-connect-wait-label [data-tone="bad"] { color: var(--sol-red); font-weight: 500; }
@@ -42,6 +42,6 @@ button.ops-vproj-row:disabled { color: var(--sol-text-dim); cursor: default; }
 .ops-vproj-box[data-round="true"] { border-radius: 50%; }
 .ops-vproj-box[data-on="true"] { background: var(--sol-blue); border-color: var(--sol-blue); color: var(--sol-bg); }
 .ops-vproj-name { min-width: 0; }
-.ops-vproj-head { display: flex; justify-content: space-between; padding: 4px 10px; font-size: 10.5px; color: var(--sol-text-dim); border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent); position: sticky; top: 0; background: var(--sol-bg); }
-.ops-vproj-n { font-size: 11.5px; color: var(--sol-text-muted); flex-shrink: 0; }
+.ops-vproj-head { display: flex; justify-content: space-between; padding: 4px 10px; font-size: var(--fs-meta); color: var(--sol-text-dim); border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent); position: sticky; top: 0; background: var(--sol-bg); }
+.ops-vproj-n { font-size: var(--fs-meta); color: var(--sol-text-muted); flex-shrink: 0; }
 .ops-vproj-n[data-zero="true"] { color: var(--sol-text-dim); }

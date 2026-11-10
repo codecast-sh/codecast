@@ -306,7 +306,7 @@ function LatestUpdate({ goal, now }: { goal: InitiativeRow; now: number }) {
 function ProposedGoalLine({ goal, depth, expanded, onToggle, quiet = false }: { goal: DocGoal; depth: number; expanded: boolean; onToggle?: () => void; quiet?: boolean }) {
   const change = goal.proposed;
   const owner = goal.owner && goal.owner.kind !== "unknown"
-    ? <span className="inline-flex min-w-0 items-center gap-1.5 text-[11.5px]" style={{ color: "var(--sol-text-secondary)" }}><Face face={goal.owner} size={16} dim /><span className="truncate">{goal.owner.name}</span></span>
+    ? <span className="inline-flex min-w-0 items-center gap-1.5 text-meta" style={{ color: "var(--sol-text-secondary)" }}><Face face={goal.owner} size={16} dim /><span className="truncate">{goal.owner.name}</span></span>
     : null;
   return (
     <ObjectLine
@@ -397,7 +397,7 @@ function ProjectsByGoal({ doc, ctx, delay }: { doc: CompanyDoc; ctx: Ctx; delay:
       {groups.map(({ goal, projects }) => (
         <div key={goal.id} className="mt-3 first:mt-1" data-company-project-group={goal.short_id ?? goal.id}>
           {/* The heading's flag sits in the glyph column of the lines under it. */}
-          <h3 className="flex items-center gap-2 pb-1 pl-[28px] pr-1.5 text-[11.5px] font-medium" style={{ color: "var(--sol-text-muted)" }}>
+          <h3 className="flex items-center gap-2 pb-1 pl-[28px] pr-1.5 text-meta font-medium" style={{ color: "var(--sol-text-muted)" }}>
             <span className="inline-flex w-5 shrink-0 justify-center"><GoalGlyph /></span>
             <a href={objectHref("initiative", goal.row!.short_id || goal.row!._id)} onClick={onLinkClick({ kind: "initiative", ref: goal.row!.short_id || goal.row!._id })} className="truncate no-underline hover:underline underline-offset-[3px]" style={{ color: "inherit" }}>{goal.title}</a>
           </h3>
@@ -406,7 +406,7 @@ function ProjectsByGoal({ doc, ctx, delay }: { doc: CompanyDoc; ctx: Ctx; delay:
       ))}
       {doc.unfiled.length > 0 && (
         <div className="mt-3" data-company-project-group="unfiled">
-          <h3 className="pb-1 pl-[56px] pr-1.5 text-[11.5px] font-medium" style={{ color: DIM }}>Not under a goal</h3>
+          <h3 className="pb-1 pl-[56px] pr-1.5 text-meta font-medium" style={{ color: DIM }}>Not under a goal</h3>
           {doc.unfiled.map((p) => <ProjectRow key={p.id} project={p} openKey={p.id} depth={0} ctx={ctx} />)}
         </div>
       )}

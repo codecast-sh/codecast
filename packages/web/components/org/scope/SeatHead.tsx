@@ -10,7 +10,7 @@ import { ShortcutTooltip } from "../../KeyboardShortcutsHelp";
 import { cn } from "../../../lib/utils";
 
 const ICON_BUTTON = "p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary transition-colors";
-const TEXT_BUTTON = "h-[22px] inline-flex items-center gap-1 px-1.5 rounded text-[11px] text-sol-text-dim hover:text-sol-text-secondary hover:bg-sol-bg-alt transition-colors whitespace-nowrap";
+const TEXT_BUTTON = "h-[22px] inline-flex items-center gap-1 px-1.5 rounded text-meta text-sol-text-dim hover:text-sol-text-secondary hover:bg-sol-bg-alt transition-colors whitespace-nowrap";
 
 /** What is wrong with the session, said in the row's own words: the one
  *  thing that replaces the state word at rest. Null when nothing is. */
@@ -24,11 +24,11 @@ export type SeatStall = { word: string; action?: { label: string; onClick: () =>
 export function SeatHeadState({ stall }: { stall: SeatStall }) {
   if (!stall) return <span data-seat-label hidden />;
   return (
-    <span data-seat-label data-seat-stall className="inline-flex items-center gap-1.5 text-[11px] whitespace-nowrap" style={{ color: stall.action ? "var(--sol-orange)" : "var(--sol-text-muted)" }}>
+    <span data-seat-label data-seat-stall className="inline-flex items-center gap-1.5 text-meta whitespace-nowrap" style={{ color: stall.action ? "var(--sol-orange)" : "var(--sol-text-muted)" }}>
       <span className="w-1.5 h-1.5 rounded-full" style={{ background: "currentColor" }} />
       {stall.word}
       {stall.action && (
-        <button type="button" onClick={stall.action.onClick} className="h-[18px] px-1.5 rounded text-[10.5px] font-medium border transition-colors hover:brightness-110" style={{ borderColor: "color-mix(in srgb, currentColor 45%, transparent)" }} data-seat-stall-action>
+        <button type="button" onClick={stall.action.onClick} className="h-[18px] px-1.5 rounded text-meta font-medium border transition-colors hover:brightness-110" style={{ borderColor: "color-mix(in srgb, currentColor 45%, transparent)" }} data-seat-stall-action>
           {stall.action.label}
         </button>
       )}

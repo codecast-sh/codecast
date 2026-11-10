@@ -79,7 +79,7 @@ export default function ChapterPage() {
           <div className="sticky top-24 max-h-[calc(100vh-7rem)] overflow-y-auto pr-1">
             {sections.length > 1 && (
               <div className="mb-8 font-mono text-[13px]">
-                <div className="text-[11px] font-bold mb-2" style={{ color: SOL.base1 }}>In this chapter</div>
+                <div className="text-meta font-bold mb-2" style={{ color: SOL.base1 }}>In this chapter</div>
                 {sections.map((s) => (
                   <a key={s.id} href={`#${s.id}`} className="block py-1 leading-snug hover:underline" style={{ color: SOL.base00 }}>{s.title}</a>
                 ))}

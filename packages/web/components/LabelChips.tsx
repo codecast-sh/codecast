@@ -40,7 +40,7 @@ export function LabelChips({
             title={onLabelClick ? `Filter by label: ${l}` : l}
             aria-label={onLabelClick ? `Filter by label: ${l}` : undefined}
             onClick={onLabelClick ? (e) => { e.stopPropagation(); onLabelClick(l); } : undefined}
-            className={`inline-flex items-center gap-1 flex-shrink-0 rounded-full py-0 text-[10px] leading-4 whitespace-nowrap ${tier} ${onLabelClick ? "hover:brightness-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-cyan" : ""}`}
+            className={`inline-flex items-center gap-1 flex-shrink-0 rounded-full py-0 text-meta leading-4 whitespace-nowrap ${tier} ${onLabelClick ? "hover:brightness-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-cyan" : ""}`}
           >
             <span className={`${dotClass} rounded-full flex-shrink-0 ${lc.dot}`} />
             {i < MAX_NAMED && <span className="cq-label-name max-w-[10rem] truncate">{l}</span>}

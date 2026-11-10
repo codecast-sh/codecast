@@ -33,12 +33,12 @@ function rail(focused: boolean | null) {
 test("focused: approvals, tasks and docs, then More", () => {
   const html = rail(true);
   for (const kept of ["questions-row", 'href="/tasks"', 'href="/docs"', ">More<"]) expect(html).toContain(kept);
-  for (const gone of ["threads-row", "feed-row", 'href="/goals"', 'href="/projects"', 'href="/org"', 'href="/repo"', 'href="/files"', 'href="/triggers"', 'href="/pages"']) expect(html).not.toContain(gone);
+  for (const gone of ["threads-row", "feed-row", 'href="/goals"', 'href="/projects"', 'href="/org"', 'href="/repo"', 'href="/files"', 'href="/triggers"', 'href="/pages"', 'href="/deploys"', 'href="/ops"', 'href="/vault"']) expect(html).not.toContain(gone);
 });
 
 test("expanded: every row, and Fewer to fold them again", () => {
   const html = rail(false);
-  for (const shown of ["threads-row", "feed-row", 'href="/projects"', 'href="/repo"', 'href="/triggers"', ">Fewer<"]) expect(html).toContain(shown);
+  for (const shown of ["threads-row", "feed-row", 'href="/projects"', 'href="/repo"', 'href="/triggers"', 'href="/deploys"', 'href="/ops"', 'href="/vault"', ">Fewer<"]) expect(html).toContain(shown);
 });
 
 test("everyone else gets no More/Fewer row at all", () => {

@@ -51,7 +51,7 @@ export function BlameLayer() {
         {t.dim("c07d5b1f8")} ({t.v("jx7m41c maya Add jitter to webhook backoff")} {t.dim("2026-10-01 09:41:37 -0400")} 8) {t.ink("  const jitter = Math.random() * 0.3;")}{"\n"}
         {t.dim("e5520aa31")} ({"Dana Okafor                               "} {t.dim("2026-10-02 16:05:12 -0400")} 9) {t.ink("  return BASE_DELAY_MS * 2 ** attempt * (1 + jitter);")}
       </Pane>
-      <p className="font-mono text-[11.5px] mt-2 mb-6" style={{ color: SOL.base1 }}>Line 9 was a hand edit outside any session, so it keeps its git author.</p>
+      <p className="font-mono text-meta mt-2 mb-6" style={{ color: SOL.base1 }}>Line 9 was a hand edit outside any session, so it keeps its git author.</p>
       </ForScripts>
 
       <Seam />
@@ -101,7 +101,7 @@ function Seam() {
         <div style={{ color: SOL.yellow }}>commit 4b1c9e2a1</div>
         <div style={{ color: SOL.base01 }}>Author: Sam Rivera</div>
         <div className="mt-2 pl-4" style={{ color: SOL.base2 }}>Cap webhook retries at 5</div>
-        <div className="mt-2 pl-4 break-all md:text-[11px]">
+        <div className="mt-2 pl-4 break-all md:text-meta">
           <span className="mm-anim mm-glow rounded px-1 -mx-1" style={{ color: "#c9cbff", backgroundColor: "rgba(108,113,196,.14)", "--d": ".4s" } as CSSProperties}>
             Codecast-Session: https://codecast.sh/conversation/{FULL_ID}
           </span>

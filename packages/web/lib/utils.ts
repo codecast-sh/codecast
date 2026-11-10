@@ -1,6 +1,15 @@
 import { clsx, type ClassValue } from "clsx"
 import { CODECAST_BASE_URL, publicUrl } from "@codecast/shared/entities";
-import { twMerge } from "tailwind-merge"
+import { extendTailwindMerge } from "tailwind-merge"
+
+// The type scale's names (tailwind.config.ts fontSize). Unregistered,
+// tailwind-merge reads any unknown `text-*` as a text colour, so
+// cn("text-meta", "text-sol-text-dim") would silently drop the size.
+export const TYPE_SCALE = ["mark", "meta", "ui", "body", "read", "title", "display"] as const;
+
+const twMerge = extendTailwindMerge({
+  extend: { classGroups: { "font-size": [{ text: [...TYPE_SCALE] }] } },
+});
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))

@@ -27,7 +27,7 @@ interface Question {
 // card in ConversationView and this registry view) renders the same monospace detail.
 export function OptionPreview({ preview }: { preview: string }) {
   return (
-    <pre className="mt-1 w-full max-h-72 overflow-auto whitespace-pre rounded border border-sol-border/40 bg-sol-bg-alt/50 p-2 font-mono text-[10px] leading-[1.2] text-sol-text-secondary">
+    <pre className="mt-1 w-full max-h-72 overflow-auto whitespace-pre rounded border border-sol-border/40 bg-sol-bg-alt/50 p-2 font-mono text-meta leading-[1.2] text-sol-text-secondary">
       {preview}
     </pre>
   );
@@ -56,7 +56,7 @@ function QuestionBlock({ question, answer }: { question: Question; answer?: stri
     <div className="space-y-2">
       <div className="flex items-center gap-2">
         {question.header && (
-          <span className="text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 border border-violet-500/20">
+          <span className="text-mark uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-400 border border-violet-500/20">
             {question.header}
           </span>
         )}

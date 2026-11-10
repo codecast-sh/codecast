@@ -370,7 +370,7 @@ function SweepBar({ scenarios, sweep, onSweep }: { scenarios: string[]; sweep: S
         </span>
       )}
       {sweep.state === "starting" && <span className="evs-job">Starting the sweep...</span>}
-      {sweep.state === "failed" && <span className="ev-fail text-[11.5px]">{sweep.error}</span>}
+      {sweep.state === "failed" && <span className="ev-fail text-meta">{sweep.error}</span>}
       {sweep.state === "failed" && <LogTail lines={sweep.logTail ?? []} label="What the sweep printed before it ended" data-evs-sweep-log />}
     </section>
   );

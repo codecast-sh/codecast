@@ -32,7 +32,7 @@ export function RepoRefsContent({ repository, family, tags = false }: { reposito
         <Icon className="size-4 mt-1 shrink-0 text-sol-blue" />
         <div className="flex-1 min-w-0">
           <div className="flex gap-2 items-center"><Link href={repoTreeHref(repository, tags ? `refs/tags/${row.name}` : row.name, undefined, family)} className="text-sol-blue truncate">{row.name}</Link>
-            {!tags && row.name === defaultBranch && <span className="text-[10px] border border-sol-border rounded-full px-2">default</span>}
+            {!tags && row.name === defaultBranch && <span className="text-meta border border-sol-border rounded-full px-2">default</span>}
           </div>
           <div className="flex flex-wrap gap-2 text-xs mt-2 text-sol-text-dim">
             <Link href={commitPageHref(repository, row.sha, family)} className="hover:text-sol-text">{row.sha?.slice(0, 7)}</Link>

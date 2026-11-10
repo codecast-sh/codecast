@@ -255,13 +255,13 @@ export const VaultQuickSwitcher = memo(function VaultQuickSwitcher() {
               <span className="truncate">
                 <Highlighted result={r.nameResult} fallback={r.target.name} />
                 {r.aliasResult && (
-                  <span className="ml-1.5 text-[11px] text-sol-text-dim">
+                  <span className="ml-1.5 text-meta text-sol-text-dim">
                     via <Highlighted result={r.aliasResult.result} fallback={r.aliasResult.text} />
                   </span>
                 )}
               </span>
               {r.target.path.includes("/") && (
-                <span className="ml-auto truncate text-[11px] text-sol-text-dim max-w-[45%]">
+                <span className="ml-auto truncate text-meta text-sol-text-dim max-w-[45%]">
                   {r.target.path.slice(0, r.target.path.lastIndexOf("/"))}
                 </span>
               )}
@@ -287,7 +287,7 @@ export const VaultQuickSwitcher = memo(function VaultQuickSwitcher() {
             <div className="px-4 py-6 text-center text-xs text-sol-text-dim">No matching notes.</div>
           )}
         </div>
-        <div className="flex items-center gap-3 px-4 py-2 border-t border-sol-border/30 text-[10px] text-sol-text-dim">
+        <div className="flex items-center gap-3 px-4 py-2 border-t border-sol-border/30 text-meta text-sol-text-dim">
           <span className="flex items-center gap-1">
             <KeyCap size="xs">↑</KeyCap>
             <KeyCap size="xs">↓</KeyCap> navigate

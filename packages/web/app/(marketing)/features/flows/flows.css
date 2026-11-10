@@ -41,7 +41,7 @@
 .flx-rail a { display: flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 12px 0 0; text-decoration: none; font-family: var(--font-mono, ui-monospace, monospace); font-size: 12.5px; font-weight: 600; color: #93a1a1; white-space: nowrap; transition: color .25s; }
 .flx-rail a::after { content: ""; flex: 1; min-width: 14px; height: 1.5px; margin-left: 4px; background: rgba(88, 110, 117, .22); transition: background-color .4s; }
 .flx-rail li:last-child a::after { display: none; }
-.flx-rail-dot { width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid #93a1a1; background: transparent; display: inline-flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; line-height: 1; color: #93a1a1; transition: background-color .25s, border-color .25s, box-shadow .25s, color .25s; flex-shrink: 0; }
+.flx-rail-dot { width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid #93a1a1; background: transparent; display: inline-flex; align-items: center; justify-content: center; font-size: var(--fs-meta); font-weight: 700; line-height: 1; color: #93a1a1; transition: background-color .25s, border-color .25s, box-shadow .25s, color .25s; flex-shrink: 0; }
 .flx-rail li[data-state="done"] a { color: #586e75; }
 .flx-rail li[data-state="done"] .flx-rail-dot { background: #2aa198; border-color: #2aa198; color: #fdf6e3; }
 .flx-rail li[data-state="done"] a::after { background: #2aa198; }
@@ -62,6 +62,6 @@
 .flx-dark .flx-ticket-dot { background: #06323d; }
 .flx-ticket-stops li[data-state="done"] .flx-ticket-dot { background: var(--c); border-color: var(--c); }
 .flx-ticket-stops li[data-state="here"] .flx-ticket-dot { border-color: var(--c); box-shadow: 0 0 0 4px color-mix(in srgb, var(--c) 22%, transparent); }
-.flx-ticket-name { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; color: #93a1a1; white-space: nowrap; }
+.flx-ticket-name { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-meta); color: #93a1a1; white-space: nowrap; }
 .flx-ticket-stops li[data-state="here"] .flx-ticket-name { color: var(--c); font-weight: 700; }
 @media (max-width: 420px) { .flx-ticket-stops li:not([data-state="here"]) .flx-ticket-name { visibility: hidden; } }

@@ -137,7 +137,7 @@ function Review({ refs }: { refs: string[] }) {
           <i key={d._id} className={`h-1 flex-1 rounded-full ${i === current ? "bg-sol-yellow" : !pending(d) ? "bg-sol-green/80" : skipped.has(d._id) ? "bg-sol-text-dim/50" : "bg-sol-border"}`} />
         ))}
       </div>
-      <div className="flex items-center gap-3 px-4 pt-2 text-[11.5px] text-sol-text-dim">
+      <div className="flex items-center gap-3 px-4 pt-2 text-meta text-sol-text-dim">
         <span>{current >= 0 ? `${current + 1} of ${members.length}` : `${members.length - waiting} of ${members.length} answered`}</span>
         <span className="ml-auto flex items-center gap-1">
           {current >= 0 && (
@@ -161,7 +161,7 @@ function Review({ refs }: { refs: string[] }) {
                 {pending(d) ? <span className="w-3.5 h-3.5 shrink-0 rounded-full border border-sol-yellow" /> : <Check className="w-3.5 h-3.5 shrink-0 text-sol-green" />}
                 <Link href={decisionHref(d)} className="min-w-0 flex-1 truncate text-sol-text-muted hover:text-sol-text">{d.question}</Link>
                 {pending(d) ? (
-                  <button onClick={() => revisit(i)} className="shrink-0 rounded border border-sol-yellow/60 px-2 py-0.5 text-[11.5px] text-sol-yellow hover:bg-sol-yellow/10">Answer</button>
+                  <button onClick={() => revisit(i)} className="shrink-0 rounded border border-sol-yellow/60 px-2 py-0.5 text-meta text-sol-yellow hover:bg-sol-yellow/10">Answer</button>
                 ) : (
                   <span className="shrink-0 max-w-[14rem] truncate text-[12px] text-sol-green">{d.status === "answered" ? decisionAnswerLabel(d, d) : d.status}</span>
                 )}

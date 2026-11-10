@@ -143,7 +143,7 @@ export function GuestLobby({
                     alt=""
                     className="h-full w-full object-cover"
                     fallback={
-                      <span className="flex h-full w-full items-center justify-center bg-sol-base02 text-[10px] text-sol-text-muted">
+                      <span className="flex h-full w-full items-center justify-center bg-sol-base02 text-meta text-sol-text-muted">
                         {inviter.name.charAt(0).toUpperCase()}
                       </span>
                     }
@@ -269,7 +269,7 @@ export function GuestLobby({
                 {error}
               </p>
             ) : (
-              <p className="text-[11.5px] leading-snug text-sol-text-dim">
+              <p className="text-meta leading-snug text-sol-text-dim">
                 {mode === "rejoin"
                   ? widened
                     ? `The call ${changed.join(" and ")} after you asked, so it's your choice: join, or leave.`
@@ -281,7 +281,7 @@ export function GuestLobby({
                 door), so it cannot open the room itself: it says where the
                 room is instead. */}
             {signedIn && (
-              <p className="rounded-lg bg-white/[0.035] px-3 py-2 text-[11.5px] leading-snug text-sol-text-muted ring-1 ring-white/[0.06]">
+              <p className="rounded-lg bg-white/[0.035] px-3 py-2 text-meta leading-snug text-sol-text-muted ring-1 ring-white/[0.06]">
                 You're signed in to codecast in this browser. On the team? Join as yourself, not as a guest:{" "}
                 <a href="/inbox" className="text-sol-cyan underline-offset-2 hover:underline">
                   open codecast
@@ -303,7 +303,7 @@ function HeldFor({ until }: { until: number }) {
   const left = until - now;
   const mins = Math.ceil(left / 60_000);
   return (
-    <p className="-mt-1.5 text-center font-mono text-[11px] text-sol-text-dim">
+    <p className="-mt-1.5 text-center font-mono text-meta text-sol-text-dim">
       {left <= 0
         ? "your place may have been let go: join to find out"
         : mins > 1
@@ -372,7 +372,7 @@ function WaitingCard({
           </div>
         </div>
       </div>
-      <div className="flex items-center justify-between gap-3 border-t border-white/[0.06] pt-3 font-mono text-[11px] text-sol-text-dim">
+      <div className="flex items-center justify-between gap-3 border-t border-white/[0.06] pt-3 font-mono text-meta text-sol-text-dim">
         {/* One line at 320 px: the time is short, and the way out never wraps. */}
         <span className="min-w-0">{doorFull ? "waiting for a place at the door" : mins < 1 ? "asked just now" : `waiting ${mins} min`}</span>
         <button
@@ -509,14 +509,14 @@ function PreviewFrame({
         </div>
       </div>
       {refused && !p.asking && (
-        <div className="absolute inset-x-3 top-3 flex items-center gap-2 rounded-lg bg-black/60 px-3 py-2 max-sm:static max-sm:mt-2 max-sm:bg-sol-orange/10 max-sm:ring-1 max-sm:ring-sol-orange/20 text-[11.5px] leading-snug text-sol-orange backdrop-blur">
+        <div className="absolute inset-x-3 top-3 flex items-center gap-2 rounded-lg bg-black/60 px-3 py-2 max-sm:static max-sm:mt-2 max-sm:bg-sol-orange/10 max-sm:ring-1 max-sm:ring-sol-orange/20 text-meta leading-snug text-sol-orange backdrop-blur">
           <span className="min-w-0 flex-1">
             {deviceTrouble(p)}
           </span>
           <button
             type="button"
             onClick={() => void preview.start({ mic: !!p.micError, camera: !!p.cameraError })}
-            className="flex shrink-0 items-center gap-1 rounded-md bg-white/10 px-2 py-1 font-mono text-[11px] text-white/90 transition-colors hover:bg-white/20"
+            className="flex shrink-0 items-center gap-1 rounded-md bg-white/10 px-2 py-1 font-mono text-meta text-white/90 transition-colors hover:bg-white/20"
           >
             <RefreshCw className="h-3 w-3" />
             try again

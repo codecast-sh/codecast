@@ -20,7 +20,7 @@ function Slot({ h, open, onHover }: { h: number; open: boolean; onHover: (h: num
       aria-label={`${String(h).padStart(2, "0")}:00, precheck exited ${ran ? 0 : 1}${ran ? ", a session ran" : ", skipped"}`}
       className="group flex flex-col items-center gap-1.5 outline-none"
     >
-      <span className="font-mono text-[10px]" style={{ color: SOL.base1 }}>{String(h).padStart(2, "0")}</span>
+      <span className="font-mono text-meta" style={{ color: SOL.base1 }}>{String(h).padStart(2, "0")}</span>
       <span
         className="flex h-9 w-9 items-center justify-center rounded-lg font-mono text-[13px] font-bold transition-transform group-hover:-translate-y-0.5"
         style={ran

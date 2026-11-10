@@ -31,7 +31,7 @@ export function Ship() {
               {s.loop && <span aria-label="repeats">↻ repeats</span>}
             </div>
             <div className="mt-1.5 font-mono text-[15px] font-semibold" style={{ color: SOL.base03 }}>{s.title}</div>
-            {s.cmd && <div className="mt-1 font-mono text-[11px]" style={{ color: SOL.cyan }}>{s.cmd}</div>}
+            {s.cmd && <div className="mt-1 font-mono text-meta" style={{ color: SOL.cyan }}>{s.cmd}</div>}
             <p className="mt-2 text-[13.5px] leading-[1.6]" style={{ color: SOL.base01 }}>{s.body}</p>
           </li>
         ))}
@@ -63,7 +63,7 @@ export function PublicRepo() {
   return (
     <div className="grid gap-8 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)] items-center">
       <Browser url={`codecast.sh/r/${REPO}/pull/${PR_NUMBER}`}>
-        <div className="flex items-center gap-4 px-4 pt-3 text-[11.5px]" style={{ color: SOL.base00 }}>
+        <div className="flex items-center gap-4 px-4 pt-3 text-meta" style={{ color: SOL.base00 }}>
           <span className="font-semibold" style={{ color: SOL.base03 }}>{REPO}</span>
           {["Code", "Pulls", "Sessions", "Commits"].map((t) => (
             <span key={t} className="pb-2" style={t === "Pulls" ? { color: SOL.base03, borderBottom: `2px solid ${SOL.green}` } : undefined}>{t}</span>
@@ -74,13 +74,13 @@ export function PublicRepo() {
             <PrIcon className="h-4 w-4 mt-[2px] shrink-0" /> <span>{PR_TITLE} <span className="whitespace-nowrap" style={{ color: SOL.base1, fontWeight: 400 }}>#{PR_NUMBER}</span></span>
           </div>
           <div className="mt-4 space-y-2 text-[12px]">
-            <div className="text-[10px] uppercase tracking-wider" style={{ color: SOL.base1 }}>Sessions</div>
+            <div className="text-mark uppercase tracking-wider" style={{ color: SOL.base1 }}>Sessions</div>
             <div className="flex flex-wrap items-center gap-2">
               <SessionPill>Webhook retry backoff</SessionPill>
               <span style={{ color: SOL.base1 }}>public, opens the transcript</span>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <span className="inline-flex items-center gap-1.5 rounded border px-1.5 py-[1px] text-[10.5px]" style={{ borderColor: SOL.base2, color: SOL.base00 }}>
+              <span className="inline-flex items-center gap-1.5 rounded border px-1.5 py-[1px] text-meta" style={{ borderColor: SOL.base2, color: SOL.base00 }}>
                 <Face name="Lena" color={PEOPLE.lena} size={13} /> Lena&apos;s session on Sep 20
               </span>
               <span style={{ color: SOL.base1 }}>private, named but not linked</span>
@@ -119,7 +119,7 @@ export function Names() {
   return (
     <div className="grid gap-8 lg:grid-cols-2 items-start">
       <div className="rounded-xl border overflow-hidden" style={{ borderColor: SOL.base2, backgroundColor: PAPER }}>
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 px-4 py-2 font-mono text-[10.5px] uppercase tracking-wider" style={{ color: SOL.base1, backgroundColor: "rgba(238,232,213,0.5)" }}>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-4 px-4 py-2 font-mono text-mark uppercase tracking-wider" style={{ color: SOL.base1, backgroundColor: "rgba(238,232,213,0.5)" }}>
           <span>The act</span><span>Whose token</span>
         </div>
         {TOKENS.map(([act, who, color]) => (

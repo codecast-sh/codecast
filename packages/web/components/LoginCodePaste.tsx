@@ -26,7 +26,7 @@ export function LoginCodePaste({
 
   if (!open) {
     return (
-      <button type="button" onClick={() => setOpen(true)} className="mt-1 block text-left font-medium text-amber-500 underline underline-offset-2 hover:text-amber-400">
+      <button type="button" onClick={() => setOpen(true)} className="mt-1 block text-left font-medium text-sol-text-secondary underline decoration-sol-orange/70 underline-offset-2 hover:text-sol-text hover:decoration-sol-orange">
         Not at that machine? Sign in here with a code
       </button>
     );
@@ -48,7 +48,7 @@ export function LoginCodePaste({
 
   return (
     <form onSubmit={send} className="mt-1.5 flex flex-col gap-1.5">
-      <a href={flow.url} target="_blank" rel="noreferrer" className="font-medium text-amber-500 underline underline-offset-2 hover:text-amber-400">
+      <a href={flow.url} target="_blank" rel="noreferrer" className="font-medium text-sol-text-secondary underline decoration-sol-orange/70 underline-offset-2 hover:text-sol-text hover:decoration-sol-orange">
         1. Open the sign-in page
       </a>
       <div className="flex items-center gap-1.5">
@@ -58,7 +58,7 @@ export function LoginCodePaste({
           value={code}
           onChange={(e) => setCode(e.target.value.trim())}
           placeholder="2. Paste the code it shows"
-          className="h-7 min-w-0 flex-1 rounded border border-sol-border bg-sol-bg px-2 font-mono text-[11px] text-sol-text"
+          className="h-7 min-w-0 flex-1 rounded border border-sol-border bg-sol-bg px-2 font-mono text-meta text-sol-text"
         />
         <Button type="submit" variant="amber" size="xs" disabled={sending || !code}>
           {sending ? "Sending…" : "Send"}

@@ -42,8 +42,29 @@ export function useActiveWorkspaceKey(): WorkspaceKey | null {
 // (collection ref, key, field-sig fn) so unrelated store writes cost nothing.
 // The store reuses a collection's identity when nothing in it changed, so this
 // scan (10k+ rows for tasks/docs) runs once per real change, not once per
-// store notification per subscriber.
+// store notification per subscriber. A digest, not the ids spelled out: every
+// subscriber compares it on every store write, and at 10k tasks the spelled
+// out form was a third of a megabyte (typing budget: a wake signature is a
+// digest). Two 32-bit hashes per part, cyrb53's mixing, as makeCollectionSig.
 type SigEntry = { table?: WorkspaceScopedTable; sig: string };
+type Digest = { h1: number; h2: number };
+const newDigest = (): Digest => ({ h1: 0xdeadbeef, h2: 0x41c6ce57 });
+function feed(d: Digest, s: string): void {
+  let { h1, h2 } = d;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 2654435761);
+    h2 = Math.imul(h2 ^ c, 1597334677);
+  }
+  d.h1 = h1;
+  d.h2 = h2;
+}
+function finish(d: Digest): string {
+  let { h1, h2 } = d;
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return `${(h1 >>> 0).toString(36)}.${(h2 >>> 0).toString(36)}`;
+}
 const sigCache = new WeakMap<object, Map<((row: any) => string) | null, Map<WorkspaceKey | null, SigEntry>>>();
 // `table` names the collection, whose registry `listed` rule (a soft-deleted
 // row stays held but leaves lists) applies here too.
@@ -58,18 +79,20 @@ export function membershipSig(
   const hit = perKey?.get(key);
   if (hit && hit.table === table) return hit.sig;
   const listed = table ? collectionRowListed(table) : undefined;
-  const ids: string[] = [];
-  let extra = "";
+  const ids = newDigest();
+  const fields = newDigest();
+  let n = 0;
   if (key) {
     for (const id in collection) {
       const row = collection[id];
       if (!inWorkspace(row, key)) continue;
       if (listed && !listed(row)) continue;
-      ids.push(id);
-      if (fieldSig) extra += fieldSig(row) + "\n";
+      feed(ids, id + "\n");
+      n++;
+      if (fieldSig) feed(fields, fieldSig(row) + "\n");
     }
   }
-  const sig = fieldSig ? ids.join("\n") + "\u0000" + extra : ids.join("\n");
+  const sig = fieldSig ? `${n}.${finish(ids)}.${finish(fields)}` : `${n}.${finish(ids)}`;
   if (!perFn) { perFn = new Map(); sigCache.set(collection, perFn); }
   if (!perKey) { perKey = new Map(); perFn.set(fieldSig, perKey); }
   perKey.set(key, { table, sig });

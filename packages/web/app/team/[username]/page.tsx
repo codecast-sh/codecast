@@ -139,13 +139,13 @@ function UserProfileContent() {
   if (!currentUser || profileUser === undefined) return <ProfileSkeleton />;
   if (profileUser === null) return (
     <div className="flex flex-col items-center justify-center gap-2 min-h-[40vh] text-center px-4">
-      <p className="text-sol-base01 text-sm">User not found.</p>
-      <p className="text-sol-base01/45 text-xs max-w-xs">This profile link may be out of date — the account was likely renamed or removed.</p>
+      <p className="text-sol-text-muted text-sm">User not found.</p>
+      <p className="text-sol-text-muted text-xs max-w-xs">This profile link may be out of date — the account was likely renamed or removed.</p>
       <div className="flex items-center gap-3 mt-1 text-xs">
         {currentUser?.github_username || currentUser?._id ? (
           <Link href={`/team/${currentUser.github_username || currentUser._id}`} className="text-sol-cyan/70 hover:text-sol-cyan underline underline-offset-2">Your profile</Link>
         ) : null}
-        <Link href="/inbox" className="text-sol-base01/60 hover:text-sol-text underline underline-offset-2">Back to inbox</Link>
+        <Link href="/inbox" className="text-sol-text-muted hover:text-sol-text underline underline-offset-2">Back to inbox</Link>
       </div>
     </div>
   );
@@ -169,19 +169,19 @@ function UserProfileContent() {
               </div>
             }
           />
-          <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-sol-bg ${online ? "bg-sol-green" : recent ? "bg-sol-yellow" : "bg-sol-base01/30"}`} />
+          <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-sol-bg ${online ? "bg-sol-green" : recent ? "bg-sol-yellow" : "bg-sol-text-dim/50"}`} />
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2 flex-wrap">
             <span className="text-[13px] font-bold text-sol-text leading-tight">{profileUser.name || "Unnamed"}</span>
             {profileUser.github_username && (
-              <a href={`https://github.com/${profileUser.github_username}`} target="_blank" rel="noopener noreferrer" className="text-[10px] text-sol-cyan/40 hover:text-sol-cyan transition-colors">@{profileUser.github_username}</a>
+              <a href={`https://github.com/${profileUser.github_username}`} target="_blank" rel="noopener noreferrer" className="text-meta text-sol-cyan/40 hover:text-sol-cyan transition-colors">@{profileUser.github_username}</a>
             )}
-            {online && <span className="text-[9px] text-sol-green font-medium">online</span>}
-            {!online && recent && <span className="text-[9px] text-sol-yellow/60">recently active</span>}
+            {online && <span className="text-meta text-sol-green font-medium">online</span>}
+            {!online && recent && <span className="text-meta text-sol-yellow/60">recently active</span>}
           </div>
           {aa && (
-            <div className="flex items-center gap-1 mt-0.5 text-[10px] text-sol-base01/40 leading-tight flex-wrap">
+            <div className="flex items-center gap-1 mt-0.5 text-meta text-sol-text-muted leading-tight flex-wrap">
               {aa.is_currently_active && aa.current_project && (
                 <span className="flex items-center gap-1 text-sol-cyan/70 font-medium mr-0.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan animate-pulse inline-block" />
@@ -194,7 +194,7 @@ function UserProfileContent() {
               {(aa.team_activity?.week_commits ?? 0) > 0 && <><Sep /><span className="text-sol-green/50">{aa.team_activity!.week_commits}c</span></>}
               {(aa.team_activity?.week_prs ?? 0) > 0 && <><Sep /><span className="text-sol-violet/50">{aa.team_activity!.week_prs} PRs</span></>}
               {aa.activity_streak > 0 && <><Sep /><span className="text-sol-orange/60">{aa.activity_streak}d streak</span></>}
-              <span className="text-sol-base01/20 ml-0.5">this week</span>
+              <span className="text-sol-text-dim ml-0.5">this week</span>
             </div>
           )}
         </div>
@@ -206,16 +206,16 @@ function UserProfileContent() {
 
       {/* View toggle */}
       <div className="flex items-center gap-0 mt-2 mb-1 border-b border-sol-border/10">
-        <button onClick={() => setView("feed")} className={`px-3 py-1.5 text-[10px] font-semibold tracking-wide transition-colors border-b-2 ${view === "feed" ? "text-sol-text border-sol-yellow/60" : "text-sol-base01/35 border-transparent hover:text-sol-base01/60"}`}>Feed</button>
-        <button onClick={() => setView("work")} className={`px-3 py-1.5 text-[10px] font-semibold tracking-wide transition-colors border-b-2 ${view === "work" ? "text-sol-text border-sol-violet/60" : "text-sol-base01/35 border-transparent hover:text-sol-base01/60"}`}>Work</button>
-        <button onClick={() => setView("timeline")} className={`px-3 py-1.5 text-[10px] font-semibold tracking-wide transition-colors border-b-2 ${view === "timeline" ? "text-sol-text border-sol-cyan/60" : "text-sol-base01/35 border-transparent hover:text-sol-base01/60"}`}>Timeline</button>
+        <button onClick={() => setView("feed")} className={`px-3 py-1.5 text-meta font-semibold tracking-wide transition-colors border-b-2 ${view === "feed" ? "text-sol-text border-sol-yellow/60" : "text-sol-text-muted border-transparent hover:text-sol-text"}`}>Feed</button>
+        <button onClick={() => setView("work")} className={`px-3 py-1.5 text-meta font-semibold tracking-wide transition-colors border-b-2 ${view === "work" ? "text-sol-text border-sol-violet/60" : "text-sol-text-muted border-transparent hover:text-sol-text"}`}>Work</button>
+        <button onClick={() => setView("timeline")} className={`px-3 py-1.5 text-meta font-semibold tracking-wide transition-colors border-b-2 ${view === "timeline" ? "text-sol-text border-sol-cyan/60" : "text-sol-text-muted border-transparent hover:text-sol-text"}`}>Timeline</button>
         <div className="ml-auto flex items-center gap-1.5 pb-1">
           {myTeams && myTeams.length > 0 && (
             <select
               value={teamScope === "default" ? (isOwn ? "all" : String(teamId ?? "all")) : teamScope}
               onChange={(e) => setTeamScope(e.target.value)}
               title="Scope activity to one team"
-              className="text-[10px] text-sol-base01/60 bg-transparent border border-sol-border/25 rounded px-1.5 py-0.5 hover:border-sol-border/50 focus:outline-none cursor-pointer max-w-[130px]"
+              className="text-meta text-sol-text-muted bg-transparent border border-sol-border/25 rounded px-1.5 py-0.5 hover:border-sol-border/50 focus:outline-none cursor-pointer max-w-[130px]"
             >
               {isOwn && <option value="all">All teams</option>}
               {myTeams.filter((t): t is NonNullable<typeof t> => t !== null).map((t) => (
@@ -256,7 +256,7 @@ function UserProfileContent() {
             </div>
           ))}
           {feedStatus !== "LoadingFirstPage" && filtered.length === 0 && (
-            <div className="text-[11px] text-sol-base01/30 text-center py-16">
+            <div className="text-meta text-sol-text-dim text-center py-16">
               {!showAll
                 ? <>No messages typed yet. <button onClick={() => setShowAll(true)} className="text-sol-cyan/50 hover:text-sol-cyan underline underline-offset-2 transition-colors">Show all activity</button></>
                 : (isOwn ? "No recent activity" : "No recent activity in this workspace")}
@@ -268,7 +268,7 @@ function UserProfileContent() {
               <button
                 onClick={() => loadMore(20)}
                 disabled={feedStatus === "LoadingMore"}
-                className="text-[10.5px] font-medium tracking-wide text-sol-base01/50 hover:text-sol-text border border-sol-border/30 hover:border-sol-border/60 rounded-full px-4 py-1.5 transition-colors disabled:opacity-50"
+                className="text-meta font-medium tracking-wide text-sol-text-muted hover:text-sol-text border border-sol-border/30 hover:border-sol-border/60 rounded-full px-4 py-1.5 transition-colors disabled:opacity-50"
               >
                 {feedStatus === "LoadingMore" ? "Loading…" : "Load more"}
               </button>
@@ -302,7 +302,7 @@ function UserProfileContent() {
 }
 
 function Sep() {
-  return <span className="text-sol-base01/15 select-none">&middot;</span>;
+  return <span className="text-sol-text-dim select-none">&middot;</span>;
 }
 
 /* ─── Timeline tab ─── */
@@ -325,25 +325,25 @@ function TimelineSection({ userId, teamId }: { userId: Id<"users">; teamId: Id<"
 /* ─── Work Tab Components ─── */
 
 const TASK_STATUS_ICON: Record<string, { icon: typeof Circle; color: string }> = {
-  backlog: { icon: CircleDotDashed, color: "text-sol-base01/40" },
+  backlog: { icon: CircleDotDashed, color: "text-sol-text-muted" },
   open: { icon: Circle, color: "text-sol-blue" },
   in_progress: { icon: CircleDot, color: "text-sol-yellow" },
   in_review: { icon: CircleDot, color: "text-sol-violet" },
   done: { icon: CheckCircle2, color: "text-sol-green" },
-  dropped: { icon: XCircle, color: "text-sol-base01/30" },
+  dropped: { icon: XCircle, color: "text-sol-text-dim" },
 };
 
 function WorkSection({ title, items, renderItem, emptyText }: { title: string; items: any[] | undefined; renderItem: (item: any) => React.ReactNode; emptyText: string }) {
-  if (!items) return <div className="text-[11px] text-sol-base01/20 text-center py-6 animate-pulse">Loading {title.toLowerCase()}...</div>;
+  if (!items) return <div className="text-meta text-sol-text-dim text-center py-6 animate-pulse">Loading {title.toLowerCase()}...</div>;
   return (
     <div>
       <div className="flex items-center gap-2 mb-2">
-        <span className="text-[9px] font-bold text-sol-base01/30 uppercase tracking-widest">{title}</span>
+        <span className="text-mark font-bold text-sol-text-dim uppercase tracking-widest">{title}</span>
         <div className="flex-1 h-px bg-sol-border/10" />
-        <span className="text-[9px] tabular-nums text-sol-base01/22">{items.length}</span>
+        <span className="text-meta tabular-nums text-sol-text-dim">{items.length}</span>
       </div>
       {items.length === 0 ? (
-        <div className="text-[11px] text-sol-base01/30 text-center py-8">{emptyText}</div>
+        <div className="text-meta text-sol-text-dim text-center py-8">{emptyText}</div>
       ) : (
         <div className="space-y-px">{items.map(renderItem)}</div>
       )}
@@ -358,13 +358,13 @@ function TaskWorkRow({ task }: { task: any }) {
   return (
     <Link href={`/tasks/${task.short_id || task._id}`} className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-sol-bg-alt/50 transition-colors group">
       <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${cfg.color}`} />
-      <ShortId id={task.short_id} className="text-[10px] text-sol-base01/35 w-14" />
-      <span className="flex-1 text-[12px] text-sol-text/80 truncate group-hover:text-sol-text transition-colors">{task.title}</span>
+      <ShortId id={task.short_id} className="text-meta text-sol-text-muted w-[68px]" />
+      <span className="flex-1 text-[12px] text-sol-text-secondary truncate group-hover:text-sol-text transition-colors">{task.title}</span>
       {task.labels?.slice(0, 2).map((l: string) => {
         const lc = getLabelColor(l);
         return <span key={l} className={`w-2 h-2 rounded-full flex-shrink-0 ${lc.dot}`} title={l} />;
       })}
-      <span className="text-[10px] text-sol-base01/25 tabular-nums flex-shrink-0">{age}</span>
+      <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0">{age}</span>
     </Link>
   );
 }
@@ -373,15 +373,15 @@ function DocWorkRow({ doc }: { doc: any }) {
   return (
     <Link href={`/docs/${doc._id}`} className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-sol-bg-alt/50 transition-colors group">
       <FileText className="w-3.5 h-3.5 flex-shrink-0 text-sol-cyan/50" />
-      <span className="flex-1 text-[12px] text-sol-text/80 truncate group-hover:text-sol-text transition-colors">{doc.title || "Untitled"}</span>
+      <span className="flex-1 text-[12px] text-sol-text-secondary truncate group-hover:text-sol-text transition-colors">{doc.title || "Untitled"}</span>
       {doc.doc_type && doc.doc_type !== "note" && (
-        <span className="text-[8.5px] font-semibold uppercase tracking-wider text-sol-cyan/40 bg-sol-cyan/8 px-1 py-px rounded">{doc.doc_type}</span>
+        <span className="text-mark font-semibold uppercase tracking-wider text-sol-cyan/40 bg-sol-cyan/8 px-1 py-px rounded">{doc.doc_type}</span>
       )}
       {doc.labels?.slice(0, 2).map((l: string) => {
         const lc = getLabelColor(l);
         return <span key={l} className={`w-2 h-2 rounded-full flex-shrink-0 ${lc.dot}`} title={l} />;
       })}
-      <DocDates doc={doc} className="text-[10px] text-sol-base01/25 flex-shrink-0" />
+      <DocDates doc={doc} className="text-meta text-sol-text-dim flex-shrink-0" />
     </Link>
   );
 }
@@ -399,7 +399,7 @@ function fmtAge(ts: number): string {
 
 const TASK_STATUS_DOTS: Record<string, string> = {
   done: "bg-sol-green", in_progress: "bg-sol-yellow", open: "bg-sol-blue",
-  in_review: "bg-sol-violet", blocked: "bg-sol-red", backlog: "bg-sol-base01/30",
+  in_review: "bg-sol-violet", blocked: "bg-sol-red", backlog: "bg-sol-text-dim/50",
 };
 
 const VERB_ICONS: Record<string, string> = {
@@ -459,7 +459,7 @@ function groupItemsBySessions(items: any[]): (SessionGroupData | EventItem)[] {
 
 function TimeGutter({ ts, top }: { ts?: number; top?: boolean }) {
   return (
-    <span className={`text-[9px] text-sol-base01/20 tabular-nums w-10 text-right flex-shrink-0 select-none pr-2 ${top ? "self-start mt-[3px]" : "self-center"}`}>
+    <span className={`text-meta text-sol-text-dim tabular-nums w-[54px] text-right flex-shrink-0 select-none pr-2 ${top ? "self-start mt-[3px]" : "self-center"}`}>
       {ts ? fmtTime(ts) : ""}
     </span>
   );
@@ -478,7 +478,7 @@ function FeedAvatar({ url, name }: { url?: string; name?: string }) {
   return url ? (
     <img src={url} alt="" className="w-[18px] h-[18px] rounded-full flex-shrink-0 mt-px ring-1 ring-sol-border/25 object-cover" />
   ) : (
-    <div className="w-[18px] h-[18px] rounded-full flex-shrink-0 mt-px bg-sol-base02 ring-1 ring-sol-border/25 flex items-center justify-center text-[9px] font-semibold text-sol-text/80">
+    <div className="w-[18px] h-[18px] rounded-full flex-shrink-0 mt-px bg-sol-base02 ring-1 ring-sol-border/25 flex items-center justify-center text-meta font-semibold text-sol-text-secondary">
       {(name || "?")[0]?.toUpperCase()}
     </div>
   );
@@ -501,13 +501,13 @@ function SessionGroup({ group, router, avatarUrl, displayName }: { group: Sessio
       <div className="min-w-0 flex-1">
         {/* destination header: "↱ to <session>" */}
         <div className="flex items-center gap-1.5 pr-2 cursor-pointer group/h" onClick={() => router.push(href)}>
-          <CornerUpRight className="w-3 h-3 flex-shrink-0 text-sol-base01/35" />
-          <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-base01/35 flex-shrink-0">to</span>
-          <span className={`text-[11px] font-semibold truncate ${accent.text} opacity-90 group-hover/h:opacity-100 transition-opacity`}>{displayTitle}</span>
-          {isLive && <span className="text-[8px] font-bold text-sol-green uppercase tracking-widest flex-shrink-0">live</span>}
+          <CornerUpRight className="w-3 h-3 flex-shrink-0 text-sol-text-muted" />
+          <span className="text-mark font-semibold uppercase tracking-wider text-sol-text-muted flex-shrink-0">to</span>
+          <span className={`text-meta font-semibold truncate ${accent.text} opacity-90 group-hover/h:opacity-100 transition-opacity`}>{displayTitle}</span>
+          {isLive && <span className="text-mark font-bold text-sol-green uppercase tracking-widest flex-shrink-0">live</span>}
           <span className="flex-1" />
-          {project && project !== displayTitle && <span className="text-[9px] font-mono text-sol-base01/30 flex-shrink-0">{project}</span>}
-          {lastTs && <span className="text-[9px] text-sol-base01/30 tabular-nums flex-shrink-0">{fmtTime(lastTs)}</span>}
+          {project && project !== displayTitle && <span className="text-meta font-mono text-sol-text-dim flex-shrink-0">{project}</span>}
+          {lastTs && <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0">{fmtTime(lastTs)}</span>}
         </div>
         {/* the message(s) you sent — accent spine ties them to the conversation */}
         <div className={`mt-1 space-y-1.5 border-l-2 pl-3 ${accent.border}`}>
@@ -527,7 +527,7 @@ function MessageRow({ item, router }: { item: any; router: ReturnType<typeof use
 
   return (
     <div className="rounded hover:bg-sol-blue/[0.05] -mx-1.5 px-1.5 py-[2px] cursor-pointer transition-colors" onClick={() => router.push(`/conversation/${item.entity_id}`)}>
-      <span className="text-[13px] text-sol-text/95 whitespace-normal break-words leading-relaxed">{oneLine}</span>
+      <span className="text-[13px] text-sol-text-secondary whitespace-normal break-words leading-relaxed">{oneLine}</span>
     </div>
   );
 }
@@ -536,7 +536,7 @@ function EventRow({ item, router }: { item: any; router: ReturnType<typeof useRo
   const href = item.entity_type === "task" ? `/tasks/${item.entity_id}`
     : item.entity_type === "doc" ? `/docs/${item.entity_id}` : null;
 
-  const verbColor = VERB_ICONS[item.verb] || "text-sol-base01/25";
+  const verbColor = VERB_ICONS[item.verb] || "text-sol-text-dim";
   const isTask = item.entity_type === "task";
   const isDoc = item.entity_type === "doc";
 
@@ -548,12 +548,12 @@ function EventRow({ item, router }: { item: any; router: ReturnType<typeof useRo
       <TimeGutter ts={item.timestamp} />
       <div className="flex items-baseline gap-1.5 min-w-0 flex-1">
         {isTask && (
-          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 self-center ${TASK_STATUS_DOTS[item.meta?.status] || "bg-sol-base01/20"}`} />
+          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 self-center ${TASK_STATUS_DOTS[item.meta?.status] || "bg-sol-text-dim/50"}`} />
         )}
         {isDoc && <FileText className="w-3 h-3 flex-shrink-0 self-center text-sol-cyan/30" />}
-        <span className={`text-[9.5px] font-medium flex-shrink-0 ${verbColor}`}>{item.verb}</span>
-        <span className="text-[11.5px] text-sol-text/65 truncate flex-1 group-hover:text-sol-text/90 transition-colors leading-tight">
-          {isTask && item.entity_short_id && <ShortId id={item.entity_short_id} className="text-[9px] text-sol-base01/25 mr-1" />}
+        <span className={`text-meta font-medium flex-shrink-0 ${verbColor}`}>{item.verb}</span>
+        <span className="text-meta text-sol-text-secondary truncate flex-1 group-hover:text-sol-text transition-colors leading-tight">
+          {isTask && item.entity_short_id && <ShortId id={item.entity_short_id} className="text-meta text-sol-text-dim mr-1" />}
           {item.entity_title || item.verb}
         </span>
         {item.meta?.priority === "high" && item.meta?.status !== "done" && <span className="w-1.5 h-1.5 rounded-full bg-sol-red/40 flex-shrink-0 self-center" />}
@@ -578,9 +578,9 @@ function DayHeader({ date, items }: { date: string; count?: number; items: any[]
 
   return (
     <div className="flex items-baseline gap-2 mt-5 mb-1.5 first:mt-1">
-      <span className="text-[10px] font-bold text-sol-text/50 uppercase tracking-wider select-none">{fmtDayLabel(date)}</span>
+      <span className="text-mark font-bold text-sol-text-muted uppercase tracking-wider select-none">{fmtDayLabel(date)}</span>
       <div className="flex-1 h-px bg-sol-border/10 translate-y-[-1px]" />
-      <div className="flex items-baseline gap-2 text-[9px] tabular-nums text-sol-base01/30 select-none">
+      <div className="flex items-baseline gap-2 text-meta tabular-nums text-sol-text-dim select-none">
         {sessions > 0 && <span>{sessions} session{sessions !== 1 ? "s" : ""}</span>}
         {messages > 0 && <span>{messages} msg{messages !== 1 ? "s" : ""}</span>}
         {totalHours > 0 && <span className="text-sol-green/35">{totalHours.toFixed(1)}h</span>}

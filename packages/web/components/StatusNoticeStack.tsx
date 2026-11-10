@@ -11,8 +11,8 @@ const TONE: Record<StatusNotice["tone"], { stripe: string; icon: string }> = {
  * Bottom-left home for transient status notices (see useStatusNotice):
  * offline, storage degraded, CLI offline, tmux missing. Fixed to the viewport
  * corner opposite the sonner toasts, so a status that comes and goes never
- * shifts the layout and never sits over the header, the transcript or the
- * composer. Its own look — a tone stripe down the left edge on a flat card —
+ * shifts the layout. On a phone the composer and its send button span the
+ * bottom of the screen, so there the stack hangs under the top bar instead. Its own look — a tone stripe down the left edge on a flat card —
  * keeps it from reading as one more toast. The container ignores the pointer;
  * each card takes it back so its controls work.
  */
@@ -23,7 +23,7 @@ export function StatusNoticeStack() {
     <div
       // Above the shell's columns (the sidebar paints its own layer), so a
       // notice is never cut by the rail it sits over.
-      className="pointer-events-none fixed bottom-4 left-4 z-[60] flex w-[340px] max-w-[calc(100vw-2rem)] flex-col gap-2"
+      className="pointer-events-none fixed bottom-4 left-4 z-[60] flex w-[340px] max-w-[calc(100vw-2rem)] flex-col gap-2 max-md:top-[calc(env(safe-area-inset-top)+48px)] max-md:bottom-auto"
       aria-live="polite"
     >
       {[...notices].map(([id, n]) => (

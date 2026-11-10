@@ -45,6 +45,8 @@ function ResetPasswordForm() {
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
                 className="sol-input w-full py-3 font-mono tracking-widest text-center text-lg"
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? "auth-error" : undefined}
                 placeholder="XXXXXX"
                 maxLength={6}
               />
@@ -66,6 +68,8 @@ function ResetPasswordForm() {
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 className="sol-input w-full py-3"
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? "auth-error" : undefined}
                 placeholder="At least 8 characters"
               />
             </div>
@@ -86,13 +90,15 @@ function ResetPasswordForm() {
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 className="sol-input w-full py-3"
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? "auth-error" : undefined}
                 placeholder="Confirm your password"
               />
             </div>
           </div>
 
           {error && (
-            <p className="mt-4 text-sm text-red-400 text-center">{error}</p>
+            <p id="auth-error" role="alert" className="mt-4 rounded-md border border-sol-red/40 bg-sol-red/10 px-3 py-2 text-sm text-sol-text text-center">{error}</p>
           )}
 
           <Button
@@ -109,7 +115,7 @@ function ResetPasswordForm() {
             Need a new code?{" "}
             <Link
               href="/forgot-password"
-              className="text-amber-400 hover:text-amber-300 font-medium transition-colors"
+              className="font-medium text-sol-text-secondary underline decoration-sol-orange/70 underline-offset-2 hover:text-sol-text hover:decoration-sol-orange transition-colors"
             >
               Request again
             </Link>

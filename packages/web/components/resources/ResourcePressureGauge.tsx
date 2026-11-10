@@ -127,11 +127,11 @@ function GaugeCard({ watched: { machine, incident, level }, now }: { watched: Wa
     <div className="p-3 text-sol-text">
       <div className="flex items-baseline gap-2">
         <span className="truncate text-[13px] font-semibold">{machine.name}</span>
-        <span className="ml-auto shrink-0 text-[10.5px] text-sol-text-dim">
+        <span className="ml-auto shrink-0 text-meta text-sol-text-dim">
           {sample.logicalCpus} cores · {fmtBytes(sample.memoryTotal)}
         </span>
       </div>
-      <div className={cn("mt-0.5 text-[11.5px]", level === "calm" ? "text-sol-text-muted" : TONE[level])}>{status}</div>
+      <div className={cn("mt-0.5 text-meta", level === "calm" ? "text-sol-text-muted" : TONE[level])}>{status}</div>
 
       <div className="mt-2.5 grid grid-cols-3 gap-1.5">
         <Vital label="CPU" value={sample.cpuPercent === undefined ? "n/a" : `${sample.cpuPercent.toFixed(0)}%`} hot={(sample.cpuPercent ?? 0) >= 90}
@@ -152,7 +152,7 @@ function GaugeCard({ watched: { machine, incident, level }, now }: { watched: Wa
 function Vital({ label, value, hot, trace }: { label: string; value: string; hot: boolean; trace: React.ReactNode }) {
   return (
     <div className="min-w-0 rounded-md bg-sol-bg-alt px-2 pb-1 pt-1.5">
-      <div className="text-[10px] text-sol-text-dim">{label}</div>
+      <div className="text-meta text-sol-text-dim">{label}</div>
       <div className={cn("text-[13px] font-semibold tabular-nums", hot && "text-sol-red")}>{value}</div>
       <div className="mt-0.5">{trace}</div>
     </div>
@@ -185,18 +185,18 @@ function TopUsers({ machine, level }: { machine: ResourceMachine; level: Level }
   const bar = level === "critical" ? "bg-sol-red" : level === "elevated" ? "bg-sol-yellow" : "bg-sol-blue";
   return (
     <div className="mt-3">
-      <div className="mb-1 text-[10px] text-sol-text-dim">Using it most</div>
+      <div className="mb-1 text-meta text-sol-text-dim">Using it most</div>
       {rows.map((r) => {
         const body = (
           <>
             <div className="min-w-0">
-              <div className="truncate text-[11.5px]">{r.title}</div>
+              <div className="truncate text-meta">{r.title}</div>
               <div className="mt-1 h-[3px] rounded-full bg-sol-bg-highlight">
                 <div className={cn("h-full rounded-full", bar)} style={{ width: `${(r.usage.cpu / max) * 100}%` }} />
               </div>
             </div>
-            <span className="text-right text-[11px] tabular-nums text-sol-text-muted">{fmtCpu(r.usage.cpu)}</span>
-            <span className="text-right text-[11px] tabular-nums text-sol-text-muted">{fmtBytes(r.usage.rss)}</span>
+            <span className="text-right text-meta tabular-nums text-sol-text-muted">{fmtCpu(r.usage.cpu)}</span>
+            <span className="text-right text-meta tabular-nums text-sol-text-muted">{fmtBytes(r.usage.rss)}</span>
           </>
         );
         const grid = "grid w-full grid-cols-[1fr_64px_56px] items-center gap-2 rounded px-1.5 py-1 text-left";

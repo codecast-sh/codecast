@@ -60,7 +60,7 @@ export function CallGroupDetail({ group }: { group: CallGroup }) {
           ))}
         </tbody>
       </table>
-      {more > 0 && <div className="ops-dim text-[11px] ops-num">+{more} earlier, back to {day(group.oldest)}</div>}
+      {more > 0 && <div className="ops-dim text-meta ops-num">+{more} earlier, back to {day(group.oldest)}</div>}
     </>
   );
 }

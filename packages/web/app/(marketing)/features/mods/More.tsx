@@ -16,7 +16,7 @@ import { Spark, Stat } from "./blocks";
 /* ── 9. Surfaces ─────────────────────────────────────────────────────────── */
 
 function Num({ n, className = "" }: { n: number; className?: string }) {
-  return <span className={`inline-grid place-items-center w-5 h-5 rounded-full font-mono text-[11px] font-bold shrink-0 ${className}`} style={{ backgroundColor: V, color: SOL.base3 }}>{n}</span>;
+  return <span className={`inline-grid place-items-center w-5 h-5 rounded-full font-mono text-meta font-bold shrink-0 ${className}`} style={{ backgroundColor: V, color: SOL.base3 }}>{n}</span>;
 }
 
 const INC9 = incident(9, "Login emails delayed", "triage", [["severity", "sev-3"]]);
@@ -40,9 +40,9 @@ function SurfacesMock() {
             return <div key={l as string} className="flex items-center gap-2 px-2 py-1 rounded" style={{ color: MUTED }}><Icon className="w-3.5 h-3.5" />{l as string}</div>;
           })}
           <div className="pt-3 relative">
-            <div className="flex items-center gap-1.5 px-2 mb-1 text-[10.5px] font-medium" style={{ color: DIM }}>Open incidents <Num n={1} className="ml-auto scale-90" /></div>
+            <div className="flex items-center gap-1.5 px-2 mb-1 text-meta font-medium" style={{ color: DIM }}>Open incidents <Num n={1} className="ml-auto scale-90" /></div>
             {sidebar.map((o) => (
-              <div key={o.id} className="flex items-center gap-1.5 px-2 py-1 rounded text-[11.5px]" style={{ color: TEXT }}>
+              <div key={o.id} className="flex items-center gap-1.5 px-2 py-1 rounded text-meta" style={{ color: TEXT }}>
                 <Flame className="w-3 h-3 shrink-0" style={{ color: o.iconTone }} />
                 <span className="truncate">{o.title}</span>
               </div>
@@ -53,7 +53,7 @@ function SurfacesMock() {
           <div className="flex items-center gap-2 mb-3">
             <Puzzle className="w-3.5 h-3.5" style={{ color: V }} />
             <span className="text-[13px] font-semibold" style={{ color: TEXT }}>Incident desk</span>
-            <span className="text-[10.5px] font-mono" style={{ color: DIM }}>v3 · r12</span>
+            <span className="text-meta font-mono" style={{ color: DIM }}>v3 · r12</span>
             <Num n={2} className="ml-auto" />
           </div>
           <div className="grid grid-cols-3 gap-1.5">
@@ -63,7 +63,7 @@ function SurfacesMock() {
           </div>
           <div className="mt-3 rounded-md border" style={{ borderColor: LINE }}>
             {[INC7, INC5, INC9, INC6].map((o) => (
-              <div key={o.id} className="grid grid-cols-[52px_minmax(0,1fr)_auto] items-center gap-2 px-2.5 py-1.5 border-b last:border-b-0 text-[11.5px]" style={{ borderColor: LINE }}>
+              <div key={o.id} className="grid grid-cols-[52px_minmax(0,1fr)_auto] items-center gap-2 px-2.5 py-1.5 border-b last:border-b-0 text-meta" style={{ borderColor: LINE }}>
                 <span className="font-mono" style={{ color: DIM }}>{o.id}</span>
                 <span className={`truncate ${o.done ? "line-through opacity-60" : ""}`} style={{ color: TEXT }}>{o.title}</span>
                 <StatusBadge label={o.state!.label} color={o.state!.color} />
@@ -76,7 +76,7 @@ function SurfacesMock() {
               <Search className="w-3.5 h-3.5" style={{ color: DIM }} />incident<span className="w-[1.5px] h-4 animate-pulse" style={{ backgroundColor: V }} />
               <Num n={3} className="ml-auto" />
             </div>
-            <div className="px-3 pt-2 pb-1 text-[10px] font-medium" style={{ color: DIM }}>Mods</div>
+            <div className="px-3 pt-2 pb-1 text-meta font-medium" style={{ color: DIM }}>Mods</div>
             {[["Incident desk", "Open board", true], ["Incident desk", "Declare an incident", false], ["Releases", "Promote canary on payments-api", false]].map(([m, c, on]) => (
               <div key={c as string} className="flex items-center gap-2 px-3 py-1.5 text-[12px]" style={{ backgroundColor: on ? tint(V, 10) : undefined, color: TEXT }}>
                 <Command className="w-3 h-3" style={{ color: V }} /><span style={{ color: DIM }}>{m as string}</span><span>{c as string}</span>
@@ -143,12 +143,12 @@ function PaneEmbed() {
       <div className="h-9 px-3 flex items-center gap-2 border-b text-[12px]" style={{ borderColor: tint(V, 20) }}>
         <Puzzle className="w-3.5 h-3.5" style={{ color: V }} />
         <span className="font-semibold" style={{ color: TEXT }}>Incident desk</span>
-        <span className="font-mono text-[10.5px] inline-grid" style={{ color: DIM }}>
+        <span className="font-mono text-meta inline-grid" style={{ color: DIM }}>
           {REVS.map((r, i) => (
             <span key={r.r} className={`[grid-area:1/1] ${i < REVS.length - 1 ? "md-gone" : "md-tick"}`} style={at(i < REVS.length - 1 ? REVS[i + 1].t + 0.4 : r.t + 0.4)}>r{r.r}</span>
           ))}
         </span>
-        <span className="ml-auto flex gap-3 text-[11px]" style={{ color: MUTED }}><span>Logs</span><span>Open</span></span>
+        <span className="ml-auto flex gap-3 text-meta" style={{ color: MUTED }}><span>Logs</span><span>Open</span></span>
       </div>
       <div className="p-3" style={{ backgroundColor: "#fffdf6" }}>
         <div className="md-in grid grid-cols-3 gap-1.5 mb-3" style={at(REVS[0].t + 0.4)}>
@@ -156,15 +156,15 @@ function PaneEmbed() {
           <Stat label="sev-2 or worse" value="2" tone={SOL.orange} />
           <Stat label="longest running" value="2h 10m" />
         </div>
-        <div className="hidden sm:grid grid-cols-[120px_minmax(0,1fr)_64px_60px_90px] gap-2 px-0.5 pb-1.5 mb-1 border-b text-[10px] font-mono" style={{ borderColor: LINE, color: DIM }}>
+        <div className="hidden sm:grid grid-cols-[120px_minmax(0,1fr)_64px_60px_90px] gap-2 px-0.5 pb-1.5 mb-1 border-b text-meta font-mono" style={{ borderColor: LINE, color: DIM }}>
           <span>service</span><span>incident</span><span>commander</span><span>running</span><span>errors, 1h</span>
         </div>
         <div className="space-y-2">
           {rows.map((r, i) => (
-            <div key={r.svc} className="md-in grid grid-cols-[minmax(0,1.3fr)_minmax(0,2fr)_70px] sm:grid-cols-[120px_minmax(0,1fr)_64px_60px_90px] items-center gap-2 text-[11.5px]" style={at(REVS[1].t + 0.5 + i * 0.08)}>
+            <div key={r.svc} className="md-in grid grid-cols-[minmax(0,1.3fr)_minmax(0,2fr)_70px] sm:grid-cols-[120px_minmax(0,1fr)_64px_60px_90px] items-center gap-2 text-meta" style={at(REVS[1].t + 0.5 + i * 0.08)}>
               <span className="flex items-center gap-1.5 min-w-0">
                 <span className="font-mono truncate" style={{ color: MUTED }}>{r.svc}</span>
-                <span className="md-in shrink-0 rounded-full px-1.5 text-[9.5px] font-medium" style={at(REVS[1].t + 0.6, { color: r.sev === "sev-2" ? SOL.orange : SOL.yellow, backgroundColor: tint(r.sev === "sev-2" ? SOL.orange : SOL.yellow, 12) })}>{r.sev}</span>
+                <span className="md-in shrink-0 rounded-full px-1.5 text-meta font-medium" style={at(REVS[1].t + 0.6, { color: r.sev === "sev-2" ? SOL.orange : SOL.yellow, backgroundColor: tint(r.sev === "sev-2" ? SOL.orange : SOL.yellow, 12) })}>{r.sev}</span>
               </span>
               <span className="truncate"><Pill o={r.o} /></span>
               <span className="hidden sm:block" style={{ color: TEXT }}>{r.cmd}</span>
@@ -206,7 +206,7 @@ export function Thread() {
       <div className="mt-8 grid sm:grid-cols-4 gap-3">
         {[["Describe", "what you want, in the thread"], ["Push", "live in your app in seconds"], ["Steer", "each change redraws in place"], ["Publish", "a numbered version with its source"]].map(([a, b], i) => (
           <div key={a} className="rounded-lg border px-3.5 py-3" style={{ borderColor: LINE, backgroundColor: SOL.base3 }}>
-            <div className="flex items-center gap-2"><span className="font-mono text-[11px]" style={{ color: V }}>{i + 1}</span><span className="text-[14px] font-semibold" style={{ color: TEXT }}>{a}</span></div>
+            <div className="flex items-center gap-2"><span className="font-mono text-meta" style={{ color: V }}>{i + 1}</span><span className="text-[14px] font-semibold" style={{ color: TEXT }}>{a}</span></div>
             <div className="text-[12.5px] mt-1 leading-5" style={{ color: MUTED }}>{b}</div>
           </div>
         ))}
@@ -246,12 +246,12 @@ export function Local() {
               <MonitorSmartphone className="w-4 h-4 shrink-0" style={{ color: n === null ? DIM : V }} />
               <div className="min-w-0 flex-1">
                 <div className="font-mono text-[13px]" style={{ color: TEXT }}>{name as string}</div>
-                <div className="text-[11.5px]" style={{ color: MUTED }}>{sub as string}</div>
+                <div className="text-meta" style={{ color: MUTED }}>{sub as string}</div>
               </div>
               {n === null ? <Lock className="w-3.5 h-3.5" style={{ color: DIM }} /> : (
                 <div className="text-right">
                   <div className="font-mono text-[15px] font-semibold tabular-nums" style={{ color: (n as number) > 0 ? SOL.orange : SOL.green }}>{n as number}</div>
-                  <div className="text-[10.5px]" style={{ color: DIM }}>502s in 10s</div>
+                  <div className="text-meta" style={{ color: DIM }}>502s in 10s</div>
                 </div>
               )}
             </div>

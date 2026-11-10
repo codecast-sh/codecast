@@ -27,20 +27,20 @@ function SyncChip() {
     >
       <div className="px-5 pt-4 pb-3">
         <div className="font-mono text-[13px] font-semibold" style={{ color: SOL.base02 }}>Synced with {LAPTOP}</div>
-        <div className="font-mono text-[11.5px] mt-1" style={{ color: SOL.base1 }}>.codecast/worktrees/sync-{SESSION} · both ways</div>
+        <div className="font-mono text-meta mt-1" style={{ color: SOL.base1 }}>.codecast/worktrees/sync-{SESSION} · both ways</div>
       </div>
 
       <div className="px-5 py-3 border-t" style={{ borderColor: "#eee5cc" }}>
-        <div className="font-mono text-[11.5px] mb-2" style={{ color: SOL.orange }}>held: changed on both sides</div>
+        <div className="font-mono text-meta mb-2" style={{ color: SOL.orange }}>held: changed on both sides</div>
         <div className="font-mono text-[12.5px] mb-2.5" style={{ color: SOL.base02 }}>src/config/routes.ts</div>
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" className="cl-lift font-mono text-[11.5px] px-2.5 py-1 rounded-md border" style={{ borderColor: SOL.base1, color: SOL.base01, backgroundColor: SOL.base3 }}>Keep the laptop&apos;s</button>
-          <button type="button" className="cl-lift font-mono text-[11.5px] px-2.5 py-1 rounded-md" style={{ backgroundColor: SOL.base03, color: SOL.base2 }}>Keep the cloud&apos;s</button>
+          <button type="button" className="cl-lift font-mono text-meta px-2.5 py-1 rounded-md border" style={{ borderColor: SOL.base1, color: SOL.base01, backgroundColor: SOL.base3 }}>Keep the laptop&apos;s</button>
+          <button type="button" className="cl-lift font-mono text-meta px-2.5 py-1 rounded-md" style={{ backgroundColor: SOL.base03, color: SOL.base2 }}>Keep the cloud&apos;s</button>
         </div>
       </div>
 
       <div className="px-5 py-3 border-t" style={{ borderColor: "#eee5cc" }}>
-        <div className="font-mono text-[11.5px] mb-2" style={{ color: SOL.base1 }}>stayed on the host</div>
+        <div className="font-mono text-meta mb-2" style={{ color: SOL.base1 }}>stayed on the host</div>
         <ul className="space-y-1">
           {STAYED.map((s) => (
             <li key={s.path} className="flex gap-3 font-mono text-[12px]">
@@ -51,7 +51,7 @@ function SyncChip() {
         </ul>
       </div>
 
-      <div className="px-5 py-3 border-t flex items-center gap-3 font-mono text-[11.5px]" style={{ borderColor: "#eee5cc", backgroundColor: "rgba(238,232,213,.5)", color: SOL.base01 }}>
+      <div className="px-5 py-3 border-t flex items-center gap-3 font-mono text-meta" style={{ borderColor: "#eee5cc", backgroundColor: "rgba(238,232,213,.5)", color: SOL.base01 }}>
         <span className="inline-flex items-center gap-1.5"><span className="w-3 h-3 rounded-[3px] border flex items-center justify-center" style={{ borderColor: SOL.base1 }} />Cloud to laptop only</span>
         <span className="ml-auto" style={{ color: BLUE }}>Stop syncing</span>
       </div>

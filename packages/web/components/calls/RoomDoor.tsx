@@ -82,13 +82,13 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
                   alt=""
                   className="h-full w-full object-cover"
                   fallback={
-                    <span className="flex h-full w-full items-center justify-center bg-sol-base02 text-[9px]">
+                    <span className="flex h-full w-full items-center justify-center bg-sol-base02 text-meta">
                       {(k.from_name || "?").charAt(0).toUpperCase()}
                     </span>
                   }
                 />
               </span>
-              <span className="flex min-w-0 flex-1 items-center gap-1.5 text-[11px] text-sol-text-muted">
+              <span className="flex min-w-0 flex-1 items-center gap-1.5 text-meta text-sol-text-muted">
                 {/* Two lines before an ellipsis: in the stage's corner a
                     guest's row also holds Deny, and one truncated line kept
                     the name and lost what they are asking for. */}
@@ -109,7 +109,7 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
               {canAnswer && guest && (
                 <button
                   onClick={() => void denyGuest(k.guest_id!, false, toast.error)}
-                  className="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-sol-text-muted transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
+                  className="shrink-0 rounded px-1.5 py-0.5 text-meta text-sol-text-muted transition-colors hover:bg-sol-bg-highlight hover:text-sol-text"
                   aria-label={`Turn ${name} away`}
                   title="Not now. They can ask again in a minute"
                 >
@@ -123,7 +123,7 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
                     setRang((prev) => ({ ...prev, [String(k.from_user)]: k.created_at }));
                     void admitKnock(roomKey, String(k.from_user));
                   }}
-                  className={`shrink-0 rounded px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                  className={`shrink-0 rounded px-2 py-0.5 text-meta font-medium transition-colors ${
                     guest
                       ? "bg-sol-yellow/20 text-sol-yellow hover:bg-sol-yellow/30"
                       : "bg-sol-violet/20 text-sol-violet hover:bg-sol-violet/30"
@@ -137,7 +137,7 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
             {/* A link that already brought somebody the room turned away is
                 probably out in the world: offer to close it with this answer. */}
             {canAnswer && guest && (k.link_turned_away ?? 0) >= 1 && (
-              <div className="flex items-center gap-2 pl-7 text-[10.5px] text-sol-text-dim">
+              <div className="flex items-center gap-2 pl-7 text-meta text-sol-text-dim">
                 <span className="min-w-0 flex-1 truncate">
                   {k.link_turned_away} turned away from this link already
                 </span>

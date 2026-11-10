@@ -160,7 +160,7 @@ export default function FeaturesPage() {
               <div className="flex items-center justify-between mb-4">
                 <span className="w-9 h-9 rounded-lg flex items-center justify-center font-mono text-lg transition-transform group-hover:-rotate-6" style={{ backgroundColor: `color-mix(in srgb, ${color} 13%, transparent)`, color }} aria-hidden>{mark}</span>
                 {early && (
-                  <span className="font-mono text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded" style={{ color: SOL.violet, backgroundColor: "rgba(108,113,196,0.1)" }}>Early access</span>
+                  <span className="font-mono text-mark uppercase tracking-wider px-1.5 py-0.5 rounded" style={{ color: SOL.violet, backgroundColor: "rgba(108,113,196,0.1)" }}>Early access</span>
                 )}
               </div>
               <h3 className="font-mono font-semibold mb-1.5" style={{ color: SOL.base03 }}>{name}</h3>

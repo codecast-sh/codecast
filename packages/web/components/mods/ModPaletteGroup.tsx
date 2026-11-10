@@ -2,7 +2,7 @@
 // commands (run them, no page change), matched by the mod's name and keywords.
 
 import { Command as CommandPrimitive } from "cmdk";
-import { DynamicIcon } from "lucide-react/dynamic";
+import { DynamicIcon } from "./ModIcon";
 import { toast } from "sonner";
 import { modHost } from "../../lib/mods/host";
 import { useModHostVersion } from "../../lib/mods/useMods";

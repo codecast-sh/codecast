@@ -39,19 +39,19 @@ export function SessionHoverContent({ session, identity = true }: { session: any
             {session.title || session.short_id}
           </div>
           <div className="flex items-center gap-2 mt-1">
-            <span className={`text-[10px] font-medium ${isActive ? "text-sol-green" : "text-gray-400"}`}>
+            <span className={`text-meta font-medium ${isActive ? "text-sol-green" : "text-gray-400"}`}>
               {isActive ? "Active" : session.status || "Stopped"}
             </span>
             {session.agent_type && (
               <>
                 <span className="text-gray-600">·</span>
-                <span className="text-[10px] text-gray-400">{session.agent_type}</span>
+                <span className="text-meta text-gray-400">{session.agent_type}</span>
               </>
             )}
             {isForeign && session.author_name && (
               <>
                 <span className="text-gray-600">·</span>
-                <span className="text-[10px] text-sol-text-muted truncate">{session.author_name}</span>
+                <span className="text-meta text-sol-text-muted truncate">{session.author_name}</span>
               </>
             )}
           </div>
@@ -63,7 +63,7 @@ export function SessionHoverContent({ session, identity = true }: { session: any
       {session._id && <SessionLastTurns conversationId={String(session._id)} className={identity ? "pl-[22px]" : ""} />}
 
       {metaParts.length > 0 && (
-        <div className={`flex items-center gap-2 ${identity ? "pl-[22px]" : ""} text-[10px] text-gray-500 font-mono`}>
+        <div className={`flex items-center gap-2 ${identity ? "pl-[22px]" : ""} text-meta text-gray-500 font-mono`}>
           {metaParts.map((part, index) => <span key={index}>{part}</span>)}
         </div>
       )}
@@ -71,13 +71,13 @@ export function SessionHoverContent({ session, identity = true }: { session: any
       {projectName && (
         <div className={`flex items-center gap-1.5 ${identity ? "pl-[22px]" : ""}`}>
           <FolderOpen className="w-2.5 h-2.5 text-gray-500 flex-shrink-0" />
-          <span className="text-[10px] text-gray-400 font-mono truncate">{projectName}</span>
+          <span className="text-meta text-gray-400 font-mono truncate">{projectName}</span>
         </div>
       )}
 
       <div className="flex items-center justify-between pt-1 border-t border-white/5">
-        <ShortId id={session.short_id} className="text-[10px] text-gray-500" />
-        <span className="text-[10px] text-gray-500 inline-flex items-center gap-0.5">
+        <ShortId id={session.short_id} className="text-meta text-gray-500" />
+        <span className="text-meta text-gray-500 inline-flex items-center gap-0.5">
           Click to open <ArrowUpRight className="w-2.5 h-2.5" />
         </span>
       </div>

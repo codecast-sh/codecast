@@ -81,7 +81,7 @@ function FileTreeItem({
       {status && (
         <span
           className={cn(
-            "w-4 h-4 rounded text-[10px] font-bold flex items-center justify-center shrink-0",
+            "w-4 h-4 rounded text-meta font-bold flex items-center justify-center shrink-0",
             status.bgColor,
             status.color
           )}
@@ -91,7 +91,7 @@ function FileTreeItem({
       )}
       <span className={cn("truncate", marks?.viewed && "line-through decoration-sol-text-dim/60")}>{node.name}</span>
       {node.file && (
-        <span className="ml-auto flex items-center gap-1.5 text-[10px] text-sol-text-dim shrink-0">
+        <span className="ml-auto flex items-center gap-1.5 text-meta text-sol-text-dim shrink-0">
           {!!marks?.pending && (
             <span className="rounded-full border border-dashed border-sol-yellow/60 px-1 text-sol-yellow" title={`${marks.pending} in your review`}>
               {marks.pending}
@@ -276,7 +276,7 @@ export function FileSidebar({
           >
             <div className="h-full bg-sol-green transition-[width]" style={{ width: `${totalLines ? (reviewedLines / totalLines) * 100 : 0}%` }} />
           </div>
-          <div className="text-[11px] text-sol-text-dim tabular-nums">
+          <div className="text-meta text-sol-text-dim tabular-nums">
             {reviewedLines} of {totalLines} changed lines reviewed
           </div>
         </div>

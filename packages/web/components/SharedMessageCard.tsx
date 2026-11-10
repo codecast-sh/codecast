@@ -85,7 +85,7 @@ function MessageSnippet({ message, compact }: { message: any; compact: boolean }
   const tools: any[] = message?.tool_calls ?? [];
   if (tools.length === 0) return null;
   return (
-    <p className="truncate font-mono text-[11px] text-sol-text-muted">
+    <p className="truncate font-mono text-meta text-sol-text-muted">
       {tools.map((t) => formatToolName(t.name)).join(" · ")}
     </p>
   );
@@ -97,7 +97,7 @@ function MessageDetail({ data, now }: { data: SharedMessageData; now: number }) 
     <div className="space-y-2.5">
       {data.note && (
         <div className="rounded-md border border-sol-yellow/30 bg-sol-yellow/10 px-2.5 py-1.5">
-          <div className="text-[10px] font-medium text-sol-yellow">Note from sharer</div>
+          <div className="text-meta font-medium text-sol-yellow">Note from sharer</div>
           <div className="text-[12px] text-sol-text">{data.note}</div>
         </div>
       )}
@@ -116,7 +116,7 @@ export function SharedMessageCard({ refId, count }: { refId: string; count: numb
   // The share page takes `now` as a prop (it hydrates server markup); the card
   // is client-only, so one timestamp per resolution is enough.
   const now = useMemo(() => Date.now(), [data]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!ref) return <span className="font-mono text-[11px] text-sol-text-dim">{refId}</span>;
+  if (!ref) return <span className="font-mono text-meta text-sol-text-dim">{refId}</span>;
 
   const message = data?.message;
   const title = data ? cleanTitle(data.conversation.title || "Conversation") : null;
@@ -143,7 +143,7 @@ export function SharedMessageCard({ refId, count }: { refId: string; count: numb
           ),
         title: data ? title : <span className="font-mono text-sol-text-dim">{refId}</span>,
         meta: data ? (
-          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-sol-text-muted">
+          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-meta text-sol-text-muted">
             <span className={`whitespace-nowrap font-medium ${message?.role === "user" ? "text-sol-blue" : "text-sol-orange"}`}>{author}</span>
             {count_ > 1 && (
               <span className="whitespace-nowrap before:mr-1.5 before:content-['·']">{count_} messages</span>

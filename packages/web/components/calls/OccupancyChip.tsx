@@ -100,7 +100,7 @@ export function OccupancyChip({
         e.stopPropagation();
         void joinCall(roomKey, { intent: "deliberate" });
       }}
-      className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 transition-colors ${compact ? "text-[10px] font-medium" : "text-xs"} ${
+      className={`flex items-center gap-1.5 rounded-full border px-2 py-0.5 transition-colors ${compact ? "text-meta font-medium" : "text-xs"} ${
         inThisRoom
           ? "border-sol-violet/50 bg-sol-violet/20 text-sol-violet hover:bg-sol-violet/25"
           : "border-sol-violet/30 bg-sol-violet/10 text-sol-violet hover:bg-sol-violet/20"
@@ -169,7 +169,7 @@ export function HuddleButton({
         e.stopPropagation();
         requestHuddleStart({ roomKey, toUserIds: ring, anchorTitle, ringChannel: isChannel, channelMemberCount, hint });
       }}
-      className={`flex items-center gap-1 rounded-full border text-sol-text-dim transition-colors hover:border-sol-violet/40 hover:text-sol-violet disabled:opacity-50 ${compact ? "border-sol-border/40 px-1.5 py-1 text-[10px] font-medium" : "border-sol-border px-2 py-0.5 text-xs"} ${className}`}
+      className={`flex items-center gap-1 rounded-full border text-sol-text-dim transition-colors hover:border-sol-violet/40 hover:text-sol-violet disabled:opacity-50 ${compact ? "border-sol-border/40 px-1.5 py-1 text-meta font-medium" : "border-sol-border px-2 py-0.5 text-xs"} ${className}`}
       title={label}
       aria-label={label}
     >
@@ -216,7 +216,7 @@ function GuestsWaitingAtDoor({ roomKey, ring, anchorTitle, channelMemberCount, h
         e.stopPropagation();
         requestHuddleStart({ roomKey, toUserIds: ring, anchorTitle, ringChannel: parseRoomKey(roomKey)?.kind === "channel", channelMemberCount, hint });
       }}
-      className={`relative flex items-center gap-1 rounded-full border border-sol-yellow/40 text-sol-yellow transition-colors hover:bg-sol-yellow/10 ${compact ? "px-1.5 py-1 text-[10px] font-medium" : "px-2 py-0.5 text-xs"}`}
+      className={`relative flex items-center gap-1 rounded-full border border-sol-yellow/40 text-sol-yellow transition-colors hover:bg-sol-yellow/10 ${compact ? "px-1.5 py-1 text-meta font-medium" : "px-2 py-0.5 text-xs"}`}
       title={line}
       aria-label={line}
     >

@@ -124,7 +124,7 @@ export function HeroStage() {
             {/* The background Cast tab, lifted out of the strip. */}
             {castTab && (
               <div className="bx-pop absolute left-[5%] sm:left-[17%] right-3 top-4 bottom-3 flex flex-col">
-                <div className="flex items-center gap-2 pb-1.5 text-[10.5px] font-mono" style={{ color: CAST_RED }}>
+                <div className="flex items-center gap-2 pb-1.5 text-meta font-mono" style={{ color: CAST_RED }}>
                   <span className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: CAST_RED }} />
                   <span className="truncate">background tab · Cast group · staging.acme.dev/checkout</span>
                 </div>
@@ -208,7 +208,7 @@ function HumanDoc() {
         <div className="mt-3 space-y-2">
           {[92, 80, 86, 40].map((w, i) => <div key={i} className="h-[7px] rounded bg-[#e5e8ec]" style={{ width: `${w}%` }} />)}
         </div>
-        <div className="mt-4 text-[11px] text-[#3c4043]">
+        <div className="mt-4 text-meta text-[#3c4043]">
           Ship checkout v2<span className="inline-block w-[1.5px] h-3 ml-[1px] align-middle bx-blink-human" style={{ backgroundColor: HUMAN_CYAN }} />
         </div>
         <div className="mt-3 space-y-2">
@@ -227,15 +227,15 @@ function HumanDoc() {
 function ThreadCard({ live }: { live: boolean }) {
   return (
     <div className="rounded-xl overflow-hidden font-mono text-left shadow-[0_30px_60px_-28px_rgba(0,43,54,.55)]" style={{ backgroundColor: "#FBF5E2", border: "1px solid #e4ddc8" }}>
-      <div className="flex items-center gap-2 px-3 py-2 text-[11px]" style={{ borderBottom: "1px solid rgba(147,161,161,.18)" }}>
+      <div className="flex items-center gap-2 px-3 py-2 text-meta" style={{ borderBottom: "1px solid rgba(147,161,161,.18)" }}>
         <span className="font-medium truncate" style={{ color: SOL.base03 }}>Verify the order fix on staging</span>
         <span className="flex items-center gap-1 shrink-0" style={{ color: SOL.green }}>
           <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: SOL.green }} /> working
         </span>
-        <span className="ml-auto text-[11px] font-medium shrink-0" style={{ color: SOL.blue }}>claude</span>
+        <span className="ml-auto text-meta font-medium shrink-0" style={{ color: SOL.blue }}>claude</span>
       </div>
       <div className="px-3 py-2.5 space-y-2">
-        <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+        <div className="flex flex-wrap items-center gap-1.5 text-meta">
           <span className="flex items-center gap-1" style={{ color: SOL.blue }}>{GLOBE_ICON} browser do</span>
           <span className="truncate" style={{ color: SOL.base00 }}>5 steps · stopped at wait</span>
           <span className="ml-auto flex gap-1">
@@ -245,12 +245,12 @@ function ThreadCard({ live }: { live: boolean }) {
         </div>
         <div className="grid grid-cols-[minmax(0,150px)_1fr] sm:grid-cols-[180px_1fr] gap-2.5 items-start">
           <Thumb />
-          <div className="text-[9.5px] leading-[1.55] min-w-0" style={{ color: SOL.base01 }}>
+          <div className="text-meta leading-[1.55] min-w-0" style={{ color: SOL.base01 }}>
             <div><span style={{ color: CAST_RED }}>ERR</span> TypeError: Cannot read properties of undefined (reading &apos;id&apos;)</div>
             <div className="mt-1"><span style={{ color: CAST_RED }}>500</span> POST /api/orders · 812ms</div>
           </div>
         </div>
-        <p className={`text-[11.5px] leading-relaxed font-sans ${live ? "bx-fade" : ""}`} style={{ color: SOL.base02 }}>
+        <p className={`text-meta leading-relaxed font-sans ${live ? "bx-fade" : ""}`} style={{ color: SOL.base02 }}>
           The order POST returns 500 on staging and the page throws reading the empty response, so the fix never reached this build. Checking the API logs next.
         </p>
       </div>

@@ -33,6 +33,7 @@ import { WatchSeriesFeeders, useWatchSeriesMap } from "../../hooks/useSyncOpsMet
 import { hasOpenModal, isEditableTarget } from "../../shortcuts";
 import { relTimeShort } from "../../lib/utils";
 import { HealthPill, MetricChart } from "./MetricChart";
+import { SparkLine } from "../Spark";
 import {
   HEALTH_LOOK, METRIC_RANGES, WATCH_STATES, WATCH_STATE_LOOK, blindWatchIds, watchStateCounts, WATCH_GROUPS, WATCH_SORTS, durationShort, filterWatches, fitStart, formatPct, formatValue, groupWatches, inWindow, isMutedAt, metricsQueryParams,
   parseMetricsQuery, rangeWindow, sortWatches, spanLabel, spanOf, stampLabel, watchHealth, type MetricRange, type MetricsQuery, type Win,
@@ -270,10 +271,8 @@ function WatchCard({ watch: w, range, drawn, change, now, since, issue, provider
       data-health={h}
       data-cursor={cursor ? "" : undefined}
       data-watch={w.short_id}
-      role="link"
-      tabIndex={0}
-      onClick={(e) => { if (!(e.target as Element).closest("a")) open(); }}
-      onKeyDown={(e) => { if (e.key === "Enter" && e.target === e.currentTarget) open(); }}
+      // The whole card takes a click; its name is the one link a keyboard or a screen reader stops on (the card holds links and buttons).
+      onClick={(e) => { if (!(e.target as Element).closest("a, button")) open(); }}
     >
       <div className="mx-card-top">
         <Link href={href} className="mx-name" title={w.name}>{w.name}</Link>
@@ -301,7 +300,7 @@ function WatchCard({ watch: w, range, drawn, change, now, since, issue, provider
       />
       {w.last_error && w.status !== "paused" && <CardError watch={w} />}
       <div className="mx-foot">
-        <span className="mx-src"><ProviderIcon provider={provider ?? "posthog"} />{w.source_name ?? "removed source"}</span>
+        <span className="mx-src"><ProviderIcon provider={provider ?? "posthog"} /><span className="truncate min-w-0">{w.source_name ?? "removed source"}</span></span>
         <span className="ops-mono">{w.short_id}</span>
         {issue && <Link href={opsHref.issue(issue)} className="ops-mono hover:underline" onClick={(e) => e.stopPropagation()}>{issue}</Link>}
         <span className="flex-1" />
@@ -370,7 +369,8 @@ function WatchTable({ rows, range, drawn, changeOf, groupById, win, now, sinceOf
               <td data-num="">{w.last_value === null ? "–" : formatValue(w.last_value, w.unit)}</td>
               <td data-num=""><Delta watch={w} d={changeOf(w)} span={changeSpan(range)} blank /></td>
               <td data-num="" className="mx-hide-sm mx-col-3 ops-dim">{lineTag(w) ?? ""}</td>
-              <td className="mx-table-spark mx-hide-sm mx-col-1"><MetricChart points={d.points} win={d.win} interval_ms={d.step} threshold={w.threshold} direction={w.direction} unit={w.unit} height={26} paused={w.status === "paused"} /></td>
+              {/* A row's line is a plain SVG (the shared SparkLine, as the Overview's watch band draws it), never a chart instance per row. */}
+              <td className="mx-table-spark mx-hide-sm mx-col-1"><SparkLine values={d.points.map((p) => p.value)} target={w.threshold ?? null} width={120} height={22} className="max-w-full" tone={w.status === "paused" ? "var(--sol-text-dim)" : watchHealth(w) === "ok" || watchHealth(w) === "series" ? "var(--sol-text-muted)" : HEALTH_LOOK[watchHealth(w)].ink} label={w.name} /></td>
               <td data-num="" className="mx-col-0" style={since ? { color: "var(--sol-red)" } : undefined}>{since ? durationShort(now - since) : ""}</td>
               <td className="mx-hide-sm mx-col-3"><span className="inline-flex items-center gap-1 ops-dim"><ProviderIcon provider={providerOf.get(w.source_id) ?? "posthog"} />{w.source_name ?? "removed"}</span></td>
               <td data-num="" className="mx-hide-sm mx-col-4 ops-dim">{intervalLabel(w.interval_ms)}</td>
@@ -507,7 +507,7 @@ function MetricsEmpty({ feedEmpty, feedReady, failed, source, hosts, onCreate }:
         {hosts.length > 0 ? (
           <div className="mx-src-list">
             {hosts.map((s) => (
-              <Link key={s._id} href={opsHref.tab("metrics", { source: s.name })} className="ops-source-chip"><ProviderIcon provider={s.provider} />{s.name}</Link>
+              <Link key={s._id} href={opsHref.tab("metrics", { source: s.name })} className="ops-source-chip"><ProviderIcon provider={s.provider} /><span className="truncate min-w-0">{s.name}</span></Link>
             ))}
           </div>
         ) : (

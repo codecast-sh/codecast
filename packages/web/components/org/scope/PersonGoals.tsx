@@ -30,14 +30,14 @@ export function PersonGoals({ person, roleHandle, now, own }: { person: BriefPer
             <span className="min-w-0 flex-1">
               <span className="block text-[12.5px] font-medium text-sol-text">
                 {g.text}
-                {g.priority && <span className="ml-1.5 text-[10px] font-semibold uppercase tracking-[0.06em]" style={{ color: g.priority === "high" ? "var(--sol-orange)" : "var(--sol-text-dim)" }}>{g.priority}</span>}
+                {g.priority && <span className="ml-1.5 text-mark font-semibold uppercase tracking-[0.06em]" style={{ color: g.priority === "high" ? "var(--sol-orange)" : "var(--sol-text-dim)" }}>{g.priority}</span>}
               </span>
               {g.refs.length > 0 && (
-                <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11.5px] text-sol-text-muted">
+                <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-meta text-sol-text-muted">
                   {g.refs.map((r) => <EntityIdPill key={r.short_id} shortId={r.short_id} compact />)}
                 </span>
               )}
-              <span className="block mt-0.5 text-[11.5px]" style={{ color: tone }} data-goal-state>{goalStateLine(g, now)}</span>
+              <span className="block mt-0.5 text-meta" style={{ color: tone }} data-goal-state>{goalStateLine(g, now)}</span>
             </span>
           </li>
         );

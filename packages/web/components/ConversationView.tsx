@@ -20,6 +20,7 @@ import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwar
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { msUntilInputQuiet, TYPING_QUIET_MS } from "../lib/inputQuiet";
 import { useTeamRosterIdentity } from "../hooks/useTeamRoster";
 import { useShortcutContext, usePaneShortcutAction, isMac, hasOpenModal, withShortcut } from "../shortcuts";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
@@ -54,7 +55,7 @@ import { toast } from "sonner";
 import { toastWriteError } from "../lib/dispatchBinding";
 import { goalCanPause, goalCanResume, goalFrameLine, goalObjectiveProblem, goalMessageBody, parseGoalCommand, sessionGoalOf } from "@codecast/shared/contracts/sessionGoal";
 import { SessionGoalPill } from "./SessionGoalPill";
-import { SwitchReview } from "./consequential/ConsequentialSwitch";
+import { ConsequentialSwitch, SwitchReview } from "./consequential/ConsequentialSwitch";
 import { sessionGoalLedger } from "../lib/sessionGoalLedger";
 import { isJumpReadyToScroll, shouldFollowStreaming, shouldLoadOlder, shouldLoadNewer, jumpRowForMessage, initialScrollEdge, settleTimelineItemAtOffset, cancelActiveItemSettle, releaseScrollTarget, shouldResumeFollow, READER_SCROLL_WINDOW_MS } from "./conversationScroll";
 import { deriveHostedRunningPhrase, deriveRunningPhrase, shouldShowIdleGap, workingSinceForClock, isProducingAgentStatus } from "./workingStatus";
@@ -137,6 +138,7 @@ import { ForkMapBox, ForkMapFallback } from "./ForkTreePanel";
 import { setupDesktopDrag, desktopHeaderClass } from "../lib/desktop";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { MessageNavButton } from "./MessageBrowserPopover";
+import { createScrollProgressSignal } from "./conversation/scrollProgressSignal";
 import { AskSessionPanel } from "./conversation/AskSessionPanel";
 import { askSideQuestion } from "../lib/sideAnswers";
 import { openSessionAtMessage } from "../lib/openSessionAtMessage";
@@ -192,7 +194,7 @@ import { useToolResultMaps } from "../hooks/useToolResultMaps";
 import { useBrowserAndWakeRows } from "../hooks/useBrowserAndWakeRows";
 import { useSessionImages } from "../hooks/useSessionImages";
 import { useConversationTaskMaps } from "../hooks/useConversationTaskMaps";
-import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
+import { keyScopeHasFocus } from "../shortcuts/keyOwnership";
 import { FeatureUpsell } from "./agentFeatures/FeatureUpsell";
 import { useOfferedFeatures } from "./agentFeatures/useFeatureOffer";
 import { pickFeatureMoment, type MomentFeature } from "../lib/featureMoments";
@@ -209,6 +211,11 @@ const AWAITING_HUMAN = new Set(["idle", "waiting", "done"]);
 // Room under the last transcript row. Ghost drafts pull up into it so they sit
 // right under the last message, where a sent draft will land.
 const VIRTUAL_PADDING_END = 100;
+// Debug override that keeps the sticky prompt on where it is disabled. Read
+// once: the scroll check runs every frame, and blocked storage throws.
+const STICKY_FORCE = (() => {
+  try { return typeof localStorage !== "undefined" && localStorage.getItem("__STICKY_FORCE") === "1"; } catch { return false; }
+})();
 const api = _typedApi as any;
 
 const CommentDock = lazy(() => import("./comments/CommentDock").then((m) => ({ default: m.CommentDock })));
@@ -436,7 +443,8 @@ const ConversationViewInner = (
   const readerDownAtRef = useRef(0);
   const scrollbarHeldRef = useRef(false);
   const scrollProgressRef = useRef<HTMLDivElement>(null);
-  const [navScrollProgress, setNavScrollProgress] = useState(() => (guest && !targetMessageId && !propHighlightQuery ? 0 : 1));
+  // Not state: it moves on every scroll frame, and only the message rail reads it.
+  const [navScrollProgress] = useState(() => createScrollProgressSignal(guest && !targetMessageId && !propHighlightQuery ? 0 : 1));
   const hasScrolledToTarget = useRef(false);
   const [jumpPending, _setJumpPending] = useState<'start' | 'end' | null>(null);
   // Synchronous mirror of jumpPending so scroll handlers / effects can read it
@@ -561,7 +569,7 @@ const ConversationViewInner = (
     setSelectedMessageIds(new Set());
     setIsImageLightboxActive(false);
     setStickyMsgVisible(false);
-    setNavScrollProgress(1);
+    navScrollProgress.seed(1);
     setInitialScrollDone(false);
     isNearBottomRef.current = true;
     lastScrollTopRef.current = 0;
@@ -723,10 +731,16 @@ const ConversationViewInner = (
 
   useWatchEffect(() => {
     if (!conversation || !effectiveIsOwner || conversation.status !== "active") return;
+    // Shift+Tab is also how a keyboard moves focus back. From any focused
+    // field or control it does that; the composer takes the chord in its own
+    // key handler. Here it is taken only while nothing holds focus and the
+    // person's last click or key was in THIS pane, so a second mounted pane
+    // never cycles too.
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== "Tab" || !e.shiftKey) return;
-      if (keyBelongsElsewhere(e.target)) return;
+      if (e.key !== "Tab" || !e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.target !== document.body) return;
       if (hasOpenModal()) return;
+      if (!keyScopeHasFocus(containerRef.current?.closest<HTMLElement>("[data-cc-conversation]"))) return;
       e.preventDefault();
       handleCycleMode();
     };
@@ -1301,6 +1315,8 @@ const ConversationViewInner = (
     const currentIds = new Set(timeline.map(item => {
       if (item.type === 'message') return (item.data as Message)._id;
       if (item.type === 'commit') return `commit-${(item.data as any).sha || (item.data as any)._id}`;
+      // The same ids the row renderer checks against (itemId in the feed below).
+      if (item.type === 'external_event') return `event-${(item.data as any)._id}`;
       return `pr-${(item.data as any)._id}`;
     }));
 
@@ -1670,7 +1686,6 @@ const ConversationViewInner = (
     const key = instance.options.getItemKey(index);
     const stampedKey = (element as HTMLElement).dataset?.vkey;
     if (VLIST_LEGACY && stampedKey !== undefined && stampedKey !== String(key)) {
-      ((window as any).__VSTAT ??= {}).guard = ((window as any).__VSTAT.guard ?? 0) + 1; // TEMP-VSTAT
       return instance.itemSizeCache.get(key) ?? instance.options.estimateSize(index);
     }
     const box = entry?.borderBoxSize?.[0];
@@ -1701,8 +1716,8 @@ const ConversationViewInner = (
       progress = maxScroll > 0 ? Math.max(0, Math.min(1, (instance.scrollOffset ?? 0) / maxScroll)) : 1;
     }
     scrollProgressRef.current.style.height = `${progress * 100}%`;
-    setNavScrollProgress(progress);
-  }, []);
+    navScrollProgress.set(progress);
+  }, [navScrollProgress]);
 
   // The one pending programmatic scroll target (lib/virtualList/scrollHold).
   const holdRef = useRef<ScrollHold | null>(null);
@@ -1868,12 +1883,19 @@ const ConversationViewInner = (
       // an early return here would disable the reconciler for good. Skip while
       // this pane is hidden (keepalive tab under display:none): every rect
       // reads 0 there, and feeding those through resizeItem would zero out the
-      // hidden pane's whole layout. Plain setInterval, not rAF: rAF never fires
-      // in a backgrounded tab, and drift must heal there too so the layout is
-      // right the moment the user comes back.
+      // hidden pane's whole layout. A hidden tab (backgrounded, or occluded)
+      // skips too, and the pass runs on visibilitychange instead, so the
+      // layout is right the moment the user comes back.
+      //
+      // The cheap gates come first, ahead of any layout read: a key press
+      // leaves layout dirty, so a read here would force a full synchronous
+      // layout between two keystrokes. While the person types the pass waits
+      // for a pause (typing budget, lib/inputQuiet).
+      if (msUntilInputQuiet(TYPING_QUIET_MS) > 0) return;
+      if (document.visibilityState === "hidden") return;
+      if (virtualizer.isScrolling) return;
       const container = containerRef.current;
       if (!container || container.offsetParent === null) return;
-      if (virtualizer.isScrolling) return;
       const byIndex = new Map(virtualizer.getVirtualItems().map((v) => [v.index, v]));
       if (byIndex.size === 0) return;
       const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 100;
@@ -1888,7 +1910,6 @@ const ConversationViewInner = (
         // the same layout-px border box the virtualizer's own measurements use.
         const real = el.offsetHeight;
         if (Math.abs(real - v.size) > 1) {
-          (((window as any).__VSTAT ??= {}).heal ??= []).push({ k: String(v.key), from: v.size, to: real, t: Date.now() }); // TEMP-VSTAT
           if ((window as any).__RECON_DEBUG) (((window as any).__RECON_LOG) ??= []).push({ i: v.index, from: v.size, to: real });
           corrections.push({ index: v.index, size: real });
         }
@@ -1900,7 +1921,12 @@ const ConversationViewInner = (
       if (corrections.length > 0 && nearBottom && !userScrolledRef.current && !guestStayAtTopRef.current) virtualizer.scrollToEnd({ behavior: "auto" });
     };
     const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
+    const onVisible = () => { if (document.visibilityState === "visible") tick(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [virtualizer]);
 
   // Scroll to absolute top or bottom of the loaded list with retries to handle
@@ -2240,7 +2266,7 @@ const ConversationViewInner = (
       );
       setNavigatorCurrentId(navId);
 
-      const bannerOff = stickyDisabled && localStorage.getItem('__STICKY_FORCE') !== '1';
+      const bannerOff = stickyDisabled && !STICKY_FORCE;
       const stickyInWindow = resolveStickyPrompt(stickyUserMsgIndices, topVisibleIndex, visible);
       const stickyAbove = laterUnloaded(stickyInWindow?.index);
       const stickyResolved = stickyAbove ? null : stickyInWindow;
@@ -2688,7 +2714,7 @@ const ConversationViewInner = (
       if (timeline.length > 0) virtualizer.scrollToIndex(0, { align: "start" });
       sc.scrollTop = 0;
       lastScrollTopRef.current = 0;
-      setNavScrollProgress(0);
+      navScrollProgress.set(0);
       setTimeout(() => {
         paginationCooldownRef.current = 0;
         sc.dispatchEvent(new Event("scroll"));
@@ -2845,7 +2871,7 @@ const ConversationViewInner = (
     // than lying ("at the top") while the content was still elsewhere.
     const edgeProgress = dir === 'start' ? 0 : 1;
     if (scrollProgressRef.current) scrollProgressRef.current.style.height = `${edgeProgress * 100}%`;
-    setNavScrollProgress(edgeProgress);
+    navScrollProgress.set(edgeProgress);
 
     // Release the freeze NOW, in this same commit. The scroll above is
     // synchronous, so the paint that shows the edge also shows the spinner
@@ -3194,10 +3220,19 @@ const ConversationViewInner = (
   // the lagging permission_blocked status alone: once the store holds an
   // answer the step reads in progress, not "Waiting for your go-ahead".
   const isHostedConv = isHostedAgentType(conversation?.agent_type);
+  // The selector runs on every store write: derive only when one of its two
+  // inputs changed identity, never on a heartbeat.
+  const hostedApprovalMemoRef = useRef<{ msgs: unknown; decisions: unknown; id: string; out: HostedApprovalState } | null>(null);
   const hostedApproval = useInboxStore((st): HostedApprovalState => {
     if (!isHostedConv || !conversation?._id) return "none";
     const id = String(conversation._id);
-    return hostedApprovalState(st.messages[id] as Message[] | undefined, Object.values(st.sessionDecisions) as any[], id);
+    const msgs = st.messages[id];
+    const decisions = st.sessionDecisions;
+    const memo = hostedApprovalMemoRef.current;
+    if (memo && memo.msgs === msgs && memo.decisions === decisions && memo.id === id) return memo.out;
+    const out = hostedApprovalState(msgs as Message[] | undefined, Object.values(decisions) as any[], id);
+    hostedApprovalMemoRef.current = { msgs, decisions, id, out };
+    return out;
   });
   const hostedStatusParked = managedSession?.agent_status === "permission_blocked";
   const hostedAsking = isHostedConv ? hostedAsks(hostedApproval, hostedStatusParked) : null;
@@ -3950,7 +3985,7 @@ const ConversationViewInner = (
     const subagents = subagentChildren!.filter((c) => c.is_subagent);
     return (
       <>
-        <DropdownMenuItem disabled className="text-[10px] uppercase tracking-wider text-sol-text-dim">
+        <DropdownMenuItem disabled className="text-mark uppercase tracking-wider text-sol-text-dim">
           Subagents ({subagents.length})
         </DropdownMenuItem>
         {subagents.map((child) => (
@@ -4033,7 +4068,7 @@ const ConversationViewInner = (
     <ReviewComposerContext.Provider value={reviewComposer}>
     <main data-cc-conversation data-cc-context={showSessionContext ? "" : undefined} data-reveal-chrome={inRevealBand ? "band" : hostingReveal ? "host" : undefined} className="relative flex flex-col bg-sol-bg h-full overflow-x-clip" style={commentRailW ? { paddingRight: commentRailW } : undefined} onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && !isHostedAgentType(conversation?.agent_type) && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/95" style={{ animation: "fadeIn 150ms ease-out" }}>
           <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
             <svg className="w-10 h-10 mx-auto mb-3 text-sol-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
             <p className="text-sol-cyan text-sm font-medium">Drop images to attach</p>
@@ -4134,7 +4169,7 @@ const ConversationViewInner = (
                 {!guest && <>
                 <CloudAgentLink actions={cloudAgentActions} />
                 <BranchCodeLink session={conversation} />
-                <SessionWorktreePills session={conversation} repository={codeRepository} className="text-[10px] max-w-[180px]" />
+                <SessionWorktreePills session={conversation} repository={codeRepository} className="text-meta max-w-[180px]" />
             {(conversation as any)?.active_plan && (
               <span data-simple-hide className="contents">
                 <PlanBadge plan={(conversation as any).active_plan} />
@@ -4149,7 +4184,7 @@ const ConversationViewInner = (
               <span data-simple-hide className="contents">
                 <Link
                   href={`/workflows/runs/${(conversation as any).workflow_run_id}`}
-                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[180px]"
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-meta flex-shrink-0 bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 hover:bg-sol-cyan/20 transition-colors max-w-[180px]"
                   title={`Workflow ${(conversation as any).workflow_run_status}${(conversation as any).workflow_run_name ? `: ${(conversation as any).workflow_run_name}` : ""} — open the live run`}
                 >
                   <span className="w-1 h-1 rounded-full bg-sol-cyan animate-pulse motion-reduce:animate-none" />
@@ -4243,7 +4278,7 @@ const ConversationViewInner = (
 
                 {/* Who has this session open right now: teammates' faces off
                     the roster's viewing field. A solo session shows nothing. */}
-                {conversation?._id && !guest && <ConversationViewers conversationId={String(conversation._id)} />}
+                {conversation?._id && !guest && <ConversationViewers conversationId={String(conversation._id)} className="cq-sq4" />}
 
                 {/* A live huddle on this session. The idle start button is
                     hidden in the header (globals.css); the menu starts one. */}
@@ -4275,7 +4310,8 @@ const ConversationViewInner = (
                           if (e.key === "Enter") { e.preventDefault(); e.shiftKey ? goToPrevMatch() : goToNextMatch(); }
                         }}
                         placeholder="Search messages..."
-                        className="bg-transparent border-none outline-none text-xs w-24 sm:w-32 placeholder:text-amber-600/50 dark:placeholder:text-amber-400/50"
+                        data-cc-conv-search-input
+                        className="bg-transparent border-none outline-none text-xs placeholder:text-amber-600/50 dark:placeholder:text-amber-400/50"
                         autoFocus
                       />
                     ) : (
@@ -4284,7 +4320,7 @@ const ConversationViewInner = (
                     {searchStatus === "searching" && <Loader2 className="w-3 h-3 shrink-0 animate-spin opacity-70" />}
                     {matchInstances.length > 0 && (
                       <>
-                        <span className="text-[10px] opacity-70 ml-1 tabular-nums whitespace-nowrap">
+                        <span className="text-meta opacity-70 ml-1 tabular-nums whitespace-nowrap">
                           {currentMatchIndex + 1}/{matchInstances.length}
                         </span>
                         <button
@@ -4308,15 +4344,15 @@ const ConversationViewInner = (
                       </>
                     )}
                     {matchInstances.length === 0 && highlightQuery && searchStatus === "done" && (
-                      <span className="text-[10px] opacity-70 ml-1 whitespace-nowrap">No matches</span>
+                      <span className="text-meta opacity-70 ml-1 whitespace-nowrap">No matches</span>
                     )}
                     {searchStatus === "error" && (
-                      <span className="text-[10px] ml-1 whitespace-nowrap text-sol-red">Search failed</span>
+                      <span className="text-meta ml-1 whitespace-nowrap text-sol-red">Search failed</span>
                     )}
                     {isLocalSearchOpen && !guest && localSearchQuery.trim().length > 2 && (
                       <button
                         onClick={() => { void askSideQuestion(askConversationId, localSearchQuery); onClearHighlight(); openAskPanel(); }}
-                        className="ml-1 px-1 rounded text-[10px] font-medium whitespace-nowrap hover:bg-amber-300/50 dark:hover:bg-amber-700/40 transition-colors"
+                        className="ml-1 px-1 rounded text-meta font-medium whitespace-nowrap hover:bg-amber-300/50 dark:hover:bg-amber-700/40 transition-colors"
                         title="Ask this session instead of searching it"
                       >
                         Ask
@@ -4355,10 +4391,9 @@ const ConversationViewInner = (
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    {/* The icon actions the squeeze folded away (level 4 in
-                        globals.css) come back here as menu rows. Mounted on
-                        open, so it reads the row's current level. */}
-                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Copy</DropdownMenuLabel>
+                    {/* The full command surface: what the header squeeze sheds
+                        (globals.css, cq-sq*) stays reachable here. */}
+                    <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Copy</DropdownMenuLabel>
                     <DropdownMenuItem onSelect={copyConversationLink}>
                       <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
@@ -4421,7 +4456,7 @@ const ConversationViewInner = (
                     {/* A phone hides the header's facts strip, so the cloud agent's link and actions live here too. */}
                     {!guest && <CloudAgentMenuItems actions={cloudAgentActions} />}
                     <DropdownMenuSeparator />
-                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">View</DropdownMenuLabel>
+                    <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">View</DropdownMenuLabel>
                     <DropdownMenuItem onSelect={() => setTimeout(() => { if (propHighlightQuery) propClearHighlight?.(); setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); })}>
                       <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -4478,7 +4513,7 @@ const ConversationViewInner = (
                     {(isOwner || (effectiveIsOwner && conversation?.session_id)) && (
                       <>
                     <DropdownMenuSeparator />
-                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Session</DropdownMenuLabel>
+                    <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Session</DropdownMenuLabel>
                       </>
                     )}
                     {/* The header shows a huddle only while one is live; starting one lives here. */}
@@ -4546,7 +4581,7 @@ const ConversationViewInner = (
                     {!guest && (parentLinkId || handedOffFrom || handedOffTo || conversation.forked_from_details || (conversation.fork_children?.length ?? 0) > 0 || conversation.forked_from) && (
                       <>
                     <DropdownMenuSeparator />
-                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Lineage</DropdownMenuLabel>
+                    <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Lineage</DropdownMenuLabel>
                     {parentLinkId && (
                       <DropdownMenuItem asChild>
                         <Link href={convLink(parentLinkId)}>
@@ -4592,7 +4627,7 @@ const ConversationViewInner = (
                       </>
                     )}
                     <DropdownMenuSeparator />
-                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Stats</DropdownMenuLabel>
+                    <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Stats</DropdownMenuLabel>
                     <ConversationAgeMenuItems startedAt={conversation.started_at} endedAt={cloudAgentActions.cloud ? conversation.messages?.at(-1)?.timestamp : undefined} messageCount={conversation.message_count} />
                     {!guest && ((conversation.fork_count ?? 0) > 0 || (conversation.fork_children?.length ?? 0) > 0 || (conversation.compaction_count ?? 0) > 0 || subagentMenuItems) && (
                       <>
@@ -4709,12 +4744,13 @@ const ConversationViewInner = (
           }}
         >
           <div className="conv-col mx-auto">
-            <div data-sv-sticky className="bg-sol-blue/10 px-4 py-3 rounded-b-lg border border-sol-blue/30 backdrop-blur-md shadow-lg relative group">
+            <div data-sv-sticky className="bg-[color-mix(in_srgb,var(--sol-blue)_10%,var(--sol-bg))] px-4 py-3 rounded-b-lg border border-sol-blue/30 shadow-lg relative group">
               <div data-sv-sticky-tools className="absolute top-1.5 right-1.5 flex items-center gap-0.5">
                 {(stickyClamped || stickyExpanded) && (
                   <button
-                    className="p-0.5 rounded hover:bg-sol-blue/20 text-sol-text-dim hover:text-sol-text opacity-0 group-hover:opacity-100 transition-opacity"
+                    className="p-0.5 rounded hover:bg-sol-blue/20 text-sol-text-dim hover:text-sol-text opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
                     title={stickyExpanded ? "Collapse" : "Show full message"}
+                    aria-label={stickyExpanded ? "Collapse" : "Show full message"}
                     onClick={(e) => {
                       e.stopPropagation();
                       setStickyExpanded(v => !v);
@@ -4726,8 +4762,9 @@ const ConversationViewInner = (
                   </button>
                 )}
                 <button
-                  className="p-0.5 rounded hover:bg-sol-blue/20 text-sol-text-dim hover:text-sol-text opacity-0 group-hover:opacity-100 transition-opacity"
+                  className="p-0.5 rounded hover:bg-sol-blue/20 text-sol-text-dim hover:text-sol-text opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity"
                   title="Dismiss"
+                  aria-label="Dismiss"
                   onClick={(e) => {
                     e.stopPropagation();
                     dismissedStickyIdsRef.current.add(activeStickyMsg!.id);
@@ -4747,7 +4784,7 @@ const ConversationViewInner = (
                     // A subagent's report names an agent, not a session — a pill would
                     // resolve nothing, so it keeps the badge the card gives it.
                     if (kind.variant === "agent") {
-                      return <><Bot className="w-4 h-4 text-sol-violet" /><span className="text-sol-violet text-xs">Report from</span><span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${agentColorMap.purple}`}>{kind.from}</span></>;
+                      return <><Bot className="w-4 h-4 text-sol-violet" /><span className="text-sol-violet text-xs">Report from</span><span className={`px-1.5 py-0.5 rounded border text-meta font-mono ${agentColorMap.purple}`}>{kind.from}</span></>;
                     }
                     return <><CornerDownRight className="w-4 h-4 text-sol-cyan" /><span className="text-sol-cyan text-xs">Message from</span><EntityIdPill shortId={kind.from} /></>;
                   }
@@ -4874,7 +4911,7 @@ const ConversationViewInner = (
           )}
           {conversation?.fork_status === "copying" && (
             <div className="conv-col mx-auto px-2 sm:px-3 md:px-4 pt-2 pb-1">
-              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-sol-cyan/10 border border-sol-cyan/30 text-sol-cyan text-[11px]">
+              <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-md bg-sol-cyan/10 border border-sol-cyan/30 text-sol-cyan text-meta">
                 <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
@@ -4979,14 +5016,14 @@ const ConversationViewInner = (
                     <div className={`relative conv-col mx-auto px-4 sm:px-5 md:px-6 ${condensedFeed || isToolRow ? "py-px" : "py-0.5 sm:py-1"} ${isNew ? "animate-message-in" : ""} ${isForkSelected ? "ring-2 ring-sol-cyan/60 bg-sol-cyan/5 rounded-lg" : ""} ${isBelowForkSelection ? "opacity-30 pointer-events-none" : ""} transition-opacity`}>
                       {showNewRule && (
                         <TimelineRule color="var(--sol-orange)" label="New messages">
-                          <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-orange">New</span>
+                          <span className="text-mark font-semibold uppercase tracking-[0.15em] text-sol-orange">New</span>
                         </TimelineRule>
                       )}
                       {rulesHere}
                       {content && <GalleryMessageScope messageId={item.type === 'message' ? (item.data as Message)._id : undefined}>{content}</GalleryMessageScope>}
                       {showIdleGap && (
                         <TimelineRule color="var(--sol-border)" className="mt-5 mb-1" faint>
-                          <span className="text-[11px] text-sol-text-dim/60">{formatRelativeTime(lastActivityAt)}</span>
+                          <span className="text-meta text-sol-text-dim/60">{formatRelativeTime(lastActivityAt)}</span>
                         </TimelineRule>
                       )}
                       {tailRules}
@@ -5022,7 +5059,7 @@ const ConversationViewInner = (
             return (
               <div className="conv-col mx-auto px-2 sm:px-3 md:px-4 pt-3 pb-8">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-[11px] text-sol-text-secondary uppercase tracking-wider font-medium">Continued in</span>
+                  <span className="text-mark text-sol-text-secondary uppercase tracking-wider font-medium">Continued in</span>
                   {continuationChildren.map((child) => (
                     <Link
                       key={child._id}
@@ -5117,14 +5154,15 @@ const ConversationViewInner = (
           ) : (
             <>
               {workflowRun?.status === "paused" && workflowRun.gate_prompt ? (
-                <div className="absolute left-0 right-0 bottom-full flex items-center gap-2 px-4 py-1.5 bg-sol-bg border-t border-sol-magenta/20 text-xs">
+                <div className="absolute left-0 right-0 bottom-full flex flex-wrap items-center gap-x-2 gap-y-1 px-4 py-1.5 bg-sol-bg border-t border-sol-magenta/20 text-xs">
                   <span className="text-sol-magenta font-semibold shrink-0">Gate</span>
-                  <span className="text-sol-text-muted truncate flex-1">{workflowRun.gate_prompt}</span>
+                  {/* The floor makes the choices wrap to a second line before the prompt disappears. */}
+                  <span className="text-sol-text-muted truncate flex-1 min-w-[8rem]" title={workflowRun.gate_prompt}>{workflowRun.gate_prompt}</span>
                   {workflowRun.gate_choices?.map(choice => (
                     <button
                       key={choice.key}
                       onClick={() => handleGateRespond(choice.key)}
-                      className="shrink-0 px-1.5 py-0.5 text-[10px] font-mono font-medium text-sol-magenta border border-sol-magenta/30 rounded hover:bg-sol-magenta/10 transition-colors disabled:opacity-40"
+                      className="shrink-0 px-1.5 py-0.5 text-meta font-mono font-medium text-sol-magenta border border-sol-magenta/30 rounded hover:bg-sol-magenta/10 transition-colors disabled:opacity-40"
                     >
                       [{choice.key}] {choice.label.replace(/^\[.\]\s*/, "")}
                     </button>
@@ -5199,6 +5237,8 @@ const ConversationViewInner = (
                   }
                 }}
                 className={`group p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg hover:bg-sol-cyan hover:text-white transition-all ${((!isNearTop && isScrollable) || hasMoreAbove || jumpPending === 'start') ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                tabIndex={((!isNearTop && isScrollable) || hasMoreAbove || jumpPending === 'start') ? undefined : -1}
+                aria-hidden={((!isNearTop && isScrollable) || hasMoreAbove || jumpPending === 'start') ? undefined : true}
                 aria-label={jumpPending === 'start' ? "Cancel jump to top" : "Scroll to top"}
                 title={jumpPending === 'start' ? "Cancel" : undefined}
               >
@@ -5237,6 +5277,8 @@ const ConversationViewInner = (
                   }
                 }}
                 className={`group p-1.5 sm:p-2 rounded-full bg-sol-bg-alt border border-sol-border shadow-lg transition-all hover:bg-sol-cyan hover:text-white ${(((userScrolled || guestStayAtTop) && !isNearBottom && isScrollable) || hasMoreBelow || jumpPending === 'end') ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                tabIndex={(((userScrolled || guestStayAtTop) && !isNearBottom && isScrollable) || hasMoreBelow || jumpPending === 'end') ? undefined : -1}
+                aria-hidden={(((userScrolled || guestStayAtTop) && !isNearBottom && isScrollable) || hasMoreBelow || jumpPending === 'end') ? undefined : true}
                 aria-label={jumpPending === 'end' ? "Cancel jump to bottom" : "Scroll to bottom"}
                 title={jumpPending === 'end' ? "Cancel" : undefined}
               >
@@ -5266,7 +5308,7 @@ const ConversationViewInner = (
               </button>
           </div>
           {(isScrollable || hasMoreAbove || hasMoreBelow) && (
-            <div className="hidden sm:block w-2 self-stretch bg-sol-base02 rounded-full overflow-hidden">
+            <div className="hidden sm:block w-2 self-stretch bg-sol-bg-highlight rounded-full overflow-hidden">
               <div
                 data-cc-scroll-progress
                 ref={scrollProgressRef}
@@ -5297,23 +5339,49 @@ const ConversationViewInner = (
       )}
 
       {shareSelectionMode && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 w-max whitespace-nowrap flex items-center gap-3 bg-sol-bg-alt border border-sol-border rounded-lg shadow-xl px-4 py-3">
+        // Anchored in this pane (main is relative), not the window: a split
+        // pane keeps its own bar, and on a phone the bar wraps instead of
+        // running off both edges.
+        <div className="absolute bottom-4 inset-x-4 mx-auto w-fit z-50 flex flex-wrap items-center justify-center gap-x-3 gap-y-2 bg-sol-bg-alt border border-sol-border rounded-lg shadow-xl px-4 py-3">
           <span className="text-sm text-sol-text-secondary">
             {selectedMessageIds.size} message{selectedMessageIds.size !== 1 ? "s" : ""} selected
           </span>
-          <label
-            className="flex items-center gap-1.5 text-sm text-sol-text-secondary cursor-pointer select-none"
-            title="Add a link to the full conversation on the shared page. This makes the conversation viewable by anyone with that link."
-          >
-            <input
-              type="checkbox"
-              checked={shareIncludeConversation}
-              onChange={(e) => setShareIncludeConversation(e.target.checked)}
-              className="accent-[var(--sol-cyan)]"
-            />
-            Link full conversation
-            {shareIncludeConversation && <span className="text-xs text-sol-text-dim">(becomes public)</span>}
-          </label>
+          {/* Linking the full conversation makes it readable by anyone with
+              the link: turning it on is a reviewed press, turning it off one. */}
+          <ConsequentialSwitch
+            on={shareIncludeConversation}
+            ledger={{
+              name: "Link full conversation",
+              subject: conversation?.title || "This conversation",
+              figures: [],
+              rows: [
+                { k: "Shared page", v: "Links the whole conversation", tone: "warn" },
+                { k: "Who reads it", v: "Anyone with the link", tone: "warn" },
+                { k: "Selected", v: `${selectedMessageIds.size} message${selectedMessageIds.size !== 1 ? "s" : ""}` },
+              ],
+              confirm: "Link full conversation",
+              keep: "Not now",
+            }}
+            onTurnOn={() => setShareIncludeConversation(true)}
+            onTurnOff={() => setShareIncludeConversation(false)}
+            trigger={({ on, press, reviewing }) => (
+              <label
+                className="flex items-center gap-1.5 text-sm text-sol-text-secondary cursor-pointer select-none"
+                title="Add a link to the full conversation on the shared page. This makes the conversation viewable by anyone with that link."
+              >
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={press}
+                  aria-haspopup="dialog"
+                  aria-expanded={reviewing}
+                  className="accent-[var(--sol-cyan)]"
+                />
+                Link full conversation
+                {on && <span className="text-xs text-sol-text-dim">(becomes public)</span>}
+              </label>
+            )}
+          />
           <button
             onClick={handleCancelShareSelection}
             className="px-3 py-1.5 text-sm text-sol-text-dim hover:text-sol-text-secondary transition-colors"

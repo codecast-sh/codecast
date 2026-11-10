@@ -751,7 +751,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
               autoComplete="off"
               className="flex-1 min-w-[12rem] bg-transparent text-xs font-mono text-sol-cyan placeholder:text-sol-text-dim outline-none border-0 p-0"
             />
-            <span className="inline-flex items-center gap-2 text-[11px] font-mono">
+            <span className="inline-flex items-center gap-2 text-meta font-mono">
               <HintKeys keys={["←", "→"]} label="move" />
               <HintKeys keys={["↵"]} label={pickList[clampedHi]?.create ? "create" : pickList[clampedHi]?.custom ? "open" : "select"} />
               {filter.trim() && pickList[clampedHi] && !pickList[clampedHi].custom && (
@@ -776,7 +776,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
               return (
                 <Fragment key={p.path}>
                   {i === firstExtraIdx && (
-                    <span className="w-full mt-1.5 mb-0.5 flex items-center gap-2 text-[10px] text-sol-text-dim/80">
+                    <span className="w-full mt-1.5 mb-0.5 flex items-center gap-2 text-meta text-sol-text-dim/80">
                       <span className="flex-1 border-t border-sol-border/40" />
                       more folders on {routedDevice ? deviceDisplayName(routedDevice) : "this machine"}
                       <span className="flex-1 border-t border-sol-border/40" />
@@ -818,7 +818,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
               // onMouseDown + preventDefault, same as the chips: keep the
               // filter input focused so expanding doesn't blur-close the picker.
               onMouseDown={(e) => { e.preventDefault(); setShowSuggested(true); }}
-              className="w-full mt-1.5 mb-0.5 flex items-center gap-2 text-[10px] text-sol-text-dim/70 hover:text-sol-text transition-colors"
+              className="w-full mt-1.5 mb-0.5 flex items-center gap-2 text-meta text-sol-text-dim/70 hover:text-sol-text transition-colors"
             >
               <span className="flex-1 border-t border-sol-border/40" />
               <span className="inline-flex items-center gap-1">
@@ -885,7 +885,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
         {!picking && recentProjects.length > 0 && (
           <button
             onClick={focusPicker}
-            className="inline-flex items-center gap-2.5 text-[10px] opacity-40 hover:opacity-90 transition-opacity"
+            className="inline-flex items-center gap-2.5 text-meta opacity-40 hover:opacity-90 transition-opacity"
           >
             <HintKeys keys={[ALT_CAP, "K"]} label="pick folder" />
             <HintKeys keys={[ALT_CAP, "J"]} label="pick agent" />
@@ -1073,7 +1073,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
           <DropdownMenuContent align="start" className="p-0 max-w-[calc(100vw-1rem)]" onCloseAutoFocus={(e) => { e.preventDefault(); restorePickerFocus(null); }}>
             <div className="flex">
               <div className="w-40 shrink-0 p-1">
-                <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Agent</DropdownMenuLabel>
+                <DropdownMenuLabel className="text-mark uppercase tracking-wider text-sol-text-dim">Agent</DropdownMenuLabel>
                 {AGENT_OPTIONS.map((a) => (
                   <DropdownMenuItem
                     key={a.type}
@@ -1140,7 +1140,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
       </div>
 
       {picking && (
-        <div className="flex items-center gap-2 text-[11px] font-mono">
+        <div className="flex items-center gap-2 text-meta font-mono">
           <input
             ref={holderRef}
             readOnly
@@ -1229,7 +1229,7 @@ function NewSessionBucketPill({ conversation }: { conversation: ConversationData
   return (
     <button
       onClick={openPicker}
-      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-[10px] leading-4 transition-colors ${
+      className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border text-meta leading-4 transition-colors ${
         assigned && color
           ? "border-sol-border/40 bg-sol-bg-alt/40 hover:border-sol-border/70"
           : "border-dashed border-sol-border/50 text-sol-text-dim/60 hover:text-sol-cyan hover:border-sol-cyan/40 hover:bg-sol-cyan/5"

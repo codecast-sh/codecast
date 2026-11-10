@@ -161,13 +161,14 @@ function TabStage({ tabs, storeActiveTabId }: { tabs: AppTab[]; storeActiveTabId
     shellEntry.key = location.key;
   }, [location.key]);
 
-  // Sync stale activeTabId to store after render
+  // Sync stale activeTabId to store after render. Only the tab list and the
+  // stored active id can make it stale, so it runs when either changes.
   useEffect(() => {
     const { activeTabId: storeId, tabs } = useInboxStore.getState();
     if (tabs.length > 0 && (!storeId || !tabs.find((t: AppTab) => t.id === storeId))) {
       useInboxStore.getState().switchTab(tabs[0].id);
     }
-  });
+  }, [tabs, storeActiveTabId]);
 
   // Lazy mount: only render tabs that have been active at least once — plus
   // tabs opened in the background by a Cmd-click (lib/openIntent), which mount

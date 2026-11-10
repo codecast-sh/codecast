@@ -25,7 +25,7 @@ export function TaskCallChip({ callId, size = "row", className = "" }: { callId:
     <Link
       href={`/calls/${shortId ?? callId}`}
       onClick={(e) => e.stopPropagation()}
-      className={`flex items-center gap-1 text-[10px] px-1.5 ${size === "head" ? "py-0.5" : "py-0"} rounded bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 hover:bg-sol-magenta/20 transition-colors flex-shrink-0 font-mono ${className}`}
+      className={`flex items-center gap-1 text-meta px-1.5 ${size === "head" ? "py-0.5" : "py-0"} rounded bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 hover:bg-sol-magenta/20 transition-colors flex-shrink-0 font-mono ${className}`}
       title={title ? `From the call "${title}"` : "From a call"}
     >
       <Phone className="w-3 h-3" />

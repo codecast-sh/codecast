@@ -19,7 +19,7 @@ export function CallVideoStretchChip({
   className?: string;
 }) {
   if (!stretches.length) return null;
-  const look = `inline-flex shrink-0 items-center gap-1 rounded-md bg-sol-red/[0.07] px-1.5 py-0.5 font-mono text-[11px] tabular-nums text-sol-text-muted ${className}`;
+  const look = `inline-flex shrink-0 items-center gap-1 rounded-md bg-sol-red/[0.07] px-1.5 py-0.5 font-mono text-meta tabular-nums text-sol-text-muted ${className}`;
   const body = (
     <>
       <Video className="h-3 w-3 text-sol-red/70" aria-hidden="true" />

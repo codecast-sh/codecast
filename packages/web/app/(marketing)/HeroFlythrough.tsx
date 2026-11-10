@@ -482,7 +482,7 @@ export function HeroFlythrough() {
                 <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: DOTS[i % DOTS.length], opacity: i === scene ? 1 : 0.55 }} />
                 <span
                   data-name
-                  className={`overflow-hidden whitespace-nowrap text-[11px] ${i === scene ? "text-[#002b36]" : "text-[#93a1a1] group-hover:text-[#586e75]"}`}
+                  className={`overflow-hidden whitespace-nowrap text-meta ${i === scene ? "text-[#002b36]" : "text-[#93a1a1] group-hover:text-[#586e75]"}`}
                   style={names ? { maxWidth: named ? (nameW ?? "none") : 0, opacity: named ? 1 : 0, transition: names.ease ? `max-width ${CHAPTER_EASE}, opacity ${CHAPTER_EASE}, color 150ms` : undefined } : undefined}
                 >
                   {s.name}

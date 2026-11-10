@@ -6,7 +6,7 @@
 // file on disk (another session saving the same memory) comes back as a
 // conflict for the person to settle instead of being overwritten.
 
-import { useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type MutableRefObject } from "react";
 import { toast } from "sonner";
 import { Trash2, X } from "lucide-react";
 import {
@@ -41,6 +41,10 @@ interface Disk {
   mtime: number | null;
 }
 
+/** Set by the open editor while it holds unsaved edits: the page hands it every way out (close, Esc, another memory,
+ *  another project), and the editor asks first instead of dropping the draft. Returns true when it held the exit. */
+export type MemoryLeaveGuard = MutableRefObject<((next: () => void) => boolean) | null>;
+
 export interface MemoryEditorProps {
   atlas: MemoryAtlas;
   /** A memory's file, MEMORY.md, or NEW_MEMORY. */
@@ -48,12 +52,14 @@ export interface MemoryEditorProps {
   onOpen: (file: string) => void;
   onClose: () => void;
   onJumpToLine: (line: number) => void;
+  /** Where the editor registers its unsaved-edits guard (MemoryLeaveGuard). */
+  leaveGuard?: MemoryLeaveGuard;
 }
 
 const fieldClass =
   "w-full bg-sol-bg border border-sol-border/60 rounded-md px-2.5 py-1.5 text-[13px] text-sol-text placeholder:text-sol-text-dim outline-none focus:border-sol-cyan transition-colors";
 
-export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: MemoryEditorProps) {
+export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine, leaveGuard }: MemoryEditorProps) {
   const isIndex = file === MEMORY_INDEX_FILE;
   const isNew = file === NEW_MEMORY;
   const note = !isIndex && !isNew ? atlas.byFile.get(file) : undefined;
@@ -67,6 +73,8 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
   const [conflict, setConflict] = useState<MemoryConflict | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ unindex: boolean } | null>(null);
   const [saving, setSaving] = useState(false);
+  // A way out the person took while the draft was unsaved: it waits on Save, Discard or Keep editing.
+  const [leaving, setLeaving] = useState<(() => void) | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
   const save = useMemoryStore((s) => s.save);
@@ -85,30 +93,52 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
     }
   }, [diskKey]);
 
+  // While the draft is unsaved, every exit the page offers comes here first.
+  useWatchEffect(() => {
+    if (!leaveGuard) return;
+    leaveGuard.current = dirty ? (next) => { setLeaving(() => next); return true; } : null;
+    return () => { leaveGuard.current = null; };
+  }, [dirty, leaveGuard]);
+  /** Leave on the editor's own account (after a create or a delete): nothing is lost, so the guard stands down. */
+  const leave = (go: () => void) => {
+    if (leaveGuard) leaveGuard.current = null;
+    go();
+  };
+
   const fields: MemoryFields = useMemo(() => readMemoryFields(draft), [draft]);
   const body = useMemo(() => splitFrontmatter(draft).body, [draft]);
   const fileName = isNew ? (newFile.touched ? newFile.name : fields.name ? memoryFileFor(fields.name) : "") : file;
 
   const setField = (key: keyof MemoryFields, value: string) => setDraft((d) => writeMemoryField(d, key, value));
 
-  const doSave = async (overwrite?: MemoryConflict) => {
-    if (saving) return;
-    if (!isIndex && !fields.name.trim()) return void toast.error("Give the memory a name first");
-    if (isNew && !MEMORY_FILE_RE.test(fileName)) return void toast.error("The file name must end in .md and use letters, digits, - or _");
+  /** Save the draft; true once it is on disk. `then`: where to go after (an exit that waited on the save). */
+  const doSave = async (overwrite?: MemoryConflict, then?: () => void): Promise<boolean> => {
+    if (saving) return false;
+    if (!isIndex && !fields.name.trim()) {
+      toast.error("Give the memory a name first");
+      return false;
+    }
+    if (isNew && !MEMORY_FILE_RE.test(fileName)) {
+      toast.error("The file name must end in .md and use letters, digits, - or _");
+      return false;
+    }
     setSaving(true);
     try {
       if (isNew) {
         await create(fileName, draft, { index: addToIndex });
         toast.success(`Created ${fileName}`);
-        onOpen(fileName);
+        leave(then ?? (() => onOpen(fileName)));
       } else {
         const mtime = await save(file, draft, overwrite ? overwrite.mtime : base.mtime);
         setBase({ raw: draft, mtime });
         setConflict(null);
+        if (then) leave(then);
       }
+      return true;
     } catch (e) {
       if (e instanceof MemoryConflict) setConflict(e);
       else toast.error(e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
       setSaving(false);
     }
@@ -119,7 +149,7 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
     try {
       const trashed = await remove(file, { unindex: confirmDelete.unindex });
       toast.success(`Moved ${file} to the trash`, { description: trashed.replace(/^\/Users\/[^/]+/, "~") });
-      onClose();
+      leave(onClose);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : String(e));
     }
@@ -148,15 +178,17 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
   };
 
   const title = isIndex ? MEMORY_INDEX_FILE : fields.name || (isNew ? "New memory" : file);
+  // The footer's state word, the same in its plain row and in the unsaved-exit bar.
+  const status = (text: string, warn: boolean) => <span className={`flex-1 text-meta ${warn ? "text-sol-orange" : "text-sol-text-dim"}`} role="status">{text}</span>;
   const typeChoices = [...new Set([...MEMORY_TYPES, fields.type].filter(Boolean))];
 
   return (
     <div ref={rootRef} onKeyDown={onKeyDown} className="h-full flex flex-col bg-sol-bg-alt/40 border-l border-sol-border/40 min-w-0">
       <header className="flex items-start gap-3 px-4 pt-3 pb-2.5 border-b border-sol-border/40">
         <div className="flex-1 min-w-0">
-          <div className="font-mono text-[11px] text-sol-text-dim truncate">{isNew ? fileName || "new file" : file}</div>
+          <div className="font-mono text-meta text-sol-text-dim truncate">{isNew ? fileName || "new file" : file}</div>
           <h2 className="text-base font-semibold text-sol-text break-words leading-snug">{title}</h2>
-          <div className="flex flex-wrap items-center gap-2 mt-1 text-[11px] text-sol-text-dim">
+          <div className="flex flex-wrap items-center gap-2 mt-1 text-meta text-sol-text-dim">
             {note && (
               <>
                 <ReachBadge reach={note.reach} />
@@ -167,7 +199,7 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
             {isIndex && <span>The index Claude Code loads at the start of every session in this project</span>}
           </div>
         </div>
-        <button type="button" onClick={onClose} title="Close" className="text-sol-text-dim hover:text-sol-text transition-colors p-1">
+        <button type="button" onClick={onClose} title="Close" aria-label="Close" className="text-sol-text-dim hover:text-sol-text transition-colors p-1">
           <X className="w-4 h-4" />
         </button>
       </header>
@@ -207,7 +239,7 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
           <>
             {isNew && (
               <label className="block">
-                <span className="block text-[11px] text-sol-text-dim mb-1">File</span>
+                <span className="block text-meta text-sol-text-dim mb-1">File</span>
                 <input
                   value={fileName}
                   onChange={(e) => setNewFile({ name: e.target.value.trim(), touched: true })}
@@ -218,11 +250,11 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
               </label>
             )}
             <label className="block">
-              <span className="block text-[11px] text-sol-text-dim mb-1">Name</span>
+              <span className="block text-meta text-sol-text-dim mb-1">Name</span>
               <input value={fields.name} onChange={(e) => setField("name", e.target.value)} placeholder="short-kebab-case-slug" spellCheck={false} autoFocus={isNew} className={fieldClass} />
             </label>
             <label className="block">
-              <span className="flex justify-between text-[11px] text-sol-text-dim mb-1">
+              <span className="flex justify-between text-meta text-sol-text-dim mb-1">
                 <span>Description</span>
                 <span className={!fields.description || fields.description.length > 220 ? "text-sol-orange" : ""}>
                   {fields.description ? `${fields.description.length} characters` : "Recall reads this line first"}
@@ -231,7 +263,7 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
               <textarea value={fields.description} onChange={(e) => setField("description", e.target.value.replace(/\n/g, " "))} rows={2} className={`${fieldClass} resize-y`} />
             </label>
             <div>
-              <span className="block text-[11px] text-sol-text-dim mb-1">Type</span>
+              <span className="block text-meta text-sol-text-dim mb-1">Type</span>
               <div className="flex flex-wrap gap-1.5">
                 {typeChoices.map((t) => {
                   const on = t === fields.type;
@@ -253,8 +285,8 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
             </div>
             <div className="flex flex-col">
               <div className="flex items-center justify-between mb-1">
-                <span className="text-[11px] text-sol-text-dim">Body</span>
-                <div className="flex rounded-md border border-sol-border/50 overflow-hidden text-[11px]">
+                <span className="text-meta text-sol-text-dim">Body</span>
+                <div className="flex rounded-md border border-sol-border/50 overflow-hidden text-meta">
                   {(["edit", "preview", "raw"] as const).map((m) => (
                     <button key={m} type="button" onClick={() => setMode(m)} className={`px-2 py-0.5 transition-colors ${mode === m ? "bg-sol-cyan text-sol-bg" : "text-sol-text-muted hover:text-sol-text"}`}>
                       {m}
@@ -342,7 +374,20 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
       </div>
 
       <footer className="flex items-center gap-2 px-4 py-2.5 border-t border-sol-border/40">
-        {confirmDelete ? (
+        {leaving ? (
+          <>
+            {status("Unsaved changes", true)}
+            <Button type="button" variant="ghost" size="xs" onClick={() => setLeaving(null)} autoFocus>
+              Keep editing
+            </Button>
+            <Button type="button" variant="ghost" size="xs" onClick={() => { const next = leaving; setLeaving(null); leave(next); }}>
+              Discard
+            </Button>
+            <Button type="button" variant="secondary" size="xs" disabled={saving} onClick={() => { const next = leaving; void doSave(undefined, next).then((ok) => ok && setLeaving(null)); }}>
+              {isNew ? "Create" : "Save"}
+            </Button>
+          </>
+        ) : confirmDelete ? (
           <>
             <label className="flex-1 flex items-center gap-2 text-xs text-sol-text-muted cursor-pointer">
               <input type="checkbox" checked={confirmDelete.unindex} onChange={(e) => setConfirmDelete({ unindex: e.target.checked })} className="accent-sol-cyan" />
@@ -357,9 +402,9 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
           </>
         ) : (
           <>
-            <span className={`flex-1 text-[11px] ${dirty ? "text-sol-orange" : "text-sol-text-dim"}`}>{saving ? "Saving…" : dirty ? "Unsaved changes" : isNew ? "" : "Saved"}</span>
+            {status(saving ? "Saving…" : dirty ? "Unsaved changes" : isNew ? "" : "Saved", dirty)}
             {note && (
-              <button type="button" onClick={() => void doDelete()} title="Move to trash" className="p-1.5 rounded-md text-sol-text-dim hover:text-sol-red transition-colors">
+              <button type="button" onClick={() => void doDelete()} title="Move to trash" aria-label="Move to trash" className="p-1.5 rounded-md text-sol-text-dim hover:text-sol-red transition-colors">
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
             )}
@@ -378,7 +423,7 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine }: Mem
 function Related({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="text-[11px] text-sol-text-dim mb-1">{label}</div>
+      <div className="text-meta text-sol-text-dim mb-1">{label}</div>
       <div className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 text-[13px]">{children}</div>
     </div>
   );

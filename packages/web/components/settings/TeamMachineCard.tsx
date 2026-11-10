@@ -28,7 +28,7 @@ export function TeamMachineCard({ m, showTeam }: { m: TeamMachine; showTeam?: bo
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-2.5 sm:px-5">
         <Server className="h-4 w-4 shrink-0 text-sol-text-muted" />
         <MachineName m={m} />
-        {showTeam && <span className="text-[11px] text-sol-text-dim">{m.team_name}</span>}
+        {showTeam && <span className="text-meta text-sol-text-dim">{m.team_name}</span>}
         <LoadChips m={m} />
         <span className="ml-auto flex items-center gap-2">
           <MyControl m={m} mine={mine} me={me} />
@@ -75,9 +75,9 @@ function MachineName({ m }: { m: TeamMachine }) {
 }
 
 function LoadChips({ m }: { m: TeamMachine }) {
-  if (!m.load) return <span className="text-[11px] text-sol-text-dim" data-tip="No member's daemon has reported the box's load in the last 5 minutes">no load report</span>;
+  if (!m.load) return <span className="text-meta text-sol-text-dim" data-tip="No member's daemon has reported the box's load in the last 5 minutes">no load report</span>;
   const l = m.load;
-  const chip = "inline-flex h-5 items-center rounded px-1.5 text-[11px] tabular-nums";
+  const chip = "inline-flex h-5 items-center rounded px-1.5 text-meta tabular-nums";
   return (
     <span className="flex items-center gap-1" data-team-machine-load>
       {l.cpu_pct !== undefined && (
@@ -194,7 +194,7 @@ function MemberRow({ m, r, isMe }: { m: TeamMachine; r: TeamMachineMember; isMe:
   return (
     <div className="group flex items-center gap-2.5 px-4 py-1 pl-11 text-[12px] sm:px-5 sm:pl-12" data-team-machine-member={r.linux_user}>
       <Avatar name={r.name} image={r.image} />
-      <span className="w-24 shrink-0 truncate font-mono text-[11.5px] text-sol-text">{r.linux_user}</span>
+      <span className="w-24 shrink-0 truncate font-mono text-meta text-sol-text">{r.linux_user}</span>
       <span className="min-w-0 flex-1 truncate text-sol-text-muted">
         {isMe ? "You" : r.name}{r.is_admin && <span className="ml-1.5 text-sol-text-dim">admin</span>}
       </span>

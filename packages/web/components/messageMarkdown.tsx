@@ -8,7 +8,7 @@
 // 3k-line view into a failed Fast Refresh boundary that re-executed all twelve
 // of its importers.
 
-import rehypeHighlight from "rehype-highlight";
+import type { Options } from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import { entityRemarkPlugins } from "../lib/remarkEntityIds";
 import { remarkEntityCards, type EntityCardsOptions } from "../lib/remarkEntityCards";
@@ -22,10 +22,15 @@ export function renderMarkdownPre(node: any, children: any, props: any) {
 }
 
 // Stable plugin/component identities for message-body markdown. Inline literals at
-// the call sites made react-markdown re-run its full parse + rehype-highlight pass on
-// EVERY block re-render — measured as the single largest cost during a session switch
+// the call sites made react-markdown re-run its full parse pass on EVERY block
+// re-render — measured as the single largest cost during a session switch
 // (~4.2s self-time / 775 renders). None of these overrides close over props.
-export const MESSAGE_MD_REHYPE = [rehypeHighlight];
+//
+// No rehype-highlight: every fence goes through the `pre` override below to
+// CodeBlock, which highlights with Prism, so a highlight.js pass here only did
+// the work twice and was flattened back to text. Kept as a stable (empty) list
+// so the call sites keep one identity to pass.
+export const MESSAGE_MD_REHYPE: NonNullable<Options["rehypePlugins"]> = [];
 export const MESSAGE_MD_COMPONENTS = {
   code: EntityAwareCode,
   a: EntityAwareLink,

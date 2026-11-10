@@ -12,7 +12,7 @@ function ReportBody({ v }: { v: 1 | 2 | 3 }) {
   const bars = v === 1 ? [62, 48, 30, 22] : [62, 48, 30, 22, 14];
   return (
     <div className="px-5 sm:px-7 pt-5 pb-6 text-left">
-      <div className="font-mono text-[10px]" style={{ color: SOL.base1 }}>churn-audit.md</div>
+      <div className="font-mono text-meta" style={{ color: SOL.base1 }}>churn-audit.md</div>
       <div className="mt-1 font-mono font-bold text-[17px] sm:text-[19px] tracking-tight" style={{ color: SOL.base03 }}>Q3 churn audit</div>
       <div className="mt-3 grid grid-cols-[1fr_auto] gap-5 items-end">
         <div className="space-y-1.5 text-[12px] leading-[1.6]" style={{ color: SOL.base01 }}>
@@ -22,7 +22,7 @@ function ReportBody({ v }: { v: 1 | 2 | 3 }) {
               <span>
                 <span className="pb-hl pb-anim pb-mark" style={delay(4.0)}>Accounts that never connected a second repo churned at twice the rate.</span>
                 <span
-                  className="pb-anim pb-pin ml-1 relative -top-1 align-middle inline-flex h-5 w-5 items-center justify-center rounded-full rounded-bl-none text-[9px] font-bold text-white"
+                  className="pb-anim pb-pin ml-1 relative -top-1 align-middle inline-flex h-5 w-5 items-center justify-center rounded-full rounded-bl-none text-meta font-bold text-white"
                   style={delay(4.25, { backgroundColor: CYAN, boxShadow: "0 3px 8px rgba(0,43,54,.25)" })}
                 >2</span>
               </span>
@@ -65,7 +65,7 @@ function Sheet({ v, offset, d, front = false }: { v: 1 | 2 | 3; offset: number; 
         </BrowserFrame>
         {!front && (
           <span
-            className="absolute -bottom-[1px] translate-y-full rounded-b-md px-2 py-0.5 font-mono text-[10px] font-semibold"
+            className="absolute -bottom-[1px] translate-y-full rounded-b-md px-2 py-0.5 font-mono text-meta font-semibold"
             style={{ right: 16 + (2 - v) * 50, backgroundColor: SOL.base2, color: SOL.base01, border: "1px solid rgba(88,110,117,.25)", borderTop: "none" }}
           >v{v}</span>
         )}
@@ -82,7 +82,7 @@ function CommentPopover() {
       style={delay(4.55, { borderColor: "rgba(88,110,117,.25)" })}
     >
       <div className="px-3 pt-2.5 pb-2 border-b" style={{ borderColor: SOL.base2 }}>
-        <div className="font-mono text-[9.5px] truncate" style={{ color: SOL.base1 }}>&ldquo;Accounts that never connected a second&hellip;&rdquo;</div>
+        <div className="font-mono text-meta truncate" style={{ color: SOL.base1 }}>&ldquo;Accounts that never connected a second&hellip;&rdquo;</div>
         <div className="mt-1.5 text-[12px] leading-snug" style={{ color: SOL.base02 }}>
           <span className="font-semibold">Maya</span> Can you split this by plan tier?
         </div>
@@ -91,8 +91,8 @@ function CommentPopover() {
         </div>
       </div>
       <div className="flex items-center justify-between px-3 py-2">
-        <span className="font-mono text-[9.5px]" style={{ color: SOL.base1 }}>2 pending</span>
-        <span className="rounded-md px-2 py-1 font-mono text-[10.5px] font-semibold text-white" style={{ backgroundColor: SOL.base03 }}>Send all</span>
+        <span className="font-mono text-meta" style={{ color: SOL.base1 }}>2 pending</span>
+        <span className="rounded-md px-2 py-1 font-mono text-meta font-semibold text-white" style={{ backgroundColor: SOL.base03 }}>Send all</span>
       </div>
     </div>
   );

@@ -77,8 +77,8 @@ export function DormantWakeRow({ session, rows, isActive, onOpen, onOpenSchedule
         title={wake.kind === "claim" ? "The agent named a wake nothing here can see. It returns to Needs Input if nothing happens." : "Open"}
       >
         <SchedChildArrow label="What wakes this session" className="text-sol-text-dim/70" />
-        <span className={`text-[11px] truncate min-w-0 ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{what}</span>
-        <span className={`ml-auto shrink-0 whitespace-nowrap text-[10px] tabular-nums ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{when}</span>
+        <span className={`text-meta truncate min-w-0 ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{what}</span>
+        <span className={`ml-auto shrink-0 whitespace-nowrap text-meta tabular-nums ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{when}</span>
       </button>
     </div>
   );
@@ -145,9 +145,9 @@ function WakeReasonRowShell({ isActive, family, title, detail, badge, badgeClass
           {/* One line, in the folded strip's type: family, what it waits on,
               where that came from, and the wake's state when it has one. */}
           <div className="min-w-0 flex-1 flex items-center gap-1.5">
-            <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">{family}</span>
-            {title && <span className="text-[11px] truncate min-w-0 text-gray-400 font-normal">{title}</span>}
-            {detail && <span className="text-[10px] truncate min-w-0 text-sol-text-dim">{title ? "· " : ""}{detail}</span>}
+            <span className="text-mark font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">{family}</span>
+            {title && <span className="text-meta truncate min-w-0 text-sol-text-muted font-normal">{title}</span>}
+            {detail && <span className="text-meta truncate min-w-0 text-sol-text-dim">{title ? "· " : ""}{detail}</span>}
             {badge && (
               <span data-sv-wake-badge="" className={`ml-auto ${WAKE_BADGE} ${badgeClass ?? ""}`}>
                 {badge}

@@ -209,7 +209,7 @@ export const VaultNoteView = memo(function VaultNoteView({
         )}
 
         {body && mode === "reading" && (
-          <div className="mt-8 pt-2 border-t border-sol-border/20 flex items-center gap-3 text-[10px] text-sol-text-dim">
+          <div className="mt-8 pt-2 border-t border-sol-border/20 flex items-center gap-3 text-meta text-sol-text-dim">
             <span className="tabular-nums">{vaultIndex.note(path)?.parsed?.wordCount ?? 0} words</span>
             <span className="tabular-nums">{vaultIndex.backlinks(path).length} backlinks</span>
           </div>

@@ -40,7 +40,7 @@ export function SessionStatusSlot({
     <span
       data-cc-conv-status
       data-interrupt-verdict={verdict}
-      className={`inline-flex items-center gap-1 px-1 text-[10px] flex-shrink-0 ${tone}`}
+      className={`inline-flex items-center gap-1 px-1 text-meta flex-shrink-0 ${tone}`}
       title={failed ? row.error ?? undefined : "No machine took the stop"}
     >
       <span className={`w-1.5 h-1.5 rounded-full ${failed ? "bg-sol-red" : "bg-sol-yellow"}`} />

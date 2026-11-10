@@ -116,11 +116,11 @@ export function MemoryIndexView({ atlas, onOpen, onEditIndex, focusLine }: { atl
                     hover === n || focusLine === n ? "bg-sol-bg-alt border-sol-cyan" : "border-transparent"
                   } ${isCut(n) ? "opacity-50 hover:opacity-100" : ""}`}
                 >
-                  <span className="text-right font-mono text-[11px] text-sol-text-dim pt-0.5 tabular-nums">{n}</span>
+                  <span className="text-right font-mono text-meta text-sol-text-dim pt-0.5 tabular-nums">{n}</span>
                   <span className="min-w-0 break-words text-sol-text-muted">
                     <IndexLine line={line} atlas={atlas} onOpen={onOpen} />
                   </span>
-                  <span className={`text-right font-mono text-[11px] pt-0.5 tabular-nums ${long ? "text-sol-yellow" : "text-sol-text-dim"}`} title={`${line.length} characters`}>
+                  <span className={`text-right font-mono text-meta pt-0.5 tabular-nums ${long ? "text-sol-yellow" : "text-sol-text-dim"}`} title={`${line.length} characters`}>
                     {long && `${line.length}ch · `}
                     {sizes[i]}B
                   </span>

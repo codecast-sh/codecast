@@ -4,6 +4,7 @@
 // what the run proposed and how it ended; open it says what it found, what it
 // changed, its proof and who answered, each on its own labelled line.
 import { ArrowUpRight } from "lucide-react";
+import Link from "next/link";
 import { dayTimeWords, dayWords, spanShort, type WorkRow } from "../../../../../lib/line/problemPage";
 
 /** The address's `row` when a person closed every run row (the newest is open when it names none). */
@@ -69,7 +70,7 @@ export function ProblemWork({ rows, bandShowsNewest, onRun, onProblem, row, onRo
                       <div><dt>Outcome</dt><dd>
                         {i === 0 && bandShowsNewest ? "above" : <>
                           {r.answer.words}{r.answer.at ? ` · ${dayTimeWords(r.answer.at)}` : ""}
-                          {r.answer.ref && <a className="lw-link" href={`/decisions/${encodeURIComponent(r.answer.ref)}`}>the decision</a>}
+                          {r.answer.ref && <Link className="lw-link" href={`/decisions/${encodeURIComponent(r.answer.ref)}`}>the decision</Link>}
                         </>}
                       </dd></div>
                     )}

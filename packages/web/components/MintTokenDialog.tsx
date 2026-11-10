@@ -67,7 +67,7 @@ export function SetupTokenBadge({ profile, now }: { profile: MintProfile; now: n
   if (tok.expires_at <= now) {
     return (
       <span
-        className="shrink-0 rounded bg-sol-red/10 px-1.5 py-0.5 text-[10px] text-sol-red"
+        className="shrink-0 rounded bg-sol-red/10 px-1.5 py-0.5 text-meta text-sol-red"
         title="The minted token for this account is past its one-year lifetime. Mint a new one, or remove it to fall back to the saved login."
       >
         token expired
@@ -77,7 +77,7 @@ export function SetupTokenBadge({ profile, now }: { profile: MintProfile; now: n
   const days = Math.max(1, Math.ceil((tok.expires_at - now) / DAY_MS));
   return (
     <span
-      className="shrink-0 rounded bg-sol-violet/10 px-1.5 py-0.5 text-[10px] text-sol-violet"
+      className="shrink-0 rounded bg-sol-violet/10 px-1.5 py-0.5 text-meta text-sol-violet"
       title={`Sessions on this account launch with a minted token that expires ${expiryDate(tok.expires_at)}`}
     >
       token · {days}d
@@ -106,7 +106,7 @@ export function MintTokenButton({ device, profile, className }: { device: MintDe
               ? "A minted token is on file for this account. Open to renew or remove it."
               : "Mint a fixed one-year token for this account, with a guided browser sign-in"
         }
-        className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-medium transition-colors ${
+        className={`inline-flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-meta font-medium transition-colors ${
           pending
             ? "border-amber-500/40 bg-amber-500/10 text-amber-500 hover:bg-amber-500/20"
             : "border-sol-border text-sol-text-dim hover:border-sol-violet/40 hover:bg-sol-violet/10 hover:text-sol-violet"
@@ -132,7 +132,7 @@ export function SpinnerDot() {
 /** SpinnerDot with what is being waited on. */
 export function Spinner({ label, className }: { label: React.ReactNode; className?: string }) {
   return (
-    <span className={`flex items-center gap-1.5 text-[11px] text-amber-500 ${className ?? ""}`}>
+    <span className={`flex items-center gap-1.5 text-meta text-amber-500 ${className ?? ""}`}>
       <SpinnerDot />
       {label}
     </span>
@@ -148,7 +148,7 @@ export function Step({ n, state, children }: { n: number; state: "todo" | "activ
         : "border-sol-border text-sol-text-dim";
   return (
     <li className="flex items-start gap-2.5">
-      <span className={`mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border text-[10px] font-semibold ${ring}`}>
+      <span className={`mt-px flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border text-meta font-semibold ${ring}`}>
         {state === "done" ? "✓" : n}
       </span>
       <span className={`text-xs leading-relaxed ${state === "todo" ? "text-sol-text-dim" : "text-sol-text"}`}>{children}</span>
@@ -287,7 +287,7 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
         )}
         <div className="space-y-3 text-xs leading-relaxed text-sol-text-muted">
           <div>
-            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-sol-text-dim">Why a token</div>
+            <div className="mb-1 text-mark font-semibold uppercase tracking-wide text-sol-text-dim">Why a token</div>
             <p>
               Sessions pinned to <span className="text-sol-text">{profile.name}</span> normally run on its saved login,
               which renews itself. A renewal can still fail: two processes refreshing the same grant, a keychain reset,
@@ -297,7 +297,7 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
             </p>
           </div>
           <div>
-            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-sol-text-dim">Why the browser</div>
+            <div className="mb-1 text-mark font-semibold uppercase tracking-wide text-sol-text-dim">Why the browser</div>
             <p>
               Anthropic issues a token only through a sign in on claude.ai. Codecast never sees your password. The
               browser page must be signed in as <span className="text-sol-text">{who}</span>. If it is signed into
@@ -305,7 +305,7 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
             </p>
           </div>
           <div>
-            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-sol-text-dim">The trade</div>
+            <div className="mb-1 text-mark font-semibold uppercase tracking-wide text-sol-text-dim">The trade</div>
             <p>
               The token expires after one year and Claude Code gives no warning. The account row shows the days left
               so you can mint again before then. Revoke a token any time at claude.ai under Settings, Claude Code.
@@ -314,12 +314,12 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
 
           <ol className="space-y-2 rounded-md border border-sol-border bg-sol-bg-alt/60 p-3">
             <Step n={1} state={step1}>
-              Codecast runs <code className="rounded bg-sol-bg px-1 py-px font-mono text-[11px]">claude setup-token</code> on {device.label ?? "this machine"}.
+              Codecast runs <code className="rounded bg-sol-bg px-1 py-px font-mono text-meta">claude setup-token</code> on {device.label ?? "this machine"}.
             </Step>
             <Step n={2} state={step2}>
               Your browser opens the claude.ai sign in. Sign in as <span className="text-sol-text">{who}</span> and press Authorize.
               {pending && (
-                <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-amber-500">
+                <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-amber-500">
                   <Spinner label="waiting for your approval in the browser" />
                   {url ? (
                     <a href={url} target="_blank" rel="noreferrer" className="underline decoration-dotted underline-offset-2 hover:text-amber-400">
@@ -371,7 +371,7 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
             </p>
           )}
           {!pending && !confirmed && !reporting && (has || expired) && (
-            <p className="text-[11px] text-sol-text-dim">
+            <p className="text-meta text-sol-text-dim">
               {expired
                 ? "The token on file is past its year. Minting again replaces it."
                 : `A token is on file, expires ${expiryDate(profile.setup_token!.expires_at)}. Minting again replaces it.`}
@@ -382,22 +382,22 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
         <DialogFooter className="gap-2 sm:justify-between">
           <div>
             {(has || expired) && !pending && (
-              <Button size="sm" variant="ghost" disabled={busy !== null} onClick={remove} className="h-7 px-2 text-[11px] text-sol-red hover:bg-sol-red/10 hover:text-sol-red">
+              <Button size="sm" variant="ghost" disabled={busy !== null} onClick={remove} className="h-7 px-2 text-meta text-sol-red hover:bg-sol-red/10 hover:text-sol-red">
                 {busy === "remove" ? "Removing…" : "Remove token"}
               </Button>
             )}
           </div>
           <div className="flex items-center gap-2">
             {pending && (device.profiles?.length ?? 0) > 1 && (
-              <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => cancel(true)} className="h-7 px-2 text-[11px]">
+              <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => cancel(true)} className="h-7 px-2 text-meta">
                 Use a different account
               </Button>
             )}
-            <Button size="sm" variant="ghost" onClick={() => pending ? cancel() : onClose()} className="h-7 px-2 text-[11px]">
+            <Button size="sm" variant="ghost" onClick={() => pending ? cancel() : onClose()} className="h-7 px-2 text-meta">
               {busy === "cancel" ? "Cancelling…" : pending ? "Cancel mint" : confirmed ? "Done" : "Close"}
             </Button>
             {!pending && !confirmed && !reporting && (
-              <Button size="sm" disabled={busy !== null} onClick={() => start(false)} className="h-7 px-3 text-[11px]">
+              <Button size="sm" disabled={busy !== null} onClick={() => start(false)} className="h-7 px-3 text-meta">
                 {rejected ? "Try again" : has || expired ? "Mint a new token" : "Start, open the sign in"}
               </Button>
             )}

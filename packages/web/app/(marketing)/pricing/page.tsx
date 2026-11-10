@@ -176,7 +176,7 @@ export default function PricingPage() {
                   </h3>
                   {tier.badge && (
                     <span
-                      className="tracking-wider font-mono text-[10px] uppercase font-medium px-2.5 py-1 rounded-md"
+                      className="tracking-wider font-mono text-mark uppercase font-medium px-2.5 py-1 rounded-md"
                       style={{ backgroundColor: "rgba(181,137,0,0.18)", color: "#b58900" }}
                     >
                       {tier.badge}
@@ -339,7 +339,7 @@ export default function PricingPage() {
           style={{ backgroundColor: "rgba(133,153,0,0.1)", color: "#859900" }}
         >
           <span className="h-2 w-2 rounded-full" style={{ backgroundColor: "#859900" }}></span>
-          <span className="tracking-wider font-mono text-[11px] uppercase font-medium">Pricing</span>
+          <span className="tracking-wider font-mono text-mark uppercase font-medium">Pricing</span>
         </div>
         <h1 className="text-5xl md:text-6xl font-bold leading-[1.1] tracking-tight mb-6 font-mono" style={{ color: "#002b36" }}>
           Honest pricing,<br />

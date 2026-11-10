@@ -50,7 +50,7 @@ export function MemoryListView({ notes, active, onOpen }: { notes: MemoryNote[];
               <th
                 key={c.key}
                 onClick={() => toggle(c.key)}
-                className={`py-2 px-2 font-medium text-[11px] border-b border-sol-border/50 cursor-pointer select-none whitespace-nowrap ${
+                className={`py-2 px-2 font-medium text-meta border-b border-sol-border/50 cursor-pointer select-none whitespace-nowrap ${
                   c.numeric ? "text-right" : "text-left"
                 } ${sort.key === c.key ? "text-sol-text" : "text-sol-text-dim hover:text-sol-text-muted"}`}
               >
@@ -73,10 +73,10 @@ export function MemoryListView({ notes, active, onOpen }: { notes: MemoryNote[];
               </td>
               <td className="py-2 px-2 align-top"><TypeBadge type={n.type} /></td>
               <td className="py-2 px-2 align-top"><ReachBadge reach={n.reach} /></td>
-              <td className="py-2 px-2 align-top text-right font-mono text-[11px] text-sol-text-muted tabular-nums">{n.inbound.length}</td>
-              <td className="py-2 px-2 align-top text-right font-mono text-[11px] text-sol-text-muted tabular-nums">{n.links.length}</td>
-              <td className="py-2 px-2 align-top text-right font-mono text-[11px] text-sol-text-muted tabular-nums">{formatBytes(n.bytes)}</td>
-              <td className="py-2 px-2 align-top text-right text-[11px] text-sol-text-dim whitespace-nowrap">{formatRelative(n.mtime)}</td>
+              <td className="py-2 px-2 align-top text-right font-mono text-meta text-sol-text-muted tabular-nums">{n.inbound.length}</td>
+              <td className="py-2 px-2 align-top text-right font-mono text-meta text-sol-text-muted tabular-nums">{n.links.length}</td>
+              <td className="py-2 px-2 align-top text-right font-mono text-meta text-sol-text-muted tabular-nums">{formatBytes(n.bytes)}</td>
+              <td className="py-2 px-2 align-top text-right text-meta text-sol-text-dim whitespace-nowrap">{formatRelative(n.mtime)}</td>
             </tr>
           ))}
         </tbody>

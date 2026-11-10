@@ -20,7 +20,7 @@ export function SessionTaskChip({ task, className = "" }: {
     <span
       data-session-task
       title={`${task.short_id ?? "Task"}: ${task.title} (${label.toLowerCase()})`}
-      className={`inline-flex items-center gap-1 min-w-0 max-w-[16rem] text-[10px] text-sol-text-muted ${className}`}
+      className={`inline-flex items-center gap-1 min-w-0 max-w-[16rem] text-meta text-sol-text-muted ${className}`}
     >
       <StatusIcon className={`w-2.5 h-2.5 flex-shrink-0 ${color}`} />
       <span className="truncate">{task.title}</span>

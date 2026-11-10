@@ -17,7 +17,7 @@ export const BrowserSessionContext = createContext<BrowserSessionRef>({});
 
 export const BROWSER_ROW_PILL =
   "flex-shrink-0 inline-flex items-center gap-1 rounded-full border border-sol-border/60 bg-sol-bg-highlight/40 " +
-  "px-1.5 py-px text-[10px] leading-4 font-mono text-sol-text-muted hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors";
+  "px-1.5 py-px text-meta leading-4 font-mono text-sol-text-muted hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors";
 
 
 export type BrowserTabActionState =

@@ -75,7 +75,7 @@ export function PageBar({ title, session, when, version, comments, old = false, 
   title: string; session?: string; when: string; version: ReactNode; comments?: number; old?: boolean; compact?: boolean;
 }) {
   return (
-    <div className="flex items-center gap-1 h-[34px] px-2.5 font-mono text-[11px] border-b" style={{ backgroundColor: "rgba(253,252,250,.95)", borderColor: "rgba(88,110,117,.22)", color: SOL.base01 }}>
+    <div className="flex items-center gap-1 h-[34px] px-2.5 font-mono text-meta border-b" style={{ backgroundColor: "rgba(253,252,250,.95)", borderColor: "rgba(88,110,117,.22)", color: SOL.base01 }}>
       <span className="mr-1.5 opacity-85 flex"><LogoGlyph /></span>
       <span className="flex-1 min-w-0 truncate font-medium" style={{ color: SOL.base03, opacity: 0.82 }}>{title}</span>
       {session && !compact && (
@@ -92,7 +92,7 @@ export function PageBar({ title, session, when, version, comments, old = false, 
       {comments !== undefined && (
         <span className="inline-flex items-center gap-1 px-1.5">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
-          {comments > 0 && <span className="text-[10px] font-semibold" style={{ color: "rgba(0,43,54,.48)" }}>{comments}</span>}
+          {comments > 0 && <span className="text-meta font-semibold" style={{ color: "rgba(0,43,54,.48)" }}>{comments}</span>}
         </span>
       )}
       <span className="px-1 opacity-60" aria-hidden>···</span>
@@ -112,7 +112,7 @@ export function BrowserFrame({ url, children, className = "", style, urlNode }: 
           <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: SOL.yellow, opacity: 0.8 }} />
           <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: SOL.green, opacity: 0.8 }} />
         </div>
-        <div className="flex-1 min-w-0 flex items-center gap-1.5 rounded-md px-2.5 h-6 font-mono text-[11px] truncate" style={{ backgroundColor: SOL.base3, color: SOL.base01 }}>
+        <div className="flex-1 min-w-0 flex items-center gap-1.5 rounded-md px-2.5 h-6 font-mono text-meta truncate" style={{ backgroundColor: SOL.base3, color: SOL.base01 }}>
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={SOL.base1} strokeWidth={2.4} aria-hidden><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>
           {urlNode ?? <span className="truncate">{url}</span>}
         </div>

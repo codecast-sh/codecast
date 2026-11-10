@@ -38,7 +38,7 @@ export function WatchTerm() {
 export function SendMock() {
   const Lane = ({ agent, title, id, children }: { agent: string; title: string; id: string; children: ReactNode }) => (
     <div className="min-w-0 rounded-xl overflow-hidden" style={frame}>
-      <div className="flex items-center gap-2 px-3 py-2 font-mono text-[11px]" style={{ borderBottom: `1px solid ${SOL.base2}`, color: SOL.base1 }}>
+      <div className="flex items-center gap-2 px-3 py-2 font-mono text-meta" style={{ borderBottom: `1px solid ${SOL.base2}`, color: SOL.base1 }}>
         <AgentTag agent={agent} size="xs" />
         <span className="min-w-0 truncate font-semibold" style={{ color: SOL.base02 }}>{title}</span>
         <span className="ml-auto shrink-0">{id}</span>
@@ -48,12 +48,12 @@ export function SendMock() {
   );
   const Line = ({ who, children }: { who: string; children: ReactNode }) => (
     <div className="text-[12.5px] leading-[1.55]" style={{ color: SOL.base01 }}>
-      <span className="mr-1.5 font-mono text-[10.5px] font-semibold" style={{ color: AGENT_COLOR[who] }}>{who}</span>{children}
+      <span className="mr-1.5 font-mono text-meta font-semibold" style={{ color: AGENT_COLOR[who] }}>{who}</span>{children}
     </div>
   );
   const Envelope = ({ from, children }: { from: string; children: ReactNode }) => (
     <div className="rounded-md px-2.5 py-2" style={{ borderLeft: `2px solid ${SOL.cyan}`, backgroundColor: "rgba(42,161,152,0.07)" }}>
-      <div className="flex items-center gap-1.5 font-mono text-[10px] font-medium uppercase tracking-wide" style={{ color: SOL.cyan }}>
+      <div className="flex items-center gap-1.5 font-mono text-mark font-medium uppercase tracking-wide" style={{ color: SOL.cyan }}>
         <span aria-hidden>↳</span>Message from
         <span className="rounded border px-1.5 py-px normal-case tracking-normal" style={{ borderColor: `${SOL.cyan}55`, backgroundColor: PAPER }}>{from}</span>
       </div>
@@ -64,7 +64,7 @@ export function SendMock() {
     <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:gap-10" role="img" aria-label="An API session sends a message to a web session, which answers with the commit it made">
       <Lane agent="claude" title="Rename the user endpoint" id="jx7c6zk">
         <Line who="claude">Renamed <span className="font-mono">/v1/user</span> to <span className="font-mono">/v1/account</span>. The web client still calls the old path.</Line>
-        <div className="rounded-md px-2.5 py-1.5 font-mono text-[11px] whitespace-pre-wrap sm:overflow-x-auto sm:whitespace-nowrap" style={{ backgroundColor: SOL.base03, color: SOL.base2 }}>
+        <div className="rounded-md px-2.5 py-1.5 font-mono text-meta whitespace-pre-wrap sm:overflow-x-auto sm:whitespace-nowrap" style={{ backgroundColor: SOL.base03, color: SOL.base2 }}>
           <span style={{ color: SOL.green }}>$ </span>cast send jx7d1mp &quot;/v1/user is now /v1/account&quot;
         </div>
         <Envelope from="jx7d1mp">Done in a4c91e2. Both calls moved, typecheck green.</Envelope>
@@ -72,7 +72,7 @@ export function SendMock() {
       <Lane agent="codex" title="Settings page polish" id="jx7d1mp">
         <Envelope from="jx7c6zk">/v1/user is now /v1/account. Your settings page calls it twice.</Envelope>
         <Line who="codex">Updating both calls before I touch the form.</Line>
-        <div className="rounded-md px-2.5 py-1.5 font-mono text-[11px] whitespace-pre-wrap sm:overflow-x-auto sm:whitespace-nowrap" style={{ backgroundColor: SOL.base03, color: SOL.base2 }}>
+        <div className="rounded-md px-2.5 py-1.5 font-mono text-meta whitespace-pre-wrap sm:overflow-x-auto sm:whitespace-nowrap" style={{ backgroundColor: SOL.base03, color: SOL.base2 }}>
           <span style={{ color: SOL.green }}>$ </span>cast send jx7c6zk &quot;Done in a4c91e2. …&quot;
         </div>
       </Lane>
@@ -115,7 +115,7 @@ export function WorktreeMock() {
   ];
   return (
     <div className="rounded-xl overflow-hidden font-mono" style={frame} role="img" aria-label="Three worktrees, one per worker, each with its own port">
-      <div className="flex items-center gap-2 px-3.5 py-2 text-[11px]" style={{ borderBottom: `1px solid ${SOL.base2}`, color: SOL.base1 }}>
+      <div className="flex items-center gap-2 px-3.5 py-2 text-meta" style={{ borderBottom: `1px solid ${SOL.base2}`, color: SOL.base1 }}>
         <span className="font-semibold" style={{ color: SOL.base01 }}>~/src/app</span>
         <span>main checkout</span>
         <span className="ml-auto">cast ws ls</span>
@@ -125,13 +125,13 @@ export function WorktreeMock() {
           <div key={r.name} className="flex items-center gap-2.5 py-1.5 text-[12px]">
             <span style={{ color: SOL.base1 }}>└</span>
             <span className="min-w-0 flex-1 truncate" style={{ color: SOL.base02 }}>.codecast/worktrees/{r.name}</span>
-            <span className="hidden sm:inline text-[10.5px]" style={{ color: SOL.base1 }}>:{r.port}</span>
+            <span className="hidden sm:inline text-meta" style={{ color: SOL.base1 }}>:{r.port}</span>
             <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: AGENT_COLOR[r.agent] }} />
-            <span className="w-14 shrink-0 text-right text-[10.5px]" style={{ color: r.state === "done" ? SOL.green : SOL.yellow }}>{r.state}</span>
+            <span className="w-14 shrink-0 text-right text-meta" style={{ color: r.state === "done" ? SOL.green : SOL.yellow }}>{r.state}</span>
           </div>
         ))}
       </div>
-      <div className="px-3.5 py-2 text-[10.5px]" style={{ borderTop: `1px solid ${SOL.base2}`, backgroundColor: SOL.base3, color: SOL.base1 }}>
+      <div className="px-3.5 py-2 text-meta" style={{ borderTop: `1px solid ${SOL.base2}`, backgroundColor: SOL.base3, color: SOL.base1 }}>
         .env copied · setup commands run · ports from .codecast/workspace.toml
       </div>
     </div>

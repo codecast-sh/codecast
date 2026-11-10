@@ -66,7 +66,7 @@ export function Conversation() {
             The errors start with <Dev o={PR} t={T.a} active={active} onPick={setActive} wait={!touched} align="right" />, which went out in the 2:10 deploy. I opened <Dev o={TASK} t={T.b} active={active} onPick={setActive} wait={!touched} /> to revert it and put the previous build on a canary:
           </p>
           <div className="grid">
-            <pre className="md-raw [grid-area:1/1] self-start rounded-md px-3 py-2 font-mono text-[11.5px] whitespace-pre-wrap" style={at(T.block, { backgroundColor: "rgba(147,161,161,.14)", color: MUTED })}>{ROLLOUT_SOURCE}</pre>
+            <pre className="md-raw [grid-area:1/1] self-start rounded-md px-3 py-2 font-mono text-meta whitespace-pre-wrap" style={at(T.block, { backgroundColor: "rgba(147,161,161,.14)", color: MUTED })}>{ROLLOUT_SOURCE}</pre>
             <div className="md-dev [grid-area:1/1]" style={at(T.block)}><RolloutBlock d={T.block + 0.3} /></div>
           </div>
           <p>

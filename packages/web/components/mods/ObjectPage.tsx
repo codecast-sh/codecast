@@ -5,7 +5,7 @@
 // the mod's page when it draws one, else its resolved status, fields and body.
 
 import { useMemo, useState } from "react";
-import { DynamicIcon } from "lucide-react/dynamic";
+import { DynamicIcon } from "./ModIcon";
 import { objectStatusIsDone, type ModSurface } from "@codecast/shared/contracts/mods";
 import { useInboxStore } from "../../store/inboxStore";
 import { formatRelativeTime } from "../../lib/conversationFormat";
@@ -17,6 +17,7 @@ import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { ModSurfaceView } from "./ModSurface";
 import { FieldEditor, FieldValue, StatusBadge } from "./objectFields";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { CommandDisclosure } from "../secrets/parts";
 
 export function ObjectPage({ id }: { id: string }) {
   useModRows();
@@ -110,7 +111,7 @@ export function ObjectPage({ id }: { id: string }) {
         </dl>
       ) : null}
       <section className="mt-5">
-        <div className="mb-1.5 flex items-center text-[11px] uppercase tracking-wide text-sol-text-dim">
+        <div className="mb-1.5 flex items-center text-mark uppercase tracking-wide text-sol-text-dim">
           <span>Notes</span>
           <button onClick={() => { if (editingBody && body !== (row.body ?? "")) update(row._id, { body }); setEditingBody((v) => !v); }} className="ml-auto normal-case tracking-normal text-[12px] text-sol-text-muted hover:text-sol-text">{editingBody ? "Done" : "Edit"}</button>
         </div>
@@ -123,7 +124,7 @@ export function ObjectPage({ id }: { id: string }) {
         )}
       </section>
       <div className="mt-8 flex items-center gap-3 border-t border-sol-border pt-3 text-[12px] text-sol-text-dim">
-        <span className="font-mono">cast obj show {row.short_id}</span>
+        <CommandDisclosure label="For scripts" text={`cast obj show ${row.short_id}`} />
         <button onClick={() => { update(row._id, { archived: true }); if (kind) modNavigate(objectsHref(kind.prefix)); }} className="ml-auto hover:text-sol-red">Archive</button>
       </div>
     </div>

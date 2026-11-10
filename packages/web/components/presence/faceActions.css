@@ -24,7 +24,7 @@
   flex-basis: 100%;
   text-align: center;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-red);
 }
 @media (prefers-reduced-motion: reduce) {

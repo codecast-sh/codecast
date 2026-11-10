@@ -76,7 +76,7 @@ export function ExternalEventGroupRow({
         </span>
 
         <div className="flex-1 min-w-0">
-          <div className="flex items-baseline gap-1.5 flex-wrap text-[11px] leading-5">
+          <div className="flex items-baseline gap-1.5 flex-wrap text-meta leading-5">
             {actors.length > 0 ? (
               <span className="inline-flex items-center flex-shrink-0 self-center">
                 <span className="inline-flex items-center -space-x-1">
@@ -102,14 +102,14 @@ export function ExternalEventGroupRow({
               </React.Fragment>
             ))}
             {branch ? (
-              <span className="font-mono text-[10px] text-sol-text-dim/80 flex-shrink-0 truncate max-w-[16rem]" title={branches.join("\n")}>{branch}</span>
+              <span className="font-mono text-meta text-sol-text-dim/80 flex-shrink-0 truncate max-w-[16rem]" title={branches.join("\n")}>{branch}</span>
             ) : null}
-            <span className="inline-flex items-center gap-0.5 text-[10px] text-sol-text-dim flex-shrink-0">
+            <span className="inline-flex items-center gap-0.5 text-meta text-sol-text-dim flex-shrink-0">
               <ChevronRight className={`w-3 h-3 transition-transform ${open ? "rotate-90" : ""}`} />
               {events.length} events
             </span>
             <span
-              className="ml-auto text-[10px] text-sol-text-dim tabular-nums flex-shrink-0 pl-1"
+              className="ml-auto text-meta text-sol-text-dim tabular-nums flex-shrink-0 pl-1"
               title={`${formatDateFull(oldest.at)} to ${formatDateFull(newest.at)}`}
             >
               {relTimeShort(newest.at, now)}

@@ -68,11 +68,11 @@ function LeadCard({ r, t, status, extra }: { r: RoleRow; t: number; status: Reac
           <Tile k={r.k} size={30} />
           <div className="min-w-0">
             <div className="font-mono font-bold text-[13px] leading-tight truncate" style={{ color: INK }}>{r.title}</div>
-            <div className="font-mono text-[11px]" style={{ color: DIM }}>{r.handle}</div>
+            <div className="font-mono text-meta" style={{ color: DIM }}>{r.handle}</div>
           </div>
         </div>
-        <div className="mt-2 font-mono text-[11px] leading-4" style={{ color: MUTED }}>{status}</div>
-        <div className="mt-1 font-mono text-[11px] leading-4 h-4" style={{ color: MUTED }}>{extra}</div>
+        <div className="mt-2 font-mono text-meta leading-4" style={{ color: MUTED }}>{status}</div>
+        <div className="mt-1 font-mono text-meta leading-4 h-4" style={{ color: MUTED }}>{extra}</div>
       </div>
     </Box>
   );
@@ -82,8 +82,8 @@ function SubNode({ r, t, status }: { r: RoleRow; t: number; status?: ReactNode }
   return (
     <Box x={SUBS[r.id]} y={SUB_Y} w={118} className="og-anim og-pop flex flex-col items-center text-center" style={at(t)}>
       <Tile k={r.k} size={44} />
-      <div className="mt-2 font-mono font-semibold text-[11.5px] leading-[1.25]" style={{ color: TEXT }}>{r.title}</div>
-      <div className="mt-1 font-mono text-[10.5px] leading-4 w-full" style={{ color: MUTED }}>{status ?? <span style={{ color: DIM }}>{STATE.dormant.word}</span>}</div>
+      <div className="mt-2 font-mono font-semibold text-meta leading-[1.25]" style={{ color: TEXT }}>{r.title}</div>
+      <div className="mt-1 font-mono text-meta leading-4 w-full" style={{ color: MUTED }}>{status ?? <span style={{ color: DIM }}>{STATE.dormant.word}</span>}</div>
     </Box>
   );
 }
@@ -124,19 +124,19 @@ function AskCard() {
     <div className="rounded-xl border px-3 py-2.5" style={{ borderColor: tint(SOL.yellow, 55), backgroundColor: tint(SOL.yellow, 9), boxShadow: "0 18px 34px -24px rgba(0,43,54,.55)" }}>
       <div className="flex items-center gap-2">
         <Tile k={eng.k} size={18} />
-        <span className="font-mono text-[11px] font-semibold" style={{ color: INK }}>{eng.title}</span>
-        <span className="ml-auto font-mono text-[10px]" style={{ color: SOL.yellow }}>waiting on you</span>
+        <span className="font-mono text-meta font-semibold" style={{ color: INK }}>{eng.title}</span>
+        <span className="ml-auto font-mono text-meta" style={{ color: SOL.yellow }}>waiting on you</span>
       </div>
       <div className="mt-1.5 font-mono text-[12px] font-semibold leading-snug" style={{ color: INK }}>Ship the checkout fix now?</div>
-      <div className="mt-1 font-mono text-[10.5px]" style={{ color: MUTED }}>
+      <div className="mt-1 font-mono text-meta" style={{ color: MUTED }}>
         <span style={{ color: SOL.green }}>Recommends</span> Ship · tests green
       </div>
-      <div className="mt-1 flex items-center gap-1 whitespace-nowrap font-mono text-[10px]" style={{ color: DIM }}>
+      <div className="mt-1 flex items-center gap-1 whitespace-nowrap font-mono text-meta" style={{ color: DIM }}>
         <Tile k={release.k} size={13} /> @release <span>→</span> <Tile k={eng.k} size={13} /> @eng <span>→</span> you
       </div>
       <div className="mt-2 flex gap-1.5">
-        <span className="rounded-md px-2 py-0.5 font-mono text-[10.5px]" style={{ backgroundColor: INK, color: PAPER }}>Ship</span>
-        <span className="rounded-md px-2 py-0.5 font-mono text-[10.5px] border" style={{ borderColor: LINE, color: TEXT }}>Hold until Monday</span>
+        <span className="rounded-md px-2 py-0.5 font-mono text-meta" style={{ backgroundColor: INK, color: PAPER }}>Ship</span>
+        <span className="rounded-md px-2 py-0.5 font-mono text-meta border" style={{ borderColor: LINE, color: TEXT }}>Hold until Monday</span>
       </div>
     </div>
   );
@@ -147,7 +147,7 @@ function Hop({ color, children, t }: { color: string; children: ReactNode; t: nu
   return (
     <div className="og-anim og-fade flex items-center gap-2.5 pl-[18px] py-1.5" style={at(t)}>
       <span className="w-px h-6" style={{ backgroundColor: color }} />
-      <span className="font-mono text-[11px]" style={{ color }}>{children}</span>
+      <span className="font-mono text-meta" style={{ color }}>{children}</span>
     </div>
   );
 }
@@ -161,11 +161,11 @@ function PhoneStory() {
   return (
     <div className="flex flex-col">
       <div className="og-anim og-rise rounded-lg border px-3 py-2 font-mono" style={at(0.2, { borderColor: tint(SOL.red, 45), backgroundColor: tint(SOL.red, 7) })}>
-        <div className="flex items-center gap-2 text-[11px]" style={{ color: SOL.red }}>
+        <div className="flex items-center gap-2 text-meta" style={{ color: SOL.red }}>
           <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: SOL.red }} />error · production
         </div>
         <div className="mt-1 text-[12.5px] font-semibold" style={{ color: INK }}>TypeError: cart is undefined</div>
-        <div className="text-[11px]" style={{ color: MUTED }}>checkout.ts:212 · 41 events in 5m</div>
+        <div className="text-meta" style={{ color: MUTED }}>checkout.ts:212 · 41 events in 5m</div>
       </div>
       <Hop color={SOL.red} t={0.5}>→ @eng · its area: the codebase</Hop>
       <div className="og-anim og-rise rounded-xl border px-3 py-2.5" style={at(0.7, card)}>
@@ -173,14 +173,14 @@ function PhoneStory() {
           <Tile k={eng.k} size={30} />
           <div className="min-w-0">
             <div className="font-mono font-bold text-[13px] leading-tight" style={{ color: INK }}>{eng.title}</div>
-            <div className="font-mono text-[11px]" style={{ color: DIM }}>{eng.handle} · reports to Maya</div>
+            <div className="font-mono text-meta" style={{ color: DIM }}>{eng.handle} · reports to Maya</div>
           </div>
         </div>
-        <div className="mt-2 font-mono text-[11.5px]" style={{ color: MUTED }}>
+        <div className="mt-2 font-mono text-meta" style={{ color: MUTED }}>
           <SessionDot state="working" className="mr-1.5 align-middle" size={6} /><span style={{ color: SOL.green }}>working</span> · checkout error
         </div>
-        <div className="mt-1 font-mono text-[11.5px]" style={{ color: MUTED }}><span style={{ color: DIM }}>└</span> <span style={{ color: TEXT }}>worker</span> · fix cart crash</div>
-        <div className="mt-2 pt-2 border-t flex items-center gap-2 font-mono text-[11.5px]" style={{ borderColor: LINE, color: MUTED }}>
+        <div className="mt-1 font-mono text-meta" style={{ color: MUTED }}><span style={{ color: DIM }}>└</span> <span style={{ color: TEXT }}>worker</span> · fix cart crash</div>
+        <div className="mt-2 pt-2 border-t flex items-center gap-2 font-mono text-meta" style={{ borderColor: LINE, color: MUTED }}>
           <Tile k={release.k} size={20} /> <span style={{ color: TEXT }}>{release.title}</span> · <span style={{ color: SOL.yellow }}>fix ready to ship</span>
         </div>
       </div>
@@ -189,7 +189,7 @@ function PhoneStory() {
         <Person p={maya} size={32} />
         <div>
           <div className="font-mono font-bold text-[13px]" style={{ color: INK }}>{maya.name}</div>
-          <div className="font-mono text-[11px]" style={{ color: SOL.yellow }}>1 needs you</div>
+          <div className="font-mono text-meta" style={{ color: SOL.yellow }}>1 needs you</div>
         </div>
       </div>
       <div className="og-anim og-ask mt-2" style={at(1.4)}><AskCard /></div>
@@ -219,7 +219,7 @@ function Stage() {
           <Person p={maya} size={34} />
           <div className="min-w-0 flex-1">
             <div className="font-mono font-bold text-[13px] leading-tight" style={{ color: INK }}>{maya.name}</div>
-            <div className="font-mono text-[11px]">
+            <div className="font-mono text-meta">
               <Swap
                 t={T.ask}
                 before={<span style={{ color: DIM }}>founder · 3 leads</span>}
@@ -264,11 +264,11 @@ function Stage() {
       {/* The error, arriving from production. */}
       <Box x={140} y={18} w={250} className="og-anim og-rise" style={at(T.signal)}>
         <div className="rounded-lg border px-3 py-2 font-mono" style={{ borderColor: tint(SOL.red, 45), backgroundColor: tint(SOL.red, 7) }}>
-          <div className="flex items-center gap-2 text-[10.5px]" style={{ color: SOL.red }}>
+          <div className="flex items-center gap-2 text-meta" style={{ color: SOL.red }}>
             <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: SOL.red }} />error · production
           </div>
-          <div className="mt-1 text-[11.5px] font-semibold truncate" style={{ color: INK }}>TypeError: cart is undefined</div>
-          <div className="text-[10.5px]">
+          <div className="mt-1 text-meta font-semibold truncate" style={{ color: INK }}>TypeError: cart is undefined</div>
+          <div className="text-meta">
             <Swap t={T.route + 0.4} before={<span style={{ color: MUTED }}>checkout.ts:212 · 41 events in 5m</span>} after={<span style={{ color: SOL.red }}>→ @eng · its area: the codebase</span>} />
           </div>
         </div>

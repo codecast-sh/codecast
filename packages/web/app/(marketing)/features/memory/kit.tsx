@@ -100,11 +100,11 @@ export function Pane({ label, children, className = "", right, wrap = false }: {
           <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: SOL.yellow }} />
           <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: SOL.green }} />
         </div>
-        <span className="text-[11px] font-mono ml-1 truncate" style={{ color: SOL.base01 }}>{label}</span>
-        {right && <span className="ml-auto text-[11px] font-mono" style={{ color: SOL.base01 }}>{right}</span>}
+        <span className="text-meta font-mono ml-1 truncate" style={{ color: SOL.base01 }}>{label}</span>
+        {right && <span className="ml-auto text-meta font-mono" style={{ color: SOL.base01 }}>{right}</span>}
       </div>
       <div className="overflow-x-auto">
-        <pre className={`px-4 py-3.5 font-mono text-[11.5px] sm:text-[12px] leading-[1.7]${wrap ? " whitespace-pre-wrap break-words" : ""}`} style={{ color: SOL.base0 }}>{children}</pre>
+        <pre className={`px-4 py-3.5 font-mono text-meta sm:text-[12px] leading-[1.7]${wrap ? " whitespace-pre-wrap break-words" : ""}`} style={{ color: SOL.base0 }}>{children}</pre>
       </div>
     </div>
   );

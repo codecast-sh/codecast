@@ -13,7 +13,7 @@
 export const RAIL_FOCUS_SINCE = Date.UTC(2026, 9, 27);
 
 /** Rail pages a focused rail leaves to More, beside the whole Agents group. */
-const MORE_PAGES = ["/threads", "/feed", "/goals", "/projects", "/org", "/repo", "/files", "/vault", "/pages", "/changes", "/triggers", "/flows"];
+const MORE_PAGES = ["/threads", "/feed", "/goals", "/projects", "/org", "/repo", "/files", "/vault", "/pages", "/changes", "/deploys", "/ops", "/triggers", "/flows"];
 
 export type RailFocusFacts = {
   /** The viewer's account creation time (users._creationTime). */

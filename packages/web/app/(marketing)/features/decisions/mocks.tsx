@@ -47,12 +47,12 @@ export function OptionRow({ option, n, primary = false, picked = false, tag, com
 
 /** The small bordered tag the product puts beside the agent's default. */
 export function DefaultTag() {
-  return <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ borderColor: LINE, color: DIM }}>proceeding with this</span>;
+  return <span className="text-meta px-1.5 py-0.5 rounded border" style={{ borderColor: LINE, color: DIM }}>proceeding with this</span>;
 }
 
 /** The "advisory" badge in the sheet's header row. */
 export function AdvisoryBadge() {
-  return <span className="text-[10px] px-1.5 py-0.5 rounded border shrink-0" style={{ borderColor: "rgba(38,139,210,.3)", color: B }}>advisory</span>;
+  return <span className="text-meta px-1.5 py-0.5 rounded border shrink-0" style={{ borderColor: "rgba(38,139,210,.3)", color: B }}>advisory</span>;
 }
 
 /** The question, set in the serif the decision page uses. */
@@ -78,7 +78,7 @@ export function EscapeHatch({ queue = true }: { queue?: boolean }) {
     <span className="flex items-center gap-1.5"><KeyCap size="xs">{k}</KeyCap><span>{label}</span></span>
   );
   return (
-    <div className="flex items-center flex-wrap gap-x-4 gap-y-2 text-[11px] mt-4" style={{ color: DIM }}>
+    <div className="flex items-center flex-wrap gap-x-4 gap-y-2 text-meta mt-4" style={{ color: DIM }}>
       {queue && item("o", "open the session")}
       {queue && item("s", "skip for now")}
       {item("x", "dismiss")}
@@ -100,7 +100,7 @@ export function TypeAnswer() {
 export function ReportEmbed({ slug, title, rows }: { slug: string; title: string; rows: [string, string][] }) {
   return (
     <div className="rounded-lg border overflow-hidden" style={{ borderColor: LINE, backgroundColor: "#fffdf6" }}>
-      <div className="flex items-center gap-2 px-3 h-7 border-b text-[10.5px] font-mono" style={{ borderColor: LINE, color: DIM, backgroundColor: SOL.base2 }}>
+      <div className="flex items-center gap-2 px-3 h-7 border-b text-meta font-mono" style={{ borderColor: LINE, color: DIM, backgroundColor: SOL.base2 }}>
         <span className="truncate">codecast.sh/a/{slug}</span>
         <ArrowUpRight className="w-3 h-3 ml-auto shrink-0" />
       </div>
@@ -108,7 +108,7 @@ export function ReportEmbed({ slug, title, rows }: { slug: string; title: string
         <div className="text-[12px] font-semibold mb-2" style={{ color: TEXT }}>{title}</div>
         <div className="space-y-1">
           {rows.map(([k, v]) => (
-            <div key={k} className="flex items-baseline gap-2 text-[11px]">
+            <div key={k} className="flex items-baseline gap-2 text-meta">
               <span className="shrink-0" style={{ color: DIM }}>{k}</span>
               <span className="flex-1 border-b border-dotted translate-y-[-3px]" style={{ borderColor: LINE }} />
               <span className="font-mono shrink-0" style={{ color: TEXT }}>{v}</span>
@@ -146,18 +146,18 @@ export function DecisionSheet({ d, position, total, pickedOption, pickAt, pickCl
       <div className="shrink-0 border-b px-4 sm:px-5 h-10 flex items-center gap-2.5 min-w-0" style={{ borderColor: LINE }}>
         <Dot tier={d.tier} />
         <span className="text-[13px] truncate" style={{ color: TEXT }}>{d.session}</span>
-        <span className="hidden sm:inline text-[11px] truncate" style={{ color: DIM }}>{d.project}</span>
+        <span className="hidden sm:inline text-meta truncate" style={{ color: DIM }}>{d.project}</span>
         {d.tier === 3 && <AdvisoryBadge />}
-        <span className="ml-auto shrink-0 text-[11px] tabular-nums" style={{ color: DIM }}>
+        <span className="ml-auto shrink-0 text-meta tabular-nums" style={{ color: DIM }}>
           <span className="hidden sm:inline">decision {position} of {total}</span>
           <span className="sm:hidden">{position}/{total}</span>
         </span>
-        <span className="shrink-0 flex items-center gap-1 pl-1.5 pr-2 sm:pr-2.5 py-0.5 rounded-full border text-[11px]" style={{ borderColor: LINE, color: MUTED }}>
+        <span className="shrink-0 flex items-center gap-1 pl-1.5 pr-2 sm:pr-2.5 py-0.5 rounded-full border text-meta" style={{ borderColor: LINE, color: MUTED }}>
           <ChevronDown className="w-3.5 h-3.5" /><span className="hidden sm:inline">Read the thread</span>
         </span>
       </div>
       <div className="px-4 sm:px-5 pt-3.5 pb-5 flex-1">
-        <div className="mb-2 flex items-center gap-3 flex-wrap text-[11px]" style={{ color: DIM }}>
+        <div className="mb-2 flex items-center gap-3 flex-wrap text-meta" style={{ color: DIM }}>
           <span>{d.asked}</span>
           {d.documentLink && <span className="inline-flex items-center gap-1" style={{ color: B }}>read the full decision<ArrowUpRight className="w-3 h-3" /></span>}
         </div>
@@ -194,7 +194,7 @@ export function DecisionSheet({ d, position, total, pickedOption, pickAt, pickCl
 export function FoldPill({ blocking = false, label, position }: { blocking?: boolean; label: string; position?: string }) {
   return (
     <span
-      className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-0.5 rounded-full border text-[11px] max-w-full"
+      className="inline-flex items-center gap-1.5 pl-2 pr-2.5 py-0.5 rounded-full border text-meta max-w-full"
       style={blocking ? { borderColor: "rgba(181,137,0,.5)", color: TEXT } : { borderColor: "rgba(38,139,210,.4)", color: B }}
     >
       <Dot tier={blocking ? 1 : 3} />
@@ -229,11 +229,11 @@ export function StackChecklistMock() {
       <div className="flex items-center gap-2 flex-wrap mb-1">
         <Layers className="w-4 h-4" style={{ color: SOL.violet }} />
         <span className="text-[14px] font-semibold" style={{ color: TEXT }}>Launch checklist</span>
-        <span className="font-mono text-[11px]" style={{ color: DIM }}>ds-7</span>
-        <span className="ml-auto text-[10.5px] px-1.5 py-0.5 rounded border" style={{ borderColor: "rgba(220,50,47,.4)", color: SOL.red }}>due 2h ago</span>
+        <span className="font-mono text-meta" style={{ color: DIM }}>ds-7</span>
+        <span className="ml-auto text-meta px-1.5 py-0.5 rounded border" style={{ borderColor: "rgba(220,50,47,.4)", color: SOL.red }}>due 2h ago</span>
       </div>
-      <div className="text-[11px] mb-4" style={{ color: DIM }}>advisory members answer with their default after 24h</div>
-      <div className="flex items-center gap-3 flex-wrap text-[11px] mb-3" style={{ color: DIM }}>
+      <div className="text-meta mb-4" style={{ color: DIM }}>advisory members answer with their default after 24h</div>
+      <div className="flex items-center gap-3 flex-wrap text-meta mb-3" style={{ color: DIM }}>
         <span>2 of 5 cleared</span>
         <div className="flex-1 min-w-[5rem] h-px relative" style={{ backgroundColor: LINE }}>
           <div className="absolute inset-y-0 left-0 dq-grow" style={{ width: "40%", backgroundColor: "rgba(42,161,152,.7)" }} />
@@ -253,15 +253,15 @@ export function StackChecklistMock() {
             </li>
           ) : (
             <li key={i} className="flex items-center gap-2.5 px-3 py-1.5 text-[12.5px]" style={{ color: r.state === "done" ? DIM : MUTED }}>
-              <span className="w-4 text-center font-mono text-[11px]" style={{ color: r.state === "done" ? SOL.green : DIM }}>{r.state === "done" ? "✓" : i + 1}</span>
+              <span className="w-4 text-center font-mono text-meta" style={{ color: r.state === "done" ? SOL.green : DIM }}>{r.state === "done" ? "✓" : i + 1}</span>
               <span className={`min-w-0 flex-1 truncate ${r.state === "done" ? "line-through" : ""}`} style={{ textDecorationColor: LINE }}>{r.q}</span>
-              {r.answer && <span className="text-[11px] shrink-0">{r.answer}</span>}
+              {r.answer && <span className="text-meta shrink-0">{r.answer}</span>}
               {r.advisory && <AdvisoryBadge />}
             </li>
           ),
         )}
       </ol>
-      <div className="mt-4 flex items-center gap-2 flex-wrap text-[11px]">
+      <div className="mt-4 flex items-center gap-2 flex-wrap text-meta">
         <span className="px-2 py-1 rounded border" style={{ borderColor: "rgba(38,139,210,.4)", color: B }}>answer all defaults (2)</span>
         <span style={{ color: DIM }}>resolves every advisory member with the default its agent declared</span>
       </div>
@@ -281,7 +281,7 @@ export function PhoneDecision() {
       <div className="mt-2 mb-1 text-[19px] leading-[1.25]" style={{ fontFamily: "var(--font-serif), Georgia, serif", fontWeight: 500, color: TEXT }}>
         Exponential backoff or a fixed 30s retry?
       </div>
-      <div className="text-[11.5px] mb-3" style={{ color: B }}>Retry webhook deliveries ›</div>
+      <div className="text-meta mb-3" style={{ color: B }}>Retry webhook deliveries ›</div>
       <div className="text-[12px] leading-[1.55] mb-4" style={{ color: MUTED }}>
         A 10 minute outage at the provider sends 20 retries per event today and trips their rate limit.
       </div>
@@ -291,10 +291,10 @@ export function PhoneDecision() {
           { l: "Fixed 30s, capped at 10", d: "simplest; still bursts" },
         ].map((o, i) => (
           <div key={i} className="flex gap-2.5 rounded-xl border px-3 py-2.5" style={{ borderColor: i === 0 ? "rgba(181,137,0,.5)" : LINE }}>
-            <span className="w-5 h-5 shrink-0 rounded-full border flex items-center justify-center text-[10px] font-mono" style={{ borderColor: LINE, color: DIM }}>{i + 1}</span>
+            <span className="w-5 h-5 shrink-0 rounded-full border flex items-center justify-center text-meta font-mono" style={{ borderColor: LINE, color: DIM }}>{i + 1}</span>
             <span className="min-w-0">
               <span className="block text-[13px]" style={{ color: TEXT }}>{o.l}</span>
-              <span className="block text-[11.5px]" style={{ color: MUTED }}>{o.d}</span>
+              <span className="block text-meta" style={{ color: MUTED }}>{o.d}</span>
             </span>
           </div>
         ))}
@@ -314,12 +314,12 @@ export function QueueRow({ tier, session, question, age, note }: { tier: 1 | 2 |
       <span className="mt-[7px]"><Dot tier={tier} /></span>
       <div className="min-w-0 flex-1">
         <div className="text-[13px] leading-snug truncate" style={{ color: TEXT }}>{question}</div>
-        <div className="mt-0.5 flex items-center gap-2 text-[11px] flex-wrap" style={{ color: DIM }}>
+        <div className="mt-0.5 flex items-center gap-2 text-meta flex-wrap" style={{ color: DIM }}>
           <span className="truncate">{session}</span>
           <span>·</span>
           <span>{age}</span>
           {tier === 3 && <AdvisoryBadge />}
-          {tier === 2 && <span className="text-[10px] px-1.5 py-0.5 rounded border" style={{ borderColor: LINE, color: DIM }}>session not running</span>}
+          {tier === 2 && <span className="text-meta px-1.5 py-0.5 rounded border" style={{ borderColor: LINE, color: DIM }}>session not running</span>}
           {note && <span style={{ color: MUTED }}>{note}</span>}
         </div>
       </div>

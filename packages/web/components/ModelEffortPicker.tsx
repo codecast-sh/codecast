@@ -128,7 +128,7 @@ export function ModelEffortRows({
         <span className={`mt-0.5 w-3 text-center text-xs ${isCurrent(m.key) ? "text-sol-cyan" : "text-transparent"}`}>●</span>
         <span className="flex flex-col min-w-0 grow">
           <span className={`text-xs ${isCurrent(m.key) ? "text-sol-text font-medium" : "text-sol-text-secondary"}`}>{m.label}</span>
-          {hint && <span className="text-[10px] text-sol-text-dim truncate">{hint}</span>}
+          {hint && <span className="text-meta text-sol-text-dim truncate">{hint}</span>}
         </span>
         {pinnable && (
           <button
@@ -137,7 +137,7 @@ export function ModelEffortRows({
               e.stopPropagation();
               setDefault(isDefault ? null : m.key);
             }}
-            className={`mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-[9px] whitespace-nowrap transition-all ${
+            className={`mt-0.5 shrink-0 rounded border px-1.5 py-0.5 text-meta whitespace-nowrap transition-all ${
               isDefault
                 ? "border-sol-cyan/50 text-sol-cyan"
                 : "border-sol-border/40 text-sol-text-dim opacity-0 group-hover:opacity-100 hover:text-sol-text hover:border-sol-border"
@@ -153,7 +153,7 @@ export function ModelEffortRows({
   if (part === "effort") {
     return (
       <>
-        <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Effort</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-mark uppercase tracking-wider text-sol-text-dim">Effort</DropdownMenuLabel>
         {rail.efforts.map((level: string) => {
           const active = level === "default" ? !effort : level === effort;
           return (
@@ -168,7 +168,7 @@ export function ModelEffortRows({
   }
   return (
     <>
-      <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Model</DropdownMenuLabel>
+      <DropdownMenuLabel className="text-mark uppercase tracking-wider text-sol-text-dim">Model</DropdownMenuLabel>
       {models.map(modelRow)}
       {dynamic && all.length > 0 && (
         <>
@@ -183,14 +183,14 @@ export function ModelEffortRows({
           <div className="max-h-48 overflow-y-auto">
             {matches.map((id) => modelRow(dynamicModelOption(id)))}
             {q && matches.length === 0 && (
-              <div className="px-3 py-1.5 text-[10px] text-sol-text-dim">No models match "{search}"</div>
+              <div className="px-3 py-1.5 text-meta text-sol-text-dim">No models match "{search}"</div>
             )}
           </div>
         </>
       )}
       {part !== "model" && cfg.efforts.length > 0 && !lane && <>
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Effort</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-mark uppercase tracking-wider text-sol-text-dim">Effort</DropdownMenuLabel>
         {/* Chips size to their label and wrap — clients with many effort levels
             (pi: off/minimal/low/medium/high/xhigh + default = 7) flow onto a second
             row instead of overflowing narrow equal-width columns. `grow` lets each
@@ -205,7 +205,7 @@ export function ModelEffortRows({
               <button
                 key={level}
                 onClick={() => { if (!active) onSelect({ effort: level }); }}
-                className={`grow whitespace-nowrap px-2 py-1 rounded text-[10px] border transition-colors ${
+                className={`grow whitespace-nowrap px-2 py-1 rounded text-meta border transition-colors ${
                   active
                     ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-cyan"
                     : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
@@ -358,17 +358,17 @@ export function AgentDefinitionPill({ conversationId, variant = "chip" }: { conv
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="center" className="min-w-[16rem]">
-        <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Agent definition</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Agent definition</DropdownMenuLabel>
         <DropdownMenuItem onSelect={() => pick(null)} className={!current ? "text-sol-cyan" : ""}>
           <span className="font-mono text-xs">none</span>
-          <span className="ml-2 text-[11px] text-sol-text-dim">plain session</span>
+          <span className="ml-2 text-meta text-sol-text-dim">plain session</span>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         {definitions.map((d) => (
           <DropdownMenuItem key={d._id} onSelect={() => pick(d.name)} className={current === d.name ? "text-sol-cyan" : ""}>
             <div className="flex min-w-0 flex-col">
-              <span className="font-mono text-xs">{d.name}<span className="ml-2 text-[10px] text-sol-text-dim">{[d.agent, d.model, d.effort].filter(Boolean).join(" · ")}</span></span>
-              <span className="truncate text-[11px] text-sol-text-dim">{d.description}</span>
+              <span className="font-mono text-xs">{d.name}<span className="ml-2 text-meta text-sol-text-dim">{[d.agent, d.model, d.effort].filter(Boolean).join(" · ")}</span></span>
+              <span className="truncate text-meta text-sol-text-dim">{d.description}</span>
             </div>
           </DropdownMenuItem>
         ))}

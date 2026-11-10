@@ -118,7 +118,7 @@ function CardButton({ onClick, title, disabled, className, children }: { onClick
       onClick={onClick}
       title={title}
       disabled={disabled}
-      className={`inline-flex items-center gap-1 rounded border border-sol-violet/40 bg-sol-violet/10 px-1.5 py-0.5 text-[10px] font-medium text-sol-violet transition-colors hover:bg-sol-violet/20 disabled:opacity-60 ${className ?? ""}`}
+      className={`inline-flex items-center gap-1 rounded border border-sol-violet/40 bg-sol-violet/10 px-1.5 py-0.5 text-meta font-medium text-sol-violet transition-colors hover:bg-sol-violet/20 disabled:opacity-60 ${className ?? ""}`}
     >
       {children}
     </button>
@@ -286,7 +286,7 @@ function ActionRows({ actions, style }: { actions: CloudAgentActions; style: key
           {pending === action ? <Loader2 className={`mt-px shrink-0 animate-spin ${row.icon}`} /> : <Icon className={`mt-px shrink-0 ${row.icon}`} />}
           <span className="flex min-w-0 flex-col">
             {label}
-            {disabledReason && <span className="text-[10px] text-sol-text-dim">{disabledReason}</span>}
+            {disabledReason && <span className="text-meta text-sol-text-dim">{disabledReason}</span>}
           </span>
         </DropdownMenuItem>
       ))}
@@ -300,13 +300,13 @@ export function CloudAgentMenuItems({ actions }: { actions: CloudAgentActions })
   return (
     <>
       <DropdownMenuSeparator />
-      <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">{actions.cloud.spec.label}</DropdownMenuLabel>
+      <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">{actions.cloud.spec.label}</DropdownMenuLabel>
       <ActionRows actions={actions} style="menu" />
     </>
   );
 }
 
-const CHIP = "inline-flex shrink-0 items-center gap-1 rounded border border-sol-violet/30 px-1.5 py-px text-[10px] text-sol-violet";
+const CHIP = "inline-flex shrink-0 items-center gap-1 rounded border border-sol-violet/30 px-1.5 py-px text-meta text-sol-violet";
 
 /**
  * The cloud agent behind a session: a link to it on the provider's site, or

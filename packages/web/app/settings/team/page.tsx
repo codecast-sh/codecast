@@ -420,13 +420,13 @@ export default function TeamPage() {
                   }`} />
                 </div>
                 <div className="min-w-0">
-                  <div className="text-sm font-medium text-sol-text">
-                    {member.name || "Unnamed"}
+                  <div className="flex min-w-0 items-baseline text-sm font-medium text-sol-text">
+                    <span className="truncate" title={member.name || undefined}>{member.name || "Unnamed"}</span>
                     {member._id === user._id && (
-                      <span className="ml-2 text-xs text-sol-text-muted">(you)</span>
+                      <span className="ml-2 shrink-0 text-xs text-sol-text-muted">(you)</span>
                     )}
                     {member.is_bot && (
-                      <span className="ml-2 text-xs text-sol-text-muted">(agent)</span>
+                      <span className="ml-2 shrink-0 text-xs text-sol-text-muted">(agent)</span>
                     )}
                   </div>
                   <div className="truncate text-xs text-sol-text-muted">

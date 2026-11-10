@@ -22,6 +22,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { ShareControl } from "../../components/ShareControl";
+import { KeyCap } from "../../components/KeyCap";
 import { policyTeamOf } from "@codecast/shared/contracts";
 import { GuestInvite } from "../../components/calls/GuestDoor";
 import { GuestTag, ParticipantTag } from "../../components/calls/GuestTag";
@@ -133,14 +134,14 @@ function RecordingScopeChip({ call }: { call: any }) {
   if (!isRecRoomKey(call.room_key) || !me || call.started_by !== me) return null;
   if (!call.rec_shared) {
     return (
-      <span className="flex shrink-0 items-center gap-1 text-[10.5px] text-sol-text-dim">
+      <span className="flex shrink-0 items-center gap-1 text-meta text-sol-text-dim">
         <Lock className="h-2.5 w-2.5" /> private
       </span>
     );
   }
   const team = (teams || []).find((t: any) => String(t._id) === String(call.team_id));
   return (
-    <span className="flex shrink-0 items-center gap-1 text-[10.5px] text-sol-cyan">
+    <span className="flex shrink-0 items-center gap-1 text-meta text-sol-cyan">
       <Users className="h-2.5 w-2.5" /> {team?.name ?? "team"}
     </span>
   );
@@ -180,9 +181,10 @@ function CallListRow({ call, selected, place }: { call: any; selected: boolean; 
       <div className="flex items-start gap-2">
         <span className="flex h-[18px] shrink-0 items-center">
         {live ? (
-          <span className="relative flex h-2 w-2 shrink-0">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sol-green opacity-60" />
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-sol-green" />
+          // A still dot: a list row runs no infinite animation (the typing
+          // budget), and the green alone says live.
+          <span className="relative flex h-2 w-2 shrink-0" title="Live" aria-label="Live" role="img">
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-sol-green ring-2 ring-sol-green/25" />
           </span>
         ) : recording ? (
           <Mic className="h-3 w-3 shrink-0 text-sol-text-dim" />
@@ -205,17 +207,17 @@ function CallListRow({ call, selected, place }: { call: any; selected: boolean; 
           {title}
         </span>
         {filmingNow && <RecordingMark size="dot" className="h-[18px]" />}
-        <span className={`shrink-0 text-[11px] leading-[18px] ${live ? "text-sol-green" : "text-sol-text-dim"}`}>
+        <span className={`shrink-0 text-meta leading-[18px] ${live ? "text-sol-green" : "text-sol-text-dim"}`}>
           {fmtCallLength(call.started_at, call.ended_at)}
         </span>
       </div>
       <div className="mt-1 flex items-center gap-2 pl-4">
-        <span className="shrink-0 text-[11px] text-sol-text-dim">{fmtWhen(call.started_at)}</span>
+        <span className="shrink-0 text-meta text-sol-text-dim">{fmtWhen(call.started_at)}</span>
         <RecordingScopeChip call={call} />
         {recording ? (
           // One microphone never fills participants, so the row reads the
           // transcript itself: how many lines it has, or where it stands.
-          <span className="text-[11px] italic text-sol-text-dim">
+          <span className="text-meta italic text-sol-text-dim">
             {call.last_seq > 0
               ? `${call.last_seq} line${call.last_seq === 1 ? "" : "s"}`
               : live
@@ -225,13 +227,13 @@ function CallListRow({ call, selected, place }: { call: any; selected: boolean; 
                   : "nothing was said"}
           </span>
         ) : live && people.length === 0 ? (
-          <span className="text-[11px] italic text-sol-text-dim">no one spoke yet</span>
+          <span className="text-meta italic text-sol-text-dim">no one spoke yet</span>
         ) : silent ? null : (
           <>
           {/* What a filmed call holds, said on the line itself, so a call
               filmed while nobody spoke still says what it is. */}
-          {filmed && <span className="shrink-0 text-[11px] text-sol-text-muted">{people.length > 0 ? "video ·" : "video, nobody spoke"}</span>}
-          <span className="min-w-0 truncate text-[11px]">
+          {filmed && <span className="shrink-0 text-meta text-sol-text-muted">{people.length > 0 ? "video ·" : "video, nobody spoke"}</span>}
+          <span className="min-w-0 truncate text-meta">
             {people.map((p: any, i: number) => (
               <span key={p.id} className={speakerColor(p.id)}>
                 {firstName(p.name)}
@@ -273,7 +275,7 @@ function RecordingScopePicker({ call }: { call: any }) {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
-          className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-[11px] transition-colors ${
+          className={`flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-meta transition-colors ${
             call.rec_shared
               ? "border-sol-cyan/40 text-sol-cyan hover:bg-sol-cyan/10"
               : "border-sol-border text-sol-text-dim hover:text-sol-text"
@@ -360,7 +362,10 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
   // a call opened before paints from cache on the next visit instead of a
   // skeleton.
   const call = useCallDetail(id);
-  const myCall = useInboxStore((s) => s.call);
+  // The room this viewer is connected in, as a string: the whole call
+  // object changes on every speaking report, and the page only asks which
+  // room the viewer is seated in.
+  const mySeatedRoom = useInboxStore((s) => (s.call.phase === "connected" ? s.call.roomKey : null));
   // A recording has no room: nobody can join it, nobody else can see it, and
   // the room chat those affordances open would have no second person in it.
   const recording = isRecRoomKey(call?.room_key);
@@ -573,7 +578,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
     return <div className="p-8 text-sm text-sol-text-dim">Call not found (or not yours to see).</div>;
   }
 
-  const inThisRoom = myCall.roomKey === call.room_key && myCall.phase === "connected";
+  const inThisRoom = !!mySeatedRoom && mySeatedRoom === call.room_key;
   // The people row lists who was heard (participants, the voices the
   // scribe transcribed). Outsiders are the one group the room let in on
   // purpose, so the ones not heard are listed too, apart, as guests: the
@@ -677,7 +682,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
           </h1>
           {live && (
             <span
-              className={`flex shrink-0 items-center gap-1.5 text-[11px] font-medium ${
+              className={`flex shrink-0 items-center gap-1.5 text-meta font-medium ${
                 recording ? "text-sol-red" : "text-sol-green"
               }`}
             >
@@ -703,7 +708,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
               {(call.participants || []).map((p: any) => (
                 <span
                   key={p.id}
-                  className={`flex items-center gap-1 rounded-md bg-sol-bg-alt/60 px-1.5 py-0.5 font-mono text-[11px] ${speakerColor(p.id)}`}
+                  className={`flex items-center gap-1 rounded-md bg-sol-bg-alt/60 px-1.5 py-0.5 font-mono text-meta ${speakerColor(p.id)}`}
                 >
                   {firstName(p.name)}
                   <ParticipantTag identity={p.id} name={p.name} />
@@ -718,7 +723,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
                 <span
                   key={`${g.name}:${g.joined_at}`}
                   title={`${firstName(g.name)} joined from a guest link${heardAll ? " and did not speak" : ""}`}
-                  className="flex items-center gap-1 rounded-md bg-sol-bg-alt/40 px-1.5 py-0.5 font-mono text-[11px] text-sol-text-dim"
+                  className="flex items-center gap-1 rounded-md bg-sol-bg-alt/40 px-1.5 py-0.5 font-mono text-meta text-sol-text-dim"
                 >
                   {firstName(g.name)}
                   <GuestTag />
@@ -887,7 +892,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
 
       {call.recording_url && (
         <div className="shrink-0 px-6 pt-4">
-          <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-sol-text-dim">
+          <div className="mb-1.5 flex items-center gap-1.5 text-mark font-medium uppercase tracking-wide text-sol-text-dim">
             <Mic className="h-3 w-3" /> Audio
           </div>
           <audio
@@ -926,19 +931,21 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
           ...(seekable ? { activeSeq, filmed: stretches } : {}),
           // A rec: voice note has no recording events to place.
           momentAt: recording ? undefined : momentAt,
+          // What a press does, as gestures and keys, not instructions.
           hint:
             selectedCount === 0
               ? coarse
                 ? hasVideo || (recording && call.recording_url)
-                  ? `Tap a line to ${hasVideo ? "see that moment" : "jump there in the audio"}. Press and hold to select lines to send.`
-                  : "Press and hold a line to select lines to send."
-                : recording
-                  ? call.recording_url
-                    ? "Click a line to jump there in the audio. Hold Shift and click to select lines to send."
-                    : "Hold Shift and click to select lines to send."
-                  : hasVideo
-                    ? "Click a line to see that moment in the video. Hold Shift and click to select lines to send."
-                    : "Click a turn to start a selection, click another to extend, then send the excerpt to an agent."
+                  ? `Tap · ${hasVideo ? "see that moment" : "play from there"} · Press and hold · select`
+                  : "Press and hold · select"
+                : recording || hasVideo
+                  ? (
+                    <>
+                      {hasVideo || call.recording_url ? `Click · ${hasVideo ? "see that moment" : "play from there"} · ` : null}
+                      <KeyCap>Shift</KeyCap> + click · select
+                    </>
+                  )
+                  : "Click · select a turn · click another · extend"
               : null,
         }}
       />
@@ -949,7 +956,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
           <button
             type="button"
             onClick={backToMoment}
-            className="pointer-events-auto flex items-center gap-1.5 rounded-full bg-sol-bg-alt px-3 py-1.5 font-mono text-[11.5px] text-sol-text-secondary shadow-xl ring-1 ring-sol-border/40 transition-colors animate-in fade-in slide-in-from-bottom-1 duration-150 hover:text-sol-text motion-reduce:animate-none"
+            className="pointer-events-auto flex items-center gap-1.5 rounded-full bg-sol-bg-alt px-3 py-1.5 font-mono text-meta text-sol-text-secondary shadow-xl ring-1 ring-sol-border/40 transition-colors animate-in fade-in slide-in-from-bottom-1 duration-150 hover:text-sol-text motion-reduce:animate-none"
           >
             <ArrowDownToLine className="h-3.5 w-3.5" /> Back to the moment
           </button>
@@ -1025,7 +1032,7 @@ function LiveNowSection({ transcribedRoomKeys }: { transcribedRoomKeys: Set<stri
   if (rooms.length === 0) return null;
   return (
     <>
-      <div className="bg-sol-bg-alt/30 px-4 py-1.5 text-[11px] font-medium uppercase tracking-wide text-sol-violet">
+      <div className="bg-sol-bg-alt/30 px-4 py-1.5 text-mark font-medium uppercase tracking-wide text-sol-violet">
         Happening now
       </div>
       {rooms.map((row) => (
@@ -1036,7 +1043,7 @@ function LiveNowSection({ transcribedRoomKeys }: { transcribedRoomKeys: Set<stri
           <Facepile members={row.members} max={4} size={22} />
           <div className="min-w-0 flex-1">
             <LiveRoomLabel row={row} className="text-[13px] font-medium text-sol-text" />
-            <div className="mt-0.5 min-w-0 truncate text-[11px] text-sol-text-dim">
+            <div className="mt-0.5 min-w-0 truncate text-meta text-sol-text-dim">
               {row.members.map((m) => firstName(m.user_name)).join(", ")}
             </div>
           </div>
@@ -1112,7 +1119,7 @@ function SeatedHuddleRecord() {
     );
   }
   return (
-    <p className="mt-1 text-[10.5px] leading-snug text-sol-text-dim/80">
+    <p className="mt-1 text-meta leading-snug text-sol-text-dim/80">
       To film a huddle, press Record on its card at the top of the window, beside Mute, or on the open call.
     </p>
   );
@@ -1199,7 +1206,7 @@ export default function CallsPage() {
           <div className={`${!showList ? "hidden" : selectedId ? "hidden md:flex" : "flex"} w-full shrink-0 flex-col border-r border-sol-border/20 md:w-72`}>
             <div className="shrink-0 border-b border-sol-border/20 px-4 py-3">
               <div className="flex items-center justify-between gap-2">
-                <h2 className="text-sm font-medium text-sol-text">Calls</h2>
+                <h2 className="text-sm font-medium text-sol-text" title="Huddles with their transcripts and video, and voice notes. Your agents can read them too.">Calls</h2>
                 {selectedId && (
                   <button
                     type="button"
@@ -1212,22 +1219,20 @@ export default function CallsPage() {
                   </button>
                 )}
               </div>
-              <p className="mt-0.5 text-[11px] text-sol-text-dim">
-                Huddles with their transcripts and video, and voice
-                notes. Your agents can read them too.
-              </p>
+              {/* What a voice note is and who sees it is on the button's
+                  title and the row's privacy chip, not in a paragraph here. */}
               <SeatedHuddleRecord />
               <RecordMeetingButton />
-              <p className="mt-1.5 text-[10.5px] leading-snug text-sol-text-dim/80">
-                A voice note records your microphone, not the huddle, and
-                starts private to you, whatever team is active. Share it into
-                a team from its page when it belongs there.
-              </p>
+              {/* Huddles off: a state with its way to act, Settings › Team. */}
               {!callsOn && (
-                <p className="mt-1.5 text-[10.5px] leading-snug text-sol-yellow/80">
-                  Huddles are off for this team (a team admin can turn them on
-                  under Settings → Team). Your voice notes stay here either way.
-                </p>
+                <button
+                  type="button"
+                  onClick={() => useInboxStore.getState().openSettingsModal("team")}
+                  title="Huddles are off for this team. A team admin turns them on in Settings › Team. Your voice notes stay here either way."
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-full border border-sol-yellow/40 px-2 py-0.5 text-meta text-sol-yellow transition-colors hover:bg-sol-yellow/10"
+                >
+                  Huddles off · Settings
+                </button>
               )}
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">
@@ -1242,16 +1247,16 @@ export default function CallsPage() {
               ) : calls.length === 0 && !callsReady ? (
                 <div className="p-4 text-[12px] text-sol-text-dim">Loading…</div>
               ) : calls.length === 0 ? (
-                <div className="p-4 text-[12px] leading-relaxed text-sol-text-dim">
-                  Nothing here yet. Start a huddle and add an agent, or switch
-                  transcription on in the thread. Or record the meeting in the
-                  room around you. Either lands here with a live transcript
-                  and, when it ends, a summary and action items.
+                <div
+                  className="p-4 text-[12px] leading-relaxed text-sol-text-dim"
+                  title="A huddle with transcription on, or a voice note, lands here with a live transcript and, when it ends, a summary and action items."
+                >
+                  No calls yet
                 </div>
               ) : (
                 <>
                   {liveCalls.length > 0 && (
-                    <div className="bg-sol-bg-alt/30 px-4 py-1.5 text-[11px] font-medium uppercase tracking-wide text-sol-green">
+                    <div className="bg-sol-bg-alt/30 px-4 py-1.5 text-mark font-medium uppercase tracking-wide text-sol-green">
                       Live ({liveCalls.length})
                     </div>
                   )}
@@ -1260,14 +1265,14 @@ export default function CallsPage() {
                   ))}
                   {pastCalls.length > 0 && (
                     <div className="flex items-center justify-between bg-sol-bg-alt/30 px-4 py-1.5">
-                      <span className="text-[11px] font-medium uppercase tracking-wide text-sol-text-dim">History</span>
+                      <span className="text-mark font-medium uppercase tracking-wide text-sol-text-dim">History</span>
                       {anyFilmed && (
                         <button
                           type="button"
                           onClick={() => setVideoOnly((v) => !v)}
                           aria-pressed={videoOnly}
                           title={videoOnly ? "Show every call" : "Show only calls with video"}
-                          className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors ${
+                          className={`flex items-center gap-1 rounded px-1.5 py-0.5 text-meta transition-colors ${
                             videoOnly ? "bg-sol-cyan/15 text-sol-cyan" : "text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text"
                           }`}
                         >

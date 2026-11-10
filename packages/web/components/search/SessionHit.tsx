@@ -83,9 +83,9 @@ export const SessionHit = memo(function SessionHit({
               : <span className="flex h-[18px] w-[18px] items-center justify-center"><AgentTypeIcon agentType={row.agentType || "claude_code"} className="h-3.5 w-3.5" /></span>}
           />
           <SessionIdentityLine row={identity} title={cleanTitle(row.title || "Untitled")} highlight={highlight} className="min-w-0 flex-1 text-[14px]" />
-          <span className="flex-shrink-0 text-[11px] tabular-nums text-sol-text-dim">{formatSearchTimestamp(row.updatedAt)}</span>
+          <span className="flex-shrink-0 text-meta tabular-nums text-sol-text-dim">{formatSearchTimestamp(row.updatedAt)}</span>
         </div>
-        <div className="mt-1 flex min-w-0 items-center gap-1.5 pl-[26px] text-[10px] text-sol-text-muted">
+        <div className="mt-1 flex min-w-0 items-center gap-1.5 pl-[26px] text-meta text-sol-text-muted">
           {!row.isOwn && row.authorName && <span className="flex-shrink-0 font-medium text-sol-violet/80">{row.authorName.split(" ")[0]}</span>}
           <SessionProjectChip project={project} directory={row.projectPath} />
           {!!row.messageCount && <><MetaDot /><span className="flex-shrink-0 tabular-nums">{row.messageCount} msgs</span></>}
@@ -116,7 +116,7 @@ export const SessionHit = memo(function SessionHit({
             <Link
               href={hrefFor(row, shown[0]?.messageId)}
               onClick={onNavigate}
-              className="block px-3 py-1 text-[11px] text-sol-text-dim no-underline hover:text-sol-text-secondary"
+              className="block px-3 py-1 text-meta text-sol-text-dim no-underline hover:text-sol-text-secondary"
             >
               {more} more in this session
             </Link>

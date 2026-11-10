@@ -124,14 +124,14 @@ export function EntityKindIcon({ type, entity, className = "h-3.5 w-3.5" }: { ty
 export function CallTurns({ call, limit }: { call: any; limit?: number }) {
   const turns = groupTurns(call.turns?.segments ?? []);
   if (!call.turns) return null;
-  if (turns.length === 0) return <p className="text-[11px] italic text-sol-text-dim">Nothing was said in those lines.</p>;
+  if (turns.length === 0) return <p className="text-meta italic text-sol-text-dim">Nothing was said in those lines.</p>;
   const shown = limit ? turns.slice(0, limit) : turns;
   const hidden = turns.length - shown.length;
   return (
     <div className="space-y-0.5">
       <TranscriptTurnList turns={shown} callId={String(call._id)} />
       {(hidden > 0 || (!limit && call.turns.more)) && (
-        <p className="text-[10px] text-sol-text-dim">{hidden > 0 ? `${hidden} more turns` : "More on the call page"}</p>
+        <p className="text-meta text-sol-text-dim">{hidden > 0 ? `${hidden} more turns` : "More on the call page"}</p>
       )}
     </div>
   );
@@ -277,7 +277,7 @@ function ProgressBar({ done, total, pct, bar }: { done: number; total: number; p
       <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-[color-mix(in_srgb,var(--sol-border)_45%,transparent)]">
         <div className={`h-full rounded-full ${bar} transition-all`} style={{ width: `${pct}%` }} />
       </div>
-      <span className="font-mono text-[10px] text-sol-text-dim">{done}/{total}</span>
+      <span className="font-mono text-meta text-sol-text-dim">{done}/{total}</span>
     </div>
   );
 }
@@ -308,8 +308,9 @@ function SessionCardBody({ session, expanded }: { session: any; expanded: boolea
           <SessionMark session={session} />
           <span className="min-w-0 font-medium [overflow-wrap:anywhere]">{title}</span>
           {isLive && (
+            // Static: a transcript can hold many of these cards, and a ping on
+            // each repaints the page every frame (AGENTS.md typing budget).
             <span className="relative flex h-1.5 w-1.5 flex-shrink-0" title="Live">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sol-green opacity-75" />
               <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-sol-green" />
             </span>
           )}
@@ -320,12 +321,12 @@ function SessionCardBody({ session, expanded }: { session: any; expanded: boolea
           </div>
         )}
         {userLine && (
-          <div className={`mt-0.5 text-[11px] font-semibold leading-snug text-sky-700 dark:text-sky-300 ${expanded ? "" : "truncate"}`}>
-            <span className="mr-0.5 text-sky-600/60 dark:text-sky-400/50">&gt;</span>
+          <div className={`mt-0.5 text-meta font-semibold leading-snug text-sol-blue ${expanded ? "" : "truncate"}`}>
+            <span className="mr-0.5 text-sol-blue/60">&gt;</span>
             {userLine}
           </div>
         )}
-        <div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-[10px] text-sol-text-dim">
+        <div className="mt-1.5 flex min-w-0 items-center gap-1.5 text-meta text-sol-text-dim">
           {(session.author_name || session.author_avatar) && (
             <span className="inline-flex min-w-0 items-center gap-1">
               <AuthorAvatar name={session.author_name} avatar={session.author_avatar} size={12} />
@@ -373,7 +374,7 @@ function CardSnippet({ type, entity, compact }: { type: EntityType; entity: any;
           </p>
         )}
         {last?.text && (
-          <div className="flex items-baseline gap-1 border-l-2 border-[color-mix(in_srgb,var(--sol-border)_70%,transparent)] pl-1.5 text-[10px] leading-snug">
+          <div className="flex items-baseline gap-1 border-l-2 border-[color-mix(in_srgb,var(--sol-border)_70%,transparent)] pl-1.5 text-meta leading-snug">
             {last.author && <span className="flex-shrink-0 font-medium text-sol-text-muted">{roleAuthor({ userId: last.author_user_id, session: last.session_info })?.name ?? last.author}</span>}
             <span className="min-w-0 truncate text-sol-text-dim">{stripMarkdown(last.text)}</span>
             {last.created_at && <span className="ml-auto flex-shrink-0 text-sol-text-dim/70">{relativeTime(last.created_at)}</span>}
@@ -450,13 +451,13 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
         {entity.description ? (
           <CardMarkdown content={entity.description} />
         ) : (
-          <p className="text-[11px] italic text-sol-text-dim">No description.</p>
+          <p className="text-meta italic text-sol-text-dim">No description.</p>
         )}
         {(creator || assignee || (entity.labels?.length ?? 0) > 0) && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
             <TaskPeople task={entity} />
             {(entity.labels ?? []).map((l: string) => (
-              <span key={l} className="rounded bg-sol-magenta/10 px-1.5 text-[10px] leading-[1.6] text-sol-magenta">
+              <span key={l} className="rounded bg-sol-magenta/10 px-1.5 text-meta leading-[1.6] text-sol-magenta">
                 {l}
               </span>
             ))}
@@ -482,7 +483,7 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
     const projectName = entity.project_path?.split("/").pop() ?? null;
     return (
       <div className="space-y-2.5">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-sol-text-dim">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-sol-text-dim">
           {entity.message_count != null && <span className="font-mono">{entity.message_count} msgs</span>}
           {projectName && (
             <span className="inline-flex items-center gap-1 font-mono">
@@ -514,7 +515,7 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
           <CardMarkdown content={entity.prompt} />
         )}
         {(entity.last_run_at || entity.run_count > 0) && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-sol-text-dim">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-sol-text-dim">
             {entity.last_run_at && (
               <span className={failing ? "text-sol-red" : ""}>
                 {failing ? "Last run failed" : "Last run"} {relativeTime(entity.last_run_at)}
@@ -529,7 +530,7 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
   if (type === "pr") {
     return (
       <div className="space-y-2.5">
-        {entity.body ? <CardMarkdown content={entity.body} /> : <p className="text-[11px] italic text-sol-text-dim">No description.</p>}
+        {entity.body ? <CardMarkdown content={entity.body} /> : <p className="text-meta italic text-sol-text-dim">No description.</p>}
         <FileDiffList files={entity.files} emptyText="No file changes synced yet" className="overflow-hidden rounded border border-sol-border/40" />
       </div>
     );
@@ -546,17 +547,17 @@ function CardDetail({ type, entity }: { type: EntityType; entity: any }) {
   if (type === "source") {
     return entity.last_error
       ? <p className="text-[12px] leading-relaxed text-sol-red">{entity.last_error}</p>
-      : <p className="text-[11px] italic text-sol-text-dim">Its errors, checks and deploys are on the Ops page.</p>;
+      : <p className="text-meta italic text-sol-text-dim">Its errors, checks and deploys are on the Ops page.</p>;
   }
   if (type === "replay") {
-    return <p className="text-[11px] italic text-sol-text-dim">Its events, console and network{entity.dom_chunks ? ", and the page itself," : ""} are on the replay page.</p>;
+    return <p className="text-meta italic text-sol-text-dim">Its events, console and network{entity.dom_chunks ? ", and the page itself," : ""} are on the replay page.</p>;
   }
   if (type === "call") {
     if (entity.turns) return <CallTurns call={entity} />;
-    return entity.summary ? <CardMarkdown content={entity.summary} /> : <p className="text-[11px] italic text-sol-text-dim">No summary yet.</p>;
+    return entity.summary ? <CardMarkdown content={entity.summary} /> : <p className="text-meta italic text-sol-text-dim">No summary yet.</p>;
   }
   const summary = entity.description || entity.goal || entity.summary;
-  return summary ? <CardMarkdown content={summary} /> : <p className="text-[11px] italic text-sol-text-dim">Nothing more here.</p>;
+  return summary ? <CardMarkdown content={summary} /> : <p className="text-meta italic text-sol-text-dim">Nothing more here.</p>;
 }
 
 /**
@@ -724,7 +725,7 @@ export function ObjectCardFrame({
             {resolved && !compact && header.meta}
           </div>
           <div className="ml-auto mt-[1px] flex flex-shrink-0 items-center gap-1.5">
-            {header.timeAgo && !compact && <span className="text-[10px] text-sol-text-dim">{header.timeAgo}</span>}
+            {header.timeAgo && !compact && <span className="text-meta text-sol-text-dim">{header.timeAgo}</span>}
             {resolved && !expanded && <RevealButton target={reveal} className={revealChrome} />}
             {resolved && !expanded && !hideOpen && <RevealOpenLink href={href} label={openLabel} onOpen={openObject} variant="compact" />}
             <ChevronDown
@@ -743,7 +744,7 @@ export function ObjectCardFrame({
       )}
       {!resolved &&
         (served ? (
-          <div className="px-2.5 py-2 text-[11px] text-sol-text-dim">Not available to you.</div>
+          <div className="px-2.5 py-2 text-meta text-sol-text-dim">Not available to you.</div>
         ) : (
           <div className="space-y-1.5 px-2.5 py-2.5" aria-hidden>
             <div className="h-2 w-3/4 animate-pulse rounded bg-[color-mix(in_srgb,var(--sol-border)_55%,transparent)]" />
@@ -766,9 +767,9 @@ export function ObjectCardFrame({
             <div className={`cursor-auto ${expanded || mounted ? "px-3.5 pb-3 pt-2" : "px-2.5 pb-2.5 pt-2"}`} onClick={(e) => e.stopPropagation()}>
               {detail}
               <div className="mt-2.5 flex items-center justify-between border-t border-[color-mix(in_srgb,var(--sol-border)_55%,transparent)] pt-1.5">
-                <span className="font-mono text-[10px] text-sol-text-dim">{footerId}</span>
+                <span className="font-mono text-meta text-sol-text-dim">{footerId}</span>
                 <span className="flex items-center gap-3">
-                  <RevealButton target={reveal} withLabel className={`text-[10px] text-sol-text-muted ${accent.hoverText} hover:underline`} />
+                  <RevealButton target={reveal} withLabel className={`text-meta text-sol-text-muted ${accent.hoverText} hover:underline`} />
                   {!hideOpen && <RevealOpenLink href={href} label={openLabel} onOpen={openObject} variant="compact" />}
                 </span>
               </div>
@@ -840,7 +841,7 @@ export function EntityObjectCard({ refId, count, unresolved }: {
 
   // Same degrade rule as the pill: an id that resolves to no entity table (or
   // is still resolving) renders back as the text that was typed.
-  if (!type) return <span className="font-mono text-[11px] text-sol-text-dim">{refId}</span>;
+  if (!type) return <span className="font-mono text-meta text-sol-text-dim">{refId}</span>;
   if (type === "proposal") {
     // One change alone on its line (`op-55#3`): the proposal's pill, opening the org screen with that change in focus.
     return changeSeq != null
@@ -871,7 +872,7 @@ export function EntityObjectCard({ refId, count, unresolved }: {
   // named by URL is certain, so it keeps the pill and the pill's hover says
   // where the object lives.
   if (isRepoObject && served && !entity) {
-    return unresolved !== undefined ? <>{unresolved}</> : <span className="font-mono text-[11px] text-sol-text-dim">{refId}</span>;
+    return unresolved !== undefined ? <>{unresolved}</> : <span className="font-mono text-meta text-sol-text-dim">{refId}</span>;
   }
 
   const isSession = type === "session";

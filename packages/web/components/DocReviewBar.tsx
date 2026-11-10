@@ -113,7 +113,7 @@ export function DocReviewBar({
           className="flex items-center gap-2 rounded-lg border border-sol-yellow/30 backdrop-blur px-3 py-2 shadow-lg shadow-black/20"
           style={{ background: "color-mix(in srgb, var(--sol-bg) 92%, transparent)" }}
         >
-          <span className="text-[11px] font-semibold text-sol-yellow whitespace-nowrap">
+          <span className="text-meta font-semibold text-sol-yellow whitespace-nowrap">
             {count > 0 ? `${count} note${count === 1 ? "" : "s"}` : "Review"}
           </span>
           <input
@@ -127,7 +127,7 @@ export function DocReviewBar({
             type="button"
             disabled={count === 0}
             onClick={pickTarget}
-            className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-md border transition-colors disabled:opacity-40 disabled:cursor-not-allowed enabled:cursor-pointer border-sol-yellow/40 bg-sol-yellow/10 text-sol-yellow enabled:hover:bg-sol-yellow/20"
+            className="inline-flex items-center gap-1.5 text-meta font-medium px-2.5 py-1 rounded-md border transition-colors disabled:opacity-40 disabled:cursor-not-allowed enabled:cursor-pointer border-sol-yellow/40 bg-sol-yellow/10 text-sol-yellow enabled:hover:bg-sol-yellow/20"
           >
             <Send className="w-3 h-3" />
             Send to agent

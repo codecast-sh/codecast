@@ -53,8 +53,8 @@ export function FollowChip({
   const { isSelf, following, followers, toggle } = useCallFollow(identity);
   const base =
     variant === "tile"
-      ? "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[11px] backdrop-blur transition-all"
-      : "inline-flex items-center gap-1 rounded-full px-1.5 py-px font-mono text-[10px] transition-all";
+      ? "inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-meta backdrop-blur transition-all"
+      : "inline-flex items-center gap-1 rounded-full px-1.5 py-px font-mono text-meta transition-all";
   const reveal = always || following ? "" : " opacity-0 group-hover:opacity-100 focus-visible:opacity-100";
   if (isSelf) {
     if (followers === 0) return null;

@@ -19,12 +19,13 @@ import { scoreBand } from "../../../../../lib/line/problemScore";
 
 /** The column heads: Findings and Last sort the whole list flat; Status returns to the page's own grouped order. */
 export function ProblemTableHead({ range, sort, onSort, grouped, day }: { range: OverviewRange; sort: ProblemSort; onSort: (s: ProblemSort) => void; /** One chip is on: the list is that group whatever the sort, so Status sorts nothing. */ grouped: boolean; /** A picked bar: the column counts that day ("Oct 9"). */ day?: string | null }) {
-  const head = (key: ProblemSort, label: string, cls: string) => {
+  // `label` is the whole head; `body`, when given, draws it with its long part marked, which a narrow pane drops.
+  const head = (key: ProblemSort, label: string, cls: string, body?: ReactNode) => {
     const on = sort === key;
     return (
       <span role="columnheader" className={cls} aria-sort={on ? (key ? "descending" : "other") : undefined}>
-        <button type="button" onClick={() => onSort(key)} data-on={on ? "" : undefined} data-line-sort={key ?? "status"}>
-          {label}{on && key && <ArrowDown className="lwp-sort" aria-hidden />}
+        <button type="button" onClick={() => onSort(key)} data-on={on ? "" : undefined} data-line-sort={key ?? "status"} aria-label={body ? label : undefined} title={body ? label : undefined}>
+          {body ?? label}{on && key && <ArrowDown className="lwp-sort" aria-hidden />}
         </button>
       </span>
     );
@@ -33,10 +34,10 @@ export function ProblemTableHead({ range, sort, onSort, grouped, day }: { range:
     <div className="lwp-tr lwp-th" role="row">
       <span className="lwp-c-title" role="columnheader">Problem</span>
       {head("score", "Score", "lwp-c-score")}
-      {head("findings", `Findings ${day ?? range}`, "lwp-c-find")}
+      {head("findings", `Findings ${day ?? range}`, "lwp-c-find", <><span className="lwp-th-long">Findings </span>{day ?? range}</>)}
       {grouped ? <span className="lwp-c-status" role="columnheader">Status</span> : head(null, "Status", "lwp-c-status")}
       {/* When the problem was last seen, never when a run last wrote or it started waiting (For you's clock). */}
-      {head("last", "Last finding", "lwp-c-last")}
+      {head("last", "Last finding", "lwp-c-last", <>Last<span className="lwp-th-long"> finding</span></>)}
     </div>
   );
 }

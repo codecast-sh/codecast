@@ -70,7 +70,7 @@ export function NowBlock({ subject, sessions, rows, lead }: { subject: NowSubjec
           <NowLine key={`${proposal._id}:${card.key}`} violet wraps data={{ "data-now-proposal": `${proposal.short_id}#${card.seqs[0] ?? ""}` }}>
             {author ? <RoleFace role={author} size={16} className="mt-px shrink-0" /> : <span className="mt-[5px] w-2 h-2 rounded-full shrink-0" style={{ background: "var(--sol-violet)" }} aria-hidden />}
             <span className="min-w-0 line-clamp-2" data-now-proposal-words>{proposesSentence(proposal.author.name, card.sentenceThis)}</span>
-            <span className="ml-auto shrink-0 pl-2 text-[11.5px] whitespace-nowrap" style={{ color: "var(--sol-violet)" }}>See it ›</span>
+            <span className="ml-auto shrink-0 pl-2 text-meta whitespace-nowrap" style={{ color: "var(--sol-violet)" }}>See it ›</span>
           </NowLine>
         );
       })}

@@ -50,7 +50,7 @@ export function HistoryFold({ open, onClick, children, className, tabIndex, ...d
       onClick={onClick}
       tabIndex={tabIndex}
       aria-expanded={open}
-      className={cn("inline-flex items-center gap-1 h-6 -ml-1 px-1 rounded text-[11.5px] transition-colors hover:bg-sol-bg-highlight/70", className)}
+      className={cn("inline-flex items-center gap-1 h-6 -ml-1 px-1 rounded text-meta transition-colors hover:bg-sol-bg-highlight/70", className)}
       style={{ color: "var(--sol-text-muted)" }}
       {...data}
     >

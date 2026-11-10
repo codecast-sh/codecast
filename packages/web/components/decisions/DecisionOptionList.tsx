@@ -82,13 +82,13 @@ export function DecisionOptionRow({
     keys ? (
       <KeyCap size={compact ? "xs" : "sm"}>{number}</KeyCap>
     ) : (
-      <span className={`flex items-center justify-center rounded-full border font-mono text-sol-text-dim ${compact ? "w-5 h-5 text-[10px]" : "w-6 h-6 text-[11px]"} ${tone === "picked" ? "border-sol-green text-sol-green" : "border-sol-border"}`}>
+      <span className={`flex items-center justify-center rounded-full border font-mono text-sol-text-dim ${compact ? "w-5 h-5 text-meta" : "w-6 h-6 text-meta"} ${tone === "picked" ? "border-sol-green text-sol-green" : "border-sol-border"}`}>
         {number}
       </span>
     )
   );
   const extras = (option.cost || option.risk || option.evidence?.length) ? (
-    <div className={`mt-1.5 flex flex-wrap gap-x-4 gap-y-1 ${compact ? "text-[11px]" : "text-[12px]"}`}>
+    <div className={`mt-1.5 flex flex-wrap gap-x-4 gap-y-1 ${compact ? "text-meta" : "text-[12px]"}`}>
       {option.cost && <span><span className="text-sol-text-dim">cost </span><span className="text-sol-text">{option.cost}</span></span>}
       {option.risk && <span><span className="text-sol-text-dim">risk </span><span className="text-sol-orange">{option.risk}</span></span>}
       {option.evidence?.map((e, k) => (
@@ -115,9 +115,9 @@ export function DecisionOptionRow({
         )}
         {extras}
       </span>
-      {held && <span data-held className="shrink-0 self-center inline-flex items-center gap-1 text-[10.5px] font-medium text-sol-text-dim"><Lock className="w-3 h-3" />{held}</span>}
+      {held && <span data-held className="shrink-0 self-center inline-flex items-center gap-1 text-meta font-medium text-sol-text-dim"><Lock className="w-3 h-3" />{held}</span>}
       {gated && !held && <Fingerprint data-gated aria-label="Asks for Touch ID" className="shrink-0 self-center w-3.5 h-3.5 text-sol-text-dim" />}
-      {suggested && <span data-cc-suggested className="shrink-0 self-center text-[10.5px] font-medium text-sol-text-dim">Suggested</span>}
+      {suggested && <span data-cc-suggested className="shrink-0 self-center text-meta font-medium text-sol-text-dim">Suggested</span>}
       {trailing && <span className="shrink-0 flex items-center gap-0.5 self-center">{trailing}</span>}
     </>
   );

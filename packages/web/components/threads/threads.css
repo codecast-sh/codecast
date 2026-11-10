@@ -45,7 +45,7 @@
   align-items: center;
   gap: 12px;
   margin-left: auto;
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
   white-space: nowrap;
 }
@@ -160,7 +160,7 @@
   flex: 0 0 auto;
   padding: 1px 7px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: var(--fs-mark);
   font-weight: 700;
   background: var(--sol-red);
   color: var(--sol-bg);
@@ -174,7 +174,7 @@
 
 .th-row-age {
   flex: 0 0 auto;
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
   font-variant-numeric: tabular-nums;
 }
@@ -266,7 +266,7 @@
   align-items: center;
   gap: 6px;
   padding: 10px 14px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
 }
 
@@ -284,7 +284,7 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
 }
 
@@ -303,7 +303,7 @@
   flex: 0 0 auto;
   padding: 1px 7px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 600;
 }
 
@@ -326,7 +326,7 @@
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
   flex: 0 0 auto;
   min-width: 0;
@@ -353,7 +353,7 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
 .th-task-desc > summary {
   cursor: pointer;
   color: var(--sol-text-dim);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   letter-spacing: 0.02em;
   padding: 2px 0;
@@ -389,7 +389,7 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
 
 .th-task-desc-toggle,
 .th-task-earlier {
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   color: var(--sol-blue);
   cursor: pointer;
@@ -424,7 +424,7 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
   flex: 0 0 auto;
   padding: 3px 10px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
   border: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent);
   cursor: pointer;
@@ -441,7 +441,7 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
   margin-top: 10px;
   padding: 5px 14px;
   border-radius: 999px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
   border: 1px solid color-mix(in srgb, var(--sol-border) 36%, transparent);
   cursor: pointer;
@@ -526,7 +526,7 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
 }
 
 .th-question-option-desc {
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
 }
 
@@ -559,7 +559,7 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
   gap: 4px;
   flex: 0 0 auto;
   padding: 6px 9px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   border-radius: 8px;
   color: var(--sol-text-muted);
   cursor: pointer;
@@ -610,7 +610,7 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
   display: flex;
   align-items: baseline;
   gap: 6px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 
 .th-page-comment-name { font-weight: 600; color: var(--sol-text-secondary); }
@@ -635,7 +635,7 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
   align-items: center;
   gap: 4px;
   flex: 0 0 auto;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
 }
 
@@ -667,7 +667,7 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
   margin: 2px 0 10px 32px;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
 }
 
@@ -682,7 +682,7 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
 }
 
 .th-session-state {
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
   min-width: 0;
   overflow: hidden;
@@ -697,7 +697,7 @@ a.th-task-meta:hover { color: var(--sol-cyan); }
   flex-shrink: 0;
   margin-left: auto;
   padding: 3px 8px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
   border-radius: 7px;
   color: var(--sol-text-muted);

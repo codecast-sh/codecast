@@ -26,8 +26,8 @@ a.lwf-main[aria-current] .lwf-l, a.lwf-more[aria-current], .lwf-more a[aria-curr
 .lwo-svg { display: block; user-select: none; }
 .lwo-grid .lwo-base { stroke: var(--lw-rule); stroke-width: 1; }
 .lwo-grid .lwo-rule { stroke: var(--lw-rule-2); stroke-width: 1; stroke-dasharray: 2 3; }
-.lwo-ymax { font-size: 10px; fill: var(--lw-ink-3); text-anchor: end; font-variant-numeric: tabular-nums; }
-.lwo-tick { font-size: 10.5px; fill: var(--lw-ink-3); text-anchor: middle; }
+.lwo-ymax { font-size: var(--fs-meta); fill: var(--lw-ink-3); text-anchor: end; font-variant-numeric: tabular-nums; }
+.lwo-tick { font-size: var(--fs-meta); fill: var(--lw-ink-3); text-anchor: middle; }
 .lwo-hit { fill: transparent; }
 .lwo-seg { fill: var(--lwo-bar); transition: fill var(--lw-fast), opacity var(--lw-fast); }
 .lwo-bars a { cursor: pointer; outline: none; }

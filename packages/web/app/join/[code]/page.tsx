@@ -73,7 +73,7 @@ function JoinHeader({
         <TeamCrest icon={icon} color={color} size="lg" className="tf-crest" />
       </div>
       <p
-        className="tf-eyebrow tf-reveal mt-5 text-[11px] font-semibold uppercase tracking-[0.14em]"
+        className="tf-eyebrow tf-reveal mt-5 text-mark font-semibold uppercase tracking-[0.14em]"
         style={{ "--tf-i": 2 } as CSSProperties}
       >
         {eyebrow}

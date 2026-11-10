@@ -44,7 +44,7 @@ export function WheelButton({
           ? "Hand the page back to the agent (Esc)"
           : "Take the wheel: your clicks and typing go to this page, for a sign-in the agent cannot do"
       }
-      className={`flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-[10px] leading-4 font-mono whitespace-nowrap transition-colors ${
+      className={`flex items-center gap-1 px-1.5 py-0.5 rounded-full border text-meta leading-4 font-mono whitespace-nowrap transition-colors ${
         floating ? "backdrop-blur-sm" : ""
       } ${tone}`}
     >
@@ -60,7 +60,7 @@ export function DrivingHint() {
   return (
     <span
       data-sv-driving-hint
-      className="absolute bottom-2 left-1/2 -translate-x-1/2 max-w-[calc(100%-16px)] inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-sol-bg/90 border border-sol-cyan/40 text-[10px] font-mono text-sol-text-muted whitespace-nowrap pointer-events-none"
+      className="absolute bottom-2 left-1/2 -translate-x-1/2 max-w-[calc(100%-16px)] inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-sol-bg/90 border border-sol-cyan/40 text-meta font-mono text-sol-text-muted whitespace-nowrap pointer-events-none"
     >
       <span className="text-sol-cyan">You have the wheel.</span>
       <span className="truncate">The agent keeps its session; nothing you do here is sent to it.</span>
@@ -88,7 +88,7 @@ export function WatchAddress({
     <span
       key={nav?.at ?? 0}
       data-sv-watch-url
-      className={`text-[10px] font-mono text-sol-text-dim/70 truncate rounded px-0.5 -mx-0.5 ${nav ? "cc-nav-flash" : ""} ${className}`}
+      className={`text-meta font-mono text-sol-text-dim/70 truncate rounded px-0.5 -mx-0.5 ${nav ? "cc-nav-flash" : ""} ${className}`}
       title={url}
     >
       {url}

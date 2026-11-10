@@ -95,7 +95,7 @@ export function Pane({ machine, title, right, children, className = "", bodyClas
         : { backgroundColor: "#fffbf0", borderColor: "#e3dcc6", boxShadow: "0 24px 50px -30px rgba(0,43,54,.35)" }}
     >
       <div
-        className="flex items-center gap-2 px-3.5 py-2 border-b font-mono text-[11.5px]"
+        className="flex items-center gap-2 px-3.5 py-2 border-b font-mono text-meta"
         style={host ? { backgroundColor: SOL.base02, borderColor: "#0b4a5a", color: SOL.base1 } : { backgroundColor: SOL.base2, borderColor: "#e3dcc6", color: SOL.base00 }}
       >
         <span className="flex gap-1.5 shrink-0">

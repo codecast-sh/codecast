@@ -217,7 +217,7 @@ export default function ChangelogPage() {
           className="hidden lg:block w-56 shrink-0 sticky top-[53px] h-[calc(100vh-53px)] overflow-y-auto py-10 pl-6 pr-4"
           style={{ borderRight: `1px solid ${SOL.base2}` }}
         >
-          <div className="text-[11px] font-mono uppercase tracking-wider mb-3" style={{ color: SOL.base01 }}>
+          <div className="text-mark font-mono uppercase tracking-wider mb-3" style={{ color: SOL.base01 }}>
             Releases
           </div>
           <nav className="space-y-0.5">
@@ -290,19 +290,19 @@ export default function ChangelogPage() {
                       {r.month}
                     </span>
                     <span
-                      className="text-[11px] font-mono px-2 py-0.5 rounded-full"
+                      className="text-meta font-mono px-2 py-0.5 rounded-full"
                       style={{ backgroundColor: SOL.base2, color: SOL.base01 }}
                     >
                       {r.version}
                     </span>
                     {r.desktop && (
-                      <span className="text-[11px] font-mono" style={{ color: SOL.base01 }}>
+                      <span className="text-meta font-mono" style={{ color: SOL.base01 }}>
                         {r.desktop}
                       </span>
                     )}
                     {r.tag && (
                       <span
-                        className="text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
+                        className="text-mark font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded-full"
                         style={{ backgroundColor: `${dot}1a`, color: dot }}
                       >
                         {r.tag}
@@ -334,7 +334,7 @@ export default function ChangelogPage() {
                               {s.title}
                             </h3>
                             {s.when && (
-                              <p className="-mt-2 mb-3 font-mono text-[11px] tabular-nums" style={{ color: SOL.base1 }}>
+                              <p className="-mt-2 mb-3 font-mono text-meta tabular-nums" style={{ color: SOL.base1 }}>
                                 {s.when}
                               </p>
                             )}

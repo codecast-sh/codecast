@@ -303,7 +303,7 @@ function StatusWord({ task, now, compact = false }: { task: TaskRow; now: number
 }
 
 const Tag = ({ children }: { children: ReactNode }) => (
-  <span className="px-1 py-0 rounded bg-sol-orange/10 border border-sol-orange/30 text-sol-orange text-[9px] font-semibold flex-shrink-0">
+  <span className="px-1 py-0 rounded bg-sol-orange/10 border border-sol-orange/30 text-sol-orange text-meta font-semibold flex-shrink-0">
     {children}
   </span>
 );
@@ -404,7 +404,7 @@ export function SetHeader({
         <button
           type="button"
           onClick={onShowAll}
-          className="flex-shrink-0 h-6 px-1.5 rounded-md text-[11px] tabular-nums text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60 transition-colors"
+          className="flex-shrink-0 h-6 px-1.5 rounded-md text-meta tabular-nums text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60 transition-colors"
         >
           +{folded}
         </button>
@@ -426,7 +426,7 @@ export function TriggerPill({ task, now, active, onClick }: { task: TaskRow; now
           e.stopPropagation();
           onClick();
         }}
-        className={`group min-w-[5.5rem] max-w-[14rem] flex-[0_1_auto] h-6 whitespace-nowrap inline-flex items-center gap-1.5 px-2 rounded-md border text-[11px] transition-colors ${
+        className={`group min-w-[5.5rem] max-w-[14rem] flex-[0_1_auto] h-6 whitespace-nowrap inline-flex items-center gap-1.5 px-2 rounded-md border text-meta transition-colors ${
           active
             ? "border-sol-orange/50 bg-sol-orange/10 text-sol-orange"
             : "border-sol-border/40 bg-sol-bg/40 text-sol-text-muted hover:border-sol-orange/40 hover:text-sol-text"
@@ -485,15 +485,15 @@ function SetList({
               <span className="flex-1 min-w-0">
                 <span className="flex items-center gap-2 min-w-0">
                   <span className="truncate font-medium text-sol-text">{taskDisplayTitle(t)}</span>
-                  <span className="min-w-0 max-w-[40%] truncate text-[11px] text-sol-text-dim">
+                  <span className="min-w-0 max-w-[40%] truncate text-meta text-sol-text-dim">
                     {isLoop ? "self-paced loop" : describeTaskCadence(t)}
                   </span>
                   {isLoop && <Tag>loop</Tag>}
                   {provenance.id && provenance.id !== conversationId && (
-                    <span className="truncate text-[10px] text-sol-cyan/80">from {provenance.title || "session"}</span>
+                    <span className="truncate text-meta text-sol-cyan/80">from {provenance.title || "session"}</span>
                   )}
                 </span>
-                <span className="mt-0.5 flex items-center gap-2 min-w-0 text-[11px] text-sol-text-dim">
+                <span className="mt-0.5 flex items-center gap-2 min-w-0 text-meta text-sol-text-dim">
                   <span className="truncate">{taskGist(t)}</span>
                   {last !== undefined && (
                     <span
@@ -519,7 +519,7 @@ function SetList({
         })}
       </div>
       <div className="flex justify-end px-2 pt-1">
-        <Link href="/triggers" className="text-[10px] text-sol-cyan hover:underline">
+        <Link href="/triggers" className="text-meta text-sol-cyan hover:underline">
           All triggers
         </Link>
       </div>
@@ -598,7 +598,7 @@ function TriggerDetail({
       : { Icon: CheckCircle2, tone: "text-sol-green", word: null };
 
   const actionBtn =
-    "px-2 py-1 rounded-md border text-[11px] font-medium transition-[color,background-color,transform] duration-100 active:scale-[0.97] disabled:opacity-50 disabled:active:scale-100";
+    "px-2 py-1 rounded-md border text-meta font-medium transition-[color,background-color,transform] duration-100 active:scale-[0.97] disabled:opacity-50 disabled:active:scale-100";
 
   return (
     <div className="px-4 pb-3 space-y-2.5 text-xs animate-in fade-in slide-in-from-top-1 duration-150">
@@ -640,7 +640,7 @@ function TriggerDetail({
       <div className="flex items-center gap-3">
         <button
           onClick={() => setShowPrompt((s) => !s)}
-          className="flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text transition-colors"
+          className="flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors"
         >
           {showPrompt ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           {showPrompt ? "Hide full prompt" : "Show full prompt"}
@@ -648,7 +648,7 @@ function TriggerDetail({
         {showPrompt && (
           <button
             onClick={copyPrompt}
-            className="flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text transition-colors"
+            className="flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors"
           >
             {promptCopied ? <Check className="w-3 h-3 text-sol-green" /> : <Copy className="w-3 h-3" />}
             {promptCopied ? "Copied" : "Copy"}
@@ -662,7 +662,7 @@ function TriggerDetail({
                 setSummarizing(true);
                 regenerateSummary({ task_id: primary._id }).catch(() => setSummarizing(false));
               }}
-              className="flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text transition-colors disabled:opacity-60"
+              className="flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors disabled:opacity-60"
             >
               {summarizing ? "Summarizing…" : "Summarize"}
             </button>
@@ -674,7 +674,7 @@ function TriggerDetail({
           Copy still hands over the raw text. */}
       {showPrompt && <TriggerPromptView prompt={primary.prompt} className="-mx-4" />}
 
-      <div className="flex items-center gap-3 flex-wrap text-[10px] text-sol-text-dim">
+      <div className="flex items-center gap-3 flex-wrap text-meta text-sol-text-dim">
         <span className="inline-flex items-center gap-1.5">
           {cadence}
           {/* Where we are in the current cycle: fills as the next fire approaches. */}
@@ -718,7 +718,7 @@ function TriggerDetail({
                 : "border-l-sol-green/50"
           }`}
         >
-          <div className="flex items-center gap-1.5 text-[10px]">
+          <div className="flex items-center gap-1.5 text-meta">
             <outcome.Icon className={`w-3 h-3 flex-shrink-0 ${outcome.tone}`} />
             <span className="font-semibold uppercase tracking-wider text-sol-text-dim/70">
               {isLoop ? "Last wakeup" : "Last run"}
@@ -757,7 +757,7 @@ function TriggerDetail({
             const para = (
               <p
                 onClick={clampable ? () => setLastRunOpen((s) => !s) : undefined}
-                className={`max-w-[110ch] text-[11px] leading-relaxed text-sol-text-muted transition-colors ${
+                className={`max-w-[110ch] text-meta leading-relaxed text-sol-text-muted transition-colors ${
                   clampable ? "cursor-pointer hover:text-sol-text" : ""
                 } ${lastRunOpen ? "" : "line-clamp-2"}`}
               >
@@ -773,7 +773,7 @@ function TriggerDetail({
       <div className="flex items-center gap-1.5 pt-0.5 flex-wrap">
         {!isLoop && primary.is_own === false && primary.owner_name && (
           <ShortcutTooltip label="This trigger runs under a different account; anyone who can see it can manage it">
-            <span className="px-1.5 py-px rounded border border-sol-border/50 text-[10px] text-sol-text-dim">
+            <span className="px-1.5 py-px rounded border border-sol-border/50 text-meta text-sol-text-dim">
               runs as {primary.owner_name}
             </span>
           </ShortcutTooltip>
@@ -840,17 +840,17 @@ function TriggerDetail({
           {inSet && (
             <button
               onClick={onShowAll}
-              className="inline-flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text transition-colors"
+              className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors"
             >
               <ArrowLeft className="w-3 h-3" /> All {setSize} triggers
             </button>
           )}
           {triggerHref && (
-            <Link href={triggerHref} className="text-[10px] text-sol-cyan hover:underline">
+            <Link href={triggerHref} className="text-meta text-sol-cyan hover:underline">
               Open trigger page
             </Link>
           )}
-          <Link href="/triggers" className="text-[10px] text-sol-cyan hover:underline">
+          <Link href="/triggers" className="text-meta text-sol-cyan hover:underline">
             All triggers
           </Link>
         </span>
@@ -860,7 +860,7 @@ function TriggerDetail({
           dismiss/kill do different things to a trigger and nothing else in
           the UI says so at the moment of choice. */}
       {ARMED_STATUSES.has(primary.status) && (
-        <p className="text-[10px] leading-relaxed text-sol-text-dim/80 border-t border-sol-border/20 pt-1.5">
+        <p className="text-meta leading-relaxed text-sol-text-dim/80 border-t border-sol-border/20 pt-1.5">
           {isLoop ? (
             <>
               The agent set its own wakeup and controls this loop from inside the session — message it to steer or stop it.{" "}

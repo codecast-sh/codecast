@@ -53,7 +53,7 @@ export function ManifestSection() {
   return (
     <>
       <div className="rounded-2xl border overflow-hidden" style={{ borderColor: "#0b4a5a", backgroundColor: "#01232c" }}>
-        <div className="hidden md:grid grid-cols-[1.05fr_1.5fr_1.4fr_1.4fr] gap-6 px-6 py-3 font-mono text-[11.5px] border-b" style={{ color: SOL.base01, borderColor: "#0b4a5a", backgroundColor: SOL.base02 }}>
+        <div className="hidden md:grid grid-cols-[1.05fr_1.5fr_1.4fr_1.4fr] gap-6 px-6 py-3 font-mono text-meta border-b" style={{ color: SOL.base01, borderColor: "#0b4a5a", backgroundColor: SOL.base02 }}>
           <span>what</span><span>includes</span><span>how it travels</span><span>where it stops</span>
         </div>
         <ul>
@@ -66,10 +66,10 @@ export function ManifestSection() {
               <span className="font-mono font-semibold text-[14px]" style={{ color: SOL.base2 }}>{r.what}</span>
               <span className="font-mono text-[12px] leading-6" style={{ color: SOL.base0 }}>{r.items}</span>
               <span className="text-[14px] leading-6" style={{ color: SOL.base1 }}>
-                <span className="md:hidden font-mono text-[11px] mr-2" style={{ color: SOL.cyan }}>how</span>{r.how}
+                <span className="md:hidden font-mono text-meta mr-2" style={{ color: SOL.cyan }}>how</span>{r.how}
               </span>
               <span className="text-[14px] leading-6 pl-3 border-l-2" style={{ color: SOL.base1, borderColor: "rgba(220,50,47,.55)" }}>
-                <span className="md:hidden font-mono text-[11px] mr-2" style={{ color: SOL.red }}>stops</span>{r.never}
+                <span className="md:hidden font-mono text-meta mr-2" style={{ color: SOL.red }}>stops</span>{r.never}
               </span>
             </li>
           ))}

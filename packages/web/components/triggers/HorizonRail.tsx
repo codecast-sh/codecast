@@ -135,7 +135,7 @@ export function HorizonRail({ tasks, now, onOpenPastRun }: {
             <>
               {halo && <span className={`absolute inset-0 m-auto h-2.5 w-2.5 rounded-full ${halo} opacity-60 animate-ping motion-reduce:animate-none`} />}
               <div className={`relative rounded-full ring-2 ring-sol-bg-alt shadow-[0_1px_2px_rgb(0_0_0/0.35)] ${cls} group-hover:scale-150 transition-transform duration-150 ease-out`} />
-              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10 whitespace-nowrap rounded-md border border-sol-border bg-sol-bg-highlight px-2 py-1 text-[11px] text-sol-text shadow-lg pointer-events-none">
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover:block z-10 whitespace-nowrap rounded-md border border-sol-border bg-sol-bg-highlight px-2 py-1 text-meta text-sol-text shadow-lg pointer-events-none">
                 <span className="font-medium">{taskDisplayTitle(pt.task)}</span>
                 <span className="text-sol-text-dim"> · {label}</span>
               </div>
@@ -163,7 +163,7 @@ export function HorizonRail({ tasks, now, onOpenPastRun }: {
         })}
       </div>
       {/* axis labels sit under their gridlines */}
-      <div className="relative mt-1.5 h-3 font-mono text-[10px] text-sol-text-dim tabular-nums">
+      <div className="relative mt-1.5 h-4 font-mono text-meta text-sol-text-dim tabular-nums">
         {AXIS.map(([p, text]) => (
           <span
             key={p}

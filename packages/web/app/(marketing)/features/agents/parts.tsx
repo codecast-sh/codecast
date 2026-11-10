@@ -22,7 +22,7 @@ export function AgentTag({ agent, size = "sm" }: { agent: string; size?: "sm" | 
   const c = AGENT_COLOR[agent] ?? SOL.base00;
   return (
     <span
-      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full font-mono font-medium ${size === "xs" ? "px-1.5 text-[10px]" : "px-2 py-0.5 text-[11px]"}`}
+      className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full font-mono font-medium ${size === "xs" ? "px-1.5 text-meta" : "px-2 py-0.5 text-meta"}`}
       style={{ color: c, backgroundColor: `${c}18`, border: `1px solid ${c}33` }}
     >
       <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: c }} />
@@ -161,7 +161,7 @@ export function Term({ label, wrap = false, children }: { label: string; wrap?: 
           <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: SOL.yellow }} />
           <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: SOL.green }} />
         </div>
-        <span className="ml-2 font-mono text-[11px]" style={{ color: SOL.base01 }}>{label}</span>
+        <span className="ml-2 font-mono text-meta" style={{ color: SOL.base01 }}>{label}</span>
       </div>
       <div className="overflow-x-auto">
         <pre className={`p-4 font-mono text-[12px] leading-[1.7] whitespace-pre-wrap${wrap ? "" : " sm:whitespace-pre"}`} style={{ color: SOL.base0 }}>{children}</pre>

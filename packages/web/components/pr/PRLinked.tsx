@@ -76,7 +76,7 @@ export function PRLinked({ pr, sessionIds }: { pr: any; sessionIds: string[] }) 
   const tasks: string[] = pr.task_ids ?? [];
   if (sessions.length === 0 && tasks.length === 0) return null;
   return (
-    <span className="inline-flex items-center gap-1.5 flex-wrap text-[11px]">
+    <span className="inline-flex items-center gap-1.5 flex-wrap text-meta">
       <span className="text-sol-text-dim">Linked</span>
       {sessions.map((id) => (
         <EntityIdPill key={id} id={id} type="session" />

@@ -78,7 +78,7 @@ function DownloadButton({ url, name }: { url: string; name: string }) {
     <button
       onClick={save}
       disabled={saving}
-      className="px-2 py-1 rounded text-[11px] font-medium text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt border border-sol-border transition-colors disabled:opacity-50"
+      className="px-2 py-1 rounded text-meta font-medium text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt border border-sol-border transition-colors disabled:opacity-50"
       title={`Save ${name}`}
     >
       {saving ? "Saving…" : "Download"}
@@ -153,7 +153,7 @@ const FileCard = memo(function FileCard({ file, soloFile }: { file: SentFileData
           </button>
         ) : (
           <div
-            className={`w-11 h-11 rounded border flex items-center justify-center flex-shrink-0 text-[10px] font-semibold tracking-wide ${KIND_ACCENT[kind]}`}
+            className={`w-11 h-11 rounded border flex items-center justify-center flex-shrink-0 text-meta font-semibold tracking-wide ${KIND_ACCENT[kind]}`}
           >
             {label.slice(0, 4)}
           </div>
@@ -161,7 +161,7 @@ const FileCard = memo(function FileCard({ file, soloFile }: { file: SentFileData
 
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-sol-text truncate" title={file.name}>{file.name}</div>
-          <div className="text-[11px] text-sol-text-dim tabular-nums">
+          <div className="text-meta text-sol-text-dim tabular-nums">
             {undelivered ? `${meta} — ${ERROR_TEXT[file.error ?? ""] ?? "not attached"}` : meta}
           </div>
         </div>
@@ -171,7 +171,7 @@ const FileCard = memo(function FileCard({ file, soloFile }: { file: SentFileData
             {previewable && kind !== "image" && (
               <button
                 onClick={() => setOpen(v => !v)}
-                className="px-2 py-1 rounded text-[11px] font-medium text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt border border-sol-border transition-colors"
+                className="px-2 py-1 rounded text-meta font-medium text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt border border-sol-border transition-colors"
               >
                 {open ? "Hide" : "Preview"}
               </button>
@@ -213,7 +213,7 @@ export const SentFileBlock = memo(function SentFileBlock({ files }: { files: Sen
   const caption = files.find(f => f.caption)?.caption;
   return (
     <div className="my-2">
-      <div className="flex items-center gap-1.5 text-[11px] text-sol-text-dim mb-1">
+      <div className="flex items-center gap-1.5 text-meta text-sol-text-dim mb-1">
         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M12 4v12m0 0l-4-4m4 4l4-4" />
         </svg>

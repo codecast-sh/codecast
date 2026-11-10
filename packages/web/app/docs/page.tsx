@@ -6,7 +6,6 @@ import Link from "next/link";
 import { useInboxStore, DocItem, DocViewPrefs, ProjectItem } from "../../store/inboxStore";
 import { AuthGuard } from "../../components/AuthGuard";
 
-import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { GenericListView, ListGroup, ItemRowState } from "../../components/GenericListView";
 import { DocMenuItems } from "../../components/menus/ObjectContextMenus";
@@ -154,8 +153,6 @@ export function DocListContent() {
   const router = useRouter();
   const createDoc = useInboxStore((s) => s.createDoc);
   const wsStamp = workspaceStamp(useWorkspaceArgs());
-  const docs = useInboxStore((s) => s.docs);
-  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const projects = useInboxStore((s) => s.projects);
   const docProjectPaths = useInboxStore((s) => s.docProjectPaths);
   const createSavedView = useInboxStore((s) => s.createSavedView);
@@ -315,7 +312,7 @@ export function DocListContent() {
         label: g.project?.title || "No project",
         icon: <FolderKanban className={`w-3.5 h-3.5 ${g.project ? "text-sol-cyan" : "text-sol-text-dim"}`} />,
         extra: g.project ? (
-          <Link href={`/projects/${g.project._id}`} onClick={(e: any) => e.stopPropagation()} className="text-[10px] text-sol-cyan hover:underline flex-shrink-0">
+          <Link href={`/projects/${g.project._id}`} onClick={(e: any) => e.stopPropagation()} className="text-meta text-sol-cyan hover:underline flex-shrink-0">
             View project
           </Link>
         ) : undefined,

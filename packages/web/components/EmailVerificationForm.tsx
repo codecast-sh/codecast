@@ -57,11 +57,13 @@ export function EmailVerificationForm({
             maxLength={6}
             value={code}
             onChange={(e) => setCode(e.target.value)}
-            className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim font-mono tracking-[0.5em] text-center text-lg focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+            className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim font-mono tracking-[0.5em] text-center text-lg focus:outline-none focus:ring-2 focus:ring-sol-cyan/50 focus:border-transparent transition-all"
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? "auth-error" : undefined}
             placeholder="XXXXXX"
           />
 
-          {error && <p className="mt-4 text-sm text-red-400 text-center">{error}</p>}
+          {error && <p id="auth-error" role="alert" className="mt-4 rounded-md border border-sol-red/40 bg-sol-red/10 px-3 py-2 text-sm text-sol-text text-center">{error}</p>}
 
           <Button
             variant="amber"
@@ -78,7 +80,7 @@ export function EmailVerificationForm({
             <button
               type="button"
               onClick={onBack}
-              className="text-amber-400 hover:text-amber-300 font-medium transition-colors"
+              className="font-medium text-sol-text-secondary underline decoration-sol-orange/70 underline-offset-2 hover:text-sol-text hover:decoration-sol-orange transition-colors"
             >
               Start over
             </button>

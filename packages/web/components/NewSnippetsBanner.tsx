@@ -3,10 +3,12 @@
 // "New agent features" upsell. When the catalog ships a snippet after this
 // account was created, a slim banner appears above the tab bar; opening it
 // explains each new feature with the same prose the CLI wizard prints and
-// offers a one-click "Turn on" (applied to every online machine). Dismissing
-// or enabling stamps the slug in the cross-device dismissed bag, so the
-// banner never returns for that feature — the Agent features page stays the place
-// to adjust later, and both paths link there.
+// offers "Turn on" (applied to every online machine). Turning one on hands
+// every online machine's agents a capability, so the press opens the shared
+// review (components/consequential) naming the machines and the file it
+// writes. Dismissing or enabling stamps the slug in the cross-device dismissed
+// bag, so the banner never returns for that feature — the Agent features page
+// stays the place to adjust later, and both paths link there.
 
 import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -15,7 +17,9 @@ import { ArrowRight, Check, Sparkles, X } from "lucide-react";
 import type { SnippetDescriptor } from "@codecast/shared/contracts";
 import { useInboxStore } from "../store/inboxStore";
 import { useCurrentUser } from "../hooks/useCurrentUser";
-import { useDevices } from "./DeviceBadge";
+import { deviceDisplayName, useDevices } from "./DeviceBadge";
+import { ConsequentialSwitch, type SwitchLedger } from "./consequential/ConsequentialSwitch";
+import { featuresAllLedger } from "./consequential/ledgers";
 import { turnOnFeature } from "./agentFeatures/useFeatureOffer";
 import { newSnippetsFor, snippetEnabledOn, snippetIntroKey } from "../lib/newSnippets";
 import {
@@ -59,6 +63,24 @@ export function NewSnippetsBanner() {
   if (!open && fresh.length === 0) return null;
 
   const onlineDevices = [...onlineLocals, ...onlineRemotes];
+  const machineNames = onlineDevices.map(deviceDisplayName);
+  // What one "Turn on" does, for the review it opens: which machines, the file
+  // it writes, and how to turn it off again.
+  const turnOnLedger = (s: SnippetDescriptor): SwitchLedger => {
+    const one = machineNames.length === 1;
+    const machines = one ? machineNames[0] : `${machineNames.length} machines`;
+    return {
+      ...featuresAllLedger({ group: s.name, machine: machines, names: [s.name] }),
+      name: s.name,
+      rows: [
+        one ? { k: "Machine", v: machines } : { k: "Machines", v: machines, list: machineNames },
+        { k: "Writes", v: s.writesTo },
+        { k: "Applies to", v: "New sessions" },
+      ],
+      stop: "Its switch in Agent features",
+      confirm: `Turn on ${s.name}`,
+    };
+  };
 
   const stampAll = () => {
     const now = Date.now();
@@ -142,7 +164,7 @@ export function NewSnippetsBanner() {
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-semibold text-sol-text">{s.name}</span>
-                        <span className="text-[10px] px-1.5 py-px rounded-full border bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30">
+                        <span className="text-meta px-1.5 py-px rounded-full border bg-sol-cyan/10 text-sol-cyan border-sol-cyan/30">
                           New
                         </span>
                       </div>
@@ -153,24 +175,35 @@ export function NewSnippetsBanner() {
                         <Check className="w-3.5 h-3.5" /> On
                       </span>
                     ) : (
-                      <button
-                        disabled={busy.has(s.slug) || onlineDevices.length === 0}
-                        onClick={() => turnOn(s)}
-                        className="flex-shrink-0 px-3 py-1 text-xs font-medium rounded border border-sol-cyan/40 bg-sol-cyan/10 text-sol-cyan hover:bg-sol-cyan/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {busy.has(s.slug) ? "Turning on…" : "Turn on"}
-                      </button>
+                      <ConsequentialSwitch
+                        on={false}
+                        ledger={turnOnLedger(s)}
+                        onTurnOn={() => void turnOn(s)}
+                        onTurnOff={() => {}}
+                        trigger={({ press, reviewing }) => (
+                          <button
+                            type="button"
+                            disabled={busy.has(s.slug) || onlineDevices.length === 0}
+                            onClick={press}
+                            aria-haspopup="dialog"
+                            aria-expanded={reviewing}
+                            className="flex-shrink-0 px-3 py-1 text-xs font-medium rounded border border-sol-cyan/40 bg-sol-cyan/10 text-sol-cyan hover:bg-sol-cyan/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                          >
+                            {busy.has(s.slug) ? "Turning on…" : "Turn on…"}
+                          </button>
+                        )}
+                      />
                     )}
                   </div>
                   <p className="text-[12px] text-sol-base1 leading-relaxed mt-2">{s.detail}</p>
-                  <p className="text-[11px] text-sol-text-dim mt-2 font-mono">{s.writesTo}</p>
+                  <p className="text-meta text-sol-text-dim mt-2 font-mono">{s.writesTo}</p>
                 </div>
               );
             })}
           </div>
 
           <div className="flex items-center justify-between gap-3 pt-1">
-            <span className="text-[11px] text-sol-text-dim">
+            <span className="text-meta text-sol-text-dim">
               {onlineDevices.length === 0
                 ? "No machines online: turn on from Agent features later"
                 : onlineDevices.length === 1
@@ -195,7 +228,8 @@ export function NewSnippetsBanner() {
                 }}
                 className="px-3 py-1 text-xs rounded border border-sol-border text-sol-base1 hover:text-sol-text hover:border-sol-base1 transition-colors"
               >
-                Later
+                {/* It stamps every feature shown as seen for good, so it says so. */}
+                Dismiss
               </button>
             </div>
           </div>

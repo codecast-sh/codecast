@@ -4,6 +4,7 @@
 // a JSON result as key: value chips, a step's own words as text, a person's
 // choice with their note, an older agent run as a link to its session.
 import { ArrowUpRight } from "lucide-react";
+import Link from "next/link";
 import { visitOutputWords, type VisitOutput } from "../../../lib/line/visitOutput";
 import "./visitOutput.css";
 
@@ -30,7 +31,7 @@ export function VisitOutputView({ out, className }: { out: VisitOutput | null; c
   if (out.kind === "session") {
     return (
       <span className={cls} data-kind="session">
-        <a className="vo-session" href={out.href} onClick={(e) => e.stopPropagation()}>session<ArrowUpRight aria-hidden /></a>
+        <Link className="vo-session" href={out.href} onClick={(e) => e.stopPropagation()}>session<ArrowUpRight aria-hidden /></Link>
       </span>
     );
   }

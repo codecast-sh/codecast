@@ -112,7 +112,7 @@ export function Clocks() {
                     key={e}
                     onMouseEnter={() => setHover(e)}
                     onMouseLeave={() => setHover(null)}
-                    className="rounded-md px-1.5 py-0.5 font-mono text-[11.5px] transition-colors cursor-default"
+                    className="rounded-md px-1.5 py-0.5 font-mono text-meta transition-colors cursor-default"
                     style={{
                       color: hover === e ? SOL.base03 : SOL.base1,
                       backgroundColor: hover === e ? g.color : `color-mix(in srgb, ${g.color} 14%, ${SOL.base03})`,

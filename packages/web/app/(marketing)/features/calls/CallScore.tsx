@@ -42,11 +42,11 @@ export function CallScore() {
           <span className="h-2 w-2 rounded-full" style={{ backgroundColor: SOL.green }} />
           Huddle in #payments
         </span>
-        <span className="rounded-full px-2 py-0.5 text-[10.5px]" style={{ backgroundColor: "rgba(211,54,130,0.1)", color: SOL.magenta }}>transcribing</span>
+        <span className="rounded-full px-2 py-0.5 text-meta" style={{ backgroundColor: "rgba(211,54,130,0.1)", color: SOL.magenta }}>transcribing</span>
         <span className="ml-auto hidden sm:flex items-center -space-x-1.5">
           {PEOPLE.map((p) => <Face key={p.id} p={p} size={24} ring="#fffaf0" />)}
         </span>
-        <span className="ml-auto sm:ml-0 text-[11px]" style={{ color: SOL.base1 }}>{CALL_ID}</span>
+        <span className="ml-auto sm:ml-0 text-meta" style={{ color: SOL.base1 }}>{CALL_ID}</span>
       </div>
 
       {/* Lanes */}
@@ -62,8 +62,8 @@ export function CallScore() {
             <div className="flex items-center gap-2" style={{ height: LANE_H }}>
               <AgentMark size={22} />
               <span className="hidden sm:flex flex-col leading-tight">
-                <span className="text-[11.5px]" style={{ color: SOL.magenta }}>session</span>
-                <span className="text-[10px]" style={{ color: SOL.base1 }}>fed live</span>
+                <span className="text-meta" style={{ color: SOL.magenta }}>session</span>
+                <span className="text-meta" style={{ color: SOL.base1 }}>fed live</span>
               </span>
             </div>
           </div>
@@ -102,7 +102,7 @@ export function CallScore() {
                 </span>
               ))}
               <span
-                className="cc-batch absolute top-1/2 -translate-y-1/2 hidden sm:inline-flex items-center gap-1 rounded-md px-1.5 py-[2px] text-[10px] whitespace-nowrap"
+                className="cc-batch absolute top-1/2 -translate-y-1/2 hidden sm:inline-flex items-center gap-1 rounded-md px-1.5 py-[2px] text-meta whitespace-nowrap"
                 style={{ left: "69.5%", backgroundColor: SOL.base02, color: SOL.base2, "--at": 0.69 } as CSSProperties}
               >
                 reply in huddle chat
@@ -112,7 +112,7 @@ export function CallScore() {
             <div className="cc-playhead pointer-events-none absolute -top-2 -bottom-2 w-[2px]" style={{ left: "100%", opacity: 0, backgroundColor: SOL.magenta, boxShadow: `0 0 0 3px rgba(211,54,130,0.15)` }} />
           </div>
         </div>
-        <div className="mt-2 flex justify-between pl-[34px] sm:pl-[118px] text-[10px]" style={{ color: SOL.base1 }}>
+        <div className="mt-2 flex justify-between pl-[34px] sm:pl-[118px] text-meta" style={{ color: SOL.base1 }}>
           <span>0:00</span><span>0:15</span><span>0:30</span><span>0:45</span><span>1:00</span>
         </div>
       </div>
@@ -120,7 +120,7 @@ export function CallScore() {
       {/* Transcript and digest */}
       <div className="grid lg:grid-cols-[1.35fr_1fr]" style={{ borderTop: `1px solid ${SOL.base2}` }}>
         <div className="px-3 sm:px-5 py-4" style={{ backgroundColor: "#fdf6e3" }}>
-          <div className="mb-2 flex items-center gap-2 text-[11px]" style={{ color: SOL.base1 }}>
+          <div className="mb-2 flex items-center gap-2 text-meta" style={{ color: SOL.base1 }}>
             <span>Transcript</span>
             <span className="ml-auto hidden sm:inline">hover a line</span>
           </div>
@@ -135,38 +135,38 @@ export function CallScore() {
                   onMouseEnter={() => setHot(l.seq)}
                   onMouseLeave={() => setHot(null)}
                 >
-                  <span className="text-[10.5px] pt-[2px] tabular-nums" style={{ color: SOL.base1 }}>{CALL_ID}:{l.seq}</span>
+                  <span className="text-meta pt-[2px] tabular-nums" style={{ color: SOL.base1 }}>{CALL_ID}:{l.seq}</span>
                   <span className="text-[12.5px] leading-snug min-w-0" style={{ color: SOL.base01 }}>
                     <span className="font-semibold" style={{ color: s.color }}>{s.name}</span>
-                    <span className="mx-1.5 text-[10.5px]" style={{ color: SOL.base1 }}>{l.at}</span>
+                    <span className="mx-1.5 text-meta" style={{ color: SOL.base1 }}>{l.at}</span>
                     {l.text}
                   </span>
                 </li>
               );
             })}
-            <li className="cc-line ml-2 mt-1.5 rounded-md px-2.5 py-2 text-[11.5px] leading-snug" style={{ "--at": 0.69, borderLeft: `2px solid ${SOL.magenta}`, backgroundColor: "rgba(211,54,130,0.06)", color: SOL.base01 } as CSSProperties}>
+            <li className="cc-line ml-2 mt-1.5 rounded-md px-2.5 py-2 text-meta leading-snug" style={{ "--at": 0.69, borderLeft: `2px solid ${SOL.magenta}`, backgroundColor: "rgba(211,54,130,0.06)", color: SOL.base01 } as CSSProperties}>
               <span className="font-semibold" style={{ color: SOL.magenta }}>{AGENT.name}</span>
-              <span className="mx-1.5 text-[10px]" style={{ color: SOL.base1 }}>huddle chat</span>
+              <span className="mx-1.5 text-meta" style={{ color: SOL.base1 }}>huddle chat</span>
               {AGENT_REPLY}
             </li>
           </ol>
         </div>
 
         <div className="cc-after px-4 sm:px-5 py-4" style={{ borderLeft: `1px solid ${SOL.base2}` }}>
-          <div className="flex items-center gap-2 text-[11px]" style={{ color: SOL.base1 }}>
+          <div className="flex items-center gap-2 text-meta" style={{ color: SOL.base1 }}>
             <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: SOL.base1 }} />
             Huddle ended, digest posted
           </div>
           <div className="mt-2 text-[15px] font-bold" style={{ color: SOL.base03 }}>{CALL_TITLE}</div>
-          <div className="text-[11px]" style={{ color: SOL.base1 }}>{CALL_LEAD}</div>
-          <div className="mt-3 text-[11px] font-semibold" style={{ color: SOL.base01 }}>Action items</div>
+          <div className="text-meta" style={{ color: SOL.base1 }}>{CALL_LEAD}</div>
+          <div className="mt-3 text-meta font-semibold" style={{ color: SOL.base01 }}>Action items</div>
           <ol className="mt-1.5 space-y-2">
             {ACTION_ITEMS.map((a, i) => (
               <li key={a.task} className="text-[12px] leading-snug" style={{ color: SOL.base01 }}>
                 <span style={{ color: SOL.base1 }}>{i + 1}. </span>{a.text}
                 <div className="mt-1 flex flex-wrap items-center gap-1.5">
                   <TaskChip id={a.task} />
-                  <span className="text-[10.5px]" style={{ color: SOL.base1 }}>from {CALL_ID}:{a.line}</span>
+                  <span className="text-meta" style={{ color: SOL.base1 }}>from {CALL_ID}:{a.line}</span>
                 </div>
               </li>
             ))}

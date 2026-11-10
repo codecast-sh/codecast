@@ -76,7 +76,7 @@ function PresenceChip({ presence, title }: { presence: VaultPresence; title: str
   const Icon = PRESENCE_ICON[presence];
   return (
     <span
-      className={`flex items-center gap-1 flex-shrink-0 text-[10px] ${PRESENCE_TONE[presence]}`}
+      className={`flex items-center gap-1 flex-shrink-0 text-meta ${PRESENCE_TONE[presence]}`}
       title={title}
     >
       <Icon className="w-3 h-3" />
@@ -184,7 +184,7 @@ export function VaultPicker({
                         <span className="block truncate text-[13px] text-sol-text">{choice.name}</span>
                         {/* One meta line: where on disk, how much, and who can
                             see what you sync from it. */}
-                        <span className="flex items-center gap-1 min-w-0 text-[10px] text-sol-text-dim">
+                        <span className="flex items-center gap-1 min-w-0 text-meta text-sol-text-dim">
                           {/* A remote mirror has no path on this machine, so
                               the separator has to earn its place rather than
                               lead the line. */}

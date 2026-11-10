@@ -17,7 +17,7 @@ function Field({ placeholder, value }: { placeholder: string; value?: string }) 
 function GateCard({ title, body, children }: { title: string; body: ReactNode; children?: ReactNode }) {
   return (
     <div className="w-full max-w-[300px] rounded-xl border p-5 text-left" style={{ borderColor: "rgba(88,110,117,.25)", backgroundColor: SOL.base3, boxShadow: "0 20px 40px -24px rgba(0,43,54,.45)" }}>
-      <div className="font-mono text-[10.5px] mb-3 pb-2 border-b truncate" style={{ color: SOL.base1, borderColor: SOL.base2 }}>Q3 churn audit</div>
+      <div className="font-mono text-meta mb-3 pb-2 border-b truncate" style={{ color: SOL.base1, borderColor: SOL.base2 }}>Q3 churn audit</div>
       <div className="font-mono text-[13px] font-bold" style={{ color: SOL.base03 }}>{title}</div>
       <div className="mt-1 text-[12.5px] leading-5" style={{ color: SOL.base01 }}>{body}</div>
       {children && <div className="mt-4 space-y-2">{children}</div>}
@@ -50,11 +50,11 @@ const GATES: Gate[] = [
     what: <>By default only you publish versions. Open it to anyone holding an edit link, or to signed-in teammates, and they can edit and publish from the browser with <strong>Edit this page</strong>. A version made in the browser records who made it.</>,
     screen: (
       <div className="w-full max-w-[300px] rounded-xl border overflow-hidden text-left" style={{ borderColor: "rgba(88,110,117,.25)", boxShadow: "0 20px 40px -24px rgba(0,43,54,.45)" }}>
-        <div className="flex items-center justify-between px-3 h-9 border-b font-mono text-[11px]" style={{ borderColor: SOL.base2, backgroundColor: SOL.base2, color: SOL.base01 }}>
+        <div className="flex items-center justify-between px-3 h-9 border-b font-mono text-meta" style={{ borderColor: SOL.base2, backgroundColor: SOL.base2, color: SOL.base01 }}>
           <span>churn-audit.md</span>
           <span className="rounded px-2 py-0.5 text-white font-semibold" style={{ backgroundColor: CYAN }}>Publish</span>
         </div>
-        <div className="px-3 py-3 font-mono text-[11px] leading-[1.7] bg-white" style={{ color: SOL.base02 }}>
+        <div className="px-3 py-3 font-mono text-meta leading-[1.7] bg-white" style={{ color: SOL.base02 }}>
           <div># Q3 churn audit</div>
           <div style={{ color: SOL.base1 }}>&nbsp;</div>
           <div>Churn rose from 3.1% to <span style={{ backgroundColor: "rgba(42,161,152,.2)" }}>4.4%</span><span className="pb-caret" /></div>
@@ -66,7 +66,7 @@ const GATES: Gate[] = [
     id: "session", short: "Hide the link back to the publishing session.", flag: "--no-session", off: "--session", name: "Session link",
     what: <>By default the page&apos;s bar links to the session that published it, so a teammate can read how the page came to be. Hide that link for pages you send outside the team.</>,
     screen: (
-      <div className="w-full max-w-[300px] rounded-lg border px-3 h-9 flex items-center gap-2 font-mono text-[11px]" style={{ borderColor: "rgba(88,110,117,.25)", backgroundColor: "#fff", color: SOL.base01 }}>
+      <div className="w-full max-w-[300px] rounded-lg border px-3 h-9 flex items-center gap-2 font-mono text-meta" style={{ borderColor: "rgba(88,110,117,.25)", backgroundColor: "#fff", color: SOL.base01 }}>
         <span className="truncate font-semibold" style={{ color: SOL.base03 }}>Q3 churn audit</span>
         <span className="line-through" style={{ color: SOL.blue, textDecorationColor: SOL.red }}>Churn analysis</span>
         <span className="ml-auto rounded-full border px-2" style={{ borderColor: "rgba(88,110,117,.28)" }}>v4</span>
@@ -115,7 +115,7 @@ function GateBoard() {
       </div>
       <div className="pb-paper relative flex items-center justify-center p-8 min-h-[260px] border-t lg:border-t-0 lg:border-l" style={{ borderColor: "rgba(88,110,117,.15)" }}>
         <div key={g.id} className="pb-anim pb-rise w-full flex justify-center">{g.screen}</div>
-        <span className="absolute bottom-3 right-4 font-mono text-[10.5px]" style={{ color: SOL.base1 }}>what the reader sees</span>
+        <span className="absolute bottom-3 right-4 font-mono text-meta" style={{ color: SOL.base1 }}>what the reader sees</span>
       </div>
     </div>
   );

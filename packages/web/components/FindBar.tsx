@@ -138,15 +138,15 @@ export function FindBar() {
         </span>
       )}
       {query && matchCount === 0 && (
-        <span className="text-xs text-red-400 whitespace-nowrap">No matches</span>
+        <span className="text-xs text-sol-red whitespace-nowrap">No matches</span>
       )}
-      <button onClick={() => goToMatch(-1)} className="p-0.5 text-sol-text-muted hover:text-sol-text">
+      <button onClick={() => goToMatch(-1)} aria-label="Previous match" className="p-0.5 text-sol-text-muted hover:text-sol-text">
         <ChevronUp className="w-4 h-4" />
       </button>
-      <button onClick={() => goToMatch(1)} className="p-0.5 text-sol-text-muted hover:text-sol-text">
+      <button onClick={() => goToMatch(1)} aria-label="Next match" className="p-0.5 text-sol-text-muted hover:text-sol-text">
         <ChevronDown className="w-4 h-4" />
       </button>
-      <button onClick={close} className="p-0.5 text-sol-text-muted hover:text-sol-text">
+      <button onClick={close} aria-label="Close find" className="p-0.5 text-sol-text-muted hover:text-sol-text">
         <X className="w-4 h-4" />
       </button>
     </div>

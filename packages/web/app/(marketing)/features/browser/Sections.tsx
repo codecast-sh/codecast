@@ -65,11 +65,11 @@ export function CastTabStrip() {
       {/* Who is in each tab. */}
       <div className="mt-5 grid sm:grid-cols-[1fr_1.55fr] gap-4 sm:gap-6 font-mono text-[12px]">
         <div className="rounded-lg bg-white/70 px-4 py-3">
-          <div className="text-[11px] mb-2" style={{ color: MUTED }}>yours</div>
+          <div className="text-meta mb-2" style={{ color: MUTED }}>yours</div>
           <div style={{ color: INK }}>Mail, a doc, a pull request. An agent never touches, closes or brings forward these tabs.</div>
         </div>
         <div className="rounded-lg bg-white/70 px-4 py-3" style={{ boxShadow: `inset 3px 0 0 ${CAST_RED}` }}>
-          <div className="text-[11px] mb-2" style={{ color: CAST_RED }}>the Cast group · one tab per session</div>
+          <div className="text-meta mb-2" style={{ color: CAST_RED }}>the Cast group · one tab per session</div>
           <div className="space-y-1.5">
             {AGENT_TABS.map((t) => (
               <div key={t.title} className="flex items-center gap-2 min-w-0">
@@ -262,12 +262,12 @@ export function EvidenceSection() {
         <div className="rounded-2xl overflow-hidden font-mono text-left shadow-[0_30px_60px_-30px_rgba(0,43,54,.45)]" style={{ backgroundColor: "#FBF5E2", border: "1px solid #e4ddc8" }}>
           <div className="flex items-center gap-2 px-4 py-2.5 text-[12px]" style={{ borderBottom: "1px solid rgba(147,161,161,.18)" }}>
             <span className="font-medium" style={{ color: INK }}>Mobile checkout looks broken</span>
-            <span className="ml-auto text-[11px]" style={{ color: SOL.blue }}>claude</span>
+            <span className="ml-auto text-meta" style={{ color: SOL.blue }}>claude</span>
           </div>
           <div className="p-4 space-y-5">
             <ThreadRow cmd="browser shot" summary="--annotate">
               <Scaled w={720} h={430}><CheckoutPage phase={2} annotate thumb /></Scaled>
-              <div className="mt-1.5 text-[10.5px]" style={{ color: MUTED }}>each [N] label is snapshot ref #eN, with a legend</div>
+              <div className="mt-1.5 text-meta" style={{ color: MUTED }}>each [N] label is snapshot ref #eN, with a legend</div>
             </ThreadRow>
             <ThreadRow cmd="browser shot" summary="desktop, then after viewport mobile">
               <div className="flex gap-2 items-start">
@@ -276,7 +276,7 @@ export function EvidenceSection() {
               </div>
             </ThreadRow>
             <ThreadRow cmd="browser wait" summary='--text "Order confirmed"' failed>
-              <div className="rounded-md px-3 py-2.5 text-[11px] leading-[1.65]" style={{ backgroundColor: SOL.base03, color: SOL.base0 }}>
+              <div className="rounded-md px-3 py-2.5 text-meta leading-[1.65]" style={{ backgroundColor: SOL.base03, color: SOL.base0 }}>
                 <div style={{ color: "#ff6f61" }}>✗ &quot;Order confirmed&quot; never appeared</div>
                 <div style={{ color: SOL.base01 }}>── failure context ──────────</div>
                 <div>console errors (newest first):</div>
@@ -314,7 +314,7 @@ export function EvidenceSection() {
 function ThreadRow({ cmd, summary, failed = false, children }: { cmd: string; summary: string; failed?: boolean; children: ReactNode }) {
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-1.5 text-[11.5px] mb-2">
+      <div className="flex flex-wrap items-center gap-1.5 text-meta mb-2">
         <span className="flex items-center gap-1" style={{ color: failed ? CAST_RED : SOL.blue }}>{GLOBE_ICON} {cmd}</span>
         <span className="truncate" style={{ color: MUTED }}>{summary}</span>
         <span className="ml-auto hidden sm:flex gap-1">
@@ -332,7 +332,7 @@ function MiniShot({ w, h, className = "", narrow = false }: { w: number; h: numb
   return (
     <div className={`min-w-0 ${className}`}>
       <Scaled w={w} h={h}><CheckoutPage phase={1} thumb={!narrow} narrow={narrow} /></Scaled>
-      <div className="mt-1 text-[10px]" style={{ color: MUTED }}>{narrow ? "mobile" : "desktop"}</div>
+      <div className="mt-1 text-meta" style={{ color: MUTED }}>{narrow ? "mobile" : "desktop"}</div>
     </div>
   );
 }
@@ -345,7 +345,7 @@ function Evidence({ title, agent, children }: { title: string; agent?: string; c
       <div>
         <h3 className="font-mono font-bold text-[15.5px]" style={{ color: INK }}>{title}</h3>
         <p className="mt-1.5 text-[15px] leading-7" style={{ color: SOL.base01 }}>{children}</p>
-        {agent && <div className="mt-1 font-mono text-[11.5px]" style={{ color: DIM }}>the agent runs <span style={{ color: MUTED }}>{agent}</span></div>}
+        {agent && <div className="mt-1 font-mono text-meta" style={{ color: DIM }}>the agent runs <span style={{ color: MUTED }}>{agent}</span></div>}
       </div>
     </div>
   );
@@ -469,7 +469,7 @@ export function WheelSection() {
       <div className="grid lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)] gap-8 items-start">
         <div className="rounded-2xl overflow-hidden font-mono" style={{ backgroundColor: "#FBF5E2", border: "1px solid #e4ddc8", boxShadow: "0 30px 60px -30px rgba(0,43,54,.45)" }}>
           {/* The dock's bar */}
-          <div className="flex items-center gap-2 px-3 h-8 text-[11px]" style={{ borderBottom: "1px solid rgba(147,161,161,.2)", color: MUTED }}>
+          <div className="flex items-center gap-2 px-3 h-8 text-meta" style={{ borderBottom: "1px solid rgba(147,161,161,.2)", color: MUTED }}>
             <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: wheel ? HUMAN_CYAN : SOL.green }} />
             <span className="truncate">id.linear.app/login</span>
             <span className="ml-auto flex items-center gap-1.5">
@@ -477,7 +477,7 @@ export function WheelSection() {
                 type="button"
                 aria-pressed={wheel}
                 onClick={() => setWheel(!wheel)}
-                className="flex items-center gap-1 px-2 py-0.5 rounded-full border text-[10.5px] whitespace-nowrap transition-colors"
+                className="flex items-center gap-1 px-2 py-0.5 rounded-full border text-meta whitespace-nowrap transition-colors"
                 style={wheel
                   ? { color: HUMAN_CYAN, borderColor: "rgba(42,161,152,.45)", backgroundColor: "rgba(42,161,152,.14)" }
                   : { color: SOL.base01, borderColor: "rgba(147,161,161,.5)", backgroundColor: "#fff" }}
@@ -501,15 +501,15 @@ export function WheelSection() {
             </div>
             {!wheel && <AgentCursor x="62%" y="58%" />}
             {wheel ? (
-              <span className="absolute bottom-2.5 left-1/2 -translate-x-1/2 max-w-[calc(100%-16px)] inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10.5px] whitespace-nowrap" style={{ backgroundColor: "rgba(253,246,227,.95)", border: "1px solid rgba(42,161,152,.45)", color: MUTED }}>
+              <span className="absolute bottom-2.5 left-1/2 -translate-x-1/2 max-w-[calc(100%-16px)] inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-meta whitespace-nowrap" style={{ backgroundColor: "rgba(253,246,227,.95)", border: "1px solid rgba(42,161,152,.45)", color: MUTED }}>
                 <span style={{ color: HUMAN_CYAN }}>You have the wheel.</span>
                 <span className="truncate hidden sm:inline">The agent keeps its session; nothing you do here is sent to it.</span>
                 <KeyCap size="xs">Esc</KeyCap>
                 <span>hands back</span>
               </span>
             ) : (
-              <span className="absolute bottom-2.5 left-3 right-3 sm:right-auto rounded-lg px-3 py-2 text-[11px] leading-snug font-sans" style={{ backgroundColor: "rgba(253,246,227,.96)", border: "1px solid #e4ddc8", color: SOL.base02 }}>
-                <span className="font-mono text-[10.5px]" style={{ color: SOL.blue }}>claude</span> · Linear wants a sign-in. Please sign in here and I will continue in this tab.
+              <span className="absolute bottom-2.5 left-3 right-3 sm:right-auto rounded-lg px-3 py-2 text-meta leading-snug font-sans" style={{ backgroundColor: "rgba(253,246,227,.96)", border: "1px solid #e4ddc8", color: SOL.base02 }}>
+                <span className="font-mono text-meta" style={{ color: SOL.blue }}>claude</span> · Linear wants a sign-in. Please sign in here and I will continue in this tab.
               </span>
             )}
           </div>
@@ -576,7 +576,7 @@ export function SafetySection() {
           <p className="mt-2 mb-4 text-[15px] leading-7" style={{ color: SOL.base1 }}>
             The audit trail is always on. It keeps origins, never full URLs, because paths and query strings carry tokens. A refused navigation is on the trail too. The app has no view of it yet; read it in a terminal.
           </p>
-          <TermShell label="cast browser audit" bodyClassName="px-4 py-3 text-[11.5px] overflow-x-auto">
+          <TermShell label="cast browser audit" bodyClassName="px-4 py-3 text-meta overflow-x-auto">
             <div className="min-w-[560px] whitespace-pre">
               <div style={{ color: SOL.base01 }}>policy: ~/src/shop/.codecast/workspace.toml [browser] allow (2 entries)</div>
               {AUDIT.map(([t, mark, origin, how]) => (
@@ -619,7 +619,7 @@ function Node({ title, sub, accent = false, red = false }: { title: string; sub:
   return (
     <div className="shrink-0 sm:w-[132px] rounded-xl px-3 py-3 text-center" style={{ border: `1.5px solid ${border}`, backgroundColor: accent ? "rgba(108,113,196,.12)" : red ? "rgba(220,50,47,.1)" : SOL.base03 }}>
       <div className="font-semibold" style={{ color: SOL.base2 }}>{title}</div>
-      <div className="mt-1 text-[10.5px]" style={{ color: SOL.base1 }}>{sub}</div>
+      <div className="mt-1 text-meta" style={{ color: SOL.base1 }}>{sub}</div>
     </div>
   );
 }
@@ -627,12 +627,12 @@ function Node({ title, sub, accent = false, red = false }: { title: string; sub:
 function Wire({ label, dir = "right", note }: { label: string; dir?: "right" | "left"; note?: string }) {
   return (
     <div className="flex-1 sm:min-w-[70px] flex sm:flex-col items-center justify-center gap-3 sm:gap-0 py-1.5 sm:py-0 px-1.5">
-      <span className="text-[10px] sm:mb-1 order-2 sm:order-none" style={{ color: SOL.base1 }}>{label}</span>
+      <span className="text-meta sm:mb-1 order-2 sm:order-none" style={{ color: SOL.base1 }}>{label}</span>
       <span className="relative w-[2px] h-7 sm:w-full sm:h-[2px] order-1 sm:order-none" style={{ backgroundColor: "#3d6c79" }}>
         <span className="hidden sm:block absolute top-1/2 -translate-y-1/2 border-y-[5px] border-y-transparent" style={dir === "right" ? { right: -1, borderLeft: "7px solid #3d6c79" } : { left: -1, borderRight: "7px solid #3d6c79" }} />
         <span className="sm:hidden absolute left-1/2 -translate-x-1/2 border-x-[5px] border-x-transparent" style={dir === "right" ? { bottom: -1, borderTop: "7px solid #3d6c79" } : { top: -1, borderBottom: "7px solid #3d6c79" }} />
       </span>
-      {note && <span className="text-[9.5px] sm:mt-1 text-center order-3 sm:order-none" style={{ color: SOL.base01 }}>{note}</span>}
+      {note && <span className="text-meta sm:mt-1 text-center order-3 sm:order-none" style={{ color: SOL.base01 }}>{note}</span>}
     </div>
   );
 }

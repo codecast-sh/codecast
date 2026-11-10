@@ -37,7 +37,7 @@ export function ReachBadge({ reach }: { reach: MemoryNote["reach"] }) {
   return (
     <span
       title={why}
-      className="inline-flex items-center gap-1.5 rounded-full border px-2 py-px text-[11px] whitespace-nowrap"
+      className="inline-flex items-center gap-1.5 rounded-full border px-2 py-px text-meta whitespace-nowrap"
       style={{ borderColor: `color-mix(in srgb, ${color} 45%, transparent)`, color }}
     >
       <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
@@ -49,7 +49,7 @@ export function ReachBadge({ reach }: { reach: MemoryNote["reach"] }) {
 export function TypeBadge({ type }: { type: string }) {
   const color = toneCss(TYPE_TONE[typeKey(type)]);
   return (
-    <span className="inline-flex items-center gap-1.5 text-[11px] text-sol-text-muted whitespace-nowrap">
+    <span className="inline-flex items-center gap-1.5 text-meta text-sol-text-muted whitespace-nowrap">
       <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
       {type}
     </span>
@@ -62,7 +62,7 @@ export function BudgetMeter({ budget, className = "" }: { budget: MemoryIndexBud
   const scale = Math.max(budget.bytes, budget.maxBytes);
   const lost = over ? budget.lines - budget.cutAt! + 1 : 0;
   return (
-    <div className={`text-[11px] ${className}`}>
+    <div className={`text-meta ${className}`}>
       <div className="flex justify-between gap-2 whitespace-nowrap text-sol-text-dim">
         <span>MEMORY.md</span>
         <span className={over ? "text-sol-red" : "text-sol-text-muted"}>

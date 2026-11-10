@@ -66,7 +66,7 @@ export function Section({ id, title, lede, children, tone = "paper", wide = fals
 export function GroupChip({ label, color = CAST_RED, size = "md", style }: { label: string; color?: string; size?: "sm" | "md"; style?: CSSProperties }) {
   return (
     <span
-      className={`inline-flex items-center rounded-[6px] font-sans font-semibold leading-none ${size === "sm" ? "text-[10.5px] px-[6px] py-[3px]" : "text-[12.5px] px-2 py-[5px]"}`}
+      className={`inline-flex items-center rounded-[6px] font-sans font-semibold leading-none ${size === "sm" ? "text-meta px-[6px] py-[3px]" : "text-[12.5px] px-2 py-[5px]"}`}
       style={{ backgroundColor: color, color: "#fff", ...style }}
     >
       {label}
@@ -78,7 +78,7 @@ export function GroupChip({ label, color = CAST_RED, size = "md", style }: { lab
 export function RefTag({ n, on = true, annotate = false, style, className = "" }: { n: number; on?: boolean; /** Draw it the way `shot --annotate` labels the image: [N]. */ annotate?: boolean; style?: CSSProperties; className?: string }) {
   return (
     <span
-      className={`bx-ref pointer-events-none absolute z-10 rounded-[4px] font-mono text-[10px] font-semibold leading-none px-[4px] py-[3px] ${on ? "bx-ref-on" : ""} ${className}`}
+      className={`bx-ref pointer-events-none absolute z-10 rounded-[4px] font-mono text-meta font-semibold leading-none px-[4px] py-[3px] ${on ? "bx-ref-on" : ""} ${className}`}
       style={{ backgroundColor: annotate ? SOL.orange : REF_BLUE, color: "#fff", boxShadow: "0 2px 6px -2px rgba(38,139,210,.6)", ...style }}
     >
       {annotate ? `[${n}]` : `#e${n}`}
@@ -100,7 +100,7 @@ export function Lights({ size = 11 }: { size?: number }) {
 /** Small favicon square for a mock tab. */
 export function Favicon({ color, glyph }: { color: string; glyph: string }) {
   return (
-    <span className="inline-flex h-[14px] w-[14px] shrink-0 items-center justify-center rounded-[3px] text-[8.5px] font-bold text-white font-sans" style={{ backgroundColor: color }}>
+    <span className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-[3px] text-mark leading-none font-bold text-white font-sans" style={{ backgroundColor: color }}>
       {glyph}
     </span>
   );
@@ -118,7 +118,7 @@ export function ChromeTab({ title, fav, active = false, groupColor, badge = fals
 }) {
   return (
     <span
-      className="relative flex items-center gap-1.5 h-[30px] px-2.5 text-[11.5px] font-sans shrink min-w-0 rounded-t-[9px]"
+      className="relative flex items-center gap-1.5 h-[30px] px-2.5 text-meta font-sans shrink min-w-0 rounded-t-[9px]"
       style={{
         width,
         backgroundColor: active ? "#ffffff" : "transparent",
@@ -156,9 +156,9 @@ export function TermShell({ label, children, className = "", bodyClassName = "" 
     <div className={`min-w-0 rounded-xl overflow-hidden shadow-2xl ${className}`} style={{ backgroundColor: SOL.base03, border: "1px solid #094959" }}>
       <div className="flex items-center gap-2 px-3.5 py-2" style={{ backgroundColor: SOL.base02, borderBottom: "1px solid #094959" }}>
         <Lights size={10} />
-        <span className="ml-1.5 text-[11px] font-mono truncate" style={{ color: SOL.base01 }}>{label}</span>
+        <span className="ml-1.5 text-meta font-mono truncate" style={{ color: SOL.base01 }}>{label}</span>
       </div>
-      <div className={`font-mono text-[11.5px] leading-[1.6] overflow-x-auto ${bodyClassName}`} style={{ color: SOL.base0 }}>{children}</div>
+      <div className={`font-mono text-meta leading-[1.6] overflow-x-auto ${bodyClassName}`} style={{ color: SOL.base0 }}>{children}</div>
     </div>
   );
 }
@@ -167,7 +167,7 @@ export function TermShell({ label, children, className = "", bodyClassName = "" 
 export function RowPill({ children, tone = "muted" }: { children: ReactNode; tone?: "muted" | "cyan" }) {
   return (
     <span
-      className="inline-flex items-center gap-1 rounded-full border px-1.5 py-[1px] text-[10px] font-mono whitespace-nowrap"
+      className="inline-flex items-center gap-1 rounded-full border px-1.5 py-[1px] text-meta font-mono whitespace-nowrap"
       style={tone === "cyan" ? { color: HUMAN_CYAN, borderColor: "rgba(42,161,152,.4)" } : { color: SOL.base01, borderColor: "rgba(147,161,161,.45)" }}
     >
       {children}

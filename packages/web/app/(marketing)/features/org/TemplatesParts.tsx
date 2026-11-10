@@ -73,11 +73,11 @@ export function Cadence({ hire }: { hire: Hire }) {
           {hire.routines.length} routine{hire.routines.length === 1 ? "" : "s"}
           {acts > 0 && <span className="font-normal" style={{ color: MUTED }}> · {acts} act{acts === 1 ? "s" : ""} once you allow it</span>}
         </div>
-        <div className="font-mono text-[11.5px] shrink-0" style={{ color: MUTED }}><span className="font-semibold" style={{ color: INK }}>{total}</span> runs a week</div>
+        <div className="font-mono text-meta shrink-0" style={{ color: MUTED }}><span className="font-semibold" style={{ color: INK }}>{total}</span> runs a week</div>
       </div>
       <div className="grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,15rem)_minmax(0,1fr)_3.2rem] gap-x-3 gap-y-2 items-center">
         <div className="hidden sm:block" />
-        <div className="hidden sm:grid grid-cols-7 font-mono text-[11.5px]" style={{ color: DIM }}>
+        <div className="hidden sm:grid grid-cols-7 font-mono text-meta" style={{ color: DIM }}>
           {DAYS.map((d) => <span key={d} className="pl-1 border-l" style={{ borderColor: LINE }}>{d}</span>)}
         </div>
         <div className="hidden sm:block" />
@@ -85,10 +85,10 @@ export function Cadence({ hire }: { hire: Hire }) {
           <div key={rt.title} className="contents">
             <div className="min-w-0 col-span-2 sm:col-span-1">
               <div className="text-[12.5px] leading-tight truncate" style={{ color: TEXT }} title={rt.title}>{rt.title}</div>
-              <div className="font-mono text-[11.5px]" style={{ color: rt.mode === "acts" ? color : DIM }}>{rt.onChange ? `when one changes · watched every ${rt.every}` : cadenceWords(rt.every)}</div>
+              <div className="font-mono text-meta" style={{ color: rt.mode === "acts" ? color : DIM }}>{rt.onChange ? `when one changes · watched every ${rt.every}` : cadenceWords(rt.every)}</div>
             </div>
             <Track rt={rt} row={i} color={rt.mode === "acts" ? color : SOL.base1} />
-            <div className="font-mono text-[11.5px] text-right tabular-nums" style={{ color: MUTED }}>{rt.onChange ? "on change" : rt.every === "30d" ? "1/mo" : `${perWeek(rt.every)}×`}</div>
+            <div className="font-mono text-meta text-right tabular-nums" style={{ color: MUTED }}>{rt.onChange ? "on change" : rt.every === "30d" ? "1/mo" : `${perWeek(rt.every)}×`}</div>
           </div>
         ))}
       </div>
@@ -103,7 +103,7 @@ function Count({ n, label, sub, children }: { n: number; label: string; sub: str
         <span className="font-mono font-bold text-[22px] leading-none tabular-nums" style={{ color: n ? INK : DIM }}>{n}</span>
         <span className="font-mono text-[12px] font-semibold" style={{ color: TEXT }}>{label}</span>
       </div>
-      <div className="mt-1 text-[11.5px] leading-snug" style={{ color: MUTED }}>{sub}</div>
+      <div className="mt-1 text-meta leading-snug" style={{ color: MUTED }}>{sub}</div>
       {children}
     </div>
   );
@@ -124,7 +124,7 @@ export function Asks({ hire }: { hire: Hire }) {
       <Count n={hire.answers} label="answers" sub={`${hire.must ? `${hire.must} with no default` : "each has a default"} · plus ${hire.secrets.length} secret${hire.secrets.length === 1 ? "" : "s"}`} />
       <Count n={hire.secrets.length} label="secrets" sub="kept on your machine">
         {hire.secrets.length > 0 && (
-          <div className="mt-1.5 font-mono text-[11.5px] leading-snug truncate" style={{ color: DIM }} title={hire.secrets.join(", ")}>{hire.secrets.slice(0, 2).join(", ")}{hire.secrets.length > 2 ? ` +${hire.secrets.length - 2}` : ""}</div>
+          <div className="mt-1.5 font-mono text-meta leading-snug truncate" style={{ color: DIM }} title={hire.secrets.join(", ")}>{hire.secrets.slice(0, 2).join(", ")}{hire.secrets.length > 2 ? ` +${hire.secrets.length - 2}` : ""}</div>
         )}
       </Count>
       <Count n={perms} label="permissions" sub="outside codecast">
@@ -133,7 +133,7 @@ export function Asks({ hire }: { hire: Hire }) {
             const n = hire.perms[k] ?? 0;
             const c = k === "spend" ? SOL.orange : k === "publish" ? SOL.magenta : k === "write" ? SOL.blue : SOL.cyan;
             return (
-              <span key={k} className="rounded px-1 font-mono text-[11.5px] leading-[18px]" style={n ? { backgroundColor: tint(c, 16), color: `color-mix(in srgb, ${c} 70%, ${INK})` } : { color: DIM, boxShadow: `inset 0 0 0 1px ${LINE}`, opacity: 0.6 }}>
+              <span key={k} className="rounded px-1 font-mono text-meta leading-[18px]" style={n ? { backgroundColor: tint(c, 16), color: `color-mix(in srgb, ${c} 70%, ${INK})` } : { color: DIM, boxShadow: `inset 0 0 0 1px ${LINE}`, opacity: 0.6 }}>
                 {k}{n > 1 ? ` ${n}` : ""}
               </span>
             );
@@ -172,12 +172,12 @@ export function HireSteps({ hire, stage }: { hire: Hire; stage: Stage }) {
             style={{ ...at(i * 0.18), borderColor: lit ? tint(color, 55) : LINE, backgroundColor: lit ? tint(color, 9) : PAPER }}
           >
             <div className="flex items-start gap-2">
-              <span className="mt-px inline-flex w-[20px] h-[20px] shrink-0 items-center justify-center rounded-full font-mono text-[11.5px] font-bold" style={lit ? { backgroundColor: color, color: PAPER } : { boxShadow: `inset 0 0 0 1.5px ${color}`, color: `color-mix(in srgb, ${color} 70%, ${INK})` }}>
+              <span className="mt-px inline-flex w-[20px] h-[20px] shrink-0 items-center justify-center rounded-full font-mono text-meta font-bold" style={lit ? { backgroundColor: color, color: PAPER } : { boxShadow: `inset 0 0 0 1.5px ${color}`, color: `color-mix(in srgb, ${color} 70%, ${INK})` }}>
                 {lit && !(i === steps.length - 1 && paused && !hire.builtin) ? "✓" : i + 1}
               </span>
               <span className="min-w-0 font-mono text-[12px] font-semibold leading-[1.35] break-words" style={{ color: INK }}>{s.title}</span>
             </div>
-            <div className="mt-1 text-[11.5px] leading-snug" style={{ color: BODY }}>{s.sub}</div>
+            <div className="mt-1 text-meta leading-snug" style={{ color: BODY }}>{s.sub}</div>
           </li>
         );
       })}
@@ -196,7 +196,7 @@ export function SetupList({ hire, lit }: { hire: Hire; lit: boolean }) {
           <span className="min-w-0 leading-snug">{s}</span>
         </li>
       ))}
-      {hire.setup > hire.steps.length && <li className="pl-5 font-mono text-[11.5px]" style={{ color: DIM }}>and {hire.setup - hire.steps.length} more</li>}
+      {hire.setup > hire.steps.length && <li className="pl-5 font-mono text-meta" style={{ color: DIM }}>and {hire.setup - hire.steps.length} more</li>}
     </ul>
   );
 }
@@ -205,7 +205,7 @@ export function SetupList({ hire, lit }: { hire: Hire; lit: boolean }) {
 export function Release({ hire }: { hire: Hire }) {
   if (hire.builtin || !hire.version) return null;
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 font-mono text-[11.5px]" style={{ color: MUTED }}>
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 font-mono text-meta" style={{ color: MUTED }}>
       <Tile k={hire.k} size={16} />
       <span style={{ color: INK }}>{hire.id} {hire.version}</span>
       <span className="rounded px-1 leading-[16px]" style={{ boxShadow: `inset 0 0 0 1px ${LINE}`, color: TEXT }}>pinned</span>
@@ -217,7 +217,7 @@ function Node({ title, sub, color, filled, t }: { title: string; sub: string; co
   return (
     <div className="og-anim og-rise min-w-0 flex-1 rounded-lg border px-2.5 py-2" style={{ ...at(t), borderColor: filled ? color : LINE, backgroundColor: filled ? tint(color, 12) : PAPER }}>
       <div className="font-mono text-[12px] font-semibold leading-tight" style={{ color: INK }}>{title}</div>
-      <div className="mt-0.5 text-[11.5px] leading-snug" style={{ color: MUTED }}>{sub}</div>
+      <div className="mt-0.5 text-meta leading-snug" style={{ color: MUTED }}>{sub}</div>
     </div>
   );
 }
@@ -233,7 +233,7 @@ export function Lifecycle({ hire }: { hire: Hire }) {
       <div>
         <div className="mb-2 flex flex-wrap items-baseline justify-between gap-2">
           <span className="font-mono text-[12.5px] font-semibold" style={{ color: INK }}>Releases</span>
-          <span className="font-mono text-[11.5px]" style={{ color: DIM }}>immutable · SHA-256 digested</span>
+          <span className="font-mono text-meta" style={{ color: DIM }}>immutable · SHA-256 digested</span>
         </div>
         <div className="flex flex-col sm:flex-row gap-2">
           <Node t={0} title="draft" sub="not offered yet" color={SOL.base1} />
@@ -242,7 +242,7 @@ export function Lifecycle({ hire }: { hire: Hire }) {
           <Arrow />
           <Node t={0.2} title="stable" sub="offered to you as an Update" color={SOL.green} filled />
         </div>
-        <div className="mt-2.5 flex flex-wrap items-center gap-2 font-mono text-[11.5px]">
+        <div className="mt-2.5 flex flex-wrap items-center gap-2 font-mono text-meta">
           <span className="inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5" style={{ borderColor: tint(color, 50), backgroundColor: tint(color, 10), color: TEXT }}>
             <Tile k={hire.k} size={14} /> your {hire.builtin ? "role" : hire.name} · pinned {v}
           </span>

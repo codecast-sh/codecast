@@ -2,7 +2,7 @@
 // recap, an event line (who came and went), a typed or agent line. Props only;
 // RoomThread owns the reads and the writes and lays these out in time order.
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import { AlertTriangle, Captions, CaptionsOff, ChevronRight, Circle, DoorOpen, Globe, ImageUp, Link2Off, ListChecks, ListPlus, Sparkles, Square, Trash2, UserMinus, Video, VideoOff } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { callShareHref, describeClockSpans, recordingFailureWords, recordingLostWords, recordingStoppedItselfWords } from "@codecast/shared/contracts";
@@ -39,7 +39,7 @@ export type RoomThreadSelection = {
   activeSeq?: number | null;
   filmed?: ReadonlyArray<{ fromMs: number; toMs: number }>;
   /** A line under the recap that says how selecting works, until a turn is chosen. */
-  hint?: string | null;
+  hint?: React.ReactNode;
   /** A wall time on the call's clock, for a recording event's clock column:
    *  with `onSeek` where the call's video shows that moment (the line jumps
    *  there), without it where no video does (the time still lines up). */
@@ -73,7 +73,9 @@ export function Fold({ open, children }: { open: boolean; children: React.ReactN
   );
 }
 
-export function PassageBlock({
+// Memoized, like ChatLine: the thread redraws whenever a word lands, and a
+// passage whose own words did not change has nothing to redraw.
+export const PassageBlock = memo(function PassageBlock({
   passage,
   idPrefix,
   open,
@@ -96,7 +98,8 @@ export function PassageBlock({
   recording: boolean;
   /** The call's start: a wall clock on the same day drops its date. */
   dayOf: number | undefined;
-  onToggle: () => void;
+  /** Handed the passage, so the thread can pass one stable function. */
+  onToggle: (passage: Passage) => void;
   selection?: RoomThreadSelection;
   /** The call the passage belongs to: its turns and its head offer links. */
   callId?: string;
@@ -135,7 +138,7 @@ export function PassageBlock({
         className="rt-passage-head"
         aria-expanded={open}
         aria-controls={open ? bodyId : undefined}
-        onClick={onToggle}
+        onClick={() => onToggle(passage)}
         title={`${open ? "Fold" : "Open"} this passage · ${n} ${units}${n === 1 ? "" : "s"}`}
       >
         <ChevronRight className="rt-chevron h-3 w-3" aria-hidden="true" />
@@ -186,7 +189,7 @@ export function PassageBlock({
       </Fold>
     </section>
   );
-}
+});
 
 // ── The recap so far ───────────────────────────────────────────────────────
 
@@ -459,7 +462,7 @@ export function RecordEventLine({
   else if (itself) words = itself;
   else if (failed) words = recordingFailureWords(row.text);
   else words = <>{who} stopped recording</>;
-  const clock = "shrink-0 min-w-[3.25rem] rounded px-1 text-right font-mono text-[10.5px] text-sol-text-dim";
+  const clock = "shrink-0 min-w-[3.25rem] rounded px-1 text-right font-mono text-meta text-sol-text-dim";
   return (
     <div className={`rt-event${fresh ? " rt-in" : ""}`} role="note">
       <span className="rt-event-glyph flex w-5 shrink-0 justify-center" aria-hidden="true">
@@ -600,7 +603,9 @@ function StageLink({ children, ...props }: any) {
 }
 const STAGE_MD_COMPONENTS = { ...MESSAGE_MD_COMPONENTS, a: StageLink };
 
-export function ChatLine({
+// Memoized: a line's markdown is parsed when the line changes, not each
+// time the thread around it redraws (a word landing, a scribe's status).
+export const ChatLine = memo(function ChatLine({
   m,
   sameAuthor,
   fresh,
@@ -674,4 +679,4 @@ export function ChatLine({
       </div>
     </div>
   );
-}
+});

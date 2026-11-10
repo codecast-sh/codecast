@@ -44,9 +44,9 @@ const SOURCES_SHOWN = 1;
 const sameWords = (a: string, b: string) => a.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() === b.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
 const inputCls = "rounded-md border border-sol-border/50 bg-sol-bg px-2 py-1 text-[12.5px] text-sol-text placeholder:text-sol-text-dim focus:border-sol-blue/60 focus:outline-none";
-const quietBtn = "text-[11.5px] text-sol-text-dim hover:text-sol-text-muted";
+const quietBtn = "text-meta text-sol-text-dim hover:text-sol-text-muted";
 const actBtn = (tone: "blue" | "green" | "orange" | "plain") => cn(
-  "rounded-md border px-2.5 py-0.5 text-[11.5px] transition-colors disabled:opacity-40 disabled:hover:bg-transparent",
+  "rounded-md border px-2.5 py-0.5 text-meta transition-colors disabled:opacity-40 disabled:hover:bg-transparent",
   tone === "blue" && "border-sol-blue/40 text-sol-blue hover:bg-sol-blue/10",
   tone === "green" && "border-sol-green/40 text-sol-green hover:bg-sol-green/10",
   tone === "orange" && "border-sol-orange/40 text-sol-orange hover:bg-sol-orange/10",
@@ -115,7 +115,7 @@ export function ExpectationsDocument({ projectId, variant = "page", adding, onAd
         <section key={area} id={`area-${slug(area)}`} className="scroll-mt-4" data-expectations-part={area}>
           <h3 className="mb-1.5 flex items-baseline gap-2 border-b border-sol-border/25 pb-1 text-[12.5px] font-semibold text-sol-text">
             {area}
-            <span className="text-[11px] font-normal tabular-nums text-sol-text-dim">{lines.length}</span>
+            <span className="text-meta font-normal tabular-nums text-sol-text-dim">{lines.length}</span>
           </h3>
           <ul className="divide-y divide-sol-border/15" data-expectations>
             {lines.map((e) => <Line key={e.id} e={e} projectId={projectId} row={row} areas={allAreas} variant={variant} />)}
@@ -165,17 +165,17 @@ export function ExpectationsDocument({ projectId, variant = "page", adding, onAd
                   className={cn("flex w-full items-baseline justify-between rounded px-2 py-1 text-left text-[12px] transition-colors", filter === f ? "bg-sol-bg-alt text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt/60")}
                   data-expectations-filter={f}>
                   <span>{FILTER_LABEL[f]}</span>
-                  <span className="tabular-nums text-[11px] text-sol-text-dim">{counts[f]}</span>
+                  <span className="tabular-nums text-meta text-sol-text-dim">{counts[f]}</span>
                 </button>
               ))}
             </nav>
             {allAreas.length > 1 && (
               <nav aria-label="Areas" className="hidden lg:block" data-expectations-areas>
-                <div className="mb-1 px-2 text-[11px] text-sol-text-dim">Areas</div>
+                <div className="mb-1 px-2 text-meta text-sol-text-dim">Areas</div>
                 {byArea(active).map(([area, ls]) => (
                   <a key={area} href={`#area-${slug(area)}`} className="flex items-baseline justify-between rounded px-2 py-0.5 text-[12px] text-sol-text-muted hover:bg-sol-bg-alt/60 hover:text-sol-text">
                     <span className="truncate">{area}</span>
-                    <span className="ml-2 tabular-nums text-[11px] text-sol-text-dim">{ls.length}</span>
+                    <span className="ml-2 tabular-nums text-meta text-sol-text-dim">{ls.length}</span>
                   </a>
                 ))}
               </nav>
@@ -206,7 +206,7 @@ function Sources({ citations, row, hideQuoteOf }: { citations: ExpectationCitati
         return <CitationLine key={`${c.kind}-${c.ref}-${i}`} c={c} who={sourceSpeaker(row, c).who} quote={!(hideQuoteOf && c.quote && sameWords(c.quote, hideQuoteOf))} />;
       })}
       {more > 0 && (
-        <button type="button" onClick={() => setAll(true)} className="text-[11px] text-sol-text-dim hover:text-sol-text-muted" data-expectation-more-sources>
+        <button type="button" onClick={() => setAll(true)} className="text-meta text-sol-text-dim hover:text-sol-text-muted" data-expectation-more-sources>
           {more} more {more === 1 ? "source" : "sources"}
         </button>
       )}
@@ -224,7 +224,8 @@ function Line({ e, projectId, row, areas, variant }: { e: Expectation; projectId
   const usage = usageOf(row, e.id);
   const toggle = (m: LineMode) => setMode((cur) => (cur === m ? null : m));
   const actions = (
-    <span className="inline-flex gap-3 whitespace-nowrap transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100" data-expectation-actions>
+    // Always there (touch has no hover), quieter until the line is pointed at.
+    <span className="inline-flex gap-3 whitespace-nowrap opacity-60 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" data-expectation-actions>
       <button type="button" onClick={() => toggle("edit")} className={cn(quietBtn, "hover:text-sol-blue")} data-expectation-edit={e.id}>Edit</button>
       {e.note && <button type="button" onClick={() => toggle("settle")} className={cn(quietBtn, "hover:text-sol-yellow")} data-expectation-settle={e.id} title="Settle its open question">Settle</button>}
       <button type="button" onClick={() => toggle("retire")} className={cn(quietBtn, "hover:text-sol-orange")} data-expectation-retire={e.id}>Retire</button>
@@ -240,13 +241,13 @@ function Line({ e, projectId, row, areas, variant }: { e: Expectation; projectId
           ) : (
             <p className="text-[13px] leading-snug text-sol-text">
               {e.text}
-              {/* The handle a finding cites, so a cause's "Expects" row can be matched by eye. */}
-              <span className="ml-2 whitespace-nowrap font-mono text-[10.5px] text-sol-text-dim" data-expectation-id>{e.id}</span>
+              {/* The handle a finding cites, so a cause's "Expects" row can be matched by eye: shown on the line it is asked of. */}
+              <span className="ml-2 whitespace-nowrap font-mono text-meta text-sol-text-dim opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100" data-expectation-id>{e.id}</span>
             </p>
           )}
           {e.note && mode !== "edit" && (
             <div className="mt-1 flex items-baseline gap-1.5 text-[12px] text-sol-yellow" data-expectation-note>
-              <span className="shrink-0 rounded-sm bg-sol-yellow/15 px-1 text-[10.5px] font-medium">Open question</span>
+              <span className="shrink-0 rounded-sm bg-sol-yellow/15 px-1 text-meta font-medium">Open question</span>
               <span className="min-w-0">{e.note}</span>
             </div>
           )}
@@ -283,18 +284,18 @@ function Line({ e, projectId, row, areas, variant }: { e: Expectation; projectId
 function UsageCell({ usage, open, onToggle }: { usage: ReturnType<typeof usageOf>; open: boolean; onToggle: () => void }) {
   const heat = lineHeat(usage);
   if (heat === "quiet") {
-    return <div className="text-[11.5px] text-sol-text-dim sm:text-right" data-expectation-usage="quiet" title="No finding cited this line in the last 30 days">never cited</div>;
+    return <div className="text-meta text-sol-text-dim sm:text-right" data-expectation-usage="quiet" title="No finding cited this line in the last 30 days">never cited</div>;
   }
   return (
     <button type="button" onClick={onToggle} aria-expanded={open}
-      className="group/usage text-left text-[11.5px] tabular-nums leading-tight sm:text-right"
+      className="group/usage text-left text-meta tabular-nums leading-tight sm:text-right"
       data-expectation-usage={heat} title="Findings that cite this line as the one they break">
       <span className="inline-flex items-baseline gap-1">
         <span className={cn("text-[13px] font-semibold", heat === "week" ? "text-sol-red" : "text-sol-orange")}>{usage.d30}</span>
         <span className="text-sol-text-muted group-hover/usage:underline">{usage.d30 === 1 ? "break" : "breaks"}, 30 days</span>
         <ChevronRight className={cn("h-3 w-3 self-center text-sol-text-dim transition-transform", open && "rotate-90")} />
       </span>
-      {usage.d7 > 0 && <span className="block text-[11px] text-sol-red/90">{usage.d7} this week</span>}
+      {usage.d7 > 0 && <span className="block text-meta text-sol-red/90">{usage.d7} this week</span>}
     </button>
   );
 }
@@ -305,7 +306,7 @@ function Findings({ findings, d30, lineText }: { findings: ExpectationFinding[];
   const at = (ms: number) => new Date(ms).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
   return (
     <div className="mt-2 rounded-md border border-sol-border/30 bg-sol-bg-alt/30 px-3 py-2" data-expectation-findings>
-      <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[11px] text-sol-text-dim">
+      <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-meta text-sol-text-dim">
         <span>{d30 > findings.length ? `The newest ${findings.length} of ${d30} findings` : `${findings.length === 1 ? "The finding" : `The ${findings.length} findings`}`} that cite this line</span>
         {causes.length > 0 && (
           <span className="inline-flex flex-wrap items-baseline gap-1.5" data-expectation-causes>
@@ -319,10 +320,10 @@ function Findings({ findings, d30, lineText }: { findings: ExpectationFinding[];
           const words = findingWords(f, lineText);
           return (
             <li key={f.short_id} className="grid grid-cols-[7.5rem_minmax(0,1fr)] items-baseline gap-x-2 text-[12px]" data-expectation-finding={f.short_id}>
-              <span className="tabular-nums text-[11px] text-sol-text-dim">{at(f.created_at)}</span>
+              <span className="tabular-nums text-meta text-sol-text-dim">{at(f.created_at)}</span>
               <span className="min-w-0 text-sol-text-muted" title={`${f.title} (${f.kind}, from ${f.source})`}>
                 <span className="line-clamp-2">{f.evidence_url ? <a href={f.evidence_url} target="_blank" rel="noreferrer" className="hover:text-sol-blue hover:underline">{words}</a> : words}</span>
-                <span className="text-[11px] text-sol-text-dim">{f.source}{causes.length > 1 && f.cause?.short_id ? `, ${f.cause.short_id}` : ""}</span>
+                <span className="text-meta text-sol-text-dim">{f.source}{causes.length > 1 && f.cause?.short_id ? `, ${f.cause.short_id}` : ""}</span>
               </span>
             </li>
           );
@@ -343,7 +344,7 @@ function ReasonForm({ placeholder, submit, hint, tone, onSubmit, onCancel }: { p
         <button type="submit" disabled={!reason.trim()} className={actBtn(tone)}>{submit}</button>
         <button type="button" onClick={onCancel} className={quietBtn}>Cancel</button>
       </div>
-      <div className="text-[11px] text-sol-text-dim">{hint}</div>
+      <div className="text-meta text-sol-text-dim">{hint}</div>
     </form>
   );
 }
@@ -374,7 +375,7 @@ function EditLine({ e, areas, youAnswer, person, onSubmit, onCancel }: { e: Expe
       </div>
       <input value={why} onChange={(ev) => setWhy(ev.target.value)} placeholder="Why the change? (optional, kept with the line)" maxLength={400} className={cn(inputCls, "w-full")} data-expectation-edit-why />
       <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 text-[11px] text-sol-text-dim">{youAnswer ? "Applies now as the next version." : `Goes to ${person} to apply.`}</span>
+        <span className="min-w-0 flex-1 text-meta text-sol-text-dim">{youAnswer ? "Applies now as the next version." : `Goes to ${person} to apply.`}</span>
         <button type="button" onClick={onCancel} className={quietBtn}>Cancel</button>
         <button type="submit" disabled={!changed} className={actBtn("blue")} data-expectation-edit-submit>{youAnswer ? "Save" : "Propose"}</button>
       </div>
@@ -397,7 +398,7 @@ function SettleForm({ e, youAnswer, person, onSubmit, onCancel }: { e: Expectati
         className={cn(inputCls, "w-full")} data-expectation-settle-why />
       <textarea value={text} onChange={(ev) => setText(ev.target.value)} rows={2} maxLength={400} className={cn(inputCls, "block w-full resize-none leading-snug")} data-expectation-settle-text />
       <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 text-[11px] text-sol-text-dim">Rewrite the line if the answer changes it. {youAnswer ? "Applies now." : `Goes to ${person} to apply.`}</span>
+        <span className="min-w-0 flex-1 text-meta text-sol-text-dim">Rewrite the line if the answer changes it. {youAnswer ? "Applies now." : `Goes to ${person} to apply.`}</span>
         <button type="button" onClick={onCancel} className={quietBtn}>Cancel</button>
         <button type="submit" disabled={!why.trim()} className={actBtn("blue")} data-expectation-settle-submit>Settle</button>
       </div>
@@ -451,7 +452,7 @@ function AddLine({ projectId, row, areas, onClose }: { projectId: string; row: P
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <span className="min-w-0 flex-1 text-[11px] text-sol-text-dim" data-expectation-add-hint={!ready ? "" : applies ? "applies" : "waits"}>
+        <span className="min-w-0 flex-1 text-meta text-sol-text-dim" data-expectation-add-hint={!ready ? "" : applies ? "applies" : "waits"}>
           {!ready ? "Your words become the line's first source." : applies ? "Applies now, with your words as its source." : `Goes to ${personWord(row)} to apply: a line too far from its own words waits for them.`}
         </span>
         <button type="button" onClick={onClose} className={quietBtn}>Cancel</button>
@@ -574,7 +575,7 @@ export function Proposal({ projectId, row, p, byId }: { projectId: string; row: 
     <div className="rounded-lg border border-sol-yellow/30 bg-sol-yellow/[0.04] px-3 py-2.5" data-expectation-proposal={p.short_id || "sending"}>
       <div className="flex items-baseline gap-2 text-[12.5px]">
         <span className="min-w-0 flex-1 text-sol-text line-clamp-2">{p.summary}</span>
-        <span className="shrink-0 text-[11px] text-sol-text-dim tabular-nums">
+        <span className="shrink-0 text-meta text-sol-text-dim tabular-nums">
           {sending ? "sending…" : <>{p.proposed_by ? `${p.from_session ? `${p.proposed_by}'s session` : p.proposed_by}, ` : ""}{ageShort(now - p.created_at)} ago</>}
           {!sending && <span className="ml-1.5 font-mono">{p.short_id}</span>}
           {p.card && p.card_status === "pending" && <span className="ml-1.5" title="The same decision waits in the queue; answering here answers it there"><EntityIdPill shortId={p.card} compact /></span>}
@@ -583,18 +584,18 @@ export function Proposal({ projectId, row, p, byId }: { projectId: string; row: 
       <ul className="mt-2 space-y-2">
         {(all ? p.ops ?? [] : (p.ops ?? []).slice(0, CHANGES_SHOWN)).map((op, i) => <Change key={i} op={op} row={row} byId={byId} />)}
         {!all && (p.ops?.length ?? 0) > CHANGES_SHOWN && (
-          <li><button type="button" onClick={() => setAll(true)} className="text-[11.5px] text-sol-text-dim hover:text-sol-text-muted" data-expectation-more-changes>
+          <li><button type="button" onClick={() => setAll(true)} className="text-meta text-sol-text-dim hover:text-sol-text-muted" data-expectation-more-changes>
             {(p.ops?.length ?? 0) - CHANGES_SHOWN} more {(p.ops?.length ?? 0) - CHANGES_SHOWN === 1 ? "change" : "changes"} ({opCounts((p.ops ?? []).slice(CHANGES_SHOWN))})
           </button></li>
         )}
-        {!p.ops && <li className="text-[11.5px] text-sol-text-dim">{p.changes} {p.changes === 1 ? "change" : "changes"}</li>}
+        {!p.ops && <li className="text-meta text-sol-text-dim">{p.changes} {p.changes === 1 ? "change" : "changes"}</li>}
       </ul>
-      {p.refused && <div className="mt-2 text-[11.5px] text-sol-orange" data-expectation-refused>It cannot apply as written: {p.refused}</div>}
+      {p.refused && <div className="mt-2 text-meta text-sol-orange" data-expectation-refused>It cannot apply as written: {p.refused}</div>}
       {!sending && (
         <div className="mt-2.5 flex items-center gap-2">
           <button type="button" onClick={() => resolve(projectId, p.short_id, "apply")} className={actBtn("green")} data-expectation-apply={p.short_id}>Apply</button>
           <button type="button" onClick={() => resolve(projectId, p.short_id, "drop")} className={actBtn("plain")} data-expectation-drop={p.short_id}>Keep the lines</button>
-          <span className="text-[11px] text-sol-text-dim">Applied, it becomes version {p.base_version + 1}.</span>
+          <span className="text-meta text-sol-text-dim">Applied, it becomes version {p.base_version + 1}.</span>
         </div>
       )}
     </div>
@@ -621,7 +622,7 @@ function Change({ op, row, byId }: { op: ExpectationOp; row: ProjectExpectations
   } else if (op.op === "edit") {
     body = (
       <>
-        <span className="font-mono text-[10.5px] text-sol-text-dim">{op.id}</span>
+        <span className="font-mono text-meta text-sol-text-dim">{op.id}</span>
         {op.text !== undefined && <><div className="text-sol-text-dim line-through decoration-sol-text-dim/50">{was?.text ?? "(a line this document does not have)"}</div><div className="text-sol-text">{op.text}</div></>}
         {op.text === undefined && was && <div className="text-sol-text-muted">{was.text}</div>}
         {op.part !== undefined && <div className="text-sol-text-muted">Moves to {op.part}</div>}
@@ -632,14 +633,14 @@ function Change({ op, row, byId }: { op: ExpectationOp; row: ProjectExpectations
     body = (
       <>
         <span className="text-sol-text-dim line-through decoration-sol-text-dim/50">{was?.text ?? op.id}</span>
-        <span className="ml-1.5 font-mono text-[10.5px] text-sol-text-dim">{op.id}</span>
+        <span className="ml-1.5 font-mono text-meta text-sol-text-dim">{op.id}</span>
         <div className="text-sol-text-muted">Because {op.reason}</div>
       </>
     );
   }
   return (
     <li className="grid grid-cols-[3.5rem_minmax(0,1fr)] gap-x-2 text-[12.5px] leading-snug" data-expectation-change={op.op}>
-      <span className={cn("text-[11px] font-semibold", tag.cls)}>{tag.label}</span>
+      <span className={cn("text-meta font-semibold", tag.cls)}>{tag.label}</span>
       <div className="min-w-0">
         {body}
         <Sources citations={op.citations} row={row} hideQuoteOf={op.op === "add" ? op.text : op.op === "retire" ? op.reason : undefined} />
@@ -662,8 +663,8 @@ function Retired({ items, row }: { items: Expectation[]; row: ProjectExpectation
           {items.map((e) => (
             <li key={e.id} id={e.id} className="scroll-mt-16 text-[12.5px] leading-snug" data-expectation={e.id} data-expectation-retired>
               <span className="text-sol-text-muted line-through decoration-sol-text-dim/40">{e.text}</span>
-              <span className="ml-1.5 font-mono text-[10.5px] text-sol-text-dim">{e.id}</span>
-              <div className="text-[11.5px] text-sol-text-dim">Retired in version {e.changed_in}{e.retired_reason ? `: ${e.retired_reason}` : ""}</div>
+              <span className="ml-1.5 font-mono text-meta text-sol-text-dim">{e.id}</span>
+              <div className="text-meta text-sol-text-dim">Retired in version {e.changed_in}{e.retired_reason ? `: ${e.retired_reason}` : ""}</div>
               <Sources citations={e.citations.slice(-1)} row={row} hideQuoteOf={e.retired_reason} />
             </li>
           ))}

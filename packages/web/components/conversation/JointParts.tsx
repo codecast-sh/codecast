@@ -15,7 +15,7 @@ export function JointParts({ parts, collapsed }: { parts: JointPart[]; collapsed
     <div data-cc-joint-turn className="not-prose flex flex-col gap-3">
       {parts.map((p, i) => (
         <div key={i} className={i > 0 ? "pt-3 border-t border-dashed border-sol-blue/20" : ""}>
-          <div className="text-[11px] font-medium text-sol-blue/80 mb-1">{p.from}</div>
+          <div className="text-meta font-medium text-sol-blue/80 mb-1">{p.from}</div>
           <div className="prose prose-invert prose-sm max-w-none"><MessageMarkdown content={p.body} userText /></div>
         </div>
       ))}

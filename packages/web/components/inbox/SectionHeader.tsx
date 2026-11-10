@@ -67,18 +67,18 @@ export function SectionHeader({
     >
       {landedColor && <span key={landedColor} aria-hidden className="absolute inset-0 pointer-events-none animate-inbox-landed" />}
       {monoLabel ? (
-        <span className={`text-[10px] font-semibold flex items-center gap-1.5 min-w-0 ${color}`}>
+        <span className={`text-meta font-semibold flex items-center gap-1.5 min-w-0 ${color}`}>
           {icon}
           <span className="truncate font-mono">{label}</span>
           <span className="opacity-70 shrink-0">({count})</span>
         </span>
       ) : (
-        <span className={`text-[10px] font-semibold uppercase tracking-wider ${color}`}>
+        <span className={`text-mark font-semibold uppercase tracking-wider ${color}`}>
           {label} ({count})
         </span>
       )}
       {states && (
-        <span className="ml-auto flex items-center gap-2 shrink-0 font-mono text-[10px] tabular-nums">
+        <span className="ml-auto flex items-center gap-2 shrink-0 font-mono text-meta tabular-nums">
           {HEADER_STATES.map((k) => (states[k] ?? 0) > 0 && (
             <span key={k} title={`${states[k]} ${ORG_STATE_META[k].label}`} className="flex items-center gap-1" style={{ color: ORG_STATE_META[k].color }}>
               <span aria-hidden className="w-1.5 h-1.5 rounded-full" style={{ background: ORG_STATE_META[k].color }} />

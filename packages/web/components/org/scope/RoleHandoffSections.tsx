@@ -71,7 +71,7 @@ export function MergeStepSwitch({ role, canEdit, merge }: { role: OrgRole; canEd
           <GitMerge className="w-3.5 h-3.5" style={{ color: on ? "var(--sol-green)" : "var(--sol-text-dim)" }} />
           <span className="text-[12px] font-semibold" style={{ color: on ? "var(--sol-green)" : "var(--sol-text-muted)" }}>Merge step {on ? "on" : "off"}</span>
         </button>
-        <span className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }} data-merge-words>{mergeStepWords(merge)}</span>
+        <span className="text-meta" style={{ color: "var(--sol-text-dim)" }} data-merge-words>{mergeStepWords(merge)}</span>
       </div>
       {merge && <MergeRateRow role={role} canEdit={canEdit} merge={merge} />}
       {reviewing && merge && <SwitchReview ledger={mergeStepLedger({ name: role.name, limit: merge.limit, used: merge.used })} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); void flip(true); }} />}
@@ -83,7 +83,7 @@ export function MergeStepSwitch({ role, canEdit, merge }: { role: OrgRole; canEd
           </label>
           <button type="submit" disabled={busy} className="h-7 px-3 rounded-md text-[12px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>Turn on</button>
           <button type="button" onClick={() => setAsking(false)} className="h-7 px-2 rounded-md text-[12px]" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
-          <span className="text-[11px] basis-full" style={{ color: "var(--sol-text-dim)" }}>This grants the role the authority to merge, for ninety days, with this daily limit. Revoke it under the role's authority at any time.</span>
+          <span className="text-meta basis-full" style={{ color: "var(--sol-text-dim)" }}>This grants the role the authority to merge, for ninety days, with this daily limit. Revoke it under the role's authority at any time.</span>
         </form>
       )}
     </div>
@@ -118,15 +118,15 @@ export function MergeRateRow({ role, canEdit, merge }: { role: OrgRole; canEdit:
       aria-pressed={mode === k}
       disabled={!canEdit}
       onClick={() => (mode === k ? (k === "rate" && setEditing((x) => !x)) : k === "rate" ? setEditing(true) : setReview("count"))}
-      className="h-6 px-2.5 text-[11.5px] font-medium disabled:cursor-default"
+      className="h-6 px-2.5 text-meta font-medium disabled:cursor-default"
       style={mode === k ? { background: "color-mix(in srgb, var(--sol-violet) 16%, transparent)", color: "var(--sol-violet)" } : { color: "var(--sol-text-muted)" }}
       data-merge-mode={k}
     >{label}</button>
   );
-  const field = "w-14 h-6 px-1.5 rounded-md border text-[11.5px] tabular-nums";
+  const field = "w-14 h-6 px-1.5 rounded-md border text-meta tabular-nums";
   const fieldStyle = { borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", background: "var(--sol-bg)", color: "var(--sol-text)" };
   return (
-    <div className="mt-2 flex items-center gap-2.5 flex-wrap text-[11.5px]" data-merge-rate={mode}>
+    <div className="mt-2 flex items-center gap-2.5 flex-wrap text-meta" data-merge-rate={mode}>
       <span className="inline-flex rounded-md border overflow-hidden" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)" }} role="group" aria-label="Merge step decides on">
         {seg("count", "Count")}
         {seg("rate", "Rate")}
@@ -142,7 +142,7 @@ export function MergeRateRow({ role, canEdit, merge }: { role: OrgRole; canEdit:
         <form className="inline-flex items-center gap-1.5" onSubmit={(e) => { e.preventDefault(); setReview("rate"); }} data-merge-rate-form>
           <label className="inline-flex items-center gap-1" style={{ color: "var(--sol-text-muted)" }}>bar <input type="number" min={1} max={100} value={bar} onChange={(e) => setBar(e.target.value)} className={field} style={fieldStyle} aria-label="Bar, percent" />%</label>
           <label className="inline-flex items-center gap-1" style={{ color: "var(--sol-text-muted)" }}>min <input type="number" min={1} value={min} onChange={(e) => setMin(e.target.value)} className={field} style={fieldStyle} aria-label="Finished changes, at least" /></label>
-          <button type="submit" className="h-6 px-2.5 rounded-md text-[11.5px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>Review</button>
+          <button type="submit" className="h-6 px-2.5 rounded-md text-meta font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>Review</button>
           <button type="button" onClick={() => setEditing(false)} className="h-6 px-1.5 rounded-md" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
         </form>
       )}
@@ -198,14 +198,14 @@ export function HandingOverSection({ tree, role, canEdit }: { tree: OrgTree; rol
   };
   return (
     <section className="rounded-xl border px-4 py-3.5" style={{ borderColor: "color-mix(in srgb, var(--sol-yellow) 45%, transparent)", background: "color-mix(in srgb, var(--sol-yellow) 6%, transparent)" }} data-handing-over={hand.reason}>
-      <h3 className="text-[10.5px] font-semibold uppercase tracking-[0.08em] inline-flex items-center gap-1.5" style={{ color: "var(--sol-yellow)" }}><ArrowRightLeft className="w-3 h-3" /> Handing over</h3>
-      <p className="mt-0.5 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>Its lines for the moved areas are already in each receiver's brief. It hands over what the lines do not say from its own thread. {why}</p>
+      <h3 className="text-mark font-semibold uppercase tracking-[0.08em] inline-flex items-center gap-1.5" style={{ color: "var(--sol-yellow)" }}><ArrowRightLeft className="w-3 h-3" /> Handing over</h3>
+      <p className="mt-0.5 text-meta" style={{ color: "var(--sol-text-dim)" }}>Its lines for the moved areas are already in each receiver's brief. It hands over what the lines do not say from its own thread. {why}</p>
       <ul className="mt-2.5 space-y-1 text-[12.5px]">
         {hand.receivers.map((r) => (
           <li key={r.role_id} className="flex items-center gap-2 flex-wrap" data-handoff-receiver={r.handle}>
             {roleLink(tree, r.role_id, r.handle)}
             <span style={{ color: "var(--sol-text-secondary)" }}>takes {areaNames(tree, role, r).join(", ") || "its area"}</span>
-            <span className="text-[11px] px-1.5 h-[18px] inline-flex items-center rounded" style={{ background: r.done_at ? "color-mix(in srgb, var(--sol-green) 14%, transparent)" : "color-mix(in srgb, var(--sol-text-dim) 14%, transparent)", color: r.done_at ? "var(--sol-green)" : "var(--sol-text-muted)" }}>{r.done_at ? `handed ${dayWords(r.done_at)}` : "waiting"}</span>
+            <span className="text-meta px-1.5 h-[18px] inline-flex items-center rounded" style={{ background: r.done_at ? "color-mix(in srgb, var(--sol-green) 14%, transparent)" : "color-mix(in srgb, var(--sol-text-dim) 14%, transparent)", color: r.done_at ? "var(--sol-green)" : "var(--sol-text-muted)" }}>{r.done_at ? `handed ${dayWords(r.done_at)}` : "waiting"}</span>
           </li>
         ))}
       </ul>
@@ -225,15 +225,15 @@ export function SuccessionSection({ tree, role }: { tree: OrgTree; role: OrgRole
   if (!rows.length) return null;
   return (
     <section className="rounded-xl border px-4 py-3.5" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 28%, transparent)", background: "var(--sol-card)" }} data-succession={rows.length}>
-      <h3 className="text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Took over</h3>
-      <p className="mt-0.5 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>Areas it inherited from another role. The lines in its brief marked (from @role) came with them.</p>
+      <h3 className="text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Took over</h3>
+      <p className="mt-0.5 text-meta" style={{ color: "var(--sol-text-dim)" }}>Areas it inherited from another role. The lines in its brief marked (from @role) came with them.</p>
       <ul className="mt-2.5 space-y-1 text-[12.5px]">
         {rows.map((s, i) => (
           <li key={`${s.from_role_id}:${s.project_id ?? s.plan_id ?? i}`} className="flex items-center gap-2 flex-wrap" data-succession-row>
             <span style={{ color: "var(--sol-text)" }}>{areaNames(tree, role, s).join(", ")}</span>
             <span style={{ color: "var(--sol-text-secondary)" }}>from</span>
             {roleLink(tree, s.from_role_id, s.from_handle)}
-            <span className="text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{dayWords(s.at)} · {s.lines ? `${s.lines} line${s.lines === 1 ? "" : "s"}` : "no line"}{s.handed_at ? `, handoff ${dayWords(s.handed_at)}` : ", handoff pending"}</span>
+            <span className="text-meta" style={{ color: "var(--sol-text-dim)" }}>{dayWords(s.at)} · {s.lines ? `${s.lines} line${s.lines === 1 ? "" : "s"}` : "no line"}{s.handed_at ? `, handoff ${dayWords(s.handed_at)}` : ", handoff pending"}</span>
           </li>
         ))}
       </ul>
@@ -306,13 +306,13 @@ export function SplitRoleDialog({ tree, role, open, onOpenChange }: { tree: OrgT
           ))}
         </div>
         <div className="mt-3">
-          <div className="text-[10.5px] mb-1.5 uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Place each area</div>
+          <div className="text-mark mb-1.5 uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Place each area</div>
           <ul className="space-y-1.5">
             {areas.map((a) => (
               <li key={a.key} className="flex items-center gap-2 text-[12.5px]" data-split-area={a.title}>
                 <span className="flex-1 truncate" style={{ color: "var(--sol-text)" }}>{a.title}</span>
                 {([0, 1] as const).map((i) => (
-                  <button key={i} type="button" onClick={() => setSide((s) => ({ ...s, [a.key]: i }))} aria-pressed={side[a.key] === i} className="h-6 px-2 rounded-md text-[11.5px] border" style={{ borderColor: side[a.key] === i ? "var(--sol-violet)" : "color-mix(in srgb, var(--sol-border) 45%, transparent)", background: side[a.key] === i ? "color-mix(in srgb, var(--sol-violet) 14%, transparent)" : undefined, color: side[a.key] === i ? "var(--sol-violet)" : "var(--sol-text-muted)" }}>@{halves[i].handle}</button>
+                  <button key={i} type="button" onClick={() => setSide((s) => ({ ...s, [a.key]: i }))} aria-pressed={side[a.key] === i} className="h-6 px-2 rounded-md text-meta border" style={{ borderColor: side[a.key] === i ? "var(--sol-violet)" : "color-mix(in srgb, var(--sol-border) 45%, transparent)", background: side[a.key] === i ? "color-mix(in srgb, var(--sol-violet) 14%, transparent)" : undefined, color: side[a.key] === i ? "var(--sol-violet)" : "var(--sol-text-muted)" }}>@{halves[i].handle}</button>
                 ))}
               </li>
             ))}
@@ -322,7 +322,7 @@ export function SplitRoleDialog({ tree, role, open, onOpenChange }: { tree: OrgT
           <input type="checkbox" checked={retireSession} onChange={(e) => setRetireSession(e.target.checked)} /> Retire its standing session with it (default: it keeps running as a plain agent)
         </label>
         <div className="mt-3 flex items-center gap-2 justify-end">
-          <span className="text-[11.5px] mr-auto" style={{ color: problem ? "var(--sol-text-dim)" : "var(--sol-green)" }} data-split-readiness>{problem ?? "Ready"}</span>
+          <span className="text-meta mr-auto" style={{ color: problem ? "var(--sol-text-dim)" : "var(--sol-green)" }} data-split-readiness>{problem ?? "Ready"}</span>
           <button type="button" onClick={() => onOpenChange(false)} className="h-8 px-3 rounded-md text-[12px]" style={{ color: "var(--sol-text-muted)" }}>Cancel</button>
           <button type="button" disabled={!!problem || busy} onClick={submit} className="h-8 px-3.5 rounded-md text-[12px] font-semibold disabled:opacity-50" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>Split</button>
         </div>
@@ -338,8 +338,8 @@ export function SplitRoleSection({ tree, role, canEdit }: { tree: OrgTree; role:
   if (!canEdit || areas < 2 || role.handing_over) return null;
   return (
     <section className="rounded-xl border px-4 py-3.5" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 28%, transparent)", background: "var(--sol-card)" }} data-split-section>
-      <h3 className="text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Split</h3>
-      <p className="mt-0.5 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>Turn this role into two leads with disjoint areas, both reporting where it does. Its knowledge goes to each.</p>
+      <h3 className="text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Split</h3>
+      <p className="mt-0.5 text-meta" style={{ color: "var(--sol-text-dim)" }}>Turn this role into two leads with disjoint areas, both reporting where it does. Its knowledge goes to each.</p>
       <button type="button" onClick={() => setOpen(true)} className="mt-2.5 inline-flex items-center gap-1.5 h-7 px-3 rounded-md text-[12px] font-semibold border" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-text)" }}><Scissors className="w-3.5 h-3.5" /> Split into two leads</button>
       {open && <SplitRoleDialog tree={tree} role={role} open={open} onOpenChange={setOpen} />}
     </section>

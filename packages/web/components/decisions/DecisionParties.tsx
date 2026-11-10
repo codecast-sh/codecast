@@ -185,10 +185,10 @@ export function HandoffNote({ decision, className = "" }: { decision: Pick<Sessi
   const Icon = up ? ArrowUp : CornerDownRight;
   return (
     <div className={`flex items-start gap-2 text-[12px] ${className}`} data-decision-handoff={up ? "escalated" : "passed"}>
-      <span className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[11px] ${up ? "border-sol-orange/40 text-sol-orange" : "border-sol-border text-sol-text-muted"}`}>
+      <span className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-meta ${up ? "border-sol-orange/40 text-sol-orange" : "border-sol-border text-sol-text-muted"}`}>
         <Icon className="w-3 h-3" aria-hidden />{up ? "escalated" : "passed"}
       </span>
-      {by && <PersonChip userId={by} className="shrink-0 text-[11px]" />}
+      {by && <PersonChip userId={by} className="shrink-0 text-meta" />}
       <span className="min-w-0 text-sol-text [overflow-wrap:anywhere] whitespace-pre-wrap">{note}</span>
     </div>
   );

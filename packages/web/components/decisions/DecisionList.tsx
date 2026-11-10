@@ -9,7 +9,7 @@
 import { useCallback, useMemo, type ReactNode } from "react";
 import { ArrowUpRight, CircleDot, Clock, FolderKanban, Inbox, Shapes, Tag, UserRound, Workflow } from "lucide-react";
 import { toast } from "sonner";
-import { GenericListView, type ListGroup, type ListTab } from "../GenericListView";
+import { GenericListView, type ItemRowState, type ListGroup, type ListTab } from "../GenericListView";
 import { useInboxStore, type SessionDecisionItem } from "../../store/inboxStore";
 import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
 import { useRolesAndPeopleOptions } from "../../hooks/useRolesAndPeopleOptions";
@@ -27,6 +27,12 @@ const AXIS_ICON: Record<DecisionAxis, ReactNode> = {
   owner: <UserRound className="w-3 h-3" />, area: <FolderKanban className="w-3 h-3" />, kind: <Shapes className="w-3 h-3" />,
   source: <Workflow className="w-3 h-3" />, category: <Tag className="w-3 h-3" />,
 };
+// The filters whose options carry counts, and the list's stable callbacks.
+const COUNTED_FILTERS = ["owner", "area", "kind", "source", "category", "blocking"] as const;
+type CountedFilter = (typeof COUNTED_FILTERS)[number];
+const decisionItemId = (d: SessionDecisionItem) => d._id;
+const decisionComposeRef = (d: SessionDecisionItem) => d.short_id ?? null;
+const decisionSearchText = (d: SessionDecisionItem) => `${d.short_id ?? ""} ${d.question} ${d.session_title ?? ""}`;
 const categoryLabel = (c: string) => (c === "unknown" ? "No category" : c[0].toUpperCase() + c.slice(1));
 
 export type DecisionListProps = {
@@ -94,10 +100,17 @@ export function DecisionList({ title, state, rows, tabs = ["mine", "team", "unas
   const axes = DECISION_AXES.filter((a) => !hideAxes.includes(a));
   const grouped = useMemo(() => new Set([view.group, view.sub].filter((a): a is DecisionAxis => a !== "none")), [view.group, view.sub]);
   const rowCtx: DecisionRowCtx = useMemo(() => ({ now, grouped, areaName, owner: ownerOf, compact }), [now, grouped, areaName, ownerOf, compact]);
+  const renderRow = useCallback((d: SessionDecisionItem, rowState: ItemRowState) => <DecisionListRow d={d} state={rowState} ctx={rowCtx} />, [rowCtx]);
 
   // Each filter's options carry how many rows picking them would show, the other filters applied.
-  const opts = (filter: "owner" | "area" | "kind" | "source" | "category" | "blocking", keys: string[], name: (k: string) => string, extra?: (k: string) => object) => {
-    const c = filterCounts(source, view, me, now, filter);
+  // Counted once per change of the rows, the view, the viewer or the clock, not on every render.
+  const countsByFilter = useMemo(() => {
+    const out = {} as Record<CountedFilter, ReturnType<typeof filterCounts>>;
+    for (const f of COUNTED_FILTERS) out[f] = filterCounts(source, view, me, now, f);
+    return out;
+  }, [source, view, me, now]);
+  const opts = (filter: CountedFilter, keys: string[], name: (k: string) => string, extra?: (k: string) => object) => {
+    const c = countsByFilter[filter];
     const all = [...new Set([...keys, ...c.keys()])];
     return [{ key: "", label: "Any" }, ...all.filter((k) => k !== "").map((k) => ({ key: k, label: name(k), count: c.get(k) ?? 0, ...(extra?.(k) ?? {}) }))];
   };
@@ -156,12 +169,12 @@ export function DecisionList({ title, state, rows, tabs = ["mine", "team", "unas
       shareUrl={savedViews ? state.shareUrl : undefined}
       groups={groups}
       flatItems={arranged.items}
-      renderRow={(d, rowState) => <DecisionListRow d={d} state={rowState} ctx={rowCtx} />}
+      renderRow={renderRow}
       renderPreview={renderPreview}
-      getItemId={(d) => d._id}
+      getItemId={decisionItemId}
       getItemRoute={routeOf}
-      getComposeRef={(d) => d.short_id ?? null}
-      getSearchText={(d) => `${d.short_id ?? ""} ${d.question} ${d.session_title ?? ""}`}
+      getComposeRef={decisionComposeRef}
+      getSearchText={decisionSearchText}
       paletteTargetType="decision"
       paletteShortcuts={[{ action: "task.assign", mode: "assign", label: "assign" }]}
       emptyIcon={<Inbox className="w-8 h-8 opacity-30" />}

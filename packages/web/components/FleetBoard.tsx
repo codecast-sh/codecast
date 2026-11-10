@@ -1,5 +1,5 @@
 "use client";
-import { memo, useCallback, useMemo, type MouseEvent as ReactMouseEvent } from "react";
+import { memo, useCallback, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   useInboxStore,
   useTrackedStore,
@@ -12,6 +12,7 @@ import {
   type InboxSession,
 } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
+import { rowSigExcluding } from "../store/wakeSig";
 import { LivenessDot } from "./LivenessDot";
 import { SessionGlyph } from "./identity";
 import { identityRowOf } from "../lib/sessionIdentity";
@@ -101,25 +102,32 @@ export function InboxHomeToggle() {
   );
 }
 
+// The tile takes what the clock decides (its state line, summary and progress)
+// as plain values computed by its band, never the clock itself: a 15s tick then
+// re-renders only the tiles whose words or bar actually moved.
 const FleetTile = memo(function FleetTile({
   session,
   band,
-  now,
+  metaText,
+  metaTone,
+  summary,
+  progress,
   onOpen,
   onContextMenu,
 }: {
   session: InboxSession;
   band: FleetBand;
-  now: number;
+  metaText: string;
+  metaTone: keyof typeof TONE;
+  summary: string;
+  /** The running bar's width, a whole percent. */
+  progress: number;
   onOpen: (id: string) => void;
   onContextMenu?: (e: ReactMouseEvent, session: InboxSession) => void;
 }) {
-  const meta = fleetTileMeta(session, band, now);
-  const tone = TONE[meta.tone];
+  const meta = { text: metaText };
+  const tone = TONE[metaTone];
   const context = fleetTileContext(session);
-  // The blocker line already carries the substance on a needs-you tile; the
-  // summary only earns its rows where the state line is generic.
-  const summary = band === "needsYou" ? "" : fleetTileSummary(session, now);
   const title = cleanTitle(session.title ?? "") || "Untitled";
   const finished = band === "finished";
   return (
@@ -150,18 +158,18 @@ const FleetTile = memo(function FleetTile({
 
       {/* 2. State — bold and colored; the scan target. line-clamp sets
           display:-webkit-box, so no `block` here or the clamp stops working. */}
-      <span className={`mt-1.5 leading-4 ${tone.text} ${finished ? "text-[10.5px] font-medium" : "text-[11.5px] font-bold"} ${band === "needsYou" ? "line-clamp-2" : "truncate"}`}>
+      <span className={`mt-1.5 leading-4 ${tone.text} ${finished ? "text-meta font-medium" : "text-meta font-bold"} ${band === "needsYou" ? "line-clamp-2" : "truncate"}`}>
         {meta.text}
       </span>
 
       {/* 3. Body — the summary, readable but clearly subordinate. */}
       {summary && (
-        <span className={`mt-0.5 line-clamp-2 text-[11px] leading-[1.35] ${finished ? "text-sol-text-dim" : "text-sol-text-muted"}`}>{summary}</span>
+        <span className={`mt-0.5 line-clamp-2 text-meta leading-[1.35] ${finished ? "text-sol-text-dim" : "text-sol-text-muted"}`}>{summary}</span>
       )}
 
       {/* 4. Footer — metadata, deliberately the quietest thing on the tile. */}
       {context && (
-        <span className="mt-auto pt-1.5 block truncate text-[9.5px] uppercase tracking-[0.08em] text-sol-text-dim/70">
+        <span className="mt-auto pt-1.5 block truncate text-mark uppercase tracking-[0.08em] text-sol-text-dim/70">
           {context}
         </span>
       )}
@@ -170,13 +178,16 @@ const FleetTile = memo(function FleetTile({
         <span className="absolute bottom-0 left-[3px] right-0 h-[2px] bg-sol-border/25">
           <span
             className="block h-full bg-sol-green/70"
-            style={{ width: `${Math.round(fleetProgress(session, now) * 100)}%` }}
+            style={{ width: `${progress}%` }}
           />
         </span>
       )}
     </button>
   );
 });
+
+// FINISHED is the band nobody scans; past this many tiles it waits for a press.
+const FINISHED_TILE_CAP = 24;
 
 function BandSection({
   band,
@@ -192,23 +203,50 @@ function BandSection({
   onTileContextMenu?: (e: ReactMouseEvent, session: InboxSession) => void;
 }) {
   const m = BAND_META[band];
+  const [showAll, setShowAll] = useState(false);
   if (rows.length === 0 && band !== "needsYou") return null;
+  const capped = band === "finished" && !showAll && rows.length > FINISHED_TILE_CAP;
+  const shown = capped ? rows.slice(0, FINISHED_TILE_CAP) : rows;
   return (
     <section className={`rounded-lg border px-2.5 pb-2.5 pt-2 ${m.box}`}>
-      <h3 className={`mb-2 flex items-center gap-2 px-0.5 text-[11px] font-bold tracking-[0.18em] ${m.accent}`}>
+      <h3 className={`mb-2 flex items-center gap-2 px-0.5 text-meta font-bold tracking-[0.18em] ${m.accent}`}>
         {m.label}
-        <span className={`rounded-full px-1.5 py-px text-[10px] font-bold tabular-nums tracking-normal ${m.count}`}>
+        <span className={`rounded-full px-1.5 py-px text-meta font-bold tabular-nums tracking-normal ${m.count}`}>
           {rows.length}
         </span>
       </h3>
       {rows.length === 0 ? (
-        <div className="px-1 pb-1 text-[11px] text-sol-text-dim">nothing needs you right now</div>
+        <div className="px-1 pb-1 text-meta text-sol-text-dim">nothing needs you right now</div>
       ) : (
         <div className="grid items-stretch gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))" }}>
-          {rows.map((s) => (
-            <FleetTile key={s._id} session={s} band={band} now={now} onOpen={onOpen} onContextMenu={onTileContextMenu} />
-          ))}
+          {shown.map((s) => {
+            const meta = fleetTileMeta(s, band, now);
+            return (
+              <FleetTile
+                key={s._id}
+                session={s}
+                band={band}
+                metaText={meta.text}
+                metaTone={meta.tone}
+                // The blocker line already carries the substance on a needs-you
+                // tile; the summary only earns its rows where the state line is generic.
+                summary={band === "needsYou" ? "" : fleetTileSummary(s, now)}
+                progress={band === "running" ? Math.round(fleetProgress(s, now) * 100) : 0}
+                onOpen={onOpen}
+                onContextMenu={onTileContextMenu}
+              />
+            );
+          })}
         </div>
+      )}
+      {capped && (
+        <button
+          type="button"
+          onClick={() => setShowAll(true)}
+          className="mt-2 px-1 text-meta font-medium text-sol-text-dim hover:text-sol-text"
+        >
+          Show all {rows.length}
+        </button>
       )}
     </section>
   );
@@ -220,14 +258,18 @@ function BandSection({
  * the board stays mounted (and visible at the edges) underneath — a visit,
  * not a home. Esc / ✕ / backdrop click all return to the board.
  */
+// The row fields a heartbeat moves and the drill-in never reads.
+const DRILL_IN_LIVENESS_FIELDS = new Set(["updated_at", "last_heartbeat", "last_metrics_at", "last_active_at", "last_message_at"]);
+
 function FleetDrillIn() {
   const s = useTrackedStore([
     (st) => overlayConversationId(st.workspace),
-    // Only this row — the whole map would re-render the overlay on every
-    // other session's heartbeat (same rule as the stage's SessionPane).
+    // Only this row, and only its fields that are not liveness: the whole map
+    // would re-render the overlay on every other session's heartbeat, and the
+    // whole row on every beat of this one (same rule as the stage's SessionPane).
     (st) => {
       const id = overlayConversationId(st.workspace);
-      return id ? st.sessions[id] : null;
+      return id ? rowSigExcluding(st.sessions[id], DRILL_IN_LIVENESS_FIELDS) : null;
     },
   ]);
   const id = overlayConversationId(s.workspace);
@@ -302,7 +344,7 @@ function FleetDrillIn() {
     // surface itself, presented as an overlay — not a dialog that owns the
     // keyboard against it. Escape/backdrop dismissal is handled above.
     <div className="absolute inset-0 z-30 flex" role="dialog" aria-modal="false">
-      <div className="absolute inset-0 bg-sol-bg/70 backdrop-blur-[2px]" onClick={handleClose} />
+      <div className="absolute inset-0 bg-sol-bg/80" onClick={handleClose} />
       <div className="relative m-auto flex h-[94%] w-[min(1100px,96%)] flex-col overflow-hidden rounded-lg border border-sol-border bg-sol-bg shadow-2xl">
         <ErrorBoundary name="FleetDrillIn" level="panel">
           <InboxConversation
@@ -386,11 +428,11 @@ export function FleetBoard() {
         <div className="mx-auto max-w-6xl px-4 pb-8 pt-4 sm:px-6">
           <div ref={titlebarRef} className="mb-3 flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-baseline gap-3">
-              <h2 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-[0.2em] text-sol-text">
-                <LivePulseDot className="h-1.5 w-1.5" />
+              <h2 className="flex items-center gap-1.5 text-meta font-semibold tracking-[0.2em] text-sol-text">
+                <LivePulseDot still className="h-1.5 w-1.5" />
                 FLEET
               </h2>
-              <span className="truncate text-[10px] tracking-[0.1em] text-sol-text-dim">
+              <span className="truncate text-meta tracking-[0.1em] text-sol-text-dim">
                 {bands.running.length} RUNNING · {bands.needsYou.length} NEED YOU · {bands.finished.length} FINISHED
               </span>
             </div>

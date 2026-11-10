@@ -50,7 +50,7 @@ function Hero() {
       <div className="max-w-6xl mx-auto px-5 sm:px-6 pt-14 pb-16 sm:pt-20 sm:pb-24 grid gap-12 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:gap-14 items-center">
         <div className="min-w-0">
           <a href="/features" className="mm-anim mm-rise inline-flex items-center gap-2 font-mono text-[13px] mb-7 rounded-full pl-1 pr-3 py-1" style={{ color: SOL.base01, backgroundColor: `color-mix(in srgb, ${VIOLET} 8%, ${SOL.base3})`, border: `1px solid color-mix(in srgb, ${VIOLET} 22%, transparent)` }}>
-            <span className="rounded-full px-2 py-0.5 text-[11px] font-semibold" style={{ backgroundColor: VIOLET, color: SOL.base3 }}>features</span>
+            <span className="rounded-full px-2 py-0.5 text-meta font-semibold" style={{ backgroundColor: VIOLET, color: SOL.base3 }}>features</span>
             Team memory
           </a>
           <h1 className="mm-anim mm-rise font-mono font-bold tracking-tight leading-[1.08] text-[34px] sm:text-[46px] lg:text-[50px] mb-6" style={{ color: SOL.base03, "--d": ".05s" } as CSSProperties}>
@@ -66,7 +66,7 @@ function Hero() {
           <ol className="mm-anim mm-rise space-y-2 mb-9" style={{ "--d": ".2s" } as CSSProperties}>
             {DIG.map((d, i) => (
               <li key={d.where} className="flex flex-wrap items-baseline gap-x-3 font-mono text-[13.5px]">
-                <span className="tabular-nums text-[11px] w-5 shrink-0" style={{ color: SOL.base1 }}>{String(i + 1).padStart(2, "0")}</span>
+                <span className="tabular-nums text-meta w-5 shrink-0" style={{ color: SOL.base1 }}>{String(i + 1).padStart(2, "0")}</span>
                 <span className="font-semibold whitespace-nowrap" style={{ color: VIOLET }}>{d.where}</span>
                 <span style={{ color: SOL.base01 }}>{d.what}</span>
               </li>
@@ -78,7 +78,7 @@ function Hero() {
         </div>
         <div className="min-w-0">
           <HeroStrata />
-          <p className="mt-4 font-mono text-[11.5px] leading-5" style={{ color: SOL.base1 }}>
+          <p className="mt-4 font-mono text-meta leading-5" style={{ color: SOL.base1 }}>
             Line 5 of a retry policy, traced through the sessions that touched the file to the one that set it, opened on the message where the number was decided and the later one that changed it.
           </p>
         </div>

@@ -66,7 +66,7 @@ export function TeamModelBudget({ teamId, isAdmin }: { teamId: Id<"teams">; isAd
             fill={{ used: known ? Math.min(1, used / cap) : 0, held: known ? Math.min(1 - Math.min(1, used / cap), budget.held_usd / cap) : 0 }}
             minUsedPx={3}
           />
-          <div className="flex justify-between text-[11px] tabular-nums text-sol-text-dim">
+          <div className="flex justify-between text-meta tabular-nums text-sol-text-dim">
             <span>{dollars(used)}</span>
             <span>{known ? `of ${dollars(cap)}` : "off"}</span>
           </div>

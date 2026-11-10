@@ -115,7 +115,7 @@ function TasksCard({ teamReady }: { teamReady: boolean }) {
       look={LOOK.tasks!}
       name="Tasks"
       on
-      control={<span className="ob-card-always text-[11px] font-medium">Always on</span>}
+      control={<span className="ob-card-always text-meta font-medium">Always on</span>}
     >
       <div className="mt-3 flex items-center gap-1.5">
         <span className="mr-0.5 text-xs text-sol-text-dim">Import from</span>

@@ -345,7 +345,7 @@ function DockCard({ entry, entries, onGo, onClose }: { entry: DockEntry; entries
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1 pt-0.5">
-          <span className="mr-1 text-[11px] tabular-nums text-sol-text-dim">
+          <span className="mr-1 text-meta tabular-nums text-sol-text-dim">
             {position >= 0 ? `${position + 1} of ${entries.length}` : ""}
           </span>
           <NavButton disabled={!prevId} onClick={() => prevId && onGo(prevId)} label="Previous" keyName="J"><ChevronLeft className="h-3.5 w-3.5" /></NavButton>

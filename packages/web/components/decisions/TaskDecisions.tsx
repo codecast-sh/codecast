@@ -17,14 +17,14 @@ function ResolvedRow({ d }: { d: SessionDecisionItem }) {
   const answer = d.status === "answered" ? decisionAnswerLabel(d, d) : undefined;
   return (
     <li className="flex items-baseline gap-2 min-w-0 text-[12px]" data-resolved-decision={d.short_id ?? d._id}>
-      <span className={`shrink-0 text-[10px] px-1.5 py-px rounded border ${d.status === "answered" ? "border-sol-green/30 text-sol-green" : "border-sol-border text-sol-text-dim"}`}>
+      <span className={`shrink-0 text-meta px-1.5 py-px rounded border ${d.status === "answered" ? "border-sol-green/30 text-sol-green" : "border-sol-border text-sol-text-dim"}`}>
         {RESOLVED_WORD[d.status] ?? d.status}
       </span>
       <Link href={decisionHref(d)} className="min-w-0 truncate text-sol-text-muted hover:text-sol-blue">
         {d.question}
       </Link>
       {answer && <span className="shrink-0 max-w-[12rem] truncate text-sol-text" title={answer}>{answer}</span>}
-      <Link href={decisionHref(d)} className="ml-auto shrink-0 inline-flex items-center gap-0.5 font-mono text-[10px] text-sol-text-dim hover:text-sol-text">
+      <Link href={decisionHref(d)} className="ml-auto shrink-0 inline-flex items-center gap-0.5 font-mono text-meta text-sol-text-dim hover:text-sol-text">
         {d.short_id ?? "open"}<ArrowUpRight className="w-3 h-3" />
       </Link>
     </li>
@@ -53,7 +53,7 @@ export function TaskDecisions({ taskId }: { taskId: string }) {
           <button
             type="button"
             onClick={() => setUnfolded((v) => !v)}
-            className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text"
+            className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text"
             aria-expanded={unfolded}
             data-resolved-toggle
           >
@@ -98,11 +98,11 @@ export function TaskDecisionChip({ taskId, className = "" }: { taskId: string; c
   if (n === 0) return null;
   return (
     <span
-      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-yellow/40 text-[10px] text-sol-yellow shrink-0 ${className}`}
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-yellow/40 text-meta text-sol-yellow shrink-0 ${className}`}
       title={`${n} open decision${n === 1 ? "" : "s"} on this task`}
       data-task-decision-chip={n}
     >
-      <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" />
+      <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow" />
       decision{n > 1 ? ` ${n}` : ""}
     </span>
   );

@@ -76,7 +76,7 @@ export function CallNotice({
   const nowPublic = { rec: !!since?.recording && news.rec, words: !!since?.transcribed && news.words };
   if (lines.length === 0) {
     return (
-      <p className="text-[11.5px] leading-relaxed text-sol-text-muted">
+      <p className="text-meta leading-relaxed text-sol-text-muted">
         This call is not being transcribed or recorded right now. If that changes while you are in it, you will see it here.
       </p>
     );
@@ -100,7 +100,7 @@ export function CallNotice({
                 <AudioLines className="h-3.5 w-3.5 text-sol-cyan" />
               )}
             </span>
-            <span className="text-[11.5px] leading-relaxed text-sol-text-secondary">
+            <span className="text-meta leading-relaxed text-sol-text-secondary">
               {fresh && (
                 <span className={`mr-1.5 font-medium ${rec ? "text-sol-red" : "text-sol-cyan"}`}>
                   {nowPublic[l.key] ? "Now shared by public link." : rec ? "Started while you waited." : "Turned on while you waited."}
@@ -153,10 +153,10 @@ export function NoticePills({
     <>
       <AudioLines className="h-3 w-3 shrink-0" />
       <span className="max-sm:hidden">{label}</span>
-      <span className="text-[10px] sm:hidden">{guestNoticeLines({ ...notice, words_public: false }, "label")[0].text}</span>
+      <span className="text-meta sm:hidden">{guestNoticeLines({ ...notice, words_public: false }, "label")[0].text}</span>
     </>
   );
-  const pill = "flex shrink-0 items-center gap-1.5 rounded-full bg-sol-cyan/10 px-2 py-0.5 font-mono text-[11px] text-sol-cyan max-sm:gap-1 max-sm:px-1.5";
+  const pill = "flex shrink-0 items-center gap-1.5 rounded-full bg-sol-cyan/10 px-2 py-0.5 font-mono text-meta text-sol-cyan max-sm:gap-1 max-sm:px-1.5";
   if (!onExplain) {
     return (
       <span className={pill} title={title}>
@@ -215,7 +215,7 @@ export function DeviceSelect({
         value={value}
         disabled={devices.length === 0}
         onChange={(e) => onChoose(kind, e.target.value)}
-        className={`meet-select w-full min-w-0 truncate rounded-lg ${compact ? "max-sm:w-[60px] max-sm:text-transparent" : ""} py-1.5 pl-8 font-mono text-[11.5px] text-sol-text-secondary outline-none ring-1 ring-white/[0.08] transition-colors hover:ring-white/15 focus-visible:ring-sol-cyan/60 disabled:opacity-50`}
+        className={`meet-select w-full min-w-0 truncate rounded-lg ${compact ? "max-sm:w-[60px] max-sm:text-transparent" : ""} py-1.5 pl-8 font-mono text-meta text-sol-text-secondary outline-none ring-1 ring-white/[0.08] transition-colors hover:ring-white/15 focus-visible:ring-sol-cyan/60 disabled:opacity-50`}
       >
         {devices.length === 0 ? (
           <option value="">{asking ? "Waiting for permission" : meta.empty}</option>

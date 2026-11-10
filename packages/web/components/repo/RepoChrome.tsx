@@ -102,9 +102,9 @@ export function BranchPicker({
                     style={{ color: "var(--repo-accent)" }}
                   />
                   <span className="truncate">{branch.name}</span>
-                  {branch.tag && <span className="ml-auto text-[10px] text-sol-text-dim">tag</span>}
+                  {branch.tag && <span className="ml-auto text-meta text-sol-text-dim">tag</span>}
                   {!branch.tag && branch.name === defaultBranch && (
-                    <span className="ml-auto text-[10px] text-sol-text-dim">default</span>
+                    <span className="ml-auto text-meta text-sol-text-dim">default</span>
                   )}
                 </button>
               ))}

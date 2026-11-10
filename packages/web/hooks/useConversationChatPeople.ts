@@ -3,6 +3,7 @@ import { useTrackedStore } from "../store/inboxStore";
 import type { ChatMember } from "../lib/chatViews";
 import { viewersOf, viewersSig } from "../components/presence/memberPresence";
 import type { PresenceRow } from "./useDocPresence";
+import { memberListSig } from "./useTeamRoster";
 
 // The people an open dock is talking to, by conversation, so the room stays
 // on screen when someone steps away mid conversation.
@@ -22,9 +23,12 @@ const subscribe = (l: () => void) => { listeners.add(l); return () => { listener
  * not on the roster and have no chat.
  */
 export function useConversationChatPeople(conversationId: string, present: readonly PresenceRow[]): ChatMember[] {
+  // Who is viewing, and the roster's identity fields (what the faces and
+  // names render): not the roster array, which a teammate's presence moves
+  // about once a minute each. The body reads the array itself.
   const st = useTrackedStore([
     (s) => viewersSig(s.teamMembers, conversationId, s.currentUser?._id?.toString?.() ?? null),
-    (s) => s.teamMembers,
+    (s) => memberListSig(s.teamMembers),
   ]);
   const me = st.currentUser?._id ? String(st.currentUser._id) : null;
   const keep = useSyncExternalStore(subscribe, () => held.get(conversationId), () => undefined);

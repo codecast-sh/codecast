@@ -99,7 +99,7 @@ function GateBadges({ a }: { a: ArtifactRow }) {
 function Author({ a }: { a: ArtifactRow }) {
   if (!a.author) return null;
   return (
-    <span className="inline-flex items-center gap-1.5 text-[11px] text-sol-text-muted min-w-0">
+    <span className="inline-flex items-center gap-1.5 text-meta text-sol-text-muted min-w-0">
       {a.author.image ? (
         <AvatarImg src={a.author.image} alt="" className="w-3.5 h-3.5 rounded-full flex-shrink-0" />
       ) : (
@@ -115,7 +115,7 @@ function Author({ a }: { a: ArtifactRow }) {
 function SessionRef({ a }: { a: ArtifactRow }) {
   if (!a.session_short_id) return null;
   return (
-    <span className="flex min-w-0 text-[11px]">
+    <span className="flex min-w-0 text-meta">
       <EntityIdPill shortId={a.session_short_id} type="session" wide />
     </span>
   );
@@ -298,7 +298,7 @@ export function ArtifactCard({
         className="group relative flex items-center gap-3 px-2 py-1.5 rounded-md hover:bg-sol-bg-alt/70 transition-colors"
         onContextMenu={(e) => ctxMenu.open(e, undefined)}
       >
-        <span className="w-16 flex-shrink-0 whitespace-nowrap text-[11px] font-mono tabular-nums text-sol-text-dim" title={at.toLocaleString()}>
+        <span className="w-[70px] flex-shrink-0 whitespace-nowrap text-meta font-mono tabular-nums text-sol-text-dim" title={at.toLocaleString()}>
           {at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
         </span>
         <a
@@ -319,12 +319,12 @@ export function ArtifactCard({
         >
           {a.title || a.slug}
         </a>
-        <span className="hidden md:inline-flex items-center gap-2 text-[11px] font-mono text-sol-text-dim flex-shrink-0">
+        <span className="hidden md:inline-flex items-center gap-2 text-meta font-mono text-sol-text-dim flex-shrink-0">
           <span>v{a.version}</span>
           <span>{kind.label}</span>
           {expired && <span className="text-sol-red">expired</span>}
         </span>
-        <span className="hidden sm:inline-flex items-center gap-3 text-[11px] text-sol-text-dim w-20 flex-shrink-0">
+        <span className="hidden sm:inline-flex items-center gap-3 text-meta text-sol-text-dim w-[88px] flex-shrink-0">
           <Stats a={a} />
         </span>
         <span className="hidden lg:flex w-36 flex-shrink-0 min-w-0"><Author a={a} /></span>
@@ -374,7 +374,7 @@ export function ArtifactCard({
           {a.title || a.slug}
         </a>
 
-        <div className="flex items-center gap-2 text-[11px] text-sol-text-muted font-mono">
+        <div className="flex items-center gap-2 text-meta text-sol-text-muted font-mono">
           <span className="px-1 py-px rounded bg-sol-bg-highlight border border-sol-border/40 text-sol-text-muted">
             v{a.version}
           </span>
@@ -388,7 +388,7 @@ export function ArtifactCard({
           {expired && <span className="text-sol-red">expired</span>}
         </div>
 
-        <div className="flex items-center gap-3 text-[11px] text-sol-text-dim">
+        <div className="flex items-center gap-3 text-meta text-sol-text-dim">
           <Stats a={a} />
         </div>
 

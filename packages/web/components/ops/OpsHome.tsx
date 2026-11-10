@@ -33,7 +33,7 @@ import { TONE_VAR, type SourceHealth } from "./sourceHealth";
 import { attentionIssueCount, issueTotals, openFeederFull, rangeIds } from "./issuesModel";
 import { OPS_OPEN_GROUPS_LIMIT } from "../../hooks/useSyncOps";
 import { rememberIssueList } from "./issueNav";
-import { undoTriage } from "./issueUndo";
+import { TRIAGE_CONFIRM_AT, undoTriage } from "./issueUndo";
 import { snoozeChoices, snoozedUntil, splitSnoozed, type OpsSnoozes } from "./opsSnooze";
 import { AttentionRow } from "./OpsHomeRow";
 import { assignItems, itemHref, itemRef, resolvableGroups, resolveItems, rowUsers, snoozeItems } from "./opsHomeItems";
@@ -162,7 +162,11 @@ export function OpsHomeView({ data, sourcesFeed, now, source: sourceRef, show, h
     snoozeItems(its, snoozeChoices(its[0].kind).find((c) => c.key === "24h") ?? null);
     done();
   };
-  const resolve = (its: AttentionItem[]) => {
+  // A resolve over many issues waits for its count to be confirmed, as the Issues tab's does (TRIAGE_CONFIRM_AT).
+  const [confirmResolve, setConfirmResolve] = useState<AttentionItem[] | null>(null);
+  const resolve = (its: AttentionItem[], confirmed = false) => {
+    if (!confirmed && resolvableGroups(its).length > TRIAGE_CONFIRM_AT) return setConfirmResolve(its);
+    setConfirmResolve(null);
     resolveItems(its);
     done();
   };
@@ -173,6 +177,12 @@ export function OpsHomeView({ data, sourcesFeed, now, source: sourceRef, show, h
       if (e.metaKey || e.ctrlKey || e.altKey || isEditableTarget(e.target) || hasOpenModal()) return;
       const move = (to: number) => setCursor(order[Math.max(0, Math.min(order.length - 1, to))] ?? null);
       const its = targets();
+      if (confirmResolve && (e.key === "Enter" || e.key === "Escape")) {
+        e.preventDefault();
+        if (e.key === "Enter") resolve(confirmResolve, true);
+        else setConfirmResolve(null);
+        return;
+      }
       if (e.key === "j" || e.key === "ArrowDown") move(at + 1);
       else if (e.key === "k" || e.key === "ArrowUp") move(at < 0 ? 0 : at - 1);
       else if ((e.key === "Enter" || e.key === "o") && current) open(current);
@@ -190,7 +200,7 @@ export function OpsHomeView({ data, sourcesFeed, now, source: sourceRef, show, h
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- targets and open read these
-  }, [order, at, current, picked, selected, anchor, sources.length, issueRefs, here]);
+  }, [order, at, current, picked, selected, anchor, sources.length, issueRefs, here, confirmResolve]);
   // The cursor stays on screen as j and k walk past the fold.
   useWatchEffect(() => {
     if (cursorKey) document.querySelector<HTMLElement>('.ops-home-row[data-cursor="true"]')?.scrollIntoView?.({ block: "nearest" });
@@ -234,7 +244,7 @@ export function OpsHomeView({ data, sourcesFeed, now, source: sourceRef, show, h
       {tiles.length > 0 && <div className="ops-home-strip" role="toolbar" aria-label="What is wrong">
         {/* The red tiles that page a person sit in one outlined group: their sum is the Overview tab's and the sidebar's count. */}
         {[tiles.filter((f) => f.tone === "bad"), tiles.filter((f) => f.tone !== "bad")].map((group, gi) => group.length > 0 && (
-          <div key={gi} className="ops-home-tilegroup" data-paging={gi === 0 ? "true" : undefined} style={{ flexGrow: group.length }} title={gi === 0 ? `Paging: ${group.reduce((n, f) => n + counts[f.key], 0)}, the Overview tab's count` : undefined}>
+          <div key={gi} className="ops-home-tilegroup" data-paging={gi === 0 ? "true" : undefined} title={gi === 0 ? `Paging: ${group.reduce((n, f) => n + counts[f.key], 0)}, the Overview tab's count` : undefined}>
             {group.map((f) => {
               const n = counts[f.key];
               const on = show === f.key;
@@ -254,14 +264,22 @@ export function OpsHomeView({ data, sourcesFeed, now, source: sourceRef, show, h
 
       {items.length ? (
         <div className="ops-home-table" data-users={usersCol ? undefined : "none"}>
-          {picked.length > 0 ? (
+          {confirmResolve ? (
+            <div className="iss-bulk ops-home-bulk" role="alertdialog" aria-label="Confirm" data-confirm="true" data-ops-bulk-confirm>
+              <span className="ops-num">Resolve <b>{resolvableGroups(confirmResolve).length.toLocaleString()}</b> issues?</span>
+              <button type="button" className="ops-btn" data-tone="primary" autoFocus onClick={() => resolve(confirmResolve, true)}>
+                Resolve {resolvableGroups(confirmResolve).length.toLocaleString()} <KeyCap size="xs" tone="onAccent">Enter</KeyCap>
+              </button>
+              <button type="button" className="ops-btn" onClick={() => setConfirmResolve(null)}>Cancel <KeyCap size="xs">Esc</KeyCap></button>
+            </div>
+          ) : picked.length > 0 ? (
             <div className="iss-bulk ops-home-bulk" role="toolbar" aria-label="Selected" data-ops-bulk={picked.length}>
               <span className="ops-num"><b>{picked.length}</b> selected</span>
               <button type="button" className="ops-btn" disabled={!resolvable} onClick={() => resolve(picked)} data-ops-bulk-resolve><Check className="w-3.5 h-3.5" />Resolve{resolvable ? ` ${resolvable}` : ""}<KeyCap size="xs">e</KeyCap></button>
               <button type="button" className="ops-btn" onClick={() => snooze24(picked)} data-ops-bulk-snooze><Clock className="w-3.5 h-3.5" />Snooze 24h<KeyCap size="xs">s</KeyCap></button>
               <button type="button" className="ops-btn" disabled={!withTask} onClick={() => assignToMe(picked)} data-ops-bulk-assign><UserPlus className="w-3.5 h-3.5" />Assign me{withTask ? ` ${withTask}` : ""}<KeyCap size="xs">a</KeyCap></button>
               <span className="flex-1" />
-              <button type="button" className="ops-btn" onClick={done}><X className="w-3.5 h-3.5" />Clear<KeyCap size="xs">esc</KeyCap></button>
+              <button type="button" className="ops-btn" onClick={done}><X className="w-3.5 h-3.5" />Clear<KeyCap size="xs">Esc</KeyCap></button>
             </div>
           ) : (
             <div className="ops-home-head">
@@ -334,7 +352,7 @@ function FilterToken({ label, href }: { label: string; href: string }) {
     <Link href={href} className="ops-home-token" data-ops-filter-token title="Show everything">
       {label}
       <X className="w-3 h-3" aria-hidden />
-      <KeyCap size="xs">esc</KeyCap>
+      <KeyCap size="xs">Esc</KeyCap>
     </Link>
   );
 }

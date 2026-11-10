@@ -35,7 +35,7 @@ export function StateBar({ counts, className }: { counts: StateCounts; className
 export function StateTally({ counts, dim, labels }: { counts: StateCounts; dim?: boolean; labels?: boolean }) {
   const shown = labels ? ORG_STATE_ORDER : ORG_STATE_ORDER.filter((k) => (counts[k] ?? 0) > 0);
   return (
-    <span className="inline-flex items-center gap-1.5 tabular-nums text-[10.5px] font-medium whitespace-nowrap">
+    <span className="inline-flex items-center gap-1.5 tabular-nums text-meta font-medium whitespace-nowrap">
       {shown.map((k) => (
         <span key={k} className="inline-flex items-center gap-[3px]" title={ORG_STATE_META[k].label}>
           <span className="w-[6px] h-[6px] rounded-full" style={{ background: ORG_STATE_META[k].color, opacity: (counts[k] ?? 0) === 0 ? 0.3 : 1 }} />

@@ -100,7 +100,7 @@ export function ImageLightbox({ src, onClose }: { src: string; onClose: () => vo
 function ZoomBadge({ scale }: { scale: number }) {
   if (scale <= 1) return null;
   return (
-    <div className="pointer-events-none absolute bottom-16 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 rounded bg-black/70 px-2 py-1 text-[11px] font-mono tabular-nums text-white/60">
+    <div className="pointer-events-none absolute bottom-16 left-1/2 -translate-x-1/2 z-10 flex items-center gap-1.5 rounded bg-black/70 px-2 py-1 text-meta font-mono tabular-nums text-white/60">
       {Math.round(scale * 100)}%
       <span className="text-white/30">·</span>
       <KeyCap size="xs">0</KeyCap> reset
@@ -399,7 +399,7 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
               ))}
             </div>
             {canPin && !zoom.zoomed && (
-              <div className="mt-2 flex items-center gap-1.5 text-[11px] font-mono text-white/35">
+              <div className="mt-2 flex items-center gap-1.5 text-meta font-mono text-white/35">
                 <MessageSquarePlus className="h-3 w-3" strokeWidth={2} />
                 click anywhere on the image to pin a note for the agent
               </div>
@@ -436,7 +436,7 @@ export function ImageGalleryProvider({ conversationId, onJumpToMessage, quotable
                   >
                     <img src={item.src} alt="" className="h-9 w-9 object-cover" draggable={false} />
                     {pinsBySrc.has(item.src) && (
-                      <span className="absolute bottom-0 right-0 flex h-3.5 min-w-3.5 items-center justify-center rounded-tl bg-sol-yellow px-0.5 text-[9px] font-bold leading-none text-black">
+                      <span className="absolute bottom-0 right-0 flex h-3.5 min-w-3.5 items-center justify-center rounded-tl bg-sol-yellow px-0.5 text-meta font-bold leading-none text-black">
                         {pinsBySrc.get(item.src)!.length}
                       </span>
                     )}
@@ -511,7 +511,7 @@ function ImagePin({ conversationId, comment, number, scale, editing, author }: {
     >
       <button
         type="button"
-        className={`absolute -left-3 -top-3 flex h-6 w-6 items-center justify-center rounded-full border-2 bg-sol-yellow text-[11px] font-bold text-black shadow-[0_0_0_2px_rgba(0,0,0,0.45)] transition-transform hover:scale-110 ${
+        className={`absolute -left-3 -top-3 flex h-6 w-6 items-center justify-center rounded-full border-2 bg-sol-yellow text-meta font-bold text-black shadow-[0_0_0_2px_rgba(0,0,0,0.45)] transition-transform hover:scale-110 ${
           editing ? "border-white" : "border-black/60"}`}
         title={comment.body || "Pinned note (click to edit)"}
         aria-label={`Note ${number}${comment.body ? `: ${comment.body}` : ""}`}
@@ -520,7 +520,7 @@ function ImagePin({ conversationId, comment, number, scale, editing, author }: {
         {number}
       </button>
       {!editing && comment.body && (
-        <div className="pointer-events-none absolute left-4 -top-2.5 max-w-[16rem] truncate rounded bg-black/75 px-1.5 py-0.5 text-[11px] text-white/85">
+        <div className="pointer-events-none absolute left-4 -top-2.5 max-w-[16rem] truncate rounded bg-black/75 px-1.5 py-0.5 text-meta text-white/85">
           {comment.body}
         </div>
       )}
@@ -532,7 +532,7 @@ function ImagePin({ conversationId, comment, number, scale, editing, author }: {
             ...(y > 0.6 ? { bottom: "0.5rem" } : { top: "-0.5rem" }),
           }}
         >
-          <div className="mb-1 flex items-center justify-between text-[10px] font-mono text-sol-text-dim">
+          <div className="mb-1 flex items-center justify-between text-meta font-mono text-sol-text-dim">
             <span>Note {number} on this point</span>
             <button
               type="button"

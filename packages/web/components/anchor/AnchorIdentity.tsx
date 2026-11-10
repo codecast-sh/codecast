@@ -58,7 +58,7 @@ export function AnchorScopePill({ anchor, quiet = false, className = "" }: {
   const team = anchor.scope_type === "team";
   return (
     <span
-      className={`inline-flex items-center gap-1 text-[10px] leading-none ${
+      className={`inline-flex items-center gap-1 text-mark leading-none ${
         quiet
           ? "text-sol-text-dim"
           : team

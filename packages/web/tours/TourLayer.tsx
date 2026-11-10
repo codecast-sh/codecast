@@ -301,8 +301,8 @@ function Spotlight({ def, step }: { def: TourDef; step: number }) {
       >
         <div className="flex items-center gap-2 px-4 pt-3">
           <span className="w-[7px] h-[7px] rounded-full shrink-0" style={{ background: accent }} />
-          <span className="text-[11px] truncate" style={{ color: "var(--sol-text-dim)" }} title={areaLabel}>{def.title}</span>
-          <span className="ml-auto text-[10.5px] tabular-nums shrink-0" style={{ color: "var(--sol-text-dim)" }} data-tour-count>{shownIndex + 1} of {shown.length}</span>
+          <span className="text-meta truncate" style={{ color: "var(--sol-text-dim)" }} title={areaLabel}>{def.title}</span>
+          <span className="ml-auto text-meta tabular-nums shrink-0" style={{ color: "var(--sol-text-dim)" }} data-tour-count>{shownIndex + 1} of {shown.length}</span>
           <button type="button" onClick={skip} aria-label="Close the tour" className="w-6 h-6 -mr-2 inline-flex items-center justify-center rounded-md hover:bg-sol-bg-highlight shrink-0" style={{ color: "var(--sol-text-dim)" }} data-tour-close>
             <X className="w-3.5 h-3.5" />
           </button>
@@ -311,7 +311,7 @@ function Spotlight({ def, step }: { def: TourDef; step: number }) {
           <h3 className="text-[16px] leading-tight font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }} data-tour-title>{cur.title}</h3>
           <p className="mt-1.5 text-[12.5px] leading-relaxed" style={{ color: "var(--sol-text-secondary, var(--sol-text-muted))" }} data-tour-body>{cur.body}</p>
           {phase.kind === "missing" && (
-            <p className="mt-1.5 text-[11px]" style={{ color: "var(--sol-text-dim)" }} data-tour-missing>Not on this screen right now.</p>
+            <p className="mt-1.5 text-meta" style={{ color: "var(--sol-text-dim)" }} data-tour-missing>Not on this screen right now.</p>
           )}
         </div>
         <div className="mt-3 px-4 pb-3 flex items-center gap-2">
@@ -330,7 +330,7 @@ function Spotlight({ def, step }: { def: TourDef; step: number }) {
             <button type="button" onClick={() => go(step + 1)} className="h-7 px-3 rounded-md text-[12px] font-semibold hover:brightness-110" style={{ background: accent, color: "var(--sol-bg)" }} data-tour-next>{last ? "Done" : "Next"}</button>
           </div>
         </div>
-        <div className="px-4 pb-2.5 -mt-1 flex items-center gap-3 text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}>
+        <div className="px-4 pb-2.5 -mt-1 flex items-center gap-3 text-meta" style={{ color: "var(--sol-text-dim)" }}>
           <span className="inline-flex items-center gap-1"><KeyCap size="xs">→</KeyCap> next</span>
           <span className="inline-flex items-center gap-1"><KeyCap size="xs">esc</KeyCap> close</span>
         </div>

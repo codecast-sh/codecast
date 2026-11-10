@@ -91,7 +91,7 @@ function SendButton({ onClick, label, title }: { onClick: () => void; label: str
       type="button"
       onClick={onClick}
       title={title}
-      className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-sol-red/30 px-2 py-1 text-[11px] text-sol-red hover:bg-sol-red/10 transition-colors"
+      className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-sol-red/30 px-2 py-1 text-meta text-sol-red hover:bg-sol-red/10 transition-colors"
     >
       <Send className="w-3 h-3" />
       {label}
@@ -115,7 +115,7 @@ function CheckRows({ checks, send }: { checks: PrCheck[] | undefined; send?: Sen
 
   return (
     <div className="px-5 py-4">
-      <div className="mb-3 flex items-center gap-2 text-[11px] text-sol-text-dim">
+      <div className="mb-3 flex items-center gap-2 text-meta text-sol-text-dim">
         <span>
           {fold.failed > 0 && <span className="text-sol-red">{fold.failed} failed · </span>}
           {fold.pending > 0 && <span className="text-sol-yellow">{fold.pending} running · </span>}
@@ -139,10 +139,10 @@ function CheckRows({ checks, send }: { checks: PrCheck[] | undefined; send?: Sen
                 style={{ color: accentVar(accent) }}
               />
               <span className="font-mono text-[12px] text-sol-text truncate">{checkLabel(check)}</span>
-              <span className="text-[11px]" style={{ color: accentVar(accent) }}>
+              <span className="text-meta" style={{ color: accentVar(accent) }}>
                 {(check.conclusion || check.status || "").replace(/_/g, " ")}
               </span>
-              <span className="ml-auto text-[11px] text-sol-text-dim shrink-0">
+              <span className="ml-auto text-meta text-sol-text-dim shrink-0">
                 {relTimeShort(check.updated_at)}
               </span>
               {check.url && <ExternalLink className="w-3 h-3 text-sol-text-dim shrink-0" />}

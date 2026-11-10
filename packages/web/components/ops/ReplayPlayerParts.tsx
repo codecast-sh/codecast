@@ -1,7 +1,7 @@
 // The replay player's smaller parts: the rest-of-recording status, the
 // semantic stage, Share, and the events rail with its rows and details.
 import Link from "next/link";
-import { type CSSProperties, Fragment, type ReactNode, useMemo, useRef, useState } from "react";
+import { type CSSProperties, Fragment, memo, type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 import type { ReplayEvent } from "@codecast/shared/contracts/replay";
 import { ChevronDown, Copy, EyeOff, Link2, Search, Share2, X } from "lucide-react";
 import { formatReplayTime, isFailedRequest, isFailure, rageBursts, routeOf } from "@codecast/shared/replay";
@@ -176,6 +176,13 @@ export function EventRail({ events, t, hasOutlines, outline, onSeek, children }:
     else next.add(lead);
     return next;
   });
+  // The rows take handlers that never change (RailRow is memoized), so a clock tick re-renders only the rows whose past or current mark flips.
+  const acts = useRef({ onSeek, mute, toggleRun });
+  acts.current = { onSeek, mute, toggleRun };
+  const seekTo = useCallback((at: number) => acts.current.onSeek(at), []);
+  const muteEndpoint = useCallback((endpoint: string) => acts.current.mute(endpoint), []);
+  const flipRun = useCallback((lead: number) => acts.current.toggleRun(lead), []);
+  const flipOpen = useCallback((i: number) => setOpenIdx((o) => (o === i ? null : i)), []);
   const listRef = useRef<HTMLDivElement>(null);
   // The row the clock is at: the last one this tab and filter show at or before it (inside a folded run, its lead). The
   // clock's own event may be one the tab hides (a scroll in All, a click in Network), so it is never looked up directly.
@@ -256,9 +263,9 @@ export function EventRail({ events, t, hasOutlines, outline, onSeek, children }:
                   const expanded = many && openRuns.has(i);
                   return (
                     <Fragment key={i}>
-                      <RailRow e={e} i={i} past={e.t <= t} current={i === cur} open={openIdx === i} onSeek={() => onSeek(e.t)} onToggle={() => setOpenIdx(openIdx === i ? null : i)} onMute={e.type === "network" && !isFailure(e) ? () => mute(endpointOf(e)) : undefined} run={many ? { count: members.length, open: expanded, toggle: () => toggleRun(i), until: members[members.length - 1][0].t, typed: runText(e, members[members.length - 1][0]) ?? undefined, rage: e.type === "click" && rageBursts(members.map(([m]) => m)).length > 0 } : undefined} />
+                      <RailRow e={e} i={i} past={e.t <= t} current={i === cur} open={openIdx === i} onSeek={seekTo} onToggle={flipOpen} onMute={e.type === "network" && !isFailure(e) ? muteEndpoint : undefined} run={many ? { count: members.length, open: expanded, until: members[members.length - 1][0].t, typed: runText(e, members[members.length - 1][0]) ?? undefined, rage: e.type === "click" && rageBursts(members.map(([m]) => m)).length > 0 } : undefined} onRun={many ? flipRun : undefined} />
                       {expanded && members.slice(1).map(([m, j]) => (
-                        <RailRow key={j} e={m} i={j} nested past={m.t <= t} current={j === cur} open={openIdx === j} onSeek={() => onSeek(m.t)} onToggle={() => setOpenIdx(openIdx === j ? null : j)} />
+                        <RailRow key={j} e={m} i={j} nested past={m.t <= t} current={j === cur} open={openIdx === j} onSeek={seekTo} onToggle={flipOpen} />
                       ))}
                     </Fragment>
                   );
@@ -272,9 +279,14 @@ export function EventRail({ events, t, hasOutlines, outline, onSeek, children }:
   );
 }
 
-type RailRun = { count: number; open: boolean; toggle: () => void; until: number; rage?: boolean; typed?: string };
+type RailRun = { count: number; open: boolean; until: number; rage?: boolean; typed?: string };
+type RailRowProps = { e: ReplayEvent; i: number; past: boolean; current: boolean; open: boolean; onSeek: (t: number) => void; onToggle: (i: number) => void; onMute?: (endpoint: string) => void; run?: RailRun; onRun?: (i: number) => void; nested?: boolean };
+const sameRun = (a?: RailRun, b?: RailRun) => a === b || (!!a && !!b && a.count === b.count && a.open === b.open && a.until === b.until && a.rage === b.rage && a.typed === b.typed);
+/** A run's facts are a fresh object each render: compared by value, so only a row whose own facts changed draws again. */
+const RailRow = memo(RailRowView, (a, b) => a.e === b.e && a.i === b.i && a.past === b.past && a.current === b.current && a.open === b.open && a.nested === b.nested
+  && a.onSeek === b.onSeek && a.onToggle === b.onToggle && a.onMute === b.onMute && a.onRun === b.onRun && sameRun(a.run, b.run));
 
-function RailRow({ e, i, past, current, open, onSeek, onToggle, onMute, run, nested }: { e: ReplayEvent; i: number; past: boolean; current: boolean; open: boolean; onSeek: () => void; onToggle: () => void; onMute?: () => void; run?: RailRun; nested?: boolean }) {
+function RailRowView({ e, i, past, current, open, onSeek, onToggle, onMute, run, onRun, nested }: RailRowProps) {
   const grade = e.type === "network" ? netGrade(e) : null;
   const text = run?.typed ?? describeEvent(e);
   const expandable = e.type === "network" || e.type === "click" || e.type === "input" || e.type === "submit" || (e.type === "error" && !!e.stack) || (e.type === "console" && e.message.length > 120);
@@ -282,9 +294,9 @@ function RailRow({ e, i, past, current, open, onSeek, onToggle, onMute, run, nes
   const label = `${formatReplayTime(e.t)} ${word}: ${text}${run ? `, ${run.count} times` : ""}`;
   return (
     <div className="rp-ev-wrap" data-open={open ? "true" : undefined} data-nested={nested ? "true" : undefined}>
-      <div className="ops-ev rp-ev" data-ev={i} data-past={past ? "true" : "false"} data-current={current ? "true" : undefined} data-grade={grade ?? undefined} aria-label={label} {...pressable(onSeek)}>
-        <span className="ops-mono ops-num ops-dim text-[11px]">{formatReplayTime(e.t)}</span>
-        <span className="ops-mono text-[10.5px]" style={{ color: inkOf(e) }}>{word}</span>
+      <div className="ops-ev rp-ev" data-ev={i} data-past={past ? "true" : "false"} data-current={current ? "true" : undefined} data-grade={grade ?? undefined} aria-label={label} {...pressable(() => onSeek(e.t))}>
+        <span className="ops-mono ops-num ops-dim text-meta">{formatReplayTime(e.t)}</span>
+        <span className="ops-mono text-meta" style={{ color: inkOf(e) }}>{word}</span>
         <span className="rp-ev-text">
           {e.type === "network" ? (
             <NetText method={e.method} url={e.url} failed={isFailure(e)} />
@@ -292,12 +304,12 @@ function RailRow({ e, i, past, current, open, onSeek, onToggle, onMute, run, nes
             <span className="truncate" title={e.type === "nav" ? e.url : text} style={{ color: isFailure(e) ? "var(--sol-red)" : undefined }}>{text}</span>
           )}
           {run && (
-            <button type="button" className="rp-run" data-rage={run.rage ? "true" : undefined} aria-expanded={run.open} title={`${run.count} in a row, to ${formatReplayTime(run.until)}${run.rage ? " · rage click" : ""}`} onClick={(ev) => { ev.stopPropagation(); run.toggle(); }}>
+            <button type="button" className="rp-run" data-rage={run.rage ? "true" : undefined} aria-expanded={run.open} title={`${run.count} in a row, to ${formatReplayTime(run.until)}${run.rage ? " · rage click" : ""}`} onClick={(ev) => { ev.stopPropagation(); onRun?.(i); }}>
               ×{run.count}
             </button>
           )}
           {onMute && e.type === "network" && (
-            <button type="button" className="rp-mute" aria-label={`Hide ${endpointOf(e)}`} title={`Hide ${endpointOf(e)} on every recording (its failures stay)`} onClick={(ev) => { ev.stopPropagation(); onMute(); }}>
+            <button type="button" className="rp-mute" aria-label={`Hide ${endpointOf(e)}`} title={`Hide ${endpointOf(e)} on every recording (its failures stay)`} onClick={(ev) => { ev.stopPropagation(); onMute(endpointOf(e)); }}>
               <EyeOff className="w-3 h-3" />
             </button>
           )}
@@ -311,7 +323,7 @@ function RailRow({ e, i, past, current, open, onSeek, onToggle, onMute, run, nes
           <span />
         )}
         {expandable ? (
-          <button type="button" className="rp-ev-more" aria-label={open ? "Hide detail" : "Show detail"} aria-expanded={open} onClick={(ev) => { ev.stopPropagation(); onToggle(); }}>
+          <button type="button" className="rp-ev-more" aria-label={open ? "Hide detail" : "Show detail"} aria-expanded={open} onClick={(ev) => { ev.stopPropagation(); onToggle(i); }}>
             <ChevronDown className="w-3 h-3" style={{ transform: open ? "rotate(180deg)" : undefined }} />
           </button>
         ) : (

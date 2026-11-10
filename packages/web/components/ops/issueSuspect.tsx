@@ -67,7 +67,7 @@ export function SuspectCommit({ sha, why, now, compare, label = "Suspect" }: { s
       ) : looking ? (
         <div className="iss-skel" style={{ width: "60%" }} aria-busy="true" />
       ) : (
-        <div className="ops-dim text-[11.5px]">not a commit codecast has seen</div>
+        <div className="ops-dim text-meta">not a commit codecast has seen</div>
       )}
     </div>
   );

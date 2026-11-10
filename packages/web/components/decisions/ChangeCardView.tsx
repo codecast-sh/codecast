@@ -1164,7 +1164,7 @@ export function ChangeCardAnswer({
               if (e.key === "Escape") { setNoteOpen(false); setError(false); }
             }}
           />
-          <div className="flex items-center gap-3 mt-1 text-[11px] text-sol-text-dim">
+          <div className="flex items-center gap-3 mt-1 text-meta text-sol-text-dim">
             <button onClick={sendRevise} className="flex items-center gap-1 hover:text-sol-text"><KeyCap size="xs">return</KeyCap><span>send Revise</span></button>
             <button onClick={() => { setNoteOpen(false); setError(false); }} className="flex items-center gap-1 hover:text-sol-text"><KeyCap size="xs">esc</KeyCap><span>cancel</span></button>
             {error && <span className="cc-text-red">Say what should change.</span>}

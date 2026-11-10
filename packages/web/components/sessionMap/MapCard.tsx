@@ -12,6 +12,7 @@ import { useStore, type Node, type NodeProps } from "@xyflow/react";
 import { ArrowUpRight, GitBranch, GitPullRequest, MessageSquare, Users } from "lucide-react";
 import { useInboxStore, type InboxSession } from "../../store/inboxStore";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { rowSigExcluding } from "../../store/wakeSig";
 import { AgentTypeIcon } from "../AgentTypeIcon";
 import { EntityIdPill } from "../EntityIdPill";
 import { SessionInlineThread } from "../conversation/SessionInlineThread";
@@ -61,9 +62,14 @@ function MidBody({ s }: { s: MapSession }) {
 
 const stop = (e: { stopPropagation: () => void }) => e.stopPropagation();
 
+// The row fields a heartbeat moves and the stage never reads.
+const STAGE_LIVENESS_FIELDS = new Set(["updated_at", "last_heartbeat", "last_metrics_at", "last_active_at", "last_message_at"]);
+
 /** The live session: messages scroll in the card, the composer stays at its foot. */
 function Stage({ id }: { id: string }) {
-  const row = useInboxStore((st) => st.sessions[id]);
+  // Wakes on what the thread reads, not on every heartbeat of a live row.
+  useInboxStore((st) => rowSigExcluding(st.sessions[id], STAGE_LIVENESS_FIELDS));
+  const row = useInboxStore.getState().sessions[id];
   const scroller = useRef<HTMLDivElement>(null);
   // Follow the tail while the reader sits at the bottom, as the conversation view does.
   useWatchEffect(() => {

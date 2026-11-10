@@ -7,7 +7,7 @@
 // useBillingReturn says how the payment went until the wallet shows it.
 import { Check, CircleGauge, CreditCard, History, ListTree, Plus } from "lucide-react";
 import { PLANS } from "@codecast/shared/contracts/assistant";
-import { SettingsCallout, SettingsPanel, SettingsRow, SettingsSection, SupportSentence } from "../../../components/settings/ui";
+import { SettingsBadge, SettingsCallout, SettingsPanel, SettingsRow, SettingsSection, SupportSentence } from "../../../components/settings/ui";
 import { Button } from "../../../components/ui/button";
 import { MeterBar } from "../../../components/plan/UsageMeter";
 import { LANE_COPY, TOPUP_AMOUNTS_USD, conversationTitle, ledgerLines, meterLegend, monthShare, planCard, planPoints, planPrice, topupLabel, usageHeadline, workedTimes } from "../../../components/simple/lane";
@@ -66,7 +66,7 @@ export default function PlanSettingsPage() {
               <div key={p.id} data-cc-plan-card data-current={current ? "" : undefined} className={cn("flex flex-col rounded-lg bg-sol-bg/60 p-3.5", current && "ring-1 ring-sol-cyan/60")}>
                 <div className="flex items-center justify-between gap-2">
                   <span data-cc-plan-name className="text-sm font-semibold text-sol-text">{p.label}</span>
-                  {current ? <span data-cc-plan-yours className="rounded-full bg-sol-cyan/15 px-2 py-0.5 text-[10px] font-medium text-sol-cyan">{WORDS.yours}</span> : null}
+                  {current ? <SettingsBadge tone="cyan" data-cc-plan-yours className="font-medium">{WORDS.yours}</SettingsBadge> : null}
                 </div>
                 <div className="mt-0.5 text-xs text-sol-text-muted">{planPrice(p)}</div>
                 <ul className="mt-3 flex-1 space-y-1.5 text-xs text-sol-text-muted">
@@ -108,7 +108,7 @@ export default function PlanSettingsPage() {
             return (
               <Button key={usd} variant="outline" className="h-auto flex-col items-start gap-0 px-3 py-2 disabled:opacity-50" disabled={!billing.topup || billing.busy} onClick={() => void billing.checkout({ topup_usd: usd })}>
                 <span>{label}</span>
-                <span className="text-[11px] font-normal text-sol-text-muted">{note}</span>
+                <span className="text-meta font-normal text-sol-text-muted">{note}</span>
               </Button>
             );
           })}

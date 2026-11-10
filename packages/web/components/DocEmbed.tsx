@@ -65,8 +65,8 @@ export function DocEmbed({ id }: { id: string }) {
       >
         <FileText className="h-3.5 w-3.5 flex-shrink-0 text-sol-green" />
         <span className="min-w-0 flex-1 truncate text-xs font-medium text-sol-text">{title}</span>
-        {doc.created_at && <DocDates doc={doc} className="text-[10px] text-sol-text-dim" />}
-        <span className="text-[10px] font-medium text-sol-green">{typeLabel}</span>
+        {doc.created_at && <DocDates doc={doc} className="text-meta text-sol-text-dim" />}
+        <span className="text-meta font-medium text-sol-green">{typeLabel}</span>
         <ArrowUpRight className="h-3 w-3 text-sol-text-dim opacity-0 transition-opacity group-hover:opacity-100" />
       </Link>
       {/* MarkdownBlocks' shared component map renders lists as `list-inside`,

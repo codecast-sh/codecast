@@ -138,7 +138,7 @@ function RoleNode({ id, x, y, size, dim, lead }: { id: string; x: number; y: num
   return (
     <Box x={x} y={y + 6} className="flex flex-col items-center og-ladder-fadeable" style={{ opacity: dim ? 0.28 : 1, filter: dim ? "grayscale(1)" : undefined }}>
       <Tile k={r.k} size={size} className={lead ? "og-ladder-tile-lead" : "og-ladder-tile-sub"} />
-      <span className="mt-1 sm:mt-1.5 font-mono text-[10px] sm:text-[12px] font-semibold whitespace-nowrap" style={{ color: TEXT }}>{r.handle}</span>
+      <span className="mt-1 sm:mt-1.5 font-mono text-meta sm:text-[12px] font-semibold whitespace-nowrap" style={{ color: TEXT }}>{r.handle}</span>
     </Box>
   );
 }
@@ -188,7 +188,7 @@ function Chart({ mode }: { mode: Mode }) {
       </Box>
       <div className="absolute -translate-y-1/2 flex flex-col items-start leading-tight" style={{ left: pct(MAYA.x + 36, W), top: pct(MAYA.y, H) }}>
         <span className="font-mono text-[12px] sm:text-[13.5px] font-semibold whitespace-nowrap" style={{ color: INK }}>Maya Chen</span>
-        <span className="font-mono text-[11px] sm:text-[12px] whitespace-nowrap" style={{ color: SOL.yellow }}>
+        <span className="font-mono text-meta sm:text-[12px] whitespace-nowrap" style={{ color: SOL.yellow }}>
           <Count from={1} to={COUNT[mode]} t0={reach[0]} t1={reach[reach.length - 1]} /> waiting on her
         </span>
       </div>
@@ -202,7 +202,7 @@ function Chart({ mode }: { mode: Mode }) {
         const up = mine.find(({ s }) => s.up);
         const done = Math.max(...answered.map(({ i }) => trips[i].end)) + 0.2;
         return (
-          <Box key={id} x={x} y={DOT_Y + 38} className="hidden sm:flex flex-col items-center font-mono text-[11.5px] leading-[1.4] whitespace-nowrap">
+          <Box key={id} x={x} y={DOT_Y + 38} className="hidden sm:flex flex-col items-center font-mono text-meta leading-[1.4] whitespace-nowrap">
             <span className="og-anim og-pop" style={at(done, { color: SOL.green })}>✓ {answered.length} answered</span>
             {up && <span className="og-anim og-pop" style={at(trips[up.i].arriveRole + 0.2, { color: SOL.yellow })}>↑ 1 {up.s.up === "lapse" ? "up by lapse" : "passed up"}</span>}
           </Box>
@@ -211,7 +211,7 @@ function Chart({ mode }: { mode: Mode }) {
 
       {withOrg && (
         <Box x={SUBS.social + 42} y={SUB_Y - 22} className="og-anim og-ladder-blink hidden sm:block" style={at(trips[lapse].arriveRole)}>
-          <span className="rounded-full px-1.5 py-px font-mono text-[11px] border whitespace-nowrap" style={{ borderColor: tint(SOL.orange, 50), color: SOL.orange, backgroundColor: PAPER }}>silent 5m</span>
+          <span className="rounded-full px-1.5 py-px font-mono text-meta border whitespace-nowrap" style={{ borderColor: tint(SOL.orange, 50), color: SOL.orange, backgroundColor: PAPER }}>silent 5m</span>
         </Box>
       )}
 
@@ -243,9 +243,9 @@ function FloodRows() {
               <SessionDot state="needs" size={8} />
               <div className="min-w-0 flex-1">
                 <div className="font-mono text-[12px] font-semibold truncate" style={{ color: INK }}>{SESSIONS[i].q}</div>
-                <div className="font-mono text-[10.5px] truncate" style={{ color: DIM }}>{SESSIONS[i].s} · needs input</div>
+                <div className="font-mono text-meta truncate" style={{ color: DIM }}>{SESSIONS[i].s} · needs input</div>
               </div>
-              <span className="font-mono text-[10px] shrink-0" style={{ color: DIM }}>{CLOCK(i)}</span>
+              <span className="font-mono text-meta shrink-0" style={{ color: DIM }}>{CLOCK(i)}</span>
             </div>
           </div>
         ))}
@@ -276,23 +276,23 @@ function LeadCard({ c }: { c: CardSpec }) {
         <Tile k={lead.k} size={30} />
         <div className="min-w-0 flex-1">
           <div className="font-mono font-bold text-[12.5px] leading-tight truncate" style={{ color: INK }}>{lead.title}</div>
-          <div className="font-mono text-[10.5px]" style={{ color: DIM }}>{lead.handle} · {c.under} sessions</div>
+          <div className="font-mono text-meta" style={{ color: DIM }}>{lead.handle} · {c.under} sessions</div>
         </div>
-        <span className="rounded-full px-2 py-0.5 font-mono text-[10px] font-semibold shrink-0" style={{ backgroundColor: tint(SOL.yellow, 28), color: `color-mix(in srgb, ${SOL.yellow} 55%, ${INK})` }}>waiting on you</span>
+        <span className="rounded-full px-2 py-0.5 font-mono text-meta font-semibold shrink-0" style={{ backgroundColor: tint(SOL.yellow, 28), color: `color-mix(in srgb, ${SOL.yellow} 55%, ${INK})` }}>waiting on you</span>
       </div>
       <div className="mt-2.5 font-mono text-[13px] font-semibold leading-snug" style={{ color: INK }}>{SESSIONS[c.i].q}</div>
       <div className="mt-1 text-[12.5px] leading-snug" style={{ color: BODY }}>
-        <span className="font-mono text-[10.5px] font-semibold mr-1.5" style={{ color: SOL.green }}>Recommends</span>{c.rec}
+        <span className="font-mono text-meta font-semibold mr-1.5" style={{ color: SOL.green }}>Recommends</span>{c.rec}
       </div>
-      <div className="mt-2.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 font-mono text-[10.5px]" style={{ color: MUTED }}>
+      <div className="mt-2.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 font-mono text-meta" style={{ color: MUTED }}>
         <Step><SessionDot state="needs" size={7} />{SESSIONS[c.i].s}</Step><Arrow />
         <Step><Tile k={sub.k} size={15} />{sub.handle}{lapsed && <span style={{ color: SOL.orange }}>· silent 5m</span>}</Step><Arrow />
         <Step><Tile k={lead.k} size={15} />{lead.handle}</Step><Arrow />
         <Step><Person p={person("maya")} size={15} style={{ boxShadow: "none" }} />you</Step>
       </div>
       <div className="mt-3 flex gap-1.5">
-        <span className="rounded-md px-2.5 py-1 font-mono text-[11px]" style={{ backgroundColor: INK, color: PAPER }}>{c.options[0]}</span>
-        <span className="rounded-md px-2.5 py-1 font-mono text-[11px] border" style={{ borderColor: LINE, color: TEXT }}>{c.options[1]}</span>
+        <span className="rounded-md px-2.5 py-1 font-mono text-meta" style={{ backgroundColor: INK, color: PAPER }}>{c.options[0]}</span>
+        <span className="rounded-md px-2.5 py-1 font-mono text-meta border" style={{ borderColor: LINE, color: TEXT }}>{c.options[1]}</span>
       </div>
     </div>
   );
@@ -315,7 +315,7 @@ function Inbox({ mode }: { mode: Mode }) {
         {mode === "without" ? <FloodRows /> : (
           <div className="p-3 space-y-2.5">
             {CARDS.map((c) => <LeadCard key={c.i} c={c} />)}
-            <div className="og-anim og-fade flex items-center gap-2 px-1 pt-1 font-mono text-[11px]" style={at(TRIPS.with[SESSIONS.length - 1].end, { color: DIM })}>
+            <div className="og-anim og-fade flex items-center gap-2 px-1 pt-1 font-mono text-meta" style={at(TRIPS.with[SESSIONS.length - 1].end, { color: DIM })}>
               <SessionDot state="working" size={7} />{ANSWERED} answered by roles, none rang Maya
             </div>
           </div>
@@ -354,7 +354,7 @@ function Toggle({ mode, onPick }: { mode: Mode; onPick: (m: Mode) => void }) {
                 <span aria-hidden className="w-3.5 h-3.5 rounded-full shrink-0" style={{ border: `2px solid ${on ? accent : DIM}`, backgroundColor: on ? accent : "transparent", boxShadow: on ? `inset 0 0 0 2px ${PAPER}` : "none" }} />
                 {label}
               </span>
-              <span className="block mt-1 font-mono text-[11px]" style={{ color: on ? MUTED : DIM }}>questions that reach Maya</span>
+              <span className="block mt-1 font-mono text-meta" style={{ color: on ? MUTED : DIM }}>questions that reach Maya</span>
             </span>
             <span className="shrink-0 whitespace-nowrap font-mono font-bold text-[30px] sm:text-[56px] leading-none tracking-[-0.04em] tabular-nums" style={{ color: on ? strong : DIM }}>{COUNT[m]}</span>
           </button>

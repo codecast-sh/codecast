@@ -85,7 +85,7 @@ const DOT = `digraph my_flow {
 function Dot() {
   const parts = DOT.split(/("[^"]*"|->|\bdigraph\b|\bgraph\b|\bshape\b|\bbackend\b|\bscript\b|\bcondition\b|\blabel\b|\bprompt\b|\bgoal\b)/g);
   return (
-    <pre className="p-4 font-mono text-[11px] leading-relaxed">
+    <pre className="p-4 font-mono text-meta leading-relaxed">
       {parts.map((p, i) => {
         if (!p) return null;
         const color = p.startsWith('"') ? SOL.cyan : p === "->" ? SOL.orange : /^(digraph|graph)$/.test(p) ? SOL.green : /^[a-z_]+$/.test(p) && i % 2 === 1 ? SOL.yellow : SOL.base0;
@@ -107,7 +107,7 @@ export function Workflow() {
           <div className="-mx-1 overflow-x-auto px-1 sm:overflow-visible">
             <div className="min-w-[540px] sm:min-w-0"><Graph /></div>
           </div>
-          <p className="mt-1 text-right font-mono text-[11px] sm:hidden" style={{ color: SOL.base1 }}>swipe for the review gate →</p>
+          <p className="mt-1 text-right font-mono text-meta sm:hidden" style={{ color: SOL.base1 }}>swipe for the review gate →</p>
           <div className="mt-4 grid grid-cols-1 gap-x-6 gap-y-1.5 text-[12.5px] sm:grid-cols-2" style={{ color: SOL.base01 }}>
             <span><span className="font-mono" style={{ color: SOL.base02 }}>box</span> agent session</span>
             <span><span className="font-mono" style={{ color: SOL.base02 }}>parallelogram</span> shell command</span>
@@ -116,7 +116,7 @@ export function Workflow() {
           </div>
         </div>
         <div className="min-w-0 rounded-2xl overflow-x-auto" style={{ backgroundColor: SOL.base03 }}>
-          <div className="px-4 pt-3 font-mono text-[11px]" style={{ color: SOL.base01 }}>flow.cast</div>
+          <div className="px-4 pt-3 font-mono text-meta" style={{ color: SOL.base01 }}>flow.cast</div>
           <Dot />
         </div>
       </div>

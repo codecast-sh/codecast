@@ -7,12 +7,13 @@ import { useState, useCallback, useMemo } from "react";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../../store/inboxStore";
 import { useConvexSync } from "../../hooks/useConvexSync";
+import { useCollectionRows } from "../../hooks/useCollectionRows";
 import {
   NotificationGroupRow,
   NotificationRow,
 } from "../../components/notifications/NotificationRow";
 import { groupIdleNotifications } from "@codecast/shared/contracts";
-import { ArrowUpRight, ExternalLink, Check, CheckCheck } from "lucide-react";
+import { ArrowUpRight, Bell, ExternalLink, Check, CheckCheck } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "../../components/ui/context-menu";
 import {
   notificationHref,
@@ -24,16 +25,21 @@ import {
 
 type FilterTab = "all" | "unread" | "sessions" | "social" | "tasks";
 
+// The rows the list shows, newest first, woken by a signature of what a row
+// draws (whether it is read, when it came) rather than the collection's ref.
+// Module level: the hook keys its signature on these functions.
+const NOTIFICATION_ROWS = {
+  sig: (n: any) => `${n.read ? 1 : 0}${n.created_at ?? 0}`,
+  sort: (a: any, b: any) => (b.created_at ?? 0) - (a.created_at ?? 0),
+};
+
+
 export default function NotificationsPage() {
   const router = useRouter();
   // Local-first: sync the server list into the store, read + mutate the store.
   const notifsList = useQueryNoThrow(api.notifications.list, {}).data;
   useConvexSync(notifsList, useCallback((d: any) => useInboxStore.getState().syncTable("notifications", d), []));
-  const notificationsMap = useInboxStore((s) => s.notifications);
-  const notifications = useMemo(
-    () => (Object.values(notificationsMap) as any[]).sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)),
-    [notificationsMap]
-  );
+  const notifications = useCollectionRows<any>("notifications", NOTIFICATION_ROWS);
   const markAsRead = useInboxStore((s) => s.markNotificationRead);
   const markAllAsRead = useInboxStore((s) => s.markAllNotificationsRead);
   const [activeTab, setActiveTab] = useState<FilterTab>("all");
@@ -107,7 +113,7 @@ export default function NotificationsPage() {
             {unreadCount > 0 && (
               <button
                 onClick={() => markAllAsRead()}
-                className="text-xs text-sol-text-muted hover:text-sol-yellow transition-colors px-3 py-1.5 border border-sol-border rounded-lg hover:border-sol-yellow/40"
+                className="text-xs text-sol-text-muted hover:text-sol-cyan transition-colors px-3 py-1.5 border border-sol-border rounded-lg hover:border-sol-cyan/40"
               >
                 Mark all read
               </button>
@@ -119,9 +125,10 @@ export default function NotificationsPage() {
               <button
                 key={tab.key}
                 onClick={() => setActiveTab(tab.key)}
+                aria-pressed={activeTab === tab.key}
                 className={`px-3 py-2 text-sm transition-colors border-b-2 -mb-px ${
                   activeTab === tab.key
-                    ? "border-sol-yellow text-sol-yellow font-medium"
+                    ? "border-sol-cyan text-sol-cyan font-medium"
                     : "border-transparent text-sol-text-muted hover:text-sol-text"
                 }`}
               >
@@ -144,19 +151,7 @@ export default function NotificationsPage() {
             </div>
           ) : filteredNotifications.length === 0 ? (
             <div className="text-center py-16">
-              <svg
-                className="w-12 h-12 mx-auto text-sol-text-dim mb-3"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"
-                />
-              </svg>
+              <Bell className="w-12 h-12 mx-auto text-sol-text-dim mb-3" strokeWidth={1.5} aria-hidden="true" />
               <p className="text-sol-text-muted text-sm">
                 {activeTab === "all" ? "No notifications yet" : `No ${activeTab} notifications`}
               </p>

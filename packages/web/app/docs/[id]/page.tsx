@@ -24,28 +24,16 @@ import "../../../components/editor/editor.css";
 import {
   Star,
   Archive,
-  Circle,
   CircleDot,
-  CheckCircle2,
-  XCircle,
-  CircleDotDashed,
   Tag,
 } from "lucide-react";
 import { taskPriority } from "../../../lib/taskPriority";
+import { statusVisual, taskStatusOf, useTeamTaskStatusList } from "../../../lib/taskStatuses";
 import Link from "next/link";
 import { toast } from "sonner";
 import { DocDates } from "../../../components/DocDates";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
-
-const STATUS_CONFIG: Record<string, { icon: typeof Circle; label: string; color: string }> = {
-  draft: { icon: CircleDotDashed, label: "Draft", color: "text-sol-text-dim" },
-  open: { icon: Circle, label: "Open", color: "text-sol-blue" },
-  in_progress: { icon: CircleDot, label: "In Progress", color: "text-sol-yellow" },
-  in_review: { icon: CircleDot, label: "In Review", color: "text-sol-violet" },
-  done: { icon: CheckCircle2, label: "Done", color: "text-sol-green" },
-  dropped: { icon: XCircle, label: "Dropped", color: "text-sol-text-dim" },
-};
 
 function DocTypeSelector({
   value,
@@ -140,6 +128,8 @@ function DocDetailContent() {
       .filter((d) => d.parent_id === id)
       .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
   }, [allDocs, id]);
+  // Related tasks render in their team's own status vocabulary.
+  const taskStatuses = useTeamTaskStatusList((data as any)?.team_id ?? null);
   const updateDoc = useInboxStore((s) => s.updateDoc);
   const pinDoc = useInboxStore((s) => s.pinDoc);
   const promoteToPlan = useInboxStore((s) => s.promoteDocToPlan);
@@ -271,7 +261,7 @@ function DocDetailContent() {
                     <Link key={l} href={`/docs?label=${encodeURIComponent(l)}`}>
                       <Badge
                         variant="outline"
-                        className="text-[10px] border-sol-border/50 text-sol-text-muted hover:brightness-90 transition-all cursor-pointer"
+                        className="text-meta border-sol-border/50 text-sol-text-muted hover:brightness-90 transition-all cursor-pointer"
                       >
                         {l}
                       </Badge>
@@ -322,7 +312,7 @@ function DocDetailContent() {
                     </span>
                     <Badge
                       variant="outline"
-                      className="text-[10px] px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto"
+                      className="text-meta px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto"
                     >
                       {(doc as any).active_plan.status}
                     </Badge>
@@ -337,7 +327,7 @@ function DocDetailContent() {
                   </h2>
                   <div className="border border-sol-border/20 rounded-lg divide-y divide-sol-border/10 overflow-hidden">
                     {relatedTasks.map((task: any) => {
-                      const status = STATUS_CONFIG[task.status] || STATUS_CONFIG.open;
+                      const status = statusVisual(taskStatusOf(task, taskStatuses), taskStatuses);
                       const priority = taskPriority(task.priority);
                       const StatusIcon = status.icon;
                       const PriorityIcon = priority.icon;
@@ -354,7 +344,7 @@ function DocDetailContent() {
                           </span>
                           <Badge
                             variant="outline"
-                            className={`text-[10px] px-1.5 py-0 ${status.color} border-current/30`}
+                            className={`text-meta px-1.5 py-0 ${status.color} border-current/30`}
                           >
                             {status.label}
                           </Badge>
@@ -384,9 +374,9 @@ function DocDetailContent() {
                             <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
                           </svg>
                           <span className="flex-1 text-sm text-sol-text truncate">
-                            {child.title || "Untitled"}
+                            {(child as any).display_title || child.title || "Untitled"}
                           </span>
-                          <span className={`text-[10px] ${typeConf.color}`}>{docTypeLabel(child.doc_type)}</span>
+                          <span className={`text-meta ${typeConf.color}`}>{docTypeLabel(child.doc_type)}</span>
                         </Link>
                       );
                     })}
@@ -410,7 +400,7 @@ function DocDetailContent() {
                           <path strokeLinecap="round" strokeLinejoin="round" d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m9.686-5.781a4.5 4.5 0 00-6.364-6.364L4.5 8.25a4.5 4.5 0 006.364 6.364l4.5-4.5z" />
                         </svg>
                         <span className="flex-1 text-sm text-sol-text truncate">
-                          {bl.title || "Untitled"}
+                          {(bl as any).display_title || bl.title || "Untitled"}
                         </span>
                       </Link>
                     ))}

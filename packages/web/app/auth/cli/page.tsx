@@ -308,7 +308,7 @@ function CliAuthContent() {
           <div className="text-center">
             <div className="mb-4">
               <svg
-                className="mx-auto h-12 w-12 text-red-400"
+                className="mx-auto h-12 w-12 text-sol-red"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
@@ -335,19 +335,19 @@ function CliAuthContent() {
               <p className="text-sol-text-muted mb-2">To finish connecting:</p>
               <ol className="list-decimal list-inside space-y-1.5 text-sol-text-muted">
                 <li>
-                  Re-run <code className="text-amber-400">cast auth</code> in your
+                  Re-run <code className="font-semibold text-sol-text">cast auth</code> in your
                   terminal and complete it within 5 minutes.
                 </li>
                 <li>
                   Or skip the browser entirely: open{" "}
                   <a
                     href="/settings/cli"
-                    className="text-amber-400 hover:text-amber-300 underline"
+                    className="text-sol-text-secondary underline decoration-sol-orange/70 underline-offset-2 hover:text-sol-text hover:decoration-sol-orange"
                   >
                     Settings → CLI
                   </a>
                   , generate a token, and run{" "}
-                  <code className="text-amber-400">cast login &lt;token&gt;</code>.
+                  <code className="font-semibold text-sol-text">cast login &lt;token&gt;</code>.
                 </li>
               </ol>
             </div>
@@ -364,7 +364,7 @@ function CliAuthContent() {
         <div className="text-center">
           <div className="mb-4">
             <svg
-              className="mx-auto h-12 w-12 text-green-400"
+              className="mx-auto h-12 w-12 text-sol-green"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"

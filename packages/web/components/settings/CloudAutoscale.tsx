@@ -57,7 +57,7 @@ export function CloudAutoscale({ d }: { d: Device }) {
   const added = devices.filter((x) => x.cloud_host?.autoscaled && x.cloud_host.state !== "missing").length;
   const on = !!policy?.enabled;
   return (
-    <span className="inline-flex items-center gap-2 text-[11px]" data-cloud-autoscale={on ? "on" : "off"}>
+    <span className="inline-flex items-center gap-2 text-meta" data-cloud-autoscale={on ? "on" : "off"}>
       <ConsequentialSwitch
         on={on}
         trigger={({ on: isOn, press, reviewing }) => isOn ? (
@@ -67,7 +67,7 @@ export function CloudAutoscale({ d }: { d: Device }) {
             <button type="button" className="text-sol-text-muted underline decoration-dotted underline-offset-2 hover:text-sol-text" onClick={press}>Turn off</button>
           </span>
         ) : (
-          <button type="button" aria-haspopup="dialog" aria-expanded={reviewing} className="h-7 rounded-md px-3 text-[11px] text-sol-text-secondary hover:bg-sol-bg-alt hover:text-sol-text" onClick={press}>Autoscale…</button>
+          <button type="button" aria-haspopup="dialog" aria-expanded={reviewing} className="h-7 rounded-md px-3 text-meta text-sol-text-secondary hover:bg-sol-bg-alt hover:text-sol-text" onClick={press}>Autoscale…</button>
         )}
         ledger={autoscaleLedger({ like: deviceDisplayName(d), laptop: manager ? deviceDisplayName(manager) : "your laptop", laptopOnline: !!manager?.online, maxExtra, size })}
         onPick={(option) => setMaxExtra(CLOUD_AUTOSCALE_MAX_EXTRA_CHOICES.find((n) => capLabel(n) === option) ?? maxExtra)}

@@ -67,7 +67,7 @@ export function Term({ label, children, className = "", bodyClassName = "" }: { 
           <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: SOL.yellow }} />
           <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: SOL.green }} />
         </div>
-        <span className="text-[11px] font-mono ml-2 truncate" style={{ color: SOL.base01 }}>{label}</span>
+        <span className="text-meta font-mono ml-2 truncate" style={{ color: SOL.base01 }}>{label}</span>
       </div>
       <div className={`p-4 font-mono text-[12px] leading-[1.65] break-words ${bodyClassName}`}>{children}</div>
     </div>

@@ -120,7 +120,7 @@ export function ConnectSheet({ kind: initial, onClose }: { kind: SheetKind; onCl
           <b>{created && fresh ? fresh.name : `Connect ${label}`}</b>
           {needsConnection ? <span className="ops-connect-step ops-dim">step 1 of 2: the {label} token</span> : null}
         </span>
-        <button type="button" className="ops-btn ops-connect-x" onClick={onClose} aria-label="Close" title="Close"><X className="w-3.5 h-3.5" /><KeyCap size="xs">esc</KeyCap></button>
+        <button type="button" className="ops-btn ops-connect-x" onClick={onClose} aria-label="Close" title="Close"><X className="w-3.5 h-3.5" /><KeyCap size="xs">Esc</KeyCap></button>
       </div>
       {!created && (
         <div className="ops-seg ops-connect-kinds" role="group" aria-label="Kind" data-ops-connect-kinds>

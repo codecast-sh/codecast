@@ -60,7 +60,7 @@ function FixPullRequests({ sessionIds }: { sessionIds: string[] }) {
             {prs.slice(0, 3).map((p) => (
               <span key={p._id} className="inline-flex items-center gap-1.5 min-w-0">
                 <EntityIdPill type="pr" id={`${p.repository}#${p.number}`} compact />
-                <span className="text-[11px]" style={{ color: p.state === "merged" ? "var(--sol-violet)" : p.state === "closed" ? "var(--sol-text-dim)" : "var(--sol-text-muted)" }}>{p.state}</span>
+                <span className="text-meta" style={{ color: p.state === "merged" ? "var(--sol-violet)" : p.state === "closed" ? "var(--sol-text-dim)" : "var(--sol-text-muted)" }}>{p.state}</span>
                 {p.checks_state && p.state === "open" && (
                   <span className="ops-pill" style={{ color: CHECKS_INK[p.checks_state] ?? "var(--sol-text-muted)", background: `color-mix(in srgb, ${CHECKS_INK[p.checks_state] ?? "var(--sol-text-muted)"} 12%, transparent)` }}>
                     checks {p.checks_state}
@@ -332,7 +332,7 @@ function FixSessionItem({ s, shipped, now }: { s: FixSessionFact; shipped: strin
     <span className="iss-session" data-state={state} title={state === "working" ? "working now" : state === "shipped" ? "wrote the landed commit" : state === "idle" ? `idle${at ? ` since ${new Date(at).toLocaleString()}` : ""}` : "not readable from here"}>
       <i className="iss-session-dot" />
       {!s.known && data === undefined && !error ? <span className="iss-skel" style={{ width: 96 }} aria-busy="true" /> : <EntityIdPill type="session" id={s.id} compact />}
-      {at ? <span className="ops-dim ops-num text-[11px]">{relTimeShort(at, now)}</span> : null}
+      {at ? <span className="ops-dim ops-num text-meta">{relTimeShort(at, now)}</span> : null}
     </span>
   );
 }
@@ -474,7 +474,7 @@ export function CheckCard({ group, events, now, runUrl, samples = [], env = null
   return (
     <div className="ops-card iss-kindcard" data-failing={failing ? "true" : undefined}>
       <div className="ops-card-head">
-        <span>{group.kind === "job" ? "Job" : "Check"}{brk?.branch ? <span className="ops-mono ops-dim font-normal text-[11px] ml-2">{brk.branch}</span> : null}</span>
+        <span>{group.kind === "job" ? "Job" : "Check"}{brk?.branch ? <span className="ops-mono ops-dim font-normal text-meta ml-2">{brk.branch}</span> : null}</span>
         <span className="iss-kind-state" data-state={failing ? "failing" : quiet ? "quiet" : "passing"}>{failing ? "failing" : quiet ? "quiet" : group.status === "open" ? "passing" : group.status}</span>
       </div>
       <div className="iss-figures">
@@ -565,7 +565,7 @@ export function MetricCard({ group, watch, now }: { group: OpsGroup; watch?: Ops
         <span className="inline-flex items-center gap-2 min-w-0">
           Metric
           {watch && <Link href={opsHref.metric(watch.short_id)} className="font-normal text-sol-text truncate hover:underline">{watch.name}</Link>}
-          {watch && <span className="ops-mono ops-dim font-normal text-[11px]">{watch.short_id}</span>}
+          {watch && <span className="ops-mono ops-dim font-normal text-meta">{watch.short_id}</span>}
         </span>
         {over !== null && <span className="iss-kind-state" data-state={over ? "failing" : "passing"}>{over ? (direction === "below" ? "under the line" : "over the line") : "within the line"}</span>}
       </div>

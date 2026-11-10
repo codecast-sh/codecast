@@ -87,7 +87,7 @@ import "./callVideoPlayer.css";
 // floor of about nine lines (callMedia.css) without the page scrolling.
 const CALL_VIDEO_BOX = "call-video-box relative aspect-video max-h-[min(46vh,calc(100dvh-520px))] min-h-[180px] w-full overflow-hidden bg-black";
 const CALL_VIDEO_FRAME = "dark overflow-hidden rounded-lg bg-black ring-1 ring-sol-border/30";
-const CALL_VIDEO_BAR = "flex min-h-[34px] flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-white/[0.06] bg-sol-base03 px-2.5 py-1.5 font-mono text-[11px] text-sol-text-muted";
+const CALL_VIDEO_BAR = "flex min-h-[34px] flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-white/[0.06] bg-sol-base03 px-2.5 py-1.5 font-mono text-meta text-sol-text-muted";
 
 /** The player's place, held before there is anything to play (the thread
  *  says the call was filmed and the recordings have not answered yet), so the
@@ -492,7 +492,7 @@ export function CallVideoPlayer({
                 <button
                   type="button"
                   onClick={() => retry(shown)}
-                  className="flex items-center gap-1.5 rounded-md bg-white/[0.08] px-2.5 py-1 font-mono text-[11px] text-sol-text transition-colors hover:bg-white/[0.14]"
+                  className="flex items-center gap-1.5 rounded-md bg-white/[0.08] px-2.5 py-1 font-mono text-meta text-sol-text transition-colors hover:bg-white/[0.14]"
                 >
                   <RotateCw className="h-3 w-3" /> Try again
                 </button>
@@ -504,7 +504,7 @@ export function CallVideoPlayer({
       {/* What the picture cannot say for itself: the moment asked for has no
           video, or the room's own file is gone and this is all there is. */}
       {(missed || main.kind === "screen") && (
-        <div className="space-y-0.5 border-t border-white/[0.06] bg-sol-base03 px-2.5 py-1.5 text-[11.5px] leading-snug text-sol-text-muted" role="status">
+        <div className="space-y-0.5 border-t border-white/[0.06] bg-sol-base03 px-2.5 py-1.5 text-meta leading-snug text-sol-text-muted" role="status">
           {missed && (
             <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
               <span>
@@ -514,7 +514,7 @@ export function CallVideoPlayer({
                 <button
                   type="button"
                   onClick={() => (onJump ? onJump(missed.jump!.ms) : seek(missed.jump!.ms))}
-                  className="rounded bg-white/[0.07] px-1.5 py-0.5 font-mono text-[11px] text-sol-text transition-colors hover:bg-white/[0.12]"
+                  className="rounded bg-white/[0.07] px-1.5 py-0.5 font-mono text-meta text-sol-text transition-colors hover:bg-white/[0.12]"
                 >
                   {missed.jump.words}
                 </button>
@@ -653,7 +653,7 @@ export function CallVideoNoticeLine({
     <button
       type="button"
       onClick={onDelete}
-      className="shrink-0 rounded px-1.5 font-mono text-[11px] not-italic text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text"
+      className="shrink-0 rounded px-1.5 font-mono text-meta not-italic text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text"
       title="Remove this failed recording from the call"
     >
       Clear

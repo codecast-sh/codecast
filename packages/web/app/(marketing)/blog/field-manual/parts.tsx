@@ -66,7 +66,7 @@ export function SeriesContents({ current }: { current?: Chapter }) {
       <Link href={`/blog/${SERIES_SLUG}`} className="block font-bold mb-3" style={{ color: SOL.base03 }}>{SERIES_TITLE}</Link>
       {(Object.keys(PARTS) as (keyof typeof PARTS)[]).map((part) => (
         <div key={part} className="mb-4">
-          <div className="text-[11px] font-bold mb-1.5" style={{ color: SOL.base1 }}>{PARTS[part].label}: {PARTS[part].title}</div>
+          <div className="text-meta font-bold mb-1.5" style={{ color: SOL.base1 }}>{PARTS[part].label}: {PARTS[part].title}</div>
           {CHAPTERS.filter((c) => c.part === part).map((c) => {
             const on = c === current;
             return (

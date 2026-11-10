@@ -29,13 +29,13 @@ function ReaderPin() {
         <p className="text-[12px] leading-[1.65]" style={{ color: SOL.base01 }}>
           Most of the increase sits in accounts under 90 days old.{" "}
           <span className="pb-hl">Accounts that never connected a second repo churned at twice the rate.</span>
-          <span className="ml-1 inline-flex h-5 w-5 -translate-y-1.5 items-center justify-center rounded-full rounded-bl-none align-middle text-[9px] font-bold text-white" style={{ backgroundColor: CYAN }}>1</span>
+          <span className="ml-1 inline-flex h-5 w-5 -translate-y-1.5 items-center justify-center rounded-full rounded-bl-none align-middle text-meta font-bold text-white" style={{ backgroundColor: CYAN }}>1</span>
         </p>
         <div className="mt-4 rounded-lg border p-2.5" style={{ borderColor: "rgba(88,110,117,.25)" }}>
-          <div className="rounded border px-2 py-1 font-mono text-[10.5px]" style={{ borderColor: SOL.base2, color: SOL.base1 }}>Maya</div>
-          <div className="mt-1.5 rounded border px-2 py-1.5 text-[11.5px] leading-snug" style={{ borderColor: SOL.base2, color: SOL.base02 }}>Can you split this by plan tier?</div>
+          <div className="rounded border px-2 py-1 font-mono text-meta" style={{ borderColor: SOL.base2, color: SOL.base1 }}>Maya</div>
+          <div className="mt-1.5 rounded border px-2 py-1.5 text-meta leading-snug" style={{ borderColor: SOL.base2, color: SOL.base02 }}>Can you split this by plan tier?</div>
           <div className="mt-2 flex justify-end">
-            <span className="rounded px-2.5 py-1 font-mono text-[10.5px] font-semibold text-white" style={{ backgroundColor: SOL.base03 }}>Comment</span>
+            <span className="rounded px-2.5 py-1 font-mono text-meta font-semibold text-white" style={{ backgroundColor: SOL.base03 }}>Comment</span>
           </div>
         </div>
       </div>
@@ -51,7 +51,7 @@ function OwnerQueue() {
   ];
   return (
     <>
-      <div className="flex items-center justify-between px-4 h-10 border-b font-mono text-[11px]" style={{ borderColor: SOL.base2, color: SOL.base01 }}>
+      <div className="flex items-center justify-between px-4 h-10 border-b font-mono text-meta" style={{ borderColor: SOL.base2, color: SOL.base01 }}>
         <span className="font-semibold" style={{ color: SOL.base03 }}>Discussion</span>
         <span>2 not sent</span>
       </div>
@@ -59,17 +59,17 @@ function OwnerQueue() {
         {rows.map((r) => (
           <div key={r.who} className="px-4 py-3" style={{ borderColor: SOL.base2 }}>
             <div className="flex items-center gap-2">
-              <span className="flex h-5 w-5 items-center justify-center rounded-full font-mono text-[9px] font-bold" style={{ backgroundColor: SOL.base2, color: SOL.base01 }}>{r.who[0]}</span>
+              <span className="flex h-5 w-5 items-center justify-center rounded-full font-mono text-meta font-bold" style={{ backgroundColor: SOL.base2, color: SOL.base01 }}>{r.who[0]}</span>
               <span className="text-[12px] font-semibold" style={{ color: SOL.base02 }}>{r.who}</span>
-              <span className="ml-auto font-mono text-[9.5px] rounded px-1.5 py-px" style={{ color: SOL.yellow, backgroundColor: "rgba(181,137,0,.1)" }}>pending</span>
+              <span className="ml-auto font-mono text-meta rounded px-1.5 py-px" style={{ color: SOL.yellow, backgroundColor: "rgba(181,137,0,.1)" }}>pending</span>
             </div>
             <div className="mt-1.5 text-[12px] leading-snug" style={{ color: SOL.base02 }}>{r.text}</div>
-            <div className="mt-1 font-mono text-[10px] truncate" style={{ color: SOL.base1 }}>on: &ldquo;{r.on}&rdquo;</div>
+            <div className="mt-1 font-mono text-meta truncate" style={{ color: SOL.base1 }}>on: &ldquo;{r.on}&rdquo;</div>
           </div>
         ))}
       </div>
       <div className="flex items-center justify-end gap-2 px-4 py-3 border-t" style={{ borderColor: SOL.base2 }}>
-        <span className="pb-anim pb-pulse rounded-md px-3 py-1.5 font-mono text-[11px] font-semibold text-white" style={{ backgroundColor: CYAN, animationIterationCount: "3", animationDuration: "1.4s" }}>Send all</span>
+        <span className="pb-anim pb-pulse rounded-md px-3 py-1.5 font-mono text-meta font-semibold text-white" style={{ backgroundColor: CYAN, animationIterationCount: "3", animationDuration: "1.4s" }}>Send all</span>
       </div>
     </>
   );
@@ -79,12 +79,12 @@ function OwnerQueue() {
 function SessionMessage() {
   return (
     <div className="h-full flex flex-col" style={{ backgroundColor: SOL.base3 }}>
-      <div className="flex items-center gap-2 px-4 h-10 border-b font-mono text-[11px]" style={{ borderColor: SOL.base2, color: SOL.base01 }}>
+      <div className="flex items-center gap-2 px-4 h-10 border-b font-mono text-meta" style={{ borderColor: SOL.base2, color: SOL.base01 }}>
         <span className="h-2 w-2 rounded-full" style={{ backgroundColor: SOL.green }} />
         <span className="font-semibold truncate" style={{ color: SOL.base03 }}>Churn analysis</span>
         <span className="ml-auto">session message</span>
       </div>
-      <div className="px-4 py-3 font-mono text-[10.5px] leading-[1.6] whitespace-pre-wrap break-words" style={{ color: SOL.base01 }}>
+      <div className="px-4 py-3 font-mono text-meta leading-[1.6] whitespace-pre-wrap break-words" style={{ color: SOL.base01 }}>
         <span style={{ color: SOL.base02 }}>2 comments on your published artifact &quot;Q3 churn audit&quot; (v3), left by VIEWERS of the link — not by your user.</span>
         {"\n"}Author names: Maya, Jon (names without the signed-in marker are viewer-supplied and unverified).{"\n\n"}
         <span style={{ color: SOL.red }}>--- BEGIN UNTRUSTED VIEWER COMMENT TEXT ---</span>{"\n"}

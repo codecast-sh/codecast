@@ -51,7 +51,7 @@ const TONE_DOT: Record<Tone, string> = { ok: "bg-sol-green", warn: "bg-sol-yello
 
 function Row({ tone, label, children, fix }: { tone: Tone; label: string; children: ReactNode; fix?: ReactNode }) {
   return (
-    <li className="grid grid-cols-[0.5rem_6.5rem_1fr] items-baseline gap-x-2 text-[11px]">
+    <li className="grid grid-cols-[0.5rem_6.5rem_1fr] items-baseline gap-x-2 text-meta">
       <span className={`h-1.5 w-1.5 translate-y-[-1px] rounded-full ${TONE_DOT[tone]}`} aria-hidden />
       <span className="text-sol-text-muted">{label}</span>
       <span className="min-w-0 text-sol-text-secondary">
@@ -147,7 +147,7 @@ function HostSetupRow({ h }: { h?: HostReadiness }) {
   const what = [...(s.packages ?? []), ...(s.services ?? []).map((x) => `${x} (service)`)];
   if (!s.ok) {
     return (
-      <Row tone="bad" label="Host setup" fix={<span className="block font-mono text-[10px] text-sol-red/80 line-clamp-3">{s.error}</span>}>
+      <Row tone="bad" label="Host setup" fix={<span className="block font-mono text-meta text-sol-red/80 line-clamp-3">{s.error}</span>}>
         failed{s.step ? ` at ${s.step}` : ""}{s.at ? ` · ${ago(s.at)}` : ""}
       </Row>
     );
@@ -182,11 +182,11 @@ export function CloudHostPanel({ d }: { d: Device }) {
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <span className={`h-2 w-2 rounded-full ${STATE[r.state].dot}`} aria-hidden />
           <span className="text-xs font-medium text-sol-text">{STATE[r.state].word}</span>
-          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-sol-text-dim" title={`${r.instance_id} · ${stateLine(r)}`}>{stateLine(r)}</span>
+          <span className="min-w-0 flex-1 truncate font-mono text-meta text-sol-text-dim" title={`${r.instance_id} · ${stateLine(r)}`}>{stateLine(r)}</span>
         </div>
       )}
       {reportOld && (
-        <div className="mt-1 text-[11px] text-sol-text-dim">
+        <div className="mt-1 text-meta text-sol-text-dim">
           As {laptop} last saw it, {relativeSeen(r!.at)}{managerOnline ? "" : `; it refreshes when ${laptop} is online`}.
         </div>
       )}
@@ -202,17 +202,17 @@ export function CloudHostPanel({ d }: { d: Device }) {
       {r && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {r.state !== "missing" && (
-            <Button type="button" size="sm" variant="outline" className="h-7 text-[11px]" disabled={!canAct} onClick={() => run(asleep ? "wake" : "sleep")}>
+            <Button type="button" size="sm" variant="outline" className="h-7 text-meta" disabled={!canAct} onClick={() => run(asleep ? "wake" : "sleep")}>
               {asleep ? "Wake" : "Sleep"}
             </Button>
           )}
-          <Button type="button" size="sm" variant="ghost" className="h-7 text-[11px]" disabled={!canAct || asleep} title={asleep ? "Wake it first" : "Install the repo's [host] packages and services now"} onClick={() => run("setup")}>
+          <Button type="button" size="sm" variant="ghost" className="h-7 text-meta" disabled={!canAct || asleep} title={asleep ? "Wake it first" : "Install the repo's [host] packages and services now"} onClick={() => run("setup")}>
             Apply setup now
           </Button>
-          <Button type="button" size="sm" variant="ghost" className="h-7 text-[11px]" disabled={!canAct || r.state === "missing"} title="Snapshot this machine so the next one starts ready" onClick={() => run("image")}>
+          <Button type="button" size="sm" variant="ghost" className="h-7 text-meta" disabled={!canAct || r.state === "missing"} title="Snapshot this machine so the next one starts ready" onClick={() => run("image")}>
             Save image
           </Button>
-          {canAct && r.state !== "missing" && <AddCloudHost like={d} className="h-7 rounded-md px-3 text-[11px] text-sol-text-secondary hover:bg-sol-bg-alt hover:text-sol-text" />}
+          {canAct && r.state !== "missing" && <AddCloudHost like={d} className="h-7 rounded-md px-3 text-meta text-sol-text-secondary hover:bg-sol-bg-alt hover:text-sol-text" />}
           {r.state !== "missing" && !r.autoscaled && <CloudAutoscale d={d} />}
           <ActionStatus last={last} running={running} laptop={laptop} managerOnline={managerOnline} now={now} />
         </div>
@@ -220,12 +220,12 @@ export function CloudHostPanel({ d }: { d: Device }) {
 
       {r && r.images.length > 0 && (
         <details className="mt-2 group">
-          <summary className="cursor-pointer select-none text-[11px] text-sol-text-muted hover:text-sol-text">
+          <summary className="cursor-pointer select-none text-meta text-sol-text-muted hover:text-sol-text">
             {r.images.length} saved image{r.images.length === 1 ? "" : "s"} · new machines start from the newest
           </summary>
           <ul className="mt-1 space-y-1">
             {r.images.map((img, i) => (
-              <li key={img.id} className="flex items-center gap-2 text-[11px]">
+              <li key={img.id} className="flex items-center gap-2 text-meta">
                 <span className="min-w-0 flex-1 truncate font-mono text-sol-text-secondary" title={img.id}>{img.name}</span>
                 <span className="shrink-0 text-sol-text-dim">{i === 0 ? "newest · " : ""}{ago(img.created)}</span>
                 {canAct && <ConfirmButton
@@ -244,12 +244,12 @@ export function CloudHostPanel({ d }: { d: Device }) {
 }
 
 function ActionStatus({ last, running, laptop, managerOnline, now }: { last?: CloudHostReport["last_action"]; running: boolean; laptop: string; managerOnline: boolean; now: number }) {
-  if (!managerOnline) return <span className="text-[11px] text-sol-text-dim">Actions run through {laptop}, which is offline.</span>;
+  if (!managerOnline) return <span className="text-meta text-sol-text-dim">Actions run through {laptop}, which is offline.</span>;
   if (!last) return null;
   const [doing, did] = DOING[last.action];
-  if (running) return <span className="inline-flex items-center gap-1 text-[11px] text-sol-text-muted"><Loader2 className="h-3 w-3 animate-spin" />{doing} through {laptop}…</span>;
-  if (last.status === "running") return <span className="text-[11px] text-sol-yellow">{doing} got no answer from {laptop}. Try again.</span>;
+  if (running) return <span className="inline-flex items-center gap-1 text-meta text-sol-text-muted"><Loader2 className="h-3 w-3 animate-spin" />{doing} through {laptop}…</span>;
+  if (last.status === "running") return <span className="text-meta text-sol-yellow">{doing} got no answer from {laptop}. Try again.</span>;
   if (now - last.at > 6 * 3600_000) return null;
-  if (last.status === "failed") return <span className="min-w-0 basis-full truncate text-[11px] text-sol-red" title={last.detail}>{doing} failed: {last.detail ?? "no detail"}</span>;
-  return <span className="text-[11px] text-sol-text-dim">{did} {relativeSeen(last.at)}</span>;
+  if (last.status === "failed") return <span className="min-w-0 basis-full truncate text-meta text-sol-red" title={last.detail}>{doing} failed: {last.detail ?? "no detail"}</span>;
+  return <span className="text-meta text-sol-text-dim">{did} {relativeSeen(last.at)}</span>;
 }

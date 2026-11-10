@@ -74,8 +74,8 @@ function ListField({ label, singular, icon: Icon, items, canEdit, onChange, plac
     <div className="min-w-0" data-charter-list={label}>
       <div className="flex items-center gap-1.5 mb-1">
         <Icon className="w-3 h-3" style={{ color: "var(--sol-text-dim)" }} />
-        <span className="text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>{label}</span>
-        {items.length > 0 && <span className="text-[10px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{items.length}</span>}
+        <span className="text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>{label}</span>
+        {items.length > 0 && <span className="text-meta tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{items.length}</span>}
       </div>
       <ul className="space-y-0.5">
         {items.map((item, i) => (
@@ -161,7 +161,7 @@ export function CharterBlock({ kind, title, charter, canEdit, onChange, roles, o
 
       <div className="flex items-center gap-2 flex-wrap mb-2">
         {!plain && (
-          <span className="inline-flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>
+          <span className="inline-flex items-center gap-1.5 text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>
             <Compass className="w-3 h-3" /> Charter
           </span>
         )}

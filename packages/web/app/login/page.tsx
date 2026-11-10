@@ -10,6 +10,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useLocalAuth } from "../../lib/localAuth";
 import { useEmailAuth } from "../../hooks/useEmailAuth";
 import { Button } from "../../components/ui/button";
+import { safeReturnTo } from "./returnTo";
 
 function LoginForm() {
   const { isAuthenticated, isLoading } = useConvexAuth();
@@ -21,7 +22,7 @@ function LoginForm() {
   const searchParams = useSearchParams();
   const reason = searchParams.get("reason");
   const returnTo = searchParams.get("return_to");
-  const redirectTo = returnTo || "/inbox";
+  const redirectTo = safeReturnTo(returnTo, "/inbox");
   // The address a sign-in is meant for (a managed device's profile names its
   // person): prefilled, and named in the subtitle.
   const loginHint = searchParams.get("login_hint")?.trim() || "";
@@ -94,7 +95,9 @@ function LoginForm() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-sol-cyan/50 focus:border-transparent transition-all"
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? "auth-error" : undefined}
                 placeholder="you@example.com"
               />
             </div>
@@ -109,8 +112,7 @@ function LoginForm() {
                 </label>
                 <Link
                   href="/forgot-password"
-                  tabIndex={-1}
-                  className="text-sm text-amber-400 hover:text-amber-300 transition-colors"
+                  className="text-sm text-sol-text-secondary underline decoration-sol-orange/70 underline-offset-2 hover:text-sol-text hover:decoration-sol-orange transition-colors"
                 >
                   Forgot password?
                 </Link>
@@ -123,14 +125,16 @@ function LoginForm() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-amber-500 focus:border-transparent transition-all"
+                className="w-full px-4 py-3 bg-sol-bg/50 border border-sol-border rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:ring-2 focus:ring-sol-cyan/50 focus:border-transparent transition-all"
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? "auth-error" : undefined}
                 placeholder="Enter your password"
               />
             </div>
           </div>
 
           {error && (
-            <p className="mt-4 text-sm text-red-400 text-center">{error}</p>
+            <p id="auth-error" role="alert" className="mt-4 rounded-md border border-sol-red/40 bg-sol-red/10 px-3 py-2 text-sm text-sol-text text-center">{error}</p>
           )}
 
             <Button
@@ -148,7 +152,7 @@ function LoginForm() {
             Don&apos;t have an account?{" "}
             <Link
               href={returnTo ? `/signup?return_to=${encodeURIComponent(returnTo)}` : "/signup"}
-              className="text-amber-400 hover:text-amber-300 font-medium transition-colors"
+              className="font-medium text-sol-text-secondary underline decoration-sol-orange/70 underline-offset-2 hover:text-sol-text hover:decoration-sol-orange transition-colors"
             >
               Sign Up
             </Link>

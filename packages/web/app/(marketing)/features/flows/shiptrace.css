@@ -39,7 +39,7 @@
 .flx-root .flx-ship-thead { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .flx-root .flx-ship-tname { width: 64px; font-weight: 700; font-size: 14px; color: #002b36; }
 .flx-root .flx-ship-twhen { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
-.flx-root .flx-ship-glob { font-size: 11.5px; padding: 1px 6px; border-radius: 4px; color: #657b83; background: rgba(147, 161, 161, .12); transition: background-color .4s, color .4s, box-shadow .4s; }
+.flx-root .flx-ship-glob { font-size: var(--fs-meta); padding: 1px 6px; border-radius: 4px; color: #657b83; background: rgba(147, 161, 161, .12); transition: background-color .4s, color .4s, box-shadow .4s; }
 .flx-root .flx-ship-glob[data-hit] { color: #073642; background: color-mix(in srgb, #2aa198 16%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, #2aa198 45%, transparent); }
 .flx-root .flx-ship-policy { display: inline-block; font-size: 12px; padding: 0 8px; border-radius: 999px; border: 1px solid rgba(88, 110, 117, .25); color: #586e75; white-space: nowrap; }
 .flx-root .flx-ship-policy[data-policy="press"] { color: #268bd2; border-color: color-mix(in srgb, #268bd2 35%, transparent); }
@@ -64,11 +64,11 @@
 .flx-root .flx-ship-notfor { color: #93a1a1; }
 
 .flx-root .flx-ship-runs { display: inline-block; font-size: 12px; padding: 0 8px; border-radius: 999px; border: 1px dashed rgba(88, 110, 117, .45); color: #586e75; white-space: nowrap; }
-.flx-root .flx-ship-polkey { display: grid; grid-template-columns: 56px minmax(0, 1fr); align-items: center; gap: 6px 10px; margin: 10px 0 0; padding-top: 10px; border-top: 1px solid rgba(88, 110, 117, .14); font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; color: #93a1a1; }
+.flx-root .flx-ship-polkey { display: grid; grid-template-columns: 56px minmax(0, 1fr); align-items: center; gap: 6px 10px; margin: 10px 0 0; padding-top: 10px; border-top: 1px solid rgba(88, 110, 117, .14); font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-meta); color: #93a1a1; }
 .flx-root .flx-ship-polkey dt { grid-column: 1; color: #657b83; font-weight: 600; }
 .flx-root .flx-ship-polkey dt:first-of-type { grid-row: span 2; align-self: start; padding-top: 2px; }
 .flx-root .flx-ship-polkey dd { grid-column: 2; margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
-.flx-root .flx-ship-polkey .flx-ship-policy, .flx-root .flx-ship-polkey .flx-ship-runs { font-size: 11.5px; }
+.flx-root .flx-ship-polkey .flx-ship-policy, .flx-root .flx-ship-polkey .flx-ship-runs { font-size: var(--fs-meta); }
 
 /* main, drawn vertically: the landed commit on top, the deploys that contain it lit. */
 .flx-root .flx-ship-main { list-style: none; margin: 0; padding: 0; font-family: var(--font-mono, ui-monospace, monospace); }
@@ -96,7 +96,7 @@
 @media (max-width: 639px) {
   .flx-root .flx-ship-commit { grid-template-columns: 16px minmax(0, 1fr) auto; grid-template-areas: "node sha flag" ". sub sub"; row-gap: 2px; }
 }
-.flx-root .flx-ship-key { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; color: #2aa198; }
+.flx-root .flx-ship-key { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-meta); color: #2aa198; }
 .flx-root .flx-ship-key i { width: 2px; height: 14px; background: #2aa198; flex-shrink: 0; }
 
 .flx-root .flx-ship-foot { display: flex; flex-direction: column; gap: 12px; margin-top: 20px; padding-top: 14px; border-top: 1px solid rgba(88, 110, 117, .14); }

@@ -50,7 +50,7 @@ export function TaskBlockedMark({ task, small = false, className = "" }: { task:
       role="img"
       aria-label={mark.tip}
       title={mark.tip}
-      className={`flex items-center gap-0.5 flex-shrink-0 text-[10px] font-mono ${style.text} ${className}`}
+      className={`flex items-center gap-0.5 flex-shrink-0 text-meta font-mono ${style.text} ${className}`}
     >
       <style.icon className={small ? "w-3 h-3" : "w-3.5 h-3.5"} />
       {mark.count > 1 && mark.count}

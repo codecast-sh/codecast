@@ -135,7 +135,7 @@ export function HostedApprovalBody({
             hovered or holds focus, rather than a boxed letter in each button
             or a line under them that the card's edge could cut. */}
         {keys && !answered && (
-          <span data-hosted-approval-keys className="ml-1 hidden items-center gap-1.5 text-[11.5px] text-sol-text-dim opacity-0 transition-opacity group-hover/approval:opacity-100 group-focus-within/approval:opacity-100 sm:inline-flex">
+          <span data-hosted-approval-keys className="ml-1 hidden items-center gap-1.5 text-meta text-sol-text-dim opacity-0 transition-opacity group-hover/approval:opacity-100 group-focus-within/approval:opacity-100 sm:inline-flex">
             <MenuKeyCaps action="permission.approve" className="contents" /> yes <MenuKeyCaps action="permission.deny" className="contents" /> not now
           </span>
         )}

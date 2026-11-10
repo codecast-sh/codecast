@@ -1,13 +1,14 @@
-import { useState, useRef, useCallback, useMemo } from "react";
+import { useState, useRef, useCallback, useMemo, type MutableRefObject } from "react";
 import { useQuery, useMutation } from "convex/react";
+import { Bot, ChevronDown, ChevronLeft, FileText, Flag, Keyboard, Plug, Plus, Settings } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
-import Link from "next/link";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { desktopHeaderClass } from "../lib/desktop";
+import { Button } from "./ui/button";
 
 type ConfigFile = {
   path: string;
@@ -147,13 +148,28 @@ function groupFiles(files: ConfigFile[]): Section[] {
   return sections.filter((s) => s.files.length > 0 || s.canCreate);
 }
 
+/** A daemon answer's JSON, or null with a toast when it is not JSON: a malformed answer never takes the page down. */
+function parseAnswer<T>(raw: string | null | undefined, what: string): T | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    toast.error(`The daemon's answer to ${what} was not readable`);
+    return null;
+  }
+}
+
+/** Set by the open file while it holds unsaved edits: every way out of it (Back, another file, a new file) asks it
+ *  first, and it offers Save / Discard instead of dropping the draft. Returns true when it held the exit. */
+type LeaveGuard = MutableRefObject<((next: () => void) => boolean) | null>;
+
 function ToolBadge({ tool }: { tool: "claude" | "codex" }) {
   return (
     <span
-      className={`text-[10px] font-mono px-1.5 py-0.5 rounded uppercase tracking-wider ${
+      className={`text-mark font-mono px-1.5 py-0.5 rounded uppercase tracking-wider border ${
         tool === "claude"
-          ? "bg-amber-950/50 text-amber-400 border border-amber-900/40"
-          : "bg-emerald-950/50 text-emerald-400 border border-emerald-900/40"
+          ? "bg-sol-amber/10 text-sol-amber border-sol-amber/30"
+          : "bg-sol-green/10 text-sol-green border-sol-green/30"
       }`}
     >
       {tool}
@@ -192,15 +208,23 @@ function useConfigCommand() {
 function FileEditor({
   file,
   onClose,
+  leaveGuard,
 }: {
   file: ConfigFile;
   onClose: () => void;
+  leaveGuard: LeaveGuard;
 }) {
   const [content, setContent] = useState<string | null>(null);
   const [draft, setDraft] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // An exit taken while the draft was unsaved: it waits on Save, Discard or Keep editing.
+  const [leaving, setLeaving] = useState<(() => void) | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // The text a save sent: what is on disk once the daemon says it wrote, whatever was typed since.
+  const sentRef = useRef<string | null>(null);
+  // An exit that waited on a save, taken once the save lands.
+  const afterSaveRef = useRef<(() => void) | null>(null);
 
   const readCmd = useConfigCommand();
   const writeCmd = useConfigCommand();
@@ -223,7 +247,7 @@ function FileEditor({
       return;
     }
     if (readCmd.result.executed_at) {
-      const parsed = readCmd.result.result ? JSON.parse(readCmd.result.result) : null;
+      const parsed = parseAnswer<{ content?: string | null }>(readCmd.result.result, "the read");
       const text = parsed?.content ?? "";
       setContent(text);
       setDraft(text);
@@ -235,11 +259,18 @@ function FileEditor({
   useWatchEffect(() => {
     if (!writeCmd.result?.executed_at) return;
     setSaving(false);
+    const then = afterSaveRef.current;
+    afterSaveRef.current = null;
     if (writeCmd.result.error) {
       toast.error(`Failed to save: ${writeCmd.result.error}`);
     } else {
-      setContent(draft);
+      setContent(sentRef.current);
       toast.success("Saved");
+      if (then) {
+        setLeaving(null);
+        leaveGuard.current = null;
+        then();
+      }
     }
     writeCmd.reset();
   }, [writeCmd.result]);
@@ -247,6 +278,7 @@ function FileEditor({
   const handleSave = useCallback(async () => {
     if (saving) return;
     setSaving(true);
+    sentRef.current = draft;
     await writeCmd.send("config_write", { file_path: file.path, content: draft });
   }, [draft, file.path, saving, writeCmd]);
 
@@ -272,48 +304,61 @@ function FileEditor({
     [draft, handleSave]
   );
 
-  const isDirty = draft !== content;
+  const isDirty = !loading && draft !== content;
+  // While the draft is unsaved, every exit the page offers comes here first.
+  useWatchEffect(() => {
+    leaveGuard.current = isDirty ? (next) => { setLeaving(() => next); return true; } : null;
+    return () => { leaveGuard.current = null; };
+  }, [isDirty, leaveGuard]);
+
   const ext = file.path.split(".").pop() ?? "md";
   const lang = ext === "json" ? "json" : ext === "toml" ? "toml" : "markdown";
 
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3 border-b border-zinc-800 shrink-0">
+      <div className="flex items-center gap-3 px-4 py-3 border-b border-sol-border shrink-0">
         <button
+          type="button"
           onClick={onClose}
-          className="text-zinc-600 hover:text-zinc-400 transition-colors"
+          className="text-sol-text-dim hover:text-sol-text transition-colors"
           title="Back"
+          aria-label="Back"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-          </svg>
+          <ChevronLeft className="w-4 h-4" />
         </button>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-mono text-zinc-200 truncate">{file.label}</span>
+            <span className="text-sm font-mono text-sol-text truncate">{file.label}</span>
             <ToolBadge tool={file.tool} />
-            <span className="text-[10px] font-mono text-zinc-600 uppercase">{lang}</span>
-            {isDirty && !loading && (
-              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" title="Unsaved changes" />
+            <span className="text-mark font-mono text-sol-text-dim uppercase">{lang}</span>
+            {isDirty && (
+              <span className="w-1.5 h-1.5 rounded-full bg-sol-amber" title="Unsaved changes" />
             )}
           </div>
-          <div className="text-[11px] font-mono text-zinc-600 truncate mt-0.5">{file.path}</div>
+          <div className="text-meta font-mono text-sol-text-dim truncate mt-0.5">{file.path}</div>
         </div>
-        <button
-          onClick={handleSave}
-          disabled={!isDirty || saving || loading}
-          className="px-3 py-1.5 text-xs font-mono rounded border transition-colors disabled:opacity-40 disabled:cursor-not-allowed border-zinc-700 text-zinc-300 hover:border-zinc-500 hover:text-white bg-zinc-900"
-        >
-          {saving ? "saving..." : "save"}
-        </button>
+        {leaving ? (
+          <div className="flex shrink-0 items-center gap-2" role="group" aria-label="Unsaved changes">
+            <span className="text-xs text-sol-orange">Unsaved changes</span>
+            <Button type="button" variant="ghost" size="xs" onClick={() => setLeaving(null)} autoFocus>Keep editing</Button>
+            <Button type="button" variant="ghost" size="xs" onClick={() => { const next = leaving; setLeaving(null); leaveGuard.current = null; next(); }}>Discard</Button>
+            <Button type="button" variant="secondary" size="xs" disabled={saving} onClick={() => { afterSaveRef.current = leaving; void handleSave(); }}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        ) : (
+          <Button type="button" variant="secondary" size="xs" onClick={handleSave} disabled={!isDirty || saving || loading}>
+            {saving ? "Saving…" : "Save"}
+          </Button>
+        )}
       </div>
 
       {/* Editor */}
       <div className="flex-1 overflow-hidden relative">
         {loading ? (
           <div className="flex items-center justify-center h-full">
-            <span className="text-zinc-600 font-mono text-sm animate-pulse">loading...</span>
+            <span className="text-sol-text-dim font-mono text-sm animate-pulse">Loading…</span>
           </div>
         ) : (
           <div className="flex h-full">
@@ -326,7 +371,7 @@ function FileEditor({
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={handleKeyDown}
               spellCheck={false}
-              className="flex-1 resize-none bg-transparent outline-none font-mono text-[13px] leading-6 text-zinc-200 py-4 pr-4 pl-3"
+              className="flex-1 resize-none bg-transparent outline-none font-mono text-[13px] leading-6 text-sol-text py-4 pr-4 pl-3"
               style={{ tabSize: 2 }}
             />
           </div>
@@ -341,7 +386,7 @@ function LineNumbers({ content }: { content: string }) {
   return (
     <div
       aria-hidden
-      className="select-none py-4 pl-4 pr-3 text-right font-mono text-[13px] leading-6 text-zinc-700 shrink-0 min-w-[3rem]"
+      className="select-none py-4 pl-4 pr-3 text-right font-mono text-[13px] leading-6 text-sol-text-dim shrink-0 min-w-[3rem]"
     >
       {lines.map((_, i) => (
         <div key={i}>{i + 1}</div>
@@ -365,18 +410,12 @@ function NewFileModal({
   const [creating, setCreating] = useState(false);
   const createCmd = useConfigCommand();
 
-  const home =
-    typeof window !== "undefined" ? "" : "";
-  const resolvedDir = dir.startsWith("~/")
-    ? dir
-    : dir;
-
   const handleCreate = async () => {
     if (!name.trim() || creating) return;
     setCreating(true);
     const filename = name.trim().endsWith(".md") ? name.trim() : `${name.trim()}.md`;
     await createCmd.send("config_create", {
-      dir_path: resolvedDir,
+      dir_path: dir,
       filename,
       content: `---\nname: "${name.trim()}"\ndescription: ""\n---\n\n`,
     });
@@ -388,46 +427,40 @@ function NewFileModal({
     if (createCmd.result.error) {
       toast.error(`Failed to create: ${createCmd.result.error}`);
     } else {
-      const parsed = createCmd.result.result ? JSON.parse(createCmd.result.result) : null;
+      const parsed = parseAnswer<{ path?: string }>(createCmd.result.result, "the create");
       if (parsed?.path) onCreated(parsed.path);
       onClose();
     }
   }, [createCmd.result]);
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={onClose}>
+    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50" onClick={onClose}>
       <div
-        className="bg-zinc-900 border border-zinc-700 rounded-lg p-5 w-80 shadow-2xl"
+        className="bg-sol-bg border border-sol-border rounded-lg p-5 w-80 max-w-[calc(100vw-2rem)] shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="text-sm font-mono text-zinc-300 mb-1">New file</div>
-        <div className="text-[11px] font-mono text-zinc-600 mb-4">{dir}</div>
+        <div className="text-sm font-medium text-sol-text mb-1">New file</div>
+        <div className="text-meta font-mono text-sol-text-dim mb-4 truncate" title={dir}>{dir}</div>
         <input
           autoFocus
           type="text"
-          placeholder="filename (without .md)"
+          placeholder="File name"
+          aria-label="File name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === "Enter") handleCreate();
             if (e.key === "Escape") onClose();
           }}
-          className="w-full px-3 py-2 bg-zinc-950 border border-zinc-700 rounded text-sm font-mono text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-zinc-500"
+          className="w-full px-3 py-2 bg-sol-bg-alt border border-sol-border rounded text-sm font-mono text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-cyan"
         />
         <div className="flex gap-2 mt-3">
-          <button
-            onClick={onClose}
-            className="flex-1 py-1.5 text-xs font-mono text-zinc-500 hover:text-zinc-300 transition-colors"
-          >
-            cancel
-          </button>
-          <button
-            onClick={handleCreate}
-            disabled={!name.trim() || creating}
-            className="flex-1 py-1.5 text-xs font-mono bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded transition-colors disabled:opacity-40"
-          >
-            {creating ? "creating..." : "create"}
-          </button>
+          <Button type="button" variant="ghost" size="xs" className="flex-1" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button type="button" variant="secondary" size="xs" className="flex-1" onClick={handleCreate} disabled={!name.trim() || creating}>
+            {creating ? "Creating…" : "Create"}
+          </Button>
         </div>
       </div>
     </div>
@@ -442,11 +475,15 @@ export function ConfigEditor() {
   const [expandedSections, setExpandedSections] = useState<Set<string>>(
     new Set(["global_claude", "global_codex", "agents", "commands", "skills"])
   );
+  // Every way out of the open file asks it first (LeaveGuard).
+  const leaveGuard: LeaveGuard = useRef<((next: () => void) => boolean) | null>(null);
+  const guarded = (next: () => void) => {
+    if (!leaveGuard.current?.(next)) next();
+  };
 
   const [deskClass, setDeskClass] = useState("");
   useMountEffect(() => { setDeskClass(desktopHeaderClass()); });
   const sentPathsRef = useRef<string | null>(null);
-
   const listCmd = useConfigCommand();
   const projects = useQuery(api.projects.webList, {});
   // Local-first: the persisted projects collection usually already holds the
@@ -481,8 +518,8 @@ export function ConfigEditor() {
       return;
     }
     if (listCmd.result.result) {
-      const files: ConfigFile[] = JSON.parse(listCmd.result.result);
-      setAllFiles(files);
+      const files = parseAnswer<ConfigFile[]>(listCmd.result.result, "the file list");
+      if (files) setAllFiles(files);
     }
   }, [listCmd.result]);
 
@@ -509,37 +546,28 @@ export function ConfigEditor() {
     const tool = path.includes("/.claude/") || path.includes("/.codex/prompts")
       ? path.includes(".codex") ? "codex" : "claude"
       : "claude";
-    setSelectedFile({ path, type: "agent", label: label.replace(/\.md$/, ""), tool });
+    guarded(() => setSelectedFile({ path, type: "agent", label: label.replace(/\.md$/, ""), tool }));
   };
 
   return (
-    <div className="flex h-full min-h-0 bg-zinc-950 text-zinc-100">
+    <div className="flex h-full min-h-0 bg-sol-bg text-sol-text">
       {/* Sidebar */}
-      <aside className="w-60 shrink-0 border-r border-zinc-800 flex flex-col overflow-hidden">
-        <div className={`px-4 py-4 border-b border-zinc-800 flex items-center gap-3 ${deskClass}`}>
-          <Link href="/inbox" className="text-zinc-600 hover:text-zinc-400 transition-colors">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-            </svg>
-          </Link>
-          <span className="text-sm font-medium text-zinc-300">Config</span>
+      <aside className="w-60 shrink-0 border-r border-sol-border flex flex-col overflow-hidden">
+        <div className={`px-4 py-4 border-b border-sol-border flex items-center gap-3 ${deskClass}`}>
+          <span className="text-sm font-medium text-sol-text">Config</span>
         </div>
 
         <div className="flex-1 overflow-y-auto py-2">
           {allFiles === null && !loadError && (
             <div className="px-4 py-8 text-center">
-              {listCmd.commandId && !listCmd.result ? (
-                <span className="text-zinc-600 font-mono text-xs animate-pulse">
-                  waiting for daemon...
-                </span>
-              ) : (
-                <span className="text-zinc-600 font-mono text-xs animate-pulse">loading...</span>
-              )}
+              <span className="text-sol-text-dim font-mono text-xs animate-pulse">
+                {listCmd.commandId && !listCmd.result ? "Waiting for the daemon…" : "Loading…"}
+              </span>
             </div>
           )}
 
           {loadError && (
-            <div className="px-4 py-4 text-xs text-red-400 font-mono">{loadError}</div>
+            <div className="px-4 py-4 text-xs text-sol-red font-mono break-words">{loadError}</div>
           )}
 
           {sections.map((section) => {
@@ -549,17 +577,13 @@ export function ConfigEditor() {
             return (
               <div key={sectionId} className="mb-1">
                 <button
+                  type="button"
                   onClick={() => toggleSection(sectionId)}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-zinc-800/40 transition-colors group"
+                  aria-expanded={isExpanded}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-sol-bg-alt transition-colors group"
                 >
-                  <svg
-                    className={`w-3 h-3 text-zinc-600 transition-transform shrink-0 ${isExpanded ? "" : "-rotate-90"}`}
-                    fill="currentColor"
-                    viewBox="0 0 20 20"
-                  >
-                    <path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" />
-                  </svg>
-                  <span className="text-[11px] font-mono uppercase tracking-wider text-zinc-500 flex-1 truncate">
+                  <ChevronDown aria-hidden className={`w-3 h-3 text-sol-text-dim transition-transform shrink-0 ${isExpanded ? "" : "-rotate-90"}`} />
+                  <span className="text-mark font-mono uppercase tracking-wider text-sol-text-muted flex-1 truncate">
                     {section.label}
                   </span>
                   {section.tool && section.tool !== "both" && (
@@ -573,22 +597,24 @@ export function ConfigEditor() {
                       const isActive = selectedFile?.path === file.path;
                       return (
                         <button
+                          type="button"
                           key={file.path}
-                          onClick={() => setSelectedFile(file)}
+                          onClick={() => { if (!isActive) guarded(() => setSelectedFile(file)); }}
+                          aria-current={isActive ? "true" : undefined}
                           className={`w-full flex items-center gap-2 px-3 py-1.5 text-left rounded-md mx-1 transition-colors ${
                             isActive
-                              ? "bg-zinc-800 text-zinc-100"
-                              : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/40"
+                              ? "bg-sol-bg-highlight text-sol-text"
+                              : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt"
                           }`}
                         >
-                          <FileIcon type={file.type} tool={file.tool} />
+                          <FileIcon type={file.type} />
                           <span className="text-[12px] font-mono truncate flex-1">
                             {file.label.includes("/")
                               ? file.label.split("/").slice(1).join("/")
                               : file.label}
                           </span>
                           {file.tool === "codex" && (
-                            <span className="text-[9px] font-mono text-emerald-700 shrink-0">cx</span>
+                            <span className="text-meta font-mono text-sol-green shrink-0">cx</span>
                           )}
                         </button>
                       );
@@ -596,18 +622,17 @@ export function ConfigEditor() {
 
                     {section.canCreate && section.createDir && (
                       <button
+                        type="button"
                         onClick={() =>
                           setNewFileDir({
                             dir: section.createDir!,
                             tool: section.tool === "codex" ? "codex" : "claude",
                           })
                         }
-                        className="w-full flex items-center gap-2 px-3 py-1.5 mx-1 text-left rounded-md text-zinc-600 hover:text-zinc-400 transition-colors"
+                        className="w-full flex items-center gap-2 px-3 py-1.5 mx-1 text-left rounded-md text-sol-text-dim hover:text-sol-text transition-colors"
                       >
-                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-                        </svg>
-                        <span className="text-[11px] font-mono">new</span>
+                        <Plus aria-hidden className="w-3 h-3" />
+                        <span className="text-meta font-mono">New</span>
                       </button>
                     )}
                   </div>
@@ -619,12 +644,13 @@ export function ConfigEditor() {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-hidden">
+      <main className="flex-1 min-w-0 overflow-hidden">
         {selectedFile ? (
           <FileEditor
             key={selectedFile.path}
             file={selectedFile}
-            onClose={() => setSelectedFile(null)}
+            onClose={() => guarded(() => setSelectedFile(null))}
+            leaveGuard={leaveGuard}
           />
         ) : (
           <EmptyEditor />
@@ -644,35 +670,26 @@ export function ConfigEditor() {
   );
 }
 
-function FileIcon({ type, tool }: { type: string; tool: "claude" | "codex" }) {
-  if (type === "agent" || type === "project_agent") {
-    return <span className="text-[11px]">⬡</span>;
-  }
-  if (type === "settings" || type === "project_settings") {
-    return <span className="text-[11px]">⚙</span>;
-  }
-  if (type === "keybindings") {
-    return <span className="text-[11px]">⌨</span>;
-  }
-  if (type === "mcp") {
-    return <span className="text-[11px]">⬡</span>;
-  }
-  if (type === "rules") {
-    return <span className="text-[11px]">⚑</span>;
-  }
-  return <span className="text-[11px] text-zinc-600">◻</span>;
+/** The file's kind, as an icon beside its name. */
+function FileIcon({ type }: { type: string }) {
+  const Icon =
+    type === "agent" || type === "project_agent" ? Bot
+    : type === "settings" || type === "project_settings" ? Settings
+    : type === "keybindings" ? Keyboard
+    : type === "mcp" ? Plug
+    : type === "rules" ? Flag
+    : FileText;
+  return <Icon aria-hidden className="w-3 h-3 shrink-0 text-sol-text-dim" />;
 }
 
 function EmptyEditor() {
   return (
     <div className="flex flex-col items-center justify-center h-full text-center px-8">
-      <div className="w-12 h-12 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mb-4">
-        <svg className="w-6 h-6 text-zinc-600" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
-        </svg>
+      <div className="w-12 h-12 rounded-xl bg-sol-bg-alt border border-sol-border flex items-center justify-center mb-4">
+        <FileText aria-hidden className="w-6 h-6 text-sol-text-dim" strokeWidth={1.5} />
       </div>
-      <p className="text-zinc-500 text-sm">Select a file to edit</p>
-      <p className="text-zinc-700 text-xs mt-1 font-mono">CLAUDE.md · AGENTS.md · settings.json · agents · commands</p>
+      <p className="text-sol-text-muted text-sm">Select a file to edit</p>
+      <p className="text-sol-text-dim text-xs mt-1 font-mono">CLAUDE.md · AGENTS.md · settings.json · agents · commands</p>
     </div>
   );
 }

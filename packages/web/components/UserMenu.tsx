@@ -144,6 +144,10 @@ export function UserMenu() {
       setOpen(false);
     }
   }, []), document);
+  // Escape closes it, as it closes the New menu and the switcher beside it.
+  useEventListener("keydown", useCallback((e: KeyboardEvent) => {
+    if (e.key === "Escape") setOpen(false);
+  }, []), open ? document : null);
 
   const handleLogout = async () => {
     await signOut();
@@ -163,10 +167,11 @@ export function UserMenu() {
     <MenuItem key={path} icon={icon} label={label} onClick={() => go(path)} />;
   const pages = [
     <MenuItem key="profile" icon={CircleUser} label="Profile" onClick={() => go(profileHref)} />,
-    page(Rss, "Feed", "/feed"),
+    // The page's own name: the rail's "Feed" is the team activity page.
+    page(Rss, "Message Feed", "/feed"),
     page(Radio, "Crosstalk", "/crosstalk"),
     page(ListChecks, "Tasks", "/tasks"),
-    page(FileText, "Documents", "/docs"),
+    page(FileText, "Docs", "/docs"),
     page(SquareTerminal, "Sessions", "/sessions"),
     page(MessageSquareText, "Prompts", "/prompts"),
     page(CalendarClock, "Workflows", "/routines"),
@@ -188,6 +193,8 @@ export function UserMenu() {
         onClick={() => setOpen(!open)}
         active={open}
         aria-label="User menu"
+        aria-haspopup="menu"
+        aria-expanded={open}
       >
         {/* Green marks the local dev server. */}
         <Settings className={isLocal ? "text-sol-green" : undefined} />
@@ -203,7 +210,7 @@ export function UserMenu() {
             <div className="flex items-center gap-2">
               <p className="text-sm font-medium text-sol-text">{displayName}</p>
               {isAdmin && (
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-sol-yellow/20 text-sol-yellow">admin</span>
+                <span className="text-meta font-mono px-1.5 py-0.5 rounded bg-sol-yellow/20 text-sol-yellow">admin</span>
               )}
             </div>
             {user?.email && (
@@ -272,7 +279,7 @@ export function UserMenu() {
                 label={`Switch to ${isLocal ? "prod" : "local"}`}
                 onClick={handleEnvSwitch}
                 trailing={
-                  <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${isLocal ? "bg-sol-green/20 text-sol-green" : "bg-sol-red/20 text-sol-red"}`}>
+                  <span className={`text-meta font-mono px-1.5 py-0.5 rounded ${isLocal ? "bg-sol-green/20 text-sol-green" : "bg-sol-red/20 text-sol-red"}`}>
                     {isLocal ? "local" : "prod"}
                   </span>
                 }

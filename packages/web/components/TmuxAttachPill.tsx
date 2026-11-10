@@ -134,7 +134,7 @@ export function TmuxAttachPill({
             if (canSplit) toggleConversationTerminal(conversationKey!, tmuxSession);
             else copyAttach();
           }}
-          className={`inline-flex items-center gap-1 pl-2 pr-1.5 py-0.5 text-[10px] font-medium transition-colors border-0 ${pillColors} ${splitOpen ? "bg-sol-green/25" : ""} ${!tmuxSession ? "cursor-default" : ""}`}
+          className={`inline-flex items-center gap-1 pl-2 pr-1.5 py-0.5 text-meta font-medium transition-colors border-0 ${pillColors} ${splitOpen ? "bg-sol-green/25" : ""} ${!tmuxSession ? "cursor-default" : ""}`}
         >
           <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -153,7 +153,7 @@ export function TmuxAttachPill({
           <button
             onClick={copyAttach}
             aria-disabled={!attach}
-            className={`cq-sq1 inline-flex items-center pl-1 pr-1.5 py-0.5 text-[10px] transition-colors border-0 border-l ${borderColor.replace("border-", "border-l-")} ${pillColors} ${attach ? "" : "cursor-default"}`}
+            className={`cq-sq1 inline-flex items-center pl-1 pr-1.5 py-0.5 text-meta transition-colors border-0 border-l ${borderColor.replace("border-", "border-l-")} ${pillColors} ${attach ? "" : "cursor-default"}`}
             aria-label="Copy tmux attach command"
           >
             <Copy className="w-2.5 h-2.5" />

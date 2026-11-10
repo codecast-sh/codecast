@@ -74,14 +74,14 @@ function ClaudeSwitchControl({
   });
   if (blocked?.block === "login_expired") {
     return (
-      <span className="shrink-0 text-[10px] text-sol-text-dim" title={blocked.label}>
+      <span className="shrink-0 text-meta text-sol-text-dim" title={blocked.label}>
         sign in to switch
       </span>
     );
   }
   if (blocked) {
     return (
-      <span className="shrink-0 cursor-default text-[10px] text-sol-text-dim" title={blocked.label}>
+      <span className="shrink-0 cursor-default text-meta text-sol-text-dim" title={blocked.label}>
         switch →
       </span>
     );
@@ -93,7 +93,7 @@ function ClaudeSwitchControl({
       disabled={switching}
       onClick={() => onSwitch(profile, email)}
       title={`Switch this machine to "${profile}". Running sessions keep the account they started on.`}
-      className="shrink-0 text-[10px] font-medium text-sol-cyan/70 hover:text-sol-cyan hover:underline disabled:opacity-40 disabled:pointer-events-none"
+      className="shrink-0 text-meta font-medium text-sol-cyan/70 hover:text-sol-cyan hover:underline disabled:opacity-40 disabled:pointer-events-none"
     >
       switch →
     </button>
@@ -286,7 +286,7 @@ export function AccountUsageChip() {
         <span
           className={`h-1.5 w-1.5 shrink-0 rounded-full ${activeGroup ? "bg-sol-green" : "bg-sol-border"}`}
         />
-        <span className="min-w-0 truncate text-[11px] font-medium text-sol-text">{g.email}</span>
+        <span className="min-w-0 truncate text-meta font-medium text-sol-text">{g.email}</span>
       </div>
       <div className="space-y-1.5">
         {g.entries.map((e, i) => (
@@ -307,18 +307,18 @@ export function AccountUsageChip() {
                   <OpenAIIcon className="h-3 w-3" />
                 </span>
               )}
-              <span className="min-w-0 flex-1 truncate text-[10px] text-sol-text-dim">
+              <span className="min-w-0 flex-1 truncate text-meta text-sol-text-dim">
                 {e.p.name}
                 {(e.p.subscription ?? e.p.tier) ? ` · ${e.p.subscription ? planTypeLabel(e.p.subscription) : e.p.tier}` : ""}
               </span>
               {e.provider === "claude" && sw.switching === e.p.name ? (
-                <span className="inline-flex shrink-0 items-center gap-1 text-[10px] font-medium text-sol-cyan">
+                <span className="inline-flex shrink-0 items-center gap-1 text-meta font-medium text-sol-cyan">
                   <span className="h-2 w-2 animate-spin rounded-full border-2 border-sol-cyan/30 border-t-sol-cyan" aria-hidden />
                   switching…
                 </span>
               ) : e.isActive ? (
                 <span
-                  className="shrink-0 text-[10px] font-medium text-sol-green"
+                  className="shrink-0 text-meta font-medium text-sol-green"
                   title={
                     e.provider === "claude" && device.launch_profile === e.p.name && !device.fleet_store
                       ? "Sessions run on this account's minted token; the machine's own login is another account"
@@ -350,7 +350,7 @@ export function AccountUsageChip() {
               <ReservedBadge profile={e.p} />
               {e.provider === "claude" && !!device.launch_profile && !e.isActive && profileIsCurrentLogin(e.p, device.active_email) && (
                 <span
-                  className="rounded bg-sol-bg-alt px-1 py-px text-[9px] text-sol-text-dim"
+                  className="rounded bg-sol-bg-alt px-1 py-px text-meta text-sol-text-dim"
                   title="The machine's keychain login: what a `claude` typed in a terminal runs on"
                 >
                   machine login
@@ -383,8 +383,17 @@ export function AccountUsageChip() {
   // panel out of the titlebar drag region — without it, Electron eats the
   // pointer on the way in and the panel closes on hover (globals.css).
   return (
-    <div className="relative hidden md:block" onMouseEnter={openNow} onMouseLeave={closeSoon}>
-      <TopbarChip tone={tone} alert={tone !== "var(--sol-green)" && tone !== "var(--sol-text-dim)"} className="cursor-default">
+    // Focus and a press open it too, so the panel (switch account, recovery)
+    // is reachable by keyboard and touch, not only by hovering.
+    <div
+      className="relative hidden md:block"
+      onMouseEnter={openNow}
+      onMouseLeave={closeSoon}
+      onFocus={openNow}
+      onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) closeSoon(); }}
+      onKeyDown={(e) => { if (e.key === "Escape" && open) { e.stopPropagation(); pointerInside.current = false; setOpen(false); } }}
+    >
+      <TopbarChip tone={tone} alert={tone !== "var(--sol-green)" && tone !== "var(--sol-text-dim)"} onClick={openNow} aria-haspopup="dialog" aria-expanded={panelOpen}>
         {shown === "claude" ? (
           <ProviderSegment
             icon={<ClaudeIcon className="h-3 w-3 shrink-0 text-sol-orange" />}
@@ -414,7 +423,7 @@ export function AccountUsageChip() {
             is a state, and this is a question waiting on the person. */}
         {awaitingApproval && !sw.switching && (
           <span
-            className="shrink-0 rounded bg-sol-yellow/15 px-1 text-[10px] font-semibold text-sol-yellow"
+            className="shrink-0 rounded bg-sol-yellow/15 px-1 text-meta font-semibold text-sol-yellow"
             title={describeDecision(state?.last_decision) ?? "An account switch is waiting for your approval"}
           >
             switch?
@@ -458,14 +467,14 @@ export function AccountUsageChip() {
           <div className="flex items-center gap-1.5 text-xs font-semibold text-sol-text">
             <KeyRound className="h-3.5 w-3.5 text-sol-cyan" />
             Model usage
-            <span className="ml-auto font-normal text-[10px] text-sol-text-dim">{device.label}</span>
+            <span className="ml-auto font-normal text-meta text-sol-text-dim">{device.label}</span>
             <UsageRefreshButton device={device} />
           </div>
         </div>
 
         {(sw.switching || sw.outcome) && (
           <div
-            className={`shrink-0 border-b px-3 py-2 text-[10px] leading-snug ${
+            className={`shrink-0 border-b px-3 py-2 text-meta leading-snug ${
               sw.outcome?.kind === "error"
                 ? "border-sol-red/30 bg-sol-red/10 text-sol-red"
                 : sw.outcome?.kind === "success"
@@ -493,7 +502,7 @@ export function AccountUsageChip() {
         <div className="max-h-[60rem] min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-2">
           {activeGroups.length > 0 && (
             <>
-              <div className="px-0.5 text-[9px] font-semibold uppercase tracking-wider text-sol-green">
+              <div className="px-0.5 text-mark font-semibold uppercase tracking-wider text-sol-green">
                 Active
               </div>
               {activeGroups.map((g) => renderGroup(g, true))}
@@ -501,10 +510,10 @@ export function AccountUsageChip() {
           )}
           {otherGroups.length > 0 && (
             <>
-              <div className="px-0.5 pt-1 text-[9px] font-semibold uppercase tracking-wider text-sol-text-dim">
+              <div className="px-0.5 pt-1 text-mark font-semibold uppercase tracking-wider text-sol-text-dim">
                 Available
               </div>
-              <p className="px-0.5 text-[10px] leading-snug text-sol-text-dim">
+              <p className="px-0.5 text-meta leading-snug text-sol-text-dim">
                 Switch changes the default login on this machine. Sessions already running keep the
                 account they started on. An account whose login expired but holds a minted token
                 switches on the token: sessions move, the machine's login stays.
@@ -542,7 +551,7 @@ export function AccountUsageChip() {
             <RecoveryModeSelect control={recovery.recovery} compact />
           </div>
           {recovery.recovery.mode === "auto" && exhausted && (
-            <div className="mt-1.5 rounded bg-sol-red/10 px-2 py-1 text-[10px] text-sol-red">
+            <div className="mt-1.5 rounded bg-sol-red/10 px-2 py-1 text-meta text-sol-red">
               {exhaustionBannerCopy([...profiles, ...codexProfiles], now)}
             </div>
           )}
@@ -550,7 +559,7 @@ export function AccountUsageChip() {
             <RecoveryDecisionNote decision={state.last_decision} now={now} className="mt-1.5 px-2" />
           )}
           {!exhausted && !state?.last_decision && state?.last_action && state.last_action_at && (
-            <div className="mt-1.5 px-2 text-[10px] text-sol-text-dim">
+            <div className="mt-1.5 px-2 text-meta text-sol-text-dim">
               Last action: {state.last_action.replace("switch:", "switched to ")}{" "}
               {formatAgo(now - state.last_action_at)}
             </div>
@@ -560,7 +569,7 @@ export function AccountUsageChip() {
               setOpen(false);
               router.push("/settings/claude-accounts");
             }}
-            className="mt-2 text-[11px] text-sol-cyan hover:underline"
+            className="mt-2 text-meta text-sol-cyan hover:underline"
           >
             Manage accounts →
           </button>

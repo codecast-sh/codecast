@@ -336,14 +336,14 @@ export function GlobalSearch() {
                 </div>
               </div>
             )}
-            <div className="px-3 py-2 bg-sol-bg-alt/80 border-t border-sol-border flex items-center justify-between text-[10px] text-sol-text-dim">
+            <div className="px-3 py-2 bg-sol-bg-alt/80 border-t border-sol-border flex items-center justify-between text-meta text-sol-text-dim">
               <div className="flex items-center gap-3">
                 <label className="flex items-center gap-1.5 cursor-pointer select-none text-sol-text-secondary hover:text-sol-text transition-colors">
                   <input
                     type="checkbox"
                     checked={userOnly}
                     onChange={(e) => setUserOnly(e.target.checked)}
-                    className="w-3 h-3 rounded border-sol-border bg-sol-bg text-amber-500 focus:ring-amber-500/50 focus:ring-offset-0 cursor-pointer"
+                    className="w-3 h-3 rounded border-sol-border bg-sol-bg text-sol-cyan focus:ring-sol-cyan/50 focus:ring-offset-0 cursor-pointer"
                   />
                   user only
                 </label>
@@ -353,7 +353,7 @@ export function GlobalSearch() {
                     <select
                       value={selectedTeamId ?? ""}
                       onChange={(e) => setSelectedTeamId(e.target.value ? e.target.value as Id<"teams"> : null)}
-                      className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary cursor-pointer focus:outline-none focus:ring-1 focus:ring-amber-500/50"
+                      className="px-1.5 py-0.5 bg-sol-bg rounded border border-sol-border text-sol-text-secondary cursor-pointer focus:outline-none focus:ring-1 focus:ring-sol-cyan/50"
                     >
                       <option value="">All teams</option>
                       {userTeams.map((team: any) => (
@@ -376,14 +376,15 @@ export function GlobalSearch() {
                 </span>
               </div>
               <div className="flex items-center gap-3">
-                <span
+                <button
+                  type="button"
                   onClick={goToFullSearch}
                   className="flex items-center gap-1 cursor-pointer text-sol-text-secondary hover:text-sol-text transition-colors"
                 >
                   <KeyCap size="xs">⇧</KeyCap>
                   <KeyCap size="xs">↵</KeyCap>
                   full search
-                </span>
+                </button>
                 <span className="flex items-center gap-1">
                   <KeyCap size="xs">Esc</KeyCap>
                   close

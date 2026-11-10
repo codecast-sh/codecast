@@ -66,7 +66,7 @@ export const MatchSnippet = memo(function MatchSnippet({ content, timestamp, who
       data-search-match
       className="group/match block rounded-md px-3 py-2 no-underline transition-colors hover:bg-sol-bg-highlight/50"
     >
-      <div className="mb-1 flex min-w-0 items-center gap-1.5 text-[11px]">
+      <div className="mb-1 flex min-w-0 items-center gap-1.5 text-meta">
         {who}
         {timestamp ? <span className="flex-shrink-0 tabular-nums text-sol-text-dim">{formatSearchTimestamp(timestamp)}</span> : null}
       </div>

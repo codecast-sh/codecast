@@ -50,6 +50,8 @@ import { IntentHeader, IntentIdChip, ProjectDeadlineChip, ProjectStatusPick, use
 import { useWorkspaceFeature } from "../../../lib/teamFeatures";
 import { projectStatusOf } from "../../../lib/projectStatus";
 import { projectTaskCounts } from "@codecast/shared/tasks";
+import { TaskHrefProvider } from "../../../lib/taskHrefContext";
+import { findEntityInStore } from "../../../lib/liveEntities";
 
 const api = _api as any;
 
@@ -74,6 +76,35 @@ const TABS: IntentTab<ProjectTab>[] = [
 ];
 /** Tabs the board no longer has, read as the one that holds them now. */
 const OLD_TABS: Record<string, ProjectTab> = { updates: "timeline", overview: "sessions", line: "flow" };
+
+// Open-task counts per project, cached on the tasks collection's identity: the
+// views menu's selector runs on every store write, and the store hands back the
+// same collection until a task changes, so the scan runs once per real change.
+const openTaskCountCache = new WeakMap<object, Map<string, number>>();
+function openTaskCount(tasks: Record<string, any> | undefined, projectId: string): number {
+  const rows = tasks ?? {};
+  let byProject = openTaskCountCache.get(rows);
+  const hit = byProject?.get(projectId);
+  if (hit !== undefined) return hit;
+  const n = projectTaskCounts(Object.values(rows) as any[], [projectId]);
+  if (!byProject) { byProject = new Map(); openTaskCountCache.set(rows, byProject); }
+  byProject.set(projectId, n.total - n.done);
+  return n.total - n.done;
+}
+
+/** Where a task opens from this project's list and task pages: one of the
+ *  project's own tasks stays inside the project (/projects/<id>/<task>), any
+ *  other keeps its own page (taskHrefContext). */
+function useProjectTaskPlace(projectRef: string | undefined) {
+  return useCallback((ref: string) => {
+    if (!projectRef) return null;
+    const s = useInboxStore.getState();
+    const task = findEntityInStore(s, "task", ref) as any;
+    if (!task) return null;
+    const projectId = (findEntityInStore(s, "project", projectRef) as any)?._id ?? projectRef;
+    return String(task.project_id ?? "") === String(projectId) ? `/projects/${projectRef}/${ref}` : null;
+  }, [projectRef]);
+}
 
 
 function ProjectDetailContent() {
@@ -120,10 +151,11 @@ function ProjectDetailContent() {
   }, [project?.short_id, projectRef]);
 
   const updateProject = useInboxStore((s) => s.updateProject);
+  const taskPlace = useProjectTaskPlace(projectRef);
   // Whether the project has a main session (its Inbox count leaves it out).
   const hasMain = useInboxStore((s) => (storeProject ? !!projectDefaultSessionOf(storeProject, s.sessions, s.orgTree?.roles as any) : false));
   // Open tasks, for the Tasks row of the views menu.
-  const openTasks = useInboxStore((s) => { const n = projectTaskCounts(Object.values(s.tasks ?? {}) as any[], [projectId]); return n.total - n.done; });
+  const openTasks = useInboxStore((s) => openTaskCount(s.tasks, projectId));
   // A project opened from another workspace: its tasks, plans, docs and line
   // feed from the active workspace, so the page says where it lives instead
   // of drawing empty lists that are not true.
@@ -178,7 +210,7 @@ function ProjectDetailContent() {
         actions={<>
           {/* Off the session, the one-press way back to it. */}
           {tab !== "sessions" && (
-            <button type="button" onClick={() => setTab("sessions")} className="inline-flex items-center gap-1 h-6 px-2 rounded-md text-[11px] text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60 transition-colors" data-project-back-to-session>
+            <button type="button" onClick={() => setTab("sessions")} className="inline-flex items-center gap-1 h-6 px-2 rounded-md text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60 transition-colors" data-project-back-to-session>
               <MessagesSquare className="w-3 h-3" />
               Session
             </button>
@@ -206,7 +238,9 @@ function ProjectDetailContent() {
         // The project's tasks, through the same list surface /tasks uses:
         // same filters, grouping, board, palette and saved views.
         <div className="flex-1 min-h-0">
-          <TaskListContent projectId={projectId} />
+          <TaskHrefProvider place={taskPlace}>
+            <TaskListContent projectId={projectId} />
+          </TaskHrefProvider>
         </div>
       ) : tab === "timeline" ? (
         <div className={body}>
@@ -246,7 +280,7 @@ function ProjectViewMenu({ tabs, active, onTab, counts, shortId }: { tabs: Inten
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <button type="button" title="Tasks, timeline, about and the project's other views" className="inline-flex items-center gap-1 h-6 px-2 rounded-md text-[11px] text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60 transition-colors" data-project-view={active}>
+        <button type="button" title="Tasks, timeline, about and the project's other views" className="inline-flex items-center gap-1 h-6 px-2 rounded-md text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60 transition-colors" data-project-view={active}>
           {Icon && <Icon className="w-3 h-3" />}
           {/* On the session the menu says only that there are other views. */}
           {active !== "sessions" && current.label}
@@ -289,6 +323,7 @@ export default function ProjectDetailPage() {
   const params = useParams();
   const projectId = params?.id as string | undefined;
   const taskId = params?.taskId as string | undefined;
+  const taskPlace = useProjectTaskPlace(projectId);
   return (
     <AuthGuard>
       <DashboardLayout>
@@ -298,7 +333,9 @@ export default function ProjectDetailPage() {
         >
           {taskId ? (
             <ErrorBoundary name="ProjectTaskDetail" level="panel">
-              <TaskDetailContent taskId={taskId} variant="page" />
+              <TaskHrefProvider place={taskPlace}>
+                <TaskDetailContent taskId={taskId} variant="page" closeHref={`/projects/${projectId}`} />
+              </TaskHrefProvider>
             </ErrorBoundary>
           ) : null}
         </DetailSplitLayout>

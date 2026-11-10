@@ -23,12 +23,10 @@ import {
   ArrowUpDown,
   Cloud,
   CopyMinus,
-  Eye,
-  EyeOff,
   FilePlus2,
   FolderPlus,
-  FileCode2,
   FolderTree,
+  MoreHorizontal,
   PanelLeft,
   PanelLeftClose,
   PanelRight,
@@ -43,9 +41,13 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { LocalDaemonUnreachable } from "../../components/LocalDaemonUnreachable";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { VAULT_SORT_OPTIONS, type VaultSortMode } from "../../lib/vault/explorerModel";
@@ -80,7 +82,8 @@ const VaultGraphView = lazy(() =>
   import("../../components/vault/VaultGraphView").then((m) => ({ default: m.VaultGraphView })),
 );
 
-const headerButtonClass = "text-sol-text-dim hover:text-sol-text transition-colors";
+// A 24px target per icon, so a glyph is easy to hit and the row's width is known.
+const headerButtonClass = "inline-flex size-6 shrink-0 items-center justify-center rounded text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text transition-colors";
 
 const SIDE_MIN_PX = 200;
 
@@ -412,7 +415,7 @@ function VaultContent() {
       >
         {remoteVaults.length > 0 && (
           <div className="mt-4 pt-3 border-t border-sol-border/30 max-w-md">
-            <div className="text-[11px] uppercase tracking-wide text-sol-text-dim mb-1.5">
+            <div className="text-mark uppercase tracking-wide text-sol-text-dim mb-1.5">
               Mirrored from another machine
             </div>
             {remoteVaults.map((v) => (
@@ -424,7 +427,7 @@ function VaultContent() {
               >
                 {v.name}
                 {v.note_count ? (
-                  <span className="text-sol-text-dim text-[11px]"> — {v.note_count} notes, read-only</span>
+                  <span className="text-sol-text-dim text-meta"> — {v.note_count} notes, read-only</span>
                 ) : null}
               </button>
             ))}
@@ -458,113 +461,92 @@ function VaultContent() {
                   else void selectVault(id);
                 }}
               />
-              {/* Tree actions, shown only while the tree is: they'd be inert
-                  next to search results. */}
-              {leftTab === "files" && (
-                <div className="flex items-center gap-1.5 flex-shrink-0">
+              {/* The three a person reaches for stay out; the rest fold into one menu, so at the panel's
+                  minimum width the folder picker keeps its room. New note only while the tree shows. */}
+              <div className="flex items-center gap-0.5 flex-shrink-0">
+                {leftTab === "files" && (
                   <button
                     type="button"
                     title="New note"
+                    aria-label="New note"
                     onClick={() => void createInRoot("note")}
                     className={headerButtonClass}
                   >
                     <FilePlus2 className="w-3.5 h-3.5" />
                   </button>
-                  <button
-                    type="button"
-                    title="New folder"
-                    onClick={() => void createInRoot("folder")}
-                    className={headerButtonClass}
-                  >
-                    <FolderPlus className="w-3.5 h-3.5" />
-                  </button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button type="button" title="Sort order" className={headerButtonClass}>
-                        <ArrowUpDown className="w-3.5 h-3.5" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end" className="min-w-[170px]">
-                      <DropdownMenuRadioGroup
-                        value={sortMode}
-                        onValueChange={(v) => setSortMode(v as VaultSortMode)}
-                      >
-                        {VAULT_SORT_OPTIONS.map((o) => (
-                          <DropdownMenuRadioItem key={o.id} value={o.id}>
-                            {o.label}
-                          </DropdownMenuRadioItem>
-                        ))}
-                      </DropdownMenuRadioGroup>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                  <button type="button" title="Collapse all" onClick={collapseAll} className={headerButtonClass}>
-                    <CopyMinus className="w-3.5 h-3.5" />
-                  </button>
-                  {/* A repo that hides its own source is lying about the folder,
-                      and a notes folder full of dotfiles is noise. The default
-                      follows the vault's kind; this is the override. */}
-                  {!isRemote && (
-                    <button
-                      type="button"
-                      title={showAllFiles ? "Showing all files — click for notes only" : "Show all files"}
-                      aria-pressed={showAllFiles}
-                      onClick={() => setShowAllFiles(!showAllFiles)}
-                      className={`transition-colors ${
-                        showAllFiles ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text"
-                      }`}
-                    >
-                      <FileCode2 className="w-3.5 h-3.5" />
+                )}
+                <button
+                  type="button"
+                  title={showGraph ? "Back to notes" : "Graph view"}
+                  aria-label={showGraph ? "Back to notes" : "Graph view"}
+                  aria-pressed={showGraph}
+                  onClick={toggleGraph}
+                  className={`${headerButtonClass} ${showGraph ? "!text-sol-cyan" : ""}`}
+                >
+                  <Waypoints className="w-3.5 h-3.5" />
+                </button>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <button type="button" title="More" aria-label="More file tree actions" className={headerButtonClass}>
+                      <MoreHorizontal className="w-3.5 h-3.5" />
                     </button>
-                  )}
-                  {/* A repo root hides its build output, .gitignore names and
-                      tool dot-directories. This lifts that, dimmed and
-                      read-only; .git and node_modules stay out regardless. */}
-                  {!isRemote && isRepo && (
-                    <button
-                      type="button"
-                      title={
-                        showIgnoredFiles
-                          ? "Showing ignored files — click to hide them"
-                          : "Show ignored files (build output, .gitignore, dot-directories)"
-                      }
-                      aria-pressed={showIgnoredFiles}
-                      onClick={() => setShowIgnoredFiles(!showIgnoredFiles)}
-                      className={`transition-colors ${
-                        showIgnoredFiles ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text"
-                      }`}
-                    >
-                      {showIgnoredFiles ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                    </button>
-                  )}
-                </div>
-              )}
-              <button
-                type="button"
-                title="Rescan"
-                onClick={() => void refresh()}
-                className={headerButtonClass}
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                title={showGraph ? "Back to notes" : "Graph view"}
-                aria-pressed={showGraph}
-                onClick={toggleGraph}
-                className={`transition-colors ${
-                  showGraph ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text"
-                }`}
-              >
-                <Waypoints className="w-3.5 h-3.5" />
-              </button>
-              <button
-                type="button"
-                title="Hide file tree"
-                onClick={() => setTreeOpen(false)}
-                className={headerButtonClass}
-              >
-                <PanelLeftClose className="w-3.5 h-3.5" />
-              </button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="min-w-[200px]">
+                    {/* Tree actions, shown only while the tree is: they'd be inert next to search results. */}
+                    {leftTab === "files" && (
+                      <>
+                        <DropdownMenuItem onSelect={() => void createInRoot("folder")}>
+                          <FolderPlus className="w-3.5 h-3.5" /> New folder
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={collapseAll}>
+                          <CopyMinus className="w-3.5 h-3.5" /> Collapse all
+                        </DropdownMenuItem>
+                        {/* A repo that hides its own source is lying about the folder, and a notes folder full of
+                            dotfiles is noise. The default follows the vault's kind; this is the override. */}
+                        {!isRemote && (
+                          <DropdownMenuCheckboxItem checked={showAllFiles} onCheckedChange={(v) => setShowAllFiles(!!v)}>
+                            Show all files
+                          </DropdownMenuCheckboxItem>
+                        )}
+                        {/* A repo root hides its build output, .gitignore names and tool dot-directories. This lifts
+                            that, dimmed and read-only; .git and node_modules stay out regardless. */}
+                        {!isRemote && isRepo && (
+                          <DropdownMenuCheckboxItem checked={showIgnoredFiles} onCheckedChange={(v) => setShowIgnoredFiles(!!v)}>
+                            Show ignored files
+                          </DropdownMenuCheckboxItem>
+                        )}
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel className="flex items-center gap-1.5 text-xs font-normal text-sol-text-dim">
+                          <ArrowUpDown className="w-3 h-3" /> Sort
+                        </DropdownMenuLabel>
+                        <DropdownMenuRadioGroup
+                          value={sortMode}
+                          onValueChange={(v) => setSortMode(v as VaultSortMode)}
+                        >
+                          {VAULT_SORT_OPTIONS.map((o) => (
+                            <DropdownMenuRadioItem key={o.id} value={o.id}>
+                              {o.label}
+                            </DropdownMenuRadioItem>
+                          ))}
+                        </DropdownMenuRadioGroup>
+                        <DropdownMenuSeparator />
+                      </>
+                    )}
+                    <DropdownMenuItem onSelect={() => void refresh()}>
+                      <RefreshCw className="w-3.5 h-3.5" /> Rescan
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                <button
+                  type="button"
+                  title="Hide file tree"
+                  aria-label="Hide file tree"
+                  onClick={() => setTreeOpen(false)}
+                  className={headerButtonClass}
+                >
+                  <PanelLeftClose className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
             {scope && <VaultScopeLine {...scope} docTwin={docTwin} />}
             <div className="flex items-center border-b border-sol-border/30">
@@ -574,7 +556,7 @@ function VaultContent() {
                   type="button"
                   onClick={() => setLeftTab(id)}
                   title={label}
-                  className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-[11px] transition-colors border-b-2 -mb-px ${
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-meta transition-colors border-b-2 -mb-px ${
                     leftTab === id
                       ? "border-sol-cyan text-sol-text"
                       : "border-transparent text-sol-text-dim hover:text-sol-text-muted"
@@ -602,29 +584,29 @@ function VaultContent() {
   return (
     <div ref={rootRef} className="h-full flex flex-col">
       {isRemote && (
-        <div className="flex items-center gap-2 px-3 py-1 text-[11px] bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
+        <div className="flex items-center gap-2 px-3 py-1 text-meta bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
           <Cloud className="w-3 h-3" />
           Read-only mirror from another machine — edits happen where the files live.
         </div>
       )}
       {connection === "cached" && (
-        <div className="flex items-center gap-2 px-3 py-1 text-[11px] bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
+        <div className="flex items-center gap-2 px-3 py-1 text-meta bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
           <WifiOff className="w-3 h-3" />
           Showing cached copy — reconnecting to the local daemon…
         </div>
       )}
       {opError && (
-        <div className="flex items-center gap-2 px-3 py-1 text-[11px] bg-sol-red/10 text-sol-red border-b border-sol-red/30">
+        <div className="flex items-center gap-2 px-3 py-1 text-meta bg-sol-red/10 text-sol-red border-b border-sol-red/30">
           <span className="flex-1 truncate" title={opError}>
             {opError}
           </span>
-          <button type="button" onClick={clearOpError} title="Dismiss" className="hover:opacity-70">
+          <button type="button" onClick={clearOpError} title="Dismiss" aria-label="Dismiss" className="hover:opacity-70">
             <X className="w-3 h-3" />
           </button>
         </div>
       )}
       {renameReport && renameReport.linksRewritten + renameReport.skipped > 0 && (
-        <div className="flex items-center gap-2 px-3 py-1 text-[11px] bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
+        <div className="flex items-center gap-2 px-3 py-1 text-meta bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
           <span className="flex-1 truncate">
             {renameReport.linksRewritten > 0 && (
               <>
@@ -641,7 +623,7 @@ function VaultContent() {
               </span>
             )}
           </span>
-          <button type="button" onClick={clearRenameReport} title="Dismiss" className="hover:opacity-70">
+          <button type="button" onClick={clearRenameReport} title="Dismiss" aria-label="Dismiss" className="hover:opacity-70">
             <X className="w-3 h-3" />
           </button>
         </div>
@@ -695,6 +677,7 @@ function VaultContent() {
               type="button"
               onClick={() => setTreeOpen(true)}
               title="Show file tree"
+              aria-label="Show file tree"
               className="absolute top-2 left-2 z-10 p-1 rounded transition-colors hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text"
             >
               <PanelLeft className="w-4 h-4" />
@@ -705,6 +688,7 @@ function VaultContent() {
               type="button"
               onClick={() => setRightPanelOpen(!rightPanelOpen)}
               title={rightPanelOpen ? "Hide side panel" : "Show backlinks, outline and tags"}
+              aria-label={rightPanelOpen ? "Hide side panel" : "Show side panel"}
               aria-pressed={rightPanelOpen}
               className={`absolute top-2 right-2 z-10 p-1 rounded transition-colors hover:bg-sol-bg-alt ${
                 rightPanelOpen ? "text-sol-text" : "text-sol-text-dim hover:text-sol-text"

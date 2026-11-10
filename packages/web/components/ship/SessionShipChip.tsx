@@ -9,9 +9,10 @@ import "./ship.css";
 
 export function SessionShipChip({ ship }: { ship: SessionShip | null }) {
   if (!ship) return null;
-  const body = <><i aria-hidden />{ship.words}</>;
+  // The words are their own flex item: an ellipsis needs a box that can shrink below its text, which the chip's anonymous text is not.
+  const body = <><i aria-hidden /><span className="ssc-words">{ship.words}</span></>;
   const href = ship.deploy ? entityRoute("deploy", ship.deploy) : null;
   return href
-    ? <Link href={href} className="ssc" data-tone={ship.tone} onClick={(e) => e.stopPropagation()} data-session-ship={ship.words}>{body}</Link>
-    : <span className="ssc" data-tone={ship.tone} data-session-ship={ship.words}>{body}</span>;
+    ? <Link href={href} className="ssc" data-tone={ship.tone} title={ship.words} onClick={(e) => e.stopPropagation()} data-session-ship={ship.words}>{body}</Link>
+    : <span className="ssc" data-tone={ship.tone} title={ship.words} data-session-ship={ship.words}>{body}</span>;
 }

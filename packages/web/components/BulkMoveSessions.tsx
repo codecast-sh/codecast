@@ -50,7 +50,7 @@ export function MoveToDeviceItems({ sessions, onDone }: { sessions: any[]; onDon
               className={here ? RUNNING_HERE_ROW : undefined}
               leading={<DeviceIcon d={d} className={`w-3.5 h-3.5 ${d.is_remote ? "text-sol-violet" : "text-sol-blue"}`} />}
               trailing={here ? <RunningHereTag online={d.online} /> : (
-                <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] text-sol-text-dim">
+                <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-meta text-sol-text-dim">
                   {note}
                   <DeviceDot online={d.online} />
                 </span>
@@ -154,7 +154,7 @@ export function BulkSessionMenuItems({
       {onClear && (
         <>
           <CtxSeparator />
-          <CtxItem onSelect={onClear}>Clear selection <span className="ml-auto text-[10px] text-sol-text-dim">Esc</span></CtxItem>
+          <CtxItem onSelect={onClear}>Clear selection <span className="ml-auto text-meta text-sol-text-dim">Esc</span></CtxItem>
         </>
       )}
     </>
@@ -183,9 +183,12 @@ export function InboxSelectionBar({
 }) {
   const n = sessions.length;
   return (
-    <div data-sel-bar className="flex items-center gap-1.5 whitespace-nowrap border-b border-sol-border/30 bg-sol-bg px-2.5 py-1.5 text-xs text-sol-text" title="⌘-click toggles a card, shift-click selects a run">
+    // The verbs wrap onto a second line on a narrow rail instead of running
+    // past its edge (the rail clips): at the usual widths Kill and Done
+    // were the ones cut off.
+    <div data-sel-bar className="flex flex-wrap items-center gap-x-1.5 gap-y-1 whitespace-nowrap border-b border-sol-border/30 bg-sol-bg px-2.5 py-1.5 text-xs text-sol-text" title="⌘-click toggles a card, shift-click selects a run">
       <span className="font-semibold">{n} selected</span>
-      <div className="ml-auto flex items-center gap-0.5">
+      <div className="ml-auto flex flex-wrap items-center justify-end gap-0.5">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-text hover:bg-sol-bg-highlight">

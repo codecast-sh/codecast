@@ -60,7 +60,7 @@ export function StateBar({ counts }: { counts: Counts }) {
 export function Words({ counts, className = "" }: { counts: Counts; className?: string }) {
   const w = stateWords(counts);
   return (
-    <span className={`inline-flex items-center gap-1 text-[10.5px] tabular-nums whitespace-nowrap ${className}`} style={{ color: DIM }} title={tallyTitle(counts)}>
+    <span className={`inline-flex items-center gap-1 text-meta tabular-nums whitespace-nowrap ${className}`} style={{ color: DIM }} title={tallyTitle(counts)}>
       {w.length === 0 ? "no sessions" : w.map((x, i) => (
         <span key={x.text} className="inline-flex items-center gap-1">{i > 0 && <span aria-hidden>·</span>}<span style={{ color: x.color }}>{x.text}</span></span>
       ))}
@@ -83,7 +83,7 @@ function Metrics({ metrics }: { metrics: Metric[] }) {
   return (
     <div className="mt-2 space-y-1">
       {metrics.map((m) => (
-        <div key={m.name} className="flex items-baseline gap-1.5 text-[10.5px] tabular-nums min-w-0">
+        <div key={m.name} className="flex items-baseline gap-1.5 text-meta tabular-nums min-w-0">
           <span className="truncate" style={{ color: MUTED }}>{m.name}</span>
           <span className="ml-auto font-semibold shrink-0" style={{ color: TEXT }}>{m.value}</span>
           <span className="shrink-0" style={{ color: m.trend === "flat" ? DIM : m.good ? SOL.green : SOL.red }}>{ARROW[m.trend]}</span>
@@ -112,7 +112,7 @@ function Week({ reached, closed }: { reached: number[]; closed: number[] }) {
           </div>
         ))}
       </div>
-      <div className="text-[10px] leading-[1.35] tabular-nums">
+      <div className="text-meta leading-[1.35] tabular-nums">
         <div style={{ color: SOL.blue }}>{sum(reached)} reached it</div>
         <div style={{ color: SOL.green }}>{sum(closed)} closed</div>
       </div>
@@ -132,11 +132,11 @@ export function RoleCard({ r, level, mark, week }: { r: RoleRow; level: Level; m
         <Tile k={r.k} size={24} />
         <div className="min-w-0">
           <div className="font-bold text-[12.5px] leading-tight truncate" style={{ color: INK }}>{r.title}</div>
-          <div className="text-[10px] leading-tight" style={{ color: DIM }}>{r.handle}</div>
+          <div className="text-meta leading-tight" style={{ color: DIM }}>{r.handle}</div>
         </div>
       </div>
       {st && h.standing && (
-        <div className={`mt-1.5 text-[10.5px] leading-[1.45] ${close ? "" : "truncate"}`} title={h.standing.line}>
+        <div className={`mt-1.5 text-meta leading-[1.45] ${close ? "" : "truncate"}`} title={h.standing.line}>
           <span className="mr-1.5 inline-block w-[7px] h-[7px] rounded-full align-middle" style={{ background: st.color }} aria-hidden />
           <span className="font-semibold" style={{ color: st.color === SOL.yellow ? "#a07c00" : st.color }}>{st.label}</span>
           <span style={{ color: DIM }}> · </span>
@@ -153,14 +153,14 @@ export function RoleCard({ r, level, mark, week }: { r: RoleRow; level: Level; m
       {close && (
         <>
           <Rule />
-          {h.charter && <p className="text-[10.5px] leading-[1.5]" style={{ color: MUTED }}>{h.charter}</p>}
+          {h.charter && <p className="text-meta leading-[1.5]" style={{ color: MUTED }}>{h.charter}</p>}
           {h.work && (
-            <div className="mt-1.5 text-[10.5px] tabular-nums" style={{ color: MUTED }}>
+            <div className="mt-1.5 text-meta tabular-nums" style={{ color: MUTED }}>
               {h.work.tasks} tasks <span style={{ color: DIM }}>·</span> {h.work.inFlight} in flight <span style={{ color: DIM }}>·</span> {h.work.plans} {h.work.plans === 1 ? "plan" : "plans"}
             </div>
           )}
           {h.running?.map((x) => (
-            <div key={x.id} className="mt-1 flex items-center gap-1.5 text-[10px] min-w-0" style={{ color: MUTED }}>
+            <div key={x.id} className="mt-1 flex items-center gap-1.5 text-meta min-w-0" style={{ color: MUTED }}>
               <span className="w-[6px] h-[6px] rounded-full shrink-0" style={{ background: SOL.green }} aria-hidden />
               <span className="shrink-0" style={{ color: DIM }}>{x.id}</span>
               <span className="truncate">{x.title}</span>
@@ -176,7 +176,7 @@ export function RoleCard({ r, level, mark, week }: { r: RoleRow; level: Level; m
 /** An area status (or health flag) with its reason: "Stuck: 1 session waiting unanswered for a day". */
 function AreaPill({ color, label, why }: { color: string; label: string; why?: string }) {
   return (
-    <span className="inline-flex max-w-full items-start gap-1 rounded-md px-1.5 py-[2px] text-[10px] leading-[1.4]" style={{ background: tint(color, 13, "#fffdf6"), color: `color-mix(in srgb, ${color} 70%, ${TEXT})` }}>
+    <span className="inline-flex max-w-full items-start gap-1 rounded-md px-1.5 py-[2px] text-meta leading-[1.4]" style={{ background: tint(color, 13, "#fffdf6"), color: `color-mix(in srgb, ${color} 70%, ${TEXT})` }}>
       <span><span className="font-semibold">{label}</span>{why && <span style={{ color: MUTED }}>: {why}</span>}</span>
     </span>
   );
@@ -192,7 +192,7 @@ export function PersonCard({ id, level, mark, note }: { id: string; level: Level
         <Person p={p} size={24} />
         <div className="min-w-0">
           <div className="font-bold text-[13px] leading-tight truncate" style={{ color: INK }}>{p.name}</div>
-          <div className="text-[10.5px]" style={{ color: DIM }}>{note}</div>
+          <div className="text-meta" style={{ color: DIM }}>{note}</div>
         </div>
       </div>
       <Sessions counts={h.counts} />
@@ -236,12 +236,12 @@ export function ItemCard({ it, level, mark }: { it: Item; level: Level; mark: Ma
       <div className="flex items-start gap-2.5 min-w-0">
         <OwnerFace owner={it.owner} size={24} />
         <div className="min-w-0">
-          <div className="text-[10px]" style={{ color: kind.color }}>{kind.word} <span style={{ color: DIM }}>· {ownerName(it.owner)}</span></div>
+          <div className="text-meta" style={{ color: kind.color }}>{kind.word} <span style={{ color: DIM }}>· {ownerName(it.owner)}</span></div>
           <div className="font-bold text-[12.5px] leading-[1.3]" style={{ color: INK }}>{it.title}</div>
         </div>
       </div>
       {it.health && (
-        <div className="mt-1.5 flex items-center gap-1.5 text-[10.5px]">
+        <div className="mt-1.5 flex items-center gap-1.5 text-meta">
           <span className="w-[7px] h-[7px] rounded-full" style={{ background: atRisk ? SOL.orange : SOL.green }} aria-hidden />
           <span style={{ color: atRisk ? SOL.orange : SOL.green }}>{it.health}</span>
         </div>

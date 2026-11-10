@@ -43,7 +43,7 @@ export function Empty({ title, hint }: { title: string; hint?: string }) {
   return (
     <div className="py-14 text-center">
       <p className="text-[13px]" style={{ color: "var(--sol-text-muted)" }}>{title}</p>
-      {hint && <p className="mt-1 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>{hint}</p>}
+      {hint && <p className="mt-1 text-meta" style={{ color: "var(--sol-text-dim)" }}>{hint}</p>}
     </div>
   );
 }
@@ -70,17 +70,17 @@ export function ScopePlansTab({ ids }: { ids: ScopeIds }) {
               <Layers className="w-4 h-4 shrink-0" style={{ color: "var(--sol-magenta)" }} />
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-[13px] font-medium" style={{ color: "var(--sol-text)" }}>{p.title}</span>
-                <span className="block truncate text-[10.5px] mt-[1px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>{p.status}{pr ? ` · ${pr.done} of ${pr.total} done` : ""}</span>
+                <span className="block truncate text-meta mt-[1px]" style={{ color: "var(--sol-text-dim)", fontFamily: "var(--font-mono)" }}>{p.status}{pr ? ` · ${pr.done} of ${pr.total} done` : ""}</span>
               </span>
               {pr && pr.total > 0 && (
                 <span className="hidden sm:flex items-center gap-2 shrink-0">
                   <span className="w-20 h-1 rounded-full overflow-hidden" style={{ background: "color-mix(in srgb, var(--sol-border) 30%, transparent)" }}>
                     <span className="block h-full" style={{ width: `${pct}%`, background: "var(--sol-green)" }} />
                   </span>
-                  <span className="text-[10.5px] tabular-nums w-8 text-right" style={{ color: "var(--sol-text-dim)" }}>{pct}%</span>
+                  <span className="text-meta tabular-nums w-8 text-right" style={{ color: "var(--sol-text-dim)" }}>{pct}%</span>
                 </span>
               )}
-              <span className="text-[10.5px] tabular-nums shrink-0" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - ((p as any).updated_at ?? now))}</span>
+              <span className="text-meta tabular-nums shrink-0" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - ((p as any).updated_at ?? now))}</span>
             </Link>
           </li>
         );
@@ -126,9 +126,9 @@ export function HandRow({ s, stateLine, task, progress, now, onOpen }: {
       <SessionMark session={s as any} iconClassName="w-4 h-4" className="shrink-0" />
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 text-[12.5px]"><SessionIdentityLine row={s as any} title={s.title || "Untitled"} titleClassName="font-medium" /></span>
-        <span className="block truncate text-[11px] mt-[1px]" style={{ color: stateLine ? "var(--sol-text-muted)" : "var(--sol-text-dim)" }} data-hand-line>{stateLine ?? m.label}</span>
+        <span className="block truncate text-meta mt-[1px]" style={{ color: stateLine ? "var(--sol-text-muted)" : "var(--sol-text-dim)" }} data-hand-line>{stateLine ?? m.label}</span>
         {task && (
-          <span className="block truncate text-[10.5px] mt-[1px]" style={{ color: "var(--sol-text-dim)" }} data-hand-task={task.short_id}>
+          <span className="block truncate text-meta mt-[1px]" style={{ color: "var(--sol-text-dim)" }} data-hand-task={task.short_id}>
             {task.title}
           </span>
         )}
@@ -138,10 +138,10 @@ export function HandRow({ s, stateLine, task, progress, now, onOpen }: {
           <span className="w-12 h-1 rounded-full overflow-hidden" style={{ background: "color-mix(in srgb, var(--sol-border) 30%, transparent)" }}>
             <span className="block h-full" style={{ width: `${Math.round((progress.closed / total) * 100)}%`, background: "var(--sol-green)" }} />
           </span>
-          <span className="text-[10.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{progress.closed}/{total}</span>
+          <span className="text-meta tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{progress.closed}/{total}</span>
         </span>
       )}
-      <span className="text-[10.5px] tabular-nums shrink-0" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - s.updated_at)}</span>
+      <span className="text-meta tabular-nums shrink-0" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - s.updated_at)}</span>
       <ExternalLink className="w-3 h-3 shrink-0 opacity-0 group-hover:opacity-70 transition-opacity" style={{ color: "var(--sol-text-dim)" }} />
     </button>
   );
@@ -176,7 +176,7 @@ export function HandGroups({ rows, hands, now, onOpen }: { rows: OrgSession[]; h
     <div className="space-y-4" data-hand-groups={groups.length}>
       {groups.map((g) => (
         <section key={g.state} data-hand-group={g.state}>
-          <h3 className="px-2.5 mb-1 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: g.color }}>
+          <h3 className="px-2.5 mb-1 flex items-center gap-1.5 text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: g.color }}>
             <span className="w-[6px] h-[6px] rounded-full" style={{ background: g.color }} />
             {g.label}
             <span className="tabular-nums font-normal" style={{ color: "var(--sol-text-dim)" }}>{g.rows.length}</span>
@@ -246,7 +246,7 @@ export function ScopeSessionsTab({ tree, role, scope, hands }: { tree: OrgTree; 
     <div>
       <div className="flex items-center justify-between px-2.5 pb-2">
         <StateTally counts={counts} />
-        <span className="text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{rows.length} of {total} session{total === 1 ? "" : "s"}</span>
+        <span className="text-meta tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{rows.length} of {total} session{total === 1 ? "" : "s"}</span>
       </div>
       <StateBar counts={counts} className="mx-2.5 mb-3" />
       {role && requested.map((c) => <RoleSessionsPage key={c} roleId={role._id} teamId={teamId} cursor={c} onPage={onPage} />)}
@@ -257,14 +257,14 @@ export function ScopeSessionsTab({ tree, role, scope, hands }: { tree: OrgTree; 
       )}
       {canLoad && (
         <div className="pt-2 text-center">
-          <button type="button" disabled={pending} onClick={() => nextCursor && setRequested((r) => [...r, nextCursor])} className="text-[11.5px] hover:underline disabled:opacity-50" style={{ color: "var(--sol-text-muted)" }}>
+          <button type="button" disabled={pending} onClick={() => nextCursor && setRequested((r) => [...r, nextCursor])} className="text-meta hover:underline disabled:opacity-50" style={{ color: "var(--sol-text-muted)" }}>
             {pending ? "Loading…" : `Load ${Math.min(50, total - rows.length)} more`}
           </button>
         </div>
       )}
       {role && scope && (
         <section className="mt-6">
-          <h3 className="px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Also working in its area</h3>
+          <h3 className="px-2.5 mb-1.5 text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Also working in its area</h3>
           <ScopeFeed scope={scope} lockKinds={["session"]} />
         </section>
       )}
@@ -313,14 +313,14 @@ export function ScopeDecisionsTab({ ids, roleId }: { ids: ScopeIds; roleId?: str
           <MessageCircleQuestionMark className="w-4 h-4 shrink-0 mt-[2px]" style={{ color: tone }} />
           <span className="min-w-0 flex-1">
             <span className="block text-[13px] font-medium leading-snug line-clamp-2" style={{ color: "var(--sol-text)" }}>{d.question}</span>
-            <span className="mt-[3px] flex items-center gap-1.5 text-[10.5px] min-w-0" style={{ color: "var(--sol-text-dim)" }}>
+            <span className="mt-[3px] flex items-center gap-1.5 text-meta min-w-0" style={{ color: "var(--sol-text-dim)" }}>
               <span className="px-1.5 h-[16px] inline-flex items-center rounded-md border" style={{ borderColor: `color-mix(in srgb, ${tone} 45%, transparent)`, color: tone }}>{d.status}</span>
               {d.blocking && d.status === "pending" && <span style={{ color: "var(--sol-yellow)" }}>blocking</span>}
               {task && <span className="truncate inline-flex items-center gap-1"><CheckSquare className="w-3 h-3" />{task.title}</span>}
               {answer && <span className="truncate">→ {answer}</span>}
             </span>
           </span>
-          <span className="text-[10.5px] tabular-nums shrink-0" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - (d.resolved_at ?? d.created_at))}</span>
+          <span className="text-meta tabular-nums shrink-0" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - (d.resolved_at ?? d.created_at))}</span>
         </Link>
       </li>
     );
@@ -329,23 +329,23 @@ export function ScopeDecisionsTab({ ids, roleId }: { ids: ScopeIds; roleId?: str
     <div className="space-y-5">
       {stacks.length > 0 && (
         <section data-scope-stacks>
-          <h3 className="px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Stacks · {stacks.length}</h3>
+          <h3 className="px-2.5 mb-1.5 text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Stacks · {stacks.length}</h3>
           <div className="space-y-3">{stacks.map((st) => <StackChecklist key={st._id} stack={st} />)}</div>
         </section>
       )}
       {ladder.length > 0 && (
         <section data-scope-ladder>
-          <h3 className="px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Waiting on this role · {ladder.length}</h3>
+          <h3 className="px-2.5 mb-1.5 text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Waiting on this role · {ladder.length}</h3>
           <div className="space-y-2">{ladder.map((d) => <DecisionCompactCard key={d._id} decision={d} />)}</div>
         </section>
       )}
       <section>
-        <h3 className="px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Open · {open.length}</h3>
+        <h3 className="px-2.5 mb-1.5 text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Open · {open.length}</h3>
         {open.length === 0 ? <p className="px-2.5 text-[12px]" style={{ color: "var(--sol-text-dim)" }}>Nothing waiting on a person.</p> : <ul className="space-y-1">{open.map((d) => <Row key={d._id} d={d} />)}</ul>}
       </section>
       {answered.length > 0 && (
         <section>
-          <h3 className="px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Answered · {answered.length}</h3>
+          <h3 className="px-2.5 mb-1.5 text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Answered · {answered.length}</h3>
           <ul className="space-y-1">{answered.map((d) => <Row key={d._id} d={d} />)}</ul>
         </section>
       )}
@@ -385,9 +385,9 @@ function RoleDoc({ docId, editable, backHref }: { docId: string; editable: boole
 function Fact({ label, value, sub, tone }: { label: string; value: React.ReactNode; sub?: string; tone?: string }) {
   return (
     <div className="rounded-xl px-3 py-2.5 border" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 28%, transparent)", background: "var(--sol-card)" }}>
-      <div className="text-[10.5px] uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--sol-text-dim)" }}>{label}</div>
+      <div className="text-mark uppercase tracking-[0.08em] font-semibold" style={{ color: "var(--sol-text-dim)" }}>{label}</div>
       <div className="mt-0.5 text-[18px] font-semibold tabular-nums leading-tight" style={{ color: tone ?? "var(--sol-text)", fontFamily: "var(--font-serif)" }}>{value}</div>
-      {sub && <div className="text-[10.5px] mt-0.5 truncate" style={{ color: "var(--sol-text-dim)" }}>{sub}</div>}
+      {sub && <div className="text-meta mt-0.5 truncate" style={{ color: "var(--sol-text-dim)" }}>{sub}</div>}
     </div>
   );
 }
@@ -406,7 +406,7 @@ export function BriefFactsBlock({ facts, roleHandle }: { facts: BriefFacts; role
       </div>
       {facts.hands.length > 0 && (
         <section>
-          <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Sessions say</h3>
+          <h3 className="px-1 mb-1.5 text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Sessions say</h3>
           <ul className="space-y-1">
             {facts.hands.map((h) => (
               <li key={h._id}>
@@ -414,10 +414,10 @@ export function BriefFactsBlock({ facts, roleHandle }: { facts: BriefFacts; role
                   <span className="w-[3px] self-stretch rounded-full shrink-0" style={{ background: h.state === "needs_input" ? "var(--sol-yellow)" : h.state === "working" ? "var(--sol-green)" : h.state === "done" ? "var(--sol-cyan)" : h.state === "dormant" ? "var(--sol-blue)" : "var(--sol-text-dim)" }} />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-[12.5px] font-medium" style={{ color: "var(--sol-text)" }}>{h.title || "Untitled"}</span>
-                    <span className="block truncate text-[11px]" style={{ color: "var(--sol-text-muted)" }}>{h.state_line ?? "no state pinned"}</span>
-                    {h.task && <span className="block truncate text-[10.5px] mt-[1px]" style={{ color: "var(--sol-text-dim)" }}>{h.task.title} · {h.task.status.replace(/_/g, " ")}{h.task.review_verdict ? ` · ${h.task.review_verdict}` : ""}</span>}
+                    <span className="block truncate text-meta" style={{ color: "var(--sol-text-muted)" }}>{h.state_line ?? "no state pinned"}</span>
+                    {h.task && <span className="block truncate text-meta mt-[1px]" style={{ color: "var(--sol-text-dim)" }}>{h.task.title} · {h.task.status.replace(/_/g, " ")}{h.task.review_verdict ? ` · ${h.task.review_verdict}` : ""}</span>}
                   </span>
-                  <span className="text-[10.5px] tabular-nums shrink-0" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - h.updated_at)}</span>
+                  <span className="text-meta tabular-nums shrink-0" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - h.updated_at)}</span>
                 </button>
               </li>
             ))}
@@ -428,19 +428,19 @@ export function BriefFactsBlock({ facts, roleHandle }: { facts: BriefFacts; role
           narrative below, read against the live rows. */}
       {(facts.people ?? []).map((person) => (
         <section key={person.user_id} data-brief-person={person.user_id}>
-          <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>{person.name}'s focus</h3>
+          <h3 className="px-1 mb-1.5 text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>{person.name}'s focus</h3>
           <PersonGoals person={person} roleHandle={roleHandle} now={now} own={false} />
         </section>
       ))}
       {facts.changed.length > 0 && (
         <section>
-          <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Moved lately</h3>
+          <h3 className="px-1 mb-1.5 text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Moved lately</h3>
           <ul className="grid sm:grid-cols-2 gap-x-4">
             {facts.changed.slice(0, 12).map((c, i) => (
               <li key={`${c.kind}:${c.short_id ?? i}`} className="flex items-center gap-2 px-1 py-1 text-[12px] min-w-0">
                 {c.kind === "task" ? <CheckSquare className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-cyan)" }} /> : <Layers className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--sol-magenta)" }} />}
                 <Link href={c.kind === "task" ? `/tasks/${c.short_id}` : `/plans/${c.short_id}`} className="truncate hover:underline" style={{ color: "var(--sol-text)" }}>{c.title}</Link>
-                <span className="text-[10.5px] shrink-0" style={{ color: "var(--sol-text-dim)" }}>{c.status.replace(/_/g, " ")} · {compactAge(now - c.updated_at)}</span>
+                <span className="text-meta shrink-0" style={{ color: "var(--sol-text-dim)" }}>{c.status.replace(/_/g, " ")} · {compactAge(now - c.updated_at)}</span>
               </li>
             ))}
           </ul>
@@ -457,7 +457,7 @@ export function ScopeBriefTab({ role, facts, factsProblem, narrative, canEdit, b
     <div className="space-y-5">
       {goals && (
         <section data-scope-section="goals">
-          <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Your focus</h3>
+          <h3 className="px-1 mb-1.5 text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>Your focus</h3>
           {goals}
         </section>
       )}
@@ -466,7 +466,7 @@ export function ScopeBriefTab({ role, facts, factsProblem, narrative, canEdit, b
         <p className="px-1 text-[12px]" style={{ color: "var(--sol-text-dim)" }}>{factsProblem ?? "Its numbers show here once they load."}</p>
       )}
       <section>
-        <h3 className="px-1 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>In its own words</h3>
+        <h3 className="px-1 mb-1.5 text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>In its own words</h3>
         {role.brief_doc_id ? (
           <RoleDoc docId={role.brief_doc_id} editable={canEdit} backHref={backHref} />
         ) : narrative ? (

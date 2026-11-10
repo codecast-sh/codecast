@@ -227,7 +227,7 @@ export function ContextChatInput({
           type="button"
           onClick={() => setIsFocused(true)}
           title={placeholder || defaultPlaceholder}
-          className="pointer-events-auto inline-flex items-center gap-1.5 h-7 px-3 rounded-full border border-sol-border/60 bg-sol-bg-alt text-[11px] text-sol-text-muted shadow-md transition-colors hover:text-sol-text hover:border-sol-border"
+          className="pointer-events-auto inline-flex items-center gap-1.5 h-7 px-3 rounded-full border border-sol-border/60 bg-sol-bg-alt text-meta text-sol-text-muted shadow-md transition-colors hover:text-sol-text hover:border-sol-border"
         >
           <Sparkles className="w-3 h-3 text-sol-cyan" />
           Ask an agent
@@ -250,7 +250,7 @@ export function ContextChatInput({
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => setSelectedAgent(agent.id)}
                 title={agent.label}
-                className={`px-2 py-0.5 text-[11px] font-medium rounded-md border transition-colors flex items-center gap-1 ${
+                className={`px-2 py-0.5 text-meta font-medium rounded-md border transition-colors flex items-center gap-1 ${
                   agentKey === agent.id
                     ? agentAccent(agent.convexType).chip
                     : "bg-transparent text-sol-text-dim border-transparent hover:text-sol-text-muted"
@@ -263,7 +263,7 @@ export function ContextChatInput({
               </button>
             ))}
           </div>
-          {!inline && <span className="text-[10px] text-sol-text-dim/50">
+          {!inline && <span className="text-meta text-sol-text-dim/50">
             {contextType}
           </span>}
         </div>

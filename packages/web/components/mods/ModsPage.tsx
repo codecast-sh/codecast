@@ -1,13 +1,12 @@
 // /mods: every mod you can see. Yours with a switch, logs and what each one
-// adds; your team's shared ones with who wrote them. Empty, it teaches the
-// loop: one sentence to an agent, or `cast mod new`.
+// adds; your team's shared ones with who wrote them. Empty, it shows the two
+// ways in: one sentence to an agent, or the scaffold's commands.
 
 import { useState } from "react";
 import { useAction } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { DynamicIcon } from "lucide-react/dynamic";
+import { DynamicIcon } from "./ModIcon";
 import { Switch } from "../ui/switch";
-import { MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { ModLogList } from "./ModLogList";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { modHost, modNavigate, type ModRow } from "../../lib/mods/host";
@@ -16,19 +15,61 @@ import { useModHostVersion, useModRows } from "../../lib/mods/useMods";
 import { useInboxStore } from "../../store/inboxStore";
 import { formatRelativeTime } from "../../lib/conversationFormat";
 import { FeatureUpsell } from "../agentFeatures/FeatureUpsell";
+import { CommandDisclosure } from "../secrets/parts";
+import { ConsequentialSwitch, type SwitchLedger, type SwitchRow } from "../consequential/ConsequentialSwitch";
 
 function Chip({ icon, children }: { icon: string; children: React.ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded-md border border-sol-border px-1.5 py-[1px] text-[11px] text-sol-text-muted">
+    <span className="inline-flex items-center gap-1 rounded-md border border-sol-border px-1.5 py-[1px] text-meta text-sol-text-muted">
       <DynamicIcon name={icon as any} size={11} />
       {children}
     </span>
   );
 }
 
+type ModAct = "install" | "review" | "enable";
+
+/**
+ * What installing, re-accepting or turning on a mod hands it: every grant as a
+ * row of its own, and the machines its local half starts on. Plain data, so it
+ * reads the row the confirm will accept.
+ */
+function modInstallLedger(row: Pick<ModRow, "name" | "title" | "manifest" | "owner_name" | "has_local" | "local_devices" | "local_off">, act: ModAct): SwitchLedger {
+  const p = row.manifest?.permissions ?? {};
+  const mod = row.title ?? row.name;
+  const grant = (v: readonly string[] | "*" | undefined, all: string, noun: string): Omit<SwitchRow, "k"> =>
+    v === "*" ? { v: all, tone: "warn" } : !v?.length ? { v: "Nothing" } : v.length === 1 ? { v: v[0] } : { v: `${v.length} ${noun}`, list: [...v] };
+  const fetch = p.fetch === "*" ? p.fetch : p.fetch?.map((o) => o.replace(/^https?:\/\//, ""));
+  const wide = [p.read, p.write, p.fetch].filter((v) => v === "*").length;
+  const count = [p.read, p.write, p.fetch, p.connectors].filter((v) => v === "*" || (Array.isArray(v) && v.length > 0)).length;
+  const off = new Set(row.local_off ?? []);
+  const machines = (row.local_devices ?? []).map((d) => d.device).filter((d) => !off.has(d));
+  return {
+    name: mod,
+    subject: row.owner_name ? `By ${row.owner_name}` : row.name,
+    shift: act === "install" ? ["Not installed", "Installed"] : act === "review" ? ["Old grants", "New grants"] : undefined,
+    figures: [
+      { value: String(count), label: count === 1 ? "grant" : "grants", tone: count ? "warn" : undefined },
+      ...(wide ? [{ value: String(wide), label: "unlimited", tone: "warn" as const }] : []),
+    ],
+    rows: [
+      { k: "Reads", ...grant(p.read, "Everything", "kinds") },
+      { k: "Writes", ...grant(p.write, "Everything", "actions") },
+      ...(p.connectors?.length ? [{ k: "Connectors", ...grant(p.connectors, "All", "connectors") }] : []),
+      { k: "Fetches", ...grant(fetch, "Anywhere", "sites") },
+      ...(row.has_local ? [machines.length ? { k: "Starts on", v: machines.length === 1 ? machines[0] : `${machines.length} machines`, list: machines.length > 1 ? machines : undefined, tone: "warn" as const } : { k: "Starts on", v: "Each of your machines", tone: "warn" as const }] : []),
+      { k: "Runs as", v: "You, sandboxed" },
+    ],
+    stop: act === "enable" ? "Its switch" : "Press Installed",
+    confirm: act === "install" ? `Install ${mod}` : act === "review" ? "Accept the new grants" : `Turn on ${mod}`,
+    keep: act === "enable" ? undefined : "Not now",
+  };
+}
+
 /**
  * A teammate's shared mod runs for you once you install it, at the grants the
  * card shows. If its author widens them, it stops until you review again.
+ * Installing and re-accepting go through the shared review; uninstalling is one press.
  */
 function InstallButton({ row }: { row: ModRow }) {
   const list = useInboxStore((s) => s.clientState.ui?.mods_installed) ?? [];
@@ -40,13 +81,24 @@ function InstallButton({ row }: { row: ModRow }) {
     useInboxStore.getState().updateClientUI({ mods_installed: next ? [...keep, next] : keep });
   };
   return (
-    <button
-      onClick={() => set(state === "installed" ? null : current)}
-      title={state === "review" ? "Its author changed what it may read, write or fetch. The card lists the new grants; install again to accept them." : undefined}
-      className={`rounded-md border px-2.5 py-1 text-[12px] transition-colors ${state === "installed" ? "border-sol-border text-sol-text-muted hover:text-sol-text" : state === "review" ? "border-sol-yellow text-sol-yellow" : "border-sol-violet bg-[color-mix(in_srgb,var(--sol-violet)_12%,transparent)] text-sol-violet"}`}
-    >
-      {state === "installed" ? "Installed" : state === "review" ? "Grants changed: review" : "Install"}
-    </button>
+    <ConsequentialSwitch
+      on={state === "installed"}
+      ledger={modInstallLedger(row, state === "review" ? "review" : "install")}
+      // The signature of the grants the review just showed: the row this render read.
+      onTurnOn={() => set(current)}
+      onTurnOff={() => set(null)}
+      trigger={({ on, press }) => (
+        <button
+          type="button"
+          onClick={press}
+          aria-haspopup={on ? undefined : "dialog"}
+          title={state === "review" ? "Its author changed what it may read, write or fetch" : undefined}
+          className={`shrink-0 rounded-md border px-2.5 py-1 text-[12px] transition-colors ${state === "installed" ? "border-sol-border text-sol-text-muted hover:text-sol-text" : state === "review" ? "border-sol-yellow text-sol-yellow" : "border-sol-violet bg-[color-mix(in_srgb,var(--sol-violet)_12%,transparent)] text-sol-violet"}`}
+        >
+          {state === "installed" ? "Installed" : state === "review" ? "Grants changed: review…" : "Install…"}
+        </button>
+      )}
+    />
   );
 }
 
@@ -61,7 +113,7 @@ function LocalHalf({ row }: { row: ModRow }) {
   const report = (device: string) => row.local_devices?.find((d) => d.device === device);
   return (
     <div className="mx-4 mt-3 rounded-lg border border-sol-border bg-sol-bg-alt/40 px-3 py-2">
-      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-sol-text-dim">
+      <div className="flex items-center gap-1.5 text-mark uppercase tracking-wide text-sol-text-dim">
         <DynamicIcon name="hard-drive" size={12} />
         Runs on your machines
       </div>
@@ -77,16 +129,16 @@ function LocalHalf({ row }: { row: ModRow }) {
               <li key={device} className="flex items-center gap-2 text-[12.5px]">
                 <span className="size-1.5 shrink-0 rounded-full" style={{ background: tone }} />
                 <span className="truncate text-sol-text">{device}</span>
-                <span className="shrink-0 text-[11px]" style={{ color: tone }}>{state}</span>
-                {state === "failed" && r?.error ? <span className="min-w-0 truncate text-[11px] text-sol-text-dim" title={r.error}>{r.error}</span> : null}
-                {r ? <span className="ml-auto shrink-0 text-[11px] text-sol-text-dim">{formatRelativeTime(r.at)}</span> : <span className="ml-auto" />}
+                <span className="shrink-0 text-meta" style={{ color: tone }}>{state}</span>
+                {state === "failed" && r?.error ? <span className="min-w-0 truncate text-meta text-sol-text-dim" title={r.error}>{r.error}</span> : null}
+                {r ? <span className="ml-auto shrink-0 text-meta text-sol-text-dim">{formatRelativeTime(r.at)}</span> : <span className="ml-auto" />}
                 <Switch checked={on} disabled={!row.enabled} onCheckedChange={(v: boolean) => useInboxStore.getState().setModLocalDevice(row._id, device, v)} />
               </li>
             );
           })}
         </ul>
       ) : (
-        <div className="mt-1 text-[12px] text-sol-text-muted">{row.enabled ? "Each of your machines starts it within 30 seconds." : "Turn the mod on and each of your machines starts it within 30 seconds."}</div>
+        <div className="mt-1 text-[12px] text-sol-text-muted">{row.enabled ? "Starting on each of your machines" : "Off"}</div>
       )}
     </div>
   );
@@ -105,7 +157,7 @@ function Secrets({ row }: { row: ModRow }) {
   const setAt = new Map((row.secrets_set ?? []).map((s) => [s.name, s.at]));
   return (
     <div className="mx-4 mt-3 rounded-lg border border-sol-border bg-sol-bg-alt/40 px-3 py-2">
-      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-sol-text-dim">
+      <div className="flex items-center gap-1.5 text-mark uppercase tracking-wide text-sol-text-dim">
         <DynamicIcon name="key-round" size={12} />
         Keys
       </div>
@@ -119,6 +171,7 @@ function Secrets({ row }: { row: ModRow }) {
 function SecretRow({ modId, name, description, origins, at }: { modId: string; name: string; description?: string; origins: string[]; at?: number }) {
   const set = useAction(api.modSecrets.webSet);
   const [editing, setEditing] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -137,12 +190,19 @@ function SecretRow({ modId, name, description, origins, at }: { modId: string; n
       <div className="flex items-center gap-2">
         <span className="size-1.5 shrink-0 rounded-full" style={{ background: tone }} />
         <span className="font-mono text-sol-text" title={description}>{name}</span>
-        <span className="min-w-0 truncate text-[11px] text-sol-text-dim">{origins.map((o) => o.replace(/^https?:\/\//, "")).join(", ")}</span>
-        <span className="ml-auto shrink-0 text-[11px]" style={{ color: tone }}>{at ? `set ${formatRelativeTime(at)}` : "not set"}</span>
-        {at && !editing ? (
+        <span className="min-w-0 truncate text-meta text-sol-text-dim">{origins.map((o) => o.replace(/^https?:\/\//, "")).join(", ")}</span>
+        <span className="ml-auto shrink-0 text-meta" style={{ color: tone }}>{at ? `set ${formatRelativeTime(at)}` : "not set"}</span>
+        {at && !editing && clearing ? (
+          // A cleared key cannot be shown again, so clearing asks once, in place.
+          <span className="inline-flex shrink-0 items-center gap-1.5 text-meta" role="group" aria-label={`Clear ${name}?`}>
+            <span className="text-sol-text">Clear key?</span>
+            <button type="button" onClick={() => { setClearing(false); void save(""); }} disabled={busy} className="rounded px-1 py-0.5 text-sol-red hover:bg-sol-red/10">Clear</button>
+            <button type="button" onClick={() => setClearing(false)} autoFocus className="rounded px-1 py-0.5 text-sol-text-muted hover:text-sol-text">Keep</button>
+          </span>
+        ) : at && !editing ? (
           <>
-            <button onClick={() => setEditing(true)} className="shrink-0 text-[11px] text-sol-text-muted hover:text-sol-text">Replace</button>
-            <button onClick={() => save("")} disabled={busy} className="shrink-0 text-[11px] text-sol-text-muted hover:text-sol-red">Clear</button>
+            <button type="button" onClick={() => setEditing(true)} className="shrink-0 rounded px-1 py-0.5 text-meta text-sol-text-muted hover:text-sol-text">Replace</button>
+            <button type="button" onClick={() => setClearing(true)} disabled={busy} className="shrink-0 rounded px-1 py-0.5 text-meta text-sol-text-muted hover:text-sol-red">Clear</button>
           </>
         ) : null}
       </div>
@@ -160,7 +220,7 @@ function SecretRow({ modId, name, description, origins, at }: { modId: string; n
           {editing ? <button type="button" onClick={() => { setEditing(false); setValue(""); }} className="text-[12px] text-sol-text-muted hover:text-sol-text">Cancel</button> : null}
         </form>
       ) : null}
-      {error ? <div className="mt-0.5 pl-3.5 text-[11px] text-sol-red">{error}</div> : null}
+      {error ? <div className="mt-0.5 pl-3.5 text-meta text-sol-red">{error}</div> : null}
     </li>
   );
 }
@@ -190,19 +250,25 @@ function ModCard({ row }: { row: ModRow }) {
             >
               {row.title ?? row.name}
             </button>
-            <span className="inline-flex items-center gap-1 text-[11px]" style={{ color: statusTone }}>
+            <span className="inline-flex items-center gap-1 text-meta" style={{ color: statusTone }}>
               <span className="size-1.5 rounded-full" style={{ background: statusTone }} />
               {status}
             </span>
           </div>
-          <div className="mt-0.5 font-mono text-[11px] text-sol-text-dim">
+          <div className="mt-0.5 font-mono text-meta text-sol-text-dim">
             {row.name} · {row.version ? `v${row.version}` : "dev"} · rev {row.rev} · {formatRelativeTime(row.updated_at)}
             {row.is_mine === false && row.owner_name ? ` · by ${row.owner_name}` : ""}
             {row.shared && row.is_mine ? " · shared" : ""}
           </div>
         </div>
         {row.is_mine !== false ? (
-          <Switch checked={row.enabled} onCheckedChange={(v: boolean) => useInboxStore.getState().setModEnabled(row._id, v)} />
+          <ConsequentialSwitch
+            on={row.enabled}
+            ledger={modInstallLedger(row, "enable")}
+            onTurnOn={() => useInboxStore.getState().setModEnabled(row._id, true)}
+            onTurnOff={() => useInboxStore.getState().setModEnabled(row._id, false)}
+            trigger={({ on, press }) => <Switch checked={on} onCheckedChange={press} aria-label={`${row.title ?? row.name} on`} aria-haspopup={on ? undefined : "dialog"} />}
+          />
         ) : (
           <InstallButton row={row} />
         )}
@@ -242,23 +308,16 @@ function EmptyMods() {
   return (
     <div className="mx-auto mt-6 max-w-2xl rounded-2xl border border-dashed border-sol-border px-8 py-10">
       <div className="text-[18px] font-semibold text-sol-text">Make codecast yours</div>
-      <p className="mt-2 text-[13px] leading-relaxed text-sol-text-muted">
-        A mod adds panes, commands and new kinds of blocks agents can draw, in one small file that runs sandboxed. Describe one to any agent, or start from the scaffold.
-      </p>
-      <div className="mt-5 grid gap-3 sm:grid-cols-2">
-        <div className="rounded-lg bg-sol-bg-alt/60 px-4 py-3">
-          <div className="text-[11px] uppercase tracking-wide text-sol-text-dim">Ask an agent</div>
-          <div className="mt-1.5 text-[13px] text-sol-text">"Make me a codecast mod that shows which of my sessions are waiting, grouped by repo."</div>
-        </div>
-        <div className="rounded-lg bg-sol-bg-alt/60 px-4 py-3">
-          <div className="text-[11px] uppercase tracking-wide text-sol-text-dim">Or from a terminal</div>
-          <pre className="mt-1.5 font-mono text-[12px] leading-relaxed text-sol-text">cast mod new my-mod{"\n"}cd my-mod && cast mod dev</pre>
-        </div>
+      <div className="mt-5 rounded-lg bg-sol-bg-alt/60 px-4 py-3">
+        <div className="text-mark uppercase tracking-wide text-sol-text-dim">Ask an agent</div>
+        <div className="mt-1.5 text-[13px] text-sol-text">"Make me a codecast mod that shows which of my sessions are waiting, grouped by repo."</div>
       </div>
-      <div className="mt-4 text-[12px] text-sol-text-dim">Mods open from the palette: <MenuKeyCaps action="palette.toggle" className="inline-flex items-center gap-[2px] align-middle" />, then the mod's name.</div>
+      <div className="mt-4"><CommandDisclosure label="Start from the scaffold" text={SCAFFOLD} data-mods-scaffold /></div>
     </div>
   );
 }
+
+const SCAFFOLD = "cast mod new my-mod\ncd my-mod && cast mod dev";
 
 export function ModsPage() {
   const rows = useModRows();
@@ -266,12 +325,9 @@ export function ModsPage() {
   const shared = rows.filter((r) => r.is_mine === false);
   return (
     <div className="mx-auto w-full max-w-5xl px-6 py-6">
-      <header className="mb-5 flex items-end gap-3">
-        <div>
-          <h1 className="text-[22px] font-semibold tracking-tight text-sol-text">Mods</h1>
-          <p className="mt-0.5 text-[13px] text-sol-text-muted">Panes, commands and blocks you and your agents added to codecast.</p>
-        </div>
-        {rows.length ? <span className="ml-auto font-mono text-[12px] text-sol-text-dim">cast mod new &lt;name&gt;</span> : null}
+      <header className="mb-5 flex items-center gap-3">
+        <h1 className="text-[22px] font-semibold tracking-tight text-sol-text">Mods</h1>
+        {rows.length ? <div className="ml-auto"><CommandDisclosure label="For scripts" text="cast mod new <name>" /></div> : null}
       </header>
       <FeatureUpsell slug="mods" className="mb-5" reason="Ask an agent for a view or tool codecast does not have, and watch it get built right in the conversation." />
       {!rows.length ? <EmptyMods /> : null}

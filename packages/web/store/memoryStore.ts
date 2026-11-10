@@ -163,7 +163,8 @@ export const useMemoryStore = create<MemoryState>()((set, get) => {
         listMemoryProjects(endpoint).catch(() => null),
         activeId ? readMemoryProject(endpoint, activeId).catch(() => null) : null,
       ]);
-      if (projects) set({ projects });
+      // The rail re-renders only when a project's summary changed, not on every re-read.
+      if (projects && JSON.stringify(projects) !== JSON.stringify(get().projects)) set({ projects });
       if (fresh && get().activeId === fresh.id && (!project || signature(project) !== signature(fresh))) set({ project: fresh });
     },
 

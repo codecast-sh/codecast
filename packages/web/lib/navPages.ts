@@ -22,7 +22,8 @@ export const NAV_PAGES: ReadonlyArray<{
    *  teaches the fast way. */
   action?: ShortcutAction;
 }> = [
-  { label: "Dashboard", path: "/team/activity", icon: "grid", keywords: "home sessions main activity feed team" },
+  // "Feed", as the rail names it; the old palette name still finds it.
+  { label: "Feed", path: "/team/activity", icon: "grid", aliases: ["Dashboard"], keywords: "home sessions main activity feed team" },
   { label: "Inbox", path: "/inbox", icon: "inbox", keywords: "idle queue waiting", action: "nav.inbox" },
   { label: "Decisions", path: "/decisions", icon: "bell", keywords: "ok approve approvals questions decisions waiting answer team mine" },
   { label: "Threads", path: "/threads", icon: "message", keywords: "threads replies comments conversations unread mentions dms" },
@@ -54,12 +55,13 @@ export const NAV_PAGES: ReadonlyArray<{
   { label: "Mods", path: "/mods", icon: "grid", keywords: "mods plugins extensions customize panes commands blocks", secondary: true },
   { label: "Prompts", path: "/prompts", icon: "message", keywords: "prompts typed messages sent sessions day people what everyone asked wrote today yesterday" },
   { label: "Team Charts", path: "/team/charts", icon: "grid", keywords: "activity punchcard heatmap hours messages typed sends members stats graphs" },
-  // The company on one canvas, and its two read views. Teams without the org
-  // feature keep them too: goals and projects need no agents.
+  // The company on one canvas, and its two read views, at the rail's own
+  // addresses. Teams without the org feature keep them too: goals and
+  // projects need no agents.
   { label: "Session Map", path: "/map", icon: "map", aliases: ["Board", "Desk"], keywords: "canvas zoom piles arrange sessions board desk spatial roles reporting org overview all sessions" },
   { label: "Org", path: "/org", icon: "network", aliases: ["Team", "Company"], keywords: "people mission roles organization org chart reporting structure members canvas" },
-  { label: "Goals", path: "/org/goals", icon: "map", aliases: ["Roadmap"], keywords: "goal initiatives objectives strategy mission health progress owner" },
-  { label: "Projects", path: "/org/projects", icon: "grid", keywords: "project leads progress status active planning paused" },
+  { label: "Goals", path: "/goals", icon: "map", aliases: ["Roadmap"], keywords: "goal initiatives objectives strategy mission health progress owner" },
+  { label: "Projects", path: "/projects", icon: "grid", keywords: "project leads progress status active planning paused" },
   { label: "Deploys", path: "/deploys", icon: "rocket", aliases: ["Releases"], keywords: "deploy ship release live waiting rollback roll back ci backend web cli mobile desktop" },
   { label: "Changes", path: "/changes", icon: "newspaper", keywords: "open changes edition shipped released landed today commits stories what changed changelog", feature: "changes" },
   { label: "Changes: yesterday", path: () => `/changes?d=${localDay(-1)}`, icon: "newspaper", keywords: "edition shipped landed commits stories what changed", feature: "changes", secondary: true },
@@ -84,10 +86,10 @@ export const NAV_PAGES: ReadonlyArray<{
   { label: "Plan", path: "/settings/plan", icon: "settings", keywords: "plan usage billing allowance upgrade subscription month meter plus pro free", secondary: true },
   { label: "Integrations", path: "/settings/integrations", icon: "link", keywords: "slack github linear google gmail notion connect oauth apps webhooks issues sync whisk mail email calendar", secondary: true },
   { label: "Provider Keys", path: "/settings/provider-keys", icon: "settings", keywords: "api keys openrouter anthropic openai", secondary: true },
-  { label: "Notifications", path: "/settings/notifications", icon: "settings", keywords: "push email digest mentions mute", secondary: true },
+  { label: "Settings: Notifications", path: "/settings/notifications", icon: "settings", keywords: "push email digest mentions mute", secondary: true },
   { label: "Keyboard Shortcuts", path: "/settings/keyboard", icon: "settings", keywords: "keys hotkeys keybindings rebind customize chords", secondary: true },
   { label: "Sounds", path: "/settings/sounds", icon: "settings", keywords: "audio volume mute chime walkie", secondary: true },
-  { label: "Calls", path: "/settings/calls", icon: "settings", keywords: "camera microphone mic devices walkie huddle meeting record", secondary: true },
+  { label: "Settings: Calls", path: "/settings/calls", icon: "settings", keywords: "camera microphone mic devices walkie huddle meeting record", secondary: true },
 ];
 
 export type NavPage = (typeof NAV_PAGES)[number];

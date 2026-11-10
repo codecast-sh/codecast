@@ -93,7 +93,7 @@ function SetupStrip() {
           <p className="mt-2 text-[13.5px] leading-6 pl-[34px]" style={{ color: SOL.base01 }}>{b.body}</p>
         </div>
       ))}
-      <p className="px-5 pb-4 font-mono text-[11.5px] leading-5" style={{ color: SOL.base01 }}>
+      <p className="px-5 pb-4 font-mono text-meta leading-5" style={{ color: SOL.base01 }}>
         Scripting it? <C>cast browser extension setup</C> does the same pairing from a terminal.
       </p>
     </div>

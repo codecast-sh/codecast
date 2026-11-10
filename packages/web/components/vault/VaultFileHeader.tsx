@@ -28,7 +28,7 @@ export const VaultFileHeader = memo(function VaultFileHeader({
 
   return (
     <>
-      <nav className="flex items-center gap-1 text-[11px] text-sol-text-dim mb-1 flex-wrap">
+      <nav className="flex items-center gap-1 text-meta text-sol-text-dim mb-1 flex-wrap">
         {segments.slice(0, -1).map((seg, i) => (
           <span key={i} className="flex items-center gap-1">
             <button

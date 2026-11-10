@@ -106,7 +106,7 @@ function PersonColumn({ column }: { column: Column }) {
       <div className="flex shrink-0 items-center gap-2 border-b border-sol-border/30 px-3 py-2">
         <Avatar name={name} image={image} size="md" />
         <span className="truncate text-[13px] font-medium text-sol-text">{name}</span>
-        <span className="ml-auto font-mono text-[11px] tabular-nums text-sol-text-muted">
+        <span className="ml-auto font-mono text-meta tabular-nums text-sol-text-muted">
           {column.rows.length} · {column.words.toLocaleString()}w
         </span>
       </div>
@@ -124,7 +124,7 @@ const PromptCard = memo(function PromptCard({ row }: { row: PromptRow }) {
   const overflows = useOverflows(ref, PROMPT_MAX_HEIGHT, [text]);
   const href = `/conversation/${row.conversation_id}#msg-${row.message_id}`;
   const header = (
-    <Link href={href} className="group flex items-baseline gap-2 text-[11px]">
+    <Link href={href} className="group flex items-baseline gap-2 text-meta">
       <span className="shrink-0 font-mono tabular-nums text-sol-text-dim">{timeOf(row.timestamp)}</span>
       <span className="truncate text-sol-text-muted group-hover:text-sol-blue">{row.session_title}</span>
     </Link>
@@ -141,7 +141,7 @@ const PromptCard = memo(function PromptCard({ row }: { row: PromptRow }) {
         <MessageMarkdown content={text} userText />
       </div>
       {(overflows || row.clipped) && (
-        <div className="mt-1 flex gap-3 text-[11px]">
+        <div className="mt-1 flex gap-3 text-meta">
           {overflows && (
             <button type="button" onClick={() => setOpen((o) => !o)} className="text-sol-text-dim hover:text-sol-blue">
               {open ? "Show less" : "Show all"}
@@ -170,7 +170,7 @@ function DecisionCard({ row, decision, header, text }: { row: PromptRow; decisio
         aria-expanded={open}
         className="mt-1 flex w-full items-start gap-1.5 text-left text-[12px] text-sol-text-muted hover:text-sol-text"
       >
-        <span className="shrink-0 text-[10px] uppercase leading-[18px] tracking-wide text-sol-violet">decision</span>
+        <span className="shrink-0 text-mark uppercase leading-[18px] tracking-wide text-sol-violet">decision</span>
         <span className={`leading-[18px] ${open ? "" : "line-clamp-2"}`}>{decision.question || "the agent's question"}</span>
       </button>
       {decision.picked ? (
@@ -183,7 +183,7 @@ function DecisionCard({ row, decision, header, text }: { row: PromptRow; decisio
           <MessageMarkdown content={text} userText />
         </div>
       )}
-      {row.clipped && <Link href={`/conversation/${row.conversation_id}#msg-${row.message_id}`} className="mt-1 block text-[11px] text-sol-text-dim hover:text-sol-blue">Rest in the session</Link>}
+      {row.clipped && <Link href={`/conversation/${row.conversation_id}#msg-${row.message_id}`} className="mt-1 block text-meta text-sol-text-dim hover:text-sol-blue">Rest in the session</Link>}
     </article>
   );
 }

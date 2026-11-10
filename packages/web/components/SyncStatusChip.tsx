@@ -261,7 +261,7 @@ function SyncDetailPanel({ syncing, stalled, color, daemonIssue, connection }: {
             <p>Check the affected machine with <code>{daemonIssue.command}</code>.</p>
           </div> : !syncing && <p className="text-xs leading-snug text-sol-text-dim">New changes arrive automatically.</p>}
           {(applyStats.direct > 0 || applyStats.refetch > 0) && (
-            <p className="text-[11px] leading-snug tabular-nums text-sol-text-dim">
+            <p className="text-meta leading-snug tabular-nums text-sol-text-dim">
               {applyStats.direct.toLocaleString()} applied
               {applyStats.refetch > 0 && <> · {applyStats.refetch.toLocaleString()} refetched</>}
             </p>
@@ -295,7 +295,7 @@ function SyncDetailPanel({ syncing, stalled, color, daemonIssue, connection }: {
       )}
       {crawls.length > 0 && (
         <StatusPanelSection>
-          <div className="pb-1 text-[9px] font-semibold uppercase tracking-wider text-sol-text-dim">
+          <div className="pb-1 text-mark font-semibold uppercase tracking-wider text-sol-text-dim">
             Background backfill
           </div>
           <div className="space-y-1.5">
@@ -309,13 +309,13 @@ function SyncDetailPanel({ syncing, stalled, color, daemonIssue, connection }: {
               </div>
             ))}
           </div>
-          <div className="pt-1.5 text-[10px] leading-snug text-sol-text-dim">
+          <div className="pt-1.5 text-meta leading-snug text-sol-text-dim">
             Older items stream in at a throttled pace. The app is usable meanwhile.
           </div>
         </StatusPanelSection>
       )}
       {stalled && !connection && (
-        <StatusPanelSection className="text-[10px] leading-snug text-sol-yellow">
+        <StatusPanelSection className="text-meta leading-snug text-sol-yellow">
           Still waiting on the server. Recent data can be incomplete until this settles.
         </StatusPanelSection>
       )}

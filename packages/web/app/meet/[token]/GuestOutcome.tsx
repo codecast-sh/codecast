@@ -194,7 +194,7 @@ export function GuestOutcome({ outcome, onAskAgain, busy, error }: { outcome: Ou
             value={typeof location === "undefined" ? "" : location.href}
             onFocus={(e) => e.currentTarget.select()}
             aria-label="This meeting's link"
-            className="w-full rounded-lg bg-white/[0.04] px-3 py-2 text-center font-mono text-[11.5px] text-sol-text-secondary outline-none ring-1 ring-white/10 focus:ring-sol-cyan/60"
+            className="w-full rounded-lg bg-white/[0.04] px-3 py-2 text-center font-mono text-meta text-sol-text-secondary outline-none ring-1 ring-white/10 focus:ring-sol-cyan/60"
             style={{ fontVariantLigatures: "none" }}
           />
           <button

@@ -14,7 +14,7 @@ export const EASE = "transition-colors duration-200 motion-reduce:transition-non
 /** The three sizes of this area: sentences and titles, values, labels. */
 export const SENTENCE = "text-[13.5px] leading-[20px]";
 export const VALUE = "text-[12.5px] leading-[20px]";
-export const LABEL = "text-[11px] leading-[20px]";
+export const LABEL = "text-meta leading-[20px]";
 
 /** The kind of record a status field moves, which picks its vocabulary. */
 export type RecordKind = "task" | "plan" | "project";

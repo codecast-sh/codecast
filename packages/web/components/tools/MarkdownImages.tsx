@@ -136,7 +136,7 @@ export function CollapsibleImage({
         )}
       </span>
       {caption && (
-        <span className="block mt-1 text-[11px] leading-snug text-sol-text-muted">{caption}</span>
+        <span className="block mt-1 text-meta leading-snug text-sol-text-muted">{caption}</span>
       )}
     </span>
   );
@@ -244,7 +244,7 @@ function InlineVideo({ src, alt, title }: { src: string; alt?: string; title?: s
           ["--cast-font" as string]: "inherit",
         }}
       />
-      {caption && <span className="block mt-1 text-[11px] leading-snug text-sol-text-muted">{caption}</span>}
+      {caption && <span className="block mt-1 text-meta leading-snug text-sol-text-muted">{caption}</span>}
     </span>
   );
 }

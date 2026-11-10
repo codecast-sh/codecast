@@ -28,7 +28,7 @@ function Player() {
       <div className="relative aspect-video">
         <div className="absolute inset-0" style={{ background: `radial-gradient(120% 90% at 30% 20%, rgba(42,161,152,.28), transparent 60%), radial-gradient(90% 70% at 85% 90%, rgba(38,139,210,.2), transparent 60%)` }} />
         <div className="absolute left-[8%] top-[14%] right-[30%] bottom-[22%] rounded-md border" style={{ borderColor: "rgba(147,161,161,.25)", backgroundColor: "rgba(0,43,54,.55)" }}>
-          <div className="px-3 py-2 font-mono text-[10px] sm:text-[11px] leading-[1.7]" style={{ color: SOL.base0 }}>
+          <div className="px-3 py-2 font-mono text-meta sm:text-meta leading-[1.7]" style={{ color: SOL.base0 }}>
             <div><span style={{ color: SOL.green }}>$</span> bun test checkout.test.ts</div>
             {chapter >= 2
               ? <div style={{ color: SOL.green }}>✓ 14 pass  0 fail</div>
@@ -38,7 +38,7 @@ function Player() {
         <div key={chapter} className="pb-anim pb-rise absolute left-4 bottom-4 font-mono text-[12px] sm:text-[13px] font-semibold rounded px-2 py-1" style={{ color: SOL.base3, backgroundColor: "rgba(0,43,54,.7)" }}>
           {chapter + 1}. {CHAPTERS[chapter].title}
         </div>
-        <div className="absolute right-4 top-4 rounded-md overflow-hidden text-[11px] font-mono border hidden sm:block" style={{ borderColor: "rgba(147,161,161,.25)", backgroundColor: "rgba(7,54,66,.92)" }}>
+        <div className="absolute right-4 top-4 rounded-md overflow-hidden text-meta font-mono border hidden sm:block" style={{ borderColor: "rgba(147,161,161,.25)", backgroundColor: "rgba(7,54,66,.92)" }}>
           {CHAPTERS.map((c, i) => (
             <button key={c.title} type="button" onClick={() => setChapter(i)} className="flex w-full items-center gap-3 px-3 py-1.5 text-left transition-colors" style={{ color: i === chapter ? SOL.base3 : SOL.base0, backgroundColor: i === chapter ? "rgba(42,161,152,.35)" : undefined }}>
               <span className="w-3 opacity-60">{i + 1}</span>
@@ -59,7 +59,7 @@ function Player() {
             );
           })}
         </div>
-        <div className="mt-2.5 flex items-center gap-3 font-mono text-[11px]" style={{ color: SOL.base0 }}>
+        <div className="mt-2.5 flex items-center gap-3 font-mono text-meta" style={{ color: SOL.base0 }}>
           <svg width="12" height="12" viewBox="0 0 24 24" fill={SOL.base2} aria-hidden><path d="M7 4v16l13-8z" /></svg>
           <span>{fmt(at)} / {fmt(TOTAL)}</span>
           <span className="ml-auto truncate" style={{ color: SOL.base01 }}>#chapter={chapter + 1}</span>
@@ -88,8 +88,8 @@ export function Video() {
       <div className="grid lg:grid-cols-[minmax(0,1.15fr)_minmax(0,0.85fr)] gap-10 items-start">
         <div className="min-w-0">
           <Player />
-          <p className="mt-3 font-mono text-[11.5px]" style={{ color: SOL.base1 }}>Click a chapter. Links open at a time with <span style={{ color: CYAN }}>#t=1:30</span> or at a chapter with <span style={{ color: CYAN }}>#chapter=3</span>.</p>
-          <pre className="mt-6 rounded-xl p-4 font-mono text-[11.5px] leading-[1.75] overflow-x-auto" style={{ backgroundColor: SOL.base03, color: SOL.base0 }}>
+          <p className="mt-3 font-mono text-meta" style={{ color: SOL.base1 }}>Click a chapter. Links open at a time with <span style={{ color: CYAN }}>#t=1:30</span> or at a chapter with <span style={{ color: CYAN }}>#chapter=3</span>.</p>
+          <pre className="mt-6 rounded-xl p-4 font-mono text-meta leading-[1.75] overflow-x-auto" style={{ backgroundColor: SOL.base03, color: SOL.base0 }}>
             {SNIPPET.split("\n").map((l, i) => (
               <span key={i} className="block">
                 {l.replace(/(<\/?[a-z-]+)|([a-z]+=)|("[^"]*")/g, "\u0000$&\u0000").split("\u0000").map((part, k) => {

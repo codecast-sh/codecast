@@ -97,11 +97,11 @@ function ContextSessionCard({
     >
       <div className="flex items-center gap-1.5 min-w-0">
         <LivenessDot state={livenessFor(item)} size="xs" className="flex-shrink-0" />
-        <span className={`text-[11px] font-medium text-sol-text truncate ${excluded ? "line-through" : ""}`}>
+        <span className={`text-meta font-medium text-sol-text truncate ${excluded ? "line-through" : ""}`}>
           {item.title}
         </span>
       </div>
-      <div className="mt-1 flex items-center gap-1.5 text-[10px] text-sol-text-dim font-mono truncate">
+      <div className="mt-1 flex items-center gap-1.5 text-meta text-sol-text-dim font-mono truncate">
         {meta.map((value, index) => (
           <span key={`${value}-${index}`} className="flex items-center gap-1.5 flex-shrink-0">
             {index > 0 && <span className="opacity-50">·</span>}
@@ -169,7 +169,7 @@ export function StableContextCards({ stableContext }: { stableContext?: string |
         type="button"
         onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
-        className="flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors mb-1.5"
+        className="flex items-center gap-1.5 text-meta text-sol-text-dim hover:text-sol-text transition-colors mb-1.5"
       >
         {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
         <Layers className="w-3 h-3 text-sol-cyan" />
@@ -299,7 +299,7 @@ export function StableContextPicker({ conversationId, trailing, className = "w-f
           type="button"
           onClick={() => setOpen((value) => !value)}
           aria-expanded={open}
-          className="flex items-center gap-1.5 whitespace-nowrap text-[11px] text-sol-text-dim hover:text-sol-text transition-colors min-w-0"
+          className="flex items-center gap-1.5 whitespace-nowrap text-meta text-sol-text-dim hover:text-sol-text transition-colors min-w-0"
         >
           {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           <Layers className="w-3 h-3 text-sol-cyan" />
@@ -327,7 +327,7 @@ export function StableContextPicker({ conversationId, trailing, className = "w-f
       </div>
       {open && (
         effectiveMode === "off" ? (
-          <div className="text-[11px] text-sol-text-dim/70 border border-dashed border-sol-border/50 rounded-md px-3 py-2">
+          <div className="text-meta text-sol-text-dim/70 border border-dashed border-sol-border/50 rounded-md px-3 py-2">
             {chosenMode === "off"
               ? "No session history will be injected into this session."
               : "Stable context is off on your machine — pick Team or Solo to inject recent session history for this session."}
@@ -347,7 +347,7 @@ export function StableContextPicker({ conversationId, trailing, className = "w-f
             })}
           </CardRow>
         ) : feedError || (feed as any)?.error ? (
-          <div className="text-[11px] text-sol-text-dim/70 border border-dashed border-sol-border/50 rounded-md px-3 py-2">
+          <div className="text-meta text-sol-text-dim/70 border border-dashed border-sol-border/50 rounded-md px-3 py-2">
             Context preview unavailable right now — the session will still start with your machine&apos;s configured context.
           </div>
         ) : feed === undefined ? (
@@ -357,7 +357,7 @@ export function StableContextPicker({ conversationId, trailing, className = "w-f
             ))}
           </div>
         ) : (
-          <div className="text-[11px] text-sol-text-dim/70 border border-dashed border-sol-border/50 rounded-md px-3 py-2">
+          <div className="text-meta text-sol-text-dim/70 border border-dashed border-sol-border/50 rounded-md px-3 py-2">
             No recent sessions to inject{projectPath ? " for this project" : ""}.
           </div>
         )

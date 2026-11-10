@@ -120,13 +120,13 @@ function BranchRow({
           <LiveDot live={node.live} />
           <span className={`truncate ${isCurrent ? "font-medium" : ""}`}>{label}</span>
           {isCurrent && (
-            <span className="text-[8px] uppercase tracking-wider px-1 py-px rounded bg-sol-cyan/15 text-sol-cyan flex-shrink-0 font-semibold">you</span>
+            <span className="text-mark uppercase tracking-wider px-1 py-px rounded bg-sol-cyan/15 text-sol-cyan flex-shrink-0 font-semibold">you</span>
           )}
           {isRoot && !isCurrent && (
-            <span className="text-[8px] uppercase tracking-wider px-1 py-px rounded bg-sol-bg-alt text-sol-text-dim flex-shrink-0 font-semibold">root</span>
+            <span className="text-mark uppercase tracking-wider px-1 py-px rounded bg-sol-bg-alt text-sol-text-dim flex-shrink-0 font-semibold">root</span>
           )}
         </span>
-        <span className="flex items-center gap-1.5 pl-3.5 min-w-0 text-[9px] text-sol-text-dim">
+        <span className="flex items-center gap-1.5 pl-3.5 min-w-0 text-meta text-sol-text-dim">
           <span
             className={`tabular-nums inline-flex items-center gap-0.5 flex-shrink-0 ${allUnread ? "text-sol-cyan font-semibold" : ""}`}
             title={isRoot ? `${count} messages` : `${count} message${count === 1 ? "" : "s"} on this branch since the fork${unread > 0 ? `, ${unread} unread` : ""}`}
@@ -147,7 +147,7 @@ function BranchRow({
       <button
         onClick={(e) => { e.stopPropagation(); onDrill(); }}
         title="Show this branch's messages to fork from"
-        className={`self-center flex-shrink-0 p-1 rounded text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors ${isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+        className={`self-center flex-shrink-0 p-1 rounded text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors ${isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"}`}
       >
         <ChevronRight className="w-3.5 h-3.5" />
       </button>
@@ -179,12 +179,12 @@ function MessageRow({
       }`}
     >
       {isSelected && <span className="absolute left-0 top-0.5 bottom-0.5 w-0.5 rounded-full bg-sol-cyan" />}
-      <span className={`font-mono text-[9px] mt-0.5 w-5 text-right flex-shrink-0 tabular-nums ${isSelected ? "text-sol-cyan" : "text-sol-text-dim/50"}`}>{num}</span>
+      <span className={`font-mono text-meta mt-0.5 w-5 text-right flex-shrink-0 tabular-nums ${isSelected ? "text-sol-cyan" : "text-sol-text-dim/50"}`}>{num}</span>
       <span className="flex-1 min-w-0 line-clamp-2 leading-snug">{msg.content}</span>
       {onFork && <button
         onClick={(e) => { e.stopPropagation(); onFork(); }}
         title="Fork from this message"
-        className={`self-center flex-shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors ${isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}
+        className={`self-center flex-shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-meta text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors ${isSelected ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"}`}
       >
         <GitFork className="w-3 h-3" />fork
       </button>}
@@ -477,7 +477,7 @@ function ForkTreeContent({
           </>
         ) : (
           <>
-            <span className="text-[10px] text-sol-text-dim font-medium uppercase tracking-wider truncate flex-1 min-w-0">
+            <span className="text-mark text-sol-text-dim font-medium uppercase tracking-wider truncate flex-1 min-w-0">
               {headerLabel}
             </span>
             <button onClick={enterFilter} title="Filter ( / )" className="p-0.5 rounded text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt flex-shrink-0">
@@ -492,7 +492,7 @@ function ForkTreeContent({
           flat.length === 0 ? (
             <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
           ) : visibleBranches.length === 0 ? (
-            <div className="py-6 text-center text-[11px] text-sol-text-dim">No branches match</div>
+            <div className="py-6 text-center text-meta text-sol-text-dim">No branches match</div>
           ) : (
             visibleBranches.map((node, idx) => (
               <BranchRow
@@ -514,7 +514,7 @@ function ForkTreeContent({
         ) : drillMsgsRaw === undefined ? (
           <AppLoader className="min-h-0 bg-transparent py-8" size={24} />
         ) : visibleMsgs.length === 0 ? (
-          <div className="py-6 text-center text-[11px] text-sol-text-dim">{filter ? "No messages match" : "No messages on this branch"}</div>
+          <div className="py-6 text-center text-meta text-sol-text-dim">{filter ? "No messages match" : "No messages on this branch"}</div>
         ) : (
           visibleMsgs.map((m, idx) => (
             <MessageRow
@@ -532,7 +532,7 @@ function ForkTreeContent({
         )}
       </div>
 
-      <div className="px-3 py-2 border-t border-sol-border text-[9px] text-sol-text-dim shrink-0 flex items-center gap-3 flex-wrap">
+      <div className="px-3 py-2 border-t border-sol-border text-meta text-sol-text-dim shrink-0 flex items-center gap-3 flex-wrap">
         <span className="inline-flex items-center gap-1"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap> move</span>
         {mode === "branches" ? (
           <>
@@ -619,7 +619,7 @@ export function ForkMapBox({
       className={`outline-none ${containerCls} ${className || ""}`}
     >
       <div className={headCls}>
-        <span className="text-[10px] text-sol-text-dim font-medium uppercase tracking-wider inline-flex items-center gap-1.5">
+        <span className="text-mark text-sol-text-dim font-medium uppercase tracking-wider inline-flex items-center gap-1.5">
           <Split className="w-3 h-3 text-sol-cyan" />Branch map
         </span>
         <button onClick={onClose} className="p-1 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text transition-colors">

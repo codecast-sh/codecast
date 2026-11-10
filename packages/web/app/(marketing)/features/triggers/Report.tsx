@@ -45,7 +45,7 @@ function Summary({ outcome }: { outcome: Outcome }) {
   const color = clean ? SOL.green : SOL.red;
   return (
     <div className="rounded-xl px-4 py-3" style={{ backgroundColor: SOL.base3, border: `1px solid ${clean ? SOL.base2 : `color-mix(in srgb, ${SOL.red} 40%, transparent)`}` }}>
-      <div className="flex items-center gap-2 font-mono text-[11.5px]" style={{ color }}>
+      <div className="flex items-center gap-2 font-mono text-meta" style={{ color }}>
         <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
         {clean ? "run of tr-47 · done" : "run of tr-47 · flagged for attention"}
       </div>

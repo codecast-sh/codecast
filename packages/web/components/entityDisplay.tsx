@@ -46,7 +46,7 @@ export function DiffStat({
 }) {
   if (additions == null && deletions == null && files == null) return null;
   return (
-    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap font-mono text-[10px] ${className}`}>
+    <span className={`inline-flex items-center gap-1.5 whitespace-nowrap font-mono text-meta ${className}`}>
       {files != null && <span className="text-sol-text-dim">{files.toLocaleString()} file{files === 1 ? "" : "s"}</span>}
       {additions != null && additions > 0 && (
         <span className={themed ? undefined : "text-sol-green"} style={themed ? { color: "var(--sol-green)" } : undefined}>+{additions.toLocaleString()}</span>
@@ -74,7 +74,7 @@ export type DottedPart = { key: string; node: React.ReactNode; shrink?: boolean 
 export function DottedRow({ parts, className = "" }: { parts: DottedPart[]; className?: string }) {
   if (parts.length === 0) return null;
   return (
-    <div className={`flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-sol-text-muted ${className}`}>
+    <div className={`flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-meta text-sol-text-muted ${className}`}>
       {parts.map((p, i) => (
         <span key={p.key} className={`inline-flex items-center gap-1.5 ${p.shrink ? "min-w-0" : "flex-shrink-0"}`}>
           {i > 0 && <MetaDot />}
@@ -106,7 +106,7 @@ export function TaskPeople({ task, size = 12, className = "" }: { task: any; siz
     ? `Filed by and assigned to ${assignee?.name}`
     : [assignee ? `Assigned to ${assignee.name}` : "Unassigned", creator ? `filed by ${creator.name}` : null].filter(Boolean).join(", ");
   return (
-    <span className={`inline-flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] text-sol-text-muted ${className}`} title={title}>
+    <span className={`inline-flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-meta text-sol-text-muted ${className}`} title={title}>
       {assignee ? <Person person={assignee} size={size} /> : <span className="text-sol-text-dim">Unassigned</span>}
       {creator && !samePerson && (
         <span className="inline-flex min-w-0 items-center gap-1 text-sol-text-dim">
@@ -176,12 +176,12 @@ export function SessionSummaryBlock({
   return (
     <div className={`space-y-1 ${className}`}>
       {summary && (
-        <p className={`text-[11px] text-sol-text-muted leading-relaxed ${clamp ? "line-clamp-3" : ""} whitespace-pre-line`}>
+        <p className={`text-meta text-sol-text-muted leading-relaxed ${clamp ? "line-clamp-3" : ""} whitespace-pre-line`}>
           <FormattedSummary text={summary} />
         </p>
       )}
       {showPreview && (
-        <div className="flex items-start gap-1 text-[10px] text-sol-text-dim leading-snug">
+        <div className="flex items-start gap-1 text-meta text-sol-text-dim leading-snug">
           <span className="flex-shrink-0 font-mono text-sol-cyan/60">{role && role !== "user" ? `${role}:` : ">"}</span>
           <span className={`${clamp ? "line-clamp-2" : "whitespace-pre-wrap"} min-w-0`}>{preview}</span>
         </div>

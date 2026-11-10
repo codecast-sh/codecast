@@ -119,11 +119,11 @@ export function RecordGroupRow({ card, answer, onAnswer, open, onOpen, lone, foc
         >
           <ChevronRight aria-hidden className={cn("relative top-[2px] h-3 w-3 shrink-0 transition-transform [transition-duration:120ms] motion-reduce:transition-none", QUIET, open && "rotate-90")} />
           <span className="min-w-0 text-[13.5px] font-bold leading-[20px] text-[color:var(--sol-text)] [overflow-wrap:anywhere]">{card.title}</span>
-          {card.kindWord && <span className={cn("shrink-0 text-[11px] leading-[20px]", QUIET)}>{card.kindWord}</span>}
+          {card.kindWord && <span className={cn("shrink-0 text-meta leading-[20px]", QUIET)}>{card.kindWord}</span>}
         </button>
         {slot && <div className={cn(SLOT, AT.verdicts[mode])} {...LEDGER_STOP} data-subject-verdicts>{slot}</div>}
         <p className={cn("col-start-2 m-0 mt-0.5 text-[12.5px] leading-[18px] [text-wrap:pretty]", MUTED)} data-group-totals>{card.totals}</p>
-        {revisedNew && <p className="org-pop-in col-start-2 m-0 mt-1 text-[11px] leading-[18px] text-[color:var(--ink-violet)]">Revised since you last looked</p>}
+        {revisedNew && <p className="org-pop-in col-start-2 m-0 mt-1 text-meta leading-[18px] text-[color:var(--ink-violet)]">Revised since you last looked</p>}
 
         {!staged && stored && <div className="col-start-2 min-w-0"><LedgerYou text={stored.text!} onEdit={onAnswer && card.waiting > 0 ? () => setFieldOpen(true) : undefined} className="mt-1.5" data-subject-you={stored.verdict} /></div>}
 
@@ -187,7 +187,7 @@ function RecordLine({ row, groupStatus, focused, onHover }: { row: RecordRow; gr
       onMouseEnter={onHover ? () => onHover(row.change._id) : undefined}
       onMouseLeave={onHover ? () => onHover(null) : undefined}
     >
-      <span className={cn("w-7 shrink-0 font-mono text-[11px]", pill && to ? "leading-[26px]" : "leading-[20px]", QUIET)} data-record-seq>#{row.seq}</span>
+      <span className={cn("w-8 shrink-0 font-mono text-meta", pill && to ? "leading-[26px]" : "leading-[20px]", QUIET)} data-record-seq>#{row.seq}</span>
       <div className="min-w-0 flex-1">
         {/* A record that exists reads as its pill, its own status circle saying where it stands, then what it becomes. */}
         {pill && to && row.subjectSpan ? (
@@ -196,12 +196,12 @@ function RecordLine({ row, groupStatus, focused, onHover }: { row: RecordRow; gr
             <span aria-hidden className={cn("shrink-0", MUTED)}>→</span>
             <span className="sr-only">becomes</span>
             <StatusTo record={pill.type} status={to} className="shrink-0" />
-            {word && <span className={cn("shrink-0 text-[11px]", word[1])} data-record-word={row.status}>{word[0]}</span>}
+            {word && <span className={cn("shrink-0 text-meta", word[1])} data-record-word={row.status}>{word[0]}</span>}
           </p>
         ) : (
           <p className={cn("m-0 text-[12.5px] leading-[20px] [overflow-wrap:anywhere] [text-wrap:pretty]", row.closed ? "text-[color:var(--sol-text-dim)]" : row.status === "skipped" ? QUIET : "text-[color:var(--sol-text)]")}>
             <Sentence text={row.sentence} span={row.subjectSpan} name="font-medium" />
-            {word && <span className={cn("ml-1.5 text-[11px]", word[1])} data-record-word={row.status}>{word[0]}</span>}
+            {word && <span className={cn("ml-1.5 text-meta", word[1])} data-record-word={row.status}>{word[0]}</span>}
           </p>
         )}
         {row.failed !== undefined && <FailNote note={row.failed} className="mt-0.5" />}

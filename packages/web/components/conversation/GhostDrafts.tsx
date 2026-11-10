@@ -36,10 +36,10 @@ export const GhostDrafts = memo(function GhostDrafts({
           row={row}
           actions={populate && isSuggestion(row) ? (
             <>
-              <button type="button" data-sv-accept-suggestion="session" onClick={() => accept(row, "session")} className="inline-flex items-center h-6 px-2.5 rounded-full text-[11px] font-medium not-italic border border-sol-violet/50 bg-sol-violet/15 text-sol-violet hover:bg-sol-violet/25 transition-colors">
+              <button type="button" data-sv-accept-suggestion="session" onClick={() => accept(row, "session")} className="inline-flex items-center h-6 px-2.5 rounded-full text-meta font-medium not-italic border border-sol-violet/50 bg-sol-violet/15 text-sol-violet hover:bg-sol-violet/25 transition-colors">
                 Send as {row.user_name.split(/[\s@]/)[0]}
               </button>
-              <button type="button" data-sv-accept-suggestion="composer" onClick={() => accept(row, "composer")} className="inline-flex items-center h-6 px-2.5 rounded-full text-[11px] font-medium not-italic border border-sol-border text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt transition-colors">
+              <button type="button" data-sv-accept-suggestion="composer" onClick={() => accept(row, "composer")} className="inline-flex items-center h-6 px-2.5 rounded-full text-meta font-medium not-italic border border-sol-border text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt transition-colors">
                 Add to my draft
               </button>
             </>
@@ -61,9 +61,9 @@ function GhostDraft({ row, actions }: { row: PresenceRow; actions?: React.ReactN
         <PresenceAvatar person={row} size={24} ring={false} />
         <span className={`text-xs font-medium ${suggested ? "text-sol-violet/80" : "text-sol-blue/80"}`}>{row.user_name}</span>
         {suggested ? (
-          <span className="text-[10px] font-medium uppercase tracking-wide px-1.5 py-px rounded border border-sol-violet/40 text-sol-violet">Suggested</span>
+          <span className="text-mark font-medium uppercase tracking-wide px-1.5 py-px rounded border border-sol-violet/40 text-sol-violet">Suggested</span>
         ) : (
-          <span className="text-[11px] text-sol-text-dim">is writing</span>
+          <span className="text-meta text-sol-text-dim">is writing</span>
         )}
         <span className="ch-typing-dots" aria-hidden="true"><span /><span /><span /></span>
       </div>

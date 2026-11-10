@@ -43,6 +43,21 @@ const RECONCILE_THROTTLE_MS = 24 * 60 * 60 * 1000;
  * that daemon heartbeats (which churn managed_sessions every ~30s) don't
  * invalidate the multi-MB task payload.
  */
+/** `next` with each entry that is value-equal to `prev`'s kept at its old
+ *  reference; `prev` itself when no entry was added, dropped or changed. */
+export function keepEqualEntries<V>(prev: Record<string, V> | null | undefined, next: Record<string, V>): Record<string, V> {
+  if (!prev) return next;
+  let changed = Object.keys(prev).length !== Object.keys(next).length;
+  const out: Record<string, V> = {};
+  for (const id in next) {
+    const old = Object.prototype.hasOwnProperty.call(prev, id) ? prev[id] : undefined;
+    const kept = old !== undefined && JSON.stringify(old) === JSON.stringify(next[id]) ? old : next[id];
+    if (kept !== old) changed = true;
+    out[id] = kept;
+  }
+  return changed ? out : prev;
+}
+
 // One-shot badge fetch batch size — bounded by webTaskOrigins' server-side cap.
 const ORIGIN_BADGE_CHUNK = 150;
 
@@ -108,8 +123,14 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
   ).data;
 
   // Active sessions stored separately — lightweight update, no task resync.
+  // Each push is a fresh decode of the whole map: keep every entry that did
+  // not change at its old reference and write nothing when none did, so a
+  // task row's agent pill wakes only when its own agent changes.
   useConvexSync(activeMap, useCallback((data: any) => {
-    if (data) useInboxStore.setState({ taskActiveSessions: data });
+    if (!data) return;
+    const prev = useInboxStore.getState().taskActiveSessions;
+    const next = keepEqualEntries(prev, data);
+    if (next !== prev) useInboxStore.setState({ taskActiveSessions: next });
   }, []));
 
   // Origin badges for rows that arrive through the sync log (they never pass a
@@ -178,9 +199,12 @@ export function useSyncTasksWithArgs(wsArgs: WorkspaceArgs) {
         syncTable("tasks", rows, { isDelta: true });
         fetchOriginBadges(rows);
       },
-      onComplete: (all) => {
-        useInboxStore.getState().clearFeedExcludes("tasks", all.map((r: any) => String(r._id)));
-        useInboxStore.getState().syncTable("tasks", all, { isDelta: true });
+      onComplete: () => {
+        // Every crawled row already landed through onPage (each flush hands
+        // over its whole buffer before onComplete runs), so the full set is
+        // not overlaid again: that applied a cold backfill twice, and could
+        // lay the crawl's copy over a newer live push or re-admit a row an
+        // exclude dropped mid-crawl.
         // Removal-condition metric (sync-log-migration.md D11/D12): rows an
         // incremental safety-net crawl healed = rows the sync log missed.
         // Emitted on EVERY completed incremental crawl, zeros included — the

@@ -29,7 +29,7 @@ export function ElsewhereCallPill({ className = "" }: { className?: string }) {
     <button
       type="button"
       onClick={() => void showCallPanel()}
-      className={`flex items-center gap-1.5 text-[11px] text-sol-violet ${className}`}
+      className={`flex items-center gap-1.5 text-meta text-sol-violet ${className}`}
       title="Show the huddle window"
     >
       <Headphones className="h-3 w-3 shrink-0" aria-hidden="true" />

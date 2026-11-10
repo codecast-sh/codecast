@@ -2,13 +2,15 @@
 // rule every reader shares (docs/architecture/session-projects.md SP1): a
 // session's own pick, else its bound task's or plan's project, else its
 // parent's. Nothing is stored per session here; the map is derived from the
-// sessions, tasks and plans already in the store and memoized on their refs.
+// sessions, tasks and plans already in the store and memoized on a digest of
+// the session fields the rule reads and the tasks' and plans' refs.
 //
 // Projects filter the inbox on the same chip axis as folders, under their own
 // key (`pj:<id>`), so a project chip and a folder chip are separate chips that
 // share every gesture: include, exclude, shift-add, history.
 
 import { sessionProjectId, type SessionProjectRow } from "@codecast/shared/contracts/sessionProject";
+import { makeCollectionSig } from "./wakeSig";
 
 export const WORK_PROJECT_CHIP_PREFIX = "pj:";
 export const workProjectChipKey = (projectId: string): string => `${WORK_PROJECT_CHIP_PREFIX}${projectId}`;
@@ -31,11 +33,19 @@ export type WorkProjectSource = {
   plans?: Record<string, { project_id?: string | null }>;
 };
 
-let memo: { sessions: unknown; tasks: unknown; plans: unknown; byId: Map<string, string | null> } | null = null;
+// The fields of a session the rule reads. A heartbeat hands back a new
+// `sessions` ref without touching any of them, so the map is keyed on this
+// digest (each unchanged row's hash is cached by its ref) and a beat rebuilds
+// nothing: every card's selector reads the same map.
+const projectFieldsSig = makeCollectionSig<SessionLike>((s) =>
+  `${s.project_id ?? ""}|${s.active_task?._id ?? ""}|${s.active_plan?._id ?? ""}|${s.parent_conversation_id ?? ""}|${s.spawned_by_conversation_id ?? ""}`);
+
+let memo: { sig: string; tasks: unknown; plans: unknown; byId: Map<string, string | null> } | null = null;
 
 /** The project of every session in the store, by conversation id (null: none). */
 export function workProjectsBySession(state: WorkProjectSource): ReadonlyMap<string, string | null> {
-  if (memo && memo.sessions === state.sessions && memo.tasks === state.tasks && memo.plans === state.plans) return memo.byId;
+  const sig = projectFieldsSig(state.sessions);
+  if (memo && memo.sig === sig && memo.tasks === state.tasks && memo.plans === state.plans) return memo.byId;
   const row = (s: SessionLike): SessionProjectRow => ({
     _id: s._id,
     project_id: s.project_id,
@@ -54,7 +64,7 @@ export function workProjectsBySession(state: WorkProjectSource): ReadonlyMap<str
   };
   const byId = new Map<string, string | null>();
   for (const s of Object.values(state.sessions)) byId.set(s._id, sessionProjectId(row(s), lookup));
-  memo = { sessions: state.sessions, tasks: state.tasks, plans: state.plans, byId };
+  memo = { sig, tasks: state.tasks, plans: state.plans, byId };
   return byId;
 }
 

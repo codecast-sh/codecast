@@ -85,7 +85,7 @@ function Swap({ children }: { children: ReactNode }) {
 function Figure({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="min-w-0">
-      <div className="text-[9.5px] uppercase tracking-wider" style={{ color: SOL.base1 }}>{label}</div>
+      <div className="text-mark uppercase tracking-wider" style={{ color: SOL.base1 }}>{label}</div>
       <div className="mt-1 text-[12px] whitespace-nowrap">{children}</div>
     </div>
   );
@@ -102,14 +102,14 @@ function PrCard() {
             {PR_TITLE} <span style={{ color: SOL.base1, fontWeight: 400 }}>#{PR_NUMBER}</span>
           </div>
         </div>
-        <div className="mt-2.5 flex flex-wrap items-center gap-2 text-[11.5px]" style={{ color: SOL.base00 }}>
-          <span className="rounded-full px-2 py-[1px] text-[10.5px] font-semibold" style={{ backgroundColor: "rgba(133,153,0,0.13)", color: SOL.green }}>Open</span>
+        <div className="mt-2.5 flex flex-wrap items-center gap-2 text-meta" style={{ color: SOL.base00 }}>
+          <span className="rounded-full px-2 py-[1px] text-meta font-semibold" style={{ backgroundColor: "rgba(133,153,0,0.13)", color: SOL.green }}>Open</span>
           <Face name={AUTHOR} color={PEOPLE.lena} size={16} />
           {AUTHOR}
-          <span className="rounded border px-1.5 py-[1px] text-[10.5px]" style={{ borderColor: SOL.base2, backgroundColor: SOL.base3 }}>{HEAD} → {BASE}</span>
+          <span className="rounded border px-1.5 py-[1px] text-meta" style={{ borderColor: SOL.base2, backgroundColor: SOL.base3 }}>{HEAD} → {BASE}</span>
         </div>
         {/* ShepherdControl: the bound session, what it is working toward, whether changes wake it */}
-        <div className="mt-3 inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1.5 rounded-lg border py-1 pl-2.5 pr-1 text-[11px]" style={{ borderColor: SOL.base2, backgroundColor: "rgba(238,232,213,0.4)" }}>
+        <div className="mt-3 inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1.5 rounded-lg border py-1 pl-2.5 pr-1 text-meta" style={{ borderColor: SOL.base2, backgroundColor: "rgba(238,232,213,0.4)" }}>
           <span className="inline-flex items-center gap-1.5" style={{ color: SOL.base1 }}>
             <RadioIcon color={SOL.cyan} /> Shepherd
           </span>
@@ -156,7 +156,7 @@ function PrCard() {
         </Figure>
       </div>
 
-      <ol className="flex-1 px-4 sm:px-5 py-3 space-y-[7px] text-[11px]" style={{ color: SOL.base00 }}>
+      <ol className="flex-1 px-4 sm:px-5 py-3 space-y-[7px] text-meta" style={{ color: SOL.base00 }}>
         <TimelineRow d={0.5} mark="x" color={SOL.red}>CI failed: test (pull_request)</TimelineRow>
         <TimelineRow d={c.green - 0.5} mark="↑" color={SOL.blue}>PR #{PR_NUMBER} updated to 3f2a91c</TimelineRow>
         <TimelineRow d={c.green} mark="✓" color={SOL.green}>CI passed on PR #{PR_NUMBER}</TimelineRow>
@@ -166,11 +166,11 @@ function PrCard() {
       </ol>
 
       <div className="flex items-center justify-between gap-3 px-4 sm:px-5 py-3" style={{ borderTop: `1px solid ${SOL.base2}`, backgroundColor: "rgba(238,232,213,0.35)" }}>
-        <span className="text-[10.5px]" style={{ color: SOL.base1 }}>Conversation · Files 4 · Commits 3 · Checks 6</span>
+        <span className="text-meta" style={{ color: SOL.base1 }}>Conversation · Files 4 · Commits 3 · Checks 6</span>
         <Swap>
-          <span className="prx-a shrink-0 whitespace-nowrap rounded-md border px-3 py-1 text-[11px] font-semibold" style={{ ...at(c.approved), borderColor: SOL.base2, color: SOL.base1 }}>Merge</span>
+          <span className="prx-a shrink-0 whitespace-nowrap rounded-md border px-3 py-1 text-meta font-semibold" style={{ ...at(c.approved), borderColor: SOL.base2, color: SOL.base1 }}>Merge</span>
           <span className="prx-in" style={at(c.approved)}>
-            <span className="prx-flash inline-block shrink-0 whitespace-nowrap rounded-md border px-3 py-1 text-[11px] font-semibold text-white" style={{ ...at(c.approved + 0.2), backgroundColor: SOL.green, borderColor: SOL.green }}>Merge</span>
+            <span className="prx-flash inline-block shrink-0 whitespace-nowrap rounded-md border px-3 py-1 text-meta font-semibold text-white" style={{ ...at(c.approved + 0.2), backgroundColor: SOL.green, borderColor: SOL.green }}>Merge</span>
           </span>
         </Swap>
       </div>
@@ -193,7 +193,7 @@ function Tether() {
   return (
     <div className="relative flex lg:flex-col items-center justify-center py-3 lg:py-0" aria-hidden>
       {/* vertical wire (narrow screens) */}
-      <div className="lg:hidden flex items-center gap-4 font-mono text-[10.5px]" style={{ color: SOL.base01 }}>
+      <div className="lg:hidden flex items-center gap-4 font-mono text-meta" style={{ color: SOL.base01 }}>
         <span className="text-right w-36">GitHub event wakes it ↓</span>
         <svg width="8" height="44" className="shrink-0"><line x1="4" y1="0" x2="4" y2="44" stroke={SOL.cyan} strokeWidth="2" strokeDasharray="4 4" className="prx-wire" /></svg>
         <span className="w-36">↑ push, reply, resolve</span>
@@ -202,7 +202,7 @@ function Tether() {
       {/* horizontal wires (wide screens): events in on top, the agent's acts back below */}
       <div className="hidden lg:block relative w-full h-full">
         <div className="absolute inset-x-0 top-[34%] -translate-y-1/2">
-          <div className="px-2 text-center font-mono text-[10.5px] leading-tight mb-2" style={{ color: SOL.cyan }}>webhook wakes it</div>
+          <div className="px-2 text-center font-mono text-meta leading-tight mb-2" style={{ color: SOL.cyan }}>webhook wakes it</div>
           <Wire />
           <div className="absolute inset-x-0 top-[calc(100%-4px)] h-0">
             <Packet d={c.checkPkt} color={SOL.red}>check failed</Packet>
@@ -211,7 +211,7 @@ function Tether() {
         </div>
         <div className="absolute inset-x-0 top-[66%] -translate-y-1/2">
           <Wire back />
-          <div className="px-2 text-center font-mono text-[10.5px] leading-tight mt-2" style={{ color: SOL.base01 }}>push, reply, resolve</div>
+          <div className="px-2 text-center font-mono text-meta leading-tight mt-2" style={{ color: SOL.base01 }}>push, reply, resolve</div>
           <div className="absolute inset-x-0 top-[4px] h-0">
             <Packet d={c.pushPkt} color={SOL.blue} back>push 3f2a91c</Packet>
             <Packet d={c.replyPkt} color={SOL.cyan} back>2 resolved</Packet>
@@ -237,7 +237,7 @@ function Wire({ back = false }: { back?: boolean }) {
 
 function Packet({ d, color, back = false, children }: { d: number; color: string; back?: boolean; children: ReactNode }) {
   return (
-    <span className={`prx-pkt ${back ? "prx-back" : ""} inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-[2px] font-mono text-[10px] font-semibold shadow-sm`} style={{ ...at(d), borderColor: color, color, backgroundColor: PAPER }}>
+    <span className={`prx-pkt ${back ? "prx-back" : ""} inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border px-2 py-[2px] font-mono text-meta font-semibold shadow-sm`} style={{ ...at(d), borderColor: color, color, backgroundColor: PAPER }}>
       <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: color }} />
       {children}
     </span>
@@ -251,8 +251,8 @@ function SessionCard() {
       <div className="flex flex-wrap items-center gap-2 px-4 sm:px-5 py-3" style={{ borderBottom: `1px solid ${SOL.base2}` }}>
         <SessionPill size="md">{SESSION.id}</SessionPill>
         <span className="min-w-0 truncate text-[13px] font-semibold" style={{ color: SOL.base03 }}>{SESSION.title}</span>
-        <span className="text-[10.5px]" style={{ color: SOL.blue }}>claude</span>
-        <span className="ml-auto text-[10.5px]">
+        <span className="text-meta" style={{ color: SOL.blue }}>claude</span>
+        <span className="ml-auto text-meta">
           <Swap>
             <span className="prx-a" style={{ ...at(c.wake), color: SOL.base1 }}>○ dormant</span>
             <span className="prx-b" style={{ ...at(c.wake, c.sleep), color: SOL.green }}><span className="prx-live">●</span> working</span>
@@ -261,7 +261,7 @@ function SessionCard() {
         </span>
       </div>
 
-      <div className="flex-1 space-y-2.5 px-4 sm:px-5 py-4 text-[11.5px] leading-[1.55]" style={{ color: SOL.base02 }}>
+      <div className="flex-1 space-y-2.5 px-4 sm:px-5 py-4 text-meta leading-[1.55]" style={{ color: SOL.base02 }}>
         <WakeBlock d={c.wake} title={`Shepherd PR #${PR_NUMBER}`}>
           <div>Woken because a check failed.</div>
           <div style={{ color: SOL.base00 }}>## Failing checks<br />- test (pull_request): failure</div>
@@ -293,7 +293,7 @@ function WakeBlock({ d, title, tone = "wake", children }: { d: number; title: st
   const rgb = tone === "wake" ? "42,161,152" : "203,75,22";
   return (
     <div className="prx-in rounded" style={{ ...at(d), borderLeft: `2px solid rgba(${rgb},0.65)`, backgroundColor: `rgba(${rgb},0.06)` }}>
-      <div className="flex items-center gap-1.5 px-2.5 pt-1.5 text-[10px] font-semibold" style={{ color }}>
+      <div className="flex items-center gap-1.5 px-2.5 pt-1.5 text-meta font-semibold" style={{ color }}>
         {tone === "wake" ? <RadioIcon color={color} /> : <Face name={REVIEWER} color={PEOPLE.omar} size={13} />}
         {title}
       </div>
@@ -334,14 +334,14 @@ function Steps({ onReplay }: { onReplay: () => void }) {
             <div className="h-[3px] rounded-full overflow-hidden" style={{ backgroundColor: SOL.base2 }}>
               <div className="prx-fill h-full" style={{ ...at(b.at), backgroundColor: SOL.cyan }} />
             </div>
-            <div className="mt-2 flex gap-2 font-mono text-[11.5px] leading-snug" style={{ color: SOL.base01 }}>
+            <div className="mt-2 flex gap-2 font-mono text-meta leading-snug" style={{ color: SOL.base01 }}>
               <span style={{ color: SOL.cyan }}>{i + 1}</span>
               {b.text}
             </div>
           </li>
         ))}
       </ol>
-      <button type="button" onClick={onReplay} className="prx-chip self-start shrink-0 rounded-md border px-3 py-1.5 font-mono text-[11.5px]" style={{ borderColor: SOL.base2, color: SOL.base00, backgroundColor: PAPER }}>
+      <button type="button" onClick={onReplay} className="prx-chip self-start shrink-0 rounded-md border px-3 py-1.5 font-mono text-meta" style={{ borderColor: SOL.base2, color: SOL.base00, backgroundColor: PAPER }}>
         ↻ Replay
       </button>
     </div>

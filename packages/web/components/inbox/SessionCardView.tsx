@@ -357,18 +357,18 @@ export function SessionCardView({
         data-selected={isSelected ? "true" : undefined}
         {...dragProps}
         onContextMenu={onCardContextMenu ? (e) => onCardContextMenu(e, session, isForeignSession) : undefined}
-        className={`relative group transition-opacity duration-150 overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-violet-400/40 bg-violet-500/10" : ""} ${
+        className={`relative group transition-opacity duration-150 overflow-hidden ${isDraggingCard ? "opacity-35 scale-[0.99]" : ""} ${isDragOver ? "ring-1 ring-inset ring-sol-violet/40 bg-sol-violet/10" : ""} ${
           isActive
-            ? "bg-violet-500/[0.08] border-l-2 border-l-violet-400/60"
+            ? "bg-sol-violet/[0.08] border-l-2 border-l-sol-violet/60"
             : isParentActive
               ? "bg-sol-cyan/[0.10] border-l border-l-sol-cyan/40"
               : isWorking
-                ? "hover:bg-violet-500/[0.06] border-l border-l-violet-400/25"
+                ? "hover:bg-sol-violet/[0.06] border-l border-l-sol-violet/25"
                 : isStashed
-                  ? "opacity-45 hover:opacity-65 hover:bg-violet-500/[0.04]"
+                  ? "opacity-45 hover:opacity-65 hover:bg-sol-violet/[0.04]"
                   : isDismissed
-                    ? "opacity-40 hover:opacity-60 hover:bg-violet-500/[0.04]"
-                    : "hover:bg-violet-500/[0.06] border-l border-l-violet-500/15"
+                    ? "opacity-40 hover:opacity-60 hover:bg-sol-violet/[0.04]"
+                    : "hover:bg-sol-violet/[0.06] border-l border-l-sol-violet/15"
         }`}
       >
         {forkColorKey && <ForkCorner colorKey={forkColorKey} />}
@@ -378,7 +378,7 @@ export function SessionCardView({
           tabIndex={0}
           onClick={(e) => onSelect(session, e)}
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
-          className="w-full text-left cursor-pointer px-2 py-1"
+          className="w-full text-left cursor-pointer px-2 py-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sol-cyan/60"
         >
           <div className="flex items-center gap-1.5">
             {/* Corner arrow (↳) — marks this row as a child of its parent
@@ -386,7 +386,7 @@ export function SessionCardView({
                 only when the parent is directly above; this makes the
                 sub-of-parent relationship explicit when a nested row is
                 focused or pinned without the parent immediately above. */}
-            <svg className={`w-3 h-3 flex-shrink-0 ${subRow === "trigger" ? "text-sol-amber/60" : "text-violet-400/60"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label={subRow === "trigger" ? "Trigger session" : roleAbove ? `Reports to @${roleAbove.handle}` : "Subagent"}>
+            <svg className={`w-3 h-3 flex-shrink-0 ${subRow === "trigger" ? "text-sol-amber/60" : "text-sol-violet/60"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label={subRow === "trigger" ? "Trigger session" : roleAbove ? `Reports to @${roleAbove.handle}` : "Subagent"}>
               <title>{subRow === "trigger" ? "Session driven by the trigger above" : roleAbove ? `Reports to @${roleAbove.handle}, which decides what reaches you` : "Subagent — child of its parent session"}</title>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
@@ -398,9 +398,9 @@ export function SessionCardView({
             )}
             {isUnread && !isActive && <UnreadDot />}
             <span data-sv-title className={`truncate text-xs leading-tight flex-1 ${
-              isActive ? "text-violet-300 font-medium" : isUnread ? "text-sol-text font-medium" : "text-gray-400 font-normal"
+              isActive ? "text-sol-violet font-medium" : isUnread ? "text-sol-text font-medium" : "text-sol-text-muted font-normal"
             }`}>
-              {isSlashCommand ? <span className="font-mono text-violet-400/80">{displayTitle}</span> : displayTitle}
+              {isSlashCommand ? <span className="font-mono text-sol-violet/80">{displayTitle}</span> : displayTitle}
             </span>
             <div className="flex items-center gap-1 flex-shrink-0">
               {showBlockedBadge && <AuthErrorBadge kind={session.pending_api_error_kind} agentType={session.agent_type} />}
@@ -419,12 +419,12 @@ export function SessionCardView({
                 <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-sol-green" title="Live" />
               )}
               {!isLive && !showBlockedBadge && !session.session_error && !session.is_unresponsive && !session.has_pending && session.message_count > 0 && (
-                <span className="w-1.5 h-1.5 rounded-full bg-gray-500/40 ring-1 ring-gray-500/20" title="Idle" />
+                <span className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/40 ring-1 ring-sol-text-dim/20" title="Idle" />
               )}
               {session.message_count > 0 && (
-                <span className="text-[9px] tabular-nums text-sol-text-dim/50">{session.message_count}</span>
+                <span className="text-meta tabular-nums text-sol-text-dim">{session.message_count}</span>
               )}
-              <span className="text-[9px] text-gray-500 tabular-nums">
+              <span className="text-meta text-sol-text-dim tabular-nums">
                 {formatIdleDuration(session.updated_at)}
               </span>
             </div>
@@ -436,14 +436,14 @@ export function SessionCardView({
                 className={`w-2 h-2 mt-[3px] shrink-0 ${stateView.status ? THREAD_STATE_STATUS_META[stateView.status].dot : THREAD_STATE_PIN_CLASS[stateView.freshness]}`}
                 strokeWidth={2.4}
               />
-              <span className="text-[10px] text-sol-text-secondary truncate leading-snug">
+              <span className="text-meta text-sol-text-secondary truncate leading-snug">
                 {stateView.cardLine}
               </span>
             </div>
           )}
           {cleanedUserMsg && (
-            <div data-sv-prompt className="text-[10px] text-gray-500 mt-0.5 truncate leading-snug">
-              <span className="text-gray-600 mr-0.5">&gt;</span>
+            <div data-sv-prompt className="text-meta text-sol-text-dim mt-0.5 truncate leading-snug">
+              <span className="text-sol-text-dim mr-0.5">&gt;</span>
               {cleanedUserMsg}
             </div>
           )}
@@ -457,8 +457,10 @@ export function SessionCardView({
           <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex items-center gap-1 py-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity pl-8 pr-2 bg-gradient-to-r from-transparent to-sol-bg-alt`}>
             {onDismiss && (
               <button
+                aria-label="Kill Session"
+                title="Kill Session"
                 onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
-                className="p-0.5 rounded text-gray-500 hover:text-sol-red transition-colors"
+                className="p-0.5 rounded text-sol-text-dim hover:text-sol-red transition-colors"
               >
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -468,11 +470,13 @@ export function SessionCardView({
           </div>
         )}
         {!isForeignSession && (onRestore || onKill) && (
-          <div className="absolute top-1 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <div className="absolute top-1 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
             {onKill && (
               <button
+                aria-label={isStashed ? "Kill" : "Remove from list"}
+                title={isStashed ? "Kill" : "Remove from list"}
                 onClick={(e) => { e.stopPropagation(); onKill(session._id); }}
-                className="p-0.5 rounded text-gray-500 hover:text-sol-red transition-colors"
+                className="p-0.5 rounded text-sol-text-dim hover:text-sol-red transition-colors"
               >
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -481,8 +485,10 @@ export function SessionCardView({
             )}
             {onRestore && (
               <button
+                aria-label={variant === "snoozed" ? "Move to Needs You now" : "Restore"}
+                title={variant === "snoozed" ? "Move to Needs You now" : "Restore"}
                 onClick={(e) => { e.stopPropagation(); onRestore(session._id); }}
-                className="p-0.5 rounded text-gray-500 hover:text-violet-400 transition-colors"
+                className="p-0.5 rounded text-sol-text-dim hover:text-sol-violet transition-colors"
               >
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 17L7 7M7 7h6M7 7v6" />
@@ -546,7 +552,7 @@ export function SessionCardView({
         aria-label={isHostedAgentType(session.agent_type) ? `${displayTitle}, ${formatRowTime(session.updated_at, true)}` : undefined}
         onClick={(e) => onSelect(session, e)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
-        className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2"
+        className="w-full text-left cursor-pointer px-2.5 sm:px-3 py-1.5 sm:py-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-sol-cyan/60"
       >
       <div className="flex items-center gap-2.5">
       {/* data-sv-body / -titlerow / -status / -ping: the compact list
@@ -630,8 +636,8 @@ export function SessionCardView({
                   onClick={(e) => { e.stopPropagation(); onToggleFavorite?.(session._id); }}
                   className={`flex-shrink-0 transition-all ${
                     isFavorite
-                      ? "text-amber-400/85 hover:text-amber-300"
-                      : "text-sol-text-dim/30 opacity-0 group-hover:opacity-50 hover:!opacity-100 hover:!text-amber-400"
+                      ? "text-sol-yellow hover:opacity-80"
+                      : "text-sol-text-dim opacity-0 group-hover:opacity-50 hover:!opacity-100 hover:!text-sol-yellow"
                   }`}
                   aria-label={isFavorite ? "Unfavorite" : "Favorite"}
                 >
@@ -668,17 +674,17 @@ export function SessionCardView({
                     every line of the card starts on the same edge. Working stays
                     quiet: the liveness dot already says "running". */}
                 {stateView.status && stateView.status !== "working" && stateView.status !== sectionStatus && (
-                  <span data-sv-status-chip className={`shrink-0 text-[11px] font-semibold ${THREAD_STATE_STATUS_META[stateView.status].dot}`}>
+                  <span data-sv-status-chip className={`shrink-0 text-meta font-semibold ${THREAD_STATE_STATUS_META[stateView.status].dot}`}>
                     {THREAD_STATE_STATUS_META[stateView.status].label}
                   </span>
                 )}
-                <span className="min-w-0 text-[11px] truncate leading-snug text-sol-text-secondary">
+                <span className="min-w-0 text-meta truncate leading-snug text-sol-text-secondary">
                   {stateView.cardLine}
                 </span>
               </div>
             )}
             {cardSummary && !stateView && !session.implementation_session && (
-              <div data-sv-summary className="text-[11px] text-sol-text-muted line-clamp-2 leading-snug whitespace-pre-line">
+              <div data-sv-summary className="text-meta text-sol-text-muted line-clamp-2 leading-snug whitespace-pre-line">
                 <FormattedSummary text={cardSummary} />
               </div>
             )}
@@ -686,30 +692,30 @@ export function SessionCardView({
                 explain it, so the card says what will happen: the next activity —
                 any message, trigger, or turn — files the row on its own again. */}
             {variant === "snoozed" && session.inbox_snoozed_until && (
-              <div className="flex items-center gap-1 text-[10px] text-sol-blue">
+              <div className="flex items-center gap-1 text-meta text-sol-blue">
                 <Clock className="h-3 w-3 shrink-0" />
                 <span>Until {new Date(session.inbox_snoozed_until).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>
               </div>
             )}
             {session.user_rest && !isDismissed && (
-              <div data-sv-rest className="flex items-center gap-1.5 text-[10px] text-sol-blue/70">
+              <div data-sv-rest className="flex items-center gap-1.5 text-meta text-sol-blue">
                 <span className="w-1.5 h-1.5 rounded-full bg-sol-blue/60" />
                 <span>{USER_REST_CARD_LINE[session.user_rest]}</span>
               </div>
             )}
             {cleanedUserMsg && (
-              <div data-sv-prompt className="text-[11px] text-sky-700/90 dark:text-sky-300/90 truncate leading-snug">
-                <span className="text-sky-600/50 dark:text-sky-400/40 mr-1">&gt;</span>
+              <div data-sv-prompt className="text-meta text-sol-blue truncate leading-snug">
+                <span className="text-sol-blue mr-1">&gt;</span>
                 {cleanedUserMsg}
               </div>
             )}
             {session._hasDraft && (
               <div data-sv-draft className="flex items-start gap-1.5">
-                <span className="shrink-0 mt-[1px] px-1 py-[1px] rounded text-[9px] font-medium uppercase tracking-wide bg-sol-yellow/15 text-sol-yellow border border-sol-yellow/30">
+                <span className="shrink-0 mt-[1px] px-1 py-[1px] rounded text-mark font-medium uppercase tracking-wide bg-sol-yellow/15 text-sol-yellow border border-sol-yellow/30">
                   Draft
                 </span>
                 {draftPreview && (
-                  <span className="text-[11px] text-sol-text-dim truncate leading-snug">{draftPreview}</span>
+                  <span className="text-meta text-sol-text-dim truncate leading-snug">{draftPreview}</span>
                 )}
               </div>
             )}
@@ -736,7 +742,7 @@ export function SessionCardView({
         )}
         <div data-sv-meta className="flex items-center gap-1.5 mt-1">
           {author && (
-            <span className="flex items-center gap-1 flex-shrink-0 max-w-[130px]" title={`${author.name}'s session`}>
+            <span className="flex items-center gap-1 min-w-0 max-w-[130px]" title={`${author.name}'s session`}>
               {author.role ? (
                 <RoleFace role={author.role} size={14} title={author.name} prefs={chrome.prefs} />
               ) : (
@@ -745,13 +751,13 @@ export function SessionCardView({
                   alt={author.name}
                   className="w-3.5 h-3.5 rounded-full object-cover"
                   fallback={
-                    <span className="w-3.5 h-3.5 rounded-full bg-sol-violet/20 text-sol-violet flex items-center justify-center text-[8px] font-semibold leading-none">
+                    <span className="w-[18px] h-[18px] rounded-full bg-sol-violet/20 text-sol-violet flex items-center justify-center text-mark font-semibold leading-none">
                       {author.name.charAt(0).toUpperCase()}
                     </span>
                   }
                 />
               )}
-              <span className="text-[10px] font-medium text-sol-violet/80 truncate">{author.role ? author.name : author.name.split(" ")[0]}</span>
+              <span className="text-meta font-medium text-sol-violet truncate">{author.role ? author.name : author.name.split(" ")[0]}</span>
             </span>
           )}
           {viewers.length > 0 && <ViewerFaces members={viewers} size={14} max={3} />}
@@ -772,7 +778,7 @@ export function SessionCardView({
               href={`/org/${session.role.short_id}`}
               data-role-sessions={roleSessions}
               onClick={(e) => e.stopPropagation()}
-              className="flex-shrink-0 text-[10px] text-sol-text-dim tabular-nums whitespace-nowrap hover:text-sol-text hover:underline underline-offset-2"
+              className="flex-shrink-0 text-meta text-sol-text-dim tabular-nums whitespace-nowrap hover:text-sol-text hover:underline underline-offset-2"
               title={`${roleSessions} ${roleSessions === 1 ? "session" : "sessions"} under this role; its page lists them`}
             >
               {roleSessions} {roleSessions === 1 ? "session" : "sessions"}
@@ -784,22 +790,26 @@ export function SessionCardView({
               work, so it stays in simple view too. */}
           {session.active_task && <SessionTaskChip task={session.active_task} className="flex-shrink" />}
           {showModelBadge && session.model && (
-            <span data-simple-hide className="text-[9px] text-sol-text-dim/70 font-mono truncate max-w-[90px] flex-shrink-0" title={session.model}>
+            <span data-simple-hide className="text-meta text-sol-text-dim font-mono truncate max-w-[90px]" title={session.model}>
               {formatModel(session.model)}
             </span>
           )}
           {session.message_count > 0 && (
-            <span data-simple-hide className={`text-[10px] tabular-nums flex-shrink-0 ${msgCountColor(session.message_count)}`}>
+            <span data-simple-hide className={`text-meta tabular-nums flex-shrink-0 ${msgCountColor(session.message_count)}`}>
               {session.message_count} msg{session.message_count !== 1 ? "s" : ""}
             </span>
           )}
-          <div data-sv-status className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
+          {/* The status cluster yields last (a near-zero shrink factor), so the
+              chips to its left truncate first, as they always did. On a rail too
+              narrow even for that, it clips from its left end: the dots and the
+              time at its right edge never leave the card. */}
+          <div data-sv-status className="flex items-center justify-end gap-1.5 min-w-0 shrink-[0.001] overflow-hidden ml-auto">
             {showBranchPill && <BranchCodeLink session={session} className="max-w-[110px]" detail={false} />}
             <SessionShipChip ship={ship} />
             <PrStatusChip status={session.pr_status} />
             <BrowserPaneOfferGlyph offer={session.browser_pane_offer} />
             {isFork(session) && (
-              <span data-simple-hide className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20" title="Fork">
+              <span data-simple-hide className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-meta font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20" title="Fork">
                 <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                   <circle cx="12" cy="18" r="3" />
                   <circle cx="6" cy="6" r="3" />
@@ -811,13 +821,13 @@ export function SessionCardView({
               </span>
             )}
             {session.active_plan && (
-              <span data-simple-hide className="inline-block align-middle px-1 py-0 rounded text-[9px] font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 max-w-[120px] truncate" title={session.active_plan.title}>
+              <span data-simple-hide className="inline-block align-middle px-1 py-0 rounded text-meta font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 max-w-[120px] truncate" title={session.active_plan.title}>
                 {session.active_plan.title}
               </span>
             )}
             {session.workflow_run_id && !session.is_workflow_sub && session.workflow_run_status === "paused" && (
-              <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/30">
-                <span className="w-1 h-1 rounded-full bg-sol-magenta animate-pulse" />
+              <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-meta font-semibold bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/30">
+                <span className="w-1 h-1 rounded-full bg-sol-magenta" />
                 Gate
               </span>
             )}
@@ -836,7 +846,7 @@ export function SessionCardView({
             />
             {/* Every row keeps its time column, so the list scans down one
                 edge. */}
-            <span data-sv-time className="text-[10px] text-sol-text-dim tabular-nums">
+            <span data-sv-time className="flex-shrink-0 whitespace-nowrap text-meta text-sol-text-dim tabular-nums">
               {formatRowTime(session.updated_at, isHostedAgentType(session.agent_type))}
             </span>
           </div>
@@ -867,7 +877,7 @@ export function SessionCardView({
 
 /** The dim dot between plain-text facts on the meta row. */
 function MetaSep() {
-  return <span aria-hidden className="flex-shrink-0 text-[10px] text-sol-text-dim/50">·</span>;
+  return <span aria-hidden className="flex-shrink-0 text-meta text-sol-text-dim">·</span>;
 }
 
 // What the card says under a user-filed row: the next activity re-files it.

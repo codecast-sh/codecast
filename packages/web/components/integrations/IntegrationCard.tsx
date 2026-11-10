@@ -92,7 +92,7 @@ export function IntegrationCard({
         <span className="truncate text-sm font-semibold tracking-tight text-sol-text">{descriptor.name}</span>
         <span className="flex-1" />
         {comingSoon ? (
-          <span className="rounded border border-dashed border-sol-border px-1.5 py-[1px] font-mono text-[10px] text-sol-text-dim">
+          <span className="rounded border border-dashed border-sol-border px-1.5 py-[1px] font-mono text-meta text-sol-text-dim">
             on the roadmap
           </span>
         ) : notConfigured ? (
@@ -124,7 +124,7 @@ export function IntegrationCard({
 
       <ul className="mt-1.5 space-y-0.5">
         {descriptor.bullets.map((b) => (
-          <li key={b} className="flex gap-1.5 text-[11px] leading-snug text-sol-text-muted">
+          <li key={b} className="flex gap-1.5 text-meta leading-snug text-sol-text-muted">
             <span className="select-none text-sol-text-dim">·</span>
             {b}
           </li>
@@ -135,11 +135,11 @@ export function IntegrationCard({
         <StatusDot tone={health.tone}>{health.text}</StatusDot>
       </div>}
 
-      {error && <p className="mt-1.5 break-words text-[11px] leading-relaxed text-sol-red">{error}</p>}
+      {error && <p className="mt-1.5 break-words text-meta leading-relaxed text-sol-red">{error}</p>}
 
       <div className="mt-2.5 flex flex-wrap items-center gap-3">
         {comingSoon ? (
-          <span className="text-[11px] text-sol-text-dim">
+          <span className="text-meta text-sol-text-dim">
             No connector yet. This card turns live when it lands.
           </span>
         ) : connected ? (
@@ -198,7 +198,7 @@ export function IntegrationCard({
       {descriptor.id === "github" && !comingSoon && (
         <>
           <GithubInstallDetail scope={scope} teamId={me ? githubAppInstallTeam(me) : undefined} />
-          <p className="mt-1.5 text-[11px] leading-relaxed text-sol-text-dim">
+          <p className="mt-1.5 text-meta leading-relaxed text-sol-text-dim">
             Installing opens GitHub, which asks for the account or organization and the repositories.
             If GitHub sends you to an existing install instead of asking, the App is set to install
             only on its own account; change that under the App&apos;s settings on GitHub, Advanced, Make

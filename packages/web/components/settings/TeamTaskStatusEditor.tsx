@@ -271,7 +271,7 @@ export function TeamTaskStatusEditor({
         })}
       </div>
       {!isAdmin && (
-        <p className="text-[11px] text-sol-text-dim mt-3">Only team admins can edit statuses.</p>
+        <p className="text-meta text-sol-text-dim mt-3">Only team admins can edit statuses.</p>
       )}
       {isAdmin && dirty && (
         // Floating save pill: sticky keeps it in view however far the list

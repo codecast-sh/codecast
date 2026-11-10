@@ -6,7 +6,7 @@
 // a cast-canvas block.
 
 import { createContext, memo, useContext, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { DynamicIcon } from "lucide-react/dynamic";
+import { DynamicIcon } from "./ModIcon";
 import { Button as UIButton } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { EntityIdPill } from "../EntityIdPill";
@@ -170,7 +170,7 @@ function Card({ p, c, panel }: { p: Record<string, any>; c: ModNode[]; panel?: b
         <header className="flex items-center gap-2 px-3.5 pt-3 pb-1">
           <div className="min-w-0 flex-1">
             {title ? <div className="text-[13px] font-semibold text-sol-text truncate">{str(title)}</div> : null}
-            {p.subtitle ? <div className="text-[11.5px] text-sol-text-dim truncate">{str(p.subtitle)}</div> : null}
+            {p.subtitle ? <div className="text-meta text-sol-text-dim truncate">{str(p.subtitle)}</div> : null}
           </div>
           {actions ? <Node n={actions as ModNode} /> : null}
         </header>
@@ -320,7 +320,7 @@ function Badge({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
   const t = tone(p.tone) ?? "var(--sol-text-muted)";
   return (
     <span
-      className="inline-flex items-center gap-1 rounded-full px-2 py-[1px] text-[11px] font-medium whitespace-nowrap"
+      className="inline-flex items-center gap-1 rounded-full px-2 py-[1px] text-meta font-medium whitespace-nowrap"
       style={{ color: t, background: `color-mix(in srgb, ${t} 14%, transparent)` }}
     >
       {p.dot ? <span className="inline-block size-1.5 rounded-full" style={{ background: t }} /> : null}
@@ -354,11 +354,15 @@ function Cell({ value, as }: { value: unknown; as?: string }) {
     case "time": return <TimeText at={value} />;
     case "badge": return <Badge p={{}} c={[str(value)]} />;
     case "number": return <span className="tabular-nums">{typeof value === "number" ? value.toLocaleString() : str(value)}</span>;
-    case "mono": return <span className="font-mono text-[12px]">{str(value)}</span>;
+    case "mono": return <span className="block max-w-[420px] truncate font-mono text-[12px]" title={str(value)}>{str(value)}</span>;
     case "markdown": return <MarkdownRenderer content={str(value)} />;
     default:
       if (value && typeof value === "object" && "t" in (value as object)) return <Node n={value as ModNode} />;
-      return <span className="truncate">{typeof value === "object" ? JSON.stringify(value) : str(value)}</span>;
+      {
+        // A table cell sizes to its content, so the cap sits on the text itself; that is what lets it end in "…".
+        const text = typeof value === "object" ? JSON.stringify(value) : str(value);
+        return <span className="block max-w-[420px] truncate" title={text}>{text}</span>;
+      }
   }
 }
 
@@ -374,10 +378,10 @@ function Table({ p }: { p: Record<string, any> }) {
   if (!rows.length) return <div className="py-4 text-center text-[12.5px] text-sol-text-dim">{str(p.empty ?? "Nothing here")}</div>;
   const pad = p.dense ? "py-1" : "py-1.5";
   return (
-    <div style={{ maxHeight: dim(p.maxHeight), overflow: p.maxHeight ? "auto" : undefined }} className="min-w-0">
+    <div style={{ maxHeight: dim(p.maxHeight), overflow: p.maxHeight ? "auto" : undefined }} className="min-w-0 overflow-x-auto">
       <table className="w-full text-[12.5px] border-collapse">
         <thead>
-          <tr className="text-sol-text-dim text-[11px] uppercase tracking-wide">
+          <tr className="text-sol-text-dim text-mark uppercase tracking-wide">
             {columns.map((col) => (
               <th
                 key={col.key}
@@ -428,7 +432,7 @@ function Tabs({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
               className={`px-3 py-1.5 -mb-px text-[12.5px] border-b-2 whitespace-nowrap transition-colors ${on ? "border-sol-blue text-sol-text" : "border-transparent text-sol-text-muted hover:text-sol-text"}`}
             >
               {str(t.p?.label ?? id)}
-              {typeof t.p?.count === "number" ? <span className="ml-1.5 text-[11px] text-sol-text-dim tabular-nums">{t.p.count as number}</span> : null}
+              {typeof t.p?.count === "number" ? <span className="ml-1.5 text-meta text-sol-text-dim tabular-nums">{t.p.count as number}</span> : null}
             </button>
           );
         })}
@@ -473,10 +477,10 @@ function Stat({ p }: { p: Record<string, any> }) {
   const t = tone(p.tone);
   return (
     <div className="rounded-lg border border-sol-border px-3.5 py-3 min-w-0" style={{ background: t ? `linear-gradient(160deg, color-mix(in srgb, ${t} 10%, var(--sol-card)), var(--sol-card) 70%)` : "var(--sol-card)" }} title={p.hint ? str(p.hint) : undefined}>
-      <div className="text-[11px] uppercase tracking-wide text-sol-text-dim truncate">{str(p.label)}</div>
+      <div className="text-mark uppercase tracking-wide text-sol-text-dim truncate">{str(p.label)}</div>
       <div className="mt-1 flex items-baseline gap-2">
         <span className="text-[24px] font-semibold tabular-nums leading-none" style={{ color: t ?? "var(--sol-text)" }}>{typeof p.value === "number" ? p.value.toLocaleString() : str(p.value)}</span>
-        {p.delta ? <span className="text-[11.5px] text-sol-text-muted tabular-nums">{str(p.delta)}</span> : null}
+        {p.delta ? <span className="text-meta text-sol-text-muted tabular-nums">{str(p.delta)}</span> : null}
       </div>
     </div>
   );
@@ -492,7 +496,7 @@ function Item({ p, c }: { p: Record<string, any>; c: ModNode[] }) {
       {p.icon ? <DynamicIcon name={p.icon as any} size={15} style={{ color: tone(p.tone) ?? "var(--sol-text-dim)", flexShrink: 0 }} /> : null}
       <div className="min-w-0 flex-1">
         {p.title ? <div className="text-[13px] text-sol-text truncate">{str(p.title)}</div> : null}
-        {p.subtitle ? <div className="text-[11.5px] text-sol-text-dim truncate">{str(p.subtitle)}</div> : null}
+        {p.subtitle ? <div className="text-meta text-sol-text-dim truncate">{str(p.subtitle)}</div> : null}
         <Children c={c} />
       </div>
       {p.trailing ? <div className="shrink-0"><Node n={p.trailing as ModNode} /></div> : null}
@@ -549,7 +553,7 @@ function ModCanvas({ p }: { p: Record<string, any> }) {
 }
 
 function Unknown({ t }: { t: string }) {
-  return <span className="rounded bg-[color-mix(in_srgb,var(--sol-red)_12%,transparent)] px-1.5 py-0.5 font-mono text-[11px] text-sol-red">unknown element {"<"}{t}{">"}</span>;
+  return <span className="rounded bg-[color-mix(in_srgb,var(--sol-red)_12%,transparent)] px-1.5 py-0.5 font-mono text-meta text-sol-red">unknown element {"<"}{t}{">"}</span>;
 }
 
 const Node = memo(function Node({ n }: { n: ModNode }): ReactNode {
@@ -590,13 +594,13 @@ const Node = memo(function Node({ n }: { n: ModNode }): ReactNode {
       const pct = Math.max(0, Math.min(100, ((typeof p.value === "number" ? p.value : 0) / max) * 100));
       return (
         <div className="min-w-0">
-          {p.label ? <div className="mb-1 flex justify-between text-[11.5px] text-sol-text-muted"><span>{str(p.label)}</span><span className="tabular-nums">{Math.round(pct)}%</span></div> : null}
+          {p.label ? <div className="mb-1 flex justify-between text-meta text-sol-text-muted"><span>{str(p.label)}</span><span className="tabular-nums">{Math.round(pct)}%</span></div> : null}
           <div className="h-1.5 rounded-full bg-sol-bg-alt overflow-hidden"><div className="h-full rounded-full transition-[width] duration-500" style={{ width: `${pct}%`, background: tone(p.tone) ?? "var(--sol-blue)" }} /></div>
         </div>
       );
     }
     case "Divider": return p.label
-      ? <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide text-sol-text-dim"><span className="h-px flex-1 bg-sol-border" />{str(p.label)}<span className="h-px flex-1 bg-sol-border" /></div>
+      ? <div className="flex items-center gap-2 text-mark uppercase tracking-wide text-sol-text-dim"><span className="h-px flex-1 bg-sol-border" />{str(p.label)}<span className="h-px flex-1 bg-sol-border" /></div>
       : <hr className="border-0 h-px bg-sol-border my-1" />;
     case "Spacer": return <div style={{ flexGrow: p.size === undefined ? 1 : undefined, height: space(p.size), width: space(p.size) }} />;
     case "Icon": return <DynamicIcon name={str(p.name) as any} size={typeof p.size === "number" ? p.size : 15} style={{ color: tone(p.tone), flexShrink: 0 }} />;

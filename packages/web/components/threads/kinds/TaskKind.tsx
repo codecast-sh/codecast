@@ -44,7 +44,7 @@ export function TaskMeta({ card }: { card: ThreadCardModel }) {
   return (
     <div className="th-card-taskrow">
       {task.priority && (
-        <Badge variant="outline" className="text-[10px] px-1">{task.priority}</Badge>
+        <Badge variant="outline" className="text-meta px-1">{task.priority}</Badge>
       )}
       {task.assignee_info?.name && (
         <span className="th-task-meta" title={`Assigned to ${task.assignee_info.name}`}>

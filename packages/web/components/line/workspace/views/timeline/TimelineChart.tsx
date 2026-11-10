@@ -150,7 +150,8 @@ function otherDeploys(h: CauseHistory) {
 export const TimelineChart = memo(function TimelineChart({ history: h, labelOf, domain, now, selectedRun, pick, onPick, onZoom, onReset, offTopic }: TimelineChartProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
-  const width = useDerivedSize(boxRef, (w) => Math.max(480, Math.round(w)), () => 960);
+  // Down to 360px it draws at the box's width; narrower, the box scrolls (timeline.css) so the newest marks and "now" stay reachable.
+  const width = useDerivedSize(boxRef, (w) => Math.max(360, Math.round(w)), () => 960);
   const [d0, d1] = domain;
   const plotW = width - GUTTER - PAD_R;
   const x = useCallback((t: number) => GUTTER + ((t - d0) / (d1 - d0)) * plotW, [d0, d1, plotW]);
@@ -407,7 +408,7 @@ export const TimelineChart = memo(function TimelineChart({ history: h, labelOf, 
       if (crossText.current && inside) crossText.current.textContent = momentWords(tAt(px));
       const wrap = wrapRef.current?.getBoundingClientRect();
       if (tipRef.current && wrap) {
-        const left = Math.min(cx - wrap.left + 14, wrap.width - 280);
+        const left = Math.min(cx - wrap.left + 14, wrap.width - (tipRef.current.offsetWidth || 280) - 8);
         // Below the pointer in the chart's top half, above it in the bottom half, so it never covers the time under the axis.
         const y = cy - wrap.top;
         const top = y > wrap.height / 2 ? y - tipRef.current.offsetHeight - 14 : y + 16;
@@ -482,7 +483,7 @@ export const TimelineChart = memo(function TimelineChart({ history: h, labelOf, 
         {/* lane labels */}
         <g className="lwt-lane-labels">
           <text x={0} y={HIST_TOP + 12}>Findings</text>
-          <text x={0} y={HIST_TOP + 27} className="lwt-lane-sub">{max > 1 ? `up to ${max} per ${spanWords(step)}` : `per ${spanWords(step)}`}</text>
+          <text x={0} y={HIST_TOP + 27} className="lwt-lane-sub">{max > 1 ? `≤${max} / ${spanWords(step)}` : `per ${spanWords(step)}`}</text>
           {hasRuns && <text x={0} y={attTop + 14}>Runs</text>}
           {hasShips && <text x={0} y={shipTop + 14}>Fix shipped</text>}
         </g>

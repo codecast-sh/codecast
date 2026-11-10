@@ -65,7 +65,7 @@ function Panel() {
               <section key={area.area} className="px-3 pt-3" data-tours-area={area.area}>
                 <div className="flex items-center gap-2 mb-1.5">
                   <span className="w-[7px] h-[7px] rounded-full" style={{ background: area.accent }} />
-                  <h3 className="text-[11.5px] font-medium" style={{ color: "var(--sol-text-dim)" }}>{area.label}</h3>
+                  <h3 className="text-meta font-medium" style={{ color: "var(--sol-text-dim)" }}>{area.label}</h3>
                 </div>
                 <div className="flex flex-col gap-1">
                   {tours.map((t) => {
@@ -83,11 +83,11 @@ function Panel() {
                         <div className="flex items-center gap-2">
                           {t.kind === "guide" && <Play className="w-3.5 h-3.5 shrink-0" style={{ color: area.accent }} />}
                           <span className="text-[13.5px] font-semibold tracking-tight" style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{t.title}</span>
-                          {t.kind === "guide" && <span className="text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}>guide · {t.minutes} min</span>}
-                          {outcome === "finished" && <span className="inline-flex items-center gap-1 text-[10.5px]" style={{ color: "var(--sol-green)" }}><Check className="w-3 h-3" /> seen</span>}
-                          {outcome === "skipped" && <span className="text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}>skipped</span>}
-                          {!outcome && <span className="text-[10.5px] px-1.5 h-[16px] inline-flex items-center rounded-md" style={{ background: `color-mix(in srgb, ${area.accent} 16%, transparent)`, color: area.accent }}>new</span>}
-                          <span className="ml-auto text-[11.5px] opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: area.accent }}>{outcome ? "Replay" : "Start"} →</span>
+                          {t.kind === "guide" && <span className="text-meta" style={{ color: "var(--sol-text-dim)" }}>guide · {t.minutes} min</span>}
+                          {outcome === "finished" && <span className="inline-flex items-center gap-1 text-meta" style={{ color: "var(--sol-green)" }}><Check className="w-3 h-3" /> seen</span>}
+                          {outcome === "skipped" && <span className="text-meta" style={{ color: "var(--sol-text-dim)" }}>skipped</span>}
+                          {!outcome && <span className="text-meta px-1.5 h-[16px] inline-flex items-center rounded-md" style={{ background: `color-mix(in srgb, ${area.accent} 16%, transparent)`, color: area.accent }}>new</span>}
+                          <span className="ml-auto text-meta opacity-0 group-hover:opacity-100 transition-opacity" style={{ color: area.accent }}>{outcome ? "Replay" : "Start"} →</span>
                         </div>
                         <p className="mt-0.5 text-[12px] leading-relaxed" style={{ color: "var(--sol-text-muted)" }}>{t.teaches}</p>
                       </button>

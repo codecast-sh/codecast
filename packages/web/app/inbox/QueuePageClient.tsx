@@ -282,7 +282,7 @@ export type InboxConversationProps = React.ComponentProps<typeof InboxConversati
 function SeatEarlier({ count, open, onToggle }: { count: number; open: boolean; onToggle: () => void }) {
   const what = count === 1 ? "The role's brief" : `The role's brief and ${count - 1} earlier ${count === 2 ? "message" : "messages"}`;
   return (
-    <button type="button" onClick={onToggle} className="w-full flex items-center gap-1.5 px-4 py-1 text-left text-[11.5px] border-t transition-colors hover:bg-sol-bg-highlight/40" style={{ color: "var(--sol-text-dim)", borderColor: "color-mix(in srgb, var(--sol-border) 18%, transparent)" }} aria-expanded={open} data-seat-earlier={open ? "open" : "folded"}>
+    <button type="button" onClick={onToggle} className="w-full flex items-center gap-1.5 px-4 py-1 text-left text-meta border-t transition-colors hover:bg-sol-bg-highlight/40" style={{ color: "var(--sol-text-dim)", borderColor: "color-mix(in srgb, var(--sol-border) 18%, transparent)" }} aria-expanded={open} data-seat-earlier={open ? "open" : "folded"}>
       <ChevronRight className={`w-3 h-3 shrink-0 transition-transform ${open ? "rotate-90" : ""}`} />
       {open ? `Hide ${what.charAt(0).toLowerCase()}${what.slice(1)}` : what}
     </button>

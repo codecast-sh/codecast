@@ -27,3 +27,36 @@
     display: none;
   }
 }
+
+/* ── A share or a speaker, and the strip of faces beside it ──────────────
+ * The strip (StageViews: Auto with a share, Speaker) sits beside the hero
+ * while the view is wide and runs under it once the view itself is under
+ * 720px: a phone, the call window, the thread rail open or dragged wide. It
+ * is measured on the view (.stage-fit), not the viewport, so a guest's page
+ * and a member's stage behave alike. Beside the hero the strip is
+ * clamp(120px, 22%, 200px) wide (its class in StageViews). */
+.stage-fit {
+  container: stage-fit / inline-size;
+}
+@container stage-fit (width < 720px) {
+  .stage-fit .stage-split {
+    flex-direction: column;
+  }
+  .stage-fit .stage-strip {
+    width: 100%;
+    flex-direction: row;
+    align-items: center;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .stage-fit .stage-voices {
+    flex-direction: row;
+  }
+  .stage-fit .stage-strip > *,
+  .stage-fit .stage-voices > * {
+    flex-shrink: 0;
+  }
+  .stage-fit .stage-tile-small {
+    width: 9rem;
+  }
+}

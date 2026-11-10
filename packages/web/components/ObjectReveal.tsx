@@ -490,7 +490,7 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
             title="Close (Esc)"
           >
             <PageIcon path={path} className="object-reveal__icon h-3 w-3 flex-shrink-0" />
-            <span className="min-w-0 flex-1 truncate text-[11px] leading-none text-sol-text">{target.title}</span>
+            <span className="min-w-0 flex-1 truncate text-meta leading-none text-sol-text">{target.title}</span>
             <span className="object-reveal__hint object-reveal__hint--on" aria-hidden>
               <span className="object-reveal__hint-word">close</span>
               <KeyCap size="xs">esc</KeyCap>
@@ -511,7 +511,7 @@ function RevealBand({ reveal }: { reveal: OpenReveal }) {
         title="Close"
       >
         <PageIcon path={path} className="object-reveal__icon h-3 w-3 flex-shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-[11px] leading-none text-sol-text">{target.title}</span>
+        <span className="min-w-0 flex-1 truncate text-meta leading-none text-sol-text">{target.title}</span>
         <span className="object-reveal__hint" aria-hidden>
           <span className="object-reveal__hint-word">close</span>
           <KeyCap size="xs">esc</KeyCap>

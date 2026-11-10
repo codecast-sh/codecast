@@ -83,7 +83,7 @@ export function ChromeWindow({
         {/* The extension's toolbar icon wears the red badge while cast drives the tab. */}
         <span className="relative shrink-0" title="cast is driving this tab">
           <span className="inline-flex h-6 w-6 items-center justify-center rounded-md [--logo-c:#444444]" style={{ backgroundColor: "#fdf6e3" }}><LogoMark size={16} /></span>
-          {showGroup && <span className="absolute -right-2 -bottom-1.5 rounded-[3px] px-[2px] text-[6.5px] font-bold leading-[9px] text-white font-sans" style={{ backgroundColor: CAST_RED }}>CAST</span>}
+          {showGroup && <span className="absolute -right-2 -bottom-1.5 rounded-[3px] px-[2px] text-meta font-bold leading-[9px] text-white font-sans" style={{ backgroundColor: CAST_RED }}>CAST</span>}
         </span>
       </div>
       {/* Viewport */}

@@ -93,8 +93,8 @@
         z-index: 2147483647;
       }
       html.dark #boot-shell { background: #002b36; }
-      html.minimal-style #boot-shell { background: #ffffff; color: #8a8a85; }
-      html.dark.minimal-style #boot-shell { background: #161615; color: #7c7a74; }
+      html.minimal-style #boot-shell { background: #ffffff; color: #72726f; }
+      html.dark.minimal-style #boot-shell { background: #161615; color: #898781; }
       html.hosted-mode.minimal-style #boot-shell#boot-shell { background: var(--pd-bg); color: var(--pd-ink-faint); }
       #boot-shell[data-hidden="true"] { display: none; }
       #boot-shell .indicator {
@@ -262,19 +262,19 @@
       }
       #cc-handoff .tertiary:hover { color: inherit; }
       /* Revealed when the browser refused to close the tab. */
-      #cc-handoff .kept { display: none; margin-top: 0.75rem; font-size: 11px; line-height: 1.6; color: #657b83; }
+      #cc-handoff .kept { display: none; margin-top: 0.75rem; font-size: var(--fs-meta, 12px); line-height: 1.6; color: #657b83; }
       html[data-cc-handoff-kept] #cc-handoff .kept { display: block; }
       #cc-handoff .keys { white-space: nowrap; }
       #cc-handoff kbd {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        min-width: 16px;
-        height: 16px;
+        min-width: 18px;
+        height: 18px;
         padding: 0 4px;
         margin: 0 1px;
         font: inherit;
-        font-size: 9px;
+        font-size: var(--fs-mark, 11px);
         line-height: 1;
         border: 1px solid rgba(147, 161, 161, 0.5);
         border-radius: 4px;
@@ -298,7 +298,7 @@
         align-items: center;
         gap: 0.5rem;
         margin-top: 1rem;
-        font-size: 11px;
+        font-size: var(--fs-meta, 12px);
         color: #657b83;
         cursor: pointer;
         user-select: none;

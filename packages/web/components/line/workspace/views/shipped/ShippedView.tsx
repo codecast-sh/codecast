@@ -5,6 +5,7 @@
 // reopened it, then those under watch, then the verified. The header's
 // numbers count this same list. A row opens its problem; Deploys is one press in.
 import { memo, useMemo } from "react";
+import Link from "next/link";
 import { Rocket } from "lucide-react";
 import { FLOW_MAP_DAYS, type FlowMapShipped } from "@codecast/shared/contracts/flowMap";
 import { useFlowMapRow } from "../../../../../hooks/useFlowMap";
@@ -32,7 +33,7 @@ export const ShippedView = memo(function ShippedView({ space, workspace: ws, hre
           <span className="sg-dim">last {FLOW_MAP_DAYS} days</span>
         </span>
         {/* Every target's live version, what waits to go out and the press that sends it: the one Deploys page. */}
-        <a className="lw-chip sh-deploys" href="/deploys" data-shipped-deploys><Rocket className="w-3.5 h-3.5" aria-hidden />Deploys</a>
+        <Link className="lw-chip sh-deploys" href="/deploys" data-shipped-deploys><Rocket className="w-3.5 h-3.5" aria-hidden />Deploys</Link>
       </header>
       {rows.length === 0 ? <div className="lw-empty"><b>Nothing shipped in {FLOW_MAP_DAYS} days</b></div> : (
         <table className="sg-table sh-table">

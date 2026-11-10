@@ -101,7 +101,7 @@ export function TourSection() {
       <div className="text-center max-w-2xl mx-auto mb-10">
         <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md mb-4" style={{ backgroundColor: "rgba(203,75,22,0.1)", color: "#cb4b16" }}>
           <svg className="w-2.5 h-2.5" viewBox="0 0 10 10" fill="currentColor" aria-hidden><path d="M2 1.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1L2.9.7a.6.6 0 0 0-.9.5z" /></svg>
-          <span className="tracking-wider font-mono text-[11px] uppercase font-medium">The tour &middot; {Math.round(TOTAL / 60)} minutes, drawn by hand</span>
+          <span className="tracking-wider font-mono text-mark uppercase font-medium">The tour &middot; {Math.round(TOTAL / 60)} minutes, drawn by hand</span>
         </div>
         <h2 className="text-3xl font-bold text-[#002b36] mb-4 font-mono">
           From one agent in the dark to a team that remembers
@@ -138,9 +138,9 @@ export function TourSection() {
                 aria-current={i === active ? "true" : undefined}
               >
                 <span className="flex items-baseline gap-2.5">
-                  <span className="font-mono text-[11px] w-4 text-right shrink-0" style={{ color: DOTS[i % DOTS.length] }}>{i}</span>
+                  <span className="font-mono text-meta w-4 text-right shrink-0" style={{ color: DOTS[i % DOTS.length] }}>{i}</span>
                   <span className={`flex-1 min-w-0 text-sm leading-snug truncate lg:whitespace-normal ${i === active ? "text-[#002b36] font-medium" : "text-[#586e75]"}`}>{c.title}</span>
-                  <span className="font-mono text-[11px] text-[#93a1a1] tabular-nums shrink-0">{clock(STARTS[i])}</span>
+                  <span className="font-mono text-meta text-[#93a1a1] tabular-nums shrink-0">{clock(STARTS[i])}</span>
                 </span>
                 <span
                   ref={(b) => { bars.current[i] = b; }}
@@ -167,7 +167,7 @@ export function WatchChapter({ title, tone = "light", compact = false }: { title
       <button
         type="button"
         onClick={() => playChapter(i, "section_link")}
-        className="inline-flex items-center gap-1.5 font-mono text-[11px] transition-colors hover:text-[#cb4b16]"
+        className="inline-flex items-center gap-1.5 font-mono text-meta transition-colors hover:text-[#cb4b16]"
         style={{ color }}
         aria-label={`Watch "${c.title}"`}
       >
@@ -189,7 +189,7 @@ export function WatchChapter({ title, tone = "light", compact = false }: { title
       <span className="underline decoration-dotted underline-offset-4 decoration-[#93a1a1] group-hover:decoration-[#cb4b16] group-hover:text-[#cb4b16]">
         Watch &ldquo;{c.title}&rdquo;
       </span>
-      <span className="text-[11px] text-[#93a1a1] tabular-nums">{clock(c.duration)}</span>
+      <span className="text-meta text-[#93a1a1] tabular-nums">{clock(c.duration)}</span>
     </button>
   );
 }

@@ -71,7 +71,7 @@ function ThemeTile({ choice, checked, onChoose }: { choice: ThemeChoice; checked
       </span>
       <span className="flex items-center gap-1.5 border-t border-sol-border/40 bg-sol-card px-2.5 py-1.5">
         <span className="min-w-0 flex-1 truncate text-xs text-sol-text">{choice.theme.title}</span>
-        {choice.modTitle && <span className="max-w-[45%] truncate text-[10px] text-sol-text-dim">{choice.modTitle}</span>}
+        {choice.modTitle && <span className="max-w-[45%] truncate text-meta text-sol-text-dim">{choice.modTitle}</span>}
         {checked && <Check className="h-3 w-3 shrink-0 text-sol-text" />}
       </span>
     </button>

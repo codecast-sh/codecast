@@ -112,7 +112,7 @@ function Stats({ items }: { items: [string, ReactNode, string?][] }) {
     <div className="mt-3 grid grid-cols-3 gap-1.5 font-mono">
       {items.map(([k, v, c]) => (
         <div key={k} className="rounded-md border px-2.5 py-2 min-w-0" style={{ borderColor: HAIR, backgroundColor: "#fffdf8" }}>
-          <div className="text-[11.5px]" style={{ color: DIM }}>{k}</div>
+          <div className="text-meta" style={{ color: DIM }}>{k}</div>
           <div className="text-[14px] font-semibold tabular-nums" style={{ color: c ?? INK }}>{v}</div>
         </div>
       ))}

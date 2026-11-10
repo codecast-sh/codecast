@@ -123,7 +123,7 @@ export function GuestSuggestComposer({ conversation, shareToken }: { conversatio
             {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : "Suggest messages"}
           </button>
         </form>
-        {error && <div className="mx-auto conv-col px-4 pb-2 text-[11px] text-sol-red">{error}</div>}
+        {error && <div className="mx-auto conv-col px-4 pb-2 text-meta text-sol-red">{error}</div>}
       </div>
     );
   }
@@ -177,7 +177,7 @@ export function GuestSuggestComposer({ conversation, shareToken }: { conversatio
             <Send className="w-3.5 h-3.5" />Suggest
           </button>
         </div>
-        <div className="flex items-center justify-between px-2 pt-1 text-[11px] text-sol-text-dim">
+        <div className="flex items-center justify-between px-2 pt-1 text-meta text-sol-text-dim">
           <span>as <b className="text-sol-text-muted">{guest.name}</b></span>
           {error && <span className="text-sol-red truncate">{error}</span>}
         </div>
@@ -189,13 +189,13 @@ export function GuestSuggestComposer({ conversation, shareToken }: { conversatio
 function StatusChip({ status }: { status: Suggestion["status"] }) {
   switch (status) {
     case "sending":
-      return <span className="shrink-0 inline-flex items-center gap-1 text-[10px] text-sol-text-dim"><Loader2 className="w-3 h-3 animate-spin" />Sending</span>;
+      return <span className="shrink-0 inline-flex items-center gap-1 text-meta text-sol-text-dim"><Loader2 className="w-3 h-3 animate-spin" />Sending</span>;
     case "pending":
-      return <span className="shrink-0 text-[10px] font-medium text-sol-yellow">Waiting</span>;
+      return <span className="shrink-0 text-meta font-medium text-sol-yellow">Waiting</span>;
     case "sent":
-      return <span className="shrink-0 inline-flex items-center gap-1 text-[10px] font-medium text-sol-green"><Check className="w-3 h-3" />Sent</span>;
+      return <span className="shrink-0 inline-flex items-center gap-1 text-meta font-medium text-sol-green"><Check className="w-3 h-3" />Sent</span>;
     default:
-      return <span className="shrink-0 text-[10px] text-sol-text-dim">Dismissed</span>;
+      return <span className="shrink-0 text-meta text-sol-text-dim">Dismissed</span>;
   }
 }
 

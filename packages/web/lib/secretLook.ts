@@ -19,9 +19,10 @@ export const FIELD_MONO = `${FIELD} font-mono`;
 /** A field's border while a file is dragged over it. */
 export const DROP_OVER = "!border-sol-yellow/60";
 
-/** The Vault's dialogs: pinned near the top so a taller form grows downward and the controls above stay under the pointer. */
+/** The Vault's dialogs: pinned near the top so a taller form grows downward and the controls above stay under the pointer.
+ *  A column capped at the window: on a short window the form body scrolls (min-h-0 overflow-y-auto) and the footer stays. */
 export const VAULT_DIALOG =
-  "top-[12vh] w-[34rem] max-w-[calc(100vw-1.5rem)] translate-y-0 grid-cols-[minmax(0,1fr)] gap-0 overflow-hidden border-sol-border bg-sol-bg p-0 text-sol-text data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 sm:rounded-xl [&>*]:min-w-0";
+  "top-[12vh] flex max-h-[86vh] w-[34rem] max-w-[calc(100vw-1.5rem)] translate-y-0 flex-col grid-cols-[minmax(0,1fr)] gap-0 overflow-hidden border-sol-border bg-sol-bg p-0 text-sol-text data-[state=closed]:slide-out-to-top-2 data-[state=open]:slide-in-from-top-2 sm:rounded-xl [&>*]:min-w-0";
 
 /** Where a new secret goes until the person picks: the team when there is one. The dialog and the composer's catch both open on it. */
 export const defaultWhere = (scope: VaultScope): "team" | "personal" => (scope.team ? "team" : "personal");

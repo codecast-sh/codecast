@@ -129,7 +129,7 @@ function Cell({ m, pts, t0, t1, hover, setHover, dim }: {
   return (
     <div className={cn("min-w-0 px-3 py-2", dim && "opacity-55")}>
       <div className="flex items-baseline justify-between gap-2">
-        <span className="text-[10px] uppercase tracking-wide text-sol-text-dim">{m.label}</span>
+        <span className="text-mark uppercase tracking-wide text-sol-text-dim">{m.label}</span>
         <span className={cn("text-[13px] font-semibold tabular-nums", m.tone)}>{at ? m.value(at) : "n/a"}</span>
       </div>
       <svg
@@ -145,7 +145,7 @@ function Cell({ m, pts, t0, t1, hover, setHover, dim }: {
         <path d={line} className="fill-none stroke-current" strokeWidth={1.25} vectorEffect="non-scaling-stroke" />
         {x !== null && <line x1={x} x2={x} y1={0} y2={H} className="stroke-sol-text-muted" strokeWidth={1} vectorEffect="non-scaling-stroke" />}
       </svg>
-      <div className="mt-0.5 truncate text-[10px] text-sol-text-muted" title={at && m.detail?.(at)}>{at && m.detail?.(at)}</div>
+      <div className="mt-0.5 truncate text-meta text-sol-text-muted" title={at && m.detail?.(at)}>{at && m.detail?.(at)}</div>
     </div>
   );
 }
@@ -173,7 +173,8 @@ export function HealthStrip({ machine, freshness, now }: { machine: ResourceMach
   const level = (hover !== null ? pts[hover] : pts[pts.length - 1])?.governor;
   return (
     <div className="border-b border-sol-border/30">
-      <div className="grid grid-cols-2 divide-sol-border/20 sm:grid-cols-3 xl:grid-cols-6 [&>*]:border-sol-border/20 [&>*]:border-r [&>*]:border-b xl:[&>*]:border-b-0">
+      {/* Columns and lines key on the box it is in (resources.css), not the window. */}
+      <div className="res-health res-health-lines">
         {metrics.map((m) => <Cell key={m.key} m={m} pts={pts} t0={t0} t1={t1} hover={hover} setHover={setHover} dim={dim} />)}
       </div>
       <div className="relative px-3 pb-2 pt-1">
@@ -191,7 +192,7 @@ export function HealthStrip({ machine, freshness, now }: { machine: ResourceMach
             return <rect key={p.at} x={((p.at - t0) / span) * W} width={Math.max(0.3, ((next - p.at) / span) * W)} y={0} height={4} className={PRESSURE_FILL[p.pressure]} />;
           })}
         </svg>
-        <div className="mt-1 flex items-center justify-between gap-3 text-[10px] text-sol-text-dim">
+        <div className="mt-1 flex items-center justify-between gap-3 text-meta text-sol-text-dim">
           <span>{hoverAt !== undefined ? fmtAgo(hoverAt, now) : "60 min ago"}</span>
           <span className="truncate">
             {freshness === "stale" && <span className="text-sol-yellow">Last sample {fmtAgo(machine.receivedAt, now)}; values may be out of date · </span>}

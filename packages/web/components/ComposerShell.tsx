@@ -77,7 +77,7 @@ export function ComposerShell({
               is the send-options "?" and the permission mode dot. */}
           {!bare && (
             <div data-cc-composer-meta className={`mx-auto mb-1 min-h-[18px] flex justify-between items-center ${colClass} ${lightboxOpen ? "hidden" : ""}`}>
-              <p className="text-[11px] text-sol-text-dim/70 pl-1">
+              <p className="text-meta text-sol-text-muted pl-1">
                 {meta}
               </p>
               <div className="flex items-center gap-2">

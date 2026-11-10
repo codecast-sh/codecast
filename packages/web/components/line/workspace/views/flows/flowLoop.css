@@ -77,7 +77,7 @@ a.lp-fig:hover { text-decoration: underline; text-underline-offset: 3px; }
 .lp-decide { margin-top: auto; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; padding: 6px 8px; border-radius: 8px; background: color-mix(in srgb, var(--lw-person) 12%, var(--lw-card)); text-decoration: none; }
 
 .lp-ship .lp-step { position: relative; }
-.lp-ship .lp-step + .lp-step::before { content: "↓"; position: absolute; left: 50%; top: -14px; color: var(--lw-ink-3); font-size: 11px; }
+.lp-ship .lp-step + .lp-step::before { content: "↓"; position: absolute; left: 50%; top: -14px; color: var(--lw-ink-3); font-size: var(--fs-meta); }
 .lp-ship .lp-step + .lp-step { margin-top: 6px; }
 .lp-prod { margin-top: auto; align-self: flex-start; padding: 3px 10px; border-radius: 999px; background: var(--lw-ink); color: var(--lw-paper); font-size: var(--lw-fs-xs); font-weight: 650; }
 
@@ -133,7 +133,7 @@ a.lp-fig[data-tone="you"]:hover { background: color-mix(in srgb, var(--lw-person
 .lp-checks ul { position: relative; }
 .lp-checks ul::before { content: "→"; position: absolute; left: -16px; top: 6px; color: var(--lw-ink-3); font-size: 12px; }
 .lp-checks li + li { position: relative; padding-top: 6px; }
-.lp-checks li + li::before { content: "↓"; position: absolute; left: 50%; top: -6px; font-size: 10px; color: var(--lw-ink-3); }
+.lp-checks li + li::before { content: "↓"; position: absolute; left: 50%; top: -6px; font-size: var(--fs-meta); color: var(--lw-ink-3); }
 .lp-checks ul { gap: 2px; }
 .lp-lane::after { right: -14px; }
 

@@ -275,7 +275,7 @@ const PileNode = memo(function PileNode({ data }: NodeProps<Node<PileData>>) {
           <PileIcon pile={pile} edit={edit} />
           <PileTitle pile={pile} renaming={renaming} edit={edit} />
           {pile.role?.line && !pile.folded && <span className="min-w-0 flex-[2] truncate text-[12px]" style={{ color: "var(--sol-text-dim)" }} title={pile.role.line}>{pile.role.line}</span>}
-          <span className="ml-auto shrink-0 text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{all.length}</span>
+          <span className="ml-auto shrink-0 text-meta tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{all.length}</span>
           {pile.kind === "custom" && (
             <button type="button" className="nodrag rounded p-0.5 hover:bg-sol-bg-highlight" onClick={() => edit.dissolve(pile.id)} aria-label="Unpile" title="Unpile: cards go back to their role or repo">
               <X className="h-3.5 w-3.5" style={{ color: "var(--sol-text-dim)" }} />
@@ -661,7 +661,7 @@ function SessionMapInner() {
           <label className="pointer-events-auto flex h-8 w-[220px] items-center gap-2 rounded-lg border px-2.5" style={{ background: "var(--sol-card)", borderColor: HAIRLINE }}>
             <Search className="h-3.5 w-3.5 shrink-0" style={{ color: "var(--sol-text-dim)" }} />
             <input value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") setQuery(""); }} placeholder="Find sessions" className="min-w-0 flex-1 bg-transparent text-[12.5px] outline-none" style={{ color: "var(--sol-text)" }} data-map-search />
-            {matches && <span className="shrink-0 text-[11px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{matches.size}</span>}
+            {matches && <span className="shrink-0 text-meta tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{matches.size}</span>}
           </label>
           {matches && matches.size > 0 && (
             <>
@@ -683,7 +683,7 @@ function SessionMapInner() {
               const n = stateCounts.find(([s]) => s === state)?.[1] ?? 0;
               const on = !hiddenStates.has(state);
               return (
-                <button key={state} type="button" aria-pressed={on} onClick={() => toggleState(state)} className={cn("flex h-full items-center gap-1.5 rounded-md px-2 text-[11.5px] tabular-nums transition-colors", on ? "hover:bg-sol-bg-highlight/60" : "opacity-40 hover:opacity-70")} style={{ color: "var(--sol-text)" }} title={`${on ? "Hide" : "Show"} ${ORG_STATE_META[state].label}`} data-map-state={state}>
+                <button key={state} type="button" aria-pressed={on} onClick={() => toggleState(state)} className={cn("flex h-full items-center gap-1.5 rounded-md px-2 text-meta tabular-nums transition-colors", on ? "hover:bg-sol-bg-highlight/60" : "opacity-40 hover:opacity-70")} style={{ color: "var(--sol-text)" }} title={`${on ? "Hide" : "Show"} ${ORG_STATE_META[state].label}`} data-map-state={state}>
                   <StateDot state={state} />
                   {ORG_STATE_META[state].label} {n}
                 </button>
@@ -697,7 +697,7 @@ function SessionMapInner() {
             onToggle={(a) => setView({ hiddenAgents: hiddenAgents.has(a) ? [...hiddenAgents].filter((x) => x !== a) : [...hiddenAgents, a] })}
             onOnly={() => setView({ hiddenAgents: [] })}
           />
-          <span className="text-[11.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{visible.length} of {sessions.length}</span>
+          <span className="text-meta tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{visible.length} of {sessions.length}</span>
         </div>
       </div>
       {selected.length > 0 && !pending && <SelectionBar count={selected.length} allPinned={allPinned} piles={customPiles} roles={roles} act={act} />}

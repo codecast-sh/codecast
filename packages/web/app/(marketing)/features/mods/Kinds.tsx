@@ -47,8 +47,8 @@ const OUTPUTS: { key: string; lines: number[]; title: string; note: ReactNode; b
               <div className="mb-1.5 flex items-center gap-1"><StatusBadge label={s} color={statusTone(INC_STATUSES, s)} /></div>
               {rows.map((r) => (
                 <div key={r.id} className="rounded border px-1.5 py-1 mb-1" style={{ borderColor: LINE, backgroundColor: "#fffdf6" }}>
-                  <div className="font-mono text-[9.5px]" style={{ color: DIM }}>{r.id}</div>
-                  <div className={`text-[10.5px] leading-tight ${r.done ? "line-through opacity-60" : ""}`} style={{ color: TEXT }}>{r.title}</div>
+                  <div className="font-mono text-meta" style={{ color: DIM }}>{r.id}</div>
+                  <div className={`text-meta leading-tight ${r.done ? "line-through opacity-60" : ""}`} style={{ color: TEXT }}>{r.title}</div>
                 </div>
               ))}
             </div>
@@ -152,7 +152,7 @@ export function External() {
             {[["cus-3f9a21bc", "what the agent wrote"], ["1 call", "your API, per draw"], ["0 rows", "copied into codecast"]].map(([a, b]) => (
               <div key={b} className="rounded-lg border px-2 py-3" style={{ borderColor: LINE }}>
                 <div className="font-mono text-[12.5px] font-semibold truncate" style={{ color: V }}>{a}</div>
-                <div className="text-[11px] mt-1" style={{ color: MUTED }}>{b}</div>
+                <div className="text-meta mt-1" style={{ color: MUTED }}>{b}</div>
               </div>
             ))}
           </div>
@@ -250,7 +250,7 @@ export function Learn() {
     >
       <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] gap-6 items-start">
         <div className="rounded-xl border overflow-hidden" style={{ borderColor: "#0b4a5a", backgroundColor: SOL.base02 }}>
-          <div className="h-9 px-4 flex items-center border-b font-mono text-[11.5px]" style={{ borderColor: "#0b4a5a", color: SOL.base01 }}>incident-desk / AGENTS.md</div>
+          <div className="h-9 px-4 flex items-center border-b font-mono text-meta" style={{ borderColor: "#0b4a5a", color: SOL.base01 }}>incident-desk / AGENTS.md</div>
           <pre className="p-4 font-mono text-[12.5px] leading-[1.8] whitespace-pre-wrap" style={{ color: SOL.base1 }}>{GUIDE}</pre>
           <div className="px-4 pb-4 text-[12px] leading-5" style={{ color: SOL.base01 }}>Every session the mod applies to starts with this note.</div>
         </div>
@@ -262,7 +262,7 @@ export function Learn() {
                 filed={filed ? (
                   <span className="md-pop inline-flex items-center gap-1.5 text-[12px]"><span style={{ color: MUTED }}>Filed as</span><Pill o={INC8} /></span>
                 ) : (
-                  <button onClick={() => setFiled(true)} className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11.5px] font-medium" style={{ backgroundColor: V, color: SOL.base3 }}>
+                  <button onClick={() => setFiled(true)} className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-meta font-medium" style={{ backgroundColor: V, color: SOL.base3 }}>
                     <Plus className="w-3 h-3" />File incident
                   </button>
                 )}

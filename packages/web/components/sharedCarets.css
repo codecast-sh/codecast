@@ -45,7 +45,7 @@
   border-radius: 3px 3px 3px 0;
   background: var(--sd-color);
   color: #fff;
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   line-height: 14px;
   white-space: nowrap;

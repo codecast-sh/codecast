@@ -40,7 +40,7 @@ export function DecisionsLayer() {
         {[["--search \"retry\"", "titles"], ["--project .", "this repo only"], ["delete <id>", "retire one"]].map(([c, d]) => (
           <div key={c} className="rounded-lg px-3 py-2 flex items-baseline gap-2" style={{ backgroundColor: SOL.base3, border: `1px solid ${SOL.base2}` }}>
             <span style={{ color: SOL.base02 }}>{c}</span>
-            <span className="text-[11.5px]" style={{ color: SOL.base1 }}>{d}</span>
+            <span className="text-meta" style={{ color: SOL.base1 }}>{d}</span>
           </div>
         ))}
       </div>
@@ -51,14 +51,14 @@ export function DecisionsLayer() {
 function Ledger({ id, date, title, why, tags, fresh = false }: { id: string; date: string; title: string; why: string; tags: string; fresh?: boolean }) {
   return (
     <div className={`mm-row grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 px-4 py-3.5 ${fresh ? "mm-anim mm-glow" : ""}`} style={{ borderBottom: `1px solid ${SOL.base2}`, "--d": ".3s" } as CSSProperties}>
-      <div className="font-mono text-[11.5px] leading-6" style={{ color: SOL.base1 }}>
+      <div className="font-mono text-meta leading-6" style={{ color: SOL.base1 }}>
         <div style={{ color: VIOLET }}>{id}</div>
         <div>{date}</div>
       </div>
       <div className="min-w-0">
         <div className="font-mono text-[13.5px] font-semibold leading-6" style={{ color: SOL.base03 }}>{title}</div>
         <div className="text-[13.5px] leading-[1.55] mt-0.5" style={{ color: SOL.base01 }}><span className="font-mono text-[12px] mr-1.5" style={{ color: SOL.base1 }}>Why:</span>{why}</div>
-        <div className="flex flex-wrap gap-x-4 mt-1.5 font-mono text-[11.5px]" style={{ color: SOL.base1 }}>
+        <div className="flex flex-wrap gap-x-4 mt-1.5 font-mono text-meta" style={{ color: SOL.base1 }}>
           <span>Tags: {tags}</span>
         </div>
       </div>
@@ -103,7 +103,7 @@ export function TeachLayer() {
         </Stage>
         <Stage n="2" title="the agent's instructions">
           <div className="rounded-xl px-5 py-4 font-mono text-[12px] leading-[1.75] overflow-x-auto" style={{ backgroundColor: "#fffdf6", border: `1px solid ${SOL.base2}`, color: SOL.base00, boxShadow: "0 18px 40px -28px rgba(0,43,54,.45)" }}>
-            <div className="text-[11px] mb-2" style={{ color: SOL.base1 }}>~/.claude/CLAUDE.md</div>
+            <div className="text-meta mb-2" style={{ color: SOL.base1 }}>~/.claude/CLAUDE.md</div>
             <div className="font-bold" style={{ color: SOL.base03 }}>## Memory</div>
             <div className="mt-1 font-sans text-[13px] leading-[1.6]" style={{ color: SOL.base01 }}>
               You are one session among many, and past conversations hold the decisions, patterns and prior work you need. Search them liberally…
@@ -172,7 +172,7 @@ function Turn({ who, children }: { who: "you" | "agent"; children: ReactNode }) 
   const me = who === "you";
   return (
     <div className="flex gap-2.5 text-[13.5px] leading-[1.55]">
-      <span className="font-mono text-[11px] w-11 shrink-0 pt-0.5" style={{ color: me ? SOL.blue : VIOLET }}>{who}</span>
+      <span className="font-mono text-meta w-11 shrink-0 pt-0.5" style={{ color: me ? SOL.blue : VIOLET }}>{who}</span>
       <span style={{ color: me ? SOL.base02 : SOL.base01 }}>{children}</span>
     </div>
   );

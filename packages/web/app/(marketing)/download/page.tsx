@@ -67,7 +67,7 @@ function OpenIllustration({ version }: { version: string | null }) {
           </svg>
           <div className="min-w-0">
             <div className="truncate font-mono text-[13px] text-[#fdf6e3]">{file}</div>
-            <div className="font-mono text-[11px] text-[#586e75]">98 MB &middot; Done</div>
+            <div className="font-mono text-meta text-[#586e75]">98 MB &middot; Done</div>
           </div>
         </div>
       </div>
@@ -138,7 +138,7 @@ function StepCard({
     <div className="overflow-hidden rounded-xl border border-[#eee8d5] bg-white/40 shadow-sm">
       {illustration}
       <div className="px-6 py-5 text-left">
-        <div className="font-mono text-[11px] uppercase tracking-wider text-[#93a1a1]">Step {step}</div>
+        <div className="font-mono text-mark uppercase tracking-wider text-[#93a1a1]">Step {step}</div>
         <h3 className="mt-1 font-mono text-xl font-bold text-[#002b36]">{title}</h3>
         <p className="mt-2 text-[15px] leading-relaxed text-[#657b83]">{children}</p>
       </div>

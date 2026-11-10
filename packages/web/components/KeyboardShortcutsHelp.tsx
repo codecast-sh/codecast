@@ -94,6 +94,7 @@ export function KeyboardShortcutsPanel() {
           <button
             onClick={s.toggleShortcutsPanel}
             className="p-1 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+            aria-label="Close shortcuts"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -104,14 +105,14 @@ export function KeyboardShortcutsPanel() {
             <section>
               <div className="flex items-center gap-2 mb-2">
                 <div className="w-1.5 h-1.5 rounded-full bg-sol-magenta" />
-                <h3 data-cc-help-heading className="text-[10px] font-semibold uppercase tracking-[0.12em] text-sol-text-dim">System-wide</h3>
+                <h3 data-cc-help-heading className="text-mark font-semibold uppercase tracking-[0.12em] text-sol-text-dim">System-wide</h3>
               </div>
               <div className="space-y-0.5">
                 {systemRows.map((row) => (
                   <ShortcutRow key={row.description} description={row.description} parts={row.parts} />
                 ))}
               </div>
-              <p className="mt-1.5 text-[10px] text-sol-text-dim">
+              <p className="mt-1.5 text-meta text-sol-text-dim">
                 Work from any app. Customize or remove in Settings → Desktop.
               </p>
             </section>
@@ -120,7 +121,7 @@ export function KeyboardShortcutsPanel() {
             <section key={label}>
               <div className="flex items-center gap-2 mb-2">
                 <div className={`w-1.5 h-1.5 rounded-full ${accent}`} />
-                <h3 data-cc-help-heading className="text-[10px] font-semibold uppercase tracking-[0.12em] text-sol-text-dim">{label}</h3>
+                <h3 data-cc-help-heading className="text-mark font-semibold uppercase tracking-[0.12em] text-sol-text-dim">{label}</h3>
               </div>
               <div className="space-y-0.5">
                 {rows.map((row) => (
@@ -131,7 +132,7 @@ export function KeyboardShortcutsPanel() {
           ))}
         </div>
 
-        <div className="px-4 py-2.5 border-t border-sol-border/30 text-[10px] text-sol-text-dim flex items-center gap-1.5 whitespace-nowrap">
+        <div className="px-4 py-2.5 border-t border-sol-border/30 text-meta text-sol-text-dim flex items-center gap-1.5 whitespace-nowrap">
           <MenuKeyCaps action="ui.toggleShortcutsHelp" className="contents" /> toggles this panel
           <span className="ml-auto flex items-center gap-3">
             <button

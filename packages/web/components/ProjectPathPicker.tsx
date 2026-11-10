@@ -45,7 +45,7 @@ export function SharedWithMark({ teamId, team, className = "" }: { teamId?: stri
             <TeamIcon icon={membership.icon} color={membership.icon_color} className="h-3 w-3" />
           </span>
         </TooltipTrigger>
-        <TooltipContent side="bottom" sideOffset={6} className="border bg-popover px-2 py-1 text-[11px] text-popover-foreground shadow-md">
+        <TooltipContent side="bottom" sideOffset={6} className="border bg-popover px-2 py-1 text-meta text-popover-foreground shadow-md">
           Sessions here are shared with {team}
         </TooltipContent>
       </Tooltip>
@@ -263,9 +263,9 @@ export function ProjectPathPicker({
                   ) : (
                     <>
                       <span className={`truncate ${o.disk && !o.repo ? "" : "font-medium"}`}>{name}</span>
-                      {o.repo && <span className="text-[10px] font-mono text-sol-text-dim/70">git</span>}
+                      {o.repo && <span className="text-meta font-mono text-sol-text-dim/70">git</span>}
                       <SharedWithMark {...sharedWith.get(o.path)} />
-                      <span className="ml-auto font-mono text-[11px] text-sol-text-dim truncate pl-2">
+                      <span className="ml-auto font-mono text-meta text-sol-text-dim truncate pl-2">
                         {displayPath(o.path, home)}
                       </span>
                     </>

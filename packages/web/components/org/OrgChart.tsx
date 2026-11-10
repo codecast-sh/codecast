@@ -391,7 +391,7 @@ function FindBox({ q, onQ, onStep, count, showCount }: { q: string; onQ: (q: str
         className="min-w-0 flex-1 bg-transparent text-[12.5px] outline-none"
         style={{ color: "var(--sol-text)" }}
       />
-      {showCount && <span className="shrink-0 text-[11px] tabular-nums" style={{ color: count.n ? "var(--sol-text-dim)" : "var(--sol-red)" }} data-org-find-count>{count.n ? `${count.at + 1}/${count.n}` : "0"}</span>}
+      {showCount && <span className="shrink-0 text-meta tabular-nums" style={{ color: count.n ? "var(--sol-text-dim)" : "var(--sol-red)" }} data-org-find-count>{count.n ? `${count.at + 1}/${count.n}` : "0"}</span>}
       {showCount && count.n > 1 && (
         <span className="-mr-1 flex shrink-0 items-center">
           <button type="button" onClick={(e) => { e.preventDefault(); onStep(-1); }} className="rounded p-0.5 hover:bg-sol-bg-highlight" aria-label="Previous match" data-org-find-prev><ChevronUp className="h-3.5 w-3.5" style={{ color: "var(--sol-text-muted)" }} /></button>

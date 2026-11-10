@@ -45,7 +45,7 @@ export function ReviewVerdictChip({ verdict, className = "" }: { verdict: { verd
   if (!verdict) return null;
   return (
     <span
-      className={`inline-flex items-center px-1.5 py-0.5 rounded border text-[10px] ${VERDICT_TONE[verdict.verdict] ?? "border-sol-border text-sol-text-dim"} ${className}`}
+      className={`inline-flex items-center px-1.5 py-0.5 rounded border text-meta ${VERDICT_TONE[verdict.verdict] ?? "border-sol-border text-sol-text-dim"} ${className}`}
       title={verdict.note ? `Review: ${verdict.verdict}. ${verdict.note}` : `Review: ${verdict.verdict}`}
       data-review-verdict={verdict.verdict}
     >
@@ -116,13 +116,13 @@ export function StationStrip({ task, embedded, aside }: { task: TaskItem & LineT
           return (
             <div key={s.id} className="flex items-center shrink-0" role="listitem" data-station={s.id} data-current={isCur || undefined}>
               {i > 0 && <span className={`w-3 h-px shrink-0 ${i <= cur ? "bg-sol-border" : "bg-sol-border/40"}`} aria-hidden />}
-              <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-[11px] whitespace-nowrap ${tone}`} aria-current={isCur ? "step" : undefined}>
+              <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-md border text-meta whitespace-nowrap ${tone}`} aria-current={isCur ? "step" : undefined}>
                 <Icon className="w-3.5 h-3.5" />
                 {s.name}
                 {isCur && held && (
                   <Link
                     href={decisionHref(held)}
-                    className="ml-1 inline-flex items-center gap-1 px-1.5 py-px rounded border border-sol-yellow/40 text-[10px] text-sol-yellow hover:bg-sol-yellow/10"
+                    className="ml-1 inline-flex items-center gap-1 px-1.5 py-px rounded border border-sol-yellow/40 text-meta text-sol-yellow hover:bg-sol-yellow/10"
                     title={`Held here by ${held.short_id ?? "a decision"}: ${held.question}`}
                     data-held-by={held.short_id ?? held._id}
                   >
@@ -138,7 +138,7 @@ export function StationStrip({ task, embedded, aside }: { task: TaskItem & LineT
       {aside && <div className="min-w-0 px-1" data-station-aside>{aside}</div>}
       </div>
       {showDetail && (
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 pb-2 text-[11px] text-sol-text-muted" data-station-detail>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 pb-2 text-meta text-sol-text-muted" data-station-detail>
           {live && node && (
             <span className="inline-flex items-center gap-1.5 min-w-0" title={run?.workflow_name ? `Run of ${flowName({ label: run.workflow_label, name: run.workflow_name })}` : "Run"} data-live-node={node.id}>
               <GitBranch className="w-3 h-3 text-sol-violet shrink-0" />
@@ -204,7 +204,7 @@ export function TaskLineChip({ task, className = "", watch = true }: { task: Tas
   const [text, tone] = dep(s).split("|");
   if (!text && watching) {
     return (
-      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-green/40 text-sol-green text-[10px] shrink-0 whitespace-nowrap ${className}`} title="Shipped: the line watches for the problem until this day, and reopens it if it comes back" data-task-line-chip="watch">
+      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-green/40 text-sol-green text-meta shrink-0 whitespace-nowrap ${className}`} title="Shipped: the line watches for the problem until this day, and reopens it if it comes back" data-task-line-chip="watch">
         <Eye className="w-3 h-3" />
         watching until {shortDay(watching)}
       </span>
@@ -214,7 +214,7 @@ export function TaskLineChip({ task, className = "", watch = true }: { task: Tas
   const held = tone === "held";
   return (
     <span
-      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] shrink-0 truncate max-w-[14rem] ${held ? "border-sol-yellow/40 text-sol-yellow" : tone === "paused" ? "border-sol-orange/40 text-sol-orange" : "border-sol-violet/40 text-sol-violet"} ${className}`}
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-meta shrink-0 truncate max-w-[14rem] ${held ? "border-sol-yellow/40 text-sol-yellow" : tone === "paused" ? "border-sol-orange/40 text-sol-orange" : "border-sol-violet/40 text-sol-violet"} ${className}`}
       title={held ? "A blocking decision holds this task at its station" : "In its flow: the run's current node"}
       data-task-line-chip={held ? "held" : "run"}
     >

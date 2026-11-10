@@ -38,9 +38,9 @@ function RepoPicker({ repos, repo, onPick }: { repos: { repo: string; commits: n
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-[14rem]">
         {repos.map((r) => (
-          <DropdownMenuItem key={r.repo} onSelect={() => onPick(r.repo)} className="flex items-center justify-between gap-4 font-mono text-[11px]">
+          <DropdownMenuItem key={r.repo} onSelect={() => onPick(r.repo)} className="flex items-center justify-between gap-4 font-mono text-meta">
             <span className={r.repo === repo ? "text-sol-text" : "text-sol-text/70"}>{r.repo}</span>
-            <span className="tabular-nums text-sol-text/45">{r.commits}</span>
+            <span className="tabular-nums text-sol-text-dim">{r.commits}</span>
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>
@@ -54,7 +54,7 @@ function Chip({ active, onClick, children, color }: { active: boolean; onClick: 
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`inline-flex h-[22px] items-center gap-1.5 rounded-full border px-2 font-mono text-[11px] transition-colors ${
+      className={`inline-flex h-[22px] items-center gap-1.5 rounded-full border px-2 font-mono text-meta transition-colors ${
         active ? "border-sol-border/70 text-sol-text" : "border-sol-border/25 text-sol-text/60 hover:border-sol-border/50 hover:text-sol-text"
       }`}
       style={active && color ? { background: color } : undefined}
@@ -89,7 +89,7 @@ function FilterBar({ url, setUrl, options, inputRef, personName }: {
           setQ(e.target.value);
           setUrl({ q: e.target.value.trim() || undefined });
         }}
-        className="h-[22px] w-44 rounded-full border border-sol-border/30 bg-transparent px-2.5 font-mono text-[11px] text-sol-text outline-none placeholder:text-sol-text/40 focus:border-sol-border/70"
+        className="h-[22px] w-44 rounded-full border border-sol-border/30 bg-transparent px-2.5 font-mono text-meta text-sol-text outline-none placeholder:text-sol-text/40 focus:border-sol-border/70"
       />
       {options.areas.map((a) => (
         <Chip key={a} active={url.areas.includes(a)} onClick={() => setUrl((s) => toggleArea(s, a))} color={areaFill(a, 14, colors)}>
@@ -116,8 +116,8 @@ function FilterBar({ url, setUrl, options, inputRef, personName }: {
 function LiveLine({ live }: { live: readonly LiveRow[] }) {
   if (!live.length) return null;
   return (
-    <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[11px] text-sol-text/50">
-      <span className="text-sol-text/40">live</span>
+    <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 font-mono text-meta text-sol-text-dim">
+      <span className="text-sol-text-dim">live</span>
       {live.map((l) => {
         const label = l.version ?? l.sha.slice(0, 7);
         const tip = `${l.surface} ${label}, ${l.kind === "deploy" ? "deployed" : "shipped"} ${formatDateSmart(l.at)}${l.waiting ? `. ${plural(l.waiting, "story", "stories")} landed since.` : ""}`;
@@ -127,12 +127,12 @@ function LiveLine({ live }: { live: readonly LiveRow[] }) {
             {l.deploy ? (
               <Link href={entityRoute("deploy", l.deploy) ?? "#"} className="tabular-nums hover:text-[var(--sol-green)]" data-deploy-ref={l.deploy}>
                 {l.surface} <span className="text-sol-text/75">{label}</span>
-                {l.waiting > 0 && <span className="text-sol-text/40"> +{l.waiting}</span>}
+                {l.waiting > 0 && <span className="text-sol-text-dim"> +{l.waiting}</span>}
               </Link>
             ) : (
               <span className="tabular-nums">
                 {l.surface} <span className="text-sol-text/75">{label}</span>
-                {l.waiting > 0 && <span className="text-sol-text/40"> +{l.waiting}</span>}
+                {l.waiting > 0 && <span className="text-sol-text-dim"> +{l.waiting}</span>}
               </span>
             )}
           </Tip>
@@ -149,8 +149,8 @@ function Toggle({ open, onClick, children, buttonRef }: { open: boolean; onClick
       type="button"
       onClick={onClick}
       aria-expanded={open}
-      className={`inline-flex h-[24px] items-center gap-1.5 rounded-md border px-2 font-mono text-[11px] transition-colors ${
-        open ? "border-sol-border/60 text-sol-text" : "border-sol-border/30 text-sol-text/55 hover:text-sol-text"
+      className={`inline-flex h-[24px] items-center gap-1.5 rounded-md border px-2 font-mono text-meta transition-colors ${
+        open ? "border-sol-border/60 text-sol-text" : "border-sol-border/30 text-sol-text-muted hover:text-sol-text"
       }`}
     >
       {children}
@@ -175,7 +175,7 @@ function ZoomControl({ zoom, onZoom }: { zoom: Zoom | undefined; onZoom: (z: Zoo
             role="radio"
             aria-checked={zoom === z}
             onClick={() => onZoom(z)}
-            className={`h-full rounded-[5px] px-2 font-mono text-[11px] transition-colors ${zoom === z ? "bg-sol-bg-alt text-sol-text" : "text-sol-text/50 hover:text-sol-text"}`}
+            className={`h-full rounded-[5px] px-2 font-mono text-meta transition-colors ${zoom === z ? "bg-sol-bg-alt text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
           >
             {label}
           </button>
@@ -212,7 +212,7 @@ export function TimelineHeader(props: {
           <ZoomControl zoom={url.zoom} onZoom={(zoom) => setUrl({ zoom })} />
           {moving > 0 && (
             <Toggle open={worksOpen} onClick={() => setWorksOpen((o) => !o)}>
-              in progress <span className="tabular-nums text-sol-text/45">{moving}</span>
+              in progress <span className="tabular-nums text-sol-text-dim">{moving}</span>
             </Toggle>
           )}
           <Toggle open={props.filterOpen || filtering} onClick={props.onToggleFilter} buttonRef={props.filterToggleRef}>

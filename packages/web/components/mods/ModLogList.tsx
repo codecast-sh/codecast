@@ -11,7 +11,7 @@ export function ModLogList({ runtime }: { runtime: ModRuntime | undefined }) {
   const logs = runtime?.logs ?? [];
   if (!logs.length) return <div className="px-1 py-2 text-[12px] text-sol-text-dim">Nothing logged yet. console.log in the mod lands here and in <span className="font-mono">cast mod logs</span>.</div>;
   return (
-    <ol className="space-y-1 font-mono text-[11.5px]">
+    <ol className="space-y-1 font-mono text-meta">
       {logs.slice(-150).map((l, i) => (
         <li key={i} className="flex gap-2 rounded px-1 py-0.5" style={{ background: l.level === "error" ? "color-mix(in srgb, var(--sol-red) 8%, transparent)" : undefined }}>
           <span className="shrink-0 text-sol-text-dim tabular-nums">{new Date(l.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>

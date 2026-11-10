@@ -63,7 +63,7 @@ export function Recipes() {
             </h3>
             <div className="min-w-0 self-start rounded-lg px-3 py-2.5" style={{ backgroundColor: SOL.base2 }}>
               <p className="text-[14px] leading-6" style={{ color: SOL.base02 }}>&ldquo;{r.prompt}&rdquo;</p>
-              <p className="mt-1 font-mono text-[11.5px]" style={{ color: r.color }}>{r.when}</p>
+              <p className="mt-1 font-mono text-meta" style={{ color: r.color }}>{r.when}</p>
             </div>
             <Body className="!text-[14.5px] !leading-6">{r.why}</Body>
           </li>

@@ -200,13 +200,13 @@ export function ThreadStatePanelView({
             >
               {statusMeta ? (
                 <span
-                  className={`mt-[3px] shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-[9px] font-semibold uppercase tracking-wide ${statusMeta.chip}`}
+                  className={`mt-[3px] shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-mark font-semibold uppercase tracking-wide ${statusMeta.chip}`}
                 >
                   <span className="w-1.5 h-1.5 rounded-full bg-current" />
                   {statusMeta.label}
                 </span>
               ) : (
-                <span className={`mt-[3px] shrink-0 text-[10px] uppercase tracking-wider font-semibold ${tone.label}`}>
+                <span className={`mt-[3px] shrink-0 text-mark uppercase tracking-wider font-semibold ${tone.label}`}>
                   Pinned
                 </span>
               )}
@@ -218,7 +218,7 @@ export function ThreadStatePanelView({
                 {view.headline}
               </span>
               {view.stamp && (
-                <span data-cc-tech className={`ml-auto mt-[3px] shrink-0 text-[10px] ${tone.meta}`}>{view.stamp}</span>
+                <span data-cc-tech className={`ml-auto mt-[3px] shrink-0 text-meta ${tone.meta}`}>{view.stamp}</span>
               )}
             </button>
             <PrStatusChip status={prStatus} size="panel" className="shrink-0" />
@@ -262,7 +262,7 @@ export function ThreadStatePanelView({
                 <button
                   type="button"
                   onClick={() => setExpanded((e) => !e)}
-                  className="mt-1 flex items-center gap-1 text-[10px] font-medium text-sol-text-dim hover:text-sol-text-muted transition-colors"
+                  className="mt-1 flex items-center gap-1 text-meta font-medium text-sol-text-dim hover:text-sol-text-muted transition-colors"
                 >
                   <ChevronDown
                     className={`w-3 h-3 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
@@ -295,7 +295,7 @@ function StateRows({ rows }: { rows: ThreadStateRow[] }) {
         const ask = !!row.label && ASK_LABELS.has(row.label);
         return (
           <React.Fragment key={i}>
-            <span className={`text-[11px] ${ask ? "pt-[5px] font-semibold text-sol-yellow" : "pt-px text-sol-text-dim"}`}>
+            <span className={`text-meta ${ask ? "pt-[5px] font-semibold text-sol-yellow" : "pt-px text-sol-text-dim"}`}>
               {row.label}
             </span>
             {ask ? (
@@ -342,13 +342,13 @@ function AskLine({ text }: { text: string }) {
       {prose && <RowText text={prose} />}
       {command && (
         <div className={`flex min-w-0 overflow-hidden rounded border border-sol-border/40 bg-sol-bg/70 ${prose ? "mt-1" : ""}`}>
-          <code className="min-w-0 flex-1 whitespace-pre-wrap break-all px-2 py-0.5 text-[11px] leading-relaxed text-sol-text-secondary">
+          <code className="min-w-0 flex-1 whitespace-pre-wrap break-all px-2 py-0.5 text-meta leading-relaxed text-sol-text-secondary">
             {command}
           </code>
           <button
             type="button"
             onClick={() => void copyText(command, "Command copied")}
-            className="flex shrink-0 items-center gap-1 border-l border-sol-border/40 px-2 text-[10.5px] font-semibold text-sol-yellow hover:bg-sol-yellow/10 transition-colors"
+            className="flex shrink-0 items-center gap-1 border-l border-sol-border/40 px-2 text-meta font-semibold text-sol-yellow hover:bg-sol-yellow/10 transition-colors"
           >
             <Copy className="h-3 w-3" strokeWidth={2.2} />
             Copy
@@ -367,7 +367,7 @@ function RowText({ text }: { text: string }) {
     <>
       {parts.map((part, i) =>
         i % 2 === 1 ? (
-          <code key={i} className="rounded border border-sol-border/40 bg-sol-bg/60 px-1 text-[11.5px] text-sol-text-secondary">
+          <code key={i} className="rounded border border-sol-border/40 bg-sol-bg/60 px-1 text-meta text-sol-text-secondary">
             {part}
           </code>
         ) : (

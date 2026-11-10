@@ -301,7 +301,7 @@ export function HireAssistantCard({ compact, onHired }: { compact?: boolean; onH
       <input type="radio" name="assistant-reach" className="mt-[3px]" checked={reach === value} onChange={() => setReach(value)} />
       <span className="min-w-0">
         <span className="block text-[12.5px] font-medium">{label}</span>
-        <span className="block text-[11px] text-sol-text-dim leading-snug">{hint}</span>
+        <span className="block text-meta text-sol-text-dim leading-snug">{hint}</span>
       </span>
     </label>
   );
@@ -320,7 +320,7 @@ export function HireAssistantCard({ compact, onHired }: { compact?: boolean; onH
           <div>
             <span className="text-xs text-sol-text-dim">Name</span>
             <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ada" maxLength={24} className="mt-1 w-full rounded-md border border-sol-border/60 bg-sol-bg px-2.5 py-1.5 text-sm" data-assistant-name />
-            <span className="text-[11px] text-sol-text-dim/70">Leave blank and it picks one to match its face.</span>
+            <span className="text-meta text-sol-text-dim/70">Leave blank and it picks one to match its face.</span>
           </div>
           <div className="space-y-1.5">
             <Option value="global" label="Across all your workspaces" hint="Yours alone. Sees what you see, everywhere you work." />

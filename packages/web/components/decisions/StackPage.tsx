@@ -37,13 +37,13 @@ function StackBody({ stack }: { stack: DecisionStackItem }) {
   return (
     <div className="h-full overflow-y-auto decision-doc" data-main-scroll>
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <div className="flex items-center gap-3 text-[11px] text-sol-text-dim">
+        <div className="flex items-center gap-3 text-meta text-sol-text-dim">
           <Link href="/decisions" className="inline-flex items-center gap-1 hover:text-sol-text transition-colors no-underline">
             <ArrowLeft className="w-3 h-3" /> The queue
           </Link>
         </div>
         <header className="mt-4">
-          <div className="flex items-center gap-2 flex-wrap text-[11px] text-sol-text-dim">
+          <div className="flex items-center gap-2 flex-wrap text-meta text-sol-text-dim">
             <span className="font-mono px-1.5 py-0.5 rounded border border-sol-border/60">{stack.short_id ?? "stack"}</span>
             <span className={`px-1.5 py-0.5 rounded border ${stack.status === "open" ? "border-sol-cyan/40 text-sol-cyan" : "border-sol-green/40 text-sol-green"}`}>{stack.status === "open" ? "open" : "done"}</span>
             <span>{stack.team_id ? "team stack" : "personal stack"}</span>
@@ -87,7 +87,7 @@ export function StacksIndex() {
   return (
     <div className="h-full overflow-y-auto decision-doc" data-main-scroll>
       <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <Link href="/decisions" className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors no-underline">
+        <Link href="/decisions" className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline">
           <ArrowLeft className="w-3 h-3" /> The queue
         </Link>
         <header className="mt-4 flex items-center gap-3 flex-wrap">
@@ -133,7 +133,7 @@ function StackRow({ stack, now }: { stack: DecisionStackItem; now: number }) {
   return (
     <li data-stack-row={stack.short_id ?? stack._id}>
       <Link href={`/decisions/stacks/${stack.short_id ?? stack._id}`} className={`block rounded-lg border px-4 py-3 no-underline transition-colors ${doneRow ? "border-sol-border/40 hover:border-sol-border/70" : "border-sol-border/70 hover:border-sol-border bg-sol-card/40"}`}>
-        <div className="flex items-center gap-2 flex-wrap text-[11px] text-sol-text-dim min-w-0">
+        <div className="flex items-center gap-2 flex-wrap text-meta text-sol-text-dim min-w-0">
           <ShortId id={stack.short_id} />
           <span className={`px-1.5 py-0.5 rounded border ${doneRow ? "border-sol-green/40 text-sol-green" : "border-sol-cyan/40 text-sol-cyan"}`}>{doneRow ? "done" : "open"}</span>
           {due && <span data-stack-due={due.overdue ? "overdue" : "due"} className={due.overdue ? "text-sol-red" : ""}>{due.text}</span>}
@@ -141,7 +141,7 @@ function StackRow({ stack, now }: { stack: DecisionStackItem; now: number }) {
           <span className="ml-auto">{formatTimeAgo(stack.updated_at, now)}</span>
         </div>
         <div className={`mt-1 text-[15px] leading-snug ${doneRow ? "text-sol-text-muted" : "text-sol-text"}`}>{stack.title}</div>
-        <div className="mt-2 flex items-center gap-3 text-[11px] text-sol-text-dim">
+        <div className="mt-2 flex items-center gap-3 text-meta text-sol-text-dim">
           <span>{stack.resolved} of {stack.total} cleared</span>
           <div className="flex-1 min-w-[4rem] h-px bg-sol-border relative">
             <div className={`absolute inset-y-0 left-0 ${doneRow ? "bg-sol-green/60" : "bg-sol-cyan/70"}`} style={{ width: `${pct}%` }} />

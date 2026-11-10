@@ -27,11 +27,11 @@ import { slackProviderRedirect } from "../lib/slackReturn";
 const BUTTON_CLASS: Record<OAuthProviderId, string> = {
   // Google's light button: white fill, gray stroke, near-black label.
   google:
-    "w-full py-3 px-4 bg-white hover:bg-gray-50 disabled:bg-white/50 disabled:cursor-not-allowed text-[#1f1f1f] font-medium rounded-lg border border-[#747775] transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-sol-bg flex items-center justify-center gap-2",
+    "w-full py-3 px-4 bg-white hover:bg-gray-50 disabled:bg-white/50 disabled:cursor-not-allowed text-[#1f1f1f] font-medium rounded-lg border border-[#747775] transition-colors focus:outline-none focus:ring-2 focus:ring-sol-cyan/50 focus:ring-offset-2 focus:ring-offset-sol-bg flex items-center justify-center gap-2",
   apple:
-    "w-full py-3 px-4 bg-white hover:bg-gray-100 disabled:bg-white/50 disabled:cursor-not-allowed text-black font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-sol-bg flex items-center justify-center gap-2",
+    "w-full py-3 px-4 bg-white hover:bg-gray-100 disabled:bg-white/50 disabled:cursor-not-allowed text-black font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-sol-cyan/50 focus:ring-offset-2 focus:ring-offset-sol-bg flex items-center justify-center gap-2",
   github:
-    "w-full py-3 px-4 bg-[#24292e] hover:bg-[#1a1e22] disabled:bg-[#24292e]/50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 focus:ring-offset-sol-bg flex items-center justify-center gap-2",
+    "w-full py-3 px-4 bg-[#24292e] hover:bg-[#1a1e22] disabled:bg-[#24292e]/50 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-sol-cyan/50 focus:ring-offset-2 focus:ring-offset-sol-bg flex items-center justify-center gap-2",
 };
 
 const ICON_FILL_RULE: Partial<Record<OAuthProviderId, "evenodd">> = { github: "evenodd" };
@@ -94,7 +94,7 @@ export function AuthProviderButtons({
         </p>
         <button
           onClick={cancel}
-          className="mt-3 text-sm text-amber-400 hover:text-amber-300 transition-colors"
+          className="mt-3 text-sm text-sol-text-secondary underline decoration-sol-orange/70 underline-offset-2 hover:text-sol-text hover:decoration-sol-orange transition-colors"
         >
           Cancel
         </button>
@@ -123,7 +123,7 @@ export function AuthProviderButtons({
         ))}
         {children}
       </div>
-      {error && <p className="mt-3 text-sm text-red-400 text-center">{error}</p>}
+      {error && <p role="alert" className="mt-3 rounded-md border border-sol-red/40 bg-sol-red/10 px-3 py-2 text-sm text-sol-text text-center">{error}</p>}
       {desktopBrowserAuth && (
         <p className="mt-3 text-sm text-sol-text-dim text-center">
           Sign-in opens in your browser.

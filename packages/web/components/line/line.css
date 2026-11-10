@@ -36,9 +36,9 @@
 /* An arrow with cards waiting past its edge carries their count, in the ask color. */
 .line-edge-arrow[data-waiting="true"] { width: auto; min-width: 22px; padding: 0 5px; gap: 2px; border-color: color-mix(in srgb, var(--sol-yellow) 55%, var(--sol-border)); }
 /* An arrow that names what lies past its edge ("Build, Check +3"): a pill, so the row reads as going on. */
-.line-edge-arrow[data-named="true"] { width: auto; height: 24px; padding: 0 8px; gap: 4px; font-size: 11px; color: var(--sol-text-muted); }
+.line-edge-arrow[data-named="true"] { width: auto; height: 24px; padding: 0 8px; gap: 4px; font-size: var(--fs-meta); color: var(--sol-text-muted); }
 .line-edge-names { white-space: nowrap; font-family: var(--font-mono), monospace; }
-.line-edge-count { font-size: 10.5px; font-weight: 600; line-height: 1; color: var(--sol-yellow); font-variant-numeric: tabular-nums; }
+.line-edge-count { font-size: var(--fs-mark); font-weight: 600; line-height: 1; color: var(--sol-yellow); font-variant-numeric: tabular-nums; }
 .line-edge-arrow[data-side="left"] { left: 2px; }
 .line-edge-arrow[data-side="right"] { right: 2px; }
 

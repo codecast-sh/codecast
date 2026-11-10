@@ -90,7 +90,7 @@ export function PriorityPill({ priority, onChange, size = "sm", className }: {
   );
   const cls = cn(
     "inline-flex items-center gap-1.5 rounded-md border font-medium whitespace-nowrap",
-    size === "xs" ? "h-[18px] px-1.5 text-[10px]" : "h-[22px] px-2 text-[11px]",
+    size === "xs" ? "h-[18px] px-1.5 text-meta" : "h-[22px] px-2 text-meta",
     !meta && "italic",
     className,
   );
@@ -110,7 +110,7 @@ export function PriorityPill({ priority, onChange, size = "sm", className }: {
           <MenuItem key={p} active={p === priority} onClick={() => { setOpen(false); if (p !== priority) onChange(p); }}>
             <PriorityDot priority={p} />
             <span className="font-mono w-6" style={{ color: PRIORITY_META[p].color }}>{PRIORITY_META[p].label}</span>
-            <span className="text-[11px] truncate" style={{ color: "var(--sol-text-dim)" }}>{PRIORITY_META[p].hint}</span>
+            <span className="text-meta truncate" style={{ color: "var(--sol-text-dim)" }}>{PRIORITY_META[p].hint}</span>
           </MenuItem>
         ))}
         {priority && (
@@ -176,7 +176,7 @@ export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChan
   const px = size === "xs" ? 12 : 14;
   const cls = cn(
     "inline-flex min-w-0 max-w-[min(220px,100%)] items-center gap-1.5 rounded-md border border-transparent whitespace-nowrap",
-    size === "xs" ? "h-[18px] px-1 text-[11px]" : "h-[22px] px-1.5 text-[11.5px]",
+    size === "xs" ? "h-[18px] px-1 text-meta" : "h-[22px] px-1.5 text-meta",
     !named && "italic",
     className,
   );
@@ -257,7 +257,7 @@ export function OwnerRoleChip({ roles, ownerRoleId, lead, noun = "owner", onChan
           <MenuItem key={r._id} active={r._id === role?._id} onClick={() => { setOpen(false); if (r._id !== role?._id || (lead?.kind === "lead" && lead.by !== "owner")) onChange(r._id); }}>
             <ChipFace role={r} px={14} />
             <span className="truncate">{r.name}</span>
-            <span className="font-mono text-[11px] truncate" style={{ color: "var(--sol-text-dim)" }}>@{r.handle}{watching.has(r._id) ? " · watches it" : ""}</span>
+            <span className="font-mono text-meta truncate" style={{ color: "var(--sol-text-dim)" }}>@{r.handle}{watching.has(r._id) ? " · watches it" : ""}</span>
           </MenuItem>
         ))}
         {onHire && (

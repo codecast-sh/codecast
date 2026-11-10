@@ -58,7 +58,7 @@ export function TaskSessionSection({ session, task, onOpen, active, rowOnly = fa
           <button
             type="button"
             onClick={() => void useInboxStore.getState().updateTaskStatus(task.short_id!, "in_review")}
-            className="ml-auto h-5 px-2 rounded border border-sol-violet/40 bg-sol-violet/10 text-[10px] text-sol-violet hover:bg-sol-violet/20 transition-colors"
+            className="ml-auto h-5 px-2 rounded border border-sol-violet/40 bg-sol-violet/10 text-meta text-sol-violet hover:bg-sol-violet/20 transition-colors"
             title="The session marked its work complete"
           >
             Move to review
@@ -90,7 +90,7 @@ export function TaskSessionEmpty({ onStart }: { onStart: () => void }) {
         <button
           type="button"
           onClick={onStart}
-          className="h-6 px-2.5 rounded-md border border-sol-border/60 text-[11px] text-sol-text-secondary hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors"
+          className="h-6 px-2.5 rounded-md border border-sol-border/60 text-meta text-sol-text-secondary hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors"
         >
           Hand to an agent
         </button>

@@ -8,7 +8,7 @@
 import { useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { ChevronDown } from "lucide-react";
-import { DynamicIcon } from "lucide-react/dynamic";
+import { DynamicIcon } from "./ModIcon";
 import { objectStatusIsDone, type ModObjectKind } from "@codecast/shared/contracts/mods";
 import { objectHref, objectKind, statusTone } from "../../lib/mods/objects";
 import { useObjectRow } from "../../lib/mods/useMods";
@@ -86,10 +86,10 @@ export function ModObjectPill({ shortId }: { shortId: string }) {
         <span aria-hidden className="absolute inset-x-0 top-full h-2" />
         <HoverCardClose.Provider value={closeNow}>
           <Link href={href} onClick={onOpen} className="block p-3 no-underline cursor-pointer">
-            {row && kind ? <ObjectHoverContent row={row} kind={kind} /> : <div className="text-[11px] text-sol-text-dim">{loading ? `Loading ${kindTitle.toLowerCase()} ${id}…` : error ?? `${kindTitle} ${id} is not in this workspace`}</div>}
+            {row && kind ? <ObjectHoverContent row={row} kind={kind} /> : <div className="text-meta text-sol-text-dim">{loading ? `Loading ${kindTitle.toLowerCase()} ${id}…` : error ?? `${kindTitle} ${id} is not in this workspace`}</div>}
           </Link>
           {canReveal && (
-            <div className="flex items-center justify-between gap-2 border-t border-sol-border/60 px-3 py-1.5 text-[10px] text-sol-text-dim">
+            <div className="flex items-center justify-between gap-2 border-t border-sol-border/60 px-3 py-1.5 text-meta text-sol-text-dim">
               <span className="inline-flex min-w-0 items-center gap-1.5">
                 <ChevronDown className="h-3 w-3 shrink-0" />
                 <span className="truncate">The arrow opens it here</span>
@@ -119,7 +119,7 @@ function ObjectHoverContent({ row, kind }: { row: any; kind: ModObjectKind & { m
         </div>
       </div>
       {fields.length ? (
-        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 pl-[22px] text-[11px]">
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 pl-[22px] text-meta">
           {fields.map(([name, f]) => (
             <div key={name} className="contents">
               <dt className="text-sol-text-dim whitespace-nowrap">{f.label ?? name.replace(/_/g, " ")}</dt>
@@ -128,8 +128,8 @@ function ObjectHoverContent({ row, kind }: { row: any; kind: ModObjectKind & { m
           ))}
         </dl>
       ) : null}
-      {notes ? <p className="pl-[22px] text-[11px] leading-relaxed text-sol-text-muted line-clamp-3">{notes}</p> : null}
-      <div className="flex items-center justify-between gap-2 border-t border-sol-border/60 pt-1.5 text-[10px] text-sol-text-dim">
+      {notes ? <p className="pl-[22px] text-meta leading-relaxed text-sol-text-muted line-clamp-3">{notes}</p> : null}
+      <div className="flex items-center justify-between gap-2 border-t border-sol-border/60 pt-1.5 text-meta text-sol-text-dim">
         <span className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap">
           <ShortId id={row.short_id} />
           <span>·</span>

@@ -114,14 +114,14 @@ export function PRCommentCard({ comment, linkUrl, threadTools, onReply }: {
         onReply={onReply ? () => onReply() : undefined}
         threadTools={threadTools}
         status={pending ? (
-          <span className="rounded-full border border-dashed border-sol-yellow/60 px-1.5 text-[10px] text-sol-yellow" title="Held in your review. Only you can see it until you finish the review.">
+          <span className="rounded-full border border-dashed border-sol-yellow/60 px-1.5 text-meta text-sol-yellow" title="Held in your review. Only you can see it until you finish the review.">
             not sent
           </span>
         ) : undefined}
         headExtra={comment.answered_message_id && comment.sent_to_conversation_id ? (
           <Link
             href={`/conversation/${comment.sent_to_conversation_id}#msg-${comment.answered_message_id}`}
-            className="inline-flex items-center gap-1 rounded-full border border-sol-green/40 px-1.5 text-[10px] text-sol-green hover:bg-sol-green/10 transition-colors"
+            className="inline-flex items-center gap-1 rounded-full border border-sol-green/40 px-1.5 text-meta text-sol-green hover:bg-sol-green/10 transition-colors"
             title="The agent answered this note: jump to its reply"
           >
             <CornerDownRight className="w-2.5 h-2.5" />
@@ -150,7 +150,7 @@ export function PRCommentCard({ comment, linkUrl, threadTools, onReply }: {
 /** The two places a new note can go, as one small switch above the composer. */
 export function NoteModePill({ mode, onChange, pendingCount }: { mode: NoteMode; onChange: (m: NoteMode) => void; pendingCount: number }) {
   return (
-    <div className="inline-flex items-center rounded-full border border-sol-border/50 p-0.5 text-[10px]" role="radiogroup" aria-label="Where this note goes">
+    <div className="inline-flex items-center rounded-full border border-sol-border/50 p-0.5 text-meta" role="radiogroup" aria-label="Where this note goes">
       {(["review", "now"] as NoteMode[]).map((key) => {
         const active = mode === key;
         return (
@@ -247,13 +247,13 @@ export function PRLineThread({
               e.preventDefault();
               onSelectLines();
             }}
-            className="text-[10px] uppercase tracking-wider text-sol-text-dim hover:text-sol-cyan transition-colors"
+            className="text-mark uppercase tracking-wider text-sol-text-dim hover:text-sol-cyan transition-colors"
             title="Select these lines; the address then points at this thread"
           >
             {span}
           </a>
         ) : (
-          <div className="text-[10px] uppercase tracking-wider text-sol-text-dim">{span}</div>
+          <div className="text-mark uppercase tracking-wider text-sol-text-dim">{span}</div>
         ))}
         <AnchorPlacementChip placement={placement} />
         {noteMode && onNoteMode && (comments.length === 0 || replying) && (

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { Button } from "@/components/ui/button";
 import { InstallTabs } from "@/components/install-tabs";
@@ -91,9 +91,11 @@ function Param({ name, desc }: { name: string; desc: string }) {
 }
 
 function CmdRow({ cmd, desc }: { cmd: string; desc: string }) {
+  // On a phone the command takes the whole width and the words go under it:
+  // side by side, a long command got under half of 342px.
   return (
-    <div className="grid grid-cols-[1fr_1.2fr] gap-4 py-2.5" style={{ borderBottom: `1px solid ${SOL.base2}` }}>
-      <code className="font-mono text-sm" style={{ color: SOL.base03 }}>{cmd}</code>
+    <div className="grid grid-cols-1 sm:grid-cols-[1fr_1.2fr] gap-1 sm:gap-4 py-2.5" style={{ borderBottom: `1px solid ${SOL.base2}` }}>
+      <code className="font-mono text-sm break-words" style={{ color: SOL.base03 }}>{cmd}</code>
       <span className="text-sm" style={{ color: SOL.base00 }}>{desc}</span>
     </div>
   );
@@ -265,13 +267,40 @@ function AppsCard() {
   );
 }
 
+/** The sidebar's contents for a screen too narrow for the sidebar: one bar
+ *  that names where the reader is and opens the whole list. A pick closes it. */
+function PhoneToc({ activeId }: { activeId: string }) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  const here =
+    TOC.find((s) => s.id === activeId)?.label ??
+    TOC.flatMap((s) => s.children).find((c) => c.id === activeId)?.label ??
+    "Contents";
+  return (
+    <details
+      ref={ref}
+      className="lg:hidden sticky top-[53px] z-30 -mx-6 -mt-8 mb-8 px-6 py-2"
+      style={{ backgroundColor: SOL.base3, borderBottom: `1px solid ${SOL.base2}` }}
+      onClick={(e) => {
+        if ((e.target as HTMLElement).closest("a") && ref.current) ref.current.open = false;
+      }}
+    >
+      <summary className="cursor-pointer select-none py-1.5 font-mono text-sm font-medium" style={{ color: SOL.base03 }}>
+        On this page <span style={{ color: SOL.base01 }}>· {here}</span>
+      </summary>
+      <div className="max-h-[60vh] overflow-y-auto pb-3 pt-1">
+        <Sidebar activeId={activeId} />
+      </div>
+    </details>
+  );
+}
+
 function Sidebar({ activeId }: { activeId: string }) {
   return (
     <nav className="space-y-1">
       {TOC.map((section) => (
         <div key={section.id}>
           {section.group && (
-            <div className="text-[10px] font-mono font-bold uppercase tracking-wider pt-5 pb-1.5 first:pt-0" style={{ color: SOL.base1 }}>{section.group}</div>
+            <div className="text-mark font-mono font-bold uppercase tracking-wider pt-5 pb-1.5 first:pt-0" style={{ color: SOL.base1 }}>{section.group}</div>
           )}
           <a
             href={`#${section.id}`}
@@ -338,6 +367,9 @@ export default function DocsPage() {
 
         {/* Content */}
         <div className="flex-1 min-w-0 max-w-4xl px-6 lg:px-12 py-8 pb-32">
+          {/* Below lg the sidebar is gone: the same contents, folded into a
+              bar that stays under the nav. */}
+          <PhoneToc activeId={activeId} />
 
           {/* Hero */}
           <div className="mb-10">
@@ -579,7 +611,10 @@ export default function DocsPage() {
             ].map(([key, action, desc], i) => (
               <div
                 key={key}
-                className="grid grid-cols-[120px_140px_1fr] gap-4 px-4 py-2.5 text-sm items-center"
+                // Phones: the key and the action on one line, the description
+                // under them, rather than three fixed columns that left the
+                // description 18px.
+                className="grid grid-cols-[auto_1fr] sm:grid-cols-[120px_140px_1fr] gap-x-4 gap-y-1 px-4 py-2.5 text-sm items-center"
                 style={{
                   backgroundColor: i % 2 === 0 ? "transparent" : `${SOL.base2}40`,
                   borderBottom: i < 18 ? `1px solid ${SOL.base2}` : undefined,
@@ -587,7 +622,7 @@ export default function DocsPage() {
               >
                 <kbd className="font-mono text-xs px-2 py-1 rounded inline-block w-fit" style={{ backgroundColor: SOL.base2, color: SOL.base03 }}>{key}</kbd>
                 <span className="font-medium" style={{ color: SOL.base03 }}>{action}</span>
-                <span style={{ color: SOL.base00 }}>{desc}</span>
+                <span className="col-span-2 sm:col-span-1 min-w-0 break-words" style={{ color: SOL.base00 }}>{desc}</span>
               </div>
             ))}
           </div>
@@ -742,7 +777,7 @@ $ cast sharing share ~/src/app --team acme-eng --dry-run`}</Code>
             if (inCat.length === 0) return null;
             return (
               <div key={cat} className="mb-6">
-                <div className="text-[11px] font-mono uppercase tracking-wider mb-2.5" style={{ color: SOL.base01 }}>
+                <div className="text-mark font-mono uppercase tracking-wider mb-2.5" style={{ color: SOL.base01 }}>
                   {cat}
                 </div>
                 <div className="grid sm:grid-cols-2 gap-3">
@@ -973,9 +1008,9 @@ source ~/.codecast/fugitive.vim`}</Code>
               [":Gslog", "session log for the file, newest first (the :Gclog equivalent)"],
               ["<CR> / O in :Gslog", "open the conversation, or the file as it was at that session's commit"],
             ].map(([k, v]) => (
-              <div key={k} className="flex gap-3 text-sm">
-                <code className="font-mono whitespace-nowrap" style={{ color: SOL.cyan }}>{k}</code>
-                <span style={{ color: SOL.base00 }}>{v}</span>
+              <div key={k} className="flex flex-wrap gap-x-3 gap-y-0.5 text-sm">
+                <code className="font-mono break-words" style={{ color: SOL.cyan }}>{k}</code>
+                <span className="min-w-0" style={{ color: SOL.base00 }}>{v}</span>
               </div>
             ))}
           </div>
@@ -1010,9 +1045,9 @@ $ code --install-extension ~/Downloads/codecast-blame.vsix
               ["Cmd/Ctrl+Alt+B", "open the conversation for the current line"],
               ["Cmd/Ctrl+Alt+L", "session log for the file -- pick one to open its conversation"],
             ].map(([k, v]) => (
-              <div key={k} className="flex gap-3 text-sm">
-                <code className="font-mono whitespace-nowrap" style={{ color: SOL.cyan }}>{k}</code>
-                <span style={{ color: SOL.base00 }}>{v}</span>
+              <div key={k} className="flex flex-wrap gap-x-3 gap-y-0.5 text-sm">
+                <code className="font-mono break-words" style={{ color: SOL.cyan }}>{k}</code>
+                <span className="min-w-0" style={{ color: SOL.base00 }}>{v}</span>
               </div>
             ))}
           </div>

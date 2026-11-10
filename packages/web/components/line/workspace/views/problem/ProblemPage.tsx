@@ -46,6 +46,39 @@ import type { CauseHistory } from "../../../../../lib/line/causeHistory";
 import "./problem.css";
 import "../timeline/timeline.css";
 
+// The problem page's store selectors run on every store write (a heartbeat, a streamed message). What they derive is
+// cached by the row or collection it came from, which a write elsewhere leaves as the same object, so such a write
+// costs a lookup, not a scan of every task or a re-read of every attempt.
+type MergedRow = { short_id?: string; title?: string; cause?: { merged_into?: string } | null };
+const mergedIndexes = new WeakMap<object, Map<string, Map<string, string>>>();
+/** The problems merged into `into` (their refs and titles, as JSON), from an index built once per tasks collection and workspace. */
+function mergedSigOf(tasks: Record<string, unknown>, key: string | null, into: string): string {
+  if (!key) return "[]";
+  let byKey = mergedIndexes.get(tasks);
+  if (!byKey) mergedIndexes.set(tasks, (byKey = new Map()));
+  let index = byKey.get(key);
+  if (!index) {
+    const lists = new Map<string, Array<{ ref: string; title: string }>>();
+    for (const t of workspaceRows<MergedRow>("tasks", tasks as Record<string, never>, key)) {
+      const to = t.cause?.merged_into;
+      if (!to || !t.short_id) continue;
+      const list = lists.get(to) ?? [];
+      list.push({ ref: t.short_id, title: t.title ?? "" });
+      lists.set(to, list);
+    }
+    index = new Map([...lists].map(([to, list]) => [to, JSON.stringify(list)]));
+    byKey.set(key, index);
+  }
+  return index.get(into) ?? "[]";
+}
+const failCauses = new WeakMap<object, ReturnType<typeof failCause>>();
+/** A run row's fail cause, read once per row object. */
+function failCauseOf(raw: Parameters<typeof failCause>[0]): ReturnType<typeof failCause> {
+  let cause = failCauses.get(raw);
+  if (!cause) failCauses.set(raw, (cause = failCause(raw)));
+  return cause;
+}
+
 const signalSig = (s: ReaderSignal & { retired?: unknown }) => `${s._id}|${s.observed_at ?? 0}|${s.subject ?? ""}|${s.judge ?? ""}|${s.judge_review?.state ?? ""}|${(s.detail_md ?? "").length}|${s.retired ? 1 : 0}`;
 /** Focus inside a decision or a need's reader: its own keys answer it, so the page's keys stand down (LJ5). */
 const inReader = (t: EventTarget | null) => !!(t as Element | null)?.closest?.(".ld, .lwn, .ask");
@@ -208,7 +241,7 @@ function ProblemBody({ issue, model, workspace, selection, select, href, prev, n
     const rows = (st as unknown as { workflowRuns?: Record<string, Parameters<typeof failCause>[0] & { status?: string }> }).workflowRuns;
     return full.attempts.flatMap((a) => {
       const raw = rows?.[a.runId];
-      const key = raw?.status === "failed" ? failCause(raw).key : "";
+      const key = raw?.status === "failed" ? failCauseOf(raw).key : "";
       return key.startsWith("review:") ? [`${a.runId}=${key.slice(7)}`] : [];
     }).join(",");
   });
@@ -221,7 +254,7 @@ function ProblemBody({ issue, model, workspace, selection, select, href, prev, n
     const rows = (st as unknown as { workflowRuns?: Record<string, Parameters<typeof failCause>[0] & { status?: string }> }).workflowRuns;
     return JSON.stringify(full.attempts.flatMap((a) => {
       const raw = rows?.[a.runId];
-      const fail = raw?.status === "failed" ? failCause(raw) : null;
+      const fail = raw?.status === "failed" ? failCauseOf(raw) : null;
       const ask = stoppedAsk(fail);
       return ask ? [[a.runId, { step: ask.step, node: fail?.step ?? null, next: ask.next }]] : [];
     }));
@@ -254,8 +287,7 @@ function ProblemBody({ issue, model, workspace, selection, select, href, prev, n
   const total = Math.max(issue.findings, signals.length);
   // Problems merged into this one: a finding a run split off to one of them came back with it, and its row says so.
   // Merged problems share this one's workspace.
-  const mergedSig = useInboxStore((st) => JSON.stringify(workspaceRows<{ short_id?: string; title?: string; cause?: { merged_into?: string } | null }>("tasks", st.tasks as Record<string, never>, (task ? workspaceKeyOfRow(task as { workspace?: string | null }) : null) ?? activeWorkspaceKeyOf(st))
-    .filter((t) => t.cause?.merged_into === issue.id && t.short_id).map((t) => ({ ref: t.short_id!, title: t.title ?? "" }))));
+  const mergedSig = useInboxStore((st) => mergedSigOf(st.tasks as Record<string, unknown>, (task ? workspaceKeyOfRow(task as { workspace?: string | null }) : null) ?? activeWorkspaceKeyOf(st), issue.id));
   const back = useMemo(() => cameBack(signals, JSON.parse(mergedSig)), [signals, mergedSig]);
 
   return (

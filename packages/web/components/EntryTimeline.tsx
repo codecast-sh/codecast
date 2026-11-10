@@ -60,7 +60,7 @@ export function EntryTimeline({
             <span className={`text-xs mt-0.5 ${TYPE_STYLES[entry.type ?? "note"] || TYPE_STYLES.note}`}>
               {TYPE_ICONS[entry.type ?? "note"] || "·"}
             </span>
-            <span className="text-[11px] text-sol-text-dim tabular-nums whitespace-nowrap mt-0.5">
+            <span className="text-meta text-sol-text-dim tabular-nums whitespace-nowrap mt-0.5">
               {formatTimestamp(entry.timestamp)}
             </span>
             <div className="flex-1 min-w-0">

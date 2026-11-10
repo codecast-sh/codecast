@@ -47,7 +47,7 @@ type Runner = { id?: string; name: string; image?: string | null };
 
 function RunnerBadge({ runner, compact, title }: { runner: Runner; compact: boolean; title: string }) {
   return (
-    <span data-runner-device className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] text-sol-text-dim border border-sol-border/40" title={title}>
+    <span data-runner-device className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-meta text-sol-text-dim border border-sol-border/40" title={title}>
       <OwnerAvatar name={runner.name} image={runner.image ?? undefined} />
       {!compact && runner.name}
     </span>
@@ -205,7 +205,7 @@ export function AssignmentBadge({
           type="button"
           data-runner-device
           title={`${deviceTitle} · ${ownerHover}`}
-          className="inline-flex items-stretch rounded-full border border-sol-border/40 overflow-hidden text-[10px] font-medium outline-none transition-colors hover:border-sol-border/80"
+          className="inline-flex items-stretch rounded-full border border-sol-border/40 overflow-hidden text-meta font-medium outline-none transition-colors hover:border-sol-border/80"
         >
           {(loaded || d || owners.canManage) && (
             <span className={`inline-flex items-center gap-1 py-0.5 ${compact ? "pl-1.5 pr-1" : `pl-2 pr-1.5 ${worktree || preparing || shared ? "max-w-[260px]" : "max-w-[150px]"}`} ${deviceTint(d, !own && !!foreign)}`}>
@@ -215,10 +215,10 @@ export function AssignmentBadge({
                   {!compact && <span className="truncate cq-sq1">{deviceDisplayName(d)}</span>}
                   {/* A worktree has its own pill beside this one (SessionWorktreePills); the main checkout has none, so it is said here. */}
                   {!compact && shared && !worktree && (
-                    <span className="truncate max-w-[70px] font-mono text-[9px] opacity-70 cq-sq1">shared</span>
+                    <span className="truncate max-w-[70px] font-mono text-meta opacity-70 cq-sq1">shared</span>
                   )}
                   {!compact && base7 && (
-                    <span className="font-mono text-[9px] opacity-70 whitespace-nowrap cq-sq1">@{base7}</span>
+                    <span className="font-mono text-meta opacity-70 whitespace-nowrap cq-sq1">@{base7}</span>
                   )}
                   {/* While the host is being prepared there is nothing to be
                       online about yet — the dot would read as "offline", which is
@@ -226,7 +226,7 @@ export function AssignmentBadge({
                   {preparing ? (
                     <span className="inline-flex items-center gap-1 whitespace-nowrap animate-pulse">
                       <span className="w-1.5 h-1.5 rounded-full bg-current opacity-60" />
-                      {!compact && <span className="text-[9px] cq-sq1">preparing cloud host</span>}
+                      {!compact && <span className="text-meta cq-sq1">preparing cloud host</span>}
                     </span>
                   ) : (
                     <DeviceDot online={d.online} />
@@ -287,7 +287,7 @@ export function AssignmentBadge({
           <>
             <DropdownMenuSeparator />
             {runner && <div className="px-2 py-1.5 text-xs text-sol-text-muted">Runs under {runner.name}’s account</div>}
-            {!isRunner && <div className="px-2 pb-1.5 text-[10px] text-sol-text-dim">Moving to your machine uses your account and billing.</div>}
+            {!isRunner && <div className="px-2 pb-1.5 text-meta text-sol-text-dim">Moving to your machine uses your account and billing.</div>}
             <RunOnDeviceItems conversationId={conversationId} ownerDeviceId={ownerDeviceId} allowRemoteMove={isRunner} />
             {cloudHost && isRunner && !preparing && (
               <>

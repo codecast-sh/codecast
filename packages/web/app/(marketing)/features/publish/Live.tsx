@@ -20,7 +20,7 @@ function LiveTab() {
       urlNode={
         <span className="flex items-center gap-1.5 min-w-0 w-full">
           <span className="truncate">{SITE}{SLUG}<span style={{ color: CYAN }}>?live=1</span></span>
-          <span className="ml-auto inline-flex items-center gap-1 shrink-0 text-[10px]" style={{ color: CYAN }}>
+          <span className="ml-auto inline-flex items-center gap-1 shrink-0 text-meta" style={{ color: CYAN }}>
             <span className="pb-anim pb-pulse h-1.5 w-1.5 rounded-full" style={{ backgroundColor: CYAN, animationIterationCount: "infinite", animationDuration: "1.6s" }} />
             live
           </span>
@@ -32,12 +32,12 @@ function LiveTab() {
         <div className="font-mono font-bold text-[18px] tracking-tight" style={{ color: SOL.base03 }}>Pricing page proposal</div>
         <p className="mt-2 text-[13px] leading-6 relative" style={{ color: SOL.base01 }}>
           <span className="pb-hl">Two plans instead of four. Teams pay per seat; solo use stays free.</span>
-          <span className="ml-2 align-middle inline-block rounded px-1.5 py-px font-mono text-[9.5px] font-semibold" style={{ color: CYAN, backgroundColor: "rgba(42,161,152,.12)" }}>new in v3</span>
+          <span className="ml-2 align-middle inline-block rounded px-1.5 py-px font-mono text-meta font-semibold" style={{ color: CYAN, backgroundColor: "rgba(42,161,152,.12)" }}>new in v3</span>
         </p>
         <div className="mt-5 grid grid-cols-2 gap-3">
           {["Solo", "Team"].map((p, i) => (
             <div key={p} className="rounded-lg border p-3" style={{ borderColor: i ? CYAN : "rgba(88,110,117,.2)", backgroundColor: i ? "rgba(42,161,152,.05)" : undefined }}>
-              <div className="font-mono text-[11px] font-semibold" style={{ color: SOL.base02 }}>{p}</div>
+              <div className="font-mono text-meta font-semibold" style={{ color: SOL.base02 }}>{p}</div>
               <div className="mt-2 h-1.5 w-2/3 rounded-full" style={{ backgroundColor: SOL.base2 }} />
               <div className="mt-1.5 h-1.5 w-1/2 rounded-full" style={{ backgroundColor: SOL.base2 }} />
             </div>

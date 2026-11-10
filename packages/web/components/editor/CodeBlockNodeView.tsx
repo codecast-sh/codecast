@@ -25,7 +25,7 @@ export function CodeBlockNodeView({ node }: NodeViewProps) {
         contentEditable={false}
       >
         {language && (
-          <span className="text-[10px] font-mono text-sol-text-dim select-none">{language}</span>
+          <span className="text-meta font-mono text-sol-text-dim select-none">{language}</span>
         )}
         <button
           onClick={handleCopy}

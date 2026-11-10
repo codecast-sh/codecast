@@ -85,10 +85,10 @@ function DiffRows({ rows }: { rows: typeof DIFF }) {
         const note = r.note !== undefined ? NOTES[r.note] : null;
         return (
           <div key={i}>
-            <div className="group flex text-[11.5px] leading-[1.9]" style={{ backgroundColor: bg }}>
+            <div className="group flex text-meta leading-[1.9]" style={{ backgroundColor: bg }}>
               <span className="relative w-10 shrink-0 pr-2 text-right tabular-nums select-none" style={{ color: SOL.base1 }}>
                 {r.kind === "-" ? "" : r.n}
-                <span className="absolute -right-2 top-1/2 -translate-y-1/2 hidden group-hover:inline-flex h-4 w-4 items-center justify-center rounded text-[11px] font-bold text-white" style={{ backgroundColor: SOL.blue }}>+</span>
+                <span className="absolute -right-2 top-1/2 -translate-y-1/2 hidden group-hover:inline-flex h-4 w-4 items-center justify-center rounded text-meta font-bold text-white" style={{ backgroundColor: SOL.blue }}>+</span>
               </span>
               <span className="w-5 shrink-0 text-center select-none" style={{ color: r.kind === "+" ? SOL.green : r.kind === "-" ? SOL.red : SOL.base1 }}>{r.kind}</span>
               <span className="whitespace-pre pr-4" style={{ color: SOL.base02 }}>{r.text}</span>
@@ -96,10 +96,10 @@ function DiffRows({ rows }: { rows: typeof DIFF }) {
             {note && (
               <div className="py-2 pl-3 pr-3 sm:pl-14" style={{ backgroundColor: "rgba(238,232,213,0.35)" }}>
                 <div className="rounded-md border border-dashed px-3 py-2 font-sans" style={{ borderColor: "rgba(181,137,0,0.6)", backgroundColor: PAPER }}>
-                  <div className="flex items-center gap-2 font-mono text-[10.5px]">
+                  <div className="flex items-center gap-2 font-mono text-meta">
                     <Face name={REVIEWER} color={PEOPLE.omar} size={15} />
                     <span style={{ color: SOL.base02 }}>{REVIEWER}</span>
-                    <span className="rounded-full border border-dashed px-1.5 text-[10px]" style={{ borderColor: "rgba(181,137,0,0.6)", color: SOL.yellow }}>held</span>
+                    <span className="rounded-full border border-dashed px-1.5 text-meta" style={{ borderColor: "rgba(181,137,0,0.6)", color: SOL.yellow }}>held</span>
                   </div>
                   <div className="mt-1 text-[13px]" style={{ color: SOL.base02 }}>{note.text}</div>
                 </div>
@@ -115,7 +115,7 @@ function DiffRows({ rows }: { rows: typeof DIFF }) {
 function FilesMock() {
   return (
     <Frame label="The Files view of the pull request page with two held notes, drawn dashed">
-      <div className="flex items-center gap-4 px-4 pt-3 text-[11.5px]" style={{ color: SOL.base00 }}>
+      <div className="flex items-center gap-4 px-4 pt-3 text-meta" style={{ color: SOL.base00 }}>
         {["Conversation", "Files 4", "Commits 3", "Checks 6"].map((t, i) => (
           <span key={t} className="pb-2 whitespace-nowrap" style={i === 1 ? { color: SOL.base03, borderBottom: `2px solid ${SOL.green}` } : undefined}>
             {t} <span className="hidden sm:inline"><KeyCap size="xs">{i + 1}</KeyCap></span>
@@ -123,7 +123,7 @@ function FilesMock() {
         ))}
       </div>
       <div className="grid sm:grid-cols-[150px_minmax(0,1fr)]" style={{ borderTop: `1px solid ${SOL.base2}` }}>
-        <div className="hidden sm:block py-2 text-[11px]" style={{ borderRight: `1px solid ${SOL.base2}`, color: SOL.base00 }}>
+        <div className="hidden sm:block py-2 text-meta" style={{ borderRight: `1px solid ${SOL.base2}`, color: SOL.base00 }}>
           {[
             { f: "src/retry.ts", held: 2 },
             { f: "src/queue.ts" },
@@ -132,21 +132,21 @@ function FilesMock() {
           ].map((x) => (
             <div key={x.f} className="flex items-center gap-1.5 px-3 py-1" style={{ opacity: x.viewed ? 0.45 : 1, backgroundColor: x.held ? "rgba(38,139,210,0.07)" : undefined }}>
               <span className="min-w-0 flex-1 truncate">{x.f.split("/").pop()}</span>
-              {x.held && <span className="rounded-full border border-dashed px-1 text-[9.5px]" style={{ borderColor: "rgba(181,137,0,0.6)", color: SOL.yellow }}>{x.held}</span>}
+              {x.held && <span className="rounded-full border border-dashed px-1 text-meta" style={{ borderColor: "rgba(181,137,0,0.6)", color: SOL.yellow }}>{x.held}</span>}
             </div>
           ))}
         </div>
         <div className="min-w-0 overflow-x-auto">
-          <div className="flex items-center justify-between px-3 py-1.5 text-[11px]" style={{ backgroundColor: SOL.base2 + "70", color: SOL.base01 }}>
+          <div className="flex items-center justify-between px-3 py-1.5 text-meta" style={{ backgroundColor: SOL.base2 + "70", color: SOL.base01 }}>
             <span>src/retry.ts</span>
             <span><span style={{ color: SOL.green }}>+21</span> <span style={{ color: SOL.red }}>-6</span></span>
           </div>
           <DiffRows rows={DIFF} />
-          <div className="px-3 py-1 text-[10.5px]" style={{ color: SOL.base1, backgroundColor: "rgba(38,139,210,0.05)" }}>⋯ 42 unchanged lines</div>
+          <div className="px-3 py-1 text-meta" style={{ color: SOL.base1, backgroundColor: "rgba(38,139,210,0.05)" }}>⋯ 42 unchanged lines</div>
           <DiffRows rows={DIFF2} />
         </div>
       </div>
-      <div className="hidden sm:flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-[10.5px]" style={{ borderTop: `1px solid ${SOL.base2}`, color: SOL.base1 }}>
+      <div className="hidden sm:flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-meta" style={{ borderTop: `1px solid ${SOL.base2}`, color: SOL.base1 }}>
         <span><KeyCap size="xs">n</KeyCap> <KeyCap size="xs">p</KeyCap> walk threads</span>
         <span><KeyCap size="xs">m</KeyCap> mark viewed, next file</span>
         <span><KeyCap size="xs">r</KeyCap> review menu</span>
@@ -177,7 +177,7 @@ function ReviewBar({ verdict, setVerdict, dest, setDest }: { verdict: Verdict; s
               role="radio"
               aria-checked={on}
               onClick={() => { setVerdict(v.key); setDest("github"); }}
-              className="prx-chip rounded-md border px-2.5 py-1 text-[11.5px]"
+              className="prx-chip rounded-md border px-2.5 py-1 text-meta"
               style={{ borderColor: on && dest === "github" ? v.color : SOL.base2, color: on && dest === "github" ? v.color : SOL.base00, backgroundColor: on && dest === "github" ? `${v.color}14` : "transparent" }}
             >
               {v.label}
@@ -189,7 +189,7 @@ function ReviewBar({ verdict, setVerdict, dest, setDest }: { verdict: Verdict; s
           type="button"
           onClick={() => setDest(dest === "session" ? "github" : "session")}
           aria-pressed={dest === "session"}
-          className="prx-chip rounded-md border px-2.5 py-1 text-[11.5px]"
+          className="prx-chip rounded-md border px-2.5 py-1 text-meta"
           style={{ borderColor: dest === "session" ? SOL.cyan : SOL.base2, color: dest === "session" ? SOL.cyan : SOL.base00, backgroundColor: dest === "session" ? "rgba(42,161,152,0.08)" : "transparent" }}
         >
           Send to session

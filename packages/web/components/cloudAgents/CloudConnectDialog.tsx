@@ -53,7 +53,7 @@ export function CloudConnectDialog({ title, description, device, machine, needsP
         )}
 
         <DialogFooter>
-          <Button size="sm" variant={done ? "default" : "ghost"} onClick={onClose} className="h-7 px-3 text-[11px]">
+          <Button size="sm" variant={done ? "default" : "ghost"} onClick={onClose} className="h-7 px-3 text-meta">
             {done ? "Done" : "Close"}
           </Button>
         </DialogFooter>

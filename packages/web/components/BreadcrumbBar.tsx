@@ -14,7 +14,7 @@
  * the one row the route names and selects the PRIMITIVE it draws, so a re-render
  * happens only when a name on screen actually changes.
  */
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
 import { channelDisplayName } from "../lib/chatViews";
@@ -25,12 +25,29 @@ import { tabStageLayout } from "../lib/stage";
 import { projectDotClass } from "../lib/projectColors";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 
+/** A short id's row key, learned on the first hit. These selectors run on
+ *  every store notification, and a short-id route ("ct-4102", the form agent
+ *  links take) never hits the _id key, so without this every tick scanned the
+ *  whole collection once per selector. */
+const shortIdKeys = new Map<string, string>();
+
 /** Rows are keyed by _id, but a route may carry a short id ("ct-4102") — links
- *  minted by agents do. Try the key first; only scan when that misses, which
- *  means the row has not synced yet and the scan is over a cold collection. */
+ *  minted by agents do. Try the key, then the learned short-id key; scan only
+ *  when both miss: the row has not synced yet, or its key changed (a stub
+ *  superseded by its server row). */
 function findRow(rows: Record<string, any> | undefined, id: string | undefined): any {
   if (!rows || !id) return undefined;
-  return rows[id] ?? Object.values(rows).find((r: any) => r?.short_id === id);
+  const direct = rows[id];
+  if (direct) return direct;
+  const learned = shortIdKeys.get(id);
+  if (learned && rows[learned]?.short_id === id) return rows[learned];
+  for (const key in rows) {
+    if (rows[key]?.short_id === id) {
+      shortIdKeys.set(id, key);
+      return rows[key];
+    }
+  }
+  return undefined;
 }
 
 /** The route's own words: which section, and which entity ids hang off it. */
@@ -39,7 +56,8 @@ function routeParts(pathname: string) {
   return { head: parts[0], first: parts[1], second: parts[2] };
 }
 
-export function BreadcrumbBar() {
+// Memo: prop-less, it reads its own route and rows, so a shell render skips it.
+export const BreadcrumbBar = memo(function BreadcrumbBar() {
   const pathname = usePathname() ?? "";
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const { head, first, second } = routeParts(pathname);
@@ -115,4 +133,4 @@ export function BreadcrumbBar() {
       <Breadcrumbs items={items} className="min-w-0" />
     </div>
   );
-}
+});

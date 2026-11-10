@@ -13,18 +13,18 @@ import { feedTone, stepLabels, truncate, type Lane, type Mark, type Timeline } f
 import { traceMatches, type SimLabels } from "../../store/__tests__/sim/labels";
 import "./sim.css";
 
-const GUTTER = 168;
+const GUTTER = 184;
 const PAD = 10;
 // Room above the lanes for two rows of step labels, then the playhead knob.
-const TOP = 44;
+const TOP = 48;
 const AXIS = 26;
 const H_DEVICE = 20;
 const H_LANE = 26;
 const GROUP_GAP = 8;
 const MIN_COL = 9;
-const CHAR_W = 6.1;
+const CHAR_W = 7;
 /** Baselines of the two step label rows above the lanes. */
-const LABEL_Y = [15, 27] as const;
+const LABEL_Y = [16, 30] as const;
 
 export interface DeliveryTimelineProps {
   timeline: Timeline;

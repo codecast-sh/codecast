@@ -31,6 +31,8 @@ import {
   ChevronLeft, ChevronRight, User,
 } from "lucide-react";
 import { useTitlebarHead } from "../../../../hooks/useTitlebarHead";
+import { KeyCap } from "../../../../components/KeyCap";
+import { isMac } from "../../../../shortcuts/registry";
 
 interface WorkflowRun {
   _id: string;
@@ -251,7 +253,7 @@ function RunDetailContent({ runId }: { runId: string }) {
             <div className="border border-sol-magenta/25 bg-sol-magenta/5 rounded-xl overflow-hidden">
               <div className="px-4 py-2.5 border-b border-sol-magenta/20 flex items-center gap-2">
                 <User className="w-3.5 h-3.5 text-sol-magenta" />
-                <span className="text-[10px] text-sol-magenta uppercase tracking-widest font-semibold">Human Gate — awaiting response</span>
+                <span className="text-mark text-sol-magenta uppercase tracking-widest font-semibold">Human Gate — awaiting response</span>
               </div>
               <div className="px-4 py-3 space-y-3">
                 <p className="text-sm text-sol-text">{run.gate_prompt}</p>
@@ -274,16 +276,20 @@ function RunDetailContent({ runId }: { runId: string }) {
                     value={gateText}
                     onChange={e => setGateText(e.target.value)}
                     onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleGateResponse(gateText); } }}
-                    placeholder="Type your response… (⌘↵ to send)"
+                    placeholder="Type your response…"
                     rows={3}
                     className="flex-1 px-3 py-2 text-sm bg-sol-bg border border-sol-border/40 rounded-lg text-sol-text placeholder-sol-text-dim/50 focus:outline-none focus:border-sol-magenta/50 resize-none disabled:opacity-50"
                   />
                   <button
                     onClick={() => handleGateResponse(gateText)}
                     disabled={!gateText.trim()}
-                    className="px-3 py-2 text-xs font-medium text-sol-magenta border border-sol-magenta/30 rounded-lg hover:bg-sol-magenta/10 transition-colors disabled:opacity-40 whitespace-nowrap"
+                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-sol-magenta border border-sol-magenta/30 rounded-lg hover:bg-sol-magenta/10 transition-colors disabled:opacity-40 whitespace-nowrap"
                   >
                     Send
+                    <span className="inline-flex gap-0.5 opacity-80">
+                      <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap>
+                      <KeyCap size="xs">↵</KeyCap>
+                    </span>
                   </button>
                 </div>
               </div>
@@ -318,7 +324,7 @@ function RunDetailContent({ runId }: { runId: string }) {
           )}
 
           {(line || graph) && <section data-run-graph>
-            <button type="button" onClick={() => setGraphOpen((o) => !o)} className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wider text-sol-text-dim hover:text-sol-text-muted" aria-expanded={graphOpen} data-run-graph-toggle>
+            <button type="button" onClick={() => setGraphOpen((o) => !o)} className="inline-flex items-center gap-1 text-mark font-semibold uppercase tracking-wider text-sol-text-dim hover:text-sol-text-muted" aria-expanded={graphOpen} data-run-graph-toggle>
               <ChevronRight className={`w-3 h-3 transition-transform ${graphOpen ? "rotate-90" : ""}`} />
               {graphOpen ? "Hide the graph" : "Show the graph"}
             </button>
@@ -338,7 +344,7 @@ function RunDetailContent({ runId }: { runId: string }) {
             )}
           </section>}
 
-          <div className="flex items-center justify-between text-[11px] text-sol-text-dim pb-2">
+          <div className="flex items-center justify-between text-meta text-sol-text-dim pb-2">
             <span title={new Date(run.created_at).toLocaleString()}>started {shortDay(run.created_at)}, {new Date(run.created_at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })}</span>
             {line && run.primary_session_id && (
               <Link href={`/conversation/${run.primary_session_id}`} className="flex items-center gap-1 hover:text-sol-cyan transition-colors">

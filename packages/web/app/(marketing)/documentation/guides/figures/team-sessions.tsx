@@ -81,7 +81,7 @@ function Card({ r, at, chip }: { r: Row; at: number; chip?: boolean }) {
     <div className="rounded-md px-3 py-1.5 font-mono bj-rise flex items-baseline gap-2" style={{ ...t(at), backgroundColor: SOL.base3, border: `1px solid ${SOL.base2}` }}>
       <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0 self-center" style={{ backgroundColor: STATE[r.state].ink }} />
       <span className="text-[12px] truncate" style={{ color: SOL.base02 }}>{r.title}</span>
-      <span className="ml-auto text-[10.5px] shrink-0" style={{ color: SOL.base1 }}>{chip ? r.who : `${r.who} · ${r.ago}m`}</span>
+      <span className="ml-auto text-meta shrink-0" style={{ color: SOL.base1 }}>{chip ? r.who : `${r.who} · ${r.ago}m`}</span>
     </div>
   );
 }
@@ -105,7 +105,7 @@ export function FeedInboxFigure() {
           <div className="px-4 pt-3 space-y-2">
             {groups.map((g) => (
               <div key={g}>
-                <div className="font-mono text-[10px] uppercase tracking-wider mb-1 bj-fade" style={{ ...t(1.0 + n * 0.1), color: STATE[g].ink }}>{STATE[g].label}</div>
+                <div className="font-mono text-mark uppercase tracking-wider mb-1 bj-fade" style={{ ...t(1.0 + n * 0.1), color: STATE[g].ink }}>{STATE[g].label}</div>
                 <div className="space-y-1.5">
                   {SESSIONS.filter((r) => r.state === g).map((r) => <Card key={r.title} r={r} at={1.1 + n++ * 0.15} chip />)}
                 </div>

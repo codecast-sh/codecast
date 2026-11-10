@@ -78,7 +78,7 @@ export function TaskStatusBadge({
 
   const Icon = config.icon;
   const sizeClasses = size === "sm"
-    ? "text-[10px] px-1.5 py-0.5 gap-1"
+    ? "text-meta px-1.5 py-0.5 gap-1"
     : "text-xs px-2 py-0.5 gap-1.5";
   const iconSize = size === "sm" ? "w-2.5 h-2.5" : "w-3 h-3";
 

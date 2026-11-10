@@ -39,7 +39,7 @@ export function SessionIdentityLine({
       {line.name && (
         <span data-sv-name className={`max-w-full flex-shrink-0 truncate font-medium text-sol-text ${nameClassName ?? ""}`}>{highlight ? highlightMatch(line.name, highlight) : line.name}</span>
       )}
-      {line.handle && <span className="min-w-0 truncate text-sol-text-dim font-mono text-[0.85em]">@{line.handle}</span>}
+      {line.handle && <span className="min-w-0 truncate text-sol-text-dim font-mono text-[length:max(0.85em,11px)]">@{line.handle}</span>}
     </>
   );
   // The name never shrinks while the title has room to give (any shrink, even

@@ -69,7 +69,7 @@ export function Stage({ children, minWidth }: { children: ReactNode; minWidth?: 
         <button
           type="button"
           onClick={() => setRun((n) => n + 1)}
-          className="font-mono text-[11px] px-2 py-0.5 rounded hover:opacity-100 opacity-60 transition-opacity"
+          className="font-mono text-meta px-2 py-0.5 rounded hover:opacity-100 opacity-60 transition-opacity"
           style={{ color: SOL.base01, backgroundColor: SOL.base2 }}
         >
           replay

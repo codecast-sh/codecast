@@ -61,7 +61,7 @@ export function FeatureDialog({
         </div>
 
         <div className="scrollbar-auto min-h-0 flex-1 overflow-y-auto">
-          <FeatureVignette slug={slug} className="h-[210px] rounded-none border-0 border-b border-sol-border/50 text-[11px]" />
+          <FeatureVignette slug={slug} className="h-[210px] rounded-none border-0 border-b border-sol-border/50 text-meta" />
 
           {setup && <div className="border-b border-sol-border/50 px-6 py-5">{setup}</div>}
 
@@ -71,7 +71,7 @@ export function FeatureDialog({
           </div>
 
           <div className="mx-6 rounded-lg border border-sol-border/70 bg-sol-bg-alt/50 px-4 py-3">
-            <div className="text-[11px] text-sol-text-dim">Try asking</div>
+            <div className="text-meta text-sol-text-dim">Try asking</div>
             <p className="mt-1 text-[13.5px] text-sol-text">&ldquo;{e.tryIt}&rdquo;</p>
           </div>
 
@@ -153,6 +153,6 @@ function DetailRow({ label, mono, children }: { label: string; mono?: boolean; c
 
 export function NewPill() {
   return (
-    <span className="rounded-full border border-sol-cyan/30 bg-sol-cyan/10 px-1.5 py-px text-[10px] text-sol-cyan">New</span>
+    <span className="rounded-full border border-sol-cyan/30 bg-sol-cyan/10 px-1.5 py-px text-meta text-sol-cyan">New</span>
   );
 }

@@ -82,7 +82,7 @@
 
 /* A source that needs a fix: its health and the fix, under its name (ops/sourceHealth.ts). */
 .sg-health { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
-.sg-health .ops-btn { height: 22px; padding: 0 8px; font-size: 11px; }
+.sg-health .ops-btn { height: 22px; padding: 0 8px; font-size: var(--fs-meta); }
 
 /* The way to Ops: its paging count in red, the sidebar badge's number. */
 .sg-ops-n { color: var(--sol-red); margin-left: 4px; font-weight: 600; }

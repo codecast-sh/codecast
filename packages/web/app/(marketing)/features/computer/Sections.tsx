@@ -202,8 +202,8 @@ export function Guardrails() {
 export function ReadVsMark() {
   return (
     <div className="grid grid-cols-2 gap-px rounded-xl overflow-hidden font-mono text-[12.5px]" style={{ backgroundColor: "rgba(147,161,161,0.18)" }}>
-      <div className="px-4 py-2 text-[11px]" style={{ backgroundColor: SOL.base03, color: SOL.base01 }}>agent does</div>
-      <div className="px-4 py-2 text-[11px]" style={{ backgroundColor: SOL.base03, color: SOL.base01 }}>waits for you to ask</div>
+      <div className="px-4 py-2 text-meta" style={{ backgroundColor: SOL.base03, color: SOL.base01 }}>agent does</div>
+      <div className="px-4 py-2 text-meta" style={{ backgroundColor: SOL.base03, color: SOL.base01 }}>waits for you to ask</div>
       {[["read a window", "send a message"], ["find a button", "submit a form"], ["write a draft", "buy anything"], ["take a screenshot", "delete data"], ["report what it saw", "change settings"]].map(([a, b]) => (
         <div key={a} className="contents">
           <div className="px-4 py-2" style={{ backgroundColor: SOL.base03, color: SOL.green }}>✓ {a}</div>
@@ -257,7 +257,7 @@ export function ErrorList() {
           <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer list-none">
             <span className="cx-err-chev font-mono text-[12px]" style={{ color: SOL.base1 }}>▸</span>
             <span className="font-mono text-[13.5px] font-semibold" style={{ color: SOL.magenta }}>{e.code}</span>
-            <span className="ml-auto font-mono text-[11px] hidden sm:inline" style={{ color: SOL.base1 }}>{e.recovery.length} step{e.recovery.length === 1 ? "" : "s"}</span>
+            <span className="ml-auto font-mono text-meta hidden sm:inline" style={{ color: SOL.base1 }}>{e.recovery.length} step{e.recovery.length === 1 ? "" : "s"}</span>
           </summary>
           <ol className="px-4 pb-4 pl-11 space-y-1.5 list-decimal text-[14px] leading-relaxed" style={{ color: SOL.base00 }}>
             {e.recovery.map((r, j) => <li key={j}><Ticks s={r} /></li>)}

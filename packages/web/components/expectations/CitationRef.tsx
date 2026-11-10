@@ -67,7 +67,7 @@ export function CitationLine({ c, className, quote = true, who }: { c: Expectati
   const when = citationWhen(c.when);
   const speaker = c.kind === "person" ? null : who;
   return (
-    <div className={cn("text-[11.5px] leading-snug text-sol-text-dim", className)} data-citation-line={c.kind}>
+    <div className={cn("text-meta leading-snug text-sol-text-dim", className)} data-citation-line={c.kind}>
       {quote && c.quote && <q className="block italic text-sol-text-muted line-clamp-3" data-citation-quote>{c.quote}</q>}
       <span className="mt-0.5 inline-flex flex-wrap items-baseline gap-x-1.5" data-citation-meta>
         {speaker && <span className="text-sol-text-muted" data-citation-who>{speaker}</span>}

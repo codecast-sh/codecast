@@ -619,14 +619,14 @@ function ChangesBar({ changes }: { changes: FileChangeEntry[] }) {
           />
         ))}
         {remaining > 0 && (
-          <span className="text-[10px] text-sol-text-dim">+{remaining}</span>
+          <span className="text-meta text-sol-text-dim">+{remaining}</span>
         )}
       </div>
       {/* The label hides when the COLUMN is narrow, not when the window is.
           The old sm: breakpoints are viewport-based, so a 290px conversation
           column on a wide screen still rendered the full-length label and
           covered that much more text. */}
-      <span className="text-[11px] text-sol-text-dim group-hover:text-sol-text-secondary transition-colors">
+      <span className="text-meta text-sol-text-dim group-hover:text-sol-text-secondary transition-colors">
         {uniqueFiles.length}
         <span className="cc-changes-pill__label"> file{uniqueFiles.length !== 1 ? "s" : ""} changed</span>
       </span>

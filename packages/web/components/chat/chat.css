@@ -59,18 +59,21 @@
 }
 
 .ch-rail-title {
-  font-size: 10px;
+  font-size: var(--fs-mark);
   font-weight: 600;
   letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--sol-text-muted);
 }
 
+/* A 24px target in the 18px the head was laid out for: the negative margin
+ * keeps the head's height. */
 .ch-rail-add {
   display: grid;
   place-items: center;
-  width: 18px;
-  height: 18px;
+  width: 24px;
+  height: 24px;
+  margin: -3px;
   border-radius: 3px;
   color: var(--sol-text-muted);
   transition: background 120ms ease, color 120ms ease;
@@ -170,7 +173,7 @@
   border-radius: 8px;
   background: var(--sol-red);
   color: var(--sol-bg);
-  font-size: 9.5px;
+  font-size: var(--fs-mark);
   font-weight: 700;
   line-height: 15px;
   text-align: center;
@@ -242,7 +245,7 @@
   padding: 2px 7px;
   border: 1px solid color-mix(in srgb, var(--sol-violet) 35%, transparent);
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
   background: none;
   cursor: pointer;
@@ -282,7 +285,7 @@
 
 .ch-listen-head {
   padding: 4px 12px 5px;
-  font-size: 9.5px;
+  font-size: var(--fs-mark);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -315,7 +318,7 @@
 
 .ch-listen-handle {
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-violet);
 }
 
@@ -329,7 +332,7 @@
 
 .ch-listen-state {
   flex: 0 0 auto;
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
 }
 
@@ -339,7 +342,7 @@
 
 .ch-listen-empty {
   padding: 4px 12px 6px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
 }
 
@@ -349,7 +352,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
   border-left: 1px solid color-mix(in srgb, var(--sol-border) 34%, transparent);
   padding-left: 10px;
@@ -404,7 +407,7 @@
   justify-content: center;
   gap: 6px;
   padding: 8px 0;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
 }
 
@@ -423,7 +426,7 @@
   border-radius: 12px;
   background: var(--sol-card);
   box-shadow: 0 3px 12px color-mix(in srgb, var(--sol-text) 18%, transparent);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   color: var(--sol-blue);
   z-index: 4;
@@ -457,12 +460,12 @@
   align-items: center;
   gap: 6px;
   margin-top: 3px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-red);
 }
 
 .ch-send-retry {
-  font-size: 11px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   color: var(--sol-blue);
   text-decoration: underline;
@@ -519,7 +522,7 @@
 /* Hover timestamp on grouped rows. Hidden rather than absent so it reserves no
  * layout and cannot reflow the body on hover. */
 .ch-msg-hovertime {
-  font-size: 9.5px;
+  font-size: var(--fs-meta);
   line-height: 18px;
   white-space: nowrap;
   color: var(--sol-text-muted);
@@ -532,10 +535,18 @@
   opacity: 1;
 }
 
+/* The head wraps rather than run off the row: a session persona's name is
+ * its session's title, and with its chip, "via", the Slack mark and the
+ * clock it can be wider than the thread pane. The name ellipsizes (its
+ * element carries the whole name in `title`), the clock stays in one piece,
+ * and what does not fit takes the next line. */
 .ch-msg-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 7px;
+  row-gap: 0;
+  min-width: 0;
   margin-bottom: 1px;
 }
 
@@ -543,18 +554,25 @@
   font-size: 12.5px;
   font-weight: 600;
   color: var(--sol-text);
+  min-width: 0;
+  max-width: min(100%, 36ch);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ch-msg-time {
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* The human a session persona ran as ("via Ada"). Quieter than the author name
    but still legible: the words were machine-typed, the authority is theirs. */
 .ch-msg-via {
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
 }
 
@@ -617,7 +635,7 @@
 
 .ch-msg-edited {
   margin-left: 5px;
-  font-size: 9.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
 }
 
@@ -683,7 +701,7 @@
   padding: 0 4px;
   border: 1px dashed color-mix(in srgb, var(--sol-text-muted) 55%, transparent);
   border-radius: 3px;
-  font-size: 9px;
+  font-size: var(--fs-mark);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -709,7 +727,7 @@
   padding: 0 4px;
   border: 1px solid color-mix(in srgb, var(--sol-violet) 45%, transparent);
   border-radius: 3px;
-  font-size: 8.5px;
+  font-size: var(--fs-mark);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -762,7 +780,7 @@
 }
 
 .ch-agent-retry {
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-blue);
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -786,7 +804,7 @@
   border: 1px solid color-mix(in srgb, var(--sol-border) 38%, transparent);
   border-radius: 10px;
   background: color-mix(in srgb, var(--sol-bg-alt) 50%, transparent);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
   transition: border-color 110ms ease, background 110ms ease;
 }
@@ -823,7 +841,7 @@ div.ch-reaction-tip {
   background: var(--sol-card);
   color: var(--sol-text-secondary);
   text-align: center;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   line-height: 1.45;
 }
 
@@ -844,7 +862,7 @@ div.ch-reaction-tip {
   margin-bottom: 1px;
   border: none;
   background: none;
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-family: inherit;
   color: var(--sol-text-muted);
   cursor: pointer;
@@ -863,7 +881,7 @@ div.ch-reaction-tip {
   padding: 2px 7px 2px 3px;
   border: 1px solid transparent;
   border-radius: 5px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-blue);
   transition: background 110ms ease, border-color 110ms ease;
 }
@@ -972,7 +990,7 @@ div.ch-reaction-tip {
 }
 
 .ch-call-kicker {
-  font-size: 10px;
+  font-size: var(--fs-mark);
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -980,7 +998,7 @@ div.ch-reaction-tip {
 }
 
 .ch-call-lead {
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
 }
 
@@ -994,6 +1012,14 @@ div.ch-reaction-tip {
 
 .ch-call-head .ch-msg-time {
   white-space: nowrap;
+}
+
+/* A huddle's title wraps whole, as before: the head already wraps between
+ * the title and its roster line. */
+.ch-call-head .ch-msg-author {
+  max-width: none;
+  overflow: visible;
+  white-space: normal;
 }
 
 /* ── Dividers ────────────────────────────────────────────────────────────── */
@@ -1019,7 +1045,7 @@ div.ch-reaction-tip {
   border: 1px solid color-mix(in srgb, var(--sol-border) 34%, transparent);
   border-radius: 10px;
   background: var(--sol-bg);
-  font-size: 10px;
+  font-size: var(--fs-mark);
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -1047,7 +1073,7 @@ div.ch-reaction-tip {
 }
 
 .ch-new-label {
-  font-size: 9px;
+  font-size: var(--fs-mark);
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -1080,7 +1106,7 @@ div.ch-reaction-tip {
   border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent);
   border-radius: 7px 7px 0 0;
   background: color-mix(in srgb, var(--sol-cyan) 4%, transparent);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 
 .ch-slack-connect-icon {
@@ -1123,7 +1149,7 @@ div.ch-reaction-tip {
   border-radius: 5px;
   background: var(--sol-card);
   color: var(--sol-text);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   font-weight: 500;
   transition: background 130ms ease, transform 130ms ease;
 }
@@ -1175,7 +1201,7 @@ div.ch-reaction-tip {
   padding: 4px 6px;
   border-radius: 6px;
   color: var(--sol-text-muted);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   transition: color 130ms ease, background 130ms ease;
 }
 
@@ -1214,7 +1240,7 @@ div.ch-reaction-tip {
   display: block;
   margin-bottom: 10px;
   color: var(--sol-text-dim);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 600;
 }
 
@@ -1229,7 +1255,7 @@ div.ch-reaction-tip {
   align-items: center;
   gap: 8px;
   min-height: 32px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   cursor: pointer;
 }
 
@@ -1250,7 +1276,7 @@ div.ch-reaction-tip {
   gap: 12px;
   min-height: 28px;
   color: var(--sol-text-muted);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 
 .ch-composer-shortcuts > div > span:last-child {
@@ -1372,7 +1398,7 @@ div.ch-reaction-tip {
 }
 
 .ch-thread-sub {
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
 }
 
@@ -1393,7 +1419,7 @@ div.ch-reaction-tip {
 
 .ch-thread-replies-label {
   padding: 0 16px 4px var(--ch-gutter);
-  font-size: 10px;
+  font-size: var(--fs-mark);
   font-weight: 600;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -1408,7 +1434,7 @@ div.ch-reaction-tip {
   align-items: center;
   gap: 4px;
   margin-top: 4px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
 }
 
 .ch-thread .ch-round {
@@ -1544,11 +1570,20 @@ div.ch-reaction-tip {
   opacity: 1;
 }
 
+/* A touch screen has no hover to reveal them: always shown there. */
+@media (hover: none) {
+  .ch-toast-actions {
+    opacity: 1;
+  }
+}
+
+/* 24px targets in the 21px the toast was laid out for. */
 .ch-toast-action {
   display: grid;
   place-items: center;
-  width: 21px;
-  height: 21px;
+  width: 24px;
+  height: 24px;
+  margin: -1.5px;
   border-radius: 4px;
   color: var(--sol-text-muted);
   transition: background 100ms ease, color 100ms ease;
@@ -1578,7 +1613,7 @@ div.ch-reaction-tip {
 }
 
 .ch-toast-where {
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1599,7 +1634,7 @@ div.ch-reaction-tip {
 
 .ch-toast-count {
   margin-top: 4px;
-  font-size: 10.5px;
+  font-size: var(--fs-mark);
   color: var(--sol-blue);
 }
 
@@ -1623,7 +1658,7 @@ div.ch-reaction-tip {
 }
 
 .ch-empty-sub {
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
   max-width: 320px;
   line-height: 1.55;
@@ -1686,7 +1721,7 @@ div.ch-reaction-tip {
     width: 24px;
     height: 24px;
     border-radius: 7px;
-    font-size: 9.5px;
+    font-size: var(--fs-meta);
     font-weight: 700;
     letter-spacing: 0.02em;
     line-height: 1;
@@ -1725,7 +1760,7 @@ div.ch-reaction-tip {
   .ch-chan-hash .cc-cmt-avatar {
     width: 24px !important;
     height: 24px !important;
-    font-size: 10px !important;
+    font-size: var(--fs-mark) !important;
   }
 
   /* A live room has no space for the chip; the tile wears a violet ring and
@@ -1746,7 +1781,7 @@ div.ch-reaction-tip {
     right: 2px;
     min-width: 13px;
     height: 13px;
-    font-size: 8.5px;
+    font-size: var(--fs-mark);
     line-height: 13px;
     box-shadow: 0 0 0 1.5px var(--sol-bg);
   }
@@ -1794,7 +1829,7 @@ div.ch-reaction-tip {
 }
 
 .ch-rail-tip-state {
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
 }
 
@@ -1920,7 +1955,7 @@ div.ch-reaction-tip {
   padding: 4px 10px;
   border: 1px solid color-mix(in srgb, var(--sol-blue) 45%, transparent);
   border-radius: 6px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   color: var(--sol-blue);
   transition: background 110ms ease;
@@ -1986,7 +2021,7 @@ div.ch-reaction-tip {
   gap: 7px;
   padding: 4px 8px;
   border-radius: 5px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-secondary);
   text-align: left;
   transition: background 100ms ease, color 100ms ease;
@@ -2049,12 +2084,12 @@ div.ch-reaction-tip {
 }
 
 .ch-notify-label {
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-secondary);
 }
 
 .ch-notify-hint {
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
 }
 
@@ -2092,7 +2127,7 @@ div.ch-reaction-tip {
   display: flex;
   gap: 10px;
   margin-top: 4px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 
 .ch-edit-save {
@@ -2139,7 +2174,7 @@ div.ch-reaction-tip {
   border-radius: 5px;
   background: var(--sol-blue);
   color: var(--sol-bg);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   font-weight: 600;
 }
 
@@ -2157,7 +2192,7 @@ div.ch-reaction-tip {
 
 .ch-channel-edit-label {
   padding: 0 2px 6px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   color: var(--sol-text);
   overflow: hidden;
@@ -2175,7 +2210,7 @@ div.ch-reaction-tip {
   align-items: center;
   gap: 6px;
   min-width: 0;
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
   animation: ch-typing-in 160ms ease-out;
 }
@@ -2287,7 +2322,7 @@ div.ch-reaction-tip {
   align-items: center;
   gap: 5px;
   margin-left: 8px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   font-weight: 400;
   color: var(--sol-text-muted);
 }
@@ -2305,7 +2340,7 @@ div.ch-reaction-tip {
 }
 
 .ch-members-count {
-  font-size: 11px;
+  font-size: var(--fs-mark);
   color: var(--sol-text-muted);
 }
 
@@ -2319,7 +2354,7 @@ div.ch-reaction-tip {
   align-items: center;
   gap: 6px;
   padding: 2px 6px 8px;
-  font-size: 10.5px;
+  font-size: var(--fs-mark);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -2386,7 +2421,7 @@ div.ch-reaction-tip {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
 }
 .ch-members-agents {
@@ -2394,7 +2429,7 @@ div.ch-reaction-tip {
   align-items: center;
   gap: 2px;
   margin-left: 4px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-violet);
 }
 
@@ -2424,14 +2459,14 @@ div.ch-reaction-tip {
   align-items: center;
   justify-content: center;
   width: 22px;
-  font-size: 9.5px;
+  font-size: var(--fs-meta);
   letter-spacing: 0.04em;
   color: var(--sol-text-dim);
 }
 
 .ch-roster-note {
   margin: -2px 6px 6px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   line-height: 1.4;
   color: var(--sol-text-dim);
 }
@@ -2451,7 +2486,7 @@ div.ch-reaction-tip {
   width: 22px;
   height: 20px;
   border-radius: 5px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
 }
 .ch-roster-mark-in {
@@ -2493,7 +2528,7 @@ div.ch-reaction-tip {
   margin: 8px 6px 2px;
   padding-top: 8px;
   border-top: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent);
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
 }
 .ch-roster-candidate .ch-people-name { color: var(--sol-text-muted); }
@@ -2503,7 +2538,7 @@ div.ch-reaction-tip {
   gap: 4px;
   padding: 2px 8px;
   border-radius: 5px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-cyan);
   opacity: 0;
   transition: opacity 120ms, background 120ms;
@@ -2514,7 +2549,7 @@ div.ch-reaction-tip {
 
 .ch-roster-err {
   margin: 6px 6px 0;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   line-height: 1.4;
   color: var(--sol-red);
 }
@@ -2527,7 +2562,7 @@ div.ch-reaction-tip {
   margin-top: 8px;
   padding: 8px;
   border-radius: 7px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   line-height: 1.4;
   color: var(--sol-text-muted);
   background: color-mix(in srgb, var(--sol-magenta) 7%, transparent);
@@ -2537,7 +2572,7 @@ div.ch-reaction-tip {
   flex: 0 0 auto;
   padding: 3px 9px;
   border-radius: 5px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   font-weight: 600;
   color: var(--sol-bg);
   background: var(--sol-magenta);
@@ -2607,7 +2642,7 @@ div.ch-reaction-tip {
 
 .ch-rail-empty-dms {
   padding: 4px 12px 8px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
 }
 
@@ -2740,7 +2775,7 @@ div.ch-reaction-tip {
   padding: 8px 12px;
   border-radius: 8px;
   border: 1px dashed color-mix(in srgb, var(--sol-border) 60%, transparent);
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
 }
 
@@ -2791,7 +2826,7 @@ div.ch-reaction-tip {
  * its case: a slug or a person's name shouted in caps reads as a different word. */
 .ch-eyebrow {
   padding: 8px 8px 3px;
-  font-size: 10.5px;
+  font-size: var(--fs-mark);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -2806,7 +2841,7 @@ div.ch-reaction-tip {
   gap: 12px;
   padding: 7px 12px;
   border-top: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
 }
 .ch-modal-legend span { display: inline-flex; align-items: center; gap: 4px; }
@@ -2907,7 +2942,7 @@ div.ch-reaction-tip {
 .ch-nm-sub {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
 }
 
@@ -3025,7 +3060,7 @@ div.ch-reaction-tip {
   gap: 4px;
   padding: 2px 8px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
   border: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
   transition: color 120ms, border-color 120ms, background 120ms;
@@ -3040,7 +3075,7 @@ button.ch-search-chip:hover { color: var(--sol-text); }
 
 .ch-search-count {
   margin-left: auto;
-  font-size: 11px;
+  font-size: var(--fs-mark);
   color: var(--sol-text-dim);
   font-variant-numeric: tabular-nums;
 }
@@ -3060,11 +3095,11 @@ button.ch-search-chip:hover { color: var(--sol-text); }
 }
 .ch-search-hint-sub {
   margin-top: 4px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
 }
 .ch-search-hint code {
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   padding: 1px 4px;
   border-radius: 4px;
   background: color-mix(in srgb, var(--sol-text) 7%, transparent);
@@ -3119,13 +3154,13 @@ button.ch-search-chip:hover { color: var(--sol-text); }
 }
 
 .ch-search-hit-time {
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
   font-variant-numeric: tabular-nums;
 }
 
 .ch-search-hit-thread {
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
   border: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
   border-radius: 4px;
@@ -3160,7 +3195,7 @@ button.ch-search-chip:hover { color: var(--sol-text); }
   padding: 0 10px;
   border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
   border-radius: 7px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
   transition: color 120ms, border-color 120ms;
 }
@@ -3208,7 +3243,7 @@ button.ch-search-chip:hover { color: var(--sol-text); }
 
 .ch-voice-clock {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   font-variant-numeric: tabular-nums;
   color: var(--sol-text-dim);
 }
@@ -3397,7 +3432,7 @@ button.ch-search-chip:hover { color: var(--sol-text); }
   border-radius: 4px;
   background: transparent;
   color: var(--sol-text-muted);
-  font-size: 11px;
+  font-size: var(--fs-meta);
   line-height: 1;
   cursor: pointer;
   transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
@@ -3493,7 +3528,7 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
 }
 .ch-quote-head:hover .ch-quote-author { text-decoration: underline; }
 .ch-quote-author { font-weight: 600; color: var(--sol-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ch-quote-meta { font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; }
+.ch-quote-meta { font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; }
 .ch-quote-slack {
   display: inline-grid;
   place-items: center;
@@ -3563,7 +3598,7 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
   align-items: center;
   gap: 3px;
   margin-top: 2px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -3583,8 +3618,8 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
 .ch-slack-close:hover { color: var(--sol-text); background: var(--sol-bg-highlight); }
 .ch-slack-body { padding: 12px 16px 14px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
 .ch-slack-lede { font-size: 12px; line-height: 1.55; color: var(--sol-text-secondary); margin: 0; }
-.ch-slack-fine { font-size: 10.5px; line-height: 1.5; color: var(--sol-text-dim); margin: 0; }
-.ch-slack-quiet { font-size: 11px; color: var(--sol-text-dim); padding: 8px 2px; }
+.ch-slack-fine { font-size: var(--fs-meta); line-height: 1.5; color: var(--sol-text-dim); margin: 0; }
+.ch-slack-quiet { font-size: var(--fs-meta); color: var(--sol-text-dim); padding: 8px 2px; }
 .ch-slack-quiet:hover:not(:disabled) { color: var(--sol-text); }
 .ch-slack-quiet:disabled { opacity: 0.45; cursor: not-allowed; }
 
@@ -3599,7 +3634,7 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
 .ch-slack-browser-list { max-height: min(340px, 44vh); }
 .ch-slack-browser-heading {
   padding: 8px 9px 3px;
-  font-size: 9.5px;
+  font-size: var(--fs-mark);
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -3644,7 +3679,7 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-dim);
 }
 .ch-slack-browser-row .ch-slack-row-meta { display: inline-flex; align-items: center; gap: 8px; margin-left: auto; }
@@ -3656,7 +3691,7 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
   gap: 6px;
   min-width: 0;
   max-width: 220px;
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
   white-space: nowrap;
 }
@@ -3670,7 +3705,7 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
 .ch-slack-import { margin-top: 6px; }
 .ch-slack-import-failed { color: var(--sol-orange); }
 .ch-slack-import-again { padding: 0 0 0 8px; text-decoration: underline; text-underline-offset: 2px; }
-.ch-slack-empty { display: flex; align-items: center; gap: 6px; padding: 14px 10px; font-size: 11px; color: var(--sol-text-dim); }
+.ch-slack-empty { display: flex; align-items: center; gap: 6px; padding: 14px 10px; font-size: var(--fs-meta); color: var(--sol-text-dim); }
 
 /* The step for private channels: one line and one button, in the browser
  * body under the list, only while the person has not connected. */
@@ -3681,7 +3716,7 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
   padding: 8px 10px;
   border: 1px dashed color-mix(in srgb, var(--sol-border) 80%, transparent);
   border-radius: 6px;
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   line-height: 1.5;
   color: var(--sol-text-dim);
 }
@@ -3694,7 +3729,7 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
   padding: 0 10px;
   border: 1px solid var(--sol-border);
   border-radius: 6px;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   color: var(--sol-text);
   white-space: nowrap;
   background: var(--sol-bg);
@@ -3711,7 +3746,7 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
 .ch-slack-dms-compact { border: 0; padding: 6px 0 0; border-top: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent); border-radius: 0; }
 .ch-slack-dms-row { display: flex; align-items: flex-start; gap: 10px; }
 .ch-slack-dms-row .ch-slack-secondary, .ch-slack-dms-row [role=switch] { flex: 0 0 auto; margin-top: 2px; }
-.ch-slack-dms-title { font-size: 11.5px; font-weight: 600; color: var(--sol-text); margin-bottom: 2px; }
+.ch-slack-dms-title { font-size: var(--fs-meta); font-weight: 600; color: var(--sol-text); margin-bottom: 2px; }
 .ch-slack-dms-window { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 
 /* People from Slack: one row per person, the picker on the right. */
@@ -3736,7 +3771,7 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
 .ch-slack-person-face { flex: 0 0 auto; display: inline-flex; }
 .ch-slack-person-who { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .ch-slack-person-name { font-size: 12px; color: var(--sol-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ch-slack-person-meta { font-size: 10.5px; color: var(--sol-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-slack-person-meta { font-size: var(--fs-meta); color: var(--sol-text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ch-slack-person-pick { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; }
 .ch-slack-person-as { flex: 0 0 auto; display: inline-flex; }
 .ch-slack-select {
@@ -3747,7 +3782,7 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
   border-radius: 5px;
   background: var(--sol-bg);
   color: var(--sol-text);
-  font-size: 11px;
+  font-size: var(--fs-meta);
 }
 .ch-slack-select:disabled { opacity: 0.55; cursor: not-allowed; }
 
@@ -3768,8 +3803,8 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
 .ch-slack-window:hover:not(:disabled) { border-color: var(--sol-border); color: var(--sol-text); }
 .ch-slack-window:disabled { opacity: 0.6; cursor: not-allowed; }
 .ch-slack-window-on { border-color: var(--sol-cyan); background: color-mix(in srgb, var(--sol-cyan) 9%, transparent); color: var(--sol-text); }
-.ch-slack-window-label { display: inline-flex; align-items: center; font-size: 11.5px; font-weight: 600; }
-.ch-slack-window-hint { font-size: 10px; line-height: 1.4; color: var(--sol-text-dim); }
+.ch-slack-window-label { display: inline-flex; align-items: center; font-size: var(--fs-meta); font-weight: 600; }
+.ch-slack-window-hint { font-size: var(--fs-meta); line-height: 1.4; color: var(--sol-text-dim); }
 .ch-slack-browser-foot { padding: 10px 16px 12px; border-top: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent); }
 @media (max-width: 640px) {
   .ch-slack-windows { grid-template-columns: repeat(2, 1fr); }
@@ -3781,7 +3816,7 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  font-size: 10px;
+  font-size: var(--fs-mark);
   font-weight: 700;
   letter-spacing: 0.09em;
   text-transform: uppercase;
@@ -3806,7 +3841,7 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
   display: flex;
   gap: 6px;
   align-items: flex-start;
-  font-size: 11px;
+  font-size: var(--fs-meta);
   line-height: 1.45;
   color: var(--sol-red);
   padding: 6px 8px;
@@ -3850,9 +3885,9 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
 .ch-slack-row:disabled { opacity: 0.5; cursor: not-allowed; }
 .ch-slack-row-on { background: color-mix(in srgb, var(--sol-cyan) 12%, transparent); color: var(--sol-text); }
 .ch-slack-row-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ch-slack-row-meta { margin-left: auto; font-size: 10.5px; color: var(--sol-text-dim); white-space: nowrap; }
+.ch-slack-row-meta { margin-left: auto; font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; }
 .ch-slack-tag {
-  font-size: 9px;
+  font-size: var(--fs-mark);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -3880,8 +3915,8 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
 }
 .ch-slack-dir:hover { border-color: var(--sol-border); color: var(--sol-text); }
 .ch-slack-dir-on { border-color: var(--sol-cyan); background: color-mix(in srgb, var(--sol-cyan) 9%, transparent); color: var(--sol-text); }
-.ch-slack-dir-label { font-size: 11.5px; font-weight: 600; }
-.ch-slack-dir-hint { font-size: 10px; line-height: 1.4; color: var(--sol-text-dim); }
+.ch-slack-dir-label { font-size: var(--fs-meta); font-weight: 600; }
+.ch-slack-dir-hint { font-size: var(--fs-meta); line-height: 1.4; color: var(--sol-text-dim); }
 @media (max-width: 520px) { .ch-slack-dirs { grid-template-columns: 1fr; } }
 
 .ch-slack-opts { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent); border-radius: 6px; }
@@ -3896,11 +3931,11 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
 .ch-slack-opt:last-child { border-bottom: 0; }
 .ch-slack-opt-dim { opacity: 0.5; }
 .ch-slack-opt-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.ch-slack-opt-label { font-size: 11.5px; color: var(--sol-text); }
-.ch-slack-opt-hint { font-size: 10px; line-height: 1.4; color: var(--sol-text-dim); }
+.ch-slack-opt-label { font-size: var(--fs-meta); color: var(--sol-text); }
+.ch-slack-opt-hint { font-size: var(--fs-meta); line-height: 1.4; color: var(--sol-text-dim); }
 
 .ch-slack-seg { display: inline-flex; border: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent); border-radius: 6px; overflow: hidden; align-self: flex-start; }
-.ch-slack-seg-item { height: 26px; padding: 0 10px; font-size: 11px; color: var(--sol-text-muted); border-right: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent); }
+.ch-slack-seg-item { height: 26px; padding: 0 10px; font-size: var(--fs-meta); color: var(--sol-text-muted); border-right: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent); }
 .ch-slack-seg-item:last-child { border-right: 0; }
 .ch-slack-seg-item:hover { color: var(--sol-text); background: var(--sol-bg-highlight); }
 .ch-slack-seg-on { color: var(--sol-text); background: color-mix(in srgb, var(--sol-cyan) 12%, transparent); }
@@ -3927,13 +3962,13 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
   padding: 0 10px;
   border: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
   border-radius: 6px;
-  font-size: 11.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
 }
 .ch-slack-secondary:hover { color: var(--sol-text); background: var(--sol-bg-highlight); }
 .ch-slack-secondary-danger:hover { color: var(--sol-red); border-color: color-mix(in srgb, var(--sol-red) 50%, transparent); }
-.ch-slack-danger { height: 28px; padding: 0 10px; border-radius: 6px; background: var(--sol-red); color: #fff; font-size: 11.5px; font-weight: 600; }
-.ch-slack-confirm { display: inline-flex; align-items: center; gap: 8px; font-size: 11px; color: var(--sol-text-muted); }
+.ch-slack-danger { height: 28px; padding: 0 10px; border-radius: 6px; background: var(--sol-red); color: #fff; font-size: var(--fs-meta); font-weight: 600; }
+.ch-slack-confirm { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-meta); color: var(--sol-text-muted); }
 
 .ch-slack-status {
   display: flex;
@@ -3950,15 +3985,15 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
 .ch-slack-dot-paused { background: var(--sol-text-dim); box-shadow: none; }
 .ch-slack-dot-err { background: var(--sol-orange); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sol-orange) 18%, transparent); }
 .ch-slack-status-text { font-size: 12px; font-weight: 600; }
-.ch-slack-open { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--sol-text-muted); }
+.ch-slack-open { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-meta); color: var(--sol-text-muted); }
 .ch-slack-open:hover { color: var(--sol-text); text-decoration: underline; }
 .ch-slack-open-next { margin-left: 10px; }
 .ch-slack-facts { display: grid; grid-template-columns: repeat(3, auto); gap: 4px 18px; margin: 0; }
-.ch-slack-facts dt { font-size: 9.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--sol-text-dim); }
-.ch-slack-facts dd { margin: 1px 0 0; font-size: 11.5px; color: var(--sol-text-secondary); font-variant-numeric: tabular-nums; }
+.ch-slack-facts dt { font-size: var(--fs-mark); font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--sol-text-dim); }
+.ch-slack-facts dd { margin: 1px 0 0; font-size: var(--fs-meta); color: var(--sol-text-secondary); font-variant-numeric: tabular-nums; }
 
 .ch-slack-ledger { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent); border-radius: 6px; max-height: 150px; overflow: auto; }
-.ch-slack-ledger-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; padding: 4px 9px; font-size: 10.5px; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 25%, transparent); color: var(--sol-text-muted); }
+.ch-slack-ledger-row { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; padding: 4px 9px; font-size: var(--fs-meta); border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 25%, transparent); color: var(--sol-text-muted); }
 .ch-slack-ledger-row:last-child { border-bottom: 0; }
 .ch-slack-ledger-kind { color: var(--sol-text-secondary); }
 .ch-slack-ledger-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
@@ -3974,16 +4009,16 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
   gap: 8px;
   cursor: pointer;
   list-style: none;
-  font-size: 10.5px;
+  font-size: var(--fs-meta);
   color: var(--sol-text-muted);
   padding: 4px 2px;
   user-select: none;
 }
 .ch-slack-more > summary::-webkit-details-marker { display: none; }
-.ch-slack-more > summary::before { content: "▸"; font-size: 9px; color: var(--sol-text-dim); }
+.ch-slack-more > summary::before { content: "▸"; font-size: var(--fs-meta); color: var(--sol-text-dim); }
 .ch-slack-more[open] > summary::before { content: "▾"; }
 .ch-slack-more > summary:hover { color: var(--sol-text); }
-.ch-slack-more-count { font-size: 9.5px; color: var(--sol-cyan); }
+.ch-slack-more-count { font-size: var(--fs-mark); color: var(--sol-cyan); }
 .ch-slack-more > .ch-slack-opts { margin-top: 6px; }
 .ch-slack-summary { padding: 6px 8px; border-left: 2px solid color-mix(in srgb, var(--sol-border) 90%, transparent); }
 

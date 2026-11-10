@@ -13,7 +13,7 @@
 
 .ops-ws {
   display: inline-flex; align-items: center; gap: 5px; max-width: 160px; flex-shrink: 1; min-width: 0;
-  height: 20px; padding: 0 7px; border-radius: 5px; font-size: 11px; color: var(--sol-text-muted);
+  height: 20px; padding: 0 7px; border-radius: 5px; font-size: var(--fs-meta); color: var(--sol-text-muted);
   background: color-mix(in srgb, var(--sol-text-muted) 10%, transparent);
 }
 .ops-head-r { margin-left: auto; display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
@@ -28,7 +28,7 @@
 .ops-filter-btn:hover { border-color: color-mix(in srgb, var(--sol-text-muted) 60%, var(--sol-border)); }
 /* A picked source is an ordinary "on" state, not an alarm: neutral ink, never red. */
 .ops-filter-btn[data-on="true"] { border-color: color-mix(in srgb, var(--sol-text-muted) 55%, var(--sol-border)); background: color-mix(in srgb, var(--sol-text-muted) 10%, var(--sol-bg)); border-top-right-radius: 0; border-bottom-right-radius: 0; }
-.ops-filter-n { font-size: 10.5px; color: var(--sol-text-dim); }
+.ops-filter-n { font-size: var(--fs-meta); color: var(--sol-text-dim); }
 .ops-filter-clear {
   display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 28px;
   border: 1px solid color-mix(in srgb, var(--sol-text-muted) 55%, var(--sol-border)); border-left: 0; border-radius: 0 6px 6px 0; color: var(--sol-text-muted);
@@ -40,17 +40,18 @@
 .ops-filter-search input { flex: 1; min-width: 0; background: transparent; outline: none; font-size: 12.5px; color: var(--sol-text); }
 .ops-filter-search input::placeholder { color: var(--sol-text-dim); }
 .ops-filter-list { max-height: 340px; overflow: auto; padding: 4px 0; }
-.ops-filter-group { display: flex; align-items: center; gap: 6px; padding: 8px 12px 3px; font-size: 10.5px; font-weight: 600; color: var(--sol-text-dim); }
+.ops-filter-group { display: flex; align-items: center; gap: 6px; padding: 8px 12px 3px; font-size: var(--fs-meta); font-weight: 600; color: var(--sol-text-dim); }
 .ops-filter-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 5px 12px; font-size: 12.5px; text-align: left; color: var(--sol-text-muted); }
-.ops-filter-row:hover, .ops-filter-row[data-cursor="true"] { background: var(--sol-bg); color: var(--sol-text); }
-.ops-filter-row[aria-selected="true"] { color: var(--sol-text); font-weight: 500; }
+/* The keyboard cursor and hover get a fill the popover does not have; the picked source keeps a rule at its left edge. */
+.ops-filter-row:hover, .ops-filter-row[data-cursor="true"] { background: var(--osx-hover); color: var(--sol-text); }
+.ops-filter-row[aria-selected="true"] { color: var(--sol-text); font-weight: 500; box-shadow: inset 2px 0 0 var(--sol-blue); }
 .ops-filter-name { flex: 1; min-width: 0; }
-.ops-filter-health { font-size: 10.5px; color: var(--sol-red); white-space: nowrap; }
-.ops-filter-open { font-size: 10.5px; color: var(--sol-red); min-width: 18px; text-align: right; }
+.ops-filter-health { font-size: var(--fs-meta); color: var(--sol-red); white-space: nowrap; }
+.ops-filter-open { font-size: var(--fs-meta); color: var(--sol-red); min-width: 18px; text-align: right; }
 .ops-filter-none { padding: 14px 12px; font-size: 12px; color: var(--sol-text-dim); }
 
 /* ── Freshness and the item's workspace (shell) ── */
-.ops-fresh { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; }
+.ops-fresh { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; }
 .ops-fresh i { width: 6px; height: 6px; border-radius: 50%; background: var(--sol-green); }
 .ops-fresh[data-state="stale"] { color: var(--sol-orange); }
 .ops-fresh[data-state="stale"] i { background: var(--sol-orange); }
@@ -58,11 +59,11 @@
 .ops-step { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; }
 .ops-step button, .ops-step a {
   display: inline-flex; align-items: center; gap: 3px; height: 22px; padding: 0 5px; border-radius: 5px;
-  color: var(--sol-text-muted); font-size: 11px; font-weight: 400;
+  color: var(--sol-text-muted); font-size: var(--fs-meta); font-weight: 400;
 }
 .ops-step button:hover:not(:disabled) { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text-muted) 10%, transparent); }
 .ops-step button:disabled { opacity: 0.35; cursor: default; }
-.ops-step-pos { font-size: 11px; color: var(--sol-text-dim); font-weight: 400; padding: 0 2px; }
+.ops-step-pos { font-size: var(--fs-meta); color: var(--sol-text-dim); font-weight: 400; padding: 0 2px; }
 
 /* ── The home ── */
 .ops-home { display: flex; flex-direction: column; gap: 18px; container: ops-home / inline-size; }
@@ -84,7 +85,7 @@
   transition: background 120ms ease;
 }
 .ops-home-count b { font-family: var(--font-mono); font-size: 24px; font-weight: 600; line-height: 1.1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; color: var(--sol-text); }
-.ops-home-count span { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ops-home-count span { font-size: var(--fs-mark); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ops-home-count[data-tone="zero"] b { color: var(--sol-text-dim); }
 .ops-home-count[data-tone="bad"] b { color: var(--sol-red); }
 .ops-home-count[data-tone="warn"] b { color: var(--sol-orange); }
@@ -104,7 +105,7 @@
 .ops-home-lane { display: inline-flex; align-items: center; gap: 3px; }
 .ops-home-token {
   display: inline-flex; align-items: center; gap: 5px; height: 20px; padding: 0 4px 0 8px; margin-left: 4px; border-radius: 5px;
-  font-size: 11px; font-weight: 500; color: var(--sol-text); background: color-mix(in srgb, var(--sol-blue) 16%, transparent);
+  font-size: var(--fs-meta); font-weight: 500; color: var(--sol-text); background: color-mix(in srgb, var(--sol-blue) 16%, transparent);
   border: 1px solid color-mix(in srgb, var(--sol-blue) 45%, transparent);
 }
 .ops-home-token:hover { background: color-mix(in srgb, var(--sol-blue) 24%, transparent); }
@@ -119,7 +120,7 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 .ops-home-sub { grid-column: 2 / -1; list-style: none; margin: 8px 0 0; padding: 4px 0 0; border-top: 1px dashed color-mix(in srgb, var(--sol-border) 80%, transparent); cursor: default; }
 .ops-home-subrow { display: grid; grid-template-columns: 12px auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 5px; font-size: 12px; color: var(--sol-text); }
 .ops-home-subrow svg { color: var(--sol-orange); }
-.ops-home-subrow .ops-mono { font-size: 11px; }
+.ops-home-subrow .ops-mono { font-size: var(--fs-meta); }
 .ops-home-subrow:hover { background: color-mix(in srgb, var(--sol-text-muted) 8%, transparent); }
 
 /* One grid for the head and every row (the list and each row are subgrids of it), so Events, Users, Since and
@@ -138,7 +139,7 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 .ops-home-head, .ops-home-bulk.ops-home-bulk { height: 32px; box-sizing: border-box; margin-bottom: 4px; }
 .ops-home-head {
   grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: end; padding: 0 12px 6px 14px;
-  font-size: 10.5px; font-weight: 600; color: var(--sol-text-dim);
+  font-size: var(--fs-meta); font-weight: 600; color: var(--sol-text-dim);
 }
 .ops-home-head .ops-home-keys { grid-column: -3 / -1; display: inline-flex; justify-content: flex-end; gap: 3px; opacity: 0.8; }
 .ops-home-paging { font-weight: 500; color: var(--sol-text-muted); }
@@ -181,22 +182,22 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 /* The title keeps at least three fifths of the row; the facts get what is left, the reading and its source first. */
 .ops-home-line1 { display: flex; align-items: baseline; gap: 8px; min-width: 60%; flex: 1 1 0; }
 .ops-home-main > .ops-home-line2 { flex: 0 1 auto; min-width: 0; max-width: calc(40% - 10px); }
-.ops-home-ref { font-size: 11px; flex-shrink: 0; }
+.ops-home-ref { font-size: var(--fs-meta); flex-shrink: 0; }
 .ops-home-title { font-size: 13px; color: var(--sol-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 /* Line two is one line tall and wraps: a fact that does not fit moves to the hidden second line whole,
    taking every fact after it, so facts drop from the tail by rank order and none is ever cut mid-word. */
 .ops-home-line2 {
   display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 6px; min-width: 0;
-  height: 18px; overflow: hidden; font-size: 11.5px; color: var(--sol-text-muted);
+  height: 18px; overflow: hidden; font-size: var(--fs-meta); color: var(--sol-text-muted);
 }
 .ops-home-line2 > * { flex-shrink: 0; white-space: nowrap; line-height: 18px; }
-.ops-home-state { font-weight: 600; font-size: 10.5px; padding: 0 6px; border-radius: 4px; line-height: 17px !important; color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 12%, transparent); }
+.ops-home-state { font-weight: 600; font-size: var(--fs-meta); padding: 0 6px; border-radius: 4px; line-height: 17px !important; color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 12%, transparent); }
 .ops-home-state[data-state="alerting"], .ops-home-state[data-state="regressed"], .ops-home-state[data-state="escalating"], .ops-home-state[data-state="source"] { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 12%, transparent); }
 /* A second state the row also holds (an alerting watch whose issue regressed): the same ink, outlined rather than filled. */
 .ops-home-state.ops-home-also { background: transparent; box-shadow: inset 0 0 0 1px currentColor; font-weight: 500; }
 .ops-home-state[data-state="errors"] { color: var(--sol-magenta); background: color-mix(in srgb, var(--sol-magenta) 12%, transparent); }
 .ops-home-fact[data-rank="1"] { color: var(--sol-text); }
-.ops-home-fact[data-mono="true"] { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; }
+.ops-home-fact[data-mono="true"] { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--fs-meta); }
 .ops-home-fact[data-narrow="true"] { display: none; }
 /* The lead fact is the reason (an error, a failing reader, a rate): it shortens with an ellipsis rather than wrap out of sight. */
 /* It takes a sliver to stay on the line beside the pill, then whatever room is left up to its full width. */
@@ -211,7 +212,7 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 .ops-home-snz { display: inline-flex; align-items: center; gap: 4px; color: var(--sol-text-muted) !important; }
 .ops-home-spark { display: flex; justify-content: flex-end; }
 .ops-home-numcol { font-size: 12px; text-align: right; color: var(--sol-text); }
-.ops-home-age { font-size: 11px; text-align: right; }
+.ops-home-age { font-size: var(--fs-meta); text-align: right; }
 
 /* The three action columns: task, primary, menu. The wrapper steps aside so each slot is a column of the shared grid. */
 .ops-home-acts { display: contents; cursor: default; }
@@ -227,7 +228,7 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 .ops-home-slot[data-slot="primary"] { gap: 6px; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 90ms ease; }
 .ops-home-row:hover .ops-home-slot[data-slot="primary"], .ops-home-row[data-cursor="true"] .ops-home-slot[data-slot="primary"], .ops-home-row:focus-within .ops-home-slot[data-slot="primary"] { opacity: 1; visibility: visible; pointer-events: auto; }
 .ops-home-row:is(:hover, [data-cursor="true"], :focus-within) .ops-home-slot[data-primary="true"] > :not([data-slot="primary"]) { visibility: hidden; }
-.ops-home-acts .ops-btn { height: 24px; padding: 0 8px; font-size: 11.5px; gap: 4px; white-space: nowrap; }
+.ops-home-acts .ops-btn { height: 24px; padding: 0 8px; font-size: var(--fs-meta); gap: 4px; white-space: nowrap; }
 .ops-home-acts .ops-home-menu-btn { width: 24px; padding: 0; justify-content: center; border-color: transparent; background: transparent; color: var(--sol-text-dim); }
 .ops-home-row:hover .ops-home-menu-btn, .ops-home-menu-btn[data-state="open"], .ops-home-menu-btn:focus-visible { border-color: var(--sol-border); color: var(--sol-text); }
 /* Red is for state (the rail, the counts), never for an act: a row's one act is a plain outline that fills on hover. */
@@ -238,19 +239,19 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 .ops-home-menu.ops-home-menu { background: var(--sol-bg); border-color: var(--sol-border); color: var(--sol-text); min-width: 190px; font-size: 12.5px; }
 .ops-home-menu [role="menuitem"] { font-size: 12.5px; }
 .ops-home-menu [role="menuitem"] svg { width: 14px; height: 14px; color: var(--sol-text-muted); }
-.ops-home-menu-label { font-size: 10.5px !important; font-weight: 600; color: var(--sol-text-dim); padding-top: 6px; padding-bottom: 2px; }
+.ops-home-menu-label { font-size: var(--fs-meta) !important; font-weight: 600; color: var(--sol-text-dim); padding-top: 6px; padding-bottom: 2px; }
 .ops-home-menu-key { margin-left: auto; padding-left: 12px; display: inline-flex; }
 
 /* The task a fix is filed under: id, status, who has it. */
 .ops-home-task {
   display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 4px; white-space: nowrap;
-  border-radius: 5px; font-size: 11.5px; line-height: 1; color: var(--sol-text-dim);
+  border-radius: 5px; font-size: var(--fs-meta); line-height: 1; color: var(--sol-text-dim);
 }
 .ops-home-task:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text-muted) 10%, transparent); }
-.ops-home-task .ops-mono { font-size: 11px; }
+.ops-home-task .ops-mono { font-size: var(--fs-meta); }
 /* Nobody on it: the face's slot stays empty, so the ids line up and the rows someone is on stand out. */
 .ops-home-task-none { display: inline-block; width: 14px; height: 14px; }
-.ops-home-task-who { font-size: 11px; color: var(--sol-orange); }
+.ops-home-task-who { font-size: var(--fs-meta); color: var(--sol-orange); }
 /* The fix act is one style wherever an issue or app sits (the home, a source's Open issues, the Timeline): a plain outline that fills on hover. */
 .ops-btn.ops-btn[data-ops-fix-start][data-tone="primary"] { background: transparent; color: var(--sol-text); border-color: var(--sol-border); }
 .ops-btn.ops-btn[data-ops-fix-start][data-tone="primary"]:hover { background: color-mix(in srgb, var(--sol-text) 10%, transparent); color: var(--sol-text); filter: none; }
@@ -266,10 +267,10 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 /* ── Sources table, edge to edge ── */
 .ops-home-sources { display: flex; flex-direction: column; }
 .ops-home-sources-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.ops-home-sources-head .ops-btn { height: 24px; padding: 0 8px; font-size: 11.5px; gap: 4px; }
+.ops-home-sources-head .ops-btn { height: 24px; padding: 0 8px; font-size: var(--fs-meta); gap: 4px; }
 .ops-home-srctable { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .ops-home-srctable th, .ops-home-srctable td { padding: 7px 10px; text-align: left; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent); white-space: nowrap; vertical-align: middle; }
-.ops-home-srctable thead th { font-size: 10.5px; font-weight: 600; color: var(--sol-text-dim); }
+.ops-home-srctable thead th { font-size: var(--fs-meta); font-weight: 600; color: var(--sol-text-dim); }
 .ops-home-srctable [data-num] { text-align: right; width: 1%; }
 .ops-home-srctable [data-col="week"] { width: 1%; }
 .ops-home-srctable [data-col="acts"] { width: 1%; padding-right: 0; }
@@ -279,12 +280,12 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
 .ops-home-srcname { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; color: var(--sol-text); }
 .ops-home-srcname:hover { text-decoration: underline; }
 .ops-home-srcacts { display: flex; justify-content: flex-end; gap: 6px; min-width: 96px; }
-.ops-home-srcacts .ops-btn { height: 24px; padding: 0 8px; font-size: 11.5px; gap: 4px; }
+.ops-home-srcacts .ops-btn { height: 24px; padding: 0 8px; font-size: var(--fs-meta); gap: 4px; }
 .ops-home-health { display: inline-flex; align-items: center; gap: 6px; color: var(--sol-text-muted); }
 .ops-home-health i { width: 6px; height: 6px; border-radius: 50%; }
 .ops-home-health[data-tone="bad"] { color: var(--sol-red); }
 .ops-home-health[data-tone="warn"] { color: var(--sol-orange); }
-.ops-home-reason { display: block; margin-top: 2px; font-size: 11px; color: var(--sol-text-muted); overflow: hidden; text-overflow: ellipsis; }
+.ops-home-reason { display: block; margin-top: 2px; font-size: var(--fs-meta); color: var(--sol-text-muted); overflow: hidden; text-overflow: ellipsis; }
 
 /* ── First run ── */
 .ops-home-first { max-width: 1180px; }
@@ -299,7 +300,7 @@ button.ops-home-blind[aria-expanded="true"] svg { transform: rotate(180deg); }
   transition: border-color 120ms ease, transform 120ms ease;
 }
 .ops-home-tile { text-align: left; color: var(--sol-text); cursor: pointer; }
-.ops-home-tile span { font-size: 11.5px; }
+.ops-home-tile span { font-size: var(--fs-meta); }
 .ops-home-tile:hover { border-color: var(--sol-text-muted); transform: translateY(-1px); }
 .ops-home-tile[data-on="true"] { border-color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 7%, var(--sol-bg)); transform: none; }
 /* Opening a sheet leaves the tiles where they are: the picked one is marked, nothing reflows. */
@@ -317,11 +318,11 @@ button.ops-band-ok:hover { background: color-mix(in srgb, var(--sol-text-muted) 
 .ops-band-title { font-size: 12px; font-weight: 600; color: var(--sol-text); white-space: nowrap; }
 .ops-band-title:hover { text-decoration: underline; }
 .ops-band-sum { display: flex; align-items: center; gap: 12px; min-width: 0; overflow: hidden; }
-.ops-band-n { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--sol-text-muted); white-space: nowrap; }
+.ops-band-n { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-meta); color: var(--sol-text-muted); white-space: nowrap; }
 .ops-band-n i { width: 7px; height: 7px; border-radius: 50%; background: var(--ink); }
 .ops-band-n b { font-weight: 600; color: var(--sol-text); }
 .ops-band-series { display: inline-flex; align-items: center; gap: 5px; margin-left: 7px; }
-.ops-band-all { margin-left: auto; font-size: 11.5px; white-space: nowrap; }
+.ops-band-all { margin-left: auto; font-size: var(--fs-meta); white-space: nowrap; }
 .ops-band-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(176px, 1fr)); gap: 6px; }
 .ops-band-tile {
   display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; column-gap: 8px; row-gap: 3px;
@@ -330,7 +331,7 @@ button.ops-band-ok:hover { background: color-mix(in srgb, var(--sol-text-muted) 
 }
 .ops-band-tile:hover { border-color: color-mix(in srgb, var(--sol-text-muted) 50%, var(--sol-border)); border-left-color: var(--ink); }
 .ops-band-tile[data-health="ok"], .ops-band-tile[data-health="series"] { border-left-color: color-mix(in srgb, var(--ink) 55%, var(--sol-border)); }
-.ops-band-name { font-size: 11.5px; color: var(--sol-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ops-band-name { font-size: var(--fs-meta); color: var(--sol-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ops-band-val { font-size: 12.5px; font-weight: 600; text-align: right; white-space: nowrap; }
 .ops-band-tile[data-health="alert"] .ops-band-val, .ops-band-tile[data-health="error"] .ops-band-val, .ops-band-tile[data-health="warn"] .ops-band-val { color: var(--ink); }
 .ops-band-spark { grid-column: 1 / -1; display: flex; }
@@ -483,7 +484,7 @@ a.ops-fresh:hover span { text-decoration: underline; }
 @keyframes ops-notfound-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .ops-notfound-spin { animation: none; } }
 /* The other workspaces still being asked, beside a finished verdict: a small mark, not the page's spinner. */
-.ops-notfound-elsewhere { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; }
+.ops-notfound-elsewhere { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-meta); }
 .ops-notfound-elsewhere .ops-notfound-spin { width: 10px; height: 10px; }
 
 /* A source overview's folded issue row (one root cause, several issues): the count opens them, each to its own page. */

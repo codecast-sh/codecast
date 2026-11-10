@@ -236,7 +236,7 @@ function PanelHeader({
             {callsEnabled && <WalkieDoorToggle compact />}
           </div>
         )}
-        <TeamPulseLine pulse={pulse} className="px-3 pb-2 text-[10.5px]" />
+        <TeamPulseLine pulse={pulse} className="px-3 pb-2 text-meta" />
         <CallBehindPill show={callBehind} onShowCall={onShowCall} />
         <ElsewhereCallPill className="border-t border-sol-border/60 px-3 py-1.5" />
       </div>
@@ -246,11 +246,11 @@ function PanelHeader({
   return (
     <div className="people-head shrink-0 border-b border-sol-border/60">
       <div
-        className={`flex h-9 items-center justify-between gap-2 pr-3 text-[11px] font-medium uppercase tracking-wider text-sol-text-dim ${head}`}
+        className={`flex h-9 items-center justify-between gap-2 pr-3 text-mark font-medium uppercase tracking-wider text-sol-text-dim ${head}`}
       >
         {/* The visible title. The document's h1 is the always-present hidden
             one on the panel, so this is presentation only. */}
-        <div aria-hidden="true" className="text-[11px] font-medium uppercase tracking-wider">
+        <div aria-hidden="true" className="text-mark font-medium uppercase tracking-wider">
           People
         </div>
         <div className="flex items-center gap-1.5">
@@ -267,7 +267,7 @@ function PanelHeader({
           <div className="truncate text-[13px] font-medium text-sol-text">
             {me ? memberDisplayName(me) : "Signing in"}
           </div>
-          <div className="truncate text-[11px] text-sol-text-dim">
+          <div className="truncate text-meta text-sol-text-dim">
             {me ? presenceLabel(memberPresenceVisual(me)) : ""}
           </div>
         </div>
@@ -280,7 +280,7 @@ function PanelHeader({
       </div>
       {/* The team in one line, under your own row: the reason to glance at a
           pinned window at all is to learn this without reading the list. */}
-      <TeamPulseLine pulse={pulse} wrap className="px-3 pb-2.5 text-[11px]" />
+      <TeamPulseLine pulse={pulse} wrap className="px-3 pb-2.5 text-meta" />
       <CallBehindPill show={callBehind} onShowCall={onShowCall} />
       <ElsewhereCallPill className="border-t border-sol-border/60 px-3 py-1.5" />
     </div>
@@ -300,7 +300,7 @@ function CallBehindPill({ show, onShowCall }: { show: boolean; onShowCall?: () =
     <button
       type="button"
       onClick={onShowCall}
-      className="flex w-full items-center gap-1.5 border-t border-sol-border/60 px-3 py-1.5 text-left text-[11px] text-sol-violet hover:bg-sol-bg-highlight"
+      className="flex w-full items-center gap-1.5 border-t border-sol-border/60 px-3 py-1.5 text-left text-meta text-sol-violet hover:bg-sol-bg-highlight"
       title="Bring the call back"
     >
       <Headphones className="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -409,7 +409,7 @@ function StatusPill({
       type="button"
       onClick={set}
       aria-pressed={active}
-      className={`flex-1 rounded px-1.5 py-1 text-[11px] capitalize transition-colors ${
+      className={`flex-1 rounded px-1.5 py-1 text-meta capitalize transition-colors ${
         active
           ? `${STATUS_STYLE[status].activeBg} ${status === "away" ? "text-sol-text" : STATUS_STYLE[status].text}`
           : "text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text"
@@ -442,7 +442,7 @@ function WalkieDoorToggle({ compact = false }: { compact?: boolean }) {
             ? "Snoozed for the hour. Turn this on to open the door again — their words arrive as messages either way."
             : "No voice plays out loud here. Their words arrive as messages either way."
       }
-      className={`flex h-7 items-center gap-1.5 rounded-md px-2 text-[11px] transition-colors ${
+      className={`flex h-7 items-center gap-1.5 rounded-md px-2 text-meta transition-colors ${
         open
           ? "bg-sol-orange/15 text-sol-orange hover:bg-sol-orange/25"
           : "bg-sol-bg-highlight text-sol-text-dim hover:text-sol-text"
@@ -588,7 +588,7 @@ function Roster({
                 type="button"
                 onClick={() => setShowOffline((v) => !v)}
                 aria-expanded={showOffline}
-                className="flex w-full items-center gap-1 px-3 pb-0.5 pt-2 text-[10px] font-medium uppercase tracking-wider text-sol-text-dim transition-colors hover:text-sol-text-muted"
+                className="flex w-full items-center gap-1 px-3 pb-0.5 pt-2 text-mark font-medium uppercase tracking-wider text-sol-text-dim transition-colors hover:text-sol-text-muted"
               >
                 <ChevronRight
                   className={`h-3 w-3 transition-transform ${showOffline ? "rotate-90" : ""}`}
@@ -597,7 +597,7 @@ function Roster({
                 <span className="text-sol-text-dim/70">{group.members.length}</span>
               </button>
             ) : (
-              <div className="flex items-center gap-1 px-3 pb-0.5 pt-2 text-[10px] font-medium uppercase tracking-wider text-sol-text-dim">
+              <div className="flex items-center gap-1 px-3 pb-0.5 pt-2 text-mark font-medium uppercase tracking-wider text-sol-text-dim">
                 {group.label}
                 <span className="text-sol-text-dim/70">{group.members.length}</span>
               </div>
@@ -700,7 +700,7 @@ function RosterRow({
             {name}
           </span>
           <span
-            className={`min-w-[6ch] max-w-[50%] shrink-0 truncate text-[10.5px] leading-tight ${PRESENCE_META[visual].text}`}
+            className={`min-w-[6ch] max-w-[50%] shrink-0 truncate text-meta leading-tight ${PRESENCE_META[visual].text}`}
           >
             {line}
           </span>
@@ -708,7 +708,7 @@ function RosterRow({
       ) : (
         <div className="min-w-0 flex-1">
           <div className="truncate text-[12.5px] leading-tight text-sol-text">{name}</div>
-          <div className={`truncate text-[11px] leading-tight ${PRESENCE_META[visual].text}`}>
+          <div className={`truncate text-meta leading-tight ${PRESENCE_META[visual].text}`}>
             {line}
           </div>
         </div>
@@ -724,7 +724,7 @@ function RosterRow({
         <div className="people-row-idle flex items-center transition-opacity">
           {unread > 0 && (
             <span
-              className={`flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1.5 text-[10px] font-bold ${
+              className={`flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1.5 text-meta font-bold ${
                 mentions > 0
                   ? "bg-sol-orange text-sol-bg"
                   : dm?.muted

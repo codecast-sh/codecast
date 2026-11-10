@@ -34,6 +34,7 @@ import {
   Bot,
   Link2,
   Forward,
+  ListChecks,
 } from "lucide-react";
 import { openForwardToChat } from "../../lib/forwardToChat";
 import { useTeamFeature } from "../../lib/teamFeatures";
@@ -67,7 +68,7 @@ function MiniProgressBar({ progress }: { progress?: { total: number; done: numbe
           <div className="bg-sol-yellow transition-all" style={{ width: `${ipPct}%` }} />
         </div>
       </div>
-      <span className="text-[10px] text-sol-text-dim tabular-nums">
+      <span className="text-meta text-sol-text-dim tabular-nums">
         {progress.done}/{progress.total}
       </span>
     </div>
@@ -123,26 +124,27 @@ function SidebarPlanItem({
         </span>
       </div>
       <div className="flex items-center gap-2 mt-1 pl-[22px]">
-        <ShortId id={plan.short_id} className="text-[10px] text-sol-text-dim" />
+        <ShortId id={plan.short_id} className="text-meta text-sol-text-dim" />
         <MiniProgressBar progress={plan.progress} />
         {activeAgents > 0 && (
-          <span className="flex items-center gap-0.5 text-[10px] text-emerald-400">
+          <span className="flex items-center gap-0.5 text-meta text-sol-green" title={`${activeAgents} active ${activeAgents === 1 ? "agent" : "agents"}`}>
             <Zap className="w-2.5 h-2.5" />
             {activeAgents}
           </span>
         )}
         {taskCount > 0 && (
-          <span className="text-[10px] text-sol-text-dim tabular-nums">
-            {taskCount}t
+          <span className="flex items-center gap-0.5 text-meta text-sol-text-dim tabular-nums" title={`${taskCount} ${taskCount === 1 ? "task" : "tasks"}`}>
+            <ListChecks className="w-2.5 h-2.5" />
+            {taskCount}
           </span>
         )}
         {sessionCount > 0 && (
-          <span className="flex items-center gap-0.5 text-[10px] text-sol-text-dim">
+          <span className="flex items-center gap-0.5 text-meta text-sol-text-dim">
             <MessageSquare className="w-2.5 h-2.5" />
             {sessionCount}
           </span>
         )}
-        <span className="text-[10px] text-sol-text-dim tabular-nums ml-auto">
+        <span className="text-meta text-sol-text-dim tabular-nums ml-auto">
           {timeAgo(plan.updated_at)}
         </span>
       </div>
@@ -179,10 +181,10 @@ function StatusGroup({
       >
         <ChevronRight className={`w-3 h-3 text-sol-text-dim transition-transform ${collapsed ? "" : "rotate-90"}`} />
         <Icon className={`w-3 h-3 ${config.color}`} />
-        <span className="text-[11px] font-medium text-sol-text-dim uppercase tracking-wide">
+        <span className="text-mark font-medium text-sol-text-dim uppercase tracking-wide">
           {config.label}
         </span>
-        <span className="text-[10px] text-sol-text-dim/60">({plans.length})</span>
+        <span className="text-meta text-sol-text-dim">({plans.length})</span>
       </button>
       {!collapsed && (
         <div>
@@ -338,15 +340,18 @@ export default function PlansPage() {
               <div className="flex items-center gap-1.5">
                 <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
                   <button
-                    onClick={() => setPlanSource("")}
-                    className={`px-1.5 py-1 transition-colors ${!planSource ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
+                    onClick={() => setPlanSource("human")}
+                    aria-pressed={planSource === "human"}
+                    aria-label="My plans"
+                    className={`px-1.5 py-1 transition-colors ${planSource === "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
                     title="My plans"
                   >
                     <User className="w-3 h-3" />
                   </button>
                   <button
                     onClick={() => setPlanSource("all")}
-                    className={`px-1.5 py-1 text-[10px] transition-colors border-l border-sol-border/40 ${planSource === "all" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
+                    aria-pressed={planSource !== "human"}
+                    className={`px-1.5 py-1 text-meta transition-colors border-l border-sol-border/40 ${planSource !== "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
                     title="All plans"
                   >
                     All
@@ -423,7 +428,7 @@ export default function PlansPage() {
                       ) : (
                         <button
                           onClick={() => setShowDone(true)}
-                          className="w-full flex items-center gap-2 px-3 py-1.5 bg-sol-bg-alt/20 border-b border-sol-border/15 hover:bg-sol-bg-alt/40 transition-colors text-[11px] text-sol-text-dim"
+                          className="w-full flex items-center gap-2 px-3 py-1.5 bg-sol-bg-alt/20 border-b border-sol-border/15 hover:bg-sol-bg-alt/40 transition-colors text-meta text-sol-text-dim"
                         >
                           <CheckCircle2 className="w-3 h-3" />
                           Show completed plans
@@ -442,7 +447,7 @@ export default function PlansPage() {
                     />
                   )}
                   {hiddenAgentCount > 0 && (
-                    <div className="px-3 py-2 flex items-center gap-1.5 text-[11px] text-sol-text-dim border-b border-sol-border/15">
+                    <div className="px-3 py-2 flex items-center gap-1.5 text-meta text-sol-text-dim border-b border-sol-border/15">
                       <Bot className="w-3 h-3 opacity-40" />
                       <span>{hiddenAgentCount} agent {hiddenAgentCount === 1 ? "plan" : "plans"} not shown</span>
                       <button onClick={() => setPlanSource("all")} className="text-sol-cyan hover:underline ml-0.5">
@@ -457,7 +462,7 @@ export default function PlansPage() {
 
           }
         >
-          {selectedPlan ? <PlanDetailPanel planId={selectedPlan} /> : null}
+          {selectedPlan ? <PlanDetailPanel planId={selectedPlan} closeHref="/plans" /> : null}
         </DetailSplitLayout>
         <ContextMenu state={ctxMenu}>
           {(plan) => (
@@ -498,15 +503,18 @@ function MobileList({
         </div>
         <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
           <button
-            onClick={() => setPlanSource("")}
-            className={`px-2 py-1 transition-colors ${!planSource ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
+            onClick={() => setPlanSource("human")}
+            aria-pressed={planSource === "human"}
+            aria-label="My plans"
+            className={`px-2 py-1 transition-colors ${planSource === "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
             title="My plans"
           >
             <User className="w-3.5 h-3.5" />
           </button>
           <button
             onClick={() => setPlanSource("all")}
-            className={`px-2 py-1 text-xs transition-colors border-l border-sol-border/40 ${planSource === "all" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
+            aria-pressed={planSource !== "human"}
+            className={`px-2 py-1 text-xs transition-colors border-l border-sol-border/40 ${planSource !== "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
             title="All plans"
           >
             All
@@ -527,20 +535,20 @@ function MobileList({
               if (grouped[status].length === 0) return null;
               return (
                 <div key={status}>
-                  <div className="px-4 py-1.5 text-[11px] font-medium text-sol-text-dim uppercase tracking-wide bg-sol-bg-alt/30 border-b border-sol-border/15">
+                  <div className="px-4 py-1.5 text-mark font-medium text-sol-text-dim uppercase tracking-wide bg-sol-bg-alt/30 border-b border-sol-border/15">
                     {STATUS_CONFIG[status].label} ({grouped[status].length})
                   </div>
                   {grouped[status].map((p: any) => (
                     <Link key={p._id} href={`/plans/${p._id}`} className="block px-4 py-3 border-b border-sol-border/15 hover:bg-sol-bg-alt/30">
                       <div className="text-sm text-sol-text">{p.title}</div>
-                      <ShortId id={p.short_id} className="block text-[10px] text-sol-text-dim mt-0.5" />
+                      <ShortId id={p.short_id} className="block text-meta text-sol-text-dim mt-0.5" />
                     </Link>
                   ))}
                 </div>
               );
             })}
             {hiddenAgentCount > 0 && (
-              <div className="px-4 py-2.5 flex items-center gap-1.5 text-[11px] text-sol-text-dim">
+              <div className="px-4 py-2.5 flex items-center gap-1.5 text-meta text-sol-text-dim">
                 <Bot className="w-3 h-3 opacity-40" />
                 <span>{hiddenAgentCount} agent {hiddenAgentCount === 1 ? "plan" : "plans"} not shown</span>
                 <button onClick={() => setPlanSource("all")} className="text-sol-cyan hover:underline ml-0.5">

@@ -38,8 +38,8 @@ function PageCard({ page }: { page: TaskEvidencePage }) {
         )}
       </a>
       <div className="px-2 py-1.5 min-w-0">
-        <div className="text-[11px] text-sol-text truncate" title={page.title}>{page.title}</div>
-        <div className="mt-1 flex items-center gap-1 text-[10px] text-sol-text-dim">
+        <div className="text-meta text-sol-text truncate" title={page.title}>{page.title}</div>
+        <div className="mt-1 flex items-center gap-1 text-meta text-sol-text-dim">
           <span className="font-mono">v{page.version}</span>
           <button
             type="button"
@@ -169,7 +169,7 @@ function TaskEvidenceContent({ task }: { task: EvidenceTask }) {
                   <li key={d.id} className="text-xs min-w-0 flex items-center gap-1.5">
                     <FileText className="w-3 h-3 text-sol-text-dim shrink-0" />
                     <Link href={d.href} className="truncate text-sol-text-muted hover:text-sol-blue">{d.title}</Link>
-                    <span className="text-[10px] text-sol-text-dim shrink-0">{d.doc_type}</span>
+                    <span className="text-meta text-sol-text-dim shrink-0">{d.doc_type}</span>
                   </li>
                 ))}
               </ul>

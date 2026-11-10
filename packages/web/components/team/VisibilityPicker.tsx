@@ -92,7 +92,7 @@ export function VisibilityPicker({
             }`}
           >
             {level.recommended && (
-              <span className="tf-accent-text absolute top-3 right-4 text-[10px] uppercase tracking-wider font-semibold">
+              <span className="tf-accent-text absolute top-3 right-4 text-mark uppercase tracking-wider font-semibold">
                 Recommended
               </span>
             )}

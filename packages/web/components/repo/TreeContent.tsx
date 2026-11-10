@@ -158,7 +158,7 @@ export function TreeContent({
           placeholder="Filter this directory"
           className="flex-1 bg-transparent text-[12px] text-sol-text placeholder:text-sol-text-dim outline-none"
         />
-        <span className="text-[11px] text-sol-text-dim">
+        <span className="text-meta text-sol-text-dim">
           {entries.length} {entries.length === 1 ? "entry" : "entries"}
         </span>
       </div>
@@ -176,7 +176,7 @@ export function TreeContent({
         )}
         {!tree.ready && !tree.error && !tree.notFound && <LoadingSkeleton />}
         {tree.data?.truncated && (
-          <p className="px-4 py-2 text-[11px] text-sol-yellow">
+          <p className="px-4 py-2 text-meta text-sol-yellow">
             GitHub truncated this listing, so some entries are missing.
           </p>
         )}
@@ -203,8 +203,8 @@ export function TreeContent({
                 <span className={`truncate ${isDir ? "text-sol-text" : "text-sol-text-muted"}`}>{name}</span>
                 </Link>
                 {last ? <><Link href={commitPageHref(repository, last.sha, family)} className="truncate text-sol-text-muted hover:text-sol-blue flex-1" title={last.subject}>{last.subject}</Link>
-                  <time title={new Date(last.committed_at).toLocaleString()} className="shrink-0 text-[11px] text-sol-text-dim">{relTimeShort(last.committed_at)}</time></>
-                  : <span className="ml-auto text-[11px] text-sol-text-dim">{!isDir ? formatSize(entry.size) : ""}</span>}
+                  <time title={new Date(last.committed_at).toLocaleString()} className="shrink-0 text-meta text-sol-text-dim">{relTimeShort(last.committed_at)}</time></>
+                  : <span className="ml-auto text-meta text-sol-text-dim">{!isDir ? formatSize(entry.size) : ""}</span>}
               </div>
             );
           })}
@@ -217,7 +217,7 @@ export function TreeContent({
         )}
       </div>
 
-      <footer className="flex items-center gap-3 px-4 py-1.5 border-t border-sol-border/40 text-[11px] text-sol-text-dim shrink-0">
+      <footer className="flex items-center gap-3 px-4 py-1.5 border-t border-sol-border/40 text-meta text-sol-text-dim shrink-0">
         <span className="flex items-center gap-1">
           <KeyCap size="xs">j</KeyCap>
           <KeyCap size="xs">k</KeyCap>

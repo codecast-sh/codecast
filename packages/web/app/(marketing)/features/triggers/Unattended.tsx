@@ -14,7 +14,7 @@ const PARK_TICKS: [number, string, string][] = [[0, "02:00", "fires"], [25, "02:
 function ParkStrip() {
   const seg = (from: number, to: number, label: string, parked = false) => (
     <div
-      className="absolute inset-y-0 flex items-center justify-center rounded-md font-mono text-[10.5px] sm:text-[11px] whitespace-nowrap overflow-hidden"
+      className="absolute inset-y-0 flex items-center justify-center rounded-md font-mono text-meta sm:text-meta whitespace-nowrap overflow-hidden"
       style={{
         left: `${from}%`, width: `${to - from}%`,
         color: SOL.base3,
@@ -28,7 +28,7 @@ function ParkStrip() {
   );
   return (
     <div className="rounded-2xl p-5" style={{ backgroundColor: SOL.base03 }}>
-      <div className="relative h-4 font-mono text-[10.5px] sm:text-[11px]" style={{ color: SOL.base0 }}>
+      <div className="relative h-4 font-mono text-meta sm:text-meta" style={{ color: SOL.base0 }}>
         {PARK_TICKS.map(([at, time, what]) => (
           <span key={time} className="absolute top-0 whitespace-nowrap" style={{ left: `${at}%`, transform: at === 0 ? "none" : at === 100 ? "translateX(-100%)" : "translateX(-50%)" }}>
             {time}<span className="hidden sm:inline"> {what}</span>
@@ -41,7 +41,7 @@ function ParkStrip() {
         {seg(74.5, 100, "same session")}
         <span className="absolute -bottom-1.5 h-[calc(100%+12px)] w-px" style={{ left: "70%", backgroundColor: SOL.yellow }} aria-hidden />
       </div>
-      <div className="relative mt-2 h-4 font-mono text-[10.5px] sm:text-[11px]" style={{ color: SOL.yellow }}>
+      <div className="relative mt-2 h-4 font-mono text-meta sm:text-meta" style={{ color: SOL.yellow }}>
         <span className="absolute whitespace-nowrap" style={{ left: "70%", transform: "translateX(-100%)", paddingRight: 6 }}>window resets 03:10</span>
       </div>
       <p className="mt-3 text-[12.5px] leading-5" style={{ color: SOL.base0 }}>
@@ -96,7 +96,7 @@ export function Unattended() {
             <div>
             <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
               <h3 className="text-[17px] font-semibold" style={{ color: SOL.base03 }}>{g.title}</h3>
-              <span className="ml-auto font-mono text-[11px]" style={{ color: SOL.base1 }}>{String(i + 1).padStart(2, "0")}</span>
+              <span className="ml-auto font-mono text-meta" style={{ color: SOL.base1 }}>{String(i + 1).padStart(2, "0")}</span>
             </div>
             <Body className="mt-2">{g.body}</Body>
             </div>

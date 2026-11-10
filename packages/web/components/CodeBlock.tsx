@@ -68,11 +68,13 @@ export const CodeBlock = memo(function CodeBlock({ code, language }: CodeBlockPr
       className="code-block-resizable relative group my-2 transition-all duration-200"
       style={expandStyle}
     >
-      <div className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 transition-opacity z-20 flex items-center gap-1.5 pl-8 pr-2 pt-1.5 pb-1.5 bg-gradient-to-r from-transparent to-[var(--sol-bg)] via-[var(--sol-bg)]">
+      <div className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity z-20 flex items-center gap-1.5 pl-8 pr-2 pt-1.5 pb-1.5 bg-gradient-to-r from-transparent to-[var(--sol-bg)] via-[var(--sol-bg)]">
         <button
           onClick={toggleWrap}
           className={`p-1 rounded select-none ${wrapped ? "text-sol-cyan" : "text-sol-text-dim/60 hover:text-sol-text-secondary"}`}
           title={wrapped ? "Disable line wrap" : "Wrap lines"}
+          aria-label={wrapped ? "Disable line wrap" : "Wrap lines"}
+          aria-pressed={wrapped}
         >
           <WrapText size={14} />
         </button>
@@ -80,6 +82,7 @@ export const CodeBlock = memo(function CodeBlock({ code, language }: CodeBlockPr
           onClick={toggleExpand}
           className={`p-1 rounded select-none ${expanded ? "text-sol-cyan" : "text-sol-text-dim/60 hover:text-sol-text-secondary"}`}
           title={expanded ? "Collapse" : "Expand to full width"}
+          aria-label={expanded ? "Collapse" : "Expand to full width"}
         >
           <MoveHorizontal size={14} />
         </button>
@@ -87,6 +90,7 @@ export const CodeBlock = memo(function CodeBlock({ code, language }: CodeBlockPr
           onClick={handleCopy}
           className="p-1 text-sol-text-dim/60 hover:text-sol-text-secondary rounded select-none"
           title="Copy code"
+          aria-label="Copy code"
         >
           {copied ? <Check size={14} /> : <Copy size={14} />}
         </button>

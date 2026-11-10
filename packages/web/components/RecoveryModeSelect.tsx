@@ -52,7 +52,7 @@ export function RecoveryModeSelect({
                 {copy.label}
               </span>
               {!compact && (
-                <span className="mt-0.5 block text-[11px] leading-relaxed text-sol-text-dim">{copy.detail}</span>
+                <span className="mt-0.5 block text-meta leading-relaxed text-sol-text-dim">{copy.detail}</span>
               )}
             </span>
           </button>
@@ -78,7 +78,7 @@ export function RecoveryDecisionNote({
   const proposing = decision.kind === "propose";
   return (
     <div
-      className={`text-[11px] leading-relaxed ${proposing ? "text-sol-yellow" : "text-sol-text-dim"} ${className ?? ""}`}
+      className={`text-meta leading-relaxed ${proposing ? "text-sol-yellow" : "text-sol-text-dim"} ${className ?? ""}`}
     >
       {text} <span className="text-sol-text-dim">{formatAgo(now - decision.at)}</span>
     </div>

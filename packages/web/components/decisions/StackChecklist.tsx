@@ -76,7 +76,7 @@ export function StackChecklist({ stack, editable = false, keys = false }: { stac
 
   return (
     <div data-stack-checklist={stack.short_id ?? stack._id}>
-      <div className="flex items-center gap-3 flex-wrap text-[11px] text-sol-text-dim mb-3">
+      <div className="flex items-center gap-3 flex-wrap text-meta text-sol-text-dim mb-3">
         <span>{done} of {stack.decision_ids.length} cleared</span>
         <div className="flex-1 min-w-[6rem] h-px bg-sol-border relative">
           <div className="absolute inset-y-0 left-0 bg-sol-cyan/70" style={{ width: `${(done / Math.max(1, stack.decision_ids.length)) * 100}%` }} />
@@ -117,17 +117,17 @@ export function StackChecklist({ stack, editable = false, keys = false }: { stac
             const resolved = d.status !== "pending";
             return (
               <li key={id} className={`flex items-center gap-2 text-[13px] px-3 py-2 rounded border ${resolved ? "border-sol-border/40 text-sol-text-dim" : "border-sol-border/70 text-sol-text-muted hover:border-sol-border cursor-pointer"}`} onClick={() => !resolved && setCursorKey(id)}>
-                <span className="font-mono text-[11px] w-5 shrink-0">{i + 1}.</span>
+                <span className="font-mono text-meta w-5 shrink-0">{i + 1}.</span>
                 {resolved ? <Check className="w-3.5 h-3.5 text-sol-green shrink-0" /> : <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow shrink-0" />}
                 <Link href={decisionHref(d)} onClick={(e) => e.stopPropagation()} className={`min-w-0 flex-1 truncate ${resolved ? "line-through decoration-sol-border" : "hover:text-sol-text"}`}>{d.question}</Link>
-                {resolved && d.status === "answered" && <span className="text-[11px] truncate max-w-[12rem]">{decisionAnswerLabel(d, d)}</span>}
+                {resolved && d.status === "answered" && <span className="text-meta truncate max-w-[12rem]">{decisionAnswerLabel(d, d)}</span>}
                 {editRail}
               </li>
             );
           }
           return (
             <li key={id} className="relative">
-              <div className="absolute -left-3 top-3 hidden sm:block font-mono text-[11px] text-sol-cyan">{i + 1}.</div>
+              <div className="absolute -left-3 top-3 hidden sm:block font-mono text-meta text-sol-cyan">{i + 1}.</div>
               <DecisionCompactCard decision={d} keys={keys} showTask />
               {editRail && <div className="mt-1 flex justify-end">{editRail}</div>}
             </li>

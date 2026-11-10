@@ -1,7 +1,7 @@
 // Timeline lanes (commits, pull requests) — store-fed delta overlays.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { normalizeRepository } from "@codecast/shared/contracts";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useSyncCollection, entityIdArgs } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { useInboxStore } from "../store/inboxStore";
@@ -27,10 +27,12 @@ export function usePullRequests(where?: (p: any) => boolean): any[] {
 
 // One PR, fed into the same collection the timeline fills. The page reads the
 // store, so a PR the timeline already cached paints before this answers.
+// Module-level: a fresh select per render re-applied the same payload.
+const oneRow = (row: any) => (row ? [row] : []);
+const ONE_ROW = { select: oneRow };
+
 export function useSyncPullRequest(args: { repository: string; number: number } | "skip") {
-  return useSyncCollection("pullRequests", api.pull_requests.getPRByNumber, args, {
-    select: (row: any) => (row ? [row] : []),
-  });
+  return useSyncCollection("pullRequests", api.pull_requests.getPRByNumber, args, ONE_ROW);
 }
 
 // The PR page paints far more of a row than the timeline lane does, so it wakes
@@ -49,10 +51,11 @@ const prDetailSig = (p: any) =>
 
 export function usePullRequest(repository: string, number: number): any | undefined {
   const canonicalRepository = normalizeRepository(repository);
-  const rows = useCollectionRows<any>("pullRequests", {
-    where: (p) => normalizeRepository(p.repository) === canonicalRepository && p.number === number,
-    sig: prDetailSig,
-  });
+  const where = useMemo(
+    () => (p: any) => normalizeRepository(p.repository) === canonicalRepository && p.number === number,
+    [canonicalRepository, number],
+  );
+  const rows = useCollectionRows<any>("pullRequests", { where, sig: prDetailSig });
   return rows[0];
 }
 
@@ -60,9 +63,7 @@ export function usePullRequest(repository: string, number: number): any | undefi
 // useSyncPullRequest: the commit page paints from whatever the timeline already
 // cached, and this refreshes the row with everything the lane leaves out.
 export function useSyncCommit(sha: string | undefined) {
-  return useSyncCollection("commits", api.commits.getCommitBySha, sha ? { sha } : "skip", {
-    select: (row: any) => (row ? [row] : []),
-  });
+  return useSyncCollection("commits", api.commits.getCommitBySha, sha ? { sha } : "skip", ONE_ROW);
 }
 
 // The commit page paints the whole row, files included, so it wakes on its own
@@ -78,10 +79,8 @@ const commitDetailSig = (c: any) =>
   ].join("|");
 
 export function useCommit(sha: string | undefined): any | undefined {
-  const rows = useCollectionRows<any>("commits", {
-    where: (c) => !!sha && c.sha === sha,
-    sig: commitDetailSig,
-  });
+  const where = useMemo(() => (c: any) => !!sha && c.sha === sha, [sha]);
+  const rows = useCollectionRows<any>("commits", { where, sig: commitDetailSig });
   return rows[0];
 }
 
@@ -125,17 +124,14 @@ export function useSyncConversationPullRequests(conversationId: string | undefin
 }
 
 export function useConversationCommits(conversationId: string | undefined): any[] {
-  return useCollectionRows<any>("commits", {
-    where: (c) => !!conversationId && c.conversation_id === conversationId,
-    sig: commitDetailSig,
-    sort: byTimestampDesc,
-  });
+  const where = useMemo(() => (c: any) => !!conversationId && c.conversation_id === conversationId, [conversationId]);
+  return useCollectionRows<any>("commits", { where, sig: commitDetailSig, sort: byTimestampDesc });
 }
 
 export function useConversationPullRequests(conversationId: string | undefined): any[] {
-  return useCollectionRows<any>("pullRequests", {
-    where: (p) => !!conversationId && Array.isArray(p.linked_session_ids) && p.linked_session_ids.includes(conversationId),
-    sig: prSig,
-    sort: byUpdatedDesc,
-  });
+  const where = useMemo(
+    () => (p: any) => !!conversationId && Array.isArray(p.linked_session_ids) && p.linked_session_ids.includes(conversationId),
+    [conversationId],
+  );
+  return useCollectionRows<any>("pullRequests", { where, sig: prSig, sort: byUpdatedDesc });
 }

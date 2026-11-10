@@ -149,7 +149,7 @@ export function LimitParkCard({
           {when ? <span className="text-sol-text-muted"> · {when}</span> : null}
         </span>
         {timestamp != null && (
-          <span className="ml-auto text-[10px] text-sol-text-dim shrink-0 whitespace-nowrap" title={new Date(timestamp).toLocaleString()}>
+          <span className="ml-auto text-meta text-sol-text-dim shrink-0 whitespace-nowrap" title={new Date(timestamp).toLocaleString()}>
             {formatAgo(now - timestamp)}
           </span>
         )}
@@ -178,7 +178,7 @@ export function LimitParkCard({
                     ? `Approve the switch this machine proposed: move ${device?.label ?? "the owner machine"} to ${best?.email ?? best?.name}, restart this session, and continue it there`
                     : `Switch ${device?.label ?? "the owner machine"} to ${best?.email ?? best?.name}, restart this session, and continue it there`
                 }
-                className="rounded border border-amber-500/40 px-2 py-0.5 text-[11px] font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 disabled:opacity-60"
+                className="rounded border border-amber-500/40 px-2 py-0.5 text-meta font-semibold text-amber-600 dark:text-amber-400 hover:bg-amber-500/10 disabled:opacity-60"
               >
                 {busy
                   ? "Switching…"
@@ -187,7 +187,7 @@ export function LimitParkCard({
                     : `Continue on ${best?.name}${bestNote ? ` (${bestNote})` : ""}`}
               </button>
             )}
-            <Link href="/settings/claude-accounts" className="text-[11px] text-sol-cyan hover:underline">
+            <Link href="/settings/claude-accounts" className="text-meta text-sol-cyan hover:underline">
               Accounts
             </Link>
           </span>
@@ -244,7 +244,7 @@ function LimitRecoveryCard({
   const verb = action.kind === "switch" ? "moving this session to" : "continuing this session on";
   const headline = `${action.by === "auto" ? `Auto-switch is ${verb}` : `${verb[0].toUpperCase()}${verb.slice(1)}`}${target ? "" : " an account with room"}`;
   const ago = timestamp != null && (
-    <span className="ml-auto text-[10px] text-sol-text-dim shrink-0 whitespace-nowrap" title={new Date(timestamp).toLocaleString()}>
+    <span className="ml-auto text-meta text-sol-text-dim shrink-0 whitespace-nowrap" title={new Date(timestamp).toLocaleString()}>
       {formatAgo(now - timestamp)}
     </span>
   );

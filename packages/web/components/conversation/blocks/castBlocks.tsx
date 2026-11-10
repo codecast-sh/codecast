@@ -33,6 +33,7 @@ import { chatHref } from "../../../lib/chatHref";
 import { BrowserWatchButton } from "./toolBlocks";
 import { decideOutputId, parseCastCommand } from "../classify";
 import { renderAnsi } from "../../../lib/conversationFormat";
+import { pressable } from "../../ops/parts";
 import { MessageMarkdown, ReactMarkdown } from "../markdown";
 import type { ImageData, ToolCall, ToolResult } from "../types";
 
@@ -132,23 +133,23 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
       <div className="px-3 py-2">
         <div className="flex items-center gap-2 min-w-0">
           {sc && (
-            <span className={`px-1.5 py-0 rounded text-[10px] font-mono ${sc.bg} ${sc.text}`}>
+            <span className={`px-1.5 py-0 rounded text-meta font-mono ${sc.bg} ${sc.text}`}>
               {status!.replace(/_/g, " ")}
             </span>
           )}
           {type === "doc" && (entity as any).doc_type && (
-            <span className={`text-[10px] font-medium ${DOC_TYPE_LABELS[(entity as any).doc_type]?.color || "text-sol-text-dim"}`}>
+            <span className={`text-meta font-medium ${DOC_TYPE_LABELS[(entity as any).doc_type]?.color || "text-sol-text-dim"}`}>
               {DOC_TYPE_LABELS[(entity as any).doc_type]?.label || (entity as any).doc_type}
             </span>
           )}
-          {shortId && <span className="text-[10px] font-mono text-sol-text-dim">{shortId}</span>}
+          {shortId && <span className="text-meta font-mono text-sol-text-dim">{shortId}</span>}
           <span className="flex-1 text-sm text-sol-text truncate">
             {(entity as any).display_title || entity.title}
           </span>
           {type === "doc" && (entity as any).created_at ? (
-            <DocDates doc={entity as any} className="text-[10px] text-sol-text-dim flex-shrink-0" />
+            <DocDates doc={entity as any} className="text-meta text-sol-text-dim flex-shrink-0" />
           ) : (
-            <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{ageStr}</span>
+            <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0">{ageStr}</span>
           )}
         </div>
         {type === "plan" && (entity as any).progress && (
@@ -159,7 +160,7 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
                 style={{ width: `${(entity as any).progress.total > 0 ? Math.round(((entity as any).progress.done / (entity as any).progress.total) * 100) : 0}%` }}
               />
             </div>
-            <span className="text-[10px] text-sol-text-dim font-mono">
+            <span className="text-meta text-sol-text-dim font-mono">
               {(entity as any).progress.done}/{(entity as any).progress.total}
             </span>
           </div>
@@ -167,19 +168,19 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
         {type === "task" && (
           <div className="flex items-center gap-1.5 mt-1">
             {(entity as any).priority && (entity as any).priority !== "medium" && (
-              <span className={`text-[10px] px-1 py-0 rounded font-mono ${
+              <span className={`text-meta px-1 py-0 rounded font-mono ${
                 (entity as any).priority === "high" || (entity as any).priority === "critical"
                   ? "bg-red-500/10 text-red-400"
                   : "bg-gray-500/10 text-gray-400"
               }`}>{(entity as any).priority}</span>
             )}
             {(entity as any).labels?.map((l: string) => (
-              <span key={l} className="text-[10px] px-1.5 py-0 rounded-full bg-sol-bg-highlight text-sol-text-dim">{l}</span>
+              <span key={l} className="text-meta px-1.5 py-0 rounded-full bg-sol-bg-highlight text-sol-text-dim">{l}</span>
             ))}
           </div>
         )}
         {type === "doc" && docPreview && (
-          <p className="text-[11px] text-sol-text-muted/70 mt-1 truncate">{docPreview}</p>
+          <p className="text-meta text-sol-text-muted/70 mt-1 truncate">{docPreview}</p>
         )}
       </div>
     </button>
@@ -202,12 +203,12 @@ function CastSessionRefBlock({ cat, target, args, rawCmd, output, isError }: {
       <div className="my-2 mx-1 rounded border-l-2 border-sol-blue/60 bg-sol-blue/5">
         <div className="flex items-center gap-2 px-3 pt-2 pb-1">
           <CornerUpRight className="w-3.5 h-3.5 text-sol-blue/70 shrink-0" />
-          <span className="text-[11px] font-medium tracking-wide uppercase text-sol-blue/70 shrink-0">Message to</span>
+          <span className="text-mark font-medium tracking-wide uppercase text-sol-blue/70 shrink-0">Message to</span>
           <EntityIdPill shortId={target} />
           {isError ? (
-            <span className="text-sol-red/80 text-[10px] ml-auto shrink-0">failed</span>
+            <span className="text-sol-red/80 text-meta ml-auto shrink-0">failed</span>
           ) : (
-            <span className="text-sol-green/70 text-[10px] ml-auto shrink-0 inline-flex items-center gap-0.5"><Check className="w-3 h-3" />sent</span>
+            <span className="text-sol-green/70 text-meta ml-auto shrink-0 inline-flex items-center gap-0.5"><Check className="w-3 h-3" />sent</span>
           )}
         </div>
         {kind === "dynamic" ? (
@@ -216,7 +217,7 @@ function CastSessionRefBlock({ cat, target, args, rawCmd, output, isError }: {
           // delivered message; that misled a sender into resending a 16KB briefing.
           <div className="px-3 pb-2">
             <code className="text-xs font-mono text-sol-text-secondary break-all">{body}</code>
-            <div className="text-[10px] text-sol-text-dim mt-1">shown as typed — the shell filled in the actual message; open the target session to read what arrived</div>
+            <div className="text-meta text-sol-text-dim mt-1">shown as typed — the shell filled in the actual message; open the target session to read what arrived</div>
           </div>
         ) : (
           <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none">
@@ -235,7 +236,8 @@ function CastSessionRefBlock({ cat, target, args, rawCmd, output, isError }: {
     <div className="my-0.5">
       <div
         className="flex items-baseline gap-1.5 text-xs cursor-pointer group flex-wrap"
-        onClick={() => setExpanded(!expanded)}
+        {...pressable(() => setExpanded(!expanded))}
+        aria-expanded={expanded}
       >
         <span className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-violet/80">
           <BookOpen className="w-3 h-3" />
@@ -243,17 +245,17 @@ function CastSessionRefBlock({ cat, target, args, rawCmd, output, isError }: {
         </span>
         <EntityIdPill shortId={target} />
         {range && <span className="text-sol-text-dim font-mono">{range}</span>}
-        {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
+        {isError && <span className="text-sol-red/80 text-meta">(error)</span>}
       </div>
       {expanded && (
         <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
           <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
-            <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
+            <pre className="text-meta sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
               $ {rawCmd}
             </pre>
           </div>
           {output && output.trim() ? (
-            <pre className={`p-1.5 sm:p-2 text-[11px] sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${isError ? "text-sol-red" : "text-sol-text-secondary"}`}>
+            <pre className={`p-1.5 sm:p-2 text-meta sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${isError ? "text-sol-red" : "text-sol-text-secondary"}`}>
               {renderAnsi(output)}
             </pre>
           ) : (
@@ -286,7 +288,7 @@ function CastMutationBody({ parts, accent }: { parts: CastBodyPart[]; accent: st
       {parts.map((part, i) => (
         <div key={i}>
           {part.label && (
-            <div className="text-[10px] uppercase tracking-wide text-sol-text-dim mb-0.5">{part.label}</div>
+            <div className="text-mark uppercase tracking-wide text-sol-text-dim mb-0.5">{part.label}</div>
           )}
           <CollapsibleBody collapsedHeight={96} toggleClassName="mt-1">
             {(expanded) => (
@@ -327,31 +329,32 @@ function CastStateBlock({ subcommand, args, rawCmd, output, isError }: { subcomm
     <div className="my-0.5">
       <div
         className="flex items-baseline gap-1.5 text-xs cursor-pointer group flex-wrap"
-        onClick={() => setExpanded(!expanded)}
+        {...pressable(() => setExpanded(!expanded))}
+        aria-expanded={expanded}
       >
         <span className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-cyan/80">
           <Pin className="w-3 h-3" strokeWidth={2.2} />
           <span className="group-hover:underline">state{verb ? ` ${verb}` : ""}</span>
         </span>
         {statusMeta && (
-          <span className={`self-center shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-[9px] font-semibold uppercase tracking-wide ${statusMeta.chip}`}>
+          <span className={`self-center shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-mark font-semibold uppercase tracking-wide ${statusMeta.chip}`}>
             <span className="w-1.5 h-1.5 rounded-full bg-current" />
             {statusMeta.label}
           </span>
         )}
         {headline && <span className="text-sol-text-muted truncate min-w-0">{headline}</span>}
         {verb === "show" && args && <span className="text-sol-text-dim font-mono">{args.split(/\s+/)[0]}</span>}
-        {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
+        {isError && <span className="text-sol-red/80 text-meta">(error)</span>}
       </div>
       {expanded && (
         <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
           <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
-            <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
+            <pre className="text-meta sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
               $ {rawCmd}
             </pre>
           </div>
           {output && output.trim() ? (
-            <pre className={`p-1.5 sm:p-2 text-[11px] sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${isError ? "text-sol-red" : "text-sol-text-secondary"}`}>
+            <pre className={`p-1.5 sm:p-2 text-meta sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${isError ? "text-sol-red" : "text-sol-text-secondary"}`}>
               {renderAnsi(output)}
             </pre>
           ) : (
@@ -404,7 +407,7 @@ function CastDecideRefBlock({ decide, rawCmd, output, isError }: { decide: Decid
   const chosen = decide.verb === "show" ? null : choiceLabel(decide.choice, options);
   return (
     <div data-cc-decide className="my-0.5">
-      <div className="flex items-center gap-1.5 text-xs cursor-pointer group flex-wrap" onClick={() => setExpanded(!expanded)}>
+      <div className="flex items-center gap-1.5 text-xs cursor-pointer group flex-wrap" {...pressable(() => setExpanded(!expanded))} aria-expanded={expanded}>
         <span className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-yellow/80">
           <Split className="w-3 h-3" strokeWidth={2.2} />
           <span className="group-hover:underline">{DECIDE_REF_VERB[decide.verb]}</span>
@@ -415,10 +418,10 @@ function CastDecideRefBlock({ decide, rawCmd, output, isError }: { decide: Decid
             <CornerUpRight className="w-3 h-3 shrink-0" />{chosen}
           </span>
         )}
-        {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
+        {isError && <span className="text-sol-red/80 text-meta">(error)</span>}
       </div>
       {expanded && (
-        <pre className="mt-1 ml-1 border-l-2 border-sol-border pl-2.5 text-[11px] text-sol-text-dim whitespace-pre-wrap break-words max-h-80 overflow-auto">
+        <pre className="mt-1 ml-1 border-l-2 border-sol-border pl-2.5 text-meta text-sol-text-dim whitespace-pre-wrap break-words max-h-80 overflow-auto">
           $ {rawCmd}
           {output && <>{"\n\n"}{renderAnsi(output)}</>}
         </pre>
@@ -495,7 +498,8 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
     <div data-cc-decide className="my-1">
       <div
         className="flex items-center gap-1.5 text-xs cursor-pointer group flex-wrap"
-        onClick={() => setExpanded(!expanded)}
+        {...pressable(() => setExpanded(!expanded))}
+        aria-expanded={expanded}
       >
         <span className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-yellow/80">
           <Split className="w-3 h-3" strokeWidth={2.2} />
@@ -503,13 +507,13 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
         </span>
         {isEdit && <span className="text-sol-text-dim">{editChanges || "no readable change"}</span>}
         {!isError && row && !answerable && (
-          <span className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-[9px] font-semibold uppercase tracking-wide ${meta.chip}`}>
-            {statusKey === "waiting" && <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />}
+          <span className={`shrink-0 inline-flex items-center gap-1 px-1.5 py-[1px] rounded-full border text-mark font-semibold uppercase tracking-wide ${meta.chip}`}>
+            {statusKey === "waiting" && <span className="w-1.5 h-1.5 rounded-full bg-current" />}
             {meta.label}
           </span>
         )}
         {!isEdit && answerLabel && <span className="text-sol-green truncate min-w-0">{answerLabel}</span>}
-        {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
+        {isError && <span className="text-sol-red/80 text-meta">(error)</span>}
       </div>
 
       {answerable && row && <div className="mt-1.5"><DecisionCompactCard decision={row} askedOf={askedOf} /></div>}
@@ -540,13 +544,13 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
                 const isDefault = statusKey === "advisory" && defaultOption === i;
                 return (
                   <div key={i} className={`flex items-baseline gap-2 text-[12px] ${chosen ? "text-sol-green" : "text-sol-text-muted"}`}>
-                    <span className={`shrink-0 inline-flex items-center justify-center w-4 h-4 rounded border text-[10px] font-mono ${chosen ? "border-sol-green/60 text-sol-green" : "border-sol-border text-sol-text-dim"}`}>
+                    <span className={`shrink-0 inline-flex items-center justify-center w-[18px] h-[18px] rounded border text-mark font-mono ${chosen ? "border-sol-green/60 text-sol-green" : "border-sol-border text-sol-text-dim"}`}>
                       {chosen ? <Check className="w-3 h-3" strokeWidth={2.5} /> : i + 1}
                     </span>
                     <span className="min-w-0">
                       <span className={chosen ? "text-sol-green" : "text-sol-text"}>{o.label}</span>
                       {o.description && <span className="text-sol-text-dim"> — {o.description}</span>}
-                      {isDefault && <span className="ml-1.5 text-[10px] text-sol-blue">proceeding with this</span>}
+                      {isDefault && <span className="ml-1.5 text-meta text-sol-blue">proceeding with this</span>}
                     </span>
                   </div>
                 );
@@ -557,7 +561,7 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
             <div className="text-[12px] text-sol-green">answered in their own words: {row.answer_text}</div>
           )}
           {!withdrawnHere && (decide.report || (!isEdit && reportSlug)) && (
-            <div className="text-[11px]">
+            <div className="text-meta">
               {reportSlug ? (
                 <a href={`/a/${reportSlug}`} target="_blank" rel="noopener noreferrer" className="text-sol-blue hover:underline inline-flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                   <FileText className="w-3 h-3" /> report
@@ -573,12 +577,12 @@ function CastDecideBlock({ decide, rawCmd, output, isError, conversationId }: { 
       {expanded && (
         <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
           <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
-            <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
+            <pre className="text-meta sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
               $ {rawCmd}
             </pre>
           </div>
           {output && output.trim() ? (
-            <pre className={`p-1.5 sm:p-2 text-[11px] sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${isError ? "text-sol-red" : "text-sol-text-secondary"}`}>
+            <pre className={`p-1.5 sm:p-2 text-meta sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${isError ? "text-sol-red" : "text-sol-text-secondary"}`}>
               {renderAnsi(output)}
             </pre>
           ) : (
@@ -605,10 +609,13 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
   );
 
   const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+  // The ids the command was given, plus the one a create made. A listing's
+  // output names every id it printed: as header pills they were clutter, and
+  // each pill is a live lookup.
   const entityIds = useMemo(() => {
     const ids: string[] = [];
     const patterns = [/\b(ct-[a-z0-9]+)\b/gi, /\b(pl-[a-z0-9]+)\b/gi];
-    const sources = [args, stripAnsi(output)];
+    const sources = isCreate ? [args, stripAnsi(output)] : [args];
     for (const src of sources) {
       for (const pattern of patterns) {
         let m;
@@ -618,7 +625,7 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
       }
     }
     return ids;
-  }, [args, output]);
+  }, [args, output, isCreate]);
 
   const scheduleCadence = useMemo(
     () => (cat === "trigger" && isCreate ? parseTriggerCadence(args) : null),
@@ -763,7 +770,7 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
         <>
           {vault.names.map((n) => <span key={n} className="text-sol-text-muted font-mono">{n}</span>)}
           {vault.command && <span className="text-sol-text-dim font-mono truncate">-- {truncateStr(vault.command, 80)}</span>}
-          {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
+          {isError && <span className="text-sol-red/80 text-meta">(error)</span>}
         </>
       );
     }
@@ -774,7 +781,7 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
       return (
         <>
           <DocTitleLink convexId={docConvexId} />
-          {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
+          {isError && <span className="text-sol-red/80 text-meta">(error)</span>}
         </>
       );
     }
@@ -782,7 +789,7 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
     return (
       <>
         {scheduleCadence && (
-          <span className="px-1 py-0.5 rounded text-[10px] font-mono bg-sol-orange/15 text-sol-orange/90 flex-shrink-0">
+          <span className="px-1 py-0.5 rounded text-meta font-mono bg-sol-orange/15 text-sol-orange/90 flex-shrink-0">
             {scheduleCadence}
           </span>
         )}
@@ -800,15 +807,15 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
         )}
 
         {(isShow || isGet) && !entityIds.length && firstArg && (
-          <span className="text-sol-text-dim font-mono">{firstArg}</span>
+          <span className="text-sol-text-dim font-mono min-w-0 break-all">{firstArg}</span>
         )}
 
         {isIdCommand && !isShow && !isGet && !isStatusChange && !entityIds.length && firstArg && (
-          <span className="text-sol-text-dim font-mono">{firstArg}</span>
+          <span className="text-sol-text-dim font-mono min-w-0 break-all">{firstArg}</span>
         )}
 
         {isStatusChange && !isDoneLike && (
-          <span className={`px-1 py-0.5 rounded text-[10px] font-mono ${statusColors[subcommand] || "bg-gray-500/15 text-gray-400"}`}>
+          <span className={`px-1 py-0.5 rounded text-meta font-mono ${statusColors[subcommand] || "bg-gray-500/15 text-gray-400"}`}>
             {subcommand}
           </span>
         )}
@@ -827,7 +834,7 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
           </span>
         )}
 
-        {isError && <span className="text-sol-red/80 text-[10px]">(error)</span>}
+        {isError && <span className="text-sol-red/80 text-meta">(error)</span>}
 
         {!isList && !isError && !isEntityCommand && !doSteps.length && output && outputLines > 1 && (
           <span className="text-sol-text-dim font-mono">({outputLines} lines)</span>
@@ -878,7 +885,8 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
     <div className="my-0.5">
       <div
         className="flex items-baseline gap-1.5 text-xs cursor-pointer group flex-wrap"
-        onClick={() => setExpanded(!expanded)}
+        {...pressable(() => setExpanded(!expanded))}
+        aria-expanded={expanded}
       >
         <span className={`flex items-center gap-1 font-mono flex-shrink-0 ${config.color}`}>
           {config.icon}
@@ -929,7 +937,7 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
       {expanded && (
         <div className="mt-1 rounded border border-sol-border/30 bg-sol-bg-inset max-h-80 overflow-auto">
           <div className="px-1.5 sm:px-2 py-1 sm:py-1.5 border-b border-sol-border/20 bg-sol-bg-highlight/30">
-            <pre className="text-[11px] sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
+            <pre className="text-meta sm:text-xs font-mono text-sol-green whitespace-pre-wrap break-all">
               $ {cast.raw}
             </pre>
           </div>
@@ -940,13 +948,13 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
                 outcomes={doOutcomes}
                 labelClass={config.color}
               />
-              {doFooter && <div className="px-2 py-1 text-[11px] font-mono text-sol-text-dim">{doFooter}</div>}
+              {doFooter && <div className="px-2 py-1 text-meta font-mono text-sol-text-dim">{doFooter}</div>}
               {!output && <div className="p-2 text-xs text-sol-text-dim">Running</div>}
             </>
           ) : vault?.hidesOutput ? (
             <div className="p-2 text-xs text-sol-text-dim inline-flex items-center gap-1"><Lock className="w-3 h-3" />value hidden</div>
           ) : output && output.trim() ? (
-            <pre className={`p-1.5 sm:p-2 text-[11px] sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${isError ? "text-sol-red" : "text-sol-text-secondary"}`}>
+            <pre className={`p-1.5 sm:p-2 text-meta sm:text-xs font-mono overflow-x-auto whitespace-pre-wrap ${isError ? "text-sol-red" : "text-sol-text-secondary"}`}>
               {renderAnsi(output)}
             </pre>
           ) : (
@@ -982,25 +990,25 @@ function CastChatSendBlock({ send, isReply, isError }: { send: ChatSendArgs; isR
     <div className="my-2 mx-1 rounded border-l-2 border-sol-magenta/60 bg-sol-magenta/5">
       <div className="flex items-center gap-2 px-3 pt-2 pb-1 flex-wrap">
         <CornerUpRight className="w-3.5 h-3.5 text-sol-magenta/70 shrink-0" />
-        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-magenta/70 shrink-0">{isReply ? "Reply in chat" : "Message to chat"}</span>
+        <span className="text-mark font-medium tracking-wide uppercase text-sol-magenta/70 shrink-0">{isReply ? "Reply in chat" : "Message to chat"}</span>
         {channelName || direct ? (
           <ChatChannelPill name={channelName ?? ""} href={href} direct={direct} />
         ) : href ? (
-          <Link href={href} className="text-[11px] font-mono text-sol-magenta hover:underline underline-offset-2">open thread</Link>
+          <Link href={href} className="text-meta font-mono text-sol-magenta hover:underline underline-offset-2">open thread</Link>
         ) : null}
-        {inThread && <span className="text-[10px] text-sol-text-dim">in thread</span>}
+        {inThread && <span className="text-meta text-sol-text-dim">in thread</span>}
         {isError ? (
-          <span className="text-sol-red/80 text-[10px] ml-auto shrink-0">failed</span>
+          <span className="text-sol-red/80 text-meta ml-auto shrink-0">failed</span>
         ) : declined ? (
-          <span className="text-sol-red/80 text-[10px] ml-auto shrink-0">could not answer</span>
+          <span className="text-sol-red/80 text-meta ml-auto shrink-0">could not answer</span>
         ) : (
-          <span className="text-sol-green/70 text-[10px] ml-auto shrink-0 inline-flex items-center gap-0.5"><Check className="w-3 h-3" />sent</span>
+          <span className="text-sol-green/70 text-meta ml-auto shrink-0 inline-flex items-center gap-0.5"><Check className="w-3 h-3" />sent</span>
         )}
       </div>
       {send.kind === "dynamic" ? (
         <div className="px-3 pb-2">
           <code className="text-xs font-mono text-sol-text-secondary break-all">{send.body}</code>
-          <div className="text-[10px] text-sol-text-dim mt-1">shown as typed — the shell filled in the actual message; open the thread to read what arrived</div>
+          <div className="text-meta text-sol-text-dim mt-1">shown as typed — the shell filled in the actual message; open the thread to read what arrived</div>
         </div>
       ) : (
         <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">

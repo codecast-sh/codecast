@@ -22,7 +22,7 @@ function Tip({ f, lane }: { f: Firing; lane: Lane }) {
   const p = pct(f.t);
   return (
     <span
-      className="tg-tip absolute bottom-full mb-2 w-60 rounded-lg px-3 py-2 text-left text-[11.5px] leading-snug shadow-lg z-30"
+      className="tg-tip absolute bottom-full mb-2 w-60 rounded-lg px-3 py-2 text-left text-meta leading-snug shadow-lg z-30"
       style={{ left: "50%", ["--tx" as string]: tipShift(p), backgroundColor: SOL.base03, color: SOL.base2 } as CSSProperties}
     >
       <span className="font-mono" style={{ color: lane.color }}>{lane.id}</span>
@@ -62,7 +62,7 @@ function Marker({ f, lane }: { f: Firing; lane: Lane }) {
           <Tip f={f} lane={lane} />
         </span>
         <span className="tg-pop absolute top-1/2 h-3 w-3 rounded-full" style={{ left: `${end}%`, transform: "translate(-50%, -50%)", backgroundColor: lane.color, ...delay(atPct(end)) }} />
-        <span className="tg-fade absolute top-[calc(50%+8px)] whitespace-nowrap font-mono text-[9.5px] leading-none hidden sm:block" style={{ left: `${(p + end) / 2}%`, transform: "translateX(-50%)", color: lane.color, ...delay(at + 0.2) }}>
+        <span className="tg-fade absolute top-[calc(50%+8px)] whitespace-nowrap font-mono text-meta leading-none hidden sm:block" style={{ left: `${(p + end) / 2}%`, transform: "translateX(-50%)", color: lane.color, ...delay(at + 0.2) }}>
           parked at limit
         </span>
       </>
@@ -82,7 +82,7 @@ function Marker({ f, lane }: { f: Firing; lane: Lane }) {
 function LaneRow({ lane, i }: { lane: Lane; i: number }) {
   return (
     <div className="tg-rise" style={delay(0.15 + i * 0.06)}>
-      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-[11.5px] leading-tight">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-meta leading-tight">
         <span className="font-semibold" style={{ color: lane.color }}>{lane.id}</span>
         <span className="min-w-0 truncate" style={{ color: SOL.base02 }}>{lane.title}</span>
         <span style={{ color: SOL.base1 }}>{lane.schedule}</span>
@@ -118,7 +118,7 @@ function Sky() {
 
 function Axis() {
   return (
-    <div className="relative h-5 font-mono text-[10px]" style={{ color: SOL.base1 }}>
+    <div className="relative h-5 font-mono text-meta" style={{ color: SOL.base1 }}>
       {AXIS.map((t) => {
         const p = pct(t);
         const edge = p === 0 ? "translateX(0)" : p === 100 ? "translateX(-100%)" : "translateX(-50%)";
@@ -130,7 +130,7 @@ function Axis() {
 
 function Log() {
   return (
-    <div className="rounded-xl p-4 font-mono text-[11px] leading-[1.55]" style={{ backgroundColor: SOL.base03, color: SOL.base0 }}>
+    <div className="rounded-xl p-4 font-mono text-meta leading-[1.55]" style={{ backgroundColor: SOL.base03, color: SOL.base0 }}>
       <div className="mb-2 flex items-center justify-between" style={{ color: SOL.base01 }}>
         <span>overnight, as it happened</span>
         <span className="tg-blink h-1.5 w-1.5 rounded-full" style={{ backgroundColor: SOL.green }} />
@@ -141,7 +141,7 @@ function Log() {
             <span style={{ color: SOL.base01 }}>{clock(l.t)}</span>
             <span style={{ color: l.color }}>{l.id}</span>
             <span style={{ color: l.kind === "attention" ? SOL.base2 : l.kind === "skip" ? SOL.base01 : SOL.base1 }}>
-              {l.kind === "attention" && <span className="mr-1 rounded px-1 text-[10px]" style={{ backgroundColor: SOL.red, color: SOL.base3 }}>needs you</span>}
+              {l.kind === "attention" && <span className="mr-1 rounded px-1 text-meta" style={{ backgroundColor: SOL.red, color: SOL.base3 }}>needs you</span>}
               {l.kind === "skip" && <span className="mr-1" style={{ color: SOL.base0 }}>skipped.</span>}
               <Whole text={l.text} />
               {l.kind === "skip" && <span style={{ color: SOL.base01 }}> {NIGHT_COUNTS.skipped - 1} more like it.</span>}
@@ -194,7 +194,7 @@ export function NightShift() {
         <button
           type="button"
           onClick={() => setTake((n) => n + 1)}
-          className="rounded-md px-2.5 py-1 font-mono text-[11px] transition-colors hover:brightness-95"
+          className="rounded-md px-2.5 py-1 font-mono text-meta transition-colors hover:brightness-95"
           style={{ backgroundColor: SOL.base2, color: SOL.base01 }}
         >
           replay the night

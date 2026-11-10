@@ -22,12 +22,12 @@ function EmbedCard() {
           <Icon d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 1 1 0 10h-2M8 12h8" />
           <Icon d="m7 15 5 5 5-5M7 9l5-5 5 5" />
           <Icon d="M3 3h18v18H3zM12 3v18" />
-          <span className="flex items-center gap-0.5 text-[11px]"><Icon d="M7 17 17 7M7 7h10v10" />open</span>
+          <span className="flex items-center gap-0.5 text-meta"><Icon d="M7 17 17 7M7 7h10v10" />open</span>
         </span>
       </div>
       <div className="bg-white px-4 py-4">
         <div className="font-mono font-bold text-[14px]" style={{ color: SOL.base03 }}>Pricing page proposal</div>
-        <div className="mt-1.5 text-[11.5px] leading-5" style={{ color: SOL.base01 }}>Two plans instead of four. Teams pay per seat; solo use stays free.</div>
+        <div className="mt-1.5 text-meta leading-5" style={{ color: SOL.base01 }}>Two plans instead of four. Teams pay per seat; solo use stays free.</div>
         <div className="mt-3 grid grid-cols-2 gap-2">
           {[0, 1].map((i) => (
             <div key={i} className="rounded border p-2" style={{ borderColor: i ? CYAN : "rgba(88,110,117,.2)" }}>
@@ -46,7 +46,7 @@ function EmbedCard() {
 
 function Pill({ children }: { children: ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-full border py-px pl-1 pr-2 align-baseline text-[11px] font-medium" style={{ borderColor: "rgba(88,110,117,.3)", backgroundColor: SOL.base2, color: SOL.base02 }}>
+    <span className="inline-flex items-center gap-1.5 rounded-full border py-px pl-1 pr-2 align-baseline text-meta font-medium" style={{ borderColor: "rgba(88,110,117,.3)", backgroundColor: SOL.base2, color: SOL.base02 }}>
       <span className="h-3.5 w-3.5 rounded-full" style={{ backgroundColor: CYAN, opacity: 0.75 }} />
       {children}
       <span style={{ color: SOL.base1 }}><Icon d="M7 17 17 7M7 7h10v10" /></span>
@@ -58,7 +58,7 @@ function Pill({ children }: { children: ReactNode }) {
 export function ConversationMock() {
   return (
     <div className="rounded-2xl border overflow-hidden" style={{ borderColor: "rgba(88,110,117,.25)", backgroundColor: SOL.base3, boxShadow: "0 30px 60px -34px rgba(0,43,54,.45)" }}>
-      <div className="flex items-center gap-2 px-4 h-10 border-b font-mono text-[11.5px]" style={{ borderColor: SOL.base2, color: SOL.base01 }}>
+      <div className="flex items-center gap-2 px-4 h-10 border-b font-mono text-meta" style={{ borderColor: SOL.base2, color: SOL.base01 }}>
         <span className="h-2 w-2 rounded-full" style={{ backgroundColor: SOL.green }} />
         <span className="font-semibold" style={{ color: SOL.base03 }}>Pricing rework</span>
         <span className="ml-auto">claude</span>
@@ -82,7 +82,7 @@ export function ConversationMock() {
                     <div key={k} className="mt-2 rounded border" style={{ height: i ? 46 : 22, borderColor: "rgba(88,110,117,.2)" }} />
                   ))}
                 </div>
-                <figcaption className="mt-1 text-center font-mono text-[10px]" style={{ color: SOL.base1 }}>{t}</figcaption>
+                <figcaption className="mt-1 text-center font-mono text-meta" style={{ color: SOL.base1 }}>{t}</figcaption>
               </figure>
             ))}
           </div>

@@ -33,7 +33,7 @@ export function AgentMark({ size = 24 }: { size?: number }) {
 /** Mirrors EntityIdPill for tasks: yellow tint, status ring, the short id or title. */
 export function TaskChip({ id, title }: { id: string; title?: string }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded border px-1.5 py-[1px] text-[10.5px] font-mono" style={{ backgroundColor: "rgba(181,137,0,0.1)", color: SOL.yellow, borderColor: "rgba(181,137,0,0.25)" }}>
+    <span className="inline-flex items-center gap-1 rounded border px-1.5 py-[1px] text-meta font-mono" style={{ backgroundColor: "rgba(181,137,0,0.1)", color: SOL.yellow, borderColor: "rgba(181,137,0,0.25)" }}>
       <svg className="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke={SOL.yellow} strokeWidth={2.5}><circle cx="12" cy="12" r="9" /></svg>
       {title ?? id}
     </span>
@@ -43,7 +43,7 @@ export function TaskChip({ id, title }: { id: string; title?: string }) {
 /** A call reference pill, the way cl-42 renders inside a message. */
 export function CallPill({ children }: { children: ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded border px-1.5 py-[1px] text-[11px] font-mono align-baseline" style={{ backgroundColor: "rgba(211,54,130,0.08)", color: SOL.magenta, borderColor: "rgba(211,54,130,0.25)" }}>
+    <span className="inline-flex items-center gap-1 rounded border px-1.5 py-[1px] text-meta font-mono align-baseline" style={{ backgroundColor: "rgba(211,54,130,0.08)", color: SOL.magenta, borderColor: "rgba(211,54,130,0.25)" }}>
       <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke={SOL.magenta} strokeWidth={2}><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3z" /><path d="M19 11a7 7 0 0 1-14 0M12 18v3" /></svg>
       {children}
     </span>

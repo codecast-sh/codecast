@@ -32,7 +32,7 @@ const CSS = `
 /** A numbered marker on the mock, matching its callout. */
 function No({ id }: { id: PartId }) {
   return (
-    <span aria-hidden className="og-a-no inline-flex w-[22px] h-[22px] mt-px rounded-full items-center justify-center font-mono text-[11.5px] font-bold" style={{ backgroundColor: tint(HI, 14, PAPER), color: SOL.orange, boxShadow: `inset 0 0 0 1.5px ${tint(HI, 55, PAPER)}` }}>
+    <span aria-hidden className="og-a-no inline-flex w-[22px] h-[22px] mt-px rounded-full items-center justify-center font-mono text-meta font-bold" style={{ backgroundColor: tint(HI, 14, PAPER), color: SOL.orange, boxShadow: `inset 0 0 0 1.5px ${tint(HI, 55, PAPER)}` }}>
       {partNo(id)}
     </span>
   );
@@ -49,12 +49,12 @@ function Part({ id, on, children, className = "" }: { id: PartId; on: PartId | n
 }
 
 const H = ({ children }: { children: ReactNode }) => (
-  <div className="font-mono text-[11px] font-semibold mb-1.5" style={{ color: DIM }}>{children}</div>
+  <div className="font-mono text-meta font-semibold mb-1.5" style={{ color: DIM }}>{children}</div>
 );
 
 function Chip({ kind, children }: { kind: string; children: ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-[11px] whitespace-nowrap" style={{ borderColor: LINE, backgroundColor: PAPER, color: TEXT }}>
+    <span className="inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 font-mono text-meta whitespace-nowrap" style={{ borderColor: LINE, backgroundColor: PAPER, color: TEXT }}>
       <span style={{ color: DIM }}>{kind}</span>{children}
     </span>
   );
@@ -73,8 +73,8 @@ function BriefTab({ on }: { on: PartId | null }) {
   return (
     <Part id="brief" on={on} className="p-3 -m-1">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-3">
-        <span className="font-mono text-[11px]" style={{ color: MUTED }}>written by @release</span>
-        <span className="ml-auto flex items-center gap-2 font-mono text-[10.5px]" style={{ color: DIM }}>
+        <span className="font-mono text-meta" style={{ color: MUTED }}>written by @release</span>
+        <span className="ml-auto flex items-center gap-2 font-mono text-meta" style={{ color: DIM }}>
           <span className="w-20 h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: SAND }}>
             <span className="block h-full rounded-full" style={{ width: "68%", backgroundColor: SOL.base1 }} />
           </span>
@@ -85,15 +85,15 @@ function BriefTab({ on }: { on: PartId | null }) {
       <div className="mt-4">
         <H>Where it stands</H>
         <ul className="space-y-1 text-[12.5px] leading-5" style={{ color: BODY }}>
-          <li className="rounded px-1.5 -mx-1.5" style={{ backgroundColor: tint(SOL.green, 10) }}><span className="font-mono text-[11px] mr-2" style={{ color: SOL.green }}>Nov 5</span>4.12 rebuilt with the checkout fix; ships Monday.</li>
-          <li><span className="font-mono text-[11px] mr-2" style={{ color: DIM }}>Nov 3</span>4.11 hotfix live on 100% of iOS.</li>
-          <li><span className="font-mono text-[11px] mr-2" style={{ color: DIM }}>Oct 31</span>App Store review back to one day.</li>
+          <li className="rounded px-1.5 -mx-1.5" style={{ backgroundColor: tint(SOL.green, 10) }}><span className="font-mono text-meta mr-2" style={{ color: SOL.green }}>Nov 5</span>4.12 rebuilt with the checkout fix; ships Monday.</li>
+          <li><span className="font-mono text-meta mr-2" style={{ color: DIM }}>Nov 3</span>4.11 hotfix live on 100% of iOS.</li>
+          <li><span className="font-mono text-meta mr-2" style={{ color: DIM }}>Oct 31</span>App Store review back to one day.</li>
         </ul>
       </div>
       <div className="mt-4 grid gap-2 sm:grid-cols-2">
         {book.map(([h, v], i) => (
           <div key={h} className={`rounded-lg border px-2.5 py-2 ${i === 0 ? "sm:col-span-2" : ""}`} style={{ borderColor: LINE, backgroundColor: PAPER }}>
-            <div className="font-mono text-[10.5px] font-semibold" style={{ color: DIM }}>{h}</div>
+            <div className="font-mono text-meta font-semibold" style={{ color: DIM }}>{h}</div>
             <div className="text-[12.5px] leading-5" style={{ color: TEXT }}>{v}</div>
           </div>
         ))}
@@ -106,7 +106,7 @@ function CharterTab({ on }: { on: PartId | null }) {
   const maya = person("maya");
   return (
     <Part id="charter" on={on} className="p-3 -m-1">
-      <div className="flex items-center gap-2 mb-3 font-mono text-[11px]" style={{ color: MUTED }}>
+      <div className="flex items-center gap-2 mb-3 font-mono text-meta" style={{ color: MUTED }}>
         <Person p={maya} size={18} /> written by Maya Chen
         <span className="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5" style={{ backgroundColor: SAND, color: MUTED }}>
           <LockGlyph /> read only for @release
@@ -119,7 +119,7 @@ function CharterTab({ on }: { on: PartId | null }) {
         <p style={{ color: MUTED }}>Not yours: writing features, changing the roadmap.</p>
       </div>
       <div className="mt-4 flex justify-end">
-        <span className="og-press rounded-md border px-2.5 py-1 font-mono text-[11px]" style={{ borderColor: LINE, color: TEXT, backgroundColor: PAPER }}>Edit</span>
+        <span className="og-press rounded-md border px-2.5 py-1 font-mono text-meta" style={{ borderColor: LINE, color: TEXT, backgroundColor: PAPER }}>Edit</span>
       </div>
     </Part>
   );
@@ -141,12 +141,12 @@ function SessionsTab() {
   ];
   return (
     <div className="space-y-1.5">
-      <div className="font-mono text-[11px] mb-2" style={{ color: MUTED }}>3 sessions under it · <span style={{ color: SOL.cyan }}>3 done</span></div>
+      <div className="font-mono text-meta mb-2" style={{ color: MUTED }}>3 sessions under it · <span style={{ color: SOL.cyan }}>3 done</span></div>
       {rows.map(([t, d, s]) => (
         <div key={t} className="flex items-center gap-2.5 rounded-lg border px-3 py-2" style={{ borderColor: LINE, backgroundColor: PAPER }}>
           <SessionDot state={s} />
           <span className="text-[12.5px] truncate" style={{ color: TEXT }}>{t}</span>
-          <span className="ml-auto font-mono text-[11px] whitespace-nowrap" style={{ color: DIM }}>{STATE[s].word} · {d}</span>
+          <span className="ml-auto font-mono text-meta whitespace-nowrap" style={{ color: DIM }}>{STATE[s].word} · {d}</span>
         </div>
       ))}
     </div>
@@ -167,12 +167,12 @@ function TriggersTab({ on }: { on: PartId | null }) {
             <span className="text-[13px] font-semibold truncate" style={{ color: INK }}>{t}</span>
             <span className="ml-auto hidden sm:flex gap-1.5">
               {["Pause", "Edit"].map((v) => (
-                <span key={v} className="rounded-md border px-2 py-0.5 font-mono text-[10.5px]" style={{ borderColor: LINE, color: MUTED }}>{v}</span>
+                <span key={v} className="rounded-md border px-2 py-0.5 font-mono text-meta" style={{ borderColor: LINE, color: MUTED }}>{v}</span>
               ))}
             </span>
           </div>
-          <div className="mt-1 pl-3.5 font-mono text-[11px] leading-4" style={{ color: MUTED }}>{when}</div>
-          <div className="pl-3.5 font-mono text-[11px] leading-4" style={{ color: DIM }}>{last}</div>
+          <div className="mt-1 pl-3.5 font-mono text-meta leading-4" style={{ color: MUTED }}>{when}</div>
+          <div className="pl-3.5 font-mono text-meta leading-4" style={{ color: DIM }}>{last}</div>
         </div>
       ))}
     </Part>
@@ -189,9 +189,9 @@ function SettingsTab({ on }: { on: PartId | null }) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-[100px_1fr] gap-y-2 text-[12.5px]">
-        <span className="font-mono text-[11px] pt-0.5" style={{ color: DIM }}>Reports to</span>
+        <span className="font-mono text-meta pt-0.5" style={{ color: DIM }}>Reports to</span>
         <span className="flex items-center gap-1.5" style={{ color: TEXT }}><Tile k={role("eng").k} size={16} />Engineering lead</span>
-        <span className="font-mono text-[11px] pt-0.5" style={{ color: DIM }}>Tenure</span>
+        <span className="font-mono text-meta pt-0.5" style={{ color: DIM }}>Tenure</span>
         <span style={{ color: TEXT }}>standing</span>
       </div>
       <Part id="switch" on={on} className="px-3 py-2.5 -mx-1">
@@ -204,12 +204,12 @@ function SettingsTab({ on }: { on: PartId | null }) {
       </Part>
       <Part id="limits" on={on} className="-mx-1">
         <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={limitsOpen} className="og-press w-full flex items-center gap-2 px-3 py-2 text-left">
-          <span className="font-mono text-[10px] transition-transform" style={{ color: DIM, transform: limitsOpen ? "rotate(90deg)" : "none" }}>▶</span>
+          <span className="font-mono text-meta transition-transform" style={{ color: DIM, transform: limitsOpen ? "rotate(90deg)" : "none" }}>▶</span>
           <span className="text-[13px]" style={{ color: TEXT }}>Limits</span>
-          <span className="ml-auto font-mono text-[11px]" style={{ color: DIM }}>none set</span>
+          <span className="ml-auto font-mono text-meta" style={{ color: DIM }}>none set</span>
         </button>
         {limitsOpen && (
-          <div className="px-3 pb-2.5 grid grid-cols-[1fr_auto] gap-y-1 font-mono text-[11.5px]">
+          <div className="px-3 pb-2.5 grid grid-cols-[1fr_auto] gap-y-1 font-mono text-meta">
             {["sessions started a day", "wakes a day", "tokens a day"].map((l) => (
               <span key={l} className="contents"><span style={{ color: MUTED }}>{l}</span><span style={{ color: DIM }}>no limit</span></span>
             ))}
@@ -219,15 +219,15 @@ function SettingsTab({ on }: { on: PartId | null }) {
       <Part id="perms" on={on} className="p-2.5 -mx-1">
         <div className="flex items-center mb-2">
           <span className="text-[13px] font-semibold" style={{ color: INK }}>Permissions outside codecast</span>
-          <span className="ml-auto rounded-md border px-2 py-0.5 font-mono text-[10.5px]" style={{ borderColor: LINE, color: MUTED }}>+ Grant</span>
+          <span className="ml-auto rounded-md border px-2 py-0.5 font-mono text-meta" style={{ borderColor: LINE, color: MUTED }}>+ Grant</span>
         </div>
         <div className="space-y-1.5">
           {grants.map(([verb, what, limit, until]) => (
             <div key={verb} className="grid grid-cols-[62px_1fr] gap-x-2 rounded-lg border px-2.5 py-1.5" style={{ borderColor: LINE, backgroundColor: PAPER }}>
-              <span className="font-mono text-[11px] font-semibold pt-px" style={{ color: SOL.orange }}>{verb}</span>
+              <span className="font-mono text-meta font-semibold pt-px" style={{ color: SOL.orange }}>{verb}</span>
               <span className="min-w-0">
                 <span className="block text-[12.5px] truncate" style={{ color: TEXT }}>{what}</span>
-                <span className="block font-mono text-[10.5px]" style={{ color: DIM }}>{limit} · {until}</span>
+                <span className="block font-mono text-meta" style={{ color: DIM }}>{limit} · {until}</span>
               </span>
             </div>
           ))}
@@ -245,7 +245,7 @@ function RolePage({ tab, setTab, on }: { tab: AnatomyTab; setTab: (t: AnatomyTab
   const r = role("release");
   return (
     <div className="rounded-2xl border overflow-hidden" style={{ borderColor: LINE, backgroundColor: "#fffdf6", boxShadow: "0 30px 70px -40px rgba(0,43,54,.45)" }}>
-      <div className="px-4 h-9 flex items-center gap-1.5 border-b font-mono text-[11.5px]" style={{ borderColor: LINE, color: DIM, backgroundColor: tint(SAND, 50) }}>
+      <div className="px-4 h-9 flex items-center gap-1.5 border-b font-mono text-meta" style={{ borderColor: LINE, color: DIM, backgroundColor: tint(SAND, 50) }}>
         Org <span>/</span> <span style={{ color: MUTED }}>Release Captain</span>
       </div>
       <div className="px-4 sm:px-5 pt-5 pb-4 border-b" style={{ borderColor: LINE }}>
@@ -268,7 +268,7 @@ function RolePage({ tab, setTab, on }: { tab: AnatomyTab; setTab: (t: AnatomyTab
         </div>
         <Part id="area" on={on} className="mt-4 px-2.5 py-2 -mx-1">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className="font-mono text-[11px] mr-1" style={{ color: DIM }}>Area</span>
+            <span className="font-mono text-meta mr-1" style={{ color: DIM }}>Area</span>
             <span className="text-[12.5px] mr-1" style={{ color: TEXT }}>{r.area}</span>
             <Chip kind="project">Mobile releases</Chip>
             <Chip kind="plan">Ship 4.12</Chip>
@@ -336,7 +336,7 @@ export function Anatomy() {
                   onFocus={() => point(p.id)}
                   onClick={() => point(p.id)}
                 >
-                  <span className="og-a-callno inline-flex w-[20px] h-[20px] rounded-full items-center justify-center font-mono text-[11px] font-bold shrink-0" style={{ backgroundColor: tint(HI, 22, SAND), color: TEXT }}>{i + 1}</span>
+                  <span className="og-a-callno inline-flex w-[20px] h-[20px] rounded-full items-center justify-center font-mono text-meta font-bold shrink-0" style={{ backgroundColor: tint(HI, 22, SAND), color: TEXT }}>{i + 1}</span>
                   <span className="min-w-0">
                     <span className="block font-mono text-[12.5px] lg:text-[13.5px] font-semibold whitespace-nowrap" style={{ color: INK }}>{p.name}</span>
                     <span className="hidden lg:block mt-0.5 text-[13.5px] leading-[1.55]" style={{ color: MUTED }}>{p.says}</span>

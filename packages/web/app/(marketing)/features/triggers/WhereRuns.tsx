@@ -21,7 +21,7 @@ function Bubble({ who, children, faded = false }: { who: "you" | "agent"; childr
 
 function FiredRule({ id, at, color }: { id: string; at: string; color: string }) {
   return (
-    <div className="flex items-center gap-2 py-1 font-mono text-[10.5px]" style={{ color }}>
+    <div className="flex items-center gap-2 py-1 font-mono text-meta" style={{ color }}>
       <span className="h-px flex-1" style={{ backgroundColor: `color-mix(in srgb, ${color} 40%, transparent)` }} />
       <span>{id} fired {at}</span>
       <span className="h-px flex-1" style={{ backgroundColor: `color-mix(in srgb, ${color} 40%, transparent)` }} />
@@ -33,7 +33,7 @@ function FiredRule({ id, at, color }: { id: string; at: string; color: string })
 function InlineMock() {
   return (
     <div className="rounded-2xl p-4 space-y-2" style={{ backgroundColor: SOL.base3, border: `1px solid ${SOL.base2}` }}>
-      <div className="mb-1 flex items-center justify-between font-mono text-[11px]" style={{ color: SOL.base1 }}>
+      <div className="mb-1 flex items-center justify-between font-mono text-meta" style={{ color: SOL.base1 }}>
         <span>Fix flaky checkout test</span><span>jx7c6zk</span>
       </div>
       <Bubble who="you" faded>ship the fix, then make sure CI is actually green</Bubble>
@@ -41,7 +41,7 @@ function InlineMock() {
       <FiredRule id="tr-41" at="18:40" color={SOL.blue} />
       <Bubble who="agent">
         CI is green on main. The checkout suite passed 3 times in a row on the new runner, so the flake is gone.
-        <span className="mt-1 block font-mono text-[10.5px]" style={{ color: SOL.base1 }}>arrived as a new turn, with the whole thread behind it</span>
+        <span className="mt-1 block font-mono text-meta" style={{ color: SOL.base1 }}>arrived as a new turn, with the whole thread behind it</span>
       </Bubble>
     </div>
   );
@@ -57,10 +57,10 @@ function SpawnMock() {
   ];
   return (
     <div className="rounded-2xl p-4" style={{ backgroundColor: SOL.base3, border: `1px solid ${SOL.base2}` }}>
-      <div className="mb-3 flex items-center justify-between font-mono text-[11px]" style={{ color: SOL.base1 }}>
+      <div className="mb-3 flex items-center justify-between font-mono text-meta" style={{ color: SOL.base1 }}>
         <span>Release prep</span><span>jx7dhfh</span>
       </div>
-      <div className="rounded-lg px-3 py-2 font-mono text-[11.5px]" style={{ backgroundColor: SOL.base2, color: SOL.base02 }}>
+      <div className="rounded-lg px-3 py-2 font-mono text-meta" style={{ backgroundColor: SOL.base2, color: SOL.base02 }}>
         <span style={{ color: SOL.cyan }}>tr-43</span> every 4h · Review open PRs and summarize findings
       </div>
       <ol className="mt-2 ml-3 border-l pl-4 space-y-2" style={{ borderColor: SOL.base2 }}>
@@ -71,14 +71,14 @@ function SpawnMock() {
               style={{ backgroundColor: r.state === "attention" ? SOL.red : SOL.cyan, boxShadow: `0 0 0 3px ${SOL.base3}` }}
             />
             <div className="rounded-lg px-3 py-1.5 text-[12px] leading-5" style={{ backgroundColor: "#fffbf0", border: `1px solid ${r.state === "attention" ? `color-mix(in srgb, ${SOL.red} 40%, transparent)` : SOL.base2}`, color: SOL.base01 }}>
-              <span className="font-mono text-[10.5px]" style={{ color: SOL.base1 }}>run {r.n} · {r.at} · fresh session</span>
+              <span className="font-mono text-meta" style={{ color: SOL.base1 }}>run {r.n} · {r.at} · fresh session</span>
               <span className="block">{r.text}</span>
-              {r.state === "attention" && <span className="mt-0.5 block font-mono text-[10.5px]" style={{ color: SOL.red }}>needs attention: wakes jx7dhfh</span>}
+              {r.state === "attention" && <span className="mt-0.5 block font-mono text-meta" style={{ color: SOL.red }}>needs attention: wakes jx7dhfh</span>}
             </div>
           </li>
         ))}
       </ol>
-      <p className="mt-3 font-mono text-[10.5px]" style={{ color: SOL.base1 }}>each run gets the prompt plus the previous run&apos;s summary</p>
+      <p className="mt-3 font-mono text-meta" style={{ color: SOL.base1 }}>each run gets the prompt plus the previous run&apos;s summary</p>
     </div>
   );
 }

@@ -327,7 +327,7 @@ function Outline({ goals, closed, d, scroller }: { goals: readonly DocGoal[]; cl
           );
         })}
       </ol>
-      {closed > 0 && <p className="mt-3 pl-2 text-[11.5px]" style={{ color: DIM }}>{closed} closed</p>}
+      {closed > 0 && <p className="mt-3 pl-2 text-meta" style={{ color: DIM }}>{closed} closed</p>}
     </nav>
   );
 }
@@ -407,7 +407,7 @@ function Facts({ goal, now }: { goal: InitiativeRow; now: number }) {
         {goal.target_date ? <TargetDate ts={goal.target_date} now={now} done={initiativeEnded(goal.status)} /> : null}
       </IntentTargetChip>
       </span>
-      {goal.short_id && <Link href={objectHref("initiative", goal.short_id)} className="ml-auto text-[11.5px] tabular-nums no-underline opacity-0 transition-opacity hover:underline group-hover/goal:opacity-100" style={{ color: DIM }} title="Open the goal's page: its record and activity">{goal.short_id}</Link>}
+      {goal.short_id && <Link href={objectHref("initiative", goal.short_id)} className="ml-auto text-meta tabular-nums no-underline hover:underline focus-visible:underline" style={{ color: DIM }} title="Open the goal's page: its record and activity">{goal.short_id}</Link>}
     </div>
   );
 }
@@ -449,7 +449,7 @@ function GoalBody({ goal, depth, d }: { goal: DocGoal; depth: number; d: Doc }) 
       {missing.length > 0 && (
         <div className="mt-2 -ml-1.5 flex flex-wrap items-center gap-0.5 opacity-0 transition-opacity group-hover/goal:opacity-100 focus-within:opacity-100" data-goal-add>
           {missing.map((m) => (
-            <button key={m.key} type="button" onClick={m.on} className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-[11.5px] transition-colors hover:bg-sol-bg-highlight/70" style={{ color: DIM }} data-goal-add-item={m.key}>
+            <button key={m.key} type="button" onClick={m.on} className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-meta transition-colors hover:bg-sol-bg-highlight/70" style={{ color: DIM }} data-goal-add-item={m.key}>
               <Plus className="h-3 w-3" /> {m.words}
             </button>
           ))}
@@ -512,7 +512,7 @@ function GoalMenu({ goal, d }: { goal: InitiativeRow; d: Doc }) {
         {!ended && homes.length > 0 && (
           <>
             <div className="mx-2 my-1 border-t" style={{ borderColor: RULE }} />
-            <p className="px-2 pb-0.5 pt-1 text-[11px]" style={{ color: DIM }}>Move under</p>
+            <p className="px-2 pb-0.5 pt-1 text-meta" style={{ color: DIM }}>Move under</p>
             <div className="max-h-48 overflow-y-auto">{homes.map((h) => item(h.title, () => moveUnder(h)))}</div>
           </>
         )}
@@ -628,7 +628,7 @@ function Projects({ goal, d, depth, adding = false, onAdding }: { goal: DocGoal;
     <div className="mt-5" data-goal-projects={row.short_id || row._id}>
       <div className="mb-1 flex min-h-[24px] items-center gap-2">
         <h3 className="text-[12px] font-normal" style={{ color: DIM }}>Projects</h3>
-        {carried.length > 0 && <span className="text-[11px] tabular-nums" style={{ color: DIM }}>{carried.length}</span>}
+        {carried.length > 0 && <span className="text-meta tabular-nums" style={{ color: DIM }}>{carried.length}</span>}
         <span className="flex-1" />
         {onAdding && (adding || carried.length > 0) && <span className="opacity-0 transition-opacity group-hover/goal:opacity-100 has-[[data-state=open]]:opacity-100" style={adding ? { opacity: 1 } : undefined}><AddProject goal={row} open={adding || undefined} onOpenChange={onAdding} /></span>}
       </div>
@@ -661,7 +661,7 @@ function Projects({ goal, d, depth, adding = false, onAdding }: { goal: DocGoal;
           );
         })}
         {takes && (
-          <div className="h-7 rounded-md border border-dashed text-[11.5px] leading-7 pl-2" style={{ borderColor: dropKey(d.drop) === dropKey(tail) ? INITIATIVE_ACCENT : RULE, color: DIM }} {...dropProps(d, tail, "project")} data-project-drop-tail>
+          <div className="h-7 rounded-md border border-dashed text-meta leading-7 pl-2" style={{ borderColor: dropKey(d.drop) === dropKey(tail) ? INITIATIVE_ACCENT : RULE, color: DIM }} {...dropProps(d, tail, "project")} data-project-drop-tail>
             {carried.length === 0 ? `Drop here to put it under ${row.title}` : "Drop here to put it last"}
           </div>
         )}

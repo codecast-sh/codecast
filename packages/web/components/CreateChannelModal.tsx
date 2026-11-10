@@ -151,7 +151,7 @@ export function CreateChannelModal({
           <Lock className={`h-3.5 w-3.5 shrink-0 ${isPrivate ? "text-sol-yellow" : "text-sol-text-dim"}`} />
           <span className="min-w-0 flex-1">
             <span className="block text-xs font-medium text-sol-text">Private</span>
-            <span className="block text-[11px] leading-snug text-sol-text-dim">
+            <span className="block text-meta leading-snug text-sol-text-dim">
               Only people you invite can see it or find its messages
             </span>
           </span>
@@ -174,7 +174,7 @@ export function CreateChannelModal({
         >
           <Bot className={`h-3.5 w-3.5 shrink-0 ${agents.length ? "text-sol-violet" : "text-sol-text-dim"}`} />
           <span className="min-w-0 flex-1 text-xs font-medium text-sol-text">Agents</span>
-          <span className="text-[11px] text-sol-text-dim">{agents.length ? agents.length : "Add roles or sessions"}</span>
+          <span className="text-meta text-sol-text-dim">{agents.length ? agents.length : "Add roles or sessions"}</span>
         </button>
         {agentsOpen && (
           <div className="border-t border-sol-border/40 px-3 py-2.5">

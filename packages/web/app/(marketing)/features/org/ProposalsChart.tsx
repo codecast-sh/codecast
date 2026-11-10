@@ -56,8 +56,8 @@ function Node({ k, title, sub, line, mode = "solid", card, land }: { k: IconKey;
     >
       <Tile k={k} size={30} className={land ? "og-anim og-pop" : ""} style={{ opacity: ghost ? 0.55 : 1, transition: "opacity .4s ease" }} />
       <div className="mt-1.5 font-mono font-bold text-[12px] leading-[15px]" style={{ color: ghost ? VIOLET : INK }}>{title}</div>
-      {sub && <div className="mt-0.5 font-mono text-[10.5px] leading-[14px]" style={{ color: ghost ? tint(VIOLET, 80) : DIM }}>{sub}</div>}
-      {line && <div className="mt-1 font-mono text-[10.5px] leading-[14px]">{line}</div>}
+      {sub && <div className="mt-0.5 font-mono text-meta leading-[14px]" style={{ color: ghost ? tint(VIOLET, 80) : DIM }}>{sub}</div>}
+      {line && <div className="mt-1 font-mono text-meta leading-[14px]">{line}</div>}
     </div>
   );
 }
@@ -124,7 +124,7 @@ export function ProposalsChart({ state, lit }: { state: State; lit: Sid | null }
           <Person p={maya} size={32} />
           <div className="min-w-0">
             <div className="font-mono font-bold text-[13px] leading-tight" style={{ color: INK }}>{maya.name}</div>
-            <div className="font-mono text-[11px]" style={{ color: DIM }}>founder · {pMode === "solid" ? 4 : 3} leads</div>
+            <div className="font-mono text-meta" style={{ color: DIM }}>founder · {pMode === "solid" ? 4 : 3} leads</div>
           </div>
         </div>
       </Box>
@@ -142,7 +142,7 @@ export function ProposalsChart({ state, lit }: { state: State; lit: Sid | null }
           <div className="grid grid-cols-3 gap-[3px]" style={{ opacity: 0.55 }}>
             {OTHER_ROLES.map((k) => <Tile key={k} k={k} size={14} />)}
           </div>
-          <div className="mt-1.5 font-mono text-[11px]" style={{ color: MUTED }}>+{OTHER_ROLES.length} roles</div>
+          <div className="mt-1.5 font-mono text-meta" style={{ color: MUTED }}>+{OTHER_ROLES.length} roles</div>
         </div>
       </Box>
 
@@ -172,7 +172,7 @@ export function ProposalsChart({ state, lit }: { state: State; lit: Sid | null }
           <div className="flex justify-center gap-[3px] flex-wrap">
             {Array.from({ length: 7 }, (_, i) => <SessionDot key={i} state={i < 2 ? "needs" : i < 5 ? "working" : "dormant"} size={8} />)}
           </div>
-          <div className="mt-1.5 font-mono text-[11px] font-semibold" style={{ color: fMode === "ghost" ? VIOLET : TEXT }}>+7 sessions</div>
+          <div className="mt-1.5 font-mono text-meta font-semibold" style={{ color: fMode === "ghost" ? VIOLET : TEXT }}>+7 sessions</div>
         </div>
       </Box>
     </Scaled>

@@ -16,7 +16,7 @@ export function at(d: number, d2?: number): CSSProperties {
 export function SessionPill({ children, size = "sm" }: { children: ReactNode; size?: "sm" | "md" }) {
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded border px-1.5 py-[1px] font-mono align-baseline whitespace-nowrap ${size === "md" ? "text-[12px]" : "text-[10.5px]"}`}
+      className={`inline-flex items-center gap-1 rounded border px-1.5 py-[1px] font-mono align-baseline whitespace-nowrap ${size === "md" ? "text-[12px]" : "text-meta"}`}
       style={{ backgroundColor: "rgba(38,139,210,0.09)", color: SOL.blue, borderColor: "rgba(38,139,210,0.22)" }}
     >
       <svg className="h-2.5 w-2.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke={SOL.blue} strokeWidth={2.4}>
@@ -30,7 +30,7 @@ export function SessionPill({ children, size = "sm" }: { children: ReactNode; si
 /** Mirrors EntityIdPill for a task: yellow tint, a status ring, the title. */
 export function TaskPill({ children }: { children: ReactNode }) {
   return (
-    <span className="inline-flex items-center gap-1 rounded border px-1.5 py-[1px] text-[10.5px] font-mono whitespace-nowrap" style={{ backgroundColor: "rgba(181,137,0,0.1)", color: SOL.yellow, borderColor: "rgba(181,137,0,0.25)" }}>
+    <span className="inline-flex items-center gap-1 rounded border px-1.5 py-[1px] text-meta font-mono whitespace-nowrap" style={{ backgroundColor: "rgba(181,137,0,0.1)", color: SOL.yellow, borderColor: "rgba(181,137,0,0.25)" }}>
       <svg className="h-2.5 w-2.5" viewBox="0 0 24 24" fill="none" stroke={SOL.yellow} strokeWidth={2.5}><circle cx="12" cy="12" r="9" /></svg>
       {children}
     </span>
@@ -91,7 +91,7 @@ export function Browser({ url, children, className = "" }: { url: string; childr
         <span className="flex gap-1">
           {[SOL.red, SOL.yellow, SOL.green].map((c) => <span key={c} className="h-2 w-2 rounded-full opacity-70" style={{ backgroundColor: c }} />)}
         </span>
-        <span className="ml-1 min-w-0 flex-1 truncate rounded px-2 py-[2px] text-[10.5px]" style={{ backgroundColor: PAPER, color: SOL.base00 }}>{url}</span>
+        <span className="ml-1 min-w-0 flex-1 truncate rounded px-2 py-[2px] text-meta" style={{ backgroundColor: PAPER, color: SOL.base00 }}>{url}</span>
       </div>
       {children}
     </Frame>
@@ -136,10 +136,10 @@ export function Term({ title, children, className = "", minH, wrap = false }: { 
         <span className="flex gap-1.5">
           {[SOL.red, SOL.yellow, SOL.green].map((c) => <span key={c} className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: c }} />)}
         </span>
-        <span className="ml-2 truncate font-mono text-[11px]" style={{ color: SOL.base01 }}>{title}</span>
+        <span className="ml-2 truncate font-mono text-meta" style={{ color: SOL.base01 }}>{title}</span>
       </div>
       <div className="overflow-x-auto">
-        <pre className={`p-4 font-mono text-[11.5px] sm:text-[12px] leading-[1.75]${wrap ? " whitespace-pre-wrap break-words" : ""}`} style={{ color: SOL.base0, minHeight: minH }}>{children}</pre>
+        <pre className={`p-4 font-mono text-meta sm:text-[12px] leading-[1.75]${wrap ? " whitespace-pre-wrap break-words" : ""}`} style={{ color: SOL.base0, minHeight: minH }}>{children}</pre>
       </div>
     </div>
   );

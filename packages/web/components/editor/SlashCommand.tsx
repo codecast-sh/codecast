@@ -151,7 +151,7 @@ export const SlashCommandList = forwardRef<any, SlashCommandListProps>(
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium">{item.title}</p>
-                <p className="text-[11px] text-sol-text-dim">{item.description}</p>
+                <p className="text-meta text-sol-text-dim">{item.description}</p>
               </div>
             </button>
           );

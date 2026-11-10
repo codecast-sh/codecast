@@ -113,7 +113,7 @@ export function DraftingControls({ d, overflowEnabled }: { d: Drafting; overflow
     <div className="flex items-center gap-1 mr-1">
       <button
         onClick={() => d.setEnabled(!d.enabled)}
-        className="px-1.5 py-1 text-[11px] tabular-nums text-sol-text-dim hover:text-sol-text-muted transition-colors"
+        className="px-1.5 py-1 text-meta tabular-nums text-sol-text-dim hover:text-sol-text-muted transition-colors"
         title="Turn drafting on or off"
       >
         {selected ? `${selected} of ${words} words` : `${words} words`}
@@ -134,7 +134,7 @@ export function DraftingControls({ d, overflowEnabled }: { d: Drafting; overflow
           title="Overflow: writing kept beside the doc"
         >
           <PanelRight className="w-3.5 h-3.5" />
-          {overflowLines > 0 && <span className="tabular-nums text-[10px]">{overflowLines}</span>}
+          {overflowLines > 0 && <span className="tabular-nums text-meta">{overflowLines}</span>}
         </button>
       )}
     </div>
@@ -167,7 +167,7 @@ function LabMenu({ d }: { d: Drafting }) {
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <button
-          className={`draft-lab-button px-2 py-[3px] mx-0.5 text-[10px] tracking-[0.14em] rounded-md border border-dashed transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+          className={`draft-lab-button px-2 py-[3px] mx-0.5 text-meta tracking-[0.14em] rounded-md border border-dashed transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
             running ? "draft-accent" : "text-sol-text-dim hover:text-sol-text"
           }`}
           title={d.labBlock ?? "The Lab: marks and trims that never rewrite your words"}
@@ -177,12 +177,12 @@ function LabMenu({ d }: { d: Drafting }) {
         </button>
       </PopoverTrigger>
       <PopoverContent align="end" sideOffset={6} className="draft-lab w-[420px] p-1.5">
-        <div className="px-2.5 pt-1.5 pb-2 text-[11px] text-sol-text-dim">
+        <div className="px-2.5 pt-1.5 pb-2 text-meta text-sol-text-dim">
           Marks and trims. Nothing here rewrites you: findings mark the text, trims fade what could go.
         </div>
         <LabItem disabled={!!running} onClick={() => { setOpen(false); d.setEnabled(true); void d.lab({ tool: "typos" }, "Typos"); }}>
           Fix punctuation and typos
-          <span className="ml-auto text-[10px] text-sol-text-dim">as versions you can flip back</span>
+          <span className="ml-auto text-meta text-sol-text-dim">as versions you can flip back</span>
         </LabItem>
         {LAB_FLAGS.map((f) => (
           <LabItem key={f.flag} disabled={!!running} onClick={() => { setOpen(false); d.setEnabled(true); void d.lab({ tool: "flag", flag: f.flag }, f.label); }}>
@@ -234,12 +234,12 @@ function TrimButton({ label, sub, active, disabled, onClick }: { label: string; 
     <button
       disabled={disabled}
       onClick={onClick}
-      className={`flex flex-col items-center justify-center rounded-lg px-1 py-1.5 border text-[11px] leading-tight transition-colors disabled:opacity-40 ${
+      className={`flex flex-col items-center justify-center rounded-lg px-1 py-1.5 border text-meta leading-tight transition-colors disabled:opacity-40 ${
         active ? "draft-trim--on" : "border-sol-border/40 text-sol-text-muted hover:text-sol-text hover:border-sol-border"
       }`}
     >
       <span>{label}</span>
-      <span className="text-[9px] text-sol-text-dim h-3">{sub}</span>
+      <span className="text-meta text-sol-text-dim h-4">{sub}</span>
     </button>
   );
 }
@@ -422,7 +422,7 @@ export function AlternativesPanel({ d }: { d: Drafting }) {
       <button
         disabled={aiRunning}
         onClick={() => d.aiAlternatives(focus)}
-        className="mt-2 self-start flex items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text disabled:opacity-40 transition-colors"
+        className="mt-2 self-start flex items-center gap-1.5 text-meta text-sol-text-dim hover:text-sol-text disabled:opacity-40 transition-colors"
       >
         <Bot className="w-3 h-3" /> Suggest versions <Keys keys={[MOD, SHIFT, "G"]} />
       </button>
@@ -433,7 +433,7 @@ export function AlternativesPanel({ d }: { d: Drafting }) {
 
 function PanelFooter({ onClose }: { onClose: () => void }) {
   return (
-    <div className="mt-auto pt-6 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[10px] text-sol-text-dim">
+    <div className="mt-auto pt-6 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-meta text-sol-text-dim">
       <span className="flex items-center gap-1 whitespace-nowrap"><KeyCap size="xs">↵</KeyCap> adds</span>
       <span className="flex items-center gap-1 whitespace-nowrap"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap> flips</span>
       <button onClick={onClose} className="flex items-center gap-1 whitespace-nowrap hover:text-sol-text"><KeyCap size="xs">esc</KeyCap> closes</button>
@@ -511,7 +511,7 @@ export function OverflowPanel({ d }: { d: Drafting }) {
         className="draft-overflow flex-1"
         spellCheck
       />
-      <div className="pt-3 flex flex-wrap items-center gap-1.5 text-[10px] text-sol-text-dim">
+      <div className="pt-3 flex flex-wrap items-center gap-1.5 text-meta text-sol-text-dim">
         <Keys keys={[MOD, "↵"]} /> <span>or drag into the page to use</span>
       </div>
     </aside>

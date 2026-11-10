@@ -5,14 +5,16 @@
 // group). Open, each row's letter picks it, so New then T is a task; Ctrl+N
 // still starts a session from anywhere without the menu.
 
-import { useState } from "react";
+import { memo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown, SquarePen } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { KeyCap } from "./KeyCap";
+import { TopbarButton } from "./TopbarButton";
 import { inAppCreateEnv, useCreateKinds } from "../hooks/useCreateKinds";
 
-export function NewMenu() {
+/** `compact`: the phone bar's icon button, where the pill has no room. */
+export const NewMenu = memo(function NewMenu({ compact = false }: { compact?: boolean }) {
   const [open, setOpen] = useState(false);
   const router = useRouter();
   const kinds = useCreateKinds().filter((k) => !k.variant);
@@ -23,6 +25,11 @@ export function NewMenu() {
   return (
     <DropdownMenu open={open} onOpenChange={setOpen} modal={false}>
       <DropdownMenuTrigger asChild>
+        {compact ? (
+          <TopbarButton aria-label="New">
+            <SquarePen />
+          </TopbarButton>
+        ) : (
         <button
           type="button"
           aria-label="New"
@@ -32,9 +39,11 @@ export function NewMenu() {
           New
           <ChevronDown className="h-3 w-3 text-sol-text-dim transition-transform duration-150 group-data-[state=open]:rotate-180" />
         </button>
+        )}
       </DropdownMenuTrigger>
       <DropdownMenuContent
-        align="start"
+        align={compact ? "end" : "start"}
+        collisionPadding={8}
         sideOffset={6}
         // Its letters are its own, ahead of the conversation's h/t/d/r.
         data-owns-keys=""
@@ -61,4 +70,4 @@ export function NewMenu() {
       </DropdownMenuContent>
     </DropdownMenu>
   );
-}
+});

@@ -131,7 +131,7 @@ export function DeviceSetupDialog() {
                   />
                 ))}
               </div>
-              <span className={`text-[11px] tabular-nums ${allRequiredOn ? "text-sol-green" : "text-sol-text-dim"}`}>
+              <span className={`text-meta tabular-nums ${allRequiredOn ? "text-sol-green" : "text-sol-text-dim"}`}>
                 {allRequiredOn ? "Needed: all on" : `${requiredOn} of ${required.length} needed on`}
               </span>
             </div>
@@ -185,7 +185,7 @@ function Section({
   return (
     <div className="border-t border-sol-border/60 first:border-t-0">
       {/* Sticky, so a scrolled list still says which group it is in. */}
-      <div className="sticky top-0 z-10 bg-sol-card px-5 pb-1 pt-3 text-[11px] font-medium uppercase tracking-wide text-sol-text-dim">
+      <div className="sticky top-0 z-10 bg-sol-card px-5 pb-1 pt-3 text-mark font-medium uppercase tracking-wide text-sol-text-dim">
         {title}
       </div>
       <div className="divide-y divide-sol-border/40">

@@ -94,7 +94,7 @@ export function CopyCommand({ cmd, className = "", onDark = false }: { cmd: stri
         <span style={{ color: SOL.green }}>$ </span>
         <Whole text={cmd} />
       </span>
-      <span className="ml-auto shrink-0 text-[11px] transition-colors" style={{ color: copied ? SOL.green : SOL.base1 }}>
+      <span className="ml-auto shrink-0 text-meta transition-colors" style={{ color: copied ? SOL.green : SOL.base1 }}>
         {copied ? "copied" : "copy"}
       </span>
     </button>
@@ -128,7 +128,7 @@ export function Shot({ src, alt, width, height, caption, className = "", eager =
 export function ForScripts({ children, note }: { children: ReactNode; note?: ReactNode }) {
   return (
     <div>
-      <div className="mb-2 font-mono text-[11.5px] font-semibold uppercase tracking-wide" style={{ color: SOL.base1 }}>For scripts and agents</div>
+      <div className="mb-2 font-mono text-mark font-semibold uppercase tracking-wide" style={{ color: SOL.base1 }}>For scripts and agents</div>
       {note && <p className="mb-3 text-[13.5px] leading-[1.6]" style={{ color: SOL.base01 }}>{note}</p>}
       {children}
     </div>

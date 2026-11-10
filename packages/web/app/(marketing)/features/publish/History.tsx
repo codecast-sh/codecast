@@ -32,17 +32,17 @@ const VERSIONS = [
 function DiffView() {
   return (
     <div className="rounded-xl border overflow-hidden bg-white" style={{ borderColor: "rgba(88,110,117,.25)" }}>
-      <div className="flex items-center gap-3 px-4 h-10 border-b font-mono text-[11.5px]" style={{ borderColor: SOL.base2, backgroundColor: SOL.base3, color: SOL.base01 }}>
+      <div className="flex items-center gap-3 px-4 h-10 border-b font-mono text-meta" style={{ borderColor: SOL.base2, backgroundColor: SOL.base3, color: SOL.base01 }}>
         <span className="font-semibold" style={{ color: SOL.base03 }}>Q3 churn audit</span>
         <span>v2 → v3</span>
         <span className="ml-auto" style={{ color: SOL.green }}>+4</span>
         <span style={{ color: SOL.red }}>−1</span>
       </div>
-      <div className="font-mono text-[11.5px] leading-[1.75] overflow-x-auto">
+      <div className="font-mono text-meta leading-[1.75] overflow-x-auto">
         {DIFF.map((op, i) => {
           if (op.t === "fold") {
             return (
-              <div key={i} className="px-4 py-1 text-[11px]" style={{ backgroundColor: "rgba(38,139,210,.06)", color: SOL.blue }}>{op.line}</div>
+              <div key={i} className="px-4 py-1 text-meta" style={{ backgroundColor: "rgba(38,139,210,.06)", color: SOL.blue }}>{op.line}</div>
             );
           }
           const bg = op.t === "add" ? "rgba(133,153,0,.12)" : op.t === "del" ? "rgba(220,50,47,.09)" : undefined;
@@ -84,9 +84,9 @@ function VersionRail() {
                 className="flex h-11 w-11 items-center justify-center rounded-full border-2 font-mono text-[13px] font-bold transition-transform group-hover:-translate-y-0.5"
                 style={{ borderColor: current ? CYAN : "rgba(42,161,152,.45)", backgroundColor: current ? CYAN : SOL.base3, color: current ? "#fff" : SOL.base02 }}
               >v{v.v}</span>
-              <span className="mt-3 block font-mono text-[11px]" style={{ color: SOL.base1 }}>{v.when} · {v.size}</span>
+              <span className="mt-3 block font-mono text-meta" style={{ color: SOL.base1 }}>{v.when} · {v.size}</span>
               <span className="mt-1 block text-[13px] leading-5" style={{ color: hover === v.v || current ? SOL.base02 : SOL.base01 }}>{v.note}</span>
-              <span className="mt-2 block font-mono text-[10.5px] transition-opacity" style={{ color: CYAN, opacity: hover === v.v ? 1 : 0.55 }}>?v={v.v}</span>
+              <span className="mt-2 block font-mono text-meta transition-opacity" style={{ color: CYAN, opacity: hover === v.v ? 1 : 0.55 }}>?v={v.v}</span>
             </button>
           );
         })}

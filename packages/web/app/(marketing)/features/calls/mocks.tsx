@@ -22,7 +22,7 @@ export function TrackDiagram() {
   return (
     <Frame label="Each person's audio track goes to speech recognition on its own stream, so each segment is stamped with its speaker">
       <div className="grid grid-cols-[auto_1fr] sm:grid-cols-[auto_auto_1fr] items-stretch">
-        <div className="px-4 py-3 text-[10.5px] col-span-full flex flex-wrap gap-x-6 gap-y-1" style={{ borderBottom: hair, color: SOL.base1 }}>
+        <div className="px-4 py-3 text-meta col-span-full flex flex-wrap gap-x-6 gap-y-1" style={{ borderBottom: hair, color: SOL.base1 }}>
           <span>track</span>
           <span className="hidden sm:inline">scribe streams it alone</span>
           <span className="ml-auto">segment, as stored</span>
@@ -44,7 +44,7 @@ export function TrackDiagram() {
                 </svg>
               </div>
               <div className="cc-rise min-w-0 px-4 py-3" style={{ borderBottom: i < 2 ? hair : undefined, "--d": `${0.3 + i * 0.12}s` } as CSSProperties}>
-                <div className="rounded-lg px-3 py-2 text-[11px] leading-[1.6] overflow-x-auto" style={{ backgroundColor: SOL.base03, color: SOL.base0 }}>
+                <div className="rounded-lg px-3 py-2 text-meta leading-[1.6] overflow-x-auto" style={{ backgroundColor: SOL.base03, color: SOL.base0 }}>
                   <span style={{ color: SOL.base01 }}>{"{ "}</span>
                   <span>seq: </span><span style={{ color: SOL.cyan }}>{seq}</span>
                   <span>, speaker_name: </span><span style={{ color: SOL.yellow }}>&quot;{p.name}&quot;</span>
@@ -68,9 +68,9 @@ function DigestBody() {
   return (
     <>
       <div className="text-[14px] font-bold" style={{ color: SOL.base03 }}>{CALL_TITLE}</div>
-      <div className="text-[11px]" style={{ color: SOL.base1 }}>{CALL_LEAD}</div>
+      <div className="text-meta" style={{ color: SOL.base1 }}>{CALL_LEAD}</div>
       <p className="mt-2 text-[12px] leading-[1.6]" style={{ color: SOL.base01 }}>{SUMMARY}</p>
-      <div className="mt-2.5 text-[11px] font-semibold" style={{ color: SOL.base01 }}>Action items</div>
+      <div className="mt-2.5 text-meta font-semibold" style={{ color: SOL.base01 }}>Action items</div>
       <ol className="mt-1 space-y-1 text-[12px] leading-snug" style={{ color: SOL.base01 }}>
         {ACTION_ITEMS.map((a, i) => <li key={a.task}><span style={{ color: SOL.base1 }}>{i + 1}. </span>{a.text}</li>)}
       </ol>
@@ -84,15 +84,15 @@ export function ChannelDigest() {
     <Frame className="cc-lift h-full" label="A huddle digest posted as a chat message in the channel">
       <div className="flex items-center gap-2 px-4 py-2.5 text-[12px]" style={{ borderBottom: hair, color: SOL.base02 }}>
         <span style={{ color: SOL.base1 }}>#</span>payments
-        <span className="ml-auto text-[10.5px]" style={{ color: SOL.base1 }}>channel or DM</span>
+        <span className="ml-auto text-meta" style={{ color: SOL.base1 }}>channel or DM</span>
       </div>
       <div className="px-4 py-4 flex gap-3">
         <Face p={PEOPLE[0]} size={28} />
         <div className="min-w-0">
-          <div className="text-[11.5px]" style={{ color: SOL.base1 }}><span className="font-semibold" style={{ color: SOL.base02 }}>Maya</span> · huddle digest</div>
+          <div className="text-meta" style={{ color: SOL.base1 }}><span className="font-semibold" style={{ color: SOL.base02 }}>Maya</span> · huddle digest</div>
           <div className="mt-1.5 rounded-lg px-3 py-2.5" style={{ border: hair, backgroundColor: "#fdf6e3" }}>
             <DigestBody />
-            <div className="mt-2.5 text-[11px]" style={{ color: SOL.blue }}>Show transcript (6 lines)</div>
+            <div className="mt-2.5 text-meta" style={{ color: SOL.blue }}>Show transcript (6 lines)</div>
           </div>
         </div>
       </div>
@@ -106,10 +106,10 @@ export function SessionDigest() {
     <Frame className="cc-lift h-full" label="A huddle digest delivered into a session as a message that wakes its agent">
       <div className="flex items-center gap-2 px-4 py-2.5 text-[12px]" style={{ borderBottom: hair, color: SOL.base02 }}>
         <AgentMark size={18} /> {AGENT.name}
-        <span className="text-[10.5px]" style={{ color: SOL.blue }}>{AGENT.backend}</span>
-        <span className="ml-auto text-[10.5px]" style={{ color: SOL.base1 }}>session room</span>
+        <span className="text-meta" style={{ color: SOL.blue }}>{AGENT.backend}</span>
+        <span className="ml-auto text-meta" style={{ color: SOL.base1 }}>session room</span>
       </div>
-      <div className="px-4 py-4 text-[11.5px] leading-[1.7]" style={{ color: SOL.base01 }}>
+      <div className="px-4 py-4 text-meta leading-[1.7]" style={{ color: SOL.base01 }}>
         <div style={{ color: SOL.magenta }}>&lt;huddle-summary&gt;</div>
         <div className="pl-3 my-1" style={{ borderLeft: `2px solid rgba(211,54,130,0.3)` }}>
           <div>The huddle in this session&apos;s room just ended. You already heard it live, line by line, while it ran.</div>
@@ -118,10 +118,10 @@ export function SessionDigest() {
           <div className="mt-1.5">Read the whole transcript with <span style={{ color: SOL.base02 }}>cast call {CALL_ID} --transcript</span></div>
         </div>
         <div style={{ color: SOL.magenta }}>&lt;/huddle-summary&gt;</div>
-        <div className="mt-3 flex items-center gap-2 text-[11px]" style={{ color: SOL.green }}>
+        <div className="mt-3 flex items-center gap-2 text-meta" style={{ color: SOL.green }}>
           <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: SOL.green }} /> agent woke · working
         </div>
-        <div className="mt-3 rounded-lg px-3 py-2.5 text-[11px] leading-[1.65]" style={{ backgroundColor: SOL.base03, color: SOL.base0 }}>
+        <div className="mt-3 rounded-lg px-3 py-2.5 text-meta leading-[1.65]" style={{ backgroundColor: SOL.base03, color: SOL.base0 }}>
           <div><span style={{ color: SOL.green }}>$ </span><span style={{ color: SOL.base2 }}>cast call {CALL_ID} 3:4</span></div>
           <div style={{ color: SOL.base01 }}>{CALL_TITLE} lines 3-4</div>
           <div style={{ color: SOL.cyan }}>Priya</div>
@@ -144,14 +144,14 @@ export function CitationMessage() {
     <Frame label="An agent's message citing the call: an inline call pill and lines 3 to 4 embedded with their speakers">
       <div className="flex items-center gap-2 px-4 py-2.5 text-[12px]" style={{ borderBottom: hair, color: SOL.base02 }}>
         <AgentMark size={18} /> {AGENT.name}
-        <span className="ml-auto text-[10.5px]" style={{ color: SOL.base1 }}>message</span>
+        <span className="ml-auto text-meta" style={{ color: SOL.base1 }}>message</span>
       </div>
       <div className="px-4 py-4 text-[13px] leading-[1.7]" style={{ color: SOL.base01 }}>
         <p>
           Switching retries to exponential backoff with jitter. This was agreed in <CallPill>{CALL_TITLE} · 6m</CallPill>, and the deadline is Friday:
         </p>
         <div className="my-3 rounded-lg overflow-hidden" style={{ border: `1px solid rgba(211,54,130,0.25)` }}>
-          <div className="flex items-center gap-2 px-3 py-1.5 text-[10.5px]" style={{ backgroundColor: "rgba(211,54,130,0.07)", color: SOL.magenta }}>
+          <div className="flex items-center gap-2 px-3 py-1.5 text-meta" style={{ backgroundColor: "rgba(211,54,130,0.07)", color: SOL.magenta }}>
             {CALL_ID}:3-4 <span style={{ color: SOL.base1 }}>· {CALL_TITLE}</span>
           </div>
           {[3, 4].map((n) => {
@@ -162,14 +162,14 @@ export function CitationMessage() {
                 <Face p={s} size={20} />
                 <div className="min-w-0">
                   <span className="font-semibold" style={{ color: s.color }}>{s.name}</span>
-                  <span className="ml-2 text-[10.5px]" style={{ color: SOL.base1 }}>{l.at}</span>
+                  <span className="ml-2 text-meta" style={{ color: SOL.base1 }}>{l.at}</span>
                   <div style={{ color: SOL.base02 }}>{l.text}</div>
                 </div>
               </div>
             );
           })}
         </div>
-        <p className="text-[11.5px]" style={{ color: SOL.base1 }}>Written as <span style={{ color: SOL.base02 }}>{CALL_ID}</span> and <span style={{ color: SOL.base02 }}>{CALL_ID}:3-4</span> on its own line.</p>
+        <p className="text-meta" style={{ color: SOL.base1 }}>Written as <span style={{ color: SOL.base02 }}>{CALL_ID}</span> and <span style={{ color: SOL.base02 }}>{CALL_ID}:3-4</span> on its own line.</p>
       </div>
     </Frame>
   );
@@ -189,12 +189,12 @@ export function ItemToTask() {
         return (
           <div key={a.task} className="cc-rise grid gap-3 md:grid-cols-[1fr_auto_1.15fr_auto_1fr] md:items-center" style={{ "--d": `${i * 0.15}s` } as CSSProperties}>
             <Frame className="px-3.5 py-3 h-full">
-              <div className="text-[10.5px] mb-1" style={{ color: SOL.base1 }}>action item {i + 1}</div>
+              <div className="text-meta mb-1" style={{ color: SOL.base1 }}>action item {i + 1}</div>
               <div className="text-[12px] leading-snug" style={{ color: SOL.base01 }}>{a.text}</div>
             </Frame>
             <Arrow />
             <Frame className="px-3.5 py-3 h-full" style={{ borderColor: `color-mix(in srgb, ${s.color} 35%, transparent)` }}>
-              <div className="text-[10.5px] mb-1" style={{ color: SOL.base1 }}>checked against {CALL_ID}:{a.line}</div>
+              <div className="text-meta mb-1" style={{ color: SOL.base1 }}>checked against {CALL_ID}:{a.line}</div>
               <div className="flex gap-2 text-[12px] leading-snug">
                 <Face p={s} size={18} />
                 <span style={{ color: SOL.base02 }}><span className="font-semibold" style={{ color: s.color }}>{s.name}: </span>&ldquo;{l.text}&rdquo;</span>
@@ -202,11 +202,11 @@ export function ItemToTask() {
             </Frame>
             <Arrow />
             <Frame className="px-3.5 py-3 h-full">
-              <div className="flex items-center gap-2 text-[10.5px] mb-1" style={{ color: SOL.base1 }}>
+              <div className="flex items-center gap-2 text-meta mb-1" style={{ color: SOL.base1 }}>
                 <TaskChip id={a.task} /> <span>from a meeting</span>
               </div>
               <div className="text-[12.5px] font-semibold leading-snug" style={{ color: SOL.base03 }}>{a.title}</div>
-              <div className="mt-1 flex items-center gap-1.5 text-[11px]" style={{ color: SOL.base1 }}>
+              <div className="mt-1 flex items-center gap-1.5 text-meta" style={{ color: SOL.base1 }}>
                 <Face p={speakerOf(a.owner)} size={16} /> {speakerOf(a.owner).name}
               </div>
             </Frame>
@@ -256,11 +256,11 @@ export function DeliveryTimeline() {
         <div className="relative h-[120px]">
           {/* hold window */}
           <div className="absolute top-0 bottom-0 rounded-md" style={{ left: `${holdFrom * 100}%`, width: `${(holdTo - holdFrom) * 100}%`, background: `repeating-linear-gradient(135deg, rgba(42,161,152,0.10) 0 6px, transparent 6px 12px)`, border: `1px dashed rgba(42,161,152,0.5)` }}>
-            <span className="absolute -top-0 left-2 translate-y-1 text-[10.5px] rounded px-1.5" style={{ color: SOL.cyan, backgroundColor: "#fffaf0" }}>the agent asks for 10m of quiet</span>
+            <span className="absolute -top-0 left-2 translate-y-1 text-meta rounded px-1.5" style={{ color: SOL.cyan, backgroundColor: "#fffaf0" }}>the agent asks for 10m of quiet</span>
           </div>
           {/* room speech */}
           <div className="absolute left-0 right-0 top-[34px] h-[22px]">
-            <span className="absolute -top-[16px] left-0 text-[10px]" style={{ color: SOL.base1 }}>the room</span>
+            <span className="absolute -top-[16px] left-0 text-meta" style={{ color: SOL.base1 }}>the room</span>
             {speech.map(([a, b, c], i) => (
               <span key={i} className="absolute top-0 bottom-0 rounded-[4px]" style={{ left: `${a * 100}%`, width: `${(b - a) * 100}%`, backgroundColor: `color-mix(in srgb, ${c} 55%, transparent)` }} />
             ))}
@@ -268,7 +268,7 @@ export function DeliveryTimeline() {
           </div>
           {/* session lane */}
           <div className="absolute left-0 right-0 top-[86px] h-[22px]">
-            <span className="absolute -top-[16px] left-0 text-[10px]" style={{ color: SOL.base1 }}>the session</span>
+            <span className="absolute -top-[16px] left-0 text-meta" style={{ color: SOL.base1 }}>the session</span>
             <span className="absolute left-0 right-0 top-1/2" style={{ borderTop: `1px dotted ${SOL.base1}` }} />
             {deliveries.map((d, i) => (
               <span key={i} className="absolute top-1/2 -translate-y-1/2 -ml-[9px] flex h-[18px] w-[18px] items-center justify-center rounded-full" style={{ left: `${d.at * 100}%`, backgroundColor: color[d.kind] }}>
@@ -277,7 +277,7 @@ export function DeliveryTimeline() {
             ))}
           </div>
         </div>
-        <div className="mt-3 grid gap-2 sm:grid-cols-3 text-[11.5px] leading-snug" style={{ color: SOL.base01 }}>
+        <div className="mt-3 grid gap-2 sm:grid-cols-3 text-meta leading-snug" style={{ color: SOL.base01 }}>
           <Legend c={SOL.magenta}>The room goes quiet: the words so far arrive as one batch.</Legend>
           <Legend c={SOL.orange}>A line that names the agent comes through during a hold.</Legend>
           <Legend c={SOL.cyan}>The hold ends: everything said meanwhile arrives together.</Legend>
@@ -310,22 +310,22 @@ export function HuddleChat() {
       <div className="px-4 py-3 space-y-3 text-[12px] leading-snug">
         <div className="flex gap-2.5">
           <Face p={PEOPLE[0]} size={22} />
-          <div><div className="text-[11px] font-semibold" style={{ color: SOL.blue }}>Maya</div><div style={{ color: SOL.base02 }}>split the 41 by customer please</div><div className="mt-0.5 text-[10px]" style={{ color: SOL.base1 }}>relayed to the session</div></div>
+          <div><div className="text-meta font-semibold" style={{ color: SOL.blue }}>Maya</div><div style={{ color: SOL.base02 }}>split the 41 by customer please</div><div className="mt-0.5 text-meta" style={{ color: SOL.base1 }}>relayed to the session</div></div>
         </div>
         <div className="flex gap-2.5">
           <AgentMark size={22} />
           <div className="min-w-0">
-            <div className="text-[11px]"><span className="font-semibold" style={{ color: SOL.magenta }}>{AGENT.name}</span> <span className="ml-1 rounded px-1 text-[9.5px]" style={{ backgroundColor: "rgba(211,54,130,0.1)", color: SOL.magenta }}>agent</span></div>
+            <div className="text-meta"><span className="font-semibold" style={{ color: SOL.magenta }}>{AGENT.name}</span> <span className="ml-1 rounded px-1 text-meta" style={{ backgroundColor: "rgba(211,54,130,0.1)", color: SOL.magenta }}>agent</span></div>
             <div style={{ color: SOL.base02 }}>Seven customers. Northwind has 22 of them, the rest have one to five each. Table is in the session.</div>
-            <div className="mt-1 text-[10.5px]" style={{ color: SOL.blue }}>open session</div>
+            <div className="mt-1 text-meta" style={{ color: SOL.blue }}>open session</div>
           </div>
         </div>
       </div>
       <div className="px-4 pb-4">
         <div className="relative flex aspect-[16/7] items-center justify-center rounded-lg" style={{ background: `radial-gradient(ellipse 45% 70% at 50% 50%, rgba(211,54,130,0.2), ${SOL.base03})` }} role="img" aria-label="The agent's video tile in the huddle, marked as an agent">
           <AgentMark size={54} />
-          <span className="absolute left-2 bottom-2 flex items-center gap-1.5 rounded px-1.5 py-0.5 text-[10px]" style={{ backgroundColor: "rgba(0,0,0,0.45)", color: SOL.base2 }}>
-            {AGENT.name}<span className="rounded px-1 text-[9px]" style={{ backgroundColor: SOL.magenta, color: "#fff" }}>agent</span>
+          <span className="absolute left-2 bottom-2 flex items-center gap-1.5 rounded px-1.5 py-0.5 text-meta" style={{ backgroundColor: "rgba(0,0,0,0.45)", color: SOL.base2 }}>
+            {AGENT.name}<span className="rounded px-1 text-meta" style={{ backgroundColor: SOL.magenta, color: "#fff" }}>agent</span>
           </span>
           <span className="cc-talking absolute right-2 bottom-2 flex items-center gap-[2px]" aria-hidden>
             {[5, 9, 6, 11, 7].map((h, k) => <span key={k} className="w-[2px] rounded-full" style={{ height: h, backgroundColor: SOL.magenta, "--i": k } as CSSProperties} />)}
@@ -350,10 +350,10 @@ export function SnapFrame() {
         <div className="absolute inset-0 flex">
           <div className="hidden sm:block w-[22%] p-3 space-y-1.5" style={{ backgroundColor: SOL.base02 }}>
             {["retry.ts", "queue.ts", "webhook.ts", "dlq.ts"].map((f, i) => (
-              <div key={f} className="text-[10px] rounded px-1.5 py-0.5" style={{ color: i === 0 ? SOL.base2 : SOL.base01, backgroundColor: i === 0 ? "rgba(147,161,161,0.15)" : undefined }}>{f}</div>
+              <div key={f} className="text-meta rounded px-1.5 py-0.5" style={{ color: i === 0 ? SOL.base2 : SOL.base01, backgroundColor: i === 0 ? "rgba(147,161,161,0.15)" : undefined }}>{f}</div>
             ))}
           </div>
-          <pre className="flex-1 p-4 text-[10.5px] sm:text-[11.5px] leading-[1.7] overflow-hidden" style={{ color: SOL.base0 }}>
+          <pre className="flex-1 p-4 text-meta sm:text-meta leading-[1.7] overflow-hidden" style={{ color: SOL.base0 }}>
             <span style={{ color: SOL.base01 }}>{"// retry.ts\n"}</span>
             <span style={{ color: SOL.green }}>export function </span><span style={{ color: SOL.blue }}>nextDelay</span>(attempt: <span style={{ color: SOL.yellow }}>number</span>) {"{\n"}
             {"  "}<span style={{ color: SOL.green }}>const</span> base = <span style={{ color: SOL.cyan }}>500</span> * <span style={{ color: SOL.cyan }}>2</span> ** attempt;{"\n"}
@@ -363,9 +363,9 @@ export function SnapFrame() {
             <span style={{ color: SOL.green }}>export const</span> MAX_ATTEMPTS = <span style={{ color: SOL.cyan }}>8</span>;{"\n"}
           </pre>
         </div>
-        <span className="absolute top-3 right-3 rounded px-1.5 py-0.5 text-[10px]" style={{ backgroundColor: "rgba(0,0,0,0.35)", color: SOL.base2 }}>Theo&apos;s screen</span>
+        <span className="absolute top-3 right-3 rounded px-1.5 py-0.5 text-meta" style={{ backgroundColor: "rgba(0,0,0,0.35)", color: SOL.base2 }}>Theo&apos;s screen</span>
       </div>
-      <div className="px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px]" style={{ borderTop: hair }}>
+      <div className="px-4 py-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta" style={{ borderTop: hair }}>
         <span className="font-semibold" style={{ color: SOL.magenta }}>{CALL_ID}@0:25</span>
         <span style={{ color: SOL.base1 }}>screen</span>
         <span className="min-w-0" style={{ color: SOL.base01 }}><span style={{ color: SOL.green }}>Theo</span> {l.text}</span>
@@ -391,7 +391,7 @@ export function PeopleWall() {
   return (
     <Frame className="h-full" label="The people wall: each teammate's face sized by how present they are, with Talk, Ring and Message under the selected face">
       <div className="px-4 py-2.5 text-[12px] flex items-center" style={{ borderBottom: hair, color: SOL.base02 }}>
-        People <span className="ml-auto text-[10.5px]" style={{ color: SOL.base1 }}>sized by presence</span>
+        People <span className="ml-auto text-meta" style={{ color: SOL.base1 }}>sized by presence</span>
       </div>
       <div className="px-5 py-6 flex flex-wrap items-end justify-center gap-5">
         {WALL.map(({ p, state, size }) => (
@@ -400,12 +400,12 @@ export function PeopleWall() {
               <Face p={p} size={size} ring={p.id === "theo" ? SOL.magenta : undefined} />
               <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full" style={{ backgroundColor: state === "active" ? SOL.green : state === "idle" ? SOL.yellow : SOL.base1, boxShadow: "0 0 0 2px #fffaf0" }} />
             </span>
-            <span className="text-[10.5px]" style={{ color: SOL.base01 }}>{p.name}</span>
-            <span className="text-[9.5px]" style={{ color: SOL.base1 }}>{state}</span>
+            <span className="text-meta" style={{ color: SOL.base01 }}>{p.name}</span>
+            <span className="text-meta" style={{ color: SOL.base1 }}>{state}</span>
           </div>
         ))}
       </div>
-      <div className="mx-4 mb-4 rounded-lg px-3 py-2.5 flex flex-wrap items-center gap-2 text-[11.5px]" style={{ border: hair, backgroundColor: "#fdf6e3" }}>
+      <div className="mx-4 mb-4 rounded-lg px-3 py-2.5 flex flex-wrap items-center gap-2 text-meta" style={{ border: hair, backgroundColor: "#fdf6e3" }}>
         <Face p={PEOPLE[1]} size={20} />
         <span style={{ color: SOL.base02 }}>Theo</span>
         <span className="ml-auto flex gap-1.5">
@@ -424,7 +424,7 @@ export function WalkieBurst() {
     <Frame className="h-full" label="A walkie burst in a DM: the words appear while they are spoken and the message lands with the voice recording">
       <div className="px-4 py-2.5 text-[12px] flex items-center gap-2" style={{ borderBottom: hair, color: SOL.base02 }}>
         <Face p={PEOPLE[2]} size={18} /> Priya
-        <span className="ml-auto flex items-center gap-1 text-[10.5px]" style={{ color: SOL.base1 }}>
+        <span className="ml-auto flex items-center gap-1 text-meta" style={{ color: SOL.base1 }}>
           Talk <KeyCap size="xs">Ctrl</KeyCap><KeyCap size="xs">Shift</KeyCap><KeyCap size="xs">Space</KeyCap>
         </span>
       </div>
@@ -432,9 +432,9 @@ export function WalkieBurst() {
         <div className="flex gap-2.5">
           <Face p={PEOPLE[2]} size={22} />
           <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 text-[11px]">
+            <div className="flex items-center gap-2 text-meta">
               <span className="font-semibold" style={{ color: SOL.violet }}>Priya</span>
-              <span className="flex items-center gap-1 rounded-full px-1.5 text-[9.5px]" style={{ backgroundColor: "rgba(220,50,47,0.1)", color: SOL.red }}>
+              <span className="flex items-center gap-1 rounded-full px-1.5 text-meta" style={{ backgroundColor: "rgba(220,50,47,0.1)", color: SOL.red }}>
                 <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: SOL.red }} /> talking
               </span>
             </div>
@@ -448,12 +448,12 @@ export function WalkieBurst() {
                   <span key={i} className="w-[3px] rounded-full" style={{ height: `${h * 100}%`, backgroundColor: SOL.violet, "--i": i } as CSSProperties} />
                 ))}
               </span>
-              <span className="text-[10.5px]" style={{ color: SOL.base01 }}>0:06</span>
+              <span className="text-meta" style={{ color: SOL.base01 }}>0:06</span>
             </div>
           </div>
         </div>
         <div className="flex justify-end">
-          <span className="rounded-md px-2.5 py-1 text-[11px]" style={{ border: `1px solid ${SOL.magenta}`, color: SOL.magenta }}>Join live</span>
+          <span className="rounded-md px-2.5 py-1 text-meta" style={{ border: `1px solid ${SOL.magenta}`, color: SOL.magenta }}>Join live</span>
         </div>
       </div>
     </Frame>

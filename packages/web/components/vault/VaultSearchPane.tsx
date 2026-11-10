@@ -109,7 +109,7 @@ const FileGroup = memo(function FileGroup({
           </span>
         </button>
         {result.matches.length > 0 && (
-          <span className="text-[10px] text-sol-text-dim tabular-nums">{result.matches.length}</span>
+          <span className="text-meta text-sol-text-dim tabular-nums">{result.matches.length}</span>
         )}
       </div>
       {shown.map((match, i) => (
@@ -118,7 +118,7 @@ const FileGroup = memo(function FileGroup({
           type="button"
           onClick={() => onNavigate(result.path, match.line)}
           title={match.headingPath.join(" › ") || undefined}
-          className="w-full text-left pl-7 pr-2 py-[3px] text-[11px] leading-[1.45] text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text rounded-sm"
+          className="w-full text-left pl-7 pr-2 py-[3px] text-meta leading-[1.45] text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text rounded-sm"
         >
           <span className="line-clamp-3">
             <Highlighted match={match} />
@@ -129,7 +129,7 @@ const FileGroup = memo(function FileGroup({
         <button
           type="button"
           onClick={() => setShowAll(true)}
-          className="pl-7 pr-2 py-[3px] text-[10px] text-sol-text-dim hover:text-sol-cyan"
+          className="pl-7 pr-2 py-[3px] text-meta text-sol-text-dim hover:text-sol-cyan"
         >
           {hidden} more match{hidden === 1 ? "" : "es"}
         </button>
@@ -138,7 +138,7 @@ const FileGroup = memo(function FileGroup({
         <button
           type="button"
           onClick={() => setShowAll(false)}
-          className="pl-7 pr-2 py-[3px] text-[10px] text-sol-text-dim hover:text-sol-cyan"
+          className="pl-7 pr-2 py-[3px] text-meta text-sol-text-dim hover:text-sol-cyan"
         >
           Show less
         </button>
@@ -149,7 +149,7 @@ const FileGroup = memo(function FileGroup({
 
 function TeachingState() {
   return (
-    <div className="px-3 py-6 text-[11px] leading-5 text-sol-text-dim">
+    <div className="px-3 py-6 text-meta leading-5 text-sol-text-dim">
       <div className="text-sol-text-muted mb-2">Search every note in this vault.</div>
       <div className="mb-1">Narrow it with operators:</div>
       <ul className="space-y-0.5">
@@ -308,7 +308,7 @@ export const VaultSearchPane = memo(function VaultSearchPane({
       </div>
 
       {results && results.length > 0 && (
-        <div className="flex items-center gap-2 px-3 py-1 border-b border-sol-border/20 text-[10px] uppercase tracking-wide text-sol-text-dim">
+        <div className="flex items-center gap-2 px-3 py-1 border-b border-sol-border/20 text-mark uppercase tracking-wide text-sol-text-dim">
           <span className="tabular-nums">
             {totalMatches > 0 ? `${totalMatches} match${totalMatches === 1 ? "" : "es"} in ` : ""}
             {results.length} note{results.length === 1 ? "" : "s"}
@@ -328,7 +328,7 @@ export const VaultSearchPane = memo(function VaultSearchPane({
         {results === null ? (
           <TeachingState />
         ) : results.length === 0 ? (
-          <div className="px-3 py-6 text-[11px] leading-5 text-sol-text-dim text-center">
+          <div className="px-3 py-6 text-meta leading-5 text-sol-text-dim text-center">
             No notes match <span className="text-sol-text-muted">{query.trim()}</span>.
             <div className="mt-1">Try fewer words, or drop an operator.</div>
           </div>

@@ -96,7 +96,7 @@ export function PassDecision({ decisionId, open, onOpenChange, onPassed, keys = 
             <FilterOptionList options={options} value="" onChange={pick} searchable />
           ) : (
             <form className="flex flex-col gap-2 p-2" onSubmit={(e) => { e.preventDefault(); send(); }} data-decision-handoff-form={step.kind}>
-              <div className="flex items-center gap-1.5 text-[11px] text-sol-text-dim">
+              <div className="flex items-center gap-1.5 text-meta text-sol-text-dim">
                 <span className={escalating ? "text-sol-orange" : ""}>{escalating ? "Escalate to" : "Pass to"}</span>
                 <span className="text-sol-text truncate">{escalating ? (upTo.join(", ") || "nobody above you") : step.to.label}</span>
               </div>
@@ -110,7 +110,7 @@ export function PassDecision({ decisionId, open, onOpenChange, onPassed, keys = 
                 aria-label={escalating ? "Why it goes up" : "Note"}
                 className="w-full resize-none rounded border border-sol-border bg-sol-bg-alt px-2 py-1.5 text-[12px] text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-blue"
               />
-              <div className="flex items-center justify-end gap-2 text-[11px]">
+              <div className="flex items-center justify-end gap-2 text-meta">
                 <button type="button" onClick={() => (escalating ? setOpen(false) : setStep({ kind: "pick" }))} className="text-sol-text-dim hover:text-sol-text">{escalating ? "Cancel" : "Back"}</button>
                 <button type="submit" disabled={!canSend} className={`flex items-center gap-1.5 px-2 py-1 rounded border ${escalating ? "border-sol-orange/40 text-sol-orange" : "border-sol-blue/40 text-sol-blue"} disabled:opacity-40`}>
                   {escalating ? "Escalate" : "Pass"}<KeyCap size="xs">↵</KeyCap>

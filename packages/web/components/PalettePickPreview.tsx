@@ -43,7 +43,7 @@ export function PalettePickPreview({ preview }: { preview: PalettePick["preview"
       <div className="min-w-0 flex-1">
         <div className="truncate text-xs font-medium text-sol-text" title={preview.title}>{preview.title}</div>
         {preview.text && <p className="mt-1 line-clamp-2 break-words text-xs leading-relaxed text-sol-text-muted [overflow-wrap:anywhere]">{preview.text}</p>}
-        <div className="mt-1 truncate text-[10px] text-sol-text-dim" title={preview.url}>{preview.url.replace(/^https?:\/\//, "")}</div>
+        <div className="mt-1 truncate text-meta text-sol-text-dim" title={preview.url}>{preview.url.replace(/^https?:\/\//, "")}</div>
       </div>
     </div>
   );

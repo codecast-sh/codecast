@@ -21,7 +21,7 @@ export function DeviceShareControl({ d, teamId }: { d: Device; teamId?: string }
   // machine as themselves instead of borrowing this login.
   const onMachine = useInboxStore((s) => teamMachineOfDevice(s.teamMachines, d.device_id, s.currentUser?._id));
   if (onMachine) {
-    return <span className="text-[11px] text-sol-text-muted" data-device-team-machine>{onMachine.team_name} team machine</span>;
+    return <span className="text-meta text-sol-text-muted" data-device-team-machine>{onMachine.team_name} team machine</span>;
   }
   if (teams.length === 0) return null;
 
@@ -79,7 +79,7 @@ export function DeviceShareControl({ d, teamId }: { d: Device; teamId?: string }
       }`}
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <span className="flex items-center gap-1.5 text-[11px] font-medium text-sol-text-muted">
+        <span className="flex items-center gap-1.5 text-meta font-medium text-sol-text-muted">
           {openTo.length ? null : <Lock className="h-3 w-3" />}
           Team access
         </span>
@@ -87,7 +87,7 @@ export function DeviceShareControl({ d, teamId }: { d: Device; teamId?: string }
           {pills}
         </div>
       </div>
-      <p className="mt-1.5 text-[11px] leading-snug text-sol-text-dim">
+      <p className="mt-1.5 text-meta leading-snug text-sol-text-dim">
         {openTo.length ? (
           <>
             {listTeamNames(openTo)} can start sessions here. They run as you, with this machine&apos;s logins and

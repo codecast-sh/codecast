@@ -52,7 +52,7 @@ export function SubagentFleetChip({ session }: { session: FleetRow }) {
     return (
       <span
         data-fleet-chip="queued"
-        className="inline-flex shrink-0 text-[9px] font-mono text-sol-violet"
+        className="inline-flex shrink-0 text-meta font-mono text-sol-violet"
         title="Waiting for a subagent slot. It starts when a running worker of this session or machine ends done, blocked or killed (cast config subagents.per_session / per_machine)."
       >
         {queuedLabel(ahead)}
@@ -71,7 +71,7 @@ export function SubagentFleetChip({ session }: { session: FleetRow }) {
     failed: `Could not merge${merge.reason ? `: ${merge.reason}` : ""}. The worktree keeps the work.`,
   }[merge.state] + files;
   return (
-    <span data-fleet-chip={merge.state} className={`inline-flex shrink-0 text-[9px] font-mono ${MERGE_TONE[merge.state]}`} title={title}>
+    <span data-fleet-chip={merge.state} className={`inline-flex shrink-0 text-meta font-mono ${MERGE_TONE[merge.state]}`} title={title}>
       {mergeBackLabel(merge)}
     </span>
   );

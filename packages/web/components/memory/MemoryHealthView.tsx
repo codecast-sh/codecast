@@ -22,7 +22,7 @@ function Row({ children, why }: { children: ReactNode; why: string }) {
   return (
     <li className="flex items-baseline gap-3 px-4 py-1.5 border-b border-sol-border/20 last:border-0">
       <span className="flex-1 min-w-0 truncate">{children}</span>
-      <span className="font-mono text-[10.5px] text-sol-text-dim truncate max-w-[45%]">{why}</span>
+      <span className="font-mono text-meta text-sol-text-dim truncate max-w-[45%]">{why}</span>
     </li>
   );
 }

@@ -175,7 +175,7 @@ export function AgentToolSetupPanel({
     const left = steps.filter((st) => !st.done);
     return (
       <div data-cc-agent-setup className={`${className} space-y-1.5`}>
-        <div className="flex items-center gap-1.5 text-[11.5px] text-sol-yellow">
+        <div className="flex items-center gap-1.5 text-meta text-sol-yellow">
           {setup.checking || setup.waiting ? <Loader2 className="w-3 h-3 animate-spin" /> : null}
           <span>
             {setup.checking
@@ -186,12 +186,12 @@ export function AgentToolSetupPanel({
           </span>
         </div>
         {!setup.checking && (
-          <div className="flex flex-wrap gap-1.5 text-[11.5px]">
+          <div className="flex flex-wrap gap-1.5 text-meta">
             {/* One button per action: both grants open the same System Settings flow. */}
             {left.filter((st, i) => st.action && left.findIndex((o) => o.action?.label === st.action!.label) === i).map((st) => <span key={st.label}>{action(st)}</span>)}
           </div>
         )}
-        {setup.error && <p className="text-[11px] text-sol-red/90">{setup.error}</p>}
+        {setup.error && <p className="text-meta text-sol-red/90">{setup.error}</p>}
       </div>
     );
   }
@@ -200,7 +200,7 @@ export function AgentToolSetupPanel({
     <div data-cc-agent-setup className={`${className} border-l-2 border-sol-cyan/50 pl-2.5 py-1 space-y-2 max-w-xl`}>
       <div className="flex items-baseline gap-2">
         <span className="text-[13px] text-sol-text">{TITLE[tool]}</span>
-        {machineName && <span className="text-[11px] text-sol-text-dim">on {machineName}</span>}
+        {machineName && <span className="text-meta text-sol-text-dim">on {machineName}</span>}
         <button
           type="button"
           aria-label="Check again"
@@ -216,7 +216,7 @@ export function AgentToolSetupPanel({
           const current = i === next && !setup.checking;
           return (
             <li key={st.label} className="flex items-start gap-2 text-[12px]">
-              <span className={`mt-[1px] shrink-0 inline-flex items-center justify-center w-4 h-4 rounded-full border text-[10px] font-mono ${st.done ? "border-sol-green/60 text-sol-green" : current ? "border-sol-cyan/70 text-sol-cyan" : "border-sol-border text-sol-text-dim"}`}>
+              <span className={`mt-[1px] shrink-0 inline-flex items-center justify-center w-[18px] h-[18px] rounded-full border text-mark font-mono ${st.done ? "border-sol-green/60 text-sol-green" : current ? "border-sol-cyan/70 text-sol-cyan" : "border-sol-border text-sol-text-dim"}`}>
                 {st.done ? <Check className="w-2.5 h-2.5" strokeWidth={3} /> : i + 1}
               </span>
               <span className="min-w-0 flex-1">
@@ -229,9 +229,9 @@ export function AgentToolSetupPanel({
         })}
       </ol>
       {setup.waiting && tool === "computer" && (
-        <p className="text-[11px] text-sol-text-dim">Turn on "codecast computer" in the pane that opened{machineName ? ` on ${machineName}` : ""}. This card updates when it lands.</p>
+        <p className="text-meta text-sol-text-dim">Turn on "codecast computer" in the pane that opened{machineName ? ` on ${machineName}` : ""}. This card updates when it lands.</p>
       )}
-      {setup.error && <p className="text-[11px] text-sol-red/90">{setup.error}</p>}
+      {setup.error && <p className="text-meta text-sol-red/90">{setup.error}</p>}
     </div>
   );
 }

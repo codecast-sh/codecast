@@ -30,7 +30,7 @@ function PropValue({ value }: { value: unknown }) {
         {value.map((v, i) => (
           <span
             key={i}
-            className="px-1.5 rounded-full text-[11px] border border-sol-border/40 bg-sol-bg-alt/60 text-sol-text-muted"
+            className="px-1.5 rounded-full text-meta border border-sol-border/40 bg-sol-bg-alt/60 text-sol-text-muted"
           >
             <PropValue value={v} />
           </span>
@@ -101,7 +101,7 @@ export const VaultProperties = memo(function VaultProperties({
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="flex-1 flex items-center gap-1 text-left px-2.5 py-1.5 text-[11px] text-sol-text-dim hover:text-sol-text-muted"
+          className="flex-1 flex items-center gap-1 text-left px-2.5 py-1.5 text-meta text-sol-text-dim hover:text-sol-text-muted"
         >
           <ChevronRight className={`w-3 h-3 transition-transform ${open ? "rotate-90" : ""}`} />
           Properties
@@ -111,7 +111,7 @@ export const VaultProperties = memo(function VaultProperties({
           <button
             type="button"
             onClick={() => setShowSource((v) => !v)}
-            className="px-2.5 py-1.5 text-[10px] text-sol-text-dim hover:text-sol-text-muted"
+            className="px-2.5 py-1.5 text-meta text-sol-text-dim hover:text-sol-text-muted"
           >
             {showSource ? "table" : "source"}
           </button>
@@ -119,7 +119,7 @@ export const VaultProperties = memo(function VaultProperties({
       </div>
       {open &&
         (showSource || !entries.length ? (
-          <pre className="px-3 pb-2 text-[11px] text-sol-text-muted whitespace-pre-wrap font-mono">{raw}</pre>
+          <pre className="px-3 pb-2 text-meta text-sol-text-muted whitespace-pre-wrap font-mono">{raw}</pre>
         ) : (
           <table className="w-full text-[12px] mb-1">
             <tbody>

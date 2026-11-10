@@ -41,7 +41,7 @@ function Packet({ d, len, kind, color, n = 1, label }: { d: number; len: number;
   return (
     <span className="cl-packet" style={{ ...style, ...(horiz ? { top: -4 } : { left: -4 }) }}>
       <span className="block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: color, boxShadow: `0 0 10px ${color}` }} />
-      {label ? <span className="absolute whitespace-nowrap font-mono text-[10px] left-4 -top-1" style={{ color }}>{label}</span> : null}
+      {label ? <span className="absolute whitespace-nowrap font-mono text-meta left-4 -top-1" style={{ color }}>{label}</span> : null}
     </span>
   );
 }
@@ -53,11 +53,11 @@ function Wire({ vertical }: { vertical: boolean }) {
       <div className="lg:hidden relative h-28 flex justify-center gap-16" aria-hidden>
         <div className="relative w-px h-full" style={{ backgroundColor: "rgba(38,139,210,.45)" }}>
           <Packet kind="down" d={1.2} len={1.4} color={BLUE} />
-          <span className="absolute top-1/2 -translate-y-1/2 right-3 font-mono text-[11px] whitespace-nowrap" style={{ color: SOL.base01 }}>checkout ↓</span>
+          <span className="absolute top-1/2 -translate-y-1/2 right-3 font-mono text-meta whitespace-nowrap" style={{ color: SOL.base01 }}>checkout ↓</span>
         </div>
         <div className="relative w-px h-full" style={{ backgroundColor: "rgba(42,161,152,.45)" }}>
           <Packet kind="up" d={5.4} len={1.3} color={SOL.cyan} n="infinite" />
-          <span className="absolute top-1/2 -translate-y-1/2 left-3 font-mono text-[11px] whitespace-nowrap" style={{ color: SOL.base01 }}>↑ edits</span>
+          <span className="absolute top-1/2 -translate-y-1/2 left-3 font-mono text-meta whitespace-nowrap" style={{ color: SOL.base01 }}>↑ edits</span>
         </div>
       </div>
     );
@@ -65,7 +65,7 @@ function Wire({ vertical }: { vertical: boolean }) {
   return (
     <div className="hidden lg:flex flex-col justify-center gap-28 px-2" aria-hidden>
       <div>
-        <div className="mb-2.5 flex justify-center"><span className="font-mono text-[11px] px-2 py-0.5 rounded-full border" style={{ color: BLUE, borderColor: "rgba(38,139,210,.45)", backgroundColor: SOL.base3 }}>checkout →</span></div>
+        <div className="mb-2.5 flex justify-center"><span className="font-mono text-meta px-2 py-0.5 rounded-full border" style={{ color: BLUE, borderColor: "rgba(38,139,210,.45)", backgroundColor: SOL.base3 }}>checkout →</span></div>
         <div className="relative h-[2px] rounded" style={{ backgroundImage: `linear-gradient(90deg, ${BLUE}, rgba(38,139,210,.35))` }}>
           <Packet kind="out" d={1.2} len={1.5} color={BLUE} />
         </div>
@@ -74,7 +74,7 @@ function Wire({ vertical }: { vertical: boolean }) {
         <div className="relative h-[2px] rounded" style={{ backgroundImage: `linear-gradient(90deg, rgba(42,161,152,.35), ${SOL.cyan})` }}>
           <Packet kind="back" d={5.5} len={1.3} color={SOL.cyan} n="infinite" />
         </div>
-        <div className="mt-2.5 flex justify-center"><span className="font-mono text-[11px] px-2 py-0.5 rounded-full border" style={{ color: SOL.cyan, borderColor: "rgba(42,161,152,.5)", backgroundColor: SOL.base03 }}>← edits</span></div>
+        <div className="mt-2.5 flex justify-center"><span className="font-mono text-meta px-2 py-0.5 rounded-full border" style={{ color: SOL.cyan, borderColor: "rgba(42,161,152,.5)", backgroundColor: SOL.base03 }}>← edits</span></div>
       </div>
     </div>
   );
@@ -118,7 +118,7 @@ function LaptopSide() {
             >
               <span style={{ color: r.dir ? SOL.base01 : SOL.base02 }}>{r.path}</span>
               {r.tag ? (
-                <span className="ml-auto text-[11px]" style={{ color: r.tag.startsWith("+") ? SOL.green : r.tag === "M" ? SOL.yellow : SOL.base1 }}>
+                <span className="ml-auto text-meta" style={{ color: r.tag.startsWith("+") ? SOL.green : r.tag === "M" ? SOL.yellow : SOL.base1 }}>
                   {r.tag}
                 </span>
               ) : null}
@@ -181,7 +181,7 @@ export function HeroDiptych() {
         <Wire vertical />
         <div className="cl-night -mx-5 px-5 sm:-mx-8 sm:px-8 py-10 lg:!bg-none lg:!bg-transparent lg:mx-0 lg:px-0 lg:py-16 lg:pl-6">
           <HostSide />
-          <p className="mt-5 font-mono text-[11.5px] leading-5" style={{ color: SOL.base01 }}>One cloud session, condensed: your laptop on the left, your host on the right, one conversation throughout.</p>
+          <p className="mt-5 font-mono text-meta leading-5" style={{ color: SOL.base01 }}>One cloud session, condensed: your laptop on the left, your host on the right, one conversation throughout.</p>
         </div>
       </div>
     </div>

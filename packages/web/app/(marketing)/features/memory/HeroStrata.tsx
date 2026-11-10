@@ -66,10 +66,10 @@ export function HeroStrata() {
       {/* The file */}
       <div className="mm-anim mm-rise relative rounded-t-xl overflow-hidden" style={{ backgroundColor: SOL.base03, border: "1px solid #0a4352", "--d": ".1s" } as CSSProperties}>
         <div className="flex items-center gap-2 px-4 py-2" style={{ backgroundColor: SOL.base02, borderBottom: "1px solid #0a4352" }}>
-          <span className="text-[11px] font-mono truncate" style={{ color: SOL.base1 }}>src/webhooks/retry.ts</span>
-          <span className="ml-auto shrink-0 text-[11px] font-mono" style={{ color: SOL.base01 }}>Blame: <span style={{ color: "#c9cbff" }}>Sessions</span></span>
+          <span className="text-meta font-mono truncate" style={{ color: SOL.base1 }}>src/webhooks/retry.ts</span>
+          <span className="ml-auto shrink-0 text-meta font-mono" style={{ color: SOL.base01 }}>Blame: <span style={{ color: "#c9cbff" }}>Sessions</span></span>
         </div>
-        <div className="relative pt-2 font-mono text-[11px] sm:text-[11.5px] leading-[1.95]">
+        <div className="relative pt-2 font-mono text-meta sm:text-meta leading-[1.95]">
           <span aria-hidden className="pointer-events-none absolute inset-y-0 right-0 w-14 z-10" style={{ background: `linear-gradient(90deg, transparent, ${SOL.base03})` }} />
           {ROWS.map((r, i) => (
             <div key={r.n} className={`relative flex whitespace-pre pl-10 pr-3 ${r.hot ? "mm-anim mm-glow" : ""}`} style={r.hot ? ({ backgroundColor: "rgba(108,113,196,.14)", "--d": ".9s" } as CSSProperties) : undefined}>
@@ -91,7 +91,7 @@ export function HeroStrata() {
       {/* Ground line between the code and what lies under it */}
       <div className="relative h-7 flex items-center" style={{ backgroundColor: SOL.base3, borderLeft: "1px solid transparent" }}>
         <Seg d={1.5} />
-        <span className="ml-10 font-mono text-[10.5px]" style={{ color: SOL.base1 }}>sessions under this file, newest first</span>
+        <span className="ml-10 font-mono text-meta" style={{ color: SOL.base1 }}>sessions under this file, newest first</span>
       </div>
 
       {/* The strata */}
@@ -102,7 +102,7 @@ export function HeroStrata() {
             <div key={s.id} className="mm-anim mm-settle relative" style={{ backgroundColor: BAND_TINTS[i], "--d": `${0.3 + i * 0.12}s`, opacity: s.past ? 0.62 : 1 } as CSSProperties}>
               {above && <Seg d={1.6 + i * 0.15} />}
               {s.target && <><Seg d={1.75} top={0} bottom="calc(100% - 16px)" /><Stop d={2} /></>}
-              <div className="flex items-baseline gap-2 sm:gap-3 pl-10 pr-3 py-2.5 font-mono text-[11px] sm:text-[12px]">
+              <div className="flex items-baseline gap-2 sm:gap-3 pl-10 pr-3 py-2.5 font-mono text-meta sm:text-[12px]">
                 <span className="font-semibold shrink-0 whitespace-nowrap" style={{ color: s.target ? VIOLET : SOL.base01 }}>{s.id}</span>
                 <span className="truncate min-w-0" style={{ color: s.target ? SOL.base03 : SOL.base00, fontWeight: s.target ? 600 : 400 }}>{s.title}</span>
                 <span className="ml-auto shrink-0 hidden sm:inline" style={{ color: SOL.base1 }}>{s.who} · {s.agent}</span>
@@ -131,7 +131,7 @@ function Msg({ d, line, who, tone, children }: { d: number; line: number; who: s
   const c = revised ? SOL.orange : VIOLET;
   return (
     <div className="mm-anim mm-open rounded-md px-3 py-2 text-[12.5px] sm:text-[13px] leading-[1.55]" style={{ backgroundColor: SOL.base3, border: `1px solid color-mix(in srgb, ${c} 30%, transparent)`, boxShadow: "0 8px 20px -14px rgba(0,43,54,.35)", "--d": `${d}s` } as CSSProperties}>
-      <div className="flex items-center gap-2 mb-0.5 font-mono text-[10.5px]">
+      <div className="flex items-center gap-2 mb-0.5 font-mono text-meta">
         <span className="px-1.5 rounded" style={{ color: SOL.base3, backgroundColor: c }}>msg {line}</span>
         <span style={{ color: SOL.base1 }}>{who}</span>
         {revised && <span style={{ color: SOL.orange }}>later: changed the answer</span>}

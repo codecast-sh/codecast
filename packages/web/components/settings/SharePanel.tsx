@@ -213,21 +213,21 @@ export function SharePanel({ name, paths, isRepository = false, local, syncsOnSh
             onSinceChange={setSince}
             controls="scope"
           />
-          {paths.length > 1 && <p className="text-[11px] text-sol-text-dim">Covers all {paths.length} checkouts of this repository and their worktrees.</p>}
+          {paths.length > 1 && <p className="text-meta text-sol-text-dim">Covers all {paths.length} checkouts of this repository and their worktrees.</p>}
           {syncsOnShare && (
             <p className="text-xs text-sol-text-muted">
               Sharing starts syncing this folder, past sessions included. The choice above decides which of them {team.name} sees.
             </p>
           )}
           {(!list || list.rows.length > 0) && <div className="rounded-md border border-sol-border/50">
-            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-sol-border/40 px-3 py-1.5 text-[11px] text-sol-text-dim">
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-sol-border/40 px-3 py-1.5 text-meta text-sol-text-dim">
               <span className="shrink-0">Untick a session to keep it private</span>
               <input
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
                 placeholder="Filter by title"
                 aria-label="Filter sessions by title"
-                className="min-w-0 flex-1 basis-[8rem] bg-transparent text-right text-[11px] text-sol-text placeholder:text-sol-text-dim focus:outline-none"
+                className="min-w-0 flex-1 basis-[8rem] bg-transparent text-right text-meta text-sol-text placeholder:text-sol-text-dim focus:outline-none"
               />
               <span className="shrink-0 tabular-nums">
                 {list ? (impact.exact && impact.sessions > list.rows.length ? `newest ${list.rows.length} of ${formatSessionCount(impact.sessions)}` : formatSessionCount(list.rows.length)) : "loading"}
@@ -250,7 +250,7 @@ export function SharePanel({ name, paths, isRepository = false, local, syncsOnSh
                     />
                     <span className={`min-w-0 flex-1 truncate ${open ? "text-sol-text" : "text-sol-text-dim"}`}>{row.title || "Untitled"}</span>
                     <span className="shrink-0 text-sol-text-dim tabular-nums">{row.started_at != null ? formatShortDate(row.started_at) : ""}</span>
-                    <span className="w-24 shrink-0 text-right text-[10px] text-sol-text-dim">
+                    <span className="w-28 shrink-0 text-right text-meta text-sol-text-dim">
                       {fate === "hidden" ? "hidden by hand" : fate === "older" ? "before start" : fate === "kept" ? "stays private" : ""}
                     </span>
                   </li>
@@ -261,7 +261,7 @@ export function SharePanel({ name, paths, isRepository = false, local, syncsOnSh
               <button
                 type="button"
                 onClick={() => setLimit((n) => Math.min(n + 100, 1000))}
-                className="w-full border-t border-sol-border/40 px-3 py-1.5 text-left text-[11px] text-sol-cyan hover:bg-sol-bg-highlight/30"
+                className="w-full border-t border-sol-border/40 px-3 py-1.5 text-left text-meta text-sol-cyan hover:bg-sol-bg-highlight/30"
               >
                 Show 100 older sessions
               </button>

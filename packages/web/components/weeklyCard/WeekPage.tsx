@@ -6,7 +6,7 @@
 // syncs in, and every edit after that is a store action.
 import { useState } from "react";
 import { useAction } from "convex/react";
-import { Check, Link2, RefreshCw } from "lucide-react";
+import { Check, Link2, RefreshCw, X } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { sharePath } from "@codecast/shared/entities";
 import { localTimeZone } from "@codecast/shared/time";
@@ -17,6 +17,7 @@ import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { useSyncWeeklyCards } from "../../hooks/useSyncWeeklyCards";
 import { useMountEffect } from "../../hooks/useMountEffect";
+import { useCopy } from "../../hooks/useCopy";
 import { shareOrigin } from "../../lib/utils";
 import { track } from "../../lib/analytics";
 import { Switch } from "../ui/switch";
@@ -187,22 +188,21 @@ const TARGETS = [
 function ShareRow({ token, stats }: { token: string; stats: WeekCardStats }) {
   const url = `${shareOrigin()}${sharePath("card", token)}`;
   const text = shareText(stats);
-  const [copied, setCopied] = useState(false);
+  // The shared copy hook says Copied only when the clipboard took it, and Copy failed when it refused.
+  const { state: copyState, copy } = useCopy();
   return (
     <div className="flex flex-wrap items-center gap-2 rounded-lg border border-sol-border bg-sol-bg-alt/40 p-2 text-[13px]" data-week-share-row>
       <a href={url} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 truncate px-2 text-sol-blue hover:underline">{url}</a>
       <button
         type="button"
         onClick={() => {
-          void navigator.clipboard?.writeText(url);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1600);
+          void copy(() => url);
           track("weekly_card_share_pressed", { target: "copy" });
         }}
         className="inline-flex h-8 items-center gap-1.5 rounded-md border border-sol-border px-3 text-sol-text hover:bg-sol-bg-alt"
       >
-        {copied ? <Check className="h-3.5 w-3.5 text-sol-green" /> : <Link2 className="h-3.5 w-3.5" />}
-        {copied ? "Copied" : "Copy link"}
+        {copyState === "copied" ? <Check className="h-3.5 w-3.5 text-sol-green" /> : copyState === "failed" ? <X className="h-3.5 w-3.5 text-sol-red" /> : <Link2 className="h-3.5 w-3.5" />}
+        <span aria-live="polite">{copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy failed" : "Copy link"}</span>
       </button>
       {TARGETS.map((t) => (
         <a

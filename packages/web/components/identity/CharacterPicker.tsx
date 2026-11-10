@@ -111,13 +111,13 @@ export function CharacterPicker({ rows, onDone }: { rows: Array<IdentityRow & Re
   return (
     <div className="p-3 w-[19rem]" onClick={(e) => e.stopPropagation()}>
       <div className="flex items-center justify-between mb-2">
-        <span className="text-[11px] uppercase tracking-wide text-sol-text-dim">
+        <span className="text-mark uppercase tracking-wide text-sol-text-dim">
           {many ? `Character for ${rows.length} sessions` : "Character"}
         </span>
         <button
           type="button"
           onClick={reset}
-          className="inline-flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text"
+          className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text"
           title="Take the character off; the card goes back to its title"
         >
           <RotateCcw className="w-3 h-3" /> Remove
@@ -177,7 +177,7 @@ export function CharacterPicker({ rows, onDone }: { rows: Array<IdentityRow & Re
       )}
 
       {many && (
-        <div className="mt-3 flex items-center gap-3 text-[11px] text-sol-text-muted">
+        <div className="mt-3 flex items-center gap-3 text-meta text-sol-text-muted">
           <label className="inline-flex items-center gap-1.5 cursor-pointer">
             <input type="radio" checked={!spread} onChange={() => setSpread(false)} className="accent-sol-cyan" />
             One face for all
@@ -190,8 +190,8 @@ export function CharacterPicker({ rows, onDone }: { rows: Array<IdentityRow & Re
       )}
 
       <div className="mt-3 flex items-center justify-between gap-2">
-        <span className="text-[10px] text-sol-text-dim">Changes apply as you pick</span>
-        <Button type="button" size="sm" variant="cyan" onClick={done} className="h-7 px-3 text-[11px]">
+        <span className="text-meta text-sol-text-dim">Changes apply as you pick</span>
+        <Button type="button" size="sm" variant="cyan" onClick={done} className="h-7 px-3 text-meta">
           Done
         </Button>
       </div>

@@ -30,7 +30,7 @@ const KINDS: SecretKind[] = ["key", "login", "file", "signin"];
 /** A name of the kind's own shape, so the empty field shows what fits. */
 const NAME_EXAMPLE: Record<SecretKind, string> = { key: "stripe-test", login: "github-bot", file: "gcp-service-account", signin: "vercel" };
 /** A line under a form row's field, in the field's column (Row's 6.5rem label plus its gap). */
-const UNDER_FIELD = "-mt-1 pb-1 pl-[calc(6.5rem+0.75rem)] text-[11.5px]";
+const UNDER_FIELD = "-mt-1 pb-1 pl-[calc(6.5rem+0.75rem)] text-meta";
 
 /** Team <name> or Only me, both always named, so where a secret lands is never a guess. */
 export function ScopePicker({ scope, value, onChange }: { scope: VaultScope; value: "team" | "personal"; onChange: (v: "team" | "personal") => void }) {
@@ -179,6 +179,7 @@ function SinglePane({
 
   return (
     <div
+      className="flex min-h-0 flex-col"
       onKeyDown={(e) => {
         if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
           e.preventDefault();
@@ -227,7 +228,7 @@ function SinglePane({
         </div>
       </header>
 
-      <div className="flex flex-col px-5 py-3">
+      <div className="flex min-h-0 flex-col overflow-y-auto px-5 py-3">
         {kind === "login" && (
           <Row label="Site" align="input">
             <input value={sitesText} onChange={(e) => setSitesText(e.target.value)} placeholder="github.com (optional)" spellCheck={false} className={FIELD_MONO} />
@@ -243,7 +244,7 @@ function SinglePane({
           <Row label={kind === "file" ? "File" : "Value"} align="input">
             <ValueFields kind={kind} draft={draft} onChange={setDraft} onEnvLine={(v) => setEnvText(v)} onImport={onImport} autoFocus />
             {kind === "key" && (
-              <button type="button" onClick={() => onImport("")} className="mt-1 text-[11.5px] text-sol-text-dim hover:text-sol-text">
+              <button type="button" onClick={() => onImport("")} className="mt-1 text-meta text-sol-text-dim hover:text-sol-text">
                 Many keys? Import a .env
               </button>
             )}
@@ -291,7 +292,7 @@ function SinglePane({
               data-vault-name
             />
             {showNameProblem ? (
-              <div className="mt-0.5 text-[11.5px] text-sol-red" data-vault-name-state>
+              <div className="mt-0.5 text-meta text-sol-red" data-vault-name-state>
                 {nameProblem}
               </div>
             ) : null}
@@ -368,6 +369,7 @@ function ImportPane({ initialText, scope, where, setWhere, rows, onClose }: { in
 
   return (
     <div
+      className="flex min-h-0 flex-col"
       onKeyDown={(e) => {
         if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
           e.preventDefault();
@@ -390,7 +392,7 @@ function ImportPane({ initialText, scope, where, setWhere, rows, onClose }: { in
           </span>
         )}
       </header>
-      <div className="flex flex-col gap-2 px-5 py-3">
+      <div className="flex min-h-0 flex-col gap-2 overflow-y-auto px-5 py-3">
         {!reviewing ? (
           <textarea
             value={text}
@@ -430,7 +432,7 @@ function ImportPane({ initialText, scope, where, setWhere, rows, onClose }: { in
                     className={`min-w-0 flex-1 rounded border bg-transparent px-1.5 py-0.5 font-mono text-[12px] text-sol-text-muted outline-none focus:border-sol-yellow disabled:opacity-40 ${issue ? "border-sol-red/70" : "border-transparent hover:border-sol-border"}`}
                     aria-label={`Name for ${e.key}`}
                   />
-                  <span className="w-[6rem] shrink-0 truncate text-right text-[11px]" style={{ color: issue ? "var(--sol-red)" : "var(--sol-text-dim)" }}>
+                  <span className="w-[6rem] shrink-0 truncate text-right text-meta" style={{ color: issue ? "var(--sol-red)" : "var(--sol-text-dim)" }}>
                     {issue ?? (!e.on && taken.has(e.name) ? "In Vault" : tooShort(e.value) ? "Too short" : `${e.value.length} chars`)}
                   </span>
                 </li>
@@ -441,7 +443,7 @@ function ImportPane({ initialText, scope, where, setWhere, rows, onClose }: { in
                 <span className="w-3.5 shrink-0" />
                 <span className="w-[36%] min-w-0 truncate font-mono text-sol-text-dim" title={k.key}>{k.key}</span>
                 <span className="min-w-0 flex-1 truncate text-sol-orange">{k.why}</span>
-                <span className="w-[6rem] shrink-0 text-right text-[11px] tabular-nums text-sol-text-dim">line {k.line}</span>
+                <span className="w-[6rem] shrink-0 text-right text-meta tabular-nums text-sol-text-dim">line {k.line}</span>
               </li>
             ))}
           </ul>

@@ -11,7 +11,7 @@ export function Doors() {
   const door = (title: string, cmd: string, body: string) => (
     <div className="prx-card rounded-lg border px-4 py-3" style={{ borderColor: SOL.base2, backgroundColor: PAPER }}>
       <div className="font-mono text-[13px] font-semibold" style={{ color: SOL.base03 }}>{title}</div>
-      <div className="mt-1 font-mono text-[11.5px]" style={{ color: SOL.cyan }}>{cmd}</div>
+      <div className="mt-1 font-mono text-meta" style={{ color: SOL.cyan }}>{cmd}</div>
       <div className="mt-1.5 text-[13.5px] leading-snug" style={{ color: SOL.base01 }}>{body}</div>
     </div>
   );
@@ -22,7 +22,7 @@ export function Doors() {
           <svg className="h-4 w-4" viewBox="0 0 24 24" fill={SOL.base2}><path d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.53-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.25-1.28-5.25-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.7 5.39-5.27 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5z" /></svg>
           GitHub
         </div>
-        <ul className="mt-3 space-y-1 font-mono text-[11.5px] leading-relaxed">
+        <ul className="mt-3 space-y-1 font-mono text-meta leading-relaxed">
           <li>pull_request · push</li>
           <li>pull_request_review</li>
           <li>pull_request_review_comment</li>
@@ -38,7 +38,7 @@ export function Doors() {
         <div className="flex items-center gap-2 font-mono text-[14px] font-semibold" style={{ color: SOL.base03 }}>
           <PrIcon color={SOL.cyan} /> one row per pull request
         </div>
-        <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-[11.5px]" style={{ color: SOL.base00 }}>
+        <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-1 font-mono text-meta" style={{ color: SOL.base00 }}>
           <span>state, draft, branch</span><span>checks, verdicts</span>
           <span>review threads</span><span>held notes (yours only)</span>
           <span>labels, reviewers</span><span>mergeability</span>
@@ -64,7 +64,7 @@ export function Doors() {
 
 function Arrows({ top, bottom }: { top: string; bottom: string }) {
   return (
-    <div className="flex lg:flex-col items-center justify-center gap-3 font-mono text-[10.5px]" style={{ color: SOL.base1 }} aria-hidden>
+    <div className="flex lg:flex-col items-center justify-center gap-3 font-mono text-meta" style={{ color: SOL.base1 }} aria-hidden>
       <span className="flex items-center gap-1.5"><span className="lg:hidden">↓</span>{top}<span className="hidden lg:inline">→</span></span>
       <span className="flex items-center gap-1.5"><span className="hidden lg:inline">←</span>{bottom}<span className="lg:hidden">↑</span></span>
     </div>
@@ -89,22 +89,22 @@ export function Linked() {
             <PrIcon className="h-4 w-4 mt-[2px]" />
             <span>{PR_TITLE} <span style={{ color: SOL.base1, fontWeight: 400 }}>#{PR_NUMBER}</span></span>
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11.5px]" style={{ color: SOL.base00 }}>
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-meta" style={{ color: SOL.base00 }}>
             <Face name={AUTHOR} color={PEOPLE.lena} size={16} /> {AUTHOR}
-            <span className="rounded border px-1.5 py-[1px] text-[10.5px]" style={{ borderColor: SOL.base2, backgroundColor: SOL.base3 }}>{HEAD} → {BASE}</span>
+            <span className="rounded border px-1.5 py-[1px] text-meta" style={{ borderColor: SOL.base2, backgroundColor: SOL.base3 }}>{HEAD} → {BASE}</span>
           </div>
-          <div className="mt-3 flex flex-wrap items-center gap-2 text-[11px]">
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-meta">
             <span className="inline-flex items-center gap-1.5" style={{ color: SOL.base1 }}><RadioIcon color={SOL.cyan} /> Shepherd</span>
             <SessionPill>{SESSION.title}</SessionPill>
           </div>
-          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-meta">
             <span style={{ color: SOL.base1 }}>Linked</span>
             <SessionPill>Webhook delivery audit</SessionPill>
             <SessionPill>Flaky retry test</SessionPill>
             <TaskPill>{TASK.title}</TaskPill>
           </div>
         </div>
-        <div className="flex gap-4 px-4 sm:px-5 pt-2.5 text-[11.5px]" style={{ color: SOL.base00 }}>
+        <div className="flex gap-4 px-4 sm:px-5 pt-2.5 text-meta" style={{ color: SOL.base00 }}>
           <span>Conversation</span><span>Files 4</span>
           <span className="pb-2" style={{ color: SOL.base03, borderBottom: `2px solid ${SOL.green}` }}>Commits 3</span><span>Checks 6</span>
         </div>
@@ -117,7 +117,7 @@ export function Linked() {
             </li>
           ))}
         </ul>
-        <div className="px-4 sm:px-5 py-3 text-[11px] leading-relaxed" style={{ color: SOL.base1 }}>
+        <div className="px-4 sm:px-5 py-3 text-meta leading-relaxed" style={{ color: SOL.base1 }}>
           The <C>Codecast-Session</C> trailer in each commit message shows as the session&apos;s pill.
         </div>
       </Frame>
@@ -172,7 +172,7 @@ export function Switchboard() {
                 aria-label={row.wakes ? "wakes the session" : "does not wake"}
               />
               <span className="min-w-0 flex-1 text-[14px] leading-snug" style={{ color: row.wakes ? SOL.base02 : SOL.base00 }}>{row.event}</span>
-              <span className="shrink-0 font-mono text-[10.5px]" style={{ color: row.wakes ? SOL.cyan : SOL.base1 }}>{row.wakes ? "wakes" : row.note}</span>
+              <span className="shrink-0 font-mono text-meta" style={{ color: row.wakes ? SOL.cyan : SOL.base1 }}>{row.wakes ? "wakes" : row.note}</span>
             </div>
           ))}
         </div>
@@ -184,7 +184,7 @@ export function Switchboard() {
           <p>
             <b style={{ color: SOL.base02 }}>The most urgent reason leads.</b> When several reasons wait, the briefing opens with the most urgent:
           </p>
-          <ol className="flex flex-wrap items-center gap-1.5 font-mono text-[11.5px]">
+          <ol className="flex flex-wrap items-center gap-1.5 font-mono text-meta">
             {SEVERITY.slice(0, 3).map(([key], i) => (
               <li key={key} className="flex items-center gap-1.5">
                 <span className="rounded px-1.5 py-[1px]" style={{ backgroundColor: i === 0 ? "rgba(220,50,47,0.1)" : i === 1 ? "rgba(203,75,22,0.1)" : "rgba(181,137,0,0.12)", color: i === 0 ? SOL.red : i === 1 ? SOL.orange : SOL.yellow }}>{key}</span>
@@ -206,13 +206,13 @@ function Briefing() {
   const h = (s: string) => <span style={{ color: SOL.cyan, fontWeight: 600 }}>{s}</span>;
   return (
     <div className="rounded-xl border overflow-hidden" style={{ borderColor: "rgba(42,161,152,0.4)", backgroundColor: PAPER, boxShadow: "0 18px 40px -28px rgba(0,43,54,0.45)" }}>
-      <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 font-mono text-[11px]" style={{ backgroundColor: "rgba(42,161,152,0.08)", borderBottom: "1px solid rgba(42,161,152,0.25)", color: SOL.base00 }}>
+      <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 font-mono text-meta" style={{ backgroundColor: "rgba(42,161,152,0.08)", borderBottom: "1px solid rgba(42,161,152,0.25)", color: SOL.base00 }}>
         <RadioIcon color={SOL.cyan} />
         <span style={{ color: SOL.cyan, fontWeight: 600 }}>Shepherd PR #{PR_NUMBER}</span>
         <span>{TRIGGER}</span>
         <span className="ml-auto">arrives in <SessionPill>{SESSION.id}</SessionPill> as a new turn</span>
       </div>
-      <pre className="overflow-x-auto px-4 sm:px-5 py-4 font-mono text-[11.5px] leading-[1.7] whitespace-pre-wrap" style={{ color: SOL.base02 }}>
+      <pre className="overflow-x-auto px-4 sm:px-5 py-4 font-mono text-meta leading-[1.7] whitespace-pre-wrap" style={{ color: SOL.base02 }}>
         {h(`# Shepherding ${REPO} PR #${PR_NUMBER}: ${PR_TITLE}`)}{"\n\n"}
         https://github.com/{REPO}/pull/{PR_NUMBER}{"\n"}
         {HEAD} into {BASE} at 9b04e1d{"\n"}

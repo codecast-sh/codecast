@@ -39,9 +39,9 @@ export function DeliveryFailedBlock({ notice, conversationId, timestamp }: { not
     <div data-delivery-failed className={`mb-3 rounded border-l-2 ${neverReached ? "border-sol-red/50 bg-sol-red/5" : "border-sol-orange/50 bg-sol-orange/5"}`}>
       <div className="flex min-w-0 items-center gap-2 px-3 py-1.5 text-xs">
         <AlertTriangle className={`h-3.5 w-3.5 shrink-0 ${tone}`} />
-        <span className={`shrink-0 text-[11px] font-medium uppercase tracking-wide ${tone}`}>Not delivered</span>
+        <span className={`shrink-0 text-mark font-medium uppercase tracking-wide ${tone}`}>Not delivered</span>
         <span className="shrink-0 text-sol-text-dim">{notice.writes} writes · {cause}</span>
-        {timestamp && <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>}
+        {timestamp && <span className="ml-auto shrink-0 text-meta text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>}
       </div>
       <div className="flex min-w-0 items-center gap-2 px-3 pb-1.5 text-xs">
         <button onClick={() => setOpen((o) => !o)} className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-sol-text-muted hover:text-sol-text">
@@ -54,7 +54,7 @@ export function DeliveryFailedBlock({ notice, conversationId, timestamp }: { not
           <button
             disabled={done}
             onClick={() => { action.run(); setDone(true); }}
-            className="shrink-0 rounded border border-sol-border px-2 py-0.5 text-[11px] text-sol-text hover:bg-sol-bg-alt disabled:cursor-default disabled:text-sol-text-dim disabled:hover:bg-transparent"
+            className="shrink-0 rounded border border-sol-border px-2 py-0.5 text-meta text-sol-text hover:bg-sol-bg-alt disabled:cursor-default disabled:text-sol-text-dim disabled:hover:bg-transparent"
           >
             {done ? action.doneLabel : action.label}
           </button>

@@ -547,10 +547,10 @@ function StreamChart({ events, rows, groups, sources, sourceIds, filter, range, 
           <button type="button" data-on={useVolume ? "true" : undefined} aria-pressed={useVolume} disabled={!volumeOk} title={volumeOk ? (daily ? "Events per day, from each source's counter" : "Occurrences per hour, by level") : "Volume is counted per hour; pick 6h or wider"} onClick={() => setMode("volume")}>Volume</button>
           <button type="button" data-on={!useVolume ? "true" : undefined} aria-pressed={!useVolume} onClick={() => setMode("transitions")}>Transitions</button>
         </div>
-        <span className="text-[11px] ops-dim">{what}</span>
+        <span className="text-meta ops-dim">{what}</span>
         {/* The total names its window, so a per-day label never reads as a day's count; per day also shows the average. */}
-        <span className="ops-num text-[11px]" data-ops-chart-total title={matched !== null ? "Rows matching the filter, of everything the sources counted" : undefined}>{matched !== null ? `${matched.toLocaleString()} of ${total.toLocaleString()}` : total.toLocaleString()} <span className="ops-dim">in {spanText(range.to - range.from, range.preset)}</span></span>
-        {useVolume && daily && bins.length > 1 && matched === null && <span className="ops-num text-[11px] ops-dim" data-ops-chart-avg>avg {Math.round(total / bins.length).toLocaleString()}/day</span>}
+        <span className="ops-num text-meta" data-ops-chart-total title={matched !== null ? "Rows matching the filter, of everything the sources counted" : undefined}>{matched !== null ? `${matched.toLocaleString()} of ${total.toLocaleString()}` : total.toLocaleString()} <span className="ops-dim">in {spanText(range.to - range.from, range.preset)}</span></span>
+        {useVolume && daily && bins.length > 1 && matched === null && <span className="ops-num text-meta ops-dim" data-ops-chart-avg>avg {Math.round(total / bins.length).toLocaleString()}/day</span>}
         {matched !== null && (
           <div className="ops-seg" role="group" aria-label="Bars show">
             <button type="button" data-on={!showAll ? "true" : undefined} aria-pressed={!showAll} onClick={() => setShowAll(false)} data-ops-chart-matching>Matching</button>
@@ -558,7 +558,7 @@ function StreamChart({ events, rows, groups, sources, sourceIds, filter, range, 
           </div>
         )}
         <span className="flex-1" />
-        <span className="ops-dim text-[11px] otl-hint">drag to zoom</span>
+        <span className="ops-dim text-meta otl-hint">drag to zoom</span>
       </div>
       <VolumeChart bins={drawn} range={chartRange} marks={marks} onBrush={(from, to) => setRange({ from, to, preset: null })} height={84} label="stream" dated={dated} empty={`No ${what.split(" per ")[0].toLowerCase()} in this window`} />
     </section>

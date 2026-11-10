@@ -188,8 +188,8 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
           {characters && <Field label="Face" hint={avatar ? "chosen" : "from the handle"}>
             <div className="flex items-center gap-2.5">
               <RoleFace role={{ avatar, handle: effHandle, name }} size={36} />
-              <button type="button" onClick={() => setFaceOpen((o) => !o)} className="text-[11.5px] underline-offset-2 hover:underline" style={{ color: "var(--sol-text-muted)" }}>{faceOpen ? "Close" : "Choose a face"}</button>
-              {avatar && <button type="button" onClick={() => setAvatar(undefined)} className="text-[11px] underline-offset-2 hover:underline" style={{ color: "var(--sol-text-dim)" }}>reset to default</button>}
+              <button type="button" onClick={() => setFaceOpen((o) => !o)} className="text-meta underline-offset-2 hover:underline" style={{ color: "var(--sol-text-muted)" }}>{faceOpen ? "Close" : "Choose a face"}</button>
+              {avatar && <button type="button" onClick={() => setAvatar(undefined)} className="text-meta underline-offset-2 hover:underline" style={{ color: "var(--sol-text-dim)" }}>reset to default</button>}
             </div>
             {faceOpen && (
               <div className="mt-1.5 grid grid-cols-8 gap-1.5 rounded-lg border p-2" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>
@@ -207,7 +207,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
 
           <Field label="Area" hint={scopeHint}>
             <div className="max-h-[132px] overflow-y-auto rounded-lg border p-1" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>
-              {projects.length === 0 && plans.length === 0 && <p className="px-2 py-1.5 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>No projects or plans in this workspace yet.</p>}
+              {projects.length === 0 && plans.length === 0 && <p className="px-2 py-1.5 text-meta" style={{ color: "var(--sol-text-dim)" }}>No projects or plans in this workspace yet.</p>}
               {projects.map((p) => <ScopeOption key={p._id} checked={projectIds.includes(p._id)} onToggle={() => toggle(projectIds, setProjectIds, p._id)} tone="blue" label={p.title} sub="project" />)}
               {plans.map((p) => <ScopeOption key={p._id} checked={planIds.includes(p._id)} onToggle={() => toggle(planIds, setPlanIds, p._id)} tone="magenta" label={p.title} sub="plan" />)}
             </div>
@@ -235,7 +235,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
           <Field label="Charter" hint={charterTouched ? "edited" : "written from its area; edit freely"}>
             <textarea value={charter} onChange={(e) => { setCharterTouched(true); setCharter(e.target.value); }} rows={4} className={INPUT} style={{ ...INPUT_STYLE, height: "auto", padding: "8px 10px", lineHeight: 1.45 }} />
             {charterTouched && charter !== proposed && (
-              <button type="button" onClick={() => { setCharterTouched(false); setCharter(proposed); }} className="self-start text-[10.5px] underline-offset-2 hover:underline" style={{ color: "var(--sol-text-dim)" }}>Use the proposed text</button>
+              <button type="button" onClick={() => { setCharterTouched(false); setCharter(proposed); }} className="self-start text-meta underline-offset-2 hover:underline" style={{ color: "var(--sol-text-dim)" }}>Use the proposed text</button>
             )}
           </Field>
 
@@ -248,7 +248,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
             {tenureKind === "program" && (
               <div className="mt-2 flex flex-col gap-2">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <span className="text-[11px] shrink-0" style={{ color: "var(--sol-text-dim)" }}>ends with</span>
+                  <span className="text-meta shrink-0" style={{ color: "var(--sol-text-dim)" }}>ends with</span>
                   <SelectBox value={endKind} onChange={(e) => setEndKind(e.target.value as "plan" | "project" | "date")} className="text-[12.5px]" style={{ width: 118 }}>
                     <option value="plan">a plan</option>
                     <option value="project">a project</option>
@@ -271,10 +271,10 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-[11px] shrink-0" style={{ color: "var(--sol-text-dim)" }}>then</span>
+                  <span className="text-meta shrink-0" style={{ color: "var(--sol-text-dim)" }}>then</span>
                   <div className="grid grid-cols-2 gap-1 rounded-lg bg-sol-bg-alt p-1" style={{ width: 220 }}>
                     {ORG_TENURE_THEN.map((t) => (
-                      <button key={t} type="button" aria-pressed={tenureThen === t} onClick={() => setTenureThen(t)} className="rounded-md px-2 py-1 text-[11.5px] font-medium capitalize transition-colors" style={{ background: tenureThen === t ? "var(--sol-card)" : undefined, color: tenureThen === t ? "var(--sol-text)" : "var(--sol-text-muted)" }}>{t}</button>
+                      <button key={t} type="button" aria-pressed={tenureThen === t} onClick={() => setTenureThen(t)} className="rounded-md px-2 py-1 text-meta font-medium capitalize transition-colors" style={{ background: tenureThen === t ? "var(--sol-card)" : undefined, color: tenureThen === t ? "var(--sol-text)" : "var(--sol-text-muted)" }}>{t}</button>
                     ))}
                   </div>
                 </div>
@@ -284,7 +284,7 @@ export function HireRoleDialog({ open, onClose, tree, meId, onCreate, initialPro
 
           {/* A hired role starts work on its own (org-staffing.md S23.1); the
               switch and its limits live on the role's page, not in the hire. */}
-          <p className="text-[11.5px] leading-snug" style={{ color: "var(--sol-text-dim)" }} data-hire-autonomy-note>
+          <p className="text-meta leading-snug" style={{ color: "var(--sol-text-dim)" }} data-hire-autonomy-note>
             It starts work in its area on its own. You can turn that off from its page.
           </p>
 
@@ -305,8 +305,8 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   return (
     <label className="flex flex-col gap-1">
       <span className="flex items-baseline justify-between gap-3">
-        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] shrink-0" style={{ color: "var(--sol-text-dim)" }}>{label}</span>
-        {hint && <span className="text-[10.5px] text-right" style={{ color: hint.startsWith("already") ? "var(--sol-red)" : "var(--sol-text-dim)" }}>{hint}</span>}
+        <span className="text-mark font-semibold uppercase tracking-[0.08em] shrink-0" style={{ color: "var(--sol-text-dim)" }}>{label}</span>
+        {hint && <span className="text-meta text-right" style={{ color: hint.startsWith("already") ? "var(--sol-red)" : "var(--sol-text-dim)" }}>{hint}</span>}
       </span>
       {children}
     </label>
@@ -321,7 +321,7 @@ function ScopeOption({ checked, onToggle, tone, label, sub }: { checked: boolean
         {checked && <span className="w-1.5 h-1.5 rounded-[1px]" style={{ background: "var(--sol-bg)" }} />}
       </span>
       <span className="flex-1 min-w-0 truncate text-[12.5px]" style={{ color: "var(--sol-text)" }}>{label}</span>
-      <span className="text-[10.5px] shrink-0" style={{ color }}>{sub}</span>
+      <span className="text-meta shrink-0" style={{ color }}>{sub}</span>
     </button>
   );
 }

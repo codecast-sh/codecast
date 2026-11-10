@@ -56,10 +56,10 @@ function AFlow({ beat }: SceneProps) {
             <span key={f.slug} className="gs-card inline-flex items-center gap-2 h-[34px] px-3 text-[12.5px]" style={{ animation: beat >= 2 ? `guide-say-in 400ms ${i * 70}ms both` : undefined }}>
               <Route className="w-3.5 h-3.5" style={{ color: f.kind === "line" ? ACCENT : "var(--sol-text-dim)" }} />
               <span className="font-semibold">{f.label}</span>
-              <span className="text-[10.5px] gs-dim">{f.kind === "line" ? "whole flow" : "segment"}</span>
+              <span className="text-meta gs-dim">{f.kind === "line" ? "whole flow" : "segment"}</span>
             </span>
           ))}
-          <span className="gs-card gs-ghost inline-flex items-center gap-2 h-[34px] px-3 text-[12.5px]"><Route className="w-3.5 h-3.5" /> <span className="font-semibold">Tidepool release</span><span className="text-[10.5px] gs-dim">yours</span></span>
+          <span className="gs-card gs-ghost inline-flex items-center gap-2 h-[34px] px-3 text-[12.5px]"><Route className="w-3.5 h-3.5" /> <span className="font-semibold">Tidepool release</span><span className="text-meta gs-dim">yours</span></span>
         </div>
       </Show>
     </div>
@@ -90,7 +90,7 @@ function RunChange({ beat, act, waiting }: SceneProps) {
               <div key={f.slug} className={`flex items-center gap-2 px-2.5 h-[40px] rounded-lg ${f.slug === "change" && waiting ? "gs-spot" : ""}`} style={{ background: f.slug === "change" ? "var(--sol-bg-alt)" : "transparent" }}>
                 <Route className="w-3.5 h-3.5" style={{ color: f.slug === "change" ? ACCENT : "var(--sol-text-dim)" }} />
                 <span className="text-[12.5px] font-semibold w-[70px]">{f.label}</span>
-                <span className="text-[11px] gs-dim truncate flex-1">{f.description ?? ""}</span>
+                <span className="text-meta gs-dim truncate flex-1">{f.description ?? ""}</span>
                 {f.slug === "change" && waiting && <StageButton primary wait onPress={act}>Run</StageButton>}
               </div>
             ))}
@@ -112,8 +112,8 @@ function RunChange({ beat, act, waiting }: SceneProps) {
             <div className="flex items-center gap-2 px-1 pb-2">
               <Route className="w-4 h-4" style={{ color: ACCENT }} />
               <span className="text-[13px] font-semibold">Change</span>
-              <span className="text-[11.5px] gs-dim">· run 1 · ct-412 Fix double booking</span>
-              <span className="ml-auto text-[11.5px] font-semibold" style={{ color: beat >= 4 ? "var(--sol-orange)" : ACCENT }}>{beat >= 4 ? "Waiting on you at Decide" : "Reviewing"}</span>
+              <span className="text-meta gs-dim">· run 1 · ct-412 Fix double booking</span>
+              <span className="ml-auto text-meta font-semibold" style={{ color: beat >= 4 ? "var(--sol-orange)" : ACCENT }}>{beat >= 4 ? "Waiting on you at Decide" : "Reviewing"}</span>
               <StageButton>Stop</StageButton>
             </div>
             <FlowDiagram flow={CHANGE} run={run} compact />
@@ -140,7 +140,7 @@ function Decide({ beat, act, waiting }: SceneProps) {
         <FlowDiagram flow={CHANGE} run={run} compact />
       </div>
       <div className="gs-card absolute p-5" style={{ left: 60, top: 146, width: 560, height: 426, borderColor: "color-mix(in srgb, var(--guide-accent) 45%, transparent)" }}>
-        <div className="flex items-center gap-2"><span className="gs-pill" style={{ color: "var(--sol-orange)", background: "color-mix(in srgb, var(--sol-orange) 14%, transparent)" }}>DECIDE</span><span className="text-[11.5px] gs-dim">Change · ct-412</span></div>
+        <div className="flex items-center gap-2"><span className="gs-pill" style={{ color: "var(--sol-orange)", background: "color-mix(in srgb, var(--sol-orange) 14%, transparent)" }}>DECIDE</span><span className="text-meta gs-dim">Change · ct-412</span></div>
         <div className="mt-2 gs-serif text-[21px] font-semibold leading-snug">Ship: fix double booking on slot release</div>
         <p className="mt-2 text-[12.5px] gs-muted leading-relaxed">Releasing a slot locks its row, so a second booking waits instead of landing on the same slot.</p>
         <div className="gs-label mt-4 mb-2">EVIDENCE</div>
@@ -170,7 +170,7 @@ function Decide({ beat, act, waiting }: SceneProps) {
           <Show key={k} on={beat >= 3} style={{ transitionDelay: `${i * 450}ms` }}>
             <div className="gs-card flex items-center gap-3 px-3 h-[48px]">
               <Icon className="w-4 h-4" style={{ color: i === 2 ? "var(--sol-violet)" : "var(--sol-green)" }} />
-              <span className="text-[12.5px] font-semibold flex-1">{k}</span><span className="text-[11px] gs-dim">{v}</span>
+              <span className="text-[12.5px] font-semibold flex-1">{k}</span><span className="text-meta gs-dim">{v}</span>
             </div>
           </Show>
         ))}
@@ -205,7 +205,7 @@ function ProblemsIn({ beat }: SceneProps) {
       {SOURCES.map((s, i) => (
         <div key={s.name} className="gs-card absolute flex items-center gap-2.5 px-3" style={{ left: 40, top: 70 + i * 116, width: 210, height: 64, animation: `guide-say-in 450ms ${i * 90}ms both` }}>
           <span className="w-2.5 h-2.5 rounded-full" style={{ background: s.color }} />
-          <div><div className="text-[13px] font-semibold">{s.name}</div><div className="text-[11px] gs-dim">{s.sub}</div></div>
+          <div><div className="text-[13px] font-semibold">{s.name}</div><div className="text-meta gs-dim">{s.sub}</div></div>
         </div>
       ))}
       <Wires>
@@ -222,10 +222,10 @@ function ProblemsIn({ beat }: SceneProps) {
           <span className="gs-serif text-[22px] font-semibold w-6 text-center" style={{ color: beat >= 2 ? "var(--sol-text)" : "var(--sol-text-dim)" }}>{j + 1}</span>
           <div className="flex-1 min-w-0">
             <div className="text-[13px] font-semibold truncate">{p.title}</div>
-            <div className="text-[11.5px] gs-dim mt-0.5"><Count value={beat >= 1 ? p.findings : 0} /> findings · {p.people} customers</div>
+            <div className="text-meta gs-dim mt-0.5"><Count value={beat >= 1 ? p.findings : 0} /> findings · {p.people} customers</div>
           </div>
           <Spark data={p.trend} color={p.color} />
-          <Show on={beat >= 2}><span className="text-[11px] font-semibold tabular-nums" style={{ color: p.color }}>{[91, 64, 38][j]}</span></Show>
+          <Show on={beat >= 2}><span className="text-meta font-semibold tabular-nums" style={{ color: p.color }}>{[91, 64, 38][j]}</span></Show>
         </div>
       ))}
       <Show on={beat >= 1} at={{ x: 430, y: 452, w: 570 }} style={{ transitionDelay: "500ms" }}>
@@ -235,13 +235,13 @@ function ProblemsIn({ beat }: SceneProps) {
               <div className="w-full flex flex-col-reverse rounded-[3px] overflow-hidden">
                 {PROBLEMS.map((p) => <span key={p.title} style={{ height: p.trend[i] * 9, background: p.color, opacity: 0.85 }} />)}
               </div>
-              <span className="text-[10px] gs-dim">{d}</span>
+              <span className="text-meta gs-dim">{d}</span>
             </div>
           ))}
         </div>
       </Show>
       <Show on={beat >= 2} at={{ x: 430, y: 66, w: 570 }}>
-        <div className="flex items-center text-[11px] gs-dim px-4"><span className="flex-1">PROBLEMS, WORST FIRST</span><span>7 DAYS</span><span className="w-[60px] text-right">SCORE</span></div>
+        <div className="flex items-center text-meta gs-dim px-4"><span className="flex-1">PROBLEMS, WORST FIRST</span><span>7 DAYS</span><span className="w-[60px] text-right">SCORE</span></div>
       </Show>
     </div>
   );
@@ -276,8 +276,8 @@ function LiveFlow({ beat }: SceneProps) {
                   <span className={`w-[34px] h-[34px] rounded-full inline-flex items-center justify-center transition-all duration-500 ${here ? "gs-live" : ""}`} style={{ background: here ? "color-mix(in srgb, var(--guide-accent) 22%, var(--sol-card))" : "var(--sol-bg)", border: `1.5px solid ${here ? "var(--guide-accent)" : "color-mix(in srgb, var(--sol-border) 80%, transparent)"}`, color: person ? "var(--sol-orange)" : ACCENT }}>
                     {person ? <User className="w-4 h-4" /> : s === "Verify" || s === "Prove" ? <SquareTerminal className="w-4 h-4" /> : <Bot className="w-4 h-4" />}
                   </span>
-                  <span className="text-[11.5px] font-semibold">{s}</span>
-                  <span className="text-[10.5px] tabular-nums" style={{ color: person ? "var(--sol-orange)" : "var(--sol-text-dim)" }}>{[3, 2, 1, 4, 2, 1, 2][i]} {person ? "on you" : "running"}</span>
+                  <span className="text-meta font-semibold">{s}</span>
+                  <span className="text-meta tabular-nums" style={{ color: person ? "var(--sol-orange)" : "var(--sol-text-dim)" }}>{[3, 2, 1, 4, 2, 1, 2][i]} {person ? "on you" : "running"}</span>
                 </div>
               </div>
             );
@@ -288,8 +288,8 @@ function LiveFlow({ beat }: SceneProps) {
         <div className="gs-label">QUEUE, BEST FIRST</div>
         {["Double booking on slot release", "Checkout times out on slow 3G", "Refund email missing the receipt", "Instructor calendar shows UTC"].map((t, i) => (
           <div key={t} className="gs-card flex items-center gap-3 px-3 h-[40px] transition-all duration-700" style={{ opacity: i < beat ? 0.35 : 1 }}>
-            <span className="text-[11px] gs-dim w-4">{i + 1}</span><span className="text-[12.5px] flex-1 truncate">{t}</span>
-            <span className="text-[11px]" style={{ color: i < beat ? ACCENT : "var(--sol-text-dim)" }}>{i < beat ? "started" : "queued"}</span>
+            <span className="text-meta gs-dim w-4">{i + 1}</span><span className="text-[12.5px] flex-1 truncate">{t}</span>
+            <span className="text-meta" style={{ color: i < beat ? ACCENT : "var(--sol-text-dim)" }}>{i < beat ? "started" : "queued"}</span>
           </div>
         ))}
       </div>
@@ -329,8 +329,8 @@ function Timeline({ data, ship, close, back, beat }: { data: number[]; ship: num
         return <rect key={i} x={i * bw + 6} y={H - h} width={bw - 12} height={h} rx={3} fill={after && back && v ? "var(--sol-red)" : "color-mix(in srgb, var(--sol-text-dim) 55%, transparent)"} style={{ transition: "height 600ms, y 600ms", opacity: beat >= 0 ? 1 : 0 }} />;
       })}
       <line x1={ship * bw} x2={ship * bw} y1={0} y2={H} stroke="var(--guide-accent)" strokeWidth={2} />
-      <text x={ship * bw + 6} y={H + 16} fontSize="11" fill="var(--sol-text-muted)">{close !== undefined ? "closed: no change needed" : "fix live"}</text>
-      <text x={W - 4} y={H + 16} fontSize="11" fill="var(--sol-text-dim)" textAnchor="end">watching 7 days</text>
+      <text x={ship * bw + 6} y={H + 16} fontSize="12" fill="var(--sol-text-muted)">{close !== undefined ? "closed: no change needed" : "fix live"}</text>
+      <text x={W - 4} y={H + 16} fontSize="12" fill="var(--sol-text-dim)" textAnchor="end">watching 7 days</text>
     </svg>
   );
 }
@@ -373,13 +373,13 @@ function MakeItYours({ beat }: SceneProps) {
           <div className="rounded px-1 -mx-1 transition-colors duration-500" style={{ background: beat >= 0 ? "color-mix(in srgb, var(--sol-green) 16%, transparent)" : undefined }}>+ If an earlier fix shipped and the problem came back,</div>
           <div className="rounded px-1 -mx-1" style={{ background: "color-mix(in srgb, var(--sol-green) 16%, transparent)" }}>+ say why it did not hold before proposing anything.</div>
           <div className="gs-muted">Name the test that will prove it.</div>
-          <div className="absolute left-4 bottom-4 flex gap-2"><StageButton primary>Test this edit</StageButton><StageButton>Save</StageButton><span className="text-[11px] gs-dim self-center ml-2">v7 · every save is a version</span></div>
+          <div className="absolute left-4 bottom-4 flex gap-2"><StageButton primary>Test this edit</StageButton><StageButton>Save</StageButton><span className="text-meta gs-dim self-center ml-2">v7 · every save is a version</span></div>
         </div>
       </Win>
       <Show on={beat >= 1} at={{ x: 530, y: 36, w: 474 }}>
         <div className="gs-card p-4">
           <div className="gs-label">TRIED ON 5 PAST CASES</div>
-          <div className="mt-2 grid text-[11.5px]" style={{ gridTemplateColumns: "1.3fr 1fr 1fr" }}>
+          <div className="mt-2 grid text-meta" style={{ gridTemplateColumns: "1.3fr 1fr 1fr" }}>
             <span className="gs-dim pb-1.5">Case</span><span className="gs-dim pb-1.5">It said</span><span className="gs-dim pb-1.5">It says now</span>
             {[["3G timeout", "Close it", "Add a timeout", true], ["Double booking", "Lock the row", "Lock the row", false], ["Refund receipt", "Resend email", "Resend email", false], ["Calendar UTC", "Close it", "Store the timezone", true], ["Promo code", "Fix rounding", "Fix rounding", false]].map(([c, a, b, changed]) => (
               <div key={c as string} className="contents">
@@ -389,7 +389,7 @@ function MakeItYours({ beat }: SceneProps) {
               </div>
             ))}
           </div>
-          <div className="mt-2 text-[11.5px]" style={{ color: "var(--sol-green)" }}>2 answers better · 3 the same · nothing ships from a test</div>
+          <div className="mt-2 text-meta" style={{ color: "var(--sol-green)" }}>2 answers better · 3 the same · nothing ships from a test</div>
         </div>
       </Show>
       <Show on={beat >= 2} at={{ x: 36, y: 346, w: 470 }}>
@@ -402,20 +402,20 @@ function MakeItYours({ beat }: SceneProps) {
               <span className="w-7 h-7 rounded-md inline-flex items-center justify-center" style={{ background: v === "wrong" ? "color-mix(in srgb, var(--sol-red) 18%, transparent)" : "transparent", color: v === "wrong" ? "var(--sol-red)" : "var(--sol-text-dim)" }}><ThumbsDown className="w-3.5 h-3.5" /></span>
             </div>
           ))}
-          <div className="mt-2 text-[11px] gs-dim">Marked answers become this step's test set.</div>
+          <div className="mt-2 text-meta gs-dim">Marked answers become this step's test set.</div>
         </div>
       </Show>
       <Show on={beat >= 3} at={{ x: 530, y: 346, w: 474 }}>
         <div className="gs-card p-4">
           <div className="gs-label">FROM A SESSION TO THE LIBRARY</div>
-          <div className="mt-3 flex items-center gap-1.5 text-[11.5px] whitespace-nowrap">
+          <div className="mt-3 flex items-center gap-1.5 text-meta whitespace-nowrap">
             <span className="gs-card px-2.5 h-[30px] inline-flex items-center">An agent's workflow</span>
             <ChevronRight className="w-4 h-4 gs-dim" />
             <span className="gs-card px-2.5 h-[30px] inline-flex items-center">Add to flows</span>
             <ChevronRight className="w-4 h-4 gs-dim" />
             <span className="gs-card px-2.5 h-[30px] inline-flex items-center font-semibold" style={{ color: ACCENT }}><Route className="w-3.5 h-3.5 mr-1" /> Tidepool release</span>
           </div>
-          <div className="mt-3 text-[11.5px] gs-muted">The team's library gains a flow, and every member can run it.</div>
+          <div className="mt-3 text-meta gs-muted">The team's library gains a flow, and every member can run it.</div>
         </div>
       </Show>
     </div>

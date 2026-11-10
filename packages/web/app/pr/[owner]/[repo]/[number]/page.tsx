@@ -444,20 +444,24 @@ export function PRContent({
   }, [tab]);
 
 
-  if (!pr) {
-    const error = prFeed.error?.message || lookup.error;
-    if (!error && !lookup.reason) return <LoadingSkeleton />;
-    return <PRUnavailable repository={repository} number={number} reason={lookup.reason} error={error} retry={() => { prFeed.retry(); lookup.retry(); }} />;
-  }
-
-  const files: DiffFile[] = (pr.files ?? []).map((f: any) => ({
+  // Built once per change of the PR's files: a new array on every render
+  // (a comment arriving) handed the diff view new input each time.
+  const prFiles = pr?.files;
+  const files: DiffFile[] = useMemo(() => (prFiles ?? []).map((f: any) => ({
     filename: f.filename,
     status: f.status,
     additions: f.additions,
     deletions: f.deletions,
     changes: f.changes,
     patch: f.patch,
-  }));
+  })), [prFiles]);
+
+  if (!pr) {
+    const error = prFeed.error?.message || lookup.error;
+    if (!error && !lookup.reason) return <LoadingSkeleton />;
+    return <PRUnavailable repository={repository} number={number} reason={lookup.reason} error={error} retry={() => { prFeed.retry(); lookup.retry(); }} />;
+  }
+
 
   const openComments = unresolvedThreadCount(comments) || (pr.unresolved_review_count ?? 0);
 
@@ -562,7 +566,7 @@ export function PRContent({
                 sidebarHeader={
                   // Where the reader is in the walk: what is left to read,
                   // what is still open, and the one key that moves them on.
-                  <div className="px-3 py-2 border-b border-sol-border/50 text-[11px] text-sol-text-muted flex items-center gap-2 flex-wrap">
+                  <div className="px-3 py-2 border-b border-sol-border/50 text-meta text-sol-text-muted flex items-center gap-2 flex-wrap">
                     <span>
                       <span className={viewedSet.size >= files.length ? "text-sol-green" : "text-sol-text"}>{viewedSet.size}</span>
                       <span className="text-sol-text-dim"> of {files.length} viewed</span>

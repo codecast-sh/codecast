@@ -29,7 +29,7 @@ export default function ForgotPasswordPage() {
               Didn&apos;t receive the email?{" "}
               <button
                 onClick={again}
-                className="text-amber-400 hover:text-amber-300 font-medium transition-colors"
+                className="font-medium text-sol-text-secondary underline decoration-sol-orange/70 underline-offset-2 hover:text-sol-text hover:decoration-sol-orange transition-colors"
               >
                 Try again
               </button>
@@ -72,12 +72,14 @@ export default function ForgotPasswordPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="sol-input w-full py-3"
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? "auth-error" : undefined}
               placeholder="you@example.com"
             />
           </div>
 
           {error && (
-            <p className="mt-4 text-sm text-red-400 text-center">{error}</p>
+            <p id="auth-error" role="alert" className="mt-4 rounded-md border border-sol-red/40 bg-sol-red/10 px-3 py-2 text-sm text-sol-text text-center">{error}</p>
           )}
 
           <Button
@@ -94,7 +96,7 @@ export default function ForgotPasswordPage() {
             Remember your password?{" "}
             <Link
               href="/login"
-              className="text-amber-400 hover:text-amber-300 font-medium transition-colors"
+              className="font-medium text-sol-text-secondary underline decoration-sol-orange/70 underline-offset-2 hover:text-sol-text hover:decoration-sol-orange transition-colors"
             >
               Sign In
             </Link>

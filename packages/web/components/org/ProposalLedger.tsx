@@ -212,7 +212,7 @@ export function ProposalFoot({ proposal, entries, batch, onMap, takeover, classN
   return (
     <>
       {!answerable && open > 0 && !withdrawn && proposal.status === "open" && (
-        <p className={cn("m-0 mt-2 text-[11px] leading-[18px] text-[color:var(--ink-quiet)]")} data-proposal-readonly-line>Open this in {who} thread to answer.</p>
+        <p className={cn("m-0 mt-2 text-meta leading-[18px] text-[color:var(--ink-quiet)]")} data-proposal-readonly-line>Open this in {who} thread to answer.</p>
       )}
       {/* A closing row with nothing in it draws no rule. */}
       {(above || left || right || outcome) && <LedgerClosingRow className={cn("mt-2", className)} above={above} left={left} right={right} outcome={outcome} />}

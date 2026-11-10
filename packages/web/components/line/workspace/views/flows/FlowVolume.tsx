@@ -91,7 +91,7 @@ export function FlowVolume({ map, href, select, now }: { map: FlowMap; href: Lin
           const share = i > 0 ? passShare(s.n, w.steps[i - 1].n) : null;
           return (
             <li key={s.key} className="fv-col" data-step={s.key}>
-              <span className="fv-name">{s.label}</span>
+              <span className="fv-name" title={s.label}>{s.label}</span>
               <button type="button" className="fv-count" aria-pressed={same(pick, { kind: "step", level: i })} disabled={!s.n} onClick={() => toggle({ kind: "step", level: i })} data-flow-volume-count={s.key}>
                 <b className="lw-num">{s.n.toLocaleString()}</b>
                 {share ? <span className="fv-share lw-num" data-tone={share.tone} title={`of ${w.steps[i - 1].label}`}>{share.text}</span> : null}

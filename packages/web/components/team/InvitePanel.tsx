@@ -283,7 +283,7 @@ export function InvitePanel({ teamId, variant = "modal" }: InvitePanelProps) {
             "They install the CLI and their sessions show in the team feed.",
           ].map((line, i) => (
             <li key={i} className="flex items-start gap-2.5">
-              <span className="tf-how-num flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold">
+              <span className="tf-how-num flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-meta font-semibold">
                 {i + 1}
               </span>
               <span>{line}</span>

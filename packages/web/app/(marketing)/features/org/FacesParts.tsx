@@ -187,7 +187,7 @@ export function Inspector({ k, drawKey }: { k: IconKey; drawKey: string }) {
             <circle cx={ix} cy={iy} r={0.32} fill={SOL.base3} stroke={SOL.base03} strokeWidth={0.08} pointerEvents="none" />
           </svg>
         </div>
-        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 justify-center lg:justify-start font-mono text-[11px]" style={{ color: SOL.base0 }}>
+        <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 justify-center lg:justify-start font-mono text-meta" style={{ color: SOL.base0 }}>
           <span className="inline-flex items-center gap-1.5"><span className="inline-block w-3 h-3 rounded-[2px] border border-dashed" style={{ borderColor: glow(c, 60) }} />live area 2..22</span>
           <span className="inline-flex items-center gap-1.5"><span className="og-faces-cross" />centre 12,12</span>
           <span className="inline-flex items-center gap-1.5"><span className="inline-block w-2 h-2 rounded-full" style={{ background: SOL.base3 }} />ink {n(ix)},{n(iy)}</span>
@@ -203,7 +203,7 @@ export function Inspector({ k, drawKey }: { k: IconKey; drawKey: string }) {
             <div className="font-mono text-[12px] mt-0.5" style={{ color: SOL.base0 }}>{wearer ? <>worn by {wearer.title} <span style={{ color: SOL.base01 }}>{wearer.handle}</span></> : <>{icon.accent}</>}</div>
           </div>
         </div>
-        <div className="mt-5 flex flex-wrap gap-2 font-mono text-[11.5px]">
+        <div className="mt-5 flex flex-wrap gap-2 font-mono text-meta">
           <Check ok label="24 grid" />
           <Check ok label="stroke 2, round" />
           <Check ok={icon.shapes.length <= ROLE_ICON_MAX_SHAPES} label={`${icon.shapes.length} of ${ROLE_ICON_MAX_SHAPES} shapes`} />
@@ -225,7 +225,7 @@ export function Inspector({ k, drawKey }: { k: IconKey; drawKey: string }) {
               style={{ borderTop: i ? `1px solid ${RULE}` : undefined, background: hi === i ? `color-mix(in srgb, ${c} 16%, transparent)` : undefined, transition: "background-color .15s ease" }}
             >
               <span className="w-4 text-right shrink-0" style={{ color: SOL.base01 }}>{i + 1}</span>
-              <span className="shrink-0 w-[68px] px-1.5 py-0.5 rounded text-center text-[11px]" style={{ background: "rgba(147,161,161,.12)", color: hi === i ? glow(c, 85) : SOL.base1 }}>{s.t}</span>
+              <span className="shrink-0 w-[68px] px-1.5 py-0.5 rounded text-center text-meta" style={{ background: "rgba(147,161,161,.12)", color: hi === i ? glow(c, 85) : SOL.base1 }}>{s.t}</span>
               <span className="truncate" title={summary(s)} style={{ color: hi === i ? SOL.base3 : SOL.base0 }}>{summary(s)}</span>
             </li>
           ))}
@@ -238,11 +238,11 @@ export function Inspector({ k, drawKey }: { k: IconKey; drawKey: string }) {
         <div className="grid grid-cols-[64px_repeat(3,minmax(0,1fr))] items-center gap-y-4 rounded-xl px-4 py-4 mb-4" style={{ border: `1px solid ${RULE}` }}>
           <span />
           {SIZES.map((px) => (
-            <span key={px} className="text-center font-mono text-[11.5px]" style={{ color: SOL.base0 }}>{px} px</span>
+            <span key={px} className="text-center font-mono text-meta" style={{ color: SOL.base0 }}>{px} px</span>
           ))}
           {[false, true].map((gray) => (
             <Fragment key={String(gray)}>
-              <span className="font-mono text-[11.5px]" style={{ color: SOL.base0 }}>{gray ? "gray" : "colour"}</span>
+              <span className="font-mono text-meta" style={{ color: SOL.base0 }}>{gray ? "gray" : "colour"}</span>
               {SIZES.map((px) => (
                 <span key={px} className="flex items-center justify-center h-[48px]"><DarkTile k={k} size={px} gray={gray} /></span>
               ))}
@@ -253,8 +253,8 @@ export function Inspector({ k, drawKey }: { k: IconKey; drawKey: string }) {
           <span className="inline-flex items-center justify-center shrink-0" style={{ width: 18, height: 18, borderRadius: 18 * ROLE_ICON_TILE.radius, background: `color-mix(in srgb, ${c} 20%, ${SOL.base2})`, boxShadow: `inset 0 0 0 1px color-mix(in srgb, ${c} 45%, ${SOL.base3})`, color: `color-mix(in srgb, ${c} 55%, ${SOL.base02})` }}>
             <Glyph k={k} px={18} />
           </span>
-          <span className="font-mono text-[11.5px] truncate" style={{ color: SOL.base02 }}>{wearer?.handle ?? `@${icon.concept.split(" ")[0]}`}</span>
-          <span className="ml-auto font-mono text-[10.5px]" style={{ color: SOL.base1 }}>light</span>
+          <span className="font-mono text-meta truncate" style={{ color: SOL.base02 }}>{wearer?.handle ?? `@${icon.concept.split(" ")[0]}`}</span>
+          <span className="ml-auto font-mono text-meta" style={{ color: SOL.base1 }}>light</span>
         </div>
       </div>
     </div>

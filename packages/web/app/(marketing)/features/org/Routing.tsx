@@ -145,7 +145,7 @@ function Stack({ sel, onPick }: { sel: string; onPick: (id: string) => void }) {
                 transform: on ? "translateX(4px)" : undefined,
               }}
             >
-              <div className="font-mono text-[10.5px] truncate" style={{ color: on ? MUTED : DIM }}>{x.source}</div>
+              <div className="font-mono text-meta truncate" style={{ color: on ? MUTED : DIM }}>{x.source}</div>
               <div className="mt-1 text-[13px] leading-[1.4] line-clamp-2" style={{ color: on ? INK : TEXT }}>{x.text}</div>
             </button>
           );
@@ -165,7 +165,7 @@ function Sieve({ it, s, run, acc, still }: { it: Item; s: number; run: number; a
   return (
     <div className="rounded-2xl border overflow-hidden" style={{ borderColor: LINE, backgroundColor: "#fffdf6", boxShadow: "0 30px 70px -40px rgba(0,43,54,.45)" }}>
       <div key={`h-${run}`} className="og-anim og-pop px-4 py-3 border-b flex items-center gap-2.5" style={{ borderColor: LINE, backgroundColor: tint(SOL.base2, 50) }}>
-        <span className="font-mono text-[10.5px] shrink-0 rounded px-1.5 py-0.5" style={{ backgroundColor: PAPER, color: MUTED, border: `1px solid ${LINE}` }}>new</span>
+        <span className="font-mono text-meta shrink-0 rounded px-1.5 py-0.5" style={{ backgroundColor: PAPER, color: MUTED, border: `1px solid ${LINE}` }}>new</span>
         <span className="text-[13px] truncate" style={{ color: INK }}>{it.text}</span>
       </div>
 
@@ -230,12 +230,12 @@ function Row({ n, name, rule, state, note, acc, unsure, children }: {
       <div />
       <div className="pr-4 py-3" style={{ height: n < 4 ? ROW_H : undefined }}>
         <div className="flex items-center gap-2">
-          <span className="inline-flex items-center justify-center rounded-full font-mono text-[11px] font-bold w-[20px] h-[20px] shrink-0" style={{ backgroundColor: lit ? c : "transparent", color: lit ? PAPER : MUTED, boxShadow: lit ? "none" : `inset 0 0 0 1.5px ${LINE}`, transition: "background-color .3s ease, color .3s ease" }}>{n}</span>
+          <span className="inline-flex items-center justify-center rounded-full font-mono text-meta font-bold w-[20px] h-[20px] shrink-0" style={{ backgroundColor: lit ? c : "transparent", color: lit ? PAPER : MUTED, boxShadow: lit ? "none" : `inset 0 0 0 1.5px ${LINE}`, transition: "background-color .3s ease, color .3s ease" }}>{n}</span>
           <span className="font-mono font-bold text-[14px]" style={{ color: INK }}>{name}</span>
           {VERDICT[state] && (
             <span
               key={state}
-              className="og-anim og-fade ml-auto font-mono text-[10.5px] rounded-full px-2 py-0.5 shrink-0"
+              className="og-anim og-fade ml-auto font-mono text-meta rounded-full px-2 py-0.5 shrink-0"
               style={lit ? { backgroundColor: c, color: PAPER } : { color: testing ? TEXT : DIM, border: `1px solid ${LINE}`, opacity: testing ? 1 : 0.75 }}
             >
               {lit && unsure ? "unsure" : VERDICT[state]}
@@ -244,7 +244,7 @@ function Row({ n, name, rule, state, note, acc, unsure, children }: {
         </div>
         <div className="mt-1 text-[12.5px] leading-[1.45] line-clamp-2" style={{ color: MUTED }}>{rule}</div>
         {shown && note && (
-          <div key={`${note}-${state === "testing"}`} className="og-anim og-fade mt-1 font-mono text-[11px] truncate" style={{ color: lit ? `color-mix(in srgb, ${c} 70%, ${INK})` : DIM }}>
+          <div key={`${note}-${state === "testing"}`} className="og-anim og-fade mt-1 font-mono text-meta truncate" style={{ color: lit ? `color-mix(in srgb, ${c} 70%, ${INK})` : DIM }}>
             {state === "skip" ? "✕ " : lit ? "✓ " : ""}{note}
           </div>
         )}
@@ -265,16 +265,16 @@ function RouterRead({ read, run }: { read: Read; run: number }) {
         return (
           <div key={x.id} className="flex items-center gap-2 py-1">
             <Tile k={r.k} size={18} />
-            <span className="font-mono text-[11.5px] w-[64px] sm:w-[92px] shrink-0 truncate" style={{ color: i === 0 ? INK : MUTED }}>{r.handle}</span>
+            <span className="font-mono text-meta w-[64px] sm:w-[92px] shrink-0 truncate" style={{ color: i === 0 ? INK : MUTED }}>{r.handle}</span>
             <span className="relative flex-1 min-w-[72px] h-[8px] rounded-full" style={{ backgroundColor: tint(SOL.base1, 22) }}>
               <span className="og-routing-bar absolute inset-y-0 left-0 rounded-full" style={{ width: `${x.c * 100}%`, backgroundColor: i === 0 ? a : tint(a, 55), animationDelay: `${0.1 + i * 0.12}s` }} />
               <span aria-hidden className="absolute -top-[3px] -bottom-[3px] w-0 border-l border-dashed" style={{ left: `${CONFIDENT * 100}%`, borderColor: INK }} />
             </span>
-            <span className="font-mono text-[11.5px] font-semibold w-[34px] text-right tabular-nums" style={{ color: i === 0 ? INK : MUTED }}>{x.c.toFixed(2)}</span>
+            <span className="font-mono text-meta font-semibold w-[34px] text-right tabular-nums" style={{ color: i === 0 ? INK : MUTED }}>{x.c.toFixed(2)}</span>
           </div>
         );
       })}
-      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-[10.5px]" style={{ color: MUTED }}>
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-meta" style={{ color: MUTED }}>
         <span>files at 0.8 or more with a 0.3 lead</span>
         <span className="ml-auto rounded px-1.5 py-0.5" style={{ backgroundColor: tint(sure ? SOL.green : SOL.yellow, 16), color: `color-mix(in srgb, ${sure ? SOL.green : SOL.yellow} 60%, ${INK})` }}>
           lead {lead.toFixed(2)} · {sure ? "files" : "files nothing"}
@@ -321,14 +321,14 @@ function Trail({ it, acc, picked }: { it: Item; acc: string; picked: boolean }) 
           <span
             key={l.n}
             title={l.name}
-            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-[11px]"
+            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 font-mono text-meta"
             style={on ? { backgroundColor: tint(c, 18, PAPER), color: `color-mix(in srgb, ${c} 60%, ${INK})`, boxShadow: `inset 0 0 0 1px ${tint(c, 50, PAPER)}` } : { color: DIM, boxShadow: `inset 0 0 0 1px ${LINE}` }}
           >
             <span className="font-bold">{l.n}</span>{mark}
           </span>
         );
       })}
-      {picked && <span className="ml-1 font-mono text-[10.5px]" style={{ color: DIM }}>then you picked</span>}
+      {picked && <span className="ml-1 font-mono text-meta" style={{ color: DIM }}>then you picked</span>}
     </div>
   );
 }
@@ -339,7 +339,7 @@ function Head({ face, title, handle, sub }: { face: ReactNode; title: string; ha
       {face}
       <div className="min-w-0">
         <div className="font-mono font-bold text-[14px] leading-tight truncate" style={{ color: INK }}>{title}</div>
-        <div className="font-mono text-[11.5px]" style={{ color: DIM }}>{handle}</div>
+        <div className="font-mono text-meta" style={{ color: DIM }}>{handle}</div>
         <div className="text-[12px] truncate" style={{ color: MUTED }}>{sub}</div>
       </div>
     </div>
@@ -349,7 +349,7 @@ function Head({ face, title, handle, sub }: { face: ReactNode; title: string; ha
 function Fact({ label, children, t }: { label: string; children: ReactNode; t: number }) {
   return (
     <div className="og-anim og-rise flex items-baseline gap-3 py-1.5 border-t" style={{ borderColor: LINE, ["--d" as string]: `${t}s` } as CSSProperties}>
-      <span className="font-mono text-[10.5px] w-[64px] shrink-0" style={{ color: DIM }}>{label}</span>
+      <span className="font-mono text-meta w-[64px] shrink-0" style={{ color: DIM }}>{label}</span>
       <span className="text-[12.5px] leading-[1.45] min-w-0" style={{ color: TEXT }}>{children}</span>
     </div>
   );
@@ -360,11 +360,11 @@ function RoleLanding({ r, it, picked }: { r: RoleRow; it: Item; picked: boolean 
     <>
       <Head face={<Tile k={r.k} size={44} ring />} title={r.title} handle={r.handle} sub={r.area} />
       <div className="mt-4">
-        <Fact label="task" t={0.12}><span className="font-mono text-[11.5px]" style={{ color: MUTED }}>{it.task!.id}</span> {it.task!.title}</Fact>
+        <Fact label="task" t={0.12}><span className="font-mono text-meta" style={{ color: MUTED }}>{it.task!.id}</span> {it.task!.title}</Fact>
         <Fact label="filed" t={0.2}>In its area, assigned to {r.handle}</Fact>
         <Fact label="role" t={0.28}><span className="inline-flex items-center gap-1.5"><SessionDot state="working" /> Woken with one line naming the task</span></Fact>
         <Fact label="decided" t={0.36}>
-          <span className="font-mono text-[11.5px]">line {picked ? 1 : it.decide}</span>{" "}
+          <span className="font-mono text-meta">line {picked ? 1 : it.decide}</span>{" "}
           <span style={{ color: MUTED }}>{picked ? `you picked ${r.handle}` : it.why}</span>
         </Fact>
       </div>
@@ -381,7 +381,7 @@ function PersonLanding({ id }: { id: string }) {
         <Fact label="session" t={0.12}>Stays in {p.name.split(" ")[0]}'s list</Fact>
         <Fact label="role" t={0.2}>None woken</Fact>
         <Fact label="later" t={0.28}>Moves under a role once bound to a task in its area</Fact>
-        <Fact label="decided" t={0.36}><span className="font-mono text-[11.5px]">line 3</span> <span style={{ color: MUTED }}>no task, plan or project</span></Fact>
+        <Fact label="decided" t={0.36}><span className="font-mono text-meta">line 3</span> <span style={{ color: MUTED }}>no task, plan or project</span></Fact>
       </div>
     </>
   );
@@ -393,7 +393,7 @@ function Choose({ read, onPick }: { read: Read; onPick: (id: string) => void }) 
       <div className="flex items-center gap-2">
         <span className="inline-block w-[10px] h-[10px] rounded-full" style={{ backgroundColor: SOL.yellow }} />
         <span className="font-mono font-bold text-[14px]" style={{ color: INK }}>Not filed</span>
-        <span className="ml-auto font-mono text-[10.5px]" style={{ color: DIM }}>pick who takes it</span>
+        <span className="ml-auto font-mono text-meta" style={{ color: DIM }}>pick who takes it</span>
       </div>
       <div className="mt-3 space-y-2">
         {[read.top, read.second].map((x, i) => {
@@ -409,14 +409,14 @@ function Choose({ read, onPick }: { read: Read; onPick: (id: string) => void }) 
               <Tile k={r.k} size={30} />
               <span className="min-w-0 flex-1">
                 <span className="block font-mono font-semibold text-[12.5px] truncate" style={{ color: INK }}>{r.title}</span>
-                <span className="block font-mono text-[11px]" style={{ color: DIM }}>{r.handle}</span>
+                <span className="block font-mono text-meta" style={{ color: DIM }}>{r.handle}</span>
               </span>
               <span className="font-mono text-[12px] font-semibold tabular-nums" style={{ color: MUTED }}>{x.c.toFixed(2)}</span>
             </button>
           );
         })}
       </div>
-      <div className="mt-3 font-mono text-[11px]" style={{ color: DIM }}>{read.reason}</div>
+      <div className="mt-3 font-mono text-meta" style={{ color: DIM }}>{read.reason}</div>
     </>
   );
 }

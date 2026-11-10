@@ -56,7 +56,7 @@ export function SubtasksSection({ task, onNavigate }: {
         <div className="text-xs font-medium text-sol-text-dim">Subtasks</div>
         {progress.total > 0 && (
           <>
-            <span className="text-[11px] font-mono text-sol-text-muted">{progress.done}/{progress.total}</span>
+            <span className="text-meta font-mono text-sol-text-muted">{progress.done}/{progress.total}</span>
             <div className="flex-1 max-w-[8rem] h-1 rounded-full bg-sol-border/30 overflow-hidden">
               <div className="h-full bg-sol-green transition-all" style={{ width: `${pct}%` }} />
             </div>
@@ -83,7 +83,7 @@ export function SubtasksSection({ task, onNavigate }: {
               >
                 <RowIcon className={`w-3.5 h-3.5 ${cfg.color}`} />
               </button>
-              <span className="text-[11px] font-mono text-sol-text-dim flex-shrink-0">{pending ? "…" : t.short_id}</span>
+              <span className="text-meta font-mono text-sol-text-dim flex-shrink-0">{pending ? "…" : t.short_id}</span>
               {pending ? (
                 <span className="flex-1 min-w-0 text-left text-xs truncate text-sol-text-dim">{t.title}</span>
               ) : (
@@ -98,14 +98,14 @@ export function SubtasksSection({ task, onNavigate }: {
                 <Bot className="w-3 h-3 text-sol-text-dim/60 flex-shrink-0" />
               )}
               {t.assignee_info?.name && (
-                <span className="text-[10px] text-sol-text-dim flex-shrink-0">{t.assignee_info.name}</span>
+                <span className="text-meta text-sol-text-dim flex-shrink-0">{t.assignee_info.name}</span>
               )}
             </div>
           );
         })}
       </div>
       {atMaxDepth ? (
-        <div className="px-1.5 py-1 mt-0.5 text-[11px] text-sol-text-dim">
+        <div className="px-1.5 py-1 mt-0.5 text-meta text-sol-text-dim">
           Deepest level — add further steps under a higher-level task.
         </div>
       ) : (

@@ -3,6 +3,9 @@ import { useHibernationCommands } from "../../hooks/useHibernationCommands";
 import { fleetBucket, hibernationCandidate, hibernationResultCounts } from "../../lib/hibernation";
 import { sessionCommandOutcome } from "@codecast/shared/contracts";
 import { useState, useMemo, useCallback, useEffect } from "react";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { SwitchReview, type SwitchLedger } from "../../components/consequential/ConsequentialSwitch";
+import { killSessionsLedger } from "../../components/consequential/ledgers";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
@@ -22,7 +25,24 @@ import { ACTIVE_AGENT_STATUSES, HEARTBEAT_ALIVE_MS } from "@codecast/shared/cont
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { sessionStructuralSig } from "../../store/inboxStore";
-import { Button } from "../../components/ui/button";
+
+const count = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** Parking the view's idle sessions: what is asked, and what the daemon still decides. */
+function hibernateLedger(n: number): SwitchLedger {
+  return {
+    name: `Hibernate ${count(n, "session")}`,
+    subject: "Idle in this view",
+    shift: ["Running", "Parked"],
+    figures: [{ value: String(n), label: "park" }],
+    rows: [
+      { k: "Sessions", v: count(n, "idle session") },
+      { k: "Checked", v: "Daemon skips unsafe ones" },
+    ],
+    confirm: `Hibernate ${n}`,
+    keep: "Keep running",
+  };
+}
 
 type Session = FunctionReturnType<typeof api.managedSessions.listActiveSessions>[number];
 // Cleanup-oriented buckets, computed from liveness + sleep-aware idle — NOT from
@@ -64,17 +84,17 @@ type ClassifiedSession = Session & {
 
 const BUCKET_STYLES: Record<Bucket, { label: string; text: string; dot: string }> = {
   hibernated: { label: "hibernated", text: "text-sol-blue", dot: "bg-sol-blue" },
-  active: { label: "active",       text: "text-sky-400",   dot: "bg-sky-500" },
-  idle:   { label: "idle · kill?", text: "text-amber-400", dot: "bg-amber-500" },
-  dead:   { label: "dead",         text: "text-zinc-600",  dot: "bg-zinc-700" },
+  active: { label: "active",       text: "text-sol-blue",   dot: "bg-sol-blue" },
+  idle:   { label: "idle · kill?", text: "text-sol-yellow", dot: "bg-sol-yellow" },
+  dead:   { label: "dead",         text: "text-sol-text-dim",  dot: "bg-sol-border" },
 };
 
 const WORK_STATE_STYLES: Record<WorkState, { label: string; cls: string }> = {
-  needs_input: { label: "needs you", cls: "text-rose-300 bg-rose-950/40 border-rose-900/50" },
-  done:        { label: "done",        cls: "text-cyan-300 bg-cyan-950/30 border-cyan-900/40" },
-  working:     { label: "working",     cls: "text-emerald-300 bg-emerald-950/30 border-emerald-900/40" },
-  dormant:     { label: "dormant",     cls: "text-sky-300 bg-sky-950/30 border-sky-900/40" },
-  idle:        { label: "idle",        cls: "text-zinc-400 bg-zinc-800/50 border-zinc-700/40" },
+  needs_input: { label: "needs you", cls: "text-sol-yellow bg-sol-yellow/15 border-sol-yellow/30" },
+  done:        { label: "done",        cls: "text-sol-cyan bg-sol-cyan/10 border-sol-cyan/30" },
+  working:     { label: "working",     cls: "text-sol-green bg-sol-green/10 border-sol-green/30" },
+  dormant:     { label: "dormant",     cls: "text-sol-blue bg-sol-blue/10 border-sol-blue/30" },
+  idle:        { label: "idle",        cls: "text-sol-text-muted bg-sol-bg-highlight/50 border-sol-border/40" },
 };
 
 type TriageFilter = "all" | "needs_input" | "working" | "pinned" | "dismissed";
@@ -145,7 +165,7 @@ function SessionMetricsChart({ sessionId }: { sessionId: string }) {
   if (!metrics || metrics.length < 2) {
     return (
       <div className="px-4 py-4 text-center">
-        <span className="text-[11px] font-mono text-zinc-600">
+        <span className="text-meta font-mono text-sol-text-dim">
           {metrics === undefined ? "Loading metrics..." : "Collecting metrics..."}
         </span>
       </div>
@@ -176,39 +196,39 @@ function SessionMetricsChart({ sessionId }: { sessionId: string }) {
   const latest = metrics[metrics.length - 1];
 
   return (
-    <div className="border-t border-zinc-800/60">
+    <div className="border-t border-sol-border/60">
       <div className="px-4 py-2.5 flex items-center justify-between">
-        <div className="flex items-center gap-4 text-[11px]">
+        <div className="flex items-center gap-4 text-meta">
           <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-1 rounded-sm bg-sky-500/60" />
-            <span className="text-zinc-500">Memory</span>
+            <span className="w-2.5 h-1 rounded-sm bg-sol-blue/60" />
+            <span className="text-sol-text-muted">Memory</span>
           </span>
           <span className="flex items-center gap-1.5">
-            <span className="w-2.5 h-0.5 rounded-sm bg-amber-500" />
-            <span className="text-zinc-500">CPU</span>
+            <span className="w-2.5 h-0.5 rounded-sm bg-sol-yellow" />
+            <span className="text-sol-text-muted">CPU</span>
           </span>
         </div>
-        <span className="text-[10px] font-mono text-zinc-600">{metrics.length} samples</span>
+        <span className="text-meta font-mono text-sol-text-dim">{metrics.length} samples</span>
       </div>
       <div className="px-4 pb-2">
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 90 }} preserveAspectRatio="none">
-          <polygon points={memAreaPoints} fill="rgba(56,189,248,0.12)" />
-          <polyline points={memPoints} fill="none" stroke="rgba(56,189,248,0.5)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-          <polyline points={cpuPoints} fill="none" stroke="rgba(245,158,11,0.7)" strokeWidth="1.5" strokeDasharray="4 2" vectorEffect="non-scaling-stroke" />
+          <polygon points={memAreaPoints} fill="color-mix(in srgb, var(--sol-blue) 12%, transparent)" />
+          <polyline points={memPoints} fill="none" stroke="color-mix(in srgb, var(--sol-blue) 50%, transparent)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+          <polyline points={cpuPoints} fill="none" stroke="color-mix(in srgb, var(--sol-yellow) 70%, transparent)" strokeWidth="1.5" strokeDasharray="4 2" vectorEffect="non-scaling-stroke" />
           {metrics.map((m: MetricsRow, i: number) => (
-            <circle key={i} cx={x(m.collected_at)} cy={yMem(m.memory / (1024 * 1024))} r="2" fill="rgba(56,189,248,0.7)" />
+            <circle key={i} cx={x(m.collected_at)} cy={yMem(m.memory / (1024 * 1024))} r="2" fill="color-mix(in srgb, var(--sol-blue) 70%, transparent)" />
           ))}
         </svg>
       </div>
-      <div className="px-4 py-2 border-t border-zinc-800/40 flex items-center gap-6 text-[11px] font-mono">
-        <span className="text-zinc-500">
-          Mem <span className="text-sky-400">{(latest.memory / (1024 * 1024)).toFixed(0)}MB</span>
+      <div className="px-4 py-2 border-t border-sol-border/40 flex items-center gap-6 text-meta font-mono">
+        <span className="text-sol-text-muted">
+          Mem <span className="text-sol-blue">{(latest.memory / (1024 * 1024)).toFixed(0)}MB</span>
         </span>
-        <span className="text-zinc-500">
-          CPU <span className="text-amber-400">{latest.cpu.toFixed(1)}%</span>
+        <span className="text-sol-text-muted">
+          CPU <span className="text-sol-yellow">{latest.cpu.toFixed(1)}%</span>
         </span>
-        <span className="text-zinc-500">
-          Procs <span className="text-zinc-300">{latest.pid_count}</span>
+        <span className="text-sol-text-muted">
+          Procs <span className="text-sol-text-secondary">{latest.pid_count}</span>
         </span>
       </div>
     </div>
@@ -239,39 +259,39 @@ function AggregateOverview({ sessions }: { sessions: ClassifiedSession[] }) {
   const hasChart = aggregateMetrics && aggregateMetrics.length >= 2;
 
   return (
-    <div className="bg-zinc-900/60 rounded-lg border border-zinc-800/60 mb-4 overflow-hidden">
+    <div className="bg-sol-bg-alt/60 rounded-lg border border-sol-border/60 mb-4 overflow-hidden">
       {/* Stats row */}
-      <div className="flex items-center gap-6 px-4 py-2.5 text-[11px] font-mono">
-        <span className="text-zinc-500">
-          <span className="text-zinc-300 text-sm">{totals.count}</span> sessions
+      <div className="flex items-center gap-6 px-4 py-2.5 text-meta font-mono">
+        <span className="text-sol-text-muted">
+          <span className="text-sol-text-secondary text-sm">{totals.count}</span> sessions
         </span>
         {totals.mem > 0 && (
-          <span className="text-zinc-500">
-            <span className="text-sky-400 text-sm">{formatBytes(totals.mem)}</span> mem
+          <span className="text-sol-text-muted">
+            <span className="text-sol-blue text-sm">{formatBytes(totals.mem)}</span> mem
           </span>
         )}
         {totals.cpu > 0 && (
           <span
-            className="text-zinc-500"
+            className="text-sol-text-muted"
             title="Sum of each live session's process-tree CPU%. 100% = one full core, so the total can exceed 100% across cores."
           >
-            <span className="text-amber-400 text-sm">{totals.cpu.toFixed(1)}%</span> cpu
+            <span className="text-sol-yellow text-sm">{totals.cpu.toFixed(1)}%</span> cpu
           </span>
         )}
         {totals.procs > 0 && (
-          <span className="text-zinc-500">
-            <span className="text-zinc-300 text-sm">{totals.procs}</span> procs
+          <span className="text-sol-text-muted">
+            <span className="text-sol-text-secondary text-sm">{totals.procs}</span> procs
           </span>
         )}
         {hasChart && (
           <div className="ml-auto flex items-center gap-4">
             <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-1 rounded-sm bg-sky-500/60" />
-              <span className="text-zinc-600">Memory</span>
+              <span className="w-2.5 h-1 rounded-sm bg-sol-blue/60" />
+              <span className="text-sol-text-dim">Memory</span>
             </span>
             <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-0.5 rounded-sm bg-amber-500" />
-              <span className="text-zinc-600">CPU</span>
+              <span className="w-2.5 h-0.5 rounded-sm bg-sol-yellow" />
+              <span className="text-sol-text-dim">CPU</span>
             </span>
           </div>
         )}
@@ -310,9 +330,9 @@ function AggregateChart({ metrics }: { metrics: AggregatePoint[] }) {
   return (
     <div className="px-4 pb-2">
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ height: 70 }} preserveAspectRatio="none">
-        <polygon points={memAreaPoints} fill="rgba(56,189,248,0.10)" />
-        <polyline points={memPoints} fill="none" stroke="rgba(56,189,248,0.45)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-        <polyline points={cpuPoints} fill="none" stroke="rgba(245,158,11,0.6)" strokeWidth="1.5" strokeDasharray="4 2" vectorEffect="non-scaling-stroke" />
+        <polygon points={memAreaPoints} fill="color-mix(in srgb, var(--sol-blue) 10%, transparent)" />
+        <polyline points={memPoints} fill="none" stroke="color-mix(in srgb, var(--sol-blue) 45%, transparent)" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+        <polyline points={cpuPoints} fill="none" stroke="color-mix(in srgb, var(--sol-yellow) 60%, transparent)" strokeWidth="1.5" strokeDasharray="4 2" vectorEffect="non-scaling-stroke" />
       </svg>
     </div>
   );
@@ -345,15 +365,11 @@ export function SessionsView() {
   const [triageFilter, setTriageFilter] = useState<TriageFilter>("all");
   const [sortKey, setSortKey] = useState<SortKey>("lastActive");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [now, setNow] = useState(Date.now());
+  // The shared coarse clock (one timer, deferred while typing) drives the ages.
+  const now = useCoarseNow(15_000);
   const [expandedSession, setExpandedSession] = useState<string | null>(null);
-  // Two-step confirm for the bulk kill (destructive, fleet-wide).
+  // The bulk kill's review (destructive, fleet-wide) is open.
   const [bulkConfirm, setBulkConfirm] = useState(false);
-
-  useEffect(() => {
-    const interval = setInterval(() => setNow(Date.now()), 5000);
-    return () => clearInterval(interval);
-  }, []);
 
   // Reset the kill-all confirm whenever the visible set changes, so a pending
   // confirm can't apply to a different list than the one the user was looking at.
@@ -521,8 +537,8 @@ export function SessionsView() {
 
   if (sessions === undefined) {
     return (
-      <div className="h-full min-h-0 overflow-y-auto bg-zinc-950 text-zinc-100 flex items-center justify-center">
-        <div className="text-zinc-500 font-mono text-sm">loading sessions...</div>
+      <div className="h-full min-h-0 overflow-y-auto bg-sol-bg text-sol-text flex items-center justify-center">
+        <div className="text-sol-text-muted font-mono text-sm">loading sessions...</div>
       </div>
     );
   }
@@ -544,65 +560,69 @@ export function SessionsView() {
   const parkCounts = hibernationResultCounts(parkResults);
   const bulkKillCount = bulkRows.filter((s) => s.conversation_id).length;
   const bulkPruneCount = bulkRows.length - bulkKillCount;
+  // The shared kill review, plus the stale rows the same press prunes.
+  const bulkKillBase = killSessionsLedger({
+    total: bulkKillCount,
+    working: bulkRows.filter((s) => s.conversation_id && s.workState === "working").map((s) => s.conversation_title || s.tmux_session || s.session_id.slice(0, 12)),
+  });
+  const bulkKillLedger: SwitchLedger = bulkKillCount === 0
+    ? { name: `Prune ${count(bulkPruneCount, "stale row")}`, subject: "No process left to kill", shift: null, figures: [{ value: String(bulkPruneCount), label: "prune" }], rows: [{ k: "Pruned", v: count(bulkPruneCount, "stale row") }], confirm: `Prune ${bulkPruneCount}`, keep: "Keep them" }
+    : bulkPruneCount > 0
+      ? { ...bulkKillBase, rows: [...bulkKillBase.rows, { k: "Pruned", v: count(bulkPruneCount, "stale row") }] }
+      : bulkKillBase;
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto bg-zinc-950 text-zinc-100">
+    <div className="h-full min-h-0 overflow-y-auto bg-sol-bg text-sol-text">
       <div className="max-w-[1200px] mx-auto px-6 py-6">
         {/* Header */}
         <div ref={titlebarRef} className="flex flex-wrap items-center justify-between gap-3 mb-6">
           <div className="flex flex-wrap items-center gap-4">
-            <Link href="/inbox" className="text-zinc-500 hover:text-zinc-300 transition-colors">
+            <Link href="/inbox" aria-label="Back to inbox" title="Back to inbox" className="text-sol-text-muted hover:text-sol-text-secondary transition-colors">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
               </svg>
             </Link>
             <h1 className="text-lg font-medium tracking-tight">Sessions</h1>
-            <Link href="/resources" className="rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300 hover:border-zinc-500 hover:text-zinc-100" title="CPU, memory and processes per machine and session">Resources</Link>
-            <div className="flex flex-wrap items-center gap-3 text-xs text-zinc-500 font-mono">
-              <span><span className="text-sky-400">{counts.active}</span> active</span>
-              <span className="text-zinc-700">|</span>
-              <span><span className={counts.idle > 0 ? "text-amber-400" : "text-zinc-600"}>{counts.idle}</span> idle 2h+</span>
-              <span className="text-zinc-700">|</span>
-              <span><span className="text-zinc-600">{counts.dead}</span> dead</span>
-              <span className="text-zinc-700">|</span>
+            <Link href="/resources" className="rounded border border-sol-border px-2 py-0.5 text-xs text-sol-text-secondary hover:border-sol-text-dim hover:text-sol-text" title="CPU, memory and processes per machine and session">Resources</Link>
+            <div className="flex flex-wrap items-center gap-3 text-xs text-sol-text-muted font-mono">
+              <span><span className="text-sol-blue">{counts.active}</span> active</span>
+              <span className="text-sol-border">|</span>
+              <span><span className={counts.idle > 0 ? "text-sol-yellow" : "text-sol-text-dim"}>{counts.idle}</span> idle 2h+</span>
+              <span className="text-sol-border">|</span>
+              <span><span className="text-sol-text-dim">{counts.dead}</span> dead</span>
+              <span className="text-sol-border">|</span>
               <span><span className="text-sol-blue">{counts.hibernated}</span> hibernated</span>
             </div>
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-          {parkConfirm ? <div className="flex flex-wrap items-center gap-2 text-xs text-sol-text-dim">
-            <span>Request parking for {parkCandidates.length} idle sessions? The daemon may skip unsafe targets.</span>
-            <button className="px-3 py-1.5 rounded border border-sol-blue/40 text-sol-blue" disabled={!parkCandidates.length} onClick={() => {
-              setParkRequests(parkCandidates.map(row => requestHibernate(String(row.conversation_id), row.session_id, row.owner_device_id!)));
-              setParkConfirm(false);
-            }}>Confirm hibernate</button>
-            <button onClick={() => setParkConfirm(false)}>cancel</button>
-          </div> : <button className="px-3 py-1.5 text-xs rounded border border-sol-blue/30 text-sol-blue disabled:opacity-40" disabled={!parkCandidates.length} onClick={() => setParkConfirm(true)} title="Request parking for your idle sessions in this view; the daemon checks safety again">Hibernate idle ({parkCandidates.length})</button>}
+          <button className="px-3 py-1.5 text-xs rounded border border-sol-blue/30 text-sol-blue disabled:opacity-40" disabled={!parkCandidates.length} onClick={() => setParkConfirm(true)} aria-haspopup="dialog" title="Request parking for your idle sessions in this view; the daemon checks safety again">Hibernate idle ({parkCandidates.length})</button>
+          {parkConfirm && parkCandidates.length > 0 && (
+            <SwitchReview
+              ledger={hibernateLedger(parkCandidates.length)}
+              onClose={() => setParkConfirm(false)}
+              onConfirm={() => {
+                setParkRequests(parkCandidates.map(row => requestHibernate(String(row.conversation_id), row.session_id, row.owner_device_id!)));
+                setParkConfirm(false);
+              }}
+            />
+          )}
           {bulkRows.length > 0 && (
-            bulkConfirm ? (
-              <div className="flex items-center gap-2 text-xs font-mono">
-                <span className="text-red-300">
-                  Kill {bulkKillCount}{bulkPruneCount > 0 ? ` · prune ${bulkPruneCount}` : ""}? Terminates tmux + claude.
-                </span>
-                <Button variant="red" size="sm" onClick={() => { handleBulk(bulkRows); setBulkConfirm(false); }}>
-                  Confirm kill
-                </Button>
-                <button
-                  onClick={() => setBulkConfirm(false)}
-                  className="px-2 py-1.5 text-zinc-400 hover:text-zinc-200 transition-colors"
-                >
-                  cancel
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setBulkConfirm(true)}
-                className="px-3 py-1.5 text-xs font-mono bg-red-950/40 text-red-400 border border-red-900/40 rounded-md hover:bg-red-950/60 hover:border-red-800/50 transition-colors"
-                title="Kill every session in the current view (terminates tmux + claude + child processes)"
-              >
-                Kill all {bulkRows.length}
-              </button>
-            )
+            <button
+              onClick={() => setBulkConfirm(true)}
+              aria-haspopup="dialog"
+              className="px-3 py-1.5 text-xs bg-sol-red/15 text-sol-red border border-sol-red/30 rounded-md hover:bg-sol-red/20 transition-colors"
+              title="Kill every session in the current view (terminates tmux + claude + child processes)"
+            >
+              Kill all {bulkRows.length}
+            </button>
+          )}
+          {bulkConfirm && bulkRows.length > 0 && (
+            <SwitchReview
+              ledger={bulkKillLedger}
+              onClose={() => setBulkConfirm(false)}
+              onConfirm={() => { handleBulk(bulkRows); setBulkConfirm(false); }}
+            />
           )}
           </div>
         </div>
@@ -615,28 +635,28 @@ export function SessionsView() {
 
         {/* Filters + sort */}
         <div className="flex flex-wrap items-center gap-2 mb-4">
-          <div className="flex flex-wrap rounded-md border border-zinc-800/60 overflow-hidden">
+          <div className="flex flex-wrap rounded-md border border-sol-border/60 overflow-hidden">
             {filterButtons.map(({ value, label, count }) => (
               <button
                 key={value}
                 onClick={() => setFilter(value)}
                 className={`px-3 py-1.5 text-xs font-mono transition-colors ${
                   filter === value
-                    ? "bg-zinc-800 text-zinc-200"
-                    : "bg-zinc-900/40 text-zinc-500 hover:text-zinc-300"
+                    ? "bg-sol-bg-highlight text-sol-text"
+                    : "bg-sol-bg-alt/40 text-sol-text-muted hover:text-sol-text-secondary"
                 }`}
               >
-                {label} <span className="text-zinc-600 ml-1">{count}</span>
+                {label} <span className="text-sol-text-dim ml-1">{count}</span>
               </button>
             ))}
           </div>
 
           <div className="ml-auto flex items-center gap-1.5 text-xs font-mono">
-            <span className="text-zinc-600">sort</span>
+            <span className="text-sol-text-dim">sort</span>
             <select
               value={sortKey}
               onChange={(e) => setSortKey(e.target.value as SortKey)}
-              className="bg-zinc-900/60 border border-zinc-800/60 rounded-md px-2 py-1.5 text-zinc-300 hover:text-zinc-100 focus:outline-none focus:border-zinc-700 cursor-pointer"
+              className="bg-sol-bg-alt/60 border border-sol-border/60 rounded-md px-2 py-1.5 text-sol-text-secondary hover:text-sol-text focus:outline-none focus:border-sol-border cursor-pointer"
             >
               {SORT_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>{o.label}</option>
@@ -644,7 +664,7 @@ export function SessionsView() {
             </select>
             <button
               onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
-              className="px-2 py-1.5 bg-zinc-900/60 border border-zinc-800/60 rounded-md text-zinc-400 hover:text-zinc-100 hover:border-zinc-700 transition-colors"
+              className="px-2 py-1.5 bg-sol-bg-alt/60 border border-sol-border/60 rounded-md text-sol-text-muted hover:text-sol-text hover:border-sol-border transition-colors"
               title={sortDir === "asc" ? "Ascending — oldest / smallest first" : "Descending — newest / largest first"}
             >
               {sortDir === "asc" ? "↑" : "↓"}
@@ -655,8 +675,8 @@ export function SessionsView() {
         {/* Triage filter — the agent's relationship to you (orthogonal to the
             process-liveness filter above). */}
         <div className="flex flex-wrap items-center gap-2 mb-4 -mt-1">
-          <span className="text-[10px] uppercase tracking-wider text-zinc-600 font-mono w-12 shrink-0">state</span>
-          <div className="flex flex-wrap rounded-md border border-zinc-800/60 overflow-hidden">
+          <span className="text-mark uppercase tracking-wider text-sol-text-dim font-mono w-12 shrink-0">state</span>
+          <div className="flex flex-wrap rounded-md border border-sol-border/60 overflow-hidden">
             {([
               { value: "all", label: "All", count: counts.total },
               { value: "needs_input", label: "Needs you", count: triageCounts.needs_input },
@@ -669,11 +689,11 @@ export function SessionsView() {
                 onClick={() => setTriageFilter(value)}
                 className={`px-3 py-1.5 text-xs font-mono transition-colors ${
                   triageFilter === value
-                    ? "bg-zinc-800 text-zinc-200"
-                    : "bg-zinc-900/40 text-zinc-500 hover:text-zinc-300"
+                    ? "bg-sol-bg-highlight text-sol-text"
+                    : "bg-sol-bg-alt/40 text-sol-text-muted hover:text-sol-text-secondary"
                 }`}
               >
-                {label} <span className="text-zinc-600 ml-1">{count}</span>
+                {label} <span className="text-sol-text-dim ml-1">{count}</span>
               </button>
             ))}
           </div>
@@ -684,8 +704,8 @@ export function SessionsView() {
 
         {/* Table */}
         {filtered.length === 0 ? (
-          <div className="bg-zinc-900/40 rounded-lg border border-zinc-800/60 p-12 text-center">
-            <div className="text-zinc-600 text-sm">
+          <div className="bg-sol-bg-alt/40 rounded-lg border border-sol-border/60 p-12 text-center">
+            <div className="text-sol-text-dim text-sm">
               {counts.total === 0 ? "No active sessions" : "No sessions match these filters"}
             </div>
           </div>
@@ -699,11 +719,11 @@ export function SessionsView() {
                 return (
                   <div
                     key={session._id}
-                    className={`bg-zinc-900/60 rounded-lg border transition-colors ${
-                      session.pinned ? "border-amber-800/40" : "border-zinc-800/60"
+                    className={`bg-sol-bg-alt/60 rounded-lg border transition-colors ${
+                      session.pinned ? "border-sol-yellow/30" : "border-sol-border/60"
                     } ${
                       session.bucket === "dead" || session.dismissed ? "opacity-50" : ""
-                    } ${isBusy ? "opacity-30" : "hover:bg-zinc-900/80"}`}
+                    } ${isBusy ? "opacity-30" : "hover:bg-sol-bg-alt/80"}`}
                   >
                     <div
                       className="px-4 py-3 cursor-pointer"
@@ -720,12 +740,12 @@ export function SessionsView() {
                           {session.conversation_id ? (
                             <Link
                               href={`/conversation/${session.conversation_id}`}
-                              className="text-sm text-zinc-200 hover:text-white truncate block transition-colors"
+                              className="text-sm text-sol-text hover:text-white truncate block transition-colors"
                             >
                               {session.conversation_title || session.tmux_session || session.session_id.slice(0, 12)}
                             </Link>
                           ) : (
-                            <span className="text-sm text-zinc-400 truncate block">
+                            <span className="text-sm text-sol-text-muted truncate block">
                               {session.tmux_session || session.session_id.slice(0, 12)}
                             </span>
                           )}
@@ -737,26 +757,26 @@ export function SessionsView() {
                           className="shrink-0 flex items-baseline gap-1 font-mono tabular-nums"
                           title={`last active ${new Date(session.lastActiveAt).toLocaleString()}`}
                         >
-                          <span className="text-sm text-zinc-100">{formatDuration(session.lastActiveMs)}</span>
-                          <span className="text-[10px] text-zinc-500">ago</span>
+                          <span className="text-sm text-sol-text">{formatDuration(session.lastActiveMs)}</span>
+                          <span className="text-meta text-sol-text-muted">ago</span>
                         </span>
 
                         <HibernatedMarker status={session.agent_status} />
-                        {commands.some(c => c.conversation_id === session.conversation_id && !c.executed_at) && <span className="text-[11px] text-sol-blue">parking requested</span>}
+                        {commands.some(c => c.conversation_id === session.conversation_id && !c.executed_at) && <span className="text-meta text-sol-blue">parking requested</span>}
 
                         {/* Pinned marker */}
                         {session.pinned && (
-                          <span className="text-amber-400 text-xs shrink-0" title="pinned">★</span>
+                          <span className="text-sol-yellow text-xs shrink-0" title="pinned">★</span>
                         )}
 
                         {/* Triage state — the agent's relationship to you. Loud
                             for the actionable states; idle stays quiet. */}
                         {session.dismissed ? (
-                          <span className="text-[11px] font-mono px-1.5 py-0.5 rounded border border-zinc-700/50 text-zinc-500 bg-zinc-800/40 shrink-0" title={session.killed ? "killed (hidden from inbox, agent torn down)" : "stashed (hidden from inbox, agent alive)"}>
+                          <span className="text-meta font-mono px-1.5 py-0.5 rounded border border-sol-border/50 text-sol-text-muted bg-sol-bg-highlight/40 shrink-0" title={session.killed ? "killed (hidden from inbox, agent torn down)" : "stashed (hidden from inbox, agent alive)"}>
                             {session.killed ? "killed" : "stashed"}
                           </span>
                         ) : (session.workState === "needs_input" || session.workState === "working") && (
-                          <span className={`text-[11px] font-mono px-1.5 py-0.5 rounded border shrink-0 ${WORK_STATE_STYLES[session.workState].cls}`}>
+                          <span className={`text-meta font-mono px-1.5 py-0.5 rounded border shrink-0 ${WORK_STATE_STYLES[session.workState].cls}`}>
                             {WORK_STATE_STYLES[session.workState].label}
                           </span>
                         )}
@@ -766,7 +786,7 @@ export function SessionsView() {
                           {style.label}
                         </span>
                         {session.bucket === "idle" && (
-                          <span className="text-xs font-mono tabular-nums shrink-0 text-amber-400" title="idle while awake (sleep excluded)">
+                          <span className="text-xs font-mono tabular-nums shrink-0 text-sol-yellow" title="idle while awake (sleep excluded)">
                             idle {formatDuration(session.awakeIdleMs)}
                           </span>
                         )}
@@ -776,25 +796,25 @@ export function SessionsView() {
                           <>
                             <button
                               onClick={() => handleTogglePin(session)}
-                              className={`px-2 py-1 text-[11px] font-mono rounded transition-colors border border-transparent shrink-0 ${
+                              className={`px-2 py-1 text-meta rounded transition-colors border border-transparent shrink-0 ${
                                 session.pinned
-                                  ? "text-amber-400 hover:bg-amber-950/30 hover:border-amber-900/40"
-                                  : "text-zinc-600 hover:text-amber-400 hover:bg-amber-950/20 hover:border-amber-900/30"
+                                  ? "text-sol-yellow hover:bg-sol-yellow/10 hover:border-sol-yellow/30"
+                                  : "text-sol-text-dim hover:text-sol-yellow hover:bg-sol-yellow/10 hover:border-sol-yellow/30"
                               }`}
                               title={session.pinned ? "Unpin" : "Pin to top of inbox"}
                             >
-                              {session.pinned ? "unpin" : "pin"}
+                              {session.pinned ? "Unpin" : "Pin"}
                             </button>
                             <button
                               onClick={() => handleToggleDismiss(session)}
-                              className={`px-2 py-1 text-[11px] font-mono rounded transition-colors border border-transparent shrink-0 ${
+                              className={`px-2 py-1 text-meta rounded transition-colors border border-transparent shrink-0 ${
                                 session.dismissed
-                                  ? "text-zinc-500 hover:text-emerald-400 hover:bg-emerald-950/20 hover:border-emerald-900/30"
-                                  : "text-zinc-600 hover:text-zinc-300 hover:bg-zinc-800/50 hover:border-zinc-700/60"
+                                  ? "text-sol-text-muted hover:text-sol-green hover:bg-sol-green/10 hover:border-sol-green/30"
+                                  : "text-sol-text-dim hover:text-sol-text-secondary hover:bg-sol-bg-highlight/50 hover:border-sol-border/60"
                               }`}
                               title={session.dismissed ? "Restore to inbox" : "Stash from inbox (keeps agent running)"}
                             >
-                              {session.dismissed ? "restore" : "stash"}
+                              {session.dismissed ? "Restore" : "Stash"}
                             </button>
                           </>
                         )}
@@ -803,92 +823,92 @@ export function SessionsView() {
                         {!isBusy && session.bucket === "dead" ? (
                           <button
                             onClick={() => handlePrune(session)}
-                            className="px-2 py-1 text-[11px] font-mono text-zinc-600 hover:text-zinc-300 hover:bg-zinc-800/50 rounded transition-colors border border-transparent hover:border-zinc-700/60 shrink-0"
+                            className="px-2 py-1 text-meta text-sol-text-dim hover:text-sol-text-secondary hover:bg-sol-bg-highlight/50 rounded transition-colors border border-transparent hover:border-sol-border/60 shrink-0"
                             title="Remove this stale row (no live process to kill)"
                           >
-                            prune
+                            Prune
                           </button>
                         ) : !isBusy && session.conversation_id ? (
                           <button
                             onClick={() => handleKill(session)}
-                            className="px-2 py-1 text-[11px] font-mono text-zinc-600 hover:text-red-400 hover:bg-red-950/30 rounded transition-colors border border-transparent hover:border-red-900/40 shrink-0"
+                            className="px-2 py-1 text-meta text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10 rounded transition-colors border border-transparent hover:border-sol-red/30 shrink-0"
                             title="Kill this session"
                           >
-                            kill
+                            Kill
                           </button>
                         ) : null}
                         {isBusy && (
-                          <span className="text-[11px] font-mono text-zinc-600 shrink-0">working…</span>
+                          <span className="text-meta font-mono text-sol-text-dim shrink-0">working…</span>
                         )}
                       </div>
 
                       {/* What this session is: insight headline, else the last
                           message so every row stays identifiable. */}
                       {(session.headline || session.last_message_preview) && (
-                        <div className="mt-1.5 ml-5 text-[12px] text-zinc-500 truncate">
+                        <div className="mt-1.5 ml-5 text-[12px] text-sol-text-muted truncate">
                           {!session.headline && session.last_message_role && (
-                            <span className="text-zinc-600">{session.last_message_role}: </span>
+                            <span className="text-sol-text-dim">{session.last_message_role}: </span>
                           )}
                           {session.headline || session.last_message_preview}
                         </div>
                       )}
 
                       {/* Metadata row */}
-                      <div className="mt-1.5 ml-5 flex items-center gap-3 text-[11px] text-zinc-600 font-mono flex-wrap">
+                      <div className="mt-1.5 ml-5 flex items-center gap-3 text-meta text-sol-text-dim font-mono flex-wrap">
                         <span>{projectName(session.project_path)}</span>
                         {session.git_branch && (
                           <>
-                            <span className="text-zinc-700">|</span>
-                            <span className="text-zinc-500" title={session.git_branch}>
-                              {session.git_branch.length > 30 ? session.git_branch.slice(0, 30) + "..." : session.git_branch}
+                            <span className="text-sol-border">|</span>
+                            <span className="text-sol-text-muted truncate max-w-[16rem]" title={session.git_branch}>
+                              {session.git_branch}
                             </span>
                           </>
                         )}
                         {session.worktree_name && (
                           <>
-                            <span className="text-zinc-700">|</span>
-                            <span className="text-teal-600">wt:{session.worktree_name}</span>
+                            <span className="text-sol-border">|</span>
+                            <span className="text-sol-cyan">wt:{session.worktree_name}</span>
                           </>
                         )}
                         {session.model && (
                           <>
-                            <span className="text-zinc-700">|</span>
+                            <span className="text-sol-border">|</span>
                             <span>{session.model}</span>
                           </>
                         )}
-                        <span className="text-zinc-700">|</span>
+                        <span className="text-sol-border">|</span>
                         <span>pid:{session.agent_pid ?? session.pid}</span>
                         {session.message_count != null && (
                           <>
-                            <span className="text-zinc-700">|</span>
+                            <span className="text-sol-border">|</span>
                             <span>{session.message_count} msgs</span>
                           </>
                         )}
-                        <span className="text-zinc-700">|</span>
+                        <span className="text-sol-border">|</span>
                         <span>up {formatDuration(session.uptime)}</span>
                         {session.is_subagent && (
                           <>
-                            <span className="text-zinc-700">|</span>
-                            <span className="text-violet-600">subagent</span>
+                            <span className="text-sol-border">|</span>
+                            <span className="text-sol-violet">subagent</span>
                           </>
                         )}
                         {/* Resource metrics reflect a live process tree — suppress for
                             dead rows where the numbers are stale pre-death values. */}
                         {session.isAlive && session.current_memory != null && session.current_memory > 0 && (
                           <>
-                            <span className="text-zinc-700">|</span>
-                            <span className="text-sky-500">{(session.current_memory / (1024 * 1024)).toFixed(0)}MB</span>
+                            <span className="text-sol-border">|</span>
+                            <span className="text-sol-blue">{(session.current_memory / (1024 * 1024)).toFixed(0)}MB</span>
                           </>
                         )}
                         {session.isAlive && session.current_cpu != null && session.current_cpu > 0 && (
                           <>
-                            <span className="text-zinc-700">|</span>
-                            <span className="text-amber-500">{session.current_cpu.toFixed(1)}%</span>
+                            <span className="text-sol-border">|</span>
+                            <span className="text-sol-yellow">{session.current_cpu.toFixed(1)}%</span>
                           </>
                         )}
                         {session.isAlive && session.current_pid_count != null && session.current_pid_count > 0 && (
                           <>
-                            <span className="text-zinc-700">|</span>
+                            <span className="text-sol-border">|</span>
                             <span>{session.current_pid_count} procs</span>
                           </>
                         )}

@@ -150,7 +150,7 @@ export function CanvasThemesFigure() {
           <HtmlSnippet code={EXAMPLES[example].html} />
           <div className="mt-3 flex flex-wrap gap-x-3 gap-y-2">
             {SWATCHES.map((s) => (
-              <div key={s} className="flex items-center gap-1.5 font-mono text-[10.5px]" style={{ color: "var(--sol-text-muted)" }}>
+              <div key={s} className="flex items-center gap-1.5 font-mono text-meta" style={{ color: "var(--sol-text-muted)" }}>
                 <span
                   className="inline-block w-3.5 h-3.5 rounded-sm transition-colors duration-500"
                   style={{ backgroundColor: `var(--sol-${s})`, boxShadow: "inset 0 0 0 1px color-mix(in srgb, var(--sol-text) 15%, transparent)" }}
@@ -162,11 +162,11 @@ export function CanvasThemesFigure() {
         </div>
       </div>
       <div className="px-5 py-3 flex flex-wrap items-center gap-2" style={{ borderTop: `1px solid ${SOL.base2}` }}>
-        <span className="font-mono text-[11px] mr-1" style={{ color: SOL.base1 }}>theme</span>
+        <span className="font-mono text-meta mr-1" style={{ color: SOL.base1 }}>theme</span>
         {THEMES.map((x, i) => (
           <Chip key={x.id} on={i === theme} onClick={() => { setAuto(false); setTheme(i); }}>{x.label}</Chip>
         ))}
-        {auto && <span className="font-mono text-[11px] ml-auto bj-pulse" data-play="1" style={{ color: SOL.base1 }}>cycling</span>}
+        {auto && <span className="font-mono text-meta ml-auto bj-pulse" data-play="1" style={{ color: SOL.base1 }}>cycling</span>}
       </div>
     </div>
   );

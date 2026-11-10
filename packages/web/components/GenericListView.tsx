@@ -88,8 +88,15 @@ function TabDropdown({
     const handler = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
+    // Esc closes the popover, and only the popover (captured before the
+    // list's own Esc and the detail's close).
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault(); e.stopPropagation(); setOpen(false);
+    };
     document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    document.addEventListener("keydown", onKey, true);
+    return () => { document.removeEventListener("mousedown", handler); document.removeEventListener("keydown", onKey, true); };
   }, [open]);
 
   // The label/count only collapse when there's an icon to stand in for them, so
@@ -110,12 +117,12 @@ function TabDropdown({
         )}
         <span className={`font-medium whitespace-nowrap max-w-[14rem] truncate ${labelCollapse}`}>{summary.label}</span>
         {summary.count != null && summary.count > 0 && (
-          <span className={`text-[10px] tabular-nums text-sol-text-dim ${labelCollapse}`}>{summary.count}</span>
+          <span className={`text-meta tabular-nums text-sol-text-dim ${labelCollapse}`}>{summary.count}</span>
         )}
         <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0 cq-caret" />
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-52 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1">
+        <div className="absolute top-full left-0 mt-1 w-52 max-h-[min(70vh,28rem)] overflow-y-auto bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1">
           {tabs.map((t) => {
             const TIcon = t.icon;
             const isActive = active?.key === t.key;
@@ -131,7 +138,7 @@ function TabDropdown({
                 {TIcon && <TIcon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />}
                 <span className="flex-1 text-left whitespace-nowrap">{t.label}</span>
                 {t.count != null && t.count > 0 && (
-                  <span className="text-[10px] tabular-nums text-sol-text-dim">{t.count}</span>
+                  <span className="text-meta tabular-nums text-sol-text-dim">{t.count}</span>
                 )}
                 {isActive && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
               </button>
@@ -222,8 +229,15 @@ function DisplayMenu({
     const handler = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
+    // Esc closes the popover, and only the popover (captured before the
+    // list's own Esc and the detail's close).
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault(); e.stopPropagation(); setOpen(false);
+    };
     document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    document.addEventListener("keydown", onKey, true);
+    return () => { document.removeEventListener("mousedown", handler); document.removeEventListener("keydown", onKey, true); };
   }, [open]);
 
   const hasGrouping = !!(groupOptions && onGroupChange);
@@ -241,11 +255,11 @@ function DisplayMenu({
         <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0 cq-caret" />
       </button>
       {open && (
-        <div className="absolute top-full right-0 mt-1 w-56 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] p-2 space-y-3">
+        <div className="absolute top-full right-0 mt-1 w-56 max-h-[min(70vh,28rem)] overflow-y-auto bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] p-2 space-y-3">
           {extra && <div className="flex flex-col gap-2">{extra}</div>}
           {hasGrouping && (
             <div>
-              <div className="text-[10px] uppercase tracking-wider text-sol-text-dim px-1 mb-1">Grouping</div>
+              <div className="text-mark uppercase tracking-wider text-sol-text-dim px-1 mb-1">Grouping</div>
               <div className="space-y-0.5">
                 {groupOptions!.map((o) => (
                   <DisplayOptionRow
@@ -264,7 +278,7 @@ function DisplayMenu({
               otherwise. */}
           {subGroupOptions && subGroupOptions.length > 0 && onSubGroupChange && groupBy && groupBy !== "none" && (
             <div>
-              <div className="text-[10px] uppercase tracking-wider text-sol-text-dim px-1 mb-1">Then by</div>
+              <div className="text-mark uppercase tracking-wider text-sol-text-dim px-1 mb-1">Then by</div>
               <div className="space-y-0.5">
                 {subGroupOptions.map((o) => (
                   <DisplayOptionRow
@@ -279,11 +293,11 @@ function DisplayMenu({
           )}
           <div>
             <div className="flex items-center justify-between px-1 mb-1">
-              <span className="text-[10px] uppercase tracking-wider text-sol-text-dim">Sorting</span>
+              <span className="text-mark uppercase tracking-wider text-sol-text-dim">Sorting</span>
               {sortDir && onSortDirChange && (
                 <button
                   onClick={onSortDirChange}
-                  className="flex items-center gap-1 h-5 px-1.5 rounded text-[10px] text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+                  className="flex items-center gap-1 h-5 px-1.5 rounded text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
                   title={sortDir === "asc" ? "Ascending — click for descending" : "Descending — click for ascending"}
                 >
                   <DirIcon className="w-3 h-3 flex-shrink-0" />
@@ -366,8 +380,13 @@ function AddFilterMenu({
     const handler = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setCatKey(null); }
     };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault(); e.stopPropagation(); setOpen(false); setCatKey(null);
+    };
     document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
+    document.addEventListener("keydown", onKey, true);
+    return () => { document.removeEventListener("mousedown", handler); document.removeEventListener("keydown", onKey, true); };
   }, [open]);
 
   const available = defs.filter((d) => !filterIsSet(d));
@@ -422,7 +441,7 @@ function AddFilterMenu({
             <>
               <button
                 onClick={() => setCatKey(null)}
-                className="w-full flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-sol-text-dim hover:text-sol-text border-b border-sol-border/30 mb-1 transition-colors"
+                className="w-full flex items-center gap-1.5 px-3 py-1.5 text-meta font-medium text-sol-text-dim hover:text-sol-text border-b border-sol-border/30 mb-1 transition-colors"
               >
                 <ChevronLeft className="w-3 h-3" /> {cat.label}
               </button>
@@ -1183,7 +1202,7 @@ export function GenericListView<T>({
                 }`}
               >
                 {tab.label}
-                {tab.count != null && tab.count > 0 && <span className="text-[10px] tabular-nums opacity-60">{tab.count}</span>}
+                {tab.count != null && tab.count > 0 && <span className="text-meta tabular-nums opacity-60">{tab.count}</span>}
               </button>
               );
             })}
@@ -1298,7 +1317,7 @@ export function GenericListView<T>({
               <button
                 onClick={copyViewLink}
                 title="Copy link to this view"
-                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-[10px] text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors"
+                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors"
               >
                 <Link2 className="w-3 h-3 flex-shrink-0" />
                 <span className="cq-header-collapse">Link</span>
@@ -1308,7 +1327,7 @@ export function GenericListView<T>({
               <button
                 onClick={() => openForwardToChat({ url: shareUrl(), label: "view" })}
                 title="Send this view to chat"
-                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-[10px] text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors"
+                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors"
               >
                 <Forward className="w-3 h-3 flex-shrink-0" />
                 <span className="cq-header-collapse">Send</span>
@@ -1325,7 +1344,7 @@ export function GenericListView<T>({
                   <button
                     onClick={filters.dirtyView.onUpdate}
                     title={`Save these filters into "${filters.dirtyView.name}"`}
-                    className="flex items-center gap-1 h-6 px-1.5 rounded-md text-[10px] text-sol-cyan hover:bg-sol-cyan/10 transition-colors"
+                    className="flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-cyan hover:bg-sol-cyan/10 transition-colors"
                   >
                     <Check className="w-3 h-3 flex-shrink-0" />
                     <span className="cq-header-collapse">Update view</span>
@@ -1334,7 +1353,7 @@ export function GenericListView<T>({
                 <button
                   onClick={filters.dirtyView.onDiscard}
                   title={`Go back to "${filters.dirtyView.name}" as saved`}
-                  className="flex items-center gap-1 h-6 px-1.5 rounded-md text-[10px] text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+                  className="flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
                 >
                   {/* A revert arrow, NOT an X: the labels collapse to icons in a
                       narrow pane, and Clear-filters beside it is already an X.
@@ -1349,7 +1368,7 @@ export function GenericListView<T>({
               <button
                 onClick={() => { setSavingView(true); setSaveViewName(""); }}
                 title={filters.dirtyView ? "Save these filters as a new view" : "Save current view as a shortcut"}
-                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-[10px] text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors"
+                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors"
               >
                 {filters.dirtyView
                   ? <BookmarkPlus className="w-3 h-3 flex-shrink-0" />
@@ -1375,13 +1394,13 @@ export function GenericListView<T>({
                   value={saveViewName}
                   onChange={(e) => setSaveViewName(e.target.value)}
                   placeholder="View name..."
-                  className="text-[11px] px-2 py-0.5 rounded bg-sol-bg border border-sol-border/60 text-sol-text outline-none focus:border-sol-cyan w-28"
+                  className="text-meta px-2 py-0.5 rounded bg-sol-bg border border-sol-border/60 text-sol-text outline-none focus:border-sol-cyan w-28"
                   onKeyDown={(e) => { if (e.key === "Escape") setSavingView(false); }}
                 />
                 <button
                   type="submit"
                   disabled={!saveViewName.trim()}
-                  className="text-[10px] text-sol-cyan hover:text-sol-cyan/80 disabled:opacity-30 disabled:cursor-default flex items-center gap-0.5"
+                  className="text-meta text-sol-cyan hover:text-sol-cyan/80 disabled:opacity-30 disabled:cursor-default flex items-center gap-0.5"
                   title="Save"
                 >
                   <Check className="w-3 h-3" />
@@ -1389,7 +1408,7 @@ export function GenericListView<T>({
                 <button
                   type="button"
                   onClick={() => setSavingView(false)}
-                  className="text-[10px] text-sol-text-dim hover:text-sol-text"
+                  className="text-meta text-sol-text-dim hover:text-sol-text"
                   title="Cancel"
                 >
                   <X className="w-3 h-3" />
@@ -1400,7 +1419,7 @@ export function GenericListView<T>({
               <button
                 onClick={filters.onClear}
                 title="Clear filters"
-                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-[10px] text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
               >
                 <X className="w-3 h-3 flex-shrink-0" />
                 <span className="cq-header-collapse">Clear</span>
@@ -1461,7 +1480,9 @@ export function GenericListView<T>({
             )}
           </div>
           {previewItem && renderPreview && (
-            <div className="flex flex-shrink-0 animate-list-peek-in">
+            // The peek never takes more than 60% of the list's row: in a
+            // narrow pane the list keeps a usable width beside it.
+            <div className="flex flex-shrink-0 max-w-[60%] min-w-0 animate-list-peek-in">
               {renderPreview(
                 previewItem,
                 () => setPreviewId(null),

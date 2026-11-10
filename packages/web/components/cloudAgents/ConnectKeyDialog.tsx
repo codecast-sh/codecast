@@ -95,7 +95,7 @@ export function ConnectKeyDialog({ provider, onClose, deviceId }: { provider: Ke
         <Step n={1} state={step1}>
           {copy.open}
           <span className="mt-1.5 block">
-            <Button type="button" size="sm" variant="outline" onClick={openConsole} className="h-7 gap-1.5 px-2.5 text-[11px]">
+            <Button type="button" size="sm" variant="outline" onClick={openConsole} className="h-7 gap-1.5 px-2.5 text-meta">
               Open {page.host}{page.pathname} <ExternalLink className="h-3 w-3" aria-hidden />
             </Button>
           </span>
@@ -118,7 +118,7 @@ export function ConnectKeyDialog({ provider, onClose, deviceId }: { provider: Ke
             </Button>
           </form>
           {trimmed && !looksRight && keySpec.keyPrefix && (
-            <span className="mt-1 block text-[11px] text-amber-500">{aKey[0].toUpperCase()}{aKey.slice(1)} starts with {keySpec.keyPrefix}.</span>
+            <span className="mt-1 block text-meta text-amber-500">{aKey[0].toUpperCase()}{aKey.slice(1)} starts with {keySpec.keyPrefix}.</span>
           )}
         </Step>
         <Step n={3} state={step3}>
@@ -139,7 +139,7 @@ export function ConnectKeyDialog({ provider, onClose, deviceId }: { provider: Ke
       {done && detail && (
         <p className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2.5 text-amber-500">{detail}</p>
       )}
-      <p className="text-[11px] text-sol-text-dim">{copy.footer} <CloudAgentRepoAccessLink spec={spec} className="hover:text-sol-text" />.</p>
+      <p className="text-meta text-sol-text-dim">{copy.footer} <CloudAgentRepoAccessLink spec={spec} className="hover:text-sol-text" />.</p>
     </CloudConnectDialog>
   );
 }

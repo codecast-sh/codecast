@@ -52,10 +52,11 @@ export const CallsNavRow = memo(function CallsNavRow({
       >
         <span className="relative flex-shrink-0">
           <Phone className="w-5 h-5" strokeWidth={1.5} />
-          {/* Narrow rail is icon-only, so the live signal rides the icon. */}
+          {/* Narrow rail is icon-only, so the live signal rides the icon.
+              A still dot: the rail runs no infinite animation (a huddle can
+              last hours, and a ping repaints a layer every frame). */}
           {isNarrow && liveRooms > 0 && (
             <span className="absolute -top-0.5 -right-0.5 flex h-2 w-2">
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sol-green opacity-60" />
               <span className="relative inline-flex h-2 w-2 rounded-full bg-sol-green" />
             </span>
           )}
@@ -65,7 +66,6 @@ export const CallsNavRow = memo(function CallsNavRow({
             <span>Calls</span>
             {liveRooms > 0 && (
               <span className="relative flex h-2 w-2" aria-label="Live huddle">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sol-green opacity-60" />
                 <span className="relative inline-flex h-2 w-2 rounded-full bg-sol-green" />
               </span>
             )}
@@ -78,8 +78,9 @@ export const CallsNavRow = memo(function CallsNavRow({
       {!isNarrow && (
         <button
           onClick={() => openCreateModal("huddle")}
-          className="p-1 mr-2 rounded text-sol-text-dim opacity-0 group-hover/calls:opacity-100 hover:text-sol-green transition-opacity"
+          className="p-1 mr-2 rounded text-sol-text-dim opacity-0 group-hover/calls:opacity-100 focus-visible:opacity-100 hover:text-sol-green transition-opacity"
           title="Start huddle"
+          aria-label="Start huddle"
         >
           <PhoneCall className="w-3.5 h-3.5" />
         </button>

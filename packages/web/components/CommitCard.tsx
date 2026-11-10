@@ -87,7 +87,7 @@ export function CommitCard({ sha, message, timestamp, filesChanged, insertions, 
               {commitMessage}
             </span>
           </div>
-          <div className="flex items-center gap-2 mt-0.5 text-[10px] text-sol-text-dim">
+          <div className="flex items-center gap-2 mt-0.5 text-meta text-sol-text-dim">
             <span>{authorName}</span>
             <span>•</span>
             <span title={formatFullTimestamp(timestamp)}>
@@ -95,7 +95,7 @@ export function CommitCard({ sha, message, timestamp, filesChanged, insertions, 
             </span>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-[10px] font-mono flex-shrink-0">
+        <div className="flex items-center gap-2 text-meta font-mono flex-shrink-0">
           <span className="text-sol-text-dim">
             {filesChanged} file{filesChanged !== 1 ? 's' : ''}
           </span>
@@ -134,7 +134,7 @@ export function CommitCard({ sha, message, timestamp, filesChanged, insertions, 
           ) : (
             <div className="px-3 py-2 bg-sol-bg/30">
               {(insertions > 0 || deletions > 0) && (
-                <div className="flex items-center gap-3 text-[10px]">
+                <div className="flex items-center gap-3 text-meta">
                   <span className="text-sol-text-dim">Changes:</span>
                   <span className="text-sol-green">+{insertions} insertion{insertions !== 1 ? 's' : ''}</span>
                   <span className="text-sol-red">-{deletions} deletion{deletions !== 1 ? 's' : ''}</span>
@@ -149,7 +149,7 @@ export function CommitCard({ sha, message, timestamp, filesChanged, insertions, 
                 href={githubUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-[10px] text-sol-cyan hover:underline flex items-center gap-1"
+                className="text-meta text-sol-cyan hover:underline flex items-center gap-1"
                 onClick={(e) => e.stopPropagation()}
               >
                 <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">

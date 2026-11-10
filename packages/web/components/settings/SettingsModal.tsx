@@ -2,7 +2,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import {
   Terminal, Bot, RefreshCw, User, KeyRound, Users, Plug, Monitor, Bell, Laptop, UserCog, Blocks, X,
-  Search, Volume2, Keyboard, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cpu, ArrowUpRight, CircleGauge, ShieldCheck, Layers, ScrollText, BadgeCheck } from "lucide-react";
+  Search, Volume2, Keyboard, Video, ArrowRightLeft, MonitorSmartphone, Unplug, Cpu, ArrowUpRight, CircleGauge, ShieldCheck, Layers, ScrollText, BadgeCheck, ChevronLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -147,6 +147,10 @@ export function SettingsModal() {
   const router = useRouter();
   const backdropRef = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
+  // A phone has no room for the list beside the panel: it shows one or the
+  // other, the panel first (a link opens the section it names), and the
+  // header's back button opens the list (labels, groups, search).
+  const [phoneNav, setPhoneNav] = useState(false);
 
   const section = s.settingsModalSection;
   const close = useCallback(() => useInboxStore.getState().closeSettingsModal(), []);
@@ -164,6 +168,7 @@ export function SettingsModal() {
     panelRef.current?.focus();
     return () => {
       setQuery("");
+      setPhoneNav(false);
       const prev = restoreFocusRef.current;
       if (prev && document.contains(prev)) prev.focus();
     };
@@ -231,6 +236,7 @@ export function SettingsModal() {
   }, [q, isDesktop, isTeamAdmin, logsAccess]);
   const firstMatch = visibleGroups[0]?.sections[0];
   const go = (d: NavDef) => {
+    setPhoneNav(false);
     if (d.id) return useInboxStore.getState().openSettingsModal(d.id);
     close();
     router.push(d.href);
@@ -257,9 +263,18 @@ export function SettingsModal() {
         onKeyDown={trapFocus}
         className="w-full max-w-[1080px] h-[min(880px,94dvh)] bg-sol-bg border border-sol-border rounded-xl shadow-2xl flex overflow-hidden animate-fadeSlideIn outline-none"
       >
-        <nav className="w-12 sm:w-56 shrink-0 border-r border-sol-border bg-sol-bg-alt/40 flex flex-col">
-          <div className="hidden sm:block px-3 pt-3.5 pb-2">
-            <div className="px-1.5 pb-2.5 text-sm font-semibold text-sol-text">Settings</div>
+        <nav className={`${phoneNav ? "flex w-full" : "hidden"} sm:flex sm:w-56 shrink-0 border-r border-sol-border bg-sol-bg-alt/40 flex-col`}>
+          <div className="px-3 pt-3.5 pb-2">
+            <div className="flex items-center justify-between gap-2 px-1.5 pb-2.5">
+              <span className="text-sm font-semibold text-sol-text">Settings</span>
+              <button
+                onClick={close}
+                className="sm:hidden shrink-0 p-1.5 -my-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/40"
+                aria-label="Close settings"
+              >
+                <X className="w-[18px] h-[18px]" />
+              </button>
+            </div>
             <div className="relative">
               <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-sol-text-dim" />
               <input
@@ -283,10 +298,10 @@ export function SettingsModal() {
               />
             </div>
           </div>
-          <div className="scrollbar-auto flex-1 overflow-y-auto px-1.5 py-3 sm:px-2 sm:pt-0.5">
+          <div className="scrollbar-auto flex-1 overflow-y-auto px-2 pt-0.5 pb-3">
             {visibleGroups.map((group) => (
               <div key={group.label} className="mb-1">
-                <div className="hidden sm:block px-3 pt-2.5 pb-1 text-[10px] font-medium uppercase tracking-wider text-sol-text-dim">
+                <div className="px-3 pt-2.5 pb-1 text-mark font-medium uppercase tracking-wider text-sol-text-dim">
                   {group.label}
                 </div>
                 {group.sections.map((d) => {
@@ -298,31 +313,39 @@ export function SettingsModal() {
                       onClick={() => go(d)}
                       title={d.label}
                       aria-label={d.label}
-                      className={`w-full flex items-center justify-center sm:justify-start gap-2.5 px-2 sm:px-3 py-1.5 rounded-md text-sm transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/40 ${
+                      className={`w-full flex items-center justify-start gap-2.5 px-3 py-1.5 rounded-md text-sm transition-colors text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/40 ${
                         isActive
                           ? "bg-sol-cyan/15 text-sol-cyan font-medium"
                           : "text-sol-text-secondary hover:text-sol-text hover:bg-sol-bg-highlight/50"
                       }`}
                     >
                       <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? "" : "text-sol-text-dim"}`} />
-                      <span className="hidden sm:inline truncate">{d.label}</span>
-                      {!d.id && <ArrowUpRight className="ml-auto hidden h-3.5 w-3.5 shrink-0 text-sol-text-dim sm:block" />}
+                      <span className="truncate">{d.label}</span>
+                      {!d.id && <ArrowUpRight className="ml-auto h-3.5 w-3.5 shrink-0 text-sol-text-dim" />}
                     </button>
                   );
                 })}
               </div>
             ))}
             {q && visibleGroups.length === 0 && (
-              <p className="hidden sm:block px-3 pt-3 text-xs text-sol-text-dim">
+              <p className="px-3 pt-3 text-xs text-sol-text-dim">
                 Nothing matches &ldquo;{query}&rdquo;
               </p>
             )}
           </div>
         </nav>
 
-        <div className="flex-1 min-w-0 flex flex-col">
-          <header className="flex items-center justify-between gap-4 pl-6 pr-3 py-3 border-b border-sol-border">
-            <div className="min-w-0">
+        <div className={`${phoneNav ? "hidden" : "flex"} sm:flex flex-1 min-w-0 flex-col`}>
+          <header className="flex items-center justify-between gap-4 pl-2 sm:pl-6 pr-3 py-3 border-b border-sol-border">
+            <button
+              onClick={() => setPhoneNav(true)}
+              className="sm:hidden shrink-0 -mr-2 p-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/40"
+              aria-label="All settings"
+              title="All settings"
+            >
+              <ChevronLeft className="w-[18px] h-[18px]" />
+            </button>
+            <div className="min-w-0 flex-1">
               <h2 data-cc-sheet-title className="text-base font-semibold text-sol-text leading-tight">{active.label}</h2>
               <p className="truncate text-xs text-sol-text-muted">
                 {active.desc}
