@@ -9,7 +9,11 @@ import { optionalNative } from '@/lib/optionalNative';
 
 // Drawn in its own window, as a popup is (components/PopupHost), so a modal
 // screen or an open sheet cannot sit above the lock. A binary without the
-// screens module draws it over the app's root instead.
+// screens module draws it over the app's root instead. The overlay joins the
+// key window of the foreground-active scene when it mounts, and an app in the
+// background has none: an overlay mounted there never shows, not even after
+// the app returns. So the background cover is drawn over the app's root, and
+// the overlay mounts afresh on each return from the background.
 const FullWindowOverlay: ComponentType<{ children: ReactNode }> | null = Platform.OS === 'ios'
   ? optionalNative('RNSModule', () => require('react-native-screens').FullWindowOverlay)
   : null;
@@ -39,10 +43,17 @@ export function BiometricGate() {
   const enabledRef = useRef(isBiometricEnabled);
   enabledRef.current = isBiometricEnabled;
   const backgroundedAt = useRef<number | null>(null);
+  // Bumped on each return to the foreground (and on the first, for a gate
+  // that mounted before the app was active); the overlay's key, so it
+  // remounts into the window that is now in the foreground.
+  const [foregroundings, setForegroundings] = useState(0);
+  const awaySinceActive = useRef(AppState.currentState !== 'active');
   // One automatic prompt per lock. A cancelled prompt leaves the Unlock
   // button; it must not ask again by itself, because the prompt's own
-  // dismissal is what brings the app back to "active".
-  const promptOwed = useRef(false);
+  // dismissal is what brings the app back to "active". A gate that mounts
+  // after the setting has loaded starts locked without going through lock(),
+  // so that first lock owes its prompt too.
+  const promptOwed = useRef(state === 'locked');
   const prompting = useRef(false);
 
   const prompt = useCallback(async () => {
@@ -80,6 +91,7 @@ export function BiometricGate() {
     const sub = AppState.addEventListener('change', (next) => {
       const current = stateRef.current;
       if (next === 'background') {
+        awaySinceActive.current = true;
         if (current === 'open' && enabledRef.current) {
           backgroundedAt.current = Date.now();
           setState('cover');
@@ -91,6 +103,10 @@ export function BiometricGate() {
         return;
       }
       if (next !== 'active') return;
+      if (awaySinceActive.current) {
+        awaySinceActive.current = false;
+        setForegroundings((n) => n + 1);
+      }
       if (current === 'cover') {
         const stale = shouldLockOnReturn({
           enabled: enabledRef.current,
@@ -125,7 +141,9 @@ export function BiometricGate() {
       ) : null}
     </View>
   );
-  return FullWindowOverlay ? <FullWindowOverlay>{body}</FullWindowOverlay> : body;
+  return FullWindowOverlay && state !== 'cover'
+    ? <FullWindowOverlay key={foregroundings}>{body}</FullWindowOverlay>
+    : body;
 }
 
 const styles = themedStyles((Theme) => StyleSheet.create({
