@@ -67,8 +67,10 @@ export type CheckResult = { errors: number; diagnostics: string };
 
 export type GateIO = {
   now: () => number;
-  /** Is HEAD a superset of origin/main? */
+  /** Is HEAD a superset of `base`? */
   treeIsFresh: () => Promise<boolean>;
+  /** The ref freshness is judged against, for the log. Defaults to origin/main. */
+  base?: string;
   signature: () => Promise<string>;
   typecheck: () => Promise<CheckResult>;
   /** Exit code of the push. */
@@ -104,7 +106,10 @@ export class Gate {
     this.busy = true;
     try {
       if (!(await this.io.treeIsFresh())) {
-        if (!this.wasStale) this.io.log("REFUSING to push: this tree is BEHIND origin/main. Run: git pull — the push resumes on its own.");
+        if (!this.wasStale) {
+          const base = this.io.base ?? "origin/main";
+          this.io.log(`REFUSING to push: this tree is BEHIND ${base}. Run: git pull --rebase ${base.replace("/", " ")} — the push resumes on its own.`);
+        }
         this.wasStale = true;
         this.retryAt = this.io.now() + STALE_RETRY_MS;
         return "stale";
@@ -176,12 +181,21 @@ function run(cmd: string[], opts: { cwd: string; timeoutMs?: number; inherit?: b
   });
 }
 
-async function treeIsFresh(): Promise<boolean> {
-  // Offline (fetch fails or hangs under load), judge by the last-known
-  // origin/main rather than blocking local dev — the same rule dev.sh applies.
-  await run(["git", "fetch", "origin", "--quiet"], { cwd: ROOT, timeoutMs: 20_000 });
-  const r = await run(["git", "merge-base", "--is-ancestor", "origin/main", "HEAD"], { cwd: ROOT, timeoutMs: 30_000 });
-  return r.code === 0;
+// The remote freshness is judged against: codecast-sh/codecast's, not a
+// fork's origin, which can sit far behind it while looking fresh.
+async function baseRemote(): Promise<string> {
+  const r = await run(["bash", join(ROOT, "scripts", "convex-base-remote.sh")], { cwd: ROOT, timeoutMs: 10_000 });
+  return (r.code === 0 && r.stdout.trim()) || "origin";
+}
+
+function treeIsFreshAgainst(remote: string): () => Promise<boolean> {
+  return async () => {
+    // Offline (fetch fails or hangs under load), judge by the last-known
+    // <remote>/main rather than blocking local dev — the same rule dev.sh applies.
+    await run(["git", "fetch", remote, "--quiet"], { cwd: ROOT, timeoutMs: 20_000 });
+    const r = await run(["git", "merge-base", "--is-ancestor", `${remote}/main`, "HEAD"], { cwd: ROOT, timeoutMs: 30_000 });
+    return r.code === 0;
+  };
 }
 
 async function signature(): Promise<string> {
@@ -233,7 +247,8 @@ function tailLogs(): void {
 
 async function main(): Promise<void> {
   if (!existsSync(FUNCTIONS)) throw new Error(`no functions directory at ${FUNCTIONS}`);
-  const gate = new Gate({ now: Date.now, treeIsFresh, signature, typecheck, push, log });
+  const remote = await baseRemote();
+  const gate = new Gate({ now: Date.now, treeIsFresh: treeIsFreshAgainst(remote), base: `${remote}/main`, signature, typecheck, push, log });
   for (const source of SOURCES) {
     if (!existsSync(source.dir)) continue;
     watch(source.dir, { recursive: true }, (_event, filename) => {
@@ -241,7 +256,7 @@ async function main(): Promise<void> {
       if (rel === undefined || shipsToProd(rel)) gate.onChange(rel);
     });
   }
-  log(`Watching ${SOURCES.map((s) => relative(ROOT, s.dir)).join(", ")}: a push waits ${QUIET_MS / 1000}s of quiet, a fresh tree and a green typecheck.`);
+  log(`Watching ${SOURCES.map((s) => relative(ROOT, s.dir)).join(", ")}: a push waits ${QUIET_MS / 1000}s of quiet, a tree not behind ${remote}/main and a green typecheck.`);
   tailLogs();
   for (;;) {
     await gate.tick();

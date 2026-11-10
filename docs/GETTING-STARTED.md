@@ -47,13 +47,15 @@ Run these commands from the repo root. Each package also has a `.env.example` li
 ```bash
 cat > packages/convex/.env.local << 'EOF'
 CONVEX_SELF_HOSTED_URL=https://convex.codecast.sh
-CONVEX_SELF_HOSTED_ADMIN_KEY=<get-from-team-lead>
+CONVEX_SELF_HOSTED_ADMIN_KEY=<production admin key: ask the team lead>
 CONVEX_URL=https://convex.codecast.sh
 CONVEX_SITE_URL=https://convex.codecast.sh
 EOF
 ```
 
-These values point at the production deployment. With them, `./dev.sh` pushes every Convex change you save to production through the gated pusher (step 5). To experiment without touching prod, point them at your own deployment (see [Self-Hosting](SELF-HOSTING.md)).
+> **The admin key is a production deploy key.** With it in this file, `./dev.sh` pushes every Convex change you save straight to production through the gated pusher (step 5). Without it, the web app still runs against production data and the pusher just can't push, so leave it out until you mean to ship backend changes. To experiment without touching prod, point these values at your own deployment (see [Self-Hosting](SELF-HOSTING.md)) and set `CONVEX_FRESHNESS_REMOTE` to the remote that deployment ships from.
+>
+> The pusher and `deploy.sh` refuse a tree behind the `codecast-sh/codecast` remote's `main`, whatever that remote is called; with no such remote they fall back to `origin`. If you cloned a fork, add it so they check the real source of truth: `git remote add upstream git@github.com:codecast-sh/codecast.git`. A fork's own `main` can sit hundreds of commits behind, and a push from that tree deletes every newer function from production.
 
 ### `packages/web/.env.local`
 
@@ -108,7 +110,7 @@ Install nginx first (`brew install nginx`); the script does not. It adds `local.
 ./dev.sh
 ```
 
-This starts Vite on port 3200 and the Convex pusher (`packages/convex/scripts/gated-push.ts`), with a watchdog that restarts either if it crashes. The pusher waits for 3 seconds of quiet in `packages/convex/convex/`, runs the whole-program typecheck, then pushes once. It refuses to start while the tree is behind origin/main, because a push from a stale tree deletes newer functions from the deployment; `dev.sh` prints the pull instruction and starts the pusher once you pull. Open **http://local.codecast.sh** (https once you have added the TLS block from `nginx.dev.conf.example`) or `http://localhost:3200`.
+This starts Vite on port 3200 and the Convex pusher (`packages/convex/scripts/gated-push.ts`), with a watchdog that restarts either if it crashes. The pusher waits for 3 seconds of quiet in `packages/convex/convex/`, runs the whole-program typecheck, then pushes once. It refuses to start while the tree is behind `codecast-sh/codecast`'s main (step 3), because a push from a stale tree deletes newer functions from the deployment; `dev.sh` prints the pull instruction and starts the pusher once you pull. Open **http://local.codecast.sh** (https once you have added the TLS block from `nginx.dev.conf.example`) or `http://localhost:3200`.
 
 `Ctrl+C` to stop. Run `./dev.sh` again to restart; it cleans up its own leftovers.
 
@@ -356,7 +358,7 @@ CONVEX_CLOUD_URL       # alias for CONVEX_CLOUD_ORIGIN
 | `./dev.sh` | Start Vite and the gated Convex pusher, with a watchdog |
 | `./dev.sh N` | Multi-instance (port 3200+N) |
 | `sudo ./setup-hosts.sh` | Add local domains to `/etc/hosts` and run nginx (already installed) as a launchd service |
-| `packages/convex/deploy.sh` | The only way to deploy Convex: refuses a tree behind origin/main |
+| `packages/convex/deploy.sh` | The only way to deploy Convex: refuses a tree behind `codecast-sh/codecast`'s main |
 | `./scripts/deploy-all.sh` | Full release in order: Convex, push (Railway builds web), CLI cut in CI, mobile OTA, desktop when `packages/electron` changed, then waits for Railway |
 | `scripts/vendor-platform.sh` | Refresh the `platform/packages/` mirror of `~/src/platform` (`--check` reports drift) |
 
@@ -364,7 +366,7 @@ CONVEX_CLOUD_URL       # alias for CONVEX_CLOUD_ORIGIN
 
 **`dev.sh` says hostname not in `/etc/hosts`.** Run `sudo ./setup-hosts.sh`.
 
-**Convex functions not updating.** Check the `dev.sh` log. The pusher refuses a tree behind origin/main (pull with `git pull --rebase`) and skips a push while the typecheck fails, so a save that lands during a failing pass can be skipped. `packages/convex/deploy.sh` pushes explicitly.
+**Convex functions not updating.** Check the `dev.sh` log. The pusher refuses a tree behind `codecast-sh/codecast`'s main (the log names the remote; pull with `git pull --rebase <remote> main`) and skips a push while the typecheck fails, so a save that lands during a failing pass can be skipped. `packages/convex/deploy.sh` pushes explicitly.
 
 **Port already in use.** `dev.sh` cleans up after itself, so run it again. Or: `lsof -ti :3200 | xargs kill`.
 

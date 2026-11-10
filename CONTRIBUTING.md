@@ -109,7 +109,7 @@ Run the test files you touched rather than whole suites; CI runs every suite on 
 
 ## Deployment
 
-Convex deploys go only through `packages/convex/deploy.sh`, which refuses a tree behind origin/main (a stale tree's snapshot deletes newer functions). Web deploys on every push to `main` (Railway). CLI releases are cut from CI with `gh workflow run cut-cli-release.yml -R codecast-sh/codecast`. See [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) for self-hosting instructions.
+Convex deploys go only through `packages/convex/deploy.sh`, which refuses a tree behind `codecast-sh/codecast`'s main, even in a fork clone (a stale tree's snapshot deletes newer functions). Web deploys on every push to `main` (Railway). CLI releases are cut from CI with `gh workflow run cut-cli-release.yml -R codecast-sh/codecast`. See [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) for self-hosting instructions.
 
 ## Commits
 
