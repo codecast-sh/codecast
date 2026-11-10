@@ -1,6 +1,7 @@
 #!/bin/bash
 # Full pg_dump of the codecast Convex database, streamed directly to R2.
-# Reads over Railway's private network (fast); never writes the dump to disk.
+# Reads Postgres over the host's docker network (see infra/host/pg-backup);
+# never writes the dump to disk.
 set -euo pipefail
 
 DATE="$(date -u +%Y-%m-%d)"

@@ -27,6 +27,12 @@ export const AREAS = [
   "electron",
   "mobile",
   "extension",
+  // packages/playground: its own Vite shell and its own Convex deployment. It
+  // is built and typechecked by the root jobs; nothing else imports it.
+  "playground",
+  // infra/: host and worker config and code. No gated job reads it. Its own
+  // tests run in test-always on every change.
+  "infra",
   "docs",
 ] as const;
 
@@ -53,11 +59,11 @@ export type Area = (typeof AREAS)[number];
 export const JOB_AREAS: Record<string, Area[]> = {
   // The web bundle pulls in convex and electron source the same way its tests
   // do (see test-web).
-  build: ["cli", "web", "convex", "shared", "electron", "extension", "platform"],
+  build: ["cli", "web", "convex", "shared", "electron", "extension", "playground", "platform"],
   // The cli program's rootDir is the repo root and it imports the convex
   // generated api, so a convex change can break the cli typecheck too. The web
   // program reaches electron's window registry.
-  typecheck: ["cli", "evals", "web", "convex", "shared", "electron", "platform"],
+  typecheck: ["cli", "evals", "web", "convex", "shared", "electron", "playground", "platform"],
   lint: ["web"],
   // About 480 of 620 convex test files import web code through convex source.
   "test-convex": ["convex", "web", "shared", "platform"],
@@ -113,9 +119,11 @@ const AREA_PREFIXES: Array<[Exclude<Area, "docs">, string[]]> = [
   // tests and the manifest drift check, which "shared" alone never did
   // (ct-49675).
   ["platform", ["platform/"]],
-  ["electron", ["packages/electron/", "packages/desktop/"]],
+  ["electron", ["packages/electron/"]],
   ["mobile", ["packages/mobile/"]],
   ["extension", ["packages/browser-extension/", "packages/vscode-extension/"]],
+  ["playground", ["packages/playground/"]],
+  ["infra", ["infra/"]],
 ];
 
 const DOCS_FILES = new Set([
@@ -125,11 +133,15 @@ const DOCS_FILES = new Set([
   "CLAUDE.md",
   "AGENTS.md",
   "LICENSE",
+  // Read by scripts/ci/quarantine.guard.test.ts, which the ungated ci-contract
+  // job runs on every change.
+  "QUARANTINE.md",
   ".github/CODEOWNERS",
   ".github/pull_request_template.md",
 ]);
 
-const DOCS_PREFIXES = ["docs/", ".github/ISSUE_TEMPLATE/"];
+// plans/ holds generated reports that code cites but no test reads.
+const DOCS_PREFIXES = ["docs/", "plans/", ".github/ISSUE_TEMPLATE/"];
 
 function isDocsPath(file: string): boolean {
   return DOCS_FILES.has(file) || DOCS_PREFIXES.some((prefix) => file.startsWith(prefix));
@@ -169,6 +181,26 @@ export function touchesComputer(file: string): boolean {
 export function computerScope(files: string[]): boolean {
   const paths = files.map((file) => file.trim()).filter(Boolean);
   return paths.length === 0 || paths.some(touchesComputer);
+}
+
+/**
+ * The message-injection path: the most fragile code in the daemon. A change to
+ * it runs the injection suites as an extra step of test-cli (ct-49536).
+ */
+const INJECTION_PATHS = new Set([
+  "packages/cli/src/daemon.ts",
+  "packages/cli/src/tmuxPaste.ts",
+  "packages/shared/contracts/agentClients.ts",
+]);
+
+export function touchesInjection(file: string): boolean {
+  return INJECTION_PATHS.has(file);
+}
+
+/** The injection suites' gate. Fails closed on an empty diff, like computerScope. */
+export function injectionScope(files: string[]): boolean {
+  const paths = files.map((file) => file.trim()).filter(Boolean);
+  return paths.length === 0 || paths.some(touchesInjection);
 }
 
 export type Scope = {
@@ -215,12 +247,16 @@ export function formatScope(scope: Scope): string {
 
 if (import.meta.main) {
   const stdin = await Bun.stdin.text();
-  const computerOnly = process.argv.includes("--computer-only");
-  const scope = classifyChangedPaths(stdin.split("\n"));
-  if (!computerOnly && scope.forcedBy.length > 0) {
-    console.error(`Running every job — unclassified input: ${scope.forcedBy.join(", ")}`);
+  const files = stdin.split("\n");
+  if (process.argv.includes("--computer-only")) {
+    console.log(`run_test_computer=${computerScope(files)}`);
+  } else if (process.argv.includes("--injection-only")) {
+    console.log(`run_test_injection=${injectionScope(files)}`);
+  } else {
+    const scope = classifyChangedPaths(files);
+    if (scope.forcedBy.length > 0) {
+      console.error(`Running every job — unclassified input: ${scope.forcedBy.join(", ")}`);
+    }
+    console.log(formatScope(scope));
   }
-  console.log(computerOnly
-    ? `run_test_computer=${computerScope(stdin.split("\n"))}`
-    : formatScope(scope));
 }

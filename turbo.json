@@ -1,13 +1,8 @@
 {
   "$schema": "https://turbo.build/schema.json",
   "tasks": {
-    "dev": {
-      "cache": false,
-      "persistent": true
-    },
     "build": {
       "cache": false,
-      "outputs": ["dist/**"],
       "passThroughEnv": ["RAILWAY_GIT_COMMIT_SHA", "GIT_SHA"]
     },
     "lint": {},

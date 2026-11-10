@@ -3,6 +3,11 @@
 # and configure this data directory as a hot standby. Every later boot: the
 # data directory already exists, so fall straight through to the template's
 # wrapper.sh, which starts postgres (standby.signal keeps it in recovery).
+#
+# The production PRIMARY still boots through this script
+# (infra/host/postgres/docker-compose.yml): it was promoted from a standby
+# built here. The wipe below therefore guards a live database with one marker
+# file.
 set -euo pipefail
 
 : "${PGDATA:=/var/lib/postgresql/data/pgdata}"

@@ -6,6 +6,13 @@ on:
   pull_request:
     branches: [main]
 
+# A new push to a pull request supersedes the run before it. A push to main is
+# keyed by its commit, so every push keeps its own run: a shared group would
+# cancel the pending run of the push before.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Why a job and not `on.pull_request.paths`: path filters drop the checks
   # from the run entirely, so a branch protection rule waiting on `verify`
@@ -25,6 +32,8 @@ jobs:
       electron: ${{ steps.scope.outputs.electron }}
       mobile: ${{ steps.scope.outputs.mobile }}
       extension: ${{ steps.scope.outputs.extension }}
+      playground: ${{ steps.scope.outputs.playground }}
+      infra: ${{ steps.scope.outputs.infra }}
       docs: ${{ steps.scope.outputs.docs }}
       run_build: ${{ steps.scope.outputs.run_build }}
       run_typecheck: ${{ steps.scope.outputs.run_typecheck }}
@@ -37,6 +46,7 @@ jobs:
       run_test_shared: ${{ steps.scope.outputs.run_test_shared }}
       run_test_mobile: ${{ steps.scope.outputs.run_test_mobile }}
       run_test_electron: ${{ steps.scope.outputs.run_test_electron }}
+      run_test_injection: ${{ steps.injection_scope.outputs.run_test_injection }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -50,7 +60,7 @@ jobs:
         with:
           deps: none
 
-      # One diff for both classifiers below. A pull request diffs its head
+      # One diff for every classifier below. A pull request diffs its head
       # against the merge base with main. A push to main diffs against the
       # commit main pointed at before the push, so each push runs the jobs its
       # own commits can break. Anything else leaves the list empty and the
@@ -101,6 +111,12 @@ jobs:
         id: computer_scope
         run: bun scripts/ci/changed-path-scope.ts --computer-only < "${{ steps.diff.outputs.list }}" | tee -a "$GITHUB_OUTPUT"
 
+      # The same list, so every commit of a multi-commit push counts, and the
+      # same fail-closed rule on an empty one.
+      - name: Classify injection-path changes
+        id: injection_scope
+        run: bun scripts/ci/changed-path-scope.ts --injection-only < "${{ steps.diff.outputs.list }}" | tee -a "$GITHUB_OUTPUT"
+
   # Pins ci.yml against its classifier: the job list, the gates, and the
   # verify assertions. Ungated — it is the check that proves the gates.
   ci-contract:
@@ -122,7 +138,8 @@ jobs:
   # source trees off disk across packages, and each test file whose imports or
   # disk reads reach an area its own job does not gate on. Each package's files
   # run from its directory with the flags its own job uses. The package jobs
-  # below still run them too when they run.
+  # below still run them too when they run. The tests outside packages/
+  # (scripts/ and infra/) belong to no package job, so they run here too.
   test-always:
     name: guard, ratchet and cross-package tests
     runs-on: ubuntu-latest
@@ -138,6 +155,15 @@ jobs:
 
       - name: Always-run tests (every package)
         run: bun scripts/ci/always-run-tests.ts
+
+      # scripts/lineFinders.test.ts is left out: it is red against the finders
+      # .codecast/line.toml declares today. infra/replay-player/src/worker.test.ts
+      # and infra/call-face-worker/vision.test.mjs are left out too: the first
+      # needs that directory's own install, the second a local LiveKit server.
+      - name: Tests outside packages/ (scripts, infra)
+        run: |
+          bun test ./scripts/line.test.ts ./infra/artifact-edge/worker.test.js ./infra/replay-player/src/clock.test.ts
+          node --test infra/call-face-worker/turns.test.mjs
 
   build:
     needs: [code_paths]
@@ -166,8 +192,10 @@ jobs:
 
       - uses: ./.github/actions/setup-bun
 
-      # Each package's own `typecheck` script, which runs the same programs
-      # .codecast/check.toml points `cast check` at. cli's widens rootDir to the
+      # Each package's own `typecheck` script, which runs the programs
+      # .codecast/check.toml points `cast check` at, except mobile:
+      # packages/mobile has no `typecheck` script, so CI does not typecheck it
+      # and `cast check mobile` is its only check. cli's widens rootDir to the
       # repo root because it imports the convex generated api. web's also runs
       # the sim program (its app tsconfig excludes tests), and evals is its own
       # program over its code plus the convex and cli files it imports, and
@@ -264,11 +292,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      # fetch-depth 2 is what the injection-path filter below needs to diff a
-      # push; a pull_request fetches its base branch itself.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          fetch-depth: 2
 
       - name: Install tmux (e2e tests need a real tmux server)
         run: sudo apt-get update && sudo apt-get install -y tmux
@@ -341,32 +365,10 @@ jobs:
       # never read as more than it is. The cold-boot, mid-turn and resume cells
       # live in messaging.e2e.test.ts against the fake-claude shim and already
       # ran in the step above.
-      # The job's own checkout above (fetch-depth 2) is the repository this
-      # diffs; a second checkout here would clean the workspace and throw away
-      # the installed dependencies the matrix runs against.
-      - name: Detect injection-path changes
-        id: injection
-        # The two-dot diff against the base tip is deliberately generous: a
-        # branch behind main reports main's files as changed too. Over-running
-        # the matrix costs a few minutes; missing an injection change costs a
-        # regression nobody caught.
-        run: |
-          set -e
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
-            changed=$(git diff --name-only FETCH_HEAD HEAD || true)
-          else
-            changed=$(git diff --name-only HEAD~1 HEAD || true)
-          fi
-          if echo "$changed" | grep -qE '^(packages/cli/src/(daemon\.ts|tmuxPaste\.ts)|packages/shared/contracts/agentClients\.ts)$'; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "changed injection paths: $(echo "$changed" | grep -cE '^(packages/cli/src/(daemon\.ts|tmuxPaste\.ts)|packages/shared/contracts/agentClients\.ts)$' || true)"
-
+      # code_paths decides whether this runs, from the same changed-path list
+      # that gates the jobs (touchesInjection in scripts/ci/changed-path-scope.ts).
       - name: Injection suites (captured frames; real-client cells skip without agent binaries)
-        if: steps.injection.outputs.run == 'true'
+        if: needs.code_paths.outputs.run_test_injection == 'true'
         working-directory: packages/cli
         # Same three-attempt shape as the E2E step above, and for the same
         # reason: spawning agent TUIs back-to-back on a contended runner is

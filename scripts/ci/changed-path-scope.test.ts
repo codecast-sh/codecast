@@ -10,6 +10,8 @@ import {
   touchesPlatform,
   touchesComputer,
   computerScope,
+  touchesInjection,
+  injectionScope,
 } from "./changed-path-scope";
 
 const flags = (files: string[]) => classifyChangedPaths(files).flags;
@@ -24,7 +26,9 @@ describe("areaOf", () => {
     expect(areaOf("platform/packages/engine/src/index.ts")).toBe("platform");
     expect(areaOf("platform/vendor-manifest.txt")).toBe("platform");
     expect(areaOf("packages/electron/main.js")).toBe("electron");
-    expect(areaOf("packages/desktop/src-tauri/tauri.conf.json")).toBe("electron");
+    expect(areaOf("packages/playground/src/main.tsx")).toBe("playground");
+    expect(areaOf("infra/convex-host/Caddyfile")).toBe("infra");
+    expect(areaOf("infra/README.md")).toBe("infra");
     expect(areaOf("packages/mobile/app/index.tsx")).toBe("mobile");
     expect(areaOf("packages/browser-extension/background.js")).toBe("extension");
     expect(areaOf("packages/vscode-extension/src/extension.ts")).toBe("extension");
@@ -35,6 +39,8 @@ describe("areaOf", () => {
     expect(areaOf("CLAUDE.md")).toBe("docs");
     expect(areaOf("docs/architecture/sync-host.md")).toBe("docs");
     expect(areaOf(".github/ISSUE_TEMPLATE/bug.md")).toBe("docs");
+    expect(areaOf("QUARANTINE.md")).toBe("docs");
+    expect(areaOf("plans/README.md")).toBe("docs");
   });
 
   test("claims nothing it does not recognise", () => {
@@ -42,7 +48,9 @@ describe("areaOf", () => {
     expect(areaOf("bun.lock")).toBeNull();
     expect(areaOf(".github/workflows/ci.yml")).toBeNull();
     expect(areaOf("scripts/ci/changed-path-scope.ts")).toBeNull();
-    expect(areaOf("infra/nginx.conf")).toBeNull();
+    expect(areaOf("scripts/deploy-all.sh")).toBeNull();
+    expect(areaOf("dev.sh")).toBeNull();
+    expect(areaOf("nginx.dev.conf.example")).toBeNull();
   });
 });
 
@@ -144,11 +152,25 @@ describe("classifyChangedPaths", () => {
 
   // web imports electron's window registry, so an electron change reaches
   // every job that loads web code.
-  test("an electron or desktop change runs the electron tests and everything that loads web", () => {
-    for (const file of ["packages/electron/main.js", "packages/desktop/src-tauri/tauri.conf.json"]) {
-      expect(flags([file]).electron).toBe(true);
-      expect(ran([file]), file).toEqual(["build", "test-electron", "test-mobile", "test-web", "typecheck"]);
-    }
+  test("an electron change runs the electron tests and everything that loads web", () => {
+    const file = "packages/electron/main.js";
+    expect(flags([file]).electron).toBe(true);
+    expect(ran([file])).toEqual(["build", "test-electron", "test-mobile", "test-web", "typecheck"]);
+  });
+
+  // Nothing imports the playground; the root build and typecheck cover it.
+  test("a playground change runs build and typecheck only", () => {
+    const scope = classifyChangedPaths(["packages/playground/src/main.tsx"]);
+    expect(scope.forcedBy).toEqual([]);
+    expect(ran(["packages/playground/src/main.tsx"])).toEqual(["build", "typecheck"]);
+  });
+
+  // infra's own tests run in test-always; no gated job reads infra/.
+  test("an infra change runs no gated job", () => {
+    const scope = classifyChangedPaths(["infra/convex-host/Caddyfile", "infra/README.md"]);
+    expect(scope.forcedBy).toEqual([]);
+    expect(scope.flags.infra).toBe(true);
+    expect(ran(["infra/convex-host/Caddyfile"])).toEqual([]);
   });
 
   // The cli files that read the extension's manifest run in test-always.
@@ -175,9 +197,9 @@ describe("classifyChangedPaths", () => {
   });
 
   test("an unrecognised path runs everything and names itself", () => {
-    const scope = classifyChangedPaths(["infra/railway/web.toml"]);
+    const scope = classifyChangedPaths(["tools/railway/web.toml"]);
     for (const job of GATED_JOBS) expect(scope.flags[jobFlag(job)]).toBe(true);
-    expect(scope.forcedBy).toEqual(["infra/railway/web.toml"]);
+    expect(scope.forcedBy).toEqual(["tools/railway/web.toml"]);
   });
 
   test("a lockfile or workflow change runs everything", () => {
@@ -245,5 +267,45 @@ describe("computer test scope", () => {
     const stdout = await new Response(proc.stdout).text();
     expect(await proc.exited).toBe(0);
     expect(stdout.trim()).toBe("run_test_computer=true");
+  });
+});
+
+describe("injection suite scope", () => {
+  test("runs for the daemon, the paste path and the agent client contract", () => {
+    for (const file of [
+      "packages/cli/src/daemon.ts",
+      "packages/cli/src/tmuxPaste.ts",
+      "packages/shared/contracts/agentClients.ts",
+    ]) expect(touchesInjection(file)).toBe(true);
+  });
+
+  test("does not run for other files", () => {
+    for (const file of ["packages/cli/src/daemon.test.ts", "packages/cli/src/index.ts", "docs/README.md", ""])
+      expect(touchesInjection(file)).toBe(false);
+  });
+
+  // Every commit of a push is in the list ci.yml hands over, so an injection
+  // change in an earlier commit of a multi-commit push still counts.
+  test("an empty diff runs the suites, an unrelated one skips them", () => {
+    expect(injectionScope([])).toBe(true);
+    expect(injectionScope(["", "  "])).toBe(true);
+    expect(injectionScope(["packages/cli/src/index.ts"])).toBe(false);
+    expect(injectionScope(["packages/cli/src/index.ts", "packages/cli/src/tmuxPaste.ts"])).toBe(true);
+  });
+
+  test("the script prints the flag", async () => {
+    const run = async (input: string) => {
+      const proc = Bun.spawn(["bun", new URL("./changed-path-scope.ts", import.meta.url).pathname, "--injection-only"], {
+        stdin: new TextEncoder().encode(input),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const stdout = await new Response(proc.stdout).text();
+      expect(await proc.exited).toBe(0);
+      return stdout.trim();
+    };
+    expect(await run("\n")).toBe("run_test_injection=true");
+    expect(await run("packages/web/index.ts\n")).toBe("run_test_injection=false");
+    expect(await run("packages/cli/src/daemon.ts\n")).toBe("run_test_injection=true");
   });
 });

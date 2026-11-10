@@ -33,4 +33,37 @@ http {
             proxy_read_timeout 86400;
         }
     }
+
+    # TLS, for https://local.codecast.sh. The desktop app needs it
+    # (packages/electron's dev script loads the https origin). Make a locally
+    # trusted certificate with mkcert (brew install mkcert), as your own user:
+    #
+    #   mkcert -install
+    #   mkdir -p ~/.config/codecast-dev
+    #   mkcert -cert-file ~/.config/codecast-dev/local.pem \
+    #          -key-file ~/.config/codecast-dev/local-key.pem \
+    #          local.codecast.sh local.1.codecast.sh local.2.codecast.sh local.3.codecast.sh
+    #
+    # Then uncomment this block in your nginx.dev.conf, replace /Users/YOU with
+    # your home directory (nginx does not expand ~), and rerun
+    # sudo ./setup-hosts.sh to reload.
+    #
+    # server {
+    #     listen 443 ssl;
+    #     server_name local.codecast.sh local.1.codecast.sh local.2.codecast.sh local.3.codecast.sh;
+    #     ssl_certificate     /Users/YOU/.config/codecast-dev/local.pem;
+    #     ssl_certificate_key /Users/YOU/.config/codecast-dev/local-key.pem;
+    #
+    #     location / {
+    #         proxy_pass http://127.0.0.1:$backend_port;
+    #         proxy_http_version 1.1;
+    #         proxy_set_header Upgrade $http_upgrade;
+    #         proxy_set_header Connection "upgrade";
+    #         proxy_set_header Host $host;
+    #         proxy_set_header X-Real-IP $remote_addr;
+    #         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    #         proxy_set_header X-Forwarded-Proto $scheme;
+    #         proxy_read_timeout 86400;
+    #     }
+    # }
 }

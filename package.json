@@ -8,13 +8,11 @@
   ],
   "scripts": {
     "start": "cd packages/web && bun run start",
-    "dev": "turbo run dev",
+    "dev": "./dev.sh",
     "build": "turbo run build --filter='!@codecast/electron' --filter='!mobile'",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
-    "convex:dev": "cd packages/convex && convex dev",
-    "convex:deploy": "cd packages/convex && convex deploy",
     "postinstall": "bash patches/convex-auth-iss-fix.sh"
   },
   "devDependencies": {
@@ -23,19 +21,9 @@
   },
   "dependencies": {
     "@codecast/web": "workspace:*",
-    "@tanstack/react-virtual": "^3.13.18",
-    "@tiptap/pm": "^3.20.4",
-    "convex": "^1.31.6",
-    "e2b": "^2.24.0",
-    "nanoid": "^5.1.7",
-    "prosemirror-collab": "^1.3.1"
+    "convex": "^1.31.6"
   },
   "overrides": {
-    "@radix-ui/react-slot": "1.2.4",
-    "react": "19.1.0",
-    "react-dom": "19.1.0"
-  },
-  "resolutions": {
     "@radix-ui/react-slot": "1.2.4",
     "react": "19.1.0",
     "react-dom": "19.1.0"

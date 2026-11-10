@@ -1,6 +1,7 @@
 #!/bin/bash
 # Local patches for @convex-dev/auth, applied on postinstall to every copy
-# (direct node_modules + bun-cached). Independent fixes live here:
+# (root and per-package node_modules, direct and bun-cached). Independent fixes
+# live here:
 #
 #   1. iss-fix  — OAuth callback "unexpected iss response parameter" (RFC 9207)
 #   2. reuse-window — widen refresh-token reuse window 10s -> 30 days
@@ -30,6 +31,21 @@
 
 set -euo pipefail
 
+# Every copy of the package in the tree, the same list convex-auth-ios-oauth.mjs
+# walks: bun gives each workspace package its own node_modules entry, and code
+# resolves the package from ITS package, so a patch applied only at the root
+# can be invisible to the file that reads it. Both patches are idempotent, so
+# a copy reached through two symlinks is patched once.
+AUTH_ROOTS=()
+for root in node_modules/@convex-dev/auth \
+            node_modules/.bun/@convex-dev+auth@*/node_modules/@convex-dev/auth \
+            packages/*/node_modules/@convex-dev/auth \
+            packages/*/node_modules/.bun/@convex-dev+auth@*/node_modules/@convex-dev/auth; do
+  if [ -d "$root" ]; then AUTH_ROOTS+=("$root"); fi
+done
+# Nothing installed (a fresh checkout mid-install): nothing to patch.
+if [ "${#AUTH_ROOTS[@]}" -eq 0 ]; then exit 0; fi
+
 apply_patch() {
   local file="$1"
   [ -f "$file" ] || return 0
@@ -49,14 +65,9 @@ apply_patch() {
   echo "[convex-auth-iss-fix] Patched $file"
 }
 
-# Patch the direct node_modules copy
-apply_patch "node_modules/@convex-dev/auth/src/server/oauth/callback.ts"
-apply_patch "node_modules/@convex-dev/auth/dist/server/oauth/callback.js"
-
-# Patch bun-cached copies (bun symlinks node_modules/@convex-dev/auth -> .bun/...)
-for f in node_modules/.bun/@convex-dev+auth@*/node_modules/@convex-dev/auth/src/server/oauth/callback.ts \
-         node_modules/.bun/@convex-dev+auth@*/node_modules/@convex-dev/auth/dist/server/oauth/callback.js; do
-  apply_patch "$f"
+for root in "${AUTH_ROOTS[@]}"; do
+  apply_patch "$root/src/server/oauth/callback.ts"
+  apply_patch "$root/dist/server/oauth/callback.js"
 done
 
 # ---------------------------------------------------------------------------
@@ -90,12 +101,9 @@ apply_reuse_window_patch() {
   echo "[convex-auth-reuse-window] Patched $file"
 }
 
-# Direct copy + all bun-cached copies, .ts src and .js dist forms.
-for f in node_modules/@convex-dev/auth/src/server/implementation/refreshTokens.ts \
-         node_modules/@convex-dev/auth/dist/server/implementation/refreshTokens.js \
-         node_modules/.bun/@convex-dev+auth@*/node_modules/@convex-dev/auth/src/server/implementation/refreshTokens.ts \
-         node_modules/.bun/@convex-dev+auth@*/node_modules/@convex-dev/auth/dist/server/implementation/refreshTokens.js; do
-  apply_reuse_window_patch "$f"
+for root in "${AUTH_ROOTS[@]}"; do
+  apply_reuse_window_patch "$root/src/server/implementation/refreshTokens.ts"
+  apply_reuse_window_patch "$root/dist/server/implementation/refreshTokens.js"
 done
 
 # ---------------------------------------------------------------------------

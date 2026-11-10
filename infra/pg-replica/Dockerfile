@@ -1,4 +1,6 @@
-# Streaming read replica of the Railway Postgres primary, used as the source
+# The image the production Postgres runs (infra/host/postgres builds it), kept
+# under its first name. Its history: a
+# streaming read replica of the Railway Postgres primary, used as the source
 # for the nightly pg_dump (infra/pg-backup) so the dump's 70-minute full-table
 # read never touches the primary again (2026-09-04: that read stalled every
 # Convex write for the whole window). Same image as the primary — same major

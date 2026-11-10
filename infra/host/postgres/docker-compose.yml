@@ -1,7 +1,11 @@
-# Postgres 17 on the migration host (pl-592). Built from infra/pg-replica: the
-# same image and entrypoint as the Railway backup standby, so it starts life as
-# a streaming standby of the Railway primary and becomes the primary at
-# cutover by promotion. Deploy: copy this directory's parent layout to
+# Postgres 17 on the production host (pl-592). THIS IS THE PRIMARY: it was
+# promoted at cutover on 2026-09-15 and Railway has since been decommissioned.
+# It is still built from infra/pg-replica, the image and entrypoint it started
+# life with as a streaming standby of the Railway primary, so the PRIMARY_* and
+# REPLICATION_* values below are leftovers of that bootstrap. The entrypoint
+# skips the bootstrap only while PGDATA holds its .pg-replica-bootstrapped
+# marker; never remove that file (see replica-entrypoint.sh).
+# Deploy: copy this directory's parent layout to
 # /srv/postgres on the host (build/ = infra/pg-replica, certs/ = the client
 # certificate minted on the primary, data/ = PGDATA volume) and run
 # `docker compose up -d --build` there.
@@ -25,7 +29,8 @@ services:
       - /srv/postgres/certs:/certs-client:ro
     environment:
       PGDATA: /var/lib/postgresql/data/pgdata
-      # Where the base backup and the WAL stream come from until cutover.
+      # Where the base backup and the WAL stream came from until cutover. Unused
+      # since promotion; the entrypoint still requires PRIMARY_HOST to be set.
       PRIMARY_HOST: hopper.proxy.rlwy.net
       PRIMARY_PORT: "14404"
       REPLICATION_USER: replicator_migrate
@@ -39,17 +44,17 @@ services:
       # The base backup reads the whole primary once; take it in the quiet
       # window after the 09:00Z dump, never during US working hours.
       BOOTSTRAP_AFTER: "2026-09-14T06:30:00Z"
-      # Sizing for the host in infra/convex-host/README.md: 247 GB of RAM
-      # shared with the Convex backend (~64 GB). Written for the 123 GB box
-      # this ran on until the 2026-09-22 resize and left unchanged there,
-      # because the resize was forced by CPU and these two values buy read
-      # cache: this workload waits on no disk (iowait sits at 0). Raise them
+      # Sizing for the host in infra/convex-host/README.md: 494 GB of RAM
+      # since 2026-10-23, shared with the Convex backend (128 GB limit).
+      # Written for the 123 GB box this ran on until the 2026-09-22 resize and
+      # left unchanged through both resizes, because each was forced by CPU and
+      # these two values buy read cache: this workload waits on no disk (iowait sits at 0). Raise them
       # only against a measured read problem.
       REPLICA_SHARED_BUFFERS: 32GB
       REPLICA_EFFECTIVE_CACHE_SIZE: 80GB
       PG_EXTRA_CONF: |
         # host tuning (pl-592 / ct-50394): NVMe gp3 at 6000 IOPS. The worker
-        # counts below were set for 16 vCPU and the host now has 32; they stay
+        # counts below were set for 16 vCPU and the host now has 64; they stay
         # low on purpose, because the Convex backend is the bigger CPU consumer
         # on this shared box (about 3.7x Postgres) and parallel query would
         # compete with it for the same cores.
