@@ -100,6 +100,7 @@ import { join } from "node:path";
 // commandGroupActivation.ts; check.ts its heap cap to checkHeap.ts; and
 // secrets/command.ts its printing to secrets/format.ts. PIN stays 257.
 // 2026-11-10: the audit fix pass took two files under the cap. PIN 255.
+// 2026-11-10: the UI audit ship took ConversationList.tsx under the cap. PIN 254.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");
@@ -116,7 +117,7 @@ function pinnedSize(source: string): number {
 }
 
 /** How many files are over the cap today. May only fall. */
-const PIN = 255;
+const PIN = 254;
 
 const result = checkRatchet({
   name: "max lines",

@@ -6,7 +6,7 @@
   },
   "app/sessions/page.tsx": {
     "no-restricted-syntax": {
-      "count": 2
+      "count": 1
     }
   },
   "components/BranchSelector.tsx": {

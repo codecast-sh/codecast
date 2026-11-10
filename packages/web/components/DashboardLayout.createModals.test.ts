@@ -9,6 +9,8 @@ import { join } from "node:path";
 const read = (rel: string) => readFileSync(join(import.meta.dir, "..", rel), "utf8");
 const store = read("store/inboxStore.ts");
 const layout = read("components/DashboardLayout.tsx");
+// The host and its dialogs live beside the shell; the shell mounts it.
+const hosts = read("components/shell/ShellHosts.tsx");
 
 const kinds = (() => {
   const m = store.match(/export type CreateModalKind\s*=\s*([^;]+);/);
@@ -17,12 +19,13 @@ const kinds = (() => {
 
 test("every create kind has a dialog in the shell's host", () => {
   expect(kinds.length).toBeGreaterThan(3);
-  const host = layout.slice(layout.indexOf("function CreateModal("), layout.indexOf("function PaletteHost("));
+  const host = hosts.slice(hosts.indexOf("function CreateModal("), hosts.indexOf("function PaletteHost("));
   expect(host.length).toBeGreaterThan(0);
   for (const kind of kinds) expect({ kind, drawn: host.includes(`kind === "${kind}"`) }).toEqual({ kind, drawn: true });
 });
 
 test("the host is mounted once, outside any rail, so it exists at every width", () => {
   expect(layout.match(/<CreateModalHost \/>/g)).toHaveLength(1);
+  expect(hosts).not.toMatch(/<CreateModalHost \/>/);
   expect(read("components/Sidebar.tsx")).not.toMatch(/createModal ===|CreateTaskModal|CreateDocModal/);
 });

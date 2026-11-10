@@ -179,7 +179,7 @@ packages/shared/entities/index.ts
 packages/shared/render/toolCall.ts 900
 packages/shared/tasks/graph.ts 950
 packages/web/app/(marketing)/compare/comparisons.ts 1100
-packages/web/app/(marketing)/documentation/page.tsx 1500
+packages/web/app/(marketing)/documentation/page.tsx 1450
 packages/web/app/(marketing)/features/browser/Sections.tsx 850
 packages/web/app/(marketing)/heroFly/timeline.ts 1000
 packages/web/app/admin/daemon-logs/page.tsx 900
@@ -195,9 +195,8 @@ packages/web/app/triggers/page.tsx 1250
 packages/web/components/ActivityFeed.tsx 1000
 packages/web/components/CommandPalette.tsx
 packages/web/components/ComposeView.tsx 900
-packages/web/components/ConversationList.tsx 1100
 packages/web/components/ConversationView.tsx
-packages/web/components/DashboardLayout.tsx 1650
+packages/web/components/DashboardLayout.tsx 1600
 packages/web/components/EntityIdPill.references.test.tsx 850
 packages/web/components/EntityIdPill.tsx 1550
 packages/web/components/EntityObjectCard.tsx 950
@@ -219,7 +218,7 @@ packages/web/components/chat/ChatMessage.tsx 900
 packages/web/components/conversation/blocks/castBlocks.tsx 1050
 packages/web/components/conversation/blocks/systemBlocks.tsx 1550
 packages/web/components/conversation/blocks/toolBlocks.tsx 1750
-packages/web/components/conversation/blocks/turnBlocks.tsx 1850
+packages/web/components/conversation/blocks/turnBlocks.tsx 1800
 packages/web/components/conversation/classify.ts 850
 packages/web/components/conversation/sessionChrome.tsx 950
 packages/web/components/conversation/sessionControls.tsx

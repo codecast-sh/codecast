@@ -25,6 +25,7 @@ import { ShortcutTooltip } from "../../components/KeyboardShortcutsHelp";
 import { isTriggerFailing, isTriggerTerminal, taskDisplayTitle, groupTriggerRowsByHome, type TaskRow, type TriggerRow, type TriggerHomeGroup } from "../../components/triggerTasks";
 import { TriggerRowItem, TriggerHomeHeader } from "../../components/TriggerRow";
 import { HorizonRail } from "../../components/triggers/HorizonRail";
+import { EMPTY_FILTERS, filtersActive, matchesFilters, type Filters } from "./triggerFilters";
 import { useTriggers, fetchTriggerRuns } from "../../hooks/useSyncTriggers";
 import { openRunInStore } from "../../components/TriggerRunHistory";
 import { SelectBox } from "../../components/ui/select-box";
@@ -638,35 +639,6 @@ function AttentionBanner({ tasks }: { tasks: any[] }) {
 }
 
 // ── Filtering ──
-
-interface Filters {
-  search: string;
-  mode: string; // all | apply | propose
-  type: string; // all | recurring | once | event
-  project: string; // all | <path>
-  agent: string; // all | claude | codex
-  failing: boolean; // only triggers whose last run failed
-}
-
-const EMPTY_FILTERS: Filters = { search: "", mode: "all", type: "all", project: "all", agent: "all", failing: false };
-
-function filtersActive(f: Filters): boolean {
-  return f.search.trim() !== "" || f.mode !== "all" || f.type !== "all" || f.project !== "all" || f.agent !== "all" || f.failing;
-}
-
-function matchesFilters(t: any, f: Filters): boolean {
-  if (f.failing && !isTriggerFailing(t)) return false;
-  if (f.mode !== "all" && (t.mode ?? "propose") !== f.mode) return false;
-  if (f.type !== "all" && t.schedule_type !== f.type) return false;
-  if (f.agent !== "all" && (t.agent_type || "claude") !== f.agent) return false;
-  if (f.project !== "all" && t.project_path !== f.project) return false;
-  const q = f.search.trim().toLowerCase();
-  if (q) {
-    const hay = `${t.title ?? ""} ${t.display_title ?? ""} ${t.display_summary ?? ""} ${t.prompt ?? ""} ${t.last_run_summary ?? ""}`.toLowerCase();
-    if (!hay.includes(q)) return false;
-  }
-  return true;
-}
 
 // The type filter is text that takes its cadence color when on (violet loops,
 // cyan one-shots, yellow event hooks) — click filters, click again clears.
