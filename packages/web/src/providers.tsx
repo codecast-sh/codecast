@@ -22,6 +22,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { identifyUser, resetUser } from "@/lib/analytics";
 import { CodecastAuthRoot } from "@/lib/authRoot";
 import { CONVEX_URL } from "@/lib/localAuth";
+import { OutageBanner } from "@/components/OutageBanner";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 // The person's own key bindings (client_state.ui.key_bindings) into the live
@@ -153,6 +154,7 @@ export function Providers({ children }: { children: ReactNode }) {
         <AnalyticsIdentify />
         <DispatchFailureToast />
         <Toaster position="bottom-right" />
+        <OutageBanner />
         </TipProvider>
         </ShortcutProvider>
       </ThemeProvider>
