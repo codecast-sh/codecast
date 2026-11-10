@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { autoContinueArmedOnPane, classifyStartedPane, parsePermissionModeFooter, stepPermissionMode, clearUnresolvablePane, extractTmuxLiveRegion, limitDialogOnPane, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
-import { classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, GROK_TRUST_PANE_CAPTURE_LINES, isGrokTrustDialog } from "./tmuxPaneState.js";
+import { classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, GROK_TRUST_PANE_CAPTURE_LINES, isClaudeIdleResumeDialog, isGrokTrustDialog, isIdleResumeOptionRow } from "./tmuxPaneState.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import { CLAUDE_BYPASS_WARNING_PANE, CODEX_TRUST_PANE, GROK_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
 
@@ -1148,5 +1148,28 @@ describe("a composer whose top rule a status line painted over", () => {
 
   test("reads busy, so delivery pastes into type-ahead instead of deferring", () => {
     expect(classifyTmuxLiveState(extractTmuxLiveRegion(pane))).toBe("busy");
+  });
+});
+
+describe("Claude idle-resume dialog", () => {
+  const pane = [
+    "Resume this conversation?",
+    "This conversation has been inactive for 33d 16h 10m and is 354.6k tokens long. Resuming it will use about 6% of your 5-hour usage limit.",
+    "❯ 1. Resume",
+    "  2. Start a new conversation   Claude can look this one up if you refer to it later",
+    "Enter to select · Esc to cancel",
+  ].join("\n");
+
+  test("is recognized by its inactivity line and its start-new option", () => {
+    expect(isClaudeIdleResumeDialog(pane)).toBe(true);
+    expect(isClaudeIdleResumeDialog("Resume from summary?\n❯ 1. Resume from summary\n  2. Resume full session")).toBe(false);
+    expect(isClaudeIdleResumeDialog("The user said the job has been inactive for days.\n❯ ")).toBe(false);
+  });
+
+  test("the Resume row matches exactly, never the question text or a longer option", () => {
+    const rows = pane.split("\n").filter((line) => isIdleResumeOptionRow(line));
+    expect(rows).toEqual(["❯ 1. Resume"]);
+    expect(isIdleResumeOptionRow("  1. Resume")).toBe(true);
+    expect(isIdleResumeOptionRow("❯ 3. Resume from summary")).toBe(false);
   });
 });

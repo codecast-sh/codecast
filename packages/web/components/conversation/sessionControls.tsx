@@ -25,6 +25,7 @@ import { StableContextPicker } from "../StableContextCards";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { toast } from "sonner";
+import { toastWriteError } from "../../lib/dispatchBinding";
 import { ComposeRolePicker } from "../ComposeRolePicker";
 import type { RoleRecipient } from "../../lib/roleRecipients";
 import { AgentTypeIcon } from "../AgentTypeIcon";
@@ -960,7 +961,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
           agent_type: agentType,
         }).catch((err) => {
           if (isParkedDispatchError(err)) return;
-          toast.error(err instanceof Error ? err.message : "Failed to switch agent");
+          toastWriteError(err, "Failed to switch agent");
         });
       }
     } catch (err) {

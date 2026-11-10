@@ -107,6 +107,7 @@ import {
   emptyInboxTally,
   isOrphanOrSubagent,
   isAssignedAwayFromViewer,
+  commandsSession,
   rollupParentIdOf,
   rideLeadPlacements,
   roleLeadIdsOf,
@@ -3867,6 +3868,29 @@ export function __resetInboxPlacementCacheForTests(): void {
   _visibleMemo.clear();
 }
 // Dev-only parity throttle (assertPlacementParity below).
+// Whether a waiting row is the viewer's to unblock: the command rule the
+// server enforces on resume and on every answer (commandsSession). A teammate's
+// waiting session reached through team scope, or one the viewer co-owns but
+// cannot command, files under Dormant instead of Needs You: nothing there is
+// this viewer's move, and Needs You would offer a Resume the server refuses.
+// An optimistic stub, a thin row with no runner, or an unknown viewer stays
+// where placement put it.
+export function waitsOnViewer(s: Pick<InboxSession, "_id" | "user_id" | "owner_user_id">, meId: string | null): boolean {
+  if (!isConvexId(s._id)) return true;
+  return viewerCommandsSession(s, meId);
+}
+
+// Whether the viewer may answer or resume a session (commandsSession, the rule
+// requireSessionCommandTarget enforces). A row not loaded or not naming its
+// runner, or a viewer not loaded yet, keeps its controls: the server decides.
+export function viewerCommandsSession(
+  row: { user_id?: string | { toString(): string } | null; owner_user_id?: string | { toString(): string } | null } | null | undefined,
+  meId: string | { toString(): string } | null | undefined,
+): boolean {
+  if (!row || meId == null || !row.user_id) return true;
+  return commandsSession(row, meId);
+}
+
 let _lastParityCheckAt = 0;
 
 export function placeInboxRows(
@@ -4153,7 +4177,10 @@ export function placeInboxRows(
         // in the cache for palette reuse but renders (and walks) nowhere.
         if (isEngagedBlank(s)) newSessions.push(s);
         break;
-      case "needs_input": needsInput.push(s); break;
+      case "needs_input":
+        if (waitsOnViewer(s, meId)) needsInput.push(s);
+        else dormant.push(s);
+        break;
       case "done": done.push(s); break;
       case "dormant": dormant.push(s); break;
       case "working": working.push(s); break;
@@ -4193,7 +4220,8 @@ export function placeInboxRows(
   for (const id of subsWithParent) {
     if (roleRidden.has(id)) continue;
     const b = placements.get(id)?.bucket;
-    const k = b ? SECTION_OF_BUCKET[b] : undefined;
+    const row = b === "needs_input" ? state.sessions[id] : undefined;
+    const k = b === "needs_input" && row && !waitsOnViewer(row, meId) ? "dormant" : b ? SECTION_OF_BUCKET[b] : undefined;
     if (k) counts[k]++;
   }
   // Pinning is manual curation: stable order by pin time, oldest first, so

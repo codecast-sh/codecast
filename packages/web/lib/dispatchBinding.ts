@@ -8,6 +8,7 @@ import type { DispatchFn } from "@platform/engine";
 import { stampDeliveryReceipts } from "./syncDeliveryReceipts";
 import { toast } from "sonner";
 import { humanizeConvexError } from "@codecast/shared/contracts";
+import { PRESENCE_REQUIRED } from "@codecast/shared/contracts/secrets";
 import { isChatRoomRefusal, useInboxStore } from "../store/inboxStore";
 import { isPermanentDispatchError } from "../store/mutativeMiddleware";
 import { dropRejectedOrgIntent } from "../store/orgSlice";
@@ -131,6 +132,47 @@ const CALLER_REPORTED_ACTIONS = new Set([
 // news to nobody: no toast, no failure mark, no error report.
 const QUIET_ACTIONS = new Set(["saveQuoteDrafts", "removeQuoteDrafts"]);
 
+// Refusals the dispatch failure toast (providers.tsx DispatchFailureToast)
+// has already told the person about. The engine hands the caller the same
+// error object it reported, so a caller's own catch can stay quiet instead of
+// toasting the raw server text a second time.
+const reportedFailures = new WeakSet<object>();
+
+/** Whether the person already heard about this dispatch error from the failure toast. */
+export function wasDispatchFailureReported(error: unknown): boolean {
+  return typeof error === "object" && error !== null && reportedFailures.has(error);
+}
+
+/**
+ * The person-facing reason inside a server refusal: the last refusal in a
+ * (possibly nested, convCommand-wrapped) Convex error message, minus the
+ * client tag, request id, stack frames and routing context. "Not authorized"
+ * reads as the session access it is.
+ */
+export function dispatchRefusalReason(message: string, fallback = "rejected by the server"): string {
+  const reason =
+    message
+      .split(/Uncaught (?:Convex)?Error:/)
+      .pop()
+      ?.split("\n")[0]
+      ?.replace(/\s+at\s+(?:async\s+)?\S+\s+\(.*$/, "")
+      .replace(/\s+Called by client.*$/, "")
+      .replace(`${PRESENCE_REQUIRED}: `, "")
+      .trim() || fallback;
+  return /not authorized/i.test(reason) ? "you don't have access to that session" : reason;
+}
+
+/**
+ * A caller's toast for a failed write: nothing when the failure toast already
+ * said it, otherwise the refusal's reason, never the raw Convex error with its
+ * request id and stack.
+ */
+export function toastWriteError(error: unknown, fallback: string): void {
+  if (wasDispatchFailureReported(error)) return;
+  const reason = dispatchRefusalReason(humanizeConvexError(error, ""), fallback);
+  toast.error(reason.charAt(0).toUpperCase() + reason.slice(1));
+}
+
 /** The handler `_setDispatchError` takes: a dispatch gave up after its retries. */
 export function applyDispatchFailure(action: string, error: unknown, args?: unknown): void {
   if (QUIET_ACTIONS.has(action)) {
@@ -186,6 +228,7 @@ export function applyDispatchFailure(action: string, error: unknown, args?: unkn
     if (SESSION_COMMAND_ACTIONS.has(action) && Array.isArray(args) && typeof args[0] === "string") {
       recordSessionCommandDispatchError(args[0], error);
     }
+    if (typeof error === "object" && error !== null) reportedFailures.add(error);
     useInboxStore.setState({
       lastDispatchFailure: { action, args, message: String((error as Error)?.message ?? error), at: Date.now() },
     });

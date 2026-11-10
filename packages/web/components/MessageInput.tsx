@@ -31,6 +31,7 @@ import type { SkillItem } from "../lib/conversationProcessor";
 import { KeyCap, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { QUEUE_CHORD } from "../shortcuts/sendChords";
 import { toast } from "sonner";
+import { toastWriteError } from "../lib/dispatchBinding";
 import { appendToDraft } from "../lib/quoteFormat";
 import { imagePlaceholderToken, insertImagePlaceholder, dropImagePlaceholder } from "../lib/imagePlaceholder";
 import { attachReviewForSend, attachReviewToMessage, batchSendWords, quotedImages } from "../lib/reviewActions";
@@ -47,7 +48,7 @@ import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { HandoffPicker, useOwnersFromStore } from "./OwnersBadge";
 import { usePendingMessageStatus } from "../hooks/useSyncPendingPermissions";
-import { useInboxStore, isConvexId, convHasPendingSend, type OptimisticImage } from "../store/inboxStore";
+import { useInboxStore, isConvexId, convHasPendingSend, viewerCommandsSession, type OptimisticImage } from "../store/inboxStore";
 import { useChangedState } from "../hooks/useChangedState";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -919,8 +920,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const ghostRestartContext = useCallback(() => ghostRestartContextFor(conversationId), [conversationId]);
   const handleRestartResult = useCallback((res: any) => followRestoredConversation(res, conversationId), [conversationId]);
 
+  // Resume and restore are daemon commands the server allows only the
+  // session's runner or second-party owner to send (commandsSession). A
+  // teammate's send into the session waits for its owner instead.
+  const canResume = useInboxStore((s) => viewerCommandsSession(
+    (s.sessions[conversationId] ?? s.conversations[conversationId]) as any,
+    s.currentUser?._id ? String(s.currentUser._id) : null,
+  ));
   const handleForceResume = useCallback(async (opts?: { auto?: boolean }) => {
-    if (isResuming) return;
+    if (isResuming || !canResume) return;
     setIsResuming(true);
     // Automatic recovery here is always the gentle, non-destructive resume (re-attach + redeliver).
     // The only automatic kill+restart lives in the confirmed-undeliverable effect below; this
@@ -954,10 +962,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           return;
         }
       }
-      toast.error(msg || "Failed to resume session");
+      toastWriteError(err, "Failed to resume session");
       setIsResuming(false);
     }
-  }, [conversationId, convCommand, isResuming, isExistingMessageDead, messageStatus?.status, ghostRestartContext, handleRestartResult, serverDeleted]);
+  }, [conversationId, convCommand, isResuming, canResume, isExistingMessageDead, messageStatus?.status, ghostRestartContext, handleRestartResult, serverDeleted]);
 
   // Stop the (otherwise indefinite) retry loop for a message that genuinely can't land. Resolve
   // the id from either the precise tracker or the conversation-scoped pending row, since a reload
@@ -1040,7 +1048,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           toast.error("This conversation no longer exists on the server", { description: "Use Restore to bring its session back." });
         } else {
           captureError(err instanceof Error ? err : new Error(msg), { source: "auto-restart-undeliverable", conversationId });
-          toast.error(`Session restart failed: ${msg}`);
+          toastWriteError(err, "Session restart failed");
         }
       });
   }, [messageStatus?.status, isAgentActive, messageReachedSession, conversationId, ghostRestartContext, handleRestartResult, hostedConversation]);
@@ -2574,7 +2582,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       foot={composerFoot && !composeMode ? <ComposerFoot start={composerFoot} end={<>{rowActions}{sendButton}</>} /> : undefined}
       before={<>
           <StopConfirm request={stopRequest} onClose={() => { setStopRequest(null); requestAnimationFrame(() => textareaRef.current?.focus()); }} />
-          {serverDeleted && !isRestarting && (
+          {serverDeleted && !isRestarting && canResume && (
             <div className={`mx-auto mb-2 ${inline ? "" : "px-4"} ${colWidth} ${lightboxImageIndex !== null ? "hidden" : ""}`}>
               <div className="flex items-center justify-between gap-3 rounded-lg border border-sol-orange/40 bg-sol-orange/10 px-3 py-2">
                 <p className="text-[12px] text-sol-text">

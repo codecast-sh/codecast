@@ -1,5 +1,5 @@
 import type { Doc, Id } from "./_generated/dataModel";
-import { ACTIVE_AGENT_STATUSES, MID_TURN_AGENT_STATUSES, localAgentTypeOf } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, MID_TURN_AGENT_STATUSES, commandsSession, localAgentTypeOf } from "@codecast/shared/contracts";
 import { enqueuePendingMessage, releaseQueuedForUser, resetConversationPendingMessages } from "./pendingMessages";
 import { parkOnCloudHost } from "./cloudPlacement";
 
@@ -271,11 +271,6 @@ export async function stopAndSendForUser(
   }
   await insertEscapeCommand(ctx, conv, { pressed_at: pressedAt, request_id: requestId, release_queued: true });
   return { interrupted: true };
-}
-
-/** Whether a person may send the session's commands: its runner or its second-party owner. */
-function commandsSession(conv: Pick<Doc<"conversations">, "user_id" | "owner_user_id">, userId: Id<"users">): boolean {
-  return conv.user_id === userId || conv.owner_user_id === userId;
 }
 
 /**

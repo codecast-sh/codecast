@@ -1,6 +1,7 @@
 import { useCallback, type RefObject } from "react";
 import { agentSupportsFork } from "@codecast/shared/contracts";
 import { toast } from "sonner";
+import { toastWriteError } from "../lib/dispatchBinding";
 import { useInboxStore, type ForkChild, type InboxSession, type OptimisticImage } from "../store/inboxStore";
 import { DispatchNotWiredError } from "../store/mutativeMiddleware";
 import { beginLocalFork, newForkSessionId, seedForkSessionRow, type LocalFork } from "../store/beginLocalFork";
@@ -112,7 +113,7 @@ export function useForkActions({ conversation, currentUser, hasMoreAbove, convCo
       // Parked-unwired keeps the stub — see doFork's catch.
       if (err instanceof DispatchNotWiredError && err.parked) return;
       useInboxStore.getState().discardForkStub(forkSessionId, branchId);
-      toast.error(err instanceof Error ? err.message : "Failed to fork");
+      toastWriteError(err, "Failed to fork");
     });
     return { forkSessionId, conversationId: forkSessionId, ready };
   }, [conversation?._id, doFork, currentUser?._id, seedForkSession, convCommand, resolveForkSessionId]);

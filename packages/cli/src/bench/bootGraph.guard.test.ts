@@ -365,7 +365,10 @@ describe("command groups stay off the boot graph", () => {
     // (+6, the read and search footers), usageCommand.ts (+3), shared/time
     // (+3), castApi.ts (+2, isOlderBackendRefusal) and under 2 KB each across
     // workState, sessionAsk, resolveWorkspace and the send and parking modules.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4635);
+    // 4637 on 2026-11-10: contracts/inboxProjection.ts (+0.4, commandsSession,
+    // the one command rule the server and the inbox share) and tmuxPaneState.ts
+    // (+0.8, the idle-resume dialog a machine wake answers itself).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4637);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {

@@ -71,6 +71,20 @@ export function isClaudeBypassWarning(text: string): boolean {
   return /running in Bypass Permissions mode/i.test(text) && /^[^\S\n]*[❯›>]?[^\S\n]*(?:\d+[.)][^\S\n]*)?Yes,\s*I accept\b/im.test(text);
 }
 
+// Claude Code's idle-resume dialog ("This conversation has been inactive for
+// … Resume / Start a new conversation"). CLAUDE_CODE_RESUME_* does not silence it.
+export function isClaudeIdleResumeDialog(text: string): boolean {
+  return /has been inactive for\b/i.test(text) && /^[^\S\n]*[❯›>]?[^\S\n]*(?:\d+[.)][^\S\n]*)?Start a new conversation\b/im.test(text);
+}
+
+// What a machine wake answers there. Resume keeps the session id codecast maps
+// and the history the wake was written against; the runner armed the wake.
+export const MACHINE_WAKE_IDLE_RESUME_CHOICE = "Resume";
+
+export function isIdleResumeOptionRow(line: string, label = MACHINE_WAKE_IDLE_RESUME_CHOICE): boolean {
+  return line.replace(/^\s*[❯›>]?\s*/, "").replace(/^\d+[.)]\s*/, "").split(/\s{3,}/)[0].trim() === label;
+}
+
 export function isCodexUpdateDialog(text: string): boolean {
   return /^[^\S\n]*[›❯>]?[^\S\n]*\d+[.)][^\S\n]*Update now\b/im.test(text)
     && /^[^\S\n]*[›❯>]?[^\S\n]*\d+[.)][^\S\n]*Skip[^\S\n]*$/im.test(text)

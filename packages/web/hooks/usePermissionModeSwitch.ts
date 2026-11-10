@@ -1,6 +1,6 @@
 import { useRef, useState, useCallback } from "react";
 import { useMountEffect } from "./useMountEffect";
-import { toast } from "sonner";
+import { toastWriteError } from "../lib/dispatchBinding";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../store/inboxStore";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -28,7 +28,7 @@ export function usePermissionModeSwitch({ effectiveMode, conversation, effective
     void convCommand(convexConvId, "setPermissionMode", target ? { target } : {}).catch((err) => {
       setSwitchingFrom(null);
       if (isParkedDispatchError(err)) return;
-      toast.error(err instanceof Error ? err.message : "Failed to change permission mode");
+      toastWriteError(err, "Failed to change permission mode");
     });
   }, [conversation, effectiveIsOwner, convCommand, convexConvId]);
   const handleCycleMode = useCallback(() => requestPermissionMode(), [requestPermissionMode]);

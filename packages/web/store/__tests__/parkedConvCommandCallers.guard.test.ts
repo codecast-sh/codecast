@@ -42,7 +42,9 @@ describe("parked convCommand caller policy", () => {
     expect(globalPanel).toContain(
       'if (isParkedDispatchError(err)) return;',
     );
-    expect(globalPanel).toContain("toast.error(`Kill failed:");
+    // Any other failure is still reported: once, in words (toastWriteError
+    // stays quiet only when the dispatch failure toast already said it).
+    expect(globalPanel).toContain('toastWriteError(err, "Kill failed")');
   });
 
   test("fire-and-forget session controls observe their asyncAction rejection", async () => {

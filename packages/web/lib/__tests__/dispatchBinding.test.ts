@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { useInboxStore } from "../../store/inboxStore";
-import { applyDispatchFailure, makeDispatchBinding, newDispatchAckState, type DispatchCallArgs } from "../dispatchBinding";
+import { toast } from "sonner";
+import { applyDispatchFailure, dispatchRefusalReason, makeDispatchBinding, newDispatchAckState, toastWriteError, wasDispatchFailureReported, type DispatchCallArgs } from "../dispatchBinding";
 
 const ID = "a".repeat(32);
 const store = () => useInboxStore.getState();
@@ -126,6 +127,52 @@ describe("applyDispatchFailure", () => {
       expect(store().dispatchErrors).toBe(before);
     } finally {
       err.mockRestore();
+    }
+  });
+});
+
+// The 2026-11-08 refusal: a team admin pressed Resume on a session he could not
+// command. The failure toast said it once in words; the composer's own catch
+// then toasted the raw Convex error, request id and stack included.
+const RAW_REFUSAL = "[CONVEX M(dispatch:dispatch)] [Request ID: a9f72e9a176de6fcb] Server Error Uncaught Error: convCommand resumeSession conv=jx7dj9yx961j5yvpz3dvww81xs8st1c4 user=kd7djmsfo6zcy30egdgy4jdard83mq64: Uncaught Error: Not authorized at requireSessionCommandTarget (../../convex/daemonCommandUtils.ts:221:9) at async resumeConversationSession (../../convex/daemonCommandUtils.ts:313:19) at async handler (../../convex/users.ts:1201:11) at convCommand (../../convex/dispatch.ts:3254:4)\n  Called by client";
+
+describe("one friendly message per refused write", () => {
+  beforeEach(() => {
+    useInboxStore.setState({ sessions: {}, conversations: {}, messages: {}, pendingMessages: {}, pending: {}, lastDispatchFailure: null } as any);
+    store()._setDispatch(async () => null);
+  });
+  afterEach(() => store()._clearRuntimeBindings());
+
+  it("reads the reason out of a nested convCommand refusal, without ids or stack", () => {
+    expect(dispatchRefusalReason(RAW_REFUSAL)).toBe("you don't have access to that session");
+    expect(dispatchRefusalReason("[CONVEX M(dispatch:dispatch)] [Request ID: x] Server Error Uncaught Error: No session ID on this conversation at resumeConversationSession (../../convex/daemonCommandUtils.ts:1:1)")).toBe("No session ID on this conversation");
+    expect(dispatchRefusalReason("", "Failed to resume session")).toBe("Failed to resume session");
+  });
+
+  it("a caller's catch stays quiet after the failure toast reported the same error", () => {
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    const shown = spyOn(toast, "error").mockImplementation(() => "" as any);
+    try {
+      const refusal = new Error(RAW_REFUSAL);
+      applyDispatchFailure("convCommand", refusal, [ID, "resumeSession"]);
+      expect(store().lastDispatchFailure).toMatchObject({ action: "convCommand" });
+      expect(wasDispatchFailureReported(refusal)).toBe(true);
+      toastWriteError(refusal, "Failed to resume session");
+      expect(shown).not.toHaveBeenCalled();
+    } finally {
+      shown.mockRestore();
+      err.mockRestore();
+    }
+  });
+
+  it("an unreported error toasts its reason, never the raw server text", () => {
+    const shown = spyOn(toast, "error").mockImplementation(() => "" as any);
+    try {
+      toastWriteError(new Error(RAW_REFUSAL), "Failed to resume session");
+      toastWriteError(new Error(""), "Failed to resume session");
+      expect(shown.mock.calls.map((c) => c[0])).toEqual(["You don't have access to that session", "Failed to resume session"]);
+    } finally {
+      shown.mockRestore();
     }
   });
 });

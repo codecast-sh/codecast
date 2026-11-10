@@ -405,7 +405,7 @@ import { setBackgroundSessions, setGovernorBackground } from "./backgroundPriori
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
 import { terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import { resumeEffortFlagFromFile, resumeModelFlagFromFile } from "./resumeCommand.js";
-import { CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
+import { CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isIdleResumeOptionRow, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
 import {
   fetchExport,
   hasResumableMessages,
@@ -25753,6 +25753,13 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
           const { stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmuxSession, "-S", "-20"]);
           if (isCodexUpdateDialog(paneContent)) {
             await tmuxExec(["send-keys", "-t", tmuxSession, "Escape"]);
+            continue;
+          }
+          // A machine wake has nobody at the terminal: answer the idle-resume
+          // dialog itself. A person's resume still gets asked.
+          if (agentType === "claude" && isMachineDeliveredMessage(content) && isClaudeIdleResumeDialog(paneContent)
+            && await selectHighlightedOption(tmuxSession, (line) => isIdleResumeOptionRow(line), "the idle-resume dialog")) {
+            logDelivery(`Auto-resume ${shortId}: answered Claude's idle-resume dialog for a machine wake`);
             continue;
           }
           if (!parsePollMessage(content) && parseInteractivePrompt(paneContent, true)) {
