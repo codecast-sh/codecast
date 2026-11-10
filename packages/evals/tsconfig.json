@@ -9,7 +9,7 @@
   },
   "include": [
     "src/**/*",
-    "scripts/**/*",
+    "fixtures/**/*.ts",
     "../convex/convex/lib/anthropic.ts",
     "../convex/convex/idleSummary.ts",
     "../cli/src/cliHttp.ts",

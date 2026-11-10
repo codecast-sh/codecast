@@ -32,14 +32,6 @@ export function verifiedSha(sha: string): string {
 /** `git log` rows as CommitRefs, newest first, each placed on the main line or mapped to its twin through heads.json. */
 const log = (args: string[], known: { onMain?: boolean } = {}): LoggedCommit[] => gitLog(args, known.onMain ? onMainLine : placeByHeads());
 
-/** One commit as the pages name it. */
-export function commitRef(sha: string): CommitRef | null {
-  const [c] = log(['-1', sha]);
-  if (!c) return null;
-  const { parents: _, ...ref } = c;
-  return ref;
-}
-
 /**
  * The commits on the main line that touched what a surface declares (its
  * sources, its own dir, the harness, and what every prompt rests on),

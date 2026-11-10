@@ -317,6 +317,9 @@ function createBrowserPanes({
     for (const pane of panes.values()) if (pane.hostId === hostId) apply(pane);
   }
 
+  const HOST_DROP_EVENTS = ["destroyed", "render-process-gone", "did-navigate"];
+  const WINDOW_REFRESH_EVENTS = ["minimize", "restore", "show", "hide", "resize", "move"];
+
   /**
    * The views belong to the renderer that asked for them. When that renderer
    * goes — the window closed, the process died, or it navigated to another
@@ -331,20 +334,29 @@ function createBrowserPanes({
     const hostId = host.id;
     if (hosts.has(hostId)) return;
     hosts.add(hostId);
-    const drop = () => {
-      hosts.delete(hostId);
-      destroyAllFor(hostId);
-    };
-    host.once("destroyed", drop);
-    host.on("render-process-gone", drop);
-    host.on("did-navigate", drop);
     const win = BrowserWindow.fromWebContents(host);
+    const refresh = () => applyAllFor(hostId);
+    // A reload or a navigation drops the host and the next pane watches it
+    // again, so `drop` takes every listener it was reached by off with it.
+    // Left on, each reload stacked another full set on the same window, and
+    // all of them ran on every resize and move.
+    const drop = () => {
+      if (!hosts.delete(hostId)) return;
+      // Views first: nothing below may keep them alive. This can run from the
+      // destroyed event, where a throw is always one property read away.
+      destroyAllFor(hostId);
+      try {
+        for (const event of HOST_DROP_EVENTS) host.removeListener(event, drop);
+        if (win) {
+          for (const event of WINDOW_REFRESH_EVENTS) win.removeListener(event, refresh);
+          win.removeListener("closed", drop);
+        }
+      } catch {}
+    };
+    for (const event of HOST_DROP_EVENTS) host.on(event, drop);
     if (win && !win.isDestroyed()) {
-      const refresh = () => applyAllFor(hostId);
-      for (const event of ["minimize", "restore", "show", "hide", "resize", "move"]) {
-        win.on(event, refresh);
-      }
-      win.once("closed", drop);
+      for (const event of WINDOW_REFRESH_EVENTS) win.on(event, refresh);
+      win.on("closed", drop);
     }
   }
 

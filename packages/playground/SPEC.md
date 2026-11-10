@@ -123,22 +123,41 @@ read as "simple, fast, fun, and real software", in that order.
   except to export something genuinely shared (and then reuse it from both).
 
 ### Convex data model (playground deployment)
-- `visitors`: secret hash, avatar, name, created/seen.
-- `apps`: slug, name, live_version, created_by, forked_from {app_id, version},
-  counts (versions, contributors), last_activity_at, budget usage.
-- `versions`: app_id, number, parent_number, files manifest (path → storage id
-  or inline text + hash), summary, request message id, author visitor, kind
-  (build | restore | fork | seed), created_at, and once taken, its still (a
-  gallery image in storage, the one field set after the insert). Immutable
-  otherwise.
-- `messages`: app_id, visitor_id or "builder", body, kind (chat | request |
-  build card | system note), element reference, build state for cards.
-- `builds`: app_id, request message, status (queued | building | live |
-  failed), base version, result version, narration log, cost, error.
-- `presence`: app_id, visitor_id, last_seen, typing_until, viewing version.
-- `app_data`: per-app documents for the runtime data layer (collection, doc
-  id, json value, updated_by, updated_at), size-capped.
-- Rate limit / budget rows as needed.
+`convex/schema.ts` is the source of truth, with the reason for each table and
+field in its comments. The tables, by what they hold:
+
+- People: `visitors` (secret hash, character avatar and name, created_at).
+- Apps: `apps` (slug, name, live_version, version and contributor counts,
+  created_by, forked_from {app_id, version}, last_activity_at, the ideas Clay
+  suggests next, and `unlisted` to keep one out of the gallery and feed).
+- Versions, immutable: `versions` (app_id, number, parent_number, kind (build |
+  restore | fork | seed), summary, author, request message, source, undid,
+  spotlight and try_it, file count, bytes and files hash, and once taken its
+  still, the one field set after the insert). File contents are apart, so a
+  timeline never reads file bytes: `version_files` is one row per path (hash,
+  and the transpiled served_hash for JSX/TS) and `blobs` holds each body once
+  by content hash, shared by every version and fork with the same bytes.
+- The room: `messages` (app_id, kind (chat | request | build | system),
+  visitor, body, element reference, pending triage, and for a card the build
+  it points at).
+- Builds: `builds` (request and card message, requested_by, status (queued |
+  building | live | failed), base and result version, restarted, cost, error,
+  error_detail and failure kind, start and finish times). The narration a card
+  shows while Clay works is in `build_progress`, off the builds row so its
+  writes wake only that card.
+- Who is here: `presence` (app, visitor, joined_at, last_seen, viewing version,
+  the app's own per-person state), `crowds` (per busy app, a count and the
+  first few faces, so the gallery never wakes for a heartbeat) and `typing`
+  (who is typing until when, apart from presence for the same reason).
+- The runtime data layer: `app_data` (per-app documents in collections, with
+  key, value, size, rev, created_by, updated_by, updated_at) and
+  `app_data_usage` (docs and bytes per app, against the caps).
+- `app_errors`: one row per version whose app reported a runtime error, so
+  the room hears of each version's first error once.
+- Budgets and limits: `tallies` (daily totals per key: build spend overall,
+  per app and per visitor; bytes copied into forks) and `limits` (fixed-window
+  rate-limit counters).
+- `reports`: "Report this app", one row per visitor per app.
 
 All public functions take the visitor id + secret and verify the hash (the
 `callGuests.ts` pattern in packages/convex), except registering and the reads behind

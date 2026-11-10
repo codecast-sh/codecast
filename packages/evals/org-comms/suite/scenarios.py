@@ -5,21 +5,21 @@
 
 ORG = """Workspace: Acme
 Roles:
-  @head-of-people Head of People · reports to Ashot · looks after whatever no narrower role covers
-  @growth Growth lead · reports to Ashot · looks after Cold outreach (pr-2)
+  @head-of-people Head of People · reports to Mara · looks after whatever no narrower role covers
+  @growth Growth lead · reports to Mara · looks after Cold outreach (pr-2)
   @cold-email Cold Email lead · reports to @growth · looks after Deliverability (pl-5)
-  @agent-quality Agent Quality lead · reports to Jason · looks after Agent Quality (pr-3)
-  @infra Infrastructure lead · reports to Samvit · looks after Infrastructure (pr-4)
-People: Ashot (admin, your person), Jason (admin), Samvit (admin)
-Spending money, buying domains or seats, and changing a goal are Ashot's alone; no role holds that authority."""
+  @agent-quality Agent Quality lead · reports to Theo · looks after Agent Quality (pr-3)
+  @infra Infrastructure lead · reports to Juno · looks after Infrastructure (pr-4)
+People: Mara (admin, your person), Theo (admin), Juno (admin)
+Spending money, buying domains or seats, and changing a goal are Mara's alone; no role holds that authority."""
 
-WORKER = """This session: jx1 Bounce-rate analysis, Ashot's session
+WORKER = """This session: jx1 Bounce-rate analysis, Mara's session
 Spawned by: jx0 Deliverability lead session (the @cold-email standing session). That session is your lead.
 Working on: task ct-41 Measure bounce rates by sending domain · plan pl-5 Deliverability · project Cold outreach
-The role that answers for this work: @cold-email (Cold Email lead), reporting to @growth → Ashot."""
+The role that answers for this work: @cold-email (Cold Email lead), reporting to @growth → Mara."""
 
-LEAD = """This session: jx0 Cold Email lead, Ashot's session
-You are @cold-email (Cold Email lead), this role's standing session, reporting to @growth → Ashot.
+LEAD = """This session: jx0 Cold Email lead, Mara's session
+You are @cold-email (Cold Email lead), this role's standing session, reporting to @growth → Mara.
   Looks after: Deliverability (pl-5)
 Workers you spawned: jx2 (inbox-provider limits research), jx3 (send scheduler), jx4 (email copy), jx5 (new domain warming), jx6 (analytics dashboard)."""
 
@@ -67,7 +67,7 @@ def g_collision(r):
     return 0
 
 def g_cross_finding(r):
-    if any(x in ("ashot", "jason", "samvit") for x in to(r, "decide")) or acts(r, "chat"): return 0
+    if any(x in ("mara", "theo", "juno") for x in to(r, "decide")) or acts(r, "chat"): return 0
     owner = "infra" in to(r, "role_wake") or "jx7" in to(r, "send") or any("pr-4" in x or "infra" in x for x in to(r, "task_comment"))
     if owner and len(interrupts(r)) <= 1: return 2
     if owner or "jx0" in to(r, "send") or acts(r, "task_comment"): return 1
@@ -95,7 +95,7 @@ def g_synthesis(r):
     return 0
 
 def g_spend(r):
-    if "ashot" in to(r, "decide") and not acts(r, "chat"): return 2
+    if "mara" in to(r, "decide") and not acts(r, "chat"): return 2
     if "growth" in to(r, "role_wake"): return 1
     return 0
 
@@ -129,12 +129,12 @@ SCENARIOS = [
     S("spend", "lead", "Hitting the deliverability target needs 20 new sending domains, about $400. Your role holds no spending authority.", g_spend),
     S("cross_tradeoff", "lead", "You want to raise daily send volume by 50%. An open task in Agent Quality (pr-3, @agent-quality's area) says reply quality from the agents degrades above the current volume. The two goals conflict and nobody has weighed them.", g_cross_tradeoff),
     S("blocked_sibling", "worker", "You need jx4's list of warmed domains to finish ct-41. jx4 is working on it; its pinned state says 'list ready in ~20 min'. You have other parts of ct-41 you could do meanwhile.", g_blocked_sibling),
-    S("unbound_handoff", "unbound", "Ashot asked you directly to speed up the deploy script, and you did: deploys now skip the smoke test unless a flag is set. That changes how @infra's area works, and its standing session does not know yet.", g_unbound_handoff),
+    S("unbound_handoff", "unbound", "Mara asked you directly to speed up the deploy script, and you did: deploys now skip the smoke test unless a flag is set. That changes how @infra's area works, and its standing session does not know yet.", g_unbound_handoff),
 ]
 
-UNBOUND = """This session: jx8 Deploy script speedup, Ashot's session
+UNBOUND = """This session: jx8 Deploy script speedup, Mara's session
 Working on: no task or plan is bound to this session yet.
-No role answers for an unbound session; it answers to Ashot."""
+No role answers for an unbound session; it answers to Mara."""
 
 WHO = {"worker": WORKER, "lead": LEAD, "unbound": UNBOUND}
 

@@ -58,7 +58,6 @@ const { createPaletteFace } = require("./paletteFace");
 // An ES module the web bundle imports too, so both sides read one table.
 const { appForRoute, placeRoute, isDesktopApp, DESKTOP_APPS } = require("./appWindows.mjs");
 const {
-  shouldHandBackCall,
   shouldHideCallWindow,
   callWindowChrome,
   callWindowPlacementKey,
@@ -81,7 +80,8 @@ const { mergeAgentDock, placeAgentDock } = require("./agentDock");
 const { createOsPermissions, loadNotificationsAddon } = require("./osPermissions");
 const { createComputerPermissions } = require("./computerPermissions");
 const { createDaemonSetup } = require("./daemonSetup");
-const { createShellAuthority, originOf, trustedShellUrl, installShellCapabilities } = require("./shellAuthority");
+const { createShellAuthority, originOf, trustedShellUrl, installShellCapabilities, shellOrigins, LOCAL_DEV_URL, LOCAL_DEV_FLAG } = require("./shellAuthority");
+const { createSettingsFile } = require("./settingsFile");
 const { createEditUndo } = require("./editUndo");
 const { createMenuKeys } = require("./menuKeys");
 const { recoveryPageUrl, isRecoveryUrl, attachCrashRecovery, attachGpuRecovery } = require("./shellRecovery");
@@ -109,24 +109,44 @@ function showNativeNotification(title, body, onClick, target) {
   notif.show();
 }
 
+// One cached copy of settings.json and an atomic write (settingsFile.js).
+// Defined here because the base URL just below is the first thing to read it.
+const settingsFile = createSettingsFile(() => path.join(app.getPath("userData"), "settings.json"));
+const loadFullSettings = settingsFile.load;
+const updateSettings = settingsFile.update;
+
 const PROD_URL = "https://codecast.sh";
 // Dev mode. Must be https: the http origin 301-redirects to https (nginx
 // single-auth-origin fix), and http/https are separate localStorage origins
 // so the Convex auth token only lives on https. Loading http here would
 // redirect anyway — point straight at https to skip the round-trip.
-const LOCAL_URL = "https://local.codecast.sh";
+const LOCAL_URL = LOCAL_DEV_URL;
+// The local dev site belongs to a from-source run. A packaged build does not
+// treat local.codecast.sh as the app: it is not one of its shell origins, the
+// sticky "local" choice is ignored, and Switch Environment (menu and global
+// shortcut) is absent. That name resolves through ordinary DNS, so on a
+// network that answers it with another address a build that trusted it would
+// hand the whole bridge to whatever was served there. The preload reads the
+// same decision from the environment, which every renderer inherits.
+const LOCAL_DEV_ALLOWED = !app.isPackaged;
+if (LOCAL_DEV_ALLOWED) process.env[LOCAL_DEV_FLAG] = "1";
+else delete process.env[LOCAL_DEV_FLAG];
 // Env is sticky across restarts: the last toggled choice is persisted in
 // settings.json (see toggleEnvironment). An explicit CODECAST_URL still wins.
 const BASE_URL =
-  process.env.CODECAST_URL || (loadFullSettings().env === "local" ? LOCAL_URL : PROD_URL);
+  process.env.CODECAST_URL || (LOCAL_DEV_ALLOWED && loadFullSettings().env === "local" ? LOCAL_URL : PROD_URL);
+const SHELL_ORIGINS = shellOrigins({ localDev: LOCAL_DEV_ALLOWED, baseUrl: BASE_URL });
 
 // local.codecast.sh resolves to 127.0.0.1 and is served with a locally
 // generated mkcert dev certificate. mkcert's CA is in the macOS keychain so
 // Safari/Chrome trust it, but Electron's bundled Chromium rejects it
 // (ERR_CERT_AUTHORITY_INVALID), which makes dev mode fail to load entirely.
 // We trust the cert for this one loopback host only (see the verify proc in
-// app.whenReady) — production validation is left fully intact.
-const LOCAL_DEV_HOST = "local.codecast.sh";
+// app.whenReady) — production validation is left fully intact. A packaged
+// build trusts it only when it was launched at that site on purpose
+// (CODECAST_URL=https://local.codecast.sh); otherwise every host is verified.
+const LOCAL_DEV_HOST = new URL(LOCAL_URL).hostname;
+const LOCAL_CERT_TRUSTED = LOCAL_DEV_ALLOWED || originOf(process.env.CODECAST_URL) === LOCAL_URL;
 
 const { DEFAULT_SHORTCUTS, mergeShortcuts, diffOverrides } = require("./shortcutSettings");
 
@@ -141,7 +161,7 @@ let deepLinkUrl = null;
 let currentBaseUrl = BASE_URL;
 const shellAuthority = createShellAuthority({
   ipcMain,
-  origins: () => [PROD_URL, LOCAL_URL, originOf(BASE_URL)].filter(Boolean),
+  origins: () => SHELL_ORIGINS,
   openExternal: (url) => shell.openExternal(url),
 });
 const shellIpc = shellAuthority.ipc;
@@ -152,7 +172,7 @@ shellIpc.on("set-menu-keys", (_e, keys) => { if (menuKeys.set(keys)) buildAppMen
 const editUndo = createEditUndo({
   keyRunsApp: (command) => menuKeys.chordRuns(command === "undo" ? "ui.undo" : "ui.redo", command === "undo" ? "CmdOrCtrl+Z" : "Shift+CmdOrCtrl+Z"),
   focusedContents: () => webContents.getFocusedWebContents() ?? BrowserWindow.getFocusedWindow()?.webContents,
-  isShell: (contents) => trustedShellUrl(contents.getURL(), [PROD_URL, LOCAL_URL, originOf(BASE_URL)].filter(Boolean)),
+  isShell: (contents) => trustedShellUrl(contents.getURL(), SHELL_ORIGINS),
 });
 // Every Codecast window is built here. A see-through one (the palette, the
 // rings, the dock) says so to its page, which then paints nothing while it
@@ -226,26 +246,10 @@ attachGpuRecovery(app, {
   onGone: (details) => reportProcessGone(details, "app", true),
 });
 
-function getSettingsPath() {
-  return path.join(app.getPath("userData"), "settings.json");
-}
-
-function loadFullSettings() {
-  try {
-    return JSON.parse(fs.readFileSync(getSettingsPath(), "utf8"));
-  } catch {
-    return {};
-  }
-}
-
 function loadSettings() {
   return mergeShortcuts(loadFullSettings().shortcuts);
 }
 
-function updateSettings(patch) {
-  const existing = loadFullSettings();
-  fs.writeFileSync(getSettingsPath(), JSON.stringify({ ...existing, ...patch }, null, 2));
-}
 
 function saveSettings(shortcuts) {
   updateSettings({ shortcuts: diffOverrides(shortcuts) });
@@ -858,11 +862,6 @@ shellIpc.handle("open-app-window", (_e, app, navPath) => {
   const clean = navPath == null ? null : sanitizeTabPath(navPath);
   createAppWindow(app, clean);
   return true;
-});
-
-shellIpc.handle("close-app-window", (_e, app) => {
-  const win = isDesktopApp(app) ? appWindowFor.get(app) : null;
-  if (win && !win.isDestroyed()) win.close();
 });
 
 shellIpc.handle("route-navigate", (e, navPath) => {
@@ -2877,7 +2876,7 @@ function navigateMain(navPath) {
 }
 
 function toggleEnvironment() {
-  if (!mainWindow) return;
+  if (!LOCAL_DEV_ALLOWED || !mainWindow) return;
   currentBaseUrl = currentBaseUrl === PROD_URL ? LOCAL_URL : PROD_URL;
   const env = currentBaseUrl === PROD_URL ? "prod" : "local";
   updateSettings({ env });
@@ -3126,7 +3125,7 @@ function buildAppMenu() {
         { label: "Command Palette", click: () => togglePalette() },
         { label: "Chat Window", click: () => createAppWindow("chat") },
         { label: "Work Window", click: () => createAppWindow("work") },
-        { label: "Switch Environment", click: () => toggleEnvironment() },
+        ...(LOCAL_DEV_ALLOWED ? [{ label: "Switch Environment", click: () => toggleEnvironment() }] : []),
         { type: "separator" },
         { role: "front" },
         { type: "separator" },
@@ -3186,7 +3185,10 @@ function emitUpdateStatus(status) {
   // (the Chat window hits the floor as readily as the main one); a status sent
   // to the main window alone left the asking window to call a staged update
   // stalled after 90s (2026-09-24).
-  for (const w of routedWindows()) w.webContents.send("update-status", status);
+  for (const w of routedWindows()) {
+    if (w.isDestroyed() || w.webContents.isDestroyed()) continue;
+    w.webContents.send("update-status", status);
+  }
 }
 
 // The .app bundle we're actually running from (NOT hardcoded to /Applications —
@@ -3420,7 +3422,6 @@ shellIpc.handle("set-badge-count", (_e, count) => {
   trayNeedsInput = count;
   applyTrayState();
 });
-shellIpc.handle("get-env", () => (currentBaseUrl === PROD_URL ? "prod" : "local"));
 // OS-wide seconds since last user input — feeds the web layer's presence
 // heartbeat so the server knows a human is at this machine even while
 // Codecast itself is unfocused. powerMonitor is only usable after app ready,
@@ -3505,10 +3506,6 @@ shellIpc.on("palette-navigate", (_e, navPath) => {
 
 shellIpc.on("palette-hide", () => {
   hidePalette();
-});
-
-shellIpc.on("palette-new-session", () => {
-  openFullSessionInMain();
 });
 
 // The compose popup reports back after the user sends the first message. The
@@ -3691,6 +3688,8 @@ function registerShortcuts() {
     // A feature's key is held only while the feature is on: a dock that was
     // turned off must not take a chord away from every other app.
     if (key === "toggleAgentDock" && !loadAgentDock().enabled) continue;
+    // Switch Environment exists in a from-source run only (LOCAL_DEV_ALLOWED).
+    if (key === "toggleEnv" && !LOCAL_DEV_ALLOWED) continue;
     let ok = false;
     // register() returns false when another app already holds the accelerator
     // and throws on a malformed one — both must land in issues, not crash.
@@ -3727,9 +3726,10 @@ app.whenReady().then(() => {
   // before any cert check, so unlike the "certificate-error" event it also
   // covers the Vite HMR WebSocket — not just the page load. callback(0) =
   // trust; callback(-3) = defer to Chromium's normal verification, so every
-  // other host (production included) stays strict.
+  // other host (production included) stays strict, and so does this one in a
+  // packaged build (LOCAL_CERT_TRUSTED).
   session.defaultSession.setCertificateVerifyProc((request, callback) => {
-    callback(request.hostname === LOCAL_DEV_HOST ? 0 : -3);
+    callback(LOCAL_CERT_TRUSTED && request.hostname === LOCAL_DEV_HOST ? 0 : -3);
   });
 
   // ── Capability policy ────────────────────────────────────────────────────

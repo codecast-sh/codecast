@@ -51,7 +51,7 @@ if os.environ.get("WORLD") == "big":
         "W6": "worker W6 under lead L: build the deliverability dashboard.",
         "W7": "worker W7 under lead L: migrate DNS records (SPF, DKIM, DMARC) for all sending domains.",
         "W8": "worker W8 under lead L: tune reply detection so bounces are not counted as replies.",
-        "W9": "worker W9 under lead L: write the weekly deliverability report for Ashot.",
+        "W9": "worker W9 under lead L: write the weekly deliverability report for Mara.",
         "W10": "worker W10 under lead L: rotate sender personas across domains.",
     }
     FACTS = [

@@ -20,27 +20,29 @@ work the same way against the real Chrome. Only the transport differs.
    installation up to date.
 2. In a terminal: `cast browser extension setup`. It starts the bridge host
    on this machine and opens the extension's options page in your Chrome with
-   the token and port already filled in. The first time, the page shows the
-   port and asks for one click on **Pair**; after that it saves the token,
-   clears it from the address bar, and connects. A token the extension already
-   holds reconnects without the click. The command waits up to thirty seconds
-   for the connection and prints one line when it arrives:
-   `extension connected`. Only when it does not arrive does the command print
-   the install steps.
+   a one-time pairing code and the port already filled in. The page shows the
+   code and the port and asks for one click on **Pair**; the worker then
+   exchanges the code for a key of this Chrome profile's own and connects. A
+   profile that is already paired and connected needs no click: the command
+   says so and returns. Otherwise it waits up to thirty seconds for the
+   profile to connect and prints one line when it does: `paired <profile>`.
+   Only when it does not arrive does the command print the install steps.
 3. Check any time with `cast browser extension status`: two green lines, one
    for the host and one for the extension.
 
 If step 2 did not open the page (no Chrome binary at a known path), run
-`cast browser extension setup --show-token`. It prints the pairing URL to
-open by hand, plus the token and port to enter under **Details, Extension
-options** followed by **Save & connect**. Without `--show-token` the command
-never prints the token: these commands run inside agent sessions whose output
-syncs off the machine. `--json` follows the same rule (`--json --show-token`
-includes the token and the URL).
+`cast browser extension setup --show-code`. It prints the pairing URL to
+open by hand, plus a one-time code and the port to enter under **Details,
+Extension options**, **Pair by hand**, followed by **Save and connect**. The
+code works once and expires after ten minutes. Without `--show-code` the
+command never prints it: these commands run inside agent sessions whose
+output syncs off the machine. `--json` follows the same rule
+(`--json --show-code` includes the code and the URL). `--profile <name>`
+picks the Chrome profile to pair when the extension is installed in several.
 
-The token rides in the URL fragment. A fragment never leaves the browser, and
+The code rides in the URL fragment. A fragment never leaves the browser, and
 `options.js` removes it from the address bar as soon as it has read it, so
-the token does not linger in history or in a screenshot. On macOS the URL
+the code does not linger in history or in a screenshot. On macOS the URL
 reaches Chrome through `osascript` on stdin, never as a process argument,
 because every user on a Mac can read every other user's process arguments.
 The first run may show a macOS prompt asking whether your terminal may
@@ -175,28 +177,26 @@ Rules the CLI enforces in real mode:
   land in `Cast` and wear its colour; the extension moves such tabs back out
   at once, since the group means agent tabs. It remembers the groups and tabs
   it created and touches only those: a group you made yourself is never
-  renamed, animated or adopted by a session. Inside the group each session
+  renamed or adopted by a session. Inside the group each session
   sees only its own tabs: the bridge host scopes what a session's engine can
   discover to the tabs that session opened or was granted, so one session's
   frozen tab cannot stall another's commands, and a session cannot close or
   navigate a tab it did not open by accident. Sharing is deliberate: `cast
   browser tab switch <id>` asks the host to grant that tab, and the host
   grants only agent tabs, never yours.
-  While a session works the title shows cycling dots; CDP calls that arrive
-  within 600 ms of each other count as one span, the dots start once a span
-  has run for 300 ms, and a checkmark follows for three seconds when the span
-  ends. The frames have a fixed width so the tab strip does not shift. The
-  group disappears with its last tab.
+  The group's title never changes while a session works: any change to it
+  resizes the chip and shifts every tab after it. The group disappears with
+  its last tab.
 - **A frame around the driven page**, a soft gradient in the group's colour,
   and a pointer in the same colour that glides to wherever the agent's mouse
   events land and pulses on a click, then fades after a few seconds of
   stillness. Neither takes clicks, and the extension hides both for every
   screenshot, so captures show the page alone. The extension injects it through the debugger
-  session it already holds, so it needs no host permission and no content
-  script, and it runs its script in an isolated world with a random element
-  id: the page cannot reach the script, cannot watch for the moment before a
-  screenshot, and cannot write a stylesheet rule against the element in
-  advance. (The DOM is shared, so a hostile page can still remove the
+  session it already holds, not as a content script, and it runs its script
+  in an isolated world, drawing inside a closed shadow root on an element
+  with no id, class or data attribute: the page cannot reach the script,
+  cannot watch for the moment before a screenshot, and cannot write a
+  stylesheet rule against the element in advance. (The DOM is shared, so a hostile page can still remove the
   element; Chrome's infobar and the tab group are not the page's to touch.)
   It goes away when the session detaches. The extension also refreshes a
   heartbeat in the page every three seconds, and the border hides itself
@@ -207,9 +207,21 @@ Rules the CLI enforces in real mode:
   pages read it and boot at once: without it, a codecast page in a
   background tab of a Chrome that owns the desktop app would wait two
   minutes for you to look at it, then open in the app instead.
-- **The codecast icon in the toolbar.** Click it for a small popup: the
-  connection in one line, the tabs a session holds right now under their
-  group names (click one to show it), and Reconnect and Settings buttons.
+- **A second script, `page.js`, in agent tabs only.** The worker injects it
+  with `chrome.scripting` into the top frame of a tab an agent drives or has
+  handed to you, and into no other tab; this is what the `scripting`,
+  `webNavigation` and `<all_urls>` permissions are for. While an agent drives
+  the tab it removes other extensions' injected frames and password manager
+  overlays, which make Chrome refuse debugger commands. During a handoff
+  (`cast browser handoff`) it removes nothing and draws a card that says what
+  the agent needs from you, with one Continue button that accepts only a real
+  click.
+- **The codecast icon in the toolbar.** Its badge says who has the tab in
+  view: RUN while an agent drives it, WAIT while an agent waits on you there,
+  ON while you have lent it. Click it for a small popup: the tab's role with
+  a button to lend it, take it back or continue a handoff, the connection in
+  one line, the tabs a session holds right now under their group names
+  (click one to show it), and Reconnect and Settings buttons.
   The settings page (the same one pairing opens) explains all of this with
   live status and keeps the pair by hand form for the rare machine where
   setup cannot open Chrome.
@@ -234,8 +246,9 @@ Rules the CLI enforces in real mode:
   a server for answering: the extension sends a fresh nonce with
   `HMAC(token, "ext:" + nonce)`, the host answers `HMAC(token, nonce)`, and
   the extension executes nothing until that answer checks out. A host that
-  cannot answer is treated like a bad token: the socket closes and the retry
-  alarm stays quiet until setup hands it a token again. The CLI does the same before it ever
+  cannot answer is treated like a bad token: the socket closes, the quick
+  retries stop, and the 30 second alarm keeps asking, since the host that
+  answered may be a stale one about to be replaced. The CLI does the same before it ever
   presents the token: `/healthz?nonce=` must return
   `HMAC(token, "healthz:" + nonce)`, and every function that builds a token
   carrying URL takes a proven host, so the compiler refuses a path that
@@ -244,8 +257,8 @@ Rules the CLI enforces in real mode:
   engine gets the bridge URL through `AGENT_BROWSER_CDP` in its environment,
   not `--cdp` on its command line; the pairing URL sits in a 0600 file under
   `~/.codecast/browser` that a `file:` page forwards from, so Chrome's command
-  line carries a path; `setup` and `status` print the token only with
-  `--show-token`; and
+  line carries a path; `setup` prints a pairing code only with
+  `--show-code`, and no command prints a profile's key; and
   the transcript redactor masks the two shapes it could be printed in
   (`token  <hex>` and `/devtools/browser/<hex>`).
 - **Who can reach the port.** Only local processes. The host binds loopback
@@ -260,10 +273,17 @@ Rules the CLI enforces in real mode:
   host. The extension is cut off at once, and nothing can drive the browser
   until `setup` hands it the new token. Removing the extension, or toggling
   it off in `chrome://extensions`, is the hard stop.
-- **Scope.** The extension holds no remote endpoints, sends nothing off the
-  machine, and stores only `{token, port}` in `chrome.storage.local`. A tab
-  group is a grouping hint and grants nothing: every tab still needs its own
-  attach.
+- **Scope.** The extension holds no remote endpoints and sends nothing off
+  the machine; its pages load no remote resource. In `chrome.storage.local`
+  it keeps the pairing (`bridge`: the port, this profile's key, a one-time
+  code until it is used, the shared token of an older CLI), a random profile
+  id, where agent tabs open, the last 24 connection log lines, and the ids
+  and URLs of the tabs it created for agents. In `chrome.storage.session` it
+  keeps which tabs and groups are the agents', which you lent or took back,
+  pending handoffs and when each agent tab was last driven. It reports the
+  URL and title of every open tab to the bridge host, which shows a session
+  only its own. A tab group is a grouping hint and grants nothing: every tab
+  still needs its own attach.
 - **Loss of the host.** When the socket to the host drops, the extension
   detaches every tab, so your browser is never left wearing debugger banners
   with nobody on the other end.
@@ -318,9 +338,9 @@ with a wrong token. Then four parts:
    open, snapshot, click, screenshot, tab list. Skipped with a note when no
    engine binary is installed.
 3. A raw CDP client on the bridge, for what only the bridge adds: a
-   background create into a named group, the group title animating while a
-   command runs, the border around the driven page, and a screenshot that
-   does not show it.
+   background create into a named group, the group title holding still
+   while a command runs, the border around the driven page, and a screenshot
+   that does not show it.
 4. The product path: the paired-extension default, then the plain verbs (open,
    snapshot, click, shot, tabs, stop) on the engine driver, with the CLI's
    state isolated from the machine's. It asserts the tab landed in one group
@@ -338,8 +358,12 @@ playwright caches, or install one with
 
 - `chrome://` pages and the Chrome Web Store cannot be attached (Chrome
   forbids it).
-- One extension connection per bridge host: install the extension in one
-  Chrome profile. A second connection replaces the first.
+- Several Chrome profiles can be paired with one bridge host. Each keeps its
+  own key and all stay connected; `setup` pins the profile new sessions use,
+  and `--browser <id>` moves one session to another. A profile reconnecting
+  replaces only its own earlier connection. Store builds from before profile
+  keys share one connection: the second such profile stands by while the
+  first answers.
 - A paired extension that is disconnected remains the default target.
   Repair the connection; a failure never starts a separate browser.
 - `setup` opens the pairing page by starting the Chrome binary on the page's

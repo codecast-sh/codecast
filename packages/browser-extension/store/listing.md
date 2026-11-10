@@ -25,7 +25,10 @@ of a copied profile.
 What it does
 
 - A session opens its own tabs, all inside one tab group named Cast, and acts
-  only on tabs it opened. Your tabs are never touched.
+  only on tabs it opened or tabs you lend it from the toolbar popup. Take any
+  tab back from the same popup.
+- When a page needs you (a sign-in, a 2FA code), the agent hands it over: a
+  small card on the page says what to do and waits for your click.
 - A soft frame and a visible pointer show exactly what the agent is doing.
   Chrome also shows its own "started debugging this browser" notice; cancel
   it there and the agent lets go.
@@ -35,10 +38,10 @@ What it does
 Pairing
 
 Run `cast browser extension setup` in a terminal. It opens this extension's
-options page with the pairing token filled in and asks for one click. The
-token never crosses a network and is proven both ways, so a random program
-on the port cannot drive your browser. Revoke everything with
-`cast browser extension revoke`.
+options page with a one-time pairing code filled in and asks for one click.
+The code and the key it is exchanged for never cross a network and are proven
+both ways, so a random program on the port cannot drive your browser. Revoke
+everything with `cast browser extension revoke`.
 
 Requires the Codecast CLI (https://codecast.sh).
 
@@ -55,28 +58,78 @@ and drive their own tabs in the user's Chrome.
 
 **Permission justifications**
 
+Each entry says what `background.js` does with the permission; keep them in
+step with `manifest.json`.
+
 - `debugger`: The whole function of the extension. A session's commands
   (navigate, click, type, read the page, screenshot) are Chrome DevTools
   Protocol commands, and `chrome.debugger` is the only extension API that
-  executes them against a tab. It is attached only to tabs the extension
-  itself created for a session, and detached when the session ends.
-- `tabs`: Create the tabs a session works in, find them again, and close them
-  when the session stops. The extension reads the URL and title only of tabs
-  it created.
-- `tabGroups`: Put every tab a session opens into one group named after the
-  session, so the user always sees which tabs an agent holds.
-- `storage`: Keep the pairing token and bridge port the user granted, so the
-  extension reconnects after a restart without asking again.
+  executes them against a tab. It attaches to a tab only when the local
+  bridge names it: a tab the extension created for a session, a tab such a
+  tab's page opened, or a tab the user lent from the toolbar popup or named
+  on the command line. It refuses a tab the user took back. It detaches when
+  the session ends, when the bridge disconnects, and when the user presses
+  Cancel on Chrome's notice. While any tab is attached it also holds a
+  session on its own service worker, which stops Chrome ending the worker in
+  the middle of a command. The frame and pointer drawn on a driven page are
+  injected through this session, and that script also sets one
+  `sessionStorage` key (`codecast-agent-tab`) and fires one DOM event
+  (`cast:driven`) so codecast's own pages know an agent holds the tab.
+- `tabs`: Create the tabs a session works in, group, move, activate and close
+  them, and close agent tabs nobody drove for 30 minutes. The extension
+  reports the URL and title of every open tab in this profile, and each
+  change to them, to the local bridge host, which uses the list to tell agent
+  tabs from the user's and shows a session only its own. It closes a tab
+  when the bridge asks (a session closing its tab); on its own it closes only
+  idle tabs it created.
+- `tabGroups`: Put every agent tab into one group named Cast, so the user
+  always sees which tabs an agent holds, and move a tab the user opened
+  inside that group back out. A group the user made is never changed.
+- `storage`: In local storage: the bridge port and this profile's pairing
+  (its key, a one-time code until it is used, and the shared token of an
+  older CLI), a random profile id, the user's choice of where agent tabs
+  open, the last 24 connection log lines, and the ids and URLs of tabs the
+  extension created for agents, so a reload can tell them from the user's.
+  In session storage, cleared when Chrome quits: which tabs and groups are
+  the agents', which the user lent or took back, the text of a pending
+  handoff, when each agent tab was last driven, and the id of the agents'
+  own window when the user chose one.
 - `offscreen`: One hidden page that messages the service worker every 20
   seconds so Chrome keeps the worker, and its process, running while the
   bridge is connected. Without it Chrome ends the worker after 30 idle
   seconds and starves its process on a busy machine, and agent commands
   time out. The page holds no content and reads nothing.
-- `alarms`: Wake the service worker to reconnect to the bridge when the CLI
-  restarts it.
+- `alarms`: Wake the service worker every 30 seconds to reconnect to the
+  bridge when the CLI restarts it, and once a minute to expire handoffs and
+  close idle agent tabs.
+- `scripting`: Inject `page.js`, a file in the package, into the top frame
+  of a tab an agent is driving or has handed to the user, and into no other
+  tab. While an agent drives the tab the script removes elements other
+  extensions injected into that page (password manager overlays, extension
+  frames), because they make Chrome refuse debugger commands. While an agent
+  waits on the user it removes nothing and draws the handoff card, whose
+  Continue button accepts only a real click.
+- `webNavigation`: Learn which tab opened a new tab, so a popup an agent's
+  page opened joins the agent's tabs and the user gets their own tab back in
+  front; and learn when an agent tab's top frame navigated, so `page.js` is
+  put back in the new document. Navigation URLs are not read or stored.
 
-**Host permissions**: none. The extension connects only to `ws://127.0.0.1`.
-It does not run content scripts and does not read pages the user opened.
+**Host permissions**: `<all_urls>`. `chrome.scripting.executeScript` needs
+host access to the page it injects into, an agent can be sent to any site,
+and no user gesture is present to grant `activeTab`. The access is used only
+to inject `page.js` into the tabs described under `scripting`; the extension
+never injects into a tab no agent holds. Network requests
+go only to the bridge on `127.0.0.1` (`ws://127.0.0.1:<port>/ext`, and
+`http://127.0.0.1:<port>/healthz` to read the host's protocol number). The
+extension's own pages load no remote resource.
+
+**Content scripts**: none declared in the manifest. `page.js` is injected
+on demand as above and runs in the extension's isolated world.
+
+**Web accessible resources**: `options.html`, to `file:` pages only. Setup
+opens a local file that forwards to the options page with the pairing code
+in the URL fragment; a code the extension does not already hold waits for
+the user's click.
 
 **Remote code**: none. All code ships in the package.
 
@@ -84,11 +137,14 @@ It does not run content scripts and does not read pages the user opened.
 
 - Personally identifiable information: not collected.
 - Health, financial, authentication information: not collected.
-- Personal communications, location, web history: not collected.
+- Personal communications, location: not collected.
+- Web history: the URL and title of each open tab are handed to the local
+  bridge on this computer. The extension stores only the URLs of tabs it
+  created for agents, and sends nothing off the machine.
 - User activity: not collected by the extension. Commands and their results
-  flow between the local bridge and the tab the session opened; the extension
+  flow between the local bridge and the tab the session holds; the extension
   stores none of it.
-- Website content: read from tabs the session opened, on the session's
+- Website content: read from tabs a session holds, on the session's
   request, and handed to the local bridge. Not stored, not sent elsewhere by
   the extension.
 

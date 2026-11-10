@@ -211,8 +211,14 @@ export const gallery = query({
     const more = await Promise.all(busy.filter((c) => !known.has(c.app_id)).map((c) => ctx.db.get(c.app_id)));
     const apps = [...recent, ...more.flatMap((a) => (a ? [a] : []))];
     const crowdOf = new Map(busy.map((c) => [c.app_id, c]));
-    const missing = await Promise.all(apps.filter((a) => !crowdOf.has(a._id)).map((a) => crowdRow(ctx, a._id)));
-    for (const c of missing) if (c) crowdOf.set(c.app_id, c);
+    // A scan that came back short holds every crowd with anyone in it, so an
+    // app outside it is empty and needs no read of its own (the range read
+    // already wakes this query when someone arrives there). Only a full scan
+    // can have cut off a busy app.
+    if (busy.length === BUSY_SCAN) {
+      const missing = await Promise.all(apps.filter((a) => !crowdOf.has(a._id)).map((a) => crowdRow(ctx, a._id)));
+      for (const c of missing) if (c) crowdOf.set(c.app_id, c);
+    }
     const count = (a: Doc<"apps">) => crowdOf.get(a._id)?.count ?? 0;
     const ranked = oneOfEach(
       apps

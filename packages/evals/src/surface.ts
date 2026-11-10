@@ -232,11 +232,3 @@ export interface SurfaceImpl {
 
 /** A gate decided by code: what every surface's gates and the route gates are built from. */
 export const gate = (id: string, pass: boolean, summary: string): GateResult => ({ id, pass, decidedBy: 'mechanical', evidence: { summary } });
-
-/** The stub every Phase 1 surface starts as, until its wave 3 unit lands. */
-export function notImplemented(id: string, refForms: string): SurfaceImpl {
-  const fail = (): never => {
-    throw new Error(`${id} is not implemented yet`);
-  };
-  return { refForms, capture: async () => fail(), replay: async () => fail(), gates: fail, describe: fail };
-}

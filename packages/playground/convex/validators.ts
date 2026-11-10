@@ -15,7 +15,6 @@ export type MessageKind = Infer<typeof messageKind>;
 
 /** What the composer asked for: Auto lets triage decide. */
 export const composerMode = v.union(v.literal("auto"), v.literal("change"), v.literal("chat"));
-export type ComposerMode = Infer<typeof composerMode>;
 
 /** Point and talk: the element a message is about. */
 export const elementRef = v.object({

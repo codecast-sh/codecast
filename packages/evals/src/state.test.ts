@@ -135,11 +135,7 @@ describe('staleness', () => {
     addSpend(0, path);
     expect(spentToday(path)).toBe(1.75);
     expect(readFileSync(path, 'utf8').trim().split('\n')).toHaveLength(2);
-    // The one-number ledger it replaced still counts for its own day; another day's lines count for nothing.
-    const day = new Date().toISOString().slice(0, 10);
-    writeFileSync(join(repo, '.home', 'spend.json'), JSON.stringify({ day, usd: 3 }));
-    expect(spentToday(path)).toBe(4.75);
-    writeFileSync(join(repo, '.home', 'spend.json'), JSON.stringify({ day: '2000-01-01', usd: 99 }));
+    // Another day's lines count for nothing, and a torn line adds nothing.
     writeFileSync(path, `${JSON.stringify({ day: '2000-01-01', usd: 99 })}\n{torn`);
     expect(spentToday(path)).toBe(0);
   });

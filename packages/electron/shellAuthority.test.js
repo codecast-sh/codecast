@@ -1,7 +1,7 @@
 const { test, beforeEach, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
 const { harness, FakeWindow } = require("./mainTestRig");
-const { createShellAuthority, installShellCapabilities } = require("./shellAuthority");
+const { createShellAuthority, installShellCapabilities, shellOrigins } = require("./shellAuthority");
 
 beforeEach(harness.setup);
 afterEach(harness.teardown);
@@ -87,4 +87,55 @@ test("installed capability handlers deny before touching providers and keep scre
   const pending = display(a.mainFrame);
   a.mainFrame.url += "?navigated=1";
   assert.deepEqual(await pending, {});
+});
+
+test("the local dev site is a shell origin only for a run that may use it", () => {
+  assert.deepEqual(shellOrigins({ localDev: false, baseUrl: "https://codecast.sh" }), ["https://codecast.sh"]);
+  assert.deepEqual(shellOrigins({ localDev: true, baseUrl: undefined }), ["https://codecast.sh", "https://local.codecast.sh"]);
+  // The site a run was pointed at on purpose is always one of its origins.
+  assert.deepEqual(shellOrigins({ localDev: false, baseUrl: "http://127.0.0.1:3200/x" }), ["https://codecast.sh", "http://127.0.0.1:3200"]);
+  assert.deepEqual(shellOrigins({ localDev: false, baseUrl: "not a url" }), ["https://codecast.sh"]);
+});
+
+// local.codecast.sh resolves through ordinary DNS. An installed build that
+// treated it as the app would hand the bridge to whatever a hostile network
+// served under that name.
+test("a packaged build never treats local.codecast.sh as the app, whatever settings.json says", () => {
+  const saved = process.env.CODECAST_URL;
+  delete process.env.CODECAST_URL;
+  try {
+    const rig = harness.loadShell({ env: "local" }, { packaged: true });
+    const wc = rig.mainWindow.webContents;
+    assert.equal(process.env.CODECAST_LOCAL_DEV, undefined, "the preload is told the same thing");
+    assert.match(rig.mainWindow.url, /^https:\/\/codecast\.sh/, "the sticky local choice is ignored");
+    const event = { prevented: false, preventDefault() { this.prevented = true; } };
+    wc.emit("will-navigate", event, "https://local.codecast.sh/inbox");
+    assert.equal(event.prevented, true);
+    wc.mainFrame.url = "https://local.codecast.sh/";
+    rig.mainWindow.url = "https://local.codecast.sh/";
+    assert.equal(rig.handlers.get("get-app-version")(rig.event()), null);
+    wc.mainFrame.url = "https://codecast.sh/";
+    rig.mainWindow.url = "https://codecast.sh/";
+    // Re-registering the global shortcuts leaves Switch Environment out.
+    rig.handlers.get("set-shortcut")(rig.event(), "newSession", "Control+Shift+M");
+    assert.ok(rig.shortcuts.has("Control+Shift+M"));
+    assert.equal(rig.shortcuts.has("CommandOrControl+Alt+L"), false);
+  } finally {
+    if (saved !== undefined) process.env.CODECAST_URL = saved;
+  }
+});
+
+test("a from-source run keeps the local dev site, its sticky choice and its shortcut", () => {
+  const saved = process.env.CODECAST_URL;
+  delete process.env.CODECAST_URL;
+  try {
+    const rig = harness.loadShell({ env: "local" });
+    assert.equal(process.env.CODECAST_LOCAL_DEV, "1");
+    assert.match(rig.mainWindow.url, /^https:\/\/local\.codecast\.sh/);
+    assert.equal(rig.handlers.get("get-app-version")(rig.event()), "0.0.0-test");
+    rig.handlers.get("set-shortcut")(rig.event(), "newSession", "Control+Shift+M");
+    assert.ok(rig.shortcuts.has("CommandOrControl+Alt+L"));
+  } finally {
+    if (saved !== undefined) process.env.CODECAST_URL = saved;
+  }
 });

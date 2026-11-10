@@ -183,7 +183,7 @@ class FakeWindow {
 
 const cursorReads = { count: 0 };
 
-function fakeElectron() {
+function fakeElectron({ packaged = false } = {}) {
   const windows = [];
   const handlers = new Map();
   const listeners = new Map();
@@ -199,10 +199,11 @@ function fakeElectron() {
     whenReady: () => new Promise(() => {}),
     getVersion: () => "0.0.0-test",
     setAboutPanelOptions: () => {},
-    isPackaged: false,
+    isPackaged: packaged,
     dock: { setIcon: () => {} },
     requestSingleInstanceLock: () => true,
     setAsDefaultProtocolClient: () => {},
+    isDefaultProtocolClient: () => true,
     hides: 0,
     hide() {
       this.hides += 1;
@@ -294,10 +295,11 @@ const harness = {
   /**
    * Load main.js against the stand-in, from a clean settings file, and make
    * the main window the way the shell itself does — `activate` is the app's
-   * own "there is no window, make one" path.
+   * own "there is no window, make one" path. `packaged` is what the shell
+   * reads off app.isPackaged: an installed build rather than a from-source run.
    */
-  loadShell(settings = {}) {
-    const rig = fakeElectron();
+  loadShell(settings = {}, { packaged = false } = {}) {
+    const rig = fakeElectron({ packaged });
     fs.writeFileSync(path.join(harness.userData, "settings.json"), JSON.stringify(settings));
     require.cache[ELECTRON] = { id: ELECTRON, filename: ELECTRON, loaded: true, exports: rig.electron };
     delete require.cache[MAIN];

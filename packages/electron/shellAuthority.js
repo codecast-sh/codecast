@@ -4,6 +4,20 @@ function originOf(value) {
   return ["https:", "http:"].includes(url.protocol) && !url.username && !url.password ? url.origin : null;
 }
 
+const PROD_URL = "https://codecast.sh";
+// The local dev site: a from-source run's own. main.js decides whether this
+// run may use it (never a packaged build) and marks the environment with
+// LOCAL_DEV_FLAG, which is how the preload, a renderer with no `app`, learns
+// the same answer.
+const LOCAL_DEV_URL = "https://local.codecast.sh";
+const LOCAL_DEV_FLAG = "CODECAST_LOCAL_DEV";
+
+// The origins whose documents are the app: production, the local dev site
+// when this run may use it, and the site the run was pointed at.
+function shellOrigins({ localDev, baseUrl }) {
+  return [...new Set([PROD_URL, localDev ? LOCAL_DEV_URL : null, originOf(baseUrl)].filter(Boolean))];
+}
+
 function trustedShellUrl(value, origins) {
   const origin = originOf(value);
   return origin !== null && origins.includes(origin);
@@ -105,4 +119,4 @@ function installShellCapabilities({ authority, session, desktopCapturer, permiss
 
 }
 
-module.exports = { originOf, trustedShellUrl, createShellAuthority, installShellCapabilities };
+module.exports = { originOf, trustedShellUrl, shellOrigins, LOCAL_DEV_URL, LOCAL_DEV_FLAG, createShellAuthority, installShellCapabilities };

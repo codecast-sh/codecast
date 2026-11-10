@@ -11,7 +11,7 @@ import { REPO_ROOT } from './paths';
 
 const PKG = join(REPO_ROOT, 'packages', 'evals');
 
-describe('committed freezes and fixtures', () => {
+describe('committed freezes, fixtures and org-comms', () => {
   test('the tree is clean', () => {
     expect(auditPublicTree(PKG)).toEqual([]);
   });
@@ -35,6 +35,18 @@ describe('committed freezes and fixtures', () => {
     expect(problems).toContain('freezes/bad.json: notes is 301 characters');
     expect(problems).toContain('freezes/bad.json: looks like a Convex document id');
     expect(problems).toContain('fixtures/echo/leak.json: carries a secret');
+
+    // org-comms/ is scanned too: a users id in a script and a committed report both fail.
+    mkdirSync(join(copy, 'org-comms', 'suite', '__pycache__'), { recursive: true });
+    writeFileSync(join(copy, 'org-comms', 'suite', 'scenarios.py'), 'ORG = """People: Mara (admin)"""\n');
+    writeFileSync(join(copy, 'org-comms', 'suite', '__pycache__', 'scenarios.cpython-311.pyc'), 'abcdefghijklmnopqrstuvwxyz012345');
+    expect(auditPublicTree(copy).filter((p) => p.startsWith('org-comms/'))).toEqual([]);
+    writeFileSync(join(copy, 'org-comms', 'monitor.py'), 'USER = "abcdefghijklmnopqrstuvwxyz012345"\n');
+    writeFileSync(join(copy, 'org-comms', 'baseline.json'), JSON.stringify({ messages: 10 }));
+    expect(auditPublicTree(copy).filter((p) => p.startsWith('org-comms/')).sort()).toEqual([
+      'org-comms/baseline.json: measured data belongs in EVALS_HOME/org-comms, not in git',
+      'org-comms/monitor.py: looks like a Convex document id (abcdef…)',
+    ]);
 
     // A criterion has one home: once a freeze points at a fixture, the fixture's own judge is a second copy.
     writeFileSync(join(copy, 'fixtures', 'echo', 'ok.json'), JSON.stringify({ asOf: '2026-01-01T00:00:00.000Z', judge: 'old words', snapshot: { text: 'hi' } }));

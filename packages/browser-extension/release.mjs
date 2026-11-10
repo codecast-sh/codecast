@@ -9,12 +9,17 @@
  *   --version X.Y.Z            set it outright instead
  *   --dry-run                  build the zip for the next version, write nothing back, upload nothing
  *
+ * manifest.json gets the new version only once that version is spoken for:
+ * straight after the build without --upload, and with --upload only after the
+ * store has accepted the package. A failed upload leaves the manifest alone,
+ * so the next run builds the same version again instead of skipping one.
+ *
  * The zip is the extension directory minus the development-only files, with
  * two edits to manifest.json: the new version, and no `key`. The store signs
  * every package with the key pair it generated on the first upload and
  * derives the extension ID from that, so the committed key is for unpacked
  * development loads only (it is the store's public key, so both loads share
- * one ID; see README "The extension ID is stable").
+ * one ID; see README "Store identity and development loads").
  *
  * Store credentials come from the environment, never from arguments:
  * CWS_CLIENT_ID, CWS_CLIENT_SECRET, CWS_REFRESH_TOKEN (an OAuth client on the
@@ -136,7 +141,8 @@ async function storeCall(token, method, url, body, contentType) {
   return json;
 }
 
-async function upload(zipPath, publish) {
+/** Upload the zip as a draft and wait for the store to accept it. Returns what publish() needs. */
+async function upload(zipPath, version) {
   const env = requireEnv(["CWS_CLIENT_ID", "CWS_CLIENT_SECRET", "CWS_REFRESH_TOKEN", "CWS_PUBLISHER_ID", "CWS_ITEM_ID"]);
   const token = await accessToken(env);
   const item = `${API}/v2/publishers/${env.CWS_PUBLISHER_ID}/items/${env.CWS_ITEM_ID}`;
@@ -150,12 +156,17 @@ async function upload(zipPath, publish) {
     status = await storeCall(token, "GET", `${item}:fetchStatus`);
     console.log(`status: ${JSON.stringify(status)}`);
   }
-  if (JSON.stringify(status).includes("IN_PROGRESS")) throw new Error("the store is still processing the upload; run again with --publish only once it settles");
-  if (/FAIL|ERROR|INVALID/.test(JSON.stringify(status).toUpperCase())) throw new Error(`the store rejected the package: ${JSON.stringify(status)}`);
-  if (!publish) {
-    console.log("draft uploaded; publish from the dashboard or run again with --upload --publish");
-    return;
+  if (JSON.stringify(status).includes("IN_PROGRESS")) {
+    throw new Error(
+      `the store is still processing the upload of ${version}, and manifest.json is unchanged. Look at the item in the developer dashboard once it settles: ` +
+        `if the package was accepted, submit it for review there and set manifest.json's version to ${version} by hand; if it was rejected, run this command again`,
+    );
   }
+  if (/FAIL|ERROR|INVALID/.test(JSON.stringify(status).toUpperCase())) throw new Error(`the store rejected the package: ${JSON.stringify(status)}`);
+  return { token, item };
+}
+
+async function publish({ token, item }) {
   const published = await storeCall(token, "POST", `${item}:publish`);
   console.log(`submitted for review: ${JSON.stringify(published)}`);
 }
@@ -174,9 +185,22 @@ async function main() {
     console.log("dry run: manifest.json unchanged, nothing uploaded");
     return;
   }
+  // The store refuses a version it already holds, so the manifest moves once
+  // the store has this one (or, without --upload, once the zip is built), and
+  // before the publish call: a failed submit must not lose the bump.
+  const draft = o.upload ? await upload(zipPath, version) : null;
   fs.writeFileSync(manifestPath, JSON.stringify({ ...manifest, version }, null, 2) + "\n");
   console.log(`manifest.json now says ${version}; commit it with the release`);
-  if (o.upload) await upload(zipPath, o.publish);
+  if (!draft) return;
+  if (!o.publish) {
+    console.log("draft uploaded; submit it for review from the developer dashboard");
+    return;
+  }
+  try {
+    await publish(draft);
+  } catch (err) {
+    throw new Error(`${err.message}; the store holds ${version} as a draft and manifest.json says ${version}: commit the manifest, then submit the draft for review from the developer dashboard (do not upload again)`);
+  }
 }
 
 if (import.meta.main) {
