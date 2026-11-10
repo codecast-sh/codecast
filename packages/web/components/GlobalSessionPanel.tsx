@@ -23,7 +23,7 @@ import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
 import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, viewerCommandsSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
 import { sessionsWakeSig, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
@@ -64,6 +64,7 @@ import { ConversationSharePopover } from "./ConversationSharePopover";
 import { PlanContextPanel } from "./PlanContextPanel";
 import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { toast } from "sonner";
+import { toastWriteError } from "../lib/dispatchBinding";
 import { animatedHideSessions, fileSessionsAsRest } from "../store/undoActions";
 
 import { soundKill } from "../lib/sounds";
@@ -95,6 +96,7 @@ const ConversationDiffLayout = React.lazy(() =>
 // -- InboxConversation (shared) --
 
 export const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, backHref, onExpandToMain, onClose }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; backHref?: string; onExpandToMain?: () => void; onClose?: () => void }) {
+  const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
   const {
     conversation,
     hasMoreAbove,
@@ -186,16 +188,23 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
   // popover for them would hand out a working world-readable link one click
   // from a session they don't own (mirrors QueuePageClient's gate).
   const shareControls = <ConversationSharePopover conversation={conversation} canManage={(conversation as any).is_own !== false} />;
+  // Answer and resume go to the runner's daemon, so they are offered only to
+  // the people the server lets send its commands (commandsSession). A
+  // teammate's session opened from team scope stays readable, without a
+  // Resume the server would refuse.
+  const canCommand = viewerCommandsSession(conversation as any, meId);
 
   const activePlanId = (conversation as any)?.active_plan_id;
   const workflowRunId = (conversation as any)?.workflow_run_id;
 
   return (
     <div className="relative h-full flex flex-col">
-      <SessionResumeBanner
-        resumeState={resumeState}
-        onResume={handleManualResume}
-      />
+      {canCommand && (
+        <SessionResumeBanner
+          resumeState={resumeState}
+          onResume={handleManualResume}
+        />
+      )}
       <CloudPlacementStrip sessionId={sessionId} />
       {sessionError && resumeState === "idle" && (
         <SessionErrorBanner
@@ -206,7 +215,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId, is
           sessionId={sessionId}
           projectPath={conversation.project_path || conversation.git_root}
           ownerDeviceId={(conversation as any).owner_device_id}
-          onResume={handleManualResume}
+          onResume={canCommand ? handleManualResume : undefined}
         />
       )}
       <div className="flex-1 min-h-0">
@@ -2018,7 +2027,7 @@ function SessionListPanelImpl({
       store.convCommand(id, "killSession", { mark_completed: true, session_id: sessionId })
         .catch((err: unknown) => {
           if (isParkedDispatchError(err)) return;
-          toast.error(`Kill failed: ${err instanceof Error ? err.message : String(err)}`);
+          toastWriteError(err, "Kill failed");
         });
     }
     // Route the local removal through markKilling (an action that deletes the row

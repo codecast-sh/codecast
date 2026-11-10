@@ -16,7 +16,7 @@ import { ConversationPlaceholder } from "../../components/ConversationPlaceholde
 import { ConversationDiffLayout, type ConversationDiffLayoutProps } from "../../components/ConversationDiffLayout";
 import type { ConversationData } from "../../components/conversation/types";
 import { useConversationMessages } from "../../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, ensureHydrated, resolveInboxHome } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, isConvexId, sortSessions, sessionsWakeSig, ensureHydrated, resolveInboxHome, viewerCommandsSession } from "../../store/inboxStore";
 import { freshHomeLaunchPending } from "../../store/viewNav";
 import { FleetBoard, InboxHomeToggle } from "../../components/FleetBoard";
 import { ConversationSharePopover } from "../../components/ConversationSharePopover";
@@ -147,6 +147,10 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   const convId = (conversation?._id ?? sessionId) as Id<"conversations">;
   useSeedOwnership(sessionId, !!seat?.seedOwnership);
   const isOwnSession = !!conversation && (!!seat?.seedOwnership || (conversation as any).is_own !== false);
+  // Resume is a daemon command: only the session's runner or second-party
+  // owner may send it (commandsSession), a narrower set than is_own.
+  const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
+  const canCommand = isOwnSession && viewerCommandsSession(conversation as any, meId);
   // A seat opens on the agent talking to the person: its provisioning prompt,
   // and whatever came before it, fold into one row at the top
   // (scopes-and-feed.md F4.1). They are still the session's context, so the
@@ -213,7 +217,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
 
   return (
     <div className="relative h-full flex flex-col" data-seat-head={seat ? (headOpen ? "open" : "rest") : undefined} data-seat-stall={seat && !headOpen && stallWord ? "" : undefined}>
-      {isOwnSession && chromeShown && (
+      {canCommand && chromeShown && (
         <SessionResumeBanner
           resumeState={resumeState}
           onResume={handleManualResume}
@@ -229,7 +233,7 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
           sessionId={sessionId}
           projectPath={conversation.project_path || conversation.git_root}
           ownerDeviceId={(conversation as any).owner_device_id}
-          onResume={handleManualResume}
+          onResume={canCommand ? handleManualResume : undefined}
         />
       )}
       <div className="flex-1 min-h-0">

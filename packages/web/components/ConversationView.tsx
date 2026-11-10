@@ -51,6 +51,7 @@ import { RevealAncestryCtx, RevealInBandCtx, useHostsReveal, useOpenReveal, useR
 import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession, toggleSessionsLikeFirst } from "../store/undoActions";
 import { toast } from "sonner";
+import { toastWriteError } from "../lib/dispatchBinding";
 import { goalCanPause, goalCanResume, goalFrameLine, goalObjectiveProblem, goalMessageBody, parseGoalCommand, sessionGoalOf } from "@codecast/shared/contracts/sessionGoal";
 import { SessionGoalPill } from "./SessionGoalPill";
 import { SwitchReview } from "./consequential/ConsequentialSwitch";
@@ -126,7 +127,7 @@ import { composerPresenceEnabled, hasCoPresent } from "../lib/composerPresence";
 import { ConversationViewers } from "./presence/ViewerFaces";
 import { anchorFromRects } from "../lib/follow";
 import { normalizeCastCategory, buildBrowserRowMap, sameBrowserRowMap, type BrowserRowInput, type BrowserRowState } from "./castCommand";
-import { useInboxStore, isConvexId, isIdleLandingStub, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, resolveSimpleView, resolveVisualStyle } from "../store/inboxStore";
+import { useInboxStore, isConvexId, isIdleLandingStub, viewerCommandsSession, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, resolveSimpleView, resolveVisualStyle } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
@@ -619,6 +620,10 @@ const ConversationViewInner = (
 
   const { user: currentUser } = useCurrentUser();
   const effectiveIsOwner = isOwner;
+  // The session's own questions (AskUserQuestion, plan approval) are answered
+  // by the runner's daemon: their controls are live only for the people the
+  // server lets command it (commandsSession), never for a team viewer.
+  const canAnswerSession = viewerCommandsSession(conversation as any, currentUser?._id);
   // Per-message sender attribution. A user message carries from_user_id when
   // someone other than the conversation owner sent it (team send into a
   // teammate's daemon, fork replies); resolve it against the cached team
@@ -1234,7 +1239,7 @@ const ConversationViewInner = (
     if (effectiveIsOwner && conversation.status === "active" && convexConvId) {
       void convCommand(convexConvId, "rewindSession", { steps_back: indexFromEnd + 1 }).catch((err) => {
         if (isParkedDispatchError(err)) return;
-        toast.error(err instanceof Error ? err.message : "Failed to rewind session");
+        toastWriteError(err, "Failed to rewind session");
       });
     }
   }, [handleForkFromMessage, conversation, effectiveIsOwner, convCommand, convexConvId]);
@@ -3868,7 +3873,7 @@ const ConversationViewInner = (
           loadingBranchId={loadingBranchId}
           mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined}
           model={msg.model}
-          onSendInlineMessage={handleSendInlineMessage}
+          onSendInlineMessage={canAnswerSession ? handleSendInlineMessage : undefined}
           isConversationActive={conversation?.status === "active"}
           globalImageMap={globalImageMap}
           globalFileMap={globalFileMap}
