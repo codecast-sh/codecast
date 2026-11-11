@@ -1,3 +1,4 @@
+import { isArtifactDocType } from "@codecast/shared/artifacts";
 import type { ComponentType } from "react";
 import { DEFAULT_IDENTITY_PREFS, sessionIdentity, type IdentityPrefs } from "./sessionIdentity";
 import { cleanTitle } from "./conversationProcessor";
@@ -148,7 +149,8 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
     row("drop", "Drop task", Trash2, "x"),
   ];
   if (type === "doc") return [
-    row("type", "Change type…", FileText, "t", "doc.type"),
+    // A board, sheet or dashboard holds elements, not markdown: it never changes type.
+    ...(targets.some((t) => isArtifactDocType(t.doc_type)) ? [] : [row("type", "Change type…", FileText, "t", "doc.type")]),
     row("labels", "Edit labels…", Tag, "l", "doc.labels"),
     ...(single ? [row("rename", "Rename document…", Pencil, "r"), row("pin", target.pinned ? "Unstar document" : "Star document", Star, "p")] : []),
     ...common,

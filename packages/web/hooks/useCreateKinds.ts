@@ -2,6 +2,10 @@ import { useMemo } from "react";
 import { Clock, FileText, Hash, Headphones, ListTodo, Map as MapIcon, MessageSquare, PanelBottom, type LucideIcon } from "lucide-react";
 import { useInboxStore, type CreateModalKind } from "../store/inboxStore";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
+import { createLiveArtifact } from "../lib/createLiveArtifact";
+import { docTypeIcon, docTypeStyle } from "../lib/docTypeStyle";
+import { useWorkspaceArgs, workspaceStamp } from "./useWorkspaceArgs";
+import type { ArtifactType } from "@codecast/shared/artifacts";
 import type { ShortcutAction } from "../shortcuts";
 
 /** How a create reaches its surface. Each host supplies its own: the command
@@ -37,19 +41,31 @@ export type CreateKind = {
 export function useCreateKinds(): CreateKind[] {
   const chatOn = useTeamFeature("chat");
   const callsOn = useCallsAvailable();
+  // A new board, sheet or dashboard lands in the workspace being viewed, like the docs list's create.
+  const stamp = workspaceStamp(useWorkspaceArgs());
+  const stampKey = JSON.stringify(stamp);
   return useMemo(() => {
+    const live = (id: ArtifactType, noun: string, key: string, keywords: string): CreateKind => ({
+      id, label: `New ${noun.toLowerCase()}`, noun, keywords, key,
+      icon: docTypeIcon(id)!, tone: docTypeStyle(id).color,
+      run: (env) => void createLiveArtifact(id, stamp, env.navigate),
+    });
     const kinds: Array<CreateKind | false> = [
       { id: "session", label: "New session", noun: "Session", keywords: "session conversation start agent compose run ask", icon: MessageSquare, tone: "text-sol-cyan", key: "s", shortcut: "session.compose", run: (env) => env.compose(false) },
       { id: "session-docked", label: "New session (docked)", noun: "Session (docked)", keywords: "session conversation docked small composer minimize corner", icon: PanelBottom, tone: "text-sol-cyan", shortcut: "session.composeDock", variant: true, run: (env) => env.compose(true) },
       { id: "task", label: "New task", noun: "Task", keywords: "create todo to-do task add", icon: ListTodo, tone: "text-sol-cyan", key: "t", shortcut: "task.create", run: (env) => env.openModal("task") },
       { id: "doc", label: "New document", noun: "Doc", keywords: "create note doc document write", icon: FileText, tone: "text-sol-text-dim", key: "d", run: (env) => env.openModal("doc") },
+      live("board", "Board", "b", "whiteboard canvas sticky diagram brainstorm timeline draw"),
+      live("sheet", "Sheet", "e", "spreadsheet table grid tracker cells formula"),
+      live("dashboard", "Dashboard", "a", "data chart metrics kpi story report analytics"),
       { id: "plan", label: "New plan", noun: "Plan", keywords: "create project", icon: MapIcon, tone: "text-sol-yellow", key: "p", run: (env) => env.openModal("plan") },
       chatOn && { id: "channel", label: "New channel", noun: "Channel", keywords: "create chat room", icon: Hash, tone: "text-sol-cyan", key: "c", run: (env) => env.openModal("chat") },
       callsOn && { id: "huddle", label: "Start huddle", noun: "Huddle", keywords: "new call ring people group voice", icon: Headphones, tone: "text-sol-violet", key: "h", run: (env) => env.openModal("huddle") },
       { id: "trigger", label: "New trigger", noun: "Trigger", keywords: "create trigger routine schedule cron automation reminder recurring", icon: Clock, tone: "text-sol-violet", key: "r", run: (env) => env.navigate("/triggers?new=1") },
     ];
     return kinds.filter((k): k is CreateKind => !!k);
-  }, [chatOn, callsOn]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- stampKey stands for stamp
+  }, [chatOn, callsOn, stampKey]);
 }
 
 /** The env for a surface inside the main window. */

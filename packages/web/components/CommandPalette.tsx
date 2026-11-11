@@ -9,10 +9,12 @@ import { RepositoryPaletteItems } from "./repo/RepositoryPaletteItems";
 import { getPaletteSessionCommands } from "../lib/paletteSessionCommands";
 import { withInboxView } from "../lib/inboxViewHistory";
 import { useCreateKinds, type CreateEnv, type CreateKind } from "../hooks/useCreateKinds";
+import { docTypeIcon } from "../lib/docTypeStyle";
+import { DocTypeMark } from "./docs/DocTypeMark";
 import { useTeamFeature, useCallsAvailable, useWorkspaceFeature, workspaceHasFeatureNow } from "../lib/teamFeatures";
 import type { TeamFeatureKey } from "@codecast/shared/contracts";
 import { pagePath, palettePages, queryNamesPage } from "../lib/navPages";
-import { useState, useCallback, useMemo, useRef, memo, lazy, Suspense } from "react";
+import { useState, useCallback, useDeferredValue, useMemo, useRef, memo, lazy, Suspense } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useIdentityPrefs } from "../hooks/useIdentityPrefs";
 import { useShortcuts, isMac, type ShortcutAction } from "../shortcuts";
@@ -121,7 +123,7 @@ import { counted } from "../store/undo/labels";
 
 import type { UserRest } from "@codecast/shared/contracts";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
-import { STATUS_OPTIONS, PRIORITY_OPTIONS, PLAN_STATUS_OPTIONS, DOC_TYPE_OPTIONS } from "./menus/entityOptions";
+import { STATUS_OPTIONS, PRIORITY_OPTIONS, PLAN_STATUS_OPTIONS, DOC_RETYPE_OPTIONS } from "./menus/entityOptions";
 import { statusByKey, statusEntityOptions, statusWriteFields, taskStatusKey, useTeamTaskStatusList } from "../lib/taskStatuses";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
 import { UNDO_HISTORY_TIER } from "../lib/undoTimelineOpen";
@@ -695,7 +697,7 @@ export function ActionSubmenu({
         }));
     }
     if (mode === "type") {
-      return DOC_TYPE_OPTIONS
+      return DOC_RETYPE_OPTIONS
         .filter((o) => o.label.toLowerCase().includes(q))
         .map((o) => ({
           ...o,
@@ -1550,6 +1552,10 @@ const MARKDOWN_RE = /\.(md|markdown)$/i;
 // (above), the palette re-renders only on its OWN state, not on session churn.
 function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const [query, setQuery] = useState("");
+  // The result groups rank against a deferred copy: the box shows each key at
+  // once, and ranking the whole cache (sessions, tasks, docs, chat) re-runs
+  // in a background render that the next key interrupts instead of waiting on.
+  const rankQuery = useDeferredValue(query);
   const [actionSearch, setActionSearch] = useState("");
   const [actionMode, setActionMode] = useState<ActionMode | null>(null);
   // Whether the submenu was reached by drilling down from the root palette
@@ -1691,7 +1697,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     [open, vaultReady],
   );
   const vaultNoteMatches = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = rankQuery.trim().toLowerCase();
     if (!q) return [];
     const ranked: Array<{ path: string; base: string; rank: number; mtime: number }> = [];
     for (const [path, entry] of Object.entries(vaultFiles)) {
@@ -1703,24 +1709,24 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     }
     ranked.sort((a, b) => a.rank - b.rank || b.mtime - a.mtime);
     return ranked.slice(0, ENTITY_RENDER_CAP);
-  }, [vaultFiles, query]);
+  }, [vaultFiles, rankQuery]);
 
   // Triggers (schedules) search — same list the /triggers page subscribes to,
   // gated on an actual query so an idle palette costs nothing. Convex dedupes
   // the subscription when the page is already open.
   // Store-fed (hooks/useSyncTriggers): the palette searches the cached
   // roster; the feeder mounts only while a search is live.
-  useSyncTriggers(open && query.trim().length >= 2);
+  useSyncTriggers(open && rankQuery.trim().length >= 2);
   const identityPrefs = useIdentityPrefs();
   const favorites = useMemo(() => (allFavorites ?? []) as any[], [allFavorites]);
   const triggerList = useCollectionRows<any>("agentTasks", { sig: triggerSig });
   // A query that is a kind's word ("routines") lists that kind; its rows
   // rank as title hits (PALETTE_KIND), above a snippet-only conversation.
-  const listedKind = kindOfQuery(query);
+  const listedKind = kindOfQuery(rankQuery);
   const entityValuePrefix = (kind: "task" | "doc" | "routine") => (listedKind === kind ? PALETTE_KIND : "__entity__");
   const triggerMatches = useMemo(
-    () => (Array.isArray(triggerList) ? matchRoutines<any>(triggerList, query, 6) : []),
-    [triggerList, query],
+    () => (Array.isArray(triggerList) ? matchRoutines<any>(triggerList, rankQuery, 6) : []),
+    [triggerList, rankQuery],
   );
 
   // Global command rows fire the same handlers their keyboard chords use.
@@ -1781,7 +1787,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     return (c: any) => byId.get(String(c._id)) ?? sessionStanding(c, meId, null);
   }, [recentPool]);
   const recentMatches = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = rankQuery.trim().toLowerCase();
     // A typed query ranks favorites with everything else, by how well the
     // words name them: a favorite is not a reason to outrank a title that
     // starts with what was typed. The Favorites group is the empty palette's.
@@ -1789,7 +1795,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     // One ranking for every session search (lib/instantSessionSearch): how
     // directly the words name it, then where it stands and how recent it is.
     return rankSessions(pool, q, standingOf, q ? RECENT_RENDER_CAP : RECENT_IDLE_CAP);
-  }, [recentPool, query, standingOf, favorites, pick]);
+  }, [recentPool, rankQuery, standingOf, favorites, pick]);
   // The machine most recents run on goes unsaid; a row names its machine only
   // when it runs somewhere else (a cloud host, the other laptop).
   const machineRoster = useInboxStore((s) => (open ? s.machineRoster : EMPTY_ROSTER)) as Device[];
@@ -1809,8 +1815,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // from Documents so they don't double up with the Plans group.
   const { tasks: taskMatches, docs: docMatches, plans: planMatches } = useMemo(() => {
     const browse = { task: picking && pickAllows("task"), doc: picking && pickAllows("doc"), plan: picking && pickAllows("plan") };
-    return matchMentionGroups(mentionIndex as any, query, activeTeamId, ENTITY_RENDER_CAP, browse);
-  }, [mentionIndex, query, activeTeamId, picking, pickAllows]);
+    return matchMentionGroups(mentionIndex as any, rankQuery, activeTeamId, ENTITY_RENDER_CAP, browse);
+  }, [mentionIndex, rankQuery, activeTeamId, picking, pickAllows]);
 
   // The server tier (hooks/useRemoteSearch): session content and titles, and
   // chat hits when chat is on.
@@ -1818,7 +1824,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // always match, so if they mount before conversation search answers, Enter
   // never opens a hit: they wait on searchAwaiting.
   const { debouncedQuery, sessionSearchOn, searchRows: allSearchRows, searchError, contentLoaded: searchData, titlesLoaded: titleData, searchAwaiting, chatHits } =
-    useRemoteSearch(query, { enabled: open, chatTeamId: chatOn ? activeTeamId : null });
+    useRemoteSearch(rankQuery, { enabled: open, chatTeamId: chatOn ? activeTeamId : null });
   // The server tier never repeats a conversation the recents above already show.
   const recentIdSig = recentMatches.map((conv: any) => String(conv._id)).join(",");
   const searchRows = useMemo(() => {
@@ -1848,13 +1854,13 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     // query and also offers teammates with no DM room yet — the caller opens
     // the DM on pick.
     const pickingChannels = picking && pickAllows("channel");
-    if (!open || !chatOn || (!pickingChannels && query.trim().length < 1))
+    if (!open || !chatOn || (!pickingChannels && rankQuery.trim().length < 1))
       return [] as Array<{ id: string; label: string; kind?: string; isPrivate?: boolean; image?: string }>;
     const state = useInboxStore.getState() as any;
     const viewerId = state.currentUser?._id ? String(state.currentUser._id) : "";
     const members = (state.teamMembers ?? []) as any[];
     const teamScope = activeTeamId ? String(activeTeamId) : undefined;
-    const q = query.trim().toLowerCase();
+    const q = rankQuery.trim().toLowerCase();
     const rows: Array<{ id: string; label: string; kind?: string; isPrivate?: boolean; image?: string; s: number; t: number }> = [];
     const dmPartners = new Set<string>();
     // The rail's rooms in the rail's scope, ranked by who you actually talk
@@ -1884,7 +1890,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       }
     }
     return rows.sort((a, b) => a.s - b.s || b.t - a.t).slice(0, pickingChannels ? 12 : 5);
-  }, [open, query, activeTeamId, chatOn, picking, pick]);
+  }, [open, rankQuery, activeTeamId, chatOn, picking, pick]);
 
   // Person and role pick (e.g. "add to the call"): the one people and roles
   // list every assignee picker shares, less the caller's exclusions. A role
@@ -1899,9 +1905,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       roles: allow("role") ? pickRoles : null,
       standing: new Map(orgRoles.map((r) => [String(r._id), r.standing?.conversation_id])),
       skip: new Set([viewerId, ...(pick?.exclude ?? [])]),
-      query,
+      query: rankQuery,
     });
-  }, [open, query, picking, pick, pickAllows, pickPeople, pickRoles, orgRoles]);
+  }, [open, rankQuery, picking, pick, pickAllows, pickPeople, pickRoles, orgRoles]);
 
   // Where each teammate is, from the roster SNAPSHOT (getState): the roster
   // re-pushes on every teammate heartbeat and the palette must not re-render
@@ -1913,8 +1919,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (!open || picking) return [] as TeammateWhereabouts[];
     const state = useInboxStore.getState() as any;
     const viewerId = state.currentUser?._id ? String(state.currentUser._id) : null;
-    return teammateWhereabouts(state.teamMembers ?? [], viewerId, query, state.sessions, state.followLeaderId ?? null).slice(0, 6);
-  }, [open, query, picking]);
+    return teammateWhereabouts(state.teamMembers ?? [], viewerId, rankQuery, state.sessions, state.followLeaderId ?? null).slice(0, 6);
+  }, [open, rankQuery, picking]);
 
   const chatAuthorName = useCallback((hit: LineAuthorFields) => {
     const members = ((useInboxStore.getState() as any).teamMembers ?? []) as any[];
@@ -1922,13 +1928,13 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   }, []);
 
   const projectRows = useWorkspaceCollection<any>("projects");
-  const projectMatches = query.trim() ? matchProjects(projectRows, query, 8) : projectRows.slice(0, 8);
+  const projectMatches = rankQuery.trim() ? matchProjects(projectRows, rankQuery, 8) : projectRows.slice(0, 8);
   // The company's goals and roles, found by title or handle the way a project
   // is, and opened on the Org screen (objectHref). A role answers to its
   // `@handle` as written.
   const goalRows = useWorkspaceCollection<any>("initiatives");
-  const goalMatches = picking ? [] : matchGoals(goalRows, query, 6);
-  const roleMatches = picking ? [] : matchRoles(orgRoles, query, 6);
+  const goalMatches = picking ? [] : matchGoals(goalRows, rankQuery, 6);
+  const roleMatches = picking ? [] : matchRoles(orgRoles, rankQuery, 6);
   const projects = useMemo(() => {
     const dirMap = new Map<string, number>();
     for (const c of recentSessions) {
@@ -2348,7 +2354,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     const options = action.key === "agent_switch" || action.key === "agent_fork" || action.key === "agent_run" || action.key === "agent_handoff" ? pinnedAgentRows(pinnedAgents, target?.agent_type)
       : action.key === "status" ? statusEntityOptions(rootTaskStatuses)
       : action.key === "priority" ? PRIORITY_OPTIONS
-      : action.key === "type" ? DOC_TYPE_OPTIONS
+      : action.key === "type" ? DOC_RETYPE_OPTIONS
       : action.key === "plan_status" ? PLAN_STATUS_OPTIONS
       : action.key === "model" ? listedModels(AGENT_MODEL_CONFIG[modelAgentKey(target?.agent_type)] ?? { models: [] })
       : [];
@@ -2790,12 +2796,18 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
           autoFocus
           onKeyDown={(e) => {
             if (e.nativeEvent.isComposing) return;
-            const rows = Array.from(paletteRef.current?.querySelectorAll<HTMLElement>('[cmdk-item]:not([aria-disabled="true"])') ?? []).filter(row => row.offsetParent !== null);
-            const index = paletteDigitIndex(e.nativeEvent, rows.length);
-            if (index >= 0) { e.preventDefault(); rows[index].click(); return; }
+            // The visible rows, read only for the keys that act on them: the
+            // query plus offsetParent forces a layout, which on every typed
+            // character made each keystroke lay out the whole page.
+            const visibleRows = () => Array.from(paletteRef.current?.querySelectorAll<HTMLElement>('[cmdk-item]:not([aria-disabled="true"])') ?? []).filter(row => row.offsetParent !== null);
+            if (paletteDigitIndex(e.nativeEvent, Infinity) >= 0) {
+              const rows = visibleRows();
+              const index = paletteDigitIndex(e.nativeEvent, rows.length);
+              if (index >= 0) { e.preventDefault(); rows[index].click(); return; }
+            }
             if ((e.key === "Backspace" || e.key === "ArrowLeft") && !e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && !query && drilled) { e.preventDefault(); setQuery(drilled.query); setDrilled(null); return; }
             if ((e.key === "ArrowRight" || e.key === "Tab") && !e.shiftKey && !picking) {
-              const selected = rows.find(row => row.getAttribute("aria-selected") === "true");
+              const selected = visibleRows().find(row => row.getAttribute("aria-selected") === "true");
               const type = selected?.dataset.paletteType as PaletteTargetType | undefined;
               const id = selected?.dataset.paletteId;
               if (type === "person") { e.preventDefault(); selected!.click(); return; }
@@ -3228,7 +3240,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 onSelect={() => chooseEntity("doc", d, `/docs/${d._id}`)}
                 className={itemClass}
               >
-                <FileText className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
+                {docTypeIcon(d.doc_type) ? <DocTypeMark type={d.doc_type} size={16} /> : <FileText className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />}
                 <span className="truncate flex-1">{d.title || "Untitled"}</span>
                 {d.source_file && (
                   <span className="text-meta text-sol-text-dim/70 font-mono truncate max-w-[140px] flex-shrink-0">{d.source_file.split("/").pop()}</span>

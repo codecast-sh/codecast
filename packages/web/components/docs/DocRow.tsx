@@ -4,7 +4,7 @@ import { useInboxStore, type DocItem } from "../../store/inboxStore";
 import type { ItemRowState } from "../ListRowShell";
 import { DocDates } from "../DocDates";
 import { docOrigin, docTypeLabel } from "@codecast/shared/docs";
-import { docTypeStyle } from "../../lib/docTypeStyle";
+import { DocTypeMark } from "./DocTypeMark";
 import { getLabelColor } from "../../lib/labelColors";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { modernPill, modernPillShape } from "../ui/modernLook";
@@ -23,11 +23,10 @@ export function DocRow({ doc, onStar, timeKey = "updated_at" }: {
 }) {
   // Modern adds its looks; Classic's class strings stay as they were.
   const m = useIsModernStyle();
-  const cfg = docTypeStyle(doc.doc_type);
   const title = (doc as any).display_title || doc.title || "Untitled";
   return (
     <>
-      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cfg.dot}`} />
+      <DocTypeMark type={doc.doc_type} size={14} />
       {/* The star (stored as `pinned`): a starred doc sits on the shelf and
           sorts first. Hidden until hover on an unstarred row so the list
           stays quiet; always shown once set. */}

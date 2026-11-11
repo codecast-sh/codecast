@@ -1,3 +1,4 @@
+import { docTypeIcon, docTypeStyle } from "../lib/docTypeStyle";
 import { useMemo, type ReactNode } from "react";
 import { MessageSquare, Tag, Folder, FileText, ListTodo, Map as MapIcon, Search, Inbox, LayoutGrid, Hash, Lock, Rss, Globe, Workflow, Zap, FolderKanban, Flag, Newspaper, Radar, KeyRound } from "lucide-react";
 import { isOpsPath } from "./ops/opsPaths";
@@ -85,8 +86,10 @@ export function RecentVisitGlyph({ item, className }: { item: ResolvedVisit; cla
       const Icon = opt?.icon ?? MapIcon;
       return <Icon className={`${className} ${opt?.color ?? "text-sol-text-dim"}`} />;
     }
-    case "doc":
-      return <FileText className={dim} />;
+    case "doc": {
+      const Icon = docTypeIcon(item.entity?.doc_type);
+      return Icon ? <Icon className={`${className} ${docTypeStyle(item.entity?.doc_type).color}`} /> : <FileText className={dim} />;
+    }
     case "channel": {
       const kind = item.entity?.kind;
       const Icon = kind === "dm" ? MessageSquare : kind === "private" ? Lock : Hash;

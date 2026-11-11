@@ -1,0 +1,23 @@
+/* The shared (public link) sheet: a static table in the grid's colors. */
+.sheet-shared { height: auto; min-height: 0; background: transparent; }
+.sheet-shared-tabs { display: flex; gap: 2px; margin-bottom: 10px; }
+.sheet-shared-tabs button { height: 28px; padding: 0 12px; border-radius: 7px; font-size: 12px; color: var(--sol-text-muted); }
+.sheet-shared-tabs button:hover { background: var(--sol-bg-alt); color: var(--sol-text); }
+.sheet-shared-tabs button.is-active { background: var(--sol-bg-alt); color: var(--sol-text); font-weight: 600; }
+.sheet-shared-scroll { overflow-x: auto; border: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent); border-radius: 12px; background: var(--sheet-bg); }
+.sheet-shared-table { border-collapse: collapse; table-layout: fixed; font-size: var(--sheet-font); font-variant-numeric: tabular-nums; }
+.sheet-shared-table thead th { scroll-snap-align: start; }
+.sheet-shared-table th { font-weight: 400; font-size: 11px; color: var(--sheet-head-text); background: var(--sheet-head-bg); border: 1px solid var(--sheet-line); text-align: center; height: 24px; }
+.sheet-shared-table td { padding: 0 8px; border: 1px solid var(--sheet-line); overflow: hidden; text-overflow: ellipsis; }
+.sheet-shared-table td.is-error { color: var(--sol-red); }
+/* A table wider than the page scrolls sideways; the side with more to see fades out. */
+.sheet-shared-frame { position: relative; width: fit-content; max-width: 100%; }
+.sheet-shared-frame::before,
+.sheet-shared-frame::after { content: ""; position: absolute; top: 1px; bottom: 1px; width: 72px; pointer-events: none; opacity: 0; transition: opacity 150ms ease-out; z-index: 1; }
+.sheet-shared-frame::before { left: 41px; background: linear-gradient(to right, var(--sheet-bg) 20%, color-mix(in srgb, var(--sheet-bg) 0%, transparent)); }
+.sheet-shared-frame::after { right: 1px; border-radius: 0 12px 12px 0; background: linear-gradient(to left, var(--sheet-bg) 20%, color-mix(in srgb, var(--sheet-bg) 0%, transparent)); }
+.sheet-shared-frame[data-more-left]::before,
+.sheet-shared-frame[data-more-right]::after { opacity: 1; }
+.sheet-shared-scroll { scroll-snap-type: x proximity; }
+/* Row numbers stay put while the columns scroll. */
+.sheet-shared-table th:first-child { width: 40px; min-width: 40px; position: sticky; left: 0; z-index: 2; background: linear-gradient(var(--sheet-head-bg), var(--sheet-head-bg)), var(--sol-bg); box-shadow: 1px 0 0 var(--sheet-line); }

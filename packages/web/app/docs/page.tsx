@@ -28,7 +28,9 @@ import {
   Lightbulb,
 } from "lucide-react";
 import { DocRow } from "../../components/docs/DocRow";
-import { docTypeStyle } from "../../lib/docTypeStyle";
+import { DocTypeMark } from "../../components/docs/DocTypeMark";
+import { isArtifactDocType } from "@codecast/shared/artifacts";
+import { createLiveArtifact, type WorkspaceStamp } from "../../lib/createLiveArtifact";
 
 const api = _api as any;
 
@@ -301,7 +303,7 @@ export function DocListContent() {
         return {
           key: g.type,
           label: docTypeLabel(g.type),
-          icon: <span className={`w-2 h-2 rounded-full ${docTypeStyle(g.type).dot}`} />,
+          icon: <DocTypeMark type={g.type} size={12} />,
           items: g.docs,
         };
       });
@@ -416,6 +418,10 @@ export function DocListContent() {
       onCreate={async () => {
         // Stamp the active workspace so the new doc lives where it was created
         // (a doc made in a team space belongs to that team).
+        if (isArtifactDocType(docType)) {
+          await createLiveArtifact(docType, wsStamp as WorkspaceStamp, (href) => router.push(href));
+          return;
+        }
         await createDoc(
           { title: "", doc_type: docType || "note", ...wsStamp },
           { version: 1, kind: "navigate" },

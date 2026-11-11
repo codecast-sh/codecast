@@ -7,7 +7,7 @@ import { toast } from "sonner";
 import { ChevronRight, FileText, Map as MapIcon } from "lucide-react";
 import { CreateDialog, CreateDialogSubtitle, CreateDialogTitle, createChipClass } from "./CreateDialog";
 import { DocEditor } from "./editor/DocEditor";
-import { DOC_TYPES, DOC_TYPE_LABELS } from "@codecast/shared/docs";
+import { RETYPABLE_DOC_TYPES, DOC_TYPE_LABELS } from "@codecast/shared/docs";
 
 const FIDELITY_OPTIONS = [
   { value: "", label: "Auto (default)" },
@@ -136,7 +136,7 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
         </div>
 
         <div className="flex flex-wrap items-center gap-1.5 px-5 pb-3.5">
-          {DOC_TYPES.map((dt) => (
+          {RETYPABLE_DOC_TYPES.map((dt) => (
             <button
               key={dt}
               type="button"

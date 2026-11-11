@@ -10,7 +10,11 @@ import { formatDateFull, formatDateSmart } from "@codecast/shared/time";
 import { MarkdownBlocks } from "../../../../components/tools/MarkdownRenderer";
 import { MD_COMPONENTS } from "../../../../lib/markdownComponents";
 import { useWatchEffect } from "../../../../hooks/useWatchEffect";
-import { Pill, Section, Rows, Row, ShareHead, SharedObjectPage } from "../../SharedObjectPage";
+import { Pill, Section, Rows, Row, ShareHead, SharedObjectPage, TONE, type Tone } from "../../SharedObjectPage";
+import { docTypeStyle } from "../../../../lib/docTypeStyle";
+import { isArtifactDocType } from "@codecast/shared/artifacts";
+import { SharedLiveArtifact } from "../../../../components/live/SharedLiveArtifact";
+import { hasLiveSharedView } from "../../../../components/live/registry";
 
 function textOf(node: ReactNode): string {
   if (node == null || typeof node === "boolean") return "";
@@ -86,23 +90,33 @@ function Outline({ entries }: { entries: OutlineEntry[] }) {
   );
 }
 
+/** The type's pill in the same color the app gives the type (a board yellow, a sheet green). */
+function typeTone(docType: string): Tone {
+  const c = /text-sol-([a-z]+)$/.exec(docTypeStyle(docType).color)?.[1];
+  return c && c in TONE ? (c as Tone) : "muted";
+}
+
 export default function SharedDocClient() {
   return (
     <SharedObjectPage<any>
       kind="doc"
       query={(api as any).docs.getShared}
       noun="doc"
+      // A board, sheet or dashboard is a picture: the full page width. A dashboard draws its own heading; the others sit under the page's.
+      wide={(doc) => (isArtifactDocType(doc.doc_type) ? "full" : false)}
       aside={(doc) => {
         const entries = outlineOf(stripTitleHeading(doc.content));
         return entries.length >= 3 ? <Outline entries={entries} /> : null;
       }}
     >
-      {(doc) => (
+      {(doc) => isArtifactDocType(doc.doc_type) && hasLiveSharedView(doc.doc_type) ? (
+        <SharedLiveArtifact docType={doc.doc_type} />
+      ) : (
         <>
           <ShareHead
             badges={
               <>
-                <Pill tone="blue">{docTypeLabel(doc.doc_type)}</Pill>
+                <Pill tone={typeTone(doc.doc_type)}>{docTypeLabel(doc.doc_type)}</Pill>
                 {doc.labels?.map((l: string) => (
                   <Pill key={l} quiet>
                     {l}
@@ -119,11 +133,15 @@ export default function SharedDocClient() {
               ) : null
             }
           />
-          <div className="share-prose">
-            <div className="prose max-w-none">
-              <MarkdownBlocks content={stripTitleHeading(doc.content)} components={READING} />
+          {isArtifactDocType(doc.doc_type) ? (
+            <SharedLiveArtifact docType={doc.doc_type} />
+          ) : (
+            <div className="share-prose">
+              <div className="prose max-w-none">
+                <MarkdownBlocks content={stripTitleHeading(doc.content)} components={READING} />
+              </div>
             </div>
-          </div>
+          )}
           {doc.entries?.length > 0 && (
             <div style={{ marginTop: 56 }}>
               <Section title="Timeline" count={doc.entries.length}>

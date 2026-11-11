@@ -1,0 +1,10 @@
+/* The artifact header sizes to its own pane, not the window: in a narrow split
+   the title keeps its room and secondary labels go first. */
+.live-head { container-type: inline-size; }
+@container (max-width: 760px) {
+  .live-head [data-live-type-label],
+  .live-head [data-freshness] { display: none !important; }
+}
+@container (max-width: 560px) {
+  .live-head [data-live-facepile] { display: none; }
+}

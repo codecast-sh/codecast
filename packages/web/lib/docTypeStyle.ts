@@ -1,4 +1,5 @@
 import type { DocType } from "@codecast/shared/docs";
+import { ChartColumn, Shapes, Table2, type LucideIcon } from "lucide-react";
 
 // Styling only; the type list and labels come from @codecast/shared/docs.
 // Typed by DocType so a type added there without a style here fails to compile.
@@ -16,5 +17,20 @@ const DOC_TYPE_STYLE: Record<DocType, { color: string; dot: string; bg: string }
   decision: { color: "text-sol-red", dot: "bg-sol-red", bg: "bg-sol-red/10 border-sol-red/30" },
   charter: { color: "text-sol-magenta", dot: "bg-sol-magenta", bg: "bg-sol-magenta/10 border-sol-magenta/30" },
   brief: { color: "text-sol-green", dot: "bg-sol-green", bg: "bg-sol-green/10 border-sol-green/30" },
+  board: { color: "text-sol-yellow", dot: "bg-sol-yellow", bg: "bg-sol-yellow/10 border-sol-yellow/30" },
+  sheet: { color: "text-sol-green", dot: "bg-sol-green", bg: "bg-sol-green/10 border-sol-green/30" },
+  dashboard: { color: "text-sol-blue", dot: "bg-sol-blue", bg: "bg-sol-blue/10 border-sol-blue/30" },
 };
 export const docTypeStyle = (docType: string) => DOC_TYPE_STYLE[docType as DocType] ?? DOC_TYPE_STYLE.note;
+
+/**
+ * The live artifact types carry an icon wherever a doc's type is marked (the
+ * docs list, the artifact header, New and the palette); prose types keep the
+ * dot. DocTypeMark draws whichever the type has.
+ */
+const DOC_TYPE_ICON: Partial<Record<DocType, LucideIcon>> = {
+  board: Shapes,
+  sheet: Table2,
+  dashboard: ChartColumn,
+};
+export const docTypeIcon = (docType: string): LucideIcon | undefined => DOC_TYPE_ICON[docType as DocType];
