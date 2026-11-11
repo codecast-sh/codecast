@@ -2,8 +2,8 @@
 // share (person, agent, project...), offered from the data itself. A choice
 // lives in the URL (`?f.day=30d&f.person=ada`), so a filtered view is a link
 // to send; every block whose source has the column narrows to it.
-import { useMemo, useState } from "react";
-import { Calendar, Check, ChevronDown, X } from "lucide-react";
+import { useState } from "react";
+import { Calendar, Check, ChevronDown } from "lucide-react";
 import { dashboard } from "@codecast/shared/artifacts";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 
@@ -14,12 +14,12 @@ const PRESETS = [
   { spec: "90d", label: "Last 90 days" },
 ] as const;
 
-export function DashboardFilters({ dims, value, set, clear }: { dims: dashboard.FilterDimension[]; value: (c: string) => string; set: (c: string, v: string | null) => void; clear: () => void }) {
+export function DashboardFilters({ dims, value, values, set, clear }: { dims: dashboard.FilterDimension[]; value: (c: string) => string; values: (c: string) => string[]; set: (c: string, v: string | readonly string[] | null) => void; clear: () => void }) {
   if (!dims.length) return null;
   const any = dims.some((d) => value(d.column));
   return (
     <div className="mb-4 flex flex-wrap items-center gap-1.5" data-dashboard-filters>
-      {dims.map((d) => (d.kind === "time" ? <DateChip key={d.column} spec={value(d.column)} onSet={(v) => set(d.column, v)} /> : <CategoryChip key={d.column} dim={d} spec={value(d.column)} onSet={(v) => set(d.column, v)} />))}
+      {dims.map((d) => (d.kind === "time" ? <DateChip key={d.column} spec={value(d.column)} onSet={(v) => set(d.column, v)} /> : <CategoryChip key={d.column} dim={d} chosen={values(d.column)} onSet={(v) => set(d.column, v)} />))}
       {any ? (
         <button type="button" onClick={clear} className="h-7 px-2 rounded-md text-xs text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt">
           Clear
@@ -88,45 +88,36 @@ function DateChip({ spec, onSet }: { spec: string; onSet: (v: string | null) => 
   );
 }
 
-const NAME: Record<string, string> = { person: "Person", agent: "Agent", project: "Project", repository: "Repository", assignee: "Assignee", status: "Status", kind: "Kind", source: "Source", model: "Model", group: "Group" };
+const NAME: Record<string, string> = { person: "Person", author: "Author", agent: "Agent", project: "Project", repository: "Repository", assignee: "Assignee", status: "Status", kind: "Kind", source: "Source", model: "Model", group: "Group" };
 
-function CategoryChip({ dim, spec, onSet }: { dim: dashboard.FilterDimension; spec: string; onSet: (v: string | null) => void }) {
+function CategoryChip({ dim, chosen, onSet }: { dim: dashboard.FilterDimension; chosen: string[]; onSet: (v: string[]) => void }) {
   const [q, setQ] = useState("");
-  const chosen = useMemo(() => (spec ? spec.split(",").map(decodeURIComponent).filter(Boolean) : []), [spec]);
-  const write = (next: string[]) => onSet(next.length ? next.map(encodeURIComponent).join(",") : null);
-  const toggle = (v: string) => write(chosen.includes(v) ? chosen.filter((x) => x !== v) : [...chosen, v]);
+  const toggle = (v: string) => onSet(chosen.includes(v) ? chosen.filter((x) => x !== v) : [...chosen, v]);
   const shown = q ? dim.values.filter((v) => v.toLowerCase().includes(q.toLowerCase())) : dim.values;
   const name = NAME[dim.column] ?? dim.column;
   return (
-    <span className="inline-flex items-center">
-      <Popover onOpenChange={(o) => !o && setQ("")}>
-        <PopoverTrigger asChild>
-          <button type="button" className={chipCls(chosen.length > 0)} data-filter-chip={dim.column}>
-            <span className="text-sol-text-dim">{name}</span>
-            <span className="truncate">{chosen.length === 0 ? "All" : chosen.length === 1 ? chosen[0] : `${chosen[0]} +${chosen.length - 1}`}</span>
-            <ChevronDown className="w-3 h-3 shrink-0 opacity-60" />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent align="start" className="w-56 p-1.5">
-          {dim.values.length > 8 ? (
-            <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Find ${name.toLowerCase()}`} aria-label={`Find ${name.toLowerCase()}`} className="mb-1 w-full h-7 rounded-md bg-sol-bg border border-sol-border/60 px-2 text-xs text-sol-text outline-none focus:border-sol-blue" />
-          ) : null}
-          <div className="max-h-64 overflow-y-auto">
-            {shown.map((v) => (
-              <button key={v} type="button" role="menuitemcheckbox" aria-checked={chosen.includes(v)} onClick={() => toggle(v)} className="w-full flex items-center gap-2 h-7 px-2 rounded text-left text-xs text-sol-text hover:bg-sol-bg-alt">
-                <span className={`grid place-items-center w-3.5 h-3.5 rounded-sm border ${chosen.includes(v) ? "bg-sol-blue border-sol-blue text-sol-bg" : "border-sol-border"}`}>{chosen.includes(v) ? <Check className="w-3 h-3" /> : null}</span>
-                <span className="truncate">{v}</span>
-              </button>
-            ))}
-            {!shown.length ? <div className="h-7 px-2 grid items-center text-xs text-sol-text-dim">No match</div> : null}
-          </div>
-        </PopoverContent>
-      </Popover>
-      {chosen.length ? (
-        <button type="button" aria-label={`Clear ${name.toLowerCase()}`} onClick={() => onSet(null)} className="-ml-1 p-1 rounded text-sol-text-dim hover:text-sol-text">
-          <X className="w-3 h-3" />
+    <Popover onOpenChange={(o) => !o && setQ("")}>
+      <PopoverTrigger asChild>
+        <button type="button" className={chipCls(chosen.length > 0)} data-filter-chip={dim.column}>
+          <span className="text-sol-text-dim">{name}</span>
+          <span className="truncate">{chosen.length === 0 ? "All" : chosen.length === 1 ? chosen[0] : `${chosen[0]} +${chosen.length - 1}`}</span>
+          <ChevronDown className="w-3 h-3 shrink-0 opacity-60" />
         </button>
-      ) : null}
-    </span>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-56 p-1.5">
+        {dim.values.length > 8 ? (
+          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Find ${name.toLowerCase()}`} aria-label={`Find ${name.toLowerCase()}`} className="mb-1 w-full h-7 rounded-md bg-sol-bg border border-sol-border/60 px-2 text-xs text-sol-text outline-none focus:border-sol-blue" />
+        ) : null}
+        <div className="max-h-64 overflow-y-auto">
+          {shown.map((v) => (
+            <button key={v} type="button" role="menuitemcheckbox" aria-checked={chosen.includes(v)} onClick={() => toggle(v)} className="w-full flex items-center gap-2 h-7 px-2 rounded text-left text-xs text-sol-text hover:bg-sol-bg-alt">
+              <span className={`grid place-items-center w-3.5 h-3.5 rounded-sm border ${chosen.includes(v) ? "bg-sol-blue border-sol-blue text-sol-bg" : "border-sol-border"}`}>{chosen.includes(v) ? <Check className="w-3 h-3" /> : null}</span>
+              <span className="truncate">{v}</span>
+            </button>
+          ))}
+          {!shown.length ? <div className="h-7 px-2 grid items-center text-xs text-sol-text-dim">No match</div> : null}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
 }

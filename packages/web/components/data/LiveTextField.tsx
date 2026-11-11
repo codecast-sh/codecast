@@ -13,6 +13,7 @@ const PARTS = [
   { part: "", label: "Value" },
   { part: ".delta", label: "Change" },
   { part: ".trend", label: "Direction" },
+  { part: ".vs", label: "Compared with" },
 ] as const;
 
 /** The refusal in a glance: what is typed, never the whole rule. */
@@ -79,7 +80,7 @@ export function LiveTextField({ label, value, kpis, multiline, placeholder, onCo
                 <Hash className="w-3 h-3" /> Live value
               </button>
             </PopoverTrigger>
-            <PopoverContent align="end" className="w-72 p-1.5" onOpenAutoFocus={(e) => e.preventDefault()}>
+            <PopoverContent align="end" className="w-80 p-1.5" onOpenAutoFocus={(e) => e.preventDefault()}>
               <div className="max-h-72 overflow-y-auto">
                 {kpis.map((k) => (
                   <div key={k.key} className="flex items-center gap-1 px-1 py-0.5">

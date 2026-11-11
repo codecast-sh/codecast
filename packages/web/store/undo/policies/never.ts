@@ -269,6 +269,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   applyLiveOps: never("artifact edit: the board, sheet or dashboard's own undo (its inverse ops) and History take it back"),
   liveDraft: never("draft: Save and Discard are the draft's own end; History holds the state before a save"),
   liveCheckpoint: never("checkpoint: saving a version changes no content"),
+  liveSetEditAccess: never("access setting: the owner sets it back with the same control, and an undo would silently re-open or re-lock editing for others"),
   settleLiveRows: INTERNAL,
   setOpsGroupStatus: never("triage: resolve, ignore and reopen sit on the same status control"),
   setOpsGroupTask: never("link: re-pointing or unlinking a problem task is done again by hand on the same Fix card"),

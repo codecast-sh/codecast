@@ -408,8 +408,23 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
           if (result.status) console.log(result.status);
           return;
         }
-        const r = await writeOps(deps, spec, id, a.title, result.ops, { draft: options.draft, position: result.position, status: result.status, elements: a.elements });
-        printWrite(spec, id, r, options.json);
+        // The cursor label takes the status's first line; the agent gets all of it (board verbs end it with the keys they made).
+        const label = result.status?.split("\n")[0];
+        const r = await writeOps(deps, spec, id, a.title, result.ops, { draft: options.draft, position: result.position, status: label, elements: a.elements });
+        // Server-side follow-ups the verb asked for, once its write has landed.
+        const after: string[] = [];
+        for (const step of result.after ?? []) {
+          if (!spec.remote?.[step.verb]) throw new Error(`${cli} ${name} asked for "${step.verb}", which is not a ${cli} remote verb`);
+          const out = await apiPost(deps, "/cli/live/remote", { cli, verb: step.verb, doc_id: id, args: step.args, ...session(deps) });
+          if (out?.text) after.push(out.text);
+        }
+        if (options.json) {
+          console.log(JSON.stringify({ ...r, ...(result.status ? { status: result.status } : {}), ...(after.length ? { after } : {}) }));
+          return;
+        }
+        printWrite(spec, id, r);
+        if (result.status) console.log(result.status);
+        for (const text of after) console.log(text);
       }));
   }
 

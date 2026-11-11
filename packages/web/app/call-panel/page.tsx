@@ -15,6 +15,7 @@ import { useSyncInboxSessions } from "../../hooks/useSyncInboxSessions";
 import { useSyncTeamInboxSessions } from "../../hooks/useSyncTeamInboxSessions";
 import { useCallSync } from "../../hooks/useCallSync";
 import { useWalkieSync } from "../../hooks/useWalkieSync";
+import { useRoomThreadAlerts } from "../../hooks/useRoomThreadAlerts";
 import { isVoiceHost } from "../../lib/desktop";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
@@ -154,5 +155,8 @@ function CallPanelSyncEffects() {
 function VoiceHostSyncEffects() {
   useSyncTeamInboxSessions();
   useWalkieSync();
+  // The room's sounds: this window is seated in every call, so it is the one
+  // that speaks them (isRoomAnnouncer), whichever window has focus.
+  useRoomThreadAlerts();
   return null;
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { agentSetupPagePath } from "@codecast/shared/contracts";
 import { InstallTabs } from "@/components/install-tabs";
 import { SOL } from "../../blog/blogChrome";
 import { featureHref, featureDeepDives } from "../catalog";
@@ -136,7 +137,7 @@ function Hero() {
               Ask your agent for something you would otherwise click through in a Mac app. It reads the window as a list of named controls, acts on them, and shows you in the conversation exactly what changed. It works on windows behind the one you are using, so Preview, Slack, System Settings or your own desktop build are in reach without the agent taking your screen.
             </p>
             <div className="cx-in mt-6 flex flex-wrap items-center gap-x-4 gap-y-3" style={{ animationDelay: "220ms" }}>
-              <a href="#setup" className="inline-flex h-11 items-center rounded-lg px-4 font-mono text-[14px] font-semibold text-white" style={{ backgroundColor: SOL.magenta }}>Turn it on</a>
+              <Link href={agentSetupPagePath("computer")} className="inline-flex h-11 items-center rounded-lg px-4 font-mono text-[14px] font-semibold text-white" style={{ backgroundColor: SOL.magenta }}>Turn it on</Link>
               <a href="#read" className="font-mono text-[13px] underline underline-offset-4" style={{ color: SOL.base01 }}>how it reads a window</a>
             </div>
           </div>

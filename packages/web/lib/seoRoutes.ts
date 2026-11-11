@@ -129,6 +129,18 @@ export const SEO_ROUTES: SeoEntry[] = [
     heading: f.title,
     description: f.dek,
   })),
+  {
+    path: "/setup/browser",
+    title: "Set up agents in your Chrome — Codecast",
+    heading: "Let your agents use your Chrome",
+    description: "Add the Codecast extension and pair it with your computer, so every agent session gets its own background tab in the Chrome you already use.",
+  },
+  {
+    path: "/setup/computer",
+    title: "Set up agents on your Mac — Codecast",
+    heading: "Let your agents use your Mac's apps",
+    description: "Grant two macOS permissions to the Codecast helper, so agents can read and act in any app's window behind yours.",
+  },
   ...GUIDES.map((g) => ({
     path: guideHref(g.slug),
     title: `${g.title} — Codecast docs`,

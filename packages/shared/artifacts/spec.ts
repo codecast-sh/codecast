@@ -27,7 +27,13 @@ export function artifactView(type: ArtifactType, title: string, elements: Artifa
 }
 
 /** The result of a product verb: the ops to write and where the agent's cursor lands. */
-export type VerbResult = { ops: ArtifactOp[]; position?: ArtifactPosition; status?: string };
+export type VerbResult = {
+  ops: ArtifactOp[];
+  position?: ArtifactPosition;
+  status?: string;
+  /** Remote verbs (spec.remote) the CLI runs once the ops are written, in order: work only the server can do (a sheet's query refresh). */
+  after?: Array<{ verb: string; args: string[] }>;
+};
 
 /**
  * A product CLI verb: `cast <cli> <verb> <doc> [args...]`. Pure: it reads the
