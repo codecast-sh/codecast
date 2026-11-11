@@ -79,6 +79,7 @@ import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { Button } from "./ui/button";
+import { ListHeadNewSession } from "./inbox/NewSessionButton";
 
 // The login flow's device-row state, as listAccountProfiles reports it.
 type LoginFlowState = {
@@ -3182,6 +3183,7 @@ function SessionListPanelImpl({
         />
       )}
       <div ref={titlebarRef} className="cc-panel__head min-w-0">
+        <ListHeadNewSession />
         {favoritesView && (
           <button
             type="button"

@@ -11,6 +11,7 @@
  * look under [data-modern-rail].
  */
 
+import { NewSessionButton } from "../inbox/NewSessionButton";
 import { Fragment, type ComponentProps, type ReactNode } from "react";
 import { NavSection, RailHeading } from "./navPrimitives";
 import type { NavSectionList } from "./SidebarNav";
@@ -122,6 +123,9 @@ export function ModernNavView({
           {workspaceHeader}
         </div>
       )}
+      <div data-rail-new-session="" className={`${isNarrow ? "mx-1 flex justify-center" : "mx-2"} mb-2`}>
+        <NewSessionButton variant={isNarrow ? "icon" : "row"} />
+      </div>
       {RAIL_GROUPS.map(({ group: name, heading }) => group(name, heading))}
       <div className="mt-3">
         <RailButtonRow
