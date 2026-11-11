@@ -1,6 +1,6 @@
 # The production Convex host
 
-What is actually running, as of 2026-09-22. The files beside this one are the
+What is actually running, as of 2026-11-10. The files beside this one are the
 source of truth for configuration; this file records the facts about the machine
 that no file in the repo can tell you.
 
@@ -8,12 +8,20 @@ that no file in the repo can tell you.
 
 | | |
 |---|---|
-| Instance | `i-008b985d1d176faa2`, `r7g.16xlarge` (64 vCPU, 494 GB RAM, Graviton) since 2026-10-23 |
-| Account / region | Union AWS `767398104971`, `us-east-1d` |
-| Address | `35.174.124.200`, an Elastic IP (`eipalloc-01460914a27378b22`) |
-| Disk | 1.5 TB gp3 (vol-0c1fb3f658ebb7d8e, 6000 IOPS, 500 MB/s) mounted at `/srv` by filesystem label `codecast-data`; grown from 1 TB online on 2026-10-22 (`aws ec2 modify-volume`, then `resize2fs /dev/nvme1n1`) |
+| Instance | `i-015ef3512c33009f0`, `r7g.16xlarge` (64 vCPU, 494 GB RAM, Graviton), launched 2026-11-10 from AMI `ami-058ffe161035c37b5` (a copy of the previous host's root disk) |
+| Account / region | AWS `045275879943` (the default AWS CLI profile), `us-east-1d` |
+| Address | `184.192.248.132`, an Elastic IP (`eipalloc-0fb9c5bd0778d91f6`) |
+| Disk | 1.5 TB gp3 (`vol-00fc743a09f9540e7`, 16000 IOPS, 1000 MB/s) mounted at `/srv` by filesystem label `codecast-data`, restored from a snapshot of the previous host's data volume |
 | SSH | `ssh convex-prod` (alias in `~/.ssh/config`; key `~/.ssh/codecast-union.pem`, `IdentitiesOnly` required) |
 | DNS | `convex.codecast.sh`, an A record in Cloudflare, NOT proxied, TTL 60 |
+
+**The previous host is parked and must stay stopped.** Until 2026-11-10 prod ran on
+`i-008b985d1d176faa2` in Union's AWS account `767398104971` (Elastic IP
+`35.174.124.200`, data volume `vol-0c1fb3f658ebb7d8e`). AWS restricted that account
+after flagging access keys, and refused to start the host after a resize stop, so
+prod was rebuilt here from snapshots with no data lost (down 19:16 to 23:17 UTC).
+The old data volume is detached. Starting the old host with it reattached would
+run a second Convex with its own crons and side effects against a stale copy.
 
 It was an `r7g.8xlarge` (32 vCPU) from 2026-09-22 to 2026-10-23, when a day at
 80 to 94% CPU from the growing agent fleet moved it to 64 vCPU (sd-1280).
