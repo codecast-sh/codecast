@@ -199,3 +199,16 @@ export const listMine = query({
     return userId ? listResourceSnapshots(ctx, userId) : [];
   },
 });
+
+// One device's report. The live feed subscribes per device: a report from any
+// daemon changed listMine's whole answer, so every report re-sent every
+// device's snapshot and history (567 KB for twelve devices, several times a
+// minute). Scoped to the caller by the index.
+export const getMine = query({
+  args: { device_id: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    return await ctx.db.query("machine_resources").withIndex("by_user_device", q => q.eq("user_id", userId).eq("device_id", args.device_id)).first();
+  },
+});

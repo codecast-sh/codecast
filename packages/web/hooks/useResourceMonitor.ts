@@ -7,6 +7,7 @@ import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { type MachineResourceSnapshot, type ResourcePoint } from "@codecast/shared/contracts";
 import { useSyncCollection } from "./useSyncCollection";
 import { useIsSyncHost } from "./useSyncRole";
+import { useInboxStore } from "../store/inboxStore";
 import { useCollectionRows } from "./useCollectionRows";
 import { useCoarseNow } from "./useCoarseNow";
 import { useManagedSessions } from "./useSyncManagedSessions";
@@ -22,10 +23,22 @@ type MachineResourceRow = { _id: string; device_id: string; received_at: number;
 
 const rowSig = (r: MachineResourceRow) => `${r.device_id}|${r.received_at}|${(r.background_sessions ?? []).join(",")}`;
 
-/** Feeder: the caller's machine reports. Global (the top bar gauge reads it), so only the sync host subscribes; followers get the rows by replication. */
-export function useSyncMachineResources(enabled = true) {
+// One subscription per device: a report from any daemon used to change the
+// one list answer, re-sending every device's snapshot and history.
+const ONE_REPORT = { select: (row: MachineResourceRow | null) => (row ? [row] : []) };
+
+/** Feeder: one device's machine report (MachineResourceFeeders mounts one per
+ *  device on the sync host; followers get the rows by replication). */
+export function useSyncMachineResource(deviceId: string) {
+  return useSyncCollection("machineResources", api.machineResources.getMine, { device_id: deviceId }, ONE_REPORT);
+}
+
+/** The device ids the feeders follow, as one string: the roster's heartbeats
+ *  change its rows every few seconds, its membership rarely. */
+export function useMachineResourceDeviceIds(): string[] {
   const host = useIsSyncHost();
-  return useSyncCollection("machineResources", api.machineResources.listMine, enabled && host ? {} : "skip");
+  const ids = useInboxStore((s) => (host ? (s.machineRoster as Array<{ device_id: string }>).map((d) => d.device_id).sort().join(",") : ""));
+  return useMemo(() => (ids ? ids.split(",") : []), [ids]);
 }
 
 export function useMachineResourceRows(): MachineResourceRow[] {

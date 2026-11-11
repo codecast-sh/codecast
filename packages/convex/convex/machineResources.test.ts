@@ -3,6 +3,7 @@ import { convexTest } from "convex-test";
 import schema from "./schema";
 import { makeFunctionReference } from "convex/server";
 const listMine = makeFunctionReference<"query">("machineResources:listMine");
+const getMine = makeFunctionReference<"query">("machineResources:getMine");
 import { hashToken } from "./apiTokens";
 import { ATTENDED_AFTER_MESSAGE_MS, OVERLOAD_REALERT_MS, overloadAlertDue, overloadMessage, storeResourceSnapshot } from "./machineResources";
 import type { MachineResourceSnapshot } from "@codecast/shared/contracts";
@@ -196,4 +197,22 @@ test("the governor's unattended set leaves out a session with a message still on
   expect((await report(now)).unattended_sessions).toEqual([]);
   await t.run(ctx => ctx.db.patch(waiting, { status: "delivered" }));
   expect((await report(now + 60_000)).unattended_sessions).toEqual(["role"]);
+});
+
+test("one device's report reads alone, scoped to its owner", async () => {
+  const t = convexTest(schema, modules);
+  const now = Date.now();
+  const [owner, other] = await t.run(async ctx => {
+    const owner = await ctx.db.insert("users", { name: "Owner" });
+    const other = await ctx.db.insert("users", { name: "Other" });
+    await ctx.db.insert("devices", { user_id: owner, device_id: "mac", label: "Mac", platform: "darwin", last_seen: now });
+    return [owner, other];
+  });
+  await t.run(ctx => storeResourceSnapshot(ctx, owner, sample(now), now));
+  expect(await t.query(getMine, { device_id: "mac" })).toBeNull();
+  expect(await t.withIdentity({ subject: other }).query(getMine, { device_id: "mac" })).toBeNull();
+  expect(await t.withIdentity({ subject: owner }).query(getMine, { device_id: "other-mac" })).toBeNull();
+  const row = await t.withIdentity({ subject: owner }).query(getMine, { device_id: "mac" });
+  expect(row.device_id).toBe("mac");
+  expect(row.history).toHaveLength(1);
 });

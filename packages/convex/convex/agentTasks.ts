@@ -775,6 +775,25 @@ const webTaskAction = (apply: (ctx: TaskCtx, task: Doc<"agent_tasks">) => Promis
     },
   });
 
+// A trigger names conversations by raw id (the inject home, the post target,
+// the creator). Each one must be a conversation the caller can read: a
+// trigger writes its armed state onto its home and posts into its target.
+async function accessibleConversationId(ctx: { db: any }, userId: Id<"users">, id: string): Promise<Id<"conversations"> | null> {
+  const convId = ctx.db.normalizeId("conversations", id);
+  const conv = convId ? await ctx.db.get(convId) : null;
+  return conv && (await canAccessConversation(ctx, userId, conv)) ? convId : null;
+}
+
+async function requireTriggerConversations(
+  ctx: { db: any },
+  userId: Id<"users">,
+  ids: { originating_conversation_id?: string | null; target_conversation_id?: string | null },
+): Promise<void> {
+  for (const id of [ids.originating_conversation_id, ids.target_conversation_id]) {
+    if (id && !(await accessibleConversationId(ctx, userId, id))) throw new Error(`No session of yours matches "${id}"`);
+  }
+}
+
 export const createTask = mutation({
   args: {
     api_token: v.string(),
@@ -817,6 +836,10 @@ export const createTask = mutation({
     if (!auth) throw new Error("Unauthorized");
     const { api_token: _token, originating_session_ref, created_by_session_ref, ...rest } = args;
     const taskArgs: NewTaskArgs = rest;
+    await requireTriggerConversations(ctx, auth.userId, rest);
+    if (rest.created_by_conversation_id && !(await accessibleConversationId(ctx, auth.userId, rest.created_by_conversation_id))) {
+      delete taskArgs.created_by_conversation_id;
+    }
     if (originating_session_ref) {
       const conv = await findConversationByAnyRef(ctx, originating_session_ref, auth.userId);
       if (!conv) throw new Error(`No session of yours matches "${originating_session_ref}"`);
@@ -2702,6 +2725,7 @@ export const webUpdate = mutation({
     const task = await getManageableTask(ctx, args.task_id, userId);
     if (!task) return false;
     const { task_id: _id, ...rest } = args;
+    await requireTriggerConversations(ctx, userId, rest);
     const result = await applyTaskUpdate(ctx, task, rest, { userId, source: "web" });
     return result.ok;
   },
@@ -2728,6 +2752,7 @@ export const updateTask = mutation({
     if (!task) return { ok: false, changed: [] };
     const { api_token: _token, task_id: _id, originating_session_ref, target_session_ref, ...rest } = args;
     const update: TaskUpdateArgs = { ...rest };
+    await requireTriggerConversations(ctx, auth.userId, rest);
     if (originating_session_ref) {
       const conv = await findConversationByAnyRef(ctx, originating_session_ref, auth.userId);
       if (!conv) throw new Error(`No session of yours matches "${originating_session_ref}"`);

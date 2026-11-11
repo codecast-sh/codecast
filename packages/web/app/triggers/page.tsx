@@ -26,7 +26,7 @@ import { isTriggerFailing, isTriggerTerminal, taskDisplayTitle, groupTriggerRows
 import { TriggerRowItem, TriggerHomeHeader } from "../../components/TriggerRow";
 import { HorizonRail } from "../../components/triggers/HorizonRail";
 import { EMPTY_FILTERS, filtersActive, matchesFilters, type Filters } from "./triggerFilters";
-import { useTriggers, fetchTriggerRuns } from "../../hooks/useSyncTriggers";
+import { useTriggers, fetchTriggerRuns, useSyncTriggerHistory } from "../../hooks/useSyncTriggers";
 import { openRunInStore } from "../../components/TriggerRunHistory";
 import { SelectBox } from "../../components/ui/select-box";
 import { SegmentedToggle } from "../../components/SegmentedToggle";
@@ -1033,6 +1033,8 @@ function TriggersContent() {
   // synchronously; the feeder keeps it fresh. `undefined` only while the cache
   // is empty AND the first answer is in flight.
   const { tasks: taskRows, ready: tasksReady } = useTriggers();
+  // The app-wide feed carries armed triggers and a recent tail; this page shows finished history too.
+  useSyncTriggerHistory();
   const tasks: TaskRow[] | undefined = tasksReady || taskRows.length > 0 ? taskRows : undefined;
   // Deep links, read REACTIVELY (tab-context searchParams): the tab shell
   // keeps this page mounted, so a later click on another trigger changes only

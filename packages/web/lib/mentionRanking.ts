@@ -54,6 +54,10 @@ export function matchScore(text: string, query: string): number {
   const tokens = queryTokens;
   if (tokens.length <= 1) return score(text, q);
   const lower = text.toLowerCase();
+  // A word absent from the whole text is absent from every word of it, so
+  // most candidates are refused here, before the split that dominated a
+  // palette keystroke over tens of thousands of tasks.
+  for (const tok of tokens) if (!lower.includes(tok)) return Infinity;
   const words = textWords(lower);
   let total = 0;
   for (const tok of tokens) {

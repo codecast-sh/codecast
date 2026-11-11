@@ -7,7 +7,7 @@
 // The rows carry the SAME shape searchConversations/searchConversationTitles
 // return, so a surface renders one list and never branches on where a row came
 // from — except to say, honestly, that content search is still running.
-import { useMemo } from "react";
+import { useDeferredValue, useMemo } from "react";
 import { normalizeQueryQuotes, parseSessionQuery } from "@codecast/shared/search";
 import type { WorkState } from "@codecast/shared/contracts";
 import {
@@ -82,14 +82,22 @@ function searchTitle(conv: HaystackRow): string {
 
 // Per row object: a search re-reads the same rows on every keystroke, and a row
 // that changed arrives as a new object.
-const _haystackCache = new WeakMap<object, { personify: IdentityPrefs; text: string }>();
-export function sessionSearchHaystack(conv: HaystackRow): string {
+const _haystackCache = new WeakMap<object, { personify: IdentityPrefs; text: string; words?: string[] }>();
+function haystackEntry(conv: HaystackRow): { personify: IdentityPrefs; text: string; words?: string[] } {
   const personify = identityPrefsNow();
   const hit = _haystackCache.get(conv);
-  if (hit && hit.personify === personify) return hit.text;
-  const text = buildHaystack(conv, personify);
-  _haystackCache.set(conv, { personify, text });
-  return text;
+  if (hit && hit.personify === personify) return hit;
+  const entry = { personify, text: buildHaystack(conv, personify) };
+  _haystackCache.set(conv, entry);
+  return entry;
+}
+export function sessionSearchHaystack(conv: HaystackRow): string {
+  return haystackEntry(conv).text;
+}
+// The haystack's words, split once per row rather than on every keystroke.
+function sessionSearchWords(conv: HaystackRow): string[] {
+  const entry = haystackEntry(conv);
+  return (entry.words ??= textWords(entry.text));
 }
 function buildHaystack(conv: HaystackRow, personify: IdentityPrefs): string {
   const who = conv._id ? identityLine(identityRowOf(conv as IdentityRow), null, personify) : null;
@@ -203,10 +211,9 @@ export function sessionMatchTier(conv: HaystackRow & { title?: string }, lowerQu
   const best = Math.min(nameScore(searchTitle(conv), q), name ? nameScore(name, q) : Infinity);
   if (best <= 1) return { tier: 0, exact: best };
   if (best !== Infinity) return { tier: 1, exact: 0 };
-  // Every typed word somewhere in what the session is about, in any order:
-  // starting a word there, or only inside one.
-  if (matchScore(hay, q) === Infinity) return null;
-  const words = textWords(hay);
+  // Every typed word is somewhere in what the session is about (the reject
+  // above): starting a word there, or only inside one.
+  const words = sessionSearchWords(conv);
   return { tier: q.split(/\s+/).every((tok) => words.some((w) => w.startsWith(tok))) ? 2 : 3, exact: 0 };
 }
 
@@ -334,7 +341,11 @@ export function instantSessionRows(
  * nothing: the selector returns a constant, so neither the signature pass nor a
  * re-render happens while the search is closed.
  */
-export function useInstantSessionRows(query: string, cap = 12, opts: InstantSearchOpts = {}): SessionSearchRow[] {
+export function useInstantSessionRows(typed: string, cap = 12, opts: InstantSearchOpts = {}): SessionSearchRow[] {
+  // Matching scans every cached session, so it runs on a deferred copy of
+  // the query: the box takes each key at once and the scan re-runs in a
+  // background render the next key interrupts.
+  const query = useDeferredValue(typed);
   // A cached row cannot say which files, commits or pull requests its session
   // touched, so an operator query (file:, pr:, ...) has no instant answer; the
   // server tier answers it alone.
