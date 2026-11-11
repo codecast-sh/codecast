@@ -224,10 +224,11 @@ describe("chat: reads, supersede and the rail's numbers", () => {
   describe("the rail's unread count", () => {
     const tip = serverId("msgtip");
 
-    it("keeps the server's number when the local page does not reach the newest message", () => {
+    it("shows what the held page says until the newest message lands, never the server's text", () => {
       // The boot case: chatMessages hydrated from IndexedDB holds a page from
-      // yesterday, and only the OPEN channel is subscribed. Tallying that page
-      // returns 0 while the server says 12.
+      // yesterday while the server says 12 newer lines exist. The rail shows
+      // the held room (no badge, yesterday's line) so opening it matches; the
+      // prefetcher brings the newest page and the rail moves with it.
       useInboxStore.getState().syncTable("chatChannels", [
         { _id: CHANNEL, name: "general", created_at: 1, updated_at: 1 },
       ]);
@@ -250,9 +251,38 @@ describe("chat: reads, supersede and the rail's numbers", () => {
       ]);
 
       _resetChatRailMemo();
+      let rail = selectChatRail(chatState(), ME);
+      expect(rail[0].unreadCount).toBe(0);
+      expect(rail[0].mentionCount).toBe(0);
+      expect(rail[0].lastMessagePreview).toBe("yesterday");
+      expect(rail[0].sortAt).toBe(100);
+
+      useInboxStore.getState().syncTable("chatMessages", [
+        { _id: tip, channel_id: CHANNEL, user_id: THEM, content: "**newest**", created_at: 9000, updated_at: 9000 },
+      ]);
+      _resetChatRailMemo();
+      rail = selectChatRail(chatState(), ME);
+      expect(rail[0].unreadCount).toBe(1);
+      expect(rail[0].lastMessagePreview).toBe("newest");
+      expect(rail[0].sortAt).toBe(9000);
+    });
+
+    it("previews the newest line the room shows: a thread reply stays in its thread", () => {
+      const root = serverId("msgroot");
+      useInboxStore.getState().syncTable("chatChannels", [
+        { _id: CHANNEL, name: "general", created_at: 1, updated_at: 1 },
+      ]);
+      useInboxStore.getState().syncTable("chatMessages", [
+        { _id: root, channel_id: CHANNEL, user_id: THEM, content: "the root", created_at: 100, updated_at: 100 },
+        { _id: serverId("msgreply"), channel_id: CHANNEL, user_id: THEM, content: "a reply", created_at: 200, updated_at: 200, thread_root_id: root },
+        { _id: serverId("msgthink"), channel_id: CHANNEL, user_id: THEM, content: "", created_at: 300, updated_at: 300, author_kind: "agent", agent_status: "thinking" },
+      ]);
+
+      _resetChatRailMemo();
       const rail = selectChatRail(chatState(), ME);
-      expect(rail[0].unreadCount).toBe(12);
-      expect(rail[0].mentionCount).toBe(3);
+      expect(rail[0].lastMessagePreview).toBe("the root");
+      // The reply is still the room's newest activity.
+      expect(rail[0].sortAt).toBe(200);
     });
 
     it("tallies locally as soon as the page holds the rail's own newest message", () => {

@@ -7,9 +7,8 @@
 // lives inside a screen component is effectively untested on mobile. Logic that
 // lives here is not.
 
-import { isSilentAgentRow, isVisibleAgentPending } from "./agent";
+import { isSettledLine } from "./agent";
 import { mentionUserIds, type ChatMentionRef } from "./mentions";
-import { isLiveVoiceRow } from "./voice";
 
 export type TimelineMessage = {
   id: string;
@@ -269,11 +268,7 @@ const isPersonLine = (m: UnreadRow) => !m.author_kind || m.author_kind === "user
 
 /** A line a person can see that told them something new. */
 function isUnreadNews(m: UnreadRow): boolean {
-  return !m.deleted_at
-    && !isSilentAgentRow(m)
-    && !isVisibleAgentPending(m.agent_status)
-    && !isLiveVoiceRow(m)
-    && !isHistoryLine(m);
+  return isSettledLine(m) && !isHistoryLine(m);
 }
 
 /**

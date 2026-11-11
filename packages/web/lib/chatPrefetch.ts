@@ -1,7 +1,9 @@
-// Background prefetch for chat: the rows a notification will open are fetched
-// before anyone clicks it, so the channel paints from the store instead of
-// waiting on its first live page (hooks/useChatPrefetch mounts it on the sync
-// host only).
+// Background prefetch for chat: every room's newest rows and every chat
+// notification's message are fetched into the store before anyone looks, so a
+// room opens on what its rail row and its notification promised. The rail
+// shows only rows the store holds (store/chatSlice selectChatRail), so this is
+// what moves a room on the rail at all. hooks/useChatPrefetch mounts it on
+// the web sync host and in the phone app.
 //
 // The one rule: fetch only what the cache is MISSING. A channel's page is
 // wanted while its newest message is absent from the store, a thread while the
@@ -31,8 +33,7 @@ export type ChatPrefetchNotification = {
   created_at: number;
 };
 
-export const CHAT_PREFETCH_CHANNELS = 8;
-export const CHAT_PREFETCH_NOTIFICATIONS = 12;
+export const CHAT_PREFETCH_NOTIFICATIONS = 50;
 export const CHAT_PREFETCH_CONCURRENCY = 2;
 /** The least time between two fetches of one target: a busy room costs at
  *  most one page a second, however fast its lines arrive. */
@@ -42,14 +43,11 @@ type Known = { thread_root_id?: string };
 
 const keyOf = (target: Pick<ChatPrefetchTarget, "kind" | "id">) => `${target.kind}:${target.id}`;
 
-/** `arrived` names the channels whose newest line changed while the app was
- *  running: those are the ones an arrival toast can open, read or not (a line
- *  read on another device still toasts here). */
+/** Newest rooms first, so the top of the rail fills before its tail. */
 export function chatPrefetchTargets(
   rail: ChatRailRow[],
   notifications: ChatPrefetchNotification[],
   read: (id: string) => ChatMessageRow | undefined,
-  arrived: ReadonlySet<string> = new Set(),
 ): ChatPrefetchTarget[] {
   const channels = new Map(rail.map(row => [row.channel_id, row]));
   const targets = new Map<string, ChatPrefetchTarget>();
@@ -78,11 +76,8 @@ export function chatPrefetchTargets(
     lookup(row, tip._id, tip.created_at, tip);
   };
 
-  const fresh = rail
-    .filter(row => row.notify_level !== "none" && (row.unread > 0 || row.unread_mentions > 0 || arrived.has(row.channel_id)))
-    .sort((a, b) => b.sort_at - a.sort_at)
-    .slice(0, CHAT_PREFETCH_CHANNELS);
-  for (const row of fresh) page(row);
+  // Every room, muted ones included: each shows its newest line on the rail.
+  for (const row of [...rail].sort((a, b) => b.sort_at - a.sort_at)) page(row);
 
   // A notification names its channel and message. The channel must be one the
   // viewer's rail carries: a room they left keeps its old notifications.
@@ -114,10 +109,6 @@ export function createChatPrefetcher(options: {
   let rail: ChatRailRow[] = [];
   let notifications: ChatPrefetchNotification[] = [];
   const active = new Set<string>();
-  // Each channel's newest line as first seen, and the channels whose newest
-  // line has moved since: the arrivals.
-  let tips: Map<string, string> | null = null;
-  const arrived = new Set<string>();
   // Per target, the message it was last fetched for. A fetch that did not
   // bring its message (a reply the channel page never carries, a failure) is
   // not repeated until the target names a newer one.
@@ -130,7 +121,7 @@ export function createChatPrefetcher(options: {
     !active.has(key) && fetchedFor.get(key) !== target.messageId && allowed(target.channelId);
 
   const refresh = () => {
-    desired = new Map(chatPrefetchTargets(rail, notifications, options.read, arrived).map(target => [keyOf(target), target]));
+    desired = new Map(chatPrefetchTargets(rail, notifications, options.read).map(target => [keyOf(target), target]));
     for (const key of fetchedFor.keys()) if (!desired.has(key)) fetchedFor.delete(key);
     // A spacing timer outlives its target: a room whose page just landed drops
     // out of the wanted set, and its next line must still wait out the second.
@@ -182,14 +173,6 @@ export function createChatPrefetcher(options: {
       if (stopped) return;
       rail = nextRail;
       notifications = nextNotifications;
-      const seeding = tips === null;
-      tips ??= new Map();
-      for (const row of rail) {
-        const tip = row.last_message?._id;
-        if (!tip) continue;
-        if (!seeding && tips.get(row.channel_id) !== tip) arrived.add(row.channel_id);
-        tips.set(row.channel_id, tip);
-      }
       refresh();
       schedule();
     },

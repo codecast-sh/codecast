@@ -17,6 +17,8 @@
 //                         wake) but never rendered. A session's thinking row
 //                         closes the same way, as a tombstone (see
 //                         isClosedAgentPlaceholder).
+import { isLiveVoiceRow } from "./voice";
+
 export type ChatAgentStatus =
   | "thinking"
   | "streaming"
@@ -53,4 +55,20 @@ export function isAgentTurnInFlight(status: string | undefined): boolean {
 /** A placeholder that shows a spinner to people in the thread. */
 export function isVisibleAgentPending(status: string | undefined): boolean {
   return status === "thinking" || status === "streaming";
+}
+
+/** A line a room has actually said: not deleted, not a silent or still
+ *  thinking agent placeholder, not a voice line still being spoken. The rail's
+ *  newest line, its sort key and every preview of a room count only these, on
+ *  the server and on each client alike. */
+export function isSettledLine(row: {
+  deleted_at?: number;
+  author_kind?: string;
+  agent_status?: string;
+  voice?: { status?: string } | null;
+}): boolean {
+  return !row.deleted_at
+    && !isSilentAgentRow(row)
+    && !isVisibleAgentPending(row.agent_status)
+    && !isLiveVoiceRow(row);
 }

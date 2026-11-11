@@ -10,6 +10,7 @@ import { setTriggerFeedArgs, useSyncTriggers } from '@codecast/web/hooks/useSync
 import { useSyncTeams } from '@codecast/web/hooks/useSyncTeams';
 import { useSyncTeamMembers } from '@codecast/web/hooks/useSyncTeamMembers';
 import { useChatChannelsSync } from '@codecast/web/hooks/useChatSync';
+import { ChatPrefetchFeeder } from '@codecast/web/hooks/useChatPrefetch';
 import { useCallBaseFeeds } from '@codecast/web/hooks/useCallBaseFeeds';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { activeTeamIdOf } from '@codecast/web/lib/activeTeam';
@@ -58,7 +59,16 @@ export function StoreSyncBridge() {
   const [armed, setArmed] = useState(false);
   useEffect(() => { setArmed(true); }, []);
   if (!armed) return null;
-  return <StoreSyncBridgeInner />;
+  // The prefetch fills the rows behind every room's rail line and every chat
+  // notification, so the Chat tab shows only what a room already holds and a
+  // tapped notification opens on its message. Its own component, as on web:
+  // it wakes on every rail push, and the feeders here need not.
+  return (
+    <>
+      <StoreSyncBridgeInner />
+      <ChatPrefetchFeeder />
+    </>
+  );
 }
 
 function StoreSyncBridgeInner() {

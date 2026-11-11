@@ -64,6 +64,16 @@ export default function ChatChannelScreen() {
   const views = useChannelMessages(channelId, feed.floor);
   const channel = useInboxStore((s) => s.chatChannels[channelId]) as any;
   const railRow = useChatRail().find((c) => c.id === channelId);
+  // The room has a line the store does not hold yet: the one a tapped push
+  // named, or the server's newest. Only after a cold or suspended app, since
+  // the prefetch fills both while the app runs; the list says so at the
+  // bottom until the live page brings it.
+  const newerComing = useInboxStore((s) => {
+    const target = typeof targetParam === 'string' ? targetParam : undefined;
+    if (target && !s.chatMessages[target]) return true;
+    const tip = (s.chatRail ?? []).find((r: any) => String(r.channel_id) === channelId)?.last_message?._id;
+    return !!tip && !s.chatMessages[tip];
+  });
   const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
   const memberById = useMemo(() => {
     const map = new Map<string, any>();
@@ -420,6 +430,11 @@ export default function ChatChannelScreen() {
             onScroll={onScroll}
             scrollEventThrottle={120}
             onScrollToIndexFailed={() => {}}
+            ListHeaderComponent={
+              feed.loading && newerComing && inverted.length > 0 ? (
+                <RNText style={styles.loadingOlder}>Loading new messages…</RNText>
+              ) : null
+            }
             ListFooterComponent={
               loadingOlder ? (
                 <RNText style={styles.loadingOlder}>Loading earlier messages…</RNText>

@@ -42,13 +42,13 @@ function harness(load?: (target: ChatPrefetchTarget) => Promise<any>, cache: Rec
 }
 
 describe("which rows the prefetch asks for", () => {
-  test("a cold start is bounded, newest first, and skips read or muted channels", () => {
-    const rail = Array.from({ length: 1_000 }, (_, i) => row(`c${i}`, undefined, i));
-    rail.push({ ...row("muted", undefined, 2000), notify_level: "none" }, { ...row("read", undefined, 2000), unread: 0 });
+  test("every room whose newest line is not held, read and muted ones included, newest first", () => {
+    const rail = Array.from({ length: 50 }, (_, i) => row(`c${i}`, undefined, i));
+    rail.push({ ...row("muted", undefined, 2000), notify_level: "none" }, { ...row("read", undefined, 1999), unread: 0 });
     const targets = chatPrefetchTargets(rail, [], none);
-    expect(targets.length).toBe(8);
-    expect(targets[0].channelId).toBe("c999");
-    expect(targets.at(-1)?.channelId).toBe("c992");
+    expect(targets.length).toBe(52);
+    expect(targets.slice(0, 3).map(t => t.channelId)).toEqual(["muted", "read", "c49"]);
+    expect(targets.at(-1)?.channelId).toBe("c0");
   });
 
   test("rows already in the cache cost nothing: a reload, or a channel open on screen", () => {
@@ -92,15 +92,15 @@ describe("the prefetch worker", () => {
     expect(h.calls).toHaveLength(1);
   });
 
-  test("a line read on another device still arrives here as a toast, so its page is fetched; the first rail is not an arrival", async () => {
-    const h = harness();
+  test("a room read on another device still gets its new line, and a held line costs nothing", async () => {
+    const h = harness(undefined, { old: message("old", "dm") });
     const read = (id: string, tip: string, notify: "all" | "none" = "all") => ({ ...row(id, tip), unread: 0, notify_level: notify });
-    h.worker.update([read("dm", "old"), read("muted", "m-old", "none")], []);
+    h.worker.update([read("dm", "old")], []);
     await pause();
     expect(h.calls).toHaveLength(0);
     h.worker.update([read("dm", "new"), read("muted", "m-new", "none")], []);
-    await pause();
-    expect(h.calls.map(t => `${t.kind}:${t.messageId}`)).toEqual(["channel:new"]);
+    await until(() => h.calls.length >= 2);
+    expect(h.calls.map(t => `${t.kind}:${t.messageId}`).sort()).toEqual(["channel:m-new", "channel:new"]);
     expect(h.cache.new).toBeDefined();
   });
 

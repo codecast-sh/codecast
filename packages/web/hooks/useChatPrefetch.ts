@@ -1,20 +1,19 @@
 import { useRef, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
-import { captureException } from "@sentry/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { createChatPrefetcher } from "../lib/chatPrefetch";
+import { captureError } from "../lib/analytics";
 import { CHAT_PAGE_SIZE, ingestChatPage } from "../lib/ingestChatPage";
 import { isChatRailLive, subscribeChatRailLive } from "../lib/chatLive";
 import { isConvexId } from "../lib/entityLinks";
 import { useTeamFeature } from "../lib/teamFeatures";
-import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useWatchEffect } from "./useWatchEffect";
 
-/** Fills the store with the chat rows a notification will open (lib/chatPrefetch).
- *  Mount on the sync host only; other windows receive the rows over
- *  replication. Reads the rail the team feeder keeps in the store, and waits
- *  for the server's first answer: the rail on disk is last session's, and its
+/** Fills the store with the chat rows every rail row and chat notification
+ *  promise (lib/chatPrefetch). Mount on the web sync host (other windows
+ *  receive the rows over replication) and in the phone app. Reads the rail
+ *  the team feeder keeps in the store, and waits for the server's first answer: the rail on disk is last session's, and its
  *  stale tips would only cost fetches the live rail then repeats. */
 export function useChatPrefetch(): void {
   const convex = useConvex();
@@ -24,9 +23,9 @@ export function useChatPrefetch(): void {
   const chatOn = useTeamFeature("chat");
   const railLive = useSyncExternalStore(subscribeChatRailLive, isChatRailLive, () => false);
   const ready = chatOn && railLive && !!viewerId && !!teamId && isConvexId(teamId);
-  // The bell and the desktop banner subscribe to the same query with the same
-  // args, and the client shares one subscription among them: this adds none.
-  const { data: notifications } = useQueryNoThrow(api.notifications.list, ready ? {} : "skip");
+  // The store's notifications (fed app-wide), the same rows the bell and the
+  // phone's Alerts tab draw.
+  const notificationsMap = useInboxStore(s => s.notifications);
   const worker = useRef<ReturnType<typeof createChatPrefetcher> | null>(null);
 
   useWatchEffect(() => {
@@ -43,7 +42,7 @@ export function useChatPrefetch(): void {
         const s = useInboxStore.getState();
         return s.currentUser?._id === viewerId && s.clientState.ui?.active_team_id === teamId && s.syncRole !== "follower";
       },
-      onError: error => captureException(error, { tags: { operation: "chat-prefetch" } }),
+      onError: error => captureError(error instanceof Error ? error : new Error(String(error)), { operation: "chat-prefetch" }),
     });
     worker.current = current;
     return () => { current.dispose(); worker.current = null; };
@@ -53,13 +52,16 @@ export function useChatPrefetch(): void {
     // The workspace's rooms only: the rail also carries the public community
     // rooms, which no notification of this viewer names.
     const channels = useInboxStore.getState().chatChannels;
-    worker.current?.update((rail ?? []).filter(row => String(channels[row.channel_id]?.team_id) === String(teamId)), notifications ?? []);
-  }, [rail, notifications, teamId, ready]);
+    worker.current?.update(
+      (rail ?? []).filter(row => String(channels[row.channel_id]?.team_id) === String(teamId)),
+      Object.values(notificationsMap ?? {}) as any[],
+    );
+  }, [rail, notificationsMap, teamId, ready]);
 }
 
-// Mounted on its own beside HostFeeders: the prefetch wakes on every
-// notification and rail push, and re-running every host feeder for that buys
-// nothing.
+// Mounted on its own beside HostFeeders (and in the phone's StoreSyncBridge):
+// the prefetch wakes on every notification and rail push, and re-running every
+// other feeder for that buys nothing.
 export function ChatPrefetchFeeder(): null {
   useChatPrefetch();
   return null;

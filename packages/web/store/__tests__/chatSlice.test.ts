@@ -642,19 +642,24 @@ describe("chat store slice", () => {
       expect(rail[0].unreadCount).toBe(1);
     });
 
-    it("falls back to the server's count for a channel whose messages are not loaded", () => {
+    it("shows no badge and no preview for a room whose messages are not held", () => {
       useInboxStore.getState().syncTable("chatChannels", [
         { _id: CHANNEL, name: "general", created_at: 1, updated_at: 1 },
       ]);
       useInboxStore.getState().syncTable("chatRail", [{
         channel_id: CHANNEL, sort_at: 900, unread: 7, unread_mentions: 2,
-        notify_level: "all", joined: true, last_message: null,
+        notify_level: "all", joined: true,
+        last_message: { _id: serverId("msgtip"), user_id: "other", created_at: 900, preview: "not held" },
       }]);
 
       _resetChatRailMemo();
       const rail = selectChatRail(chatState(), ME);
-      expect(rail[0].unreadCount).toBe(7);
-      expect(rail[0].mentionCount).toBe(2);
+      // Nothing to open onto yet: the prefetcher fetches the rows, and the
+      // room moves when they land. Until then it still sorts by the server.
+      expect(rail[0].unreadCount).toBe(0);
+      expect(rail[0].mentionCount).toBe(0);
+      expect(rail[0].lastMessagePreview).toBeUndefined();
+      expect(rail[0].sortAt).toBe(900);
     });
 
     it("attests emptiness only when a rail row says so", () => {

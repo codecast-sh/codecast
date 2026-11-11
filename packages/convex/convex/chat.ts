@@ -37,6 +37,7 @@ import {
   isHistoryLine,
   isLiveVoiceRow,
   isSilentAgentRow,
+  isSettledLine,
   isThreadMuted,
   isVisibleAgentPending,
   mentionSessions,
@@ -738,8 +739,7 @@ async function railFor(
     // notified, so it neither becomes the rail's last message nor bumps the
     // room's sort. Finalize does both, once. A thinking row has said nothing
     // yet either: the answer it becomes is the line.
-    const visible = (m: Doc<"chat_messages">) =>
-      !m.deleted_at && !isSilentAgentRow(m) && !isLiveVoiceRow(m) && !isVisibleAgentPending(m.agent_status);
+    const visible = (m: Doc<"chat_messages">) => isSettledLine(m);
     const lastMessage = newest.find(visible) ?? null;
     // The newest line from the other side, or null when the viewer has only
     // ever spoken (or the other side's last word is beyond the scan).

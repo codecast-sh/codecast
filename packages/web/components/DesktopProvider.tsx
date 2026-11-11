@@ -150,6 +150,17 @@ export function DesktopProvider() {
   const mountedAtRef = useRef<number>(Date.now());
   const seenIdsRef = useRef<Set<string>>(new Set());
   const initializedRef = useRef(false);
+  // Which unread chat notifications have their message in the store. A chat
+  // banner waits for its row, so the room it opens already holds the line;
+  // this wakes the loop when one lands.
+  const chatRowsHeld = useInboxStore((s) => {
+    let out = "";
+    for (const n of notifications ?? []) {
+      if (n.read || n.entity_type !== "chat_channel" || !n.chat_message_id) continue;
+      out += s.chatMessages[String(n.chat_message_id)] ? "1" : "0";
+    }
+    return out;
+  });
 
   const permissionRequestedRef = useRef(false);
 
@@ -179,6 +190,7 @@ export function DesktopProvider() {
       return;
     }
 
+    const waiting = new Set<string>();
     for (const n of notifications) {
       if (
         !seenIdsRef.current.has(n._id) &&
@@ -208,9 +220,13 @@ export function DesktopProvider() {
           const msgId = n.chat_message_id ? String(n.chat_message_id) : "";
           const st = useInboxStore.getState() as any;
           const msg = msgId ? st.chatMessages?.[msgId] : undefined;
-          const rail = (st.chatRail ?? []).find((r: any) => String(r.channel_id) === String(n.entity_id));
-          const threadRootId = msg?.thread_root_id
-            ?? (rail?.last_message?._id === msgId ? rail.last_message.thread_root_id : undefined);
+          // The banner opens the room on this line: wait until the store holds
+          // it (the prefetcher, lib/chatPrefetch, is fetching it).
+          if (msgId && !msg) {
+            waiting.add(n._id);
+            continue;
+          }
+          const threadRootId = msg?.thread_root_id;
           const onScreen = isChatContextOnScreen(String(n.entity_id), threadRootId ? String(threadRootId) : undefined);
           if (typeof document !== "undefined" && document.hasFocus() && onScreen) continue;
           force = !onScreen;
@@ -259,8 +275,8 @@ export function DesktopProvider() {
         }
       }
     }
-    seenIdsRef.current = new Set(notifications.map((n) => n._id));
-  }, [notifications]);
+    seenIdsRef.current = new Set(notifications.map((n) => n._id).filter((id) => !waiting.has(id)));
+  }, [notifications, chatRowsHeld]);
 
   const updateDismissed = useInboxStore(s => s.updateClientDismissed);
 

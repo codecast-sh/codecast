@@ -39,7 +39,7 @@
 
 import { threadRowId, type PageCommentRow, type PageThreadRow, type ThreadInboxRow, type ThreadKind } from "./threadTypes";
 import { inActiveWorkspace } from "../lib/workspaceScope";
-import { dmKeyFor, dmOtherIds, endRound, isThreadMuted, recordOutcome, withThreadMuted, type ChatMentionRef, type ChatRound, type ChatVoiceStatus } from "@codecast/shared/chat";
+import { dmKeyFor, dmOtherIds, endRound, isSettledLine, isThreadMuted, plainPreview, recordOutcome, withThreadMuted, type ChatMentionRef, type ChatRound, type ChatVoiceStatus } from "@codecast/shared/chat";
 import { normalizeChannelName } from "@codecast/convex/convex/chatText";
 import { humanizeConvexError } from "@codecast/shared/contracts";
 import { mirrorState, mergeLinkOptions, nextSlackMembers, type SlackDirection, type SlackLinkOptions, type SlackMemberWriter, type SlackSendAuth } from "@codecast/convex/convex/lib/slackMirror";
@@ -1616,22 +1616,18 @@ let railCacheValue: ChatRailChannel[] = [];
  * The channel rail: unarchived channels, newest activity first, each with the
  * two numbers the rail is allowed to show.
  *
- * The counts come from `tallyUnread` over the messages this client actually
- * holds — that is what makes a badge clear the instant the viewer reads, and
- * what counts a teammate's line that arrived while the channel was open. Mixing
- * the two any other way (a max, a sum) would invent a number neither side
- * believes.
+ * Everything a room shows comes from the messages this client HOLDS: the
+ * preview, its time, the unread badge and the mention count. That is the
+ * contract the rail makes: whatever it shows, opening the room already has,
+ * because the room renders the same rows. A badge also clears the instant the
+ * viewer reads, and a teammate's line that arrived while the room was open
+ * counts at once.
  *
- * BUT the local page is only allowed to answer when it REACHES THE NEWEST
- * MESSAGE. chatMessages is persisted and hydrates from IndexedDB at boot, while
- * only the open channel is subscribed — so after a reload every channel visited
- * before holds a stale page, and tallying it would return 0 while the server
- * says 12. The page reaches the tip when it holds the rail's own newest message,
- * or when its newest row is at least as new as the rail's sort stamp (an
- * optimistic send the rail has not caught up with). Otherwise the server's
- * number stands — except when this viewer's read mark is already at or past
- * that newest activity, which means nothing the server knows about is unread and
- * the badge must clear without waiting for a round trip.
+ * The server's rail row (chat.listChannels) says where each room has got to.
+ * When its newest line is not held, the prefetcher (lib/chatPrefetch) fetches
+ * the rows behind it, and the room moves on the rail when they land. Until
+ * then the room shows what is held, and a room with nothing held shows no
+ * preview and no badge.
  *
  * Memoized on the collection refs: the rail is always mounted, and these maps
  * change far less often than the store around them.
@@ -1710,32 +1706,33 @@ export function selectChatRail(
     const loaded = messagesByChannel.get(id);
     const isDm = channel.kind === "dm";
 
-    let unread = rail?.unread ?? 0;
-    let mentions = rail?.unread_mentions ?? 0;
-    let sortAt = rail?.sort_at ?? channel.created_at;
-
-    // Does the page we hold reach the newest message the server knows about?
-    let newestLocal = 0;
-    for (const m of loaded ?? []) if (m.created_at > newestLocal) newestLocal = m.created_at;
-    const railTipId = rail?.last_message?._id;
-    const reachesTip =
-      !rail ||
-      (railTipId ? !!state.chatMessages[railTipId] : true) ||
-      newestLocal >= (rail.sort_at ?? 0);
-
-    if (!reachesTip && read && read.last_read_at >= (rail?.sort_at ?? 0)) {
-      // The mark is past everything the server has. Nothing is unread, whatever
-      // the last rail push said.
-      unread = 0;
-      mentions = 0;
+    // The room as this client HOLDS it. The preview, its time, the unread
+    // badge and the mention count all come from these rows, so whatever the
+    // rail shows, opening the room shows too. The server's summary only says
+    // where the room has got to; the prefetcher (lib/chatPrefetch) fetches the
+    // rows behind it, and the rail moves when they land.
+    let newest: ChatMessageRow | undefined;
+    let shown: ChatMessageRow | undefined;
+    let inbound: ChatMessageRow | undefined;
+    for (const m of loaded ?? []) {
+      if (!isSettledLine(m)) continue;
+      if (!newest || byCreatedAsc(newest, m) < 0) newest = m;
+      // The preview is a line the room's timeline shows: a root, or a reply
+      // also sent to the channel. A reply alone lives in its thread.
+      if ((!m.thread_root_id || m.broadcast) && (!shown || byCreatedAsc(shown, m) < 0)) shown = m;
+      if (isDm && m.user_id !== viewer && (!inbound || byCreatedAsc(inbound, m) < 0)) inbound = m;
     }
-
-    if (loaded && loaded.length > 0 && reachesTip) {
-      const tally = tallyUnread(loaded, read?.last_read_at, viewer, { isDm });
-      unread = tally.unread;
-      mentions = tally.mentions;
-      for (const m of loaded) if (m.created_at > sortAt) sortAt = m.created_at;
-    }
+    const held = !!loaded && loaded.length > 0;
+    const tally = held ? tallyUnread(loaded!, read?.last_read_at, viewer, { isDm }) : { unread: 0, mentions: 0 };
+    const unread = tally.unread;
+    const mentions = tally.mentions;
+    // Nothing held yet (a cold cache): the server's stamp orders the room, and
+    // it shows no preview until its rows arrive.
+    const sortAt = newest ? Math.max(newest.created_at, channel.created_at) : (rail?.sort_at ?? channel.created_at);
+    // Held rows that reach the server's newest line while the server counts
+    // past its cap: the badge says "N+".
+    const reachesTip = !!rail?.last_message && !!state.chatMessages[rail.last_message._id];
+    const unreadCapped = reachesTip && unread > 0 && !!rail?.unread_capped;
 
     const notifyLevel = read?.notify_level ?? rail?.notify_level ?? "mentions";
     // Who else is in the room: the dm_key names the set (works for stubs the
@@ -1763,10 +1760,10 @@ export function selectChatRail(
       notifyLevel,
       joined: !!read || !!rail?.joined,
       lastReadAt: read?.last_read_at,
-      lastMessagePreview: rail?.last_message?.preview,
-      lastMessageFromAgent: rail?.last_message?.author_kind === "agent",
-      lastInboundAt: rail?.last_inbound?.created_at,
-      unreadCapped: loaded && loaded.length > 0 && reachesTip ? false : rail?.unread_capped,
+      lastMessagePreview: shown ? plainPreview(shown.content ?? "", 120) : undefined,
+      lastMessageFromAgent: shown?.author_kind === "agent",
+      lastInboundAt: held ? inbound?.created_at : rail?.last_inbound?.created_at,
+      unreadCapped,
       // The rail row and the channel row arrive in the same listChannels
       // payload, so a freshly created DM is attested empty in the same sync
       // batch that supersedes its stub — no gap for a skeleton to flash in.
