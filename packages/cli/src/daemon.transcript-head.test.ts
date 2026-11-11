@@ -3,7 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { readFileHeadLines } from "./daemon.js";
-import { extractCodexCwd } from "./parser.js";
+import { extractCodexCwd } from "./codexSessionMeta.js";
 
 // Codex 0.153 writes session_meta with the full base_instructions text inline:
 // the real first line of rollout-2026-09-05T16-32-42-01a07345 was 22186 bytes.

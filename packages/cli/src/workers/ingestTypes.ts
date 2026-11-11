@@ -1,5 +1,6 @@
 import type { PermissionPrompt } from "../permissionDetector.js";
-import type { ParsedMessage, CodexSessionMetadata } from '../parser.js';
+import type { ParsedMessage } from '../parser.js';
+import type { CodexSessionMetadata } from '../codexSessionMeta.js';
 import { validCursor } from './scanTypes.js';
 export const INGEST_WINDOW_ROWS = 256;
 export const INGEST_PAGE_BYTES = 256 * 1024;

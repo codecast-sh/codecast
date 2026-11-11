@@ -3,7 +3,7 @@ import { IngestDeadline, IngestDeadlineExceeded, IngestCancelled } from './inges
 import { validIngestPage, type IngestJob } from './ingestTypes.js';
 import { validateIngestResult } from './ingestValidation.js';
 import { IngestAssembler, ingestTokenPages } from './ingestTransport.js';
-import { extractCodexSessionMetadata } from '../parser.js';
+import { extractCodexSessionMetadata } from '../codexSessionMeta.js';
 
 const job: IngestJob = {client:'claude',file:'/owned/source',sessionId:'full-session',generation:'generation',offset:0,identity:{dev:1,ino:2,birthtimeMs:3,ctimeMs:4,mtimeMs:5,size:100}};
 const result = () => ({messages:[{role:'assistant' as const,content:'hello',timestamp:1}],bytesConsumed:100,fileSize:100,totalCount:1,maxRowId:0,signatures:['a'.repeat(64)],receiptSignatures:['b'.repeat(64)],receiptOccurrences:[0],messageTitles:[null],handoffParents:[null],metadata:{warnings:[]}});

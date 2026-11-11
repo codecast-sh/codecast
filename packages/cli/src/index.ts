@@ -132,7 +132,7 @@ const ORCHESTRATE_DEFAULT_MAX = 3;
 import type { CumulativeChange } from "@codecast/shared/diff";
 import { writeThreadStatePulse } from "./threadStateStamp.js";
 import { AuthServer } from "./authServer.js";
-import { startRelayPoller } from "./authRelay.js";
+import { makeVerifier, registerAuthRequest, startRelayPoller } from "./authRelay.js";
 import { c, fmt, icons, UNVERIFIABLE_MARK } from "./colors.js";
 import { authorityLine, briefHandLine, briefInitiativeLines, briefTextLines, roleLine, standingSessionLine } from "./briefLines.js";
 import { wakeWords } from "@codecast/shared/contracts/rolePlaybook";
@@ -160,7 +160,6 @@ import { registerDocDraftingCommands } from "./docDraftingCommand.js";
 import { commandTree, didYouMean, listDescription, nearMatches, unknownCommandNextStep } from "./commandSuggestion.js";
 import { choiceOption, countOption, exitNotFound, idKindOf, nonNegativeCountOption, notFoundLine, stateOption, unknownActionError, wrongKindIdError, withSessionIdHint, SESSION_ID_HINT, DATE_FORMS } from "./argChecks.js";
 import { requireDestructiveConfirm } from "./destructiveCommands.js";
-import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import { setPosition } from "./positionTracker.js";
 import { isEncryptedToken, TokenDecryptError } from "./tokenEncryption.js";
 import { bearerFromStored, mintDeviceId } from "./bearerToken.js";
@@ -1888,6 +1887,19 @@ async function runAuth(opts: { query?: Record<string, string> } = {}): Promise<v
   const extra = Object.entries(opts.query ?? {}).map(([k, v]) => `&${k}=${encodeURIComponent(v)}`).join("");
   const cliUrl = `${webUrl}/auth/cli?nonce=${nonce}&port=${port}&device=${deviceName}${mintDevice ? `&device_id=${mintDevice}` : ""}${extra}`;
 
+  // Register the request before the browser opens, so the Authorize page
+  // shows what the server saw (this machine's network, the start time) and a
+  // relayed token goes only to a claim carrying this verifier. A backend that
+  // predates registration answers 404 and the sign-in proceeds as before.
+  const convexSiteUrl = convexUrl.replace(".cloud", ".site");
+  const { verifier, verifierHash } = makeVerifier();
+  await registerAuthRequest(convexSiteUrl, {
+    nonce,
+    verifierHash,
+    deviceName: deviceLabel(),
+    ...(mintDevice ? { deviceId: mintDevice } : {}),
+  });
+
   // Over SSH there is no browser to open here — the user signs in on another
   // machine, and the server relay (below) carries the token back to us.
   const isRemoteShell = Boolean(process.env.SSH_CONNECTION || process.env.SSH_TTY);
@@ -1910,7 +1922,7 @@ async function runAuth(opts: { query?: Record<string, string> } = {}): Promise<v
   // (same-machine fast path), or — when it can't reach us — it deposits the
   // token server-side and our relay poll claims it. waitForCallback owns the
   // 5-minute timeout for both.
-  const relay = startRelayPoller(convexUrl.replace(".cloud", ".site"), nonce);
+  const relay = startRelayPoller(convexSiteUrl, nonce, { verifier });
   const authResult = await Promise.race([authServer.waitForCallback(), relay.promise]);
   relay.stop();
   authServer.stop();
@@ -12907,6 +12919,7 @@ program
       console.error("Desktop auto-update is macOS-only.");
       process.exit(1);
     }
+    const { checkForDesktopUpdate } = await import("./desktopUpdate.js");
     const applied = await checkForDesktopUpdate((msg) => console.log(msg), { force: opts.force === true, install: true });
     if (applied) {
       console.log("Desktop app updated and relaunched.");

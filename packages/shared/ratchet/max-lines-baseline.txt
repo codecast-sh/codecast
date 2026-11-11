@@ -48,11 +48,11 @@ packages/cli/src/judgeFixCommand.ts 850
 packages/cli/src/orgTemplate.test.ts 1200
 packages/cli/src/orgTemplateRun.ts 1100
 packages/cli/src/parser.test.ts 1350
-packages/cli/src/parser.ts 2500
+packages/cli/src/parser.ts 2350
 packages/cli/src/prCommand.ts 1250
 packages/cli/src/publish.ts 1000
 packages/cli/src/remote/session-move.ts 1500
-packages/cli/src/retryQueue.test.ts 1100
+packages/cli/src/retryQueue.test.ts 950
 packages/cli/src/secrets/command.ts 850
 packages/cli/src/snippets.sections.test.ts 950
 packages/cli/src/syncService.ts
@@ -128,7 +128,7 @@ packages/convex/convex/pendingMessages.test.ts 950
 packages/convex/convex/pendingMessages.ts
 packages/convex/convex/plans.ts 1950
 packages/convex/convex/prCli.ts
-packages/convex/convex/prShepherd.ts 1050
+packages/convex/convex/prShepherd.ts 850
 packages/convex/convex/pushRouter.test.ts 950
 packages/convex/convex/replays.ts 950
 packages/convex/convex/repos.ts 1600

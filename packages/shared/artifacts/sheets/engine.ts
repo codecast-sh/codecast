@@ -4,7 +4,8 @@
 // in an explicit-stack DFS (so a 10k-row chain cannot overflow the call
 // stack), caches every result, and an edit clears the cache of exactly the
 // cells downstream of it. A cycle marks every cell on it #CIRC!.
-import { FUNCTIONS, scalarOf, type FnContext } from "./functions";
+import { FUNCTIONS, type FnContext } from "./functions";
+import { scalarOf } from "./functionArgs";
 import { FormulaSyntaxError, MAX_COL, MAX_ROW, isFormula, parseFormula, type Node } from "./formula";
 import {
   compareScalars,

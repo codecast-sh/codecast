@@ -1,5 +1,6 @@
 import { describe, test, expect, mock } from "bun:test";
-import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, parseCodexSessionFile, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild, extractTeamInfo, extractSummaryTitle, claudeBannerText, type ClaudeSessionEntry } from "./parser.js";
+import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, parseCodexSessionFile, extractTeamInfo, extractSummaryTitle, claudeBannerText, type ClaudeSessionEntry } from "./parser.js";
+import { extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild } from "./codexSessionMeta.js";
 import { classifyApiErrorBanner } from "@codecast/shared/contracts";
 
 describe("Parser malformed JSON handling", () => {

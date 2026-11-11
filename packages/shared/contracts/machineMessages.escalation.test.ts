@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { isMachineDeliveredMessage, isSessionEscalationMessage, parseSessionEscalation, sessionEscalationCaption } from "./machineMessages";
+import { isMachineDeliveredMessage, isSessionEscalationMessage } from "./machineMessages";
+import { parseSessionEscalation, sessionEscalationCaption } from "./sessionEscalation";
 
 // The verb that wrote this tag (`cast escalate`) is gone (org-staffing.md
 // S28); threads written before that still carry it, so the parser and the
