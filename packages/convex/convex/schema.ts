@@ -1647,6 +1647,10 @@ export default defineSchema({
     // Back link to the org role this standing agent serves (org-roles-standing.md
     // T1); absent on the workspace anchor. Reserved for the provisioning wave.
     org_role_id: v.optional(v.id("org_roles")),
+    // Its thread reads as a clean chat: the person's messages and what the
+    // agent said with `cast say`, and its opening tells it to talk that way.
+    // Set on every anchor provisioned since; absent reads as off.
+    clean_chat: v.optional(v.boolean()),
     created_at: v.number(),
     updated_at: v.optional(v.number()),
   })
@@ -6893,6 +6897,13 @@ export default defineSchema({
     .index("by_user_updated", ["user_id", "updated_at"])
     .index("by_project_id", ["project_id"])
     .index("by_project_status", ["project_id", "status"])
+    // A project's tasks in one status, newest touched first: `cast task ls
+    // --project` stops at its limit instead of reading the project (10k
+    // unfinished rows under one project timed the list out, 2026-11-10).
+    .index("by_project_status_updated", ["project_id", "status", "updated_at"])
+    // The same read over one triage state, so a list without mined rows
+    // does not walk past thousands of suggested problems to find real work.
+    .index("by_project_triage_status_updated", ["project_id", "triage_status", "status", "updated_at"])
     // A project's real work without its untriaged rows (org resolveScope): a
     // review files thousands of suggested problems under one project.
     .index("by_project_triage", ["project_id", "triage_status"])

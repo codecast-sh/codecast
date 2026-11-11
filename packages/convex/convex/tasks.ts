@@ -48,7 +48,7 @@ import { internal } from "./_generated/api";
 import { isViableInboxParent } from "./inboxFilters";
 import { listLiveManagedSessions } from "./lib/liveSessions";
 import { requireInitiative } from "./lib/initiativeRef";
-import { projectTasks } from "./lib/projectWork";
+import { projectTasks, projectTasksIn } from "./lib/projectWork";
 import { taskCommentsWithSessionInfo, type CommentSessionCache } from "./lib/commentSessionInfo";
 import { pickInheritedGitMeta, type GitMetaSource } from "./projectPaths";
 import { bucketTs } from "./presenceState";
@@ -1791,6 +1791,9 @@ function searchCategories(args: { status?: string; include_done?: boolean }): st
   return null;
 }
 
+const LIST_LIMIT = 300;
+// The triage states of a row that is not derived (keepRow's rule).
+const NOT_DERIVED = [undefined, "active"] as const;
 const SEARCH_TAKE = 120;
 const RECENT_SCAN = 300;
 
@@ -1861,6 +1864,27 @@ async function listTasksCore(ctx: QueryCtx, args: ObjectType<typeof listArgs> & 
   // Rows the title search matched by word, kept even where the words are not
   // one substring of the title.
   let searched: Map<string, any> | null = null;
+  // The filters that judge one row by itself. A bounded read applies them as
+  // it streams, so its limit counts rows the list will show; every read
+  // applies them again below.
+  const planTaskIds = args.plan_id
+    ? new Set(((await ctx.db.query("plans").withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!)).first())?.task_ids || []).map((id: any) => String(id)))
+    : null;
+  const wantedQuery = args.query?.toLowerCase();
+  const wantedLabel = args.label?.toLowerCase();
+  const keepRow = (t: any): boolean => {
+    if (!args.include_derived && t.triage_status && t.triage_status !== "active") return false;
+    if (!args.include_ephemeral && !args.ready && t.ephemeral) return false;
+    if (args.execution_status && t.execution_status !== args.execution_status) return false;
+    if (planTaskIds && !planTaskIds.has(String(t._id))) return false;
+    if (wantedQuery && !(searched?.has(String(t._id))
+      || (t.title || "").toLowerCase().includes(wantedQuery)
+      || (t.description || "").toLowerCase().includes(wantedQuery)
+      || (t.short_id || "").toLowerCase().includes(wantedQuery))) return false;
+    if (wantedLabel && !(t.labels || []).some((l: string) => l.toLowerCase() === wantedLabel)) return false;
+    return true;
+  };
+
   // The assignee and project_id indexes are global — they return rows the
   // caller may not be able to see, so those two branches get an explicit
   // owner-or-team-member filter below. The other branches are already
@@ -1883,7 +1907,18 @@ async function listTasksCore(ctx: QueryCtx, args: ObjectType<typeof listArgs> & 
     // not listed to the team.
     const inInitiative = args.initiative ? (await requireInitiative(ctx, auth.userId as Id<"users">, args.initiative)).project_ids.map(String) : null;
     const projectIds: string[] = args.project_id ? (!inInitiative || inInitiative.includes(args.project_id) ? [args.project_id] : []) : inInitiative!;
-    tasks = (await Promise.all(projectIds.map((projectId) => projectTasks(ctx, auth.userId as Id<"users">, projectId as any)))).flat();
+    // Known status categories read one index range each, newest first, and
+    // stop at the limit; the frontier (--ready) needs every open row.
+    // Every category when finished work is wanted too; a team status name
+    // is resolved per row, so it reads the project.
+    const statuses = searchCategories(args) ?? (args.status ? null : TASK_STATUS_CATEGORIES);
+    const bound = {
+      ...(args.ready ? {} : { limit: args.limit || LIST_LIMIT, keep: keepRow }),
+      ...(args.include_derived ? {} : { triage: NOT_DERIVED }),
+    };
+    tasks = (await Promise.all(projectIds.map((projectId) => statuses
+      ? projectTasksIn(ctx, auth.userId as Id<"users">, projectId as any, statuses, bound)
+      : projectTasks(ctx, auth.userId as Id<"users">, projectId as any)))).flat();
   } else if (args.cursor !== undefined) {
     const got = await db.query("tasks")
       .withIndex("by_workspace_updated", (q: any) => q.eq("workspace", db.workspaceKey))
@@ -1902,11 +1937,7 @@ async function listTasksCore(ctx: QueryCtx, args: ObjectType<typeof listArgs> & 
     // Each wanted category is its own index range: a filter would still read
     // every finished task (22k rows on a large team) to drop them. Legacy
     // rows (no stored key) ride along on every range; the map dedupes them.
-    const categories = isTaskStatusCategory(args.status)
-      ? [args.status]
-      : !args.status && !args.include_done
-        ? TASK_STATUS_CATEGORIES.filter((s) => !TERMINAL_TASK_CATEGORIES.includes(s))
-        : null;
+    const categories = searchCategories(args);
     if (categories) {
       const byId = new Map<string, any>();
       for (const status of categories) {
@@ -1956,40 +1987,7 @@ async function listTasksCore(ctx: QueryCtx, args: ObjectType<typeof listArgs> & 
     tasks = tasks.filter((t: any) => !TERMINAL_TASK_CATEGORIES.includes(t.status));
   }
 
-  if (!args.include_derived) {
-    tasks = tasks.filter((t: any) => !t.triage_status || t.triage_status === "active");
-  }
-  if (!args.include_ephemeral && !args.ready) tasks = tasks.filter((t: any) => !t.ephemeral);
-
-  if (args.execution_status) {
-    tasks = tasks.filter((t: any) => t.execution_status === args.execution_status);
-  }
-
-  if (args.plan_id) {
-    const plan = await ctx.db
-      .query("plans")
-      .withIndex("by_short_id", (q) => q.eq("short_id", args.plan_id!))
-      .first();
-    const planTaskIds = new Set((plan?.task_ids || []).map((id: any) => String(id)));
-    tasks = tasks.filter((t: any) => planTaskIds.has(String(t._id)));
-  }
-
-  if (args.query) {
-    const q = args.query.toLowerCase();
-    tasks = tasks.filter((t: any) =>
-      searched?.has(String(t._id)) ||
-      (t.title || "").toLowerCase().includes(q) ||
-      (t.description || "").toLowerCase().includes(q) ||
-      (t.short_id || "").toLowerCase().includes(q),
-    );
-  }
-
-  if (args.label) {
-    const wanted = args.label.toLowerCase();
-    tasks = tasks.filter((t: any) =>
-      (t.labels || []).some((l: string) => l.toLowerCase() === wanted),
-    );
-  }
+  tasks = tasks.filter(keepRow);
 
   // Ready is graph.ts's rule (task-graph.md TG1). Blockers and parents the
   // filtered page dropped are read from the database: a finished blocker is
@@ -2005,7 +2003,7 @@ async function listTasksCore(ctx: QueryCtx, args: ObjectType<typeof listArgs> & 
   const now = Date.now();
   if (args.ready) tasks = await orderFrontier(ctx, tasks, now);
   else tasks.sort((a: any, b: any) => (b.updated_at || b._creationTime || 0) - (a.updated_at || a._creationTime || 0));
-  const limit = args.limit || 300;
+  const limit = args.limit || LIST_LIMIT;
   const result = paged ? tasks : tasks.slice(0, limit);
 
   const assigneeInfo = await assigneeInfoFor(ctx, result.map((t: any) => t.assignee));
