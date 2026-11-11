@@ -161,14 +161,16 @@ const SYNCED_MODULES = new Set(Object.keys(SYNCED_WRITER_MODULES));
 // machine, a login, an action on a session) writes no synced row, so there is
 // nothing for a store action to paint: it is not a write of the collection its
 // module feeds. Judged by what the handler writes: one or more inserts into
-// daemon_commands and no other write, no write helper, no scheduled or nested
+// daemon_commands and no other write, no write helper but the command's audit
+// row (authority_events, which no client feed reads), no scheduled or nested
 // function. A command mutation that also patches a synced row still counts.
 const DB_WRITE = /\bctx\.db\.(insert|patch|replace|delete)\(\s*(?:"(\w+)")?/g;
+const AUDIT_HELPERS = new Set(["recordAuthorityEvent"]);
 function queuesOnlyACommand(body: string): boolean {
   const writes = [...body.matchAll(DB_WRITE)];
   return writes.length > 0
     && writes.every((w) => w[1] === "insert" && w[2] === "daemon_commands")
-    && writeHelpersOf(body).length === 0
+    && writeHelpersOf(body).every((helper) => AUDIT_HELPERS.has(helper))
     && !/\bctx\.(scheduler|runMutation|runAction)\b/.test(body);
 }
 const COMMAND_ONLY = new Set([...publicMutations()].filter(([, body]) => queuesOnlyACommand(body)).map(([path]) => path));
@@ -229,7 +231,7 @@ describe("gestures on synced collections go through a store action", () => {
   });
 
   test("a mutation counts as queueing only a command by what it writes", () => {
-    for (const path of ["devices.enqueueAgentToolSetupCommand", "devices.enqueueCloudAgentLoginCommand", "devices.enqueueCloudAgentActionCommand"]) {
+    for (const path of ["devices.enqueueAgentToolSetupCommand", "devices.enqueueCloudAgentLoginCommand", "devices.enqueueCloudAgentActionCommand", "users.sendDaemonCommand"]) {
       expect(COMMAND_ONLY.has(path), path).toBe(true);
     }
     // These also patch the device row the roster paints, so they stay writes.
@@ -238,6 +240,8 @@ describe("gestures on synced collections go through a store action", () => {
     }
     expect(queuesOnlyACommand(`await ctx.db.insert("daemon_commands", {}); await ctx.db.patch(id, {});`)).toBe(false);
     expect(queuesOnlyACommand(`await ctx.db.insert("daemon_commands", {}); await ctx.scheduler.runAfter(0, x, {});`)).toBe(false);
+    expect(queuesOnlyACommand(`await ctx.db.insert("daemon_commands", {}); await recordAuthorityEvent(ctx, {});`)).toBe(true);
+    expect(queuesOnlyACommand(`await ctx.db.insert("daemon_commands", {}); await patchConversationVisibility(ctx, {});`)).toBe(false);
     expect(queuesOnlyACommand(`await ctx.db.insert("tasks", {});`)).toBe(false);
     expect(queuesOnlyACommand(`return null;`)).toBe(false);
   });
