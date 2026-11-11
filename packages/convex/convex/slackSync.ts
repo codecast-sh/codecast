@@ -69,7 +69,7 @@ import {
 } from "./lib/slackOutbound";
 import {
   type BackfillWindow, DIRECTION_FLOW, DIRECTION_SENTENCE, LINK_DEFAULTS, mergeLinkOptions, nextSlackMembers, slackMemberWriter, tokenCanReact, tokenHasScope } from "./lib/slackMirror";
-import { BOT_SCOPES, USER_SCOPES, tokenCanPost, tokenHasDmScopes, webBaseUrl } from "./slack";
+import { BOT_SCOPES, USER_SCOPES, tokenCanPost, tokenHasDmScopes, webBaseUrl } from "./lib/slackOAuth";
 
 type ReadCtx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
 type Link = Doc<"slack_channel_links">;

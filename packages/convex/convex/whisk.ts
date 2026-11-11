@@ -31,7 +31,7 @@ import type { Id } from "./_generated/dataModel";
 import { action, internalMutation, internalQuery, query } from "./functions";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { signStateWith, verifyStateWith } from "./lib/hmac";
-import { webBaseUrl } from "./slack";
+import { webBaseUrl } from "./lib/slackOAuth";
 import { decryptRefreshToken, encryptRefreshToken } from "./googleOAuth";
 import { connectionRowFor } from "./oauthConnectors";
 import {

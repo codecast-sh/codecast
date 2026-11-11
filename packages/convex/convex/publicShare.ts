@@ -19,6 +19,7 @@ import type { Doc, Id, TableNames } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { canAccessDoc, canAccessInitiative, canAccessPlan, canAccessProject, canAccessTask, isSameWorkspace, workspaceForResource } from "./lib/access";
 import { canReadCall } from "./transcripts";
+import { callRecordingGetUrl } from "./lib/r2";
 import { sharedCallVideoKey, sharedCallVideos } from "./callRecordings";
 import { callTeamRetired, mayPublishCall, restampRunShare } from "./lib/callRecordingRuns";
 import { stampRoomWordsPublic } from "./callRooms";
@@ -326,6 +327,35 @@ export const sharedCallVideoObject = internalQuery({
     const t = await byShareToken(ctx, "transcripts", args.share_token);
     return t ? await sharedCallVideoKey(ctx, t, args.at) : null;
   },
+});
+
+// A publicly shared call's video (callRecordings.sharedCallVideos): the share
+// page's <video> points here, and every request (each range a player asks
+// for) re-checks the link and the choice to include video, then redirects to
+// a URL into the private bucket. Turning the link off stops the video at the
+// next request; no URL into the bucket is ever written into the page.
+//
+// The URL is signed stable within SHARED_VIDEO_REDIRECT_WINDOW_MS (lib/r2
+// stableSigningWindow), so every redirect in a window carries the same
+// Location: a player that asks again while scrubbing lands on the object URL
+// it already holds, and its ranges come from R2 rather than through here.
+// It lives at most two windows, the ten minutes a fresh one had.
+//
+// Registered only under /cli/, the prefix the Caddy proxy in front of prod
+// forwards to HTTP actions today (infra/convex-host/Caddyfile): any other
+// path lands on the backend and 404s, so a second address here would be a
+// route that never answers.
+const SHARED_VIDEO_REDIRECT_WINDOW_MS = 5 * 60_000;
+export const sharedCallVideo = httpAction(async (ctx, request) => {
+  const u = new URL(request.url);
+  const token = u.searchParams.get("token") ?? "";
+  const at = Number(u.searchParams.get("at"));
+  const notFound = () => new Response("Not found", { status: 404, headers: { "Cache-Control": "no-store" } });
+  if (!token || !Number.isFinite(at)) return notFound();
+  const key = await ctx.runQuery(internal.publicShare.sharedCallVideoObject, { share_token: token, at });
+  const signed = key ? await callRecordingGetUrl(key, { stable: { at: Date.now(), windowMs: SHARED_VIDEO_REDIRECT_WINDOW_MS } }) : null;
+  if (!signed) return notFound();
+  return new Response(null, { status: 302, headers: { Location: signed.url, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
 });
 
 // A person's display name, never their id or address.

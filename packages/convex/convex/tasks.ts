@@ -61,7 +61,7 @@ import { watchUntilFor } from "./lib/lineWatch";
 import { isLineRun } from "@codecast/shared/contracts/changeCard";
 import { cancelCore } from "./workflow_runs";
 import { withdrawClosedProblemAsks } from "./sessionDecisions";
-import { webBaseUrl } from "./slack";
+import { webBaseUrl } from "./lib/slackOAuth";
 // Owner-or-team access check for a task. Moved to lib/access.ts (Wave-1
 // auth/access seam). Imported for local use here and re-exported so existing
 // callers keep working unchanged.

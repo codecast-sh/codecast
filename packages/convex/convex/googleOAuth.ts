@@ -58,7 +58,7 @@ import { query, action, internalAction, internalMutation, internalQuery } from "
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { signStateWith, verifyStateWith } from "./lib/hmac";
 import { sha256Hex } from "./lib/hash";
-import { convexSiteUrl, webBaseUrl } from "./slack";
+import { convexSiteUrl, webBaseUrl } from "./lib/slackOAuth";
 import {
   PROVIDER_KEY_AES_ALGO,
   PROVIDER_KEY_AES_KEY_BITS,

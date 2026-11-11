@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
-import { completeSlackInstall, getInstallUrl, resolveInstallScope, signState, storeInstallation, storeUserToken } from "./slack";
+import { completeSlackInstall, getInstallUrl, resolveInstallScope, storeInstallation, storeUserToken } from "./slack";
+import { signState } from "./lib/slackOAuth";
 
 const call = (fn: any, ctx: any, args: any) => fn._handler(ctx, args);
 const envKeys = ["SLACK_CLIENT_ID", "SLACK_CLIENT_SECRET", "SITE_URL"] as const;

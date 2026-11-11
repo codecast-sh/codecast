@@ -321,7 +321,7 @@ export async function withdrawAndMark(ctx: DirtyCtx, rows: Doc<"change_story_inp
 }
 
 /**
- * A member's level fell or their membership ended (teams.endMembership): their
+ * A member's level fell or their membership ended (lib/teamMembershipEnd endMembership): their
  * sessions' contributions narrow at once, the first page here and the rest in
  * scheduled pages.
  */

@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
+import { buildWakePrompt, pickWakeReason } from "./lib/prWakePrompt";
 import {
-  buildWakePrompt,
-  pickWakeReason,
   patchPullRequest,
   recomputeReviewDecision,
   refreshConversationPrStatus,

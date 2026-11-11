@@ -12,7 +12,7 @@
 //
 // Chunk read: a 302 to a GET signed now for a few minutes, minted only after
 // the reader's workspace access is checked, the way a shared call's video is
-// served (http.ts sharedCallVideo). No URL into the bucket is ever stored.
+// served (publicShare.ts sharedCallVideo). No URL into the bucket is ever stored.
 //
 // A chunk is either the semantic stream's (`kind` absent or "events") or the
 // DOM capture the player plays (`kind: "dom"`, kept under the recording's
@@ -104,8 +104,17 @@ export async function handleReplaySign(ctx: any, request: Request, key: string):
     if (!bucket) return ingestJson(503, { error: "replay storage is not configured" }, cors);
     const keyParts = { sourceId: String(source._id), replay: safeReplayPathSegment(sign.replay_id), seq: sign.seq, sha256: sign.sha256 };
     const objectKey = sign.kind === "dom" ? replayDomChunkKey(keyParts) : replayChunkKey(keyParts);
-    const recorded = await ctx.runMutation(internal.replays.recordChunk, { source_id: source._id, replay_external_id: sign.replay_id, seq: sign.seq, key: objectKey, kind: sign.kind });
+    const record = (replace_unlanded?: string) => ctx.runMutation(internal.replays.recordChunk, { source_id: source._id, replay_external_id: sign.replay_id, seq: sign.seq, key: objectKey, kind: sign.kind, ...(replace_unlanded ? { replace_unlanded } : {}) });
+    let recorded = await record();
     if (!recorded.ok) return ingestJson(400, { error: recorded.reason }, cors);
+    // Append-only: a sequence whose chunk has landed keeps it; one whose upload never landed may be re-signed.
+    if (recorded.held) {
+      const held = recorded.held;
+      const landed = await fetch(await r2Presign(bucket, "HEAD", held, REPLAY_LIMITS.signed_url_ttl_s), { method: "HEAD" }).catch(() => null);
+      if (landed?.ok) return ingestJson(200, { key: held, upload_url: null, exists: true }, cors);
+      recorded = await record(held);
+      if (!recorded.ok || recorded.held) return ingestJson(503, { error: "chunk changed while signing; try again" }, cors);
+    }
 
     const head = await fetch(await r2Presign(bucket, "HEAD", objectKey, REPLAY_LIMITS.signed_url_ttl_s), { method: "HEAD" }).catch(() => null);
     if (head?.ok) return ingestJson(200, { key: objectKey, upload_url: null, exists: true }, cors);

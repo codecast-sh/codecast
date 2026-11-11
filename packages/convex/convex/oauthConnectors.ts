@@ -20,7 +20,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { getAuthenticatedUserId } from "./pendingMessages";
-import { convexSiteUrl, webBaseUrl } from "./slack";
+import { convexSiteUrl, webBaseUrl } from "./lib/slackOAuth";
 import { encryptRefreshToken, decryptRefreshToken } from "./googleOAuth";
 import { signStateWith, verifyStateWith } from "./lib/hmac";
 import { claimRefreshOn, writeRefreshOutcomeOn, singleFlightRefresh, storedRefreshFailure } from "./lib/tokenRefresh";

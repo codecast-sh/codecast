@@ -26,7 +26,7 @@ import { resolveTeamForRepository } from "./githubWebhooks";
 import { commitUrl, normalizeRepository, shortSha } from "./lib/gitRefs";
 import { resolveMentions, resolveSessionMentions } from "./lib/mentionResolve";
 import { canSendProductMessage, enqueuePendingMessage } from "./pendingMessages";
-import { webBaseUrl } from "./slack";
+import { webBaseUrl } from "./lib/slackOAuth";
 import { touchThread } from "./threadReads";
 import type { MutationCtx } from "./_generated/server";
 import { codeThreadRootKey } from "@codecast/shared/comments";

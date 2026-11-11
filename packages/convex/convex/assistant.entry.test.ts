@@ -890,8 +890,9 @@ describe("a hosted routine is its owner's to write and arm", () => {
   test("a teammate cannot move the owner's routine onto the owner's hosted conversation", async () => {
     const { t, started, mate, authed, ownersLocal, routine } = await sharedRoutine();
     const id = await routine(ownersLocal);
+    // The hosted conversation is the owner's own: the teammate cannot even name it.
     await expect(mate.mutation(api.agentTasks.webUpdate, { task_id: id, originating_conversation_id: started.conversation_id }))
-      .rejects.toThrow(/Only the owner/);
+      .rejects.toThrow(/No session of yours matches/);
     expect((await t.run((ctx) => ctx.db.get(id)))?.originating_conversation_id).toBe(ownersLocal);
     expect(await authed.mutation(api.agentTasks.webUpdate, { task_id: id, originating_conversation_id: started.conversation_id })).toBe(true);
   });

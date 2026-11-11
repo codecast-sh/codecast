@@ -612,11 +612,11 @@ describe("migration and backfill", () => {
 
 const ARTIFACT = "artifacts_9" as any;
 
-function pageSeed(extra: Record<string, any[]> = {}) {
+function pageSeed(extra: Record<string, any[]> = {}, page: Record<string, any> = {}) {
   return {
     artifacts: [{
       _id: ARTIFACT, slug: "weekly-report", title: "Weekly report", user_id: ALICE,
-      storage_id: "storage-1", version: 1, size: 10, created_at: 1, updated_at: 1,
+      storage_id: "storage-1", version: 1, size: 10, created_at: 1, updated_at: 1, ...page,
     }],
     artifact_comments: [],
     artifact_identities: [
@@ -679,7 +679,8 @@ describe("page kind", () => {
   });
 
   test("access is owner or commenter: a mentioned teammate is filed but sees nothing until they comment", async () => {
-    const ctx = await context(ALICE, pageSeed());
+    // Published from Alice's team session, so Bob and Carol are its teammates.
+    const ctx = await context(ALICE, pageSeed({}, { session_conversation_id: CONVERSATION }));
     await submitPageComment(ctx, { token: "page-token-bob", text: "ping @carol" });
     // The mention filed Carol's row, but she has not commented: dropped.
     expect(rowOf(ctx, CAROL, "page")).toBeDefined();

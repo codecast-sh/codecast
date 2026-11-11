@@ -53,8 +53,9 @@ async function fixtures(extra: Record<string, any[]> = {}) {
       { _id: S1, user_id: OWNER, team_id: TEAM, is_private: false, status: "active", title: "Hand", short_id: "jx1", active_task_id: T1, updated_at: NOW, created_at: 1, message_count: 1 },
     ],
     artifacts: [
-      // Already published from this path: a republish with --task attaches it.
-      { _id: "art_existing", slug: "existing", user_id: OWNER, title: "Old", source_path: "/tmp/report.html", storage_id: "st_old", size: 10, version: 2, content_hash: "h1", created_at: 1, updated_at: 2 },
+      // Already published from this path by the team's session, so it sits in
+      // the team's workspace: a republish with --task attaches it.
+      { _id: "art_existing", slug: "existing", user_id: OWNER, session_conversation_id: S1, title: "Old", source_path: "/tmp/report.html", storage_id: "st_old", size: 10, version: 2, content_hash: "h1", created_at: 1, updated_at: 2 },
       // Pages already attached to the task, at two stations.
       { _id: "art_a", slug: "pagea", user_id: OWNER, title: "Analysis", storage_id: "st_a", size: 1, version: 1, task_id: T1, station: "open", thumb_storage_id: "thumb_a", created_at: 1, updated_at: NOW - 30 },
       { _id: "art_b", slug: "pageb", user_id: OWNER, title: "Verification", storage_id: "st_b", size: 1, version: 3, task_id: T1, station: "in_progress", created_at: 1, updated_at: NOW - 10 },
