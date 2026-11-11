@@ -122,7 +122,7 @@ describe("access log", () => {
       const row = { slug: "pg7abc12", user_id: admin, title: "Labs", storage_id, size: 9, version: 1, created_at: 1, updated_at: 1, owner_key: "ok_secret", team_gate: regulated };
       const id = await ctx.db.insert("artifacts", row as any);
       await ctx.db.insert("artifact_identities", { token: "idtok", user_id: member, artifact_id: id, created_at: 1 });
-      return { slug: row.slug, m: await mTokenFor(row as any), token: "idtok" };
+      return { slug: row.slug, m: await mTokenFor(row as any, String(member)), token: "idtok" };
     });
     expect((await t.mutation(api.artifacts.recordView, { slug, m: m! })).ok).toBe(true);
     await t.mutation(api.artifacts.recordView, { slug, m: m! });
