@@ -68,3 +68,37 @@ describe("startRelayPoller", () => {
     expect(winner).toBe("pending");
   });
 });
+
+describe("registered requests", () => {
+  test("every claim carries the verifier, which hashes to what was registered", async () => {
+    const { makeVerifier, registerAuthRequest } = await import("./authRelay.js");
+    const { createHash } = await import("crypto");
+    const { verifier, verifierHash } = makeVerifier();
+    expect(createHash("sha256").update(verifier).digest("hex")).toBe(verifierHash);
+
+    const bodies: any[] = [];
+    const fetchImpl = async (url: string, init: RequestInit) => {
+      bodies.push({ url, body: JSON.parse(init.body as string) });
+      return url.endsWith("/cli/auth-request")
+        ? fakeResponse({ ok: true })
+        : fakeResponse({ user_id: "users:1", auth_token: "tok" });
+    };
+    expect(await registerAuthRequest("https://c.example", { nonce: "n0nce", verifierHash, deviceName: "mini" }, fetchImpl as any)).toBe(true);
+    const poller = startRelayPoller("https://c.example", "n0nce", { intervalMs: 5, fetchImpl: fetchImpl as any, verifier });
+    await poller.promise;
+    poller.stop();
+
+    expect(bodies[0]).toEqual({ url: "https://c.example/cli/auth-request", body: { nonce: "n0nce", verifier_hash: verifierHash, device_name: "mini" } });
+    // The verifier goes to the claim only, never into the registration.
+    expect(bodies[1].body).toEqual({ nonce: "n0nce", verifier });
+  });
+
+  test("a backend without registration leaves sign-in on the legacy path", async () => {
+    const { registerAuthRequest } = await import("./authRelay.js");
+    const notFound = async () => fakeResponse({}, false);
+    const down = async () => { throw new Error("offline"); };
+    const req = { nonce: "n", verifierHash: "h", deviceName: "d" };
+    expect(await registerAuthRequest("https://c.example", req, notFound as any)).toBe(false);
+    expect(await registerAuthRequest("https://c.example", req, down as any)).toBe(false);
+  });
+});

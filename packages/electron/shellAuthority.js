@@ -1,3 +1,5 @@
+const net = require("node:net");
+
 function originOf(value) {
   if (typeof value !== "string" || !URL.canParse(value)) return null;
   const url = new URL(value);
@@ -119,4 +121,38 @@ function installShellCapabilities({ authority, session, desktopCapturer, permiss
 
 }
 
-module.exports = { originOf, trustedShellUrl, shellOrigins, LOCAL_DEV_URL, LOCAL_DEV_FLAG, createShellAuthority, installShellCapabilities };
+// Certificate trust for the local dev site. It is served with a mkcert
+// certificate that Electron's bundled Chromium rejects, so a run allowed to use
+// it accepts that certificate, but only while the name points at this machine.
+// The name resolves through ordinary DNS, so a network that answers it with
+// another address gets Chromium's normal verification. `resolve` is the
+// session's own resolver (session.resolveHost), the one whose cached answer the
+// connection being verified just used. A certificate Chromium already accepts,
+// and every other host, keep the normal path. Results follow
+// setCertificateVerifyProc: 0 trusts, -3 defers to Chromium.
+const LOOPBACK = new net.BlockList();
+LOOPBACK.addSubnet("127.0.0.0", 8, "ipv4");
+LOOPBACK.addAddress("::1", "ipv6");
+
+function isLoopbackAddress(address) {
+  const family = net.isIP(address);
+  return family !== 0 && LOOPBACK.check(address, family === 4 ? "ipv4" : "ipv6");
+}
+
+function localDevCertVerifier({ enabled, resolve }) {
+  const host = new URL(LOCAL_DEV_URL).hostname;
+  return (request, callback) => {
+    if (!enabled || request.hostname !== host || request.verificationResult === "net::OK") return callback(-3);
+    Promise.resolve()
+      .then(() => resolve(host))
+      .then(
+        (resolved) => {
+          const addresses = (resolved?.endpoints ?? []).map((e) => e.address);
+          callback(addresses.length > 0 && addresses.every(isLoopbackAddress) ? 0 : -3);
+        },
+        () => callback(-3),
+      );
+  };
+}
+
+module.exports = { originOf, trustedShellUrl, shellOrigins, LOCAL_DEV_URL, LOCAL_DEV_FLAG, createShellAuthority, installShellCapabilities, localDevCertVerifier, isLoopbackAddress };

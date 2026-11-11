@@ -102,4 +102,22 @@ describe("setTeamFeature", () => {
     expect(off.features).toEqual({ chat: false, calls: true });
     expect(await teamHasFeature(ctx, ON, "chat")).toBe(false);
   });
+
+  test("a feature in development is turned on by staff only; a team that has it keeps it and turns it off", async () => {
+    const ctx = ctxFor(ALICE);
+    for (const feature of ["agent_faces", "agent_realtime"]) {
+      await expect(call(setTeamFeature, ctx, { team_id: ON, feature, enabled: true })).rejects.toThrow(/in development/);
+    }
+    // Changes stays self-serve: it runs on codecast's own pipeline, not a paid in-development API.
+    expect((await call(setTeamFeature, ctx, { team_id: ON, feature: "changes", enabled: true })).features).toMatchObject({ changes: true });
+    expect(await teamHasFeature(ctx, ON, "agent_faces")).toBe(false);
+
+    // Already on: setting it on again is no change, and turning it off works.
+    await ctx.db.patch(ON, { features: { chat: true, agent_faces: true } });
+    expect((await call(setTeamFeature, ctx, { team_id: ON, feature: "agent_faces", enabled: true })).features).toEqual({ chat: true, agent_faces: true });
+    expect((await call(setTeamFeature, ctx, { team_id: ON, feature: "agent_faces", enabled: false })).features).toEqual({ chat: true, agent_faces: false });
+
+    await ctx.db.patch(ALICE, { staff: true });
+    expect((await call(setTeamFeature, ctx, { team_id: ON, feature: "agent_realtime", enabled: true })).features).toMatchObject({ agent_realtime: true });
+  });
 });

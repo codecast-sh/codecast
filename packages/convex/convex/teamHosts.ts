@@ -56,7 +56,7 @@ async function canManage(ctx: Ctx, userId: Id<"users">, host: Doc<"team_hosts">)
   return host.admin_user_id === userId || (await isTeamAdmin(ctx, userId, host.team_id));
 }
 
-async function queueMemberCommand(ctx: MutationCtx, host: Doc<"team_hosts">, memberId: Id<"team_host_members">, action: "add" | "remove") {
+async function queueMemberCommand(ctx: Ctx, host: Doc<"team_hosts">, memberId: Id<"team_host_members">, action: "add" | "remove") {
   await ctx.db.insert("daemon_commands", {
     user_id: host.admin_user_id,
     command: "team_host_member" as const,
@@ -175,14 +175,38 @@ export async function performRemoveTeamHostMember(ctx: MutationCtx, userId: Id<"
   if (member.user_id === host.admin_user_id && member.linux_user === host.admin_linux_user) {
     throw new Error("The admin's own user runs the machine; remove the machine instead");
   }
-  // A join that never got anywhere has nothing on the box to undo.
-  if (member.status === "joining" && member.step === "queued") {
-    await ctx.db.delete(memberId);
-    return { removed: true };
-  }
-  await ctx.db.patch(memberId, { status: "removing", step: undefined, error: undefined, voucher: undefined });
-  await queueMemberCommand(ctx, host, memberId, "remove");
+  await takeOffMachine(ctx, host, member);
   return { removed: true };
+}
+
+/**
+ * Queue the admin daemon to take a member off the box: daemon stopped, login
+ * locked, keys and codecast login removed, home kept (removeUserRootScript).
+ * A join that never got anywhere has nothing on the box to undo.
+ */
+async function takeOffMachine(ctx: Ctx, host: Doc<"team_hosts">, member: Doc<"team_host_members">) {
+  if (member.status === "joining" && member.step === "queued") {
+    await ctx.db.delete(member._id);
+    return;
+  }
+  await ctx.db.patch(member._id, { status: "removing", step: undefined, error: undefined, voucher: undefined });
+  await queueMemberCommand(ctx, host, member._id, "remove");
+}
+
+/**
+ * Someone left the team (teams.endMembership): take them off every machine
+ * the team owns, as a per-machine removal would. A machine's admin keeps the
+ * Linux user that runs the box; removing the machine is a separate step.
+ */
+export async function removeFromTeamHosts(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams">) {
+  const hosts: Doc<"team_hosts">[] = await ctx.db.query("team_hosts").withIndex("by_team", (q: any) => q.eq("team_id", teamId)).collect();
+  for (const host of hosts) {
+    for (const m of await membersOf(ctx, host._id)) {
+      if (String(m.user_id) !== String(userId) || m.status === "removing") continue;
+      if (m.user_id === host.admin_user_id && m.linux_user === host.admin_linux_user) continue;
+      await takeOffMachine(ctx, host, m);
+    }
+  }
 }
 
 export async function performRenameTeamHost(ctx: MutationCtx, userId: Id<"users">, hostId: Id<"team_hosts">, name: string) {

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { DEVICE_BOUND_TOKEN_PREFIX, hashToken, presentToken } from "@platform/auth/convex";
 import { claimMember, linkTeamHostBeat, list, performJoinTeamHost, performRemoveTeamHostMember, performRenameTeamHost, register, reportMember } from "./teamHosts";
 import { makeFakeDb } from "./testDb";
+import { endMembership } from "./lib/teamMembershipEnd";
 
 // The whole life of a team machine on the server: the admin registers the
 // box, a teammate joins, the admin daemon claims and carries out the join,
@@ -201,6 +202,40 @@ describe("removing", () => {
     const adminRow = f.tables.team_host_members.find((m) => m.user_id === ADMIN);
     await expect(performRemoveTeamHostMember(f.ctx, ADMIN as any, adminRow._id)).rejects.toThrow("remove the machine instead");
     await expect(performRenameTeamHost(f.ctx, MEMBER as any, f.hostId, "mine")).rejects.toThrow("Only the machine's admin");
+  });
+});
+
+describe("leaving the team", () => {
+  test("takes the member off each team machine: the admin daemon is told to lock them out, their home stays", async () => {
+    const f = await registered();
+    const { member_id } = await performJoinTeamHost(f.ctx, MEMBER as any, f.hostId);
+    await linkTeamHostBeat(f.ctx, MEMBER as any, BOX_MEMBER_DEVICE, { key: f.hostKey, linux_user: "ashot" });
+    const queued = f.tables.daemon_commands.length;
+    await endMembership(f.ctx, MEMBER as any, TEAM as any, ADMIN as any);
+    expect(f.tables.team_host_members.find((m) => m._id === member_id).status).toBe("removing");
+    expect(f.tables.daemon_commands.slice(queued).map((c) => [c.target_device_id, JSON.parse(c.args).action])).toEqual([[BOX_ADMIN_DEVICE, "remove"]]);
+    f.as(null);
+    expect(await (claimMember as any)._handler(f.ctx, { api_token: f.adminToken, member_id })).toMatchObject({ action: "remove", linux_user: "ashot" });
+    // Leaving twice queues nothing new.
+    await endMembership(f.ctx, MEMBER as any, TEAM as any, ADMIN as any);
+    expect(f.tables.daemon_commands.length).toBe(queued + 1);
+  });
+
+  test("a queued join just goes, and the admin's own Linux user stays on the box", async () => {
+    const f = await registered();
+    const { member_id } = await performJoinTeamHost(f.ctx, MEMBER as any, f.hostId);
+    await endMembership(f.ctx, MEMBER as any, TEAM as any, ADMIN as any);
+    expect(f.tables.team_host_members.find((m) => m._id === member_id)).toBeUndefined();
+    await endMembership(f.ctx, ADMIN as any, TEAM as any, ADMIN as any);
+    expect(f.tables.team_host_members.find((m) => m.user_id === ADMIN).status).toBe("ready");
+  });
+
+  test("leaving another team touches nothing on this team's machine", async () => {
+    const f = await registered();
+    const { member_id } = await performJoinTeamHost(f.ctx, MEMBER as any, f.hostId);
+    await linkTeamHostBeat(f.ctx, MEMBER as any, BOX_MEMBER_DEVICE, { key: f.hostKey, linux_user: "ashot" });
+    await endMembership(f.ctx, MEMBER as any, OTHER_TEAM as any, MEMBER as any);
+    expect(f.tables.team_host_members.find((m) => m._id === member_id).status).toBe("ready");
   });
 });
 

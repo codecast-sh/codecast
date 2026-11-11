@@ -6,7 +6,8 @@
 import { v } from "convex/values";
 import { mutation, internalMutation } from "./functions";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { TEAM_FEATURE_KEYS, teamFeatureEnabled, type TeamFeatures } from "@codecast/shared/contracts";
+import { TEAM_FEATURE_KEYS, TEAM_FEATURES, teamFeatureEnabled, type TeamFeatures } from "@codecast/shared/contracts";
+import { isStaff } from "./lib/staff";
 import type { Id } from "./_generated/dataModel";
 import { applyFeatureChange } from "@platform/flags";
 import { TEAM_FEATURE_CATALOG } from "./lib/teamFeatureGuard";
@@ -40,7 +41,9 @@ async function afterFeatureChange(ctx: any, teamId: Id<"teams">, before: TeamFea
 }
 
 
-/** Admin-only: turn one team feature on or off. */
+/** Admin-only: turn one team feature on or off. Turning on a feature still in
+ *  development (it spends codecast's vendor accounts) is staff-only; a team
+ *  that already has one on keeps it and any admin can turn it off. */
 export const setTeamFeature = mutation({
   args: {
     team_id: v.id("teams"),
@@ -55,6 +58,10 @@ export const setTeamFeature = mutation({
       .withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", args.team_id))
       .unique();
     const team = await ctx.db.get(args.team_id);
+    const turningOn = args.enabled && !teamFeatureEnabled(team, args.feature);
+    if (turningOn && TEAM_FEATURES.find((f) => f.key === args.feature)?.inDevelopment && !isStaff(await ctx.db.get(userId))) {
+      throw new Error("This feature is still in development; codecast turns it on for a team");
+    }
     const features = applyFeatureChange(TEAM_FEATURE_CATALOG, {
       isAdmin: membership?.role === "admin",
       current: team?.features,

@@ -3138,7 +3138,7 @@ export const getExecutionAuthority = query({
       .withIndex("by_conversation_epoch", (q: any) => q.eq("conversation_id", args.conversation_id))
       .collect();
     const activeAttempt = head.active_delivery_attempt_id
-      ? await ctx.db.get(head.active_delivery_attempt_id)
+      ? await ctx.db.get(head.active_delivery_attempt_id as Id<"delivery_attempts">)
       : null;
     return { head, bindings, activeAttempt };
   },

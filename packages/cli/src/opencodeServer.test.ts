@@ -303,6 +303,42 @@ describe("OpencodeServer lifecycle", () => {
   });
 });
 
+describe("OpencodeServer authentication", () => {
+  test("each launch sets a fresh server password, and every request carries it as basic auth", async () => {
+    const envs: Record<string, string | undefined>[] = [];
+    const children: ReturnType<typeof makeFakeChild>[] = [];
+    const { fetchImpl, calls } = makeFetch({ forkId: "ses_auth" });
+    const server = new OpencodeServer({
+      log: () => {},
+      spawnFn: ((_bin: string, _args: string[], opts: any) => { envs.push(opts.env); const c = makeFakeChild(); children.push(c); return c; }) as any,
+      fetchImpl,
+      healthTimeoutMs: 1000,
+    });
+    const ready = once(server, "ready");
+    server.start();
+    children[0]!.stdout.write(announce + "\n");
+    await ready;
+    await server.fork("ses_parent");
+
+    const password = envs[0]!.OPENCODE_SERVER_PASSWORD!;
+    expect(password.length).toBeGreaterThanOrEqual(32);
+    expect(envs[0]!.OPENCODE_SERVER_USERNAME).toBe("opencode");
+    const expected = `Basic ${Buffer.from(`opencode:${password}`).toString("base64")}`;
+    const auth = (c: (typeof calls)[number]) => (c.init?.headers as Record<string, string> | undefined)?.authorization;
+    for (const path of ["/global/health", "/event", "/fork"]) {
+      const call = calls.find((c) => c.url.includes(path));
+      expect(call && auth(call)).toBe(expected);
+    }
+    expect((calls.find((c) => c.url.includes("/fork"))!.init!.headers as Record<string, string>)["content-type"]).toBe("application/json");
+    server.stop();
+
+    // A restart mints a new password; the old one opens nothing.
+    server.start();
+    expect(envs[1]!.OPENCODE_SERVER_PASSWORD).not.toBe(password);
+    server.stop();
+  });
+});
+
 describe("OpencodeServer HTTP helpers", () => {
   async function readyServer(fetchImpl: typeof fetch) {
     const child = makeFakeChild();

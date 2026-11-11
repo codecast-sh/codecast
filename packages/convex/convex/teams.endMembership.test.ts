@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { endMembership, sweepStaleSessionOwners } from "./teams";
+import { sweepStaleSessionOwners } from "./teams";
+import { endMembership } from "./lib/teamMembershipEnd";
 
 // F26: an owner row on a session another account runs steers that account's
 // daemon. Leaving the team drops the rows no remaining shared team explains.

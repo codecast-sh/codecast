@@ -11,10 +11,9 @@ import { installCallbackHandler } from "./githubApp";
 import { verifyLinearSignature, linearDeliveryId } from "./linearWebhooks";
 import { readConversationRange } from "./conversations";
 import { SHARED_CALL_VIDEO_PATH, signForCli } from "./callRecordings";
-import { SHARED_CALL_AUDIO_PATH, sharedCallAudio } from "./publicShare";
+import { SHARED_CALL_AUDIO_PATH, sharedCallAudio, sharedCallVideo } from "./publicShare";
 import { VAULT_BODY_UPLOAD_PATH, uploadBody as vaultUploadBody } from "./vaultMirror";
-import { callRecordingGetUrl } from "./lib/r2";
-import { ipRateLimited } from "./lib/httpRateLimit";
+import { clientIp, ipRateLimited } from "./lib/httpRateLimit";
 import { cliErrorReply } from "./lib/cliErrorStatus";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
 import { publishedKeys } from "./lib/codecastSigning";
@@ -127,6 +126,44 @@ http.route({
   }),
 });
 
+// `cast auth` registers its sign-in request here before opening the browser:
+// the nonce the URL will carry, the hash of a verifier that never leaves the
+// CLI, and its device. The caller's network is recorded for the Authorize
+// page (cliAuth.requestInfo). Called by the CLI only, so no CORS.
+http.route({
+  path: "/cli/auth-request",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const limited = await ipRateLimited(ctx, request, "cli_auth_request", 30, 10 * 60 * 1000);
+    if (limited) return limited;
+    const json = (status: number, body: unknown) =>
+      new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+    let body: any;
+    try {
+      body = await request.json();
+    } catch {
+      return json(400, { error: "Invalid JSON" });
+    }
+    const str = (x: unknown) => (typeof x === "string" ? x : undefined);
+    const nonce = str(body?.nonce);
+    const verifierHash = str(body?.verifier_hash);
+    if (!nonce || !verifierHash) return json(400, { error: "Missing nonce or verifier_hash" });
+    const country = request.headers.get("cf-ipcountry") ?? undefined;
+    const userAgent = request.headers.get("user-agent") ?? undefined;
+    const deviceId = str(body.device_id);
+    const ok = await ctx.runMutation(internal.cliAuth.register, {
+      nonce,
+      verifier_hash: verifierHash,
+      device_name: str(body.device_name) ?? "CLI Device",
+      ...(deviceId ? { device_id: deviceId } : {}),
+      ip: clientIp(request),
+      ...(country ? { country } : {}),
+      ...(userAgent ? { user_agent: userAgent } : {}),
+    });
+    return ok ? json(200, { ok: true }) : json(400, { error: "Invalid or duplicate request" });
+  }),
+});
+
 // Polled by `cast auth` while it waits on its localhost listener, so auth
 // also completes for CLIs the browser can't reach (SSH / remote machines).
 // The nonce is the CLI's one-time 256-bit secret; a claim is single-use.
@@ -151,7 +188,9 @@ http.route({
         });
       }
 
-      const result = await ctx.runMutation(internal.cliAuth.claim, { nonce });
+      // A current CLI sends the verifier it registered (cliAuth.claimWithVerifier).
+      const verifier = typeof body.verifier === "string" ? body.verifier : undefined;
+      const result = await ctx.runMutation(internal.cliAuth.claim, { nonce, ...(verifier ? { verifier } : {}) });
 
       // "Not deposited yet" is the normal polling answer, not an error.
       if (!result) {
@@ -5405,34 +5444,6 @@ cliRoute("/cli/work/evidence", async (ctx, body) => ctx.runQuery(api.taskEvidenc
 // scripts run, but the page can never touch convex.codecast.sh state.
 http.route({ pathPrefix: "/cli/a/", method: "GET", handler: artifactServe });
 
-// A publicly shared call's video (callRecordings.sharedCallVideos): the share
-// page's <video> points here, and every request (each range a player asks
-// for) re-checks the link and the choice to include video, then redirects to
-// a URL into the private bucket. Turning the link off stops the video at the
-// next request; no URL into the bucket is ever written into the page.
-//
-// The URL is signed stable within SHARED_VIDEO_REDIRECT_WINDOW_MS (lib/r2
-// stableSigningWindow), so every redirect in a window carries the same
-// Location: a player that asks again while scrubbing lands on the object URL
-// it already holds, and its ranges come from R2 rather than through here.
-// It lives at most two windows, the ten minutes a fresh one had.
-//
-// Registered only under /cli/, the prefix the Caddy proxy in front of prod
-// forwards to HTTP actions today (infra/convex-host/Caddyfile): any other
-// path lands on the backend and 404s, so a second address here would be a
-// route that never answers.
-const SHARED_VIDEO_REDIRECT_WINDOW_MS = 5 * 60_000;
-const sharedCallVideo = httpAction(async (ctx, request) => {
-  const u = new URL(request.url);
-  const token = u.searchParams.get("token") ?? "";
-  const at = Number(u.searchParams.get("at"));
-  const notFound = () => new Response("Not found", { status: 404, headers: { "Cache-Control": "no-store" } });
-  if (!token || !Number.isFinite(at)) return notFound();
-  const key = await ctx.runQuery(internal.publicShare.sharedCallVideoObject, { share_token: token, at });
-  const signed = key ? await callRecordingGetUrl(key, { stable: { at: Date.now(), windowMs: SHARED_VIDEO_REDIRECT_WINDOW_MS } }) : null;
-  if (!signed) return notFound();
-  return new Response(null, { status: 302, headers: { Location: signed.url, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
-});
 http.route({ path: SHARED_CALL_VIDEO_PATH, method: "GET", handler: sharedCallVideo });
 // A shared call's audio, re-checked against the link on every request the
 // same way (publicShare.sharedCallAudio).

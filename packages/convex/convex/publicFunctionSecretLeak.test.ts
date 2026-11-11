@@ -10,7 +10,11 @@
 // These tests assert the shape, not the implementation: whatever a public
 // function returns for a user, the secret-bearing fields must never be in it.
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import ts from "typescript";
 import { makeFakeDb } from "./testDb";
+import { SECRET_FIELDS as GUARDED } from "./publicFunctionSecretLeak.guard";
 import { getUserByUsername } from "./users";
 import { getUserByGithubId } from "./teams";
 import * as commits from "./commits";
@@ -21,14 +25,9 @@ import { cliConnectToken } from "./integrations";
 import * as tokenConnectors from "./tokenConnectors";
 import * as appConnector from "./sources/app";
 
-// Every field on `users` that must never cross a public boundary.
-const SECRET_FIELDS = [
-  "github_access_token",
-  "encryption_master_key",
-  "push_token",
-  "email",
-  "alternate_emails",
-] as const;
+// What a public profile lookup must withhold: the users row's credentials
+// (one list, shared with the compile-time guard) plus the owner's addresses.
+const SECRET_FIELDS = [...GUARDED.users, "email", "alternate_emails"] as const;
 
 const VICTIM = "u_victim";
 const STRANGER = "u_stranger";
@@ -61,6 +60,8 @@ function tables(extra: Record<string, any[]> = {}): Record<string, any[]> {
         github_access_token: "gho_REAL_TOKEN_VALUE",
         encryption_master_key: "MASTER_KEY_VALUE",
         push_token: "PUSH_TOKEN_VALUE",
+        voip_push_token: "VOIP_TOKEN_VALUE",
+        email_unsub_token: "UNSUB_TOKEN_VALUE",
         email: "victim@example.invalid",
         alternate_emails: ["alt@example.invalid"],
       },
@@ -81,12 +82,40 @@ function assertNoSecrets(returned: unknown, label: string) {
   // Belt and braces: the literal secret values must not appear anywhere in the
   // serialized payload, even under a renamed or nested key.
   const serialized = JSON.stringify(returned);
-  for (const secret of ["gho_REAL_TOKEN_VALUE", "MASTER_KEY_VALUE", "PUSH_TOKEN_VALUE"]) {
+  for (const secret of ["gho_REAL_TOKEN_VALUE", "MASTER_KEY_VALUE", "PUSH_TOKEN_VALUE", "VOIP_TOKEN_VALUE", "UNSUB_TOKEN_VALUE"]) {
     expect(`${label} contains ${secret}: ${serialized.includes(secret)}`).toBe(
       `${label} contains ${secret}: false`,
     );
   }
 }
+
+// The broad check is compile-time: publicFunctionSecretLeak.guard.ts walks the
+// return type of every public function in the generated api and fails the
+// convex typecheck on any that can carry a SECRET_FIELDS entry. These tests
+// keep that guard switched on.
+describe("the compile-time guard covers every public function", () => {
+  test("it walks the whole generated api and is typechecked", () => {
+    const guard = readFileSync(join(import.meta.dir, "publicFunctionSecretLeak.guard.ts"), "utf8");
+    expect(guard).toContain("NoneOf<PublicSecretReturns<typeof api>>");
+    expect(guard).toContain("GuardSelfTest");
+    const tsconfig = ts.parseConfigFileTextToJson("tsconfig.json", readFileSync(join(import.meta.dir, "tsconfig.json"), "utf8")).config;
+    expect(tsconfig.include).toContain("./**/*");
+    for (const pattern of tsconfig.exclude ?? []) {
+      expect(`excluded by ${pattern}: ${new Bun.Glob(pattern.replace(/^\.\//, "")).match("publicFunctionSecretLeak.guard.ts")}`)
+        .toBe(`excluded by ${pattern}: false`);
+    }
+  });
+
+  test("every table it guards still has the fields it names", () => {
+    const schema = readFileSync(join(import.meta.dir, "schema.ts"), "utf8");
+    for (const [table, fields] of Object.entries(GUARDED)) {
+      const start = schema.indexOf(`  ${table}: defineTable(`);
+      expect(`${table} in schema: ${start >= 0}`).toBe(`${table} in schema: true`);
+      const body = schema.slice(start, schema.indexOf("\n  }", start));
+      for (const field of fields) expect(`${table}.${field}: ${body.includes(`${field}:`)}`).toBe(`${table}.${field}: true`);
+    }
+  });
+});
 
 describe("public functions never return the raw users row", () => {
   test("getUserByUsername by github username withholds every secret", async () => {

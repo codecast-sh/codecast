@@ -80,7 +80,7 @@ const { mergeAgentDock, placeAgentDock } = require("./agentDock");
 const { createOsPermissions, loadNotificationsAddon } = require("./osPermissions");
 const { createComputerPermissions } = require("./computerPermissions");
 const { createDaemonSetup } = require("./daemonSetup");
-const { createShellAuthority, originOf, trustedShellUrl, installShellCapabilities, shellOrigins, LOCAL_DEV_URL, LOCAL_DEV_FLAG } = require("./shellAuthority");
+const { createShellAuthority, originOf, trustedShellUrl, installShellCapabilities, shellOrigins, localDevCertVerifier, LOCAL_DEV_URL, LOCAL_DEV_FLAG } = require("./shellAuthority");
 const { createSettingsFile } = require("./settingsFile");
 const { createEditUndo } = require("./editUndo");
 const { createMenuKeys } = require("./menuKeys");
@@ -141,11 +141,10 @@ const SHELL_ORIGINS = shellOrigins({ localDev: LOCAL_DEV_ALLOWED, baseUrl: BASE_
 // generated mkcert dev certificate. mkcert's CA is in the macOS keychain so
 // Safari/Chrome trust it, but Electron's bundled Chromium rejects it
 // (ERR_CERT_AUTHORITY_INVALID), which makes dev mode fail to load entirely.
-// We trust the cert for this one loopback host only (see the verify proc in
-// app.whenReady) — production validation is left fully intact. A packaged
-// build trusts it only when it was launched at that site on purpose
-// (CODECAST_URL=https://local.codecast.sh); otherwise every host is verified.
-const LOCAL_DEV_HOST = new URL(LOCAL_URL).hostname;
+// We trust the cert for this one host, and only while it resolves to loopback
+// (localDevCertVerifier, installed in app.whenReady); production validation is
+// left fully intact. A packaged build trusts it only when it was launched at
+// that site on purpose (CODECAST_URL=https://local.codecast.sh).
 const LOCAL_CERT_TRUSTED = LOCAL_DEV_ALLOWED || originOf(process.env.CODECAST_URL) === LOCAL_URL;
 
 const { DEFAULT_SHORTCUTS, mergeShortcuts, diffOverrides } = require("./shortcutSettings");
@@ -3706,10 +3705,11 @@ app.whenReady().then(() => {
   // covers the Vite HMR WebSocket — not just the page load. callback(0) =
   // trust; callback(-3) = defer to Chromium's normal verification, so every
   // other host (production included) stays strict, and so does this one in a
-  // packaged build (LOCAL_CERT_TRUSTED).
-  session.defaultSession.setCertificateVerifyProc((request, callback) => {
-    callback(LOCAL_CERT_TRUSTED && request.hostname === LOCAL_DEV_HOST ? 0 : -3);
-  });
+  // packaged build (LOCAL_CERT_TRUSTED) or when DNS points it off this machine.
+  session.defaultSession.setCertificateVerifyProc(localDevCertVerifier({
+    enabled: LOCAL_CERT_TRUSTED,
+    resolve: (host) => session.defaultSession.resolveHost(host),
+  }));
 
   // ── Capability policy ────────────────────────────────────────────────────
   // The shell is a HOST, not a feature: it grants its own trusted origins the

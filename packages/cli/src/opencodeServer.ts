@@ -35,6 +35,7 @@ import { EventEmitter } from "events";
 import { spawn, type ChildProcess } from "./proc.js";
 import * as readline from "readline";
 import { agentSpawnPath } from "./agentSpawnPath.js";
+import { randomBytes } from "crypto";
 
 /** Coarse work-state the daemon's `sendAgentStatus` understands. The SSE stream is
  *  mapped down to this; content deltas are ignored (the DB path owns content). */
@@ -91,13 +92,13 @@ export interface OpencodeServerOptions {
   /** How long to wait for the server to answer /global/health before giving up on
    *  a spawn attempt. */
   healthTimeoutMs?: number;
-  /** Stop the sidecar after this many ms with no fork activity. The serve process
-   *  binds 127.0.0.1 but has NO auth (opencode serve offers none), so a live
-   *  instance is an unauthenticated local HTTP surface; bounding its lifetime to
-   *  "shortly after the last fork" instead of "forever after the first fork" keeps
-   *  the exposure window to a single fork burst. 0 disables the timeout. */
+  /** Stop the sidecar after this many ms with no fork activity, so a sidecar
+   *  lives for one fork burst rather than forever after the first fork.
+   *  0 disables the timeout. */
   idleTimeoutMs?: number;
 }
+
+const OPENCODE_USERNAME = "opencode";
 
 // ── Pure helpers (unit-tested with fixtures) ──────────────────────────────────
 
@@ -228,6 +229,10 @@ export class OpencodeServer extends EventEmitter {
   private lastSpawnTime = 0;
   private sseController: AbortController | null = null;
   private sseReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Basic auth for this launch: opencode serve requires it once
+   *  OPENCODE_SERVER_PASSWORD is set, and codecast is its only client, so any
+   *  other local process or page that finds the port is refused. */
+  private password = "";
 
   constructor(opts: OpencodeServerOptions) {
     super();
@@ -271,6 +276,11 @@ export class OpencodeServer extends EventEmitter {
     return this.resolvedPort;
   }
 
+  /** Headers every request to this launch carries. */
+  private headers(extra?: Record<string, string>): Record<string, string> {
+    return { authorization: `Basic ${Buffer.from(`${OPENCODE_USERNAME}:${this.password}`).toString("base64")}`, ...extra };
+  }
+
   get baseUrl(): string {
     return `http://${this.hostname}:${this.resolvedPort}`;
   }
@@ -285,6 +295,7 @@ export class OpencodeServer extends EventEmitter {
     // a restarted process's announce, leaving the respawned sidecar never marked ready
     // (matters for the idle-stop → next-fork restart path).
     this.resolvedPort = 0;
+    this.password = randomBytes(24).toString("base64url");
 
     let child: ChildProcess;
     try {
@@ -294,6 +305,8 @@ export class OpencodeServer extends EventEmitter {
         env: {
           ...process.env,
           PATH: agentSpawnPath(process.env.HOME && `${process.env.HOME}/.opencode/bin`),
+          OPENCODE_SERVER_USERNAME: OPENCODE_USERNAME,
+          OPENCODE_SERVER_PASSWORD: this.password,
         },
       });
     } catch (err: any) {
@@ -380,6 +393,7 @@ export class OpencodeServer extends EventEmitter {
     while (Date.now() < deadline && !this.stopped && this.process) {
       try {
         const resp = await this.fetchImpl(`${this.baseUrl}/global/health`, {
+          headers: this.headers(),
           signal: AbortSignal.timeout(2000),
         });
         if (resp.ok) {
@@ -424,7 +438,7 @@ export class OpencodeServer extends EventEmitter {
     this.sseController = controller;
     try {
       const resp = await this.fetchImpl(`${this.baseUrl}/event`, {
-        headers: { accept: "text/event-stream" },
+        headers: this.headers({ accept: "text/event-stream" }),
         signal: controller.signal,
       });
       if (!resp.ok || !resp.body) {
@@ -530,7 +544,7 @@ export class OpencodeServer extends EventEmitter {
     if (!this.resolvedPort) throw new Error("opencode server not ready");
     const resp = await this.fetchImpl(`${this.baseUrl}${path}`, {
       method,
-      headers: body !== undefined ? { "content-type": "application/json" } : undefined,
+      headers: this.headers(body !== undefined ? { "content-type": "application/json" } : undefined),
       body: body !== undefined ? JSON.stringify(body) : undefined,
       signal: AbortSignal.timeout(30_000),
     });

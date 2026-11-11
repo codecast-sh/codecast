@@ -72,6 +72,20 @@ disables the member's daemon and locks the login, and the server revokes the
 tokens bound to that device and deletes the row. The member's home stays; only
 the admin deletes files, by hand.
 
+Leaving the team does the same on every machine the team owns
+(`teams.endMembership` calls `teamHosts.removeFromTeamHosts`). The admin's
+own Linux user is the one exception: it runs the box, so it goes only when
+the machine is removed.
+
+Runbook for machines that missed a removal before this: removals made before
+2026-11-11 left the member's row, keys and daemon in place. For each machine,
+compare `cast hosts team ls` with the team roster, and for every member no
+longer on the team run `cast hosts team remove <machine> <linux-user>` as the
+machine's admin. That queues the same lock-out (daemon stopped, login locked,
+`authorized_keys` and codecast login removed, home kept). If a row is already
+gone but the account is still live on the box, run `removeUserRootScript`'s
+steps by hand as root (`packages/cli/src/browser/sharedHost.ts`).
+
 ## Logins
 
 A member's sessions use the member's own logins. The box refuses laptop

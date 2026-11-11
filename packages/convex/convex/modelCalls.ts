@@ -14,6 +14,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { createWorkContext } from "./data";
 import { requireTeamAdmin, requireTeamMembership } from "./lib/access";
+import { isStaff } from "./lib/staff";
 import { parseWorkspaceKey } from "./lib/accessKeys";
 import { callModelMetered, estimatedUsage, modelCost } from "./lib/anthropic";
 import { readBudget, setBudgetCap, settleBudget, takeBudget, worstCaseCost } from "./lib/teamBudget";
@@ -221,6 +222,25 @@ export const setTeamBudget = mutation({
   },
 });
 
+/**
+ * The most a personal workspace may set its own monthly model budget to. The
+ * budget spends codecast's model key and no payment backs it, so an uncapped
+ * personal setter is a free model proxy for anyone who signs up. Personal
+ * judging and call nodes cost a few dollars a month; $250 is far above that.
+ * Teams stay under their admin's rule and staff are not held to it. A cap
+ * stored above this keeps working: the limit is never below the workspace's
+ * current cap, so this never lowers one.
+ */
+export const PERSONAL_BUDGET_CEILING_USD = 250;
+
+async function requirePersonalCapAllowed(ctx: any, userId: Id<"users">, workspace: string, capUsd: number): Promise<void> {
+  if (capUsd <= PERSONAL_BUDGET_CEILING_USD) return;
+  if (isStaff(await ctx.db.get(userId))) return;
+  const { cap_usd: stored } = await readBudget(ctx, workspace, Date.now());
+  if (capUsd <= stored) return;
+  throw new Error(`A personal monthly budget is at most $${Math.max(PERSONAL_BUDGET_CEILING_USD, stored).toLocaleString("en-US")}`);
+}
+
 /** `cast line budget [--set <usd>]`: the caller's workspace budget, set by a team admin. */
 export const budgetForCli = mutation({
   args: { api_token: v.string(), ...scopeArgs, set_usd: v.optional(v.number()) },
@@ -233,6 +253,7 @@ export const budgetForCli = mutation({
       if (!Number.isFinite(args.set_usd) || args.set_usd < 0 || args.set_usd > 100_000) throw new Error("A monthly budget is from $0 to $100,000");
       const parsed = parseWorkspaceKey(workspace);
       if (parsed?.type === "team") await requireTeamAdmin(ctx, auth.userId, parsed.teamId);
+      else await requirePersonalCapAllowed(ctx, auth.userId, workspace, args.set_usd);
       await setBudgetCap(ctx, workspace, db.axes.team_id, Math.round(args.set_usd * 100) / 100, auth.userId, Date.now());
     }
     return await readBudget(ctx, workspace, Date.now());

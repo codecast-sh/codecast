@@ -1,7 +1,7 @@
 const { test, beforeEach, afterEach } = require("node:test");
 const assert = require("node:assert/strict");
 const { harness, FakeWindow } = require("./mainTestRig");
-const { createShellAuthority, installShellCapabilities, shellOrigins } = require("./shellAuthority");
+const { createShellAuthority, installShellCapabilities, shellOrigins, localDevCertVerifier } = require("./shellAuthority");
 
 beforeEach(harness.setup);
 afterEach(harness.teardown);
@@ -138,4 +138,24 @@ test("a from-source run keeps the local dev site, its sticky choice and its shor
   } finally {
     if (saved !== undefined) process.env.CODECAST_URL = saved;
   }
+});
+
+test("the local dev certificate is trusted only while local.codecast.sh resolves to loopback", async () => {
+  const verdict = (opts, request) => new Promise((done) => localDevCertVerifier(opts)(request, done));
+  const at = (...addresses) => async () => ({ endpoints: addresses.map((address) => ({ address })) });
+  const local = { hostname: "local.codecast.sh", verificationResult: "net::ERR_CERT_AUTHORITY_INVALID" };
+  const on = (resolve) => ({ enabled: true, resolve });
+
+  assert.equal(await verdict(on(at("127.0.0.1")), local), 0);
+  assert.equal(await verdict(on(at("::1", "127.0.0.1")), local), 0);
+  // A network that points the name anywhere else gets Chromium's own verification.
+  assert.equal(await verdict(on(at("203.0.113.9")), local), -3);
+  assert.equal(await verdict(on(at("127.0.0.1", "10.0.0.5")), local), -3);
+  assert.equal(await verdict(on(at("::ffff:192.168.1.4")), local), -3);
+  assert.equal(await verdict(on(at()), local), -3);
+  assert.equal(await verdict(on(async () => { throw new Error("NXDOMAIN"); }), local), -3);
+  // Packaged builds, other hosts and certificates Chromium already accepts keep the normal path.
+  assert.equal(await verdict({ enabled: false, resolve: at("127.0.0.1") }, local), -3);
+  assert.equal(await verdict(on(at("127.0.0.1")), { ...local, hostname: "codecast.sh" }), -3);
+  assert.equal(await verdict(on(at("127.0.0.1")), { ...local, verificationResult: "net::OK" }), -3);
 });

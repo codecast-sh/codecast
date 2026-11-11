@@ -24,7 +24,7 @@ import { spawn } from "../proc.js";
 import { gitSshUrl, remoteHome, shq, sshBase, type RemoteHost } from "../remote/session-move.js";
 import { mergeTrees, overlayTree, sshHostSide } from "./liveSync.js";
 import type { LiveSyncJobs } from "./liveSyncJobs.js";
-import { credentialStoreFor } from "./mirror/discovery.js";
+import { FETCH_EXCLUDED_NAMES, homeLoginReason } from "./mirror/discovery.js";
 import { groupSyncSkipped } from "@codecast/shared/contracts";
 import { describeSkipped, runRemoteSide, runSide, type LandResult, type LsEntry, type Skipped, type SnapshotResult, type SyncScope } from "./syncSide.js";
 
@@ -47,6 +47,8 @@ export interface SyncRequestDeps {
   jobs: LiveSyncJobs;
   hostFor: (hostDeviceId: string) => RemoteHost | null;
   scopeFor: (localRoot: string) => SyncScope | undefined;
+  /** Whether `root` is one of this laptop's own project checkouts (the roots its heartbeat reports). */
+  isProjectRoot: (root: string) => Promise<boolean>;
   home?: string;
 }
 
@@ -81,21 +83,24 @@ const mb = (n: number) => n >= 1048576 ? `${(n / 1048576).toFixed(n >= 10 * 1048
 const listed = (items: string[]) => items.length > LISTED ? [...items.slice(0, LISTED), `…and ${items.length - LISTED} more`] : items;
 
 /**
- * A host asks and the laptop answers, so the laptop refuses its own key and
- * login stores (the list the mirror and reached folders refuse): the path as
- * named, the place a symlink on the way resolves to, and a folder that holds
- * a store. A repo file such as .env.local still travels; that is what pull is for.
+ * A host asks and the laptop answers, so the laptop refuses its own keys and
+ * logins (homeLoginReason): the path as named, the place a symlink on the way
+ * resolves to, and a folder that holds one. A link that resolves outside the
+ * home folder is refused like a path named there. A repo file such as
+ * .env.local still travels; that is what pull is for.
  */
 function refuseCredentialStore(asked: string, from: string, where: { localRoot: string; home: string }, outside: boolean): void {
-  const real = (p: string) => { try { return fs.realpathSync(p); } catch { return p; } };
+  // A path not there yet resolves through its nearest parent that is.
+  const real = (p: string): string => { try { return fs.realpathSync(p); } catch { const up = path.dirname(p); return up === p ? p : path.join(real(up), path.basename(p)); } };
   const under = (abs: string, root: string) => abs === root || abs.startsWith(root + path.sep);
   const check = (abs: string, home: string) => {
-    if (!under(abs, home) || abs === home) return;
-    const store = credentialStoreFor(path.relative(home, abs), true);
-    if (store) throw new Error(`${asked} ${under(abs, path.join(home, store)) ? "is in" : "holds"} ~/${store}, which keeps credentials; a sync never carries it`);
+    if (!under(abs, home)) throw new Error(`${asked} resolves outside your home folder, which is all a pull reaches`);
+    if (abs === home) throw new Error(`${asked} resolves to your whole home folder`);
+    const reason = homeLoginReason(path.relative(home, abs));
+    if (reason) throw new Error(`${asked} ${reason}; a sync never carries it`);
   };
   if (outside) check(from, where.home);
-  // A link, in the repo or out of it, that resolves into a store.
+  // A link, in the repo or out of it, that resolves somewhere else.
   const realFrom = real(from);
   if (outside || !under(realFrom, real(where.localRoot))) check(realFrom, real(where.home));
 }
@@ -131,6 +136,8 @@ export function mapPath(p: string, where: { localRoot: string; remoteCwd: string
 export async function handleSyncRequest(args: SyncRequestArgs, deps: SyncRequestDeps): Promise<SyncAnswer> {
   const host = deps.hostFor(args.host_device_id);
   if (!host) throw new Error("this laptop does not manage that cloud host (cast hosts ls)");
+  // The server names the checkout from the roots this laptop reported; anything else is not ours to serve.
+  if (!args.local_root || !(await deps.isProjectRoot(args.local_root))) throw new Error(`${args.local_root || "that folder"} is not a project checkout on this laptop`);
   const scope = deps.scopeFor(args.local_root);
   const home = deps.home ?? os.homedir();
   const where = { localRoot: args.local_root, remoteCwd: args.remote_cwd, home, hostHome: remoteHome(host) };
@@ -262,6 +269,15 @@ async function pullCheckout(args: SyncRequestArgs, host: RemoteHost, scope?: Syn
   };
 }
 
+/**
+ * The tar that packs a pull. A folder from outside the repo leaves out keys,
+ * token files and stores at any depth inside it; a repo's own files all go.
+ */
+export function packCommand(fromRoot: string, rels: string[], outside: boolean): string {
+  const excludes = outside ? FETCH_EXCLUDED_NAMES.map((n) => `--exclude=${shq(n)}`).join(" ") + " " : "";
+  return `tar -C ${shq(fromRoot)} ${excludes}-cf - -- ${rels.map(shq).join(" ")}`;
+}
+
 async function pullPaths(args: SyncRequestArgs, host: RemoteHost, where: Parameters<typeof mapPath>[1]): Promise<SyncAnswer> {
   const mapped = args.paths!.map((p) => ({ asked: p, ...mapPath(p, where) }));
   const sizes = await runSide<LsEntry[]>({ op: "ls", cwd: args.local_root, paths: mapped.map((m) => m.from) });
@@ -270,17 +286,17 @@ async function pullPaths(args: SyncRequestArgs, host: RemoteHost, where: Paramet
   const total = sizes.reduce((n, s) => n + (s.bytes ?? 0), 0);
   if (total > PULL_HARD_CAP_BYTES) throw new Error(`that is ${mb(total)}, over the ${mb(PULL_HARD_CAP_BYTES)} a pull carries; name smaller parts`);
   // One tar stream per root, unpacked in the matching place on the host.
-  const groups = new Map<string, { fromRoot: string; toRoot: string; rels: string[] }>();
+  const groups = new Map<string, { fromRoot: string; toRoot: string; rels: string[]; outside: boolean }>();
   for (const m of present) {
     const toRoot = m.to.slice(0, m.to.length - m.rel.length - 1);
     const key = `${m.fromRoot}\0${toRoot}`;
-    const g = groups.get(key) ?? { fromRoot: m.fromRoot, toRoot, rels: [] };
+    const g = groups.get(key) ?? { fromRoot: m.fromRoot, toRoot, rels: [], outside: m.outside };
     g.rels.push(m.rel);
     groups.set(key, g);
   }
   for (const g of groups.values()) {
     // COPYFILE_DISABLE: macOS tar would otherwise add ._ resource files beside each file.
-    await pipeline(`tar -C ${shq(g.fromRoot)} -cf - -- ${g.rels.map(shq).join(" ")} | ${sshLine(host, unpackInto(g.toRoot))}`, { COPYFILE_DISABLE: "1" });
+    await pipeline(`${packCommand(g.fromRoot, g.rels, g.outside)} | ${sshLine(host, unpackInto(g.toRoot))}`, { COPYFILE_DISABLE: "1" });
   }
   const size = (m: (typeof mapped)[number]) => sizes[mapped.indexOf(m)]?.bytes;
   return {

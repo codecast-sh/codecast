@@ -79,6 +79,29 @@ The tail starts from "now" whenever it restarts, so a restart leaves a gap of
 seconds. The current hour's file is still open: it reads up to the last
 5-second flush and then zcat warns "unexpected end of file", which is expected. Its admin key lives only in `/srv/convex-logtail/.env`.
 
+## What the backend can reach from inside
+
+Mods and deploy-target readers make server-side fetches to addresses users
+choose. `convex/lib/guardedFetch.ts` refuses private, loopback, link-local and
+metadata addresses, but it resolves the name once and `fetch` resolves it again,
+so an attacker who runs their own DNS can still rebind a name to an internal
+address. What that reaches, checked 2026-11-11:
+
+| Target | Reachable from `convex-backend-1` | Exposure |
+|---|---|---|
+| Instance metadata `169.254.169.254` | yes, IMDSv1 (`HttpTokens=optional`, hop limit 1) | no IAM role and no user data, so instance facts only |
+| Other hosts in `vpc-02f1e86a336a35ce7` | none exist; this is the account's only instance | none today |
+| `codecast` docker network (postgres, dashboard 6791, pg-backup, logtail) | yes | dashboard and backend admin APIs need the admin key; postgres is not HTTP |
+| Host services | only sshd on 22; Caddy has no admin listener, everything else binds 127.0.0.1 | none over HTTP |
+
+Keep it that way: never attach an IAM role or user data with secrets to this
+instance, and never put another service in this VPC, without first adding a
+`DOCKER-USER` iptables rule that drops traffic from `172.18.0.0/16` to
+`169.254.0.0/16` and the private ranges other than `172.18.0.0/16`, with an
+exception for the VPC resolver `172.31.0.2` port 53, which the container's DNS
+uses. Setting `HttpTokens=required` takes metadata away from containers
+entirely (the hop limit of 1 already blocks their token request).
+
 ## Stopping and starting the machine
 
 Downtime is about two and a half minutes. Do it in the overnight trough (the box

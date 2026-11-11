@@ -38,6 +38,11 @@ export interface TeamFeatureDescriptor {
    * development and policy switches stay off until an admin turns them on.
    */
   onByDefault?: boolean;
+  /**
+   * Still in development, and it spends codecast's vendor accounts. Only staff
+   * turn it on; a team that has it on keeps it, and any admin turns it off.
+   */
+  inDevelopment?: boolean;
   /** A few words for the setup flow's feature list, where the full desc is too long to scan. */
   short: string;
 }
@@ -89,6 +94,7 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
     name: "Agent faces in calls",
     desc: "An agent added to a call joins it as a face and says its replies out loud. In development.",
     short: "Agents join calls with a face and a voice",
+    inDevelopment: true,
     snippets: [],
   },
   {
@@ -96,6 +102,7 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
     name: "Real-time agents in calls",
     desc: "An agent's face hears and sees the call and answers at once, handing deeper work to its session. Needs agent faces. In development.",
     short: "Agents hear the call and answer at once",
+    inDevelopment: true,
     snippets: [],
   },
   {

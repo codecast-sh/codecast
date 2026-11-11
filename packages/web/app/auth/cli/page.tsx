@@ -13,6 +13,7 @@ import { oauthProviderButton } from "@platform/auth/web";
 import { useLocalAuth } from "../../../lib/localAuth";
 import { markCliConnected } from "../../../lib/cliConnected";
 import { Button } from "../../../components/ui/button";
+import { formatRelativeTime } from "../../../lib/conversationFormat";
 
 function CliAuthContent() {
   const { isAuthenticated, isLoading } = useConvexAuth();
@@ -46,7 +47,16 @@ function CliAuthContent() {
   // of parking the user on the login page.
   const provider = oauthProviderButton(searchParams.get("provider"));
   const device = searchParams.get("device") || (isDesktopMode ? "Codecast Desktop" : "CLI Device");
-  const deviceName = decodeURIComponent(device);
+  // What the server recorded when `cast auth` registered this request: its
+  // device, network and start time. Null for a request that was never
+  // registered (an older CLI, the desktop app). The registered device name
+  // wins over the URL, which anyone can write.
+  const request = useQueryNoThrow(
+    api.cliAuth.requestInfo,
+    isAuthenticated && nonce ? { nonce } : "skip",
+  ).data;
+  const deviceName = request?.device_name ?? decodeURIComponent(device);
+  const requestDead = request ? request.used || Date.now() > request.expires_at : false;
   // The CLI's device id, when it sent one: the token minted below binds to it
   // and works only from that machine. Absent (an older CLI, the desktop sign
   // in, whose token is consumed by the exchange anyway), the token is unbound.
@@ -75,6 +85,7 @@ function CliAuthContent() {
   };
 
   const deliverAuth = async () => {
+    if (requestDead) return;
     setStatus("sending");
 
     let tokenResult: { token: string };
@@ -253,7 +264,26 @@ function CliAuthContent() {
                 </>
               )}
             </p>
-            {wrongAccount ? (
+            {request && (
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-sm text-left bg-sol-bg-alt/60 rounded-lg px-4 py-3 mb-6">
+                <dt className="text-sol-text-dim">Device</dt>
+                <dd className="text-sol-text truncate">{request.device_name}</dd>
+                <dt className="text-sol-text-dim">Network</dt>
+                <dd className="text-sol-text font-mono truncate">
+                  {request.ip}
+                  {request.country ? <span className="text-sol-text-muted"> · {request.country}</span> : null}
+                </dd>
+                <dt className="text-sol-text-dim">Started</dt>
+                <dd className={requestDead ? "text-sol-red" : "text-sol-text"}>
+                  {request.used ? "Already used" : requestDead ? "Expired" : formatRelativeTime(request.created_at)}
+                </dd>
+              </dl>
+            )}
+            {requestDead ? (
+              <Button variant="amber" size="lg" disabled className="w-full">
+                Run cast auth again
+              </Button>
+            ) : wrongAccount ? (
               // The profile names another person: the server would refuse this
               // account, so the one action is signing in as that person.
               <Button

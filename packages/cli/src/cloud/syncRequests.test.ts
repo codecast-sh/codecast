@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { mapPath } from "./syncRequests";
+import { handleSyncRequest, mapPath, packCommand } from "./syncRequests";
 import { requestPath } from "./syncCli";
 
 const where = { localRoot: "/Users/me/src/app", remoteCwd: "/home/ubuntu/work/app/.codecast/worktrees/cloud-1", home: "/Users/me", hostHome: "/home/ubuntu" };
@@ -33,7 +33,7 @@ describe("credential stores never travel", () => {
     expect(() => mapPath("~/Library/Keychains/login.keychain-db", where)).toThrow("is in ~/Library/Keychains");
     expect(() => mapPath("~/.codecast/config.json", where)).toThrow("is in ~/.codecast");
     expect(() => mapPath("~/.config", where)).toThrow("holds ~/.config/gh");
-    expect(() => mapPath("~/Library", where)).toThrow("holds ~/Library/Keychains");
+    expect(() => mapPath("~/Library", where)).toThrow("is in ~/Library");
   });
 
   test("a repo's own files and folders with a store's name still travel", () => {
@@ -54,7 +54,7 @@ describe("credential stores never travel", () => {
       fs.symlinkSync(path.join(home, ".ssh"), path.join(home, "data/keys"));
       fs.writeFileSync(path.join(home, "src/app/real.txt"), "x");
       expect(() => mapPath("notes.txt", w)).toThrow("is in ~/.ssh");
-      expect(() => mapPath("~/data/keys/id_ed25519", w)).toThrow("is in ~/.ssh");
+      expect(() => mapPath("~/data/keys/known_hosts", w)).toThrow("is in ~/.ssh");
       expect(mapPath("real.txt", w)).toMatchObject({ outside: false });
     } finally { fs.rmSync(home, { recursive: true, force: true }); }
   });
@@ -91,5 +91,57 @@ describe("what stayed behind, in a few lines", () => {
       "  a.mp4 (5 MB): audio or video, fetched when needed",
       "  cast sync pull <path> brings any of these here",
     ]);
+  });
+});
+
+describe("logins and keys outside the stores never travel", () => {
+  test("agent auth, browser profiles, Library, git passwords and key-named files are refused by name", () => {
+    expect(() => mapPath("~/.claude/.credentials.json", where)).toThrow("is in ~/.claude/.credentials.json");
+    expect(() => mapPath("~/.claude.json", where)).toThrow("which keeps credentials");
+    expect(() => mapPath("~/.codex/auth.json", where)).toThrow("is in ~/.codex/auth.json");
+    expect(() => mapPath("~/Library/Application Support/Google/Chrome/Default/Cookies", where)).toThrow("is in ~/Library");
+    expect(() => mapPath("~/.config/google-chrome/Default", where)).toThrow("is in ~/.config/google-chrome");
+    expect(() => mapPath("~/.git-credentials", where)).toThrow("which keeps credentials");
+    expect(() => mapPath("~/.claude", where)).toThrow("holds ~/.claude");
+    expect(() => mapPath("~/deploy/prod.pem", where)).toThrow("named like a key");
+    expect(() => mapPath("~/backup/id_ed25519", where)).toThrow("named like a key");
+    expect(() => mapPath("~/other-app/.env", where)).toThrow("named like a key");
+  });
+
+  test("ordinary home files, other agent config and the repo's own .env still travel", () => {
+    expect(mapPath("~/data/export.csv", where)).toMatchObject({ outside: true });
+    expect(mapPath("~/.claude/skills/x/SKILL.md", where)).toMatchObject({ outside: true });
+    expect(mapPath(".env", where)).toMatchObject({ outside: false });
+  });
+
+  test("a link out of the home folder is refused, a missing file under a linked root is not", () => {
+    const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "sync-map-")));
+    const linked = fs.mkdtempSync(path.join(os.tmpdir(), "sync-link-"));
+    try {
+      fs.mkdirSync(path.join(home, "src/app"), { recursive: true });
+      fs.symlinkSync("/etc/hosts", path.join(home, "src/app/hosts"));
+      fs.symlinkSync(path.join(home, "src"), path.join(linked, "src"));
+      const w = { ...where, home, localRoot: path.join(home, "src/app") };
+      expect(() => mapPath("hosts", w)).toThrow("resolves outside your home folder");
+      expect(mapPath("not-yet.txt", { ...w, localRoot: path.join(linked, "src/app") })).toMatchObject({ outside: false });
+    } finally { fs.rmSync(home, { recursive: true, force: true }); fs.rmSync(linked, { recursive: true, force: true }); }
+  });
+
+  test("a folder from outside the repo leaves keys out of the tar; the repo's folders go whole", () => {
+    const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "sync-pack-")));
+    try {
+      fs.mkdirSync(path.join(home, "data/nested/.ssh"), { recursive: true });
+      for (const f of ["data/a.csv", "data/nested/b.csv", "data/nested/server.pem", "data/nested/.env", "data/nested/.ssh/id_ed25519"]) fs.writeFileSync(path.join(home, f), "x");
+      const list = (outside: boolean) => require("node:child_process").execSync(`${packCommand(home, ["data"], outside)} | tar -tf -`, { env: { ...process.env, COPYFILE_DISABLE: "1" } }).toString().split("\n").filter((l: string) => l && !l.endsWith("/")).sort();
+      expect(list(true)).toEqual(["data/a.csv", "data/nested/b.csv"]);
+      expect(list(false)).toHaveLength(5);
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
+  });
+});
+
+describe("only this laptop's own checkouts are served", () => {
+  test("a local_root the laptop never reported is refused before anything is read", async () => {
+    const deps = { jobs: {} as any, hostFor: () => ({ user: "u", address: "h" }) as any, scopeFor: () => undefined, isProjectRoot: async (r: string) => r === "/Users/me/src/app" };
+    await expect(handleSyncRequest({ op: "diff", conversation_id: "c", host_device_id: "d", remote_cwd: "/w", local_root: "/Users/me", paths: [".ssh/id_rsa"] }, deps)).rejects.toThrow("not a project checkout on this laptop");
   });
 });
