@@ -1211,6 +1211,21 @@ export const listDevices = query({
     const sharedTeams = (deviceId: string) =>
       shares.filter((sh: any) => sh.device_id === deviceId).map((sh: any) => sh.team_id.toString()).sort();
     const management = await deviceManagementFor(ctx, userId, rows.map((d: any) => d.device_id));
+    const links = await ctx.db
+      .query("peer_links")
+      .withIndex("by_user", (q: any) => q.eq("user_id", userId))
+      .collect();
+    const known = new Set(rows.map((d: any) => d.device_id));
+    const peerLinksFrom = (deviceId: string) =>
+      links
+        .filter((l: any) => l.from_device_id === deviceId && known.has(l.to_device_id))
+        .sort((x: any, y: any) => x.to_device_id.localeCompare(y.to_device_id))
+        .map((l: any) => ({
+          to_device_id: l.to_device_id,
+          ...(l.last_direct_ok_at !== undefined ? { last_direct_ok_at: l.last_direct_ok_at } : {}),
+          ...(l.last_direct_failure ? { last_direct_failure: l.last_direct_failure } : {}),
+          ...(l.last_relay_ok_at !== undefined ? { last_relay_ok_at: l.last_relay_ok_at } : {}),
+        }));
     return rows
       .map((d: any) => ({
         device_id: d.device_id,
@@ -1294,6 +1309,8 @@ export const listDevices = query({
         // whether it accepts direct links (peer-transport.md).
         tailnet: d.tailnet ?? undefined,
         direct_links_off: d.direct_links_off ?? undefined,
+        // The last transfer outcome from this machine to each other one (peer_links), for the pair chips.
+        peer_links: peerLinksFrom(d.device_id),
         online: now - d.last_seen < DEVICE_ONLINE_MS,
       }))
       .sort((a: any, b: any) => b.last_seen - a.last_seen);
@@ -1618,11 +1635,18 @@ export const setDeviceSshHost = mutation({
 export const setDeviceDirectLinks = mutation({
   args: { api_token: v.optional(v.string()), device_id: v.string(), enabled: v.boolean() },
   handler: async (ctx, args) => {
-    const { device } = await requireOwnDevice(ctx, args.api_token, args.device_id);
-    await ctx.db.patch(device._id, { direct_links_off: args.enabled ? undefined : true });
-    return { direct_links_off: !args.enabled };
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    return performSetDeviceDirectLinks(ctx, userId, args.device_id, args.enabled);
   },
 });
+
+export async function performSetDeviceDirectLinks(ctx: any, userId: Id<"users">, deviceId: string, enabled: boolean) {
+  const device = await ownDevice(ctx, userId, deviceId);
+  if (!device) throw new Error("Unknown device");
+  await ctx.db.patch(device._id, { direct_links_off: enabled ? undefined : true });
+  return { direct_links_off: !enabled };
+}
 
 /**
  * Tell the team a machine just opened to them: one bell row each, no phone
