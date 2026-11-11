@@ -521,6 +521,27 @@ describe("runs belong to the workspace (the-line.md L8)", () => {
     }
   });
 
+  test("createFromCli refuses a task, plan or workflow the caller cannot read (F15)", async () => {
+    const { ctx, tables } = await seed({
+      plans: [{ _id: "plans_p1", short_id: "pl-3", user_id: HOST, team_id: TEAM, workspace: `team:${TEAM}`, title: "Plan" }],
+    });
+    tables.workflow_runs[0].status = "completed";
+    const before = { ...tables.tasks[0] };
+    await expect((createFromCli as any)._handler(ctx, { api_token: "stranger-token", workflow_name: "line", task_id: "ct-7" }))
+      .rejects.toThrow(/ct-7 not found/);
+    await expect((createFromCli as any)._handler(ctx, { api_token: "stranger-token", workflow_name: "line", plan_id: "pl-3" }))
+      .rejects.toThrow(/pl-3 not found/);
+    await expect((createFromCli as any)._handler(ctx, { api_token: "stranger-token", workflow_name: "line", workflow_id: "workflows_line" }))
+      .rejects.toThrow(/Workflow not found/);
+    expect(tables.workflow_runs).toHaveLength(1);
+    expect(tables.tasks[0]).toEqual(before);
+    expect(tables.plans[0].workflow_run_id).toBeUndefined();
+    // A teammate who can read the task still starts a run on it.
+    tables.api_tokens.push({ _id: "token_mate", user_id: MATE, token_hash: await hashToken("mate-token") });
+    const r = await (createFromCli as any)._handler(ctx, { api_token: "mate-token", workflow_name: "line", task_id: "ct-7", plan_id: "pl-3" });
+    expect(r.run_id).toBeTruthy();
+  });
+
   test("createFromCli --detach hands the run to the calling machine's daemon", async () => {
     const { ctx, tables } = await seed();
     tables.workflow_runs[0].status = "completed";

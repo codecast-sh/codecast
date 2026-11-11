@@ -187,7 +187,7 @@ export async function applyMemberChange(memberId: string, log: (m: string) => vo
       if (ownerId !== String(claim.user_id)) throw new Error(`the Linux user ${user} on this machine belongs to another codecast account`);
     }
     log(`creating ${user}…`);
-    runBash(addUserRootScript(user, claim.github, { pubkey: claim.ssh_pubkey, lenientKeys: true }), { timeoutMs: 120_000 });
+    runBash(addUserRootScript(user, claim.github, { pubkey: claim.ssh_pubkey, lenientKeys: true, owner: String(claim.user_id) }), { timeoutMs: 120_000 });
     await report({ step: "tools" });
     log(`installing ${user}'s tools…`);
     runBash(addUserSelfScript(readInstalledClientVersions()), { asUser: user, timeoutMs: 1_200_000 });
