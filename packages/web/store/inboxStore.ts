@@ -4278,9 +4278,9 @@ export function placeInboxRows(
   }
   for (const id of subsWithParent) {
     if (roleRidden.has(id)) continue;
-    const row = scoped[id];
-    if (row && isSpawnedWorker(row)) {
-      if (!isMemberCandidate(row)) continue; // a workflow sub is no member, like a Task subagent
+    const worker = scoped[id];
+    if (worker && isSpawnedWorker(worker)) {
+      if (!isMemberCandidate(worker)) continue; // a workflow sub is no member, like a Task subagent
       const k = sectionOfCard.get(topCardOf(id));
       if (k) counts[k]++;
       continue;

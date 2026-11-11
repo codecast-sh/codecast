@@ -80,39 +80,32 @@ export function InboxHomeToggle() {
 }
 
 /** One session as a list row: title; the state or the summary; ID ·
- *  project · model · msgs; the age on the right edge. */
+ *  project · model · msgs; the age on the right edge. The row takes what the
+ *  clock decides (its line and age) as plain values computed by its band,
+ *  never the clock itself: a 15s tick then re-renders only the rows whose
+ *  words actually moved. */
 const FleetRow = memo(function FleetRow({
   session,
   band,
-  metaText,
-  metaTone,
-  summary,
-  progress,
+  line,
+  lineTone,
+  age,
   onOpen,
   onContextMenu,
 }: {
   session: InboxSession;
   band: FleetBand;
-  metaText: string;
-  metaTone: keyof typeof TONE;
-  summary: string;
-  /** The running bar's width, a whole percent. */
-  progress: number;
+  line: string;
+  lineTone: keyof typeof TONE;
+  age: string;
   onOpen: (id: string) => void;
   onContextMenu?: (e: ReactMouseEvent, session: InboxSession) => void;
 }) {
-  const meta = fleetTileMeta(session, band, now);
-  const tone = TONE[meta.tone];
+  const tone = TONE[lineTone];
   const title = cleanTitle(session.title ?? "") || "Untitled";
-  // The blocker is the line that matters on a row that waits on you; elsewhere
-  // the summary says what the agent is about, and the band already says state.
-  // A working row's live status ("thinking") is worth a line; a done row's
-  // state only repeats its heading, and its age sits on the right.
-  const line = band === "needsYou" ? meta.text : fleetTileSummary(session, now) || (band === "running" ? meta.text : "");
   // The short ID cast prints (jx7c6zk): the stored one, else the id's first seven.
   const shortId = (session as { short_id?: string }).short_id ?? String(session._id).slice(0, 7);
   const context = [shortId, fleetTileContext(session)].filter(Boolean).join(" · ");
-  const age = compactAge(now - (session.updated_at ?? now));
   return (
     <button
       onClick={() => onOpen(session._id)}
@@ -125,7 +118,7 @@ const FleetRow = memo(function FleetRow({
         <span className="min-w-0">
           <span className="block truncate text-[14px] font-medium leading-5 text-sol-text">{title}</span>
           {line && <span className={`block truncate text-[13px] leading-5 ${band === "needsYou" ? tone.text : "text-sol-text-muted"}`}>{line}</span>}
-          {context && <span className="block truncate text-[12px] leading-5 text-sol-text-dim">{context}</span>}
+          {context && <span className="block truncate text-meta leading-5 text-sol-text-dim">{context}</span>}
         </span>
       </span>
       <span className="pt-0.5 text-meta leading-5 tabular-nums text-sol-text-dim">{age}</span>
@@ -164,9 +157,26 @@ function BandSection({
         <div className="pb-1 text-[13px] text-sol-text-dim">Nothing needs you right now.</div>
       ) : (
         <div className="-mx-3 flex flex-col">
-          {rows.map((s) => (
-            <FleetRow key={s._id} session={s} band={band} now={now} onOpen={onOpen} onContextMenu={onTileContextMenu} />
-          ))}
+          {shown.map((s) => {
+            const meta = fleetTileMeta(s, band, now);
+            // The blocker is the line that matters on a row that waits on you;
+            // elsewhere the summary says what the agent is about, and the band
+            // already says state. A working row's live status ("thinking") is
+            // worth a line; a done row's state only repeats its heading.
+            const line = band === "needsYou" ? meta.text : fleetTileSummary(s, now) || (band === "running" ? meta.text : "");
+            return (
+              <FleetRow
+                key={s._id}
+                session={s}
+                band={band}
+                line={line}
+                lineTone={meta.tone}
+                age={compactAge(now - (s.updated_at ?? now))}
+                onOpen={onOpen}
+                onContextMenu={onTileContextMenu}
+              />
+            );
+          })}
         </div>
       )}
       {capped && (
