@@ -404,6 +404,46 @@ export function deviceBeatChanged(
   });
 }
 
+export const tailnetValidator = v.object({
+  ip: v.string(),
+  name: v.string(),
+  tailnet: v.optional(v.string()),
+  ts_user_id: v.optional(v.string()),
+  bindable: v.optional(v.boolean()),
+});
+type StoredTailnet = typeof tailnetValidator.type;
+
+const TAILNET_IPV4 = /^\d{1,3}(\.\d{1,3}){3}$/;
+const tailnetText = (s: string | undefined) => (s && s.length <= 255 ? s : undefined);
+
+/**
+ * The devices.tailnet write for a beat's report (shared/contracts/peerTransport
+ * normalizePeerTailnet rules): absent or malformed changes nothing, null
+ * clears, and a value equal to the stored one writes nothing, so it never
+ * defeats the device write throttle.
+ */
+export function heartbeatTailnetPatch(existing: StoredTailnet | undefined, reported: StoredTailnet | null | undefined): { tailnet?: StoredTailnet | undefined } {
+  if (reported === undefined) return {};
+  let next: StoredTailnet | undefined;
+  if (reported !== null) {
+    const name = tailnetText(reported.name);
+    if (!TAILNET_IPV4.test(reported.ip) || !name) return {};
+    const tailnet = tailnetText(reported.tailnet);
+    const ts_user_id = tailnetText(reported.ts_user_id);
+    next = {
+      ip: reported.ip,
+      name,
+      ...(tailnet ? { tailnet } : {}),
+      ...(ts_user_id ? { ts_user_id } : {}),
+      ...(reported.bindable !== undefined ? { bindable: reported.bindable } : {}),
+    };
+  }
+  const same = !existing || !next
+    ? !existing && !next
+    : (["ip", "name", "tailnet", "ts_user_id", "bindable"] as const).every((k) => existing[k] === next![k]);
+  return same ? {} : { tailnet: next };
+}
+
 export const daemonHeartbeat = mutation({
   args: {
     api_token: v.string(),
@@ -496,6 +536,8 @@ export const daemonHeartbeat = mutation({
     // The daemon runs on a team machine: its marker's key and the Linux user
     // it runs as (teamHosts.linkTeamHostBeat).
     team_host: v.optional(v.object({ key: v.string(), linux_user: v.string() })),
+    // This machine's place on a running tailnet; null when it is on none.
+    tailnet: v.optional(v.union(v.null(), tailnetValidator)),
   },
   handler: async (ctx, args) => {
     // updateLastUsed=true here is the ONLY token-doc refresh: heartbeat is a
@@ -680,6 +722,7 @@ export const daemonHeartbeat = mutation({
         cli_version: args.version,
         ...(args.update_available !== undefined ? { update_available: args.update_available || undefined } : {}),
         ...selfUpdateBeatPatch(existingDevice, args),
+        ...heartbeatTailnetPatch(existingDevice?.tailnet, args.tailnet),
         // Hash-gated: the daemon only attaches this when it changed, but guard
         // against a resend loop (e.g. a failed-ack daemon) rewriting the ~10KB
         // field every beat anyway.
