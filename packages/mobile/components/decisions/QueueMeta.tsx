@@ -1,6 +1,7 @@
 import { StyleSheet, View } from 'react-native';
 import { Text } from '@/components/Themed';
 import { useTheme, chipShell, chipText, chipTint, CHROME_FONT_CAP } from '@/constants/Theme';
+import { codeFont } from '@/constants/fonts';
 import { getProjectName } from '@codecast/web/store/inboxStore';
 import { formatTimeAgo } from '@codecast/web/lib/messageNavigator';
 import type { QueueItem } from '@codecast/web/lib/decisionQueue';
@@ -25,7 +26,7 @@ export function QueueChip({ item, now }: { item: QueueItem; now: number }) {
       <View style={[chipShell, chipTint(color)]}>
         <Text style={[chipText, { color }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{label}</Text>
       </View>
-      {item.shortId ? <Text style={[styles.dim, { color: Theme.textMuted0 }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{item.shortId}</Text> : null}
+      {item.shortId ? <Text style={[styles.dim, codeFont, { color: Theme.textMuted0 }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{item.shortId}</Text> : null}
       <Text style={[styles.dim, { color: Theme.textMuted0 }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{formatTimeAgo(item.createdAt, now)}</Text>
     </View>
   );

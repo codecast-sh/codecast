@@ -17,7 +17,7 @@ import {
 import { createContext, forwardRef, useContext } from 'react';
 
 import { Theme, getActiveLook, useActiveScheme, useTheme } from '@/constants/Theme';
-import { monoStyle, namedFaceGroup, useLateFacesLoaded, type FaceGroup } from '@/constants/fonts';
+import { isCapsText, monoStyle, namedFaceGroup, useLateFacesLoaded, type FaceGroup } from '@/constants/fonts';
 
 // Under Modern, the face group a Text names outright, handed to the Text
 // nested in it: RN nests Text the way the DOM nests spans, and a span that
@@ -52,7 +52,7 @@ export const Text = forwardRef<DefaultText, TextProps>(function Text(props, ref)
   const look = getActiveLook();
   const inherited = useContext(InheritedFace);
   if (look !== 'modern') return <DefaultText ref={ref} {...otherProps} style={monoStyle([{ color }, style], late, look)} />;
-  const text = <DefaultText ref={ref} {...otherProps} style={monoStyle([{ color }, style], late, look, inherited)} />;
+  const text = <DefaultText ref={ref} {...otherProps} style={monoStyle([{ color }, style], late, look, inherited, isCapsText(otherProps.children))} />;
   const named = namedFaceGroup(style);
   return named && named !== inherited ? <InheritedFace.Provider value={named}>{text}</InheritedFace.Provider> : text;
 });

@@ -119,6 +119,8 @@ import { EntityPill } from '@/components/EntityPill';
 import { CastCanvas, canvasAvailable, looksLikeHtmlMessage } from '@/components/CastCanvas';
 import { useSessionRestart, ghostRestartContextFor } from '@codecast/web/hooks/useSessionRestart';
 import { Theme, Spacing, chipShell, chipText, chipQuiet, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
+import { codeFont } from '@/constants/fonts';
+import { CodeRuns } from '@/components/CodeRuns';
 import { MOBILE_AGENT_TINT, MOBILE_COMPOSER_PLACEHOLDER, MOBILE_COMPOSER_STATUS, MOBILE_SESSION_HEADER_HEIGHT, MOBILE_SESSION_STYLE as S, mobileRelativeTime } from '@codecast/shared/render/mobileSessionStyle';
 import {
   extractNestedActions,
@@ -1373,7 +1375,7 @@ function VaultReadyLine({ vault, timestamp }: { vault: VaultReadyMessage; timest
   return (
     <RNView style={styles.vaultReadyLine} testID={`vault-ready-${vault.name}`}>
       <Feather name="lock" size={12} color={Theme.yellow + 'cc'} />
-      <RNText style={[styles.vaultReadyText, { color: Theme.text }]} numberOfLines={1} onPress={route ? () => router.push(route as never) : undefined}>{vault.name}</RNText>
+      <RNText style={[styles.vaultReadyText, codeFont, { color: Theme.text }]} numberOfLines={1} onPress={route ? () => router.push(route as never) : undefined}>{vault.name}</RNText>
       <RNText style={[styles.vaultReadyText, { color: Theme.green + 'cc' }]}>ready in Vault</RNText>
       {timestamp != null && timestamp > 0 && <RNText style={[styles.vaultReadyText, { color: Theme.textDim }]}>· {formatRelativeTime(timestamp)}</RNText>}
     </RNView>
@@ -1887,7 +1889,7 @@ function DeliveryFailedRail({ notice, conversationId, timestamp }: { notice: Ret
       <Feather name="alert-triangle" size={12} color={color} />
       <RNView style={{ flex: 1, minWidth: 0 }}>
         <RNText style={[styles.systemRailKicker, { color }]}>Not delivered · {notice.writes} writes · {cause}</RNText>
-        <RNText style={styles.systemRailText} numberOfLines={1}>{frame?.trigger ? `${frame.trigger} · ` : ''}{what}</RNText>
+        <RNText style={styles.systemRailText} numberOfLines={1}>{frame?.trigger ? <RNText style={codeFont}>{frame.trigger}</RNText> : null}{frame?.trigger ? ' · ' : ''}{what}</RNText>
       </RNView>
       {action ? (
         <Pressable disabled={done} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); action.run(); setDone(true); }} hitSlop={8}>
@@ -2022,8 +2024,8 @@ function SystemMessage({ message, conversationId }: { message: Message; conversa
     return (
       <RNView style={[styles.systemRail, { borderLeftColor: Theme.cyan + '4d', alignItems: 'center' }]}>
         <Feather name="chevron-right" size={12} color={Theme.cyan} />
-        {!!cmdName && <RNText style={[styles.systemRailText, { color: Theme.cyan, fontWeight: '600' }]}>/{cmdName}</RNText>}
-        <RNText style={[styles.systemRailText, { flex: 1 }]} numberOfLines={2}>{output || (cmdName ? '' : stripAnsiCodes(c.replace(/<[^>]+>/g, '')))}</RNText>
+        {!!cmdName && <RNText style={[styles.systemRailText, codeFont, { color: Theme.cyan, fontWeight: '600' }]}>/{cmdName}</RNText>}
+        <RNText style={[styles.systemRailText, codeFont, { flex: 1 }]} numberOfLines={2}>{output || (cmdName ? '' : stripAnsiCodes(c.replace(/<[^>]+>/g, '')))}</RNText>
       </RNView>
     );
   }
@@ -4354,10 +4356,10 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
       case 'command': {
         const { cmdName, args } = parseCommandInvocation(item.content || '');
         const expansion = userRowKinds.expansions.byCommand.get(item._id);
-        return <FoldedPromptRow icon="command" label={cmdName ? `/${cmdName}` : 'command'} detail={args} body={expansion ? cleanCommandExpansion(expansion) : undefined} timestamp={item.timestamp} />;
+        return <FoldedPromptRow icon="command" label={cmdName ? `/${cmdName}` : 'command'} detail={args} codeLabel={!!cmdName} codeDetail body={expansion ? cleanCommandExpansion(expansion) : undefined} timestamp={item.timestamp} />;
       }
       case 'skill_expansion':
-        return <FoldedPromptRow icon="book-open" label={kind.cmdName ? `/${kind.cmdName}` : 'Skill'} detail="prompt" body={cleanCommandExpansion(item.content || '')} timestamp={item.timestamp} />;
+        return <FoldedPromptRow icon="book-open" label={kind.cmdName ? `/${kind.cmdName}` : 'Skill'} codeLabel={!!kind.cmdName} detail="prompt" body={cleanCommandExpansion(item.content || '')} timestamp={item.timestamp} />;
       case 'workflow_frame':
         // Web draws the same two frames: the launching session's ask folded,
         // the agent's computed task as a brief card from the workflow.
@@ -4399,7 +4401,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             <RNView style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
               <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
               <RoleFace role={esc.role} size={16} />
-              <RNText style={{ fontSize: 11, color: Theme.textDim }} numberOfLines={2}>{caption} · {formatRelativeTime(item.timestamp)}</RNText>
+              <RNText style={{ fontSize: 11, color: Theme.textDim }} numberOfLines={2}><CodeRuns text={caption} /> · {formatRelativeTime(item.timestamp)}</RNText>
               <RNView style={{ flex: 1, height: StyleSheet.hairlineWidth, backgroundColor: Theme.border }} />
             </RNView>
             {!!esc.line && (
@@ -4629,7 +4631,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                     style={styles.metaChip}
                   >
                     <FontAwesome name="code-fork" size={10} color={Theme.green} />
-                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.metaChipText} numberOfLines={1}>{conversation.git_branch}</RNText>
+                    <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={[styles.metaChipText, codeFont]} numberOfLines={1}>{conversation.git_branch}</RNText>
                   </Pressable>
                 )}
                 {chipsExpanded ? (
@@ -5111,7 +5113,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   );
 }
 
-const styles = themedStyles((Theme) => StyleSheet.create({
+const styles = themedStyles((Theme, look) => StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: Theme.bg,
@@ -5198,7 +5200,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   userBubbleSender: { ...S.userBubbleSender, color: Theme.textDim },
   toolRunRow: S.toolRunRow,
   toolRunCalls: { marginBottom: 6 },
-  toolRunText: { ...S.toolRunText, color: Theme.textDim },
+  toolRunText: { ...S.toolRunText, ...codeFont, color: Theme.textDim },
   assistantBubble: {
     backgroundColor: 'transparent',
     // Stretch, don't shrink-wrap: a flex-start bubble sizes to its widest
@@ -6529,7 +6531,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   apiErrorHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 8, ...(look === 'modern' && { flexWrap: 'wrap' as const }),
     marginBottom: 4,
   },
   apiErrorCode: {

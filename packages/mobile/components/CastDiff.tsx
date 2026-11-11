@@ -4,12 +4,13 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Text as RNText } from '@/components/Themed';
-import { CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
+import { CHROME_FONT_CAP, themedStyles, useActiveLook, useTheme } from '@/constants/Theme';
 import { parseCastDiff, type DiffFileSection } from '@codecast/web/lib/castDiff';
 import { parseApplyPatchSections } from '@codecast/convex/convex/fileChanges/applyPatchParser';
 import type { PatchHunk } from '@codecast/convex/convex/fileChanges/patchParser';
 import { diffRows, diffStats, editHunk, type DiffRow } from '@/lib/diffRows';
 import { HighlightedCodeText } from './CodeText';
+import { codeFont } from '@/constants/fonts';
 
 // Diffs on a phone. Lines wrap rather than scroll sideways, so a whole change
 // reads without scrubbing; unchanged runs fold into one row; a long diff shows
@@ -20,11 +21,14 @@ const INLINE_ROWS = 24;
 /** Diff rows: a line-number gutter, the +/- mark, and the wrapped line. */
 export function DiffLines({ rows, numbers = true, onGapPress }: { rows: DiffRow[]; numbers?: boolean; onGapPress?: () => void }) {
   const Theme = useTheme();
+  // A digit is about 6pt at Classic's 10pt; Modern sets the gutter at the
+  // 12pt floor, and the step leaves room for Dynamic Type's chrome cap.
+  const digit = useActiveLook() === 'modern' ? 8.7 : 6.6;
   const gutter = useMemo(() => {
     let max = 0;
     for (const r of rows) if (r.kind === 'line' && r.num != null) max = Math.max(max, r.num);
-    return numbers && max > 0 ? String(max).length * 6.6 + 6 : 0;
-  }, [rows, numbers]);
+    return numbers && max > 0 ? String(max).length * digit + 6 : 0;
+  }, [rows, numbers, digit]);
   return (
     <RNView>
       {rows.map((r, i) => {
@@ -254,6 +258,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     gap: 6,
   },
   status: {
+    ...codeFont,
     fontSize: 10,
     fontWeight: '700',
     paddingHorizontal: 4,
@@ -261,10 +266,12 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     overflow: 'hidden',
   },
   path: {
+    ...codeFont,
     flex: 1,
     fontSize: 12,
   },
   count: {
+    ...codeFont,
     fontSize: 11,
   },
   row: {
@@ -272,6 +279,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     paddingRight: 6,
   },
   num: {
+    ...codeFont,
     fontSize: 10,
     lineHeight: 16,
     textAlign: 'right',
@@ -279,12 +287,14 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     marginRight: 4,
   },
   mark: {
+    ...codeFont,
     width: 14,
     textAlign: 'center',
     fontSize: 11,
     lineHeight: 16,
   },
   code: {
+    ...codeFont,
     flex: 1,
     fontSize: 11,
     lineHeight: 16,

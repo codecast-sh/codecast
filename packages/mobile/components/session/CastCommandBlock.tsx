@@ -10,6 +10,7 @@ import { Text as RNText } from '@/components/Themed';
 import { CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
 import { AnsiText } from '@/components/CodeText';
+import { codeFont } from '@/constants/fonts';
 import { EntityPill } from '@/components/EntityPill';
 import { CollapsibleBody, blendOver } from '@/components/CollapsibleBody';
 import {
@@ -242,8 +243,8 @@ export function CastCommandBlock({ cast, output, isError, image }: {
     summary = (
       <>
         {id && <EntityPill shortId={id} type="secret" />}
-        {vault.names.length > 0 && <RNText style={styles.summaryText} numberOfLines={1}>{vault.names.join(', ')}</RNText>}
-        {!!vault.command && <RNText style={styles.summaryMuted} numberOfLines={1}>{vault.command}</RNText>}
+        {vault.names.length > 0 && <RNText style={[styles.summaryText, codeFont]} numberOfLines={1}>{vault.names.join(', ')}</RNText>}
+        {!!vault.command && <RNText style={[styles.summaryMuted, codeFont]} numberOfLines={1}>{vault.command}</RNText>}
       </>
     );
   } else {
@@ -261,7 +262,7 @@ export function CastCommandBlock({ cast, output, isError, image }: {
           <RNText style={styles.summaryText} numberOfLines={1}>{cat === 'search' || subcommand === 'search' ? `“${first}”` : first}</RNText>
         )}
         {!ids.length && first && !isCreate && cat !== 'search' && subcommand !== 'search' && (
-          <RNText style={styles.summaryMuted} numberOfLines={1}>{first}</RNText>
+          <RNText style={[styles.summaryMuted, codeFont]} numberOfLines={1}>{first}</RNText>
         )}
         {LIST_VERBS.has(subcommand) && lines > 0 && <RNText style={styles.summaryMuted}>{lines} items</RNText>}
       </>
@@ -362,6 +363,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     overflow: 'hidden',
   },
   rawCmd: {
+    ...codeFont,
     fontSize: 11,
     lineHeight: 16,
     color: Theme.green,
@@ -371,6 +373,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     borderBottomColor: Theme.border,
   },
   rawOut: {
+    ...codeFont,
     fontSize: 11,
     lineHeight: 16,
     color: Theme.textSecondary,

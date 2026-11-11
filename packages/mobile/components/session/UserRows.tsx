@@ -10,6 +10,7 @@ import { Text as RNText } from '@/components/Themed';
 import { CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
 import { AnsiText } from '@/components/CodeText';
+import { codeFont } from '@/constants/fonts';
 import { EntityPill } from '@/components/EntityPill';
 import { CollapsibleBody } from '@/components/CollapsibleBody';
 import { mobileRelativeTime } from '@codecast/shared/render/mobileSessionStyle';
@@ -21,10 +22,13 @@ type FeatherName = React.ComponentProps<typeof Feather>['name'];
  * One line that names a machine-written prompt; a tap opens the prompt under
  * it. `body` is markdown; with none the row is a plain label.
  */
-export function FoldedPromptRow({ icon, label, detail, body, timestamp }: {
+export function FoldedPromptRow({ icon, label, detail, body, timestamp, codeLabel, codeDetail }: {
   icon: FeatherName;
   label: string;
   detail?: string;
+  /** The label or detail is code (a slash command, its arguments): mono under Modern. */
+  codeLabel?: boolean;
+  codeDetail?: boolean;
   body?: string;
   timestamp?: number;
 }) {
@@ -35,8 +39,8 @@ export function FoldedPromptRow({ icon, label, detail, body, timestamp }: {
     <RNView style={styles.fold}>
       <TouchableOpacity activeOpacity={canOpen ? 0.6 : 1} disabled={!canOpen} onPress={() => setOpen((o) => !o)} style={styles.foldRow}>
         <Feather name={icon} size={12} color={Theme.textDim} />
-        <RNText style={styles.foldLabel} maxFontSizeMultiplier={CHROME_FONT_CAP}>{label}</RNText>
-        {!!detail && <RNText style={styles.foldDetail} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{detail}</RNText>}
+        <RNText style={[styles.foldLabel, codeLabel && codeFont]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{label}</RNText>
+        {!!detail && <RNText style={[styles.foldDetail, codeDetail && codeFont]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{detail}</RNText>}
         {!detail && <RNView style={{ flex: 1 }} />}
         {timestamp != null && timestamp > 0 && (
           <RNText style={styles.time} maxFontSizeMultiplier={CHROME_FONT_CAP}>{mobileRelativeTime(timestamp)}</RNText>
@@ -201,6 +205,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     paddingTop: 6,
   },
   bashCommand: {
+    ...codeFont,
     paddingHorizontal: 10,
     paddingTop: 6,
     fontSize: 12,
@@ -208,6 +213,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     color: Theme.text,
   },
   bashOut: {
+    ...codeFont,
     paddingHorizontal: 10,
     paddingTop: 4,
     paddingBottom: 8,

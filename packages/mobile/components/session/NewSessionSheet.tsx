@@ -133,9 +133,10 @@ function watchSessionCreate(stubId: string, ready: Promise<string>, create: (stu
 
 // One launch choice in the sheet's settings card: label left, the current
 // value right, tapping opens its picker.
-function SettingRow({ label, value, dot, onPress }: {
+function SettingRow({ label, value, dot, onPress, code }: {
   label: string;
   value: string;
+  code?: boolean;
   dot?: string;
   onPress: () => void;
 }) {
@@ -145,7 +146,7 @@ function SettingRow({ label, value, dot, onPress }: {
       <RNText style={modalStyles.settingLabel}>{label}</RNText>
       <RNView style={modalStyles.settingValueWrap}>
         {dot ? <RNView style={[modalStyles.machineDot, { backgroundColor: dot }]} /> : null}
-        <RNText style={modalStyles.settingValue} numberOfLines={1}>{value}</RNText>
+        <RNText style={[modalStyles.settingValue, code && { fontFamily: 'JetBrainsMono-Regular' }]} numberOfLines={1}>{value}</RNText>
       </RNView>
       <FontAwesome name="angle-right" size={16} color={Theme.textMuted0} />
     </TouchableOpacity>
@@ -625,7 +626,7 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
                 label="Machine"
                 value={selectedDevice ? deviceDisplayName(selectedDevice) : "Auto"}
                 dot={selectedDevice ? (selectedDevice.online ? Theme.green : Theme.textMuted0) : undefined}
-                onPress={() => setOpenSheet("machine")}
+                onPress={() => setOpenSheet("machine")} code={!!selectedDevice}
               />
             )}
             {rail && (
@@ -745,7 +746,7 @@ const modalStyles = themedStyles((Theme) => StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
   },
-  folderInput: { flex: 1, fontSize: 14, paddingVertical: 10, color: Theme.text },
+  folderInput: { fontFamily: 'JetBrainsMono-Regular', flex: 1, fontSize: 14, paddingVertical: 10, color: Theme.text },
   folderChip: {
     flexDirection: "row",
     alignItems: "center",
@@ -759,7 +760,7 @@ const modalStyles = themedStyles((Theme) => StyleSheet.create({
   },
   folderChipActive: { borderColor: Theme.cyan + "99", backgroundColor: Theme.cyan + "18" },
   folderChipCustom: { borderStyle: "dashed", borderColor: Theme.cyan + "66" },
-  folderChipText: { fontSize: 13, color: Theme.textMuted, fontWeight: "500", flexShrink: 1 },
+  folderChipText: { fontFamily: 'JetBrainsMono-Regular', fontSize: 13, color: Theme.textMuted, fontWeight: "500", flexShrink: 1 },
   dim: { opacity: 0.55 },
   hintText: { fontSize: 12, color: Theme.textMuted0, lineHeight: 16 },
   agentChip: {

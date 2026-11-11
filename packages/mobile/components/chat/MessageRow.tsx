@@ -7,6 +7,7 @@ import type { ChatMessageRow } from '@codecast/web/store/inboxStore';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
+import { TYPE_SCALE } from '@codecast/shared/render/typeScale';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
 import { openLink } from '@/lib/links';
 import { SlackLogo } from '@/components/SlackLogo';
@@ -440,7 +441,7 @@ export function NewDivider() {
   );
 }
 
-const styles = themedStyles((Theme) => StyleSheet.create({
+const styles = themedStyles((Theme, look) => StyleSheet.create({
   avatar: {
     borderRadius: 6,
     alignItems: 'center',
@@ -459,7 +460,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     borderColor: Theme.border + '80',
   },
   avatarInitials: { fontWeight: '700', color: Theme.bg },
-  mdBase: { fontSize: 13.5, lineHeight: 20, color: Theme.textSecondary },
+  mdBase: { fontSize: look === 'modern' ? TYPE_SCALE.body.size : 13.5, lineHeight: 20, color: Theme.textSecondary },
   row: {
     flexDirection: 'row',
     paddingHorizontal: Spacing.md,

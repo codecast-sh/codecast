@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import { StyleProp, StyleSheet, TextStyle } from 'react-native';
 import { getActiveLook, useActiveLook, type Look } from '@/constants/Theme';
+import { floorTextSize } from '@codecast/shared/render/typeScale';
 
 // JetBrains Mono is the app face, same as web (web aliases font-sans to it —
 // the entire product renders in mono). Each face is named by its PostScript
@@ -28,6 +29,13 @@ export const Sans = {
   bold: 'InstrumentSans-Bold',
   italic: 'InstrumentSans-Italic',
 } as const;
+
+/** The style for code-like text: code, commands, paths, branch names,
+ *  hashes, ids, machine names and env vars. It names the mono face, so the
+ *  run stays mono under Modern, and nested runs inherit it (Themed.tsx). In
+ *  Classic it resolves to the face an unnamed style gets, so nothing moves.
+ *  lib/modernMono.guard.test.ts holds the code renderers to it. */
+export const codeFont = { fontFamily: Mono.regular } as const;
 
 export type FaceGroup = { readonly regular: string; readonly medium: string; readonly semiBold: string; readonly bold: string; readonly italic: string };
 
@@ -149,18 +157,23 @@ function faceFor(weight: TextStyle['fontWeight'], italic: boolean, group: FaceGr
  * in (`inherited`, as CSS inherits a font), else Instrument Sans, by weight
  * and slant. A style naming a face of a known group (Mono, Sans) keeps that
  * group, so code that names Mono stays mono. Any other family is untouched.
+ * Modern also holds sizes to the type scale's floor (@codecast/shared/render
+ * /typeScale): under 12 rises to 12, except capitals (`textTransform:
+ * 'uppercase'`, or `caps` for a run whose words are capitals), which may sit
+ * at 11.
  */
-export function monoStyle(style: StyleProp<TextStyle>, late = lateFacesLoaded, look: Look = getActiveLook(), inherited?: FaceGroup): TextStyle {
+export function monoStyle(style: StyleProp<TextStyle>, late = lateFacesLoaded, look: Look = getActiveLook(), inherited?: FaceGroup, caps = false): TextStyle {
   const flat = StyleSheet.flatten(style) ?? {};
-  if (look === 'modern') return modernStyle(flat, late, inherited);
+  if (look === 'modern') return modernStyle(flat, late, inherited, caps);
   if (flat.fontFamily && !MONO_FACES.has(flat.fontFamily)) return flat;
   const { fontWeight, fontStyle, ...rest } = flat;
   return { ...rest, fontFamily: loadedFace(faceFor(fontWeight, fontStyle === 'italic'), late) };
 }
 
-function modernStyle(flat: TextStyle, late: boolean, inherited: FaceGroup | undefined): TextStyle {
-  const group = flat.fontFamily ? GROUP_OF.get(flat.fontFamily) : inherited ?? Sans;
-  if (!group) return flat;
+function modernStyle(style: TextStyle, late: boolean, inherited: FaceGroup | undefined, caps: boolean): TextStyle {
+  const group = style.fontFamily ? GROUP_OF.get(style.fontFamily) : inherited ?? Sans;
+  if (!group) return style;
+  const flat = floored(style, caps || style.textTransform === 'uppercase');
   const { fontWeight, fontStyle, ...rest } = flat;
   const face = faceFor(fontWeight, fontStyle === 'italic', group);
   if (group === Mono) return { ...rest, fontFamily: loadedFace(face, late) };
@@ -168,4 +181,19 @@ function modernStyle(flat: TextStyle, late: boolean, inherited: FaceGroup | unde
   // Not registered yet: the system face, which has real weights and slants.
   const { fontFamily: _unloaded, ...system } = flat;
   return system;
+}
+
+function floored(style: TextStyle, caps: boolean): TextStyle {
+  const lineHeight = typeof style.lineHeight === 'number' ? style.lineHeight : undefined;
+  const next = floorTextSize(style.fontSize, lineHeight, caps);
+  if (next.fontSize === style.fontSize) return style;
+  return lineHeight === undefined ? { ...style, fontSize: next.fontSize } : { ...style, fontSize: next.fontSize, lineHeight: next.lineHeight };
+}
+
+/** Whether a run's words are set in capitals ("PLAN", "410 GONE"), which the
+ *  floor lets sit at 11 like a `textTransform: 'uppercase'` label. */
+export function isCapsText(children: unknown): boolean {
+  const text = typeof children === 'string' ? children : Array.isArray(children) && children.every((c) => typeof c === 'string' || typeof c === 'number') ? children.join('') : null;
+  // Three letters at least, so a clock ("9:01 AM") is not a label.
+  return !!text && (text.match(/[A-Z]/g)?.length ?? 0) >= 3 && text === text.toUpperCase();
 }
