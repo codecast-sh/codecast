@@ -591,6 +591,24 @@ describe("unread state", () => {
     expect((await railFor(ctx)).unread).toBe(1);
   });
 
+  test("a DM's unread lines ride the rail push that counts them; a read DM sends none", async () => {
+    const alice = context(ALICE);
+    const bob = as(alice, BOB);
+    const dm = await call(openDm, alice, { team_id: TEAM, member_ids: [BOB] });
+    await call(sendMessage, bob, { channel_id: dm.channel_id, content: "you added modern?" });
+    await call(sendMessage, alice, { channel_id: dm.channel_id, content: "Yes" });
+    // Channel lines never ride along, unread or not.
+    await call(sendMessage, alice, { channel_id: CHANNEL, content: "channel line" });
+
+    const unread = await call(listChannels, bob, { team_id: TEAM });
+    const row = unread.rail.find((r: any) => String(r.channel_id) === String(dm.channel_id));
+    expect(row.unread).toBe(1);
+    expect(unread.unread_dm_messages.map((m: any) => m.content)).toEqual(["Yes"]);
+
+    await call(markRead, bob, { channel_id: dm.channel_id });
+    expect((await call(listChannels, bob, { team_id: TEAM })).unread_dm_messages).toEqual([]);
+  });
+
   test("a reply also sent to the channel ticks the channel; a plain reply does not", async () => {
     const ctx = context(BOB);
     const alice = as(ctx, ALICE);
