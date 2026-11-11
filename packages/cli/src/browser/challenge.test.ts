@@ -13,6 +13,7 @@ const page = (over: Partial<ChallengeProbe> = {}): ChallengeProbe => ({
   selectors: [],
   visibleSelectors: [],
   sinceLoad: 100,
+  humanPhrase: null,
   ...over,
 });
 const short = (text: string, over: Partial<ChallengeProbe> = {}) => page({ text, textLength: text.length, ...over });
@@ -83,6 +84,18 @@ describe("classifyChallenge", () => {
     expect(classifyChallenge(page({ selectors: ["awswaf-captcha"] }))).toMatchObject({ vendor: "aws-waf", kind: "needs-person" });
     expect(classifyChallenge(short("", { scriptSrcs: ["https://abc.token.awswaf.com/x/challenge.js"] })))
       .toMatchObject({ vendor: "aws-waf", kind: "clears-itself" });
+  });
+
+  test("Amazon's robot check, over a full storefront or on its own page", () => {
+    const storefront = { text: "Deliver to Brooklyn 11215 All Departments", textLength: 40_000 };
+    expect(classifyChallenge(page({ ...storefront, url: "https://www.amazon.com/checkpoint/continue?token=x", humanPhrase: "I am human" })))
+      .toMatchObject({ vendor: "amazon", kind: "needs-person" });
+    expect(classifyChallenge(page({ url: "https://www.amazon.co.uk/errors/validateCaptcha" })))
+      .toMatchObject({ vendor: "amazon", kind: "needs-person" });
+    // The same phrase elsewhere, or an ordinary Amazon page, is not a check.
+    expect(classifyChallenge(page({ ...storefront, url: "https://blog.test/post", humanPhrase: "I am human" }))).toBeNull();
+    expect(classifyChallenge(page({ ...storefront, url: "https://www.amazon.com/cart" }))).toBeNull();
+    expect(classifyChallenge(page({ url: "https://notamazon.com/x", humanPhrase: "I am human" }))).toBeNull();
   });
 
   test("captcha walls and Google's sorry page", () => {
@@ -166,8 +179,23 @@ describe("the probe", () => {
       visibleSelectors: ["#challenge-form"],
       scriptSrcs: ["https://a.test/s.js"],
       sinceLoad: 42,
+      humanPhrase: null,
     });
     expect(classifyChallenge(p!)?.vendor).toBe("cloudflare");
+  });
+
+  test("finds the robot-check phrase past the text it keeps", () => {
+    const document: any = {
+      body: { innerText: `${"x".repeat(5000)} Click the box: I am human. Continue shopping` },
+      title: "Amazon.com",
+      querySelector: () => null,
+      querySelectorAll: () => [],
+      scripts: [],
+    };
+    const run = new Function("document", "location", "performance", `return ${CHALLENGE_PROBE_SOURCE}`);
+    const p = parseChallengeProbe(JSON.stringify(run(document, { href: "https://www.amazon.com/cart" }, { now: () => 1 })));
+    expect(p?.humanPhrase).toBe("I am human");
+    expect(classifyChallenge(p!)).toMatchObject({ vendor: "amazon", kind: "needs-person" });
   });
 
   test("wait bound reads the env, within 0 to 60 s", () => {

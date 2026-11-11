@@ -28,7 +28,7 @@
  */
 
 export type ChallengeVendor =
-  | "cloudflare" | "akamai" | "datadome" | "perimeterx" | "imperva" | "aws-waf" | "recaptcha" | "hcaptcha" | "generic";
+  | "cloudflare" | "akamai" | "datadome" | "perimeterx" | "imperva" | "aws-waf" | "amazon" | "recaptcha" | "hcaptcha" | "generic";
 
 export type ChallengeKind = "clears-itself" | "needs-person" | "blocked";
 
@@ -57,7 +57,16 @@ export interface ChallengeProbe {
   visibleSelectors: string[];
   /** ms since this document started: tells whether a click navigated. */
   sinceLoad: number;
+  /** The first HUMAN_CHECK_PHRASE match anywhere in body.innerText, or null.
+   *  A check drawn over a full page (Amazon's) sits past the 3000 characters
+   *  `text` keeps. */
+  humanPhrase: string | null;
 }
+
+/** Robot-check wording the probe looks for across the whole page text. Only
+ *  sites with a rule that reads `humanPhrase` act on it: on any page an
+ *  article can quote these words. */
+export const HUMAN_CHECK_PHRASE = /\bi am human\b|make sure you(?:'|\u2019)re not a robot|enter the characters you see below/i;
 
 /** Element markers the probe checks. Keep in step with `classifyChallenge`. */
 export const PROBE_SELECTORS = [
@@ -100,6 +109,7 @@ export const CHALLENGE_PROBE_SOURCE = `(() => {
     selectors: matched,
     visibleSelectors: visible,
     sinceLoad: performance.now(),
+    humanPhrase: (${HUMAN_CHECK_PHRASE}.exec(text) || [null])[0],
   });
 })()`;
 
@@ -121,6 +131,7 @@ export function parseChallengeProbe(stdout: string): ChallengeProbe | null {
       selectors: Array.isArray(p.selectors) ? p.selectors : [],
       visibleSelectors: Array.isArray(p.visibleSelectors) ? p.visibleSelectors : [],
       sinceLoad: typeof p.sinceLoad === "number" ? p.sinceLoad : Infinity,
+      humanPhrase: typeof p.humanPhrase === "string" ? p.humanPhrase : null,
     };
   } catch {
     return null;
@@ -224,6 +235,14 @@ export function classifyChallenge(p: ChallengeProbe): ChallengeDetection | null 
     return { vendor: "aws-waf", kind: "clears-itself", signal: clip(`script ${awsScript}`) };
   }
 
+  // Amazon's own robot check: the classic "Enter the characters you see
+  // below" page, and the "I am human" box it draws over a full storefront
+  // (cart, search, checkout's /checkpoint/ redirect), which no length rule sees.
+  if (/(?:^|\.)amazon\.(?:com|ca|co\.uk|de|fr|it|es|co\.jp|in|com\.au|com\.mx|com\.br|nl|se|pl|sg|ae|sa|com\.tr|eg|com\.be)$/.test(host)) {
+    if (/\/errors\/validatecaptcha/i.test(p.url)) return { vendor: "amazon", kind: "needs-person", signal: "url: /errors/validateCaptcha" };
+    if (p.humanPhrase) return { vendor: "amazon", kind: "needs-person", signal: clip(`text: ${p.humanPhrase}`) };
+  }
+
   if (shortPage(p)) {
     // Captcha walls: a page that is mostly a reCAPTCHA or hCaptcha widget.
     const recaptcha = hasFrame(p, /^https:\/\/www\.(?:google|recaptcha)\.(?:com|net)\/recaptcha\/(?:api2|enterprise)\/anchor/);
@@ -322,7 +341,8 @@ export function challengeReport(o: ChallengeOutcome): string {
   }
   return (
     `${where} is showing a ${o.vendor} security check that needs a person (${o.signal}${waited}). ` +
-    `Do not try to solve it, retry or reload. Hand it to the human: ask them to complete the check in this tab ` +
-    `(\`cast browser show\` brings it forward), then continue once they say it is done.`
+    `Do not try to solve it, retry or reload. Hand it to the human with ` +
+    `\`cast browser handoff "complete the security check" --show\` and end your turn; it wakes you when they are done. ` +
+    `Then carry on through click and type only: scripted clicks and requests are what brought the check.`
   );
 }

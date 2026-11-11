@@ -686,7 +686,7 @@ cast browser read | shot | eval "<js>"     # text, a screenshot into the thread,
 cast browser do "find Sign in" click "wait --text Welcome"   # several steps, one process
 \`\`\`
 
-Snapshot, then act on a ref; when you can name the target, \`find\` it instead. Batch steps you can see ahead into one \`do\`: each command costs seconds of startup. Evidence lands in the thread; never link local file paths. Close tabs you opened when done (\`cast browser stop\`) unless the human still needs them; touch no others. Hand a step only the human can do (a sign-in) to \`cast browser handoff "<step>"\` and end your turn. \`show\` raises your tab only when asked. Subagents sharing a session each pass \`--tab <name>\`. \`cast browser --help\` lists every verb, and \`cast guide browser\` covers tabs, recovery and sign-in.
+Snapshot, then act on a ref; when you can name the target, \`find\` it instead. On a site that holds the human's accounts (a store, a bank, social media), act through \`click\`, \`type\` and \`select\`, and keep \`eval\` to reading: an \`eval\` that clicks, submits a form or calls the site's own endpoints skips the paced input those verbs send, bot checks score exactly that, and the flag lands on the human's account. Batch steps you can see ahead into one \`do\`: each command costs seconds of startup. Evidence lands in the thread; never link local file paths. Close tabs you opened when done (\`cast browser stop\`) unless the human still needs them; touch no others. Hand a step only the human can do (a sign-in) to \`cast browser handoff "<step>"\` and end your turn. \`show\` raises your tab only when asked. Subagents sharing a session each pass \`--tab <name>\`. \`cast browser --help\` lists every verb, and \`cast guide browser\` covers tabs, recovery and sign-in.
 ${BROWSER_SNIPPET_END}
 `;
 
@@ -848,6 +848,7 @@ printf '%s' "$TOKEN" | cast computer set-value --app <app> --element-index 42 --
 | \`invalid_argument\` | The message says exactly which flags are wrong. Fix them; do not retry unchanged. |
 | \`permission_denied\` | Accessibility is missing, or the helper belongs to another launch (a rerun clears that). Read \`cast computer permissions\`; if the grant is missing, ask the human to run \`cast computer setup\`, or run \`cast computer permissions --open-settings --id accessibility\` once while they are there, then read again. |
 | \`screenshot_failed\` | The pixels are missing, the tree is not: rerun with \`--no-screenshot\`. If it names Screen Recording, ask the human to run \`cast computer setup\`, or run \`cast computer permissions --open-settings --id screenshots\` once while they are there, then read again. |
+| \`screen_locked\` | The Mac is locked (or another user has the screen), and macOS blocks every read until the human unlocks it. The grants are fine: tell the human, declare blocked, and retry after they unlock. |
 | \`action_timeout\` | No answer in time. Snapshot to see what changed, then try a simpler action. |
 | \`unsupported_capability\` | This build or platform cannot do it. Check \`capabilities\` and take another route. |
 | \`provider_incompatible\` | The CLI and its helper come from different releases. Update codecast. |
