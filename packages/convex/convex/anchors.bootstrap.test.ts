@@ -7,8 +7,8 @@ import { isBootstrapPrompt } from "@codecast/shared/contracts";
 // reports to, what it looks after, how it wakes, that its sessions stay out of the
 // person's inbox, that the person reads only what it says with `cast say`,
 // and that its brief is its memory, in under 300 plain words.
-const opening = (startsOnItsOwn: boolean) => bootstrapMessage({
-  name: "Calling", scopeType: "team", scopeLabel: "the Union workspace", teamName: "Union",
+const opening = (startsOnItsOwn: boolean, cleanChat = true) => bootstrapMessage({
+  name: "Calling", scopeType: "team", scopeLabel: "the Union workspace", teamName: "Union", cleanChat,
   role: { handle: "calling", scopeNames: ["project Callers & Call Management"], parentName: "Head of People (@head-of-people)", parentHandle: "head-of-people", startsOnItsOwn },
 });
 
@@ -34,6 +34,15 @@ describe("a role's opening message", () => {
     expect(m).toContain("A person may ask you about a decision you present");
     expect(m.split(/\s+/).length).toBeLessThan(450);
     expect(isBootstrapPrompt(m)).toBe(true);
+  });
+
+  // Clean chat is the seat's switch (anchors.clean_chat): off, its thread
+  // shows the whole transcript and the person reads each turn's last message.
+  test("with clean chat off it answers in its last message, not with cast say", () => {
+    const m = opening(true, false);
+    expect(m).not.toContain("cast say");
+    expect(m).toContain("The person sees only your last message of each turn");
+    expect(m).toContain("post a one-line hello");
   });
 
   // Scope is opt in (org-staffing.md S26).
@@ -62,7 +71,7 @@ describe("a role's opening message", () => {
   });
 
   test("an assistant's is the right hand's, built from its reach (org-staffing.md S30)", () => {
-    const m = bootstrapMessage({ name: "Executive Assistant", scopeType: "user", scopeLabel: "personal", ownerName: "Ashot", role: { handle: "executive-assistant", scopeNames: [], parentName: "Ashot", startsOnItsOwn: true, assistantOpening: "You are Ada, Ashot's Executive Assistant for everything Ashot works on." } });
+    const m = bootstrapMessage({ name: "Executive Assistant", scopeType: "user", scopeLabel: "personal", ownerName: "Ashot", cleanChat: true, role: { handle: "executive-assistant", scopeNames: [], parentName: "Ashot", startsOnItsOwn: true, assistantOpening: "You are Ada, Ashot's Executive Assistant for everything Ashot works on." } });
     expect(m.startsWith("You are Ada, Ashot's Executive Assistant")).toBe(true);
     expect(m).toContain("Read `cast brief` now, say a one-line hello, then stand by.");
     expect(m).toContain("Start every turn with `cast brief`");
@@ -75,6 +84,10 @@ describe("a role's opening message", () => {
 // with a team is not told its conversation is private.
 describe("a workspace agent's opening", () => {
   const facts = { name: "Fern", scopeLabel: "the Fernhill workspace", ownerName: "Theo", teamName: "Fernhill" };
+  test("talks with cast say only when its clean chat is on", () => {
+    expect(bootstrapMessage({ ...facts, scopeType: "team", cleanChat: true })).toContain(SAY_GUIDANCE);
+    expect(bootstrapMessage({ ...facts, scopeType: "team" })).not.toContain("cast say");
+  });
   test("a team agent is told the whole team reads this conversation", () => {
     const m = bootstrapMessage({ ...facts, scopeType: "team" });
     expect(m).toContain("standing agent for Fernhill: every member of that team can reach you and read this conversation");

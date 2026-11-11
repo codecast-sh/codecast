@@ -634,6 +634,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     });
   },
   // The scope's line (the-line.md L2): human only, logged, wakes the role.
+  // A standing agent's clean chat (anchors.setCleanChat): its thread and its opening.
+  setAnchorCleanChat: async (ctx, _userId, [anchorId, on]: [string, boolean]) => {
+    return await ctx.runMutation!((api as any).anchors.setCleanChat, { anchor_id: anchorId, on });
+  },
   setRoleLine: async (ctx, _userId, [roleId, slug]: [string, string]) => {
     return await ctx.runMutation!((api as any).orgRoles.setLine, { role_id: roleId, slug });
   },

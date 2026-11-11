@@ -312,7 +312,7 @@ export async function provisionStandingAgent(
     await announceSeating(ctx, args.role!.adopt._id, hostUserId, args.role!.announce);
     if (args.bootstrap !== false) {
       await enqueuePendingMessage(ctx, await ctx.db.get(args.role!.adopt._id), hostUserId, {
-        content: bootstrapMessage({ name, scopeType: args.scope_type, scopeLabel, ownerName, teamName, persona: adoptedAnchor.persona, role: args.role!.bootstrap }),
+        content: bootstrapMessage({ name, scopeType: args.scope_type, scopeLabel, ownerName, teamName, persona: adoptedAnchor.persona, role: args.role!.bootstrap, cleanChat: adoptedAnchor.clean_chat }),
       });
     }
     return {
@@ -356,6 +356,7 @@ export async function provisionStandingAgent(
     model: args.model,
     status: "provisioning",
     org_role_id: args.role?._id,
+    clean_chat: true,
     created_at: now,
     updated_at: now,
   });
@@ -448,6 +449,7 @@ export async function provisionStandingAgent(
         persona: args.persona,
         role: args.role?.bootstrap,
         sharedWithTeam: await sharedTeamOf(ctx, args.scope_type, conversation),
+        cleanChat: true,
       }),
     });
   }
@@ -535,6 +537,7 @@ export async function briefingFor(ctx: { db: any }, anchor: any): Promise<string
     teamName: team?.name ?? undefined,
     persona: anchor.persona,
     sharedWithTeam: await sharedTeamOf(ctx, anchor.scope_type, conversation),
+    cleanChat: anchor.clean_chat,
   });
 }
 
@@ -553,6 +556,30 @@ export const rebriefAnchor = mutation({
     }
     const briefing = await briefingFor(ctx, anchor);
     return await deliverToAnchor(ctx, args.anchor_id, briefing, `anchor-brief:${Date.now()}`);
+  },
+});
+
+// setCleanChat — turn a standing agent's clean chat on or off. Its thread
+// follows at once, and the agent is re-sent its opening so it talks the way
+// its thread now reads. Admin gated like rebriefAnchor. Returns whether a
+// briefing went out.
+export async function performSetCleanChat(ctx: any, userId: any, args: { anchor_id: Id<"anchors">; on: boolean }): Promise<boolean> {
+  const anchor = await ctx.db.get(args.anchor_id);
+  if (!anchor) throw new Error("No workspace agent found");
+  if (!(await userCanAdminAnchor(ctx, userId, anchor))) {
+    throw new Error("Only an admin (or the host) can change how the workspace's agent talks");
+  }
+  if (!!anchor.clean_chat === args.on) return false;
+  await ctx.db.patch(args.anchor_id, { clean_chat: args.on, updated_at: Date.now() });
+  return !!(await rebriefLiveAnchor(ctx, { ...anchor, clean_chat: args.on }, "clean-chat", { key: `${args.on ? "on" : "off"}:${Date.now()}` }));
+}
+
+export const setCleanChat = mutation({
+  args: { api_token: v.optional(v.string()), anchor_id: v.id("anchors"), on: v.boolean() },
+  handler: async (ctx, args): Promise<boolean> => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication failed: invalid token or session");
+    return await performSetCleanChat(ctx, userId, args);
   },
 });
 

@@ -7,13 +7,14 @@
 // from the orgTree store singleton (the same feeder the org page mounts) plus
 // two per view queries: the board counts and the brief. Every edit is a store
 // action that moves the page in the same tick and rides dispatch to orgRoles.*.
+import { cleanChatOf } from "../../../lib/cleanThread";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { threadStateCardLine } from "@codecast/shared/contracts";
 import { useTourAutoStart } from "../../../tours/useTourAutoStart";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { Archive, ArrowLeft, MoreHorizontal, Network, PanelRightClose, PanelRightOpen, Pause, Pin, PinOff, Play } from "lucide-react";
+import { Archive, ArrowLeft, Check, MessageCircle, MoreHorizontal, Network, PanelRightClose, PanelRightOpen, Pause, Pin, PinOff, Play } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../ui/dropdown-menu";
 import { useInboxStore, useTrackedStore, type PlanItem, type ProjectItem } from "../../../store/inboxStore";
 import { useSyncOrgTree } from "../../../hooks/useSyncOrgTree";
@@ -226,6 +227,10 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   const seatHead = useMemo(() => ({ open: seatHeadOpen, onToggle: () => setSeatHeadOpen((v) => !v) }), [seatHeadOpen]);
   const seat = useSeat({ conversationId: standingId, speaker, ask: role && isHeadOfPeopleRole(role) ? "about the org" : undefined, lead, offer, canTalk: canEditBrief, hideDiff: panelOpen, onSessionView, head: seatHead });
   const pinned = useInboxStore((st) => role ? isHeaderPinned(st, "role", role._id) : false);
+  const seatAnchorId = useInboxStore((st) => (standingId ? (Object.values((st as any).anchors ?? {}) as any[]).find((a) => a?.conversation_id === standingId)?._id ?? null : null));
+  const cleanChatOn = useInboxStore((st) => cleanChatOf((st as any).anchors, standingId ?? undefined));
+  const setAnchorCleanChat = useInboxStore((st) => st.setAnchorCleanChat);
+  const cleanChat = useMemo(() => (seatAnchorId && canEditBrief ? { on: cleanChatOn, onToggle: () => setAnchorCleanChat(seatAnchorId, !cleanChatOn) } : null), [seatAnchorId, canEditBrief, cleanChatOn, setAnchorCleanChat]);
 
   // -------- not found / loading
   if (!tree) {
@@ -326,7 +331,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
           {role && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <button type="button" className={HEAD_ICON} style={{ color: "var(--sol-text-muted)" }} aria-label="Role actions: pin to header, pause or retire" data-scope-actions>
+                <button type="button" className={HEAD_ICON} style={{ color: "var(--sol-text-muted)" }} aria-label="Role actions: pin to header, clean chat, pause or retire" data-scope-actions>
                   <MoreHorizontal className="w-4 h-4" />
                 </button>
               </DropdownMenuTrigger>
@@ -335,6 +340,13 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
                   {pinned ? <PinOff className="w-3.5 h-3.5" /> : <Pin className="w-3.5 h-3.5" />}
                   <span>{pinned ? "Unpin from header" : "Pin to header"}</span>
                 </DropdownMenuItem>
+                {cleanChat && (
+                  <DropdownMenuItem onSelect={cleanChat.onToggle} data-scope-action="clean-chat">
+                    <MessageCircle className="w-3.5 h-3.5" />
+                    <span className="flex-1">Clean chat</span>
+                    {cleanChat.on && <Check className="w-3.5 h-3.5" aria-label="on" />}
+                  </DropdownMenuItem>
+                )}
                 {canEdit && (<>
                 <DropdownMenuItem onSelect={() => update({ status: paused ? "active" : "paused" })} data-scope-action="pause">
                   {paused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}

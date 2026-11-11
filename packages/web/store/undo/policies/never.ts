@@ -257,6 +257,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   updateNotificationSettings: SETTINGS,
   updateIssueSyncSource: SETTINGS,
   setOpsSourceStatus: SETTINGS,
+  setAnchorCleanChat: SEND,
   setOpsSourceProject: SETTINGS,
   updateOpsWatch: SETTINGS,
   startOpsReplayImport: MACHINE,

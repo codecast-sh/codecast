@@ -92,3 +92,10 @@ export function cleanKeepsSystemRow(content: string | undefined, subtype: string
   }
   return true;
 }
+
+/** Whether a standing agent's thread reads as a clean chat: its seat's switch (anchors.clean_chat). */
+export function cleanChatOf(anchors: Record<string, { conversation_id?: string | null; clean_chat?: boolean }> | undefined, conversationId: string | undefined): boolean {
+  if (!anchors || !conversationId) return false;
+  for (const a of Object.values(anchors)) if (a?.conversation_id === conversationId) return !!a.clean_chat;
+  return false;
+}

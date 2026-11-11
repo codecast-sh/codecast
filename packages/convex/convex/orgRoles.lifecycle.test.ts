@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { makeFakeDb } from "./testDb";
 import { applyCancel, applyPause } from "./agentTasks";
-import { briefingFor, performRebriefRoles } from "./anchors";
+import { briefingFor, performRebriefRoles, performSetCleanChat } from "./anchors";
 import { charterTemplate, ensureRoleRoutine, performCreateRole, performWakeRole, performPauseRole, performProvisionRole, performResetOrg, performReparentRole, performResumeRole, performRetireRole, performStaff, performMoveRole, resetOrgPreview, seatingNote, standingConversationOf } from "./orgRoles";
 import { ROLE_CHECK_PROMPT } from "./lib/orgRoutine";
 import { roleRunner, seatPlace } from "./lib/seatPlace";
@@ -214,6 +214,24 @@ describe("what a person and a role read", () => {
     // The same sweep again sends nothing new while the first still waits.
     await performRebriefRoles(ctx, {});
     expect(tables.pending_messages).toHaveLength(before + 1);
+  });
+
+  test("clean chat is on for a new seat; switching it re-sends the opening that matches, once per change", async () => {
+    const { ctx, tables } = world();
+    await lead(ctx);
+    const anchor = tables.anchors[0];
+    expect(anchor.clean_chat).toBe(true);
+    expect(await briefingFor(ctx, anchor)).toContain("`cast say`");
+    const before = tables.pending_messages.length;
+    expect(await performSetCleanChat(ctx, ME, { anchor_id: anchor._id, on: false })).toBe(true);
+    expect(tables.anchors[0].clean_chat).toBe(false);
+    expect(tables.pending_messages).toHaveLength(before + 1);
+    expect(tables.pending_messages.at(-1)!.content).not.toContain("cast say");
+    expect(tables.pending_messages.at(-1)!.content).toContain("These are your current instructions");
+    // Setting what is already set sends nothing.
+    expect(await performSetCleanChat(ctx, ME, { anchor_id: anchor._id, on: false })).toBe(false);
+    expect(tables.pending_messages).toHaveLength(before + 1);
+    await expect(performSetCleanChat(ctx, PEER, { anchor_id: anchor._id, on: true })).rejects.toThrow("Only an admin");
   });
 
   test("a sub-lead is told to write to the role it reports to", async () => {
