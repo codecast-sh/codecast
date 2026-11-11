@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { envSessionLookup, parseProcArgs2, tmuxEnvNamesSession, tmuxSessionEnvUpdates } from "./processEnv";
+import { envSessionLookup, followsCredentialStore, parseProcArgs2, tmuxEnvNamesSession, tmuxSessionEnvUpdates } from "./processEnv";
 import { attributeProcesses, listedProcesses, processesStartedOutside, summarizeProcesses } from "./systemResources";
 import type { ResourceProcess } from "@codecast/shared/contracts";
 
@@ -120,5 +120,21 @@ describe("listed processes", () => {
     expect(new Set(listed.filter((p) => p.sessionId).map((p) => p.sessionId)).size).toBe(40);
     expect(listed.map((p) => p.name)).toContain("claude-0");
     expect(listed.map((p) => p.name)).not.toContain("claude-0-child");
+  });
+});
+
+describe("followsCredentialStore", () => {
+  const fleet = "/Users/x/.codecast/cc-fleet";
+  test("a launched session on the store follows it", () => {
+    expect(followsCredentialStore(1, fleet, () => parseProcArgs2(procargs(["claude"], [`CLAUDE_SECURESTORAGE_CONFIG_DIR=${fleet}`])))).toBe(true);
+  });
+  test("a claude started by hand reads the keychain and does not follow", () => {
+    expect(followsCredentialStore(1, fleet, () => parseProcArgs2(procargs(["claude", "--resume", "s1"], ["HOME=/Users/x", "TERM_PROGRAM=iTerm.app"])))).toBe(false);
+  });
+  test("a session pinned to another profile's store does not follow", () => {
+    expect(followsCredentialStore(1, fleet, () => ({ CLAUDE_SECURESTORAGE_CONFIG_DIR: "/Users/x/.codecast/cc-store/p1" }))).toBe(false);
+  });
+  test("an unreadable environment is unknown", () => {
+    expect(followsCredentialStore(1, fleet, () => null)).toBeUndefined();
   });
 });
