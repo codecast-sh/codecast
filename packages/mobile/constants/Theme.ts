@@ -2,6 +2,7 @@ import { StyleSheet } from 'react-native';
 import { useSyncExternalStore } from 'react';
 import { MOBILE_TAB_BAR_STYLE } from '@codecast/shared/render/mobileTabsStyle';
 import { MOBILE_CHIP_HEIGHT, MOBILE_CHIP_STYLE } from '@codecast/shared/render/mobileSessionStyle';
+import { ModernPalettes } from './modernPalette';
 
 export const SolarizedLight = {
   bg: '#FBF5E2',
@@ -119,32 +120,52 @@ export const Palettes: Record<ColorScheme, Palette> = {
   dark: SolarizedDark,
 };
 
-/** `a` mixed with `b`, `pct` percent of `a`, as hex: CSS color-mix in srgb. */
-export function mixHex(a: string, pct: number, b: string): string {
-  const rgb = (h: string) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
-  const [x, y] = [rgb(a), rgb(b)];
-  return '#' + x.map((v, i) => Math.round((v * pct + y[i] * (100 - pct)) / 100).toString(16).padStart(2, '0')).join('');
-}
+export { mixHex } from './colorMix';
 
-/** The palette a scheme resolves to. */
-export function paletteFor(scheme: ColorScheme): Palette {
-  return Palettes[scheme];
+/** Which palette and faces the app wears. `classic` is codecast's Solarized
+ *  and JetBrains Mono; `modern` is the web's opt-in Modern style: the
+ *  Verdigris palette (constants/modernPalette.ts) and Instrument Sans for the
+ *  interface, with code-like text kept mono (constants/fonts.ts). Which one a
+ *  device wears is lib/mobileLook.ts's decision. */
+export type Look = 'classic' | 'modern';
+
+/** The palette a scheme and a look resolve to. */
+export function paletteFor(scheme: ColorScheme, look: Look = 'classic'): Palette {
+  return look === 'modern' ? ModernPalettes[scheme] : Palettes[scheme];
 }
 
 // The active scheme is a tiny external store. The root layout publishes the
 // resolved preference (Settings choice, else the OS setting) into it, and
 // every screen subscribes through useTheme() so a flip re-renders the tree.
+// The look rides the same store: the root publishes it (lib/mobileLook), and
+// a flip repaints the tree the way a scheme flip does.
 let activeScheme: ColorScheme = 'light';
+let activeLook: Look = 'classic';
 const listeners = new Set<() => void>();
 
 export function getActiveScheme(): ColorScheme {
   return activeScheme;
 }
 
+export function getActiveLook(): Look {
+  return activeLook;
+}
+
 export function setActiveScheme(next: ColorScheme) {
   if (next === activeScheme) return;
   activeScheme = next;
   listeners.forEach((listener) => listener());
+}
+
+export function setActiveLook(next: Look) {
+  if (next === activeLook) return;
+  activeLook = next;
+  listeners.forEach((listener) => listener());
+}
+
+/** Look and scheme as one value, so a subscriber re-renders on either. */
+export function appearanceKey(): string {
+  return `${activeLook}:${activeScheme}`;
 }
 
 function subscribeScheme(listener: () => void) {
@@ -172,7 +193,7 @@ function liveView<T extends object>(resolve: () => T, keys: (keyof T)[]): T {
 // the expression runs. Reads inside a render body follow the scheme as long as
 // the component re-renders on a flip — call useTheme() for that.
 export const Theme: Palette = liveView(
-  () => paletteFor(activeScheme),
+  () => paletteFor(activeScheme, activeLook),
   Object.keys(SolarizedLight) as (keyof Palette)[],
 );
 
@@ -181,15 +202,30 @@ export const Theme: Palette = liveView(
 // palette forever. themedStyles builds one sheet per scheme (lazily) and hands
 // back a live view, so `styles.row` read during render is the active scheme's
 // row style. Name the factory parameter `Theme` to keep the body unchanged.
-export function themedStyles<T extends StyleSheet.NamedStyles<T>>(build: (theme: Palette) => T): T {
-  const sheets: Partial<Record<ColorScheme, T>> = {};
-  const sheetFor = (scheme: ColorScheme): T => (sheets[scheme] ??= build(paletteFor(scheme)));
-  return liveView(() => sheetFor(activeScheme), Object.keys(sheetFor('light')) as (keyof T)[]);
+// The builder also gets the look, for a style whose shape (not only its
+// colour) differs under Modern. One sheet per look and scheme.
+export function themedStyles<T extends StyleSheet.NamedStyles<T>>(build: (theme: Palette, look: Look) => T): T {
+  const sheets: Record<string, T> = {};
+  const sheetFor = (scheme: ColorScheme, look: Look): T => (sheets[`${look}:${scheme}`] ??= build(paletteFor(scheme, look), look));
+  return liveView(() => sheetFor(activeScheme, activeLook), Object.keys(sheetFor('light', 'classic')) as (keyof T)[]);
 }
 
-
+// Re-renders on a look flip too: every themed read (Theme, themedStyles)
+// changes with it, and this is the hook those readers already call.
 export function useActiveScheme(): ColorScheme {
-  return useSyncExternalStore(subscribeScheme, getActiveScheme, getActiveScheme);
+  useSyncExternalStore(subscribeScheme, appearanceKey, appearanceKey);
+  return activeScheme;
+}
+
+export function useActiveLook(): Look {
+  useSyncExternalStore(subscribeScheme, appearanceKey, appearanceKey);
+  return activeLook;
+}
+
+/** Look and scheme as one key, for a memo or a list's extraData that holds
+ *  rows painted from the palette. */
+export function useAppearanceKey(): string {
+  return useSyncExternalStore(subscribeScheme, appearanceKey, appearanceKey);
 }
 
 // Subscribes the calling component to scheme flips and returns the live

@@ -16,9 +16,12 @@ import { GestureHandlerRootView } from '@/lib/gestureHandler';
 import { ConvexProvider } from 'convex/react';
 import { ConvexAuthProvider } from '@convex-dev/auth/react';
 
-import { paletteFor, setActiveScheme, useActiveScheme, type ColorScheme } from '@/constants/Theme';
+import { paletteFor, setActiveLook, setActiveScheme, useActiveLook, useActiveScheme, type ColorScheme, type Look } from '@/constants/Theme';
 import { useColorScheme } from '@/components/useColorScheme';
-import { Mono, markLateFacesLoaded, uiFace, useLateFacesLoaded } from '@/constants/fonts';
+import { Mono, markLateFacesLoaded, uiFace, useFacesVersion, useLateFacesLoaded } from '@/constants/fonts';
+import { resolveMobileLook } from '@/lib/mobileLook';
+import { ensureModernFaces } from '@/lib/modernFaces';
+import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { convex, CONVEX_URL } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
@@ -145,6 +148,16 @@ function RootLayout() {
     setActiveScheme(scheme);
   }, [scheme]);
 
+  // The look (Classic or Modern, lib/mobileLook) publishes the same way. The
+  // splash holds until the cache has hydrated, so a relaunch in Modern paints
+  // its first frame in Modern. Faces first: on a binary that embeds Instrument
+  // Sans they are marked ready synchronously, before the look flips.
+  const look = useInboxStore((s) => resolveMobileLook(s.clientState?.ui));
+  useLayoutEffect(() => {
+    if (look === 'modern') ensureModernFaces();
+    setActiveLook(look);
+  }, [look]);
+
   useEffect(() => {
     if (!loaded) return;
 
@@ -224,10 +237,11 @@ export default wrapRoot(RootLayout);
 // Navigation chrome (stack headers, back buttons, tab bar) renders outside
 // our StyleSheets, so parity with web has to come through the nav theme:
 // Solarized surfaces + JetBrains Mono faces. fontWeight stays 'normal' in
-// every entry — the face carries the weight (see constants/fonts.ts).
-function solarizedNavTheme(scheme: ColorScheme, late: boolean) {
+// every entry — the face carries the weight (see constants/fonts.ts). Under
+// Modern, the look's palette and Instrument Sans.
+function solarizedNavTheme(scheme: ColorScheme, look: Look, late: boolean) {
   const base = scheme === 'dark' ? DarkTheme : DefaultTheme;
-  const palette = paletteFor(scheme);
+  const palette = paletteFor(scheme, look);
   return {
     ...base,
     colors: {
@@ -240,18 +254,20 @@ function solarizedNavTheme(scheme: ColorScheme, late: boolean) {
       notification: palette.red,
     },
     fonts: {
-      regular: { fontFamily: uiFace(Mono.regular, late), fontWeight: 'normal' },
-      medium: { fontFamily: uiFace(Mono.medium, late), fontWeight: 'normal' },
-      bold: { fontFamily: uiFace(Mono.semiBold, late), fontWeight: 'normal' },
-      heavy: { fontFamily: uiFace(Mono.bold, late), fontWeight: 'normal' },
+      regular: { fontFamily: uiFace(Mono.regular, late, look), fontWeight: 'normal' },
+      medium: { fontFamily: uiFace(Mono.medium, late, look), fontWeight: 'normal' },
+      bold: { fontFamily: uiFace(Mono.semiBold, late, look), fontWeight: 'normal' },
+      heavy: { fontFamily: uiFace(Mono.bold, late, look), fontWeight: 'normal' },
     },
   } as const;
 }
 
 function RootLayoutNav() {
   const scheme = useActiveScheme();
+  const look = useActiveLook();
   const lateFaces = useLateFacesLoaded();
-  const navTheme = useMemo(() => solarizedNavTheme(scheme, lateFaces), [scheme, lateFaces]);
+  const faces = useFacesVersion();
+  const navTheme = useMemo(() => solarizedNavTheme(scheme, look, lateFaces), [scheme, look, lateFaces, faces]);
   const [calls, setCalls] = useState(false);
   useEffect(() => { setCalls(true); }, []);
   return (

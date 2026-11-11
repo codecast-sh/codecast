@@ -19,7 +19,7 @@ import { Text as RNText, TextInput } from '@/components/Themed';
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import FontAwesome from "@expo/vector-icons/FontAwesome";
-import { Theme, Spacing, themedStyles, useActiveScheme, useTheme } from "@/constants/Theme";
+import { Theme, Spacing, themedStyles, useAppearanceKey, useTheme } from "@/constants/Theme";
 import { useInboxStore, type TaskItem, type PlanItem, type DocItem } from "@codecast/web/store/inboxStore";
 import { createTaskAndAdopt } from "@codecast/web/lib/taskActions";
 import { buildTaskTree, isOnHumanBoard, taskFamilyIndex } from "@codecast/shared/tasks";
@@ -191,7 +191,7 @@ const taskItemKey = (item: TaskListItem) => item.key;
 
 export default function TasksScreen() {
   const Theme = useTheme();
-  const appearance = useActiveScheme();
+  const appearance = useAppearanceKey();
   // A link can name the segment (`?segment=routines`, lib/linkRoutes): it sets
   // the starting segment, and again when a new link arrives while the tab is
   // mounted. Tapping a segment afterwards is the person's own choice, and

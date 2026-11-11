@@ -6,7 +6,7 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect, startTransition } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
-import { Theme, Spacing, themedStyles, useTheme, useActiveScheme } from '@/constants/Theme';
+import { Theme, Spacing, themedStyles, useTheme, useAppearanceKey } from '@/constants/Theme';
 import {
   SessionData, SwipeableSessionItem, InboxRowEnvProvider, sessionTitle, agentLabel, agentColor,
   formatRelativeTime, projectName, projectColor, styles as sessionStyles,
@@ -151,7 +151,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   if (PERF_PROBE) probeRender('InboxView');
   const Theme = useTheme();
   // Both list memos below bake palette values into React nodes.
-  const scheme = useActiveScheme();
+  const appearance = useAppearanceKey();
   const [showStashed, setShowStashed] = useState(false);
   const [showKilled, setShowKilled] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -556,7 +556,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     sections.push(renderSection('Dormant', statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, placed.counts.dormant)));
     return sections.filter(Boolean);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, scheme, unreadByConv, coarseNow, rowBudget]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, rowBudget]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
@@ -635,7 +635,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         </RNView>
       )}
     </RNView>
-  ), [schedulePartition, showStashed, showKilled, filteredStashed, filteredKilled, openSession, handleRestore, confirmKillAllStashed, heldKillId, scheme]);
+  ), [schedulePartition, showStashed, showKilled, filteredStashed, filteredKilled, openSession, handleRestore, confirmKillAllStashed, heldKillId, appearance]);
 
   // What the inbox is narrowed to, named in the title: a label or a project
   // picked in the slide-out panel. The clear mark beside it goes back to all.

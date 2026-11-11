@@ -11,7 +11,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { copyToClipboard } from '@/lib/clipboard';
 import { openLink } from '@/lib/links';
-import { Theme, CHROME_FONT_CAP, themedStyles, useTheme, useActiveScheme } from '@/constants/Theme';
+import { Theme, CHROME_FONT_CAP, themedStyles, useTheme, useAppearanceKey } from '@/constants/Theme';
 import { buildCanvasShell } from '@/lib/canvasShell';
 import { CONVEX_ORIGIN } from '@/lib/convex';
 import { solTokens } from '@/lib/solColor';
@@ -86,7 +86,7 @@ function extractExcerpt(code: string): string {
 // virtualized list cheap when a conversation holds many canvases.
 export function CastCanvas({ code }: { code: string }) {
   const Theme = useTheme();
-  const scheme = useActiveScheme();
+  const appearance = useAppearanceKey();
   const [fullscreen, setFullscreen] = useState(false);
   const [showSource, setShowSource] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -95,9 +95,9 @@ export function CastCanvas({ code }: { code: string }) {
   const title = useMemo(() => extractCanvasTitle(code), [code]);
   const excerpt = useMemo(() => extractExcerpt(code), [code]);
   // Build the document only when the modal opens; it bakes the palette's
-  // --sol-* tokens, so a scheme flip rebuilds it.
+  // --sol-* tokens, so a scheme or look flip rebuilds it.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const shell = useMemo(() => (fullscreen ? buildCanvasShell(code, solTokensCss(), CONVEX_ORIGIN) : null), [fullscreen, code, scheme]);
+  const shell = useMemo(() => (fullscreen ? buildCanvasShell(code, solTokensCss(), CONVEX_ORIGIN) : null), [fullscreen, code, appearance]);
 
   if (!code.trim() || !WebViewComp) return null;
 

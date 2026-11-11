@@ -22,7 +22,10 @@ Copyright 2022 The Instrument Sans Project Authors (https://github.com/Instrumen
 
 Licensed under the SIL Open Font License, Version 1.1 (https://openfontlicense.org).
 Static instances from Google Fonts. Hosted mode's interface face, the same
-face the web and Whisk load through @platform/design.
+face the web and Whisk load through @platform/design, and the Modern look's
+interface face. InstrumentSans-Italic.ttf is the family's static italic from
+its own repository (fonts/ttf at github.com/Instrument/instrument-sans); it
+is not in app.json's expo-font list, and loads at runtime (lib/modernFaces.ts).
 
 ## Newsreader
 
