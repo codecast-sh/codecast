@@ -1363,6 +1363,11 @@ export default defineSchema({
     // T1), the way anchor_id marks the workspace anchor's. Reserved for the
     // provisioning wave; nothing writes it in the org page slice.
     standing_role_id: v.optional(v.id("org_roles")),
+    // paneRecovery.ts: when this unattended seat last restarted itself
+    // because its terminal refused a message, and when a refusal after that
+    // restart marked its session_error (cleared on the next delivery).
+    pane_recovered_at: v.optional(v.number()),
+    pane_refused_at: v.optional(v.number()),
     // The task this session was started to review (the-line.md L3). Stamped
     // by the spawn route when the line starts its review station; such a
     // session is never a hand of the task's role, so its approve is the

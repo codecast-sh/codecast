@@ -33531,15 +33531,25 @@ async function main(): Promise<void> {
             // the conversation with the whole message, so the person reading
             // the session can send it again.
             logDelivery(`EXHAUSTED: msg=${msg._id.slice(0, 8)} conv=${msg.conversation_id.slice(0, 12)} submitted=${err.submitted} ${errMsg}`);
-            syncService.cancelPendingMessage(msg._id).catch(logConvexFailure);
             // Given up on: an open record would take a later send's echo with the same words.
             deliveryEchoLedger().forget(msg._id);
-            syncService.addMessage({
-              conversationId: msg.conversation_id,
-              role: "system",
-              subtype: DELIVERY_FAILED_SUBTYPE,
-              timestamp: Date.now(),
-              content: formatDeliveryFailedNotice({ writes: err.writes, submitted: err.submitted, message: messageContent }),
+            // Never submitted: the pane is deaf, and the server may restart an
+            // unattended seat and queue the message again as a new row.
+            const refused = err.submitted
+              ? syncService.cancelPendingMessage(msg._id).catch(logConvexFailure).then(() => ({ recovered: false }))
+              : syncService.reportPaneRefused(msg._id);
+            refused.then(({ recovered }) => {
+              if (recovered) {
+                logDelivery(`RECOVER: msg=${msg._id.slice(0, 8)} conv=${msg.conversation_id.slice(0, 12)} pane refused input; restarting the session and sending it again`);
+                return;
+              }
+              return syncService.addMessage({
+                conversationId: msg.conversation_id,
+                role: "system",
+                subtype: DELIVERY_FAILED_SUBTYPE,
+                timestamp: Date.now(),
+                content: formatDeliveryFailedNotice({ writes: err.writes, submitted: err.submitted, message: messageContent }),
+              });
             }).catch(logConvexFailure);
           } else if (err instanceof TmuxDeliveryUncertainError || /^(AGENT_STDIN_NOT_READY|TMUX_SERVER_BUSY|INJECT_UNVERIFIED):/.test(errMsg)) {
             logDelivery(`HELD: msg=${msg._id.slice(0, 8)} awaiting terminal input confirmation: ${errMsg}`);

@@ -2073,6 +2073,23 @@ export class SyncService {
     });
   }
 
+  // A pane never showed this message after every write and none was submitted.
+  // The server cancels it and, for an unattended seat, restarts the session and
+  // queues the message again (paneRecovery.ts). A backend without the function
+  // gets the plain cancel.
+  async reportPaneRefused(messageId: string): Promise<{ recovered: boolean }> {
+    try {
+      const result = await this.mutate("paneRecovery:reportPaneRefused" as any, {
+        message_id: messageId,
+        api_token: this.apiToken,
+      });
+      return { recovered: !!(result as any)?.recovered };
+    } catch {
+      await this.cancelPendingMessage(messageId);
+      return { recovered: false };
+    }
+  }
+
   // With holdReason the row is re-pended WITHOUT spending a retry: the paste was
   // refused because the terminal waits for a human, not because it failed.
   async retryMessage(messageId: string, opts?: { holdReason?: string; holdScreen?: string }): Promise<void> {
