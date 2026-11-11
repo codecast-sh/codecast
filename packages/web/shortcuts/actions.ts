@@ -1,5 +1,6 @@
 "use client";
 
+import { toggleAppAddressBar } from "../lib/appAddress";
 import { startTour } from '../tours/engine';
 import { toast } from "sonner";
 import { isForeignSession } from "../lib/liveEntities";
@@ -272,6 +273,7 @@ export function useGlobalShortcutActions() {
   }, [router]));
 
   useShortcutAction('nav.ops', useCallback(() => { router.push("/ops"); }, [router]));
+  useShortcutAction('ui.addressBar', useCallback(() => { toggleAppAddressBar(); }, []));
   // Modern's Back walks the tab's trail, as the back control in every header does.
   useShortcutAction('nav.back', useCallback(() => { if (isModernStyle()) goBackInTrail((p) => router.push(p)); else window.history.back(); }, [router]));
   useShortcutAction('nav.forward', useCallback(() => { window.history.forward(); }, []));

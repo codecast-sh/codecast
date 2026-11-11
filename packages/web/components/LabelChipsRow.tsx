@@ -867,10 +867,10 @@ export function LabelChipsRow({
               className="w-full px-2 py-1 rounded-md text-meta bg-sol-bg-alt/50 border border-sol-border/40 text-sol-text placeholder:text-sol-text-dim/60 outline-none focus:border-sol-cyan/50 modern:h-control-sm modern:rounded-control modern:border-sol-border modern:bg-sol-card modern:py-0 modern:text-ui"
             />
           </div>
-          {[["Projects", workProjects], ["Folders", folders]].map(([heading, rows]) => (rows as Array<[string, number]>).length > 0 && (
+          {[["Folders", folders], ["Projects", workProjects]].map(([heading, rows]) => (rows as Array<[string, number]>).length > 0 && (
             <div key={heading as string}>
-              {/* Projects are Codecast projects (the sessions working in
-                  them, store/workProjects); a folder is where a session ran. */}
+              {/* A folder is where a session ran; projects are Codecast
+                  projects (the sessions working in them, store/workProjects). */}
               <div className="mt-0.5 border-t border-sol-border/40 px-3 pt-2 pb-1 text-mark font-semibold uppercase tracking-widest text-sol-text-dim/70 modern:text-meta modern:font-medium modern:normal-case modern:tracking-normal modern:text-sol-text-dim">
                 {heading as string}
               </div>
