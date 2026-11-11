@@ -448,6 +448,9 @@ export function OffloadReview({ plan: livePlan, sessions, sourceName, now, initi
         <div className="space-y-1.5 rounded-xl bg-sol-bg-alt px-3.5 py-3" data-load="source">
           <div className="flex items-center gap-2 text-meta text-sol-text-dim">
             <Laptop className="h-3.5 w-3.5" /><span className="truncate">{sourceName}</span>
+            {plan.sourceSample.processCount === undefined
+              ? <span className="text-sol-yellow">session usage not measured</span>
+              : plan.usageAt !== undefined && <span title="The latest process capture timed out">usage {fmtAgo(plan.usageAt, now)}</span>}
             {going.length > 0 && (
               <span className="ml-auto tabular-nums" title={namedStops(stopping, 20)}>
                 {stopping.length} {stopping.length === 1 ? "process stops" : "processes stop"}{stoppingOutside ? <span className="text-sol-orange"> ({stoppingOutside} outside agents)</span> : null}

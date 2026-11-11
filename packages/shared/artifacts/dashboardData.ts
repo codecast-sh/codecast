@@ -27,7 +27,7 @@ export const DATA_SOURCES = [
   { id: "usage", label: "Token spend", group: "codecast", args: "days, group_by none|person", columns: "day, [person], tokens, spend" },
   { id: "sessions", label: "Sessions", group: "codecast", args: "days, group_by none|person|agent, subagents", columns: "day, [group], sessions" },
   { id: "tasks", label: "Tasks", group: "codecast", args: "view status|project|assignee|done_per_day|created_per_day, days, project, board human|all", columns: "per view" },
-  { id: "prs", label: "Pull requests", group: "codecast", args: "days, repository", columns: "day, opened, merged" },
+  { id: "prs", label: "Pull requests", group: "codecast", args: "days, repository, group_by none|author|repository", columns: "day, [author|repository], opened, merged" },
   { id: "signals", label: "Signals", group: "codecast", args: "days, group_by kind|source|none, source", columns: "day, [group], signals" },
   { id: "events", label: "Events", group: "product", args: "days, group_by, kind, source", columns: "day, [group], events" },
   { id: "event_groups", label: "Issues", group: "product", args: "view series|top, bucket day|hour, days, source, kind, status", columns: "per view" },
@@ -48,7 +48,7 @@ export const SOURCE_PARAMS: Record<DataSourceId, readonly SourceParam[]> = {
   usage: [DAYS, { name: "group_by", label: "Split by", kind: "enum", options: ["none", "person"] }],
   sessions: [DAYS, { name: "group_by", label: "Split by", kind: "enum", options: ["none", "person", "agent"] }],
   tasks: [{ name: "view", label: "View", kind: "enum", options: ["status", "project", "assignee", "done_per_day", "created_per_day"] }, DAYS, { name: "board", label: "Board", kind: "enum", options: ["human", "all"] }, { name: "project", label: "Project", kind: "text", placeholder: "any" }],
-  prs: [DAYS, { name: "repository", label: "Repository", kind: "text", placeholder: "all" }],
+  prs: [DAYS, { name: "group_by", label: "Split by", kind: "enum", options: ["none", "author", "repository"] }, { name: "repository", label: "Repository", kind: "text", placeholder: "all" }],
   signals: [DAYS, { name: "group_by", label: "Split by", kind: "enum", options: ["none", "kind", "source"] }, { name: "source", label: "Source", kind: "text", placeholder: "all" }],
   events: [DAYS, { name: "group_by", label: "Split by", kind: "enum", options: ["none", "kind", "source"] }, { name: "source", label: "Source", kind: "text", placeholder: "all" }],
   event_groups: [{ name: "view", label: "View", kind: "enum", options: ["top", "series"] }, { name: "bucket", label: "Bucket", kind: "enum", options: ["day", "hour"] }, DAYS],
@@ -210,9 +210,10 @@ export function filterRows(result: DataResult, where: Where | undefined, scope?:
   return { rows };
 }
 
-/** Which of a dashboard filter's columns a source carries: the filter narrows only blocks over those. */
-export function scopeApplies(result: DataResult | undefined, scope: Where | undefined): boolean {
-  return !!result && whereClauses(scope).some((c) => result.columns.includes(c.column));
+/** The dashboard filter's columns a source lacks: the block is not narrowed by those, and must say so. */
+export function scopeMissing(result: DataResult | undefined, scope: Where | undefined): string[] {
+  if (!result) return [];
+  return [...new Set(whereClauses(scope).map((c) => c.column))].filter((c) => !result.columns.includes(c));
 }
 
 function missing(result: DataResult, col: string): string {
@@ -240,6 +241,8 @@ export function aggregate(result: DataResult, rows: number[], agg: KpiAgg, field
   const bad = invalidCells(result, rows, fi);
   if (bad.length) return { problem: invalidProblem(result, bad, fi) };
   const vals = rows.map((r) => ({ r, v: num(result.rows[r][fi]) })).filter((x): x is { r: number; v: number } => x.v !== null);
+  // Nothing passed the filter: a sum of no rows is 0, an average or a maximum of nothing is no value.
+  if (!rows.length && agg === "sum") return { value: 0, used: [], how: `sum of ${field} over 0 rows` };
   if (!vals.length) return { value: null, used: [], how: `no numeric ${field} in ${rows.length} rows` };
   switch (agg) {
     case "sum":
@@ -288,7 +291,8 @@ export type KpiBlock = {
   value?: Json;
 };
 
-export type Delta = { value: number; ratio: number | null; display: string; caption: string; dir: "up" | "down" | "flat"; good: boolean | null };
+/** A KPI's change. `against` names what it is compared with, in words a sentence can carry ("the prior 7 days"). */
+export type Delta = { value: number; ratio: number | null; display: string; caption: string; against: string; dir: "up" | "down" | "flat"; good: boolean | null };
 
 export type KpiEval =
   | { state: "ok"; value: number | string | null; display: string; delta?: Delta; used: number[]; how: string }
@@ -309,7 +313,7 @@ export function evaluateKpi(block: KpiBlock, result: DataResult | undefined, sco
   const format = agg === "top" ? "text" : block.format ?? "number";
   const out: KpiEval = { state: "ok", value: main.value, display: formatValue(main.value, format), used: main.used, how: main.how };
   if (block.compare && typeof main.value === "number") {
-    const d = kpiDelta(result, filtered.rows, block, agg, main.value);
+    const d = kpiDelta(result, filtered.rows, block, agg, main.value, scope);
     // A comparison that can't be computed is a broken claim, not a missing decoration: text may quote it.
     if (d && "problem" in d) return { state: "problem", problem: `the comparison: ${d.problem}` };
     if (d) out.delta = d;
@@ -345,12 +349,56 @@ function halves(result: DataResult, rows: number[]): { early: number[]; late: nu
   return { early: keys.slice(0, mid).flatMap((k) => byKey.get(k)!), late: keys.slice(keys.length - mid).flatMap((k) => byKey.get(k)!), n: mid, unit };
 }
 
-function kpiDelta(result: DataResult, rows: number[], block: KpiBlock, agg: KpiAgg, current: number): Delta | { problem: string } | undefined {
+const DATE_COLS = ["day", "date"];
+const shiftDay = (day: string, by: number) => {
+  const d = new Date(`${day}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + by);
+  return d.toISOString().slice(0, 10);
+};
+const daysBetween = (a: string, b: string) => Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
+
+/**
+ * Under a date filter, "halves" means the period shown against the period of
+ * the same length just before it: the number and its change describe the same
+ * days. Null when the filter names no dates or the rows don't reach back far
+ * enough to hold the earlier period.
+ */
+function priorPeriod(result: DataResult, block: KpiBlock, scope: Where | undefined): { rows: number[]; n: number } | { problem: string } | null {
+  const col = DATE_COLS.find((c) => result.columns.includes(c) && scope && c in scope);
+  if (!col || !scope) return null;
+  const ti = result.columns.indexOf(col);
+  const days = result.rows.map((r) => String(r[ti] ?? "")).filter((d) => /^\d{4}-\d\d-\d\d$/.test(d)).sort();
+  if (!days.length) return null;
+  const range = scope[col] as { gte?: string; lte?: string };
+  const from = typeof range?.gte === "string" ? range.gte : days[0];
+  const to = typeof range?.lte === "string" && range.lte < days[days.length - 1] ? range.lte : days[days.length - 1];
+  const n = daysBetween(from, to) + 1;
+  if (n < 1) return null;
+  const prevFrom = shiftDay(from, -n);
+  if (days[0] > prevFrom) return null;
+  const prior = filterRows(result, block.where, { ...scope, [col]: { gte: prevFrom, lte: shiftDay(from, -1) } });
+  return "problem" in prior ? prior : { rows: prior.rows, n };
+}
+
+const plural = (n: number, unit: string) => `${n} ${unit}${n === 1 ? "" : "s"}`;
+
+function kpiDelta(result: DataResult, rows: number[], block: KpiBlock, agg: KpiAgg, current: number, scope?: Where): Delta | { problem: string } | undefined {
   let before: number | null = null;
   let against = "";
+  let words = "";
+  let lead = "";
   let thisValue = current;
   const fmt = block.format ?? "number";
-  if (block.compare === "prev") {
+  const period = block.compare === "halves" ? priorPeriod(result, block, scope) : null;
+  if (period && "problem" in period) return period;
+  if (period) {
+    const b = aggregate(result, period.rows, agg, block.field);
+    if ("problem" in b) return b;
+    if (typeof b.value !== "number") return undefined;
+    before = b.value;
+    against = `prior ${period.n}d`;
+    words = `the prior ${plural(period.n, "day")}`;
+  } else if (block.compare === "prev") {
     // The last row against the one before it: today vs yesterday, this week vs last.
     const fi = columnIndex(result, block.field);
     if (rows.length < 2 || fi < 0) return undefined;
@@ -360,6 +408,7 @@ function kpiDelta(result: DataResult, rows: number[], block: KpiBlock, agg: KpiA
     thisValue = a;
     before = b;
     against = result.columns.includes("day") ? "the day before" : "the row before";
+    words = against;
   } else if (block.compare === "halves") {
     const h = halves(result, rows);
     if (!h) return undefined;
@@ -370,7 +419,10 @@ function kpiDelta(result: DataResult, rows: number[], block: KpiBlock, agg: KpiA
     if (typeof a.value !== "number" || typeof b.value !== "number") return undefined;
     thisValue = b.value;
     before = a.value;
-    against = `last ${h.n}${h.unit} vs prior ${h.n}${h.unit}`;
+    // The number shown covers the whole window; its change compares the window's halves, and says so up front.
+    lead = `last ${h.n}${h.unit}: `;
+    against = `prior ${h.n}${h.unit}`;
+    words = h.unit === "d" ? `the ${plural(h.n, "day")} before` : `the ${h.n}${h.unit} before`;
   } else {
     if (columnIndex(result, block.compare) < 0) return { problem: missing(result, block.compare!) };
     const other = aggregate(result, rows, agg === "count" ? "sum" : agg, block.compare);
@@ -378,6 +430,7 @@ function kpiDelta(result: DataResult, rows: number[], block: KpiBlock, agg: KpiA
     if (typeof other.value !== "number") return undefined;
     before = other.value;
     against = block.compare!.replace(/_/g, " ");
+    words = against;
   }
   if (before === null) return undefined;
   const diff = round(thisValue - before);
@@ -389,7 +442,8 @@ function kpiDelta(result: DataResult, rows: number[], block: KpiBlock, agg: KpiA
     value: diff,
     ratio,
     display,
-    caption: block.compare === "halves" ? `${against}: ${sign}${formatValue(Math.abs(diff), fmt)}` : `${sign}${formatValue(Math.abs(diff), fmt)} vs ${against}`,
+    caption: dir === "flat" ? `${lead}same as ${against}` : `${lead}${sign}${formatValue(Math.abs(diff), fmt)} vs ${against}`,
+    against: words,
     dir,
     good: dir === "flat" || !block.good ? null : (dir === "up") === (block.good === "up"),
   };
@@ -591,8 +645,10 @@ export function checkBlock(kind: string, block: Record<string, unknown>, result:
   if (result.error) return { state: "stale", label: "Last read failed", detail: `Showing the read from ${ago(now - result.refreshed_at)}; the latest read failed: ${result.error}` };
   if (result.truncated) return { state: "partial", label: "Partial rows", detail: "The source returned more rows than a dashboard keeps; totals may be low" };
   const age = now - result.refreshed_at;
-  if (result.refreshing) return { state: "refreshing", label: "Refreshing", detail: `Showing the read from ${ago(age)} while a new one runs` };
-  if (age > Math.max(result.refresh_ms, 60_000) * 3) return { state: "stale", label: `Read ${ago(age)}`, detail: "No fresh read lately; open the check to re-run it" };
+  const due = Math.max(result.refresh_ms, 60_000);
+  // A routine re-read behind a current answer changes nothing the reader can see; only an answer past its interval says it is waiting on one.
+  if (result.refreshing && age > due) return { state: "refreshing", label: "Refreshing", detail: `Showing the read from ${ago(age)} while a new one runs` };
+  if (age > due * 3) return { state: "stale", label: `Read ${ago(age)}`, detail: "No fresh read lately; open the check to re-run it" };
   return { state: "verified", label: "Verified", detail: `Computed from ${q.source} rows read ${ago(age)}` };
 }
 

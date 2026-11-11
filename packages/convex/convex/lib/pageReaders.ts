@@ -232,7 +232,9 @@ const tasks: ReaderDef = {
       else {
         const assignee = t.assignee;
         const id = assignee ? ctx.db.normalizeId("users", assignee) : null;
-        items.push([id ? await nameOf("users", id) : assignee || "(unassigned)"]);
+        // Work an agent holds is assigned by a session or machine id; a reader can't place an id, and a session's title may be private, so all of it reads as one bucket.
+        const machineId = !id && !!assignee && /^[a-z0-9]{30,34}$/.test(assignee);
+        items.push([id ? await nameOf("users", id) : machineId ? "Agent session" : assignee || "(unassigned)"]);
       }
     }
     return { items, cursor: res.isDone ? null : res.continueCursor, scanned: res.page.length };
@@ -329,10 +331,14 @@ const usage: ReaderDef = {
 };
 
 const prs: ReaderDef = {
-  validate: validating(["days", "repository"], (raw) => {
+  validate: validating(["days", "repository", "group_by"], (raw) => {
     const n = days(raw, 30, 180);
     const repository = text(raw, "repository");
-    return { args: { days: n, ...(repository ? { repository } : {}) }, text: `pull requests opened and merged per day over the last ${n} days${repository ? ` in ${repository}` : ""}` };
+    const groupBy = oneOf(raw, "group_by", ["none", "author", "repository"] as const, "none");
+    return {
+      args: { days: n, ...(repository ? { repository } : {}), ...(groupBy !== "none" ? { group_by: groupBy } : {}) },
+      text: `pull requests opened and merged per day over the last ${n} days${repository ? ` in ${repository}` : ""}${groupBy !== "none" ? `, by ${groupBy}` : ""}`,
+    };
   }),
   async check(_ctx, scope) {
     return teamOf(scope) ? null : "pull requests belong to a team: declare a team workspace";
@@ -348,18 +354,37 @@ const prs: ReaderDef = {
     const items: unknown[][] = [];
     for (const pr of res.page as Doc<"pull_requests">[]) {
       if (args.repository && pr.repository !== args.repository) continue;
-      if (pr.created_at >= start) items.push([dayKey(pr.created_at), "opened"]);
-      if (pr.merged_at && pr.merged_at >= start) items.push([dayKey(pr.merged_at), "merged"]);
+      const group = args.group_by === "author" ? pr.author_github_username : args.group_by === "repository" ? pr.repository : "";
+      if (pr.created_at >= start) items.push([dayKey(pr.created_at), "opened", group]);
+      if (pr.merged_at && pr.merged_at >= start) items.push([dayKey(pr.merged_at), "merged", group]);
     }
     return { items, cursor: res.isDone ? null : res.continueCursor, scanned: res.page.length };
   },
   fold(items, args, now) {
     const counts = new Map<string, number>();
-    for (const [day, what] of items as [string, string][]) counts.set(`${day}:${what}`, (counts.get(`${day}:${what}`) ?? 0) + 1);
-    return {
-      columns: ["day", "opened", "merged"],
-      rows: dayKeys(now, args.days as number).map((d) => [d, counts.get(`${d}:opened`) ?? 0, counts.get(`${d}:merged`) ?? 0]),
-    };
+    const groups = new Set<string>();
+    for (const [day, what, group] of items as [string, string, string][]) {
+      groups.add(group);
+      const k = `${day}\u0000${group}\u0000${what}`;
+      counts.set(k, (counts.get(k) ?? 0) + 1);
+    }
+    const by = args.group_by as string | undefined;
+    if (!by) {
+      return {
+        columns: ["day", "opened", "merged"],
+        rows: dayKeys(now, args.days as number).map((d) => [d, counts.get(`${d}\u0000\u0000opened`) ?? 0, counts.get(`${d}\u0000\u0000merged`) ?? 0]),
+      };
+    }
+    // One row per day and group that saw any pull request, so a split chart or a ranking reads without empty rows.
+    const rows: unknown[][] = [];
+    for (const d of dayKeys(now, args.days as number)) {
+      for (const g of [...groups].sort()) {
+        const opened = counts.get(`${d}\u0000${g}\u0000opened`) ?? 0;
+        const merged = counts.get(`${d}\u0000${g}\u0000merged`) ?? 0;
+        if (opened || merged) rows.push([d, g, opened, merged]);
+      }
+    }
+    return { columns: ["day", by, "opened", "merged"], rows };
   },
 };
 

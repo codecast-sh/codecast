@@ -83,7 +83,7 @@ export const NON_TAB_EXACT = new Set([
 // the real router (components/LaneRedirect): a tab would intercept the click
 // and never run the redirect. A renamed page's old root (/goals) redirects
 // the same way.
-export const NON_TAB_PREFIXES: readonly string[] = ["/settings", "/auth", "/join", "/share", "/meet", "/blog", "/documentation", "/features", "/compare", "/a", "/r", "/slack/connect", WHISK_RETURN_PATH, ...LANE_ROOTS, ...Object.keys(RENAMED_PAGE_ROOTS)];
+export const NON_TAB_PREFIXES: readonly string[] = ["/settings", "/auth", "/join", "/share", "/meet", "/blog", "/documentation", "/features", "/setup", "/compare", "/a", "/r", "/slack/connect", WHISK_RETURN_PATH, ...LANE_ROOTS, ...Object.keys(RENAMED_PAGE_ROOTS)];
 
 export function isNonTabRoute(path: string): boolean {
   const clean = path.split("?")[0].split("#")[0];

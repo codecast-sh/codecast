@@ -155,6 +155,12 @@ test("a held review keeps its order and numbers and takes only verdicts from new
   expect(view.candidates[0].perDestination.linux.blockers).toEqual(["Host is full"]);
   expect(view.candidates[1].perDestination.linux.readiness).toBe("blocked");
 });
+test("a review opened on a sample with no process list takes the first sample that has one", () => {
+  const live = buildOffloadPlan(input())!;
+  const blank: OffloadPlan = { ...live, sourceSample: { ...live.sourceSample, processCount: undefined }, candidates: live.candidates.map((c) => ({ ...c, relief: { rssLow: 0 } })) };
+  expect(holdPlan(blank, live)).toBe(live);
+  expect(holdPlan(blank, blank).candidates[0].relief.cpu).toBeUndefined();
+});
 test("a rehearsal rides on its destination: the newest wins, what would fail the transfer blocks, a pending or failed one only shows", () => {
   const plan = buildOffloadPlan(input())!;
   const row = (status: "pending" | "done" | "failed", at: number, blockers: string[] = []) => ({

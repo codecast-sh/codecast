@@ -9,7 +9,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { RefreshCw, Radio } from "lucide-react";
 import type { ArtifactPresence } from "@codecast/shared/artifacts";
-import { a1, addTabOps, LiveSheet, validationAt, validateInput, cellNum, deleteTabOps, formatValue, inputOps, isFormula, parseQualifiedRange, quoteTabName, rectA1, renameTabOps, styleOf, tabPatchOps, toTsv, fitWidthOps, inheritedFormat, uniqueTabName, type CellStyle, type Rect, type TabData, type QuerySource } from "./sheetCore";
+import { a1, addTabOps, LiveSheet, enforceValidation, expandToMerges, mergeAt, cellNum, deleteTabOps, formatValue, inputOps, isFormula, parseQualifiedRange, quoteTabName, rectA1, renameTabOps, styleOf, tabPatchOps, toTsv, fitWidthOps, inheritedFormat, uniqueTabName, type CellStyle, type Rect, type TabData, type QuerySource } from "./sheetCore";
 import type { LiveViewProps } from "../live/registry";
 import { useLiveElements, useLivePresence } from "../live/useLiveArtifact";
 import { sendAsk, pickAskTarget, reopenAsk } from "../live/askAgent";
@@ -24,21 +24,21 @@ import { CellEditor, FormulaBar, SelectionSummary, TabStrip, type EditorPlacemen
 import { FormatBar, type FormatAction } from "./FormatBar";
 import { SHEET_ASK_SLOT } from "./askSlot";
 import { useQueryTabRefresh } from "./useQueryTabRefresh";
-import { useUnseenTabs } from "./tabActivity";
+import { useAgentFlash, useUnseenTabs } from "./tabActivity";
 import { useSheetExtras } from "./useSheetExtras";
+import { sheetExports } from "./exportFile";
 import { SheetExtrasView } from "./SheetExtras";
 import { IMPORT_ACCEPT } from "./importFile";
-import { Upload } from "lucide-react";
 import { solVar } from "./cellPaint";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { DEF_COL_W, DEF_ROW_H, REF_COLORS, type Sel, type Menu, selRect, parsePosition, visibleRowsOf, clearVisible, QUERY_LABEL, ago, cellNumOfKey, elementsHaveTab, shiftFormulaSafe, columnValues, refsKeyOf, formatSelection, writeSheetClipboard, pasteSheetClipboard, type SheetState, type SheetCtx } from "./sheetActions";
-import { TabMenu, CellMenu, FilterPanel, FilterButtons, FindBar } from "./SheetMenus";
+import { DEF_COL_W, DEF_ROW_H, REF_COLORS, type Sel, type Menu, selRect, parsePosition, visibleRowsOf, clearVisible, QUERY_LABEL, ago, cellNumOfKey, elementsHaveTab, shiftFormulaSafe, columnValues, refsKeyOf, formatSelection, moveSelection, unhideBefore, hideSelection, layoutWidths, writeSheetClipboard, pasteSheetClipboard, sheetClipboardCommand, checkCommit, type SheetState, type SheetCtx } from "./sheetActions";
+import { TabMenu, CellMenu, FilterPanel, FilterButtons, FindBar, type ClipKind } from "./SheetMenus";
 import { handleSheetKey } from "./sheetKeys";
 import { sheetPointerDown, sheetResizeStart, sheetFillStart } from "./sheetPointer";
 import "./sheet.css";
 
 
-export default function SheetView({ doc, live, setSelection, mode, snapshot, setToolbar }: LiveViewProps) {
+export default function SheetView({ doc, live, selection, setSelection, mode, snapshot, setToolbar, setExports, setImport, openComments, setPanel }: LiveViewProps) {
   const params = useSearchParams();
   const liveEls = useLiveElements(doc._id);
   const elements = snapshot ?? liveEls;
@@ -68,9 +68,10 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
     const t = model.tabs.find((x) => x.id === wantTab || x.name.toLowerCase() === wantTab.toLowerCase());
     if (t) setTabId(t.id);
   }, [wantTab, model.tabs]);
-  const showTab = useCallback((id: string) => {
+  /** Show a tab and put it in the address. A tab just created passes its name: the model doesn't hold it yet. */
+  const showTab = useCallback((id: string, knownName?: string) => {
     setTabId(id);
-    const name = held.current?.model.byId.get(id)?.meta.name ?? id;
+    const name = knownName ?? held.current?.model.byId.get(id)?.meta.name ?? id;
     const next = new URLSearchParams(window.location.search);
     next.set("tab", name);
     next.delete("el");
@@ -89,7 +90,8 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
   // ── Filter: hidden rows ───────────────────────────────────────────────────
   const filter = tab.meta.filter;
   const hiddenRows = useMemo(() => {
-    const hidden = new Set<number>();
+    // Rows hidden by hand and rows the filter hides are both out of view (copy, sums and find skip them).
+    const hidden = new Set<number>(tab.hiddenRows);
     if (!filter) return hidden;
     const entries = Object.entries(filter.hidden ?? {}).filter(([, vals]) => vals.length);
     if (!entries.length) return hidden;
@@ -108,7 +110,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
   }, [filter, tab, wb, version, activeTabId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Layout ────────────────────────────────────────────────────────────────
-  const cols = useMemo(() => new AxisLayout(Math.min(18_278, Math.max(26, tab.cols + 8)), DEF_COL_W, tab.colWidths), [tab.cols, tab.colWidths]);
+  const cols = useMemo(() => new AxisLayout(Math.min(18_278, Math.max(26, tab.cols + 8)), DEF_COL_W, layoutWidths(tab)), [tab.cols, tab.colWidths, tab.hiddenCols]); // eslint-disable-line react-hooks/exhaustive-deps
   const rows = useMemo(() => {
     const custom = new Map(tab.rowHeights);
     // Wrapped text grows its row (unless someone set the height), so wrapping never hides text.
@@ -128,8 +130,10 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
 
   // ── Selection ─────────────────────────────────────────────────────────────
   const [sel, setSel] = useState<Sel>({ anchor: { col: 1, row: 1 }, focus: { col: 1, row: 1 } });
-  const rect = selRect(sel);
-  const active = sel.anchor;
+  // A selection never cuts a merge in half, and a merged cell is its top-left.
+  const rect = expandToMerges(model, activeTabId, selRect(sel));
+  const activeMerge = mergeAt(model, activeTabId, sel.anchor.col, sel.anchor.row);
+  const active = activeMerge ? { col: activeMerge.rect.c0, row: activeMerge.rect.r0 } : sel.anchor;
   const edit = useRef<EditStore>(createEditStore()).current;
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const sinkRef = useRef<HTMLTextAreaElement | null>(null);
@@ -138,6 +142,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
   const pasteValuesRef = useRef(false);
   const pointRef = useRef<{ start: number; end: number; anchor: { col: number; row: number }; focus: { col: number; row: number } } | null>(null);
   const tabMemory = useRef(new Map<string, { sel: Sel; left: number; top: number }>());
+  const tabRunRef = useRef<number | null>(null);
   const [copyRect, setCopyRect] = useState<{ tab: string; rect: Rect } | null>(null);
   const [fillPreview, setFillPreview] = useState<Rect | null>(null);
   const [scrollTick, setScrollTick] = useState(0);
@@ -148,8 +153,12 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
   // The same, plus the handlers and refs, for the event handlers in sheetKeys/sheetPointer/sheetActions.
   const ctx = useRef<SheetCtx>(null!);
 
+  // Every write from the view: strict dropdown and date cells refuse what they don't accept, whatever the path (typing, paste, fill).
   const apply = useCallback((ops: Parameters<typeof live.apply>[0]) => {
-    if (ops.length) live.apply(ops);
+    if (!ops.length) return;
+    const held = enforceValidation(S.current.model, ops);
+    if (held.refused) toast(`Skipped ${held.refused} value${held.refused === 1 ? "" : "s"} a dropdown doesn't allow`);
+    if (held.ops.length) live.apply(held.ops);
   }, [live]);
 
   // Selection -> presence (my range, in this tab) and the shell's Ask selection.
@@ -212,57 +221,32 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
       if (queryTabRef.current) toast("This tab is a live query; it fills itself.");
       return;
     }
-    const cur = wb.cell(activeTabId, sel.anchor.col, sel.anchor.row)?.input ?? "";
-    edit.set({ tab: activeTabId, col: sel.anchor.col, row: sel.anchor.row, text: text ?? cur, mode, surface });
+    const m = mergeAt(S.current.model, activeTabId, sel.anchor.col, sel.anchor.row);
+    const at = m ? { col: m.rect.c0, row: m.rect.r0 } : sel.anchor;
+    const cur = wb.cell(activeTabId, at.col, at.row)?.input ?? "";
+    edit.set({ tab: activeTabId, col: at.col, row: at.row, text: text ?? cur, mode, surface });
     caretRef.current = (text ?? cur).length;
   }, [edit]);
   const queryTabRef = useRef(queryTab);
   queryTabRef.current = queryTab;
 
-  const move = useCallback((dc: number, dr: number, extend = false, jump = false) => {
-    const { sel, cols, rows, tab } = S.current;
-    const from = extend ? sel.focus : sel.anchor;
-    let col = from.col, row = from.row;
-    if (jump) {
-      // Ctrl/⌘+arrow: to the edge of the current run of data, or the next data.
-      const has = (c: number, r: number) => {
-        const el = tab.cells.get(cellNum(c, r));
-        return !!el && typeof el.input === "string" && el.input !== "";
-      };
-      const limitC = Math.max(tab.cols, 1), limitR = Math.max(tab.rows, 1);
-      const step = () => {
-        const nc = col + dc, nr = row + dr;
-        if (nc < 1 || nr < 1 || (dc > 0 && nc > limitC) || (dr > 0 && nr > limitR)) return false;
-        col = nc;
-        row = nr;
-        return true;
-      };
-      const startFilled = has(col, row);
-      const nextFilled = has(col + dc, row + dr);
-      if (startFilled && nextFilled) {
-        while (has(col + dc, row + dr) && step());
-      } else {
-        while (step() && !has(col, row));
-      }
-    } else {
-      for (let i = 0; i < Math.abs(dc); i++) col = cols.step(col, dc > 0 ? 1 : -1);
-      for (let i = 0; i < Math.abs(dr); i++) row = rows.step(row, dr > 0 ? 1 : -1);
-    }
-    col = Math.max(1, Math.min(cols.count, col));
-    row = Math.max(1, Math.min(rows.count, row));
-    select(extend ? { anchor: sel.anchor, focus: { col, row } } : { anchor: { col, row }, focus: { col, row } });
-  }, [select]);
+  const move = useCallback((dc: number, dr: number, extend = false, jump = false) => moveSelection(dc, dr, extend, jump, S, select), [select]);
 
   const commitEdit = useCallback((dc = 0, dr = 0) => {
     const e = edit.get();
     if (!e) return;
     edit.set(null);
     const { model, activeTabId } = S.current;
-    // A dropdown or date cell checks what was typed: a listed value takes its listed case; a strict cell refuses the rest.
-    const checked = validateInput(validationAt(model, e.tab, e.col, e.row), finishInput(e.text));
+    const checked = checkCommit(model, e);
+    if ("error" in checked) {
+      // A formula that doesn't parse stays open with the reason, instead of landing as #ERROR!.
+      edit.set({ ...e, error: checked.error });
+      return;
+    }
     if ("refuse" in checked) {
-      edit.set(e);
-      toast(checked.refuse);
+      // A strict cell opens its picker on what was typed, so the right value is one pick away.
+      edit.set(null);
+      if (!ctx.current.openPicker(e.col, e.row, e.text.trim())) toast(checked.refuse);
       return;
     }
     const input = checked.input;
@@ -323,6 +307,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
   }, [writeClipboard, copySelection]);
 
   const pasteInto = useCallback((e: React.ClipboardEvent) => pasteSheetClipboard(e, ctx.current), []);
+  const onClipboard = useCallback((kind: ClipKind) => sheetClipboardCommand(kind, ctx.current), []);
 
   // ── Keyboard ──────────────────────────────────────────────────────────────
   const onKey = useCallback((e: ReactKeyboardEvent<HTMLTextAreaElement | HTMLInputElement>, surface: "cell" | "bar") => handleSheetKey(e, surface, ctx.current), []);
@@ -354,6 +339,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
   }, [apply]);
 
   const onFillStart = useCallback((e: React.PointerEvent) => sheetFillStart(e, ctx.current), []);
+  const onUnhide = useCallback((axis: "col" | "row", at: number) => unhideBefore(axis, at, ctx.current), []);
 
   // ── Context menus and filter popover ──────────────────────────────────────
   const menu = useContextMenu<Menu>();
@@ -378,25 +364,8 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
     filterPop.open(e, { col }, { force: true });
   }, [filterPop]);
 
-  // ── Agent writes flash briefly, so a person watching sees the sheet fill ──
-  const [flash, setFlash] = useState<Set<string> | undefined>(undefined);
-  const seenRevs = useRef<Map<string, number> | null>(null);
-  useWatchEffect(() => {
-    const prev = seenRevs.current;
-    const next = new Map<string, number>();
-    const hits = new Set<string>();
-    for (const [n, el] of tab.cells) {
-      next.set(el.key, el.rev);
-      const before = prev?.get(el.key);
-      if (prev && (before === undefined || before < el.rev) && typeof el.by === "string" && el.by.startsWith("s:")) hits.add(`${n % 32768}:${Math.floor(n / 32768)}`);
-    }
-    seenRevs.current = next;
-    if (!hits.size) return;
-    setFlash(hits);
-    const t = setTimeout(() => setFlash(undefined), 1400);
-    return () => clearTimeout(t);
-  }, [tab]);
-  useWatchEffect(() => { seenRevs.current = null; }, [activeTabId]);
+  // Agent writes flash, live or when you open a tab they changed while you were elsewhere.
+  const flash = useAgentFlash(tab);
 
   // ── Others: outlines in their color ───────────────────────────────────────
   const others = useLivePresence(doc._id);
@@ -423,6 +392,9 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
   }, [others, activeTabId, copyRect, fillPreview, editRefsKey, model.tabs]);
 
   // ── Paint context (tables, conditional colors, scale ranges) ──────────────
+  // Dropdowns, comments, the error card and import: declared before the paint context, which reads their comment cells.
+  const x = useSheetExtras({ S, scrollerRef, sinkRef, select, apply, menu, live, showTab, docId: doc._id, openComments, setPanel, selection });
+  const { openPicker, onValidate, activeValidation, commentCells, openCellComment, openRules, onGridHover, hoverRef, setErrHover, importFiles, dropping, setDropping } = x;
   const paintCtx = useMemo(() => {
     const tables = model.tables.filter((t) => t.tab === activeTabId);
     const conds = model.conds.filter((c) => c.tab === activeTabId);
@@ -431,6 +403,8 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
     return {
       tables,
       conds,
+      comments: commentCells.size ? commentCells : undefined,
+      merges: model.merges.some((m) => m.tab === activeTabId) ? model.merges.filter((m) => m.tab === activeTabId) : undefined,
       validation: validations.length
         ? (col: number, row: number) => {
             for (let i = validations.length - 1; i >= 0; i--) {
@@ -453,7 +427,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
         return r;
       },
     };
-  }, [model, activeTabId, wb, version, filter]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [model, activeTabId, wb, version, filter, commentCells]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Editor placement (follows scroll) ─────────────────────────────────────
   const editState = useSyncExternalStore(edit.subscribe, () => {
@@ -530,8 +504,8 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
     // The implicit first tab gets an element so the new one sorts after it.
     const ensureFirst = model.tabs.length === 1 && !elementsHaveTab(elements, model.tabs[0].id) ? tabPatchOps(model, model.tabs[0].id, {}) : [];
     apply([...ensureFirst, ...add.ops]);
-    setTabId(add.id);
-    requestAnimationFrame(() => showTab(add.id));
+    const created = add.ops[0];
+    showTab(add.id, "put" in created && typeof created.put.name === "string" ? created.put.name : name);
     select({ anchor: { col: 1, row: 1 }, focus: { col: 1, row: 1 } });
   }, [apply, select, elements, showTab]);
   const addMenu = useContextMenu<null>();
@@ -553,17 +527,18 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
   }, []);
   const [renameTab, setRenameTab] = useState<string | null>(null);
 
-  const x = useSheetExtras({ S, scrollerRef, sinkRef, select, apply, menu, live, showTab, setTabId });
-  const { openPicker, onValidate, activeValidation, onGridHover, hoverRef, setErrHover, fileRef, importFiles, dropping, setDropping } = x;
 
-  // Top-bar controls: none beyond the shell's for now.
+  // Top-bar controls: none beyond the shell's. Downloads: this tab (or the selection) as CSV, the whole sheet as Excel.
   useWatchEffect(() => {
     setToolbar(null);
-  }, [setToolbar]);
+    setExports(sheetExports(S));
+    setImport({ label: "Import file", accept: IMPORT_ACCEPT, multiple: true, run: (files) => void importFiles(files) });
+    return () => { setExports(null); setImport(null); };
+  }, [setToolbar, setExports, setImport, importFiles]);
 
   const projectName = doc.project_path?.split("/").filter(Boolean).pop();
 
-  ctx.current = { S, edit, pointRef, caretRef, scrollerRef, sinkRef, pasteValuesRef, dragRef, live, docId: doc._id, cancelEdit, commitEdit, commitToSelection, move, beginEdit, apply, onFormat, select, setSel, setCopyRect, setFillPreview, setFindOpen, openPicker };
+  ctx.current = { S, edit, pointRef, caretRef, scrollerRef, sinkRef, pasteValuesRef, dragRef, live, docId: doc._id, cancelEdit, commitEdit, commitToSelection, move, beginEdit, apply, onFormat, select, setSel, setCopyRect, setFillPreview, setFindOpen, openPicker, tabRunRef, openCellComment, openRules };
 
   return (
     <div
@@ -586,17 +561,6 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
         void importFiles(e.dataTransfer.files);
       }}
     >
-      <input
-        ref={fileRef}
-        type="file"
-        accept={IMPORT_ACCEPT}
-        multiple
-        hidden
-        onChange={(e) => {
-          if (e.target.files?.length) void importFiles(e.target.files);
-          e.target.value = "";
-        }}
-      />
       <FormulaBar
         edit={edit}
         refLabel={refLabel}
@@ -627,7 +591,6 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
         onPointerLeave={(e) => {
           if ((e.relatedTarget as HTMLElement | null)?.closest?.("[data-sheet-error-pop]")) return;
           hoverRef.current.key = "";
-          if (hoverRef.current.timer) clearTimeout(hoverRef.current.timer);
           setErrHover(null);
         }}
       >
@@ -642,6 +605,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
           frozenCols={frozenCols}
           sel={rect}
           active={active}
+          activeRect={activeMerge?.rect}
           outlines={outlines}
           paintCtx={paintCtx}
           filterCols={new Set(Object.entries(filter?.hidden ?? {}).filter(([, v]) => v.length).map(([c]) => Number(c)))}
@@ -651,6 +615,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
           scrollerRef={scrollerRef}
           onAutoFit={onAutoFit}
           onPointerDown={onPointerDown}
+          onUnhide={onUnhide}
           onDoubleClick={onDoubleClick}
           onContextMenu={onContextMenu}
           onResizeStart={onResizeStart}
@@ -682,7 +647,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
           onPaste={pasteInto}
           onCaret={(c) => { caretRef.current = c; }}
         />
-        <SheetExtrasView x={x} placement={placement} editing={!!editState} readOnly={readOnly} edit={edit} select={select} apply={apply} sinkRef={sinkRef} tabRows={tab.rows} />
+        <SheetExtrasView x={x} placement={placement} editing={!!editState} readOnly={readOnly} edit={edit} select={select} apply={apply} sinkRef={sinkRef} live={live} />
         <FormatBar docId={doc._id} style={activeStyle} onAction={onFormat} readOnly={readOnlyDoc || loading} selectionLabel={refLabel} tabName={tab.meta.name} autoAsk={tab.rows === 0 && !queryTab} onAsk={onAsk} />
       </div>
       <TabStrip
@@ -708,7 +673,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
         renameRequest={renameTab}
         onRenameDone={() => setRenameTab(null)}
         onAdd={(e) => addMenu.open(e, null, { force: true })}
-        summary={<SelectionSummary values={summaryValues} style={activeStyle} />}
+        summary={<SelectionSummary values={summaryValues} style={activeStyle.nf ? activeStyle : { ...activeStyle, nf: activeInfo?.implied?.nf }} />}
         others={others}
         unseen={unseenTabs}
       />
@@ -717,7 +682,6 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
         {() => (
           <>
             <CtxItem onSelect={() => addTab()}>Blank tab</CtxItem>
-            <CtxItem icon={Upload} onSelect={() => fileRef.current?.click()}>Import file</CtxItem>
             <DropdownMenuSeparator />
             {(["tasks", "sessions", "prs", "metrics"] as const).map((src) => (
               <CtxItem key={src} icon={Radio} onSelect={() => addTab({ name: uniqueTabName(S.current.model, QUERY_LABEL[src]), query: { source: src, ...(projectName && src !== "metrics" ? { project: projectName } : {}) } })}>
@@ -744,7 +708,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
               }}
             />
           ) : (
-            <CellMenu kind={m.kind} readOnly={readOnly} onFormat={onFormat} validation={activeValidation?.rule} onValidate={onValidate} onClear={() => apply(clearVisible(model, activeTabId, rect, hiddenRows))} onCopyHint={() => {
+            <CellMenu kind={m.kind} readOnly={readOnly} onFormat={onFormat} validation={activeValidation?.rule} onValidate={onValidate} onClipboard={onClipboard} onComment={() => openCellComment()} onHide={(axis, hide) => hideSelection(axis, hide, ctx.current)} onClear={() => apply(clearVisible(model, activeTabId, rect, hiddenRows))} onCopyHint={() => {
               const { rect: r, tab: t } = S.current;
               const lines = visibleRowsOf(r, hiddenRows, t.rows).map((row) => {
                 const out: string[] = [];
