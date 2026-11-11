@@ -2407,7 +2407,11 @@ diffs-container {
    hover card whose top edge crosses the header band reads as a leave on
    the way down and closes, and a modal's controls over a draggable stretch
    never get the click. Every Radix layer (popover, hover card, tooltip,
-   menu) is covered by its wrapper; a hand-built flyout carries data-flyout. */
+   menu) is covered by its wrapper; a hand-built flyout carries data-flyout.
+   no-drag only wins where it comes LATER in the document than the drag
+   region it overlaps (Blink sends the rects in tree order, Electron lets the
+   last one win), so a fixed control over the titlebar must also mount after
+   the page: portals do, and ZenCorner sits at the end of the shell. */
 [data-flyout],
 [data-radix-popper-content-wrapper],
 [aria-modal="true"] {

@@ -1366,8 +1366,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       {/* Zen hides this header. Each surface's own top row then stands in as
           the titlebar (drag region + an inset past the zen corner) via
           useTitlebarHead, and the zen toggle stays in that corner on every
-          page. An app window (Chat, Work) replaces it with the app's own bar. */}
-      {isZenMode && !appWindow && <ZenCorner />}
+          page (ZenCorner, at the end of this shell). An app window (Chat,
+          Work) replaces it with the app's own bar. */}
       {appWindow && <AppWindowBar app={appWindow} />}
       {/* Header spans full width */}
       <header data-cc-topbar ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] modern:border-sol-border ${desktopClass} ${isZenMode || appWindow ? "hidden" : ""} relative`}>
@@ -1565,6 +1565,12 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         </ErrorBoundary>
       </MobileDrawer>
       <ShellOverlays />
+      {/* Last in the shell on purpose. In zen the row under the corner is a
+          drag region, and the desktop app resolves overlapping drag and
+          no-drag areas by document order, not z-index: the later element
+          wins. Mounted before the page, the window took every click on the
+          zen toggle and the workspace switcher. */}
+      {isZenMode && !appWindow && <ZenCorner />}
     </div>
   );
 }
