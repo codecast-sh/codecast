@@ -5,10 +5,10 @@
 import { MAX_COL, MAX_ROW, isFormula, tokenize, type RefPart, type RefToken } from "./formula";
 import { colLetters, quoteTabName } from "./refs";
 
-function partText(p: RefPart, shape: RefToken["shape"]): string {
+function partText(p: RefPart, shape: RefToken["shape"], end = false): string {
   const c = `${p.absCol ? "$" : ""}${colLetters(p.col)}`;
   const r = `${p.absRow ? "$" : ""}${p.row}`;
-  if (shape === "cols") return c;
+  if (shape === "cols" || (shape === "colsFrom" && end)) return c;
   if (shape === "rows") return r;
   return c + r;
 }
@@ -17,7 +17,7 @@ function partText(p: RefPart, shape: RefToken["shape"]): string {
 export function refText(t: Pick<RefToken, "tab" | "shape" | "a" | "b">): string {
   const prefix = t.tab !== undefined ? `${quoteTabName(t.tab)}!` : "";
   const a = partText(t.a, t.shape);
-  return t.shape === "cell" ? prefix + a : `${prefix}${a}:${partText(t.b!, t.shape)}`;
+  return t.shape === "cell" ? prefix + a : `${prefix}${a}:${partText(t.b!, t.shape, true)}`;
 }
 
 /** Map every reference in a formula; return null from fn to keep it, a string to replace it. */
@@ -49,7 +49,8 @@ export function shiftFormula(input: string, dCol: number, dRow: number): string 
   return mapFormulaRefs(input, (t) => {
     const move = (p: RefPart): RefPart | null => {
       const col = p.absCol || t.shape === "rows" ? p.col : p.col + dCol;
-      const row = p.absRow || t.shape === "cols" ? p.row : p.row + dRow;
+      // An open-ended column range keeps its end on the last row.
+      const row = p.absRow || t.shape === "cols" || (t.shape === "colsFrom" && p === t.b) ? p.row : p.row + dRow;
       if (col < 1 || row < 1 || col > MAX_COL || row > MAX_ROW) return null;
       return { ...p, col, row };
     };
@@ -80,6 +81,14 @@ export function adjustFormula(input: string, formulaTab: string, s: Structural):
     const target = t.tab ?? formulaTab;
     if (target.toLowerCase() !== s.tabName.toLowerCase()) return null;
     if (s.axis === "row" && t.shape === "cols") return null;
+    // An open-ended column range: its start moves with rows; its end stays at the bottom.
+    if (s.axis === "row" && t.shape === "colsFrom") {
+      const r = t.a.row;
+      if (s.count > 0) return r >= s.at ? refText({ ...t, a: { ...t.a, row: r + s.count } }) : null;
+      const hi = s.at - s.count - 1;
+      if (r < s.at) return null;
+      return refText({ ...t, a: { ...t.a, row: r <= hi ? s.at : r + s.count } });
+    }
     if (s.axis === "col" && t.shape === "rows") return null;
     const key = s.axis === "row" ? "row" : "col";
     const get = (p: RefPart) => p[key];

@@ -5,6 +5,7 @@
 // stack), caches every result, and an edit clears the cache of exactly the
 // cells downstream of it. A cycle marks every cell on it #CIRC!.
 import { FUNCTIONS, type FnContext } from "./functions";
+import { ARRAY_FUNCTIONS } from "./arrayFunctions";
 import { scalarOf } from "./functionArgs";
 import { FormulaSyntaxError, MAX_COL, MAX_ROW, isFormula, parseFormula, type Node } from "./formula";
 import {
@@ -52,12 +53,29 @@ function cid(ti: number, col: number, row: number): number {
   return (ti * ROW_BITS + row) * COL_BITS + col;
 }
 
+function decode(id: number): { ti: number; col: number; row: number } {
+  const ti = Math.floor(id / COL_BITS / ROW_BITS);
+  const rest = id - ti * ROW_BITS * COL_BITS;
+  const row = Math.floor(rest / COL_BITS);
+  return { ti, row, col: rest - row * COL_BITS };
+}
+
 export type CellInfo = {
   input: string;
   value: Scalar;
   implied?: ImpliedFormat;
   formula: boolean;
+  /** A value spilled here by an array formula elsewhere (FILTER, UNIQUE, ...); the cell itself holds no input. */
+  spilled?: boolean;
 };
+
+/** Where an array formula's block sits: its anchor cell and the rectangle (grid null while cells are in the way). */
+type Spill = { ti: number; c0: number; r0: number; c1: number; r1: number; grid: Scalar[][] | null };
+
+function sameScalar(a: Scalar | undefined, b: Scalar | undefined): boolean {
+  if (isError(a) || isError(b)) return isError(a) && isError(b) && a.error === b.error;
+  return a === b;
+}
 
 /** Changes above this size re-dirty every formula instead of walking dependents. */
 const BULK_THRESHOLD = 256;
@@ -84,6 +102,13 @@ export class Workbook {
   private rangeWide = new Map<number, Set<number>>();
   /** Formulas that read the clock (TODAY, NOW). */
   private volatile = new Set<number>();
+  /** Array formulas (outermost function FILTER, UNIQUE, SORT, ...): their block spills into the cells beside them. */
+  private anchors = new Set<number>();
+  private spills = new Map<number, Spill>();
+  /** Spilled cell -> the anchor whose block covers it. */
+  private spillOf = new Map<number, number>();
+  /** Cells whose spilled value changed during an evaluation; their readers are invalidated once it ends. */
+  private spillMoved: number[] = [];
   private now: () => Date;
 
   constructor(opts: { now?: () => Date } = {}) {
@@ -117,6 +142,7 @@ export class Workbook {
     // Names moved: every formula's precedents re-resolve.
     for (const [id, e] of this.entries) if (e.ast) this.linkDeps(id, e);
     this.dirtyAll();
+    this.settle();
   }
 
   tabName(tabId: string): string | undefined {
@@ -137,8 +163,112 @@ export class Workbook {
       if (id !== null) changed.push(id);
     }
     if (changed.length === 0) return;
+    // A write inside an array formula's block (or where a blocked one wants to go) makes it place again.
+    if (this.spills.size) {
+      const anchors = new Set<number>();
+      for (const id of changed) {
+        const a = this.spillOf.get(id);
+        if (a !== undefined) anchors.add(a);
+      }
+      for (const [a, sp] of this.spills) {
+        if (sp.grid) continue;
+        for (const id of changed) {
+          const { ti, col, row } = decode(id);
+          if (id !== a && ti === sp.ti && col >= sp.c0 && col <= sp.c1 && row >= sp.r0 && row <= sp.r1) anchors.add(a);
+        }
+      }
+      for (const a of anchors) if (this.entries.has(a)) changed.push(a);
+    }
     if (changed.length > BULK_THRESHOLD) this.dirtyAll();
     else this.invalidate(changed);
+    this.settle();
+  }
+
+  /**
+   * Place every stale array formula's block, then invalidate the readers of
+   * cells whose spilled value changed; repeat while blocks move (an array
+   * formula can read another's block).
+   */
+  private settle(): void {
+    for (let pass = 0; pass < 8; pass++) {
+      for (const a of this.anchors) {
+        const e = this.entries.get(a);
+        if (e && e.state === 0) this.ensure(a);
+      }
+      if (!this.spillMoved.length) return;
+      const moved = this.spillMoved;
+      this.spillMoved = [];
+      this.invalidate(moved);
+    }
+  }
+
+  /** Take an anchor's block off the grid, noting the cells that lose a value. */
+  private unspill(anchor: number, keep?: Spill): void {
+    const sp = this.spills.get(anchor);
+    if (!sp) return;
+    this.spills.delete(anchor);
+    if (!sp.grid) return;
+    for (let r = sp.r0; r <= sp.r1; r++)
+      for (let c = sp.c0; c <= sp.c1; c++) {
+        const id = cid(sp.ti, c, r);
+        if (id === anchor || this.spillOf.get(id) !== anchor) continue;
+        this.spillOf.delete(id);
+        const stays = keep?.grid && r <= keep.r1 && c <= keep.c1 && sameScalar(keep.grid[r - keep.r0]?.[c - keep.c0] ?? null, sp.grid[r - sp.r0]?.[c - sp.c0] ?? null);
+        if (!stays) this.spillMoved.push(id);
+      }
+  }
+
+  /** An array formula's result: its block goes into the empty cells beside it, or #SPILL! when something is in the way. */
+  private place(id: number, e: Entry, v: Value): Scalar {
+    const grid = isGrid(v) && (v.grid.length > 1 || (v.grid[0]?.length ?? 0) > 1) ? v.grid : null;
+    if (!grid) {
+      this.unspill(id);
+      return topLevel(v);
+    }
+    const r1 = Math.min(MAX_ROW, e.row + grid.length - 1);
+    const c1 = Math.min(MAX_COL, e.col + Math.max(...grid.map((r) => r.length)) - 1);
+    let blocked = false;
+    for (let r = e.row; r <= r1 && !blocked; r++)
+      for (let c = e.col; c <= c1; c++) {
+        const cell = cid(e.ti, c, r);
+        if (cell === id) continue;
+        const owner = this.spillOf.get(cell);
+        if (this.entries.has(cell) || (owner !== undefined && owner !== id)) {
+          blocked = true;
+          break;
+        }
+      }
+    const next: Spill = { ti: e.ti, c0: e.col, r0: e.row, c1, r1, grid: blocked ? null : grid };
+    this.unspill(id, next);
+    this.spills.set(id, next);
+    if (blocked) return err("#SPILL!", "cells in the way of the result");
+    for (let r = e.row; r <= r1; r++)
+      for (let c = e.col; c <= c1; c++) {
+        const cell = cid(e.ti, c, r);
+        if (cell === id || this.spillOf.get(cell) === id) continue;
+        this.spillOf.set(cell, id);
+        this.spillMoved.push(cell);
+      }
+    const ext = this.extents.get(e.ti) ?? { rows: 0, cols: 0 };
+    if (r1 > ext.rows || c1 > ext.cols) this.extents.set(e.ti, { rows: Math.max(ext.rows, r1), cols: Math.max(ext.cols, c1) });
+    return topLevel(grid[0][0] ?? null);
+  }
+
+  /** The block an array formula fills (its anchor's address), when it spills. */
+  spillRange(tab: string, col: number, row: number): Rect | null {
+    const ti = this.tabIndex.get(tab);
+    if (ti === undefined) return null;
+    const sp = this.spills.get(cid(ti, col, row));
+    return sp?.grid ? { c0: sp.c0, r0: sp.r0, c1: sp.c1, r1: sp.r1 } : null;
+  }
+
+  /** Every block spilling on a tab, for drawing the cells that hold no input. */
+  spillRects(tab: string): Rect[] {
+    const ti = this.tabIndex.get(tab);
+    const out: Rect[] = [];
+    if (ti === undefined) return out;
+    for (const sp of this.spills.values()) if (sp.ti === ti && sp.grid) out.push({ c0: sp.c0, r0: sp.r0, c1: sp.c1, r1: sp.r1 });
+    return out;
   }
 
   setCell(tab: string, col: number, row: number, input: string | null): void {
@@ -154,6 +284,10 @@ export class Workbook {
     const text = input ?? "";
     if ((prev?.input ?? "") === text) return null;
     if (prev?.ast || prev?.syntax) this.unlinkDeps(id, prev);
+    if (this.anchors.has(id)) {
+      this.anchors.delete(id);
+      this.unspill(id);
+    }
     if (text === "") {
       this.entries.delete(id);
       this.formulasByTab.get(ti)?.delete(id);
@@ -170,6 +304,7 @@ export class Workbook {
       if (!set) this.formulasByTab.set(ti, (set = new Set()));
       set.add(id);
       if (e.ast) this.linkDeps(id, e);
+      if (e.ast?.t === "fn" && ARRAY_FUNCTIONS.has(e.ast.name)) this.anchors.add(id);
     } else {
       this.formulasByTab.get(ti)?.delete(id);
       const lit = parseLiteral(text);
@@ -334,6 +469,7 @@ export class Workbook {
   refreshVolatile(): boolean {
     if (this.volatile.size === 0) return false;
     this.invalidate([...this.volatile]);
+    this.settle();
     return true;
   }
 
@@ -351,7 +487,7 @@ export class Workbook {
     if (ti === undefined) return null;
     const id = cid(ti, col, row);
     const e = this.entries.get(id);
-    if (!e) return null;
+    if (!e) return this.spillOf.has(id) ? { input: "", value: this.valueById(id), formula: false, spilled: true } : null;
     const formula = !!(e.ast || e.syntax);
     return { input: e.input, value: this.valueById(id), implied: e.implied, formula };
   }
@@ -383,7 +519,16 @@ export class Workbook {
 
   private valueById(id: number): Scalar {
     const e = this.entries.get(id);
-    if (!e) return null;
+    if (!e) {
+      const a = this.spillOf.get(id);
+      if (a === undefined) return null;
+      const ae = this.entries.get(a);
+      if (ae && ae.state === 0) this.ensure(a);
+      const sp = this.spills.get(a);
+      if (!sp?.grid) return null;
+      const { col, row } = decode(id);
+      return sp.grid[row - sp.r0]?.[col - sp.c0] ?? null;
+    }
     if (e.state === 2) return e.ast || e.syntax ? (e.value ?? null) : (e.literal ?? null);
     if (e.state === 1) return err("#CIRC!", "circular reference");
     this.ensure(id);
@@ -443,14 +588,15 @@ export class Workbook {
       stack.pop();
       const e = this.entries.get(top.id)!;
       if (e.state === 2) continue;
-      e.value = this.compute(e);
+      e.value = this.compute(top.id, e);
       e.state = 2;
     }
   }
 
-  private compute(e: Entry): Scalar {
+  private compute(id: number, e: Entry): Scalar {
     if (e.syntax) return err("#ERROR!", e.syntax);
-    return topLevel(this.evalNode(e.ast!, e.ti, { col: e.col, row: e.row, now: this.now() }));
+    const v = this.evalNode(e.ast!, e.ti, { col: e.col, row: e.row, now: this.now() });
+    return this.anchors.has(id) ? this.place(id, e, v) : topLevel(v);
   }
 
   private readGrid(ti: number, c0: number, r0: number, c1: number, r1: number): Scalar[][] {
@@ -545,8 +691,13 @@ function binary(op: string, a: Value, b: Value): Value {
     for (let r = 0; r < rows; r++) {
       const line: Scalar[] = [];
       for (let c = 0; c < cols; c++) {
-        const x = ga ? (ga[ga.length === 1 ? 0 : r]?.[ga[0].length === 1 ? 0 : c] ?? err("#N/A")) : (a as Scalar);
-        const y = gb ? (gb[gb.length === 1 ? 0 : r]?.[gb[0].length === 1 ? 0 : c] ?? err("#N/A")) : (b as Scalar);
+        // An empty cell is null (it compares as "" or 0); only a position past the smaller block's edge is #N/A.
+        const at = (g: Scalar[][], rr: number, cc: number): Scalar => {
+          const v = g[g.length === 1 ? 0 : rr]?.[g[0].length === 1 ? 0 : cc];
+          return v === undefined ? err("#N/A") : v;
+        };
+        const x = ga ? at(ga, r, c) : (a as Scalar);
+        const y = gb ? at(gb, r, c) : (b as Scalar);
         line.push(binaryScalar(op, x, y));
       }
       out.push(line);

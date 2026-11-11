@@ -141,6 +141,24 @@ test("a settled submit keeps the pane even when its message is unacknowledged", 
   store.advance(identity.messageId, "submit");
   const next = { ...identity, messageId: "message-b" };
   await expect(prepareTmuxDelivery("target", next, query, async () => false, store, { settleMs: 0 })).rejects.toThrow("earlier message");
+  await expect(prepareTmuxDelivery("target", next, query, async () => false, store, { settleMs: 0, submitSpent: async () => false })).rejects.toThrow("earlier message");
+});
+
+// jx742pa, 2026-11-11: a starved agent drew two sends into one turn, so the
+// first never echoed, and its submitted receipt refused every later message
+// for hours while the agent sat idle at an empty prompt.
+test("a settled submit an idle agent has taken frees the pane for the next message", async () => {
+  const store = open();
+  store.begin(identity, generation, "continue");
+  store.advance(identity.messageId, "submit");
+  const next = { ...identity, messageId: "message-b" };
+  let probed = 0;
+  const submitSpent = async () => { probed++; return true; };
+  await expect(prepareTmuxDelivery("target", next, query, async () => false, store, { submitSpent })).rejects.toThrow("earlier message");
+  expect(probed).toBe(0);
+  await prepareTmuxDelivery("target", next, query, async () => false, store, { settleMs: 0, submitSpent });
+  expect(store.get(identity.messageId)).toBeNull();
+  expect(store.begin(next, generation, "next").fresh).toBe(true);
 });
 
 test("a verification the server never acknowledged is reported once the receipt settles", async () => {
@@ -176,6 +194,19 @@ test("a message is written at most TMUX_PASTE_WRITE_CAP times, then refused loud
   expect((error as TmuxDeliveryExhaustedError).submitted).toBe(true);
   // Nothing was written: the pane is free for the next message.
   expect(store.begin({ ...identity, messageId: "message-b" }, generation, "next").fresh).toBe(true);
+});
+
+test("a payload already at the prompt is submitted after the cap, and the submit is not a write", () => {
+  // jx70102, 2026-11-11: a starved agent drew the third write only after the
+  // daemon had moved on; pressing Enter on it writes nothing, so the cap must not refuse it.
+  const store = open();
+  for (let write = 1; write <= TMUX_PASTE_WRITE_CAP; write++) {
+    store.begin(identity, generation, "continue");
+    store.release(identity.messageId);
+  }
+  const { receipt, fresh } = store.begin(identity, generation, "continue", { atPrompt: true });
+  expect({ fresh, writes: receipt.writes }).toEqual({ fresh: true, writes: TMUX_PASTE_WRITE_CAP });
+  expect(store.writesOf(identity.messageId)).toBe(TMUX_PASTE_WRITE_CAP);
 });
 
 test("a message whose writes never got an Enter is exhausted as never submitted", () => {
