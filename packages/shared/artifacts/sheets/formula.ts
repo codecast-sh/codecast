@@ -31,7 +31,7 @@ export type Token =
   | { type: "op"; v: string; start: number; end: number }
   | RefToken;
 
-export const ERROR_CODES = ["#DIV/0!", "#N/A", "#NAME?", "#NULL!", "#NUM!", "#REF!", "#VALUE!", "#CIRC!", "#ERROR!"] as const;
+export const ERROR_CODES = ["#DIV/0!", "#N/A", "#NAME?", "#NULL!", "#NUM!", "#REF!", "#VALUE!", "#CIRC!", "#SPILL!", "#ERROR!"] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
 const SHEET_PREFIX = String.raw`(?:'((?:[^']|'')+)'|([A-Za-z_][A-Za-z0-9_.]*))!`;
@@ -238,7 +238,13 @@ export function parseFormula(src: string): Node {
 
   function primary(): Node {
     const t = toks[p++];
-    if (!t) throw new FormulaSyntaxError("formula ends early");
+    if (!t) {
+      // Say what is missing: "=B2*" needs a value after *, "=SUM(A1," another argument.
+      const last = toks[toks.length - 1];
+      if (last?.type === "op" && last.v === ",") throw new FormulaSyntaxError("Missing an argument after the last comma");
+      if (last?.type === "op" && last.v !== ")") throw new FormulaSyntaxError(`Missing a value after ${last.v}`);
+      throw new FormulaSyntaxError("The formula ends too early");
+    }
     switch (t.type) {
       case "num":
         return { t: "num", v: t.v };

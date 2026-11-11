@@ -77,6 +77,10 @@ describe("declaration and registry", () => {
     // A grouped series names its group column for what it groups by, so series="agent" finds it.
     expect(PAGE_READERS.sessions.fold!([[dayKey(now), "codex"]], { days: 1, group_by: "agent" }, now)).toEqual({ columns: ["day", "agent", "sessions"], rows: [["2026-10-08", "codex", 1]] });
     expect(PAGE_READERS.signals.fold!([[dayKey(now), "bug"]], { days: 1, group_by: "kind" }, now).columns).toEqual(["day", "kind", "signals"]);
+    // Pull requests: the plain series keeps its shape; a split by author has one row per day and author that saw any.
+    const prs = [[dayKey(now), "opened", "ada"], [dayKey(now), "merged", "ada"], [dayKey(now), "opened", "bo"]];
+    expect(PAGE_READERS.prs.fold!(prs.map(([d, w]) => [d, w, ""]), { days: 1 }, now)).toEqual({ columns: ["day", "opened", "merged"], rows: [["2026-10-08", 2, 1]] });
+    expect(PAGE_READERS.prs.fold!(prs, { days: 1, group_by: "author" }, now)).toEqual({ columns: ["day", "author", "opened", "merged"], rows: [["2026-10-08", "ada", 1, 1], ["2026-10-08", "bo", 1, 0]] });
     expect(tableFromJson([{ a: 1, b: "x" }, { a: 2, c: true }])).toEqual({ columns: ["a", "b", "c"], rows: [[1, "x", undefined], [2, undefined, true]] });
     expect(tableFromJson({ total: 3 })).toEqual({ columns: ["key", "value"], rows: [["total", 3]] });
     expect(capResult(["n"], Array.from({ length: 5000 }, (_, i) => [i])).rows).toHaveLength(2000);

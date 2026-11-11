@@ -28,6 +28,7 @@ export function sheetPointerDown(hit: GridHit, e: React.PointerEvent, c: SheetCt
       });
       return;
     }
+    c.tabRunRef.current = null;
     if (st) commitEdit();
     e.preventDefault();
     sinkRef.current?.focus({ preventScroll: true });

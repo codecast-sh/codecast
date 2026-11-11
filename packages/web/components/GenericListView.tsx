@@ -1,5 +1,5 @@
 "use client";
-import { ReactNode, useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { ReactElement, ReactNode, useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { copyToClipboard } from "../lib/utils";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRouter, usePathname } from "next/navigation";
@@ -449,6 +449,8 @@ export interface GenericListViewProps<T> {
 
   /** Absent on a list nothing is made from (decisions arrive; nobody files one): no create button, no "Create one". */
   onCreate?: () => void;
+  /** Wraps the header's + in a menu of what to create (the docs list's type and template picker); onCreate then serves only the keyboard. */
+  createMenu?: (trigger: ReactElement) => ReactNode;
 
   hasMore?: boolean;
   isLoadingMore?: boolean;
@@ -474,6 +476,10 @@ export interface GenericListViewProps<T> {
    *  of silently returning "No results". When omitted, search stays scoped to the
    *  visible groups/flatItems (unchanged behavior). */
   searchAllItems?: T[];
+  /** The search box's text, for a page that also searches the server. */
+  onSearchChange?: (query: string) => void;
+  /** An item the server's search found (its content matched), shown though its own text does not. */
+  alsoMatches?: (item: T) => boolean;
   /** When set, a subtle "syncing N" whisper renders next to the title while the
    *  reconcile crawl for this scope ("tasks" | "docs") is still streaming in. */
   syncScope?: string;
@@ -542,6 +548,7 @@ export function GenericListView<T>({
   emptyIcon,
   emptyMessage,
   onCreate,
+  createMenu,
   hasMore,
   isLoadingMore,
   onLoadMore,
@@ -553,6 +560,8 @@ export function GenericListView<T>({
   onItemEdit,
   getSearchText,
   searchAllItems,
+  onSearchChange,
+  alsoMatches,
   syncScope,
   headerExtra,
   displayExtra,
@@ -621,6 +630,11 @@ export function GenericListView<T>({
   }, [shareUrl]);
 
   const searching = !!searchQuery && !!getSearchText;
+  useWatchEffect(() => { onSearchChange?.(searchQuery); }, [searchQuery, onSearchChange]);
+  const matchesSearch = useCallback(
+    (item: T, q: string) => getSearchText!(item).toLowerCase().includes(q) || !!alsoMatches?.(item),
+    [getSearchText, alsoMatches],
+  );
   // A search with a `searchAllItems` corpus spans the whole set (ignoring the
   // active browse tab / grouping) and renders as a flat result list.
   const crossScopeSearch = searching && !!searchAllItems;
@@ -631,17 +645,17 @@ export function GenericListView<T>({
     if (crossScopeSearch) return null; // flat results from searchAllItems instead
     const q = searchQuery.toLowerCase();
     return groupsWithItems(
-      groups.map(g => ({ ...g, items: g.items.filter(item => getSearchText!(item).toLowerCase().includes(q)) }))
+      groups.map(g => ({ ...g, items: g.items.filter(item => matchesSearch(item, q)) }))
     );
-  }, [groups, searching, crossScopeSearch, searchQuery, getSearchText]);
+  }, [groups, searching, crossScopeSearch, searchQuery, matchesSearch]);
 
   const displayFlatItems = useMemo(() => {
     if (!searching) return flatItems;
     const q = searchQuery.toLowerCase();
-    if (crossScopeSearch) return searchAllItems!.filter(item => getSearchText!(item).toLowerCase().includes(q));
+    if (crossScopeSearch) return searchAllItems!.filter(item => matchesSearch(item, q));
     if (groups) return flatItems; // grouped search handled in displayGroups
-    return flatItems.filter(item => getSearchText!(item).toLowerCase().includes(q));
-  }, [groups, flatItems, searching, crossScopeSearch, searchAllItems, searchQuery, getSearchText]);
+    return flatItems.filter(item => matchesSearch(item, q));
+  }, [groups, flatItems, searching, crossScopeSearch, searchAllItems, searchQuery, matchesSearch]);
 
   const visibleItems = useMemo(() => {
     if (displayGroups) {
@@ -1139,16 +1153,19 @@ export function GenericListView<T>({
           >
             {paletteKeys ? paletteKeys.map((k, i) => <KeyCap key={i} size="xs">{k}</KeyCap>) : <Command className="w-3 h-3" />}
           </button>
-          {onCreate && (
-            <button
-              onClick={onCreate}
-              className={`flex items-center justify-center w-7 h-7 rounded-full border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors flex-shrink-0 ${M_ICON_SM}`}
-              title="Create new"
-              aria-label="Create new"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
-          )}
+          {onCreate && (() => {
+            const plus = (
+              <button
+                onClick={createMenu ? undefined : onCreate}
+                className={`flex items-center justify-center w-7 h-7 rounded-full border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors flex-shrink-0 ${M_ICON_SM}`}
+                title="Create new"
+                aria-label="Create new"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            );
+            return createMenu ? createMenu(plus) : plus;
+          })()}
         </>}
       >
         {/* Filter bar — only present once at least one chip-able filter is set (NOT

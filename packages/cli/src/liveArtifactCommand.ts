@@ -408,8 +408,15 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
           if (result.status) console.log(result.status);
           return;
         }
-        const r = await writeOps(deps, spec, id, a.title, result.ops, { draft: options.draft, position: result.position, status: result.status, elements: a.elements });
-        printWrite(spec, id, r, options.json);
+        // The cursor label takes the status's first line; the agent gets all of it (board verbs end it with the keys they made).
+        const label = result.status?.split("\n")[0];
+        const r = await writeOps(deps, spec, id, a.title, result.ops, { draft: options.draft, position: result.position, status: label, elements: a.elements });
+        if (options.json) {
+          console.log(JSON.stringify({ ...r, ...(result.status ? { status: result.status } : {}) }));
+          return;
+        }
+        printWrite(spec, id, r);
+        if (result.status) console.log(result.status);
       }));
   }
 

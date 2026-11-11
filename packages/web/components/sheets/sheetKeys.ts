@@ -16,10 +16,17 @@ export function handleSheetKey(e: ReactKeyboardEvent<HTMLTextAreaElement | HTMLI
         cancelEdit();
       } else if (e.key === "Enter" && !e.altKey) {
         e.preventDefault();
+        const start = c.tabRunRef.current;
+        c.tabRunRef.current = null;
         if (mod) commitToSelection();
-        else commitEdit(0, e.shiftKey ? -1 : 1);
+        else if (start !== null && !e.shiftKey) {
+          // Typing a row with Tab, then Enter: back to the column the row started in, like Sheets.
+          commitEdit(0, 0);
+          if (S.current.activeTabId === st.tab) select({ anchor: { col: start, row: st.row + 1 }, focus: { col: start, row: st.row + 1 } });
+        } else commitEdit(0, e.shiftKey ? -1 : 1);
       } else if (e.key === "Tab") {
         e.preventDefault();
+        if (!e.shiftKey && c.tabRunRef.current === null) c.tabRunRef.current = st.col;
         commitEdit(e.shiftKey ? -1 : 1, 0);
       } else if (e.key === "F4") {
         // Cycle the reference at the caret through A1, $A$1, A$1, $A1.
@@ -51,6 +58,7 @@ export function handleSheetKey(e: ReactKeyboardEvent<HTMLTextAreaElement | HTMLI
           return;
         }
         e.preventDefault();
+        c.tabRunRef.current = null;
         commitEdit(d[0], d[1]);
       }
       if (!e.key.startsWith("Arrow") && e.key !== "Shift") pointRef.current = null;
@@ -58,6 +66,12 @@ export function handleSheetKey(e: ReactKeyboardEvent<HTMLTextAreaElement | HTMLI
     }
     if (surface !== "cell") return;
     const { readOnly, model, activeTabId, rect } = S.current;
+    // ⌘⌥M comments on the cell, as in Google Sheets (Option turns M into µ on a Mac, so match the key code).
+    if (mod && e.altKey && e.code === "KeyM") {
+      e.preventDefault();
+      c.openCellComment();
+      return;
+    }
     // Alt+Down opens a dropdown or date cell's picker, as in Sheets and Excel.
     if (e.altKey && e.key === "ArrowDown" && c.openPicker()) {
       e.preventDefault();
@@ -70,11 +84,13 @@ export function handleSheetKey(e: ReactKeyboardEvent<HTMLTextAreaElement | HTMLI
       case "ArrowRight": {
         e.preventDefault();
         const d = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] }[e.key]!;
+        c.tabRunRef.current = null;
         move(d[0], d[1], e.shiftKey, mod);
         return;
       }
       case "Tab":
         e.preventDefault();
+        if (!e.shiftKey && c.tabRunRef.current === null) c.tabRunRef.current = S.current.sel.anchor.col;
         move(e.shiftKey ? -1 : 1, 0);
         return;
       case "Enter":

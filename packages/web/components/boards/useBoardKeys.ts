@@ -27,7 +27,6 @@ export type KeyCommands = {
   /** Select the next (+1) or previous (-1) element in reading order; false when there is nothing to walk. */
   cycle(dir: 1 | -1): boolean;
   hasSelection(): boolean;
-  toggleHelp(): void;
   toggleLock(): void;
   readOnly: boolean;
 };
@@ -84,7 +83,6 @@ export function useBoardKeys(cmds: KeyCommands, spaceHeld: React.MutableRefObjec
         if (inBoard && c.cycle(e.shiftKey ? -1 : 1)) { walked.current = true; stop(); return; }
         return;
       }
-      if (e.key === "?" || (e.shiftKey && e.code === "Slash")) { stop(); c.toggleHelp(); return; }
       // A version open in history, or a viewer without edit rights: nothing below writes.
       if (c.readOnly) return;
       if (mod && k === "z") { stop(); if (e.shiftKey) c.redo(); else c.undo(); return; }
