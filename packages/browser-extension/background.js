@@ -614,7 +614,32 @@ chrome.alarms.onAlarm.addListener((a) => {
   connect("alarm");
 });
 chrome.runtime.onStartup.addListener(() => connect("startup"));
-chrome.runtime.onInstalled.addListener(() => connect("installed"));
+chrome.runtime.onInstalled.addListener((details) => {
+  connect("installed");
+  if (details.reason === "install") void showSetupPage();
+});
+
+/**
+ * A fresh install from the Web Store lands nowhere on its own, and the next
+ * step (pairing with the machine) is on codecast's setup page. If that page
+ * is already open (it sent the person to the store), it comes forward and
+ * reloads so it reads the new install; otherwise it opens.
+ */
+const SETUP_PAGE_URL = "https://codecast.sh/setup/browser";
+async function showSetupPage() {
+  try {
+    const [tab] = await chrome.tabs.query({ url: `${SETUP_PAGE_URL}*` });
+    if (tab?.id !== undefined) {
+      await chrome.tabs.update(tab.id, { active: true });
+      if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true });
+      await chrome.tabs.reload(tab.id);
+      return;
+    }
+    await chrome.tabs.create({ url: `${SETUP_PAGE_URL}?installed=1` });
+  } catch {
+    /* a page that cannot open leaves the install itself intact */
+  }
+}
 connect("boot");
 
 // The options page asks for status and pokes reconnects through here.

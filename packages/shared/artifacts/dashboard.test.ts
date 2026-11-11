@@ -2,11 +2,15 @@ import { describe, expect, test } from "bun:test";
 import { artifactView, type ArtifactElement } from "./index";
 import {
   chartPointRows,
+  alertLine,
+  alertState,
   checkBlock,
+  readSchedule,
   directionWords,
   filterDimensions,
   filterRows,
   scopeFromParams,
+  scopeMissing,
   kpiPartText,
   kpiResolver,
   storyProblems,
@@ -24,6 +28,7 @@ import {
   moveBlockOps,
   orderAfter,
   orderedBlocks,
+  packSpans,
   parseFlags,
   parseText,
   queryKey,
@@ -311,7 +316,7 @@ describe("review regressions", () => {
     // 4 days × 2 people: the early half is days 1-2, the late half days 3-4.
     const rows = ["d1", "d2", "d3", "d4"].flatMap((d, i) => [[d, "ada", i + 1], [d, "bo", 10]]);
     const ev = evaluateKpi({ query: q, field: "n", agg: "sum", compare: "halves" }, result(["day", "person", "n"], rows));
-    expect(ev.state === "ok" && ev.delta).toMatchObject({ value: 4, caption: "last 2d vs prior 2d: +4" });
+    expect(ev.state === "ok" && ev.delta).toMatchObject({ value: 4, caption: "last 2d: +4 vs prior 2d", against: "the 2 days before" });
   });
   test("ranked bars with a split or no numbers are a problem, not an empty chart", () => {
     expect(evaluateChart({ query: q, chart: "hbar", x: "day", y: "spend", series: "person" }, spend).state).toBe("problem");
@@ -366,7 +371,7 @@ describe("compact deltas", () => {
     const tokens = result(["day", "tokens"], [["d1", 26_000_000_000], ["d2", 0], ["d3", 22_040_000_000], ["d4", 0]]);
     const ev = evaluateKpi({ query: q, field: "tokens", agg: "sum", format: "compact", compare: "halves" }, tokens);
     expect(ev.state === "ok" && ev.display).toBe("48B");
-    expect(ev.state === "ok" && ev.delta?.caption).toBe("last 2d vs prior 2d: −4.0B");
+    expect(ev.state === "ok" && ev.delta?.caption).toBe("last 2d: −4.0B vs prior 2d");
   });
 });
 
@@ -457,7 +462,7 @@ describe("dashboard filters", () => {
     ]);
   });
   test("URL params become the scope: relative and absolute dates, lists of values", () => {
-    expect(scopeFromParams([["f.day", "7d"], ["f.person", "ada,b%2Co"], ["tab", "x"]], "2026-11-10")).toEqual({ day: { gte: "2026-11-04", lte: "2026-11-10" }, person: { in: ["ada", "b,o"] } });
+    expect(scopeFromParams([["f.day", "7d"], ["f.person", "ada"], ["f.person", "Benn, Jason"], ["tab", "x"]], "2026-11-10")).toEqual({ day: { gte: "2026-11-04", lte: "2026-11-10" }, person: { in: ["ada", "Benn, Jason"] } });
     expect(scopeFromParams([["f.day", "2026-11-08.."]], "2026-11-10")).toEqual({ day: { gte: "2026-11-08" } });
     expect(scopeFromParams([["f.day", "soon"]], "2026-11-10")).toBeUndefined();
   });
@@ -468,5 +473,72 @@ describe("trend tokens", () => {
     expect(parseText("{b_dsqycf36.trend} and {b_x9.delta}")).toEqual([{ ref: "b_dsqycf36", part: "trend" }, { text: " and " }, { ref: "b_x9", part: "delta" }]);
     const view = artifactView("dashboard", "T", [el("b_dsqycf36", "kpi", { order: 1 })]);
     expect(dashboardSpec.verbs!.story.run(view, ["scrolly", "--headline", "PR merges are {b_dsqycf36.trend}"]).ops).toHaveLength(1);
+  });
+});
+
+describe("grid packing", () => {
+  test("a row's leftover goes to its widest block; widths fold on narrower panes", () => {
+    expect(packSpans([3, 6, 12], "wide")).toEqual([3, 9, 12]);
+    expect(packSpans([3, 3, 3, 3, 8, 4], "wide")).toEqual([3, 3, 3, 3, 8, 4]);
+    expect(packSpans([3, 3, 3, 8], "wide")).toEqual([3, 3, 6, 12]);
+    expect(packSpans([3, 3, 3, 6], "medium")).toEqual([4, 4, 4, 12]);
+    expect(packSpans([3, 3, 3, 3], "medium")).toEqual([4, 4, 4, 12]);
+    expect(packSpans([3, 6], "narrow")).toEqual([12, 12]);
+  });
+});
+
+describe("refresh states", () => {
+  const kpi = { query: q, field: "spend" };
+  test("a routine re-read behind a current answer stays verified; one past its interval says refreshing", () => {
+    expect(checkBlock("kpi", kpi, { ...spend, refreshing: true }, NOW)?.state).toBe("verified");
+    expect(checkBlock("kpi", kpi, { ...spend, refreshing: true, refreshed_at: NOW - 400_000 }, NOW)?.state).toBe("refreshing");
+  });
+});
+
+describe("unfiltered columns", () => {
+  test("a block names each dashboard filter column its source lacks", () => {
+    const prs = result(["day", "opened", "merged"], [["2026-11-07", 1, 1]]);
+    expect(scopeMissing(prs, { day: { gte: "2026-11-01" }, person: { in: ["ada"] } })).toEqual(["person"]);
+    expect(scopeMissing(spend, { day: { gte: "2026-11-01" }, person: { in: ["ada"] } })).toEqual([]);
+    expect(scopeMissing(undefined, { person: { in: ["ada"] } })).toEqual([]);
+  });
+});
+
+describe("schedules and alerts", () => {
+  const view = artifactView("dashboard", "T", [el("b_s", "kpi", { order: 1, title: "Spend", query: q, field: "spend", format: "usd" })]);
+  test("kpi alert flags and the schedule verb write the elements", () => {
+    expect(dashboardSpec.verbs!.kpi.run(view, ["--key", "b_s", "--alert-above", "5"]).ops).toEqual([{ k: "b_s", set: { alert: { above: 5 } } }]);
+    expect(dashboardSpec.verbs!.kpi.run(view, ["--key", "b_s", "--no-alert"]).ops).toEqual([{ k: "b_s", set: { alert: null } }]);
+    expect(dashboardSpec.verbs!.schedule.run(view, ["daily"]).ops).toEqual([{ k: "layout", put: { kind: "layout", refresh: "daily" } }]);
+    expect(() => dashboardSpec.verbs!.schedule.run(view, ["weekly"])).toThrow(/hourly\|daily\|off/);
+    expect(readSchedule({ refresh: "hourly" })).toBe("hourly");
+    expect(readSchedule({ refresh: "weekly" })).toBeNull();
+  });
+  test("a KPI's value against its lines, and the line it reads as", () => {
+    const b = el("b_s", "kpi", { title: "Spend", query: q, field: "spend", format: "usd", alert: { above: 5 } });
+    const s = alertState(b, spend)!;
+    expect(s.state).toBe("above");
+    expect(alertLine(b, s, "Team")).toBe("Spend is $9.35, above $5 on Team");
+    expect(alertState({ ...b, alert: { below: 5 } } as any, spend)!.state).toBe("ok");
+    expect(alertState({ ...b, alert: {} } as any, spend)).toBeNull();
+  });
+});
+
+describe("period comparison under a date filter", () => {
+  const days = Array.from({ length: 14 }, (_, i) => [`2026-11-${String(i + 1).padStart(2, "0")}`, i + 1]);
+  const daily = result(["day", "n"], days);
+  const kpi = { query: q, field: "n", agg: "sum" as const, compare: "halves" };
+  test("the filtered days against the same number of days just before them", () => {
+    const ev = evaluateKpi(kpi, daily, { day: { gte: "2026-11-08", lte: "2026-11-14" } });
+    // Nov 8-14 sum 77 vs Nov 1-7 sum 28.
+    expect(ev.state === "ok" && [ev.value, ev.delta?.caption, ev.delta?.against]).toEqual([77, "+49 vs prior 7d", "the prior 7 days"]);
+  });
+  test("when the rows don't reach back a whole period, the change falls back to the window's halves and says so", () => {
+    const ev = evaluateKpi(kpi, daily, { day: { gte: "2026-11-03", lte: "2026-11-14" } });
+    expect(ev.state === "ok" && ev.delta?.caption).toMatch(/^last 6d: \+\d+ vs prior 6d$/);
+  });
+  test("the .vs token names what the change compares with", () => {
+    const ev = evaluateKpi(kpi, daily, { day: { gte: "2026-11-08", lte: "2026-11-14" } });
+    expect(kpiPartText(ev, "vs")).toBe("the prior 7 days");
   });
 });

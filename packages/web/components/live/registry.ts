@@ -26,6 +26,27 @@ export type LiveViewProps = {
   setToolbar: (node: ReactNode) => void;
   /** A right-side drawer the shell lays out beside the view; null closes it. */
   setPanel: (node: ReactNode | null) => void;
+  /** What the artifact downloads as; the shell's top-bar menu lists them and saves "<title>.<ext>". Null offers none. */
+  setExports: (exports: LiveExport[] | null) => void;
+  /** A file import the shell's menu offers above the downloads; null offers none. */
+  setImport: (imp: LiveImport | null) => void;
+  /** Open the comments panel: on `thread` (as ?c= does), or on a new comment anchored to `anchor` with the box focused. */
+  openComments: (opts?: { anchor?: string; thread?: string }) => void;
+  /** The header's type label when the view is something more specific than its type ("Scrollyteller"); null restores it. */
+  setTypeLabel: (label: string | null) => void;
+};
+
+/** A file import: the shell opens the file picker with `accept` and hands the chosen files to `run`. */
+export type LiveImport = { label: string; accept: string; multiple?: boolean; run: (files: File[]) => void };
+
+/** One download the artifact offers. `run` produces the file; the shell names, saves and reports it. */
+export type LiveExport = {
+  format: "png" | "svg" | "pdf" | "csv" | "xlsx";
+  /** Menu words when the format alone does not say it ("PNG, 2x"). */
+  label?: string;
+  /** Offer a "selection only" entry while something is selected. */
+  selectionAware?: boolean;
+  run: (opts: { selection: string[] }) => Promise<Blob>;
 };
 
 /** The foundation's proof views. `?view=minimal` on an artifact's page forces them (the end-to-end check runs on these). */

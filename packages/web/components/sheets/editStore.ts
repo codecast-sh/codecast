@@ -13,6 +13,8 @@ export type EditState = {
   mode: "enter" | "edit";
   /** Where the person is typing: the in-cell editor or the formula bar. */
   surface: "cell" | "bar";
+  /** Why the formula can't be committed yet (it doesn't parse); clears on the next keystroke. */
+  error?: string;
 };
 
 export type EditStore = {
