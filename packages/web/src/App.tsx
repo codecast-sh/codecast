@@ -16,6 +16,7 @@ const Landing = lazy(() => import("@/app/(marketing)/page"));
 const About = lazy(() => import("@/app/(marketing)/about/page"));
 const Features = lazy(() => import("@/app/(marketing)/features/page"));
 const FeatureDeepDive = lazy(() => import("@/app/(marketing)/features/FeatureDeepDivePage"));
+const AgentSetup = lazy(() => import("@/app/(marketing)/setup/SetupPage"));
 const Documentation = lazy(() => import("@/app/(marketing)/documentation/page"));
 const DocumentationGuide = lazy(() => import("@/app/(marketing)/documentation/guides/GuidePage"));
 const Privacy = lazy(() => import("@/app/(marketing)/privacy/page"));
@@ -227,6 +228,7 @@ export function App() {
               <Route path="about" element={<E name="About"><About /></E>} />
               <Route path="features" element={<E name="Features"><Features /></E>} />
               <Route path="features/:slug" element={<E name="FeatureDeepDive"><FeatureDeepDive /></E>} />
+              <Route path="setup/:tool" element={<E name="AgentSetup"><AgentSetup /></E>} />
               <Route path="documentation" element={<E name="Documentation"><Documentation /></E>} />
               <Route path="documentation/:slug" element={<E name="DocumentationGuide"><DocumentationGuide /></E>} />
               <Route path="privacy" element={<E name="Privacy"><Privacy /></E>} />

@@ -303,9 +303,8 @@ export async function movabilityFacts(ctx: { db: any }, userId: Id<"users">): Pr
   const stepRefs = new Set<string>();
   const runParents = new Set<string>();
   for (const status of ["running", "paused"] as const) {
-    const runs = await ctx.db.query("workflow_runs").withIndex("by_status", (q: any) => q.eq("status", status)).collect();
+    const runs = await ctx.db.query("workflow_runs").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", status)).collect();
     for (const run of runs) {
-      if (String(run.user_id) !== String(userId)) continue;
       if (run.primary_conversation_id) runParents.add(String(run.primary_conversation_id));
       for (const n of run.node_statuses ?? []) if (n.status === "running" && n.session_id) stepRefs.add(n.session_id);
     }

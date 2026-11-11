@@ -52,11 +52,12 @@ export async function runAgentToolSetup(args: AgentToolSetupArgs, deps: AgentToo
 async function checkAgentTool(tool: AgentToolSetupArgs["tool"], deps: AgentToolSetupDeps): Promise<AgentToolSetupStatus> {
   if (tool === "browser") {
     const res = await deps.runCast(["browser", "extension", "status", "--json"]);
-    const raw = lastJson(res.stdout) as { paired?: boolean; connected?: boolean; chrome_running?: boolean; detail?: string } | null;
+    const raw = lastJson(res.stdout) as { installed?: boolean; paired?: boolean; connected?: boolean; chrome_running?: boolean; detail?: string } | null;
     if (!raw) return { tool, ready: false, paired: false, connected: false, chrome_running: false, detail: failure(res) };
     return {
       tool,
       ready: !!raw.connected,
+      ...(typeof raw.installed === "boolean" ? { installed: raw.installed } : {}),
       paired: !!raw.paired,
       connected: !!raw.connected,
       chrome_running: !!raw.chrome_running,

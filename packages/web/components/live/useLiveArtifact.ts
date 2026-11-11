@@ -36,7 +36,9 @@ import {
   type ElementState,
 } from "@codecast/shared/artifacts";
 import { useInboxStore } from "../../store/inboxStore";
+import { isRefusedDispatchError } from "../../store/mutativeMiddleware";
 export { applyElementsPayload, settleAfter, storeRowOf } from "../../hooks/useSyncLiveArtifact";
+import { onLiveRowsArrived, rowArrivedAt } from "../../hooks/useSyncLiveArtifact";
 import { liveRowId, type LiveLayer } from "../../store/liveArtifactsSlice";
 import { settleAfter, useSyncLiveArtifact } from "../../hooks/useSyncLiveArtifact";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -294,17 +296,69 @@ function rebuildQueuedOverlay(docId: string) {
 // state reads. A write counts from its send until the server answers it,
 // however long that takes (offline, a stalled socket).
 const unsettled = new Map<string, number>();
+// The newest write the server refused, per doc, until a later write lands:
+// the save state shows it rather than "Saved" over an edit that was undone.
+const refused = new Map<string, string>();
+// Writes parked for delivery (the dispatch was rewired under them: a reload, a
+// hot update). The outbox holds them; while any is parked the page asks it to
+// deliver every few seconds, and each counts as waiting until the feed brings
+// its rows back.
+const parked = new Map<string, Array<{ rowIds: string[]; at: number }>>();
+let parkedKick: ReturnType<typeof setInterval> | null = null;
+let stopArrivals: (() => void) | null = null;
+function settleParked() {
+  let changed = false;
+  for (const [docId, list] of parked) {
+    const left = list.filter((w) => !w.rowIds.every((id) => rowArrivedAt(id) > w.at));
+    if (left.length !== list.length) changed = true;
+    if (left.length) parked.set(docId, left);
+    else parked.delete(docId);
+  }
+  if (parked.size === 0) {
+    if (parkedKick) clearInterval(parkedKick);
+    parkedKick = null;
+    stopArrivals?.();
+    stopArrivals = null;
+  }
+  if (changed) for (const fn of unsettledListeners) fn();
+}
+function park(docId: string, rowIds: string[]) {
+  parked.set(docId, [...(parked.get(docId) ?? []), { rowIds, at: Date.now() }]);
+  for (const fn of unsettledListeners) fn();
+  if (!stopArrivals) stopArrivals = onLiveRowsArrived(settleParked);
+  if (!parkedKick) parkedKick = setInterval(() => {
+    (useInboxStore.getState() as any)._drainOutbox?.();
+    settleParked();
+  }, 3_000);
+}
+const parkedCount = (docId: string) => parked.get(docId)?.length ?? 0;
 const unsettledListeners = new Set<() => void>();
 function countUnsettled(docId: string, delta: number) {
   unsettled.set(docId, Math.max(0, (unsettled.get(docId) ?? 0) + delta));
   for (const fn of unsettledListeners) fn();
+}
+function refusalText(e: any): string {
+  const data = e?.data;
+  if (typeof data === "string") return data;
+  if (data && typeof data.message === "string") return data.message;
+  const m = typeof e?.message === "string" ? e.message.match(/ConvexError: ([^\n]+)/) : null;
+  return m?.[1] ?? (typeof e?.message === "string" && !e.message.startsWith("[") ? e.message : "The server refused the edit");
+}
+
+/** Why the server refused this tab's newest write to the doc, or null once a write lands. */
+export function useLiveRefusal(docId: string): string | null {
+  return useSyncExternalStore(
+    useCallback((fn) => { unsettledListeners.add(fn); return () => { unsettledListeners.delete(fn); }; }, []),
+    () => refused.get(docId) ?? null,
+    () => null,
+  );
 }
 
 /** How many of this tab's writes to the doc the server has not answered yet. */
 export function useLiveUnsettled(docId: string): number {
   return useSyncExternalStore(
     useCallback((fn) => { unsettledListeners.add(fn); return () => { unsettledListeners.delete(fn); }; }, []),
-    () => (unsettled.get(docId) ?? 0) + (sendQueues.get(docId)?.pending.length ?? 0),
+    () => (unsettled.get(docId) ?? 0) + parkedCount(docId) + (sendQueues.get(docId)?.pending.length ?? 0),
     () => 0,
   );
 }
@@ -322,6 +376,17 @@ function dispatchNow(docId: string, layer: LiveLayer, ops: ArtifactOp[]) {
     return Promise.resolve(pending)
       .then((res: any) => {
         if (res && typeof res.rev === "number") settleAfter(docId, res.rev, rowIds, before);
+        refused.delete(docId);
+      })
+      .catch((e: any) => {
+        if (!isRefusedDispatchError(e)) {
+          park(docId, rowIds);
+          return;
+        }
+        // The store already put the rows back; say so once, and keep it on the save state.
+        const why = refusalText(e);
+        if (refused.get(docId) !== why) toast.error(`Not saved: ${why}`);
+        refused.set(docId, why);
       })
       .finally(() => countUnsettled(docId, -1));
   });

@@ -12,6 +12,7 @@ import { DoubtChip } from "../line/DoubtChip";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { AppLoader } from "../AppLoader";
 import { DecisionAnswerControls } from "./DecisionAnswerControls";
+import { RunFallbackLine, RunSubjectView } from "./RunSubject";
 import { DecisionOptionList } from "./DecisionOptionList";
 import { DecisionDiscussion } from "./DecisionDiscussion";
 import { DecisionBody, DecisionFacts, DecisionLadder, DecisionReport, LeadRecommendation } from "./DecisionSections";
@@ -190,7 +191,10 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           </section>
         )}
 
+        {/* What a permission ask's Yes approves, exactly, before its answers. */}
+        <RunSubjectView run={decision.run} className="mt-6" />
         {!decision.card && <LeadRecommendation decision={decision} detail={detail} className="mt-8" />}
+
 
         {/* ── Options ── */}
         {/* A settled card's options collapse into its outcome line. */}
@@ -238,6 +242,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
               Fields: {decision.form.fields.map((f) => `${f.label} (${f.type})`).join(", ")}
             </div>
           )}
+          <RunFallbackLine run={pending ? decision.run : undefined} className="mt-3" />
         </section>}
 
         {/* ── Answer ── */}

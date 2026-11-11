@@ -294,7 +294,7 @@ import { subagentPromptParent } from "./agentPromptOrigin.js";
 import { declaredSpawnParent } from "./spawnParents.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { SECRET_PAYLOAD_MAX } from "@codecast/shared/contracts/secrets";
-import { RUN_TIMEOUT_MS } from "@codecast/shared/contracts/commandRun";
+import { APPROVED_RUN_ENV, RUN_TIMEOUT_MS } from "@codecast/shared/contracts/commandRun";
 import { personEnv } from "./sessionIdentity.js";
 import { RetryQueue, flushRetryQueueForShutdown, isSessionRefusal, isStaleConversationError, type RetryOperation } from "./retryQueue.js";
 import { isPidAlive } from "./pidAlive.js";
@@ -400,11 +400,11 @@ import { writeStoredConfig } from "./config/storedConfig.js";
 import { configDirTarget, fenceAdmits, fenceTargetOf, type FenceKind } from "./configFence.js";
 import { AwakeIdleClock, captureProcessSnapshot, collectSessionResources, decodeAwakeIdleSnapshot, formatResourcesLog, restorableAwakeIdle, nextAwakeIdleMs, shouldReportMetrics, stableAgentStartedAt, type ReportedMetrics, type SessionResources } from "./resourceMonitor.js";
 import { collectMachineResources, processesStartedOutside, readHostPressure } from "./systemResources.js";
-import { setBackgroundSessions, setGovernorBackground } from "./backgroundPriority.js";
+import { setBackgroundSessions, setGovernorBackground, holdForDelivery, isDeliveryHeld } from "./backgroundPriority.js";
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
 import { terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import { resumeEffortFlagFromFile, resumeModelFlagFromFile } from "./resumeCommand.js";
-import { CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isIdleResumeOptionRow, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
+import { CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
 import {
   fetchExport,
   hasResumableMessages,
@@ -6185,6 +6185,8 @@ async function runApprovedCast(decisionId: string, argv: string[], cwd: string |
   // A person's shell, so the CLI sends no from_session and the act is theirs.
   const env = personEnv();
   if (cwd) env.CODECAST_CWD = cwd;
+  // The command can read back what the person's Yes approved (sessionDecisions.approvedRun).
+  env[APPROVED_RUN_ENV] = decisionId;
   log(`[RUN] ${decisionId}: cast ${argv.join(" ").slice(0, 200)}`);
   const res = await runCastCommand(argv, { env, cwd, timeoutMs: RUN_TIMEOUT_MS, inheritEnv: false });
   const output = [res.stdout, res.stderr].filter((x) => x.trim()).join("\n");
@@ -17289,7 +17291,8 @@ function assertPromptAbsent(pane: string, ownText?: string, pastDialog = false):
   // y/n dialog currently fails parseInteractivePrompt (no numbered rows, no
   // cursor), but skipping the detectors here keeps a future parse from parking
   // delivery on a dialog the launch path already knows how to dismiss.
-  if (isGrokTrustDialog(pane) || isCodexTrustDialog(pane) || isCodexUpdateDialog(pane) || limitDialogOnPane(pane)) return;
+  // The Rewind picker is a modal ensureTmuxReady cancels with Escape, not a question.
+  if (isGrokTrustDialog(pane) || isCodexTrustDialog(pane) || isCodexUpdateDialog(pane) || limitDialogOnPane(pane) || isClaudeRewindDialog(pane)) return;
   const prompt = parseInteractivePrompt(pane, true);
   if (prompt && !promptIsOwnText(prompt, ownText)) throw new InputBlockedError("terminal is waiting for a human answer", undefined, holdScreen(pane));
 }
@@ -17943,6 +17946,23 @@ export async function tmuxAgentStarved(target: string, sampleMs = 1_000): Promis
   }
 }
 
+/**
+ * Whether the pane proves an earlier submit was taken: the agent sits idle at
+ * an empty prompt and is getting CPU, so it has read its terminal past that
+ * Enter. A starved agent's empty prompt is a stale picture and proves nothing.
+ */
+export async function tmuxSubmitSpent(
+  target: string,
+  agentStarved: (target: string) => Promise<boolean> = tmuxAgentStarved,
+  exec: typeof tmuxExec = tmuxExec,
+): Promise<boolean> {
+  const pane = await captureTmuxComposerPane(exec, target, 40).catch(() => "");
+  if (classifyTmuxLiveState(extractTmuxLiveRegion(pane)) !== "idle" || tmuxComposerText(pane)?.trim() !== "") return false;
+  if (await agentStarved(target)) return false;
+  log(`An earlier submit into ${target} was taken by an idle agent; releasing its hold on the pane`);
+  return true;
+}
+
 export const DRAIN_MAX_CYCLES = 40;
 export async function drainTmuxComposer(
   target: string,
@@ -18387,7 +18407,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     target, opts.delivery, tmuxExec,
     async id => syncServiceRef ? pendingMessageFinished(syncServiceRef, id) : false,
     receiptJournal!,
-    { settleMs: opts.receiptSettleMs },
+    { settleMs: opts.receiptSettleMs, submitSpent: () => tmuxSubmitSpent(target, opts?.agentStarved) },
   ) : null;
   if (delivery?.prior) delivery.journal.begin(opts!.delivery!, delivery.generation, sanitized);
   // A verified command that opened a panel is final even unacknowledged: it
@@ -18492,7 +18512,7 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   let gate: "matched" | "unwatchable" = "matched";
 
   if (alreadyAtPrompt) {
-    delivery?.journal.begin(opts!.delivery!, delivery.generation, sanitized);
+    delivery?.journal.begin(opts!.delivery!, delivery.generation, sanitized, { atPrompt: true });
     log(`Composer in ${target} already holds this payload from an earlier attempt; submitting it instead of pasting again`);
   } else if (prior && delivery) {
     // An earlier attempt wrote this payload and it is not at the prompt. Wait
@@ -24431,7 +24451,9 @@ async function applyGovernorBackground(): Promise<void> {
 
 async function governorTick(): Promise<void> {
   const confinedBefore = governor.confined.length;
-  const { before, after } = sampleLoad(unattendedHere.map((id) => ({ id, cpu: latestSessionResources.get(id)?.cpu ?? 0 })));
+  // A session a message is going into is not a candidate: it is out of the cage until its hold lapses.
+  const candidates = unattendedHere.filter((id) => !isDeliveryHeld(id));
+  const { before, after } = sampleLoad(candidates.map((id) => ({ id, cpu: latestSessionResources.get(id)?.cpu ?? 0 })));
   writeGovernorState(unattendedHere);
   const confined = governor.confined.length;
   if (before === after && confined === confinedBefore) return;
@@ -27259,6 +27281,8 @@ async function deliverMessageIntoSession(
   if (agentTypeHint) detectedType = agentTypeHint;
 
   logDelivery(`Delivering to session=${sessionId.slice(0, 12)} conv=${conversationId.slice(0, 12)} type=${detectedType}`);
+  // The agent has to redraw the paste for the Enter gate to see it: out of background priority first.
+  await holdForDelivery(sessionId);
 
 
   // Find an already-live session (cached tmux / started session / live process pane) via the

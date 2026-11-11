@@ -23,6 +23,23 @@ export const AGENT_SETUP_CONTINUE_MESSAGE: Record<AgentSetupTool, string> = {
   computer: "cast computer's Accessibility and Screen Recording permissions are granted now. Retry and continue.",
 };
 
+/**
+ * The page that explains a tool and walks a person through its setup, live
+ * for one machine when `?device=` names it. Every place that hands a person
+ * this setup (the CLI, the extension's first run, agent guidance, the feature
+ * pages) sends them here.
+ */
+export function agentSetupPagePath(tool: AgentSetupTool): string {
+  return `/setup/${tool}`;
+}
+
+export const AGENT_SETUP_PAGE_ORIGIN = "https://codecast.sh";
+
+/** The page's public URL, for text that leaves the app (agent guidance, the extension). */
+export function agentSetupPageUrl(tool: AgentSetupTool, origin = AGENT_SETUP_PAGE_ORIGIN, deviceId?: string): string {
+  return `${origin.replace(/\/$/, "")}${agentSetupPagePath(tool)}${deviceId ? `?device=${encodeURIComponent(deviceId)}` : ""}`;
+}
+
 export function isAgentSetupTool(value: unknown): value is AgentSetupTool {
   return typeof value === "string" && (AGENT_SETUP_TOOLS as readonly string[]).includes(value);
 }
@@ -79,6 +96,10 @@ export type AgentToolSetupStatus =
   | {
       tool: "browser";
       ready: boolean;
+      /** The extension is installed in some Chrome profile on the machine.
+       *  Absent from daemons that predate the field, and where Chrome's
+       *  profiles cannot be read. */
+      installed?: boolean;
       /** The bridge holds a token the extension was handed at least once. */
       paired: boolean;
       /** The extension is connected to this machine's bridge host now. */

@@ -2,6 +2,7 @@ import { cloneElement, isValidElement, useContext, useMemo, useRef, useState, ty
 import { X, Keyboard } from "lucide-react";
 import { formatShortcutParts, formatAcceleratorParts, getShortcutsForAction, getShortcutsByContext } from "../shortcuts";
 import type { ShortcutAction } from "../shortcuts";
+import { BOARD_SHORTCUT_SECTIONS } from "./boards/boardModel";
 import { visibleShortcutSections } from "../shortcuts/visibleSections";
 import { useKeyBindingsVersion, useShortcutParts } from "../shortcuts/registry";
 import { rebindShortcut } from "../lib/keyboardSettings";
@@ -76,9 +77,17 @@ export function KeyboardShortcutsPanel() {
         });
       }
     }
+    // A board on screen answers to its own keys (they run inside the canvas, outside the registry): they lead the panel.
+    if (s.shortcutsPanelOpen && typeof document !== "undefined" && document.querySelector("[data-board]:not(.is-readonly)")) {
+      result.unshift(...BOARD_SHORTCUT_SECTIONS.map((g) => ({
+        label: `Board · ${g.title}`,
+        accent: "bg-sol-yellow",
+        rows: g.rows.map(([description, parts]) => ({ key: `board:${g.title}:${description}`, description, parts })),
+      })));
+    }
     return result;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flowsOn, bindingsVersion]);
+  }, [flowsOn, bindingsVersion, s.shortcutsPanelOpen]);
 
   return (
     <div
