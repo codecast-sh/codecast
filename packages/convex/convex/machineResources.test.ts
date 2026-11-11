@@ -216,3 +216,31 @@ test("one device's report reads alone, scoped to its owner", async () => {
   expect(row.device_id).toBe("mac");
   expect(row.history).toHaveLength(1);
 });
+
+test("a report whose process capture timed out keeps the last list while it is recent, stamped with its age", async () => {
+  const t = convexTest(schema, modules);
+  const now = Date.now();
+  const user = await t.run(async ctx => {
+    const id = await ctx.db.insert("users", {});
+    await ctx.db.insert("devices", { user_id: id, device_id: "mac", label: "Mac", platform: "darwin", last_seen: now });
+    return id;
+  });
+  const listed: MachineResourceSnapshot = { ...sample(now), processes: [{ pid: 7, ppid: 1, name: "claude", kind: "agent", cpu: 40, rss: 900, sessionId: "s1" }], groups: [{ kind: "agent", cpu: 40, rss: 900, processCount: 1 }] };
+  const timedOut = (at: number): MachineResourceSnapshot => ({ ...sample(at), sample: { ...sample(at).sample, processCount: undefined }, limitations: ["Process capture failed or timed out; process totals and session attribution are unavailable."] });
+  const read = async () => (await t.withIdentity({ subject: user }).query(listMine, {}))[0];
+  await t.run(ctx => storeResourceSnapshot(ctx, user, listed, now));
+  await t.run(ctx => storeResourceSnapshot(ctx, user, timedOut(now + 60_000), now + 60_000));
+  let row = await read();
+  expect(row.snapshot.processes.map((p: { sessionId?: string }) => p.sessionId)).toEqual(["s1"]);
+  expect(row.snapshot.processesAt).toBe(now);
+  expect(row.snapshot.sample.at).toBe(now + 60_000);
+  expect(row.snapshot.limitations[0]).toContain("60s before this sample");
+  expect(row.history.at(-1).processCount).toBeUndefined();
+  // A second miss keeps the original capture time, so the list ages out instead of renewing itself.
+  await t.run(ctx => storeResourceSnapshot(ctx, user, timedOut(now + 240_000), now + 240_000));
+  expect((await read()).snapshot.processesAt).toBe(now);
+  await t.run(ctx => storeResourceSnapshot(ctx, user, timedOut(now + 360_000), now + 360_000));
+  row = await read();
+  expect(row.snapshot.processes).toEqual([]);
+  expect(row.snapshot.processesAt).toBeUndefined();
+});

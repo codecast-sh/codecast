@@ -21,6 +21,7 @@ import { AskingSessionView, HandoffNote, type AskingSessionRow } from "./Decisio
 import { askingSessionDeps } from "./askingSessionDeps";
 import { OptionPages } from "./OptionPages";
 import { PublishedPageEmbed } from "../PublishedPageEmbed";
+import { RunFallbackLine, RunSubjectView } from "./RunSubject";
 import { ChangeCardHeadline, ChangeCardView, SepRow, cardAnswerIndexes } from "./ChangeCardView";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { hasCanvasFence } from "../HtmlSnippet";
@@ -323,6 +324,8 @@ export function DecisionCompactCardView({
             <PublishedPageEmbed slug={decision.report_slug} decision={decision._id} height={240} />
           </div>
         )}
+        {/* A permission ask that approves content shows that content, exactly. */}
+        {pending && <RunSubjectView run={decision.run} className="mt-2.5" />}
         {pageCount > 0 && (
           <div className="mt-2"><OptionPages decision={decision} answerable={pending && kind === "single"} onAnswer={(i) => onAnswer({ index: i })} /></div>
         )}
@@ -344,6 +347,7 @@ export function DecisionCompactCardView({
           )}
         </div>
       )}
+      {pending && <RunFallbackLine run={decision.run} className="px-4 pb-3" />}
       {/* The team thread, with the session that owns it, without leaving the queue (ct-74449). */}
       {!folded && (
         <div className="px-4 pb-3"><DecisionDiscussion decisionId={decision._id} compact /></div>

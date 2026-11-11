@@ -123,17 +123,18 @@ test("pairing opens in the profile that has the extension, not Chrome's last-use
   expect(lastState?.profile).toBe("Profile 2");
 });
 
-test("with no profile holding the extension, setup opens the Web Store and never an extension page", async () => {
+test("with no profile holding the extension, setup opens the setup page for this machine and never an extension page", async () => {
   const out = await setup([], false, { ...ONE_PROFILE, withExtension: [] });
   expect(out).not.toContain("OPENED_URL=chrome-extension://");
-  expect(out).toContain(`OPENED_URL=${BRIDGE_STORE_URL} PROFILE_ARGS=["--profile-directory=Default"]`);
+  expect(out).toMatch(/OPENED_URL=https:\/\/[^ ]+\/setup\/browser\?device=[0-9a-f]+ PROFILE_ARGS=\["--profile-directory=Default"\]/);
   expect(out).toContain("not installed in any Chrome profile");
 });
 
-test("--profile naming a profile without the extension sends that profile to the store", async () => {
+test("--profile naming a profile without the extension sends that profile to the setup page", async () => {
   const out = await setup(["--profile", "personal"], false);
   expect(out).not.toContain("OPENED_URL=chrome-extension://");
-  expect(out).toContain(`OPENED_URL=${BRIDGE_STORE_URL} PROFILE_ARGS=["--profile-directory=Default"]`);
+  expect(out).toMatch(/OPENED_URL=\S+\/setup\/browser\S* PROFILE_ARGS=\["--profile-directory=Default"\]/);
+  expect(out).toContain('cast browser extension setup --profile "personal"');
 });
 
 test("several profiles: the pinned one is paired and the others are named", async () => {

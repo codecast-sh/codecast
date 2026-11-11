@@ -23,6 +23,7 @@ import {
   type BoardTemplate,
   cloneOps,
   connectorGeometry,
+  elbowObstacles,
   distributeBoxes,
   elementBounds,
   elementBox,
@@ -56,7 +57,6 @@ import { pasteOps, placeImage, serializeSelection, stickiesToTasks } from "./boa
 import type { BoardEl, BoardTool } from "./boardTypes";
 import { drawOrder, fitBox } from "./boardFrame";
 import { BoardMinimap } from "./BoardMinimap";
-import { BoardShortcuts } from "./BoardShortcuts";
 import { BoardEditBar } from "./BoardEditBar";
 import { BOARD_ART_URLS } from "./boardArtUrls";
 
@@ -71,7 +71,7 @@ const NOOP_EDIT = { editing: false, onEditInput: NOOP, onEditDone: NOOP };
 
 type PromptState = { mode: PromptMode; at: Pt; world?: Pt; anchor?: string | null };
 
-export default function BoardView({ doc, live, selection, setSelection, mode, snapshot, toScreen }: LiveViewProps) {
+export default function BoardView({ doc, live, selection, setSelection, mode, snapshot, toScreen, setExports }: LiveViewProps) {
   const readOnly = mode === "view";
   const liveEls = useLiveElements(doc._id);
   const elements = (snapshot ?? liveEls) as BoardEl[];
@@ -98,7 +98,6 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   const [pressing, setPressing] = useState(false);
   const editBaseH = useRef<number | null>(null);
   const [locked, setLocked] = useState(false);
-  const [help, setHelp] = useState(false);
   const [minimap, setMinimapState] = useState(() => { try { return localStorage.getItem(MINIMAP_KEY) === "1"; } catch { return false; } });
   const setMinimap = (on: boolean) => { setMinimapState(on); try { localStorage.setItem(MINIMAP_KEY, on ? "1" : "0"); } catch { /* private mode */ } };
   const spaceHeld = useRef(false);
@@ -160,6 +159,23 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     return cam.onCamera(() => toScreen(screenOf as any));
   });
 
+  // ── Export: the shell's Download menu asks the board for a picture of itself (or of the selection) ──
+  const exportRef = useRef({ elements, byKey });
+  exportRef.current = { elements, byKey };
+  useMountEffect(() => {
+    const picture = async (selection: string[]) => {
+      const { boardSvg } = await import("./boardExport");
+      const root = cam.rootRef.current;
+      if (!root) throw new Error("the board is not on screen");
+      return boardSvg({ ...exportRef.current, root, only: selection });
+    };
+    setExports([
+      { format: "png", selectionAware: true, run: async ({ selection }) => (await import("./boardExport")).svgToPng(await picture(selection), 2) },
+      { format: "svg", selectionAware: true, run: async ({ selection }) => new Blob([await picture(selection)], { type: "image/svg+xml" }) },
+    ]);
+    return () => setExports(null);
+  });
+
   // ── Presence: my pointer and selection, everyone else's selection ─────────
   useWatchEffect(() => {
     live.setPresence({ position: lastPointer.current ? { point: lastPointer.current } : undefined, selection });
@@ -199,7 +215,14 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
         if (el?.kind !== "sticky") return;
         const b = elementBox(el);
         const k = newElementKey("el");
-        const put = { kind: "sticky", x: dir > 0 ? b.x + b.w + 24 : b.x, y: dir > 0 ? b.y : b.y + b.h + 24, w: b.w, h: editBaseH.current ?? b.h, text: "", color: el.color ?? "yellow", z: nextZ({ elements: [...byKeyRef.current.values()] }) };
+        // The next free spot in that direction: past anything already there.
+        const h = editBaseH.current ?? b.h;
+        const taken = [...byKeyRef.current.values()].filter((o) => o.kind !== "frame" && o.kind !== "connector" && o.kind !== "pen").map(elementBounds);
+        let spot = { x: dir > 0 ? b.x + b.w + 24 : b.x, y: dir > 0 ? b.y : b.y + b.h + 24 };
+        for (let i = 0; i < 40 && taken.some((t) => intersects({ ...spot, w: b.w, h }, { x: t.x + 1, y: t.y + 1, w: t.w - 2, h: t.h - 2 })); i++) {
+          spot = dir > 0 ? { ...spot, x: spot.x + b.w + 24 } : { ...spot, y: spot.y + h + 24 };
+        }
+        const put = { kind: "sticky", ...spot, w: b.w, h, text: "", color: el.color ?? "yellow", z: nextZ({ elements: [...byKeyRef.current.values()] }) };
         live.commit();
         editBaseH.current = null;
         live.apply([{ k, put: put as any }]);
@@ -382,7 +405,6 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     duplicate,
     selectAll: () => setSelection(elements.map((e) => e.key)),
     clearSelection: () => {
-      if (help) { setHelp(false); return true; }
       if (prompt) { setPrompt(null); return true; }
       if (thread) { setThread(null); return true; }
       if (!selection.length) return false;
@@ -401,7 +423,11 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     zoomBy: (f) => cam.zoomBy(f),
     zoomTo: (z) => cam.zoomBy(z / cam.cam.current.z),
     fit: fitTo,
-    editSelection: () => { if (selection.length === 1) startEdit(selection[0]); },
+    editSelection: () => {
+      if (selection.length === 1) { startEdit(selection[0]); return; }
+      // With a making tool armed and nothing selected, Enter places one in the middle of the view: the keyboard's click.
+      if (!selection.length && (tool === "sticky" || tool === "text" || tool === "shape" || tool === "frame" || tool === "stamp")) gestures.placeAt(tool, viewCenter());
+    },
     cycle: (dir) => {
       const order = readingOrder([...byKeyRef.current.values()].filter((e) => e.kind !== "pen")) as BoardEl[];
       if (!order.length) return false;
@@ -412,7 +438,6 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       return true;
     },
     hasSelection: () => selection.length > 0,
-    toggleHelp: () => setHelp((h) => !h),
     toggleLock: () => setLocked((l) => !l),
     ask: () => openAsk(selection.length ? "describe" : "ask"),
     readOnly,
@@ -455,7 +480,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   };
 
   // Elbow connectors route around these: everything a line should not cross.
-  const obstacles = useMemo(() => elements.filter((e) => e.kind !== "connector" && e.kind !== "frame" && e.kind !== "pen" && e.kind !== "stamp").map(elementBounds), [elements]);
+  const obstacles = useMemo(() => elbowObstacles(elements), [elements]);
 
   // ── Culling ────────────────────────────────────────────────────────────────
   const { world, cam: vcam } = cam.viewport;
@@ -613,8 +638,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
         </ShortcutTooltip>
       </div>
 
-      {minimap && elements.length > 0 && <BoardMinimap elements={elements} byKey={byKey} cam={cam} />}
-      {help && <BoardShortcuts onClose={() => setHelp(false)} />}
+      {minimap && elements.length > 0 && <BoardMinimap elements={elements} byKey={byKey} cam={cam} top={cam.viewport.w < 820} />}
       {editAt && <BoardEditBar at={editAt} />}
       <div aria-live="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)" }}>{announce}</div>
 
@@ -660,9 +684,10 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
         readOnly={readOnly}
         locked={locked}
         setLocked={setLocked}
+        compact={cam.viewport.w > 0 && cam.viewport.w < 600}
         askSlot={
           <ShortcutTooltip label="Ask agent" accel="A" side="top">
-            <AskButton className="board-ask" onClick={() => openAsk(selection.length ? "describe" : "ask")} />
+            <AskButton className="board-ask" label={cam.viewport.w > 0 && cam.viewport.w < 600 ? null : undefined} aria-label="Ask agent" onClick={() => openAsk(selection.length ? "describe" : "ask")} />
           </ShortcutTooltip>
         }
       />

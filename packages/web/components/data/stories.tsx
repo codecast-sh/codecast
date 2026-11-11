@@ -6,7 +6,7 @@
 //   Visual short   the same steps as a short film: beats laid end to end
 //                  (shared shortTimeline), a segmented timeline to scrub,
 //                  numbers counting up and charts drawing in as each plays.
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { ArrowDown, Pause, Play, RotateCcw } from "lucide-react";
@@ -16,34 +16,6 @@ import { blockCheck } from "./blockCheck";
 import { KeyCap } from "../KeyCap";
 
 type StoryProps = { title: string; layout: dashboard.DashboardLayout; elements: ArtifactElement[]; env: BlockEnv };
-
-/** True once the element has scrolled into view; stays true. */
-function useRevealed<T extends Element>(threshold = 0.25): [React.RefObject<T | null>, boolean] {
-  const ref = useRef<T | null>(null);
-  const [seen, setSeen] = useState(false);
-  useWatchEffect(() => {
-    const el = ref.current;
-    if (!el || seen) return;
-    if (typeof IntersectionObserver === "undefined") return setSeen(true);
-    const io = new IntersectionObserver((entries) => entries.some((e) => e.isIntersecting) && setSeen(true), { threshold });
-    io.observe(el);
-    return () => io.disconnect();
-  }, [seen, threshold]);
-  return [ref, seen];
-}
-
-function Reveal({ children, delay = 0, className = "" }: { children: ReactNode; delay?: number; className?: string }) {
-  const [ref, seen] = useRevealed<HTMLDivElement>(0.2);
-  return (
-    <div
-      ref={ref}
-      className={`${className} transition-[opacity,transform] duration-700 ease-out motion-reduce:transition-none ${seen ? "opacity-100 translate-y-0" : "opacity-0 translate-y-6"}`}
-      style={{ transitionDelay: `${delay}ms` }}
-    >
-      {children}
-    </div>
-  );
-}
 
 /** A block drawn large for a story, with its check in the corner. */
 function StoryBlock({ b, env, reveal }: { b: ArtifactElement; env: BlockEnv; reveal: boolean }) {
@@ -57,7 +29,7 @@ function StoryBlock({ b, env, reveal }: { b: ArtifactElement; env: BlockEnv; rev
         </div>
         {check ? <CheckMark check={check} onClick={() => env.onCheck?.(b.key)} /> : null}
       </div>
-      {b.kind === "chart" ? (reveal ? <ChartBody b={b} env={env} height={340} compact={false} revealMs={1400} /> : <div style={{ height: 340 }} />) : null}
+      {b.kind === "chart" ? (reveal ? <ChartBody b={b} env={env} height={340} compact={false} revealMs={1400} annotate /> : <div style={{ height: 340 }} />) : null}
       {b.kind === "table" ? <TableBody b={b} env={env} maxHeight={420} /> : null}
       {b.kind === "text" ? <TextBody b={b} env={env} /> : null}
     </div>
@@ -87,13 +59,65 @@ function NumbersRow({ keys, env, run, size = "lg" }: { keys: string[]; env: Bloc
 
 // ── Scrollyteller ──
 
+/**
+ * The words a step reads as. A step an author left wordless still says
+ * something true: a KPI with a comparison reads as its live direction
+ * ("Agent spend {b_spend.trend}"), so the words can never disagree with the
+ * number beside them.
+ */
+function stepWords(step: dashboard.StoryStep, env: BlockEnv): { title?: string; say?: string } {
+  if (step.kind === "hero" || step.kind === "chapter") return {};
+  if (step.title || step.say) return { title: step.title, say: step.say };
+  if (step.kind === "numbers") {
+    const lines = step.keys
+      .map((k) => env.blocks.get(k))
+      .filter((b): b is ArtifactElement => !!b && !!b.title)
+      .map((b) => (b.compare ? `${String(b.title)} {${b.key}.trend}` : `${String(b.title)} {${b.key}}`));
+    return { title: lines[0], say: lines.slice(1).join(" · ") || undefined };
+  }
+  return {};
+}
+
 export function ScrollyStory({ title, layout, elements, env }: StoryProps) {
   const steps = useMemo(() => dashboard.storySteps(title, layout, elements), [title, layout, elements]);
   const [hero, ...rest] = steps;
+  const [active, setActive] = useState(0);
+  // Each step ever shown keeps its visual mounted, so a chart draws in once and stays drawn.
+  const [shown, setShown] = useState<Set<number>>(() => new Set([0]));
+  const refs = useRef<Array<HTMLElement | null>>([]);
+  useWatchEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    // The step crossing the middle band of the pane is the one being read.
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) {
+          if (!e.isIntersecting) continue;
+          const i = Number((e.target as HTMLElement).dataset.step);
+          setActive(i);
+          setShown((prev) => (prev.has(i) ? prev : new Set(prev).add(i)));
+        }
+      },
+      { rootMargin: "-45% 0px -45% 0px" },
+    );
+    for (const el of refs.current) if (el) io.observe(el);
+    return () => io.disconnect();
+  }, [rest.length]);
+
+  // Chapters break the flow full width; the steps between them share one pinned stage.
+  const groups: Array<{ chapter?: number; steps: number[] }> = [];
+  rest.forEach((s, i) => {
+    if (s.kind === "chapter") return void groups.push({ chapter: i, steps: [] });
+    const last = groups[groups.length - 1];
+    if (last && last.chapter === undefined) last.steps.push(i);
+    else groups.push({ steps: [i] });
+  });
+  // The stage of a group the reader is not in holds its nearest step: the first above it, the last below it.
+  const onStage = (g: number[]) => (g.includes(active) ? active : active < g[0] ? g[0] : g[g.length - 1]);
+
   return (
     <div className="data-story story-pad" data-format="scrolly">
       {hero?.kind === "hero" ? (
-        <section className="min-h-[78vh] flex flex-col items-center justify-center text-center max-w-[980px] mx-auto py-16">
+        <section className="min-h-[72vh] flex flex-col items-center justify-center text-center max-w-[980px] mx-auto py-16">
           <h1 className="text-[length:clamp(34px,6cqw,68px)] leading-[1.06] font-bold tracking-[-0.03em] text-sol-text text-balance data-story-in" data-block="layout"><LiveText text={hero.headline} env={env} /></h1>
           {hero.summary ? (
             <p className="mt-6 text-[length:clamp(16px,1.9cqw,20px)] leading-relaxed text-sol-text-secondary max-w-[60ch] text-balance data-story-in" style={{ animationDelay: "160ms" }}>
@@ -105,54 +129,57 @@ export function ScrollyStory({ title, layout, elements, env }: StoryProps) {
           </div>
         </section>
       ) : null}
-      {rest.map((s, i) => (
-        <ScrollyStep key={`${s.kind}:${s.keys.join(",")}:${i}`} step={s} env={env} />
-      ))}
-      <div className="h-[30vh]" />
+      {groups.map((g, gi) =>
+        g.chapter !== undefined ? (
+          <section key={`c${gi}`} ref={(el) => void (refs.current[g.chapter!] = el)} data-step={g.chapter} className="min-h-[60vh] flex flex-col items-center justify-center text-center max-w-[900px] mx-auto">
+            {(() => {
+              const c = rest[g.chapter!] as Extract<dashboard.StoryStep, { kind: "chapter" }>;
+              return (
+                <>
+                  <h2 className={`text-[length:clamp(28px,4.4cqw,48px)] font-bold tracking-[-0.02em] text-sol-text text-balance transition-opacity duration-500 ${active === g.chapter ? "opacity-100" : "opacity-40"}`}>
+                    <LiveText text={c.title} env={env} />
+                  </h2>
+                  {c.say ? <p className="mt-3 text-lg text-sol-text-muted max-w-[56ch] text-balance"><LiveText text={c.say} env={env} /></p> : null}
+                </>
+              );
+            })()}
+          </section>
+        ) : (
+          <div key={`g${gi}`} className="scrolly-group max-w-[1240px] mx-auto">
+            <div className="scrolly-stage" aria-live="polite">
+              <div className="scrolly-stage-inner">
+                {g.steps.map((i) => (
+                  <div key={i} className={`scrolly-visual ${onStage(g.steps) === i ? "is-on" : ""}`} aria-hidden={onStage(g.steps) !== i}>
+                    {shown.has(i) || i === g.steps[0] ? <StepVisual step={rest[i]} env={env} run={shown.has(i)} /> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="scrolly-steps">
+              {g.steps.map((i) => {
+                const w = stepWords(rest[i], env);
+                return (
+                  <section key={i} ref={(el) => void (refs.current[i] = el)} data-step={i} className="scrolly-step">
+                    <div className={`scrolly-card ${active === i ? "is-on" : ""}`}>
+                      {w.title ? <h2 className="text-[length:clamp(22px,2.8cqw,32px)] leading-[1.18] font-bold tracking-[-0.02em] text-sol-text text-balance"><LiveText text={w.title} env={env} /></h2> : null}
+                      {w.say ? <p className={`${w.title ? "mt-3" : ""} text-[17px] leading-relaxed text-sol-text-secondary`}><LiveText text={w.say} env={env} /></p> : null}
+                    </div>
+                  </section>
+                );
+              })}
+            </div>
+          </div>
+        ),
+      )}
+      <div className="h-[45vh]" />
     </div>
   );
 }
 
-function ScrollyStep({ step, env }: { step: dashboard.StoryStep; env: BlockEnv }) {
-  const [ref, seen] = useRevealed<HTMLElement>(0.3);
-  if (step.kind === "chapter") {
-    return (
-      <section ref={ref} className="max-w-[1100px] mx-auto py-20 text-center">
-        <Reveal>
-          <h2 className="text-[length:clamp(26px,4cqw,44px)] font-bold tracking-[-0.02em] text-sol-text"><LiveText text={step.title} env={env} /></h2>
-          {step.say ? <p className="mt-3 text-lg text-sol-text-muted"><LiveText text={step.say} env={env} /></p> : null}
-        </Reveal>
-      </section>
-    );
-  }
-  const words = step.kind === "numbers" || step.kind === "block" ? (
-    <div className="story-words">
-      {step.title ? <h2 className="text-[length:clamp(24px,3.2cqw,38px)] leading-[1.15] font-bold tracking-[-0.02em] text-sol-text text-balance"><LiveText text={step.title} env={env} /></h2> : null}
-      {step.say ? <p className="mt-4 text-[17px] leading-relaxed text-sol-text-secondary"><LiveText text={step.say} env={env} /></p> : null}
-    </div>
-  ) : null;
-  const visual =
-    step.kind === "numbers" ? (
-      <NumbersRow keys={step.keys} env={env} run={seen} />
-    ) : (
-      (() => {
-        const b = env.blocks.get(step.keys[0]);
-        return b ? <StoryBlock b={b} env={env} reveal={seen} /> : null;
-      })()
-    );
-  const wordless = step.kind === "numbers" && !step.title && !step.say;
-  return (
-    <section ref={ref} className="max-w-[1180px] mx-auto py-14">
-      {wordless ? (
-        <Reveal>{visual}</Reveal>
-      ) : (
-        <div className="story-step grid items-start">
-          <Reveal>{words}</Reveal>
-          <Reveal delay={120}>{visual}</Reveal>
-        </div>
-      )}
-    </section>
-  );
+function StepVisual({ step, env, run }: { step: dashboard.StoryStep; env: BlockEnv; run: boolean }) {
+  if (step.kind === "numbers") return <NumbersRow keys={step.keys} env={env} run={run} />;
+  const b = env.blocks.get(step.keys[0]);
+  return b ? <StoryBlock b={b} env={env} reveal={run} /> : null;
 }
 
 // ── Visual short ──
@@ -347,13 +374,15 @@ function Beat({ step, env }: { step: dashboard.StoryStep; env: BlockEnv }) {
       </div>
     );
   }
+  // A beat its author left wordless still says something true about its numbers.
+  const w = stepWords(step, env);
   if (step.kind === "numbers") {
-    if (step.keys.length === 1) return <BigNumber k={step.keys[0]} title={step.title} say={step.say} env={env} />;
+    if (step.keys.length === 1) return <BigNumber k={step.keys[0]} title={w.title} say={w.say} env={env} />;
     return (
       <div className="w-full">
-        {step.title ? <h2 className="mb-5 text-[length:clamp(18px,2.6cqw,30px)] font-bold tracking-[-0.02em] text-sol-text text-center"><LiveText text={step.title} env={env} /></h2> : null}
+        {w.title ? <h2 className="mb-5 text-[length:clamp(18px,2.6cqw,30px)] font-bold tracking-[-0.02em] text-sol-text text-center"><LiveText text={w.title} env={env} /></h2> : null}
         <NumbersRow keys={step.keys} env={env} run size="stage" />
-        {step.say ? <p className="mt-4 text-center text-[length:clamp(12px,1.4cqw,16px)] text-sol-text-secondary"><LiveText text={step.say} env={env} /></p> : null}
+        {w.say ? <p className="mt-4 text-center text-[length:clamp(12px,1.4cqw,16px)] text-sol-text-secondary"><LiveText text={w.say} env={env} /></p> : null}
       </div>
     );
   }
@@ -370,7 +399,7 @@ function Beat({ step, env }: { step: dashboard.StoryStep; env: BlockEnv }) {
         {check ? <span className="relative z-10"><CheckMark check={check} onClick={() => env.onCheck?.(b.key)} /></span> : null}
       </div>
       <div className="flex-1 min-h-0">
-        {b.kind === "chart" ? <ChartBody b={b} env={env} height="100%" compact={false} revealMs={1600} /> : b.kind === "table" ? <TableBody b={b} env={env} maxHeight={320} /> : <TextBody b={b} env={env} />}
+        {b.kind === "chart" ? <ChartBody b={b} env={env} height="100%" compact={false} revealMs={1600} annotate /> : b.kind === "table" ? <TableBody b={b} env={env} maxHeight={320} /> : <TextBody b={b} env={env} />}
       </div>
     </div>
   );
