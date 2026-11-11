@@ -45,6 +45,16 @@ describe("mod secrets and connectors", () => {
     expect(bad.ok).toBe(false);
   });
 
+  test("a secret's origins must be public hosts, since codecast's servers attach it; plain http to a public host is fine", () => {
+    for (const origin of ["http://169.254.169.254", "http://localhost:3210", "http://postgres:5432", "http://10.0.0.8"]) {
+      const check = validateManifest({ name: "union", permissions: { fetch: [origin] }, secrets: [{ name: "UNION_KEY", origins: [origin] }] });
+      expect(check.ok ? [] : check.errors.join()).toContain("which codecast's servers do not call");
+    }
+    expect(validateManifest({ name: "union", permissions: { fetch: ["http://api.union.example"] }, secrets: [{ name: "UNION_KEY", origins: ["http://api.union.example"] }] }).ok).toBe(true);
+    // The browser-side fetch list is the viewer's own and may name a local dev server.
+    expect(validateManifest({ name: "union", permissions: { fetch: ["http://localhost:5173"] } }).ok).toBe(true);
+  });
+
   test("a fetch carries a secret only toward its declared origins", () => {
     const check = validateManifest({ ...base, secrets: [{ name: "UNION_KEY", origins: ["https://api.union.test"] }] });
     if (!check.ok) throw new Error("manifest");

@@ -139,6 +139,17 @@ export const cliPendingCall = query({
   },
 });
 
+/**
+ * Who made a call, for the local half: a shared mod takes calls from every
+ * member of its team, and the half runs on the author's machine, so it is told
+ * who is asking and whether that is the author.
+ */
+async function callerOf(ctx: any, call: any): Promise<{ id: string; name?: string; email?: string; is_author: boolean }> {
+  const id = call.caller_id ?? call.user_id;
+  const user = await ctx.db.get(id);
+  return { id: String(id), ...(user?.name ? { name: user.name } : {}), ...(user?.email ? { email: user.email } : {}), is_author: String(id) === String(call.user_id) };
+}
+
 export const cliClaimCalls = mutation({
   args: { api_token: v.string(), names: v.array(v.string()), device_name: v.optional(v.string()) },
   handler: async (ctx, args) => {
@@ -161,7 +172,7 @@ export const cliClaimCalls = mutation({
       const name = names.get(String(c.mod_id));
       if (!name) continue;
       await ctx.db.patch(c._id, { status: "running", device_name: args.device_name, updated_at: Date.now() });
-      calls.push({ id: c._id, name, method: c.method, args: c.args });
+      calls.push({ id: c._id, name, method: c.method, args: c.args, caller: await callerOf(ctx, c) });
     }
     return { calls };
   },

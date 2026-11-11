@@ -57,6 +57,8 @@ test("a member's call runs on the author's machine and only the member reads the
   const { calls } = await t.mutation(api.modLocal.cliClaimCalls, { api_token: TOKEN, names: ["union"], device_name: "host" });
   expect(await t.query(api.modLocal.cliPendingCall, { api_token: TOKEN })).toBeNull();
   expect(calls.map((c: any) => c.method)).toEqual(["refs"]);
+  // The half runs on the author's machine, so it is told which teammate asked.
+  expect(calls[0].caller).toEqual({ id: String(ben), name: "Ben", is_author: false });
   await t.mutation(api.modLocal.cliFinishCall, { api_token: TOKEN, id, result: { ok: 1 } });
 
   expect(await as(ben).query(api.modCalls.webGetCall, { id })).toMatchObject({ status: "done", result: { ok: 1 } });
@@ -79,4 +81,11 @@ test("a member reads what the shared half published; an outsider and an unshared
 test("someone outside the team cannot call into a shared mod", async () => {
   const { mod, cat, as } = await seed(true);
   await expect(as(cat).mutation(api.modCalls.webCall, { mod_id: mod, method: "refs" })).rejects.toThrow(/your own mods/);
+});
+
+test("the author's own call reaches the half as the author", async () => {
+  const { t, mod, ana, as } = await seed(true);
+  await as(ana).mutation(api.modCalls.webCall, { mod_id: mod, method: "refs" });
+  const { calls } = await t.mutation(api.modLocal.cliClaimCalls, { api_token: TOKEN, names: ["union"], device_name: "host" });
+  expect(calls[0].caller).toEqual({ id: String(ana), name: "Ana", is_author: true });
 });

@@ -331,6 +331,13 @@ describe("a json live reader's url (pollLiveReaders)", () => {
     ]) expect([url, liveReaderUrlRefusal(url) !== null]).toEqual([url, true]);
   });
 
+  test("publish refuses a json reader aimed inside the network, and stores nothing", async () => {
+    const t = await seed();
+    const inside = { ...TARGETS[2], live: { ...TARGETS[2].live, url: "http://169.254.169.254/latest/meta-data/" } };
+    await expect((publish as any)._handler(ctxFor(t), { api_token: TOKEN, team_id: TEAM, repository: REPO, targets: [inside] })).rejects.toThrow("must name a public host");
+    expect(t.deploy_targets).toEqual([]);
+  });
+
   test("a public release document is still read", () => {
     for (const url of [
       "https://dl.acme.dev/latest.json",

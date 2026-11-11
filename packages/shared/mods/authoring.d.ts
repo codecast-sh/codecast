@@ -378,12 +378,24 @@ declare module "codecast-mod/local" {
     readonly device: string;
     readonly manifest: any;
   }
+  /** Who made a local call. */
+  export interface LocalCaller {
+    id: string;
+    name?: string;
+    email?: string;
+    /** True when the mod's author made the call. */
+    is_author: boolean;
+  }
   export type LocalHook<E> = ($: LocalApi, e: Readonly<E>) => unknown;
   export interface LocalOn {
     /** Once, when the daemon starts this half. Start timers here. */
     (event: "local.start", hook: LocalHook<{ device: string }>): void;
-    /** A call from the mod's UI ($.local.call(method, args)); the return value is the answer. */
-    (event: "local.call", matcher: { method: string }, hook: LocalHook<{ method: string; args: any }>): void;
+    /**
+     * A call from the mod's UI ($.local.call(method, args)); the return value is the answer. `caller` is who
+     * made it: once the mod is shared, any member of its team can call, and the hook runs on your machine,
+     * so check `caller.is_author` (or the caller's id) before doing anything only you should be able to ask for.
+     */
+    (event: "local.call", matcher: { method: string }, hook: LocalHook<{ method: string; args: any; caller?: LocalCaller }>): void;
     /**
      * Any of your sessions, on any agent and machine, changing who acts next: "working", "needs_input",
      * "done", "dormant", "idle". Runs always, with no window open. Match on to/from to narrow it.

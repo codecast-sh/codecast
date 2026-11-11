@@ -169,7 +169,7 @@ export function startLocalMods(deps: LocalRunnerDeps): { stop: () => void; wakeC
   const pump = async () => {
     const names = [...running.entries()].filter(([, r]) => r.ready).map(([n]) => n);
     if (!names.length) return;
-    let calls: { id: string; name: string; method: string; args: unknown }[];
+    let calls: { id: string; name: string; method: string; args: unknown; caller?: unknown }[];
     try { calls = (await post("/cli/mods/claim-calls", { names, device_name: device })).calls ?? []; } catch { return; }
     for (const c of calls) {
       const r = running.get(c.name);
@@ -179,7 +179,7 @@ export function startLocalMods(deps: LocalRunnerDeps): { stop: () => void; wakeC
         clearTimeout(timer);
         post("/cli/mods/finish-call", { id: c.id, result: res.result, error: res.error }).catch(() => {});
       });
-      r.worker.postMessage({ type: "call", id: c.id, method: c.method, args: c.args });
+      r.worker.postMessage({ type: "call", id: c.id, method: c.method, args: c.args, caller: c.caller });
     }
   };
 

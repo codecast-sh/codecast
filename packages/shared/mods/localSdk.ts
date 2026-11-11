@@ -6,7 +6,9 @@
 // answering the UI's calls, filing objects, and running `cast`.
 
 type Init = { type: "init"; name: string; manifest: any; siteUrl: string; apiToken: string; deviceName: string; castBin: string; castArgv?: string[] };
-type CallMsg = { type: "call"; id: string; method: string; args: unknown };
+/** Who made a call: a shared mod's local half takes calls from every member of its team. */
+export type LocalCaller = { id: string; name?: string; email?: string; is_author: boolean };
+type CallMsg = { type: "call"; id: string; method: string; args: unknown; caller?: LocalCaller };
 type EventMsg = { type: "event"; event: string; payload: Record<string, unknown> };
 
 type LocalHook = ($: LocalApi, e: any) => unknown;
@@ -149,7 +151,7 @@ export function start(register: LocalRegister | undefined): void {
       const hook = hooks.find((h) => h.event === "local.call" && (!h.matcher || h.matcher.method === msg.method));
       try {
         if (!hook) throw new Error(`the local half answers no call "${msg.method}"`);
-        const result = await hook.hook($, { method: msg.method, args: msg.args });
+        const result = await hook.hook($, Object.freeze({ method: msg.method, args: msg.args, caller: msg.caller ? Object.freeze({ ...msg.caller }) : undefined }));
         post({ type: "result", id: msg.id, result: result === undefined ? null : JSON.parse(JSON.stringify(result)) });
       } catch (err) {
         post({ type: "result", id: msg.id, error: errorText(err) });
