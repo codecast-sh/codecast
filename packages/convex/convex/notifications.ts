@@ -29,6 +29,7 @@ import {
   isSettleVerdictCurrent,
   HEARTBEAT_ALIVE_MS,
   restoreToInbox,
+  ROUTE_UP_STALL_GRACE_MS,
 } from "./inboxFilters";
 import { loadArmedTriggerHomes, isArmedTriggerHome, isArmedLoopHome } from "./dormancy";
 import { displayNotificationActor, rewriteNotificationMessage } from "./lib/notificationActor";
@@ -924,12 +925,18 @@ export async function performNeedsInputCheck(
     // finished turn lands here too, so it waits for the settle classifier,
     // which fires the route up on a needs-input verdict
     // (idleSummary.setIdleSummary). Only whether anyone can hear is known now.
-    if (stuck || declared) {
-      unheard = (await routeUpWaitingSession(ctx, conv, {
-        why: stuck ? kind : "blocked",
-        since: (stuck ? session?.agent_status_updated_at : conv.thread_state_at) ?? lastMsg?.timestamp ?? now,
-        stuck,
-      })) === "unreachable";
+    const since = (stuck ? session?.agent_status_updated_at : conv.thread_state_at) ?? lastMsg?.timestamp ?? now;
+    // A permission prompt or a stopped process gets ROUTE_UP_STALL_GRACE_MS to
+    // clear on its own: the check runs again then, and a status change in
+    // between supersedes it, so a stall that cleared never wakes the role.
+    const graceLeft = stuck && !awaitingInput && !declared ? since + ROUTE_UP_STALL_GRACE_MS - now : 0;
+    if (graceLeft > 0) {
+      await ctx.scheduler.runAfter(graceLeft, internal.notifications.checkNeedsInput, {
+        conversation_id: conv._id,
+        status_ts: session?.agent_status_updated_at,
+      });
+    } else if (stuck || declared) {
+      unheard = (await routeUpWaitingSession(ctx, conv, { why: stuck ? kind : "blocked", since, stuck })) === "unreachable";
     } else {
       unheard = (await routeUpHears(ctx, conv)) === "unreachable";
     }

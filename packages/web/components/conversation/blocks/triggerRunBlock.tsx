@@ -74,7 +74,15 @@ function changeWords(c: NonNullable<ScheduledTaskFrame["change"]>): string {
   return `@${c.role_handle} has read ${AREA_STATUS_WORDS[c.to]} at two checks in a row`;
 }
 
-function RoleWakeBlock({ frame, timestamp }: { frame: ScheduledTaskFrame; timestamp: number }) {
+/** The first line of a reply, as plain words for one row. */
+function replyLine(reply: string): string {
+  const line = reply.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+  return line.replace(/^#+\s*|^[-*]\s+/, "").replace(/\*\*|__|`/g, "");
+}
+
+/** `reply` is what the role said back (ConversationView replyAfter):
+ *  undefined while its turn has not ended, null when it ended without a word. */
+function RoleWakeBlock({ frame, timestamp, reply }: { frame: ScheduledTaskFrame; timestamp: number; reply?: string | null }) {
   const [open, setOpen] = useState(false);
   const role = frame.role!;
   const w = frame.waiting;
@@ -97,9 +105,17 @@ function RoleWakeBlock({ frame, timestamp }: { frame: ScheduledTaskFrame; timest
         {w && (
           <span className="flex min-w-0 shrink items-center gap-1.5" data-waiting-session={w.short_id}>
             <span className="shrink-0" onClick={stop}><EntityIdPill shortId={w.short_id} compact /></span>
-            <span className="truncate text-sol-text-dim">{waitingWords(w, timestamp)}</span>
+            <span className={`truncate ${reply === null ? "text-sol-yellow" : "text-sol-text-dim"}`}>{waitingWords(w, timestamp)}</span>
           </span>
         )}
+        {/* What the role did about it, so a handled wake reads as handled. */}
+        {reply && (
+          <span className="flex min-w-0 flex-1 items-center gap-1 text-sol-text-muted" data-role-wake-reply>
+            <CornerDownLeft className="w-3 h-3 shrink-0 text-sol-violet/60" />
+            <span className="truncate">{replyLine(reply)}</span>
+          </span>
+        )}
+        {reply === null && <span className="shrink-0 text-sol-yellow" data-role-wake-reply="none">no reply</span>}
         {c && <span className="min-w-0 shrink truncate text-sol-text-dim" data-area-change={c.kind}>{changeWords(c)}</span>}
         <span className="ml-auto shrink-0 text-meta text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         {open ? <ChevronDown className="w-3 h-3 shrink-0 text-sol-text-dim" /> : <ChevronRight className="w-3 h-3 shrink-0 text-sol-text-dim" />}
@@ -186,14 +202,14 @@ function HostedRoutineRunLine({ frame, timestamp }: { frame: ScheduledTaskFrame;
   );
 }
 
-export function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = false }: { content: string; timestamp: number; hosted?: boolean }) {
+export function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = false, reply }: { content: string; timestamp: number; hosted?: boolean; reply?: string | null }) {
   const [showPlumbing, setShowPlumbing] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
   const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
   const spawned = parseSpawnedTaskPrompt(content);
   const frame = spawned ? null : parseScheduledTask(content);
   if (hosted && frame) return <HostedRoutineRunLine frame={frame} timestamp={timestamp} />;
-  if (frame?.role) return <RoleWakeBlock frame={frame} timestamp={timestamp} />;
+  if (frame?.role) return <RoleWakeBlock frame={frame} timestamp={timestamp} reply={reply} />;
   if (frame?.workers?.length) return <WorkerReportBlock frame={frame} timestamp={timestamp} />;
   const title = spawned?.title || frame?.title || "Trigger Run";
   const prompt = spawned?.prompt ?? (frame?.body || cleanStickyContent(content));

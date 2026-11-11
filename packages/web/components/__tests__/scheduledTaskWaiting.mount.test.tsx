@@ -83,3 +83,26 @@ test("a role's run is one line at rest and opens inline to its card, the waiting
   expect(host.querySelector("[data-role-wake-prompt]")!.textContent).toBe("A session that reports to you is waiting.");
   expect(detail.textContent).not.toMatch(/STASHED|cast state/);
 });
+
+test("a role's run shows what the role said back, and marks one its turn left unanswered", async () => {
+  const firedAt = Date.now();
+  const content = formatScheduledTask({
+    title: "A session under you needs input", task_id: "rx3", trigger: "tr-3513", event: "session_needs_input",
+    role: { handle: "mobile", name: "Head of Mobile", reports_to: "Ashot", scope: [], goals: [] },
+    waiting: { short_id: "jx7e9hv", title: "Mobile prompt generalization", why: "permission_blocked", since: firedAt - 26_000, state: "" },
+    body: "A session that reports to you is waiting.",
+  });
+  const mount = async (reply: string | null | undefined) => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    await act(async () => createRoot(host).render(React.createElement(MemoryRouter, null, React.createElement(ScheduledTaskBlock, { content, timestamp: firedAt, reply }))));
+    return host;
+  };
+  const answered = await mount("**The web prompts worker** had stopped on a permission prompt; it is running again.\n\nNothing needed from me.");
+  expect(answered.querySelector("[data-role-wake-reply]")!.textContent).toBe("The web prompts worker had stopped on a permission prompt; it is running again.");
+  const unanswered = await mount(null);
+  expect(unanswered.querySelector("[data-role-wake-reply=none]")!.textContent).toBe("no reply");
+  // Its turn has not ended yet: nothing claims either way.
+  const pending = await mount(undefined);
+  expect(pending.querySelector("[data-role-wake-reply]")).toBeNull();
+});

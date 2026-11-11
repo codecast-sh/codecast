@@ -429,6 +429,11 @@ export const NEEDS_INPUT_PERMISSION_CHECK_DELAY_MS = 10_000;
 // moment it syncs; the small delay just lets the same batch's conversation
 // patch (message_count) settle before the dedupe key is computed.
 export const NEEDS_INPUT_AUQ_CHECK_DELAY_MS = 2_000;
+// How long a session under a role may sit on a permission prompt or a stopped
+// process before its role is woken. Most of these clear on their own within a
+// minute (a prompt answered, a process resumed), and each wake costs the role a
+// whole turn over its thread; an open question still wakes it at once.
+export const ROUTE_UP_STALL_GRACE_MS = 2 * 60_000;
 
 // The daemon liveness window, the status trust rule and the idle rule live in
 // the shared contracts now (sync-convergence ct-47609: a replica re-derives

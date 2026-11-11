@@ -1146,6 +1146,47 @@ describe("the route up", () => {
     expect(told(tables, "standing_sub").length).toBe(2);
   });
 
+  test("a permission prompt or a stopped process wakes the role only once it outlasts the grace; one that clears never does", async () => {
+    for (const status of ["permission_blocked", "stopped"]) {
+      const { ctx, tables, scheduled } = blockedHand();
+      Object.assign(tables.conversations[0], { thread_state_status: undefined, thread_state: undefined, thread_state_at: undefined });
+      Object.assign(tables.managed_sessions[0], { agent_status: status, agent_status_updated_at: now - 10_000 });
+      const statusTs = tables.managed_sessions[0].agent_status_updated_at;
+      await performNeedsInputCheck(ctx as any, { conversation_id: "conv1", status_ts: statusTs });
+      expect([status, told(tables, "standing_sub").length]).toEqual([status, 0]);
+      const recheck = scheduled.find((s) => s.args.conversation_id === "conv1" && s.args.status_ts === statusTs)!;
+      expect(recheck.delay).toBeGreaterThan(100_000);
+      expect(recheck.delay).toBeLessThanOrEqual(110_000);
+      // Still stuck when the grace runs out: the role hears it, once.
+      tables.managed_sessions[0].agent_status_updated_at = Date.now() - 125_000;
+      await performNeedsInputCheck(ctx as any, { conversation_id: "conv1", status_ts: tables.managed_sessions[0].agent_status_updated_at });
+      expect(told(tables, "standing_sub").map((f) => f?.waiting?.why)).toEqual([status]);
+    }
+    // Cleared in between: the status moved, so the re-check is superseded.
+    const { ctx, tables } = blockedHand();
+    Object.assign(tables.conversations[0], { thread_state_status: undefined, thread_state: undefined, thread_state_at: undefined });
+    Object.assign(tables.managed_sessions[0], { agent_status: "permission_blocked", agent_status_updated_at: now - 10_000 });
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv1", status_ts: now - 10_000 });
+    Object.assign(tables.managed_sessions[0], { agent_status: "working", agent_status_updated_at: now });
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1", status_ts: now - 10_000 });
+    expect(res.reason).toBe("superseded");
+    expect(told(tables, "standing_sub")).toEqual([]);
+  });
+
+  test("a hand waiting on its own open decision is one ask: the block it declares after posting it tells the role nothing more", async () => {
+    const { ctx, tables } = blockedHand();
+    tables.session_decisions = [{ _id: "dec1", conversation_id: "conv1", status: "pending", question: "Which price band for Texas?" }];
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).toBe("under_role");
+    expect(told(tables, "standing_sub")).toEqual([]);
+    // Answered, the next block is a new ask and the role hears it.
+    tables.session_decisions[0].status = "answered";
+    tables.conversations[0].message_count = 9;
+    tables.conversations[0].thread_state = "Which price band for Ohio?";
+    await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(told(tables, "standing_sub").length).toBe(1);
+  });
+
   test("the person controls it: a paused or cancelled trigger fires nothing, an edited prompt is what the role reads, and a cancel is never re-armed", async () => {
     const { ctx, tables } = blockedHand();
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
@@ -1270,7 +1311,8 @@ describe("the route up", () => {
   test("a hard stall is one ask per settle: a second permission prompt under the same pinned line still tells the role", async () => {
     const { ctx, tables } = blockedHand();
     Object.assign(tables.conversations[0], { thread_state_status: "working", thread_state: "Migrating the parser" });
-    tables.managed_sessions[0].agent_status = "permission_blocked";
+    // A prompt that has outlasted the grace (ROUTE_UP_STALL_GRACE_MS).
+    Object.assign(tables.managed_sessions[0], { agent_status: "permission_blocked", agent_status_updated_at: now - 3 * 60_000 });
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
     expect(told(tables, "standing_sub").map((f) => f?.waiting?.why)).toEqual(["permission_blocked"]);

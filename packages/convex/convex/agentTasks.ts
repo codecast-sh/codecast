@@ -1135,6 +1135,17 @@ export async function routeUpWaitingSession(
   const [toldAt, ...toldState] = String(conv.hand_wake_notified_key ?? "").split(":");
   const sameLine = !wait.stuck && conv.thread_state_status === "blocked" && !!state && toldState.join(":") === state;
   if ((toldAt !== "" && Number(toldAt) === count) || sameLine) return "already";
+  // A session waiting on its own open decision is one ask: posting the
+  // decision told the role (sessionDecisions.tellHearingRole), so the block or
+  // the settle that follows it tells nobody again. A "question" is that
+  // decision itself, routed when its session moves under a role.
+  if (wait.why !== "question") {
+    const openDecision = await ctx.db
+      .query("session_decisions")
+      .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conv._id).eq("status", "pending"))
+      .first();
+    if (openDecision) return "already";
+  }
   const { target, standingRole } = await routeUpTarget(ctx, conv);
   if (!target) return "nobody";
   const episode = `${count}:${state}`;
