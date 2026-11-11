@@ -455,8 +455,12 @@ export default function ChatChannelScreen() {
               )
             }
             contentContainerStyle={inverted.length === 0 ? styles.emptyList : undefined}
-            keyboardDismissMode="interactive"
-            keyboardShouldPersistTaps="always"
+            // A drag or a tap on the transcript puts the keyboard away; a tap
+            // on a link, reaction or image acts first time ('handled'). A row
+            // takes every tap for its long-press menu, so MessageRow dismisses
+            // on a plain tap itself. 'interactive' is iOS-only.
+            keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+            keyboardShouldPersistTaps="handled"
           />
           {awayFromBottom && (
             <TouchableOpacity style={styles.jumpPill} onPress={jumpToNow} activeOpacity={0.85}>

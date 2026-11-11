@@ -1,6 +1,6 @@
 import { memo } from 'react';
 import { router } from 'expo-router';
-import { StyleSheet, TouchableOpacity, View as RNView, Image, Linking, useWindowDimensions } from 'react-native';
+import { StyleSheet, TouchableOpacity, View as RNView, Image, Keyboard, Linking, useWindowDimensions } from 'react-native';
 import { useStorageImageUrl } from '@codecast/web/hooks/useStorageImageUrl';
 import { attachmentKind, type ChatAttachmentKind, type ChatMessageView } from '@codecast/web/components/chat/chatTypes';
 import type { ChatMessageRow } from '@codecast/web/store/inboxStore';
@@ -283,6 +283,11 @@ export const MessageRow = memo(function MessageRow({
   return (
     <TouchableOpacity
       activeOpacity={0.85}
+      // The row claims every tap (it holds the long-press menu), so the
+      // transcript's persistTaps="handled" never sees a tap on plain text: a
+      // tap with nothing to do puts the keyboard away here. Links, reactions
+      // and images inside are deeper touchables and take their own taps.
+      onPress={Keyboard.dismiss}
       onLongPress={() => onLongPress?.(message)}
       delayLongPress={350}
       style={[

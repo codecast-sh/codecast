@@ -174,8 +174,10 @@ export function MessageComposer({
     </RNView>
   ) : null;
 
+  // 'always', as every strip in the composer: a tap here never puts the
+  // keyboard away, even on a preview between its remove buttons.
   const imageStripEl = images.selectedImages.length > 0 ? (
-    <ScrollView horizontal style={styles.imagePreviewContainer} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+    <ScrollView horizontal style={styles.imagePreviewContainer} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always">
       {images.selectedImages.map((img, index) => (
         <RNView key={index} style={styles.imagePreview}>
           <Image source={{ uri: img.uri }} style={styles.previewImage} />

@@ -141,6 +141,7 @@ function NoteCard({ words, docId, name }: { words: string; docId: string; name?:
       <Pressable
         accessibilityRole="link"
         accessibilityLabel={`Open note ${title}`}
+        disabled={!route}
         onPress={route ? () => router.push(route as any) : undefined}
         style={({ pressed }) => ({
           borderRadius: 10,

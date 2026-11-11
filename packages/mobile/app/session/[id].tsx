@@ -1269,6 +1269,9 @@ function TaskNotificationLine({ content, timestamp, childConversationMap }: { co
 
   return (
     <TouchableOpacity
+      // Disabled with no child to open, so a tap on it falls through to the
+      // transcript, which puts the keyboard away.
+      disabled={!childId}
       onPress={childId ? () => router.push(`/session/${childId}`) : undefined}
       activeOpacity={childId ? 0.7 : 1}
       style={[styles.taskNotificationRow, { backgroundColor: config.bg }]}
@@ -2302,7 +2305,11 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   };
 
   return (
-    <Pressable onLongPress={handleLongPress} onPress={globalCollapsed && !localExpanded ? handleTapToExpand : undefined}>
+    // The bubble claims every tap (it holds the long-press menu), so the
+    // transcript's persistTaps="handled" never sees a tap on plain text: a tap
+    // with nothing to do puts the keyboard away here. Links, tool rows and
+    // images inside are deeper pressables and take their own taps.
+    <Pressable onLongPress={handleLongPress} onPress={globalCollapsed && !localExpanded ? handleTapToExpand : Keyboard.dismiss}>
       {isUser && sender ? <RNText style={styles.userBubbleSender} numberOfLines={1}>{sender}</RNText> : null}
       <RNView
         style={[styles.messageBubble, isUser ? styles.userBubble : styles.assistantBubble, showHeader && !isUser && styles.assistantBubbleFirst, isToolCallOnly && styles.toolCallOnlyBubble]}>
@@ -4914,15 +4921,18 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           // list has nothing to hold, and anchoring across the empty state
           // giving way to the first row reads as a scroll.
           maintainVisibleContentPosition={allMessages.length > 0 ? MVCP_ANCHOR_FIRST_VISIBLE : undefined}
-          // Drag the transcript to put the keyboard away. The composer is
-          // multiline, so the return key inserts a newline instead of
-          // submitting, and persistTaps="always" means a tap on the transcript
-          // never blurs either — without this the keyboard has no way down once
-          // the field is focused. iOS tracks the finger (iMessage style);
-          // 'interactive' is iOS-only and degrades to 'none' on Android, so
-          // Android gets 'on-drag', which dismisses as soon as a drag begins.
+          // The composer is multiline, so return inserts a newline: the
+          // keyboard goes down by a drag or a tap on the transcript. iOS tracks
+          // the finger (iMessage style); 'interactive' is iOS-only and degrades
+          // to 'none' on Android, so Android gets 'on-drag'.
           keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-          keyboardShouldPersistTaps="always"
+          // 'handled', not 'always': a tap that a link, button, tool row or
+          // image takes acts on the first tap with the keyboard up, and a tap
+          // nothing takes (empty space) puts the keyboard away. A bubble takes
+          // every tap for its long-press menu, so MessageBubble dismisses on a
+          // plain tap itself. 'always' kept the keyboard up on every tap. The
+          // composer is outside this list; its strips persist taps on their own.
+          keyboardShouldPersistTaps="handled"
         />
         <MessageTickRail
           ticks={navTicks}

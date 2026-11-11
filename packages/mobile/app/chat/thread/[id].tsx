@@ -283,7 +283,9 @@ export default function ChatThreadScreen() {
           data={inverted}
           keyExtractor={(item) => item.key}
           onScrollToIndexFailed={() => {}}
-          keyboardShouldPersistTaps="always"
+          // As the channel: a tap on the transcript puts the keyboard away, a
+          // tap on a link, reaction or image acts first time.
+          keyboardShouldPersistTaps="handled"
           renderItem={({ item }) => {
             if (item.kind !== 'message') return null;
             const view = (item.message as any).view as MobileChatMessage;
@@ -321,7 +323,7 @@ export default function ChatThreadScreen() {
               </RNView>
             ) : null
           }
-          keyboardDismissMode="interactive"
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
         />
 
         <TypingRow

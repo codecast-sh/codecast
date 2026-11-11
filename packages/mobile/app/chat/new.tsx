@@ -104,7 +104,9 @@ export default function NewMessageScreen() {
       <FlatList
         data={candidates}
         keyExtractor={(m: any) => String(m._id)}
-        keyboardShouldPersistTaps="always"
+        // A teammate row acts on the first tap; a tap below the rows puts
+        // the keyboard away.
+        keyboardShouldPersistTaps="handled"
         renderItem={({ item: m }: { item: any }) => {
           const id = String(m._id);
           const on = picked.includes(id);

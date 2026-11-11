@@ -280,7 +280,9 @@ describe("mobile send button is a real tap target", () => {
     // The send button's size lives in the shared session style.
     const sharedStyle = readFileSync(`${import.meta.dir}/../../shared/render/mobileSessionStyle.ts`, "utf8");
     expect(sharedStyle).toMatch(/sendButton: \{[^}]*minWidth: 44[^}]*height: 44/);
-    expect(sessionSource).toContain('keyboardShouldPersistTaps="always"');
+    // A tap the transcript's children take acts with the keyboard up; the
+    // full tap rules are in keyboardTaps.guard.test.ts.
+    expect(sessionSource).toContain('keyboardShouldPersistTaps="handled"');
     // Overlay is a child of the list pane, closed before composerLayer.
     const overlay = sessionSource.indexOf("styles.jumpButtonsOverlay");
     const overlayClose = sessionSource.indexOf("</Animated.View>", overlay);
