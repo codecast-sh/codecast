@@ -22,6 +22,11 @@ export const accountPoolTables = {
     // account's usage meter.
     holder_device_id: v.string(),
     team_id: v.id("teams"),
+    // The kinds of work that may draw on the account besides the team's
+    // members' own machines. "line": the team's line hosts (cloud hosts with
+    // line_slots) get a sealed copy and run their stations on it. Absent: the
+    // team pool alone.
+    pools: v.optional(v.array(v.string())),
     shared_at: v.number(),
   })
     .index("by_team", ["team_id"])

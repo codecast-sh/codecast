@@ -251,12 +251,27 @@ type ContinueDevice = {
   cc_accounts?: Parameters<typeof activeTokenProfile>[0];
 };
 
+/** A cloud host that runs the login its laptop pushes: it never pins, never
+ *  switches on its own, and its parks are the laptop's account's. A host on a
+ *  fleet store of its own (line-pool copies, accountPool.deviceMayHold) is
+ *  none of that: it answers for its own account like a local machine. */
+export function runsPushedLogin(device: { is_remote?: boolean; cc_accounts?: { fleet_store?: boolean } | null } | undefined | null): boolean {
+  return device?.is_remote === true && device.cc_accounts?.fleet_store !== true;
+}
+
+/** A cloud host whose sessions run on its own fleet store (line-pool copies).
+ *  Recovery judges and moves it on its own accounts (autoSwitchCheck with a
+ *  device_id), not through the laptop. */
+export function runsOwnFleet(device: { is_remote?: boolean; cc_accounts?: { fleet_store?: boolean } | null } | undefined | null): boolean {
+  return device?.is_remote === true && device.cc_accounts?.fleet_store === true;
+}
+
 /** The pin a session continued "on this account" (no switch) must carry on
  * this device: the profile covering the machine's current login when it has a
  * launch credential, otherwise none (the session follows the keychain).
- * Remotes run a pushed credential and never pin. */
+ * Remotes on a pushed credential never pin. */
 export function continueTargetPin(device: ContinueDevice | undefined, now: number): string | undefined {
-  if (!device || device.is_remote === true) return undefined;
+  if (!device || runsPushedLogin(device)) return undefined;
   return activeTokenProfile(device.cc_accounts, now);
 }
 
@@ -274,7 +289,7 @@ export function continueNeedsRestart(
   now: number,
 ): boolean {
   if (conv.pending_api_error_kind === "auth") return true;
-  if (device?.is_remote === true) return false;
+  if (runsPushedLogin(device)) return false;
   // An unpinned process runs on the keychain login. That is the fleet account
   // unless a token switch moved the fleet elsewhere, in which case a plain
   // continue would retry the same spent (or dead) login.
@@ -297,7 +312,7 @@ export function parkedOnActiveAccount(
   device: { is_remote?: boolean; cc_accounts?: FleetAccounts } | undefined,
   now: number,
 ): boolean {
-  if (device?.is_remote === true) return true;
+  if (runsPushedLogin(device)) return true;
   const fleet = fleetAccount(device?.cc_accounts, now);
   // Unpinned = the keychain login, which is the fleet account unless a token
   // switch moved the fleet: then its park says nothing about the token account.
@@ -369,7 +384,7 @@ export function resumePinFor(
   // A pin the machine chose follows the machine: after a switch (keychain or
   // token) the next resume lands on the account the fleet runs on now. A
   // pin a person chose (`--account`) is left alone below.
-  if (conv.cc_account_auto === true && device?.is_remote !== true) return continueTargetPin(device, now);
+  if (conv.cc_account_auto === true && !runsPushedLogin(device)) return continueTargetPin(device, now);
   const parked =
     conv.pending_api_error === true &&
     (conv.pending_api_error_kind === "limit" || conv.pending_api_error_kind === "auth");
@@ -381,7 +396,7 @@ export function resumePinFor(
       conv.model ? [conv.model] : undefined,
     );
   if ((parked || pinnedSpent) && continueNeedsRestart(conv, device, now)) return continueTargetPin(device, now);
-  if (!conv.cc_account && device?.is_remote !== true) return continueTargetPin(device, now);
+  if (!conv.cc_account && !runsPushedLogin(device)) return continueTargetPin(device, now);
   return conv.cc_account ?? undefined;
 }
 

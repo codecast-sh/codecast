@@ -69,6 +69,8 @@ import {
   codexAccountNeedsRestart,
   listOnlineDevices,
   findFlowDevice,
+  runsPushedLogin,
+  runsOwnFleet,
 } from "./ccAccountsShared";
 import { decideSwitchAhead } from "./ccSwitchAhead";
 import { poolUsageOverlay } from "./accountPool";
@@ -597,7 +599,7 @@ export async function insertSwitchCommands(
   // (nothing blocked — the Settings flow), and a fleet with remote-owned
   // sessions (remotes never swap locally; their credential is the primary's
   // push, so the primary must perform the swap for their revive to matter).
-  const hasRemoteGroup = [...groups.keys()].some((id) => deviceFor(id)?.is_remote === true);
+  const hasRemoteGroup = [...groups.keys()].some((id) => runsPushedLogin(deviceFor(id)));
   if (
     switchRequested &&
     opts.primary &&
@@ -623,7 +625,9 @@ export async function insertSwitchCommands(
   const unswitchableDevices: string[] = [];
   for (const [deviceId, convs] of groups) {
     const device = deviceFor(deviceId);
-    const isRemote = device?.is_remote === true;
+    // A host on a fleet store of its own (line-pool copies) switches under
+    // its own name for the account, like any local machine.
+    const isRemote = runsPushedLogin(device);
     if (switchRequested && isRemote && !primaryCanSwitch) {
       unswitchable += convs.length;
       unswitchableDevices.push(device?.label ?? deviceId.slice(0, 8));
@@ -1747,6 +1751,37 @@ export const setRecoveryMode = mutation({
 // model-scoped week ("Fable") can stop. Read from the sessions active in the
 // last half hour, which is the fleet a switch ahead moves.
 const RUNNING_MODELS_WINDOW_MS = 30 * 60 * 1000;
+
+/**
+ * The machine one recovery pass judges and moves. Without a device_id it is
+ * the person's laptop, as it always was. With one it is that cloud host, when
+ * the host runs on a fleet store of its own (line-pool copies, runsOwnFleet):
+ * the host's parks and meters are about its own accounts, which the laptop's
+ * pass can neither see nor move. The host pass runs under the person's
+ * recovery mode, read from their laptop whether or not it is online, with
+ * ask-first taken as auto: putting an account in the line pool is the
+ * approval, and nobody sits at a host to answer an ask. Returns the host row
+ * carrying that mode, so every rule below reads it as it reads a laptop's.
+ */
+async function recoveryFleet(
+  ctx: { db: any },
+  userId: Id<"users">,
+  deviceId: string | undefined,
+  online: Doc<"devices">[],
+  laptop: Doc<"devices"> | undefined,
+): Promise<Doc<"devices"> | undefined> {
+  if (!deviceId) return laptop;
+  const host = online.find((d) => d.device_id === deviceId && runsOwnFleet(d));
+  if (!host) return undefined;
+  const person: Doc<"devices"> | undefined = laptop ?? (await ctx.db
+    .query("devices")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .collect())
+    .filter((d: Doc<"devices">) => !d.is_remote)
+    .sort((a: Doc<"devices">, b: Doc<"devices">) => b.last_seen - a.last_seen)[0];
+  const on = !!person && recoveryModeOf(person) !== "off";
+  return { ...host, cc_auto_switch: on, cc_recovery_ask: false, cc_auto_continue: false };
+}
 async function runningClaudeModels(ctx: { db: any }, userId: Id<"users">, now: number): Promise<string[]> {
   const recent: Doc<"conversations">[] = await ctx.db
     .query("conversations")
@@ -1757,10 +1792,12 @@ async function runningClaudeModels(ctx: { db: any }, userId: Id<"users">, now: n
 }
 
 export const switchAheadCheck = internalMutation({
-  args: { user_id: v.id("users") },
+  // device_id: a cloud host on its own fleet store (recoveryFleet).
+  args: { user_id: v.id("users"), device_id: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const now = Date.now();
-    const { online, primary } = await listOnlineDevices(ctx, args.user_id, now);
+    const { online, primary: laptop } = await listOnlineDevices(ctx, args.user_id, now);
+    const primary = await recoveryFleet(ctx, args.user_id, args.device_id, online, laptop);
     const accounts = primary?.cc_accounts;
     if (!primary || !accounts?.fleet_store || recoveryModeOf(primary) !== "auto") return { acted: "off" };
     const state = primary.cc_auto_switch_state ?? {};
@@ -1810,10 +1847,23 @@ export const switchAheadCheck = internalMutation({
  * identically at the execution layer.
  */
 export const autoSwitchCheck = internalMutation({
-  args: { user_id: v.id("users") },
+  // device_id: the pass for one cloud host on its own fleet store
+  // (recoveryFleet). The person's pass hands each such host a pass of its own
+  // and leaves those hosts' Claude parks to it.
+  args: { user_id: v.id("users"), device_id: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const now = Date.now();
-    const { online, primary } = await listOnlineDevices(ctx, args.user_id, now);
+    const { online, primary: laptop } = await listOnlineDevices(ctx, args.user_id, now);
+    const ownFleetHosts = new Set(online.filter(runsOwnFleet).map((d) => d.device_id));
+    const hostPass = !!args.device_id;
+    if (!hostPass) {
+      for (const device_id of ownFleetHosts) {
+        await ctx.scheduler.runAfter(0, internal.accountSwitch.autoSwitchCheck, { user_id: args.user_id, device_id });
+      }
+    }
+    // Every re-check this pass books is for the same machine.
+    const again = { user_id: args.user_id, ...(args.device_id ? { device_id: args.device_id } : {}) };
+    const primary = await recoveryFleet(ctx, args.user_id, args.device_id, online, laptop);
     if (!primary) return { acted: "off" };
     // Ask-first: never change the account without the human approving. A
     // switch the loop would take becomes a PROPOSAL instead (recorded on the
@@ -1828,7 +1878,15 @@ export const autoSwitchCheck = internalMutation({
 
     let state = primary.cc_auto_switch_state ?? {};
     const attempts = state.attempts ?? [];
-    const listed = await listBlockedConversations(ctx, args.user_id, false);
+    // A host on its own fleet answers for its own Claude parks; everything
+    // else (Codex parks included: their logins are per machine and the laptop
+    // pass has always run them) stays with the person's pass.
+    const inThisPass = (c: Doc<"conversations">) =>
+      c.agent_type !== "codex" && !!c.owner_device_id && ownFleetHosts.has(c.owner_device_id)
+        ? c.owner_device_id === args.device_id
+        : !hostPass;
+    const listedAll = await listBlockedConversations(ctx, args.user_id, false);
+    const listed = { blocked: listedAll.blocked.filter(inThisPass), skipped: listedAll.skipped.filter(inThisPass) };
     // A worker stopped on a limit is evidence about the account, and its
     // parent is the session to recover (workerParks): the parent stands in
     // for it below, and the worker stays blocked until the pass acts on it.
@@ -1872,7 +1930,7 @@ export const autoSwitchCheck = internalMutation({
       if (authParks.length > 0 && !activeDead) {
         const retryAt = now + AUTO_SWITCH_PROBE_RETRY_MS;
         if (!state.next_check_at || state.next_check_at <= now || retryAt < state.next_check_at) {
-          await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, { user_id: args.user_id });
+          await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, again);
           await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, next_check_at: retryAt } });
         }
         return { acted: "wait", next_check_at: retryAt };
@@ -1906,9 +1964,7 @@ export const autoSwitchCheck = internalMutation({
       // (deduped via next_check_at, cleared whenever an action is taken).
       const retryAt = state.last_action_at + AUTO_SWITCH_COOLDOWN_MS + 5_000;
       if (!state.next_check_at || state.next_check_at <= now || retryAt < state.next_check_at) {
-        await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, {
-          user_id: args.user_id,
-        });
+        await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, again);
         await ctx.db.patch(primary._id, {
           cc_auto_switch_state: { ...state, next_check_at: retryAt },
         });
@@ -1956,7 +2012,7 @@ export const autoSwitchCheck = internalMutation({
     const bookCodexFollowUp = async (): Promise<number | undefined> => {
       if (codexLimit.length === 0) return undefined;
       const at = now + AUTO_SWITCH_COOLDOWN_MS + 5_000;
-      await ctx.scheduler.runAt(at, internal.accountSwitch.autoSwitchCheck, { user_id: args.user_id });
+      await ctx.scheduler.runAt(at, internal.accountSwitch.autoSwitchCheck, again);
       return at;
     };
 
@@ -2015,7 +2071,7 @@ export const autoSwitchCheck = internalMutation({
           retryAt,
         );
         // A redeem that buys nothing must not strand the sessions.
-        await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, { user_id: args.user_id });
+        await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, again);
         console.log(
           `autoSwitchCheck: redeeming a Codex reset credit on "${codexDecision.profile}" for ${codexLimit.length} parked conversation(s)`,
         );
@@ -2042,7 +2098,7 @@ export const autoSwitchCheck = internalMutation({
       // account's reset" gap, one provider over).
       if (!soleParks) return { retry_at: retryAt };
       if (!state.next_check_at || state.next_check_at <= now || retryAt < state.next_check_at) {
-        await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, { user_id: args.user_id });
+        await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, again);
         await ctx.db.patch(primary._id, { cc_auto_switch_state: { ...state, next_check_at: retryAt } });
       }
       return { acted: codexDecision.action, next_check_at: retryAt };
@@ -2059,7 +2115,7 @@ export const autoSwitchCheck = internalMutation({
       });
       const retryAt = now + AUTO_SWITCH_COOLDOWN_MS + 5_000;
       await recordAction("auth_restart", authRestart.map((c) => authRestartAttemptKey(c._id)), retryAt);
-      await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, { user_id: args.user_id });
+      await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, again);
       console.log(
         `autoSwitchCheck: restarting ${authRestart.length} auth-parked conversation(s) on the current login`,
       );
@@ -2111,9 +2167,7 @@ export const autoSwitchCheck = internalMutation({
       // Not an action: no cooldown, no attempt, exhausted_at untouched.
       const retryAt = withCodexRetry(decision.retry_at);
       if (!state.next_check_at || state.next_check_at <= now || retryAt < state.next_check_at) {
-        await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, {
-          user_id: args.user_id,
-        });
+        await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, again);
         await ctx.db.patch(primary._id, {
           cc_auto_switch_state: { ...state, next_check_at: retryAt },
         });
@@ -2125,7 +2179,11 @@ export const autoSwitchCheck = internalMutation({
       // Same no-switch revive the banner uses: a message where one can
       // reach the session, a restart (pin corrected) where it cannot. Two or
       // more rows go out in stages behind a probe (continueLimitParks).
-      const res = await continueLimitParks(ctx, args.user_id, { blocked: claudeLimit, online, primary, now });
+      // A host's parks go out together: the staged release behind a probe
+      // (throttleContinueCheck) keeps its bookkeeping on the laptop's row.
+      const res = hostPass
+        ? { ...(await insertSwitchCommands(ctx, args.user_id, { profile: undefined, blocked: claudeLimit, online, primary, continueBlocked: true, now })), probe: null, throttle_check_at: undefined }
+        : await continueLimitParks(ctx, args.user_id, { blocked: claudeLimit, online, primary, now });
       if (res.probe) state = { ...state, limit_probe: res.probe, throttle_check_at: res.throttle_check_at };
       await recordAction("continue", [AUTO_SWITCH_CONTINUE_KEY], await bookCodexFollowUp(), buildDecision("continue", activeProfile));
       await releaseWorkers();
@@ -2220,9 +2278,7 @@ export const autoSwitchCheck = internalMutation({
         // minutes so the stored ask matches the bars the person is reading.
         const retryAt = Math.min(withCodexRetry(decision.retry_at), now + 3 * AUTO_SWITCH_PROBE_RETRY_MS);
         if (!state.next_check_at || state.next_check_at <= now || retryAt < state.next_check_at) {
-          await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, {
-            user_id: args.user_id,
-          });
+          await ctx.scheduler.runAt(retryAt, internal.accountSwitch.autoSwitchCheck, again);
         }
         console.log(
           `autoSwitchCheck: ask-first — recommending "${best.name}" for ${claudeLimit.length} limit-parked conversation(s), awaiting approval`,
@@ -2250,9 +2306,7 @@ export const autoSwitchCheck = internalMutation({
       state.next_check_at <= now ||
       exhaustedRetryAt < state.next_check_at
     ) {
-      await ctx.scheduler.runAt(exhaustedRetryAt, internal.accountSwitch.autoSwitchCheck, {
-        user_id: args.user_id,
-      });
+      await ctx.scheduler.runAt(exhaustedRetryAt, internal.accountSwitch.autoSwitchCheck, again);
       nextState.next_check_at = exhaustedRetryAt;
     }
     await ctx.db.patch(primary._id, { cc_auto_switch_state: nextState });

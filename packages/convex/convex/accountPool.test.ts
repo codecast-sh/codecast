@@ -40,6 +40,9 @@ function fixture() {
         },
       },
       { _id: "d_host", user_id: ASHOT, device_id: "ashot-host", is_remote: true, last_seen: NOW, provider_key_pubkey: "pk-host" },
+      { _id: "d_line", user_id: ASHOT, device_id: "line-host", is_remote: true, last_seen: NOW, provider_key_pubkey: "pk-line", line_slots: [{ origin: "git@github.com:acme/app.git" }] },
+      { _id: "d_jason_line", user_id: JASON, device_id: "jason-line", is_remote: true, last_seen: NOW, provider_key_pubkey: "pk-jline", line_slots: [{ origin: "git@github.com:acme/app.git" }] },
+      { _id: "d_stranger_line", user_id: STRANGER, device_id: "stranger-line", is_remote: true, last_seen: NOW, provider_key_pubkey: "pk-sline", line_slots: [{ origin: "git@github.com:acme/app.git" }] },
       {
         _id: "d_jason", user_id: JASON, device_id: "jason-laptop", last_seen: NOW, provider_key_pubkey: "pk-jason",
         cc_accounts: { active_email: "jason@x.com", profiles: [{ name: "jason", email: "jason@x.com", usage: usage(100) }] },
@@ -60,7 +63,8 @@ function fixture() {
 
 type Db = ReturnType<typeof makeFakeDb>;
 const as = (db: Db, user: string) => ({ db, auth: { getUserIdentity: async () => ({ subject: `${user}|session` }) } });
-const share = (db: Db, teams = [TEAM], email = "claude4@x.com") => performSetAccountShares({ db }, ASHOT as any, "ashot-laptop", email, teams);
+const share = (db: Db, teams = [TEAM], email = "claude4@x.com", pools?: Record<string, string[]>) => performSetAccountShares({ db }, ASHOT as any, "ashot-laptop", email, teams, pools);
+const targetsOf = async (db: Db) => (await poolFor(db, ASHOT, "ashot-laptop")).seal[0].targets.map((t: any) => t.device_id).sort();
 const poolFor = (db: Db, user: string, device: string) => (poolForDevice as any)._handler(as(db, user), { device_id: device });
 const store = (db: Db, shareId: string, devices: string[]) =>
   (storePoolCopies as any)._handler(as(db, ASHOT), { device_id: "ashot-laptop", share_id: shareId, token_stored_at: NOW - DAY, copies: devices.map((device_id) => ({ device_id, sealed: SEALED })) });
@@ -92,6 +96,42 @@ describe("sharing an account into the team's pool", () => {
     // machine with no key, not one unseen for months, not a stranger's.
     expect(pool.seal[0].targets.map((t: any) => t.device_id)).toEqual(["jason-laptop"]);
     expect(pool.seal[0].targets[0]).toMatchObject({ pubkey: "pk-jason", token_stored_at: null });
+  });
+
+  test("a line-pool share also seals to the team's line hosts, and to no other host", async () => {
+    const db = fixture();
+    await share(db, [TEAM], "claude4@x.com", { [TEAM]: ["line"] });
+    expect(db._tables.account_shares[0].pools).toEqual(["line"]);
+    // Personal machines exactly as before, plus every member's host that runs
+    // line work. Not a host without line_slots, not a stranger's line host.
+    expect(await targetsOf(db)).toEqual(["jason-laptop", "jason-line", "line-host"]);
+    const shareId = db._tables.account_shares[0]._id;
+    expect((await store(db, shareId, ["line-host", "ashot-host", "stranger-line"])).stored).toBe(1);
+    expect((await poolFor(db, ASHOT, "line-host")).copies).toMatchObject([{ share_id: shareId, name: "pool-claude4" }]);
+    expect((await (listPool as any)._handler(as(db, ASHOT), {}))[0].pools).toEqual(["line"]);
+  });
+
+  test("a host loses its copy when the label comes off or it stops running line work", async () => {
+    const db = fixture();
+    await share(db, [TEAM], "claude4@x.com", { [TEAM]: ["line"] });
+    const shareId = db._tables.account_shares[0]._id;
+    await store(db, shareId, ["line-host", "jason-laptop"]);
+    db._tables.devices.find((d: any) => d.device_id === "line-host").line_slots = [];
+    expect((await poolFor(db, ASHOT, "line-host")).copies).toHaveLength(0);
+    db._tables.devices.find((d: any) => d.device_id === "line-host").line_slots = [{ origin: "o" }];
+    // A share written without labels keeps the ones it has (the web's pill).
+    await share(db);
+    expect(db._tables.account_shares[0].pools).toEqual(["line"]);
+    await share(db, [TEAM], "claude4@x.com", { [TEAM]: [] });
+    expect(db._tables.account_shares[0].pools).toBeUndefined();
+    expect(db._tables.account_pool_copies.map((c: any) => c.device_id)).toEqual(["jason-laptop"]);
+    expect((await poolFor(db, ASHOT, "line-host")).copies).toHaveLength(0);
+    expect(await targetsOf(db)).toEqual(["jason-laptop"]);
+  });
+
+  test("an unknown pool label is refused", async () => {
+    const db = fixture();
+    await expect(share(db, [TEAM], "claude4@x.com", { [TEAM]: ["batch"] })).rejects.toThrow("Unknown pool batch");
   });
 
   test("a sealed copy reaches only its machine, named as a pool profile, until the share closes", async () => {

@@ -37,6 +37,7 @@ import {
 } from "./ccAccounts.js";
 import { decryptProviderKeyPayload, encryptProviderKey } from "./providerKeyCrypto.js";
 import { execFileAsync } from "./proc.js";
+import { isRemoteDevice } from "./remote/device.js";
 
 /** The label sealed copies carry (the transport's `provider` field). */
 export const POOL_SEAL_LABEL = "claude-pool";
@@ -210,8 +211,10 @@ export async function runPoolPass(backend: PoolBackend, configDir: string, now =
 
 /** The pass on the daemon's clock, against the signed-in backend. Only a
  *  machine on the fleet store takes part: a pool copy carries sessions only
- *  there (a take-back can empty it), so a remote or a machine with the fleet
- *  turned off neither holds copies nor draws. */
+ *  there (a take-back can empty it), so a machine with the fleet turned off
+ *  neither holds copies nor draws. A cloud host always asks: the server seals
+ *  it copies only from its team's line pool, and holding one is what turns
+ *  its fleet store on (fleetStoreEnabled); its last copy going turns it off. */
 export function startPoolPasses(opts: {
   client: () => { query(name: any, args: any): Promise<any>; mutation(name: any, args: any, o?: any): Promise<any> } | null;
   token: () => string | undefined;
@@ -219,7 +222,7 @@ export function startPoolPasses(opts: {
   configDir: string;
   log: (line: string) => void;
 }): ReturnType<typeof setInterval> | null {
-  if (!fleetStoreEnabled()) return null;
+  if (!fleetStoreEnabled() && !isRemoteDevice()) return null;
   let running = false;
   const backend: PoolBackend = {
     state: async () => {

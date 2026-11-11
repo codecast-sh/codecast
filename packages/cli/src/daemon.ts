@@ -30637,16 +30637,15 @@ async function main(): Promise<void> {
   setTimeout(() => { pushProviderKeysToRemoteHosts("daemon start").catch(() => {}); }, 62_000 * bootPacing.fanoutOffsetScale);
   setInterval(() => { pushProviderKeysToRemoteHosts("periodic", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
   // The team's shared account pool (ccPool.ts): seal this machine's shared
-  // accounts for teammates, and keep the copies sealed to it.
-  if (!isRemoteDevice()) {
-    void import("./ccPool.js").then(({ startPoolPasses }) => startPoolPasses({
-      client: () => syncService.getClient(),
-      token: () => readConfig()?.auth_token,
-      deviceId: deviceId(),
-      configDir: CONFIG_DIR,
-      log,
-    }));
-  }
+  // accounts for teammates, and keep the copies sealed to it. A line host
+  // draws its team's line pool the same way.
+  void import("./ccPool.js").then(({ startPoolPasses }) => startPoolPasses({
+    client: () => syncService.getClient(),
+    token: () => readConfig()?.auth_token,
+    deviceId: deviceId(),
+    configDir: CONFIG_DIR,
+    log,
+  }));
   // Home mirror (cloud/mirror) in its own process, started after the first
   // minute like the other remote fan-outs; it exits when the mirror is turned
   // off and is retried every minute while it is on.

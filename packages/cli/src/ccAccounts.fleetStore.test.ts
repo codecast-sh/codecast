@@ -18,7 +18,12 @@ import {
   readFleetState,
   listProfiles,
   writeAccountToken,
+  drawsLinePool,
+  fleetStoreEnabled,
+  getAccountsHeartbeatPayload,
+  switchFleetTo,
 } from "./ccAccounts.js";
+import { removePoolProfile } from "./ccPool.js";
 import { refreshUsageSnapshots } from "./ccUsagePoll.js";
 import { fallbackProfiles } from "@codecast/shared/contracts";
 
@@ -119,6 +124,71 @@ describe("fleet store (sandboxed $HOME)", () => {
     expect(launchProfileName(now)).toBeUndefined();
     expect(fs.existsSync(path.join(home, ".codecast", "cc-launch.json"))).toBe(false);
     expect(launchAccountPrefix(undefined)).toEqual({ prefix: "", account: undefined });
+  });
+
+  describe("a cloud host drawing on its team's line pool", () => {
+    const POOL = "sk-ant-oat01-" + "p".repeat(90);
+    const addCopy = (name: string, email: string, shareId: string) => {
+      writeAccountToken(name, POOL);
+      const index = JSON.parse(fs.readFileSync(path.join(home, ".codecast", "cc-accounts.json"), "utf-8"));
+      index.profiles[name] = { email, saved_at: 1, pool_share_id: shareId };
+      fs.writeFileSync(path.join(home, ".codecast", "cc-accounts.json"), JSON.stringify(index));
+      invalidateAccountsCache();
+    };
+
+    it("without a copy keeps the pushed login: no fleet store, no launch account", async () => {
+      process.env.CODECAST_REMOTE_DEVICE = "1";
+      expect(drawsLinePool()).toBe(false);
+      expect(fleetStoreEnabled()).toBe(false);
+      expect(await maintainFleetStore(now)).toBeNull();
+      expect(readFleetState()).toBeNull();
+    });
+
+    it("launches its sessions on a pool copy through the fleet store, and the heartbeat reports it", async () => {
+      process.env.CODECAST_REMOTE_DEVICE = "1";
+      addCopy("pool-a", "a@x.com", "account_shares_a");
+      expect(fleetStoreEnabled()).toBe(true);
+      const did = await maintainFleetStore(now);
+      expect(did).toContain("from the line pool");
+      // Only a pool copy, never one of the host's own profiles or its pushed login.
+      expect(readFleetState()?.profile).toBe("pool-a");
+      expect(launchProfileName(now)).toBe("pool-a");
+      expect(JSON.parse(fs.readFileSync(path.join(fleetStoreDir(), ".credentials.json"), "utf-8")).claudeAiOauth.accessToken).toBe(POOL);
+      expect(launchAccountPrefix(undefined).account).toBe(FLEET_GATE_ACCOUNT);
+      // Recovery sees the host's account: the inventory names the fleet's copy.
+      expect(getAccountsHeartbeatPayload()).toMatchObject({ fleet_store: true, launch_profile: "pool-a" });
+      // The server's switch moves it like any fleet machine.
+      addCopy("pool-b", "b@x.com", "account_shares_b");
+      expect((await switchFleetTo("pool-b", now)).mode).toBe("fleet");
+      expect(launchProfileName(now)).toBe("pool-b");
+    });
+
+    it("never keeps one of its own profiles as the launch account", () => {
+      process.env.CODECAST_REMOTE_DEVICE = "1";
+      addCopy("pool-a", "a@x.com", "account_shares_a");
+      setLaunchProfile("tok", undefined, now);
+      expect(launchProfileName(now)).toBeUndefined();
+    });
+
+    it("its last copy going returns it to the pushed login", async () => {
+      process.env.CODECAST_REMOTE_DEVICE = "1";
+      addCopy("pool-a", "a@x.com", "account_shares_a");
+      await maintainFleetStore(now);
+      expect(await removePoolProfile("pool-a", now)).toContain("emptied the fleet store");
+      expect(fleetStoreEnabled()).toBe(false);
+      expect(launchProfileName(now)).toBeUndefined();
+      expect(launchAccountPrefix(undefined)).toEqual({ prefix: "", account: undefined });
+    });
+
+    it("moves to the next copy when one is taken back", async () => {
+      process.env.CODECAST_REMOTE_DEVICE = "1";
+      addCopy("pool-a", "a@x.com", "account_shares_a");
+      addCopy("pool-b", "b@x.com", "account_shares_b");
+      await putFleetOn("pool-a", now);
+      await removePoolProfile("pool-a", now);
+      expect(readFleetState()?.profile).toBe("pool-b");
+      expect(launchProfileName(now)).toBe("pool-b");
+    });
   });
 
   it("refuses a profile that can carry nothing, leaving the store as it was", async () => {

@@ -4384,9 +4384,11 @@ async function publishAccountsInventory(): Promise<void> {
 
 const poolCmd = () => import("./accountPoolCommand.js");
 accountsCmd.command("share <profile> [teams...]").description("Pool an account with a team").option("--yes", "Skip confirm")
+  .addOption(new Option("--pool <label>", "Also open it to a kind of work: line (the team's line hosts)").choices(["line"]))
   .action(async (p, t, o) => (await poolCmd()).shareAccount(p, t, o, publishAccountsInventory));
 accountsCmd.command("unshare <profile> [teams...]").description("Take an account out of a team's pool")
-  .action(async (p, t) => (await poolCmd()).unshareAccount(p, t));
+  .addOption(new Option("--pool <label>", "Take only this label off, keeping the team share").choices(["line"]))
+  .action(async (p, t, o) => (await poolCmd()).unshareAccount(p, t, o));
 accountsCmd.command("pool").description("Pooled accounts and who spent them").option("--json", "JSON")
   .action(async (o) => (await poolCmd()).printPool(o));
 

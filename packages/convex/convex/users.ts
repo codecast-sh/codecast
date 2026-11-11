@@ -699,8 +699,8 @@ export const daemonHeartbeat = mutation({
       const DEVICE_WRITE_THROTTLE_MS = 45 * 1000;
       // Read BEFORE the patch: was this machine offline until this beat?
       const cameOnline = !existingDevice || now - existingDevice.last_seen >= DEVICE_ONLINE_MS;
+      const seenStale = !existingDevice || now - existingDevice.last_seen >= DEVICE_WRITE_THROTTLE_MS;
       if (existingDevice) {
-        const seenStale = now - existingDevice.last_seen >= DEVICE_WRITE_THROTTLE_MS;
         if (seenStale || deviceBeatChanged(existingDevice, devicePatch)) {
           await ctx.db.patch(existingDevice._id, devicePatch);
         }
@@ -732,6 +732,12 @@ export const daemonHeartbeat = mutation({
         JSON.stringify(args.cc_accounts) !== JSON.stringify(existingDevice?.cc_accounts)
       ) {
         await ctx.scheduler.runAfter(0, internal.accountSwitch.switchAheadCheck, { user_id: auth.userId });
+      }
+      // A cloud host on its own fleet store (line-pool copies) reads its
+      // meters from each account's holder, whose beats this host never sees,
+      // so its check runs on the host's own beat, at most one a throttle window.
+      if (!localDevice && args.cc_accounts?.fleet_store && seenStale) {
+        await ctx.scheduler.runAfter(0, internal.accountSwitch.switchAheadCheck, { user_id: auth.userId, device_id: args.device_id });
       }
       if (cameOnline && localDevice) {
         await ctx.scheduler.runAfter(0, internal.users.catchUpCameOnline, { user_id: auth.userId, device_id: args.device_id });

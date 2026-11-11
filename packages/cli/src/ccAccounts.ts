@@ -1468,12 +1468,16 @@ export function launchRecordInEffect(active?: ActiveIdentity, now = Date.now()):
   // A cloud host runs the login the laptop pushes, so every machine follows
   // one account and one switch. A launch account of its own took the host out
   // of that: recovery could neither see nor move it, and it sat on a spent
-  // week while other accounts had room (jx75sbx, 2026-10-24).
-  if (isRemoteDevice()) {
+  // week while other accounts had room (jx75sbx, 2026-10-24). The one
+  // exception is a host drawing on its team's line pool: there the record
+  // names the pool copy its fleet store carries, the heartbeat reports it, and
+  // the server's recovery moves it (autoSwitchCheck's host pass). Nothing
+  // else may stand as a host's launch account.
+  const meta = readProfileIndex().profiles[record.profile];
+  if (isRemoteDevice() && !(fleetStoreEnabled() && meta?.pool_share_id)) {
     clearLaunchProfile();
     return null;
   }
-  const meta = readProfileIndex().profiles[record.profile];
   // On the fleet store the record names the account the store carries. It
   // holds while that profile is saved: the keychain login is not the fleet's,
   // and whether the profile can still carry sessions is the store's question
@@ -1542,11 +1546,20 @@ export function fleetStatePath(): string {
   return path.join(fleetStoreDir(), "state.json");
 }
 
-/** Sessions on this machine launch on the fleet store. Remotes run a pushed
- *  copy of the primary's login instead. CODECAST_CC_FLEET=0 turns it off. */
+/** A cloud host holding copies from its team's line pool (ccPool.ts). The
+ *  server seals only line-pool shares to a host (accountPool.deviceMayHold),
+ *  so any pool copy here is one. */
+export function drawsLinePool(): boolean {
+  return isRemoteDevice() && Object.values(readProfileIndex().profiles).some((m) => !!m.pool_share_id);
+}
+
+/** Sessions on this machine launch on the fleet store. A remote runs a pushed
+ *  copy of the primary's login instead, unless it draws on its team's line
+ *  pool: then its fleet store carries the pool copies. CODECAST_CC_FLEET=0
+ *  turns it off. */
 export function fleetStoreEnabled(): boolean {
   if (process.env.CODECAST_CC_FLEET === "0") return false;
-  return !isRemoteDevice();
+  return !isRemoteDevice() || drawsLinePool();
 }
 
 export interface FleetState {
@@ -1701,8 +1714,15 @@ export async function putFleetOn(name: string, now = Date.now()): Promise<FleetS
  */
 export async function maintainFleetStore(now = Date.now()): Promise<string | null> {
   if (!fleetStoreEnabled()) return null;
-  const name = launchProfileName(now) ?? activeProfileName();
-  if (!name) return null;
+  // A host carries only pool copies, never the login its laptop pushes.
+  const name = launchProfileName(now) ?? (isRemoteDevice() ? undefined : activeProfileName());
+  if (!name) {
+    if (!isRemoteDevice()) return null;
+    // A host that just drew its first line-pool copy starts on the best of
+    // them; the server's recovery moves it from there.
+    const state = await moveFleetToFallback(undefined, now);
+    return state && `started the ${describeFleetWrite(state)} from the line pool`;
+  }
   const { login, machine } = await fleetLoginFor(name);
   if (!readAccountTokenValue(name) && !machine) {
     const exp = oauthOf(login)?.expiresAt;
@@ -1755,13 +1775,14 @@ async function failFleetOver(dead: string, login: string | null, now: number): P
 }
 
 /** Fleet onto auto-switch's pick besides `leaving`, else null. */
-export async function moveFleetToFallback(leaving: string, now: number): Promise<FleetState | null> {
+export async function moveFleetToFallback(leaving: string | undefined, now: number): Promise<FleetState | null> {
   const { accounts: usage } = readUsageCache();
   const candidates = fallbackProfiles(
     listProfiles()
-      .filter((p) => p.name !== leaving)
+      // A host's fleet carries only its line-pool copies (fleetStoreEnabled).
+      .filter((p) => p.name !== leaving && (!isRemoteDevice() || !!p.pool_share_id))
       .map((p) => ({ ...p, usage: usage[p.uuid || p.email || ""], setup_token: accountTokenInfo(p.name) })),
-    readProfileIndex().profiles[leaving]?.email,
+    leaving ? readProfileIndex().profiles[leaving]?.email : undefined,
     now,
   );
   for (const candidate of candidates) {
