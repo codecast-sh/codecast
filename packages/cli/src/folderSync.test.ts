@@ -5,6 +5,8 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import {
   exportFolder,
+  isSecretFile,
+  refusedFolder,
   localFolderFor,
   packFolder,
   planFolderExport,
@@ -105,14 +107,39 @@ describe("pack and unpack", () => {
   });
 });
 
+describe("refusedFolder", () => {
+  test("only ordinary folders inside home", () => {
+    expect(refusedFolder("/Users/a/src/family", "/Users/a")).toBeNull();
+    expect(refusedFolder("/Users/a", "/Users/a")).not.toBeNull();
+    expect(refusedFolder("/Users/a/.ssh", "/Users/a")).not.toBeNull();
+    expect(refusedFolder("/Users/a/.config/gh", "/Users/a")).not.toBeNull();
+    expect(refusedFolder("/Users/a/Library/LaunchAgents", "/Users/a")).not.toBeNull();
+    expect(refusedFolder("/etc", "/Users/a")).not.toBeNull();
+    expect(refusedFolder("/Users/b/src", "/Users/a")).not.toBeNull();
+  });
+});
+
+describe("isSecretFile", () => {
+  test("keys and credentials", () => {
+    for (const n of [".env", ".env.local", "id_ed25519", "id_rsa.pub", "server.pem", "tls.key", "cert.p12", ".netrc", ".npmrc", "credentials.json"]) expect(isSecretFile(n)).toBe(true);
+    for (const n of ["notes.md", "keyboard.ts", "identity.ts", "env.ts"]) expect(isSecretFile(n)).toBe(false);
+  });
+});
+
 describe("exportFolder", () => {
+  test("refuses a private folder in home", async () => {
+    write(".ssh/id_ed25519", "k");
+    const out = await exportFolder({ path: path.join(root, ".ssh") }, { home: root, upload: async () => "s" });
+    expect(out.ok).toBe(false);
+  });
+
   test("refuses a home folder", async () => {
     const out = await exportFolder({ path: root }, { home: root, upload: async () => "s" });
     expect(out.ok).toBe(false);
   });
 
   test("answers missing when the folder is not here", async () => {
-    const out = await exportFolder({ path: path.join(root, "gone") }, { home: "/Users/nobody", upload: async () => "s" });
+    const out = await exportFolder({ path: path.join(root, "gone") }, { home: root, upload: async () => "s" });
     expect(out).toMatchObject({ ok: false, missing: true });
   });
 });
@@ -120,7 +147,7 @@ describe("exportFolder", () => {
 describe("syncFolderFromPeer", () => {
   async function exported(dir: string, store: Map<string, Uint8Array>) {
     return exportFolder({ path: dir }, {
-      home: "/Users/nobody",
+      home: root,
       upload: async (b) => { store.set("s1", b); return "s1"; },
     });
   }

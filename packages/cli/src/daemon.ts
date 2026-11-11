@@ -705,9 +705,14 @@ async function fetchFolderFromPeers(conversationId: string, recorded: string): P
   const run = (async (): Promise<string | null> => {
     const owner = await svc.getConversationOwner(conversationId).catch(() => null);
     if (owner && owner !== deviceId()) return null;
-    const { localFolderFor, syncFolderFromPeer } = await import("./folderSync.js");
+    const { localFolderFor, refusedFolder, syncFolderFromPeer } = await import("./folderSync.js");
     const dest = localFolderFor(recorded, home);
     if (fs.existsSync(dest)) return dest;
+    const refused = refusedFolder(dest, home);
+    if (refused) {
+      folderFetchFailures.set(key, { at: Date.now(), reason: refused });
+      return null;
+    }
     log(`[FOLDER] ${recorded} isn't here; asking your other machines for it`);
     const r = await syncFolderFromPeer(dest, {
       request: () => svc.requestFolderExport(conversationId, deviceId(), recorded),

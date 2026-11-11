@@ -59,6 +59,15 @@ describe("requestFolderExport", () => {
     expect(JSON.parse(cmd!.args!)).toEqual({ path: "/Users/ashot/src/family", conversation_id: conv });
   });
 
+  test("refuses any path but the conversation's own folder", async () => {
+    const { owner, conv, as } = await setup();
+    for (const path of ["/Users/ashot/.ssh", "/Users/ashot", "/", "/Users/ashot/src/family/../.."]) {
+      await expect(as(owner).mutation(api.folderSync.requestFolderExport, { device_id: "here", conversation_id: conv, path })).rejects.toThrow("not this conversation's folder");
+    }
+    const ok = await as(owner).mutation(api.folderSync.requestFolderExport, { device_id: "here", conversation_id: conv, path: "/Users/ashot/src/family/" });
+    expect(ok.command_ids).toHaveLength(1);
+  });
+
   test("refuses someone else's conversation", async () => {
     const { other, conv, as } = await setup();
     await expect(as(other).mutation(api.folderSync.requestFolderExport, { device_id: "bos-mac", conversation_id: conv, path: "/x" })).rejects.toThrow("not your conversation");
