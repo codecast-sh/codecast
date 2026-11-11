@@ -405,7 +405,11 @@ async function loadConversationSearchScope(
 
   const effectiveTeamIds = args.mineOnly
     ? []
-    : args.activeTeamId ? [args.activeTeamId] : userTeamIds;
+    // A named team narrows the scope only when the caller belongs to it; a
+    // team id the caller is not a member of scopes to nothing.
+    : args.activeTeamId
+      ? userTeamIds.filter(id => id === args.activeTeamId)
+      : userTeamIds;
 
   const allTeamUsers: Doc<"users">[] = [];
   for (const teamId of effectiveTeamIds) {
@@ -2699,7 +2703,10 @@ export const listConversations = query({
     const includeMessagePreviews = args.include_message_previews ?? false;
     const cursorTimestamp = args.cursor ? parseInt(args.cursor, 10) : null;
 
-    const effectiveTeamId = args.filter === "team" ? (args.activeTeamId || user.active_team_id) : undefined;
+    const requestedTeamId = args.filter === "team" ? (args.activeTeamId || user.active_team_id) : undefined;
+    const effectiveTeamId = requestedTeamId
+      ? (await resolveInboxTeamScope(ctx, userId, requestedTeamId)) ?? undefined
+      : undefined;
 
     const teamUsers = args.filter === "team" && effectiveTeamId
       ? await ctx.db
@@ -7637,7 +7644,10 @@ export const getTeamUnreadCount = query({
       return 0;
     }
 
-    const effectiveTeamId = args.teamId || user.active_team_id;
+    const requestedTeamId = args.teamId || user.active_team_id;
+    const effectiveTeamId = requestedTeamId
+      ? await resolveInboxTeamScope(ctx, userId, requestedTeamId)
+      : null;
     if (!effectiveTeamId) {
       return 0;
     }
