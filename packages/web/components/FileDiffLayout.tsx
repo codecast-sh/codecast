@@ -373,7 +373,7 @@ function FileDiffContent({
         <div className="flex items-center gap-2 shrink-0">
           <span className="text-meta text-sol-text-dim">
             <span className="text-sol-green">+{file.additions}</span>
-            <span className="mx-0.5 text-sol-text-dim/30">/</span>
+            <span className="mx-0.5 text-sol-text-dim/30 modern:text-sol-text-dim">/</span>
             <span className="text-sol-red">-{file.deletions}</span>
           </span>
           {showNav && (
@@ -551,7 +551,7 @@ function UnifiedDiffView({
               <span className="flex items-center gap-2 text-meta text-sol-text-dim shrink-0">
                 <span>
                   <span className="text-sol-green">+{file.additions}</span>
-                  <span className="mx-0.5 text-sol-text-dim/30">/</span>
+                  <span className="mx-0.5 text-sol-text-dim/30 modern:text-sol-text-dim">/</span>
                   <span className="text-sol-red">-{file.deletions}</span>
                 </span>
                 <ViewedToggle file={file} fileMarks={fileMarks} onToggleViewed={toggleViewed} />
@@ -1246,11 +1246,11 @@ export function FileDiffLayout({
     return (
       <div ref={paneRef} className="h-full flex flex-col">
         <div className="px-4 py-2 border-b border-sol-border bg-sol-bg flex items-center justify-between shrink-0 gap-2">
-          <div className="flex items-center gap-3 text-sm min-w-0 truncate">
+          <div className="flex items-center gap-3 modern:gap-2 text-sm min-w-0 truncate">
             {headerExtra}
             {/* Beside header controls the count drops "changed" and the
                 folder moves to the tooltip, so the viewed tally stays in view. */}
-            <span className="text-sol-text-muted shrink-0" title={headerExtra && commonPrefix ? `${commonPrefix}/` : undefined}>
+            <span className="text-sol-text-muted shrink-0 modern:shrink modern:min-w-0 modern:truncate" title={headerExtra && commonPrefix ? `${commonPrefix}/` : undefined}>
               {files.length} {files.length === 1 ? "file" : "files"}{headerExtra ? "" : " changed"}
             </span>
             <span className="text-sol-green font-medium shrink-0">+{totalAdditions}</span>
