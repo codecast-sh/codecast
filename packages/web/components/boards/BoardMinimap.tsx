@@ -7,8 +7,6 @@ import type { BoardCamera } from "./useBoardCamera";
 import type { BoardEl } from "./boardTypes";
 import { colorToken, stickyFill } from "./boardColors";
 
-const W = 200;
-const H = 132;
 
 function fillFor(el: BoardEl): string {
   if (el.kind === "sticky") return stickyFill(el.color);
@@ -17,7 +15,9 @@ function fillFor(el: BoardEl): string {
   return "var(--sol-text-dim)";
 }
 
-export const BoardMinimap = memo(function BoardMinimap({ elements, byKey, cam }: { elements: BoardEl[]; byKey: Map<string, BoardEl>; cam: BoardCamera }) {
+export const BoardMinimap = memo(function BoardMinimap({ elements, byKey, cam, top }: { elements: BoardEl[]; byKey: Map<string, BoardEl>; cam: BoardCamera; top?: boolean }) {
+  // A narrow pane gets a smaller overview, so it never takes a large share of the reading area.
+  const W = top ? 112 : 168, H = top ? 72 : 108;
   const content = useMemo(() => unionBox(elements.flatMap((e) => {
     if (e.kind !== "connector") return [elementBounds(e)];
     const g = connectorGeometry(e, (k) => byKey.get(k));
@@ -42,14 +42,15 @@ export const BoardMinimap = memo(function BoardMinimap({ elements, byKey, cam }:
   return (
     <div
       data-board-ui
-      style={{ position: "absolute", top: 52, right: 12, zIndex: 20, padding: 4, background: "var(--sol-card)", border: "1px solid var(--sol-border)", borderRadius: 9, boxShadow: "var(--board-chrome-shadow)" }}
+      // Bottom-right, clear of the toolbar, translucent: an overview, not a panel over the work.
+      style={{ position: "absolute", ...(top ? { top: 52 } : { bottom: 16 }), right: 12, zIndex: 20, padding: 3, background: "color-mix(in srgb, var(--sol-card) 82%, transparent)", backdropFilter: "blur(6px)", border: "1px solid var(--sol-border)", borderRadius: 9, boxShadow: "var(--board-chrome-shadow)" }}
     >
       <svg
         width={W}
         height={H}
         role="img"
         aria-label="Board overview"
-        style={{ display: "block", cursor: "pointer", touchAction: "none", borderRadius: 6, background: "var(--sol-bg)" }}
+        style={{ display: "block", cursor: "pointer", touchAction: "none", borderRadius: 6, background: "color-mix(in srgb, var(--sol-bg) 70%, transparent)" }}
         onPointerDown={(e) => { drag.current = true; e.currentTarget.setPointerCapture(e.pointerId); goTo(e); }}
         onPointerMove={(e) => { if (drag.current) goTo(e); }}
         onPointerUp={() => { drag.current = false; }}

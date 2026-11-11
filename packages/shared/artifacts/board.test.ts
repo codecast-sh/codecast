@@ -17,6 +17,8 @@ import {
   snapBox,
   stickyFontSize,
   BOARD_TEMPLATES,
+  stickyLayout,
+  textHeight,
   BOARD_VERBS,
 } from "./board";
 
@@ -451,5 +453,19 @@ describe("elbow attachment", () => {
     const c = { key: "c", kind: "connector", rev: 1, from: "a", to: "g", curve: "elbow", to_at: [0.9, 0] } as any;
     const geo = connectorGeometry(c, (k) => ({ a, g } as any)[k])!;
     expect(Math.round(geo.b.x)).toBe(Math.round(-4 + 0.9 * 1008));
+  });
+});
+
+describe("sticky layout", () => {
+  test("an illustrated sticky with a long body gives up illustration room before shrinking type below the floor", () => {
+    const text = "Lock flavor\nHuckleberry wins the tasting panel after three rounds of blind tasting with the whole team and two outside judges";
+    const { iconH, size } = stickyLayout(text, 200, 196, "berries", true);
+    expect(iconH).toBeLessThan(84);
+    expect(size).toBeGreaterThanOrEqual(10);
+    // What it draws fits inside the card.
+    expect(28 + (iconH ? iconH + 6 : 0) + textHeight(text, size, 172)).toBeLessThanOrEqual(196);
+  });
+  test("a short sticky keeps its full illustration", () => {
+    expect(stickyLayout("Ship it", 200, 200, "rocket", true).iconH).toBe(84);
   });
 });

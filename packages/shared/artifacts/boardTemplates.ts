@@ -6,6 +6,7 @@ import type { ArtifactOp } from "./core";
 import { newElementKey } from "./spec";
 import type { Pt } from "./boardGeometry";
 import { timelineOps } from "./boardLayout";
+import type { BoardArt } from "./boardArt";
 
 export const BOARD_TEMPLATES = ["retro", "kanban", "roadmap", "timeline", "brainstorm"] as const;
 export type BoardTemplate = (typeof BOARD_TEMPLATES)[number];
@@ -16,6 +17,11 @@ export const BOARD_TEMPLATE_LABELS: Record<BoardTemplate, string> = {
   roadmap: "Roadmap",
   timeline: "Timeline",
   brainstorm: "Brainstorm",
+};
+
+/** Each template's picture where a picker lists them (an illustration name, boardArt.ts). */
+export const BOARD_TEMPLATE_ART: Record<BoardTemplate, BoardArt> = {
+  retro: "thumbsup", kanban: "clipboard", roadmap: "compass", timeline: "road", brainstorm: "lightbulb",
 };
 
 export function isBoardTemplate(v: unknown): v is BoardTemplate {

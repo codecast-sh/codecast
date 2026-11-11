@@ -7,8 +7,7 @@ import {
   connectorGeometry,
   elementBox,
   smoothPath,
-  stickyFontSize,
-  stickyIconHeight,
+  stickyLayout,
   unflatten,
   type Box,
 } from "@codecast/shared/artifacts/board";
@@ -101,8 +100,7 @@ const StickyView = memo(function StickyView({ el, editing, onEditInput, onEditDo
   const text = typeof el.text === "string" ? el.text : "";
   const [draft, setDraft] = useState(text);
   const shown = editing ? draft : text;
-  const iconH = stickyIconHeight(icon, !!art, b.w, b.h);
-  const size = stickyFontSize(shown || " ", b.w, b.h - (iconH ? iconH + 6 : 0), 17, 11);
+  const { iconH, size } = stickyLayout(shown, b.w, b.h, icon, !!art);
   return (
     <div data-key={el.key} className="board-el board-sticky" style={boxStyle(el, { background: stickyFill(el.color) })}>
       {art ? (
@@ -138,8 +136,10 @@ const TextView = memo(function TextView({ el, editing, onEditInput, onEditDone }
     lineHeight: 1.3,
   };
   const text = typeof el.text === "string" ? el.text : "";
+  // Text with no width set is as wide as its longest line in whatever face the theme uses; the box estimate is only a floor.
+  const auto = typeof el.w !== "number" ? { width: "max-content", minWidth: elementBox(el).w, whiteSpace: "pre" as const } : {};
   return (
-    <div data-key={el.key} className="board-el board-text" style={boxStyle(el, style)}>
+    <div data-key={el.key} className="board-el board-text" style={boxStyle(el, { ...style, ...auto })}>
       {editing ? <InlineEditor value={text} className="board-text-edit" style={style} onInput={onEditInput} onDone={onEditDone} /> : text ? <RichText text={text} /> : <span className="board-placeholder">Text</span>}
     </div>
   );
