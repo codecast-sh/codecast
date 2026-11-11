@@ -109,7 +109,10 @@ describe("DOM chunks", () => {
     const source = w.db._tables.event_sources[0];
     await recordReplayChunk(w.internalCtx, source, "rec", 1, domKey(1), NOW, "dom");
     await recordReplayChunk(w.internalCtx, source, "rec", 0, domKey(0), NOW, "dom");
-    await recordReplayChunk(w.internalCtx, source, "rec", 0, domKey(0, SHA("e")), NOW, "dom");
+    // Other content for a held seq keeps the held key unless the caller vouches it never landed.
+    expect(await recordReplayChunk(w.internalCtx, source, "rec", 0, domKey(0, SHA("e")), NOW, "dom")).toMatchObject({ held: domKey(0) });
+    expect(w.db._tables.replays[0].dom_chunk_keys).toEqual([domKey(0), domKey(1)]);
+    await recordReplayChunk(w.internalCtx, source, "rec", 0, domKey(0, SHA("e")), NOW, "dom", domKey(0));
     const row = w.db._tables.replays[0];
     expect(row.chunk_keys).toEqual([]);
     expect(row.dom_chunk_keys).toEqual([domKey(0, SHA("e")), domKey(1)]);
