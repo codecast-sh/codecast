@@ -45,6 +45,7 @@ import {
 import { checkSuiteCi, ciOf, recordCommitCi, recordGithubDeployStatus, teamKey, workflowRunCi } from "./deployTargetsCi";
 import { commitBySha, deployCommitsOf, mainAtOf, mainCommitsAfter, targetDeploys, targetState, upsertMainCommits } from "./deployTargetsState";
 import { liveReaderUrlRefusal } from "./lib/liveReaderUrl";
+import { guardedFetch, RefusedHostError } from "./lib/guardedFetch";
 
 /** Commits kept on one deploy's record. */
 const COMMITS_MAX = 200;
@@ -118,6 +119,8 @@ export const publish = mutation({
       if (!DEPLOY_TARGET_NAME_RE.test(name)) throw new Error(`"${t.name}" is not a target name`);
       if (declared.has(name)) throw new Error(`target ${name} is declared twice`);
       declared.add(name);
+      const readerRefusal = t.live.kind === "json" ? liveReaderUrlRefusal(t.live.url) : null;
+      if (readerRefusal) throw new Error(`target ${name}: ${readerRefusal}`);
       const fields = {
         command: t.command,
         runs: t.runs,
@@ -518,10 +521,15 @@ export const pollLiveReaders = internalAction({
       try {
         const refusal = liveReaderUrlRefusal(t.live.url);
         if (refusal) throw new Error(refusal);
-        const res = await fetch(t.live.url, { headers: { Accept: "application/json", "Cache-Control": "no-cache" }, signal: AbortSignal.timeout(10_000) });
-        // A redirect must end somewhere the reader could have named itself.
-        const landed = res.url ? liveReaderUrlRefusal(res.url) : null;
-        if (landed) throw new Error(`${t.live.url} redirected: ${landed}`);
+        // Every redirect hop, and every address a name resolves to, is checked before it is requested.
+        let res: Response;
+        try {
+          res = await guardedFetch(t.live.url, { headers: { Accept: "application/json", "Cache-Control": "no-cache" }, signal: AbortSignal.timeout(10_000) }, { maxRedirects: 5 });
+        } catch (err) {
+          // A refusal names only the host; any other failure says nothing about what answered inside the network.
+          throw err instanceof RefusedHostError ? err : new Error(`${t.live.url} could not be read`);
+        }
+        if (res.status >= 300 && res.status < 400) throw new Error(`${t.live.url} redirected more than 5 times`);
         if (!res.ok) throw new Error(`${t.live.url} answered ${res.status}`);
         const { sha, version } = readJsonLive(t.live, await res.json());
         const r = await ctx.runMutation(internal.deployTargets.recordLiveRead, { target_id: t._id, ...(sha ? { sha } : {}), ...(version ? { version } : {}) });
