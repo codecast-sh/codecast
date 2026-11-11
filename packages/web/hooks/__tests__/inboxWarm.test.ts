@@ -119,3 +119,48 @@ describe("readForward heals a stale row in the middle of a hosted turn", () => {
     expect((healed[1] as any).tool_calls?.[0]?.name).toBe("write_doc");
   });
 });
+
+describe("startWarmLoop", () => {
+  // A follower window gets its rows from the host's replication stream, not
+  // from a feeder, and holds its own message cache. A row that lands after the
+  // window mounted must still be warmed, or dismissing onto it shows a loader.
+  it("warms a row that arrives in the store with no feeder push", async () => {
+    const { startWarmLoop, WARM_COALESCE_MS } = await import("../inboxWarm");
+    const id = "jx7aaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    useInboxStore.setState({ sessions: {}, messages: {}, pagination: {}, clientState: { ui: { inbox_view_mode: "recent" } } as any });
+    const calls: string[] = [];
+    const convex = {
+      query: async (_fn: unknown, args: any) => {
+        calls.push(String(args.conversation_id));
+        return { page: [{ _id: "m1", role: "user", content: "hi", timestamp: 1 }], isDone: true };
+      },
+    };
+    const stop = startWarmLoop(convex);
+    try {
+      expect(calls).toEqual([]);
+      useInboxStore.setState({
+        sessions: {
+          [id]: { _id: id, session_id: "s", agent_type: "claude_code", message_count: 1, is_idle: true, has_pending: false, last_user_message: "hi", started_at: Date.now(), updated_at: Date.now(), title: "T" } as any,
+        },
+      });
+      await new Promise((r) => setTimeout(r, WARM_COALESCE_MS + 200));
+      expect(useInboxStore.getState().visualOrder().map((s) => String(s._id))).toContain(id);
+      expect(calls).toContain(id);
+      expect(useInboxStore.getState().messages[id]?.length).toBe(1);
+
+      // The loop keeps running, and a second mount in the same window (the
+      // layout and the sync hooks both mount it) shares it: unmounting one
+      // leaves the other's loop alive.
+      startWarmLoop(convex)();
+      const id2 = "jx7bbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+      useInboxStore.setState({
+        sessions: { ...useInboxStore.getState().sessions, [id2]: { ...useInboxStore.getState().sessions[id], _id: id2 } as any },
+      });
+      await new Promise((r) => setTimeout(r, WARM_COALESCE_MS + 200));
+      expect(calls).toContain(id2);
+    } finally {
+      stop();
+      useInboxStore.setState({ sessions: {}, messages: {}, pagination: {}, clientState: {} as any });
+    }
+  });
+});

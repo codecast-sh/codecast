@@ -7,7 +7,6 @@ import { useInboxStore, InboxSession, isConvexId } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
 import { INBOX_RECOVERY_STALE_MS, useRecoveryPoll } from "./useRecoveryPoll";
 import { queryWithSignal } from "../lib/queryWithSignal";
-import { warmVisibleSessions } from "./inboxWarm";
 
 import { useWatchEffect } from "./useWatchEffect";
 // Record the team-mode active id set, change-guarded so an identical payload
@@ -89,12 +88,11 @@ export function useSyncTeamInboxSessions() {
   const lastLivenessRef = useRef(Date.now());
 
   useConvexSync(teamSessions, useCallback((data: any) => {
+    // Team rows warm through the store-driven loop (startWarmLoop): the board's
+    // cards are the rows on screen in team scope.
     if (!applyTeamListPayload(data, (activeTeamId as string | undefined) ?? null)) return;
-    // Team rows warm through the same rendered-order loop as the personal
-    // inbox — the board's cards are the rows on screen in team scope.
-    warmVisibleSessions(convex);
     lastSyncRef.current = Date.now();
-  }, [activeTeamId, convex]), { coalesceMs: 300 });
+  }, [activeTeamId]), { coalesceMs: 300 });
 
   // Liveness overlay into the team projection slot (applyTeamLivenessPayload).
   useConvexSync(teamLiveness, useCallback((data: any) => {
@@ -125,7 +123,6 @@ export function useSyncTeamInboxSessions() {
     }, signal);
     if (signal.aborted) return;
     if (!applyTeamListPayload(fresh, (activeTeamId as string | undefined) ?? null)) return;
-    warmVisibleSessions(convex);
     lastSyncRef.current = Date.now();
   }, [convex, active, activeTeamId]), INBOX_RECOVERY_STALE_MS);
 

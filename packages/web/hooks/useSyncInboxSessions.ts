@@ -2,10 +2,10 @@ import { useRef, useCallback, useState } from "react";
 import { useMutation, useConvex, type ConvexReactClient } from "convex/react";
 import { captureError } from "../lib/analytics";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, InboxSession, classifySession, claimsViewer, isSub, isConvexId, visualOrderViewSig } from "../store/inboxStore";
+import { useInboxStore, InboxSession, classifySession, claimsViewer, isSub, isConvexId } from "../store/inboxStore";
 import { agentStatusAt } from "../lib/liveness";
 import { WORKING_SET_RECENCY_MS } from "@codecast/shared/contracts";
-import { warmVisibleSessions } from "./inboxWarm";
+import { startWarmLoop } from "./inboxWarm";
 import { toast } from "sonner";
 import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
@@ -330,13 +330,10 @@ export function useSyncInboxSessions() {
   const lastLivenessSyncRef = useRef(Date.now());
   const lastUserSyncRef = useRef(Date.now());
 
-  // Message warming: one module-level loop driven by the RENDERED order (see
-  // inboxWarm.ts). Every list push, every recovery pass and every change of what
-  // the user is looking at (view mode, scope, show-old, chip filter) re-plans it;
-  // it is idempotent and cheap once the visible rows sit at their tier depth.
-  const warm = useCallback(() => warmVisibleSessions(convex), [convex]);
-  const warmViewSig = useInboxStore(visualOrderViewSig);
-  useWatchEffect(() => { warm(); }, [warm, warmViewSig]);
+  // Message warming: one store-driven loop per window over the RENDERED order
+  // (startWarmLoop in inboxWarm.ts). It runs in followers too, which hold their
+  // own message cache and have no feeders to drive it.
+  useWatchEffect(() => startWarmLoop(convex), [convex]);
 
 
   // The base live session list — syncTable + liveInboxIds — is shared with the
@@ -346,8 +343,7 @@ export function useSyncInboxSessions() {
   // carries null liveness (include_liveness:false), so the idle/needs-input sound
   // stays on the sessionsLiveness overlay below where liveness actually changes.
   const { data: inboxSessions, error: inboxError } = useLiveInboxSessions({
-    onSync: (sessions) => {
-      warm();
+    onSync: () => {
       lastSyncRef.current = Date.now();
     },
   });
@@ -359,8 +355,7 @@ export function useSyncInboxSessions() {
     const sessions = data?.sessions ?? data;
     if (!Array.isArray(sessions)) return;
     syncTable("sessions", sessions as unknown as InboxSession[]);
-    warm();
-  }, [syncTable, warm]), { coalesceMs: 500 });
+  }, [syncTable]), { coalesceMs: 500 });
 
   // Liveness overlay: a small {convId: {facts + projection stamps}} map, plus
   // the projection envelope (sync-convergence C1). The ONLY inbox channel that
@@ -424,9 +419,8 @@ export function useSyncInboxSessions() {
     // subscription — otherwise the "recovery" just re-reads the staleness.
     const fresh: any = await querySplitWhole(convex, api.conversations.listInboxSessions, LIST_INBOX_SESSIONS_ARGS, "list", signal);
     if (signal.aborted || !applyInboxListPayload(fresh, convex)) return;
-    warm();
     lastSyncRef.current = Date.now();
-  }, [convex, syncTable, warm, isSyncHost]), INBOX_RECOVERY_STALE_MS);
+  }, [convex, isSyncHost]), INBOX_RECOVERY_STALE_MS);
 
   // Liveness can stall independently of the base list — recover it on the same
   // cadence so a frozen subscription doesn't leave every session reading a stale

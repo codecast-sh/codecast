@@ -1,6 +1,7 @@
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useInboxStore, isConvexId, ensureHydrated } from "../store/inboxStore";
+import { useInboxStore, isConvexId, ensureHydrated, visualOrderViewSig } from "../store/inboxStore";
+import { whenInputQuiet } from "../lib/inputQuiet";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { isHostedAgentType } from "@codecast/shared/contracts";
 
@@ -310,6 +311,77 @@ export function warmVisibleSessions(convex: ConvexClient): void {
     else if (action.kind === "deepen") runDeepen(convex, action);
     else runDelta(convex, action);
   }
+}
+
+/** Store changes coalesce into one warm pass at most this often. */
+export const WARM_COALESCE_MS = 750;
+/** A pass waits for a pause in typing, but never longer than this. */
+const WARM_MAX_DEFER_MS = 3_000;
+
+type WarmInputs = Pick<ReturnType<typeof useInboxStore.getState>, "sessions" | "messages" | "pagination" | "liveInboxIds" | "teamInboxIds">;
+const warmInputsChanged = (a: WarmInputs, b: WarmInputs) =>
+  a.sessions !== b.sessions || a.messages !== b.messages || a.pagination !== b.pagination
+  || a.liveInboxIds !== b.liveInboxIds || a.teamInboxIds !== b.teamInboxIds;
+
+/**
+ * Keep the rendered rows warm in THIS window for as long as it lives. The pass
+ * is driven by the store, not by whichever feeder happened to write: every
+ * window holds its own message cache (messages never replicate), and a
+ * follower window mounts no feeders at all, so a pass tied to them never ran
+ * there and every session it opened (or dismissed onto) loaded cold. Any change
+ * to the rows, their messages, or the view that orders them schedules one
+ * coalesced pass, which waits for a pause in typing.
+ *
+ * One loop per window however many places mount it (the per-window layout
+ * mount and the sync hooks both do); the last stop ends it.
+ */
+let loopRefs = 0;
+let stopLoop: (() => void) | null = null;
+
+export function startWarmLoop(convex: ConvexClient): () => void {
+  loopRefs++;
+  if (!stopLoop) stopLoop = runWarmLoop(convex);
+  else warmVisibleSessions(convex);
+  let stopped = false;
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    if (--loopRefs === 0) {
+      stopLoop?.();
+      stopLoop = null;
+    }
+  };
+}
+
+function runWarmLoop(convex: ConvexClient): () => void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let cancelQuiet: (() => void) | null = null;
+  let pending = false;
+  const schedule = () => {
+    if (pending) return;
+    pending = true;
+    timer = setTimeout(() => {
+      timer = null;
+      // whenInputQuiet runs the pass synchronously when nobody is typing, so
+      // `pending` (not the returned cancel) is what says a pass is queued.
+      cancelQuiet = whenInputQuiet(() => {
+        pending = false;
+        warmVisibleSessions(convex);
+      }, WARM_MAX_DEFER_MS);
+    }, WARM_COALESCE_MS);
+  };
+  const unsubscribe = useInboxStore.subscribe((st, prev) => {
+    if (warmInputsChanged(st, prev) || visualOrderViewSig(st) !== visualOrderViewSig(prev)) schedule();
+  });
+  warmVisibleSessions(convex);
+  return () => {
+    unsubscribe();
+    if (timer !== null) clearTimeout(timer);
+    cancelQuiet?.();
+    timer = null;
+    cancelQuiet = null;
+    pending = false;
+  };
 }
 
 // Dev console access (same convention as window.__inboxStore): the last pass

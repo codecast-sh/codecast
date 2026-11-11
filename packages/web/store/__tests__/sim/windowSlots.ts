@@ -192,6 +192,8 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "hooks/inboxWarm.ts:lastPass": NO_WARM,
   "hooks/inboxWarm.ts:inFlight": NO_WARM,
   "hooks/inboxWarm.ts:syncedCount": NO_WARM,
+  "hooks/inboxWarm.ts:loopRefs": NO_WARM,
+  "hooks/inboxWarm.ts:stopLoop": NO_WARM,
   "hooks/useStorageImageUrl.ts:urlCache": IMAGE_URLS,
   "hooks/useStorageImageUrl.ts:loadedSrcs": IMAGE_URLS,
   "hooks/useStorageImageUrl.ts:persistScheduled": IMAGE_URLS,
