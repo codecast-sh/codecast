@@ -5,9 +5,9 @@
 // summary and a line per step. Save or Discard on the draft bar settles it.
 import { Bot } from "lucide-react";
 import { dashboard, type ArtifactElement, type ArtifactOp } from "@codecast/shared/artifacts";
+import { LiveTextField } from "./LiveTextField";
 import { PanelShell, Field } from "./CheckPanel";
-import { useCommittedDraft } from "./ArgsEditor";
-import { pickAskTarget, sendAsk, type AskDoc } from "../live/AskAgentControl";
+import { pickAskTarget, sendAsk, type AskDoc } from "../live/askAgent";
 
 const FORMATS: Array<{ id: dashboard.StoryFormat; label: string; art: React.ReactNode }> = [
   {
@@ -62,20 +62,20 @@ const FORMATS: Array<{ id: dashboard.StoryFormat; label: string; art: React.Reac
   },
 ];
 
-/** A first summary built from the KPIs' live values: "{b_x} spend · {b_y} sessions". */
-export function autoSummary(elements: readonly ArtifactElement[]): string | undefined {
+/** A first summary built from the KPIs' live values, each under its own title: "Agent spend {b_x} · PRs merged {b_y}". */
+function autoSummary(elements: readonly ArtifactElement[]): string | undefined {
   const kpis = dashboard.orderedBlocks(elements).filter((b) => b.kind === "kpi" && b.title).slice(0, 3);
   if (!kpis.length) return undefined;
-  return kpis.map((b) => `{${b.key}} ${String(b.title).toLowerCase()}`).join(" · ");
+  return kpis.map((b) => `${String(b.title)} {${b.key}}`).join(" · ");
 }
 
-export function storyPrompt(format: dashboard.StoryFormat): string {
+function storyPrompt(format: dashboard.StoryFormat): string {
   const name = format === "scrolly" ? "a Scrollyteller" : "a Visual short";
   return [
     `Redo this dashboard as ${name}, on the same data. The format is already set in the draft; write the story into it:`,
-    `1. \`cast data story <doc> ${format} --headline "<short, concrete claim the data supports>" --summary "<one sentence built from {b_key} values>"\`.`,
+    `1. \`cast data story <doc> ${format} --headline "<short, concrete claim the data supports, its direction as {b_key.trend}>" --summary "<one sentence built from {b_key} values>"\`.`,
     `2. For each block worth a step, \`cast data say <doc> <key> "<what it shows, as a claim>" "<one line of evidence with {b_key} values>"\`; \`--skip\` the rest. Lead with the numbers, then the trend that explains them.`,
-    "3. Never type a number: reference KPIs as {b_key} so every figure stays live and checked. Add a KPI first if a figure you need has none.",
+    "3. Never type a number or a direction: reference KPIs as {b_key}, {b_key.delta} or {b_key.trend} so every figure and every up or down stays live and checked. Add a KPI first if a figure you need has none.",
     "4. Run `cast data check <doc>` and fix anything broken. Leave the draft for the person to Save.",
   ].join("\n");
 }
@@ -99,6 +99,7 @@ export function DesignPanel({
   onClose: () => void;
 }) {
   const layoutEl = elements.find((e) => e.key === dashboard.LAYOUT_KEY);
+  const kpis = dashboard.orderedBlocks(elements).filter((b) => b.kind === "kpi");
   const setLayout = (fields: Record<string, string | null>) =>
     write([layoutEl ? { k: dashboard.LAYOUT_KEY, set: fields } : { k: dashboard.LAYOUT_KEY, put: { kind: "layout", format: format, ...Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== null)) } as any }]);
   const pick = (f: dashboard.StoryFormat) => {
@@ -136,8 +137,10 @@ export function DesignPanel({
       </div>
       {canEdit ? (
         <Field label="Words">
-          <LayoutText label="Headline" value={String(layoutEl?.headline ?? "")} placeholder={doc.title} onCommit={(v) => setLayout({ headline: v || null })} />
-          <LayoutText label="Summary" value={String(layoutEl?.summary ?? "")} placeholder="{b_key} so far, {b_key.delta} on last week" multiline onCommit={(v) => setLayout({ summary: v || null })} />
+          <div className="mt-2 space-y-2">
+            <LiveTextField label="Headline" value={layoutEl?.headline} kpis={kpis} placeholder={doc.title} onCommit={(v) => setLayout({ headline: v.trim() || null })} />
+            <LiveTextField label="Summary" value={layoutEl?.summary} kpis={kpis} multiline onCommit={(v) => setLayout({ summary: v.trim() || null })} />
+          </div>
         </Field>
       ) : null}
       {format !== "dashboard" && canEdit ? (
@@ -146,27 +149,5 @@ export function DesignPanel({
         </button>
       ) : null}
     </PanelShell>
-  );
-}
-
-function LayoutText({ label, value, placeholder, multiline, onCommit }: { label: string; value: string; placeholder?: string; multiline?: boolean; onCommit: (v: string) => void }) {
-  const { draft, setDraft, onFocus, onBlur } = useCommittedDraft(value);
-  const props = {
-    value: draft,
-    placeholder,
-    "aria-label": label,
-    onFocus,
-    onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setDraft(e.target.value),
-    onBlur: () => {
-      onBlur();
-      if (draft !== value) onCommit(draft.trim());
-    },
-    className: "w-full rounded-md bg-sol-bg border border-sol-border/60 px-2 py-1.5 text-sm text-sol-text outline-none focus:border-sol-blue",
-  };
-  return (
-    <label className="block space-y-1 mt-2">
-      <span className="text-meta text-sol-text-dim">{label}</span>
-      {multiline ? <textarea {...props} rows={3} className={`${props.className} resize-y leading-6`} /> : <input {...props} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />}
-    </label>
   );
 }

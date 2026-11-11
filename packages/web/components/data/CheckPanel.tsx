@@ -6,28 +6,39 @@ import { useMemo, useState } from "react";
 import { Copy, Play, X } from "lucide-react";
 import { toast } from "sonner";
 import { dashboard, type ArtifactElement } from "@codecast/shared/artifacts";
-import { CheckMark, RowsTable, blockCheck, type BlockEnv } from "./blocks";
+import { CheckMark, type BlockEnv } from "./blocks";
+import { CheckRows, type RowsScope } from "./CheckRows";
+import { blockCheck } from "./blockCheck";
 import { resultFor, useRerun, type DataResult } from "../../hooks/useDashboardData";
 
 type Rerun = { at: number; ms: number; outcome: ReturnType<typeof dashboard.compareRerun> };
 
-function evalOf(b: ArtifactElement, r: DataResult | undefined): { how?: string; used?: number[]; problem?: string } {
-  const ev = b.kind === "kpi" ? dashboard.evaluateKpi(b as dashboard.KpiBlock, r) : b.kind === "chart" ? dashboard.evaluateChart(b as dashboard.ChartBlock, r) : b.kind === "table" ? dashboard.evaluateTable(b as dashboard.TableBlock, r) : null;
-  if (!ev) return {};
+function evalOf(b: ArtifactElement, r: DataResult | undefined, scope: dashboard.Where | undefined): { how?: string; used?: number[]; problem?: string } {
+  if (b.kind !== "kpi" && b.kind !== "chart" && b.kind !== "table") return {};
+  const ev = dashboard.evaluateBlock(b.kind, b, r, scope);
   if (ev.state === "ok") return { how: ev.how, used: ev.used };
   if (ev.state === "problem") return { problem: ev.problem };
   return {};
 }
 
-export function CheckPanel({ docId, block, env, onClose, canRerun = true }: { docId: string; block: ArtifactElement | undefined; env: BlockEnv; onClose: () => void; canRerun?: boolean }) {
+/** A chart point the check opened on: its x and, on a split chart, its series. */
+export type CheckPoint = { x: string; series?: string };
+
+export function CheckPanel({ docId, block, env, onClose, canRerun = true, point }: { docId: string; block: ArtifactElement | undefined; env: BlockEnv; onClose: () => void; canRerun?: boolean; point?: CheckPoint }) {
   const rerunAction = useRerun();
   const [running, setRunning] = useState(false);
   const [last, setLast] = useState<Rerun | null>(null);
   const result = block ? resultFor(env.results, block) : undefined;
   const q = block ? dashboard.blockQuery(block) : null;
   const check = block ? blockCheck(block, env) : null;
-  const ev = useMemo(() => (block ? evalOf(block, result) : {}), [block, result]);
+  const ev = useMemo(() => (block ? evalOf(block, result, env.scope) : {}), [block, result, env.scope]);
   const used = useMemo(() => new Set(ev.used ?? []), [ev.used]);
+  const scopes = useMemo(() => {
+    const out: RowsScope[] = [];
+    if (point && block && block.kind === "chart") out.push({ label: point.series ? `${point.x} · ${point.series}` : point.x, rows: new Set(dashboard.chartPointRows(block as dashboard.ChartBlock, result, point.x, point.series, env.scope)) });
+    if (result && used.size && used.size < result.rows.length) out.push({ label: env.scope ? "Filtered" : "Used", rows: used });
+    return out;
+  }, [point, block, result, used, env.scope]);
 
   if (!block) {
     return (
@@ -38,7 +49,7 @@ export function CheckPanel({ docId, block, env, onClose, canRerun = true }: { do
   }
   const source = q ? dashboard.DATA_SOURCES.find((s) => s.id === q.source) : undefined;
   const cli = q ? `cast data query ${docId} ${q.source} --args '${JSON.stringify(q.args ?? {})}'` : "";
-  const shown = dashboard.blockFingerprint(block.kind, block, result);
+  const shown = dashboard.blockValue(block.kind, block, result, env.scope)?.shown ?? null;
 
   const rerun = async () => {
     if (!q) return;
@@ -46,7 +57,7 @@ export function CheckPanel({ docId, block, env, onClose, canRerun = true }: { do
     const before = result;
     try {
       const fresh = await rerunAction({ doc_id: docId as any, qkey: dashboard.queryKey(q) });
-      setLast({ at: Date.now(), ms: fresh.ran_ms, outcome: dashboard.compareRerun(block.kind, block, before, fresh) });
+      setLast({ at: Date.now(), ms: fresh.ran_ms, outcome: dashboard.compareRerun(block.kind, block, before, fresh, env.scope) });
     } catch (e) {
       setLast({ at: Date.now(), ms: 0, outcome: { same: false, before: shown, after: null, problem: e instanceof Error ? e.message.replace(/^.*Error: /, "") : String(e) } });
     } finally {
@@ -85,7 +96,7 @@ export function CheckPanel({ docId, block, env, onClose, canRerun = true }: { do
           </Field>
 
           <Field label="Query">
-            <pre className="text-[11.5px] leading-5 font-mono text-sol-text-secondary bg-sol-bg-alt/60 rounded-md px-2.5 py-2 whitespace-pre-wrap break-all">{JSON.stringify({ source: q.source, args: q.args ?? {} }, null, 1)}</pre>
+            <pre className="text-meta leading-5 font-mono text-sol-text-secondary bg-sol-bg-alt/60 rounded-md px-2.5 py-2 whitespace-pre-wrap break-all">{JSON.stringify({ source: q.source, args: q.args ?? {} }, null, 1)}</pre>
             <button
               type="button"
               onClick={() => navigator.clipboard.writeText(cli).then(() => toast.success("Copied"))}
@@ -109,8 +120,8 @@ export function CheckPanel({ docId, block, env, onClose, canRerun = true }: { do
           </div> : null}
 
           {result && result.columns.length ? (
-            <Field label={`Rows · ${used.size ? `${used.size} used of ` : ""}${result.rows.length}${result.truncated ? "+" : ""}`}>
-              <RowsTable columns={result.columns} rows={result.rows.slice(0, 500)} highlight={used} maxHeight={360} exact footer={result.rows.length > 500 ? `Showing the first 500 of ${result.rows.length} rows` : undefined} />
+            <Field label="Rows">
+              <CheckRows key={point ? `${point.x}|${point.series ?? ""}` : "all"} columns={result.columns} rows={result.rows} scopes={scopes} truncated={result.truncated} />
             </Field>
           ) : null}
         </>

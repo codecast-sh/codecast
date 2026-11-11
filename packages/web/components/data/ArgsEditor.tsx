@@ -1,10 +1,12 @@
 // A source's arguments as controls: a days field, a split-by select, a sheet
 // picker, a range. The raw JSON stays one toggle away for the arguments a
 // control doesn't cover, and refuses to commit until it parses.
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { useCommittedDraft } from "../../hooks/useCommittedDraft";
 import { Braces } from "lucide-react";
 import { dashboard, type Json } from "@codecast/shared/artifacts";
 import { useDataSources } from "../../hooks/useDashboardData";
+import { SheetRangePicker } from "./SheetRangePicker";
 
 type Args = Record<string, Json>;
 
@@ -25,9 +27,16 @@ export function ArgsEditor({ docId, source, args, onChange }: { docId: string; s
     <div className="space-y-2">
       {!raw ? (
         <div className="grid grid-cols-2 gap-2">
-          {params.map((p) => (
-            <ParamControl key={p.name} p={p} value={args[p.name]} rows={rows} loading={loading} onSet={(v) => set(p.name, v)} />
-          ))}
+          {params.map((p) =>
+            source === "sheet" && p.name === "range" && typeof args.doc === "string" && args.doc ? (
+              <div key={p.name} className="col-span-2 space-y-1">
+                <span className="text-meta text-sol-text-dim">{p.label}</span>
+                <SheetRangePicker sheetId={args.doc} range={typeof args.range === "string" ? args.range : undefined} header={args.header !== false} onRange={(r) => set("range", r)} />
+              </div>
+            ) : (
+              <ParamControl key={p.name} p={p} value={args[p.name]} rows={rows} loading={loading} onSet={(v) => set(p.name, v)} />
+            ),
+          )}
         </div>
       ) : (
         <RawArgs args={args} onChange={onChange} />
@@ -94,29 +103,6 @@ function ParamControl({ p, value, rows, loading, onSet }: { p: dashboard.SourceP
       />
     </label>
   );
-}
-
-/**
- * A field's draft over a stored value: follows writes from elsewhere (an
- * agent, another tab) while the field isn't being edited, and never throws
- * away what the person typed, even input that can't be committed yet.
- */
-export function useCommittedDraft(value: string) {
-  const [draft, setDraft] = useState(value);
-  const focused = useRef(false);
-  useEffect(() => {
-    if (!focused.current) setDraft(value);
-  }, [value]);
-  return {
-    draft,
-    setDraft,
-    onFocus: () => {
-      focused.current = true;
-    },
-    onBlur: () => {
-      focused.current = false;
-    },
-  };
 }
 
 /** A text field that writes on blur or Enter, so typing stays cheap; a days field takes whole numbers only. */

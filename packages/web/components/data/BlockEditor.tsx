@@ -1,7 +1,10 @@
 // Edit one block in the drawer: its words, its source and how its rows are
 // shaped. Selects write at once; typed fields write when they lose focus or
 // on Enter, so typing stays as cheap as a bare text field.
-import { ArgsEditor, useCommittedDraft } from "./ArgsEditor";
+import { ArgsEditor } from "./ArgsEditor";
+import { LiveTextField } from "./LiveTextField";
+import { WhereBuilder } from "./WhereBuilder";
+import { useCommittedDraft } from "../../hooks/useCommittedDraft";
 import { Trash2 } from "lucide-react";
 import { dashboard, type ArtifactElement, type ArtifactOp, type Json } from "@codecast/shared/artifacts";
 import { PanelShell, Field } from "./CheckPanel";
@@ -22,6 +25,10 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
   const set = (fields: Record<string, Json>) => apply([{ k: block.key, set: fields }]);
   const result = resultFor(env.results, block);
   const columns = result?.columns ?? [];
+  const sample = result?.rows.find((r) => r.some((v) => v !== null && v !== undefined)) ?? [];
+  const numeric = columns.filter((_, i) => typeof sample[i] === "number");
+  const labels = columns.filter((_, i) => typeof sample[i] !== "number");
+  const kpis = [...env.blocks.values()].filter((b) => b.kind === "kpi" && b.key !== block.key).sort((a, b) => Number(a.order ?? 0) - Number(b.order ?? 0));
   const q = dashboard.blockQuery(block);
   return (
     <PanelShell
@@ -34,7 +41,7 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
       }
     >
       {block.kind !== "text" ? <TextField label="Title" value={block.title} onCommit={(v) => set({ title: v || null })} /> : null}
-      {block.kind === "text" ? <TextField label="Text · {b_key} shows a KPI live" value={block.text} multiline onCommit={(v) => set({ text: v })} /> : <TextField label="Caption" value={block.caption} onCommit={(v) => set({ caption: v || null })} />}
+      {block.kind === "text" ? <LiveTextField label="Text" value={block.text} kpis={kpis} multiline onCommit={(v) => set({ text: v })} /> : <TextField label="Caption" value={block.caption} onCommit={(v) => set({ caption: v || null })} />}
 
       {block.kind === "kpi" || block.kind === "chart" || block.kind === "table" ? (
         <>
@@ -58,11 +65,11 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
             <>
               <Select label="Chart" value={block.chart ?? "line"} options={dashboard.CHART_TYPES} labels={{ hbar: "ranked bars", stacked: "stacked bars" }} onChange={(v) => set({ chart: v })} />
               <Row>
-                <Select label="X" value={block.x} options={columns} empty="first" onChange={(v) => set({ x: v || null })} />
-                <Select label="Y" value={block.y} options={columns} empty="auto" onChange={(v) => set({ y: v || null })} />
+                <Select label="X" value={block.x} options={labels.length ? labels : columns} empty="first" onChange={(v) => set({ x: v || null })} />
+                <Select label="Split by" value={block.series} options={labels.filter((c) => c !== (block.x ?? columns[0]))} empty="none" onChange={(v) => set({ series: v || null, ...(v && String(block.y ?? "").includes(",") ? { y: String(block.y).split(",")[0] } : {}) })} />
               </Row>
+              <SeriesPicker value={block.y} options={numeric} single={!!block.series} onChange={(v) => set({ y: v })} />
               <Row>
-                <Select label="Split by" value={block.series} options={columns} empty="none" onChange={(v) => set({ series: v || null })} />
                 <Select label="Format" value={block.format ?? "number"} options={FORMATS} onChange={(v) => set({ format: v })} />
               </Row>
               <label className="flex items-center gap-2 text-sm text-sol-text-secondary">
@@ -80,16 +87,18 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
               </Row>
             </>
           ) : null}
-          <TextField label="Filter rows" placeholder={`{"person":"ada"}`} value={block.where ? JSON.stringify(block.where) : ""} mono validate={jsonObject} onCommit={(v) => set({ where: v.trim() ? JSON.parse(v) : null })} />
+          <Field label="Filter rows">
+            <WhereBuilder where={block.where as dashboard.Where | undefined} columns={columns} rows={result?.rows ?? []} onChange={(w) => set({ where: (w ?? null) as Json })} />
+          </Field>
         </>
       ) : null}
 
       <Select label="Width" value={String(dashboard.blockSpan(block))} options={dashboard.SPANS.map(String)} labels={{ "3": "quarter", "4": "third", "6": "half", "8": "two thirds", "12": "full" }} onChange={(v) => set({ span: Number(v) })} />
 
       <Field label="In a story">
-        <TextField label="Story title" value={block.say_title} onCommit={(v) => set({ say_title: v || null })} />
+        <LiveTextField label="Story title" value={block.say_title} kpis={kpis} onCommit={(v) => set({ say_title: v || null })} />
         <div className="h-2" />
-        <TextField label="Story line" value={block.say} multiline onCommit={(v) => set({ say: v || null })} />
+        <LiveTextField label="Story line" value={block.say} kpis={kpis} multiline onCommit={(v) => set({ say: v || null })} />
         <label className="mt-2 flex items-center gap-2 text-sm text-sol-text-secondary">
           <input type="checkbox" checked={block.in_story !== false} onChange={(e) => set({ in_story: e.target.checked ? null : false })} className="accent-[var(--sol-blue)]" />
           Show in stories
@@ -135,15 +144,6 @@ function TextField({ label, value, onCommit, multiline, mono, placeholder, hint,
   );
 }
 
-const jsonObject = (v: string): string | null => {
-  if (!v.trim()) return null;
-  try {
-    const o = JSON.parse(v);
-    return o && typeof o === "object" && !Array.isArray(o) ? null : "Needs a JSON object";
-  } catch {
-    return "Not valid JSON";
-  }
-};
 
 function Select({ label, value, options, labels, empty, onChange }: { label: string; value: unknown; options: readonly string[]; labels?: Record<string, string>; empty?: string; onChange: (v: string) => void }) {
   const v = value === undefined || value === null ? "" : String(value);
@@ -186,5 +186,30 @@ function QueryField({ docId, block, onCommit, problem }: { docId: string; block:
       {q ? <ArgsEditor docId={docId} source={q.source} args={(q.args ?? {}) as Record<string, Json>} onChange={(args) => onCommit({ ...q, args })} /> : null}
       {problem ? <div className="text-meta text-sol-red break-words">{problem}</div> : null}
     </Field>
+  );
+}
+
+/** The value columns a chart draws: any number of them, or one when the chart splits by a column. Auto picks the numeric ones. */
+function SeriesPicker({ value, options, single, onChange }: { value: unknown; options: string[]; single: boolean; onChange: (v: string | null) => void }) {
+  const chosen = typeof value === "string" && value ? value.split(",").map((s) => s.trim()).filter(Boolean) : [];
+  const all = [...new Set([...chosen, ...options])];
+  const toggle = (c: string) => {
+    const next = single ? (chosen[0] === c ? [] : [c]) : chosen.includes(c) ? chosen.filter((x) => x !== c) : [...chosen, c];
+    onChange(next.length ? next.join(",") : null);
+  };
+  return (
+    <div className="space-y-1">
+      <span className="text-meta text-sol-text-dim">{single ? "Value" : "Values"}</span>
+      <div className="flex flex-wrap gap-1" role="group" aria-label="Values">
+        <button type="button" aria-pressed={!chosen.length} onClick={() => onChange(null)} className={`h-7 px-2 rounded-md border text-xs ${!chosen.length ? "border-sol-blue/50 bg-sol-blue/10 text-sol-text" : "border-sol-border/60 text-sol-text-muted hover:text-sol-text"}`}>
+          auto
+        </button>
+        {all.map((c) => (
+          <button key={c} type="button" aria-pressed={chosen.includes(c)} onClick={() => toggle(c)} className={`h-7 px-2 rounded-md border text-xs ${chosen.includes(c) ? "border-sol-blue/50 bg-sol-blue/10 text-sol-text" : "border-sol-border/60 text-sol-text-muted hover:text-sol-text"} ${options.includes(c) ? "" : "line-through"}`}>
+            {c}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }

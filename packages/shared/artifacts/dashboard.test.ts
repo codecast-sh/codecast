@@ -1,7 +1,19 @@
 import { describe, expect, test } from "bun:test";
 import { artifactView, type ArtifactElement } from "./index";
 import {
+  chartPointRows,
   checkBlock,
+  directionWords,
+  filterDimensions,
+  filterRows,
+  scopeFromParams,
+  kpiPartText,
+  kpiResolver,
+  storyProblems,
+  textProblems,
+  whereClauses,
+  whereFrom,
+  whereProblem,
   compareRerun,
   dashboardQueries,
   dashboardSpec,
@@ -236,8 +248,8 @@ describe("verbs", () => {
     const c = dashboardSpec.verbs!.chart.run(view, ["--after", "b_a", "--type", "area", "--source", "usage", "--x", "day", "--y", "spend", "--cumulative"]);
     expect((c.ops[0] as any).put).toMatchObject({ kind: "chart", chart: "area", order: 1.5, cumulative: true });
     expect(dashboardSpec.verbs!.move.run(view, ["b_b", "--first"]).ops).toEqual([{ k: "b_b", set: { order: 0 } }]);
-    expect(dashboardSpec.verbs!.story.run(view, ["scrolly", "--headline", "Up 17%"]).ops).toEqual([{ k: "layout", put: { kind: "layout", format: "scrolly", headline: "Up 17%" } }]);
-    expect(dashboardSpec.verbs!.say.run(view, ["b_b", "Doubled", "Mostly", "Ada"]).ops).toEqual([{ k: "b_b", set: { say_title: "Doubled", say: "Mostly Ada" } }]);
+    expect(dashboardSpec.verbs!.story.run(view, ["scrolly", "--headline", "Spend is {b_a.trend}"]).ops).toEqual([{ k: "layout", put: { kind: "layout", format: "scrolly", headline: "Spend is {b_a.trend}" } }]);
+    expect(dashboardSpec.verbs!.say.run(view, ["b_b", "Where it went", "Mostly", "Ada"]).ops).toEqual([{ k: "b_b", set: { say_title: "Where it went", say: "Mostly Ada" } }]);
   });
   test("describe names each block's binding", () => {
     expect(dashboardSpec.describe(view)).toBe(
@@ -355,5 +367,106 @@ describe("compact deltas", () => {
     const ev = evaluateKpi({ query: q, field: "tokens", agg: "sum", format: "compact", compare: "halves" }, tokens);
     expect(ev.state === "ok" && ev.display).toBe("48B");
     expect(ev.state === "ok" && ev.delta?.caption).toBe("last 2d vs prior 2d: −4.0B");
+  });
+});
+
+describe("filters", () => {
+  const rows = (where: any, scope?: any) => {
+    const r = filterRows(spend, where, scope);
+    return "rows" in r ? r.rows : r.problem;
+  };
+  test("plain equality keeps working; conditions compare numbers as numbers and dates as text", () => {
+    expect(rows({ person: "ada" })).toEqual([0, 2, 4]);
+    expect(rows({ tokens: { gte: 100 } })).toEqual([0, 2, 4]);
+    expect(rows({ tokens: { gt: "50", lt: 250 } })).toEqual([0, 2]);
+    expect(rows({ day: { gte: "2026-11-08", lte: "2026-11-09" } })).toEqual([2, 3, 4]);
+    expect(rows({ person: { in: ["bo"] }, day: { ne: "2026-11-07" } })).toEqual([3, 5]);
+    expect(rows({ person: { contains: "A" } })).toEqual([0, 2, 4]);
+  });
+  test("a block's own filter on a missing column is a problem; the dashboard's filter skips sources without it", () => {
+    expect(rows({ repo: "x" })).toMatch(/no column "repo"/);
+    expect(rows(undefined, { repo: "x", person: "bo" })).toEqual([1, 3, 5]);
+    expect(rows({ tokens: { between: 1 } })).toMatch(/not a filter operator/);
+  });
+  test("clauses round-trip to the short stored form", () => {
+    const w = { person: "ada", day: { gte: "2026-11-01", lt: "2026-12-01" }, agent: ["a", "b"] };
+    const c = whereClauses(w);
+    expect(c).toEqual([
+      { column: "person", op: "eq", value: "ada" },
+      { column: "day", op: "gte", value: "2026-11-01" },
+      { column: "day", op: "lt", value: "2026-12-01" },
+      { column: "agent", op: "in", value: ["a", "b"] },
+    ]);
+    expect(whereFrom(c)).toEqual({ person: "ada", day: { gte: "2026-11-01", lt: "2026-12-01" }, agent: { in: ["a", "b"] } });
+    expect(whereFrom([])).toBeUndefined();
+    expect(whereProblem({ person: { in: "ada" } })).toMatch(/takes a list/);
+  });
+  test("a dashboard filter narrows a KPI and its check", () => {
+    const ev = evaluateKpi({ query: q, field: "tokens" }, spend, { person: "bo" });
+    expect(ev.state === "ok" && ev.value).toBe(80);
+    expect(checkBlock("kpi", { query: q, field: "tokens" }, spend, NOW, { scope: { person: "bo" } })?.state).toBe("verified");
+  });
+  test("the rows behind one chart point, per series", () => {
+    const chart = { query: q, x: "day", y: "tokens", series: "person" };
+    expect(chartPointRows(chart, spend, "2026-11-08")).toEqual([2, 3]);
+    expect(chartPointRows(chart, spend, "2026-11-08", "bo")).toEqual([3]);
+    expect(chartPointRows(chart, spend, "2026-11-08", "bo", { person: "ada" })).toEqual([]);
+  });
+});
+
+describe("words against the data", () => {
+  const daily = result(["day", "n"], [["a", 10], ["b", 10], ["c", 5], ["d", 5]]);
+  const els = new Map<string, any>([["b_n", { key: "b_n", kind: "kpi", title: "Throughput", query: q, field: "n", compare: "halves" }]]);
+  const kpi = kpiResolver((k) => els.get(k), () => daily);
+  test("direction words, but not phrasal 'set up' or 'follow up on'", () => {
+    expect(directionWords("Throughput rose. It is up 12% and down from May.").map((d) => d.dir)).toEqual(["up", "up", "down"]);
+    expect(directionWords("Set up the board and follow up with the team.")).toEqual([]);
+  });
+  test("a clause that says the opposite of its KPI contradicts it; a matching or token-only one passes", () => {
+    expect(textProblems("Throughput {b_n} rose this week", kpi)).toEqual([{ kind: "contradicts", detail: 'says "rose" but Throughput is down 50%' }]);
+    expect(textProblems("Throughput fell to {b_n}", kpi)).toEqual([]);
+    expect(textProblems("Throughput is {b_n.trend}, but reviews grew", kpi)).toEqual([{ kind: "typed", detail: '"grew" states a direction no live number backs' }]);
+    expect(checkBlock("text", { text: "Throughput {b_n} rose" }, undefined, NOW, { kpi })).toMatchObject({ state: "broken", label: "Contradicts the data" });
+  });
+  test("tokens read as value, signed change and direction", () => {
+    const ev = kpi("b_n")!.ev;
+    expect([kpiPartText(ev, "value"), kpiPartText(ev, "delta"), kpiPartText(ev, "trend")]).toEqual(["30", "−50%", "down 50%"]);
+  });
+  test("story words are checked with the blocks", () => {
+    const p = storyProblems({ headline: "Throughput {b_n} doubled" }, [{ key: "b_n", say: "58,500 so far" }], kpi);
+    expect(p.map((x) => [x.key, x.field, x.kind])).toEqual([["layout", "headline", "contradicts"], ["b_n", "say", "typed"]]);
+  });
+  test("the verbs refuse typed numbers and worded directions, and allow windows and ranks", () => {
+    const view = artifactView("dashboard", "T", [el("b_n", "kpi", { order: 1 })]);
+    expect(() => dashboardSpec.verbs!.text.run(view, ["Spend rose this week"])).toThrow(/\{b_key\.trend\}/);
+    expect(() => dashboardSpec.verbs!.story.run(view, ["scrolly", "--headline", "Pre-orders hit 58,500"])).toThrow(/typed number/);
+    expect(() => dashboardSpec.verbs!.say.run(view, ["b_n", "Throughput", "up from May"])).toThrow(/direction/);
+    expect(dashboardSpec.verbs!.text.run(view, ["Top 10 repos over the last 30 days: {b_n}, {b_n.trend}. Set up in 2026."]).ops).toHaveLength(1);
+    expect(() => dashboardSpec.verbs!.table.run(view, ["--where", '{"person":{"in":"ada"}}'])).toThrow(/takes a list/);
+  });
+});
+
+describe("dashboard filters", () => {
+  test("a date range from the shared day column, categories with more than one value, most common first", () => {
+    const tasks = result(["assignee", "count"], [["ada", 3], ["bo", 1]]);
+    const solo = result(["day", "agent", "n"], [["2026-11-07", "claude", 1]]);
+    expect(filterDimensions([spend, tasks, solo, undefined])).toEqual([
+      { column: "day", kind: "time", values: [] },
+      { column: "person", kind: "category", values: ["ada", "bo"] },
+      { column: "assignee", kind: "category", values: ["ada", "bo"] },
+    ]);
+  });
+  test("URL params become the scope: relative and absolute dates, lists of values", () => {
+    expect(scopeFromParams([["f.day", "7d"], ["f.person", "ada,b%2Co"], ["tab", "x"]], "2026-11-10")).toEqual({ day: { gte: "2026-11-04", lte: "2026-11-10" }, person: { in: ["ada", "b,o"] } });
+    expect(scopeFromParams([["f.day", "2026-11-08.."]], "2026-11-10")).toEqual({ day: { gte: "2026-11-08" } });
+    expect(scopeFromParams([["f.day", "soon"]], "2026-11-10")).toBeUndefined();
+  });
+});
+
+describe("trend tokens", () => {
+  test("a key with digits is a reference, not a typed number, in every token form", () => {
+    expect(parseText("{b_dsqycf36.trend} and {b_x9.delta}")).toEqual([{ ref: "b_dsqycf36", part: "trend" }, { text: " and " }, { ref: "b_x9", part: "delta" }]);
+    const view = artifactView("dashboard", "T", [el("b_dsqycf36", "kpi", { order: 1 })]);
+    expect(dashboardSpec.verbs!.story.run(view, ["scrolly", "--headline", "PR merges are {b_dsqycf36.trend}"]).ops).toHaveLength(1);
   });
 });

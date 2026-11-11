@@ -56,7 +56,9 @@ export function DashboardToolbar({
       {worst ? (
         <span className={`inline-flex items-center gap-1 h-7 px-1.5 rounded-md ${panel === "checks" ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-alt"}`} title={summary} data-checks-summary={worst}>
           <CheckMark check={{ state: worst, label: summary }} onClick={() => onPanel("checks")} size={15} />
-          {worst !== "verified" ? <span className="text-meta tabular-nums text-sol-text-muted">{total - (counts.verified ?? 0)}</span> : null}
+          <button type="button" onClick={() => onPanel("checks")} className="text-meta tabular-nums text-sol-text-muted hover:text-sol-text whitespace-nowrap">
+            {worstLabel(worst, counts)}
+          </button>
         </span>
       ) : null}
       {canEdit ? (
@@ -65,8 +67,8 @@ export function DashboardToolbar({
           <ModeButton on={edit} onClick={() => onMode(true)} title="Edit" icon={Pencil} />
         </div>
       ) : null}
-      <BarButton on={panel === "design"} onClick={() => onPanel("design")} title="Design: redo as a story" icon={Palette} />
-      <BarButton on={panel === "sources"} onClick={() => onPanel("sources")} title="Data sources" icon={Database} />
+      <BarButton on={panel === "design"} onClick={() => onPanel("design")} title="Design: redo as a story" label="Design" icon={Palette} />
+      <BarButton on={panel === "sources"} onClick={() => onPanel("sources")} title="Data sources" label="Sources" icon={Database} />
       <span className="w-px h-4 bg-sol-border/50 mx-0.5" />
     </div>
   );
@@ -80,10 +82,20 @@ function ModeButton({ on, onClick, title, icon: Icon }: { on: boolean; onClick: 
   );
 }
 
-function BarButton({ on, onClick, title, icon: Icon }: { on: boolean; onClick: () => void; title: string; icon: typeof Pencil }) {
+function BarButton({ on, onClick, title, label, icon: Icon }: { on: boolean; onClick: () => void; title: string; label: string; icon: typeof Pencil }) {
   return (
-    <button type="button" onClick={onClick} title={title} aria-pressed={on} className={`inline-flex items-center justify-center w-7 h-7 rounded-md transition-colors ${on ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt"}`}>
+    <button type="button" onClick={onClick} title={title} aria-pressed={on} className={`inline-flex items-center justify-center gap-1.5 h-7 min-w-7 px-1.5 rounded-md text-meta transition-colors ${on ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt"}`}>
       <Icon className="w-4 h-4" />
+      <span className="hidden md:inline">{label}</span>
     </button>
   );
+}
+
+/** The checks in a word: the worst state and how many blocks are in it. */
+function worstLabel(worst: dashboard.CheckState, counts: Partial<Record<dashboard.CheckState, number>>): string {
+  if (worst === "verified") return "Verified";
+  if (worst === "broken") return `${counts.broken} broken`;
+  if (worst === "stale") return `${(counts.stale ?? 0) + (counts.partial ?? 0)} stale`;
+  if (worst === "refreshing") return `${(counts.loading ?? 0) + (counts.refreshing ?? 0)} reading`;
+  return `${counts.typed} unverified`;
 }

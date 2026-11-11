@@ -11,6 +11,11 @@
 // rows it used, so the check behind a number can show exactly those rows.
 
 import type { Json } from "./core";
+import { WHERE_OPS, cellMatches, cellNumber, num, whereClauses, type Where, type WhereOp } from "./dashboardWhere";
+import { textProblems, type TextProblem } from "./dashboardWords";
+
+export * from "./dashboardWhere";
+export * from "./dashboardWords";
 
 // ── queries ──
 
@@ -176,50 +181,42 @@ function grouped(n: number, digits: number, cents = false): string {
 
 // ── shaping rows ──
 
-export type Where = { [column: string]: Json };
-
 function columnIndex(result: DataResult, name: string | undefined): number {
   return name ? result.columns.indexOf(name) : -1;
 }
 
-/** Row indices that pass the block's filter, or a problem naming the missing column. */
-export function filterRows(result: DataResult, where: Where | undefined): { rows: number[] } | { problem: string } {
-  const tests: Array<[number, Json]> = [];
-  for (const [col, want] of Object.entries(where ?? {})) {
-    const i = columnIndex(result, col);
-    if (i < 0) return { problem: missing(result, col) };
-    tests.push([i, want]);
+/**
+ * Row indices that pass the block's filter, or a problem naming the missing
+ * column. `scope` is the dashboard's own filter (a date range, a person): it
+ * narrows every block whose source has the column and skips the rest, so one
+ * control works across sources that don't all carry it.
+ */
+export function filterRows(result: DataResult, where: Where | undefined, scope?: Where): { rows: number[] } | { problem: string } {
+  const tests: Array<[number, WhereOp, Json]> = [];
+  for (const c of whereClauses(where)) {
+    const i = columnIndex(result, c.column);
+    if (i < 0) return { problem: missing(result, c.column) };
+    if (!(WHERE_OPS as readonly string[]).includes(c.op)) return { problem: `"${c.op}" is not a filter operator (use ${WHERE_OPS.join(", ")})` };
+    tests.push([i, c.op, c.value]);
+  }
+  for (const c of whereClauses(scope)) {
+    const i = columnIndex(result, c.column);
+    if (i >= 0) tests.push([i, c.op, c.value]);
   }
   const rows: number[] = [];
   result.rows.forEach((r, idx) => {
-    if (tests.every(([i, want]) => String(r[i]) === String(want))) rows.push(idx);
+    if (tests.every(([i, op, want]) => cellMatches(r[i], op, want))) rows.push(idx);
   });
   return { rows };
 }
 
+/** Which of a dashboard filter's columns a source carries: the filter narrows only blocks over those. */
+export function scopeApplies(result: DataResult | undefined, scope: Where | undefined): boolean {
+  return !!result && whereClauses(scope).some((c) => result.columns.includes(c.column));
+}
+
 function missing(result: DataResult, col: string): string {
   return `the source has no column "${col}" (it has ${result.columns.join(", ") || "none"})`;
-}
-
-/**
- * A cell as a number: null when blank, "invalid" when it holds something that
- * is not a number (text, a formula error like "#DIV/0!"). "17%" is 0.17 and
- * "$1,200" is 1200, the way a sheet shows them.
- */
-function cellNumber(v: unknown): number | null | "invalid" {
-  if (v === null || v === undefined) return null;
-  if (typeof v === "number") return Number.isFinite(v) ? v : "invalid";
-  if (typeof v === "boolean") return v ? 1 : 0;
-  const t = String(v).trim();
-  if (t === "") return null;
-  const n = Number(t.replace(/[$,%\s]/g, ""));
-  if (!Number.isFinite(n) || !/^[-+−$\d.,%\s]+$/.test(t)) return "invalid";
-  return t.endsWith("%") ? n / 100 : n;
-}
-
-function num(v: unknown): number | null {
-  const n = cellNumber(v);
-  return n === "invalid" ? null : n;
 }
 
 /** Rows whose value in a column is not a number: the reason a total can't be trusted. */
@@ -299,12 +296,12 @@ export type KpiEval =
   | { state: "loading" }
   | { state: "unbound"; display: string };
 
-export function evaluateKpi(block: KpiBlock, result: DataResult | undefined): KpiEval {
+export function evaluateKpi(block: KpiBlock, result: DataResult | undefined, scope?: Where): KpiEval {
   const q = blockQuery(block);
   if (!q) return { state: "unbound", display: block.value === undefined || block.value === null ? "–" : formatValue(block.value, block.format) };
   if (!result || (!result.refreshed_at && !result.error)) return { state: "loading" };
   if (result.error && !result.refreshed_at) return { state: "problem", problem: result.error };
-  const filtered = filterRows(result, block.where);
+  const filtered = filterRows(result, block.where, scope);
   if ("problem" in filtered) return { state: "problem", problem: filtered.problem };
   const agg = block.agg ?? (block.field ? "sum" : "count");
   const main = aggregate(result, filtered.rows, agg, block.field, block.label);
@@ -428,11 +425,11 @@ export type ChartEval =
   | { state: "loading" }
   | { state: "unbound" };
 
-export function evaluateChart(block: ChartBlock, result: DataResult | undefined): ChartEval {
+export function evaluateChart(block: ChartBlock, result: DataResult | undefined, scope?: Where): ChartEval {
   if (!blockQuery(block)) return { state: "unbound" };
   if (!result || (!result.refreshed_at && !result.error)) return { state: "loading" };
   if (result.error && !result.refreshed_at) return { state: "problem", problem: result.error };
-  const filtered = filterRows(result, block.where);
+  const filtered = filterRows(result, block.where, scope);
   if ("problem" in filtered) return { state: "problem", problem: filtered.problem };
   const xName = block.x ?? result.columns[0];
   const xi = columnIndex(result, xName);
@@ -495,6 +492,21 @@ export function evaluateChart(block: ChartBlock, result: DataResult | undefined)
   return { state: "ok", type, x, series, used: filtered.rows, how, format: block.format ?? "number", total };
 }
 
+/**
+ * The rows behind one chart point: the rows at that x (and in that series,
+ * when the chart splits by a column). A running total's point is the rows
+ * added at that x, the step the line took there.
+ */
+export function chartPointRows(block: ChartBlock, result: DataResult | undefined, x: string, series?: string, scope?: Where): number[] {
+  if (!result) return [];
+  const filtered = filterRows(result, block.where, scope);
+  if ("problem" in filtered) return [];
+  const xi = columnIndex(result, block.x ?? result.columns[0]);
+  const si = block.series ? columnIndex(result, block.series) : -1;
+  if (xi < 0) return [];
+  return filtered.rows.filter((r) => String(result.rows[r][xi] ?? "") === x && (si < 0 || series === undefined || String(result.rows[r][si] ?? "(none)") === series));
+}
+
 // ── tables ──
 
 export type TableBlock = { title?: string; caption?: string; query?: unknown; columns?: string; sort?: string; limit?: number; where?: Where; format?: NumberFormat };
@@ -505,11 +517,11 @@ export type TableEval =
   | { state: "loading" }
   | { state: "unbound" };
 
-export function evaluateTable(block: TableBlock, result: DataResult | undefined): TableEval {
+export function evaluateTable(block: TableBlock, result: DataResult | undefined, scope?: Where): TableEval {
   if (!blockQuery(block)) return { state: "unbound" };
   if (!result || (!result.refreshed_at && !result.error)) return { state: "loading" };
   if (result.error && !result.refreshed_at) return { state: "problem", problem: result.error };
-  const filtered = filterRows(result, block.where);
+  const filtered = filterRows(result, block.where, scope);
   if ("problem" in filtered) return { state: "problem", problem: filtered.problem };
   const cols = block.columns ? block.columns.split(",").map((s) => s.trim()).filter(Boolean) : result.columns;
   const idx = cols.map((c) => columnIndex(result, c));
@@ -542,32 +554,6 @@ function compareCells(a: unknown, b: unknown): number {
   return String(a ?? "").localeCompare(String(b ?? ""));
 }
 
-// ── text with live numbers ──
-
-/** A text block's pieces: literal text, and {b_key} / {b_key.delta} references to a KPI's live value. */
-export type TextPart = { text: string } | { ref: string; part: "value" | "delta" };
-
-export function parseText(text: string): TextPart[] {
-  const parts: TextPart[] = [];
-  const re = /\{(b_[A-Za-z0-9_]+)(?:\.(value|delta))?\}/g;
-  let last = 0;
-  for (let m = re.exec(text); m; m = re.exec(text)) {
-    if (m.index > last) parts.push({ text: text.slice(last, m.index) });
-    parts.push({ ref: m[1], part: (m[2] as "value" | "delta") ?? "value" });
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) parts.push({ text: text.slice(last) });
-  return parts;
-}
-
-/** Numbers typed into the literal text rather than referenced: they trace to no source. */
-export function typedNumbers(text: string): string[] {
-  const literal = parseText(text)
-    .map((p) => ("text" in p ? p.text : " "))
-    .join("");
-  return literal.match(/[$+−-]?\d[\d,]*(\.\d+)?[%KMB]?/g)?.filter((n) => /\d{2,}|%|\$/.test(n)) ?? [];
-}
-
 // ── verification ──
 
 export type CheckState = "verified" | "refreshing" | "stale" | "partial" | "broken" | "typed" | "loading";
@@ -580,16 +566,27 @@ export type Check = { state: CheckState; label: string; detail?: string };
  * read is current. Broken: the source can no longer produce it (the query
  * fails, a column it folds is gone). Typed: a value with no source at all.
  */
-export function checkBlock(kind: string, block: Record<string, unknown>, result: DataResult | undefined, now: number): Check | null {
+/** A bound block's evaluation, whatever its kind. */
+export function evaluateBlock(kind: string, block: Record<string, unknown>, result: DataResult | undefined, scope?: Where): KpiEval | ChartEval | TableEval {
+  return kind === "kpi" ? evaluateKpi(block as KpiBlock, result, scope) : kind === "chart" ? evaluateChart(block as ChartBlock, result, scope) : evaluateTable(block as TableBlock, result, scope);
+}
+
+/** What a check reads beyond the block: the dashboard's filter, and the KPIs a text references. */
+export type CheckContext = { scope?: Where; kpi?: (key: string) => { title?: string; ev: KpiEval } | undefined };
+
+export function checkBlock(kind: string, block: Record<string, unknown>, result: DataResult | undefined, now: number, ctx: CheckContext = {}): Check | null {
+  const scope = ctx.scope;
   if (kind === "section") return null;
   if (kind === "text") {
-    const typed = typedNumbers(String(block.text ?? ""));
-    return typed.length ? { state: "typed", label: "Typed numbers", detail: `${typed.join(", ")} ${typed.length === 1 ? "is" : "are"} typed, not read from a source` } : null;
+    const problems = textProblems(String(block.text ?? ""), ctx.kpi ?? (() => undefined));
+    const wrong = problems.find((p) => p.kind === "contradicts");
+    if (wrong) return { state: "broken", label: "Contradicts the data", detail: wrong.detail };
+    return problems.length ? { state: "typed", label: "Typed claims", detail: problems.map((p) => p.detail).join("; ") } : null;
   }
   const q = blockQuery(block);
   if (!q) return kind === "kpi" && block.value !== undefined ? { state: "typed", label: "Typed by hand", detail: "This number has no source" } : null;
   if (!result || (!result.refreshed_at && !result.error)) return { state: "loading", label: "Reading" };
-  const ev = kind === "kpi" ? evaluateKpi(block as KpiBlock, result) : kind === "chart" ? evaluateChart(block as ChartBlock, result) : evaluateTable(block as TableBlock, result);
+  const ev = evaluateBlock(kind, block, result, scope);
   if (ev.state === "problem") return { state: "broken", label: "Can't reproduce", detail: ev.problem };
   if (result.error) return { state: "stale", label: "Last read failed", detail: `Showing the read from ${ago(now - result.refreshed_at)}; the latest read failed: ${result.error}` };
   if (result.truncated) return { state: "partial", label: "Partial rows", detail: "The source returned more rows than a dashboard keeps; totals may be low" };
@@ -613,17 +610,17 @@ export function ago(ms: number): string {
  * category and series) is what a re-run must reproduce; `shown` is how the
  * page writes it.
  */
-export function blockValue(kind: string, block: Record<string, unknown>, result: DataResult | undefined): { exact: string; shown: string } | null {
+export function blockValue(kind: string, block: Record<string, unknown>, result: DataResult | undefined, scope?: Where): { exact: string; shown: string } | null {
   if (kind === "kpi") {
-    const ev = evaluateKpi(block as KpiBlock, result);
+    const ev = evaluateKpi(block as KpiBlock, result, scope);
     return ev.state === "ok" ? { exact: stableJson([ev.value, ev.delta?.value ?? null, ev.delta?.ratio ?? null]), shown: `${ev.display}${ev.delta ? ` ${ev.delta.display}` : ""}` } : null;
   }
   if (kind === "chart") {
-    const ev = evaluateChart(block as ChartBlock, result);
+    const ev = evaluateChart(block as ChartBlock, result, scope);
     return ev.state === "ok" ? { exact: stableJson([ev.x, ev.series]), shown: `${ev.x.length} points, total ${formatValue(ev.total, ev.format)}` } : null;
   }
   if (kind === "table") {
-    const ev = evaluateTable(block as TableBlock, result);
+    const ev = evaluateTable(block as TableBlock, result, scope);
     return ev.state === "ok" ? { exact: stableJson([ev.columns, ev.rows]), shown: `${ev.rows.length} rows` } : null;
   }
   return null;
@@ -635,14 +632,14 @@ export function blockFingerprint(kind: string, block: Record<string, unknown>, r
 }
 
 /** A fresh re-run against what the dashboard shows: does the source still give exactly the same values? */
-export function compareRerun(kind: string, block: Record<string, unknown>, shown: DataResult | undefined, fresh: DataResult): { same: boolean; before: string | null; after: string | null; problem?: string } {
-  const was = blockValue(kind, block, shown);
+export function compareRerun(kind: string, block: Record<string, unknown>, shown: DataResult | undefined, fresh: DataResult, scope?: Where): { same: boolean; before: string | null; after: string | null; problem?: string } {
+  const was = blockValue(kind, block, shown, scope);
   if (fresh.error) return { same: false, before: was?.shown ?? null, after: null, problem: fresh.error };
   // Matching the rows a dashboard keeps is not reproducing a number computed over rows it dropped.
-  if (fresh.truncated) return { same: false, before: was?.shown ?? null, after: blockValue(kind, block, fresh)?.shown ?? null, problem: "the source returned more rows than a dashboard keeps, so the number can't be fully reproduced" };
-  const now = blockValue(kind, block, fresh);
+  if (fresh.truncated) return { same: false, before: was?.shown ?? null, after: blockValue(kind, block, fresh, scope)?.shown ?? null, problem: "the source returned more rows than a dashboard keeps, so the number can't be fully reproduced" };
+  const now = blockValue(kind, block, fresh, scope);
   if (!now) {
-    const ev = kind === "kpi" ? evaluateKpi(block as KpiBlock, fresh) : kind === "chart" ? evaluateChart(block as ChartBlock, fresh) : evaluateTable(block as TableBlock, fresh);
+    const ev = evaluateBlock(kind, block, fresh, scope);
     return { same: false, before: was?.shown ?? null, after: null, problem: ev.state === "problem" ? ev.problem : "the source returned nothing to compute from" };
   }
   const same = !!was && was.exact === now.exact;
@@ -674,4 +671,30 @@ export function sheetTable(values: Cell[][], header: boolean, firstCol = 1): { c
     return name;
   });
   return { columns, rows: values.slice(1) };
+}
+
+// ── checking words against the data ──
+
+/** A KPI lookup for text checks: evaluate the referenced block over its own result, under the dashboard's filter. */
+export function kpiResolver(get: (key: string) => Record<string, unknown> | undefined, resultOf: (block: Record<string, unknown>) => DataResult | undefined, scope?: Where): NonNullable<CheckContext["kpi"]> {
+  return (key) => {
+    const b = get(key);
+    if (!b || b.kind !== "kpi") return undefined;
+    return { title: typeof b.title === "string" ? b.title : undefined, ev: evaluateKpi(b as KpiBlock, resultOf(b), scope) };
+  };
+}
+
+/** Story words that disagree with the data or trace to nothing: the headline, the summary, and each block's story title and line. */
+export function storyProblems(layout: Record<string, unknown> | undefined, blocks: readonly Record<string, unknown>[], kpi: NonNullable<CheckContext["kpi"]>): Array<{ key: string; field: string } & TextProblem> {
+  const out: Array<{ key: string; field: string } & TextProblem> = [];
+  const look = (key: string, field: string, v: unknown) => {
+    if (typeof v === "string" && v.trim()) for (const p of textProblems(v, kpi)) out.push({ key, field, ...p });
+  };
+  look("layout", "headline", layout?.headline);
+  look("layout", "summary", layout?.summary);
+  for (const b of blocks) {
+    look(String(b.key), "say_title", b.say_title);
+    look(String(b.key), "say", b.say);
+  }
+  return out;
 }

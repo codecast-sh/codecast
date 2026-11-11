@@ -5,24 +5,29 @@
 // cursors, history, the draft bar and Ask agent; this view adds the top-bar
 // controls and the right drawer (Data sources, Design, a check, the editor).
 import "./dashboard.css";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { BarChart3, Bot, Database, Hash, Heading, Plus, Table2, Type } from "lucide-react";
 import { dashboard, newElementKey, type ArtifactElement, type ArtifactOp, type ArtifactPosition, type Json } from "@codecast/shared/artifacts";
 import type { LiveViewProps } from "../live/registry";
 import { useLiveElements } from "../live/useLiveArtifact";
-import { pickAskTarget, sendAsk, useAskDraft, useClaimAsk } from "../live/AskAgentControl";
+import { pickAskTarget, sendAsk, useAskDraft, useClaimAsk } from "../live/askAgent";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useInboxStore } from "../../store/inboxStore";
 import { useDashboardFeed, useDataResults, useRerun } from "../../hooks/useDashboardData";
-import { CheckMark, blockCheck, type BlockEnv } from "./blocks";
+import { CheckMark, type BlockEnv } from "./blocks";
+import { blockCheck } from "./blockCheck";
 import { DashboardGrid, FormatBody } from "./DashboardGrid";
 import { DashboardToolbar, type Freshness, type PanelKind } from "./DashboardToolbar";
-import { CheckPanel, PanelShell } from "./CheckPanel";
+import { CheckPanel, PanelShell, type CheckPoint } from "./CheckPanel";
+import { DashboardFilters } from "./DashboardFilters";
+import { useDashboardScope } from "../../hooks/useDashboardScope";
 import { SourcesPanel } from "./SourcesPanel";
 import { BlockEditor } from "./BlockEditor";
 import { DesignPanel } from "./DesignPanel";
+import { Button } from "../ui/button";
 
-type Panel = { kind: PanelKind; key?: string } | null;
+type Panel = { kind: PanelKind; key?: string; point?: CheckPoint } | null;
 
 const isTyping = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
 
@@ -46,7 +51,10 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
 
   const openCheck = useCallback((key: string) => setPanelState({ kind: "check", key }), []);
   const bind = useCallback((key: string) => setPanelState({ kind: "edit", key }), []);
-  const env: BlockEnv = useMemo(() => ({ results, blocks: byKey, now, onCheck: openCheck, ...(canEdit ? { onBind: bind } : {}) }), [results, byKey, now, openCheck, canEdit, bind]);
+  const openPoint = useCallback((key: string, x: string, series?: string) => setPanelState({ kind: "check", key, point: { x, ...(series !== undefined ? { series } : {}) } }), []);
+  const filter = useDashboardScope(now);
+  const scope = layout.format === "dashboard" ? filter.scope : undefined;
+  const env: BlockEnv = useMemo(() => ({ results, blocks: byKey, now, scope, onCheck: openCheck, onPoint: openPoint, ...(canEdit ? { onBind: bind } : {}) }), [results, byKey, now, scope, openCheck, openPoint, canEdit, bind]);
 
   // ── writes ──
   const select = useCallback(
@@ -89,6 +97,7 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
   // ── freshness and checks ──
   const rerun = useRerun();
   const queries = useMemo(() => dashboard.dashboardQueries(blocks), [blocks]);
+  const dims = useMemo(() => dashboard.filterDimensions([...queries.keys()].map((k) => results.get(k))), [queries, results]);
   const freshness: Freshness = useMemo(() => {
     let oldest = 0;
     let refreshing = false;
@@ -111,30 +120,30 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
 
   // ── the top bar ──
   const togglePanel = useCallback((kind: PanelKind) => setPanelState((p) => (p?.kind === kind ? null : { kind })), []);
-  useEffect(() => {
+  useWatchEffect(() => {
     setToolbar(
       <DashboardToolbar now={now} freshness={freshness} counts={counts} edit={edit} canEdit={canEdit && layout.format === "dashboard"} panel={panel?.kind ?? null} onMode={setEditing} onPanel={togglePanel} onRefresh={refreshAll} />,
     );
   }, [setToolbar, now, freshness, counts, edit, canEdit, layout.format, panel?.kind, togglePanel, refreshAll]);
-  useEffect(() => () => setToolbar(null), [setToolbar]);
+  useWatchEffect(() => () => setToolbar(null), [setToolbar]);
 
   // ── the drawer ──
   const closePanel = useCallback(() => setPanelState(null), []);
   const askDoc = useMemo(() => ({ _id: docId, title: doc.title, doc_type: doc.doc_type, project_path: doc.project_path, git_root: doc.git_root }), [docId, doc.title, doc.doc_type, doc.project_path, doc.git_root]);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!panel) return setPanel(null);
     const block = panel.key ? byKey.get(panel.key) : undefined;
-    if (panel.kind === "check") setPanel(<CheckPanel key={panel.key} docId={docId} block={block} env={env} onClose={closePanel} />);
+    if (panel.kind === "check") setPanel(<CheckPanel key={panel.key} docId={docId} block={block} env={env} point={panel.point} onClose={closePanel} />);
     else if (panel.kind === "edit") setPanel(<BlockEditor key={panel.key} docId={docId} block={block} env={env} apply={write} onClose={closePanel} onRemove={() => panel.key && remove(panel.key)} />);
     else if (panel.kind === "sources") setPanel(<SourcesPanel docId={docId} blocks={blocks} env={env} canEdit={canEdit} onClose={closePanel} onAdd={added} onCheck={openCheck} />);
     else if (panel.kind === "design") setPanel(<DesignPanel doc={askDoc} format={layout.format} elements={elements} canEdit={canEdit} writeDraft={(ops) => live.apply(ops, { layer: "draft" })} write={write} onClose={closePanel} />);
     else if (panel.kind === "checks") setPanel(<ChecksPanel checks={checks} onOpen={openCheck} onClose={closePanel} />);
   }, [panel, byKey, docId, env, write, remove, blocks, canEdit, added, openCheck, askDoc, layout.format, elements, live, checks, closePanel, setPanel]);
-  useEffect(() => () => setPanel(null), [setPanel]);
+  useWatchEffect(() => () => setPanel(null), [setPanel]);
 
   // ── cursors: where a block is on screen ──
   const root = useRef<HTMLDivElement>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = root.current;
     if (!el) return;
     const map = (pos: ArtifactPosition) => {
@@ -212,6 +221,7 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
   return (
     <div ref={root} className="data-wrap h-full overflow-y-auto overflow-x-hidden bg-sol-bg outline-none" tabIndex={-1} onKeyDown={onKeyDown} onClick={(e) => e.target === e.currentTarget && select(null)} data-dashboard={docId}>
       <FormatBody title={doc.title} layout={layout} elements={elements} env={env} onBackground={() => select(null)}>
+        {blocks.length ? <DashboardFilters dims={dims} value={filter.value} set={filter.set} clear={filter.clear} /> : null}
         {blocks.length ? (
           <DashboardGrid
             blocks={blocks}
@@ -289,9 +299,9 @@ function EmptyDashboard({ docId, canEdit, onSources, onAsk }: { docId: string; c
             <Database className="w-3.5 h-3.5" /> Pick a source
           </button>
           <span className="flex-1" />
-          <button type="button" onClick={send} disabled={!prompt.trim()} className="inline-flex items-center gap-1.5 h-7 px-3 rounded-md text-xs font-medium bg-sol-violet text-sol-bg hover:opacity-90 disabled:opacity-40">
+          <Button type="button" variant="violet" size="xs" onClick={send} disabled={!prompt.trim()}>
             <Bot className="w-3.5 h-3.5" /> Ask agent
-          </button>
+          </Button>
         </div>
       </div>
     </div>

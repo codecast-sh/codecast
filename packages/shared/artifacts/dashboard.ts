@@ -9,7 +9,7 @@
 import type { ArtifactElement, ArtifactOp, Json } from "./core";
 import type { ArtifactSpec, ArtifactView, VerbResult } from "./spec";
 import { newElementKey } from "./spec";
-import { CHART_TYPES, DATA_SOURCES, KPI_AGGS, isDataSource, type DataQuery } from "./dashboardData";
+import { CHART_TYPES, DATA_SOURCES, KPI_AGGS, isDataSource, whereProblem, writtenTextProblem, type DataQuery } from "./dashboardData";
 
 export * from "./dashboardData";
 
@@ -226,8 +226,19 @@ function commonFields(f: Flags): Record<string, Json> {
     out.span = span;
   }
   const where = flagJson(f, "where");
-  if (where) out.where = where;
+  if (where) {
+    const bad = whereProblem(where);
+    if (bad) throw new Error(`--where: ${bad}`);
+    out.where = where;
+  }
   return out;
+}
+
+/** Words a reader takes as fact: refused when they type a number or state a direction the data does not carry. */
+function checkedWords(what: string, text: string): string {
+  const bad = writtenTextProblem(text);
+  if (bad) throw new Error(`${what}: ${bad}`);
+  return text;
 }
 
 /**
@@ -318,12 +329,12 @@ const verbs: ArtifactSpec["verbs"] = {
     },
   },
   text: {
-    summary: "Add or update a text block; {b_key} shows a KPI's live value, {b_key.delta} its change",
+    summary: "Add or update a text block; {b_key} shows a KPI's live value, {b_key.delta} its signed change, {b_key.trend} its direction in words",
     usage: `text <doc> "Spend is {b_spend}, {b_spend.delta} on the prior fortnight." [--key b_x] [--after b_y]`,
     run(view, args) {
       const f = parseFlags(args, ["first"]);
       const fields = commonFields(f);
-      if (f.pos.length) fields.text = f.pos.join(" ");
+      if (f.pos.length) fields.text = checkedWords("text", f.pos.join(" "));
       return writeBlock(view, "text", f, fields);
     },
   },
@@ -353,23 +364,23 @@ const verbs: ArtifactSpec["verbs"] = {
   },
   story: {
     summary: "Set the format the dashboard reads as (dashboard, scrolly, short) and its headline and summary",
-    usage: `story <doc> scrolly|short|dashboard [--headline "Spend is up 17%"] [--summary "One line with {b_key} values"]`,
+    usage: `story <doc> scrolly|short|dashboard [--headline "Spend is {b_spend.trend}"] [--summary "{b_spend} so far, {b_spend.delta} on the prior fortnight"]`,
     run(view, args) {
       const f = parseFlags(args);
       const format = f.pos[0];
       if (!(STORY_FORMATS as readonly string[]).includes(format)) throw new Error(`usage: story <doc> ${STORY_FORMATS.join("|")} [--headline ..] [--summary ..]`);
       const fields: Record<string, Json> = { format };
       const headline = flagText(f, "headline");
-      if (headline !== undefined) fields.headline = headline;
+      if (headline !== undefined) fields.headline = checkedWords("--headline", headline);
       const summary = flagText(f, "summary");
-      if (summary !== undefined) fields.summary = summary;
+      if (summary !== undefined) fields.summary = checkedWords("--summary", summary);
       const op: ArtifactOp = view.get(LAYOUT_KEY) ? { k: LAYOUT_KEY, set: fields } : { k: LAYOUT_KEY, put: { kind: "layout", ...fields } };
       return { ops: [op], status: `format ${format}` };
     },
   },
   say: {
     summary: "Set the story line a block shows in a Scrollyteller or Visual short, or leave it out of the story",
-    usage: `say <doc> <key> "Pre-orders are up 17%" ["58,500 so far, {b_last} last year"] | say <doc> <key> --skip | --show`,
+    usage: `say <doc> <key> "Pre-orders are {b_orders.trend}" ["{b_orders} so far, {b_last} last year"] | say <doc> <key> --skip | --show`,
     run(view, args) {
       const f = parseFlags(args, ["skip", "show"]);
       const [key, title, ...line] = f.pos;
@@ -377,8 +388,8 @@ const verbs: ArtifactSpec["verbs"] = {
       const fields: Record<string, Json> = {};
       if (f.flags.skip) fields.in_story = false;
       if (f.flags.show) fields.in_story = null;
-      if (title !== undefined) fields.say_title = title;
-      if (line.length) fields.say = line.join(" ");
+      if (title !== undefined) fields.say_title = checkedWords("the story title", title);
+      if (line.length) fields.say = checkedWords("the story line", line.join(" "));
       if (!Object.keys(fields).length) throw new Error("nothing to say: pass a title, a line, --skip or --show");
       return { ops: [{ k: key, set: fields }], position: { block: key }, status: `story line on ${key}` };
     },
@@ -414,9 +425,9 @@ export const dashboardSpec: ArtifactSpec = {
     "Every number must come from a source, so a person can open the check behind it. Never type a number into a block or a text.",
     "1. `cast data sources <doc>` lists sources; `cast data query <doc> <source> --args '<json>'` shows a query's columns and rows. Look before you bind.",
     "2. Bind blocks with the verbs: `kpi`, `chart`, `table` take --source and --args plus how to shape the rows (KPI: --field --agg sum|last|avg|min|max|count|top --compare halves|prev|<column> --good up|down; chart: --type --x --y --series --cumulative).",
-    "3. Write prose with `text`, referencing live values as {b_key} and {b_key.delta}, so the words update with the data and stay verified.",
+    "3. Write prose with `text`, referencing live values as {b_key} (the value), {b_key.delta} (the signed change, \"+12%\") and {b_key.trend} (the direction in words, \"up 12%\", \"down 4%\", \"flat\"), so the words update with the data and stay verified. The verbs refuse a typed number or a direction stated in words (rose, fell, up 12%): those go wrong the day the data turns.",
     "4. `cast data check <doc>` prints each block's value and check state; fix anything it reports as broken before you hand the dashboard back.",
-    "Stories: `story <doc> scrolly|short --headline .. --summary ..` (draft first: `cast data draft <doc> start`), then `say <doc> <key> \"<title>\" \"<line>\"` per block, KPIs first, one idea per step. Keep headlines short and concrete. Headline, summary and story lines all take {b_key} and {b_key.delta}; state a direction through them (spend {b_spend.delta} this fortnight) rather than a word that goes stale when the data turns.",
+    "Stories: `story <doc> scrolly|short --headline .. --summary ..` (draft first: `cast data draft <doc> start`), then `say <doc> <key> \"<title>\" \"<line>\"` per block, KPIs first, one idea per step. Keep headlines short and concrete. Headline, summary and story lines take the same tokens and follow the same rule: \"Spend is {b_spend.trend} this fortnight\", never \"Spend rose 12%\".",
     `Sources: ${DATA_SOURCES.map((s) => `${s.id} (${s.args})`).join("; ")}.`,
   ].join("\n"),
 };

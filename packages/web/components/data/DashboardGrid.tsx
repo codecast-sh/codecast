@@ -7,7 +7,8 @@ import { GripVertical, Pencil, Trash2 } from "lucide-react";
 import { dashboard, type ArtifactElement } from "@codecast/shared/artifacts";
 import type { ReactNode } from "react";
 import { ScrollyStory, VisualShort } from "./stories";
-import { ChartBody, CheckMark, KpiBody, TableBody, TextBody, LiveText, blockCheck, type BlockEnv } from "./blocks";
+import { ChartBody, CheckMark, KpiBody, TableBody, TextBody, LiveText, type BlockEnv } from "./blocks";
+import { blockCheck } from "./blockCheck";
 
 const SPAN_LABEL: Record<number, string> = { 3: "¼", 4: "⅓", 6: "½", 8: "⅔", 12: "1" };
 
@@ -25,7 +26,7 @@ export type GridProps = {
 };
 
 /** A data block with nothing to show (no source, no typed value): editors bind it, viewers never see it. */
-export function isEmptyBlock(b: ArtifactElement): boolean {
+function isEmptyBlock(b: ArtifactElement): boolean {
   if (b.kind === "text") return !String(b.text ?? "").trim();
   if (b.kind !== "kpi" && b.kind !== "chart" && b.kind !== "table") return false;
   return !dashboard.blockQuery(b) && (b.kind !== "kpi" || b.value === undefined || b.value === null);
@@ -138,6 +139,11 @@ const Cell = memo(function Cell({ b, env, edit, selected, fresh, dropSide, dragg
       ) : b.kind === "text" ? (
         <div className="py-1 pr-8">
           <TextBody b={b} env={env} />
+          {check ? (
+            <span className="absolute top-1.5 right-1.5">
+              <CheckMark check={check} onClick={() => env.onCheck?.(b.key)} />
+            </span>
+          ) : null}
         </div>
       ) : (
         <>
@@ -159,7 +165,7 @@ const Cell = memo(function Cell({ b, env, edit, selected, fresh, dropSide, dragg
           <span className="p-1 text-sol-text-dim cursor-grab active:cursor-grabbing" title="Drag to move" aria-hidden>
             <GripVertical className="w-3.5 h-3.5" />
           </span>
-          <button type="button" onClick={(e) => (e.stopPropagation(), onSpan(b.key, nextSpan))} title={`Width: ${SPAN_LABEL[span]} (click for ${SPAN_LABEL[nextSpan]})`} className="h-6 min-w-6 px-1 text-[11px] font-mono text-sol-text-muted hover:text-sol-text">
+          <button type="button" onClick={(e) => (e.stopPropagation(), onSpan(b.key, nextSpan))} title={`Width: ${SPAN_LABEL[span]} (click for ${SPAN_LABEL[nextSpan]})`} className="h-6 min-w-6 px-1 text-mark font-mono text-sol-text-muted hover:text-sol-text">
             {SPAN_LABEL[span]}
           </button>
           <button type="button" onClick={(e) => (e.stopPropagation(), onEdit(b.key))} title="Edit" aria-label="Edit block" className="p-1 text-sol-text-muted hover:text-sol-text">
@@ -175,13 +181,14 @@ const Cell = memo(function Cell({ b, env, edit, selected, fresh, dropSide, dragg
 });
 
 /** The dashboard's own heading: its title and a live one-line summary. */
-export function DashboardHeading({ title, summary, env, byline }: { title: string; summary?: string; env: BlockEnv; byline?: ReactNode }) {
+export function DashboardHeading({ title, summary, env, byline }: { title?: string; summary?: string; env: BlockEnv; byline?: ReactNode }) {
+  if (!title && !summary && !byline) return null;
   return (
     <div className="mb-6" data-block="layout">
       {byline ? <div className="mb-2 flex items-center gap-2 text-meta text-sol-text-dim">{byline}</div> : null}
-      <h1 className="text-[26px] leading-tight font-bold tracking-[-0.02em] text-sol-text">{title}</h1>
+      {title ? <h1 className="text-[26px] leading-tight font-bold tracking-[-0.02em] text-sol-text"><LiveText text={title} env={env} /></h1> : null}
       {summary ? (
-        <p className="mt-1.5 text-[15px] text-sol-text-secondary">
+        <p className={`${title ? "mt-1.5" : ""} text-[15px] text-sol-text-secondary`}>
           <LiveText text={summary} env={env} />
         </p>
       ) : null}
@@ -198,7 +205,8 @@ export function FormatBody({ title, layout, elements, env, children, onBackgroun
   if (layout.format === "short") return <VisualShort title={title} layout={layout} elements={elements} env={env} />;
   return (
     <div className="max-w-[1240px] mx-auto px-4 sm:px-8 pt-7 pb-24" onClick={(e) => e.target === e.currentTarget && onBackground?.()}>
-      <DashboardHeading title={layout.headline || title} summary={layout.summary} env={env} byline={byline} />
+      {/* The shell already shows the doc title; a heading here is only for a headline of its own (or a shared page, which has no shell title). */}
+      <DashboardHeading title={layout.headline && layout.headline !== title ? layout.headline : byline ? title : undefined} summary={layout.summary} env={env} byline={byline} />
       {children}
     </div>
   );

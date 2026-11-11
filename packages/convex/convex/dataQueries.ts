@@ -499,10 +499,15 @@ export const cliCheck = internalAction({
     results = await ctx.runQuery(internal.dataQueries.resultsForUser, { user_id: args.user_id, doc_id: docId });
     const byKey = new Map(results.map((r) => [r.qkey, r]));
     const now = Date.now();
-    const out = blocks.map((b) => {
+    const resultOf = (b: Record<string, unknown>) => {
       const q = dashboard.blockQuery(b);
-      const result = q ? byKey.get(queryKey(q)) : undefined;
-      const check = checkBlock(b.kind, b, result, now);
+      return q ? byKey.get(queryKey(q)) : undefined;
+    };
+    const els = new Map(elements.map((e) => [e.key, e]));
+    const kpi = dashboard.kpiResolver((k) => els.get(k), resultOf);
+    const out = blocks.map((b) => {
+      const result = resultOf(b);
+      const check = checkBlock(b.kind, b, result, now, { kpi });
       let value = "";
       if (b.kind === "kpi") {
         const ev = evaluateKpi(b as any, result);
@@ -519,6 +524,9 @@ export const cliCheck = internalAction({
     const lines = out.map((o) => `${o.check ? MARK[o.check.state] ?? " " : " "} ${o.key} ${o.kind}${o.title ? ` "${o.title}"` : ""}  ${o.value}${o.check && o.check.state !== "verified" ? `  [${o.check.label}${o.check.detail ? `: ${o.check.detail}` : ""}]` : ""}`);
     const counts = out.reduce<Record<string, number>>((acc, o) => (o.check ? ((acc[o.check.state] = (acc[o.check.state] ?? 0) + 1), acc) : acc), {});
     const summary = Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(", ") || "no checked blocks";
-    return { text: [`${title}: ${summary}`, ...lines].join("\n"), json: { title, blocks: out, results: results.map((r) => ({ ...r, rows: r.rows.length })) } };
+    // Story words are claims too: a headline or story line that contradicts its KPI is as wrong as a broken number.
+    const story = dashboard.storyProblems(els.get(dashboard.LAYOUT_KEY), blocks, kpi);
+    const storyLines = story.map((p) => `${p.kind === "contradicts" ? MARK.broken : MARK.typed} ${p.key} ${p.field}  [${p.kind === "contradicts" ? "Contradicts the data" : "Typed claim"}: ${p.detail}]`);
+    return { text: [`${title}: ${summary}${story.length ? `; ${story.length} story ${story.length === 1 ? "claim" : "claims"} to fix` : ""}`, ...lines, ...storyLines].join("\n"), json: { title, blocks: out, story, results: results.map((r) => ({ ...r, rows: r.rows.length })) } };
   },
 });

@@ -6,10 +6,13 @@
 //   Visual short   the same steps as a short film: beats laid end to end
 //                  (shared shortTimeline), a segmented timeline to scrub,
 //                  numbers counting up and charts drawing in as each plays.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useEventListener } from "../../hooks/useEventListener";
 import { ArrowDown, Pause, Play, RotateCcw } from "lucide-react";
 import { dashboard, type ArtifactElement } from "@codecast/shared/artifacts";
-import { ChartBody, CheckMark, KpiBody, LiveText, TableBody, TextBody, blockCheck, type BlockEnv } from "./blocks";
+import { ChartBody, CheckMark, KpiBody, LiveText, TableBody, TextBody, type BlockEnv } from "./blocks";
+import { blockCheck } from "./blockCheck";
 import { KeyCap } from "../KeyCap";
 
 type StoryProps = { title: string; layout: dashboard.DashboardLayout; elements: ArtifactElement[]; env: BlockEnv };
@@ -18,7 +21,7 @@ type StoryProps = { title: string; layout: dashboard.DashboardLayout; elements: 
 function useRevealed<T extends Element>(threshold = 0.25): [React.RefObject<T | null>, boolean] {
   const ref = useRef<T | null>(null);
   const [seen, setSeen] = useState(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = ref.current;
     if (!el || seen) return;
     if (typeof IntersectionObserver === "undefined") return setSeen(true);
@@ -171,7 +174,7 @@ export function VisualShort({ title, layout, elements, env }: StoryProps) {
   }, [elements, env.results]);
   const [playing, setPlaying] = useState(false);
   const started = useRef(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (ready && !started.current) {
       started.current = true;
       setPlaying(true);
@@ -179,15 +182,11 @@ export function VisualShort({ title, layout, elements, env }: StoryProps) {
   }, [ready]);
   // Opening the evidence behind a number pauses the film; so does leaving the tab.
   const benv: BlockEnv = useMemo(() => ({ ...env, onCheck: (k: string) => { setPlaying(false); env.onCheck?.(k); } }), [env]);
-  useEffect(() => {
-    const onHide = () => document.hidden && setPlaying(false);
-    document.addEventListener("visibilitychange", onHide);
-    return () => document.removeEventListener("visibilitychange", onHide);
-  }, []);
+  useEventListener("visibilitychange", () => document.hidden && setPlaying(false), document);
   const stage = useRef<HTMLDivElement>(null);
   const clock = useRef({ t: 0, last: 0 });
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!playing) return;
     let raf = 0;
     clock.current.last = performance.now();

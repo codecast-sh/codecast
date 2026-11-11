@@ -3,11 +3,15 @@
 // mark that opens the source behind any of them. The dashboard grid, the
 // Scrollyteller and the Visual short all draw blocks through these, so a
 // number looks and verifies the same in every format.
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useMemo, useRef, useState, type ReactNode } from "react";
 import { BadgeAlert, BadgeCheck, BadgeX, CircleDashed, Database, Loader2, TrendingDown, TrendingUp } from "lucide-react";
 import { dashboard, type ArtifactElement } from "@codecast/shared/artifacts";
 import { OpsChart } from "../ops/chart/OpsChart";
+import type { ECharts } from "../ops/chart/echarts";
 import { chartOption } from "./chartOption";
+import { blockCheck } from "./blockCheck";
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { resultFor, type DataResult } from "../../hooks/useDashboardData";
 
 export type BlockEnv = {
@@ -18,6 +22,10 @@ export type BlockEnv = {
   onCheck?: (key: string) => void;
   /** Open the editor on a block with no source yet; absent where nobody can edit. */
   onBind?: (key: string) => void;
+  /** The dashboard's own filter (date range, person...): narrows every block whose source has the column. */
+  scope?: dashboard.Where;
+  /** Open the rows behind one chart point. */
+  onPoint?: (key: string, x: string, series?: string) => void;
 };
 
 // ── the check mark ──
@@ -52,17 +60,13 @@ export function CheckMark({ check, onClick, size = 16 }: { check: dashboard.Chec
   );
 }
 
-export function blockCheck(b: ArtifactElement, env: BlockEnv): dashboard.Check | null {
-  return dashboard.checkBlock(b.kind, b, resultFor(env.results, b), env.now);
-}
-
 // ── KPI ──
 
 /** A number that counts up to its value the first time it shows (stories only). */
-export function useCountUp(target: number | null, run: boolean, ms = 900): number | null {
+function useCountUp(target: number | null, run: boolean, ms = 900): number | null {
   const [v, setV] = useState<number | null>(run ? 0 : target);
   const done = useRef(!run);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (target === null || done.current || !run) {
       setV(target);
       return;
@@ -83,7 +87,7 @@ export function useCountUp(target: number | null, run: boolean, ms = 900): numbe
 }
 
 export function KpiBody({ b, env, size = "md", countUp = false }: { b: ArtifactElement; env: BlockEnv; size?: "md" | "lg" | "xl" | "stage"; countUp?: boolean }) {
-  const ev = dashboard.evaluateKpi(b as dashboard.KpiBlock, resultFor(env.results, b));
+  const ev = dashboard.evaluateKpi(b as dashboard.KpiBlock, resultFor(env.results, b), env.scope);
   const numeric = ev.state === "ok" && typeof ev.value === "number" ? ev.value : null;
   const counted = useCountUp(numeric, countUp && numeric !== null);
   const big = size === "stage" ? "text-[length:clamp(24px,min(5cqw,9cqh),52px)] leading-[1.1]" : size === "xl" ? "text-[length:clamp(40px,min(15cqw,30cqh),140px)] leading-[1.05] tracking-[-0.04em]" : size === "lg" ? "text-[44px] leading-[52px]" : "text-[30px] leading-[38px]";
@@ -131,28 +135,46 @@ export function DeltaChip({ d }: { d: dashboard.Delta }) {
 
 export const ChartBody = memo(function ChartBody({ b, env, height = 220, compact = true, revealMs = 0 }: { b: ArtifactElement; env: BlockEnv; height?: number | string; compact?: boolean; revealMs?: number }) {
   const result = resultFor(env.results, b);
-  const ev = useMemo(() => dashboard.evaluateChart(b as dashboard.ChartBlock, result), [b, result]);
+  const ev = useMemo(() => dashboard.evaluateChart(b as dashboard.ChartBlock, result, env.scope), [b, result, env.scope]);
   if (ev.state === "loading") return <div className="rounded-lg bg-sol-bg-alt/60 animate-pulse" style={{ height }} />;
   if (ev.state === "unbound") return <BindSource height={height} onBind={env.onBind && (() => env.onBind!(b.key))} />;
   if (ev.state === "problem") return <BlockEmpty height={height} text={ev.problem} tone="red" />;
   if (!ev.x.length) return <BlockEmpty height={height} text="No rows in this window" />;
-  return <SizedChart ev={ev} b={b} height={height} compact={compact} revealMs={revealMs} />;
+  return <SizedChart ev={ev} b={b} height={height} compact={compact} revealMs={revealMs} onPoint={env.onPoint && ((x, series) => env.onPoint!(b.key, x, series))} />;
 });
 
 /** The chart with its width bucketed (narrow or not), so a resize redraws only when the layout it picks changes. */
-function SizedChart({ ev, b, height, compact, revealMs }: { ev: Extract<dashboard.ChartEval, { state: "ok" }>; b: ArtifactElement; height: number | string; compact: boolean; revealMs: number }) {
+function SizedChart({ ev, b, height, compact, revealMs, onPoint }: { ev: Extract<dashboard.ChartEval, { state: "ok" }>; b: ArtifactElement; height: number | string; compact: boolean; revealMs: number; onPoint?: (x: string, series?: string) => void }) {
   const box = useRef<HTMLDivElement>(null);
   const [narrow, setNarrow] = useState(false);
-  useEffect(() => {
+  useMountEffect(() => {
     const el = box.current;
     if (!el) return;
     const ro = new ResizeObserver((e) => setNarrow((e[0]?.contentRect.width ?? 999) < 420));
     ro.observe(el);
     return () => ro.disconnect();
-  }, []);
+  });
+  const pointRef = useRef({ onPoint, ev, split: !!b.series });
+  pointRef.current = { onPoint, ev, split: !!b.series };
+  // Clicking a mark opens its rows; clicking the plot between marks opens the rows at that x.
+  const ready = (chart: ECharts) => {
+    chart.on("click", (p: { name?: string; seriesName?: string }) => {
+      const { onPoint: open, split } = pointRef.current;
+      if (open && p.name !== undefined) open(String(p.name), split ? p.seriesName : undefined);
+    });
+    chart.getZr().on("click", (e: { target?: unknown; offsetX: number; offsetY: number }) => {
+      const { onPoint: open, ev: cur } = pointRef.current;
+      if (!open || e.target || !chart.containPixel("grid", [e.offsetX, e.offsetY])) return;
+      const ranked = cur.type === "hbar";
+      const at = chart.convertFromPixel(ranked ? { yAxisIndex: 0 } : { xAxisIndex: 0 }, ranked ? e.offsetY : e.offsetX) as unknown as number;
+      const x = cur.x[Math.round(Number(at))];
+      if (x !== undefined) open(x);
+    });
+  };
   return (
-    <div ref={box} style={{ height }}>
+    <div ref={box} style={{ height }} className={onPoint ? "cursor-pointer" : undefined}>
       <OpsChart
+      onReady={ready}
       option={(t) => chartOption(ev, t, { compact, revealMs, narrow })}
       deps={[ev, compact, revealMs, narrow]}
       height="100%"
@@ -187,7 +209,7 @@ function BlockEmpty({ height, text, tone }: { height: number | string; text: str
 
 export function TableBody({ b, env, maxHeight = 320 }: { b: ArtifactElement; env: BlockEnv; maxHeight?: number }) {
   const result = resultFor(env.results, b);
-  const ev = useMemo(() => dashboard.evaluateTable(b as dashboard.TableBlock, result), [b, result]);
+  const ev = useMemo(() => dashboard.evaluateTable(b as dashboard.TableBlock, result, env.scope), [b, result, env.scope]);
   if (ev.state === "loading") return <div className="h-32 rounded-lg bg-sol-bg-alt/60 animate-pulse" />;
   if (ev.state === "unbound") return <BindSource height={96} onBind={env.onBind && (() => env.onBind!(b.key))} />;
   if (ev.state === "problem") return <BlockEmpty height={96} text={ev.problem} tone="red" />;
@@ -243,12 +265,12 @@ function exactNumber(v: unknown): string {
 // ── text with live numbers ──
 
 /** A KPI's live value inside prose: the number from its source, with its own check. */
-function LiveNumber({ refKey, part, env }: { refKey: string; part: "value" | "delta"; env: BlockEnv }) {
+function LiveNumber({ refKey, part, env }: { refKey: string; part: "value" | "delta" | "trend"; env: BlockEnv }) {
   const target = env.blocks.get(refKey);
   if (!target || target.kind !== "kpi") return <span className="text-sol-red" title={`No KPI ${refKey}`}>{`{${refKey}}`}</span>;
-  const ev = dashboard.evaluateKpi(target as dashboard.KpiBlock, resultFor(env.results, target));
+  const ev = dashboard.evaluateKpi(target as dashboard.KpiBlock, resultFor(env.results, target), env.scope);
   const check = blockCheck(target, env);
-  const text = ev.state === "ok" ? (part === "delta" ? ev.delta?.display ?? "" : ev.display) : ev.state === "unbound" ? ev.display : "…";
+  const text = dashboard.kpiPartText(ev, part);
   const tone = check?.state === "broken" ? "decoration-sol-red" : check?.state === "verified" ? "decoration-sol-green/60" : "decoration-sol-text-dim";
   return (
     <button
