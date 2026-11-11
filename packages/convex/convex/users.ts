@@ -45,6 +45,7 @@ import { startAccountDeletion } from "./accountDelete";
 import { readLocalViewRevision } from "./localFirstCommands";
 import { daemonLastSeenStale } from "./lib/daemonLiveness";
 import { linkTeamHostBeat } from "./teamHosts";
+import { scheduleSwitchAhead } from "./lib/hostRecovery";
 import {
   CURRENT_USER_GRANT_KEY,
   CURRENT_USER_VIEW_CONTRACT_ID,
@@ -724,21 +725,8 @@ export const daemonHeartbeat = mutation({
       // (cloudPlacement.reissueStrandedCloudSpawns). Only the transition beat
       // schedules it, and it runs as its own mutation (catchUpCameOnline).
       const localDevice = !(args.is_remote_device ?? existingDevice?.is_remote ?? false);
-      // New meters from a machine on the fleet store: see whether the fleet
-      // should leave its account before it runs out (switchAheadCheck).
-      if (
-        localDevice &&
-        args.cc_accounts?.fleet_store &&
-        JSON.stringify(args.cc_accounts) !== JSON.stringify(existingDevice?.cc_accounts)
-      ) {
-        await ctx.scheduler.runAfter(0, internal.accountSwitch.switchAheadCheck, { user_id: auth.userId });
-      }
-      // A cloud host on its own fleet store (line-pool copies) reads its
-      // meters from each account's holder, whose beats this host never sees,
-      // so its check runs on the host's own beat, at most one a throttle window.
-      if (!localDevice && args.cc_accounts?.fleet_store && seenStale) {
-        await ctx.scheduler.runAfter(0, internal.accountSwitch.switchAheadCheck, { user_id: auth.userId, device_id: args.device_id });
-      }
+      // The fleet's account may be about to run out (lib/hostRecovery).
+      await scheduleSwitchAhead(ctx, auth.userId, { deviceId: args.device_id, local: localDevice, ccAccounts: args.cc_accounts, previous: existingDevice?.cc_accounts, seenStale });
       if (cameOnline && localDevice) {
         await ctx.scheduler.runAfter(0, internal.users.catchUpCameOnline, { user_id: auth.userId, device_id: args.device_id });
       }

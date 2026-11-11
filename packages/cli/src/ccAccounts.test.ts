@@ -34,7 +34,6 @@ import {
   parseStatusLineUsage,
   ingestStatusLineUsage,
   CcAccountError,
-  createMtimeGatedCache,
   accountSourcePrefix,
   accountLaunchFilePath,
   accountLaunchInfo,
@@ -61,6 +60,7 @@ import {
   sameAccountFingerprint,
   attributeFingerprint,
 } from "./ccAccounts.js";
+import { createMtimeGatedCache } from "./mtimeGatedCache.js";
 import { refreshUsageSnapshots } from "./ccUsagePoll.js";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/codecastDir.js";
 

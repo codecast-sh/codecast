@@ -74,6 +74,7 @@ import {
 } from "./ccAccountsShared";
 import { decideSwitchAhead } from "./ccSwitchAhead";
 import { poolUsageOverlay } from "./accountPool";
+import { recoveryFleet } from "./lib/hostRecovery";
 import { deliverSessionNotificationToParties } from "./notifications";
 import { canOwnerOrTeamAccess } from "./privacy";
 import { withSafetyBlock, describeDecision, peggedWindowLabel, oauthApprovalCode, CONTEXT_RECOVERY_DELAY_MS } from "@codecast/shared/contracts";
@@ -1752,36 +1753,6 @@ export const setRecoveryMode = mutation({
 // last half hour, which is the fleet a switch ahead moves.
 const RUNNING_MODELS_WINDOW_MS = 30 * 60 * 1000;
 
-/**
- * The machine one recovery pass judges and moves. Without a device_id it is
- * the person's laptop, as it always was. With one it is that cloud host, when
- * the host runs on a fleet store of its own (line-pool copies, runsOwnFleet):
- * the host's parks and meters are about its own accounts, which the laptop's
- * pass can neither see nor move. The host pass runs under the person's
- * recovery mode, read from their laptop whether or not it is online, with
- * ask-first taken as auto: putting an account in the line pool is the
- * approval, and nobody sits at a host to answer an ask. Returns the host row
- * carrying that mode, so every rule below reads it as it reads a laptop's.
- */
-async function recoveryFleet(
-  ctx: { db: any },
-  userId: Id<"users">,
-  deviceId: string | undefined,
-  online: Doc<"devices">[],
-  laptop: Doc<"devices"> | undefined,
-): Promise<Doc<"devices"> | undefined> {
-  if (!deviceId) return laptop;
-  const host = online.find((d) => d.device_id === deviceId && runsOwnFleet(d));
-  if (!host) return undefined;
-  const person: Doc<"devices"> | undefined = laptop ?? (await ctx.db
-    .query("devices")
-    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-    .collect())
-    .filter((d: Doc<"devices">) => !d.is_remote)
-    .sort((a: Doc<"devices">, b: Doc<"devices">) => b.last_seen - a.last_seen)[0];
-  const on = !!person && recoveryModeOf(person) !== "off";
-  return { ...host, cc_auto_switch: on, cc_recovery_ask: false, cc_auto_continue: false };
-}
 async function runningClaudeModels(ctx: { db: any }, userId: Id<"users">, now: number): Promise<string[]> {
   const recent: Doc<"conversations">[] = await ctx.db
     .query("conversations")

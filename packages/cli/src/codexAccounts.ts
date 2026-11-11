@@ -22,7 +22,8 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { createMtimeGatedCache, deriveProfileName, isLegacyDerivedName } from "./ccAccounts.js";
+import { deriveProfileName, isLegacyDerivedName } from "./ccAccounts.js";
+import { createMtimeGatedCache } from "./mtimeGatedCache.js";
 import { atomicWriteFile } from "./atomicWrite.js";
 import { readProfileIndexFile } from "./readForUpdate.js";
 import {
