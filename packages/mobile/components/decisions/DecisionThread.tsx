@@ -57,6 +57,12 @@ function Row({ c, fresh, mine, replyingTo, onReply, onEdit, onRemove }: { c: Com
   );
 }
 
+type Role = { _id: string; name?: string; handle?: string };
+// One array for "no org tree yet". A fresh [] on every read is a new snapshot
+// each time, which React answers with "Maximum update depth exceeded": the
+// decision screen died for anyone whose org tree had not synced.
+const NO_ROLES: Role[] = [];
+
 export function DecisionThread({ decisionId, conversationId }: { decisionId: string; conversationId?: string }) {
   const Theme = useTheme();
   const convex = useConvex();
@@ -68,7 +74,7 @@ export function DecisionThread({ decisionId, conversationId }: { decisionId: str
   const sessionId = owner?.conversation_id ?? conversationId ?? '';
   const session = useInboxStore((s) => s.sessions[sessionId] as { short_id?: string; title?: string } | undefined);
   const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
-  const roles = useInboxStore((s) => ((s as any).orgTree?.roles ?? []) as Array<{ _id: string; name?: string; handle?: string }>);
+  const roles = useInboxStore((s) => ((s as any).orgTree?.roles ?? NO_ROLES) as Role[]);
   const [replyTo, setReplyTo] = useState<Comment | null>(null);
   const [editing, setEditing] = useState<{ messageId: string; content: string } | null>(null);
   const [asking, setAsking] = useState(false);
