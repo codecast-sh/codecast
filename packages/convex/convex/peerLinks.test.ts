@@ -9,7 +9,7 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { allModules } from "./testModules.testkit";
 import { hashToken } from "./apiTokens";
-import { heartbeatTailnetArg, heartbeatTailnetPatch } from "./users";
+import { heartbeatTailnetArg, heartbeatTailnetPatch } from "./lib/heartbeatTailnet";
 
 setDefaultTimeout(120_000);
 
@@ -79,18 +79,50 @@ describe("listDevices and setDeviceDirectLinks", () => {
   test("the owner sees tailnet and direct_links_off; the switch flips only its own machine", async () => {
     const { t, as, owner, other, token, beat } = await setup();
     await beat(TAILNET);
-    await as(owner).mutation(api.devices.setDeviceDirectLinks, { device_id: "there", enabled: false });
+    await as(owner).mutation(api.peerLinks.setDeviceDirectLinks, { device_id: "there", enabled: false });
     const rows = await as(owner).query(api.devices.listDevices, {});
     const here = rows.find((d: any) => d.device_id === "here")!;
     expect(here.tailnet).toEqual(TAILNET);
     expect(here.direct_links_off).toBeUndefined();
     expect(rows.find((d: any) => d.device_id === "there")).toMatchObject({ direct_links_off: true });
 
-    await t.mutation(api.devices.setDeviceDirectLinks, { api_token: token, device_id: "there", enabled: true });
+    await t.mutation(api.peerLinks.setDeviceDirectLinks, { api_token: token, device_id: "there", enabled: true });
     expect((await as(owner).query(api.devices.listDevices, {})).find((d: any) => d.device_id === "there")!.direct_links_off).toBeUndefined();
 
-    await expect(as(other).mutation(api.devices.setDeviceDirectLinks, { device_id: "there", enabled: false })).rejects.toThrow("Unknown device");
+    await expect(as(other).mutation(api.peerLinks.setDeviceDirectLinks, { device_id: "there", enabled: false })).rejects.toThrow("Unknown device");
     expect((await as(other).query(api.devices.listDevices, {})).map((d: any) => d.device_id)).toEqual(["bos-mac"]);
+  });
+});
+
+describe("listDevices peer_links", () => {
+  test("each machine carries its outcomes as the source, small and owner only", async () => {
+    const { t, as, owner, other } = await setup();
+    await as(owner).mutation(api.peerLinks.recordPeerLink, { from_device_id: "there", to_device_id: "here", mode: "direct", ok: true, bytes: 10 });
+    await as(owner).mutation(api.peerLinks.recordPeerLink, { from_device_id: "there", to_device_id: "here", mode: "direct", ok: false, reason: "refused" });
+    await as(owner).mutation(api.peerLinks.recordPeerLink, { from_device_id: "here", to_device_id: "there", mode: "relay", ok: true });
+    await t.run((ctx) => ctx.db.insert("peer_links", { user_id: owner, from_device_id: "there", to_device_id: "gone", last_relay_ok_at: 1, updated_at: 1 }));
+    await t.run((ctx) => ctx.db.insert("peer_links", { user_id: other, from_device_id: "bos-mac", to_device_id: "here", last_direct_ok_at: 1, updated_at: 1 }));
+
+    const rows = await as(owner).query(api.devices.listDevices, {});
+    const there = rows.find((d: any) => d.device_id === "there")!.peer_links;
+    expect(there).toHaveLength(1);
+    expect(Object.keys(there[0]).sort()).toEqual(["last_direct_failure", "last_direct_ok_at", "to_device_id"]);
+    expect(there[0]).toMatchObject({ to_device_id: "here", last_direct_failure: { reason: "refused" } });
+    expect(rows.find((d: any) => d.device_id === "here")!.peer_links).toEqual([{ to_device_id: "there", last_relay_ok_at: expect.any(Number) }]);
+
+    const bos = (await as(other).query(api.devices.listDevices, {}))[0];
+    expect(bos.peer_links).toEqual([]);
+  });
+
+  test("the web's dispatch flips the switch on the caller's own machine only", async () => {
+    const { as, owner, other, device } = await setup();
+    const dispatch = (user: Id<"users">, args: unknown[]) => as(user).mutation(api.dispatch.dispatch, { action: "setDeviceDirectLinks", args });
+    await dispatch(owner, ["there", false]);
+    expect((await device("there"))!.direct_links_off).toBe(true);
+    await dispatch(owner, ["there", true]);
+    expect((await device("there"))!.direct_links_off).toBeUndefined();
+    await expect(dispatch(other, ["there", false])).rejects.toThrow("Unknown device");
+    expect((await device("there"))!.direct_links_off).toBeUndefined();
   });
 });
 

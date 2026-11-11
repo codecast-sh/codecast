@@ -9,6 +9,7 @@
  */
 
 import { deviceDisplayName, localTmuxAttachCommand, sshTmuxAttachCommand, wslTmuxAttachCommand } from "@codecast/shared/contracts";
+import { tailnetShortName } from "@codecast/shared/contracts/peerTransport";
 import { visitorPlatform } from "../lib/visitorPlatform";
 
 export type SessionMachine = {
@@ -26,7 +27,23 @@ export type SessionMachine = {
   ssh_host: string | null;
   /** The WSL distro the pane's daemon runs in; null off WSL or not yours. */
   wsl_distro?: string | null;
+  /** The machine's MagicDNS name when it is on a tailnet and is not this
+   *  window's own machine (useAttachCopy fills it from the roster). */
+  tailnet_name?: string | null;
+  /** The MagicDNS suffix of the viewer's own machine, when known. */
+  viewer_tailnet?: string | null;
 };
+
+/**
+ * The MagicDNS name to ssh to: the short name when the viewer sits on the same
+ * tailnet (search domains resolve it), else the full name. Null when it is not
+ * a plain hostname, since it lands in a copied shell line.
+ */
+export function tailnetSshHost(name: string | null | undefined, viewerTailnet?: string | null): string | null {
+  const full = name?.replace(/\.$/, "") ?? "";
+  const host = viewerTailnet && full.endsWith(`.${viewerTailnet}`) ? tailnetShortName(full) : full;
+  return host.length <= 253 && /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,62})(?:\.[A-Za-z0-9][A-Za-z0-9-]{0,62})*$/.test(host) ? host : null;
+}
 
 /**
  * The command to reach a pane, or null when no honest command exists.
@@ -56,8 +73,8 @@ export function attachCommand(
   if (!machine.is_mine) return null;
   // A Windows viewer pastes into PowerShell, where tmux only exists inside WSL.
   if (!machine.ssh_host && machine.wsl_distro && viewerOnWindows) return wslTmuxAttachCommand(machine.wsl_distro, tmuxSession);
-  if (!machine.ssh_host) return local;
-  return sshTmuxAttachCommand(machine.ssh_host, tmuxSession);
+  const host = machine.ssh_host ?? tailnetSshHost(machine.tailnet_name, machine.viewer_tailnet);
+  return host ? sshTmuxAttachCommand(host, tmuxSession) : local;
 }
 
 /**
@@ -85,7 +102,7 @@ export function attachCopy(
       message: `Runs on ${name}, which isn't one of your machines, so no attach command works from here. Run on device → run here brings it to this machine.`,
     };
   }
-  if (machine.ssh_host) return { command, message: "ssh + tmux attach copied" };
+  if (command.startsWith("ssh ")) return { command, message: "ssh + tmux attach copied" };
   if (command?.startsWith("wsl.exe")) return { command, message: `tmux attach copied: run it in PowerShell on ${name}` };
   return { command, message: `tmux attach copied — run it in a shell on ${name}` };
 }

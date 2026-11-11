@@ -27,7 +27,7 @@ import { handleFaceRequest } from "./callFace";
 import { sentryWebhook, setEventGroupStatus } from "./sources/sentry";
 import { STRIPE_WEBHOOK_PATH, stripeWebhook } from "./billing";
 import { claimFrontier } from "./taskFrontier";
-import { heartbeatTailnetArg } from "./users";
+import { heartbeatTailnetArg } from "./lib/heartbeatTailnet";
 import {
   serve as repoPublicServe,
   preflight as repoPublicPreflight,

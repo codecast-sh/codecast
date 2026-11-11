@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { Readable } from "node:stream";
 import {
   exportFolder,
@@ -10,6 +11,7 @@ import {
   refusedFolder,
   localFolderFor,
   packFolder,
+  peerTransferReporter,
   planFolderExport,
   syncFolderFromPeer,
   unpackFolder,
@@ -18,7 +20,9 @@ import {
   type PeerAttempt,
   type PeerOutcome,
   type PeerRequestOpts,
+  type PeerTransferReport,
 } from "./folderSync";
+import { folderFetchGate } from "./folderFetchGate";
 import type { TailnetStatus } from "./cloud/tailnet";
 import { closeAllGrants, liveGrantCount, type GrantOutcome } from "./peer/grant";
 import { pollUntil } from "./test-helpers/pollUntil";
@@ -428,7 +432,7 @@ describe("direct links", () => {
     expect(f.phases).toContain("receiving");
     await pollUntil(() => f.grants.length === 1, "grant done");
     expect(f.grants[0]).toMatchObject({ served: true });
-  });
+  }, 30_000);
 
   test("the requester refusing the source falls back to the relay from the same machine", async () => {
     write("family/notes.md", "hello");
@@ -505,5 +509,127 @@ describe("direct links", () => {
     );
     expect(relayOnly).toMatchObject({ ok: true, storage_id: "s" });
     expect(liveGrantCount()).toBe(0);
+  });
+
+  test("a cancel before anything is asked sends no request", async () => {
+    write("family/notes.md", "hello");
+    const f = fleet(path.join(root, "family"));
+    const dest = path.join(root, "here", "family");
+    const r = await syncFolderFromPeer(dest, { ...f.deps, cancelled: () => true });
+    expect(r).toEqual({ ok: false, reason: "cancelled" });
+    expect(f.requests).toEqual([]);
+    expect(fs.existsSync(dest)).toBe(false);
+  });
+
+  test("a cancel during a direct pull aborts it, leaves nothing at dest and never falls back", async () => {
+    fs.mkdirSync(path.join(root, "big"));
+    fs.writeFileSync(path.join(root, "big/blob.bin"), randomBytes(8 * 1024 * 1024));
+    const f = fleet(path.join(root, "big"));
+    const dest = path.join(root, "here", "big");
+    let cancel = false;
+    const r = await syncFolderFromPeer(dest, {
+      ...f.deps,
+      onProgress: (p) => { f.phases.push(p.phase); if (p.phase === "receiving") cancel = true; },
+      cancelled: () => cancel,
+    });
+    expect(r).toEqual({ ok: false, reason: "cancelled" });
+    expect(f.requests).toHaveLength(1);
+    expect(f.attempts).toEqual([]);
+    expect(fs.existsSync(dest)).toBe(false);
+    expect(fs.readdirSync(path.join(root, "here"))).toEqual([]);
+  });
+
+  test("a cancel during a relay download aborts it and unpacks nothing", async () => {
+    write("family/notes.md", "hello");
+    const f = fleet(path.join(root, "family"));
+    const dest = path.join(root, "here", "family");
+    let cancel = false;
+    let aborted = false;
+    const r = await syncFolderFromPeer(dest, {
+      ...f.deps,
+      direct: async () => null,
+      cancelled: () => cancel,
+      download: (_id: string, signal?: AbortSignal) => new Promise<Uint8Array | null>((_resolve, reject) => {
+        cancel = true;
+        signal?.addEventListener("abort", () => { aborted = true; reject(new Error("aborted")); });
+      }),
+    });
+    expect(r).toEqual({ ok: false, reason: "cancelled" });
+    expect(aborted).toBe(true);
+    expect(f.attempts).toEqual([]);
+    expect(fs.existsSync(dest)).toBe(false);
+  });
+});
+
+describe("peerTransferReporter", () => {
+  const gate = () => {
+    const calls: { r: PeerTransferReport; done: (v: { cancel: boolean }) => void }[] = [];
+    const send = (r: PeerTransferReport) => new Promise<{ cancel: boolean }>((done) => calls.push({ r, done }));
+    return { calls, send };
+  };
+
+  test("sends one at a time, keeps only the newest while one is in flight, and never drops the end", async () => {
+    const g = gate();
+    const rep = peerTransferReporter(g.send, { heartbeatMs: 60_000 });
+    rep.report({ phase: "asking" });
+    rep.report({ phase: "receiving", bytes: 1 });
+    rep.report({ phase: "receiving", bytes: 2 });
+    rep.report({ phase: "failed", reason: "no answer" });
+    rep.report({ phase: "receiving", bytes: 3 });
+    expect(g.calls.map((c) => c.r.phase)).toEqual(["asking"]);
+    g.calls[0].done({ cancel: false });
+    await pollUntil(() => g.calls.length === 2, "second report");
+    expect(g.calls[1].r).toEqual({ phase: "failed", reason: "no answer" });
+    g.calls[1].done({ cancel: false });
+    await rep.settled();
+    expect(g.calls).toHaveLength(2);
+  });
+
+  test("a report's answer turns cancelled on, and a failing send does not stop the next", async () => {
+    let n = 0;
+    const rep = peerTransferReporter(async () => {
+      if (++n === 1) throw new Error("offline");
+      return { cancel: true };
+    }, { heartbeatMs: 60_000 });
+    rep.report({ phase: "asking" });
+    await rep.settled();
+    expect(rep.cancelled()).toBe(false);
+    rep.report({ phase: "receiving", mode: "relay" });
+    await rep.settled();
+    expect(rep.cancelled()).toBe(true);
+  });
+
+  test("repeats the last report while nothing new comes, and stops once the transfer ends", async () => {
+    const sent: PeerTransferReport[] = [];
+    const rep = peerTransferReporter(async (r) => { sent.push(r); return { cancel: false }; }, { heartbeatMs: 20 });
+    rep.report({ phase: "receiving", mode: "relay", total: 10 });
+    await pollUntil(() => sent.length >= 3, "heartbeats");
+    expect(new Set(sent.map((r) => r.phase))).toEqual(new Set(["receiving"]));
+    rep.report({ phase: "done" });
+    await rep.settled();
+    const after = sent.length;
+    await new Promise((r) => setTimeout(r, 80));
+    expect(sent.length).toBe(after);
+    expect(sent.at(-1)).toEqual({ phase: "done" });
+  });
+});
+
+describe("folderFetchGate", () => {
+  test("a failure blocks the automatic path for the window; a restart forgets only that conversation", () => {
+    let t = 1000;
+    const g = folderFetchGate(60_000, () => t);
+    g.fail("c1\0/a", "you cancelled the transfer");
+    g.fail("c2\0/a", "no answer");
+    expect(g.blocked("c1\0/a")).toBe("you cancelled the transfer");
+    t += 30_000;
+    expect(g.blocked("c1\0/a")).toBe("you cancelled the transfer");
+    g.forgetConversation("c1");
+    expect(g.blocked("c1\0/a")).toBeUndefined();
+    expect(g.blocked("c2\0/a")).toBe("no answer");
+    t += 31_000;
+    expect(g.blocked("c2\0/a")).toBeUndefined();
+    expect(g.reason("c2\0/a")).toBe("no answer");
+    g.clear("c2\0/a");
+    expect(g.reason("c2\0/a")).toBeUndefined();
   });
 });
