@@ -1005,14 +1005,42 @@ export function extractCodexSessionMetadata(content: string): CodexSessionMetada
       const entry = JSON.parse(line);
       if (entry.type !== "session_meta") continue;
       return {
-        id: entry.payload?.id,
-        parentThreadId: entry.payload?.parent_thread_id,
-        originator: entry.payload?.originator,
-        source: entry.payload?.source,
+        id: optionalString(entry.payload?.id),
+        parentThreadId: optionalString(entry.payload?.parent_thread_id),
+        originator: optionalString(entry.payload?.originator),
+        source: codexSource(entry.payload?.source),
       };
     } catch {}
   }
   return undefined;
+}
+
+const optionalString = (v: unknown) => (typeof v === "string" ? v : undefined);
+const plainObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+
+// Codex adds fields to session_meta.source between releases (0.167 added
+// thread_spawn.agent_role). The ingest worker's result validator accepts only
+// the declared shape, so passing the raw object through rejected every such
+// session's ingest. Keep exactly the fields CodexSessionMetadata declares.
+function codexSource(raw: unknown): CodexSessionMetadata["source"] {
+  if (typeof raw === "string") return raw;
+  if (!plainObject(raw)) return undefined;
+  const source: Exclude<CodexSessionMetadata["source"], string | undefined> = {};
+  if (typeof raw.custom === "string") source.custom = raw.custom;
+  if (typeof raw.subagent === "string") source.subagent = raw.subagent;
+  else if (plainObject(raw.subagent)) {
+    const spawn = raw.subagent.thread_spawn;
+    if (!plainObject(spawn)) source.subagent = {};
+    else {
+      const kept: CodexThreadSpawn = {};
+      for (const key of ["parent_thread_id", "agent_path", "agent_nickname"] as const) {
+        if (typeof spawn[key] === "string") kept[key] = spawn[key] as string;
+      }
+      if (Number.isSafeInteger(spawn.depth) && (spawn.depth as number) >= 0) kept.depth = spawn.depth as number;
+      source.subagent = { thread_spawn: kept };
+    }
+  }
+  return source;
 }
 
 // A Codex thread no person started: `codex exec` (Codex's headless mode, the

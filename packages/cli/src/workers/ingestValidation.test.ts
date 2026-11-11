@@ -3,6 +3,7 @@ import { IngestDeadline, IngestDeadlineExceeded, IngestCancelled } from './inges
 import { validIngestPage, type IngestJob } from './ingestTypes.js';
 import { validateIngestResult } from './ingestValidation.js';
 import { IngestAssembler, ingestTokenPages } from './ingestTransport.js';
+import { extractCodexSessionMetadata } from '../parser.js';
 
 const job: IngestJob = {client:'claude',file:'/owned/source',sessionId:'full-session',generation:'generation',offset:0,identity:{dev:1,ino:2,birthtimeMs:3,ctimeMs:4,mtimeMs:5,size:100}};
 const result = () => ({messages:[{role:'assistant' as const,content:'hello',timestamp:1}],bytesConsumed:100,fileSize:100,totalCount:1,maxRowId:0,signatures:['a'.repeat(64)],receiptSignatures:['b'.repeat(64)],receiptOccurrences:[0],messageTitles:[null],handoffParents:[null],metadata:{warnings:[]}});
@@ -104,4 +105,11 @@ test('schema validation yields and refuses a deadline expiring during validation
   setImmediate(()=>{now=11;});
   try { await expect(validateIngestResult(value,job,()=>deadline.check())).rejects.toThrow(IngestDeadlineExceeded); }
   finally { deadline.dispose(); }
+});
+test('a Codex session_meta with fields Codex added later still crosses ingestion validation',async()=>{
+  const head=JSON.stringify({type:'session_meta',payload:{id:'child',originator:'codex-tui',source:{subagent:{thread_spawn:{parent_thread_id:'parent',depth:1,agent_path:'/root/x',agent_nickname:'Kant',agent_role:'explorer'},future:true},custom:'c'}}});
+  const codex=extractCodexSessionMetadata(head);
+  expect(codex).toEqual({id:'child',originator:'codex-tui',source:{subagent:{thread_spawn:{parent_thread_id:'parent',depth:1,agent_path:'/root/x',agent_nickname:'Kant'}},custom:'c'}});
+  const value={...result(),metadata:{warnings:[],codex}};
+  await expect(validateIngestResult(value,job)).resolves.toEqual(value);
 });
