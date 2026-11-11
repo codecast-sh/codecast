@@ -951,6 +951,19 @@ export default defineSchema({
       offered_at: v.number(),
       opened_at: v.optional(v.number()),
     })),
+    // The folder this session needs, live while the owner's machine fetches it
+    // from another of theirs (peerTransfers.ts); removed once it arrives.
+    peer_transfer: v.optional(v.object({
+      phase: v.union(v.literal("asking"), v.literal("receiving"), v.literal("unpacking"), v.literal("done"), v.literal("failed")),
+      from: v.optional(v.string()),
+      mode: v.optional(v.union(v.literal("direct"), v.literal("relay"))),
+      bytes: v.optional(v.number()),
+      total: v.optional(v.number()),
+      reason: v.optional(v.string()),
+      started_at: v.number(),
+      updated_at: v.number(),
+      cancel_requested_at: v.optional(v.number()),
+    })),
     // Dedupe for the needs-input push: "<message_count>:<kind>" of the last
     // waiting episode already notified (see notifications.checkNeedsInput).
     // Mirrors the web idle-sound's notified-keys map so one episode pushes
