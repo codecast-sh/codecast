@@ -4,22 +4,13 @@ import { History, ArrowUpRight, ExternalLink, Link2 } from "lucide-react";
 import { TopbarButton } from "./TopbarButton";
 import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
-import { resolveRecentVisits, type ResolvedVisit } from "../lib/recentVisits";
+import { resolveRecentVisits, visitHref, type ResolvedVisit } from "../lib/recentVisits";
 import { useOpenRecentVisit } from "../hooks/useOpenRecentVisit";
 import { useTipActions } from "../tips";
 import { copyToClipboard, shareOrigin } from "../lib/utils";
 import { ContextMenu, useContextMenu, CtxItem, CtxHeader } from "./ui/context-menu";
 import { RecentsPanel } from "./RecentsPanel";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
-
-// The standalone URL a visit maps to, when one exists. Label/project visits
-// are store filters with no URL of their own, so they get null (menu items
-// that need a URL don't render for them).
-function visitHref(item: ResolvedVisit): string | null {
-  if (item.sessionId) return `/conversation/${item.sessionId}`;
-  if (item.bucketId || item.projectName) return null;
-  return item.path ?? null;
-}
 
 // The whole window the Ctrl+Tab walk covers: a query is how you reach the
 // eleventh row.

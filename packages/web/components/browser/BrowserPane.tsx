@@ -60,6 +60,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { paneOfferOwner } from "../../lib/browserPaneOffer";
 import { KeyCap, ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { isMac } from "../../shortcuts";
+import { claimKeys } from "../../shortcuts/keyOwnership";
 import { PaneControls } from "../stage/PaneControls";
 import { AddressField } from "./AddressField";
 import { FrameBackend } from "./backends/FrameBackend";
@@ -218,19 +219,19 @@ export function BrowserPane() {
     inputRef.current?.focus();
   }, [source, focused]);
 
-  // Cmd/Ctrl+L is the address bar's key everywhere; inside the app it belongs
-  // to the focused browser pane, so it only binds while this pane has focus.
+  // Cmd/Ctrl+L is the address bar's key everywhere. While this pane has focus
+  // it means this page's address, so the pane claims it ahead of every other
+  // listener, the app's own address bar shortcut included.
   useWatchEffect(() => {
     if (!focused) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() !== "l") return;
-      if (isMac ? !e.metaKey || e.ctrlKey : !e.ctrlKey) return;
+    return claimKeys((e) => {
+      if (e.key.toLowerCase() !== "l" || e.shiftKey || e.altKey) return false;
+      if (isMac ? !e.metaKey || e.ctrlKey : !e.ctrlKey) return false;
       e.preventDefault();
       inputRef.current?.focus();
       inputRef.current?.select();
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
+      return true;
+    });
   }, [focused]);
 
   // Whether this build has the shell's native view at all. It is the shell's

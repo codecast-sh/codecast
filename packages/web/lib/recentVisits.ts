@@ -180,6 +180,15 @@ export function resolveRecentVisits(
   return out;
 }
 
+// The standalone URL a visit maps to, when one exists. Label/project visits
+// are store filters with no URL of their own, so they get null (surfaces that
+// need a URL leave them out).
+export function visitHref(item: ResolvedVisit): string | null {
+  if (item.sessionId) return `/conversation/${item.sessionId}`;
+  if (item.bucketId || item.projectName) return null;
+  return item.path ?? null;
+}
+
 export const VISIT_OBJECT_LABEL: Record<VisitObjectType, string> = {
   session: "Session",
   task: "Task",

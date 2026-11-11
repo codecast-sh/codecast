@@ -45,6 +45,7 @@ export type ShortcutAction =
   | 'ui.guideOrg'
   | 'ui.guideFlows'
   | 'ui.openSettings'
+  | 'ui.addressBar'
   | 'ui.undo'
   | 'ui.redo'
   | 'ui.undoHistory'
@@ -368,6 +369,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   // listener, so the chord walks the history of the window that has focus.
   // The app menu ("Go" in packages/electron/main.js) carries the same
   // accelerators as the fallback for a window without this handler.
+  // The desktop app has no browser chrome, so Cmd+L opens the app's own bar.
+  // A focused browser pane claims the key first for its page's address.
+  { key: 'ctrl+alt+l', mac: 'meta+l', action: 'ui.addressBar', when: 'desktop', skipInputCheck: true, description: 'Address bar' },
   { key: 'alt+arrowleft', mac: 'meta+[', action: 'nav.back', when: 'desktop', skipInputCheck: true, description: 'Back' },
   { key: 'alt+arrowright', mac: 'meta+]', action: 'nav.forward', when: 'desktop', skipInputCheck: true, description: 'Forward' },
 

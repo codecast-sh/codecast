@@ -1,4 +1,5 @@
 import { lazy, Suspense } from "react";
+import { AppAddressBarHost } from "../AppAddressBar";
 import { useRouter } from "next/navigation";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -81,13 +82,20 @@ function CreateModal({ kind }: { kind: CreateModalKind }) {
 
 // The palette and the people wall each mount only while open. Their open
 // flags live in these leaves, so opening one re-renders the leaf, not the shell.
+// The address bar is the palette's sibling overlay and rides the same host.
 export function PaletteHost() {
   const open = useInboxStore((s) => s.palette.open);
-  if (!open) return null;
   return (
-    <ErrorBoundary name="CommandPalette" level="inline">
-      <Suspense fallback={null}><CommandPalette /></Suspense>
-    </ErrorBoundary>
+    <>
+      {open && (
+        <ErrorBoundary name="CommandPalette" level="inline">
+          <Suspense fallback={null}><CommandPalette /></Suspense>
+        </ErrorBoundary>
+      )}
+      <ErrorBoundary name="AppAddressBar" level="inline">
+        <AppAddressBarHost />
+      </ErrorBoundary>
+    </>
   );
 }
 

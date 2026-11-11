@@ -1,10 +1,9 @@
 import { useState, useRef, useCallback } from "react";
-import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useRouter } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
 import { useCodecastSignOut } from "../hooks/useCodecastSignOut";
-import { copyToClipboard } from "../lib/utils";
+import { setAppAddressBarOpen } from "../lib/appAddress";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { isDesktopShell } from "../lib/desktop";
 import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
@@ -49,91 +48,8 @@ function MenuItem({
   );
 }
 
-function UrlBarModal({ onClose }: { onClose: () => void }) {
-  const router = useRouter();
-  const [url, setUrl] = useState("");
-  const [copied, setCopied] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const backdropRef = useRef<HTMLDivElement>(null);
-
-  useMountEffect(() => {
-    setUrl(window.location.href);
-    setTimeout(() => inputRef.current?.select(), 50);
-  });
-
-  const handleNavigate = useCallback(() => {
-    try {
-      const parsed = new URL(url, window.location.origin);
-      if (parsed.origin === window.location.origin) {
-        router.push(parsed.pathname + parsed.search + parsed.hash);
-      } else {
-        window.location.href = url;
-      }
-      onClose();
-    } catch {
-      if (url.startsWith("/")) {
-        router.push(url);
-        onClose();
-      }
-    }
-  }, [url, router, onClose]);
-
-  const handleCopy = useCallback(() => {
-    copyToClipboard(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  }, [url]);
-
-  const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      handleNavigate();
-    }
-    if (e.key === "Escape") {
-      e.preventDefault();
-      onClose();
-    }
-  }, [handleNavigate, onClose]);
-
-  return (
-    <div ref={backdropRef} className="fixed inset-0 z-[200] flex items-start justify-center pt-[20vh] bg-black/60 backdrop-blur-sm" onClick={(e) => { if (e.target === backdropRef.current) onClose(); }}>
-      <div className="w-full max-w-lg bg-sol-bg border border-sol-border rounded-xl shadow-2xl overflow-hidden" onClick={(e) => e.stopPropagation()}>
-        <div className="px-4 py-3 border-b border-sol-border flex items-center justify-between">
-          <span className="text-xs font-mono uppercase tracking-wider text-sol-text-dim">URL Bar</span>
-          <div className="flex items-center gap-1">
-            <button onClick={() => { window.history.back(); setUrl(window.location.href); }} className="p-1.5 text-sol-text-dim hover:text-sol-text transition-colors rounded" title="Back">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" /></svg>
-            </button>
-            <button onClick={() => { window.history.forward(); setUrl(window.location.href); }} className="p-1.5 text-sol-text-dim hover:text-sol-text transition-colors rounded" title="Forward">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" /></svg>
-            </button>
-          </div>
-        </div>
-        <div className="p-4 flex items-center gap-2">
-          <input
-            ref={inputRef}
-            type="text"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            onKeyDown={handleKeyDown}
-            className="flex-1 px-3 py-2 bg-sol-bg-alt border border-sol-border rounded-lg text-sm font-mono text-sol-text placeholder-sol-text-dim focus:outline-none focus:border-sol-cyan"
-            placeholder="https://codecast.sh/..."
-          />
-          <button onClick={handleCopy} className="px-3 py-2 text-xs font-medium rounded-lg border border-sol-border text-sol-text-dim hover:text-sol-text hover:border-sol-cyan transition-colors whitespace-nowrap">
-            {copied ? "Copied" : "Copy"}
-          </button>
-          <button onClick={handleNavigate} className="px-3 py-2 text-xs font-medium rounded-lg bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 hover:bg-sol-cyan/25 transition-colors">
-            Go
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function UserMenu() {
   const [open, setOpen] = useState(false);
-  const [urlBarOpen, setUrlBarOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const signOut = useCodecastSignOut();
   const router = useRouter();
@@ -206,7 +122,6 @@ export function UserMenu() {
         <Settings className={isLocal ? "text-sol-green" : undefined} />
       </TopbarButton>
       </ShortcutTooltip>
-      {urlBarOpen && <UrlBarModal onClose={() => setUrlBarOpen(false)} />}
       {open && (
         <div className="cc-topbar-menu absolute right-0 mt-2 w-60 max-h-[calc(100vh-4rem)] overflow-y-auto overscroll-contain bg-sol-bg border border-sol-border rounded-lg shadow-lg py-1 z-50">
           <button
@@ -238,6 +153,18 @@ export function UserMenu() {
               onClick={() => { setOpen(false); toggleShortcutsPanel(); }}
               trailing={<MenuKeyCaps action="ui.toggleShortcutsHelp" />}
             />
+            {/* The desktop app has no address bar of its own, so everyone gets
+                this one there, on its key; on the web the browser's bar does
+                the job and keeps Cmd+L, and admins keep this one for its
+                in-app routing. */}
+            {(isDesktopShell() || isAdmin) && (
+              <MenuItem
+                icon={Globe}
+                label="Address bar"
+                onClick={() => { setOpen(false); setAppAddressBarOpen(true); }}
+                trailing={isDesktopShell() ? <MenuKeyCaps action="ui.addressBar" /> : undefined}
+              />
+            )}
             <MenuItem
               icon={theme === "dark" ? Sun : Moon}
               label={theme === "dark" ? "Light mode" : "Dark mode"}
@@ -291,9 +218,9 @@ export function UserMenu() {
                 }
               />
               <MenuItem icon={ScrollText} label="Daemon logs" onClick={() => go("/admin/daemon-logs")} />
-              <MenuItem icon={Globe} label="URL bar" onClick={() => { setOpen(false); setUrlBarOpen(true); }} />
             </div>
           )}
+
 
           <div className="border-t border-sol-border py-1">
             <MenuItem icon={LogOut} label="Sign out" onClick={handleLogout} />
