@@ -55,6 +55,7 @@ function unreachableReason(failure: DiscoveryFailure): string {
 }
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useTerminalIsland } from "../../hooks/useTerminalIsland";
 const MIN_HEIGHT = 110;
 const DEFAULT_HEIGHT = 280;
 
@@ -75,6 +76,7 @@ export function TerminalPanel() {
   const [dragHeight, setDragHeight] = useState<number | null>(null);
   const [maximized, setMaximized] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
+  const island = useTerminalIsland();
   const started = useRef(false);
   const restoredOnce = useRef(false);
 
@@ -248,8 +250,8 @@ export function TerminalPanel() {
       // Maximized: a huge grow factor lets flexbox hand the panel all free
       // space (the flex-1 content sibling collapses to ~0) — no pixel math,
       // and it tracks window resizes for free.
-      className={`flex-col bg-sol-bg ${open ? "flex" : "hidden"} ${maximized ? "flex-[999_1_0%] min-h-0" : "flex-shrink-0"}`}
-      style={maximized ? undefined : { height: open ? height : 0 }}
+      className={`flex-col bg-sol-bg ${island.className} ${open ? "flex" : "hidden"} ${maximized ? "flex-[999_1_0%] min-h-0" : "flex-shrink-0"}`}
+      style={maximized ? island.style : { ...island.style, height: open ? height : 0 }}
     >
       {/* drag handle */}
       <SplitResizeHandle

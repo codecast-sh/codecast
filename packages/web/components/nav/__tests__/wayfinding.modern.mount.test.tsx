@@ -3,7 +3,7 @@
 // names where it goes (the tab's trail, else the page's parent), the header
 // says where the page sits as crumbs, and the rail lights the section an
 // object page belongs to. Classic keeps its own headers and the list-cover
-// detail, untouched.
+// detail; its close (Esc, ✕) goes back along the same trail.
 // Run: cd packages/web && bun test --isolate components/nav/__tests__/wayfinding.modern.mount.test.tsx
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { installModernDom, styleValue } from "../../../test-helpers/modernDom";
@@ -22,8 +22,10 @@ const { TabParamsCtx, parseTabLocation } = await import("../../../lib/tabParams"
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { PageHeader } = await import("../../ui/page-header");
 const { DetailSplitLayout } = await import("../../DetailSplitLayout");
+const { PlanPanelTitleRow } = await import("../../PlanPanelHead");
 const { BreadcrumbBar } = await import("../../BreadcrumbBar");
-const { recordTrail, _resetTrailForTests } = await import("../../../lib/navTrail");
+const { recordTrail, trailOf, _resetTrailForTests } = await import("../../../lib/navTrail");
+const { startNavTrail } = await import("../../../lib/navTrailRecorder");
 const { placeSection } = await import("../../../lib/navPlace");
 const { ModernNavView, RegistryNavSection } = await import("../../sidebar/ModernNav");
 
@@ -223,5 +225,53 @@ describe("Classic keeps its own", () => {
     });
     // The session opens through the inbox, in the tab's own spelling.
     expect(useInboxStore.getState().tabs[0].path).toBe(`/inbox?s=${SESSION}`);
+  });
+
+  test("Esc on an open item in Classic goes back the way it came too; with no trail, to the list", async () => {
+    const page = <DetailSplitLayout list={<div>list</div>} closeHref="/tasks"><div>detail</div></DetailSplitLayout>;
+    const esc = () => act(async () => {
+      document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    });
+    recordTrail("t1", `/inbox?s=${SESSION}`, "push");
+    recordTrail("t1", "/tasks/ct-1", "push");
+    await mount("/tasks/ct-1", page, "classic");
+    await esc();
+    expect(useInboxStore.getState().tabs[0].path).toBe(`/inbox?s=${SESSION}`);
+    await act(() => root!.unmount());
+    root = null;
+    dom.window.sessionStorage.clear();
+    _resetTrailForTests();
+    await mount("/tasks/ct-1", page, "classic");
+    await esc();
+    expect(useInboxStore.getState().tabs[0].path).toBe("/tasks");
+  });
+
+  test("a Classic ✕ drawn as a link points where the close goes, and goes there", async () => {
+    recordTrail("t1", "/projects/pj-1", "push");
+    recordTrail("t1", "/plans/pl-1", "push");
+    const status = { icon: () => null, color: "text-sol-green", label: "Active" };
+    await mount("/plans/pl-1", <PlanPanelTitleRow plan={{ _id: "p1", short_id: "pl-1", title: "Launch plan" }} status={status as any} storeShareToken={null} closeHref="/plans" />, "classic");
+    const close = host.querySelector<HTMLAnchorElement>("a[aria-label='Close']")!;
+    expect(close.getAttribute("href")).toBe("/projects/pj-1");
+    // No Back control and no crumbs: the same ✕, a better destination.
+    expect(back()).toBeNull();
+    await act(async () => close.click());
+    expect(useInboxStore.getState().tabs[0].path).toBe("/projects/pj-1");
+  });
+
+  test("the trail records in Classic and Minimal too, so their close has somewhere to go", async () => {
+    const html = dom.window.document.documentElement.classList;
+    html.remove("modern-style");
+    const tick = () => act(async () => { await Promise.resolve(); });
+    useInboxStore.setState({ tabs: [{ id: "t1", path: "/projects/pj-1", title: "", createdAt: 0 }], activeTabId: "t1" } as any);
+    const stop = startNavTrail();
+    try {
+      useInboxStore.setState({ tabs: [{ id: "t1", path: "/tasks/ct-1", title: "", createdAt: 0 }] } as any);
+      await tick();
+      expect(trailOf("t1").map((e) => e.path)).toEqual(["/projects/pj-1", "/tasks/ct-1"]);
+    } finally {
+      stop();
+      html.add("modern-style");
+    }
   });
 });

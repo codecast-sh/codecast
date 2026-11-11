@@ -55,6 +55,7 @@ import {
 } from "../../lib/terminal/conversationTerminalState";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useTerminalIsland } from "../../hooks/useTerminalIsland";
 const MIN_HEIGHT = 90;
 // Comfortably more than the daemon's heartbeat, so a slow round-trip doesn't
 // flicker the "paused" label on and off.
@@ -234,12 +235,13 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
   };
 
   const close = () => toggleConversationTerminal(convKey, target);
+  const island = useTerminalIsland();
 
   return (
     <div
       data-terminal-panel
-      className="flex-shrink-0 flex flex-col bg-sol-bg"
-      style={{ height: dragHeight ?? split.height }}
+      className={`flex-shrink-0 flex flex-col bg-sol-bg ${island.className}`}
+      style={{ ...island.style, height: dragHeight ?? split.height }}
     >
       <div className="flex items-center h-[24px] px-2 gap-1.5 flex-shrink-0 bg-sol-bg-alt/30 border-b border-sol-border/20 select-none">
         <span

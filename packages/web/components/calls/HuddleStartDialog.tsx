@@ -48,7 +48,7 @@ export default function HuddleStartDialog({ req }: { req: HuddleStartRequest }) 
   };
   return (
     <Dialog open onOpenChange={(open) => !open && closeHuddleStart()}>
-      <DialogContent className="flex w-[calc(100%-2rem)] max-w-[420px] flex-col gap-0 overflow-hidden rounded-xl border-sol-border bg-sol-bg p-0 text-sol-text">
+      <DialogContent className="flex w-[calc(100%-2rem)] max-w-[420px] flex-col gap-0 overflow-x-hidden overflow-y-auto rounded-xl border-sol-border bg-sol-bg p-0 text-sol-text">
         <Heading req={req} isPrivate={isPrivate} setPrivate={setPrivate} />
         {preview && <PreviewBody preview={preview} />}
         <label className="mx-4 mb-3 flex cursor-pointer select-none items-center gap-2 text-xs text-sol-text-muted hover:text-sol-text">

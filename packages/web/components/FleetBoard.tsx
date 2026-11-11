@@ -1,5 +1,5 @@
 "use client";
-import { memo, useCallback, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { lazy, memo, Suspense, useCallback, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   useInboxStore,
   useTrackedStore,
@@ -19,7 +19,8 @@ import { identityRowOf } from "../lib/sessionIdentity";
 import { sessionLivenessState } from "../lib/liveness";
 import { SegmentedToggle } from "./SegmentedToggle";
 import { ErrorBoundary } from "./ErrorBoundary";
-import { InboxConversation } from "./GlobalSessionPanel";
+import { ConversationPlaceholder } from "./ConversationPlaceholder";
+import { PaneControls } from "./stage/PaneControls";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { animatedHideSession } from "../store/undoActions";
 import { getSessionRenderKey } from "../store/inboxStore";
@@ -40,6 +41,15 @@ import { ModernFleetBody } from "./fleet/ModernFleetBoard";
 import { hostedStopOf } from "../lib/hostedNotice";
 import { isHostedAgentType } from "@codecast/shared/contracts";
 import { modernDialog, modernScrim } from "./ui/modernLook";
+
+// The drill-in shows the session page every other way of opening a session
+// shows (app/inbox/QueuePageClient SessionPage: its resume ladder, the trigger
+// panel, a role's page for a standing session), with the overlay's own expand
+// and close in its header, as the stage pane does. Lazy: that module renders
+// this board, so a static import would be a cycle.
+const SessionPage = lazy(() =>
+  import("../app/inbox/QueuePageClient").then((m) => ({ default: m.SessionPage })),
+);
 // The fleet board: the inbox home surface when clientState.ui.inbox_home is
 // "board" (the default). Every visible session as a dense two-line tile,
 // grouped into NEEDS YOU / RUNNING / FINISHED bands — supervision by scanning,
@@ -296,6 +306,9 @@ function FleetDrillIn() {
     store.setShowMySessions(false);
   }, [id]);
 
+  // Stable, so the memoized session page holds across the overlay's renders.
+  const headerEnd = useMemo(() => <PaneControls onExpand={handleExpand} onClose={handleClose} />, [handleExpand, handleClose]);
+
   const handleSendAndDismiss = useCallback(() => {
     if (!id) return;
     animatedHideSession(id, "stash");
@@ -353,17 +366,18 @@ function FleetDrillIn() {
       <div className={`absolute inset-0 bg-sol-bg/80 ${modernScrim}`} onClick={handleClose} />
       <div className={`relative m-auto flex h-[94%] w-[min(1100px,96%)] flex-col overflow-hidden rounded-lg border border-sol-border bg-sol-bg shadow-2xl ${modernDialog({ scroll: false })}`}>
         <ErrorBoundary name="FleetDrillIn" level="panel">
-          <InboxConversation
-            key={getSessionRenderKey(session) || id}
-            sessionId={id}
-            isIdle={session.is_idle}
-            onSendAndAdvance={handleClose}
-            onSendAndDismiss={handleSendAndDismiss}
-            lastUserMessage={session.last_user_message}
-            sessionError={session.session_error}
-            onExpandToMain={handleExpand}
-            onClose={handleClose}
-          />
+          <Suspense fallback={<ConversationPlaceholder id={id} />}>
+            <SessionPage
+              key={getSessionRenderKey(session) || id}
+              sessionId={id}
+              isIdle={session.is_idle}
+              onSendAndAdvance={handleClose}
+              onSendAndDismiss={handleSendAndDismiss}
+              lastUserMessage={session.last_user_message}
+              sessionError={session.session_error}
+              headerEnd={headerEnd}
+            />
+          </Suspense>
         </ErrorBoundary>
       </div>
     </div>
@@ -413,7 +427,8 @@ export function FleetBoard() {
     // Modern opens a tile where a session opens from everywhere else (the
     // rail, the palette, a link): the inbox's own session page, with its
     // header's way back to this board and the triage keys on it. Classic
-    // keeps the drill-in overlay.
+    // and Minimal keep the board under it: the same session page, in the
+    // drill-in overlay (FleetDrillIn).
     if (isModernStyle()) {
       store.navigateToSession(id);
       if (store.showMySessions) store.setShowMySessions(false);

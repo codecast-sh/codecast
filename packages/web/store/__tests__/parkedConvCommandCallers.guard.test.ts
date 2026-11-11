@@ -6,11 +6,12 @@ async function source(path: string): Promise<string> {
 
 describe("parked convCommand caller policy", () => {
   test("restart surfaces keep a durably parked request in their recovery state", async () => {
-    const [restartHook, commands, queuePage, globalPanel] = await Promise.all([
+    // The session page (QueuePageClient) holds the one resume ladder; the
+    // board's drill-in mounts it too.
+    const [restartHook, commands, queuePage] = await Promise.all([
       source("../../hooks/useSessionRestart.ts"),
       source("../../lib/sessionCommands.ts"),
       source("../../app/inbox/QueuePageClient.tsx"),
-      source("../../components/GlobalSessionPanel.tsx"),
     ]);
 
     expect(restartHook).toContain("if (isParkedDispatchError(err)) return;");
@@ -20,8 +21,6 @@ describe("parked convCommand caller policy", () => {
     expect(restartHook).toContain("restartPhaseOf(gesture, now)");
     expect(queuePage.match(/isParkedDispatchError/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
     expect(queuePage).toContain('setResumeState("failed")');
-    expect(globalPanel.match(/isParkedDispatchError/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
-    expect(globalPanel).toContain('setResumeState("failed")');
   });
 
   test("project switch and kill callers suppress only parked:true failures", async () => {

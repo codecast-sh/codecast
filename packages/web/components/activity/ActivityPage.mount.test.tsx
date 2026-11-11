@@ -1,10 +1,13 @@
 // The Activity page mounted for real (jsdom, the real store, the real page
-// file) on a feed of several people across three days. In Modern it is the
-// new page: the Now strip, days grouped by person, one line a session, the
-// outcome chips, a row that opens into its details, and the Needs someone
-// group with its actions and its filter. In Classic the same page file still
-// draws the old feed. A liveness heartbeat re-renders nothing.
+// file) on a feed of several people across three days: the Now strip, days
+// grouped by person, one line a session, the outcome chips, a row that opens
+// into its details, and the Needs someone group with its actions and its
+// filter. Every style draws this page (the old feed, components/ActivityFeed,
+// is gone from it): Modern in its page bar, Classic and Minimal with their own
+// header at the top of the column and their own shapes on every piece. A
+// liveness heartbeat re-renders nothing.
 import { afterAll, describe, expect, mock, spyOn, test } from "bun:test";
+import type { ReactNode } from "react";
 import { JSDOM } from "jsdom";
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
 import { replaceGlobals } from "../../test-helpers/globals";
@@ -52,6 +55,7 @@ hydrationSpy.mockRestore();
 const { ThemeContext } = await import("../ThemeProvider");
 const { settingsDataKey } = await import("../../lib/settingsData");
 const { default: TeamActivityPage } = await import("../../app/team/activity/page");
+const { ActivityPage } = await import("./ActivityPage");
 
 const TEAM = "k97b3xkt3wvhmc3p03dgwxtfr583m6bg";
 const ME = "kd75bs3q5x39xnc7bsjv6wz8wd7z9zy7";
@@ -116,7 +120,8 @@ function seed() {
   } as any);
 }
 
-const style = (visualStyle: "modern" | "classic") => ({ theme: "light", toggleTheme: () => {}, visualStyle, setVisualStyle: () => {} }) as any;
+type Style = "modern" | "classic" | "minimal";
+const style = (visualStyle: Style) => ({ theme: "light", toggleTheme: () => {}, visualStyle, setVisualStyle: () => {} }) as any;
 const where = { url: "" };
 function Probe() {
   const loc = useLocation();
@@ -124,16 +129,20 @@ function Probe() {
   return null;
 }
 
-async function mount(visualStyle: "modern" | "classic", onCommit?: () => void) {
+async function mount(visualStyle: Style, onCommit?: () => void, at: { path: string; node: ReactNode } = { path: "/team/activity", node: <TeamActivityPage /> }) {
   seed();
+  // The root class the ThemeProvider sets, for the code that reads it outside React.
+  const html = document.documentElement.classList;
+  html.toggle("modern-style", visualStyle === "modern");
+  html.toggle("minimal-style", visualStyle === "minimal");
   const el = document.createElement("div");
   document.body.appendChild(el);
   const root = createRoot(el);
   const page = (
     <ThemeContext.Provider value={style(visualStyle)}>
-      <MemoryRouter initialEntries={["/team/activity"]}>
+      <MemoryRouter initialEntries={[at.path]}>
         <Probe />
-        <TeamActivityPage />
+        {at.node}
       </MemoryRouter>
     </ThemeContext.Provider>
   );
@@ -291,16 +300,122 @@ describe("Activity in Modern", () => {
   }, 30_000);
 });
 
-describe("Activity in Classic", () => {
-  test("the same page file still draws the old feed", async () => {
-    const { el, unmount } = await mount("classic");
+// Classes that only resolve under .modern-style (the primitive tokens): one
+// left un-prefixed would draw nothing outside Modern (a square corner, no
+// height, no motion).
+const MODERN_ONLY = /^(?:rounded(?:-[trbl]{1,2})?-(?:control|card|dialog)|(?:h|w|size|min-h|min-w|max-h)-control-(?:sm|md|lg)|shadow-(?:popover|dialog|toast)|duration-(?:press|pop)|ease-ui)$/;
+function unprefixedModernTokens(root: Element): string[] {
+  const out = new Set<string>();
+  for (const node of [root, ...root.querySelectorAll("*")]) {
+    for (const cls of (node.getAttribute("class") ?? "").split(/\s+/)) {
+      if (!cls || cls.startsWith("modern:")) continue;
+      const base = cls.split(":").pop()!;
+      if (MODERN_ONLY.test(base)) out.add(`${node.tagName.toLowerCase()} ${cls}`);
+    }
+  }
+  return [...out];
+}
+
+describe.each(["classic", "minimal"] as const)("Activity in %s", (visualStyle) => {
+  test("the new page, under the style's own header: title, tabs, Charts, then the filters", async () => {
+    const { el, unmount } = await mount(visualStyle);
     try {
-      expect(el.querySelector("[data-activity-page]")).toBeNull();
-      expect(el.querySelector("[data-activity-row]")).toBeNull();
-      // FeedCard rows and the rollup's Charts link.
-      expect(el.querySelector(`[data-flip-key='${S.samDone}']`)).toBeTruthy();
-      expect(el.textContent).toContain("Fix flaky checkout test");
-      expect(q(el, "a").some((a) => a.getAttribute("href") === "/team/charts")).toBe(true);
+      // Not the old feed, and not Modern's page bar.
+      expect(el.querySelector("[data-flip-key]")).toBeNull();
+      expect(el.querySelector("[data-cc-page-head]")).toBeNull();
+      expect(el.querySelector("[data-activity-page='activity']")).toBeTruthy();
+
+      const head = el.querySelector("[data-activity-head]")!;
+      expect(head).toBeTruthy();
+      // Named as the sidebar names the page in these styles.
+      expect(head.querySelector("h1")?.textContent).toBe("Feed");
+      const tabs = q(head, "button[aria-pressed]").filter((b) => b.textContent === "Activity" || b.textContent === "Messages");
+      expect(tabs.map((b) => [b.textContent, b.getAttribute("aria-pressed")])).toEqual([["Activity", "true"], ["Messages", "false"]]);
+      // The boxed toggle Classic pages use, not Modern's tray.
+      expect(tabs[0].parentElement!.className).toContain("rounded-md border");
+      expect(head.querySelector("[data-activity-charts]")?.getAttribute("href")).toBe("/team/charts");
+      expect(head.querySelector("[data-activity-filters]")).toBeTruthy();
+      expect(head.querySelector("[data-activity-needs-toggle]")?.className).toContain("h-7");
+
+      // The page's pieces are all here.
+      expect(el.querySelector("[data-activity-now]")).toBeTruthy();
+      expect(el.querySelector("[data-activity-summary]")).toBeTruthy();
+      expect(q(el, "[data-activity-needs] [data-activity-row]")).toHaveLength(2);
+      expect(q(el, "[data-activity-day]")).toHaveLength(3);
+
+      // Nothing on the page leans on a token only Modern defines.
+      expect(unprefixedModernTokens(el)).toEqual([]);
+
+      // The Messages tab is the message feed's address.
+      await click(tabs[1]);
+      expect(where.url).toBe("/feed");
+    } finally { await unmount(); }
+  }, 30_000);
+
+  test("a session is one 36px line on Classic's corners, with room for the status word and the clock in mono", async () => {
+    const { el, unmount } = await mount(visualStyle);
+    try {
+      const row = el.querySelector(`[data-activity-days] [data-activity-row='${S.samDone}']`)!;
+      const line = row.querySelector(":scope > div")!;
+      expect(row.querySelectorAll(":scope > div")).toHaveLength(1);
+      const cls = line.className.split(/\s+/);
+      expect(cls).toContain("h-9");
+      expect(cls).toContain("rounded-md");
+      expect(cls).toContain("modern:rounded-control");
+      expect(cls).not.toContain("rounded-control");
+      // "Needs you" in mono needs 96px; Modern keeps its 88.
+      const status = row.querySelector("[data-status-word]")!.parentElement!;
+      expect(status.className).toContain("sm:w-24");
+      expect(status.className).toContain("modern:sm:w-[5.5rem]");
+      // "12:45 PM" in mono needs 64px.
+      expect(row.querySelector("time")?.className).toContain("w-16");
+      // The PR is a 20px chip on a 4px corner, its number in mono.
+      const pr = row.querySelector("[data-activity-outcome='pr']")!;
+      expect(pr.className.split(/\s+/)).toEqual(expect.arrayContaining(["h-5", "gap-1", "rounded", "px-1.5", "text-meta", "font-medium"]));
+      expect(pr.className.split(/\s+/)).not.toContain("px-2.5");
+      expect(pr.querySelector(".font-mono")?.textContent).toBe("#42");
+
+      // It opens into its details, on a Classic card.
+      await click(row.querySelector("button[aria-expanded]"));
+      const detail = row.querySelector("[data-activity-detail]")!;
+      expect(detail.className).toContain("rounded-lg");
+      expect(detail.textContent).toContain("Removed the retry wrapper");
+    } finally { await unmount(); }
+  }, 30_000);
+
+  test("nothing to show, and a cold cache: the empty states and the skeleton on the style's own corners", async () => {
+    let { el, unmount } = await mount(visualStyle, undefined, { path: "/team/activity?people=nobody", node: <TeamActivityPage /> });
+    try {
+      const nothing = el.querySelector("[data-empty-state='panel']")!;
+      expect(nothing.textContent).toContain("Nothing matches");
+      expect(nothing.querySelector("span")!.className.split(/\s+/)).toEqual(expect.arrayContaining(["rounded-lg", "modern:rounded-card"]));
+      const now = el.querySelector("[data-activity-now] [data-empty-state='inline']")!;
+      expect(now.textContent).toContain("No one is working now");
+      expect(now.className.split(/\s+/)).toEqual(expect.arrayContaining(["min-h-8", "rounded-lg", "modern:rounded-card"]));
+      expect(unprefixedModernTokens(el)).toEqual([]);
+    } finally { await unmount(); }
+
+    ({ el, unmount } = await mount(visualStyle));
+    try {
+      // The team's feed not loaded yet, and nothing cached.
+      await act(async () => { useInboxStore.setState({ feedConversations: { [`${TEAM}|`]: [] }, sessions: {} } as any); });
+      const bars = q(el, "[data-skeleton]");
+      expect(bars.length).toBe(8);
+      expect(bars[0].className.split(/\s+/)).toEqual(expect.arrayContaining(["h-7", "rounded", "modern:rounded-control"]));
+      expect(unprefixedModernTokens(el)).toEqual([]);
+    } finally { await unmount(); }
+  }, 30_000);
+
+  test("/feed is the Messages tab of the same page", async () => {
+    const { el, unmount } = await mount(visualStyle, undefined, { path: "/feed", node: <ActivityPage tab="messages" /> });
+    try {
+      expect(el.querySelector("[data-activity-page='messages']")).toBeTruthy();
+      const head = el.querySelector("[data-activity-head]")!;
+      expect(head.querySelector("h1")?.textContent).toBe("Feed");
+      const pressed = q(head, "button[aria-pressed='true']").map((b) => b.textContent);
+      // The tab, and whose messages: the viewer's own by default.
+      expect(pressed).toEqual(["Messages", "Mine"]);
+      expect(unprefixedModernTokens(el)).toEqual([]);
     } finally { await unmount(); }
   }, 30_000);
 });

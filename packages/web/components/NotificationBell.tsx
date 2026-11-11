@@ -38,7 +38,7 @@ export const NotificationBellButton = forwardRef<
       >
         <Bell />
         {unreadCount !== undefined && unreadCount > 0 && (
-          <span className="absolute -top-0.5 -right-1 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-sol-cyan px-[3px] text-mark font-semibold leading-none tabular-nums text-white ring-2 ring-sol-bg">
+          <span className="absolute -top-0.5 -right-1 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-sol-cyan px-[3px] text-mark font-semibold leading-none tabular-nums text-white dark:text-sol-bg ring-2 ring-sol-bg">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}

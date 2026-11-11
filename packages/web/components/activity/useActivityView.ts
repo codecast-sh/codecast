@@ -1,4 +1,4 @@
-// The Modern Activity page's view as the page holds it: the address when it
+// The Activity page's view as the page holds it: the address when it
 // names a field (a link is a view), else the person's last grouping (the ui
 // prefs bag), and every change written to the address, the grouping to the
 // prefs too, the way the decision and task lists keep theirs.

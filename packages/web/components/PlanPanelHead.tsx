@@ -1,6 +1,7 @@
 "use client";
 // The head of a plan opened over the Plans list (components/PlanDetailPanel),
-// both ways. Classic keeps its title row inside the panel's column; Modern
+// both ways. Classic keeps its title row inside the panel's column, its ✕
+// going back the way the person came (hooks/useNavTrail) as Modern's does; Modern
 // draws the shared page header pinned at the top of the panel's scroller:
 // the back control, the plan's place (Docs › Plans), its status and name,
 // the share control and the close, which goes back the way the person came
@@ -12,7 +13,7 @@ import { policyTeamOf } from "@codecast/shared/contracts";
 import { Badge } from "./ui/badge";
 import { ShareControl } from "./ShareControl";
 import { PageHeader } from "./ui/page-header";
-import { useNavClose } from "../hooks/useNavTrail";
+import { useNavClose, useNavCloseTarget } from "../hooks/useNavTrail";
 
 type PlanHeadProps = {
   plan: { _id: string; short_id?: string; title: string; share_token?: string | null };
@@ -35,6 +36,7 @@ function PlanShare({ plan, storeShareToken }: Pick<PlanHeadProps, "plan" | "stor
 /** Classic: the status icon, the title, the status, then share and close. */
 export function PlanPanelTitleRow({ plan, status, storeShareToken, closeHref }: PlanHeadProps) {
   const StatusIcon = status.icon;
+  const close = useNavCloseTarget(closeHref ?? "/plans");
   return (
         <div className="flex items-center gap-2.5 mb-2">
           <StatusIcon className={`w-5 h-5 flex-shrink-0 ${status.color}`} />
@@ -46,7 +48,13 @@ export function PlanPanelTitleRow({ plan, status, storeShareToken, closeHref }: 
             <PlanShare plan={plan} storeShareToken={storeShareToken} />
             {closeHref && (
               <Link
-                href={closeHref}
+                href={close.href}
+                onClick={(e) => {
+                  // A modified click keeps the link's own behaviour (a new tab).
+                  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+                  e.preventDefault();
+                  close.close();
+                }}
                 aria-label="Close"
                 title="Close"
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"

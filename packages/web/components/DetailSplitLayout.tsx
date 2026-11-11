@@ -1,6 +1,5 @@
 "use client";
 import { ReactNode } from "react";
-import { useRouter } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
 import { hasOpenModal } from "../shortcuts/registry";
 import { useTabActive } from "../hooks/usePagePresence";
@@ -8,10 +7,13 @@ import { useTabActive } from "../hooks/usePagePresence";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 import { useIsModernStyle } from "../hooks/useVisualStyle";
+import { useNavClose } from "../hooks/useNavTrail";
 import { ModernDetailSplit } from "./nav/ModernDetailSplit";
 // List, then detail — each taking the full stage:
 //   click/enter → the detail covers the list
-//   Esc / ✕     → back to the list
+//   Esc / ✕     → back where the item was opened from (the list, a project,
+//                 a conversation: hooks/useNavTrail useNavClose), the list
+//                 when there is no trail
 // The list stays mounted underneath (inert, so nothing in it can take focus)
 // and keeps its scroll position for the return. Side by side is not this
 // component's job any more: it is the stage's split layout, entered by a
@@ -22,7 +24,7 @@ import { ModernDetailSplit } from "./nav/ModernDetailSplit";
 // and closes along the trail (components/nav/ModernDetailSplit).
 export function DetailSplitLayout(props: {
   list: ReactNode;
-  /** List-root route that close (✕ / Esc) navigates back to. */
+  /** List-root route that close (✕ / Esc) navigates back to with no trail. */
   closeHref: string;
   children?: ReactNode;
 }) {
@@ -38,15 +40,15 @@ function ClassicDetailSplit({
   closeHref: string;
   children?: ReactNode;
 }) {
-  const router = useRouter();
+  const close = useNavClose(closeHref);
   // Background tab panes stay mounted (display:none) — a hidden pane must not
   // run the document-level Esc listener, which would navigate the ACTIVE tab.
   const isTabActive = useTabActive();
   const hasDetail = children != null && children !== false;
   const active = hasDetail && isTabActive;
 
-  // Esc returns to the list. Never from an editable (editors own Esc), never
-  // under a modal or the shortcuts panel.
+  // Esc closes the item, the way it came. Never from an editable (editors own
+  // Esc), never under a modal or the shortcuts panel.
   useWatchEffect(() => {
     if (!active) return;
     const onKey = (e: KeyboardEvent) => {
@@ -54,11 +56,11 @@ function ClassicDetailSplit({
       if (useInboxStore.getState().shortcutsPanelOpen) return;
       if (keyBelongsElsewhere(e.target)) return;
       e.preventDefault();
-      router.push(closeHref);
+      close();
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [active, closeHref, router]);
+  }, [active, close]);
 
   return (
     <div className="relative h-full overflow-hidden">

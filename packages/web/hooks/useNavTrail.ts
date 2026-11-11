@@ -2,7 +2,6 @@ import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
 import { useTabContext } from "../lib/tabParams";
-import { useIsModernStyle } from "./useVisualStyle";
 import { backEntry, subscribeTrail, trailOf, trailVersion } from "../lib/navTrail";
 import { noteTrailBack, shownPlace } from "../lib/navTrailRecorder";
 import { canonicalPlacePath, placeOf, placeSessionId } from "../lib/navPlace";
@@ -10,7 +9,9 @@ import { placeNamesOf, placeTitle } from "../lib/placeTitle";
 import { pathLabel } from "../lib/pathLabel";
 
 // The Modern back control's brain: where Back goes from the page this hook
-// runs in, under what name, and the move that gets there.
+// runs in, under what name, and the move that gets there. Closing an item
+// follows the same rule in every style (useNavClose): Classic and Minimal have
+// no Back control, but their ✕, back arrow and Esc land where Modern's would.
 //
 // Along the trail (lib/navTrail) when the page is its app tab's own page and
 // the trail holds a step before it; otherwise up to the page's parent
@@ -121,20 +122,27 @@ export function useBackTarget(fallback?: { label: string; href: string } | null)
 }
 
 /**
- * Closing a detail (its ✕, or Esc where the page takes it). In Modern it
- * follows the back control's rule, so a task opened from a project returns to
- * the project and one opened from a conversation returns to the conversation;
- * Classic and Minimal keep going to the list.
+ * Closing a detail (its ✕, its back arrow, or Esc where the page takes it), in
+ * every style. It follows the back control's rule, so a task opened from a
+ * project returns to the project and one opened from a conversation returns
+ * to the conversation; with no trail (a cold link) it goes to the list.
+ * `href` is where the close goes, for a control drawn as a link.
  */
-export function useNavClose(closeHref: string): () => void {
-  const modern = useIsModernStyle();
+export function useNavCloseTarget(closeHref: string): { href: string; close: () => void } {
   const router = useRouter();
   // The list as the fallback, so with no trail the close goes there, and the
   // parent lookup never runs.
   const fallback = useMemo(() => ({ label: "", href: closeHref }), [closeHref]);
   const target = useBackTarget(fallback);
-  return useCallback(() => {
-    if (modern && target) target.go();
+  const close = useCallback(() => {
+    if (target) target.go();
     else router.push(closeHref);
-  }, [modern, target, router, closeHref]);
+  }, [target, router, closeHref]);
+  const href = target?.path ?? closeHref;
+  return useMemo(() => ({ href, close }), [href, close]);
+}
+
+/** The close alone (useNavCloseTarget), for a control drawn as a button or a key. */
+export function useNavClose(closeHref: string): () => void {
+  return useNavCloseTarget(closeHref).close;
 }

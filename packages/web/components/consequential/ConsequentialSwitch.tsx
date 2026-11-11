@@ -111,7 +111,8 @@ export function SwitchReview({ ledger: l, onClose, onConfirm, onPick }: { ledger
         // Focus rests on the back-out button, so Enter or Space on open backs out.
         onOpenAutoFocus={(e) => { e.preventDefault(); cancel.current?.focus(); }}
         // One column that never grows past the dialog: every part may shrink, nothing may push the edge.
-        className="w-[30rem] max-w-[calc(100vw-1.5rem)] grid-cols-[minmax(0,1fr)] gap-0 overflow-hidden border-sol-border bg-sol-bg p-0 text-sol-text sm:rounded-xl [&>*]:min-w-0"
+        // Taller than the window, it scrolls (the dialog's cap), so the buttons stay in reach.
+        className="w-[30rem] max-w-[calc(100vw-1.5rem)] grid-cols-[minmax(0,1fr)] gap-0 overflow-x-hidden overflow-y-auto border-sol-border bg-sol-bg p-0 text-sol-text sm:rounded-xl [&>*]:min-w-0"
         data-switch-review={l.name}
       >
         <header className="flex items-start justify-between gap-3 border-b border-sol-border/60 px-5 py-3.5" data-switch-part>

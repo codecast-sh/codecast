@@ -101,6 +101,24 @@ nav[data-modern-rail] [data-sv-count] {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+/* A volume count is a quiet pill: the row's own ink on a faint accent tint.
+   Accent-coloured digits on an accent tint measured 3.1 to 3.5:1. */
+nav[data-modern-rail] [data-sv-count=""] {
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--sol-cyan) 14%, transparent);
+}
+/* A mention or an alert is a filled red badge. White digits pass on the light
+   theme's red; on the dark theme's lighter red they need the page's dark ink. */
+.dark nav[data-modern-rail] [data-sv-count="mention"],
+.dark nav[data-modern-rail] [data-sv-count="alert"] {
+  color: var(--sol-bg);
+}
+/* A sub-row keeps readable ink when its person is away: the dimming is on the
+   avatar and the presence dot, not the name. */
+nav[data-modern-rail] [data-nav-subrow] > span.truncate {
+  opacity: 1;
+  color: var(--sol-text-muted);
+}
 
 /* ---- Headings ------------------------------------------------------------- */
 

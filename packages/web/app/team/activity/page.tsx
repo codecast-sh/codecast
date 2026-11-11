@@ -1,23 +1,22 @@
 import { useMutation } from "convex/react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { ActivityFeed } from "../../../components/ActivityFeed";
-import { ErrorBoundary } from "../../../components/ErrorBoundary";
-import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
-import { useIsModernStyle } from "../../../hooks/useVisualStyle";
-import { ModernActivityPage } from "../../../components/activity/ModernActivityPage";
-// The single activity feed (the former /dashboard folded in here). It's driven
-// entirely by the URL so the sidebar/command-palette/team-avatar links and tab
-// routing all share one source of truth:
+import { ActivityPage } from "../../../components/activity/ActivityPage";
+// The Activity page (the former /dashboard folded in here), in every style
+// (components/activity). It's driven entirely by the URL so the
+// sidebar/command-palette/team-avatar links and tab routing all share one
+// source of truth:
 //   ?filter=my  → your personal feed; otherwise the team feed (teamless users
 //                 always get the personal feed since there's no team to show).
 //   ?dir=<path> → scope the feed to a single workspace (sidebar "Workspaces").
+// The page reads the rest of its view (grouping, people, project, needs) from
+// the address too (components/activity/activityView).
 export default function TeamActivityPage() {
   const searchParams = useSearchParams();
   // The store's copy (local-first): a warm cache paints the feed at once,
@@ -28,7 +27,6 @@ export default function TeamActivityPage() {
 
   const mode: "personal" | "team" =
     searchParams.get("filter") === "my" || !teamId ? "personal" : "team";
-  const directoryFilter = searchParams.get("dir");
 
   // Reading the team feed is what clears the sidebar Feed badge
   // (getTeamUnreadCount counts teammate activity past this mark). Stamp it on
@@ -41,28 +39,5 @@ export default function TeamActivityPage() {
     return () => { void markTeamSeen({}); };
   }, [mode, teamId, markTeamSeen]);
 
-  // Modern draws its own page (components/activity); the rest of this file is Classic and Minimal.
-  const modern = useIsModernStyle();
-  if (modern) return <DashboardLayout><ModernActivityPage tab="activity" /></DashboardLayout>;
-
-  // A skeleton only for a genuinely cold cache: nobody known and no team.
-  if (!user && !teamId) {
-    return (
-      <DashboardLayout>
-        <div className="flex items-center justify-center min-h-[60vh]">
-          <LoadingSkeleton />
-        </div>
-      </DashboardLayout>
-    );
-  }
-
-  return (
-    <DashboardLayout>
-      <div className="max-w-3xl mx-auto">
-        <ErrorBoundary name="ActivityFeed" level="inline">
-          <ActivityFeed mode={mode} teamId={teamId} directoryFilter={directoryFilter} />
-        </ErrorBoundary>
-      </div>
-    </DashboardLayout>
-  );
+  return <DashboardLayout><ActivityPage tab="activity" /></DashboardLayout>;
 }

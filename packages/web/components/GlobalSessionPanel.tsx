@@ -5,7 +5,6 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useConvex, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
-import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useRouter } from "next/navigation";
 import { ContextMenu, CursorPopover, useContextMenu, CtxItem, CtxHeader, CtxSeparator } from "./ui/context-menu";
 import { SessionMenuItems } from "./menus/ObjectContextMenus";
@@ -14,17 +13,12 @@ import { labelSessions } from "../lib/labelSessions";
 import { selectionGesture, selectionIdsFor, useInboxSelection } from "../lib/inboxSelection";
 import { useEventListener } from "../hooks/useEventListener";
 import { copyToClipboard, formatShortDate } from "../lib/utils";
-import { SessionErrorBanner, SessionResumeBanner } from "./SessionErrorBanner";
-import { CloudPlacementStrip } from "./CloudPlacementStrip";
-import { AppLoader } from "./AppLoader";
 import { LoginCodePaste } from "./LoginCodePaste";
-import type { ConversationData } from "./conversation/types";
 import type { ThreadStateStatus } from "@codecast/shared/contracts";
 import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
-import { useConversationMessages } from "../hooks/useConversationMessages";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, viewerCommandsSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
 import { sessionsWakeSig, resolveInboxViewMode, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
@@ -61,15 +55,12 @@ import { CharacterPicker } from "./identity/CharacterPicker";
 import { standingRoleIdOf } from "../lib/sessionIdentity";
 import { isUnderRole } from "@codecast/shared/contracts";
 import { AuthErrorBadge } from "./AuthErrorBadge";
-import { ConversationSharePopover } from "./ConversationSharePopover";
-import { PlanContextPanel } from "./PlanContextPanel";
-import { WorkflowContextPanel } from "./WorkflowContextPanel";
 import { toast } from "sonner";
 import { toastWriteError } from "../lib/dispatchBinding";
 import { animatedHideSessions, fileSessionsAsRest } from "../store/undoActions";
 
 import { soundKill } from "../lib/sounds";
-import { latestSessionCommand, requestAccountSwitchCommand, requestSessionRestart, switchPending } from "../lib/sessionCommands";
+import { latestSessionCommand, requestAccountSwitchCommand, switchPending } from "../lib/sessionCommands";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { X, ChevronsRight, ChevronRight, ChevronDown, Star, Workflow, Play, Pause, Settings2, ArrowUpRight, Zap, Copy, ArrowUp, ArrowDown } from "lucide-react";
 import { InboxViewPicker } from "./InboxViewPicker";
@@ -86,178 +77,8 @@ import type { NoticeKind } from "@codecast/shared/contracts/assistant";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
-import { PaneControls } from "./stage/PaneControls";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { Button } from "./ui/button";
-const ConversationDiffLayout = React.lazy(() =>
-  import("./ConversationDiffLayout").then((module) => ({ default: module.ConversationDiffLayout })),
-);
-
-
-// -- InboxConversation (shared) --
-
-export const InboxConversation = memo(function InboxConversation({ sessionId, isIdle, onSendAndAdvance, onSendAndDismiss, lastUserMessage, sessionError, onBack, targetMessageId, backHref, onExpandToMain, onClose }: { sessionId: string; isIdle: boolean; onSendAndAdvance: () => void; onSendAndDismiss?: () => void; lastUserMessage?: string | null; sessionError?: string; onBack?: () => void; targetMessageId?: string; backHref?: string; onExpandToMain?: () => void; onClose?: () => void }) {
-  const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
-  const {
-    conversation,
-    hasMoreAbove,
-    hasMoreBelow,
-    isLoadingOlder,
-    isLoadingNewer,
-    loadOlder,
-    loadNewer,
-    jumpToStart,
-    jumpToEnd,
-    jumpToTimestamp,
-    isJumpingToTarget,
-  } = useConversationMessages(sessionId, targetMessageId);
-
-  const convCommand = useInboxStore((s) => s.convCommand);
-  const [resumeState, setResumeState] = useState<"idle" | "resuming" | "sent" | "reconstituting" | "failed">("idle");
-  const forceRestartAttemptedRef = useRef(false);
-  const reconstitutionAttemptedRef = useRef(false);
-
-  useWatchEffect(() => {
-    if (!isIdle && (resumeState === "sent" || resumeState === "resuming" || resumeState === "reconstituting")) {
-      setResumeState("idle");
-      forceRestartAttemptedRef.current = false;
-      reconstitutionAttemptedRef.current = false;
-    }
-  }, [isIdle, resumeState]);
-
-  useWatchEffect(() => {
-    if (resumeState !== "sent") return;
-    const timeout = setTimeout(async () => {
-      if (!forceRestartAttemptedRef.current && isConvexId(sessionId)) {
-        forceRestartAttemptedRef.current = true;
-        try {
-          await requestSessionRestart(sessionId);
-          setResumeState("sent");
-        } catch (err) {
-          // A parked restart is still pending. Keep the recovery state and let
-          // the liveness/timeout ladder decide whether it ultimately worked.
-          if (isParkedDispatchError(err)) return;
-          setResumeState("failed");
-        }
-      } else if (!reconstitutionAttemptedRef.current && isConvexId(sessionId)) {
-        reconstitutionAttemptedRef.current = true;
-        setResumeState("reconstituting");
-        try {
-          await requestSessionRestart(sessionId, undefined, true);
-          setResumeState("reconstituting");
-        } catch (err) {
-          if (isParkedDispatchError(err)) return;
-          setResumeState("failed");
-        }
-      } else {
-        setResumeState("failed");
-      }
-    }, 90_000);
-    return () => clearTimeout(timeout);
-  }, [resumeState, sessionId, convCommand]);
-
-  useWatchEffect(() => {
-    if (resumeState !== "reconstituting") return;
-    const timeout = setTimeout(() => {
-      setResumeState("failed");
-    }, 60_000);
-    return () => clearTimeout(timeout);
-  }, [resumeState]);
-
-  // `leave_out` answers a cloud placement whose context was over the cap.
-  const handleManualResume = useCallback((extra?: { leave_out?: string[] }) => {
-    setResumeState("resuming");
-    convCommand(sessionId, "resumeSession", extra?.leave_out ? { leave_out: extra.leave_out } : undefined)
-      .then(() => setResumeState("sent"))
-      .catch((err) => {
-        if (isParkedDispatchError(err)) {
-          setResumeState("sent");
-          return;
-        }
-        setResumeState("failed");
-      });
-  }, [sessionId, convCommand]);
-
-  if (!conversation) {
-    return (
-      <AppLoader className="min-h-0 h-full bg-transparent" size={32} />
-    );
-  }
-
-  const convId = conversation._id as Id<"conversations">;
-  // Owner-only: a team viewer's payload carries share_token, and rendering the
-  // popover for them would hand out a working world-readable link one click
-  // from a session they don't own (mirrors QueuePageClient's gate).
-  const shareControls = <ConversationSharePopover conversation={conversation} canManage={(conversation as any).is_own !== false} />;
-  // Answer and resume go to the runner's daemon, so they are offered only to
-  // the people the server lets send its commands (commandsSession). A
-  // teammate's session opened from team scope stays readable, without a
-  // Resume the server would refuse.
-  const canCommand = viewerCommandsSession(conversation as any, meId);
-
-  const activePlanId = (conversation as any)?.active_plan_id;
-  const workflowRunId = (conversation as any)?.workflow_run_id;
-
-  return (
-    <div className="relative h-full flex flex-col">
-      {canCommand && (
-        <SessionResumeBanner
-          resumeState={resumeState}
-          onResume={handleManualResume}
-        />
-      )}
-      <CloudPlacementStrip sessionId={sessionId} />
-      {sessionError && resumeState === "idle" && (
-        <SessionErrorBanner
-          // Remount per session: the dismiss state is keyed by error TEXT, and
-          // two sessions can fail with the identical message.
-          key={conversation._id}
-          error={sessionError}
-          sessionId={sessionId}
-          projectPath={conversation.project_path || conversation.git_root}
-          ownerDeviceId={(conversation as any).owner_device_id}
-          onResume={canCommand ? handleManualResume : undefined}
-        />
-      )}
-      <div className="flex-1 min-h-0">
-        <React.Suspense fallback={<AppLoader className="min-h-0 h-full" />}>
-          <ConversationDiffLayout
-            conversation={conversation as ConversationData}
-            embedded
-            headerExtra={shareControls}
-            headerEnd={onClose || onExpandToMain ? (
-              // The standard pane cluster (expand, close) — same icons and
-              // order as every other pane's strip (components/stage/PaneControls).
-              <PaneControls onExpand={onExpandToMain} onClose={onClose} />
-            ) : undefined}
-            hasMoreAbove={hasMoreAbove}
-            hasMoreBelow={hasMoreBelow}
-            isLoadingOlder={isLoadingOlder}
-            isLoadingNewer={isLoadingNewer}
-            onLoadOlder={loadOlder}
-            onLoadNewer={loadNewer}
-            onJumpToStart={jumpToStart}
-            onJumpToEnd={jumpToEnd}
-            onJumpToTimestamp={jumpToTimestamp}
-            isOwner={true}
-            onSendAndAdvance={onSendAndAdvance}
-            onSendAndDismiss={onSendAndDismiss}
-            autoFocusInput
-            backHref={backHref}
-            onBack={onBack}
-            fallbackStickyContent={lastUserMessage}
-            targetMessageId={targetMessageId}
-            isJumpingToTarget={isJumpingToTarget}
-            subHeaderContent={<>
-              {activePlanId && <PlanContextPanel planId={activePlanId} />}
-              {workflowRunId && <WorkflowContextPanel workflowRunId={workflowRunId} />}
-            </>}
-          />
-        </React.Suspense>
-      </div>
-    </div>
-  );
-});
 
 // The login flow's device-row state, as listAccountProfiles reports it.
 type LoginFlowState = {

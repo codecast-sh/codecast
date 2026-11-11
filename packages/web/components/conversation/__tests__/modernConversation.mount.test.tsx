@@ -515,7 +515,26 @@ describe("Modern failures, paths and the live line", () => {
     expect(text(path.querySelector("[data-cc-path-base]"))).toBe("ModernRow.tsx");
     expect(path.querySelector("[data-cc-path-dir]")!.className).toContain("text-ellipsis");
     expect(path.querySelector("[data-cc-path-base]")!.className).toContain("shrink-0");
-    expect(draw(<ToolBlock tool={deep.tool} result={deep.result} />, "classic").querySelector("[data-cc-path]")).toBeNull();
+    // Modern draws the path bare, as it shipped.
+    expect(path.className).not.toContain("[text-decoration:inherit]");
+  });
+
+  test("Classic and Minimal cut a row's path in the middle too, the link's dotted underline carried into it", () => {
+    const deep = tool("Read", { file_path: "/Users/me/src/codecast/packages/web/components/conversation/blocks/ModernRow.tsx" }, { content: "1\n2" });
+    const row = draw(<ToolBlock tool={deep.tool} result={deep.result} />, "classic");
+    // Still Classic's row: the tool's name, the result in parens, no icon.
+    expect(text(row.querySelector("[data-cc-row-verb]"))).toBe("Read");
+    expect(row.querySelector("[data-cc-row-icon]")).toBeNull();
+    const object = row.querySelector("[data-cc-row-object]")!;
+    expect(object.className).toContain("truncate");
+    const path = object.querySelector("a.fs-link [data-cc-path]")!;
+    expect(text(path.querySelector("[data-cc-path-dir]"))).toBe("codecast/packages/web/components/conversation/blocks/");
+    expect(text(path.querySelector("[data-cc-path-base]"))).toBe("ModernRow.tsx");
+    expect(path.getAttribute("title")).toBe("codecast/packages/web/components/conversation/blocks/ModernRow.tsx");
+    // An inline-flex box takes no underline from the link around it.
+    expect(path.className).toContain("[text-decoration:inherit]");
+    // The words are the same as before, only cut differently.
+    expect(text(object)).toBe("codecast/packages/web/components/conversation/blocks/ModernRow.tsx");
   });
 
   test("the working bubble is the Working mark and word in Modern, three dots in Classic, and nothing moves", () => {

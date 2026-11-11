@@ -7908,3 +7908,21 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   height: 16px;
 }
 /* ---- end of MODERN · THE CONVERSATION ---- */
+
+/* MODERN · TERMINALS. On a light page a terminal's frame carries the dark
+   palette (hooks/useTerminalIsland.ts). In dark it sits a step below the page,
+   matching what lib/terminal/theme.ts paints inside it, and both get a hairline
+   so the frame reads as its own surface beside a transcript. */
+.modern-style.dark [data-terminal-panel] {
+  background: color-mix(in srgb, var(--sol-bg) 65%, #000);
+}
+.modern-style [data-terminal-panel] {
+  border-block: 1px solid var(--sol-border);
+}
+/* The panel-head tokens are computed on the root, from the page's palette.
+   Inside a terminal's frame they are recomputed from the frame's own. */
+.modern-style [data-terminal-panel] {
+  --cc-panel-head-bg: color-mix(in srgb, var(--sol-bg-alt) 60%, var(--sol-bg));
+  --cc-panel-rule: var(--sol-border);
+  color: var(--sol-text);
+}

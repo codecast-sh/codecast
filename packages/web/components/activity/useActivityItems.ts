@@ -1,4 +1,4 @@
-// The Modern Activity page's items: the feed's rows (team or personal, from
+// The Activity page's items: the feed's rows (team or personal, from
 // the existing feed hooks) joined with what the store already holds about
 // each session, read once per page and never per row:
 //   - the viewer's own sessions (store.sessions): the full status, its reason

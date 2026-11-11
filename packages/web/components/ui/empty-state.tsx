@@ -54,11 +54,13 @@ function Press({ action, look }: { action: EmptyStateAction | React.ReactElement
 
 /** The one empty state: an icon, a short title, at most one primary button
  *  and one secondary link. Also what an error boundary draws (ErrorBoundary)
- *  and what a page shows when there is nothing yet. */
+ *  and what a page shows when there is nothing yet. Modern's shapes are the
+ *  `modern:` ones; outside Modern (the Activity page) it keeps Classic's
+ *  corners and a 32px row. */
 export function EmptyState({ icon: Icon, title, action, secondary, size = "panel", className, children }: EmptyStateProps) {
   if (size === "inline") {
     return (
-      <div data-empty-state="inline" className={cn("flex min-h-control-md items-center gap-2 px-3 py-1.5 text-ui text-sol-text-dim", className)}>
+      <div data-empty-state="inline" className={cn("flex min-h-8 items-center gap-2 px-3 py-1.5 text-ui text-sol-text-dim modern:min-h-control-md", className)}>
         <Icon className="size-4 shrink-0" />
         <span className="min-w-0 truncate">{title}</span>
         {(action || secondary) && (
@@ -73,7 +75,7 @@ export function EmptyState({ icon: Icon, title, action, secondary, size = "panel
   }
   return (
     <div data-empty-state="panel" className={cn("flex flex-col items-center justify-center gap-3 px-6 py-12 text-center", className)}>
-      <span className="flex size-10 items-center justify-center rounded-card bg-sol-text/[0.05] text-sol-text-dim">
+      <span className="flex size-10 items-center justify-center rounded-lg bg-sol-text/[0.05] text-sol-text-dim modern:rounded-card">
         <Icon className="size-5" />
       </span>
       <p className="max-w-sm text-body font-medium text-sol-text">{title}</p>

@@ -19,13 +19,19 @@ import { Button } from "../ui/button";
 import { DecisionChip, Face, PrChip, QuietCount, RowTime, TaskChip } from "./ActivityParts";
 import { branchOf, type ActivityItem } from "./activityModel";
 
-// One session on the Modern Activity page: ONE line, 36px, the shared status
+// One session on the Activity page: ONE line, 36px, the shared status
 // mark and word (lib/sessionStatus, the rail's vocabulary), the title (a link
 // to the session), the one line about the work, and at the right what it
 // produced and when. Everything else is behind the chevron: the summary in
 // full, what was asked, the facts, every outcome as a link, and the actions.
+// Classic and Minimal draw the same line on their own corners, with room for
+// the status word and the clock in mono; Modern's shapes are the `modern:` ones.
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation();
+
+/** On a phone a mono line has no room for the quiet counts beside the title:
+ *  Classic and Minimal leave them to the details there (Modern keeps them). */
+const PHONE_QUIET = "hidden sm:inline-flex modern:inline-flex";
 
 /** The press a session that waits on someone offers on the spot. */
 function primaryAction(item: ActivityItem): { kind: "answer" | "restart"; href?: string; label: string } | null {
@@ -83,7 +89,7 @@ export const ActivityRow = memo(function ActivityRow({ item, relative, showActor
     <li data-activity-row={item.id} data-status={item.status} data-expanded={open ? "true" : undefined} className="list-none">
       <div
         onClick={toggle}
-        className={`flex h-9 cursor-pointer items-center gap-2 rounded-control pl-0.5 pr-1.5 transition-colors duration-press hover:bg-sol-text/[0.04] ${open ? "bg-sol-text/[0.03]" : ""} ${item.hiddenFromTeam ? "opacity-60 hover:opacity-100" : ""}`}
+        className={`flex h-9 cursor-pointer items-center gap-2 rounded-md pl-0.5 pr-1.5 transition-colors hover:bg-sol-text/[0.04] modern:rounded-control modern:duration-press ${open ? "bg-sol-text/[0.03]" : ""} ${item.hiddenFromTeam ? "opacity-60 hover:opacity-100" : ""}`}
       >
         <button
           type="button"
@@ -92,10 +98,10 @@ export const ActivityRow = memo(function ActivityRow({ item, relative, showActor
           onClick={(e) => { stop(e); toggle(); }}
           className="flex size-6 shrink-0 items-center justify-center rounded-[4px] text-sol-text-dim outline-none hover:text-sol-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-[color:var(--focus-ring)]"
         >
-          <ChevronRight aria-hidden className={`size-3.5 transition-transform duration-press ${open ? "rotate-90" : ""}`} />
+          <ChevronRight aria-hidden className={`size-3.5 transition-transform modern:duration-press ${open ? "rotate-90" : ""}`} />
         </button>
         {showActor && <span title={item.actor.name}><Face actor={item.actor} size={18} /></span>}
-        <span className="flex shrink-0 items-center gap-1.5 sm:w-[5.5rem]" title={meta.meaning}>
+        <span className="flex shrink-0 items-center gap-1.5 sm:w-24 modern:sm:w-[5.5rem]" title={meta.meaning}>
           <SessionStatusMark status={item.status} />
           <SessionStatusWord status={item.status} title={item.reason ?? meta.meaning} className="hidden truncate text-ui font-medium sm:block" />
         </span>
@@ -121,8 +127,8 @@ export const ActivityRow = memo(function ActivityRow({ item, relative, showActor
               {pending && <DecisionChip decision={pending} sessionId={item.id} />}
               {prs[0] && <PrChip pr={prs[0]} />}
               {prs.length > 1 && <span className="text-meta tabular-nums text-sol-text-dim" title={prs.slice(1).map((p) => `#${p.number} ${p.label}`).join(", ")}>+{prs.length - 1}</span>}
-              {commits > 0 && <QuietCount icon={GitCommit} n={commits} kind="commits" title={`${commits} commit${commits === 1 ? "" : "s"}`} />}
-              {tasks.length > 0 && <QuietCount icon={ListChecks} n={tasks.length} kind="tasks" title={`${tasks.length} task${tasks.length === 1 ? "" : "s"} (${tasks.filter((t) => t.done).length} done)`} />}
+              {commits > 0 && <QuietCount icon={GitCommit} n={commits} kind="commits" title={`${commits} commit${commits === 1 ? "" : "s"}`} className={PHONE_QUIET} />}
+              {tasks.length > 0 && <QuietCount icon={ListChecks} n={tasks.length} kind="tasks" title={`${tasks.length} task${tasks.length === 1 ? "" : "s"} (${tasks.filter((t) => t.done).length} done)`} className={PHONE_QUIET} />}
             </>
           )}
           <RowTime at={item.at} relative={relative} />
@@ -159,7 +165,7 @@ function ActivityRowDetail({ item, teamId }: { item: ActivityItem; teamId?: stri
   const hasOutcomes = prs.length > 0 || tasks.length > 0 || decisions.length > 0 || commits > 0;
 
   return (
-    <div data-activity-detail className="mb-2 ml-8 mt-0.5 space-y-3 rounded-card border border-sol-border bg-sol-card px-3.5 py-3 text-ui text-sol-text">
+    <div data-activity-detail className="mb-2 ml-8 mt-0.5 space-y-3 rounded-lg border border-sol-border/40 bg-sol-card px-3.5 py-3 text-ui text-sol-text modern:rounded-card modern:border-sol-border">
       <div className="flex items-start gap-2">
         <Face actor={item.actor} size={20} className="mt-px" />
         <div className="min-w-0 flex-1">

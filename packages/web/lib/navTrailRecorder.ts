@@ -7,10 +7,10 @@
 // board or the feed) keeps the last session's `?s=` in the path while it is
 // on screen, so the inbox with `showMySessions` up is the bare /inbox.
 //
-// Only while Modern is on: Classic and Minimal never read the trail.
+// In every style: Modern's Back control reads the trail, and closing an item
+// (hooks/useNavTrail useNavClose) reads it in Classic and Minimal too.
 
 import { useInboxStore } from "../store/inboxStore";
-import { isModernStyle } from "./visualStyle";
 import { placeKey } from "./navPlace";
 import { placeName } from "./placeTitle";
 import { recordTrail, type TrailMove } from "./navTrail";
@@ -56,7 +56,6 @@ export function startNavTrail(): () => void {
   let queued = false;
   const run = () => {
     queued = false;
-    if (!isModernStyle()) return;
     const st = useInboxStore.getState();
     const shown = shownPlace(st);
     if (!shown) return;

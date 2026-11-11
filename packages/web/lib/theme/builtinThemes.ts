@@ -22,9 +22,9 @@ export const BUILTIN_THEMES: readonly ModTheme[] = [
       // Near-white surfaces with a faint cool tint, and a white card. The
       // earlier sage (#edf3ee) read as warm paper next to the teal ink.
       bg: "#f6f9f8", "bg-alt": "#ecf1ef", card: "#ffffff", border: "#d2ddd9",
-      text: "#1a2d29", "text-muted": "#3e564f", "text-dim": "#576d66", link: "#0d7a67",
-      red: "#c3352b", orange: "#c05d1c", amber: "#a6740e", yellow: "#8c8211",
-      green: "#3d892d", cyan: "#11807a", blue: "#2a66b4", violet: "#694ebf", magenta: "#ae3977",
+      text: "#1a2d29", "text-muted": "#3e564f", "text-dim": "#576d66", link: "#0d7865",
+      red: "#c3352b", orange: "#a95219", amber: "#8e630c", yellow: "#746c0e",
+      green: "#357827", cyan: "#107771", blue: "#2a66b4", violet: "#694ebf", magenta: "#ae3977",
     },
     dark: {
       bg: "#0e1918", "bg-alt": "#13221f", card: "#172925", border: "#233f39",
@@ -40,8 +40,8 @@ export const BUILTIN_THEMES: readonly ModTheme[] = [
     light: {
       bg: "#eef1f5", "bg-alt": "#e4e9ef", card: "#f8fafc", border: "#cdd5df",
       text: "#232a35", "text-muted": "#465262", "text-dim": "#606a78", link: "#2d6a8c",
-      red: "#b0414c", orange: "#b35c2e", amber: "#96680d", yellow: "#85740f",
-      green: "#4f7a35", cyan: "#23788c", blue: "#3a5f94", violet: "#7a4f86", magenta: "#9a4577",
+      red: "#b0414c", orange: "#9e5129", amber: "#895f0c", yellow: "#75660d",
+      green: "#497131", cyan: "#217082", blue: "#3a5f94", violet: "#7a4f86", magenta: "#9a4577",
     },
     dark: {
       bg: "#20252e", "bg-alt": "#252b35", card: "#2b323d", border: "#3a4351",
@@ -56,8 +56,8 @@ export const BUILTIN_THEMES: readonly ModTheme[] = [
     light: {
       bg: "#f4ecd8", "bg-alt": "#ece2c9", card: "#faf5e8", border: "#d9cba8",
       text: "#3a2f22", "text-muted": "#5b4c38", "text-dim": "#73634c", link: "#8a4b12",
-      red: "#b23a2a", orange: "#b8601a", amber: "#9c6c08", yellow: "#857610",
-      green: "#4e7d2a", cyan: "#2f7a72", blue: "#345f9a", violet: "#6c4f94", magenta: "#9c3d6b",
+      red: "#b23a2a", orange: "#9a5016", amber: "#855c07", yellow: "#71640e",
+      green: "#456f25", cyan: "#2a6e67", blue: "#345f9a", violet: "#6c4f94", magenta: "#9c3d6b",
     },
     dark: {
       bg: "#1d1913", "bg-alt": "#241f17", card: "#2a241b", border: "#3d3427",
@@ -72,8 +72,8 @@ export const BUILTIN_THEMES: readonly ModTheme[] = [
     light: {
       bg: "#f7eedd", "bg-alt": "#eee2c6", card: "#fcf6e8", border: "#d8c8a4",
       text: "#3c3836", "text-muted": "#564e49", "text-dim": "#6e635a", link: "#af3a03",
-      red: "#b8261a", orange: "#b44f0b", amber: "#a46b07", yellow: "#8b7a0c",
-      green: "#6b7a12", cyan: "#3f7d5a", blue: "#2f6a72", violet: "#7b4b8f", magenta: "#9a3d63",
+      red: "#b8261a", orange: "#a7490a", amber: "#8b5a06", yellow: "#73650a",
+      green: "#5f6c10", cyan: "#386f50", blue: "#2f6a72", violet: "#7b4b8f", magenta: "#9a3d63",
     },
     dark: {
       bg: "#1f1c1a", "bg-alt": "#262220", card: "#2c2724", border: "#403833",
@@ -87,9 +87,9 @@ export const BUILTIN_THEMES: readonly ModTheme[] = [
     title: "Rosewood",
     light: {
       bg: "#faf4f0", "bg-alt": "#f2e9e4", card: "#fffaf7", border: "#e2d4d0",
-      text: "#3a2f45", "text-muted": "#5c4e69", "text-dim": "#72657d", link: "#b4637a",
-      red: "#b4475f", orange: "#c06a3a", amber: "#a8720f", yellow: "#8f7f14",
-      green: "#3f7f5a", cyan: "#2f7a86", blue: "#3f619a", violet: "#7752a8", magenta: "#a8457e",
+      text: "#3a2f45", "text-muted": "#5c4e69", "text-dim": "#72657d", link: "#a24e66",
+      red: "#ae455c", orange: "#9c562f", amber: "#8e600d", yellow: "#766910",
+      green: "#3a7553", cyan: "#2c727d", blue: "#3f619a", violet: "#7752a8", magenta: "#a8457e",
     },
     dark: {
       bg: "#1b1723", "bg-alt": "#211c2b", card: "#262033", border: "#3a3149",
@@ -104,8 +104,8 @@ export const BUILTIN_THEMES: readonly ModTheme[] = [
     light: {
       bg: "#eef0f8", "bg-alt": "#e4e7f3", card: "#f8f9fd", border: "#ccd1e6",
       text: "#1f2340", "text-muted": "#484e72", "text-dim": "#626784", link: "#3451b8",
-      red: "#b8384f", orange: "#b55a1c", amber: "#94680e", yellow: "#7f7414",
-      green: "#44772a", cyan: "#156e95", blue: "#3451b8", violet: "#6a44b8", magenta: "#a03c94",
+      red: "#b6384e", orange: "#a04f19", amber: "#875f0d", yellow: "#716712",
+      green: "#417228", cyan: "#156d93", blue: "#3451b8", violet: "#6a44b8", magenta: "#a03c94",
     },
     dark: {
       bg: "#13151f", "bg-alt": "#181a27", card: "#1c1f2e", border: "#2b2f45",

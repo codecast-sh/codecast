@@ -3,16 +3,18 @@ import Link from "next/link";
 import { CircleCheck, CircleHelp, CheckCheck, GitMerge, GitPullRequest, GitPullRequestClosed } from "lucide-react";
 import { entityRoute } from "@codecast/shared/entities";
 import { AvatarImg } from "../../lib/avatarCache";
-import { formatDateFull } from "../../lib/utils";
+import { cn, formatDateFull } from "../../lib/utils";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { badgeVariants } from "../ui/badge";
 import { AVATAR_BG, hashIndex, relTime } from "../feed/activityFeedFormat";
 import type { ExternalEventAccent } from "../../lib/externalEvents";
 import type { ActivityActor, ActivityDecision, ActivityPr, ActivityTask } from "./activityModel";
 
-// The Modern Activity page's small pieces: a person's face, the outcome chips
-// (a pull request in its state's colour, a task, a decision) and a row's time.
-// Every chip is a link to the thing it names.
+// The Activity page's small pieces: a person's face, the outcome chips (a pull
+// request in its state's colour, a task, a decision) and a row's time. Every
+// chip is a link to the thing it names. A chip is the Badge tone in every
+// style; Classic and Minimal take Modern's 20px shape on their own 4px corner
+// (Badge's Classic face is a roomier label).
 
 const stop = (e: React.SyntheticEvent) => e.stopPropagation();
 
@@ -20,7 +22,8 @@ type BadgeTone = "green" | "red" | "yellow" | "blue" | "violet" | "cyan" | "mage
 const TONE_OF_ACCENT: Record<ExternalEventAccent, BadgeTone> = {
   green: "green", red: "red", yellow: "yellow", blue: "blue", violet: "violet", cyan: "cyan", magenta: "magenta", orange: "orange", muted: "neutral",
 };
-const chip = (tone: BadgeTone) => `${badgeVariants({ variant: tone })} min-w-0 max-w-[18rem] overflow-hidden transition-opacity hover:opacity-80`;
+const chip = (tone: BadgeTone) =>
+  cn(badgeVariants({ variant: tone }), "h-5 gap-1 whitespace-nowrap rounded px-1.5 text-meta font-medium min-w-0 max-w-[18rem] overflow-hidden transition-opacity hover:opacity-80");
 
 /** A person's face: their avatar, else their initial on a tint of their own. */
 export function Face({ actor, size = 20, className = "" }: { actor: ActivityActor; size?: number; className?: string }) {
@@ -47,8 +50,12 @@ export function PrChip({ pr, withTitle = false }: { pr: ActivityPr; withTitle?: 
   const body = (
     <>
       <Icon aria-hidden className="size-3 shrink-0" />
-      <span className="shrink-0 tabular-nums">#{pr.number}</span>
-      <span className="shrink-0">{pr.label}</span>
+      {/* The number is code: mono in Classic and Minimal (Modern keeps the
+          face it shipped with). */}
+      <span className="shrink-0 font-mono tabular-nums">#{pr.number}</span>
+      {/* On a phone a row's chip is the number in its state's colour; the
+          word comes back from sm up, and always with a title beside it. */}
+      <span className={withTitle ? "shrink-0" : "hidden shrink-0 sm:inline modern:inline"}>{pr.label}</span>
       {withTitle && pr.title ? <span className="min-w-0 truncate font-normal opacity-80">{pr.title}</span> : null}
     </>
   );
@@ -99,9 +106,9 @@ export function DecisionChip({ decision, sessionId }: { decision: ActivityDecisi
 }
 
 /** A quiet count at the right of a row: a glyph and a number. */
-export function QuietCount({ icon: Icon, n, title, kind }: { icon: React.ComponentType<{ className?: string; "aria-hidden"?: boolean }>; n: number; title: string; kind: string }) {
+export function QuietCount({ icon: Icon, n, title, kind, className }: { icon: React.ComponentType<{ className?: string; "aria-hidden"?: boolean }>; n: number; title: string; kind: string; className?: string }) {
   return (
-    <span data-activity-count={kind} title={title} className="inline-flex items-center gap-1 text-meta tabular-nums text-sol-text-dim">
+    <span data-activity-count={kind} title={title} className={cn("inline-flex items-center gap-1 text-meta tabular-nums text-sol-text-dim", className)}>
       <Icon aria-hidden className="size-3.5" />
       {n}
     </span>
@@ -123,7 +130,8 @@ function RelativeTime({ at }: { at: number }) {
 
 function TimeLabel({ at, text }: { at: number; text: string }) {
   return (
-    <time dateTime={new Date(at).toISOString()} title={formatDateFull(at)} className="w-12 shrink-0 text-right text-meta tabular-nums text-sol-text-dim">
+    // Wide enough for "12:45 PM" in mono (Classic) as well as in Modern's sans.
+    <time dateTime={new Date(at).toISOString()} title={formatDateFull(at)} className="w-16 shrink-0 text-right text-meta tabular-nums text-sol-text-dim modern:w-12">
       {text}
     </time>
   );

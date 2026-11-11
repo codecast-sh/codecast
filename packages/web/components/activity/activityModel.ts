@@ -1,4 +1,4 @@
-// The Modern Activity page's model (components/activity/ModernActivityPage):
+// The Activity page's model (components/activity/ActivityPage):
 // pure functions from the feed's rows and the store's outcome rows to what the
 // page draws. No React, no store: the hooks beside this file read the store
 // and hand the rows in, so every rule here is testable on plain data.

@@ -16,7 +16,8 @@ const ENTITY_PAGES: Record<EntityType, Page> = {
   // The task page draws its header (both styles) in its sibling TaskHead.tsx.
   task: ["app/tasks/[id]/TaskHead.tsx"],
   plan: ["app/plans/[id]/page.tsx"],
-  session: ["app/inbox/QueuePageClient.tsx", "components/GlobalSessionPanel.tsx", "app/conversation/[id]/diff/page.tsx"],
+  // The board's drill-in mounts the same session page (QueuePageClient SessionPage).
+  session: ["app/inbox/QueuePageClient.tsx", "app/conversation/[id]/diff/page.tsx"],
   doc: ["app/docs/[id]/page.tsx"],
   project: ["app/projects/[id]/page.tsx"],
   initiative: ["components/org/company/SheetFrame.tsx"],

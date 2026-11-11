@@ -5,7 +5,7 @@ import { SessionStatusMark } from "../inbox/SessionStatusMark";
 import { Face } from "./ActivityParts";
 import type { ActivitySummary, NowPerson } from "./activityModel";
 
-// The top of the Modern Activity page: who is working right now (one card per
+// The top of the Activity page: who is working right now (one card per
 // person, their faces and live count, and what each live session is doing),
 // then the period in four numbers.
 
@@ -20,14 +20,14 @@ export function ActivityNowStrip({ people, personHref }: { people: NowPerson[]; 
         {live > 0 && <span className="text-meta tabular-nums text-sol-green">{live} live</span>}
       </div>
       {people.length === 0 ? (
-        <EmptyState size="inline" icon={Activity} title="No one is working now" className="rounded-card border border-sol-border bg-sol-card" />
+        <EmptyState size="inline" icon={Activity} title="No one is working now" className="rounded-lg border border-sol-border/40 bg-sol-card modern:rounded-card modern:border-sol-border" />
       ) : (
         <ul className="grid grid-cols-1 gap-2 sm:grid-cols-[repeat(auto-fill,minmax(16rem,1fr))]">
           {people.map((p) => {
             const more = p.items.length - LINES_PER_PERSON;
             return (
-              <li key={p.actor.id} data-now-person={p.actor.id} className="min-w-0 list-none rounded-card border border-sol-border bg-sol-card px-3 pb-1.5 pt-2">
-                <Link href={personHref(p.actor.id)} title={`Only ${p.actor.name}'s work`} className="flex h-7 min-w-0 items-center gap-2 rounded-control hover:text-sol-cyan">
+              <li key={p.actor.id} data-now-person={p.actor.id} className="min-w-0 list-none rounded-lg border border-sol-border/40 bg-sol-card px-3 pb-1.5 pt-2 modern:rounded-card modern:border-sol-border">
+                <Link href={personHref(p.actor.id)} title={`Only ${p.actor.name}'s work`} className="flex h-7 min-w-0 items-center gap-2 rounded-md hover:text-sol-cyan modern:rounded-control">
                   <Face actor={p.actor} size={22} />
                   <span className="min-w-0 truncate text-ui font-semibold text-sol-text">{p.actor.name}</span>
                   <span className="ml-auto shrink-0 text-meta tabular-nums text-sol-green">{p.items.length} live</span>
@@ -39,7 +39,7 @@ export function ActivityNowStrip({ people, personHref }: { people: NowPerson[]; 
                         href={`/conversation/${i.id}`}
                         data-now-session={i.id}
                         title={i.line ? `${i.title} · ${i.line}` : i.title}
-                        className="flex h-7 min-w-0 items-center gap-2 rounded-control px-0.5 text-ui hover:bg-sol-text/[0.04]"
+                        className="flex h-7 min-w-0 items-center gap-2 rounded-md px-0.5 text-ui hover:bg-sol-text/[0.04] modern:rounded-control"
                       >
                         <span className="flex w-[22px] shrink-0 justify-center"><SessionStatusMark status={i.status} /></span>
                         <span className="min-w-0 truncate text-sol-text">{i.line || i.title}</span>
@@ -79,7 +79,7 @@ export function ActivitySummaryRow({ summary }: { summary: ActivitySummary }) {
     { key: "tasks", n: summary.tasksDone, label: summary.tasksDone === 1 ? "task done" : "tasks done", tone: summary.tasksDone > 0 ? "text-sol-green" : "text-sol-text" },
   ];
   return (
-    <div data-activity-summary className="mb-5 flex flex-wrap items-baseline gap-x-6 gap-y-1 border-y border-sol-border py-2.5">
+    <div data-activity-summary className="mb-5 flex flex-wrap items-baseline gap-x-6 gap-y-1 border-y border-sol-border/40 py-2.5 modern:border-sol-border">
       {stats.map((s) => (
         <span key={s.key} data-stat={s.key} className="inline-flex items-baseline gap-1.5">
           <span className={`text-title font-semibold tabular-nums ${s.tone}`}>{s.n}</span>

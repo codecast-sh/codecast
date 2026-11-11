@@ -50,6 +50,7 @@ const { Tabs, TabsList, TabsTrigger } = await import("./tabs");
 const { Popover, PopoverContent, PopoverTrigger } = await import("./popover");
 const { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } = await import("./tooltip");
 const { Dialog, DialogBody, DialogContent, DialogFooter, DialogHeader, DialogTitle } = await import("./dialog");
+const { Sheet, SheetContent, SheetTitle } = await import("./sheet");
 const { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } = await import("./dropdown-menu");
 const { CTX_SURFACE, CtxItem } = await import("./context-menu");
 const { modernMenuItem } = await import("./styles");
@@ -220,5 +221,73 @@ describe("empty, loading and error states", () => {
       console.error = quiet;
       document.documentElement.classList.add("modern-style");
     }
+  });
+});
+
+// Two Modern fixes that are not about a look, in Classic and Minimal too: a
+// dialog or sheet never outgrows the window (it scrolls, so its buttons stay in
+// reach), and a popover opened from a dialog draws above it.
+describe("in every style", () => {
+  test("a dialog is capped to the window and scrolls; a call site's own cap and overflow win", async () => {
+    let off = await mount(<Dialog open><DialogContent data-x="dialog"><DialogTitle>T</DialogTitle></DialogContent></Dialog>);
+    let c = classes(document.querySelector("[data-x=dialog]"));
+    expect(c).toEqual(expect.arrayContaining(["grid", "max-h-[calc(100dvh-2rem)]", "overflow-y-auto", "modern:max-h-[calc(100dvh-2rem)]", "modern:overflow-y-auto"]));
+    await off();
+    // FeatureDetail and DeviceSetupDialog pin their own cap and scroll a body of their own.
+    off = await mount(<Dialog open><DialogContent data-x="dialog" className="flex max-h-[90dvh] flex-col gap-0 overflow-hidden p-0"><DialogTitle>T</DialogTitle></DialogContent></Dialog>);
+    c = classes(document.querySelector("[data-x=dialog]"));
+    expect(c).toEqual(expect.arrayContaining(["max-h-[90dvh]", "overflow-hidden", "modern:max-h-[calc(100dvh-2rem)]"]));
+    expect(c).not.toContain("max-h-[calc(100dvh-2rem)]");
+    expect(c).not.toContain("overflow-y-auto");
+    await off();
+    // RewindToHere and NewSnippetsBanner: their own cap, the same scroll.
+    off = await mount(<Dialog open><DialogContent data-x="dialog" className="max-h-[85vh] overflow-y-auto"><DialogTitle>T</DialogTitle></DialogContent></Dialog>);
+    c = classes(document.querySelector("[data-x=dialog]"));
+    expect(c).toContain("max-h-[85vh]");
+    expect(c).not.toContain("max-h-[calc(100dvh-2rem)]");
+    await off();
+  });
+
+  test("a sheet scrolls; one from the top or bottom stops short of the far edge", async () => {
+    for (const side of ["top", "bottom", "left", "right"] as const) {
+      const off = await mount(<Sheet open><SheetContent side={side} data-x="sheet"><SheetTitle>T</SheetTitle></SheetContent></Sheet>);
+      const c = classes(document.querySelector("[data-x=sheet]"));
+      expect(c).toContain("overflow-y-auto");
+      if (side === "top" || side === "bottom") expect(c).toContain("max-h-[calc(100dvh-2rem)]");
+      else expect(c).toContain("h-full");
+      await off();
+    }
+  });
+
+  test("a popover sits in the dialog's tier, so one opened from a dialog draws above it; tooltips and menus keep their order", async () => {
+    const off = await mount(
+      <TooltipProvider>
+        <Dialog open>
+          <DialogContent data-x="dialog">
+            <DialogTitle>T</DialogTitle>
+            <Popover open><PopoverTrigger>p</PopoverTrigger><PopoverContent data-x="pop">body</PopoverContent></Popover>
+          </DialogContent>
+        </Dialog>
+        <Tooltip open><TooltipTrigger>t</TooltipTrigger><TooltipContent data-x="tip">tip</TooltipContent></Tooltip>
+        <DropdownMenu open><DropdownMenuTrigger>m</DropdownMenuTrigger><DropdownMenuContent data-x="menu"><DropdownMenuItem>a</DropdownMenuItem></DropdownMenuContent></DropdownMenu>
+      </TooltipProvider>,
+    );
+    const pop = document.querySelector("[data-x=pop]")!;
+    const pc = classes(pop);
+    // Classic and Minimal: the dialog's z 200 (the lowest that clears it); Modern keeps 250.
+    expect(pc).toEqual(expect.arrayContaining(["z-[200]", "modern:z-[250]"]));
+    expect(pc).not.toContain("z-50");
+    expect(classes(document.querySelector("[data-x=dialog]"))).toContain("z-[200]");
+    expect(classes(document.querySelector("[data-x=tip]"))).toContain("z-[200]");
+    expect(classes(document.querySelector("[data-x=menu]"))).toContain("z-[250]");
+    // At an equal z the later layer draws on top: the popover's layer comes
+    // after the dialog's, because it opens from inside it.
+    const layerOf = (el: Element) => [...document.body.children].findIndex((c) => c.contains(el));
+    expect(layerOf(pop)).toBeGreaterThan(layerOf(document.querySelector("[data-x=dialog]")!));
+    // A call site's own tier still wins (cloudAgents/parts sets z-[250]).
+    await off();
+    const off2 = await mount(<Popover open><PopoverTrigger>p</PopoverTrigger><PopoverContent data-x="pop" className="z-[250]">b</PopoverContent></Popover>);
+    expect(classes(document.querySelector("[data-x=pop]"))).not.toContain("z-[200]");
+    await off2();
   });
 });

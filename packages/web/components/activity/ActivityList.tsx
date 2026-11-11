@@ -8,7 +8,7 @@ import { ActivityRow } from "./ActivityRow";
 import { DecisionChip, Face, PrChip, TaskChip } from "./ActivityParts";
 import type { ActivityDay, ActivityGroup, ActivityGroupBy, ActivityItem } from "./activityModel";
 
-// The body of the Modern Activity page: what waits on someone, pinned first,
+// The body of the Activity page: what waits on someone, pinned first,
 // then what happened, by day and inside a day by person or project. A group
 // leads with what it produced (PRs, tasks done, answers) and shows a few of
 // its sessions, one line each; the rest are a press away.
@@ -27,13 +27,13 @@ export function ActivityNeedsGroup({ items, all = false, teamId }: { items: Acti
         <h2 className="text-ui font-semibold text-sol-text">Needs someone</h2>
         <span className="text-meta tabular-nums text-sol-text-dim">{items.length}</span>
       </div>
-      <ul className="rounded-card border border-sol-border bg-sol-card px-1 py-1">
+      <ul className="rounded-lg border border-sol-border/40 bg-sol-card px-1 py-1 modern:rounded-card modern:border-sol-border">
         {shown.map((item) => (
           <ActivityRow key={item.id} item={item} relative needsRow showActor teamId={teamId} />
         ))}
       </ul>
       {shown.length < items.length && (
-        <button type="button" onClick={() => setMore(true)} className="mt-1 h-7 rounded-control px-2 text-meta text-sol-text-muted hover:bg-sol-text/[0.04] hover:text-sol-text">
+        <button type="button" onClick={() => setMore(true)} className="mt-1 h-7 rounded-md px-2 text-meta text-sol-text-muted hover:bg-sol-text/[0.04] hover:text-sol-text modern:rounded-control">
           Show {items.length - shown.length} more
         </button>
       )}
@@ -112,7 +112,7 @@ function ActivityGroupBlock({ group, by, relative, teamId, href }: {
         <div data-activity-outcomes className="mb-1 flex flex-wrap items-center gap-1.5 pl-8">
           {shownOutcomes}
           {shownOutcomes.length < outcomes.length && (
-            <button type="button" onClick={() => setAllOutcomes(true)} className="h-5 rounded-control px-1.5 text-meta tabular-nums text-sol-text-muted hover:bg-sol-text/[0.06] hover:text-sol-text">
+            <button type="button" onClick={() => setAllOutcomes(true)} className="h-5 rounded px-1.5 text-meta tabular-nums text-sol-text-muted hover:bg-sol-text/[0.06] hover:text-sol-text modern:rounded-control">
               +{outcomes.length - shownOutcomes.length}
             </button>
           )}
@@ -126,7 +126,7 @@ function ActivityGroupBlock({ group, by, relative, teamId, href }: {
         </ul>
       )}
       {rows.length < group.items.length && (
-        <button type="button" onClick={() => setAllRows(true)} className="ml-7 h-7 rounded-control px-2 text-meta text-sol-text-muted hover:bg-sol-text/[0.04] hover:text-sol-text">
+        <button type="button" onClick={() => setAllRows(true)} className="ml-7 h-7 rounded-md px-2 text-meta text-sol-text-muted hover:bg-sol-text/[0.04] hover:text-sol-text modern:rounded-control">
           Show {group.items.length - rows.length} more
         </button>
       )}
@@ -163,7 +163,7 @@ export function ActivityLoadOlder({ onLoad, busy, shown, more }: {
       {busy ? (
         <Spinner className="text-sol-text-dim" />
       ) : more ? (
-        <button type="button" onClick={() => load.current()} className="h-7 rounded-control px-3 text-meta text-sol-text-muted hover:bg-sol-text/[0.04] hover:text-sol-text">
+        <button type="button" onClick={() => load.current()} className="h-7 rounded-md px-3 text-meta text-sol-text-muted hover:bg-sol-text/[0.04] hover:text-sol-text modern:rounded-control">
           Load older
         </button>
       ) : null}

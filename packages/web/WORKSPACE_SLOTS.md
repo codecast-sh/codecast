@@ -34,8 +34,9 @@ re-implemented region by region:
 - `SessionListPanel` and `Sidebar` are each mounted **three times** (split, hover
   peek, mobile drawer) with identical props; the two mobile drawers are
   copy-pasted backdrop markup.
-- `InboxConversation` is **defined twice**, in GlobalSessionPanel and again in
-  QueuePageClient with a different prop set.
+- `InboxConversation` was **defined twice**, in GlobalSessionPanel and again in
+  QueuePageClient with a different prop set. The board's drill-in now mounts
+  QueuePageClient's `SessionPage`, and the GlobalSessionPanel copy is gone.
 - Only **2 of ~10** collapsible regions have a hover-peek path.
 
 The drift this produces is already visible as dead and lying state:

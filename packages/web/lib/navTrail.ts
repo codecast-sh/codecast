@@ -11,8 +11,9 @@
 //
 // It lives in sessionStorage: it survives a reload of the browser tab, stays
 // with that browser tab (a second browser tab starts its own), and never
-// reaches the server or the store's synced state. Classic and Minimal never
-// read it.
+// reaches the server or the store's synced state. Every style records it;
+// Classic and Minimal read it only to close an item (hooks/useNavTrail
+// useNavClose), and draw no Back control of their own.
 
 import { placeKey, placeOf } from "./navPlace";
 

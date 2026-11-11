@@ -1,6 +1,5 @@
 "use client";
 import { useRef, useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
 import { CollabDocEditor } from "./editor/CollabDocEditor";
 import { AppLoader } from "./AppLoader";
 import { useMentionQuery, useActiveMentionScope } from "../hooks/useMentionQuery";
@@ -27,7 +26,7 @@ import { AlternativesPanel, DraftingControls, OverflowPanel, TrimBar, useDraftin
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTabActive } from "../hooks/usePagePresence";
 import { useFollowScroll } from "../hooks/useFollowSurface";
-import { useNavClose } from "../hooks/useNavTrail";
+import { useNavCloseTarget } from "../hooks/useNavTrail";
 import { PageHeader } from "./ui/page-header";
 // Module-level so MessageReview's memo holds (a fresh inline arrow would defeat
 // it). Renders the doc's markdown as a flat run of blocks — each a direct child
@@ -102,10 +101,16 @@ export function DocumentDetailLayout({
   embedded = false,
   drafting,
 }: DocumentDetailLayoutProps) {
-  const router = useRouter();
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
-  // Modern's ✕ goes back the way the person came (hooks/useNavTrail).
-  const navClose = useNavClose(backHref);
+  // ✕ and the back arrow go back the way the person came, in every style
+  // (hooks/useNavTrail); the list (`backHref`) when there is no trail.
+  const { href: closeHref, close: navClose } = useNavCloseTarget(backHref);
+  const onBackArrow = useCallback((e: React.MouseEvent<HTMLAnchorElement>) => {
+    // A modified click keeps the link's own behaviour (a new tab).
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    navClose();
+  }, [navClose]);
   // Edit mode is the default: the doc opens as the live collaborative editor
   // (rich pills, dates, checkboxes in place). Review mode is the opt-in
   // toggle — the body re-renders as quotable blocks (hover any block to
@@ -223,7 +228,8 @@ export function DocumentDetailLayout({
             <div className="flex items-center gap-3 min-w-0 overflow-hidden">
               {!embedded && (
                 <Link
-                  href={backHref}
+                  href={closeHref}
+                  onClick={onBackArrow}
                   className="text-sol-text-dim hover:text-sol-cyan transition-colors"
                 >
                   <ArrowLeft className="w-4 h-4" />
@@ -239,7 +245,7 @@ export function DocumentDetailLayout({
               {/* Shared controls in the detail's own header. Closing here is a
                   navigation, so the slot's default hide is overridden — the
                   affordance stays identical either way. */}
-              {!embedded && <SlotActions slot="primary" onClose={() => router.push(backHref)} />}
+              {!embedded && <SlotActions slot="primary" onClose={navClose} />}
               {infoButton}
             </div>
           </div>

@@ -1,4 +1,4 @@
-// The Modern Activity page's view, as the address holds it, so a view can be
+// The Activity page's view, as the address holds it, so a view can be
 // sent: which tab (the path), whose work (`filter`, the param the sidebar and
 // the palette already use), how it groups, and the filters. Pure; the hook
 // (useActivityView) reads and writes it.

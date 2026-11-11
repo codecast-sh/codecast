@@ -881,9 +881,12 @@ export function ToolBlock({ tool, result, changeIndex, changeRange, shareSelecti
         {summary && (
           <span data-cc-row-object className="text-sol-text-muted font-mono truncate min-w-0">
             {(isStandardEdit || isRead) && filePath ? (
-              // The file a Read/Edit touched, linked into Files. Stop the click
-              // so it opens the file rather than toggling the row.
-              <FilePathLink path={filePath} onClick={(e) => e.stopPropagation()}>{mh ? <PathText path={summary} /> : summary}</FilePathLink>
+              // The file a Read/Edit touched, linked into Files, cut in the
+              // middle so the file name stays (PathText). Stop the click so it
+              // opens the file rather than toggling the row. A link's dotted
+              // underline does not reach into the path's inline-flex box, so
+              // Classic and Minimal hand it on (Modern draws the path bare).
+              <FilePathLink path={filePath} onClick={(e) => e.stopPropagation()}><PathText path={summary} className={mh ? undefined : "[text-decoration:inherit]"} /></FilePathLink>
             ) : summary}
           </span>
         )}

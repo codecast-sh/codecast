@@ -1,7 +1,6 @@
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { Activity, ChartColumn, EyeOff, SearchX } from "lucide-react";
+import { Activity, EyeOff, SearchX } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, useTrackedStore, sessionsWakeSig, isSessionHidden } from "../../store/inboxStore";
@@ -9,17 +8,18 @@ import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useViewerIdentity } from "../../hooks/useTeamRoster";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { useTeamFeed, inboxSessionToConv } from "../../hooks/useTeamFeed";
 import { settingsDataKey } from "../../lib/settingsData";
 import type { Conversation } from "../../lib/conversationRow";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { MessageFeed } from "../MessageFeed";
-import { SegmentedToggle } from "../SegmentedToggle";
-import { PageFrame, PageHeader } from "../ui/page-header";
+import { PageFrame } from "../ui/page-header";
 import { Button } from "../ui/button";
 import { EmptyState } from "../ui/empty-state";
 import { SkeletonRows } from "../ui/skeleton";
 import { ActivityFilterRow, ActivityScopeToggle } from "./ActivityFilters";
+import { ActivityHeader } from "./ActivityHeader";
 import { ActivityDays, ActivityLoadOlder, ActivityNeedsGroup } from "./ActivityList";
 import { ActivityNowStrip, ActivitySummaryRow } from "./ActivityNow";
 import { useActivityItems } from "./useActivityItems";
@@ -27,9 +27,8 @@ import { useActivityView, type ActivityViewState } from "./useActivityView";
 import { activityViewHref, type ActivityTab } from "./activityView";
 import { filterItems, filterLoose, groupActivity, needsList, nowStrip, peopleFacets, projectFacets, summarize } from "./activityModel";
 
-// The Activity page in the Modern style (Classic and Minimal keep
-// components/ActivityFeed). A person comes here to learn four things, and the
-// page is laid out in that order:
+// The Activity page (/team/activity), in every style. A person comes here to
+// learn four things, and the page is laid out in that order:
 //   1. who is working on what right now   → the Now strip
 //   2. what waits on someone               → Needs someone, each with its action
 //   3. what got done                       → days, then people (or projects),
@@ -37,15 +36,22 @@ import { filterItems, filterLoose, groupActivity, needsList, nowStrip, peopleFac
 //   4. open the thing                      → every face, title and chip is a link
 // The message feed (/feed) is the page's second tab, Messages. The view lives
 // in the address (useActivityView), so any view can be sent.
+//
+// Modern draws the shared page bar over the column (components/ui/page-header
+// PageFrame). Classic and Minimal draw the header at the top of the column
+// inside the shell's padded scroller (lib/pageLayout PageShell), which is the
+// page's scroller and so also the root "Load older" watches. Every piece below
+// carries its Classic shape un-prefixed and Modern's under `modern:`.
 
 const COLUMN = "mx-auto w-full max-w-4xl px-4 pb-12 pt-4 sm:px-6";
+const LEGACY_COLUMN = "mx-auto w-full max-w-4xl pb-6";
 const DAYS_FIRST = 5;
 const DAYS_STEP = 5;
 const PERSONAL_FIRST = 300;
 const PERSONAL_STEP = 200;
 const RECONFIRM_MS = 30_000;
 
-export function ModernActivityPage({ tab }: { tab: ActivityTab }) {
+export function ActivityPage({ tab }: { tab: ActivityTab }) {
   const { user } = useCurrentUser();
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as string | undefined;
   const teamId = activeTeamId || (user?.active_team_id as string | undefined) || (user?.team_id as string | undefined) || null;
@@ -56,32 +62,6 @@ export function ModernActivityPage({ tab }: { tab: ActivityTab }) {
     : <PersonalActivity state={state} hasTeam={!!teamId} />;
 }
 
-function ActivityHeader({ tab, state, hasTeam, count, children }: { tab: ActivityTab; state: ActivityViewState; hasTeam: boolean; count?: number | null; children?: ReactNode }) {
-  const router = useRouter();
-  return (
-    <PageHeader
-      legacy={null}
-      title="Activity"
-      icon={Activity}
-      count={count}
-      tabs={
-        <SegmentedToggle
-          value={tab}
-          onChange={(key) => { if (key !== tab) router.push(state.tabHref(key as ActivityTab)); }}
-          items={[{ key: "activity", label: "Activity" }, { key: "messages", label: "Messages" }]}
-        />
-      }
-      actions={hasTeam ? (
-        <Button asChild variant="ghost" size="sm">
-          <Link href="/team/charts"><ChartColumn aria-hidden />Charts</Link>
-        </Button>
-      ) : null}
-    >
-      {children}
-    </PageHeader>
-  );
-}
-
 function MessagesScreen({ state, hasTeam }: { state: ActivityViewState; hasTeam: boolean }) {
   const header = (
     <ActivityHeader tab="messages" state={state} hasTeam={hasTeam}>
@@ -89,7 +69,7 @@ function MessagesScreen({ state, hasTeam }: { state: ActivityViewState; hasTeam:
     </ActivityHeader>
   );
   return (
-    <PageFrame header={header} legacyColumn="" column={COLUMN} rootProps={{ "data-activity-page": "messages" }}>
+    <PageFrame header={header} legacyColumn={LEGACY_COLUMN} legacyColumnProps={{ "data-activity-page": "messages" }} column={COLUMN} rootProps={{ "data-activity-page": "messages" }}>
       <ErrorBoundary name="MessageFeed" level="inline">
         <MessageFeed filter={state.view.scope} />
       </ErrorBoundary>
@@ -97,7 +77,7 @@ function MessagesScreen({ state, hasTeam }: { state: ActivityViewState; hasTeam:
   );
 }
 
-// ── sources: the same two the Classic feed reads ───────────────────────────
+// ── sources: the same two the old feed (components/ActivityFeed) reads ─────
 
 /** The team's sessions: listConversations(team) cached in the store
  *  (hooks/useTeamFeed), with the viewer's own private rows merged in. */
@@ -122,7 +102,7 @@ function TeamActivity({ state, fallbackTeamId }: { state: ActivityViewState; fal
   const loadOlder = useCallback(() => {
     if (hasMore) { void loadMore(); return; }
     // The believed end of history is re-checked now and then, so a stale
-    // persisted "end" can never strand the feed (as the Classic feed does).
+    // persisted "end" can never strand the feed (as the old feed does).
     const now = Date.now();
     if (now - lastReconfirm.current < RECONFIRM_MS) return;
     lastReconfirm.current = now;
@@ -191,10 +171,10 @@ function PersonalActivity({ state, hasTeam }: { state: ActivityViewState; hasTea
  *  what to share is its own deliberate step. */
 function ShareNotice({ teamId, teamName }: { teamId: string; teamName?: string }) {
   return (
-    <div data-activity-share-notice className="mb-4 flex min-h-10 items-center gap-2 rounded-card border border-sol-border bg-sol-card px-3 py-1.5 text-ui">
+    <div data-activity-share-notice className="mb-4 flex min-h-10 items-center gap-2 rounded-lg border border-sol-border/40 bg-sol-card px-3 py-1.5 text-ui modern:rounded-card modern:border-sol-border">
       <EyeOff aria-hidden className="size-4 shrink-0 text-sol-text-dim" />
       <span className="min-w-0 flex-1 truncate text-sol-text-muted">Your sessions are hidden from {teamName || "the team"}</span>
-      <Button asChild variant="outline" size="sm">
+      <Button asChild variant="outline" size="sm" className="h-7 modern:h-control-sm">
         <Link href={`/settings/team/join?teamId=${teamId}&setup=1`}>Share workspaces</Link>
       </Button>
     </div>
@@ -216,6 +196,7 @@ function ActivityScreen({ state, hasTeam, rows, teamId, teamMode, hasMore, loadO
   notice: ReactNode;
 }) {
   const { view, set } = state;
+  const modern = useIsModernStyle();
   const sorted = useMemo(() => [...rows].sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)), [rows]);
   const { items, loose } = useActivityItems(sorted, { teamId, teamMode });
 
@@ -252,7 +233,7 @@ function ActivityScreen({ state, hasTeam, rows, teamId, teamMode, hasMore, loadO
 
   let body: ReactNode;
   if (cold) {
-    body = <SkeletonRows rows={8} rowClassName="h-7" />;
+    body = <SkeletonRows rows={8} rowClassName="h-7 rounded modern:rounded-control" />;
   } else if (items.length === 0 && loose.length === 0) {
     body = <EmptyState icon={Activity} title={teamMode ? "No team sessions yet" : "No sessions yet"} />;
   } else if (view.needs) {
@@ -276,9 +257,10 @@ function ActivityScreen({ state, hasTeam, rows, teamId, teamMode, hasMore, loadO
   }
 
   return (
-    <PageFrame header={header} legacyColumn="" column={COLUMN} rootProps={{ "data-activity-page": "activity" }}>
+    <PageFrame header={header} legacyColumn={LEGACY_COLUMN} legacyColumnProps={{ "data-activity-page": "activity" }} column={COLUMN} rootProps={{ "data-activity-page": "activity" }}>
       {notice}
-      <ErrorBoundary name="ModernActivity" level="inline">{body}</ErrorBoundary>
+      {/* Modern keeps the boundary's name it shipped with. */}
+      <ErrorBoundary name={modern ? "ModernActivity" : "Activity"} level="inline">{body}</ErrorBoundary>
     </PageFrame>
   );
 }

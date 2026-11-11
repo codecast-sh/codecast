@@ -97,7 +97,8 @@ export function TabContent() {
   // What this shell shows feeds recents. A window borrowing the tab shell
   // (a detached tab, an embedded pane) shows no tab of its own.
   useMountEffect(() => (borrowsTabShell() ? undefined : startVisitRecorder()));
-  // And the way back (lib/navTrail): Modern's back control walks it.
+  // And the way back (lib/navTrail): Modern's back control walks it, and
+  // closing an item follows it in every style.
   useMountEffect(() => (borrowsTabShell() ? undefined : startNavTrail()));
 
   if (s.tabs.length === 0) return null;
