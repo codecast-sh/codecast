@@ -273,6 +273,26 @@ export function classifyHideTransition(
 // `forceKill` marks the caller as an EXPLICIT kill gesture (cast kill, the web's
 // killSession/killSessions actions) rather than a patch that merely happens to
 // carry the flag.
+//
+// One transaction shares one teardown budget. The patch-row cap and the
+// cascade's per-lead batch multiplied (25 rows x 20 children each), so a web
+// kill of a few leads ran hundreds of teardowns inline, passed the 3s mutation
+// limit, and every retry timed out the same way (~1,800 an hour, 2026-11-11).
+// Callers ask hideBudgetLeft and schedule what does not fit. The web patches a
+// lead and its children together, so a row the cascade already tore down in
+// this transaction is not torn down again.
+const HIDE_TEARDOWNS_INLINE = 20;
+type HideTxnState = { spent: number; done: Set<string> };
+const hideTxnStates = new WeakMap<object, HideTxnState>();
+function hideTxnState(ctx: { db: any }): HideTxnState {
+  let state = hideTxnStates.get(ctx);
+  if (!state) hideTxnStates.set(ctx, (state = { spent: 0, done: new Set() }));
+  return state;
+}
+export function hideBudgetLeft(ctx: { db: any }): number {
+  return Math.max(0, HIDE_TEARDOWNS_INLINE - hideTxnState(ctx).spent);
+}
+
 export async function applyHideTransition(
   ctx: { db: any },
   doc: any,
@@ -288,6 +308,13 @@ export async function applyHideTransition(
   // An explicit kill naming a role's own session is refused (lib/seatKill);
   // a cascade from a parent never reaches a seat, and internal reaps carry no forceKill.
   if (opts?.forceKill && opts.cascade !== false && patch.inbox_dismissed_at) await refuseSeatKill(ctx, doc);
+  const txn = hideTxnState(ctx);
+  const docKey = String(doc?._id);
+  if (txn.done.has(docKey)) {
+    return { action: "none", canceledSchedules: 0, canceledMessages: 0, cascaded: 0, teardownEnqueued: false };
+  }
+  txn.done.add(docKey);
+  txn.spent++;
   const classified = classifyHideTransition(patch, doc, await conversationHasNoWork(ctx, doc));
   // Kill is a DESIRED STATE, not an event. classifyHideTransition gates on the
   // FLAG's transition, so a quiet re-assert of an already-set inbox_dismissed_at
@@ -439,7 +466,7 @@ async function hideNestedChildren(
   childIds: string[],
   opts?: { forceKill?: boolean; cause?: string },
 ): Promise<void> {
-  const now = ctx.scheduler ? childIds.slice(0, CASCADE_BATCH) : childIds;
+  const now = ctx.scheduler ? childIds.slice(0, Math.min(CASCADE_BATCH, hideBudgetLeft(ctx))) : childIds;
   for (const id of now) {
     // A copy: applyHideTransition classifies on the PRE-patch row.
     const found = await ctx.db.get(id);

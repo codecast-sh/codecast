@@ -144,10 +144,46 @@ describe("applyPatches batches a big patch set", () => {
 
     await applyPatches({ db, scheduler } as any, "users_me" as any, patches, { cause: "web:stashSession" });
 
-    expect(db._tables.conversations.filter((r: any) => r.inbox_stashed_at === 555)).toHaveLength(25);
+    // Each hide row spends the transaction's teardown budget (cleanup.ts hideBudgetLeft).
+    expect(db._tables.conversations.filter((r: any) => r.inbox_stashed_at === 555)).toHaveLength(20);
     expect(scheduled).toHaveLength(1);
-    expect(Object.keys(scheduled[0].patches.conversations)).toEqual(ids.slice(25));
+    expect(Object.keys(scheduled[0].patches.conversations)).toEqual(ids.slice(20));
     expect(scheduled[0]).toMatchObject({ user_id: "users_me", cause: "web:stashSession" });
+  });
+});
+
+// The patch-row cap and the cascade's per-lead batch multiplied: killing a few
+// leads whose children the web patches alongside them ran hundreds of
+// teardowns inline and timed out every retry (2026-11-11). One transaction now
+// spends one teardown budget and tears each conversation down once.
+describe("hide teardowns share one budget per transaction", () => {
+  test("a group kill tears down at most the budget inline, each row once, and schedules the rest", async () => {
+    const leads = ["conversations_lead0", "conversations_lead1", "conversations_lead2"];
+    const children = leads.flatMap((lead, l) =>
+      Array.from({ length: 15 }, (_, i) => ({
+        _id: `conversations_c${l}_${i}`, user_id: "users_me", session_id: `s-c${l}-${i}`,
+        status: "active", message_count: 5, parent_conversation_id: lead,
+      })));
+    const db = makeFakeDb({
+      conversations: [
+        ...leads.map((_id, l) => ({ _id, user_id: "users_me", session_id: `s-lead${l}`, status: "active", message_count: 5 })),
+        ...children,
+      ],
+      session_owners: [], messages: [], pending_messages: [], client_state: [],
+      managed_sessions: [], agent_tasks: [], daemon_commands: [],
+    });
+    const scheduled: any[] = [];
+    const scheduler = { runAfter: async (_ms: number, _fn: any, args: any) => { scheduled.push(args); } };
+    const ids = [...leads, ...children.map((c) => c._id)];
+    const patches = { conversations: Object.fromEntries(ids.map((id) => [id, { inbox_dismissed_at: 777 }])) };
+
+    await applyPatches({ db, scheduler } as any, "users_me" as any, patches, { forceKill: true, cause: "web:killSessions" });
+
+    const kills = db._tables.daemon_commands.filter((c: any) => c.command === "kill_session");
+    const killed = kills.map((c: any) => JSON.parse(c.args).conversation_id);
+    expect(killed.length).toBeLessThanOrEqual(20);
+    expect(new Set(killed).size).toBe(killed.length);
+    expect(scheduled.length).toBeGreaterThan(0);
   });
 });
 

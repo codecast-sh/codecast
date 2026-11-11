@@ -44,13 +44,15 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType
   recordingPressStale,
   recordingPressStaleWords,
 } from "@codecast/shared/contracts";
-import { applyHideTransition } from "./cleanup";
+import { applyHideTransition, hideBudgetLeft } from "./cleanup";
 import { stampBrowserPaneOfferHandled, writeShareLink } from "./conversations";
 import { writeObjectShareLink } from "./publicShare";
 import { setWeeklyCardEnabledFor, setWeeklyCardOptionsFor } from "./weeklyCards";
 import { deleteSessionAsOwner } from "./sessionDelete";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
+import { applyAsWebUser } from "./liveArtifacts";
+import { docTypeChangeAllowed } from "@codecast/shared/docs";
 import { startHostedConversationFor } from "./assistant/entry";
 import { parseQuoteDrafts, quotesWaiting, removeQuotes, saveQuotes, stampQuotesSent } from "./quoteDrafts";
 import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser, cancelPendingMessageForUser, reorderQueuedForUser, mergeQueuedForUser, releaseQueuedForUser } from "./pendingMessages";
@@ -290,7 +292,9 @@ export async function applyPatches(
     if (!config) continue;
 
     for (const [docKey, fields] of Object.entries(docs)) {
-      if (inline-- <= 0 && scheduler) {
+      // Hide teardowns share the transaction's budget with the cascade they
+      // start (cleanup.ts hideBudgetLeft), so a conversation row waits once it is spent.
+      if ((inline-- <= 0 || (table === "conversations" && ("inbox_dismissed_at" in fields || "inbox_stashed_at" in fields) && hideBudgetLeft(ctx) === 0)) && scheduler) {
         ((deferred ??= {})[table] ??= {})[docKey] = fields;
         continue;
       }
@@ -1624,6 +1628,21 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     await ctx.db.patch(doc._id, { archived_at: undefined });
   },
 
+  // Live artifacts (web store/liveArtifactsSlice.ts): an element batch, the
+  // draft's save/discard, a named checkpoint. Same core the CLI writes through.
+  applyLiveOps: async (ctx, userId, [docId, layer, ops, clientId]: [string, "main" | "draft" | "comments", any[], string | undefined]) => {
+    return await applyAsWebUser(ctx, userId, docId, layer, ops, clientId);
+  },
+  liveDraft: async (ctx, _userId, [docId, op, draftAt]: [string, "start" | "save" | "discard", number | undefined]) => {
+    if (!ctx.db.normalizeId("docs", docId)) return null;
+    if (op === "start") return await (ctx as any).runMutation(api.liveArtifacts.draftStart, { doc_id: docId });
+    const fn = op === "save" ? api.liveArtifacts.draftSave : api.liveArtifacts.draftDiscard;
+    return await (ctx as any).runMutation(fn, { doc_id: docId, ...(typeof draftAt === "number" ? { draft_at: draftAt } : {}) });
+  },
+  liveCheckpoint: async (ctx, _userId, [docId, label]: [string, string | undefined]) => {
+    if (!ctx.db.normalizeId("docs", docId)) return null;
+    return await (ctx as any).runMutation(api.liveArtifacts.checkpoint, { doc_id: docId, ...(label ? { label } : {}) });
+  },
   updateDoc: async (ctx, userId, [docId, fields]: [string, { content?: string; title?: string; doc_type?: string; labels?: string[]; overflow?: string }]) => {
     const doc = await ctx.db.get(docId as Id<"docs">);
     if (!doc) throw new Error("Doc not found");
@@ -1631,7 +1650,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const updates: any = { updated_at: Date.now() };
     if (fields.content !== undefined) updates.content = fields.content;
     if (fields.title !== undefined) updates.title = fields.title;
-    if (fields.doc_type !== undefined) updates.doc_type = fields.doc_type;
+    if (fields.doc_type !== undefined && docTypeChangeAllowed(doc.doc_type, fields.doc_type)) updates.doc_type = fields.doc_type;
     if (fields.labels !== undefined) updates.labels = fields.labels;
     if (fields.overflow !== undefined) updates.overflow = fields.overflow;
     await ctx.db.patch(doc._id, updates);
