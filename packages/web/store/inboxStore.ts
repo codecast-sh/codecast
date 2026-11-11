@@ -1840,6 +1840,8 @@ export type ClientUI = {
   visual_style?: "classic" | "minimal";
   /** The opt-in Modern style, kept apart from visual_style (components/ThemeProvider.tsx says why). */
   modern_style?: boolean;
+  /** The phone's own Modern choice (packages/mobile/lib/mobileLook.ts). Absent or null: the phone follows modern_style. */
+  mobile_modern_style?: boolean | null;
   sidebar_collapsed?: boolean;
   // The sidebar sections the chevrons pin open (true) or closed (false), by
   // section key. A section the user never touched is absent and follows the
@@ -7355,7 +7357,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
 // would collapse the laptop's sidebar on the ultrawide, or send a headset id
 // to a phone that cannot open it.
 export const PER_DEVICE_UI_KEYS = new Set([
-  "visual_style", "modern_style",
+  "visual_style", "modern_style", "mobile_modern_style",
   "sidebar_collapsed", "zen_mode", "nav_sections", "workspace",
   "sticky_headers_disabled", "diff_panel_open",
   "trigger_prompt_height", "thread_state_collapsed", "calls_list_open", "people_view", "float_face_size",
