@@ -14,6 +14,9 @@ import { inferEntityTypeFromShortId, shortIdSource } from "@codecast/shared/enti
 import { extractSessionTrailer } from "@codecast/shared/blame";
 import { isConversationOwner, isConversationTeamVisible } from "../privacy";
 import { normalizeRepository } from "@codecast/shared/contracts";
+// accessKeys, not ./access: access.ts pulls in function modules, and this file
+// loads inside webhook modules (an import cycle there breaks module init).
+import { accessStampFor, authorizedFor, heldKeysFor, resolveWorkspaceKey } from "./accessKeys";
 
 type Db = { db: any };
 
@@ -44,6 +47,9 @@ export function extractTaskShortIds(text: string | null | undefined): string[] {
   return out;
 }
 
+/** Who is linking: the codecast user behind the git activity, and the team it routes to. */
+export type LinkScope = { userId?: Id<"users"> | null; teamId?: Id<"teams"> | null };
+
 export type TaskLinks = {
   task_ids: Id<"tasks">[];
   plan_ids: Id<"plans">[];
@@ -51,13 +57,26 @@ export type TaskLinks = {
 };
 
 /**
- * Short ids to real rows, plus the plans and projects those tasks belong to.
+ * Whether git activity may link a task. Short ids are sequential and anyone
+ * can write any id into a commit or a PR, so a link is decided by access: the
+ * user behind the activity can read the task, or the task lives in the
+ * workspace of the team the repository routes to.
+ */
+export async function isTaskLinkable(ctx: Db, task: Doc<"tasks">, scope: LinkScope): Promise<boolean> {
+  // canAccessTask's rule: the task's stamp against the keys the user holds.
+  if (scope.userId && authorizedFor(await accessStampFor(ctx, "tasks", task), String(scope.userId), await heldKeysFor(ctx, scope.userId))) return true;
+  return !!scope.teamId && (await resolveWorkspaceKey(ctx, task)) === `team:${String(scope.teamId)}`;
+}
+
+/**
+ * Short ids to real rows that `scope` may link, plus the plans and projects
+ * those tasks belong to.
  *
  * A miss is silent: git text names ids from other workspaces and from before
  * the task was deleted, and a push must never fail because a commit message
- * quoted a stale id.
+ * quoted a stale id. A task outside the scope is a miss.
  */
-export async function resolveTaskLinks(ctx: Db, shortIds: string[]): Promise<TaskLinks> {
+export async function resolveTaskLinks(ctx: Db, shortIds: string[], scope: LinkScope): Promise<TaskLinks> {
   const task_ids: Id<"tasks">[] = [];
   const planIds = new Set<string>();
   const projectIds = new Set<string>();
@@ -67,7 +86,7 @@ export async function resolveTaskLinks(ctx: Db, shortIds: string[]): Promise<Tas
       .query("tasks")
       .withIndex("by_short_id", (q: any) => q.eq("short_id", shortId))
       .first();
-    if (!task) continue;
+    if (!task || !(await isTaskLinkable(ctx, task, scope))) continue;
     task_ids.push(task._id);
     if (task.plan_id) planIds.add(String(task.plan_id));
     if (task.project_id) projectIds.add(String(task.project_id));
@@ -80,15 +99,12 @@ export async function resolveTaskLinks(ctx: Db, shortIds: string[]): Promise<Tas
   };
 }
 
-/** Read the task links straight out of git text. */
-export async function resolveTaskLinksFromText(ctx: Db, ...texts: (string | null | undefined)[]): Promise<TaskLinks> {
-  return resolveTaskLinks(ctx, extractTaskShortIds(texts.filter(Boolean).join("\n")));
+/** Read the task links `scope` may make straight out of git text. */
+export async function resolveTaskLinksFromText(ctx: Db, scope: LinkScope, ...texts: (string | null | undefined)[]): Promise<TaskLinks> {
+  return resolveTaskLinks(ctx, extractTaskShortIds(texts.filter(Boolean).join("\n")), scope);
 }
 
 // ── Which sessions git activity may link ──
-
-/** Who is linking: the codecast user behind the git activity, and the team it routes to. */
-export type LinkScope = { userId?: Id<"users"> | null; teamId?: Id<"teams"> | null };
 
 /**
  * Whether git activity may link a session. A linked session reaches the pull
