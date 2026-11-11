@@ -7974,7 +7974,9 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
 }
 /* An ops pill sets its ink inline and paints its ground as 14% of that ink.
    Its words step deeper than the ink so they hold contrast on that ground. */
-.modern-style:not(.dark) .ops-pill > span { color: color-mix(in srgb, currentColor 82%, #000); }
+/* A filled pill (its words in the page colour on a solid ink) is left alone:
+   darkening those words took them from 5:1 to 3.3:1. */
+.modern-style:not(.dark) .ops-pill:not([style*="color: var(--sol-bg)"]) > span { color: color-mix(in srgb, currentColor 82%, #000); }
 .modern-style .ops-pill .iss-state-rel { opacity: 1; }
 /* Raw Tailwind palette text (text-amber-400, text-red-400 and the like) was
    picked for dark grounds and lands near 2:1 to 3.5:1 on Modern's near-white.
@@ -8010,3 +8012,22 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
 .modern-style [data-cc-conversation] > div:has(> .conv-col > [data-sv-sticky]) {
   padding-top: 0;
 }
+
+/* ---- MODERN · OPS AND CHAT, QUIET WITHOUT FADING ---------------------------
+   A state with nothing in it, and a teammate chat only suggests, were faded
+   whole (45% and 62%), which took their words under 3:1. They step down in
+   tone and weight; only the dot fades. */
+.modern-style .mx-state[data-zero] { opacity: 1; color: var(--sol-text-dim); }
+.modern-style .mx-state[data-zero] b { color: var(--sol-text-dim); font-weight: 500; }
+.modern-style .mx-state[data-zero] i { opacity: 0.45; }
+.modern-style .ch-chan-suggest { opacity: 1; }
+.modern-style .ch-chan-suggest .ch-chan-name { color: var(--sol-text-dim); }
+.modern-style .ch-chan-suggest .ch-chan-hash { opacity: 0.7; }
+/* Ops words in an accent on that accent's own tint sat at 4.1 to 4.5:1 on the
+   light palette; they step a little deeper. Dark already clears. */
+.modern-style:not(.dark) .ops-home-state { color: color-mix(in srgb, var(--sol-orange) 86%, #000); }
+.modern-style:not(.dark) .ops-home-state:is([data-state="alerting"], [data-state="regressed"], [data-state="escalating"], [data-state="source"]) { color: color-mix(in srgb, var(--sol-red) 88%, #000); }
+.modern-style:not(.dark) .ops-home-state[data-state="errors"] { color: color-mix(in srgb, var(--sol-magenta) 88%, #000); }
+.modern-style:not(.dark) .rp-issue:is([data-status="open"], [data-status="regressed"]) .ops-mono { color: color-mix(in srgb, var(--sol-red) 88%, #000); }
+.modern-style:not(.dark) .iss-lane[data-lane="new"] { color: color-mix(in srgb, var(--sol-red) 88%, #000); }
+.modern-style:not(.dark) .iss-lane[data-lane="escalating"] { color: color-mix(in srgb, var(--sol-orange) 86%, #000); }
