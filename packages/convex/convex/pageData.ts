@@ -234,7 +234,7 @@ export const refreshInput = internalQuery({
 export const readPage = internalQuery({
   args: { owner: v.id("users"), workspace: v.string(), reader: v.string(), args_json: v.string(), cursor: v.union(v.string(), v.null()), now: v.number() },
   handler: async (ctx, args) => {
-    if (!(await ownerHolds(ctx, args.owner, args.workspace))) throw new Error("The page's publisher can no longer read this workspace");
+    if (!(await ownerHolds(ctx, args.owner, args.workspace))) throw new Error("The query's owner can no longer read this workspace");
     const def = PAGE_READERS[args.reader as keyof typeof PAGE_READERS];
     if (!def?.page) throw new Error(`Unknown reader ${args.reader}`);
     return await def.page(ctx, { owner: args.owner, workspace: args.workspace }, JSON.parse(args.args_json), args.cursor, args.now);
@@ -276,7 +276,7 @@ async function readAll(ctx: ActionCtx, row: Pick<Doc<"page_queries">, "reader" |
   const scope: ReaderScope = { owner: row.owner_user_id, workspace: row.workspace };
   const args = JSON.parse(row.args_json);
   if (def.fetch) {
-    if (!(await ctx.runQuery(internal.pageData.ownerStillHolds, scope))) throw new Error("The page's publisher can no longer read this workspace");
+    if (!(await ctx.runQuery(internal.pageData.ownerStillHolds, scope))) throw new Error("The query's owner can no longer read this workspace");
     return await def.fetch(fetchDeps(ctx), scope, args);
   }
   const items: unknown[][] = [];
@@ -329,7 +329,7 @@ export const refresh = internalAction({
 });
 
 /** Cells a page can show: numbers, strings, booleans and null; anything else as its JSON. */
-function normalizeRow(row: unknown[]): unknown[] {
+export function normalizeRow(row: unknown[]): unknown[] {
   return row.map((c) => (c === undefined ? null : c === null || ["number", "string", "boolean"].includes(typeof c) ? c : JSON.stringify(c)));
 }
 

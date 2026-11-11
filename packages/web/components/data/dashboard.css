@@ -1,0 +1,73 @@
+/* Data dashboards: the responsive grid, drop markers, the edit flash and the
+   story entrances. Colors are the --sol-* tokens; spacing follows the grid. */
+
+.data-wrap { container-type: inline-size; }
+
+.data-grid {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: 16px;
+}
+.data-cell { grid-column: span 12; }
+.data-cell[data-span="3"] { grid-column: span 3; }
+.data-cell[data-span="4"] { grid-column: span 4; }
+.data-cell[data-span="6"] { grid-column: span 6; }
+.data-cell[data-span="8"] { grid-column: span 8; }
+
+/* Two columns, then one, as the dashboard's own width narrows (a side panel open, a pane, a phone). */
+@container (max-width: 860px) {
+  .data-cell[data-span="3"], .data-cell[data-span="4"] { grid-column: span 6; }
+  .data-cell[data-span="6"], .data-cell[data-span="8"] { grid-column: span 12; }
+}
+@container (max-width: 480px) {
+  .data-grid { gap: 12px; }
+  .data-cell[data-span] { grid-column: span 12; }
+}
+
+.data-drop { position: absolute; background: var(--sol-blue); border-radius: 2px; pointer-events: none; z-index: 5; }
+.data-drop-before { left: -10px; top: 8px; bottom: 8px; width: 3px; }
+.data-drop-after { right: -10px; top: 8px; bottom: 8px; width: 3px; }
+.data-drop-above { top: -10px; left: 8px; right: 8px; height: 3px; }
+.data-drop-below { bottom: -10px; left: 8px; right: 8px; height: 3px; }
+
+/* A block someone else just wrote: one soft pulse of the writer's attention color. */
+.data-flash {
+  position: absolute; inset: -1px; border-radius: 12px; pointer-events: none;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--sol-violet) 70%, transparent);
+  animation: data-flash 1.6s ease-out forwards;
+}
+@keyframes data-flash {
+  0% { opacity: 0; } 12% { opacity: 1; } 100% { opacity: 0; }
+}
+
+.data-story-in { animation: data-rise 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+.data-beat-in { animation: data-rise 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes data-rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .data-flash, .data-story-in, .data-beat-in { animation: none; }
+}
+
+/* The Visual short's stage sizes its type to itself (cqw/cqh), so a beat fits a pane as well as a full screen. */
+.data-stage { container-type: size; }
+
+/* Stories lay out by the pane they're in, not the window: words beside the chart only when there's room. */
+.story-pad { padding-inline: 20px; }
+.story-step { gap: 28px; }
+.story-numbers { grid-template-columns: 1fr; }
+@container (min-width: 560px) {
+  .story-pad { padding-inline: 40px; }
+  .story-numbers[data-count="2"] { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .story-numbers[data-count="3"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@container (min-width: 900px) {
+  .story-step { grid-template-columns: minmax(0, 5fr) minmax(0, 8fr); gap: 56px; }
+  .story-words { position: sticky; top: 22vh; }
+}
+/* A narrow pane gets a portrait stage so a beat's headline, number and line all fit. */
+@container (max-width: 640px) {
+  .data-stage { aspect-ratio: 4 / 5; }
+}

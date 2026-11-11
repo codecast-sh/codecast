@@ -18,6 +18,7 @@ export const PAGE_DATA_READERS = [
   "metric",
   "hogql",
   "connector",
+  "sheet",
 ] as const;
 export type PageDataReader = (typeof PAGE_DATA_READERS)[number];
 

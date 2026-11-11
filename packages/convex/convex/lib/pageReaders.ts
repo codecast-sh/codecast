@@ -24,6 +24,10 @@ import { fetchUserUsageDays, seesTeamSpend } from "./usageDaily";
 import { resolveWorkspaceProject } from "./projectRef";
 import { sourceByRef } from "./ingestScope";
 import { cachedManifest } from "../sources/app";
+import { dashboard as dashboardData } from "@codecast/shared/artifacts";
+import { readSheetRange } from "@codecast/shared/artifacts/sheet";
+
+const { sheetTable } = dashboardData;
 
 type Db = { db: any };
 type Args = Record<string, unknown>;
@@ -577,6 +581,45 @@ export function tableFromJson(body: unknown): Table {
   return { columns: ["value"], rows: [[cell(body)]] };
 }
 
+/** A range of a live sheet in the workspace (a docs row of type sheet), its first row as column names unless header is false. */
+const sheet: ReaderDef = {
+  validate: validating(["doc", "range", "header"], (raw) => {
+    const doc = text(raw, "doc", true);
+    const range = text(raw, "range", true);
+    if (raw.header !== undefined && typeof raw.header !== "boolean") throw new ArgError(`"header" must be true or false`);
+    const header = raw.header !== false;
+    return { args: { doc, range, header }, text: `cells ${range} of sheet ${doc}${header ? ", first row as column names" : ""}` };
+  }),
+  async check(ctx, scope, args) {
+    const doc = await sheetDoc(ctx, scope, args.doc as string);
+    return typeof doc === "string" ? doc : null;
+  },
+  // The one page holds the whole table, its column names first: the range is evaluated by the Sheets engine, which needs every cell at once.
+  async page(ctx, scope, args) {
+    const doc = await sheetDoc(ctx, scope, args.doc as string);
+    if (typeof doc === "string") throw new Error(doc);
+    const rows = await ctx.db.query("live_elements").withIndex("by_doc_layer_key", (q: any) => q.eq("doc_id", doc._id).eq("layer", "main")).collect();
+    const elements = rows.filter((r: any) => !r.deleted && !r.dead).map((r: any) => ({ ...(r.fields ?? {}), key: r.key, kind: r.kind, rev: r.rev }));
+    const read = readSheetRange(elements, args.range as string);
+    if ("error" in read) throw new Error(read.error);
+    // A tab the Sheets product fills from a query keeps its last cells when that query fails; those cells are not today's evidence.
+    const tab = elements.find((e: any) => e.kind === "tab" && (e.name === read.tab || e.key === `tab:${read.tab}`)) as any;
+    if (tab?.query_error) throw new Error(`the sheet's "${tab.name ?? read.tab}" tab failed its last refresh: ${tab.query_error}`);
+    const firstCol = read.rect.match(/^([A-Z]+)/)?.[1] ?? "A";
+    const table = sheetTable(read.values, args.header !== false, [...firstCol].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0));
+    return { items: [table.columns, ...table.rows], cursor: null, scanned: rows.length };
+  },
+  fold: (items) => ({ columns: (items[0] ?? []) as string[], rows: items.slice(1) }),
+};
+
+async function sheetDoc(ctx: Db, scope: ReaderScope, ref: string): Promise<Doc<"docs"> | string> {
+  const id = ctx.db.normalizeId("docs", ref.replace(/^.*\/docs\//, "").replace(/[/?#].*$/, ""));
+  const doc: Doc<"docs"> | null = id ? await ctx.db.get(id) : null;
+  if (!doc || doc.doc_type !== "sheet" || doc.workspace !== scope.workspace) return `no sheet ${ref} in this workspace`;
+  if (doc.archived_at) return `the sheet "${doc.title}" is archived`;
+  return doc;
+}
+
 export const PAGE_READERS: Record<PageDataReader, ReaderDef> = {
   tasks,
   sessions,
@@ -588,6 +631,7 @@ export const PAGE_READERS: Record<PageDataReader, ReaderDef> = {
   metric,
   hogql,
   connector,
+  sheet,
 };
 
 /** The full audit line for a query: what it reads and where. */
