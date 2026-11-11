@@ -85,6 +85,7 @@ function pageFor(s: LineSelection): ComponentType<LineViewProps> {
   if (s.view === "timeline") return Timeline;
   if (s.view === "signals") return Signals;
   if (s.view === "shipped") return Shipped;
+  // Volume draws under the live flow's head, as the stage's third view (FlowsStage).
   return s.source ? Finder : Line;
 }
 /** How long after G the second key of the go chord still counts. */

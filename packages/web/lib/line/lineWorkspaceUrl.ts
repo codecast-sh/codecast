@@ -6,7 +6,8 @@
 //   flow     a flow's owner handle: Decisions narrows to that flow's projects
 //   view     signals, timeline, problems, line (the live flow's map or its
 //            table), flows (the library, or one flow's overview), foryou
-//            (Decisions), shipped, deploys. Each sits under one stage of the
+//            (Decisions), shipped, deploys, volume (where the volume is, whether
+//            it flows, what holds it). Each sits under one stage of the
 //            pipeline header (pipeline.ts). An address with no view is the
 //            landing page: the live flow on its map
 //   mode     the Steps page's mode: table (the default when the view is named) or map
@@ -47,7 +48,7 @@
 // write, as the view that holds their job now. Pure, so a test reads and
 // writes addresses.
 
-export const LINE_VIEWS = ["signals", "flows", "foryou", "timeline", "problems", "line", "deploys", "shipped"] as const;
+export const LINE_VIEWS = ["signals", "flows", "foryou", "timeline", "problems", "line", "deploys", "shipped", "volume"] as const;
 export type LineView = (typeof LINE_VIEWS)[number];
 /** What an address with no view opens: Steps, on its map (LANDING_MODE). */
 export const DEFAULT_LINE_VIEW: LineView = "line";
@@ -105,6 +106,8 @@ const VIEW_KEEPS: Record<LineView, ReadonlyArray<(typeof SELECTION_KEYS)[number]
   // problem's band shows its own without it, so a decision kept from another view would follow every later link.
   // For you's list keeps how it is filtered, ordered and grouped.
   foryou: ["flow", "need", "card", "decision", "who", "kind", "area", "order", "group"], problems: ["case", "ask", "run", "step", "source", "finding", "row", "status", "process", "quiet", "found", "q", "sort", "win"], line: ["source", "finding"], flows: ["item", "run"], deploys: ["deploy"], shipped: [],
+  // Volume keeps its window (win: 7 or 30 days) and the count open under it (show).
+  volume: ["win", "show"],
   // Signals keeps the review stage open over it (stage, item) and the source view open in it (sig: its tab, the source,
   // the app, an issue or replay as item, and the replay's playhead t).
   signals: ["source", "stage", "item", "sig", "app", "t"],

@@ -28,6 +28,26 @@ export const flowFunnelValidator = v.object({
   })),
 });
 
+// Every open problem by where it stands, and the window's days (shared/contracts/lineVolume.ts FlowBacklog).
+export const flowBacklogValidator = v.object({
+  at: v.number(),
+  total: v.number(),
+  stands: v.array(v.object({ stand: v.string(), n: v.number() })),
+  projects: v.array(v.object({ project: v.union(v.string(), v.null()), stand: v.string(), n: v.number() })),
+  stations: v.array(v.object({ stand: v.optional(v.string()), node: v.string(), n: v.number() })),
+  items: v.array(v.object({
+    task: v.string(), ref: v.union(v.string(), v.null()), title: v.string(), run: v.union(v.string(), v.null()), at: v.number(),
+    stand: v.string(), node: v.union(v.string(), v.null()), status: v.union(v.string(), v.null()), project: v.union(v.string(), v.null()),
+  })),
+  days: v.array(v.object({ day: v.string(), opened: v.number(), ran: v.number(), landed: v.number(), clean: v.number() })),
+});
+// Per event source and kind, what arrived each day against what read it (lineVolume.ts SourceCoverage).
+export const sourceCoverageValidator = v.array(v.object({
+  source_id: v.string(),
+  kind: v.string(),
+  days: v.array(v.object({ day: v.string(), arrived: v.number(), read: v.number(), judged: v.number(), failed: v.number(), waiting: v.number() })),
+}));
+
 export const flowMapTables = {
   flow_map_rollups: defineTable({
     workspace: v.string(),
@@ -57,5 +77,8 @@ export const flowMapTables = {
     reopened: v.array(v.object({ task_id: v.string(), at: v.number() })),
     // The Flows page's Volume chart; absent on a row from before it, which the next pass recounts in full.
     funnel: v.optional(flowFunnelValidator),
+    // The Volume page's backlog and days, and its sources read against arrived; absent on a row from before them.
+    backlog: v.optional(flowBacklogValidator),
+    coverage: v.optional(sourceCoverageValidator),
   }).index("by_workspace", ["workspace"]),
 };

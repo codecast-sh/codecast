@@ -25,9 +25,10 @@ import { flowFamily, flowRouteFor, type FlowRouteRow } from "./lib/flowRoute";
 import { eventSourceWords, sourceWords } from "./lib/flowMapLabels";
 import { flowHands, flowHold, flowRoles } from "./liveFlows";
 import { lineOwnerOf } from "./orgLine";
-import { flowFunnelValidator, flowMapOutcomesValidator } from "./flowMapSchema";
+import { flowBacklogValidator, flowFunnelValidator, flowMapOutcomesValidator, sourceCoverageValidator } from "./flowMapSchema";
 import { FUNNEL_DAYS, foldFunnel, funnelItem, funnelStations, type FunnelItem, type FunnelStation } from "@codecast/shared/contracts/lineFunnel";
 import { runsWaitingOnAPerson } from "./lib/linePlacement";
+import { RECORDING, backlogItem, flowEvents, foldBacklog, foldCoverage, momentCoverage, recordingCoverage, type BacklogItem, type CoverageDay, type FlowEvents, type SourceCoverage } from "@codecast/shared/contracts/lineVolume";
 
 type Ctx = { db: any };
 
@@ -69,7 +70,9 @@ async function flowSetup(ctx: Ctx, workspace: string) {
   const memberOf = (workflowId: unknown): any | null => {
     if (!workflowId) return null;
     const id = String(workflowId);
-    return byId.get(id) ?? bySlug.get(slugOf.get(id) ?? "") ?? null;
+    const slug = slugOf.get(id) ?? "";
+    // A flow named under the spine's slug (onefix-triage under onefix) is the spine's own batch, never outside it.
+    return byId.get(id) ?? bySlug.get(slug) ?? (spine?.slug && slug.startsWith(`${spine.slug}-`) ? spine : null);
   };
   return { flow, spine, rows, family, memberOf };
 }
@@ -174,44 +177,99 @@ export const problemsPage = internalQuery({
     const page = await ctx.db.query("tasks").withIndex("by_workspace_source_status", (q: any) => q.eq("workspace", args.workspace).eq("source", "signal").eq("status", args.status)).paginate({ cursor: args.cursor, numItems: 150 });
     let open = 0, scored = 0, queued = 0;
     const outcomes: Array<{ source: string; outcome: string }> = [];
+    const backlog: BacklogItem[] = [];
+    const events: FlowEvents[] = [];
+    const f = args.funnel;
+    // A live run waits on a person when a blocking decision of its runner names it, as the live map counts it.
+    const askedBy = new Map<string, Set<string>>();
+    const asked = async (run: any): Promise<boolean> => {
+      const runner = String(run.user_id);
+      if (!askedBy.has(runner)) askedBy.set(runner, await runsWaitingOnAPerson(ctx, runner));
+      return askedBy.get(runner)!.has(String(run._id));
+    };
     for (const t of page.page as any[]) {
       if (t.ephemeral || t.cause?.merged_into) continue;
-      if (OPEN_STATUSES.has(t.status)) {
+      const isOpen = OPEN_STATUSES.has(t.status);
+      const recent = t.created_at >= args.since;
+      if (isOpen) {
         open++;
         if (t.cause?.scored) scored++;
         if (t.status === "open" && !t.workflow_run_id && t.readiness === "ready") queued++;
       }
-      if (t.created_at < args.since) continue;
+      // An old closed problem moved nothing in the window: its run is read only when the problem is open, new, or touched since.
+      if (!isOpen && !recent && (t.updated_at ?? t.created_at) < args.since) continue;
       const run: any = t.workflow_run_id ? await ctx.db.get(t.workflow_run_id) : null;
-      const outcome = problemOutcome(t, run);
-      // A problem with no finding left on it has no source to count under.
-      const source = outcome ? await problemSource(ctx, t._id) : null;
+      const e = flowEvents(t, run, f?.now ?? Date.now());
+      if (e && [e.opened, e.ran, e.landed, e.clean].some((at) => at != null && at >= args.since)) events.push(e);
+      const outcome = recent ? problemOutcome(t, run) : null;
+      // A problem with no finding left on it has no source to count under. An old problem's source matters only to a
+      // flow that takes some sources and not others.
+      const source = outcome || (isOpen && !run && f?.sources.length) ? await problemSource(ctx, t._id) : null;
       if (outcome && source) outcomes.push({ source, outcome });
-      const f = args.funnel;
+      if (!f) continue;
       const noRun = !run && t.status === "open";
-      const item = f ? funnelItem({
-        task: { ...t, _id: String(t._id) }, run: run ? { ...run, _id: String(run._id) } : null, stations: f.stations, labels, bar: f.bar, now: f.now,
-        ...(noRun ? { owned: await owned(t), sourceTaken: !f.sources.length || (!!source && f.sources.includes(source)) } : {}),
-      }) : null;
-      if (item) items.push(item);
+      const gates = noRun ? { owned: await owned(t), sourceTaken: !f.sources.length || (!!source && f.sources.includes(source)) } : {};
+      const common = { task: { ...t, _id: String(t._id) }, run: run ? { ...run, _id: String(run._id) } : null, labels, bar: f.bar, now: f.now, ...gates };
+      if (recent) {
+        const item = funnelItem({ ...common, stations: f.stations });
+        if (item) items.push(item);
+      }
+      if (isOpen) {
+        const b = backlogItem({ ...common, waiting: !!run && ["pending", "running"].includes(run.status) && await asked(run) });
+        if (b) backlog.push(b);
+      }
     }
-    return { open, scored, queued, outcomes, items, cursor: page.isDone ? null : page.continueCursor };
+    return { open, scored, queued, outcomes, items, backlog, events, cursor: page.isDone ? null : page.continueCursor };
   },
 });
 
-/** Problem runs started since `since` on a flow outside the live flow's family, by source. */
+/** One page of the problems whose runs started since `since` on a flow outside the live flow's family, by source. Paged: a week of
+ *  runs with a finding read for each passed the 4,096-read cap and failed every pass from Nov 10. */
 export const escapesInputs = internalQuery({
-  args: { workspace: v.string(), since: v.number() },
-  handler: async (ctx, { workspace, since }) => {
+  args: { workspace: v.string(), since: v.number(), cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: async (ctx, { workspace, since, cursor }) => {
     const { memberOf } = await flowSetup(ctx, workspace);
-    const runs: any[] = await ctx.db.query("workflow_runs").withIndex("by_workspace_updated", (q: any) => q.eq("workspace", workspace).gte("updated_at", since)).collect();
-    const out: Record<string, number> = {};
-    for (const r of runs) {
-      if (!r.task_id || r.created_at < since || memberOf(r.workflow_id)) continue;
+    const page = await ctx.db.query("workflow_runs").withIndex("by_workspace_updated", (q: any) => q.eq("workspace", workspace).gte("updated_at", since)).paginate({ cursor: cursor ?? null, numItems: 400 });
+    const out: Record<string, string[]> = {};
+    const seen = new Set<string>();
+    for (const r of page.page as any[]) {
+      if (!r.task_id || r.created_at < since || memberOf(r.workflow_id) || seen.has(String(r.task_id))) continue;
+      seen.add(String(r.task_id));
       const source = await problemSource(ctx, r.task_id);
-      if (source) out[source] = (out[source] ?? 0) + 1;
+      if (source) (out[source] ??= []).push(String(r.task_id));
     }
-    return out;
+    return { escapes: out, cursor: page.isDone ? null : page.continueCursor };
+  },
+});
+
+type CoverageRow = { source_id: string; kind: string } & CoverageDay;
+const coverageRow = (source_id: unknown, kind: string, c: Omit<CoverageRow, "source_id" | "kind">): CoverageRow => ({ source_id: String(source_id), kind, ...c });
+
+/** One page of a workspace's moments created since `since`: each one's day and state, its newest judge run read for
+ *  whether the judge failed. */
+export const momentsCoveragePage = internalQuery({
+  args: { workspace: v.string(), since: v.number(), cursor: v.union(v.string(), v.null()), ids: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query("moments").withIndex("by_workspace_created", (q: any) => q.eq("workspace", args.workspace).gte("created_at", args.since)).paginate({ cursor: args.cursor, numItems: 300 });
+    const rows: CoverageRow[] = [];
+    const failed: Array<{ moment: string; source_id: string; kind: string; why: string }> = [];
+    for (const m of page.page as any[]) {
+      const last: any = m.judged_at ? await ctx.db.query("judge_runs").withIndex("by_moment", (q: any) => q.eq("moment_id", m._id)).order("desc").first() : null;
+      const c = momentCoverage(m, last?.status);
+      rows.push(coverageRow(m.source_id, m.kind, c));
+      if (args.ids && c.failed) failed.push({ moment: m.short_id, source_id: String(m.source_id), kind: m.kind, why: m.status === "failed" ? "extract" : "judge" });
+    }
+    // `ids`: the failed moments by name too, for a person to retry them (`run.sh flowMap:momentsCoveragePage`).
+    return { rows, ...(args.ids ? { failed } : {}), cursor: page.isDone ? null : page.continueCursor };
+  },
+});
+
+/** One page of a workspace's recordings started since `since`: each one's day and whether its stream was read. */
+export const recordingsCoveragePage = internalQuery({
+  args: { workspace: v.string(), since: v.number(), cursor: v.union(v.string(), v.null()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query("replays").withIndex("by_workspace_started", (q: any) => q.eq("workspace", args.workspace).gte("started_at", args.since)).paginate({ cursor: args.cursor, numItems: 100 });
+    return { rows: (page.page as any[]).map((r) => coverageRow(r.source_id, RECORDING, recordingCoverage(r))), cursor: page.isDone ? null : page.continueCursor };
   },
 });
 
@@ -251,6 +309,8 @@ const rollupArgs = {
   queued: v.number(),
   reopened: v.array(v.object({ task_id: v.string(), at: v.number() })),
   funnel: v.optional(flowFunnelValidator),
+  backlog: v.optional(flowBacklogValidator),
+  coverage: v.optional(sourceCoverageValidator),
 };
 
 export const writeRollup = internalMutation({
@@ -270,9 +330,21 @@ type RollupRow = { [K in keyof typeof rollupArgs]: any };
  * the whole window; after that, yesterday (a late finding still lands in it)
  * and today.
  */
-export function recountFrom(prev: { rolled_at: number; funnel?: unknown } | null | undefined, now: number): number {
+export function recountFrom(prev: { rolled_at: number; funnel?: unknown; coverage?: unknown } | null | undefined, now: number, kept: "funnel" | "coverage" = "funnel"): number {
   const windowStart = dayStart(now - (KEEP_DAYS - 1) * DAY_MS);
-  return prev?.funnel && now - prev.rolled_at < 2 * DAY_MS ? dayStart(now - DAY_MS) : windowStart;
+  return prev?.[kept] && now - prev.rolled_at < 2 * DAY_MS ? dayStart(now - DAY_MS) : windowStart;
+}
+
+/** Every page of a paged rollup query, in order. */
+async function allPages<T>(ctx: any, fn: any, args: Record<string, unknown>): Promise<T[]> {
+  const out: T[] = [];
+  let cursor: string | null = null;
+  do {
+    const page: any = await ctx.runQuery(fn, { ...args, cursor });
+    out.push(page);
+    cursor = page.cursor;
+  } while (cursor);
+  return out;
 }
 
 /**
@@ -320,41 +392,55 @@ export function foldRollup(o: {
 }
 
 async function rollupWorkspace(ctx: any, workspace: string, now: number): Promise<void> {
-  const prev = await ctx.runQuery((internal as any).flowMap.rollupRow, { workspace });
+  const api = (internal as any).flowMap;
+  const prev = await ctx.runQuery(api.rollupRow, { workspace });
   const from = recountFrom(prev, now);
   const counts: Array<{ source: string; day: string; n: number; last_at: number }> = [];
   const reopened: Array<{ task_id: string; at: number }> = [];
-  let cursor: string | null = null;
-  do {
-    const page: any = await ctx.runQuery((internal as any).flowMap.findingsPage, { workspace, since: from, cursor });
+  for (const page of await allPages<any>(ctx, api.findingsPage, { workspace, since: from })) {
     counts.push(...page.counts);
     reopened.push(...page.reopened);
-    cursor = page.cursor;
-  } while (cursor);
+  }
   const outcomes: Array<{ source: string; outcome: string }> = [];
   const items: FunnelItem[] = [];
+  const backlog: BacklogItem[] = [];
+  const flowEventsSeen: FlowEvents[] = [];
   let open = 0, scored = 0, queued = 0;
-  // One read serves both: a source's outcomes and the Volume chart's problems span the same 30 days.
+  // One read serves all three: a source's outcomes, the Volume chart's problems and the days span the same 30 days, and
+  // the backlog is every open problem the same pages pass.
   const since = now - FLOW_MAP_OUTCOME_DAYS * DAY_MS;
-  const setup: FunnelSetup = await ctx.runQuery((internal as any).flowMap.funnelSetup, { workspace });
+  const setup: FunnelSetup = await ctx.runQuery(api.funnelSetup, { workspace });
   const funnel = { ...setup, now };
   for (const status of PROBLEM_STATUSES) {
-    cursor = null;
-    do {
-      const page: any = await ctx.runQuery((internal as any).flowMap.problemsPage, { workspace, status, since, cursor, funnel });
+    for (const page of await allPages<any>(ctx, api.problemsPage, { workspace, status, since, funnel })) {
       open += page.open;
       scored += page.scored;
       queued += page.queued;
       outcomes.push(...page.outcomes);
       items.push(...page.items);
-      cursor = page.cursor;
-    } while (cursor);
+      backlog.push(...page.backlog);
+      flowEventsSeen.push(...page.events);
+    }
   }
-  const escapes = await ctx.runQuery((internal as any).flowMap.escapesInputs, { workspace, since: now - FLOW_MAP_ESCAPE_DAYS * DAY_MS });
-  const events = await ctx.runQuery((internal as any).flowMap.eventsInputs, { workspace, since: dayStart(now - (FLOW_MAP_DAYS - 1) * DAY_MS) });
+  // Distinct problems per source: a problem retried, or run again on another flow, ran off the flow once.
+  const escaped = new Map<string, Set<string>>();
+  for (const page of await allPages<any>(ctx, api.escapesInputs, { workspace, since: now - FLOW_MAP_ESCAPE_DAYS * DAY_MS })) {
+    for (const [k, ids] of Object.entries(page.escapes as Record<string, string[]>)) for (const id of ids) (escaped.get(k) ?? escaped.set(k, new Set()).get(k)!).add(id);
+  }
+  const escapes: Record<string, number> = Object.fromEntries([...escaped].map(([k, ids]) => [k, ids.size]));
+  const events = await ctx.runQuery(api.eventsInputs, { workspace, since: dayStart(now - (FLOW_MAP_DAYS - 1) * DAY_MS) });
+  const covFrom = recountFrom(prev, now, "coverage");
+  const covRows = [
+    ...(await allPages<any>(ctx, api.momentsCoveragePage, { workspace, since: covFrom })).flatMap((p) => p.rows),
+    ...(await allPages<any>(ctx, api.recordingsCoveragePage, { workspace, since: covFrom })).flatMap((p) => p.rows),
+  ];
+  const coverage: SourceCoverage[] = foldCoverage({ prev: prev?.coverage, from: covFrom, now, rows: covRows });
   const folded = foldRollup({ workspace, now, from, prev, counts, reopened, outcomes, escapes });
   const volume = foldFunnel({ items, stations: setup.stations, sources: folded.sources, now });
-  await ctx.runMutation((internal as any).flowMap.writeRollup, { workspace, rolled_at: now, ...folded, events, problems_open: open, problems_scored: scored, queued, funnel: volume });
+  await ctx.runMutation(api.writeRollup, {
+    workspace, rolled_at: now, ...folded, events, problems_open: open, problems_scored: scored, queued, funnel: volume,
+    backlog: foldBacklog({ items: backlog, events: flowEventsSeen, now }), coverage,
+  });
 }
 
 /** The hourly pass (crons.ts), or one workspace by hand: `run.sh flowMap:rollup '{"workspace":"team:..."}'`. */
@@ -455,13 +541,16 @@ export async function flowMapView(ctx: Ctx, workspace: string, viewer: string, n
   const eventSources: any[] = await ctx.db.query("event_sources").withIndex("by_workspace_name", (q: any) => q.eq("workspace", workspace)).collect();
   // The judges by name, and the sources they read moments from (which are no problem source of their own).
   const judges = new Map<string, string[]>();
+  const liveJudges = new Set<string>();
   const momentSources = new Set<string>();
   for (const src of eventSources) {
     for (const j of (await ctx.db.query("judges").withIndex("by_source_name", (q: any) => q.eq("source_id", src._id)).collect()) as any[]) {
       judges.set(j.name, [...(judges.get(j.name) ?? []), String(j._id)]);
+      if (!j.removed_at) liveJudges.add(j.name);
       momentSources.add(String(src._id));
     }
   }
+  const retiredJudges = new Set([...judges.keys()].filter((n) => !liveJudges.has(n)));
   const watches: any[] = await ctx.db.query("metric_watches").withIndex("by_workspace", (q: any) => q.eq("workspace", workspace)).collect();
 
   const sources: FlowMapSource[] = [];
@@ -480,10 +569,14 @@ export async function flowMapView(ctx: Ctx, workspace: string, viewer: string, n
   // A source that promotes but has filed nothing yet still has its row.
   for (const [key, src] of bySignalKey) if ((src.promote ?? []).length && !rolledSources.has(key) && !momentSources.has(String(src._id))) rolledSources.set(key, { key, days: [], outcomes: emptyOutcomes(), escapes: 0 });
 
+  const recent = new Set(windowDays(now, 14));
   for (const s of rolledSources.values()) {
     const src = bySignalKey.get(s.key);
     const judgeName = s.key.startsWith("judge:") ? s.key.slice(6) : null;
     const finder = finders.get(s.key);
+    // A retired source is no source: a judge whose judges were all removed, or a key nothing declares that filed nothing in 14 days.
+    if (judgeName && retiredJudges.has(judgeName)) continue;
+    if (!src && !finder && !(judgeName && judges.has(judgeName)) && !s.days.some((d: any) => recent.has(d.day) && d.n > 0)) continue;
     const promoted = new Set<string>(src?.promote ?? []);
     const promotedEvents = src ? events.filter((e) => String(e.source_id) === String(src._id) && promoted.has(e.transition)) : [];
     // A source that has filed nothing yet: its state is its events' (it is flowing, its findings are not).
@@ -542,6 +635,18 @@ export async function flowMapView(ctx: Ctx, workspace: string, viewer: string, n
   const shipped = shippedFixes({ watched, reopened, now });
 
   const queued = rolled?.queued ?? 0;
+  const backlog = rolled?.backlog ?? null;
+  const projectById = new Map(projects.map((p) => [String(p._id), p]));
+  const backlogProjects: Record<string, { title: string; ref: string | null }> = {};
+  for (const x of backlog?.projects ?? []) {
+    const p = x.project ? projectById.get(x.project) : null;
+    if (p) backlogProjects[x.project!] = { title: p.title ?? "Untitled", ref: p.short_id ?? null };
+  }
+  const sourceById = new Map(eventSources.map((s) => [String(s._id), s]));
+  const coverage = (rolled?.coverage ?? []).flatMap((c: any) => {
+    const src = sourceById.get(c.source_id);
+    return src ? [{ ...c, label: String(src.name), provider: String(src.provider) }] : [];
+  });
   return {
     workspace,
     rolledAt: rolled?.rolled_at ?? null,
@@ -556,6 +661,9 @@ export async function flowMapView(ctx: Ctx, workspace: string, viewer: string, n
     sources,
     shipped,
     funnel: rolled?.funnel ?? null,
+    backlog,
+    backlogProjects,
+    coverage,
     header: {
       problemsOpen: rolled?.problems_open ?? 0, problemsScored: rolled?.problems_scored ?? 0, decisionsForYou, decisionsForTeam,
       watching: shipped.filter((r) => r.state === "watching").length, regressed: shipped.filter((r) => r.state === "regressed").length,

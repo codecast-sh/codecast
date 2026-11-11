@@ -171,6 +171,8 @@ export type LiveFlowRow = {
   /** The bar a problem clears to start (clearsBar), and who set it; null takes every problem. */
   bar: (FlowBar & { by: string; at: number }) | null;
   load: { working: number; cap: number };
+  /** The machines holding a slot for the flow's checkouts: online now, and in all. Absent from a server before it. */
+  machines?: { online: number; total: number };
   waiting: string | null;
   watcher: { role_id: string; handle: string } | null;
   changed_by: string;
@@ -191,6 +193,8 @@ export async function liveFlowView(ctx: Ctx, flow: any, now = Date.now()): Promi
   // Leads seated in different folders of one checkout share its pool: count each pool, and each runner's own machine, once.
   const distinct = new Map([...loads.values()].map((l) => [l.pool ? l.pool.slots.map((sl) => sl.device).sort().join(",") : `runner:${l.runner}`, l]));
   const totals = [...distinct.values()].reduce((t, l) => ({ working: t.working + l.working, cap: t.cap + l.cap }), { working: 0, cap: 0 });
+  const online = [...distinct.values()].reduce((n, l) => n + (l.pool?.slots.length ?? 0), 0);
+  const machines = { online, total: online + [...distinct.values()].reduce((n, l) => n + (l.pool?.offline ?? 0), 0) };
   const plan = await planLiveFlow(ctx, flow, roles, now, LIVE_FLOW_SHOWN, loads);
   const running: string[] = [];
   for (const r of team) {
@@ -214,6 +218,7 @@ export async function liveFlowView(ctx: Ctx, flow: any, now = Date.now()): Promi
     hold: flowHold(flow, now),
     bar: flow.bar ?? null,
     load: totals,
+    machines,
     waiting: plan.waiting,
     watcher: watcher ? { role_id: String(watcher._id), handle: watcher.handle } : null,
     changed_by: String(flow.changed_by),

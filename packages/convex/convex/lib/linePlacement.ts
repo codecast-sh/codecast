@@ -16,7 +16,8 @@ import { isDeviceOnline } from "../ccAccountsShared";
 type Ctx = { db: any };
 
 export type LineSlot = { device: string; user: string; root: string; runs: number; working: number };
-export type LinePool = { origin: string; subpath: string; slots: LineSlot[] };
+/** `offline`: the machines that hold a slot for the checkout and are offline now (or cannot start the flow's agents). */
+export type LinePool = { origin: string; subpath: string; slots: LineSlot[]; offline?: number };
 
 // A run works while it is pending or running. A run paused at its card, or
 // running but blocked on a person's answer, uses no machine.
@@ -136,7 +137,8 @@ export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string 
   if (!checkout || !origin) return null;
   const subpath = projectPath.slice(checkout.root.length).replace(/^\/+/, "");
   const own = await slotsFor(ctx, devices, origin, now, needs);
-  if (own.length) return { origin, subpath, slots: own };
+  const offline = (ds: any[]) => ds.filter((d) => (d.line_slots ?? []).some((s: any) => s.origin === origin) && (!isDeviceOnline(d, now) || missingAgentOn(d, needs))).length;
+  if (own.length) return { origin, subpath, slots: own, offline: offline(devices) };
   if (!teamId) return null;
   const team: any[] = [];
   for (const member of await teamMemberIds(ctx, teamId)) {
@@ -144,7 +146,7 @@ export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string 
     team.push(...await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", member)).collect());
   }
   const shared = await slotsFor(ctx, team, origin, now, needs);
-  return shared.length ? { origin, subpath, slots: shared } : null;
+  return shared.length ? { origin, subpath, slots: shared, offline: offline(devices) + offline(team) } : null;
 }
 
 async function slotsFor(ctx: Ctx, devices: any[], origin: string, now: number, needs?: readonly string[]): Promise<LineSlot[]> {

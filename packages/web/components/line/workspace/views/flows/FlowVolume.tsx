@@ -1,5 +1,5 @@
 "use client";
-// The Flows page's Volume view: everything that moved through the line in a
+// The Volume page's funnel (VolumePage): what moved through the line in a
 // window, as one chart. Left to right the signals that came in, the problems
 // opened, the runs started, each station of the live flow, then merged, live
 // and closed clean. Each column's bar is the problems that reached it; the
@@ -10,7 +10,7 @@
 import { useState, type MouseEvent } from "react";
 import Link from "next/link";
 import type { FlowMap } from "@codecast/shared/contracts/flowMap";
-import { FUNNEL_REASONS, FUNNEL_WINDOWS, funnelItemsOf, type FunnelReason, type FunnelWindow } from "@codecast/shared/contracts/lineFunnel";
+import { FUNNEL_REASONS, funnelItemsOf, type FunnelReason, type FunnelWindow } from "@codecast/shared/contracts/lineFunnel";
 import { ageShort } from "../../../../../lib/lineFlow";
 import type { LineSelectionPatch } from "../../../../../lib/line/lineWorkspaceUrl";
 import type { LineViewProps } from "../types";
@@ -38,12 +38,12 @@ type Pick = { kind: "signals" } | { kind: "step"; level: number; why?: FunnelRea
 
 const same = (a: Pick, b: Pick) => JSON.stringify(a) === JSON.stringify(b);
 
-export function FlowVolume({ map, href, select, now }: { map: FlowMap; href: LineViewProps["href"]; select: LineViewProps["select"]; now: number }) {
-  const [days, setDays] = useState<number>(FUNNEL_WINDOWS[0]);
+/** How far the problems opened in the window got through the live flow, one column per step. */
+export function FunnelChart({ map, days, href, select, now }: { map: FlowMap; days: number; href: LineViewProps["href"]; select: LineViewProps["select"]; now: number }) {
   const [pick, setPick] = useState<Pick>(null);
   const toggle = (p: Pick) => setPick((cur) => (same(cur, p) ? null : p));
   const f = map.funnel;
-  if (!f) return <section className="fv" data-flow-volume=""><p className="fv-none">No rollup yet</p></section>;
+  if (!f) return null;
   const w = f.windows.find((x) => x.days === days) ?? f.windows[0];
   // One logarithmic scale for every column, in whole decades from 1 to the largest count.
   const dec = Math.max(1, Math.ceil(Math.log10(Math.max(10, w.signals, ...w.steps.map((s) => s.n)))));
@@ -51,15 +51,9 @@ export function FlowVolume({ map, href, select, now }: { map: FlowMap; href: Lin
   const present = FUNNEL_REASONS.filter((r) => w.steps.some((s) => s.drops[r]));
 
   return (
-    <section className="fv" aria-label="Volume" data-flow-volume={days}>
+    <section className="fv" aria-label="Problems opened, through the flow" data-flow-volume={days}>
       <header className="fv-head">
-        <h2 className="fv-title">Volume</h2>
-        <div className="lw-seg" role="tablist" aria-label="Window">
-          {FUNNEL_WINDOWS.map((d) => (
-            <button key={d} type="button" role="tab" aria-selected={d === days} onClick={() => { setDays(d); }} data-flow-volume-window={d}>{d} days</button>
-          ))}
-        </div>
-        <span className="fv-age" title={new Date(f.at).toLocaleString()}>as of <span className="lw-num">{ageShort(Math.max(0, now - f.at))}</span> ago</span>
+        <h3 className="fv-title">Opened in {days} days, through the flow</h3>
       </header>
 
       <ul className="fv-key" aria-label="Key">

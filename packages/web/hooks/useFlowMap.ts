@@ -18,6 +18,8 @@ const asRows = (m: FlowMap | null | undefined) => (m ? [{ ...m, _id: m.workspace
 
 const mapSig = (m: FlowMapRow) => [
   m.rolledAt ?? "",
+  // The backlog, funnel and coverage change only with a pass (rolledAt); the backlog's project names can change between.
+  Object.entries(m.backlogProjects ?? {}).map(([id, p]) => `${id}:${p.title}`).join(","),
   Object.values(m.header).join(","),
   m.liveFlow ? `${m.liveFlow.on}|${m.liveFlow.hold?.why ?? ""}|${m.liveFlow.running}|${m.liveFlow.stalled}|${m.liveFlow.queued}|${m.liveFlow.handsToday}|${m.liveFlow.cap}|${m.liveFlow.finishedToday}` : "",
   m.lanes.map((l) => `${l.key}:${l.steps.map((s) => `${s.id}=${s.running}/${s.stalled}/${s.waiting}`).join(",")}`).join(";"),

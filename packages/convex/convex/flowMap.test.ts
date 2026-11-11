@@ -325,6 +325,57 @@ describe("rollup then forTeam", () => {
     expect(map.funnel!.items.find((x) => x.ref === "ct-jr")!.why).toBe("unowned");
   });
 
+  test("the Volume page: every open problem whatever its age, by where it stands; the days; sources read against arrived", async () => {
+    const map = (await rolledMap(VIEWER, async (db) => {
+      const m = (id: string, status: string, over: Record<string, any> = {}) => db.insert("moments", { workspace: WS, source_id: "event_sources_errors", short_id: `mo-${id}`, kind: "conversation", subject: id, status, events: 1, first_event_at: NOW - H, event_at: NOW - H, due_at: NOW, attempts: 0, created_at: NOW - H, updated_at: NOW - H, ...over });
+      const judged = await m("1", "ready", { judged_at: NOW - H });
+      const failedJudge = await m("2", "ready", { judged_at: NOW - H });
+      await m("3", "ready");
+      await m("4", "failed");
+      await db.insert("judge_runs", { workspace: WS, source_id: "event_sources_errors", judge_id: "judges_ar", judge: "agent-review", judge_version: "1", moment_id: judged, moment_short_id: "mo-1", mode: "live", status: "ok", expectations: [], findings: 0, model: "m", cost_usd: 0, at: NOW - H });
+      await db.insert("judge_runs", { workspace: WS, source_id: "event_sources_errors", judge_id: "judges_ar", judge: "agent-review", judge_version: "1", moment_id: failedJudge, moment_short_id: "mo-2", mode: "live", status: "failed", expectations: [], findings: 0, model: "m", cost_usd: 0, at: NOW - H });
+      const rp = (id: string, over: Record<string, any> = {}) => db.insert("replays", { workspace: WS, source_id: "event_sources_posthog", short_id: `rp-${id}`, provider: "posthog", external_id: id, started_at: NOW - 2 * H, counts: { clicks: 0, errors: 0, failed_requests: 0 }, group_ids: [], chunk_keys: [], created_at: NOW - H, updated_at: NOW - H, ...over });
+      await rp("1", { imported_at: NOW - H });
+      await rp("2");
+      await rp("3");
+    }))!;
+    const b = map.backlog!;
+    // Every open problem, the 40-day-old ones included: ar1 ar2 ar3 p1 p2 e1 jr p3 ar5 old (ar4 merged, w1 done).
+    expect(b.total).toBe(10);
+    expect(b.total).toBe(map.header.problemsOpen);
+    const n = Object.fromEntries(b.stands.map((s) => [s.stand, s.n]));
+    // ar1 runs at Build; ar2 stalled there; p1 paused at Decide, p3 named by a blocking decision and ar5 holding a wait:
+    // on a person; p2 sat at Rebase 20h: stalled; ar3, jr and old are in no project, so nobody owns them; e1 shipped and came back.
+    expect(n).toEqual({ running: 1, stalled: 2, waiting: 3, noproject: 3, other: 1 });
+    expect(b.stations.filter((s) => s.node === "Build").map((s) => `${s.stand}:${s.n}`).sort()).toEqual(["running:1", "stalled:1", "waiting:1"]);
+    expect(b.items.find((x) => x.ref === "ct-old")).toMatchObject({ stand: "noproject", run: null });
+    // The days: today, the runs started 1h and 5h ago; problems opened a day ago land yesterday.
+    expect(b.days).toHaveLength(30);
+    expect(b.days.at(-1)!.ran).toBe(2);
+    expect(b.days.at(-2)!.opened).toBeGreaterThan(0);
+    const cov = Object.fromEntries(map.coverage!.map((c) => [`${c.label}:${c.kind}`, c.days.reduce((t, d) => ({ arrived: t.arrived + d.arrived, read: t.read + d.read, judged: t.judged + d.judged, failed: t.failed + d.failed, waiting: t.waiting + d.waiting }), { arrived: 0, read: 0, judged: 0, failed: 0, waiting: 0 })]));
+    expect(cov["union-errors:conversation"]).toEqual({ arrived: 4, read: 3, judged: 1, failed: 2, waiting: 1 });
+    expect(cov["union-posthog:recording"]).toEqual({ arrived: 3, read: 1, judged: 0, failed: 0, waiting: 0 });
+  });
+
+  test("a retired source is no source; a flow named under the spine's slug is the spine's own batch, never an escape", async () => {
+    const map = (await rolledMap(VIEWER, async (db) => {
+      // judge:comms, folded into agent-review: its judge removed, its last finding 20 days back. evals: nothing declares it, quiet 20 days.
+      await db.insert("judges", { source_id: "event_sources_errors", name: "comms", workspace: WS, removed_at: NOW - 20 * DAY_MS });
+      await db.insert("signals", signal("c1", "judge:comms", NOW - 20 * DAY_MS));
+      await db.insert("signals", signal("ev1", "evals", NOW - 20 * DAY_MS));
+      // An agentwatch-triage batch run on p1, a person's problem: inside the family, so the person source keeps its one escape (p2's own line).
+      await db.insert("workflows", { user_id: VIEWER, workspace: WS, slug: "agentwatch-triage", name: "agentwatch-triage", nodes: [], edges: [], created_at: 1, updated_at: 1 });
+      const triage = (await db.query("workflows").collect()).find((w: any) => w.slug === "agentwatch-triage")._id;
+      await db.insert("workflow_runs", { workspace: WS, user_id: VIEWER, workflow_id: triage, task_id: "tasks_p1", status: "completed", current_node_id: "exit", created_at: NOW - H, updated_at: NOW - H });
+    }))!;
+    const keys = map.sources.map((s) => s.key);
+    expect(keys).not.toContain("judge:comms");
+    expect(keys).not.toContain("evals");
+    expect(keys).toContain("judge:agent-review");
+    expect(map.sources.find((s) => s.key === "person")!.escapes).toBe(1);
+  });
+
   test("a finder's declaration names its row", async () => {
     const { db } = fixtures({ signals: [signal("d", "union.desk", NOW - H)] });
     const realNow = Date.now;

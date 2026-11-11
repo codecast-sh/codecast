@@ -1,18 +1,18 @@
 "use client";
 // The flows app's left nav (doc "Signals to shipped: one pipeline"): For you
 // first, the decisions waiting on the viewer with their count, then the
-// pipeline's stages in the order work moves through them, Signals, Problems,
+// whole line at a glance (Volume), then the pipeline's stages in the order work moves through them, Signals, Problems,
 // Flows and Shipped, joined by a rail. Each shows its number and its state and
 // opens its view; the open one is marked. G then the stage's key opens it too.
 // A number the map has not answered yet shows as a dash, never as a zero that
 // would read as settled.
 import { memo } from "react";
-import { AlertCircle, Inbox, Rocket, Rss, Workflow, type LucideIcon } from "lucide-react";
+import { AlertCircle, BarChart3, Inbox, Rocket, Rss, Workflow, type LucideIcon } from "lucide-react";
 import { KeyCap } from "../../KeyCap";
 import { PIPELINE_KEYS, PIPELINE_LABELS, PIPELINE_RAIL, type PipelineStage, type StageFigure } from "../../../lib/line/pipeline";
 import "./pipeline.css";
 
-const ICONS: Record<PipelineStage, LucideIcon> = { decisions: Inbox, signals: Rss, problems: AlertCircle, flows: Workflow, shipped: Rocket };
+const ICONS: Record<PipelineStage, LucideIcon> = { decisions: Inbox, signals: Rss, problems: AlertCircle, flows: Workflow, shipped: Rocket, volume: BarChart3 };
 
 export const PipelineNav = memo(function PipelineNav({ figures, at, open, settling }: { figures: Record<PipelineStage, StageFigure>; at: PipelineStage | null; open: (stage: PipelineStage) => void; settling?: boolean }) {
   const item = (stage: PipelineStage) => {
@@ -37,6 +37,7 @@ export const PipelineNav = memo(function PipelineNav({ figures, at, open, settli
   return (
     <nav className="pn" aria-label="Flows" data-pipeline data-settling={settling ? "" : undefined}>
       {item("decisions")}
+      {item("volume")}
       <div className="pn-rail" data-pipeline-rail>{PIPELINE_RAIL.map(item)}</div>
     </nav>
   );

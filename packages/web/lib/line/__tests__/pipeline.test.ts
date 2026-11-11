@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { PIPELINE_LABELS, PIPELINE_RAIL, pipelineFigures, pipelineHome, pipelineStageForGoKey, pipelineStageOf, routeWords, signalCounts } from "../pipeline";
-import { readLineSelection } from "../lineWorkspaceUrl";
+import { lineSelectionSearch, readLineSelection } from "../lineWorkspaceUrl";
 import { emptyOutcomes, type FlowMap, type FlowMapSource } from "@codecast/shared/contracts/flowMap";
 
 const src = (key: string, o: Partial<FlowMapSource> = {}): FlowMapSource => ({
@@ -34,6 +34,17 @@ describe("the pipeline nav", () => {
     expect(["", "view=line", "view=flows", "view=flows&item=x"].map(at)).toEqual(Array(4).fill("flows"));
     expect(["view=foryou", "need=sd-1"].map(at)).toEqual(["decisions", "decisions"]);
     expect(["view=shipped", "view=deploys"].map(at)).toEqual(["shipped", "shipped"]);
+    expect(["view=volume", "view=volume&win=30&show=stand:nolead"].map(at)).toEqual(["volume", "volume"]);
+  });
+
+  test("Volume has an address that keeps its window and the count open under it, and drops them on leaving", () => {
+    const q = lineSelectionSearch(new URLSearchParams("view=line&case=ct-1"), { view: "volume", win: "30", show: "stand:nolead" });
+    expect(q).toContain("win=30");
+    expect(q).toContain("show=stand");
+    expect(q).not.toContain("case=");
+    expect(lineSelectionSearch(new URLSearchParams("view=volume&win=30&show=stand:nolead"), { view: "signals" })).not.toMatch(/win=|show=/);
+    expect(pipelineHome("volume")).toMatchObject({ view: "volume" });
+    expect(pipelineStageForGoKey("v")).toBe("volume");
   });
 
   test("a stage's home is its view with nothing open; Flows opens the live flow's map, or the library with none", () => {

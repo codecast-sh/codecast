@@ -1,23 +1,24 @@
 // The flows app as one pipeline (doc "Signals to shipped: one pipeline"):
 // Signals, Problems, Flows, Decisions, Shipped. The left nav carries it: For
-// you (the decisions waiting on the viewer) first, then the stages work moves
+// you (the decisions waiting on the viewer) first, Volume (the whole line at
+// a glance: arrived against read, the backlog, the days), then the stages work moves
 // through, each one number and one state, and the way into its view. Every
 // view of the app sits under one stage, so the nav marks where a person is
 // whatever address they came by. Pure, so a test reads it.
 import type { FlowMap, FlowMapGroup, FlowMapSource, FlowMapState } from "@codecast/shared/contracts/flowMap";
 import { lineViewHome, type LineSelection, type LineSelectionPatch } from "./lineWorkspaceUrl";
 
-export const PIPELINE_STAGES = ["signals", "problems", "flows", "decisions", "shipped"] as const;
+export const PIPELINE_STAGES = ["signals", "problems", "flows", "decisions", "shipped", "volume"] as const;
 export type PipelineStage = (typeof PIPELINE_STAGES)[number];
 
-export const PIPELINE_LABELS: Record<PipelineStage, string> = { signals: "Signals", problems: "Problems", flows: "Flows", decisions: "For you", shipped: "Shipped" };
+export const PIPELINE_LABELS: Record<PipelineStage, string> = { signals: "Signals", problems: "Problems", flows: "Flows", decisions: "For you", shipped: "Shipped", volume: "Volume" };
 
 /** The stages the nav's rail joins, in the order work moves through them; For you sits above them, since a decision
  *  can wait at any of them. */
 export const PIPELINE_RAIL: ReadonlyArray<PipelineStage> = ["signals", "problems", "flows", "shipped"];
 
 /** The second key of the go chord (G, then this). No digit: an open decision answers on bare 1 to 9. */
-export const PIPELINE_KEYS: Record<PipelineStage, string> = { signals: "s", problems: "p", flows: "f", decisions: "d", shipped: "h" };
+export const PIPELINE_KEYS: Record<PipelineStage, string> = { signals: "s", problems: "p", flows: "f", decisions: "d", shipped: "h", volume: "v" };
 
 export const pipelineStageForGoKey = (key: string): PipelineStage | null => PIPELINE_STAGES.find((s) => PIPELINE_KEYS[s] === key.toLowerCase()) ?? null;
 
@@ -30,6 +31,7 @@ export function pipelineStageOf(s: Pick<LineSelection, "view" | "source">): Pipe
     case "foryou": return "decisions";
     case "shipped": case "deploys": return "shipped";
     case "flows": return "flows";
+    case "volume": return "volume";
     case "line": return s.source ? "signals" : "flows";
   }
 }
@@ -43,6 +45,7 @@ export function pipelineHome(stage: PipelineStage, live = true): LineSelectionPa
     case "flows": return live ? { ...lineViewHome("line"), mode: "map" } : lineViewHome("flows");
     case "decisions": return lineViewHome("foryou");
     case "shipped": return lineViewHome("shipped");
+    case "volume": return lineViewHome("volume");
   }
 }
 
@@ -76,7 +79,24 @@ export function pipelineFigures(map: FlowMap | null, forYou: number): Record<Pip
     problems: { n: h ? h.problemsOpen : null, unit: "open", state: h ? [{ words: `${h.problemsScored.toLocaleString()} scored`, tone: "ok" }] : [] },
     flows: { n: map ? (live?.running ?? 0) + (map.off.running ?? 0) : null, unit: "running", state: flowState },
     decisions: { n: forYou, unit: "for you", state: h ? [{ words: `${h.decisionsForTeam.toLocaleString()} for the team`, tone: h.decisionsForTeam ? "ask" : "calm" }] : [] },
+    volume: volumeFigure(map),
     shipped: { n: h ? h.watching : null, unit: "watching", state: h ? [h.regressed ? { words: `${h.regressed.toLocaleString()} regressed`, tone: "bad" } : { words: "none regressed", tone: "ok" }] : [] },
+  };
+}
+
+/** Volume's figure: what came in over the last 24 hours, then what was left unread today and how old the counts are. */
+function volumeFigure(map: FlowMap | null): StageFigure {
+  if (!map) return { n: null, unit: "in today", state: [] };
+  const today = map.sources.reduce((n, s) => n + s.today, 0);
+  const key = new Date().toISOString().slice(0, 10);
+  const unread = (map.coverage ?? []).reduce((n, c) => { const d = c.days.find((x) => x.day === key); return n + (d ? (c.kind === "recording" ? d.arrived - d.read : d.waiting + d.failed) : 0); }, 0);
+  const stale = map.rolledAt != null && Date.now() - map.rolledAt > 3 * 3_600_000;
+  return {
+    n: today, unit: "in today",
+    state: [
+      ...(unread > 0 ? [{ words: `${unread.toLocaleString()} unread`, tone: "warn" as const }] : []),
+      ...(stale ? [{ words: "counts stale", tone: "bad" as const }] : []),
+    ],
   };
 }
 

@@ -6,6 +6,7 @@
 
 import { runEnd, type AnsweredGate, type LineRunStations } from "./lineRunEnd";
 import type { FlowFunnel } from "./lineFunnel";
+import type { FlowBacklog, SourceCoverage } from "./lineVolume";
 
 export const FLOW_MAP_DAYS = 14;
 /** How far back a source's problems count toward its outcomes. */
@@ -94,6 +95,12 @@ export type FlowMap = {
   shipped: FlowMapShipped[];
   /** How far the problems opened in each window got through the live flow (lineFunnel.ts); null before a rollup wrote one. */
   funnel?: FlowFunnel | null;
+  /** Every open problem by where it stands, and the window's days (lineVolume.ts); null before a rollup wrote one. */
+  backlog?: FlowBacklog | null;
+  /** The backlog's projects by id: their names, and whether a lead owns them. */
+  backlogProjects?: Record<string, { title: string; ref: string | null }>;
+  /** Per event source and kind, arrived against read (lineVolume.ts), named by its source. */
+  coverage?: Array<SourceCoverage & { label: string; provider: string }> | null;
   header: {
     problemsOpen: number;
     problemsScored: number;

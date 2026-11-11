@@ -66,7 +66,7 @@ type GraphEdge = { from: string; to: string };
 
 const WORK = new Set(["agent", "human", "prompt"]);
 /** Where a change goes in: pushed, merged, or left ready for a person to land. */
-const LANDING = /^(?:push|merge|ready_to_land|land|rebase)$/;
+export const LANDING = /^(?:push|merge|ready_to_land|land|rebase)$/;
 /** The order a landing step names its stations in: where the line lands it first, a person's hand last. */
 const LANDING_NAMES = ["merge", "land", "rebase", "ready_to_land"];
 const DEPLOYING = /^(?:deploy|wait_for_live)$/;

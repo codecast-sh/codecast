@@ -23,6 +23,8 @@ export type LiveFlow = {
   caps: { hands_per_day: number | null };
   hands_today: number;
   load: { working: number; cap: number };
+  /** The machines holding a slot for the flow's checkouts: online now, and in all. */
+  machines?: { online: number; total: number };
   /** Why nothing starts now, when nothing does. */
   waiting: string | null;
   watcher: { role_id: string; handle: string } | null;
@@ -69,7 +71,7 @@ export type SessionFlow = {
 
 const teamOf = (space: string | null | undefined) => (space?.startsWith("team:") ? space.slice(5) : null);
 
-const liveSig = (r: LiveFlow) => `${r.on}|${r.flow.id}|${r.flow.label}|${r.load.working}/${r.load.cap}|${r.hands_today}|${r.caps.hands_per_day}|${r.waiting ?? ""}|${(r.sources ?? []).join(" ")}|${r.queue.map((q) => `${q.task_id}:${q.waiting ?? ""}`).join(",")}|${r.running.join(",")}|${r.watcher?.handle ?? ""}|${r.hold ? `${r.hold.why}@${r.hold.until ?? ""}` : ""}|${r.bar ? `${r.bar.score}/${r.bar.findings}/${r.bar.quiet_days}` : ""}`;
+const liveSig = (r: LiveFlow) => `${r.on}|${r.flow.id}|${r.flow.label}|${r.load.working}/${r.load.cap}|${r.machines ? `${r.machines.online}/${r.machines.total}` : ""}|${r.hands_today}|${r.caps.hands_per_day}|${r.waiting ?? ""}|${(r.sources ?? []).join(" ")}|${r.queue.map((q) => `${q.task_id}:${q.waiting ?? ""}`).join(",")}|${r.running.join(",")}|${r.watcher?.handle ?? ""}|${r.hold ? `${r.hold.why}@${r.hold.until ?? ""}` : ""}|${r.bar ? `${r.bar.score}/${r.bar.findings}/${r.bar.quiet_days}` : ""}`;
 const sessionSig = (r: SessionFlow) => `${r.label ?? r.name}|${r.run_count}|${r.more}|${r.last_at}|${r.saved?.slug ?? ""}@${r.saved?.version ?? ""}|${r.sessions.join(",")}|${r.by.join(",")}|${r.base ?? ""}`;
 
 /** Feeder and reader: the team workspace's live flow (the first, while a team runs one), or null. */
