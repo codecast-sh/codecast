@@ -1,4 +1,5 @@
 import { execFileSync } from "../proc.js";
+import { MANIFEST_SIGNED_SH, RELEASE_MANIFEST_SIGNING, manifestSignedByPinnedKey } from "../releaseTrust.js";
 import { SHARED_HOST_MARKER } from "../remote/sharedHostGuard.js";
 import { sshBase, type RemoteHost } from "../remote/session-move.js";
 
@@ -24,15 +25,26 @@ const VERSION = /^\d+\.\d+\.\d+$/;
  *  `<system>-<arch>`, where its binary is and the binary's sha256. */
 export type CastRelease = { version: string; binaries: Record<string, { url: string; sha256: string }> };
 
-function fetchJson(url: string): any {
-  const out = execFileSync("curl", ["-fsSL", "--max-time", "30", url], { encoding: "utf8", timeout: 40_000, stdio: ["ignore", "pipe", "ignore"] });
-  return JSON.parse(String(out));
+/** A release object's exact text, over https on every hop. */
+function fetchText(url: string): string {
+  const out = execFileSync("curl", ["-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-time", "30", url], { encoding: "utf8", timeout: 40_000, stdio: ["ignore", "pipe", "ignore"] });
+  return String(out);
 }
 
-/** The release dl.codecast.sh publishes as latest, or null when it cannot be read. */
-export function latestRelease(fetch: (url: string) => any = fetchJson): CastRelease | null {
+/**
+ * The release dl.codecast.sh publishes as latest, or null when it cannot be
+ * read or no pinned key signed it (releaseTrust.ts): whoever can write the
+ * bucket cannot choose what a host installs.
+ */
+export function latestRelease(fetch: (url: string) => string = fetchText, policy = RELEASE_MANIFEST_SIGNING): CastRelease | null {
   try {
-    const manifest = fetch(`${RELEASES}/latest.json`);
+    const text = fetch(`${RELEASES}/latest.json`);
+    let signature: string | null = null;
+    try {
+      signature = fetch(`${RELEASES}/latest.json.sig`);
+    } catch { /* unsigned: refused below */ }
+    if (!manifestSignedByPinnedKey(new TextEncoder().encode(text), signature, policy)) return null;
+    const manifest = JSON.parse(text);
     return typeof manifest?.version === "string" && VERSION.test(manifest.version) && manifest.binaries ? manifest : null;
   } catch {
     return null;
@@ -57,16 +69,27 @@ function githubJson(url: string): any {
 }
 
 /**
- * The published release of exactly `version`. Latest when it is that one;
- * otherwise its immutable objects on R2, which live under the commit the
- * release was cut from (cli/releases/v<version>/<commit>/): the newest commit
- * at or below the tag that has a release.json there. Throws, naming what
- * could not be read.
+ * The published release of exactly `version`. Latest when it is that one and
+ * signed; otherwise its immutable objects on R2, which live under the commit
+ * the release was cut from (cli/releases/v<version>/<commit>/): the newest
+ * commit at or below the tag that has a release.json there. release.json is
+ * not signed, so each binary's sha256 must also be the digest GitHub holds for
+ * that asset on the version's release, which the bucket cannot change.
+ * Throws, naming what could not be read or did not match.
  */
-export function releaseFor(version: string, fetch: (url: string) => any = fetchJson, github: (url: string) => any = githubJson): CastRelease {
+export function releaseFor(version: string, fetch: (url: string) => string = fetchText, github: (url: string) => any = githubJson, policy = RELEASE_MANIFEST_SIGNING): CastRelease {
   if (!VERSION.test(version)) throw new Error(`cast ${version} is not a published release version`);
-  const latest = latestRelease(fetch);
+  const latest = latestRelease(fetch, policy);
   if (latest?.version === version) return latest;
+  const digests: Record<string, string> = {};
+  try {
+    const assets = github(`https://api.github.com/repos/codecast-sh/codecast/releases/tags/v${version}`)?.assets;
+    for (const a of Array.isArray(assets) ? assets : []) {
+      const m = typeof a?.digest === "string" ? /^sha256:([0-9a-f]{64})$/.exec(a.digest) : null;
+      if (typeof a?.name === "string" && m) digests[a.name] = m[1]!;
+    }
+  } catch { /* named below */ }
+  if (!Object.keys(digests).length) throw new Error(`could not read the asset digests of GitHub release v${version}, which confirm cast ${version}'s binaries`);
   let commits: string[] = [];
   try {
     const listed = github(`https://api.github.com/repos/codecast-sh/codecast/commits?sha=v${version}&per_page=${RELEASE_COMMIT_SEARCH}`);
@@ -77,7 +100,7 @@ export function releaseFor(version: string, fetch: (url: string) => any = fetchJ
     const prefix = `${RELEASES}/cli/releases/v${version}/${commit}`;
     let artifacts: Record<string, { sha256?: string }> | undefined;
     try {
-      artifacts = fetch(`${prefix}/release.json`)?.artifacts;
+      artifacts = JSON.parse(fetch(`${prefix}/release.json`))?.artifacts;
     } catch {
       continue;
     }
@@ -85,7 +108,9 @@ export function releaseFor(version: string, fetch: (url: string) => any = fetchJ
     const binaries: CastRelease["binaries"] = {};
     for (const target of ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"]) {
       const sha256 = artifacts[`codecast-${target}`]?.sha256;
-      if (sha256) binaries[target] = { url: `${prefix}/codecast-${target}`, sha256 };
+      if (!sha256) continue;
+      if (digests[`codecast-${target}`] !== sha256) throw new Error(`cast ${version}'s codecast-${target} on dl.codecast.sh does not match GitHub release v${version}`);
+      binaries[target] = { url: `${prefix}/codecast-${target}`, sha256 };
     }
     return { version, binaries };
   }
@@ -97,9 +122,16 @@ export function releaseFor(version: string, fetch: (url: string) => any = fetchJ
  * release; without, whatever latest.json names when the script runs.
  */
 export function hostReleaseScript(platform: "linux" | "darwin", systemLinks = true, release?: CastRelease): string {
+  // A pinned release was resolved and verified where this script was built.
+  // Otherwise the host reads latest.json itself and installs it only when a
+  // pinned key signed those exact bytes.
   const manifest = release
     ? `cat > "$stage/manifest.json" <<'MANIFEST'\n${JSON.stringify(release)}\nMANIFEST`
-    : `curl -fsSL --max-time 60 https://dl.codecast.sh/latest.json -o "$stage/manifest.json"`;
+    : `curl -fsSL --proto '=https' --proto-redir '=https' --max-time 60 ${RELEASES}/latest.json -o "$stage/latest.json"
+curl -fsSL --proto '=https' --proto-redir '=https' --max-time 60 ${RELEASES}/latest.json.sig -o "$stage/latest.json.sig" || true
+${MANIFEST_SIGNED_SH}
+manifest_signed "$stage" || { echo 'latest.json carries no valid signature by a pinned key; installed CLI unchanged' >&2; exit 1; }
+cp "$stage/latest.json" "$stage/manifest.json"`;
   return `set -euo pipefail
 export PATH="$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 stage=$(mktemp -d)
@@ -122,7 +154,7 @@ if not url.startswith("https://dl.codecast.sh/cli/releases/") or not re.fullmatc
     raise SystemExit("Invalid release artifact")
 digest = hashlib.sha256()
 binary_path = os.path.join(stage, "cast")
-subprocess.run(["curl", "-fsSL", "--max-time", "180", url, "-o", binary_path], check=True)
+subprocess.run(["curl", "-fsSL", "--proto", "=https", "--proto-redir", "=https", "--max-time", "180", url, "-o", binary_path], check=True)
 with open(binary_path, "rb") as source:
     while chunk := source.read(1024 * 1024):
         digest.update(chunk)
@@ -147,8 +179,12 @@ if [ ! -e ${SHARED_HOST_MARKER} ]; then sudo ln -sf "$target" /usr/local/bin/cas
 printf 'CAST-RELEASE=%s\\n' "$expected"`;
 }
 
-export function installHostRelease(host: RemoteHost, platform: "linux" | "darwin", log: (message: string) => void, release?: CastRelease): string {
-  log(`installing ${release ? `Codecast ${release.version}` : "the published Codecast release"} and verifying its checksum…`);
+export function installHostRelease(host: RemoteHost, platform: "linux" | "darwin", log: (message: string) => void, pinned?: CastRelease): string {
+  log(`installing ${pinned ? `Codecast ${pinned.version}` : "the published Codecast release"} and verifying its checksum…`);
+  // Resolved here, where the signature is checked, so the host installs
+  // exactly the verified manifest.
+  const release = pinned ?? latestRelease();
+  if (!release) throw new Error("The published Codecast release could not be read or carries no valid signature; the host's CLI is unchanged");
   const output = execFileSync("ssh", [...sshBase(host), `${host.user}@${host.address}`, "bash -s"], {
     input: hostReleaseScript(platform, true, release), encoding: "utf8", timeout: 300_000, maxBuffer: 1024 * 1024,
     stdio: ["pipe", "pipe", "pipe"],
