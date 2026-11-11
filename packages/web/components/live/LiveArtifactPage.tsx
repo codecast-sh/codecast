@@ -31,7 +31,8 @@ import { CommentsPanel, HistoryPanel } from "./LiveSidePanels";
 import { LIVE_VIEWS, MINIMAL_VIEWS, type LiveExport, type LiveImport, type ScreenPoint } from "./registry";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../ui/dropdown-menu";
-import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
+import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import { api } from "@codecast/convex/convex/_generated/api";
 import { duplicateLiveArtifact } from "../../lib/createLiveArtifact";
 import { Button } from "../ui/button";
 import { toast } from "sonner";
@@ -599,8 +600,11 @@ function EditAccess({ doc, canEdit }: { doc: { _id: string; user_id?: string; wo
   const edit = useInboxStore((s: any) => (s.liveHeads?.[doc._id]?.edit as "team" | "owners" | undefined) ?? "team");
   const editorsSig = useInboxStore((s: any) => (s.liveHeads?.[doc._id]?.editors ?? []).join(","));
   const editors: string[] = useMemo(() => (editorsSig ? String(editorsSig).split(",") : []), [editorsSig]);
-  const roster = useTeamRosterIdentity();
   const owner = !!me && String(doc.user_id) === me;
+  const [menuOpen, setMenuOpen] = useState(false);
+  // The board's own team, asked when the menu opens: the team being viewed may be another one.
+  const { data: candidates } = useQueryNoThrow(api.liveArtifacts.editorCandidates, owner && menuOpen ? { doc_id: doc._id as any } : "skip");
+  const roster: Array<{ _id: string; name: string }> = (candidates as any[] | undefined) ?? [];
   // A personal artifact opens for its owner alone: there is no one to let in or keep out.
   if (String(doc.workspace ?? "").startsWith("user:")) return null;
   if (!owner) {
@@ -608,9 +612,9 @@ function EditAccess({ doc, canEdit }: { doc: { _id: string; user_id?: string; wo
   }
   const set = (next: "team" | "owners", list: string[]) => (useInboxStore.getState() as any).liveSetEditAccess(doc._id, next, list);
   const nameOf = (id: string) => roster.find((m) => m._id === id)?.name ?? "Someone";
-  const addable = roster.filter((m) => m._id !== me && !editors.includes(m._id) && !(m as any).is_bot);
+  const addable = roster.filter((m) => !editors.includes(m._id));
   return (
-    <DropdownMenu>
+    <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
         <button type="button" data-live-edit-access={edit} title={edit === "team" ? "Anyone can edit" : "Only you and editors edit"} className="inline-flex items-center gap-1 h-6 px-1.5 rounded text-meta shrink-0 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt">
           {edit === "team" ? <Users className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}

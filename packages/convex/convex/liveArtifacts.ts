@@ -556,6 +556,38 @@ export const setEditAccess = mutation({
   },
 });
 
+/**
+ * Who the owner can name as an editor: the people of the artifact's own team
+ * (not the team the owner is looking at), who can open it. Owner only; empty
+ * for a personal artifact.
+ */
+export const editorCandidates = query({
+  args: { doc_id: v.id("docs") },
+  handler: async (ctx, args) => {
+    let caller: Caller;
+    let doc: Doc<"docs">;
+    try {
+      caller = await resolveCaller(ctx, {});
+      doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
+    } catch {
+      return [];
+    }
+    if (String(doc.user_id) !== String(caller.userId)) return [];
+    const ws = String(doc.workspace ?? "");
+    if (!ws.startsWith("team:")) return [];
+    const teamId = ws.slice(5) as Id<"teams">;
+    const memberships = await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", teamId)).take(200);
+    const out: Array<{ _id: string; name: string; image?: string }> = [];
+    for (const m of memberships) {
+      if (String(m.user_id) === String(doc.user_id)) continue;
+      const u = await ctx.db.get(m.user_id);
+      if (!u || (u as any).is_bot) continue;
+      out.push({ _id: String(u._id), name: userName(u), ...(u.image ? { image: u.image } : {}) });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  },
+});
+
 /** The caller, checked against the doc, for an action (actions have no db). */
 export const callerForAction = internalQuery({
   args: { doc_id: v.id("docs"), ...vCaller },

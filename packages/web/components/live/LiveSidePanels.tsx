@@ -12,10 +12,18 @@ import { relativeTime } from "../../lib/entityDisplay";
 import { sharePageUrl } from "../../lib/utils";
 import { useInboxStore } from "../../store/inboxStore";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { CommentComposer } from "../comments/CommentComposer";
 import { CommentMarkdown } from "../comments/CommentMarkdown";
 import { groupThreads } from "./liveThreads";
 const formatRelative = (ts: number) => relativeTime(ts) ?? "";
+/** A comment's age the way a thread reads it: "just now", "4 min", then the app's relative time. */
+function commentAge(ts: number, now: number): string {
+  const mins = Math.floor((now - ts) / 60_000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min`;
+  return formatRelative(ts);
+}
 
 export function CommentsPanel({
   doc,
@@ -263,6 +271,16 @@ function AskState({ root }: { root: ArtifactElement }) {
   );
 }
 
+/** Ticks with the clock (a coarse one: no re-render faster than the words change). */
+function CommentTime({ ts, edited }: { ts: number; edited: boolean }) {
+  const now = useCoarseNow(30_000);
+  return (
+    <span className="text-sol-text-dim shrink-0" title={new Date(ts).toLocaleString()}>
+      {commentAge(ts, now)}{edited ? " · edited" : ""}
+    </span>
+  );
+}
+
 function CommentLine({ docId, c, canDelete, onDelete, onEdit }: { docId: string; c: ArtifactElement; canDelete: boolean; onDelete: () => void; onEdit?: (text: string) => void }) {
   // The author's own words open into an editor; Enter saves, Esc leaves them as they were.
   const [draft, setDraft] = useState<string | null>(null);
@@ -279,7 +297,7 @@ function CommentLine({ docId, c, canDelete, onDelete, onEdit }: { docId: string;
         <span className={`font-medium ${String(c.author ?? "").startsWith("s:") ? "text-sol-violet" : "text-sol-text"}`}>{String(c.author_name ?? "Someone")}</span>
         {c.anchor ? <AnchorLabel docId={docId} anchor={String(c.anchor)} inline /> : null}
         <span className="flex-1" />
-        <span className="text-sol-text-dim">{formatRelative(Number(c.created_at ?? c.at ?? 0))}{c.edited_at ? " · edited" : ""}</span>
+        <CommentTime ts={Number(c.created_at ?? c.at ?? 0)} edited={!!c.edited_at} />
         {onEdit && draft === null && (
           <button
             type="button"

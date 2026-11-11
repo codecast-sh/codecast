@@ -340,6 +340,9 @@ describe("live artifacts", () => {
     await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_o", put: { kind: "comment", text: "Owner's ask" } }] });
     await expect(as(dev).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_o", set: { answered_at: 1, answered_by_name: "Nobody" } }] })).rejects.toThrow(/set by the server/);
     await as(dev).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_o", set: { resolved: true } }] });
+    // The owner is offered the artifact's own team, not themselves; others are offered nobody.
+    expect((await as(rosa).query(api.liveArtifacts.editorCandidates, { doc_id: doc })).map((c: any) => c.name)).toEqual(["Dev"]);
+    expect(await as(dev).query(api.liveArtifacts.editorCandidates, { doc_id: doc })).toEqual([]);
     // Named, Dev edits again.
     await as(rosa).mutation(api.liveArtifacts.setEditAccess, { doc_id: doc, edit: "owners", editors: [dev] });
     await as(dev).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_a", set: { x: 9 } }] });
