@@ -120,6 +120,47 @@ describe("mergeBranch", () => {
     } finally { r.done(); }
   });
 
+  test("a squash onto the default branch's head over a tree built on the older default branch is left: it would undo what landed in between, and nothing is pushed", () => {
+    const r = gitRepo();
+    try {
+      r.git(r.work, "checkout", "-q", "-b", "b");
+      r.commit("b.txt", "fix\n", "fix: b");
+      r.advanceMain("a.txt", "one\ntwo\n");
+      r.advanceMain("m.txt", "main moved\n");
+      r.git(r.work, "fetch", "-q", "origin");
+      r.git(r.work, "reset", "-q", "--soft", "origin/main");
+      r.git(r.work, "commit", "-q", "-m", "fix: b, squashed");
+      r.git(r.work, "push", "-q", "-f", "origin", "b");
+      const main = r.git(r.origin, "rev-parse", "main");
+      const out = mergeBranch({ cwd: r.work, branch: "b", into: "main", pr_url: null });
+      expect(out.kind).toBe("left");
+      const reason = out.kind === "left" ? out.reason : "";
+      expect(reason).toStartWith("b would undo changes main made after it was built (");
+      expect(reason).toContain("a.txt from ");
+      expect(reason).toContain("m.txt from ");
+      expect(r.git(r.origin, "rev-parse", "main")).toBe(main);
+      expect(r.git(r.origin, "branch", "--list", "b")).toBe("b");
+    } finally { r.done(); }
+  });
+
+  test("the same squash made after rebasing onto the default branch lands: it carries only the branch's own change", () => {
+    const r = gitRepo();
+    try {
+      r.git(r.work, "checkout", "-q", "-b", "b");
+      r.commit("b.txt", "fix\n", "fix: b");
+      r.commit("b.txt", "fix\nmore\n", "fix: b, more");
+      r.advanceMain("a.txt", "one\ntwo\n");
+      r.git(r.work, "fetch", "-q", "origin");
+      r.git(r.work, "rebase", "-q", "origin/main");
+      r.git(r.work, "reset", "-q", "--soft", "origin/main");
+      r.git(r.work, "commit", "-q", "-m", "fix: b, squashed");
+      r.git(r.work, "push", "-q", "-f", "origin", "b");
+      const head = r.git(r.work, "rev-parse", "HEAD");
+      expect(mergeBranch({ cwd: r.work, branch: "b", into: "main", pr_url: null })).toEqual({ kind: "merged", sha: head, into: "main", via: "push" });
+      expect(r.git(r.origin, "show", "main:a.txt")).toBe("one\ntwo");
+    } finally { r.done(); }
+  });
+
   test("a branch whose files the default branch also changed is left, naming them, and nothing is pushed", () => {
     const r = gitRepo();
     try {

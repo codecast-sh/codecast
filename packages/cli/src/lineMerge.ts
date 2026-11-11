@@ -65,6 +65,9 @@ export function mergeBranch(args: { cwd: string; branch: string; into: string; p
     const checks = checksGreen(info.statusCheckRollup);
     if (!checks.green) return { kind: "left", reason: `checks are not green: ${checks.detail}` };
     if (info.mergeable && info.mergeable !== "MERGEABLE") return { kind: "left", reason: `the pull request is ${String(info.mergeable).toLowerCase()}` };
+    const onto = exec("git", ["rev-parse", `origin/${into}`], cwd).stdout.trim();
+    const undone = onto ? undoneChanges(exec, cwd, onto, sha) : [];
+    if (undone.length) return { kind: "left", reason: undoneReason(branch, into, undone) };
     const merge = exec("gh", ["pr", "merge", args.pr_url, "--rebase", "--delete-branch"], cwd);
     if (merge.status !== 0) return { kind: "left", reason: `gh pr merge failed: ${(merge.stderr || merge.stdout).trim().split("\n")[0]}` };
     return { kind: "merged", sha, into, via: "pr" };
@@ -73,6 +76,8 @@ export function mergeBranch(args: { cwd: string; branch: string; into: string; p
   for (let attempt = 1; ; attempt++) {
     const landing = landingCommit(exec, cwd, branch, into, sha);
     if ("reason" in landing) return { kind: "left", reason: landing.reason };
+    const undone = undoneChanges(exec, cwd, exec("git", ["rev-parse", `origin/${into}`], cwd).stdout.trim(), landing.sha);
+    if (undone.length) return { kind: "left", reason: undoneReason(branch, into, undone) };
     const push = exec("git", ["push", "origin", `${landing.sha}:refs/heads/${into}`], cwd);
     if (push.status === 0) {
       exec("git", ["push", "origin", "--delete", branch], cwd);
@@ -86,6 +91,29 @@ export function mergeBranch(args: { cwd: string; branch: string; into: string; p
 }
 
 const lines = (text: string) => text.split("\n").map((l) => l.trim()).filter(Boolean);
+
+/** The files `landing` would set back to their content from before one of the default branch's own recent changes
+ *  to them, each with the change it undoes. A commit squashed onto the default branch's head over a tree built on an
+ *  older default branch carries all the work that landed in between back out, as a fast forward that every other
+ *  check passes: on Nov 10 one such commit undid nine commits on Union's main. Reads each touched file's last
+ *  `depth` changes on the default branch, and stops after `most` hits. */
+export function undoneChanges(exec: Exec, cwd: string, onto: string, landing: string, depth = 8, most = 5): Array<{ file: string; commit: string }> {
+  const git = (...args: string[]) => exec("git", args, cwd);
+  // `rev:path` reads the path from the repository's top, wherever in it the step runs; a missing file reads empty.
+  const blob = (rev: string, file: string) => { const r = git("rev-parse", "--verify", "-q", `${rev}:${file}`); return r.status === 0 ? r.stdout.trim() : ""; };
+  const out: Array<{ file: string; commit: string }> = [];
+  for (const file of lines(git("diff", "--name-only", "--no-renames", onto, landing).stdout)) {
+    const mine = blob(landing, file);
+    if (mine === blob(onto, file)) continue;
+    const commit = lines(git("log", "--format=%H", "-n", String(depth), onto, "--", `:(top,literal)${file}`).stdout).find((c) => blob(`${c}^`, file) === mine);
+    if (commit) out.push({ file, commit });
+    if (out.length >= most) break;
+  }
+  return out;
+}
+
+const undoneReason = (branch: string, into: string, undone: Array<{ file: string; commit: string }>) =>
+  `${branch} would undo changes ${into} made after it was built (${undone.map((u) => `${u.file} from ${u.commit.slice(0, 10)}`).join(", ")}); build it again on ${into} first`;
 
 /** What lands on the default branch for the branch head `head`: the head itself when it already contains the default
  *  branch. When the default branch has moved on since they parted, and changed none of the files the branch touches

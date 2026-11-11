@@ -168,6 +168,25 @@ describe("a run whose transcript syncs late", () => {
   });
 });
 
+describe("Codex trigger launch receipts", () => {
+  it("recovers a late Codex transcript from the saved exact launch prompt", () => {
+    const prompt = "[Codecast Task: fixture]\nTask ID: trigger-codex\nUnique report.";
+    const key = `prompt:${require("node:crypto").createHash("sha256").update(prompt).digest("hex")}`;
+    fs.writeFileSync(path.join(dir, "trigger-runs.json"), JSON.stringify({
+      daemonId: "old-daemon", runs: [], sessions: { [key]: { taskId: "trigger-codex", at: Date.now() } },
+    }));
+    const { scheduler } = makeScheduler([]);
+    expect(triggerRunTaskId("codex-unrelated", `${prompt} changed`)).toBeUndefined();
+    expect(triggerRunTaskId("codex-late", prompt)).toBe("trigger-codex");
+    expect(triggerRunTaskId("codex-late")).toBe("trigger-codex");
+    scheduler.saveRuns();
+    expect(JSON.parse(fs.readFileSync(path.join(dir, "trigger-runs.json"), "utf8")).sessions["codex-late"].taskId).toBe("trigger-codex");
+    scheduler.stop();
+    forgetTriggerRun("codex-late");
+    forgetTriggerRun(key);
+  });
+});
+
 describe("TaskScheduler device affinity", () => {
   it("does not claim a spawn task whose project_path is missing locally", async () => {
     const { scheduler, calls } = makeScheduler([spawnTask("t1", path.join(dir, "nope"))]);
@@ -355,9 +374,9 @@ describe("trigger run lifecycle guidance", () => {
     expect(prompt).toContain("bounded trigger and its terminal condition is verified complete");
     expect(prompt).toContain("save the outcome first, then cancel only this trigger with cast trigger cancel tr-42");
     expect(prompt).toContain("Quiet or no-change results, quota errors, collector failures, unavailable sources, and pending deadlines are NOT proof of completion");
-    expect(prompt).toContain("A finding does not survive this run on its own");
-    expect(prompt).toContain("the next firing overwrites this trigger's summary");
-    expect(prompt).toContain("File it as a task, add it to the task or plan it already belongs to, or queue a decision");
+    expect(prompt).toContain("A spawned run is its parent session's worker");
+    expect(prompt).toContain("The next firing replaces the trigger's summary");
+    expect(prompt).toContain("Do not file a new task merely because a run found something");
     expect(prompt).toContain("--needs-attention claims the human's eyes, so pass it only when they themselves must act");
     expect(prompt).toContain("open the summary with the ask: what you need them to do");
     expect(prompt).toContain("Work you have already given an owner does not need their eyes");

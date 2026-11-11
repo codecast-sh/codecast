@@ -91,8 +91,17 @@ function readSavedRuns(file: string): SavedRuns | null {
 // exists (forgetTriggerRun) or RUN_SESSION_TTL_MS passes.
 const RUN_SESSION_TTL_MS = 48 * 3600_000;
 const liveRunTasks = new Map<string, { taskId: string; at: number }>();
-export function triggerRunTaskId(sessionId: string): string | undefined {
-  return liveRunTasks.get(sessionId)?.taskId;
+function triggerPromptKey(prompt: string): string {
+  return `prompt:${crypto.createHash("sha256").update(prompt).digest("hex")}`;
+}
+
+export function triggerRunTaskId(sessionId: string, prompt?: string): string | undefined {
+  const known = liveRunTasks.get(sessionId);
+  if (known) return known.taskId;
+  const receipt = prompt ? liveRunTasks.get(triggerPromptKey(prompt)) : undefined;
+  if (!receipt || Date.now() - receipt.at >= RUN_SESSION_TTL_MS) return undefined;
+  liveRunTasks.set(sessionId, { ...receipt });
+  return receipt.taskId;
 }
 /** The run's conversation exists and carries its stamp; nothing left to remember. */
 export function forgetTriggerRun(sessionId: string): void {
@@ -517,6 +526,10 @@ export class TaskScheduler {
     // with `@codecast_session_id` would route it into managed-session registration
     // with a TASKS-table id as if it were a session id. Only `@codecast_agent_type`
     // is stamped, which is harmless.
+    const promptKey = triggerPromptKey(prompt);
+    liveRunTasks.set(promptKey, { taskId: task._id, at: Date.now() });
+    if (runSessionUuid) liveRunTasks.set(runSessionUuid, { taskId: task._id, at: Date.now() });
+    this.saveRuns();
     const spawn = await spawnAgentTmux(
       {
         tmuxSession,
@@ -557,8 +570,6 @@ export class TaskScheduler {
     }, HEARTBEAT_INTERVAL_MS);
 
     this.running.set(run.taskId, { ...run, heartbeatTimer });
-    this.saveRuns();
-
     // Link the run's conversation to the task as soon as it syncs (bounded
     // retries — the first JSONL write usually lands within seconds). This makes
     // the schedule strip/badge work DURING the run and folds the previous
@@ -568,6 +579,7 @@ export class TaskScheduler {
       liveRunTasks.set(run.runSessionUuid, { taskId: run.taskId, at: Date.now() });
       this.scheduleRunLink(run.taskId, run.runSessionUuid);
     }
+    this.saveRuns();
   }
 
   private saveRuns(): void {
@@ -671,6 +683,12 @@ export class TaskScheduler {
   private async checkTaskCompletion(taskId: string): Promise<void> {
     const entry = this.running.get(taskId);
     if (!entry) return;
+    if (!entry.runSessionUuid) {
+      entry.runSessionUuid = [...liveRunTasks].find(([key, receipt]) =>
+        !key.startsWith("prompt:") && receipt.taskId === taskId && receipt.at >= entry.startedAt - 5_000
+      )?.[0];
+      if (entry.runSessionUuid) this.saveRuns();
+    }
 
     // The session is gone only when tmux says so. A probe that timed out or
     // failed to start says nothing (tr-1474 ended a live run that way at a
