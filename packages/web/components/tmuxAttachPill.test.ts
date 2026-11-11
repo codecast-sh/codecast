@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { attachCommand, attachCopy } from "./tmuxAttach";
+import { attachCommand, attachCopy, tailnetSshHost } from "./tmuxAttach";
 import { REMOTE_TMUX_PATH } from "@codecast/shared/contracts";
 
 const mine = (ssh_host: string | null) => ({
@@ -102,5 +102,41 @@ describe("attachCopy", () => {
 
   test("unknown machine: the pre-existing local form with the plain toast", () => {
     expect(attachCopy("cc-x", null)).toEqual({ command: "tmux -L 'cast-cc-x' attach -t 'cc-x' 2>/dev/null || tmux attach -t 'cc-x'", message: "tmux attach copied" });
+  });
+});
+
+describe("another of your machines on a tailnet, with no ssh host set", () => {
+  const onTailnet = { ...mine(null), tailnet_name: "nose.tail1234.ts.net." };
+
+  test("a viewer on the same tailnet: ssh to its MagicDNS short name", () => {
+    const sameTailnet = { ...onTailnet, viewer_tailnet: "tail1234.ts.net" };
+    expect(attachCommand("cc-x", sameTailnet)).toBe(`ssh nose -t "PATH=${REMOTE_TMUX_PATH} tmux -L 'cast-cc-x' attach -t 'cc-x' 2>/dev/null || tmux attach -t 'cc-x'"`);
+    expect(attachCopy("cc-x", sameTailnet).message).toBe("ssh + tmux attach copied");
+  });
+
+  test("a viewer on another tailnet, or one not known: the full MagicDNS name", () => {
+    expect(attachCommand("cc-x", onTailnet)).toStartWith("ssh nose.tail1234.ts.net -t ");
+    expect(attachCommand("cc-x", { ...onTailnet, viewer_tailnet: "tail9999.ts.net" })).toStartWith("ssh nose.tail1234.ts.net -t ");
+  });
+
+  test("an ssh host the person set still wins", () => {
+    expect(attachCommand("cc-x", { ...onTailnet, ssh_host: "m1@10.0.0.4" })).toContain("ssh m1@10.0.0.4 -t ");
+  });
+
+  test("a WSL pane viewed from Windows keeps the wsl.exe form", () => {
+    expect(attachCommand("cc-x", { ...onTailnet, wsl_distro: "Ubuntu" }, true)).toBe("wsl.exe -d Ubuntu -e tmux attach -t cc-x");
+  });
+
+  test("someone else's machine still yields nothing", () => {
+    expect(attachCommand("cc-x", { ...theirs, tailnet_name: "mini.tail1234.ts.net." })).toBeNull();
+  });
+
+  test("a name that is not a plain hostname never reaches the shell line", () => {
+    expect(tailnetSshHost("x;rm -rf ~.tail.ts.net.")).toBeNull();
+    expect(tailnetSshHost("$(id).tail.ts.net")).toBeNull();
+    expect(tailnetSshHost(null)).toBeNull();
+    expect(tailnetSshHost(".tail.ts.net")).toBeNull();
+    expect(tailnetSshHost("nose..ts.net")).toBeNull();
+    expect(attachCommand("cc-x", { ...mine(null), tailnet_name: "a b.ts.net." })).toBe("tmux -L 'cast-cc-x' attach -t 'cc-x' 2>/dev/null || tmux attach -t 'cc-x'");
   });
 });

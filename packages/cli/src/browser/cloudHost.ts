@@ -478,6 +478,7 @@ export async function ensureUp(
     } catch {
       if (dial !== address) {
         onProgress(`tailnet address ${dial} did not answer; using ${address}`);
+        tailnetFailedAt.set(dial, Date.now());
         dial = address;
         socket = socketFor(dial);
         continue;
@@ -583,4 +584,43 @@ export function toRemoteHost(host: CloudHost): RemoteHost {
     remoteBaseDir: `${home}/work`,
     homeDir: home,
   };
+}
+
+const TAILNET_SHUN_MS = 5 * 60_000;
+const tailnetFailedAt = new Map<string, number>();
+
+/**
+ * toRemoteHost for a caller that dials again and again (a 3 s live-sync tick)
+ * and cannot afford a probe each time: a tailnet address that failed lately
+ * gives way to the public address until TAILNET_SHUN_MS has passed.
+ */
+export function dialRemoteHost(host: CloudHost, now = Date.now()): RemoteHost {
+  const first = toRemoteHost(host);
+  const failed = tailnetFailedAt.get(first.address);
+  return failed !== undefined && now - failed < TAILNET_SHUN_MS ? toRemoteHost({ ...host, tailnet: undefined }) : first;
+}
+
+/** A dial through dialRemoteHost failed: when it went over the tailnet, use public for a while. True when the next dial moves. */
+export function noteDialFailure(host: CloudHost, now = Date.now()): boolean {
+  const dialed = dialRemoteHost(host, now).address;
+  if (!host.address || dialed === host.address) return false;
+  tailnetFailedAt.set(dialed, now);
+  return true;
+}
+
+const SSH_CONNECT_FAILURE = /ssh: connect to host|Connection timed out|Operation timed out|No route to host|Network is unreachable/i;
+
+/** An error from a dial through dialRemoteHost: when ssh never reached the host over the tailnet, shun it. True when a retry would dial elsewhere. */
+export function noteDialError(host: CloudHost | null | undefined, err: unknown, now = Date.now()): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return !!host?.address && SSH_CONNECT_FAILURE.test(msg) && noteDialFailure(host, now);
+}
+
+/** The address that answers ssh now (tailnet, then public), for a one-shot command; the usual address when neither answers. */
+export async function probedRemoteHost(host: CloudHost, reach = sshReachable): Promise<RemoteHost> {
+  return (await reachableRemoteHost(host, { toRemoteHost, sshReachable: reach })) ?? toRemoteHost(host);
+}
+
+export function resetDialFailuresForTests(): void {
+  tailnetFailedAt.clear();
 }
