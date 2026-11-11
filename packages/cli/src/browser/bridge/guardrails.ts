@@ -18,6 +18,8 @@
  *   3. The site allowlist is policy.ts's; the host applies it per tab.
  */
 
+import { getDomain } from "tldts";
+
 /** URL schemes no client may navigate a tab to: the local disk and the browser's own privileged pages. */
 const BLOCKED_NAV_SCHEMES = new Set(["file", "chrome", "chrome-extension", "chrome-untrusted", "devtools", "view-source"]);
 
@@ -103,15 +105,26 @@ export function webHost(url: string): string | null {
 }
 
 /**
+ * Whether a host is a site of its own (a registrable domain or a name under
+ * one) rather than a public suffix such as `com`, `co.uk` or `github.io`.
+ * Judged by the Public Suffix List, private section included, the way Chrome
+ * judges where a cookie may be set.
+ */
+function ownsSubdomains(host: string): boolean {
+  return getDomain(host, { allowPrivateDomains: true }) !== null;
+}
+
+/**
  * Whether a cookie for `domain` belongs to one of `hosts`: the host would be
  * sent it (`.example.com` for www.example.com), or it is the host's own or a
  * subdomain's (`mail.example.com` for a tab at example.com, which a sign-in
- * spanning the site needs).
+ * spanning the site needs). The subdomain direction holds only for a host
+ * that is a site: a tab at `http://com/` reaches no `.com` cookie.
  */
 export function cookieInScope(domain: string, hosts: readonly string[]): boolean {
   const d = domain.trim().toLowerCase().replace(/^\./, "");
   if (!d) return false;
-  return hosts.some((h) => h === d || h.endsWith(`.${d}`) || d.endsWith(`.${h}`));
+  return hosts.some((h) => h === d || h.endsWith(`.${d}`) || (d.endsWith(`.${h}`) && ownsSubdomains(h)));
 }
 
 /** The host of an origin-keyed storage parameter (`https://x.com`, a storage key `https://x.com/^0...`), or null. */

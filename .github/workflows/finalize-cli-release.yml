@@ -808,10 +808,9 @@ jobs:
               }
             }' > /tmp/cli-release/latest.json
 
-          # The previous signature goes first. A pinned client refuses a
-          # signature that does not match the manifest, but accepts a missing
-          # one while signing is optional, so the only gap a client can see
-          # is "unsigned", never "mismatched". The sign step below uploads
+          # The previous signature goes first, so the only gap a client can
+          # see is "unsigned" (refused for one poll, retried on the next),
+          # never a signature over other bytes. The sign step below uploads
           # the new signature.
           aws s3 rm "s3://$R2_BUCKET/latest.json.sig" --endpoint-url "$R2_ENDPOINT" --only-show-errors || true
           aws s3 cp /tmp/cli-release/latest.json "s3://$R2_BUCKET/latest.json" \
@@ -821,11 +820,10 @@ jobs:
             --metadata "version=$RELEASE_VERSION,source-sha=$SOURCE_COMMIT" \
             --no-progress
 
-      # Detached Ed25519 signature over the exact bytes just published. Skipped
-      # while no signing key is configured (rollout step 1 in
-      # docs/architecture/release-signing.md); once the secret exists every
-      # publish carries latest.json.sig and clients that pin the key verify it.
-      - name: Sign latest.json when a signing key is configured
+      # Detached Ed25519 signature over the exact bytes just published. Clients
+      # refuse a latest.json that no pinned key signed
+      # (docs/architecture/release-signing.md), so a missing key fails the run.
+      - name: Sign latest.json
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
@@ -837,8 +835,8 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${RELEASE_MANIFEST_SIGNING_KEY:-}" || -z "${RELEASE_MANIFEST_KEY_ID:-}" ]]; then
-            echo "::notice::no release manifest signing key configured; latest.json published unsigned"
-            exit 0
+            echo "::error::no release manifest signing key configured; clients refuse the unsigned latest.json"
+            exit 1
           fi
           bun platform/packages/cli-kit/release/sign-manifest.ts \
             --manifest /tmp/cli-release/latest.json \

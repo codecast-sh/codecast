@@ -14,11 +14,11 @@ import * as fs from "node:fs";
 import {
   createUpdater,
   type DownloadOptions,
-  type ManifestSigningPolicy,
   type Updater,
   type UpdaterConfig,
 } from "@platform/cli-kit/update";
 import { execFileSync, spawnSync } from "./proc.js";
+import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING } from "./releaseTrust.js";
 import { getVersion } from "./cliVersion.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { isManagedInstall } from "./managedInstall.js";
@@ -29,21 +29,7 @@ export { getVersion };
 const VERSION = getVersion();
 const CONFIG_DIR = defaultConfigDir();
 
-export const RELEASE_BASE_URL = "https://dl.codecast.sh";
-
-/** The Apple team every darwin release is signed by (CI and the laptop path). */
-export const DARWIN_SIGNING_TEAM = "WRG9THCK9Q";
-
-/**
- * Public keys that may vouch for latest.json, by key id. CI signs every
- * release with cli-release-2026 (custody in docs/architecture/release-signing.md).
- * While `required` is false a missing signature is still accepted, so an
- * unsigned publish keeps working; a signature that does not match is refused.
- */
-export const RELEASE_MANIFEST_SIGNING: ManifestSigningPolicy = {
-  keys: { "cli-release-2026": "4f1kzY89/uJGGB+hvoONtVag56qy1gOkVxhMzLdEc5M=" },
-  required: false,
-};
+export { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING };
 
 type ExecFileSync = typeof execFileSync;
 type SpawnSync = typeof spawnSync;

@@ -16,6 +16,9 @@ import { compareVersions, isBelowMinimum } from "@platform/cli-kit/update";
 import { defaultConfigDir } from "./config/configDir.js";
 import { execFileAsync, execFileSync, spawnSync } from "./proc.js";
 import { isDevMode } from "./update.js";
+// The desktop app's own updater rules (zip name, version floor), shared so
+// this out-of-band path accepts exactly what the app would.
+import { bundleRefusal, parseFeed } from "../../electron/updatePolicy.js";
 
 const DESKTOP_FEED = "https://dl.codecast.sh/desktop/latest-mac.yml";
 const DESKTOP_BASE = "https://dl.codecast.sh/desktop";
@@ -105,6 +108,17 @@ export function shouldApplyWhileRunning(
 // already current must not have its app quit and rewritten for nothing.
 export function wantsReinstall(opts: { force?: boolean; reinstall?: boolean }): boolean {
   return opts.force === true && opts.reinstall !== false;
+}
+
+/**
+ * Why a downloaded archive may not replace the installed app, or null. It must
+ * be the version the feed announced and never older than the installed app:
+ * a reinstall or a damaged-bundle repair may put down the same version, never
+ * walk the app back to an older signed build. With no readable installed
+ * version there is nothing to hold it to.
+ */
+export function archiveRefusal(feedVersion: string, archiveVersion: string | null, installed: string | null): string | null {
+  return bundleRefusal({ feedVersion, bundleVersion: archiveVersion, runningVersion: installed ?? "0.0.0", force: true });
 }
 
 export interface DesktopUpdateOpts {
@@ -252,24 +266,6 @@ export async function waitForAppSwap(appPath: string, opts: { timeoutMs?: number
     await sleep(opts.pollMs ?? 250);
   }
   return true;
-}
-
-// Parse only the fields we need from latest-mac.yml (avoids a YAML dependency).
-function parseFeed(text: string): { version?: string; zip?: string; sha512?: string } {
-  const version = text.match(/^version:\s*(.+)$/m)?.[1]?.trim();
-  let zip: string | undefined;
-  let sha512: string | undefined;
-  const lines = text.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/url:\s*(\S+-mac\.zip)\s*$/);
-    if (m) {
-      zip = m[1].trim();
-      const sm = lines[i + 1]?.match(/sha512:\s*(\S+)\s*$/);
-      if (sm) sha512 = sm[1].trim();
-      break;
-    }
-  }
-  return { version, zip, sha512 };
 }
 
 async function sha512Base64(filePath: string): Promise<string> {
@@ -456,7 +452,7 @@ export async function checkForDesktopUpdate(
     // curl streams to disk and works reliably under launchd. Off the event
     // loop: a synchronous download froze the daemon for minutes, its
     // heartbeats stopped, and the watchdog replaced it mid-install (2026-09-24).
-    await execFileAsync("/usr/bin/curl", ["-fsSL", zipUrl, "-o", zipPath], { timeout: 600000 });
+    await execFileAsync("/usr/bin/curl", ["-fsSL", "--proto", "=https", "--proto-redir", "=https", zipUrl, "-o", zipPath], { timeout: 600000 });
 
     const got = await sha512Base64(zipPath);
     if (got !== sha512) {
@@ -476,9 +472,9 @@ export async function checkForDesktopUpdate(
       return false;
     }
 
-    const newVersion = plistVersion(path.join(newApp, "Contents", "Info.plist"));
-    if (newVersion !== version) {
-      bail(`desktop update: archive version ${newVersion} != feed ${version}; aborting`);
+    const refusal = archiveRefusal(version, plistVersion(path.join(newApp, "Contents", "Info.plist")), installed);
+    if (refusal) {
+      bail(`desktop update: ${refusal}; aborting`);
       rmrf(WORK_DIR);
       return false;
     }

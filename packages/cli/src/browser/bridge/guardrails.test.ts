@@ -64,6 +64,19 @@ describe("cookie scope", () => {
     expect(cookieInScope("", ["example.com"])).toBe(false);
   });
 
+  test("a tab at a public suffix reaches none of the cookies under it", () => {
+    const jar = { cookies: [{ name: "g", domain: ".google.com" }, { name: "m", domain: "mail.google.com" }, { name: "b", domain: ".bank.co.uk" }, { name: "p", domain: "me.github.io" }] };
+    for (const url of ["http://com/", "http://co.uk/", "https://github.io/"]) {
+      expect(filterCookieReply(jar, [webHost(url)!]).cookies).toEqual([]);
+    }
+    expect(scopeRefusal("Network.setCookie", { domain: ".google.com", name: "x", value: "y" }, ["com"])).not.toBeNull();
+    expect(scopeRefusal("Network.getCookies", { urls: ["https://mail.google.com/"] }, ["com"])).not.toBeNull();
+    // A real site keeps its subdomains, under a multi-label suffix too.
+    expect(cookieInScope("mail.bank.co.uk", ["bank.co.uk"])).toBe(true);
+    expect(cookieInScope("api.me.github.io", ["me.github.io"])).toBe(true);
+    expect(cookieInScope("localhost", ["localhost"])).toBe(true);
+  });
+
   test("webHost reads only web pages", () => {
     expect(webHost("https://WWW.Example.com:8443/a")).toBe("www.example.com");
     expect(webHost("about:blank")).toBeNull();

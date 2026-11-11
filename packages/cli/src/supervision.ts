@@ -13,6 +13,8 @@
 // relaunches it if the loop ever exits. This turns a multi-hour outage into a
 // sub-minute one (we cannot run at all while the Mac is fully asleep — that is macOS).
 import { AGENT_ENV_UNSET_SH } from "./agentEnv.js";
+import { DARWIN_SIGNING_TEAM, MANIFEST_SIGNED_SH, RELEASE_BASE_URL, VERSION_FLOOR_SH } from "./releaseTrust.js";
+import { getVersion } from "./cliVersion.js";
 
 export const WATCHDOG_HEARTBEAT_FILENAME = "watchdog.heartbeat";
 
@@ -375,8 +377,15 @@ export function watchdogHeartbeatStale(
 // compiled `_watchdog` pass with a self-update fallback) vs the dev/from-source form
 // (do the health check inline in shell). Both run as a resident loop that stamps the
 // heartbeat each cycle so the daemon can see the watchdog is alive, not just loaded.
-export function buildWatchdogShellScript(opts: { isBinary: boolean; watchdogCommand: string }): string {
+export function buildWatchdogShellScript(opts: { isBinary: boolean; watchdogCommand: string; floorVersion?: string }): string {
   const { isBinary, watchdogCommand } = opts;
+  // The rollback floor for the self-update fallback: the version of the CLI
+  // that wrote this script. The daemon rewrites it on every start, so it never
+  // sits above the installed binary. A dev build has no floor.
+  const floor = opts.floorVersion ?? getVersion();
+  const floorVersion = /^\d+(\.\d+)*$/.test(floor) ? floor : "0";
+  // The same executable asked to update itself: `<binary> -- update`.
+  const updateCommand = /'_watchdog'$/.test(watchdogCommand) ? watchdogCommand.replace(/'_watchdog'$/, "'update'") : "false";
 
   if (!isBinary) {
     return `#!/bin/sh
@@ -540,7 +549,9 @@ HEARTBEAT="\${HOME}/.codecast/${WATCHDOG_HEARTBEAT_FILENAME}"
 log() { printf '[%s] %s\\n' "\$(date '+%Y-%m-%d %H:%M:%S')" "\$1" >> "\$LOGFILE"; }
 WATCHDOG_INTERVAL=${WATCHDOG_INTERVAL_SECONDS}
 PASS_TIMEOUT=${WATCHDOG_PASS_TIMEOUT_SECONDS}
-DL_HOST="https://dl.codecast.sh"
+DL_HOST="${RELEASE_BASE_URL}"
+CODESIGN="/usr/bin/codesign"
+FLOOR_VERSION="${floorVersion}"
 ${ROTATE_LOGS_SH}
 
 # One pass under a hard deadline. This loop is the only thing that revives a dead
@@ -563,6 +574,57 @@ run_pass() {
   wait "\$PASS_PID"
 }
 
+# Releases are fetched over https only, redirects included.
+fetch_release() {
+  curl -fsSL --proto '=https' --proto-redir '=https' --max-redirs 3 --connect-timeout 10 --max-time "\$3" "\$1" -o "\$2" 2>>"\$LOGFILE"
+}
+
+${MANIFEST_SIGNED_SH}
+
+${VERSION_FLOOR_SH}
+# Is the file a valid darwin binary signed by our Apple team?
+team_signed() {
+  "\$CODESIGN" --verify --strict -- "\$1" >/dev/null 2>&1 || return 1
+  "\$CODESIGN" -dv -- "\$1" 2>&1 | grep -qx "TeamIdentifier=${DARWIN_SIGNING_TEAM}"
+}
+
+# Download this platform's binary as latest.json names it and install it only
+# when its sha256 matches the manifest and the release is ours: the manifest
+# signed by a pinned key, or on darwin the binary signed by our Apple team.
+install_verified() {
+  OS="\$(uname -s)"; ARCH="\$(uname -m)"
+  case "\$OS" in Darwin*) P="darwin";; Linux*) P="linux";; *) log "Unsupported OS: \$OS"; return 1;; esac
+  case "\$ARCH" in x86_64|amd64) A="x64";; arm64|aarch64) A="arm64";; *) log "Unsupported arch: \$ARCH"; return 1;; esac
+  ENTRY_LINE="\$(tr -d ' \\t\\r\\n' < "\$1/latest.json" | tr '}' '\\n' | grep -F "\\"\$P-\$A\\":{" | head -n 1)"
+  URL="\$(printf '%s' "\$ENTRY_LINE" | sed -n 's/.*"url":"\\([^"]*\\)".*/\\1/p')"
+  SHA="\$(printf '%s' "\$ENTRY_LINE" | sed -n 's/.*"sha256":"\\([0-9a-f]\\{64\\}\\)".*/\\1/p')"
+  case "\$URL" in "\$DL_HOST"/*) ;; *) log "Refusing release URL off \$DL_HOST: \$URL"; return 1;; esac
+  case "\$URL" in *[!A-Za-z0-9._/:-]*) log "Refusing release URL: \$URL"; return 1;; esac
+  [ -n "\$SHA" ] || { log "No sha256 for \$P-\$A in latest.json"; return 1; }
+  log "Downloading codecast (\$P-\$A)"
+  fetch_release "\$URL" "\$1/codecast" 180 || { log "Download failed"; return 1; }
+  GOT="\$( (sha256sum "\$1/codecast" 2>/dev/null || shasum -a 256 "\$1/codecast") | cut -d' ' -f1)"
+  [ "\$GOT" = "\$SHA" ] || { log "Refusing download: sha256 \$GOT does not match latest.json"; return 1; }
+  if fetch_release "\$DL_HOST/latest.json.sig" "\$1/latest.json.sig" 30 && manifest_signed "\$1"; then
+    :
+  elif [ "\$P" = "darwin" ] && team_signed "\$1/codecast"; then
+    :
+  else
+    log "Refusing download: latest.json has no valid signature by a pinned key and the binary carries no signature by team ${DARWIN_SIGNING_TEAM}"
+    return 1
+  fi
+  if [ "\$P" = "darwin" ] && ! team_signed "\$1/codecast"; then
+    log "Refusing download: binary is not signed by team ${DARWIN_SIGNING_TEAM}"
+    return 1
+  fi
+  # Verified as ours, so it may run: it must not be older than the floor,
+  # whatever an unsigned or replayed manifest claims.
+  chmod +x "\$1/codecast" || return 1
+  GOT_VERSION="\$(cd "\$1" && ./codecast --version 2>/dev/null | tail -n 1 | tr -d ' \r')"
+  not_older_than "\$GOT_VERSION" "\$FLOOR_VERSION" || { log "Refusing download: v\$GOT_VERSION is older than the installed v\$FLOOR_VERSION"; return 1; }
+  mv "\$1/codecast" "\$2"
+}
+
 run_check() {
   # Stamp liveness first (see dev branch). Epoch ms matches daemon.state tick units.
   printf '%s' "\$(( \$(date +%s) * 1000 ))" > "\$HEARTBEAT" 2>/dev/null
@@ -572,26 +634,38 @@ run_check() {
   run_pass ${watchdogCommand} && return 0
   log "Watchdog failed (exit \$?), checking for update"
 
-  LATEST="\$(curl -fsSL --connect-timeout 10 --max-time 30 "\$DL_HOST/latest.json" 2>/dev/null)" || { log "Failed to fetch latest.json"; return 1; }
-  VERSION="\$(printf '%s' "\$LATEST" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')"
-  [ -z "\$VERSION" ] && { log "Could not parse version"; return 1; }
+  # Every byte the fallback reads lands in this directory, so the manifest is
+  # verified as exactly the bytes that were signed.
+  WORK="\$(mktemp -d)" || { log "No scratch directory"; return 1; }
+  fetch_release "\$DL_HOST/latest.json" "\$WORK/latest.json" 30 || { rm -rf "\$WORK"; log "Failed to fetch latest.json"; return 1; }
+  VERSION="\$(tr -d ' \\t\\r\\n' < "\$WORK/latest.json" | sed -n 's/.*"version":"\\([0-9A-Za-z.+-]*\\)".*/\\1/p')"
+  [ -z "\$VERSION" ] && { rm -rf "\$WORK"; log "Could not parse version"; return 1; }
+  # Never roll back: a replayed older manifest is refused before any download.
+  not_older_than "\$VERSION" "\$FLOOR_VERSION" || { rm -rf "\$WORK"; log "Refusing v\$VERSION: older than the installed v\$FLOOR_VERSION"; return 1; }
 
   LAST_DL_FILE="\${HOME}/.codecast/last_download_version"
   LAST_DL="\$(cat "\$LAST_DL_FILE" 2>/dev/null || true)"
   if [ "\$VERSION" = "\$LAST_DL" ]; then
+    rm -rf "\$WORK"
     log "v\$VERSION already tried and failed, waiting for new release"
     return 1
   fi
 
-  OS="\$(uname -s)"; ARCH="\$(uname -m)"
-  case "\$OS" in Darwin*) P="darwin";; Linux*) P="linux";; *) log "Unsupported OS: \$OS"; return 1;; esac
-  case "\$ARCH" in x86_64|amd64) A="x64";; arm64|aarch64) A="arm64";; *) log "Unsupported arch: \$ARCH"; return 1;; esac
-
   DIR="\${HOME}/.local/bin"; mkdir -p "\$DIR"
-  TMP="\$(mktemp)"
-  log "Downloading codecast v\$VERSION (\$P-\$A)"
-  curl -fsSL --connect-timeout 10 --max-time 180 "\$DL_HOST/codecast-\$P-\$A" -o "\$TMP" 2>>"\$LOGFILE" || { rm -f "\$TMP"; log "Download failed"; return 1; }
-  mv "\$TMP" "\$DIR/codecast" && chmod +x "\$DIR/codecast"
+  # A binary that still runs updates itself through its own updater, which
+  # holds the release to the signed manifest, its checksum and, on darwin, the
+  # code signature. Only a binary that cannot do that is replaced from here,
+  # under the same rules (install_verified).
+  if run_pass ${updateCommand}; then
+    log "Updated to v\$VERSION through the installed updater, retrying watchdog"
+    printf '%s' "\$VERSION" > "\$LAST_DL_FILE"
+    rm -rf "\$WORK"
+    run_pass ${watchdogCommand} || { log "Still failed after update"; return 1; }
+    return 0
+  fi
+  log "Installed updater failed, installing v\$VERSION from the verified release"
+  install_verified "\$WORK" "\$DIR/codecast" || { rm -rf "\$WORK"; return 1; }
+  rm -rf "\$WORK"
   printf '%s' "\$VERSION" > "\$LAST_DL_FILE"
   log "Installed v\$VERSION, retrying watchdog"
 

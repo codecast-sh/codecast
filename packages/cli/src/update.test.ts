@@ -7,12 +7,30 @@ import { describe, expect, it } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sha256Hex, type UpdaterFs } from "@platform/cli-kit/update";
-import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, createCodecastUpdater, makeCurlDownload, makeDarwinSignatureCheck } from "./update";
+import { generateKeyPairSync } from "node:crypto";
+import { publicKeyToBase64, sha256Hex, signManifest, type UpdaterFs } from "@platform/cli-kit/update";
+import { DARWIN_SIGNING_TEAM, RELEASE_BASE_URL, RELEASE_MANIFEST_SIGNING, createCodecastUpdater, makeCurlDownload, makeDarwinSignatureCheck } from "./update";
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 const NEW = enc.encode("NEW CODECAST BINARY");
+
+// A test key stands in for the release key; the policy keeps production's
+// `required`, so every manifest a test expects to load is signed like a release.
+const TEST_KEY = generateKeyPairSync("ed25519");
+const TEST_SIGNING = { keys: { "test-key": publicKeyToBase64(TEST_KEY.publicKey) }, required: RELEASE_MANIFEST_SIGNING.required };
+
+/** Serves `manifest` as latest.json with a signature by the test key beside it (`sign: false` serves no signature). */
+function releaseFetch(manifest: unknown, { sign = true } = {}) {
+  const bytes = JSON.stringify(manifest);
+  const sig = JSON.stringify({ signatures: [signManifest(enc.encode(bytes), TEST_KEY.privateKey.export({ type: "pkcs8", format: "pem" }) as string, "test-key")] });
+  return (async (input: string | URL) => {
+    const url = String(input);
+    if (url === `${RELEASE_BASE_URL}/latest.json`) return new Response(bytes);
+    if (url === `${RELEASE_BASE_URL}/latest.json.sig` && sign) return new Response(sig);
+    return new Response("nf", { status: 404 });
+  }) as unknown as typeof globalThis.fetch;
+}
 
 function memFs(initial: Record<string, string>) {
   const files = new Map<string, Uint8Array>();
@@ -72,14 +90,12 @@ async function harness(manifestEntry: Partial<{ url: string; sha256: string; siz
     released: "2026-09-23T00:00:00Z",
     binaries: { "darwin-arm64": { url: `${RELEASE_BASE_URL}/cli/releases/v9.9.9/abc/codecast-darwin-arm64`, sha256: sha, ...manifestEntry } },
   };
-  const fetch = (async (input: string | URL) => {
-    if (String(input) === `${RELEASE_BASE_URL}/latest.json`) return new Response(JSON.stringify(manifest));
-    return new Response("nf", { status: 404 });
-  }) as unknown as typeof globalThis.fetch;
+  const fetch = releaseFetch(manifest);
   const updater = createCodecastUpdater({
     currentVersion: "1.0.0",
     stateDir: "/home/u/.codecast",
     fetch,
+    manifestSigning: TEST_SIGNING,
     fs,
     execPath: "/opt/codecast/codecast",
     platform: "darwin",
@@ -199,6 +215,25 @@ describe("cast update refuses a manifest it cannot trust before curl runs", () =
   });
 });
 
+describe("release manifest signature", () => {
+  const manifest = { version: "9.9.9", released: "2026-11-10T00:00:00Z", binaries: { "darwin-arm64": { url: `${RELEASE_BASE_URL}/codecast-darwin-arm64`, sha256: "00".repeat(32) } } };
+  const load = (fetch: typeof globalThis.fetch, manifestSigning = RELEASE_MANIFEST_SIGNING) =>
+    (createCodecastUpdater({ currentVersion: "1.0.0", stateDir: "/s", fs: memFs({}).fs, fetch, manifestSigning, log: () => {} }) as any).loadManifest();
+
+  it("is required: an unsigned latest.json is refused before anything downloads", async () => {
+    expect(RELEASE_MANIFEST_SIGNING.required).toBe(true);
+    expect(await load(releaseFetch(manifest, { sign: false }))).toEqual({ ok: false, error: "manifest_signature_missing" });
+  });
+
+  it("refuses a manifest signed only by a key the client does not pin", async () => {
+    expect(await load(releaseFetch(manifest))).toEqual({ ok: false, error: "manifest_signature_unknown_key" });
+  });
+
+  it("accepts a manifest signed by a pinned key", async () => {
+    expect((await load(releaseFetch(manifest), TEST_SIGNING)).ok).toBe(true);
+  });
+});
+
 describe("darwin code signature gate", () => {
   type Spawned = { file: string; args: string[] };
   function fakeSpawn(teams: Record<string, string | null>, verifyOk = true, seen: Spawned[] = []) {
@@ -238,13 +273,9 @@ describe("darwin code signature gate", () => {
   it("refuses the swap through the real updater when the gate says no", async () => {
     const { fs, files } = memFs({ "/opt/codecast/codecast": "OLD" });
     const sha = await sha256Hex(NEW);
-    // An unsigned release: the pinned key is optional, so a 404 signature is accepted.
-    const fetch = (async (url: string) =>
-      String(url).endsWith(".sig")
-        ? new Response("", { status: 404 })
-        : new Response(JSON.stringify({ version: "9.9.9", released: "", binaries: { "darwin-arm64": { url: `${RELEASE_BASE_URL}/codecast-darwin-arm64`, sha256: sha } } }))) as unknown as typeof globalThis.fetch;
+    const fetch = releaseFetch({ version: "9.9.9", released: "", binaries: { "darwin-arm64": { url: `${RELEASE_BASE_URL}/codecast-darwin-arm64`, sha256: sha } } });
     const updater = createCodecastUpdater({
-      currentVersion: "1.0.0", stateDir: "/s", fetch, fs, execPath: "/opt/codecast/codecast", platform: "darwin", arch: "arm64", log: () => {},
+      currentVersion: "1.0.0", stateDir: "/s", fetch, fs, manifestSigning: TEST_SIGNING, execPath: "/opt/codecast/codecast", platform: "darwin", arch: "arm64", log: () => {},
       download: async (_u, dest) => void files.set(dest, NEW),
       // The download lands at a name the updater picks, so every file but the
       // running binary carries the foreign team.

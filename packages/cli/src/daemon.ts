@@ -86,7 +86,11 @@ import {
   accountSwitchRestartReason,
   previousAccountToClaim,
   readDeviceAccountStamp,
+  readDeviceAccountBearer,
   writeDeviceAccountStamp,
+  deviceClaimSettled,
+  DEVICE_CLAIM_PROOF_RETRY_MS,
+  type DeviceClaimResult,
 } from "./deviceAccount.js";
 import { readInputIdleMs } from "./inputIdle.js";
 import { checkoutOfMoveClone, copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, shq, type RemoteHost } from "./remote/session-move.js";
@@ -5506,13 +5510,15 @@ function maybeAutoSaveCodexAccount(): void {
 // this process authenticated as. Cleared once those sessions have moved.
 let pendingAccountClaimUser: string | null = null;
 let accountClaimWaitLogged = false;
+// A handover refused for want of proof is asked again no sooner than this.
+let accountClaimRetryAt = 0;
 
 async function claimDeviceAccountIfNeeded(): Promise<void> {
   const previous = pendingAccountClaimUser;
-  if (!previous || !syncServiceRef) return;
-  let result: { moved?: number; more?: boolean; pending?: boolean; error?: string };
+  if (!previous || !syncServiceRef || Date.now() < accountClaimRetryAt) return;
+  let result: DeviceClaimResult;
   try {
-    result = await syncServiceRef.claimDeviceAccount(previous, deviceId());
+    result = await syncServiceRef.claimDeviceAccount(previous, deviceId(), readDeviceAccountBearer(CONFIG_DIR));
   } catch (err) {
     log(`[AUTH] could not move sessions off the previous account: ${err instanceof Error ? err.message : String(err)}`);
     return;
@@ -5528,6 +5534,12 @@ async function claimDeviceAccountIfNeeded(): Promise<void> {
     log(`[AUTH] moved ${result.moved ?? 0} sessions onto this account; more remain`);
     return;
   }
+  if (!deviceClaimSettled(result)) {
+    // Kept, never discarded: the stamp is the only record of whom to claim from.
+    log(`[AUTH] sessions stay with the previous account for now: ${result?.error ?? "not settled"}; asking again later`);
+    accountClaimRetryAt = Date.now() + DEVICE_CLAIM_PROOF_RETRY_MS;
+    return;
+  }
   if (result?.error) {
     log(`[AUTH] left the previous account's sessions in place: ${result.error}`);
   } else if ((result?.moved ?? 0) > 0) {
@@ -5536,7 +5548,7 @@ async function claimDeviceAccountIfNeeded(): Promise<void> {
   pendingAccountClaimUser = null;
   const current = activeConfig?.user_id;
   if (current) {
-    try { writeDeviceAccountStamp(CONFIG_DIR, current); } catch (err) {
+    try { writeDeviceAccountStamp(CONFIG_DIR, current, activeConfig?.auth_token); } catch (err) {
       log(`[AUTH] could not record the account stamp: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -6960,7 +6972,7 @@ async function executeRemoteCommand(
         await flushRemoteLogs();
         setTimeout(() => {
           try {
-            execSync("curl -fsSL codecast.sh/install | sh", { timeout: 120000, stdio: "ignore" });
+            execSync("curl -fsSL --proto '=https' --proto-redir '=https' https://codecast.sh/install | sh", { timeout: 120000, stdio: "ignore" });
             logLifecycle("reinstall_complete", `Reinstalled from v${currentVersion}`);
           } catch (e) {
             logLifecycle("reinstall_failed", `Failed from v${currentVersion}: ${e instanceof Error ? e.message : String(e)}`);
@@ -30449,7 +30461,7 @@ async function main(): Promise<void> {
   if (pendingAccountClaimUser) {
     log(`[AUTH] this machine last synced as ${pendingAccountClaimUser}; its sessions will move to ${config.user_id}`);
   } else if (config.user_id) {
-    try { writeDeviceAccountStamp(CONFIG_DIR, config.user_id); } catch { /* claim path records it */ }
+    try { writeDeviceAccountStamp(CONFIG_DIR, config.user_id, config.auth_token); } catch { /* claim path records it */ }
   }
   log(`Convex URL: ${convexUrl}`);
   if (config.auth_token) {
