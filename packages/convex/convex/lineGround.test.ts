@@ -131,7 +131,8 @@ describe("lineGround.sweep (LE5)", () => {
 
   test("a cause with no project is grounded against the whole workspace's goals, and placed in one", async () => {
     const { add, sweep, task, avatars, t } = await setup();
-    const filed = await add({ fingerprint: "err-2", title: "Avatar upload rejects PNG" });
+    // A person's finding: no profile publishes its source, so nothing filed it under a project.
+    const filed = await add({ source: "person", fingerprint: "err-2", title: "Avatar upload rejects PNG" });
     stub.state.replies.push(ground({ goal_ref: "pr-2", category: "ux", project: "pr-2" }));
     expect(await sweep()).toMatchObject({ grounded: 1 });
     const call = stub.state.calls.at(-1);

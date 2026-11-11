@@ -286,14 +286,16 @@ export function registerSourcesCommand(program: Command, deps: PublishDeps): voi
   set
     .option("--promote <transitions>", "Transitions that become findings on the line")
     .option("--project <ref>", "The project its findings file into (id, short id or title); \"\" for none")
+    .option("--fingerprint-prefix <prefix>", "Group keys become <prefix>:<kind>:<key>, joining problems a finder files the same way; \"\" for none")
     .option(...TEAM_OPTION)
     .option(...JSON_OPTION)
-    .action(async (ref: string, o: Record<string, unknown> & { promote?: string; project?: string; team?: string; json?: boolean }) => {
+    .action(async (ref: string, o: Record<string, unknown> & { promote?: string; project?: string; fingerprintPrefix?: string; team?: string; json?: boolean }) => {
       const config = sourceConfigFromFlags(o);
       const promote = csv(o.promote);
       const project = typeof o.project === "string" ? o.project.trim() : undefined;
-      if (!Object.keys(config).length && !promote && project === undefined) fail(`Name a setting to change: ${[...SOURCE_CONFIG_FIELDS.map((f) => `--${f.flag}`), "--promote", "--project"].join(", ")}`);
-      const result = await scopedWrite(deps, "/cli/sources/update", { source: ref, ...(Object.keys(config).length ? { config } : {}), ...(promote ? { promote } : {}), ...(project !== undefined ? { project } : {}) }, o.team);
+      const prefix = typeof o.fingerprintPrefix === "string" ? o.fingerprintPrefix.trim() : undefined;
+      if (!Object.keys(config).length && !promote && project === undefined && prefix === undefined) fail(`Name a setting to change: ${[...SOURCE_CONFIG_FIELDS.map((f) => `--${f.flag}`), "--promote", "--project", "--fingerprint-prefix"].join(", ")}`);
+      const result = await scopedWrite(deps, "/cli/sources/update", { source: ref, ...(Object.keys(config).length ? { config } : {}), ...(promote ? { promote } : {}), ...(project !== undefined ? { project } : {}), ...(prefix !== undefined ? { fingerprint_prefix: prefix } : {}) }, o.team);
       emit(o.json, result, () => formatSourceLine(result.source));
     });
 

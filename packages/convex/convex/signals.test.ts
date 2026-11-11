@@ -209,7 +209,7 @@ describe("signals.ingest", () => {
     const second = await add({ fingerprint: "err-1", title: "Checkout throws on empty cart (again)", observed_at: T0 + 5000 });
     expect(second).toMatchObject({ attach: "fingerprint", task_id: first.task_id, signal_count: 2, reopened: false });
     expect(stub.state.calls).toHaveLength(0);
-    expect((await task(first.task_id)).cause).toEqual({ signal_count: 2, first_seen: T0, last_seen: T0 + 5000, fingerprints: ["err-1"], joined_at: expect.any(Number), placed: "none" });
+    expect((await task(first.task_id)).cause).toEqual({ signal_count: 2, first_seen: T0, last_seen: T0 + 5000, fingerprints: ["err-1"], joined_at: expect.any(Number), placed: "default" });
   });
 
   test("judge: a new fingerprint near an open cause attaches where the judge points", async () => {
@@ -790,8 +790,9 @@ describe("signals in a project (line-profile.md LP1)", () => {
 
   test("a fingerprint hit on a cause with no project keeps the signal in the project it was filed for", async () => {
     const { add, t, infra } = await withProjects();
-    const a = await add({ fingerprint: "union:cluster:c8", title: "Agent repeats itself" });
-    const b = await add({ fingerprint: "union:cluster:c8", title: "Agent repeats itself", project: "Infrastructure" });
+    // A person's finding: no profile publishes its source, so its cause has no project.
+    const a = await add({ source: "person", fingerprint: "union:cluster:c8", title: "Agent repeats itself" });
+    const b = await add({ source: "person", fingerprint: "union:cluster:c8", title: "Agent repeats itself", project: "Infrastructure" });
     expect(b).toMatchObject({ attach: "fingerprint", task_id: a.task_id });
     const row = await t.run(async (ctx) => await ctx.db.get(b.signal_id));
     expect(row?.project_id).toBe(infra);
@@ -867,16 +868,20 @@ describe("signals in a project (line-profile.md LP1)", () => {
     expect((await place({ source: "union.escalation", fingerprint: "esc-1", title: "Broker asked twice", default_project: "Agent Quality" })).cause).toMatchObject({ project_id: infra, cause: { placed: "source" } });
   });
 
-  test("placement: a broad source falls to the repo default, which Ground may replace, and with no default to no project", async () => {
-    const { place, quality } = await withPlacement();
-    const filed = await place({ source: "union.eval", fingerprint: "ev-2", title: "Gate red", default_project: "Agent Quality" });
-    expect(filed.cause).toMatchObject({ project_id: quality, cause: { placed: "default" } });
+  test("placement: a broad source falls to the repo default, else to the project its profile is published on as default, which Ground may replace", async () => {
+    const { place, quality, infra } = await withPlacement();
+    const filed = await place({ source: "union.eval", fingerprint: "ev-2", title: "Gate red", default_project: "Infrastructure" });
+    expect(filed.cause).toMatchObject({ project_id: infra, cause: { placed: "default" } });
     expect(filed.row.placed).toBe("default");
-    const none = await place({ source: "union.eval", fingerprint: "ev-3", title: "Gate red again" });
+    // A server filer (an event source) sends no repo default: the published profile's default holds it, so the line can start it.
+    const server = await place({ source: "union.eval", fingerprint: "ev-3", title: "Gate red again" });
+    expect(server.cause).toMatchObject({ project_id: quality, cause: { placed: "default" } });
+    // A default that names nothing in the workspace falls through rather than refusing the signal.
+    expect((await place({ source: "union.eval", fingerprint: "ev-4", title: "Gate red once more", default_project: "Nowhere" })).cause).toMatchObject({ project_id: quality, cause: { placed: "default" } });
+    // A source no profile publishes files in no project.
+    const none = await place({ source: "person", fingerprint: "ev-5", title: "Gate red, a person says" });
     expect(none.cause.project_id).toBeUndefined();
     expect(none.cause.cause.placed).toBe("none");
-    // A default that names nothing in the workspace files nowhere rather than refusing the signal.
-    expect((await place({ source: "union.eval", fingerprint: "ev-4", title: "Gate red once more", default_project: "Nowhere" })).cause.cause.placed).toBe("none");
   });
 
   test("placement: a source declared both with and without its own project is broad", async () => {

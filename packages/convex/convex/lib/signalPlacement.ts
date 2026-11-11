@@ -9,9 +9,12 @@
 //                project)
 //   source       every finder declaring its source names one project of its
 //                own: a single-purpose source (LP3)
-//   default      the repo profile's `[line] project`, sent as default_project:
-//                where the problem is filed until Ground places it
-//   none         nothing named a project; Ground places it
+//   default      the repo profile's `[line] project`, sent as default_project,
+//                else the project its source's finders are published on as the
+//                profile's default (a server filer, like an event source, has no
+//                repo profile to send): where the problem is filed until Ground
+//                places it, since the line starts only a problem in a project
+//   none         nothing named a project and no profile publishes its source
 //
 // Nothing declares that a project owns a metric, surface or file today, so no
 // step reads a subject that way; an initiative metric names the projects it
@@ -41,27 +44,28 @@ export async function expectationProject(ctx: { db: any }, workspace: string, su
 }
 
 /**
- * The project a single-purpose source files into: every published finder of
- * this source in the workspace declares a project of its own, and they agree.
- * A finder declares one with `single_purpose`; a finder published onto a
+ * Where a source's published finders put a signal. `source` settles it: every
+ * published finder of this source declares a project of its own, and they
+ * agree. A finder declares one with `single_purpose`; a finder published onto a
  * project that is not its profile's default could only get there by naming
  * that project, so it counts too (profiles published before the flag).
+ * Otherwise `default` is the project a finder of this source is published on
+ * as its profile's default, which only holds the problem until Ground places it.
  */
-export async function sourceProject(ctx: { db: any }, workspace: string, source: string): Promise<Id<"projects"> | null> {
+export async function sourcePlacement(ctx: { db: any }, workspace: string, source: string): Promise<Placement | null> {
   const want = source.trim().toLowerCase();
   const projects: Doc<"projects">[] = await ctx.db.query("projects").withIndex("by_workspace", (q: any) => q.eq("workspace", workspace)).collect();
   const owners = new Set<string>();
-  let any = false;
+  let profileDefault: Doc<"projects"> | null = null;
   for (const p of projects) {
     for (const f of p.line_profile?.finders ?? []) {
       if (f.source !== want) continue;
-      any = true;
-      if (!f.single_purpose && p.line_profile?.default !== false) return null;
-      owners.add(String(p._id));
+      if (!f.single_purpose && p.line_profile?.default !== false) profileDefault ??= p;
+      else owners.add(String(p._id));
     }
   }
-  if (!any || owners.size !== 1) return null;
-  return projects.find((p) => owners.has(String(p._id)))!._id;
+  if (!profileDefault && owners.size === 1) return { project_id: projects.find((p) => owners.has(String(p._id)))!._id, placed: "source" };
+  return profileDefault ? { project_id: profileDefault._id, placed: "default" } : null;
 }
 
 /** Every step in order, for a signal filed in this workspace. `project` is the filer's; `default_project` the repo profile's. */
@@ -70,11 +74,12 @@ export async function placeSignal(ctx: { db: any }, workspace: string, signal: {
   if (expectation) return { project_id: expectation, placed: "expectation" };
   const filer = await resolveWorkspaceProject(ctx as any, workspace, refs.project);
   if (filer) return { project_id: filer._id, placed: "filer" };
-  const source = await sourceProject(ctx, workspace, signal.source);
-  if (source) return { project_id: source, placed: "source" };
-  // A default that no longer resolves files nowhere rather than refusing the signal.
+  const source = await sourcePlacement(ctx, workspace, signal.source);
+  if (source?.placed === "source") return source;
+  // A default that no longer resolves falls through rather than refusing the signal.
   const fallback = await resolveWorkspaceProject(ctx as any, workspace, refs.default_project).catch(() => null);
-  return fallback ? { project_id: fallback._id, placed: "default" } : { project_id: null, placed: "none" };
+  if (fallback) return { project_id: fallback._id, placed: "default" };
+  return source ?? { project_id: null, placed: "none" };
 }
 
 /** The project a signal's judge and new cause are scoped to: only a settled one; a default looks across the workspace. */
