@@ -103,10 +103,12 @@ describe("signInLandingNote", () => {
     expect(note).toContain("Or your real Chrome holds this login");
     expect(signInLandingNote("https://github.com/login", google, { real: false, realHint: null })).not.toContain("Or ");
   });
-  test("in the human's own Chrome, hands the sign-in to the human and never names a verb that refuses there", () => {
+  test("in the human's own Chrome, signs in from the Vault or hands the sign-in over, and never names a verb that refuses there", () => {
     const note = signInLandingNote("https://console.anthropic.com/login", google, { real: true, realHint: "ignored" })!;
     expect(note).toContain("console.anthropic.com");
-    expect(note).toContain("cast browser show");
+    expect(note).toContain("--vault <name>/username");
+    expect(note).toContain("cast browser handoff");
+    expect(note).toContain("copy cookies or move to another browser");
     for (const refused of ["cast browser login", "cast browser sync", "Or "]) expect(note).not.toContain(refused);
   });
 });

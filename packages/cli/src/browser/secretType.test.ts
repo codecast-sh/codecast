@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { SecretMeta } from "@codecast/shared/contracts/secrets";
 import type { ReadSecret } from "../secrets/inject.js";
-import { fieldFor, originVerdict, typeSecret, valueFor, SecretTypeRefusal, type FocusProbe, type SecretTypeDeps } from "./secretType.js";
+import { fieldFor, originVerdict, withSubdomains, typeSecret, valueFor, SecretTypeRefusal, type FocusProbe, type SecretTypeDeps } from "./secretType.js";
 
 const meta = (over: Partial<SecretMeta> = {}): SecretMeta =>
   ({ _id: "s1", short_id: "sc-1", name: "acme", kind: "login", status: "ready", workspace: "user:u", sites: ["login.acme.test"], created_by: "u", created_at: 0, updated_at: 0, ...over }) as SecretMeta;
@@ -23,10 +23,19 @@ describe("originVerdict", () => {
     refused(() => originVerdict(meta({ sites: [] }), "https://login.acme.test/", null), /names no site/);
     refused(() => originVerdict(meta({ sites: ["*"] }), "https://login.acme.test/", null), /names no site/);
   });
-  test("exact host, any port on https; subdomains only with *.", () => {
+  test("a named host covers its subdomains, never a lookalike or a parent", () => {
     expect(originVerdict(meta(), "https://login.acme.test/signin?x=1", null).origin).toBe("https://login.acme.test");
-    refused(() => originVerdict(meta(), "https://evil.login.acme.test/", null), /not a site of acme/);
+    expect(originVerdict(meta(), "https://sso.login.acme.test/", null).origin).toBe("https://sso.login.acme.test");
     refused(() => originVerdict(meta(), "https://login.acme.test.evil.com/", null), /not a site of acme/);
+    refused(() => originVerdict(meta(), "https://evillogin.acme.test/", null), /not a site of acme/);
+    refused(() => originVerdict(meta(), "https://acme.test/", null), /not a site of acme/);
+    // The case that refused in real use: a portal stored by its bare domain, served from www.
+    const portal = meta({ sites: ["myconnectnyc.org"] });
+    expect(originVerdict(portal, "https://www.myconnectnyc.org/MyChart/", null).origin).toBe("https://www.myconnectnyc.org");
+    expect(originVerdict(portal, "https://myconnectnyc.org/", null).origin).toBe("https://myconnectnyc.org");
+    refused(() => originVerdict(portal, "https://myconnectnyc.org.evil.com/", null), /not a site/);
+    refused(() => originVerdict(portal, "https://www.myconnectnyc.org.evil.com/", null), /not a site/);
+    refused(() => originVerdict(portal, "https://notmyconnectnyc.org/", null), /not a site/);
     expect(originVerdict(meta({ sites: ["*.acme.test"] }), "https://sso.acme.test/", null).origin).toBe("https://sso.acme.test");
   });
   test("plain http only on loopback, and a port in the site is exact", () => {
@@ -34,6 +43,8 @@ describe("originVerdict", () => {
     const local = meta({ sites: ["127.0.0.1:4001"] });
     expect(originVerdict(local, "http://127.0.0.1:4001/login", null).origin).toBe("http://127.0.0.1:4001");
     refused(() => originVerdict(local, "http://127.0.0.1:4002/login", null), /not a site/);
+    expect(withSubdomains("127.0.0.1:4001")).toEqual(["127.0.0.1:4001"]);
+    expect(withSubdomains("10.0.0.5")).toEqual(["10.0.0.5"]);
   });
   test("a page with no web origin is no site", () => {
     refused(() => originVerdict(meta(), "about:blank", null), /no site/);

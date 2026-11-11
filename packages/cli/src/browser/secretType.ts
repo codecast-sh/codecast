@@ -83,6 +83,13 @@ export function webOrigin(url: string): string | null {
   }
 }
 
+/** A secret's site as patterns: a named host and its subdomains; an IP, a port or a `*.` pattern as written. */
+export function withSubdomains(site: string): string[] {
+  const p = parsePattern(site);
+  if (!p || p.wildcard || p.port !== null || p.scheme || !/[a-z]/i.test(p.host.split(".").pop() ?? "") || !p.host.includes(".")) return [site];
+  return [site, `*.${p.host}`];
+}
+
 /** The field a kind types by default, or why `field` does not fit it. */
 export function fieldFor(kind: SecretKind, field: SecretTypeField | undefined, name: string): SecretTypeField {
   if (kind === "signin") throw new SecretTypeRefusal(`${name} is a saved sign-in: cast browser open <site> loads it, there is no value to type`);
@@ -94,9 +101,11 @@ export function fieldFor(kind: SecretKind, field: SecretTypeField | undefined, n
 }
 
 /**
- * May `name`'s value go to `url`? Its Sites as policy patterns (`example.com`
- * exact host, `*.example.com` subdomains too, `host:port`), https only except
- * on loopback, then the session allowlist when there is one.
+ * May `name`'s value go to `url`? Its Sites as policy patterns, a named host
+ * covering its subdomains too (`example.com` takes `www.example.com` and
+ * `sso.example.com`, never `example.com.evil.test`), an IP or `host:port`
+ * site exact; https only except on loopback, then the session allowlist when
+ * there is one.
  */
 export function originVerdict(
   secret: Pick<SecretMeta, "name" | "sites">,
@@ -120,7 +129,7 @@ export function originVerdict(
   if (u.protocol !== "https:" && !LOOPBACK.test(u.hostname)) {
     throw new SecretTypeRefusal(`${origin} is not https, so ${name} is not typed there`);
   }
-  if (!checkUrl({ sources: [{ file: "the Vault", key: name, patterns: sites }], errors: [] }, url).allowed) {
+  if (!checkUrl({ sources: [{ file: "the Vault", key: name, patterns: sites.flatMap(withSubdomains) }], errors: [] }, url).allowed) {
     throw new SecretTypeRefusal(`${origin} is not a site of ${name} (${sites.join(", ")})`, "Open the secret's own site, or ask a person to add this one to its Sites");
   }
   const allow = checkUrl(session, url);
@@ -229,7 +238,28 @@ export interface SecretTypeDeps {
 function checkFocus(probe: FocusProbe, origin: string): void {
   if (probe.frame === "cross") throw new SecretTypeRefusal("the field is inside a cross-origin iframe, so nothing is typed there");
   if (probe.docOrigin !== origin) throw new SecretTypeRefusal(`the field's frame is ${probe.docOrigin ?? "unknown"}, not ${origin}`);
+  requireEditable(probe);
+}
+
+function requireEditable(probe: FocusProbe): void {
   if (!probe.editable) throw new SecretTypeRefusal("the target is not an editable text field (or did not take focus)", "Point it at the input itself: a ref from `cast browser snapshot -i`, or a CSS selector");
+}
+
+/**
+ * Put a value the caller already holds (`type`/`fill --stdin`) into the
+ * target, by the same CDP insert as a Vault value, so it never becomes an
+ * engine argument. No Sites check: the value is not the Vault's.
+ */
+export async function typeText(text: string, opts: { append?: boolean }, page: SecretTypePage): Promise<{ typed: true; origin: string }> {
+  await page.focus();
+  const frame = (await page.probe()).frame === "cross" ? await focusedFrame(page) : null;
+  const target: SecretTypeDoc = frame ?? { ...page, url: page.topUrl };
+  const probe = await target.probe();
+  if (probe.frame === "cross") throw new SecretTypeRefusal("the field is inside a cross-origin iframe, so nothing is typed there");
+  requireEditable(probe);
+  if (!opts.append) await target.selectAll();
+  await target.insertText(text);
+  return { typed: true, origin: probe.docOrigin ?? webOrigin(await target.url()) ?? "" };
 }
 
 /** Type `name` into the target. Every refusal is thrown before the value is read or inserted. */
@@ -431,21 +461,43 @@ moved to another origin before the insert is refused.
       let tab: SessionTab | null = null;
       try {
         tab = await openSessionTab(o, deps);
-        const t = tab;
-        const metas = metasOnce(deps);
         const res = await typeSecret(name, { field: o.field as SecretTypeField | undefined, append: o.append }, {
-          meta: async (n) => (await metas()).find((m) => m.name === n || m.short_id === n) ?? null,
-          read: async (n, field) => (await readSecrets(deps, [n], field === "otp" ? "otp" : "get", o.why))[0],
+          ...vaultReads(deps, o.why),
           policy: loadSitePolicy(),
-          page: cdpSecretPage(t.conn, t.sessionId, target, /^#?e\d+$/i.test(target) ? () => t.focusRef(target) : undefined),
+          page: secretPageFor(tab, target),
         });
         if (o.json) console.log(JSON.stringify(res));
-        else console.log(`${fmt.success(icons.check)} typed ${res.name} (${res.field}) on ${res.origin}`);
+        else console.log(typedLine(res));
       } catch (err) {
-        const hint = (err as { hint?: string }).hint;
-        fail(`${(err as Error).message}${err instanceof SecretTypeRefusal ? ". Nothing was typed" : ""}${hint ? `\n  ${hint}` : ""}`);
+        fail(refusalText(err));
       } finally {
         tab?.conn.close();
       }
     });
+}
+
+/** The page typeSecret drives for `target` on a session tab: a snapshot ref is focused by the driver that made it, a CSS selector here. */
+export function secretPageFor(tab: SessionTab, target: string): SecretTypePage {
+  const ref = /^[#@]?e\d+$/i.test(target) ? `#${target.replace(/^[#@]/, "")}` : null;
+  return cdpSecretPage(tab.conn, tab.sessionId, target, ref ? () => tab.focusRef(ref) : undefined);
+}
+
+/** typeSecret's Vault reads for this session; `why` words an Ask first question. */
+export function vaultReads(deps: PublishDeps, why?: string): Pick<SecretTypeDeps, "meta" | "read"> {
+  const metas = metasOnce(deps);
+  return {
+    meta: async (n) => (await metas()).find((m) => m.name === n || m.short_id === n) ?? null,
+    read: async (n, field) => (await readSecrets(deps, [n], field === "otp" ? "otp" : "get", why))[0],
+  };
+}
+
+/** What a typed Vault value reports: its name and field, never the value. */
+export function typedLine(res: SecretTypeResult): string {
+  return `${fmt.success(icons.check)} typed ${res.name} (${res.field}) on ${res.origin}`;
+}
+
+/** A failure as one line plus its hint; a refusal says nothing was typed. */
+export function refusalText(err: unknown): string {
+  const hint = (err as { hint?: string }).hint;
+  return `${(err as Error).message}${err instanceof SecretTypeRefusal ? ". Nothing was typed" : ""}${hint ? `\n  ${hint}` : ""}`;
 }
