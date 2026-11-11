@@ -28,6 +28,8 @@ import {
   type RetryOperation as GenericRetryOperation,
   type DroppedOperation as GenericDroppedOperation,
   type LogLevel,
+  type ErrorClass,
+  defaultClassifyError,
   parseRateLimitDelay,
 } from "@platform/cli-kit/retryQueue";
 import { SHUTDOWN_FLUSH_MS } from "./shutdownBudget.js";
@@ -119,6 +121,27 @@ const isAddMessagesFor = (op: RetryOperation, conversationId: string): boolean =
 export function isStaleConversationError(error: string): boolean {
   return error.includes("Conversation not found") ||
     error.includes("Unauthorized: can only add messages to your own conversations");
+}
+
+// Answers that mean "not now", never "not this op": the daemon's own transcript
+// pool was full or a pass ran out of its deadline, or Convex shed load (its
+// concurrency cap, queue expiry, OCC contention on a hot table) or a call hit
+// its abort timeout. Read as ordinary failures they dropped 736 ops at
+// maxAttempts while prod recovered from an outage on 2026-11-10; as overload
+// they back off and retry until the backend can take them.
+const LOAD_REFUSALS = [
+  "ingest reservation capacity",
+  "ingest transaction deadline",
+  "TooManyConcurrentRequests",
+  "ExpiredInQueue",
+  "OptimisticConcurrencyControlFailure",
+  "The operation timed out",
+];
+
+export function classifyRetryError(error: string): ErrorClass {
+  const cls = defaultClassifyError(error);
+  if (cls !== "retry") return cls;
+  return LOAD_REFUSALS.some((refusal) => error.includes(refusal)) ? "overload" : "retry";
 }
 
 // createConversation refusals that hold for good: the session moved to another
@@ -354,6 +377,7 @@ export class RetryQueue {
         healedInPlace = healed.changed && healed.ops.length === ops.length;
         return healed.ops;
       },
+      classifyError: classifyRetryError,
       onFailure: (op, error, queue) => {
         if (error.includes("timed out after") && splitTimedOutAddMessages(queue, op as RetryOperation, limits, log)) {
           return true;

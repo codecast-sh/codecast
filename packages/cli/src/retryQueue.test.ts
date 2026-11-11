@@ -3,8 +3,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { RetryQueue } from "./retryQueue.js";
-import { withTranscriptDeadline } from "./workers/ingestDeadline.js";
-import { serializeTranscript } from "./workers/ingestClient.js";
+import { withTranscriptDeadline, IngestDeadlineExceeded } from "./workers/ingestDeadline.js";
+import { serializeTranscript, IngestCapacityError } from "./workers/ingestClient.js";
 
 it("durable retries get a fresh transaction after the enqueueing ingest expires", async () => {
   const queue = new RetryQueue({ initialDelayMs: 30, maxDelayMs: 30, maxAttempts: 2 });
@@ -135,6 +135,30 @@ describe("RetryQueue", () => {
 
     const successLog = logs.find((l) => l.includes("Retry succeeded"));
     expect(successLog).toBeDefined();
+  });
+
+  // 2026-11-10: prod was unreachable for four hours. On recovery every queued op
+  // replayed at once, Convex shed load, and the daemon's own transcript pool
+  // filled; the queue read each of those answers as an ordinary failure and
+  // dropped 736 ops at maxAttempts (699 creates refused only for a local slot).
+  // None of them says anything is wrong with the op.
+  it.each([
+    ["local transcript pool full", new IngestCapacityError().message],
+    ["transcript pass deadline", new IngestDeadlineExceeded("ingest transaction deadline").message],
+    ["Convex concurrency cap", '{"code":"TooManyConcurrentRequests","message":"Too many concurrent requests. Your backend is limited to 64 concurrent mutations."}'],
+    ["Convex queue expiry", '{"code":"ExpiredInQueue","message":"Too many concurrent requests in a short period of time."}'],
+    ["Convex OCC contention", '{"code":"OptimisticConcurrencyControlFailure","message":"Documents read from or written to the \\"rate_limits\\" table changed"}'],
+    ["fetch abort timeout", "The operation timed out."],
+  ])("never drops an op refused for load (%s)", async (_label, error) => {
+    let attempts = 0;
+    queue.setExecutor(async () => {
+      if (++attempts >= 5) return true;
+      throw new Error(error);
+    });
+    queue.add("createConversation", { sessionId: "load" });
+    await until(() => queue.getQueueSize() === 0);
+    expect(attempts).toBe(5);
+    expect(queue.getDroppedOperationCount()).toBe(0);
   });
 
   it("drains a backed-off op immediately on connection restore", async () => {
