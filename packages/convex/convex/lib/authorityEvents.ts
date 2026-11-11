@@ -28,6 +28,7 @@ export const AUTHORITY_EVENT_KINDS = [
   "team_member_removed",
   "team_member_role_changed",
   "team_member_visibility_changed",
+  "staff_daemon_command",
 ] as const;
 export type AuthorityEventKind = (typeof AUTHORITY_EVENT_KINDS)[number];
 

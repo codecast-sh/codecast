@@ -15,6 +15,7 @@ const modules = {
   "./daemonLogs.ts": () => import("./daemonLogs"),
   "./syncOutbox.ts": () => import("./syncOutbox"),
   "./teamActivity.ts": () => import("./teamActivity"),
+  "./authorityEvents.ts": () => import("./authorityEvents"),
 };
 
 async function setup() {
@@ -41,6 +42,41 @@ describe("staff gate", () => {
     await expect(
       as(ids.founder).mutation(api.users.sendDaemonCommand, { user_id: ids.operator, command: "restart" }),
     ).rejects.toThrow("Not authorized");
+  });
+
+  test("staff maintenance commands reach another user's daemon, each with an audit row", async () => {
+    const { t, ids, as } = await setup();
+    const { command_id } = await as(ids.operator).mutation(api.users.sendDaemonCommand, { user_id: ids.founder, command: "restart" });
+    const row = await t.run((ctx) => ctx.db.get(command_id));
+    expect(row).toMatchObject({ user_id: ids.founder, command: "restart" });
+    expect(row?.args).toBeUndefined();
+    const audit = await t.run((ctx) => ctx.db.query("authority_events").collect());
+    expect(audit).toHaveLength(1);
+    expect(audit[0]).toMatchObject({ kind: "staff_daemon_command", actor_user_id: ids.operator, target_user_id: ids.founder });
+    expect(audit[0].detail.after).toMatchObject({ command: "restart", command_id });
+  });
+
+  test("staff cannot run code, type into panes or touch config on another user's machine", async () => {
+    const { t, ids, as } = await setup();
+    for (const command of ["config_write", "config_create", "config_read", "send_keys", "start_session", "resume_session", "run_workflow", "kill_session"]) {
+      await expect(
+        as(ids.operator).mutation(api.users.sendDaemonCommand, { user_id: ids.founder, command, args_json: "{}" } as any),
+      ).rejects.toThrow();
+    }
+    await expect(
+      as(ids.operator).mutation(api.users.sendDaemonCommand, { user_id: ids.founder, command: "restart", args_json: "{}" } as any),
+    ).rejects.toThrow();
+    expect(await t.run((ctx) => ctx.db.query("daemon_commands").collect())).toEqual([]);
+  });
+
+  test("a fleet command leaves one audit row naming the verb and how many daemons it reached", async () => {
+    const { t, ids, as } = await setup();
+    await t.run((ctx) => ctx.db.patch(ids.founder, { last_heartbeat: Date.now() } as any));
+    const { sent } = await as(ids.operator).mutation(api.users.sendDaemonCommandToAll, { command: "force_update" });
+    expect(sent).toBe(1);
+    const audit = await t.run((ctx) => ctx.db.query("authority_events").collect());
+    expect(audit).toHaveLength(1);
+    expect(audit[0].detail.after).toMatchObject({ command: "force_update", fleet: true, sent: 1 });
   });
 
   test("staff reads the operator views", async () => {

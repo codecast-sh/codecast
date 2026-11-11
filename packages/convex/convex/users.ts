@@ -22,6 +22,7 @@ import { adminChangesZones, recutChangesDays } from "./lib/changesDirty";
 import { normalizeTimezone } from "./lib/teamDay";
 import { startedBefore } from "./pathStats";
 import { isStaff } from "./lib/staff";
+import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { verifyApiToken } from "./apiTokens";
 import { findSessionCommandByRequest, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, isTeamMember, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
@@ -972,29 +973,21 @@ export const reportCommandResult = mutation({
   },
 });
 
+// Staff remote maintenance of one user's daemon (the /admin/daemon-logs
+// panel). Only verbs that report state or restart/update the daemon from the
+// signed release channel, and never arguments: a staff account must not be a
+// way to run code, type into panes, start sessions or touch ~/.claude files on
+// a customer's machine. Every send is recorded in authority_events.
 export const sendDaemonCommand = mutation({
   args: {
     user_id: v.id("users"),
     command: v.union(
       v.literal("status"),
+      v.literal("version"),
       v.literal("restart"),
       v.literal("force_update"),
-      v.literal("reinstall"),
-      v.literal("version"),
-      v.literal("start_session"),
-      v.literal("escape"),
-      v.literal("resume_session"),
-      v.literal("kill_session"),
-      v.literal("send_keys"),
-      v.literal("rewind"),
-      v.literal("config_list"),
-      v.literal("config_read"),
-      v.literal("config_write"),
-      v.literal("config_create"),
-      v.literal("config_delete"),
-      v.literal("run_workflow")
+      v.literal("reinstall")
     ),
-    args_json: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthUserId(ctx);
@@ -1010,8 +1003,13 @@ export const sendDaemonCommand = mutation({
     const commandId = await ctx.db.insert("daemon_commands", {
       user_id: args.user_id,
       command: args.command,
-      args: args.args_json,
       created_at: Date.now(),
+    });
+    await recordAuthorityEvent(ctx, {
+      kind: "staff_daemon_command",
+      actor_user_id: authUserId,
+      target_user_id: args.user_id,
+      detail: { after: { command: args.command, command_id: commandId } },
     });
 
     return { command_id: commandId };
@@ -1122,6 +1120,11 @@ export const sendDaemonCommandToAll = mutation({
       });
       sent++;
     }
+    await recordAuthorityEvent(ctx, {
+      kind: "staff_daemon_command",
+      actor_user_id: authUserId,
+      detail: { after: { command: args.command, fleet: true, max_version: args.max_version ?? null, sent } },
+    });
 
     return { sent, total: recentlyActive.length };
   },
