@@ -376,6 +376,35 @@ describe("machine prompt delivery safety", () => {
     expect(f.bodies).toEqual(["continue"]);
   });
 
+  // jx7f403, 2026-11-11: the limit dialog closed on the first Escape, but the
+  // next capture still showed it, so the corrective pressed twice more 0.5s
+  // apart. Those Escapes landed on an empty composer and opened Rewind, which
+  // then held every message. A modal gets one Escape; after it, wait for the
+  // repaint.
+  test("dismisses the limit dialog with one Escape even when the repaint lags", async () => {
+    const f = fixture();
+    const dialog = [
+      "  ⎿  You've hit your weekly limit · resets Nov 16 at 1pm (America/New_York)",
+      "▔".repeat(120),
+      "   What do you want to do?",
+      "   ❯ 1. Stop and wait for limit to reset",
+      "     2. Wait here, then continue automatically at Nov 16 at 1pm",
+      "     3. Switch to usage credits",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    f.state.menu = dialog;
+    let staleCaptures = 0;
+    f.hooks.capture = () => { if (staleCaptures > 0 && --staleCaptures === 0) f.state.menu = null; };
+    f.hooks.input = (event: string) => {
+      if (event === "Escape" && staleCaptures === 0) staleCaptures = 3;
+    };
+    await f.deliver("continue").catch((e: any) => console.log("ERR", String(e?.message ?? e)));
+    console.log("EVENTS", JSON.stringify(f.events));
+    await expect(f.deliver("continue")).resolves.toBe(true);
+    expect(f.events.filter((e: string) => e === "Escape")).toEqual(["Escape"]);
+    expect(f.bodies).toEqual(["continue"]);
+  });
+
   test("a timed-out waiter does not steal the active terminal writer's lock", async () => {
     const f = fixture();
     const active = new Promise<void>(() => {});

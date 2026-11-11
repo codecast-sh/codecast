@@ -5,7 +5,7 @@
 // report, and the answers right there, or the answer once it is settled.
 // Answering is the store's answerDecision, so the card flips the moment it
 // is pressed and the asking session wakes with the answer.
-import { RUN_OPTION, SKIP_OPTION, approvesPersonsAct } from '@codecast/shared/contracts/commandRun';
+import { RUN_OPTION, SKIP_OPTION, approvesPersonsAct, fallbackLine } from '@codecast/shared/contracts/commandRun';
 import { approvalButtonLabel } from '@codecast/shared/contracts/assistant';
 import { useCallback, useRef } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -105,7 +105,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
   // answer are a tap away on the decision's screen.
   // A permission ask (`cast decide --run`): the question and Yes / Not now,
   // Yes marked with the fingerprint it confirms with, as on the web
-  // (components/conversation/PermissionAsk). Nothing else to read or open.
+  // (components/conversation/PermissionAsk), with what Yes approves and the terminal line at its foot.
   if (docked && row.run && !settledOf(row)) {
     const yes = options.findIndex((o) => o.label === RUN_OPTION);
     const no = options.findIndex((o) => o.label === SKIP_OPTION);
@@ -115,6 +115,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
           <View style={styles.permissionTile}><Feather name="shield" size={16} color={Theme.yellow} /></View>
           <Text style={[styles.question, { flex: 1, marginTop: 4 }]}>{row.question}</Text>
         </View>
+        {row.run.approves ? <RunSubjectBlock subject={row.run.approves} /> : null}
         <View style={[styles.compactRow, { paddingLeft: 44 }]}>
           {yes >= 0 ? (
             <Pressable accessibilityRole="button" accessibilityHint="Confirms with Touch ID" onPress={() => answer({ index: yes })} style={[styles.compact, styles.permissionYes]}>
@@ -128,6 +129,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
             </Pressable>
           ) : null}
         </View>
+        <Text style={styles.fallback} numberOfLines={1} selectable>{fallbackLine(row.run)}</Text>
       </View>
     );
   }
@@ -240,6 +242,26 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
   );
 }
 
+/** What a permission ask's Yes approves (commandRun.ts RunSubject): the folder, then each piece's exact lines, as on the web (RunSubjectView). */
+function RunSubjectBlock({ subject }: { subject: NonNullable<NonNullable<SessionDecisionItem['run']>['approves']> }) {
+  return (
+    <View style={{ paddingLeft: 44, gap: 8 }}>
+      <Text style={styles.session} numberOfLines={1}>{`${subject.title} · ${subject.folder}`}</Text>
+      {subject.items.map((item) => (
+        <View key={item.label} style={styles.subjectItem}>
+          <View style={styles.subjectHead}>
+            <Text style={[styles.session, { flex: 1, marginTop: 0 }]} numberOfLines={1}>{item.label}</Text>
+            {item.note ? <Text style={styles.subjectNote}>{item.note}</Text> : null}
+          </View>
+          <View style={{ paddingHorizontal: 10, paddingVertical: 6 }}>
+            {item.lines.map((line, i) => <Text key={i} style={styles.subjectLine}>{line || ' '}</Text>)}
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+}
+
 const styles = themedStyles((Theme) => StyleSheet.create({
   card: {
     gap: 8,
@@ -276,6 +298,11 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   permission: { borderWidth: 1, borderColor: Theme.yellow + '55', gap: 12 },
   permissionTile: { width: 32, height: 32, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: Theme.yellow + '22' },
   permissionYes: { backgroundColor: Theme.yellow, borderColor: Theme.yellow },
+  subjectItem: { borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.borderLight, borderRadius: 8, overflow: 'hidden' },
+  subjectHead: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 4, backgroundColor: Theme.card },
+  subjectNote: { fontSize: 11, color: Theme.blue },
+  subjectLine: { fontSize: 12.5, lineHeight: 18, color: Theme.text },
+  fallback: { fontSize: 11, color: Theme.textMuted0, paddingLeft: 44 },
   footer: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 },
   footerRight: { flexDirection: 'row', gap: 18 },
   footerText: { fontSize: 13, color: Theme.textMuted },

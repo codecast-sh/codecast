@@ -246,7 +246,7 @@ describe("focusRequestedTab", () => {
     const out = await focusRequestedTab(new URLSearchParams({ tab: "2be86883", session_uuid: "s-1" }), {
       engines: [engine("builtin", { calls, listTabs: async () => [tab(T2), tab(T1)] })],
       raiseApp: () => {},
-      resolveSessionTab: () => T2,
+      resolveSessionTabs: () => [T2],
     });
     expect(out).toEqual({ tab: T1, result: { ok: true, tab: T1, pid: 1234 } });
     expect(calls).toEqual([`builtin:activate:${T1}@9333`]);
@@ -258,7 +258,7 @@ describe("focusRequestedTab", () => {
     const out = await focusRequestedTab(new URLSearchParams({ session_uuid: "s-1" }), {
       engines: [engine("builtin", { calls })],
       raiseApp: () => {},
-      resolveSessionTab: (keys) => (asked.push(keys), T1),
+      resolveSessionTabs: (keys) => (asked.push(keys), [T1]),
     });
     expect(asked).toEqual([["session:s-1", "env:s-1"]]);
     expect(out).toEqual({ tab: T1, result: { ok: true, tab: T1, pid: 1234 } });
@@ -273,7 +273,7 @@ describe("focusRequestedTab", () => {
     const out = await focusRequestedTab(new URLSearchParams({ tab: "4a2cdc7e", session_uuid: "s-1" }), {
       engines: [engine("builtin", { calls })],
       raiseApp: () => {},
-      resolveSessionTab: () => T1,
+      resolveSessionTabs: () => [T1],
     });
     expect(out).toEqual({ tab: T1, result: { ok: true, tab: T1, pid: 1234 } });
     expect(calls).toEqual([`builtin:activate:${T1}@9333`]);
@@ -288,7 +288,21 @@ describe("focusRequestedTab", () => {
     const out = await focusRequestedTab(new URLSearchParams({ tab: "4a2cdc7e", session_uuid: "s-1" }), {
       engines: [never, engine("bridge", { calls })],
       raiseApp: () => {},
-      resolveSessionTab: () => T1,
+      resolveSessionTabs: () => [T1],
+    });
+    expect(out).toEqual({ tab: T1, result: { ok: true, tab: T1, pid: 1234 } });
+    expect(calls).toEqual([`bridge:activate:${T1}@9333`]);
+  });
+
+  // A session that works through named tabs (`--tab li`) leaves its default
+  // pin on a tab closed long ago. The click tries every tab it pinned, newest
+  // first, and raises the first one a browser still holds.
+  test("a session whose newest pins are gone raises the newest tab still open", async () => {
+    const calls: string[] = [];
+    const out = await focusRequestedTab(new URLSearchParams({ tab: "deadbeef", session_uuid: "s-1" }), {
+      engines: [engine("bridge", { calls, listTabs: async () => [tab(T2), tab(T1)] })],
+      raiseApp: () => {},
+      resolveSessionTabs: () => ["DEAD0001", T1, "DEAD0002", T2],
     });
     expect(out).toEqual({ tab: T1, result: { ok: true, tab: T1, pid: 1234 } });
     expect(calls).toEqual([`bridge:activate:${T1}@9333`]);
@@ -298,7 +312,7 @@ describe("focusRequestedTab", () => {
     const out = await focusRequestedTab(new URLSearchParams({ tab: "4a2cdc7e", session_uuid: "s-1" }), {
       engines: [engine("builtin")],
       raiseApp: () => {},
-      resolveSessionTab: () => null,
+      resolveSessionTabs: () => [],
     });
     expect(out).toEqual({ tab: "4a2cdc7e", result: { ok: false, reason: "tab-not-found" } });
   });
@@ -307,7 +321,7 @@ describe("focusRequestedTab", () => {
     const out = await focusRequestedTab(new URLSearchParams({ session_uuid: "s-1" }), {
       engines: [engine("builtin")],
       raiseApp: () => {},
-      resolveSessionTab: () => null,
+      resolveSessionTabs: () => [],
     });
     expect(out).toEqual({ tab: "", result: { ok: false, reason: "tab-not-found" } });
   });
@@ -320,7 +334,7 @@ describe("handleBrowserFocusHttp", () => {
     const deps = {
       engines: [],
       raiseApp: () => {},
-      resolveSessionTab: () => {
+      resolveSessionTabs: () => {
         throw new Error("binding file unreadable");
       },
     };
