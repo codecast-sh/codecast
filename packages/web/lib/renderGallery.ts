@@ -598,6 +598,11 @@ export function renderGalleryMessages(now: number): Row[] {
   user(formatScheduledTask({ title: "A session under you needs input", task_id: "rw1", trigger: "tr-42", event: "session_needs_input", role: ea, waiting: { short_id: "jx7gal1", title: "Router replay", why: "decision", since: now - 26 * 3_600_000 - 44_000, state: "Which router should replay first?" }, body: "A session that reports to you is waiting." }));
   user(formatScheduledTask({ title: "Check Executive Assistant's area", task_id: "rw2", trigger: "tr-43", role: ea, body: "Read your area and route what matters." }));
   user(formatScheduledTask({ title: "A session under you needs input", task_id: "rw3", trigger: "tr-42", event: "session_needs_input", role: ea, waiting: { short_id: "jx7gal1", title: "Router replay", why: "stopped", since: now - 17 * 3_600_000 - 11_000, state: "" }, body: "A session that reports to you is waiting." }));
+  // The role worked on that wake and ended its turn without a word, so the
+  // wake reads "no reply"; the next one it answers.
+  sh("cast read jx7gal1", "Router replay: stopped at its usage limit.");
+  user(formatScheduledTask({ title: "A session under you needs input", task_id: "rw4", trigger: "tr-42", event: "session_needs_input", role: ea, waiting: { short_id: "jx7gal1", title: "Router replay", why: "permission_blocked", since: now - 3 * 60_000, state: "" }, body: "A session that reports to you is waiting." }));
+  asst("Router replay was waiting on a permission prompt; I approved the read and it is running again.");
   sys("scheduled_task_prompt", '<scheduled-task title="Nightly audit">Run the audit.</scheduled-task>');
   sys("scheduled_task_fire", "Claude resuming /loop wakeup (Oct 19 5:07pm)");
   sys("away_summary", "While you were away: the audit landed **diff cards** and the shared classifier.");
