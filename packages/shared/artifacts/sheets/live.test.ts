@@ -75,3 +75,19 @@ describe("round 3 fixes", () => {
     expect(live.wb.value("t9", 1, 1)).toBe(1);
   });
 });
+
+describe("agent writes per tab", () => {
+  test("each tab knows its newest agent write, incrementally and on rebuild", () => {
+    const w = (key: string, rev: number, by?: string) => ({ ...el(key, "cell", { input: "1" }), rev, by, at: rev * 10 }) as ArtifactElement;
+    let els: ArtifactElement[] = [el("tab:a", "tab", { name: "A", order: 0 }), el("tab:b", "tab", { name: "B", order: 1 }), w("c:a!A1", 1, "u:x:t"), w("c:b!A1", 2, "s:conv1")];
+    for (let i = 2; i < 12; i++) els.push(w(`c:a!A${i}`, 2 + i, "u:x:t"));
+    const live = new LiveSheet();
+    live.update(els);
+    expect(live.model.byId.get("a")!.agentWrite).toBeUndefined();
+    expect(live.model.byId.get("b")!.agentWrite).toEqual({ rev: 2, by: "s:conv1", at: 20 });
+    els = [...els, w("c:a!B1", 50, "s:conv2")];
+    live.update(els);
+    expect(live.model.byId.get("a")!.agentWrite).toEqual({ rev: 50, by: "s:conv2", at: 500 });
+    expect(buildModel(els).byId.get("a")!.agentWrite).toEqual({ rev: 50, by: "s:conv2", at: 500 });
+  });
+});

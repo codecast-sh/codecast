@@ -4,25 +4,17 @@
 // never a frame behind. Only the visible window of cells renders; gridlines
 // are one line per visible row/column; selections, other people's ranges and
 // the fill handle are overlays drawn per pane and clipped to it.
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { ArtifactPresence } from "@codecast/shared/artifacts";
 import { cellNum, colLetters, type Rect, type TabData, type Workbook } from "@codecast/shared/artifacts/sheets";
 import { CursorTag } from "../live/LiveCursors";
 import { CursorArrow } from "../presence/CursorArrow";
 import { paintCell, tint, type Paint, type PaintContext } from "./cellPaint";
 import type { AxisLayout } from "./layout";
+import { BOTTOM_ROOM, COL_HEADER_H, ROW_HEADER_W, hitTest, type GridHit } from "./gridGeometry";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
-export const ROW_HEADER_W = 46;
-export const COL_HEADER_H = 24;
 const OVERSCAN_PX = 200;
-/** Space under the last row, so the floating format bar never sits on data you scroll to. */
-export const BOTTOM_ROOM = 64;
-
-export type GridHit =
-  | { zone: "cell"; col: number; row: number }
-  | { zone: "colHeader"; col: number }
-  | { zone: "rowHeader"; row: number }
-  | { zone: "corner" };
 
 export type Outline = { key: string; rect: Rect; color: string; presence?: ArtifactPresence; dashed?: boolean; fill?: boolean; label?: ReactNode };
 
@@ -60,31 +52,6 @@ type Win = { r0: number; r1: number; c0: number; c1: number };
 /** Where a pane's local (0,0) sits in axis px: local = offset - origin. */
 type Pane = { name: "corner" | "top" | "left" | "main"; ox: number; oy: number; rows: [number, number]; cols: [number, number] };
 
-export function hitTest(scroller: HTMLDivElement, cols: AxisLayout, rows: AxisLayout, frozenW: number, frozenH: number, clientX: number, clientY: number): GridHit {
-  const r = scroller.getBoundingClientRect();
-  const vx = clientX - r.left, vy = clientY - r.top;
-  const inColHeader = vy < COL_HEADER_H;
-  const inRowHeader = vx < ROW_HEADER_W;
-  if (inColHeader && inRowHeader) return { zone: "corner" };
-  const xPx = vx < ROW_HEADER_W + frozenW ? vx - ROW_HEADER_W : vx - ROW_HEADER_W + scroller.scrollLeft;
-  const yPx = vy < COL_HEADER_H + frozenH ? vy - COL_HEADER_H : vy - COL_HEADER_H + scroller.scrollTop;
-  const col = cols.indexAt(Math.max(0, xPx));
-  const row = rows.indexAt(Math.max(0, yPx));
-  if (inColHeader) return { zone: "colHeader", col };
-  if (inRowHeader) return { zone: "rowHeader", row };
-  return { zone: "cell", col, row };
-}
-
-/** A cell's rect in viewport px (relative to the scroller's top-left). */
-export function cellViewportRect(scroller: HTMLDivElement, cols: AxisLayout, rows: AxisLayout, frozenCols: number, frozenRows: number, col: number, row: number) {
-  const frozenW = cols.offset(frozenCols + 1), frozenH = rows.offset(frozenRows + 1);
-  const x = ROW_HEADER_W + cols.offset(col) - (col > frozenCols ? scroller.scrollLeft : 0);
-  const y = COL_HEADER_H + rows.offset(row) - (row > frozenRows ? scroller.scrollTop : 0);
-  const visible =
-    (col <= frozenCols || x >= ROW_HEADER_W + frozenW - 1) && (row <= frozenRows || y >= COL_HEADER_H + frozenH - 1);
-  return { x, y, w: cols.sizeOf(col), h: rows.sizeOf(row), visible };
-}
-
 export const SheetGrid = memo(function SheetGrid(p: GridProps) {
   const { cols, rows, frozenRows, frozenCols, scrollerRef } = p;
   const frozenW = cols.offset(frozenCols + 1);
@@ -120,7 +87,7 @@ export const SheetGrid = memo(function SheetGrid(p: GridProps) {
     measure();
   }, [measure]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = scrollerRef.current;
     if (!el) return;
     let raf = 0;
@@ -287,8 +254,20 @@ const Cell = memo(
       if (paint.bd.includes("l")) style.borderLeft = b;
     }
     return (
-      <div className={`sheet-cell${paint.error ? " is-error" : ""}${flash ? " is-flash" : ""}`} data-a1={a1} style={style} title={paint.error}>
-        <span className="sheet-cell-text">{paint.text}</span>
+      <div
+        className={`sheet-cell${paint.error ? " is-error" : ""}${paint.invalid ? " is-invalid" : ""}${flash ? " is-flash" : ""}`}
+        data-a1={a1}
+        data-picker={paint.picker}
+        style={paint.picker ? { ...style, paddingRight: 22 } : style}
+      >
+        {paint.chip ? (
+          <span className="sheet-chip" style={{ background: paint.chip.fill, color: paint.chip.color }}>
+            {paint.text}
+          </span>
+        ) : (
+          <span className="sheet-cell-text">{paint.text}</span>
+        )}
+        {paint.picker === "list" && <span className="sheet-cell-caret" aria-hidden />}
       </div>
     );
   },
@@ -310,7 +289,11 @@ function samePaint(a: Paint, b: Paint): boolean {
     a.wrap === b.wrap &&
     a.error === b.error &&
     a.padRight === b.padRight &&
-    a.check === b.check
+    a.check === b.check &&
+    a.picker === b.picker &&
+    a.invalid === b.invalid &&
+    a.chip?.fill === b.chip?.fill &&
+    a.chip?.color === b.chip?.color
   );
 }
 
@@ -346,7 +329,7 @@ const PaneCells = memo(function PaneCells({
     const paint = paintCell(el, info?.value ?? null, info?.implied, col, row, paintCtx);
     if (!paint.text && !paint.fill && !paint.bd) return;
     let spill = 0;
-    if (paint.align === "left" && !paint.wrap && paint.text && typeof info?.value === "string") {
+    if (paint.align === "left" && !paint.wrap && !paint.chip && paint.text && typeof info?.value === "string") {
       // Text runs on into empty neighbours, like Sheets.
       const approx = paint.text.length * 7.6 * ((paint.size ?? 13) / 13) * (paint.bold ? 1.05 : 1) + 14;
       let c = col + 1;

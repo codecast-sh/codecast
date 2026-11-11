@@ -11,6 +11,7 @@ import {
   type Scalar,
   type ImpliedFormat,
   type TableStyle,
+  type Validation,
   styleOf,
 } from "@codecast/shared/artifacts/sheets";
 
@@ -39,6 +40,12 @@ export type Paint = {
   /** Room on the right for a filter button over the header cell. */
   padRight?: boolean;
   check?: boolean;
+  /** A dropdown cell: its value drawn as a chip in this fill and text color. */
+  chip?: { fill: string; color: string };
+  /** The cell opens a dropdown (list) or a date picker (date). */
+  picker?: "list" | "date";
+  /** The value is outside the cell's list or is not a date. */
+  invalid?: boolean;
 };
 
 export type PaintContext = {
@@ -52,6 +59,8 @@ export type PaintContext = {
   filterHeader?: (col: number, row: number) => boolean;
   /** min/max per scale rule key, computed once per render pass. */
   scaleRange: (key: string) => { min: number; max: number } | null;
+  /** The validation covering a cell (dropdown or date). */
+  validation?: (col: number, row: number) => Validation | undefined;
 };
 
 export function paintCell(el: CellEl | undefined, value: Scalar, implied: ImpliedFormat | undefined, col: number, row: number, ctx: PaintContext): Paint {
@@ -128,7 +137,25 @@ export function paintCell(el: CellEl | undefined, value: Scalar, implied: Implie
   // The cell's own colors win over table and rule colors.
   if (s.fill) p.fill = tint(s.fill, 20);
   if (s.color) p.color = solVar(s.color);
+  const dv = ctx.validation?.(col, row);
+  if (dv) {
+    p.picker = dv.rule;
+    if (dv.rule === "list" && text !== "") {
+      const want = text.toLowerCase();
+      const opt = dv.options.find((o) => o.v.toLowerCase() === want);
+      if (opt) p.chip = chipStyle(opt.color);
+      else p.invalid = true;
+    } else if (dv.rule === "date" && value !== null && value !== "" && !(numeric && (s.nf === "date" || s.nf === "datetime" || implied?.nf === "date" || implied?.nf === "datetime"))) {
+      p.invalid = true;
+    }
+  }
   return p;
+}
+
+/** A dropdown value's chip: a tint of its color, with text that reads on it in both themes. */
+export function chipStyle(color: PaletteColor | undefined): { fill: string; color: string } {
+  const c = color ?? "gray";
+  return { fill: tint(c, 22), color: ruleText(c) };
 }
 
 /** Rule-hit text: the color pulled toward the body text so it reads on its own tint in both themes. */

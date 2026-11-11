@@ -311,7 +311,7 @@
 .sheet-outline-tag-top { left: -2px; bottom: 100%; margin-bottom: 1px; }
 .sheet-outline-tag-under { left: -2px; top: 100%; margin-top: 3px; }
 /* Tags are compact so they cover as little of the neighbouring row as possible. */
-.sheet-outline-tag [data-live-tag] { font-size: 10px; line-height: 13px; padding: 0 5px; border-radius: 3px; }
+.sheet-outline-tag [data-live-tag] { font-size: var(--fs-mark); line-height: 13px; padding: 0 5px; border-radius: 3px; }
 .sheet-outline-tag-bottom { left: calc(100% + 8px); top: calc(100% + 6px); }
 .sheet-outline-arrow { position: absolute; left: calc(100% - 4px); top: calc(100% - 4px); transform: scale(0.85); transform-origin: 0 0; }
 

@@ -1,28 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { applyOp, toElement, type ArtifactElement, type ArtifactOp, type ElementState } from "../core";
-import { artifactView } from "../spec";
+import { doc } from "./sheetDoc.testkit";
 import { sheetSpec, readSheetRange, describeSheet } from "../sheet";
 import { adjustFormula, renameTabInFormula, shiftFormula } from "./rewrite";
 import { buildModel, workbookFor } from "./model";
 import { fillOps, parseTsv, structuralOps, sortOps, toTsv, clipOf, pasteClipOps } from "./ops";
-
-/** A tiny in-memory doc: apply ops, read elements. */
-function doc(initial: ArtifactOp[] = []) {
-  const state = new Map<string, ElementState>();
-  const apply = (ops: ArtifactOp[]) => {
-    for (const op of ops) state.set(op.k, applyOp(state.get(op.k), op));
-  };
-  apply(initial);
-  const elements = (): ArtifactElement[] => [...state].filter(([, s]) => !s.deleted).map(([k, s]) => toElement(k, s));
-  const view = () => artifactView("sheet", "Pre-orders", elements());
-  const verb = (name: string, args: string[], stdin?: string) => {
-    const r = sheetSpec.verbs![name].run(view(), args, stdin);
-    apply(r.ops);
-    return r;
-  };
-  const input = (key: string) => state.get(key)?.fields.input;
-  return { apply, elements, view, verb, input, state };
-}
 
 describe("rewrite", () => {
   test("relative shift keeps anchors", () => {
@@ -136,8 +117,14 @@ describe("verbs and ops", () => {
     d.verb("cond", ["A2:A3", "gt", "0", "green"]);
     d.verb("table", ["A1:A3", "green"]);
     const m = buildModel(d.elements());
-    expect(m.conds).toHaveLength(1);
-    expect(m.conds[0]).toMatchObject({ rule: "gt", value: 0, color: "green" });
+    // Rules stack on one range; repeating a rule with the same value restyles it.
+    expect(m.conds).toHaveLength(2);
+    d.verb("cond", ["A2:A3", "gt", "0", "blue"]);
+    const conds = buildModel(d.elements()).conds;
+    expect(conds).toHaveLength(2);
+    expect(conds.find((c) => c.rule === "gt")).toMatchObject({ value: 0, color: "blue" });
+    d.verb("cond", ["A2:A3", "clear"]);
+    expect(buildModel(d.elements()).conds).toHaveLength(0);
     expect(m.tables[0]).toMatchObject({ color: "green", banded: true });
     d.verb("query", ["Open tasks", "tasks", "project=codecast"]);
     expect(buildModel(d.elements()).tabs.find((t) => t.name === "Open tasks")?.query).toEqual({ source: "tasks", project: "codecast" });

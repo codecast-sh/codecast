@@ -24,3 +24,26 @@ describe("paintCell", () => {
     expect(p.text).toBe("24,726");
   });
 });
+
+describe("validation paint", () => {
+  const list = { key: "dv:1", tab: "Sheet1", rect: { c0: 3, r0: 2, c1: 3, r1: 50 }, rule: "list" as const, strict: false, options: [{ v: "Offer", color: "green" as const }, { v: "Screen" }] };
+  const date = { ...list, key: "dv:2", rule: "date" as const, options: [] };
+  const el = (input: string) => ({ key: "c:Sheet1!C2", kind: "cell", rev: 1, input }) as any;
+  test("a listed value paints as a chip in its color, any case", () => {
+    const p = paintCell(el("offer"), "offer", undefined, 3, 2, ctx({ validation: () => list }));
+    expect(p.picker).toBe("list");
+    expect(p.chip?.fill).toContain("--sol-green");
+    expect(p.invalid).toBeUndefined();
+    expect(paintCell(el("Screen"), "Screen", undefined, 3, 2, ctx({ validation: () => list })).chip?.fill).toContain("--sol-text-muted");
+  });
+  test("a value outside the list is flagged; an empty cell is not", () => {
+    expect(paintCell(el("Maybe"), "Maybe", undefined, 3, 2, ctx({ validation: () => list })).invalid).toBe(true);
+    const empty = paintCell(undefined, null, undefined, 3, 2, ctx({ validation: () => list }));
+    expect(empty.invalid).toBeUndefined();
+    expect(empty.picker).toBe("list");
+  });
+  test("a date cell flags text that is not a date", () => {
+    expect(paintCell(el("2026-11-12"), 46338, { nf: "date" }, 3, 2, ctx({ validation: () => date })).invalid).toBeUndefined();
+    expect(paintCell(el("soon"), "soon", undefined, 3, 2, ctx({ validation: () => date })).invalid).toBe(true);
+  });
+});

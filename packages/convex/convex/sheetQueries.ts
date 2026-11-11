@@ -22,6 +22,8 @@ const DEFAULT_LIMIT = 300;
 const MAX_LIMIT = 2000;
 /** Pull request rows carry file patches; a filtered scan stops after this many. */
 const PR_SCAN_MAX = 500;
+/** Rows read per task status range while looking for `limit` the sheet may show. */
+const TASK_SCAN_MAX = 6000;
 const OPEN_TASK_CATEGORIES = TASK_STATUS_CATEGORIES.filter((c) => c !== "done" && c !== "dropped");
 
 type Scope = { key: string; userId: Id<"users">; teamId?: Id<"teams">; project: Doc<"projects"> | null };
@@ -34,6 +36,12 @@ const cell = (value: unknown): string => {
 };
 const stamp = (ms: number | undefined) => (ms ? new Date(ms).toISOString().slice(0, 16).replace("T", " ") : "");
 const newestFirst = (a: any, b: any) => (b.updated_at ?? b._creationTime) - (a.updated_at ?? a._creationTime);
+/**
+ * A query picks the most recently updated rows, then shows them in creation
+ * order: an update rewrites that row's cells in place, a new row appends at
+ * the bottom, and formulas pointing into the tab keep their rows.
+ */
+const stableOrder = <T extends { _creationTime: number }>(rows: T[]): T[] => rows.sort((a, b) => a._creationTime - b._creationTime);
 
 async function tasksGrid(ctx: any, scope: Scope, q: TabQuery, limit: number): Promise<string[][]> {
   const status = q.status?.trim().toLowerCase();
@@ -43,16 +51,25 @@ async function tasksGrid(ctx: any, scope: Scope, q: TabQuery, limit: number): Pr
   const cats = status === "all" ? [...TASK_STATUS_CATEGORIES] : status ? [status] : OPEN_TASK_CATEGORIES;
   let rows: any[] = [];
   for (const cat of cats) {
-    // The workspace's keyed status index, or the project's (whose tasks can sit
-    // in other workspaces, e.g. private inside a team). Either way a row stays
-    // only when its access key is the sheet's.
-    const page = await ctx.db.query("tasks")
+    // The most recently updated tasks of each status, from an index ordered by
+    // updated_at: the workspace's, or the project's (whose tasks can sit in
+    // other workspaces, e.g. private inside a team). A row stays only when its
+    // access key is the sheet's, so the scan runs past rows it drops until it
+    // has `limit` of its own.
+    const range = ctx.db.query("tasks")
       .withIndex(scope.project ? "by_project_status_updated" : "by_workspace_status", (x: any) =>
         scope.project ? x.eq("project_id", scope.project._id).eq("status", cat) : x.eq("workspace", scope.key).eq("status", cat))
-      .order("desc").take(limit);
-    for (const t of page) if ((await resolveWorkspaceKey(ctx, t)) === scope.key) rows.push(t);
+      .order("desc");
+    let kept = 0, scanned = 0;
+    for await (const t of range) {
+      if (++scanned > TASK_SCAN_MAX) break;
+      // The tasks the task list shows: not mined suggestions awaiting triage, not ephemeral bookkeeping.
+      if ((t.triage_status && t.triage_status !== "active") || t.ephemeral || (await resolveWorkspaceKey(ctx, t)) !== scope.key) continue;
+      rows.push(t);
+      if (++kept >= limit) break;
+    }
   }
-  rows = rows.filter((t) => t.triage_status !== "dismissed").sort(newestFirst).slice(0, limit);
+  rows = stableOrder(rows.sort(newestFirst).slice(0, limit));
   const names = await assigneeNamesFor(ctx, rows.map((t) => t.assignee));
   return [
     ["ID", "Title", "Status", "Priority", "Assignee", "Labels", "Updated"],
@@ -93,7 +110,7 @@ async function sessionsGrid(ctx: any, scope: Scope, limit: number): Promise<stri
       if (await isConversationTeamVisible(ctx, c)) convs.push(c);
     }
   }
-  convs = convs.filter((c) => !c.is_subagent).sort(newestFirst).slice(0, limit);
+  convs = stableOrder(convs.filter((c) => !c.is_subagent).sort(newestFirst).slice(0, limit));
   return [
     ["ID", "Title", "Agent", "Status", "Messages", "Updated"],
     ...convs.map((c) => [c.short_id ?? c._id, c.short_title || c.title || "", c.agent_type, c.status, c.message_count ?? 0, stamp(c.updated_at)].map(cell)),
@@ -116,7 +133,7 @@ async function prsGrid(ctx: any, scope: Scope, q: TabQuery, limit: number): Prom
   }
   return [
     ["Number", "Title", "State", "Author", "Repo", "Updated"],
-    ...prs.map((p) => [p.number, p.title, p.state, p.author_github_username, p.repository, stamp(p.updated_at)].map(cell)),
+    ...stableOrder(prs).map((p) => [p.number, p.title, p.state, p.author_github_username, p.repository, stamp(p.updated_at)].map(cell)),
   ];
 }
 
@@ -124,6 +141,7 @@ async function metricsGrid(ctx: any, scope: Scope, limit: number): Promise<strin
   // Metric watches carry their workspace key: one equality against the sheet's.
   const watches = (await ctx.db.query("metric_watches").withIndex("by_workspace", (x: any) => x.eq("workspace", scope.key)).take(MAX_LIMIT))
     .sort(newestFirst).slice(0, limit);
+  stableOrder(watches);
   return [
     ["Name", "Value", "Unit", "Updated"],
     ...watches.map((w: any) => {

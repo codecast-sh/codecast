@@ -2755,6 +2755,25 @@ export default defineSchema({
     .index("by_nonce_hash", ["nonce_hash"])
     .index("by_created_at", ["created_at"]),
 
+  // `cast auth` requests the CLI registered before opening the browser
+  // (POST /cli/auth-request). The Authorize page shows these server-recorded
+  // facts instead of URL text, a deposit for a registered nonce is accepted
+  // once and only while fresh, and the relay hands the token only to a claim
+  // carrying the verifier whose hash is stored here (convex/cliAuth.ts).
+  cli_auth_registrations: defineTable({
+    nonce_hash: v.string(),
+    verifier_hash: v.string(),
+    device_name: v.string(),
+    device_id: v.optional(v.string()),
+    ip: v.string(),
+    country: v.optional(v.string()),
+    user_agent: v.optional(v.string()),
+    created_at: v.number(),
+    authorized_at: v.optional(v.number()),
+  })
+    .index("by_nonce_hash", ["nonce_hash"])
+    .index("by_created_at", ["created_at"]),
+
   pending_messages: defineTable({
     conversation_id: v.id("conversations"),
     kill_generation: v.optional(v.number()),
@@ -5396,6 +5415,7 @@ export default defineSchema({
       v.literal("team_member_removed"),
       v.literal("team_member_role_changed"),
       v.literal("team_member_visibility_changed"),
+      v.literal("staff_daemon_command"),
     ),
     actor_user_id: v.id("users"),
     actor_conversation_id: v.optional(v.id("conversations")),
@@ -6946,7 +6966,9 @@ export default defineSchema({
     .index("by_workspace", ["workspace"])
     // A workspace's tasks touched in a trailing window (page data readers).
     .index("by_workspace_updated", ["workspace", "updated_at"])
-    .index("by_workspace_status", ["workspace", "status"])
+    // Ordered by updated_at within a status: a live query tab reads the most
+    // recently touched open tasks, not the newest created.
+    .index("by_workspace_status", ["workspace", "status", "updated_at"])
     // LE6: the open causes in a whole workspace role's boundary.
     .index("by_workspace_source_status", ["workspace", "source", "status"])
     // LE5: the open causes no one has grounded yet (readiness unset), which

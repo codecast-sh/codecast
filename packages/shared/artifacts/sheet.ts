@@ -25,6 +25,9 @@ import {
   styleOps,
   tabPatchOps,
   fitWidthOps,
+  importTablesOps,
+  parseTable,
+  validationOps,
   type StylePatch,
 } from "./sheets/ops";
 import { DEFAULT_TAB, a1, colIndex as colIdx, colLetters as colLtrs, parseA1 as parseA1Ref, parseKey, parseQualifiedRange, quoteTabName, rectA1, tabKey, type Rect } from "./sheets/refs";
@@ -177,6 +180,8 @@ export function describeSheet(view: ArtifactView): string {
     const tables = model.tables.filter((c) => c.tab === meta.id);
     for (const c of conds) out.push(`  cond ${rectA1(c.rect)} ${c.rule}${c.value !== undefined ? ` ${c.value}` : ""}${c.color ? ` ${c.color}` : ""}`);
     for (const tb of tables) out.push(`  table ${rectA1(tb.rect)} ${tb.color}${tb.banded ? " banded" : ""}`);
+    for (const v of model.validations.filter((x) => x.tab === meta.id))
+      out.push(`  validate ${rectA1(v.rect)} ${v.rule}${v.options.length ? ` ${v.options.map((o) => (o.color ? `${o.v}:${o.color}` : o.v)).join(",")}` : ""}${v.strict ? " --strict" : ""}`);
   }
   return out.join("\n");
 }
@@ -366,7 +371,7 @@ const verbs: ArtifactSpec["verbs"] = {
     },
   },
   cond: {
-    summary: `Conditional color on a range: sign (green positive, red negative) | scale [color] | gt|lt|eq <n> <color> | contains <text> <color> | clear`,
+    summary: `Conditional color on a range: sign (green positive, red negative) | scale [color] | gt|lt|eq <n> <color> | contains <text> <color> | clear (all rules on the range). Rules stack: run it once per rule`,
     usage: "cond <doc> <Tab!B2:G6> <rule> [value] [color]",
     run(view, args) {
       const [ref, rule, ...rest] = args;
@@ -386,7 +391,9 @@ const verbs: ArtifactSpec["verbs"] = {
         if (!(PALETTE as readonly string[]).includes(color)) throw new Error(`color must be one of ${PALETTE.join(", ")}`);
         fields.color = color;
       }
-      const key = existing[0]?.key ?? newElementKey("cf");
+      // Rules stack on a range (Offer green and Rejected gray on one Stage column); the same rule and value restyles in place.
+      const same = existing.find((c) => c.rule === rule && String(c.value ?? "") === String(fields.value ?? ""));
+      const key = same?.key ?? newElementKey("cf");
       return done(t, [{ k: key, put: { kind: "cf", ...fields } }], `coloring ${range}`);
     },
   },
@@ -402,6 +409,43 @@ const verbs: ArtifactSpec["verbs"] = {
       if (!(PALETTE as readonly string[]).includes(color)) throw new Error(`color must be one of ${PALETTE.join(", ")}`);
       const key = existing[0]?.key ?? newElementKey("tbl");
       return done(t, [{ k: key, put: { kind: "table", tab: t.tab.id, range, color, banded: !args.includes("--plain") } }], `styling ${range}`);
+    },
+  },
+  import: {
+    summary: "Import CSV or TSV from stdin as a new tab (named, or Imported), columns fitted",
+    usage: "import <doc> [tab name] < data.csv",
+    stdin: true,
+    run(view, args, stdin) {
+      const grid = parseTable(stdin ?? "");
+      if (!grid.length || (grid.length === 1 && grid[0].every((v) => v === ""))) throw new Error("nothing to import on stdin");
+      const name = args.join(" ").trim() || "Imported";
+      const r = importTablesOps(buildModel(view.elements), [{ name, grid }]);
+      const width = Math.max(...grid.map((row) => row.length));
+      return { ops: r.ops, position: { range: `${r.tabIds[0]}!A1:${colLtrs(width)}${grid.length}` }, status: `imported ${grid.length} rows` };
+    },
+  },
+  validate: {
+    summary: "What a range accepts. list: a dropdown whose values paint as colored chips (Value:color, comma separated; --strict refuses anything else). date: a date picker. clear removes it",
+    usage: "validate <doc> <Tab!C2:C200> list \"Applied:gray,Screen:blue,Offer:green\" [--strict] | date | clear",
+    run(view, args) {
+      const [ref, rule, spec] = args;
+      const t = target(view, ref, "validate <doc> <range> list|date|clear ...", false);
+      const range = rectA1(t.rect);
+      if (rule === "clear") return done(t, validationOps(t.model, t.tab.id, t.rect, null), `clearing validation on ${range}`);
+      if (rule !== "list" && rule !== "date") throw new Error("rule must be list, date or clear");
+      const options: Array<{ v: string; color?: string }> = [];
+      if (rule === "list") {
+        if (!spec || spec.startsWith("--")) throw new Error('list needs its values: list "Open:blue,Done:green"');
+        for (const part of spec.split(",")) {
+          const raw = part.trim();
+          const at = raw.lastIndexOf(":");
+          const color = at > 0 ? raw.slice(at + 1).trim() : "";
+          const known = (PALETTE as readonly string[]).includes(color);
+          if (at > 0 && color && !known && /^[a-z]+$/.test(color)) throw new Error(`color must be one of ${PALETTE.join(", ")}`);
+          options.push(known ? { v: raw.slice(0, at).trim(), color } : { v: raw });
+        }
+      }
+      return done(t, validationOps(t.model, t.tab.id, t.rect, rule, options, args.includes("--strict")), `validating ${range}`);
     },
   },
   insert: {
@@ -540,7 +584,7 @@ export const sheetSpec: ArtifactSpec = {
   type: "sheet",
   label: "Sheet",
   cli: "sheet",
-  kinds: ["cell", "tab", "col", "row", "cf", "table"],
+  kinds: ["cell", "tab", "col", "row", "cf", "table", "dv"],
   describe: describeSheet,
   presenceFor: (_view, keys) => rangeOf(keys),
   seed: () => [{ k: tabKey(DEFAULT_TAB), put: { kind: "tab", name: DEFAULT_TAB, order: 0 } }],
@@ -551,6 +595,7 @@ export const sheetSpec: ArtifactSpec = {
     "Functions: SUM AVERAGE MIN MAX COUNT COUNTA ROUND IF IFS IFERROR XLOOKUP VLOOKUP INDEX MATCH SUMIF(S) COUNTIF(S) AVERAGEIF TEXT DATE TODAY EDATE EOMONTH YEAR MONTH LEFT RIGHT MID CONCAT TEXTJOIN and more. Typed 10% is a percent, $1,200 currency, 2026-11-10 a date.",
     "Then format: `fmt <doc> A1:G1 b fill=blue`, `fmt <doc> C2:C6 pct sign`, `fmt <doc> B2:B6 num`, `fmt <doc> A6:G6 b border=outer`. Colors: red orange yellow green cyan blue violet magenta gray. A done/status column of TRUE/FALSE reads as checkboxes with `fmt <doc> Tab!E2:E40 check`. `table <doc> A1:G6 blue` gives a header and bands; `cond <doc> G2:G6 sign` colors gains green and losses red.",
     "Columns you write widen to fit on their own; `fit <doc> Tab!A:G` refits after you change content, `width <doc> Tab!A 220` sets one exactly.",
+    "A column with a fixed set of values (status, stage, owner, priority) gets a dropdown: `validate <doc> Tab!C2:C200 list \"Todo:gray,Doing:blue,Done:green\"`; its values paint as colored chips and people pick from the list. A date column gets `validate <doc> Tab!F2:F200 date` and a date picker. Cover the rows people will add, not only the rows you wrote.",
     "A tracker: header row, one row per item, `tab <doc> freeze <tab> 1`. `query <doc> \"Open tasks\" tasks project=<name>` makes a tab that reads codecast tasks live. `range <doc> Tab!A1:D20` reads computed values back.",
   ].join("\n"),
 };

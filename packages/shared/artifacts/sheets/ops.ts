@@ -1,13 +1,14 @@
 // Edits as ops: every sheet gesture (typing, paste, fill, format, insert,
 // delete, sort, tab changes) becomes a list of element ops here, so the web
 // grid, the CLI verbs and tests all produce the same writes.
-import type { ArtifactOp } from "../core";
+import { foldOps, toElement, type ArtifactOp } from "../core";
+import { newElementKey } from "../spec";
 import type { Json } from "../core";
 import { isFormula } from "./formula";
 import { Workbook } from "./engine";
 import { adjustFormula, adjustRangeText, mapFormulaRefs, refText, renameTabInFormula, shiftFormula, type Structural } from "./rewrite";
 import { cellKey, colKey, colLetters, newTabId, normRect, parseKey, rectA1, rowKey, tabKey, type Rect } from "./refs";
-import { cellNum, inheritedFormat, STYLE_FIELDS, styleOf, type CellEl, type CellStyle, type SheetModel, type TabData } from "./model";
+import { buildModel, cellNum, inheritedFormat, STYLE_FIELDS, styleOf, workbookFor, type CellEl, type CellStyle, type SheetModel, type TabData, type TabMeta } from "./model";
 import { formatValue } from "./format";
 import { compareScalars, parseLiteral, type Scalar } from "./values";
 
@@ -58,6 +59,19 @@ export function gridOps(model: SheetModel, tabId: string, col: number, row: numb
 
 /** Parse TSV the way Sheets and Excel put it on the clipboard: quoted fields may hold tabs, newlines and "". */
 export function parseTsv(text: string): string[][] {
+  return parseDelimited(text, "\t");
+}
+
+/** CSV or TSV by what the first line holds: a tab means TSV, else commas (or semicolons, Excel's European export). */
+export function parseTable(text: string): string[][] {
+  const first = text.slice(0, text.search(/\r?\n|$/));
+  if (first.includes("\t")) return parseDelimited(text, "\t");
+  const commas = (first.match(/,/g) ?? []).length, semis = (first.match(/;/g) ?? []).length;
+  return parseDelimited(text, semis > commas ? ";" : ",");
+}
+
+/** Rows of fields split on a delimiter; a field may be quoted ("a, b", "say ""hi""", line breaks inside). */
+export function parseDelimited(text: string, sep: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let field = "";
@@ -84,7 +98,7 @@ export function parseTsv(text: string): string[][] {
         }
         val += src[j++];
       }
-      if (closed && (j >= src.length || src[j] === "\t" || src[j] === "\n")) {
+      if (closed && (j >= src.length || src[j] === sep || src[j] === "\n")) {
         field = val;
         i = j;
         atFieldStart = false;
@@ -92,7 +106,7 @@ export function parseTsv(text: string): string[][] {
       }
       // Not a well-formed quoted field: read it literally.
     }
-    if (ch === "\t") {
+    if (ch === sep) {
       row.push(field);
       field = "";
       atFieldStart = true;
@@ -351,8 +365,8 @@ export function structuralOps(model: SheetModel, tabId: string, axis: "row" | "c
       if (next !== el.input) puts.set(el.key, { k: el.key, set: { input: next } });
     }
   }
-  // Conditional colors and tables.
-  for (const item of [...model.conds, ...model.tables]) {
+  // Conditional colors, tables and validations.
+  for (const item of [...model.conds, ...model.tables, ...model.validations]) {
     if (item.tab !== tabId) continue;
     const next = adjustRangeText(rectA1(item.rect), { axis, at, count });
     if (next === null) dels.add(item.key);
@@ -471,7 +485,7 @@ export function deleteTabOps(model: SheetModel, tabId: string): ArtifactOp[] {
   for (const el of t.cells.values()) ops.push({ k: el.key, del: true });
   for (const c of t.colWidths.keys()) ops.push({ k: colKey(tabId, c), del: true });
   for (const r of t.rowHeights.keys()) ops.push({ k: rowKey(tabId, r), del: true });
-  for (const item of [...model.conds, ...model.tables]) if (item.tab === tabId) ops.push({ k: item.key, del: true });
+  for (const item of [...model.conds, ...model.tables, ...model.validations]) if (item.tab === tabId) ops.push({ k: item.key, del: true });
   return ops;
 }
 
@@ -649,4 +663,65 @@ export function fitWidthOps(model: SheetModel, wb: Workbook, tabId: string, cols
     ops.push({ k: colKey(tabId, col), put: { kind: "col", w: fit } });
   }
   return ops;
+}
+
+/**
+ * Imported tables (a CSV, or each sheet of a workbook) as new tabs after the
+ * existing ones, names kept unique, columns fitted to what they hold.
+ */
+export function importTablesOps(model: SheetModel, tables: Array<{ name: string; grid: string[][] }>): { ops: ArtifactOp[]; tabIds: string[] } {
+  const ops: ArtifactOp[] = [];
+  const tabIds: string[] = [];
+  let m = model;
+  for (const table of tables) {
+    const add = addTabOps(m, table.name);
+    const first = add.ops[0];
+    const name = "put" in first && typeof first.put.name === "string" ? first.put.name : table.name;
+    const meta: TabMeta = { id: add.id, name, order: Math.max(-1, ...m.tabs.map((t) => t.order)) + 1, frozenRows: 0, frozenCols: 0 };
+    m = { ...m, tabs: [...m.tabs, meta], byId: new Map(m.byId).set(add.id, { meta, cells: new Map(), colWidths: new Map(), rowHeights: new Map(), rows: 0, cols: 0 }) };
+    const cells = gridOps(m, add.id, 1, 1, table.grid);
+    // Fit against the imported cells alone: the new tab holds nothing else yet.
+    const alone = buildModel([...foldOps(new Map(), [...add.ops, ...cells])].map(([k, st]) => toElement(k, st)));
+    const width = Math.max(0, ...table.grid.map((r) => r.length));
+    const fit = fitWidthOps(alone, workbookFor(alone), add.id, Array.from({ length: Math.min(width, 200) }, (_, i) => i + 1));
+    ops.push(...add.ops, ...cells, ...fit);
+    tabIds.push(add.id);
+  }
+  return { ops, tabIds };
+}
+
+/**
+ * Set what a range accepts: a list (with chip colors) or a date, replacing a
+ * validation on exactly that range; rule null removes every validation the
+ * range covers. The CLI verb and the web editor both write through this.
+ */
+export function validationOps(model: SheetModel, tabId: string, rect: Rect, rule: "list" | "date" | null, options: Array<{ v: string; color?: string }> = [], strict = false): ArtifactOp[] {
+  const range = rectA1(rect);
+  const mine = model.validations.filter((v) => v.tab === tabId);
+  if (rule === null) {
+    const inside = (r: Rect) => r.c0 >= rect.c0 && r.c1 <= rect.c1 && r.r0 >= rect.r0 && r.r1 <= rect.r1;
+    return mine.filter((v) => inside(v.rect) || rectA1(v.rect) === range).map((v) => ({ k: v.key, del: true as const }));
+  }
+  const seen = new Set<string>();
+  const opts = options
+    .map((o) => ({ v: o.v.trim(), ...(o.color ? { color: o.color } : {}) }))
+    .filter((o) => o.v && !seen.has(o.v.toLowerCase()) && seen.add(o.v.toLowerCase()));
+  const fields: Record<string, Json> = { kind: "dv", tab: tabId, range, rule };
+  if (rule === "list") fields.options = opts as Json;
+  if (strict) fields.strict = true;
+  const key = mine.find((v) => rectA1(v.rect) === range)?.key ?? newElementKey("dv");
+  return [{ k: key, put: fields as { kind: string } & Record<string, Json> }];
+}
+
+/** A typed value checked against the cell's validation: the input to write (a list value in its listed case), or why it is refused. */
+export function validateInput(v: { rule: "list" | "date"; options: Array<{ v: string }>; strict: boolean } | undefined, input: string): { input: string } | { refuse: string } {
+  if (!v || input === "" || input.startsWith("=")) return { input };
+  if (v.rule === "list") {
+    const hit = v.options.find((o) => o.v.toLowerCase() === input.trim().toLowerCase());
+    if (hit) return { input: hit.v };
+    return v.strict ? { refuse: `Pick one of: ${v.options.map((o) => o.v).join(", ")}` } : { input };
+  }
+  const nf = parseLiteral(input).implied?.nf;
+  if (nf === "date" || nf === "datetime") return { input };
+  return v.strict ? { refuse: "Enter a date, like 2026-11-12" } : { input };
 }

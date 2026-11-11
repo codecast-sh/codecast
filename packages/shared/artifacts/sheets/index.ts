@@ -9,3 +9,4 @@ export * from "./engine";
 export * from "./model";
 export * from "./ops";
 export * from "./rewrite";
+export * from "./catalog";

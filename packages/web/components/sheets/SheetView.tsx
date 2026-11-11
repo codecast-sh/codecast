@@ -4,95 +4,39 @@
 // edit re-evaluates only what depends on it. Writes are element ops from
 // @codecast/shared/artifacts/sheets through live.apply. Other participants'
 // selections and an agent's write range are outlined in their color.
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { Check, Filter as FilterIcon, RefreshCw, Radio, X } from "lucide-react";
+import { RefreshCw, Radio } from "lucide-react";
 import type { ArtifactPresence } from "@codecast/shared/artifacts";
-import {
-  Workbook,
-  a1,
-  addTabOps,
-  borderOps,
-  LiveSheet,
-  cellNum,
-  clearOps,
-  clipOf,
-  deleteTabOps,
-  fillOps,
-  formatValue,
-  gridOps,
-  inputOps,
-  moveOps,
-  isFormula,
-  newElementKey,
-  normRect,
-  parseQualifiedRange,
-  parseTsv,
-  pasteClipOps,
-  quoteTabName,
-  rectA1,
-  renameTabOps,
-  sortOps,
-  structuralOps,
-  styleOf,
-  styleOps,
-  tabPatchOps,
-  tokenize,
-  toTsv,
-  colWidthOps,
-  rowHeightOps,
-  fitWidthOps,
-  inheritedFormat,
-  refText,
-  shiftFormula,
-  uniqueTabName,
-  type CellStyle,
-  type PaletteColor,
-  type Rect,
-  type SheetClip,
-  type SheetModel,
-  type TabData,
-  type QuerySource,
-} from "./sheetCore";
+import { a1, addTabOps, LiveSheet, validationAt, validateInput, cellNum, deleteTabOps, formatValue, inputOps, isFormula, parseQualifiedRange, quoteTabName, rectA1, renameTabOps, styleOf, tabPatchOps, toTsv, fitWidthOps, inheritedFormat, uniqueTabName, type CellStyle, type Rect, type TabData, type QuerySource } from "./sheetCore";
 import type { LiveViewProps } from "../live/registry";
 import { useLiveElements, useLivePresence } from "../live/useLiveArtifact";
-import { sendAsk, pickAskTarget, reopenAsk } from "../live/AskAgentControl";
+import { sendAsk, pickAskTarget, reopenAsk } from "../live/askAgent";
 import { ContextMenu, CursorPopover, CtxItem, useContextMenu } from "../ui/context-menu";
 import { DropdownMenuSeparator } from "../ui/dropdown-menu";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
-import { useInboxStore } from "../../store/inboxStore";
 import { createEditStore, finishInput, wantsReference, type EditStore } from "./editStore";
 import { AxisLayout } from "./layout";
-import { SheetGrid, ROW_HEADER_W, COL_HEADER_H, BOTTOM_ROOM, cellViewportRect, hitTest, type GridHit, type Outline } from "./SheetGrid";
+import { SheetGrid, type Outline } from "./SheetGrid";
+import { ROW_HEADER_W, COL_HEADER_H, BOTTOM_ROOM, cellViewportRect, type GridHit } from "./gridGeometry";
 import { CellEditor, FormulaBar, SelectionSummary, TabStrip, type EditorPlacement } from "./SheetChrome";
-import { FormatBar, SHEET_ASK_SLOT, type FormatAction } from "./FormatBar";
+import { FormatBar, type FormatAction } from "./FormatBar";
+import { SHEET_ASK_SLOT } from "./askSlot";
 import { useQueryTabRefresh } from "./useQueryTabRefresh";
+import { useUnseenTabs } from "./tabActivity";
+import { useSheetExtras } from "./useSheetExtras";
+import { SheetExtrasView } from "./SheetExtras";
+import { IMPORT_ACCEPT } from "./importFile";
+import { Upload } from "lucide-react";
 import { solVar } from "./cellPaint";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { DEF_COL_W, DEF_ROW_H, REF_COLORS, type Sel, type Menu, selRect, parsePosition, visibleRowsOf, clearVisible, QUERY_LABEL, ago, cellNumOfKey, elementsHaveTab, shiftFormulaSafe, columnValues, refsKeyOf, formatSelection, writeSheetClipboard, pasteSheetClipboard, type SheetState, type SheetCtx } from "./sheetActions";
+import { TabMenu, CellMenu, FilterPanel, FilterButtons, FindBar } from "./SheetMenus";
+import { handleSheetKey } from "./sheetKeys";
+import { sheetPointerDown, sheetResizeStart, sheetFillStart } from "./sheetPointer";
 import "./sheet.css";
 
-const DEF_COL_W = 104;
-const DEF_ROW_H = 26;
-const REF_COLORS: PaletteColor[] = ["blue", "magenta", "green", "orange", "violet", "cyan", "red", "yellow"];
-
-type Sel = { anchor: { col: number; row: number }; focus: { col: number; row: number } };
-type Menu = { kind: "cell" | "colHeader" | "rowHeader"; col: number; row: number } | { kind: "tab"; tabId: string };
-
-/** Internal clipboard: cell fields with their origin, so a paste here shifts formulas. */
-let lastClip: { id: string; docId: string; tabId: string; rect: Rect; clip: SheetClip; cut: boolean } | null = null;
-const CLIP_MIME = "application/x-codecast-sheet";
-
-function selRect(s: Sel): Rect {
-  return normRect({ c0: s.anchor.col, r0: s.anchor.row, c1: s.focus.col, r1: s.focus.row });
-}
-
-function parsePosition(pos: string | undefined): { tab: string; rect: Rect } | null {
-  if (!pos) return null;
-  const bang = pos.lastIndexOf("!");
-  if (bang < 0) return null;
-  const q = parseQualifiedRange(`x!${pos.slice(bang + 1)}`);
-  return q ? { tab: pos.slice(0, bang), rect: q.rect } : null;
-}
 
 export default function SheetView({ doc, live, setSelection, mode, snapshot, setToolbar }: LiveViewProps) {
   const params = useSearchParams();
@@ -119,7 +63,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
   // ?tab=<name> is the tab's address: honored once the tabs load, and kept in step on switch.
   const router = useRouter();
   const wantTab = params.get("tab");
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!wantTab) return;
     const t = model.tabs.find((x) => x.id === wantTab || x.name.toLowerCase() === wantTab.toLowerCase());
     if (t) setTabId(t.id);
@@ -199,15 +143,17 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
   const [scrollTick, setScrollTick] = useState(0);
 
   // Everything handlers need, read live so they stay stable.
-  const S = useRef({ model, wb, tab, activeTabId, sel, rect, cols, rows, frozenRows, frozenCols, readOnly, readOnlyDoc, hiddenRows });
+  const S = useRef<SheetState>({ model, wb, tab, activeTabId, sel, rect, cols, rows, frozenRows, frozenCols, readOnly, readOnlyDoc, hiddenRows });
   S.current = { model, wb, tab, activeTabId, sel, rect, cols, rows, frozenRows, frozenCols, readOnly, readOnlyDoc, hiddenRows };
+  // The same, plus the handlers and refs, for the event handlers in sheetKeys/sheetPointer/sheetActions.
+  const ctx = useRef<SheetCtx>(null!);
 
   const apply = useCallback((ops: Parameters<typeof live.apply>[0]) => {
     if (ops.length) live.apply(ops);
   }, [live]);
 
   // Selection -> presence (my range, in this tab) and the shell's Ask selection.
-  useEffect(() => {
+  useWatchEffect(() => {
     const keys: string[] = [];
     for (let r = rect.r0; r <= Math.min(rect.r1, rect.r0 + 39); r++)
       for (let c = rect.c0; c <= Math.min(rect.c1, rect.c0 + 25); c++) {
@@ -223,7 +169,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
   }, [rect.c0, rect.r0, rect.c1, rect.r1, activeTabId]);
 
   // Deep link ?el=c:<tab>!B2 selects that cell.
-  useEffect(() => {
+  useWatchEffect(() => {
     const el = params.get("el");
     const m = el?.match(/^c:([^!]+)!([A-Z]+)(\d+)$/);
     if (!m) return;
@@ -312,7 +258,14 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
     if (!e) return;
     edit.set(null);
     const { model, activeTabId } = S.current;
-    const input = finishInput(e.text);
+    // A dropdown or date cell checks what was typed: a listed value takes its listed case; a strict cell refuses the rest.
+    const checked = validateInput(validationAt(model, e.tab, e.col, e.row), finishInput(e.text));
+    if ("refuse" in checked) {
+      edit.set(e);
+      toast(checked.refuse);
+      return;
+    }
+    const input = checked.input;
     apply(inputOps(model, e.tab, [{ col: e.col, row: e.row, input }]));
     if (e.tab !== activeTabId) showTabRef.current?.(e.tab);
     sinkRef.current?.focus({ preventScroll: true });
@@ -349,127 +302,11 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
   const activeEl = tab.cells.get(cellNum(active.col, active.row));
   const activeStyle: CellStyle = styleOf(activeEl);
 
-  const onFormat = useCallback((a: FormatAction) => {
-    const { model, activeTabId, rect, wb, sel, tab } = S.current;
-    if (S.current.readOnlyDoc) return;
-    // On a live query tab the server owns the contents; formats, filters and freezing still apply.
-    if (S.current.readOnly && (a.type === "sort" || a.type === "insert" || a.type === "delete")) {
-      toast("This tab is a live query; it fills itself.");
-      return;
-    }
-    const el = tab.cells.get(cellNum(sel.anchor.col, sel.anchor.row));
-    const st = styleOf(el);
-    switch (a.type) {
-      case "style":
-        apply(styleOps(model, activeTabId, rect, a.patch as any));
-        break;
-      case "toggle":
-        apply(styleOps(model, activeTabId, rect, { [a.field]: st[a.field] ? null : true } as any));
-        break;
-      case "decimals": {
-        const info = wb.cell(activeTabId, sel.anchor.col, sel.anchor.row);
-        const v = info?.value;
-        let cur = st.dp ?? info?.implied?.dp;
-        if (cur === undefined) {
-          const shown = typeof v === "number" ? formatValue(v, st, info?.implied) : "";
-          cur = shown.includes(".") ? shown.split(".")[1].replace(/\D/g, "").length : 0;
-        }
-        // Keep what the number reads as (a typed 10% stays a percent).
-        const nf = st.nf ?? info?.implied?.nf ?? (info?.input?.startsWith("=") ? inheritedFormat(model, activeTabId, info.input)?.nf : undefined) ?? "number";
-        apply(styleOps(model, activeTabId, rect, { dp: Math.max(0, Math.min(10, cur + a.delta)), nf }));
-        break;
-      }
-      case "border":
-        apply(borderOps(model, activeTabId, rect, a.mode));
-        break;
-      case "cond": {
-        const range = rectA1(rect);
-        const existing = model.conds.filter((c) => c.tab === activeTabId && rectA1(c.rect) === range);
-        if (a.rule === "clear") {
-          const hits = model.conds.filter((c) => c.tab === activeTabId && c.rect.c0 <= rect.c1 && c.rect.c1 >= rect.c0 && c.rect.r0 <= rect.r1 && c.rect.r1 >= rect.r0);
-          apply(hits.map((c) => ({ k: c.key, del: true as const })));
-        } else {
-          apply([{ k: existing[0]?.key ?? newElementKey("cf"), put: { kind: "cf", tab: activeTabId, range, rule: a.rule, ...(a.color ? { color: a.color } : {}) } }]);
-        }
-        break;
-      }
-      case "table": {
-        const hits = model.tables.filter((t) => t.tab === activeTabId && t.rect.c0 <= rect.c1 && t.rect.c1 >= rect.c0 && t.rect.r0 <= rect.r1 && t.rect.r1 >= rect.r0);
-        if (!a.color) apply(hits.map((t) => ({ k: t.key, del: true as const })));
-        else {
-          // A single cell styles the data region around it.
-          const r = rect.c0 === rect.c1 && rect.r0 === rect.r1 ? dataRegion(tab, rect.c0, rect.r0) : rect;
-          apply([...hits.map((t) => ({ k: t.key, del: true as const })), { k: newElementKey("tbl"), put: { kind: "table", tab: activeTabId, range: rectA1(r), color: a.color, banded: true } }]);
-        }
-        break;
-      }
-      case "sort": {
-        const region = rect.r0 === rect.r1 ? dataRegion(tab, rect.c0, rect.r0) : rect;
-        const hasHeader = region.r0 <= tab.meta.frozenRows || (filter && filter.row === region.r0) || isHeaderRow(wb, activeTabId, region);
-        const body = { ...region, r0: hasHeader ? region.r0 + 1 : region.r0 };
-        apply(sortOps(model, wb, activeTabId, body, sel.anchor.col, a.desc));
-        toast(`Sorted ${rectA1(body)} by ${a1(sel.anchor.col, body.r0).replace(/\d+/, "")} ${a.desc ? "Z→A" : "A→Z"}`);
-        break;
-      }
-      case "filter": {
-        if (tab.meta.filter) {
-          apply(tabPatchOps(model, activeTabId, { filter: null }));
-          break;
-        }
-        const region = rect.r0 === rect.r1 && rect.c0 === rect.c1 ? dataRegion(tab, rect.c0, rect.r0) : rect;
-        apply(tabPatchOps(model, activeTabId, { filter: { row: region.r0, c0: region.c0, c1: region.c1, hidden: {} } as any }));
-        break;
-      }
-      case "freeze": {
-        // Freeze through the active cell's row (or column); "none" unfreezes both.
-        if (a.axis === "none") apply(tabPatchOps(model, activeTabId, { frozen_rows: null, frozen_cols: null }));
-        else if (a.axis === "row") apply(tabPatchOps(model, activeTabId, { frozen_rows: sel.anchor.row }));
-        else apply(tabPatchOps(model, activeTabId, { frozen_cols: sel.anchor.col }));
-        break;
-      }
-      case "insert": {
-        const at = a.axis === "row" ? (a.after ? rect.r1 + 1 : rect.r0) : a.after ? rect.c1 + 1 : rect.c0;
-        const n = a.axis === "row" ? rect.r1 - rect.r0 + 1 : rect.c1 - rect.c0 + 1;
-        apply(structuralOps(model, activeTabId, a.axis, at, n));
-        break;
-      }
-      case "delete": {
-        const at = a.axis === "row" ? rect.r0 : rect.c0;
-        const n = a.axis === "row" ? rect.r1 - rect.r0 + 1 : rect.c1 - rect.c0 + 1;
-        apply(structuralOps(model, activeTabId, a.axis, at, -n));
-        break;
-      }
-      case "clearFormat":
-        apply(styleOps(model, activeTabId, rect, { b: null, i: null, u: null, fs: null, al: null, color: null, fill: null, nf: null, dp: null, sign: null, cur: null, bd: null, wrap: null }));
-        break;
-    }
-  }, [apply, filter]);
+  const onFormat = useCallback((a: FormatAction) => formatSelection(a, ctx.current), []);
 
   // ── Clipboard ─────────────────────────────────────────────────────────────
-  const visibleRows = visibleRowsOf;
 
-  const writeClipboard = useCallback((e: React.ClipboardEvent, cut: boolean) => {
-    const { model, activeTabId, rect, wb, tab, hiddenRows } = S.current;
-    e.preventDefault();
-    const rowsList = visibleRows(rect, hiddenRows, tab.rows);
-    const c1 = Math.min(rect.c1, Math.max(tab.cols, rect.c0));
-    const grid = rowsList.map((r) => {
-      const line: string[] = [];
-      for (let c = rect.c0; c <= c1; c++) {
-        const info = wb.cell(activeTabId, c, r);
-        line.push(info ? formatValue(info.value, styleOf(tab.cells.get(cellNum(c, r))), info.implied) : "");
-      }
-      return line;
-    });
-    const id = Math.random().toString(36).slice(2, 10);
-    const clipRect = { ...rect, c1, r1: rowsList[rowsList.length - 1] ?? rect.r0 };
-    e.clipboardData.setData("text/plain", toTsv(grid));
-    e.clipboardData.setData("text/html", `<table>${grid.map((r) => `<tr>${r.map((v) => `<td>${escapeHtml(v)}</td>`).join("")}</tr>`).join("")}</table>`);
-    // Our own payload names the copy, so a paste knows it came from here (and whether it is a move).
-    e.clipboardData.setData(CLIP_MIME, JSON.stringify({ id, doc: doc._id }));
-    lastClip = { id, docId: doc._id, tabId: activeTabId, rect: clipRect, clip: clipOf(model, activeTabId, clipRect, rowsList), cut };
-    setCopyRect({ tab: activeTabId, rect: clipRect });
-  }, [doc._id]);
+  const writeClipboard = useCallback((e: React.ClipboardEvent, cut: boolean) => writeSheetClipboard(e, cut, ctx.current), []);
 
   const copySelection = useCallback((e: React.ClipboardEvent) => writeClipboard(e, false), [writeClipboard]);
   const cutSelection = useCallback((e: React.ClipboardEvent) => {
@@ -485,306 +322,15 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
     writeClipboard(e, true);
   }, [writeClipboard, copySelection]);
 
-  const pasteInto = useCallback((e: React.ClipboardEvent) => {
-    const { model, activeTabId, rect, readOnly } = S.current;
-    e.preventDefault();
-    if (readOnly) return;
-    let mine: { id: string; doc: string } | null = null;
-    try {
-      mine = JSON.parse(e.clipboardData.getData(CLIP_MIME) || "null");
-    } catch {
-      mine = null;
-    }
-    const text = e.clipboardData.getData("text/plain");
-    const valuesOnly = pasteValuesRef.current;
-    pasteValuesRef.current = false;
-    if (!valuesOnly && mine && lastClip && lastClip.id === mine.id && lastClip.docId === doc._id) {
-      const clip = lastClip;
-      const h = clip.clip.cells.length, w = clip.clip.cells[0]?.length ?? 0;
-      if (clip.cut) {
-        // A cut is a move: references to the cells follow them, on any tab.
-        apply(moveOps(model, clip.tabId, clip.rect, rect.c0, rect.r0, activeTabId));
-      } else {
-        const target = rect.c1 - rect.c0 + 1 >= w && rect.r1 - rect.r0 + 1 >= h ? rect : { c0: rect.c0, r0: rect.r0, c1: rect.c0 + w - 1, r1: rect.r0 + h - 1 };
-        apply(pasteClipOps(model, activeTabId, clip.clip, target));
-      }
-      if (clip.cut) lastClip = null;
-      select({ anchor: { col: rect.c0, row: rect.r0 }, focus: { col: rect.c0 + w - 1, row: rect.r0 + h - 1 } }, { reveal: false });
-    } else if (text) {
-      const grid = parseTsv(text);
-      if (grid.length === 1 && grid[0].length === 1 && (rect.c0 !== rect.c1 || rect.r0 !== rect.r1)) {
-        const cells: Array<{ col: number; row: number; input: string }> = [];
-        for (let r = rect.r0; r <= rect.r1; r++) for (let c = rect.c0; c <= rect.c1; c++) cells.push({ col: c, row: r, input: grid[0][0] });
-        apply(inputOps(model, activeTabId, cells));
-      } else {
-        apply(gridOps(model, activeTabId, rect.c0, rect.r0, grid));
-        const w = Math.max(...grid.map((r) => r.length));
-        select({ anchor: { col: rect.c0, row: rect.r0 }, focus: { col: rect.c0 + w - 1, row: rect.r0 + grid.length - 1 } }, { reveal: false });
-      }
-    }
-    setCopyRect(null);
-  }, [apply, select, doc._id]);
+  const pasteInto = useCallback((e: React.ClipboardEvent) => pasteSheetClipboard(e, ctx.current), []);
 
   // ── Keyboard ──────────────────────────────────────────────────────────────
-  const onKey = useCallback((e: ReactKeyboardEvent<HTMLTextAreaElement | HTMLInputElement>, surface: "cell" | "bar") => {
-    const mod = e.metaKey || e.ctrlKey;
-    const st = edit.get();
-    if (st) {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        cancelEdit();
-      } else if (e.key === "Enter" && !e.altKey) {
-        e.preventDefault();
-        if (mod) commitToSelection();
-        else commitEdit(0, e.shiftKey ? -1 : 1);
-      } else if (e.key === "Tab") {
-        e.preventDefault();
-        commitEdit(e.shiftKey ? -1 : 1, 0);
-      } else if (e.key === "F4") {
-        // Cycle the reference at the caret through A1, $A$1, A$1, $A1.
-        e.preventDefault();
-        const el = e.currentTarget;
-        const next = cycleAnchors(st.text, el.selectionStart ?? st.text.length);
-        if (next) {
-          edit.patch({ text: next.text });
-          requestAnimationFrame(() => { el.selectionStart = el.selectionEnd = next.caret; });
-        }
-      } else if (st.mode === "enter" && e.key.startsWith("Arrow")) {
-        const el = e.currentTarget;
-        // While pointing, the caret is where the last step left it (key repeat can outrun a render).
-        const caret = pointRef.current ? caretRef.current : (el.selectionStart ?? 0);
-        const d = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] }[e.key]!;
-        const pt = pointRef.current;
-        if ((pt && caret === pt.end) || wantsReference(st.text, caret)) {
-          // Pointing: arrows walk a reference into the formula, shift widens it to a range.
-          e.preventDefault();
-          const base = pt && caret === pt.end ? pt : { start: caret, end: caret, anchor: { col: st.col, row: st.row }, focus: { col: st.col, row: st.row } };
-          const focus = { col: Math.max(1, base.focus.col + d[0]), row: Math.max(1, base.focus.row + d[1]) };
-          const anchor = e.shiftKey ? base.anchor : focus;
-          const ref = rectA1(normRect({ c0: anchor.col, r0: anchor.row, c1: focus.col, r1: focus.row }));
-          const text = st.text.slice(0, base.start) + ref + st.text.slice(base.end);
-          pointRef.current = { start: base.start, end: base.start + ref.length, anchor, focus };
-          edit.patch({ text });
-          caretRef.current = base.start + ref.length;
-          requestAnimationFrame(() => { el.selectionStart = el.selectionEnd = base.start + ref.length; });
-          return;
-        }
-        e.preventDefault();
-        commitEdit(d[0], d[1]);
-      }
-      if (!e.key.startsWith("Arrow") && e.key !== "Shift") pointRef.current = null;
-      return;
-    }
-    if (surface !== "cell") return;
-    const { readOnly, model, activeTabId, rect } = S.current;
-    switch (e.key) {
-      case "ArrowUp":
-      case "ArrowDown":
-      case "ArrowLeft":
-      case "ArrowRight": {
-        e.preventDefault();
-        const d = { ArrowUp: [0, -1], ArrowDown: [0, 1], ArrowLeft: [-1, 0], ArrowRight: [1, 0] }[e.key]!;
-        move(d[0], d[1], e.shiftKey, mod);
-        return;
-      }
-      case "Tab":
-        e.preventDefault();
-        move(e.shiftKey ? -1 : 1, 0);
-        return;
-      case "Enter":
-        e.preventDefault();
-        if (e.shiftKey) move(0, -1);
-        else beginEdit(null, "edit");
-        return;
-      case "F2":
-        e.preventDefault();
-        beginEdit(null, "edit");
-        return;
-      case "Escape":
-        setCopyRect(null);
-        return;
-      case "End":
-        e.preventDefault();
-        if (mod) {
-          const t = S.current.tab;
-          select({ anchor: { col: Math.max(1, t.cols), row: Math.max(1, t.rows) }, focus: { col: Math.max(1, t.cols), row: Math.max(1, t.rows) } });
-        } else move(1, 0, e.shiftKey, true);
-        return;
-      case "Home":
-        e.preventDefault();
-        select({ anchor: { col: 1, row: mod ? 1 : S.current.sel.anchor.row }, focus: { col: 1, row: mod ? 1 : S.current.sel.anchor.row } });
-        return;
-      case "PageDown":
-      case "PageUp": {
-        e.preventDefault();
-        // A page is the visible height, whatever the row heights.
-        const el = scrollerRef.current;
-        const { rows: ly, sel: cur } = S.current;
-        const view = el ? el.clientHeight - COL_HEADER_H - BOTTOM_ROOM : 400;
-        const from = e.shiftKey ? cur.focus.row : cur.anchor.row;
-        const target = e.key === "PageDown" ? ly.indexAt(ly.offset(from) + view) : ly.indexAt(Math.max(0, ly.offset(from) - view));
-        move(0, target - from, e.shiftKey);
-        return;
-      }
-      case "Backspace":
-      case "Delete":
-        e.preventDefault();
-        if (!readOnly) apply(clearVisible(model, activeTabId, rect, S.current.hiddenRows));
-        return;
-    }
-    if (mod) {
-      const k = e.key.toLowerCase();
-      if (k === "v" && e.shiftKey) {
-        // The paste event that follows takes values only.
-        pasteValuesRef.current = true;
-        return;
-      }
-      if (k === " " || e.code === "Space") {
-        e.preventDefault();
-        select({ anchor: { col: rect.c0, row: 1 }, focus: { col: rect.c1, row: S.current.rows.count } }, { reveal: false });
-        return;
-      }
-      if (k === ";" && !readOnly) {
-        e.preventDefault();
-        const d = new Date();
-        const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-        apply(inputOps(model, activeTabId, [{ col: S.current.sel.anchor.col, row: S.current.sel.anchor.row, input: today }]));
-        return;
-      }
-      if (k === "f") {
-        e.preventDefault();
-        setFindOpen(true);
-        return;
-      }
-      if (k === "z") {
-        e.preventDefault();
-        if (e.shiftKey) live.redo();
-        else live.undo();
-      } else if (k === "y") {
-        e.preventDefault();
-        live.redo();
-      } else if (k === "b" || k === "i" || k === "u") {
-        e.preventDefault();
-        onFormat({ type: "toggle", field: k as "b" });
-      } else if (k === "a") {
-        e.preventDefault();
-        const t = S.current.tab;
-        select({ anchor: { col: 1, row: 1 }, focus: { col: Math.max(1, t.cols), row: Math.max(1, t.rows) } }, { reveal: false });
-      } else if (k === "d" && !readOnly) {
-        // Fill down from the selection's top row.
-        e.preventDefault();
-        if (rect.r1 > rect.r0) apply(fillOps(model, activeTabId, { ...rect, r1: rect.r0 }, rect));
-      } else if (k === "r" && !readOnly && !e.shiftKey) {
-        e.preventDefault();
-        if (rect.c1 > rect.c0) apply(fillOps(model, activeTabId, { ...rect, c1: rect.c0 }, rect));
-      }
-      return;
-    }
-    if (e.key === " " && e.shiftKey) {
-      e.preventDefault();
-      select({ anchor: { col: 1, row: rect.r0 }, focus: { col: 18_278, row: rect.r1 } }, { reveal: false });
-    }
-  }, [edit, cancelEdit, commitEdit, commitToSelection, move, beginEdit, apply, live, onFormat, select]);
+  const onKey = useCallback((e: ReactKeyboardEvent<HTMLTextAreaElement | HTMLInputElement>, surface: "cell" | "bar") => handleSheetKey(e, surface, ctx.current), []);
 
   // ── Pointer: select, drag-select, point mode, resize, fill ────────────────
   const dragRef = useRef<{ kind: "cells" | "cols" | "rows" | "fill"; origin: Rect } | null>(null);
 
-  const onPointerDown = useCallback((hit: GridHit, e: React.PointerEvent) => {
-    const { sel, cols, rows, frozenCols, frozenRows } = S.current;
-    const st = edit.get();
-    const el = scrollerRef.current!;
-    // Point mode: clicking a cell while typing a formula inserts its reference.
-    if (st && hit.zone === "cell" && wantsReference(st.text, caretRef.current)) {
-      e.preventDefault();
-      const { activeTabId: here, tab: hereTab } = S.current;
-      const ref = (st.tab !== here ? `${quoteTabName(hereTab.meta.name)}!` : "") + a1(hit.col, hit.row);
-      const caret = caretRef.current;
-      const next = st.text.slice(0, caret) + ref + st.text.slice(caret);
-      edit.patch({ text: next, mode: "edit" });
-      caretRef.current = caret + ref.length;
-      requestAnimationFrame(() => {
-        const t = st.surface === "bar" ? (document.querySelector("[data-sheet-formula-input]") as HTMLInputElement | null) : sinkRef.current;
-        if (t) {
-          t.focus();
-          t.selectionStart = t.selectionEnd = caret + ref.length;
-        }
-      });
-      return;
-    }
-    if (st) commitEdit();
-    e.preventDefault();
-    sinkRef.current?.focus({ preventScroll: true });
-    if (hit.zone === "cell" && !e.shiftKey && !S.current.readOnly) {
-      // A click on a checkbox cell ticks it.
-      const ce = S.current.tab.cells.get(cellNum(hit.col, hit.row));
-      if (ce?.nf === "check") {
-        const on = S.current.wb.value(S.current.activeTabId, hit.col, hit.row);
-        const isOn = on === true || on === 1;
-        if (!(typeof ce.input === "string" && isFormula(ce.input))) apply(inputOps(S.current.model, S.current.activeTabId, [{ col: hit.col, row: hit.row, input: isOn ? "FALSE" : "TRUE" }]));
-      }
-    }
-    if (hit.zone === "cell") {
-      const next: Sel = e.shiftKey ? { anchor: sel.anchor, focus: { col: hit.col, row: hit.row } } : { anchor: { col: hit.col, row: hit.row }, focus: { col: hit.col, row: hit.row } };
-      select(next, { reveal: false });
-      dragRef.current = { kind: "cells", origin: selRect(next) };
-    } else if (hit.zone === "colHeader") {
-      const anchorCol = e.shiftKey ? sel.anchor.col : hit.col;
-      select({ anchor: { col: anchorCol, row: 1 }, focus: { col: hit.col, row: rows.count } }, { reveal: false });
-      dragRef.current = { kind: "cols", origin: { c0: anchorCol, c1: anchorCol, r0: 1, r1: rows.count } };
-    } else if (hit.zone === "rowHeader") {
-      const anchorRow = e.shiftKey ? sel.anchor.row : hit.row;
-      select({ anchor: { col: 1, row: anchorRow }, focus: { col: cols.count, row: hit.row } }, { reveal: false });
-      dragRef.current = { kind: "rows", origin: { c0: 1, c1: 1, r0: anchorRow, r1: anchorRow } };
-    } else {
-      select({ anchor: { col: 1, row: 1 }, focus: { col: cols.count, row: rows.count } }, { reveal: false });
-      return;
-    }
-    const frozenW = cols.offset(frozenCols + 1), frozenH = rows.offset(frozenRows + 1);
-    let lastX = e.clientX, lastY = e.clientY;
-    let raf = 0;
-    const update = () => {
-      const d = dragRef.current;
-      if (!d) return;
-      const h = hitTest(el, cols, rows, frozenW, frozenH, lastX, lastY);
-      const col = h.zone === "cell" || h.zone === "colHeader" ? h.col : d.origin.c0;
-      const row = h.zone === "cell" || h.zone === "rowHeader" ? h.row : d.origin.r0;
-      setSel((s) => {
-        if (d.kind === "cols") return { anchor: s.anchor, focus: { col, row: rows.count } };
-        if (d.kind === "rows") return { anchor: s.anchor, focus: { col: cols.count, row } };
-        if (s.focus.col === col && s.focus.row === row) return s;
-        return { anchor: s.anchor, focus: { col, row } };
-      });
-    };
-    const autoscroll = () => {
-      const r = el.getBoundingClientRect();
-      const edge = 28;
-      let dx = 0, dy = 0;
-      if (lastX > r.right - edge) dx = 18;
-      else if (lastX < r.left + ROW_HEADER_W + frozenW && el.scrollLeft > 0) dx = -18;
-      if (lastY > r.bottom - edge) dy = 18;
-      else if (lastY < r.top + COL_HEADER_H + frozenH && el.scrollTop > 0) dy = -18;
-      if (dx || dy) {
-        el.scrollLeft += dx;
-        el.scrollTop += dy;
-        update();
-      }
-      raf = requestAnimationFrame(autoscroll);
-    };
-    raf = requestAnimationFrame(autoscroll);
-    const onMove = (ev: PointerEvent) => {
-      lastX = ev.clientX;
-      lastY = ev.clientY;
-      update();
-    };
-    const onUp = () => {
-      dragRef.current = null;
-      cancelAnimationFrame(raf);
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  }, [edit, commitEdit, select, apply]);
+  const onPointerDown = useCallback((hit: GridHit, e: React.PointerEvent) => sheetPointerDown(hit, e, ctx.current), []);
 
   const onDoubleClick = useCallback((hit: GridHit) => {
     if (hit.zone !== "cell") return;
@@ -794,37 +340,12 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
       router.push(v.startsWith("pl-") ? `/plans/${v}` : `/tasks/${v}`);
       return;
     }
+    // A dropdown or date cell opens its picker; typing still edits it as text.
+    if (ctx.current.openPicker(hit.col, hit.row)) return;
     beginEdit(null, "edit");
   }, [beginEdit, router]);
 
-  const onResizeStart = useCallback((axis: "col" | "row", index: number, e: React.PointerEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (S.current.readOnlyDoc) return;
-    const { cols, rows, activeTabId, rect } = S.current;
-    const layout = axis === "col" ? cols : rows;
-    const start = axis === "col" ? e.clientX : e.clientY;
-    const base = layout.sizeOf(index);
-    // Resizing a header inside a whole-column selection resizes every selected column.
-    const group =
-      axis === "col" && rect.r0 === 1 && rect.r1 >= rows.count && index >= rect.c0 && index <= rect.c1
-        ? Array.from({ length: rect.c1 - rect.c0 + 1 }, (_, i) => rect.c0 + i)
-        : axis === "row" && rect.c0 === 1 && rect.c1 >= cols.count && index >= rect.r0 && index <= rect.r1
-          ? Array.from({ length: rect.r1 - rect.r0 + 1 }, (_, i) => rect.r0 + i)
-          : [index];
-    const sizeFor = (ev: PointerEvent) => Math.max(axis === "col" ? 32 : 18, Math.min(axis === "col" ? 800 : 400, base + ((axis === "col" ? ev.clientX : ev.clientY) - start)));
-    const onMove = (ev: PointerEvent) => {
-      const size = sizeFor(ev);
-      live.preview(axis === "col" ? colWidthOps(activeTabId, group, size) : rowHeightOps(activeTabId, group, size));
-    };
-    const onUp = () => {
-      live.commit();
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  }, [live]);
+  const onResizeStart = useCallback((axis: "col" | "row", index: number, e: React.PointerEvent) => sheetResizeStart(axis, index, e, ctx.current), []);
 
   const onAutoFit = useCallback((col: number) => {
     if (S.current.readOnlyDoc) return;
@@ -832,35 +353,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
     apply(fitWidthOps(model, wb, activeTabId, [col]));
   }, [apply]);
 
-  const onFillStart = useCallback((e: React.PointerEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (S.current.readOnly) return;
-    const el = scrollerRef.current!;
-    const { cols, rows, frozenCols, frozenRows, rect: src } = S.current;
-    const frozenW = cols.offset(frozenCols + 1), frozenH = rows.offset(frozenRows + 1);
-    let dest = src;
-    const onMove = (ev: PointerEvent) => {
-      const h = hitTest(el, cols, rows, frozenW, frozenH, ev.clientX, ev.clientY);
-      if (h.zone !== "cell") return;
-      const down = h.row - src.r1, up = src.r0 - h.row, right = h.col - src.c1, left = src.c0 - h.col;
-      const vertical = Math.max(down, up) >= Math.max(right, left);
-      if (vertical) dest = down > 0 ? { ...src, r1: h.row } : up > 0 ? { ...src, r0: h.row } : src;
-      else dest = right > 0 ? { ...src, c1: h.col } : left > 0 ? { ...src, c0: h.col } : src;
-      setFillPreview(dest === src ? null : dest);
-    };
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      setFillPreview(null);
-      if (dest === src) return;
-      const { model, activeTabId } = S.current;
-      apply(fillOps(model, activeTabId, src, dest));
-      select({ anchor: { col: dest.c0, row: dest.r0 }, focus: { col: dest.c1, row: dest.r1 } }, { reveal: false });
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  }, [apply, select]);
+  const onFillStart = useCallback((e: React.PointerEvent) => sheetFillStart(e, ctx.current), []);
 
   // ── Context menus and filter popover ──────────────────────────────────────
   const menu = useContextMenu<Menu>();
@@ -888,7 +381,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
   // ── Agent writes flash briefly, so a person watching sees the sheet fill ──
   const [flash, setFlash] = useState<Set<string> | undefined>(undefined);
   const seenRevs = useRef<Map<string, number> | null>(null);
-  useEffect(() => {
+  useWatchEffect(() => {
     const prev = seenRevs.current;
     const next = new Map<string, number>();
     const hits = new Set<string>();
@@ -903,10 +396,11 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
     const t = setTimeout(() => setFlash(undefined), 1400);
     return () => clearTimeout(t);
   }, [tab]);
-  useEffect(() => { seenRevs.current = null; }, [activeTabId]);
+  useWatchEffect(() => { seenRevs.current = null; }, [activeTabId]);
 
   // ── Others: outlines in their color ───────────────────────────────────────
   const others = useLivePresence(doc._id);
+  const unseenTabs = useUnseenTabs(model, activeTabId);
   const editRefsKey = useSyncExternalStore(edit.subscribe, () => refsKeyOf(edit.get()?.text), () => "");
   const outlines: Outline[] = useMemo(() => {
     const out: Outline[] = [];
@@ -932,10 +426,20 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
   const paintCtx = useMemo(() => {
     const tables = model.tables.filter((t) => t.tab === activeTabId);
     const conds = model.conds.filter((c) => c.tab === activeTabId);
+    const validations = model.validations.filter((v) => v.tab === activeTabId);
     const ranges = new Map<string, { min: number; max: number } | null>();
     return {
       tables,
       conds,
+      validation: validations.length
+        ? (col: number, row: number) => {
+            for (let i = validations.length - 1; i >= 0; i--) {
+              const r = validations[i].rect;
+              if (col >= r.c0 && col <= r.c1 && row >= r.r0 && row <= r.r1) return validations[i];
+            }
+            return undefined;
+          }
+        : undefined,
       numericAt: (col: number, row: number) => typeof wb.value(activeTabId, col, row) === "number",
       filterHeader: (col: number, row: number) => !!filter && row === filter.row && col >= filter.c0 && col <= filter.c1,
       inherited: (el: { input?: string }) => (typeof el.input === "string" ? inheritedFormat(model, activeTabId, el.input) : undefined),
@@ -973,7 +477,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
   }, [edit]);
 
   // Leaving a tab or the doc commits the edit in progress.
-  useEffect(() => () => { if (edit.get()) commitEdit(); }, [activeTabId]); // eslint-disable-line react-hooks/exhaustive-deps
+  useWatchEffect(() => () => { if (edit.get()) commitEdit(); }, [activeTabId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Live query tabs refresh themselves while open ─────────────────────────
   const { refreshing, refresh, lastError } = useQueryTabRefresh(doc._id, tab.meta, readOnlyDoc);
@@ -1049,15 +553,50 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
   }, []);
   const [renameTab, setRenameTab] = useState<string | null>(null);
 
+  const x = useSheetExtras({ S, scrollerRef, sinkRef, select, apply, menu, live, showTab, setTabId });
+  const { openPicker, onValidate, activeValidation, onGridHover, hoverRef, setErrHover, fileRef, importFiles, dropping, setDropping } = x;
+
   // Top-bar controls: none beyond the shell's for now.
-  useEffect(() => {
+  useWatchEffect(() => {
     setToolbar(null);
   }, [setToolbar]);
 
   const projectName = doc.project_path?.split("/").filter(Boolean).pop();
 
+  ctx.current = { S, edit, pointRef, caretRef, scrollerRef, sinkRef, pasteValuesRef, dragRef, live, docId: doc._id, cancelEdit, commitEdit, commitToSelection, move, beginEdit, apply, onFormat, select, setSel, setCopyRect, setFillPreview, setFindOpen, openPicker };
+
   return (
-    <div className="sheet-root" data-sheet-root data-sheet-tab={tab.meta.name}>
+    <div
+      className="sheet-root"
+      data-sheet-root
+      data-sheet-tab={tab.meta.name}
+      data-dropping={dropping ? "" : undefined}
+      onDragOver={(e) => {
+        if (readOnlyDoc || !e.dataTransfer.types.includes("Files")) return;
+        e.preventDefault();
+        if (!dropping) setDropping(true);
+      }}
+      onDragLeave={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDropping(false);
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer.files.length) return;
+        e.preventDefault();
+        setDropping(false);
+        void importFiles(e.dataTransfer.files);
+      }}
+    >
+      <input
+        ref={fileRef}
+        type="file"
+        accept={IMPORT_ACCEPT}
+        multiple
+        hidden
+        onChange={(e) => {
+          if (e.target.files?.length) void importFiles(e.target.files);
+          e.target.value = "";
+        }}
+      />
       <FormulaBar
         edit={edit}
         refLabel={refLabel}
@@ -1082,7 +621,16 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
           </button>
         </div>
       )}
-      <div className="sheet-body">
+      <div
+        className="sheet-body"
+        onPointerMove={onGridHover}
+        onPointerLeave={(e) => {
+          if ((e.relatedTarget as HTMLElement | null)?.closest?.("[data-sheet-error-pop]")) return;
+          hoverRef.current.key = "";
+          if (hoverRef.current.timer) clearTimeout(hoverRef.current.timer);
+          setErrHover(null);
+        }}
+      >
         {!live.ready && !snapshot && <div className="sheet-loading" role="progressbar" aria-label="Loading sheet" />}
         <SheetGrid
           tab={tab}
@@ -1134,6 +682,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
           onPaste={pasteInto}
           onCaret={(c) => { caretRef.current = c; }}
         />
+        <SheetExtrasView x={x} placement={placement} editing={!!editState} readOnly={readOnly} edit={edit} select={select} apply={apply} sinkRef={sinkRef} tabRows={tab.rows} />
         <FormatBar docId={doc._id} style={activeStyle} onAction={onFormat} readOnly={readOnlyDoc || loading} selectionLabel={refLabel} tabName={tab.meta.name} autoAsk={tab.rows === 0 && !queryTab} onAsk={onAsk} />
       </div>
       <TabStrip
@@ -1160,12 +709,15 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
         onRenameDone={() => setRenameTab(null)}
         onAdd={(e) => addMenu.open(e, null, { force: true })}
         summary={<SelectionSummary values={summaryValues} style={activeStyle} />}
+        others={others}
+        unseen={unseenTabs}
       />
 
       <ContextMenu state={addMenu}>
         {() => (
           <>
             <CtxItem onSelect={() => addTab()}>Blank tab</CtxItem>
+            <CtxItem icon={Upload} onSelect={() => fileRef.current?.click()}>Import file</CtxItem>
             <DropdownMenuSeparator />
             {(["tasks", "sessions", "prs", "metrics"] as const).map((src) => (
               <CtxItem key={src} icon={Radio} onSelect={() => addTab({ name: uniqueTabName(S.current.model, QUERY_LABEL[src]), query: { source: src, ...(projectName && src !== "metrics" ? { project: projectName } : {}) } })}>
@@ -1192,7 +744,7 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
               }}
             />
           ) : (
-            <CellMenu kind={m.kind} readOnly={readOnly} onFormat={onFormat} onClear={() => apply(clearVisible(model, activeTabId, rect, hiddenRows))} onCopyHint={() => {
+            <CellMenu kind={m.kind} readOnly={readOnly} onFormat={onFormat} validation={activeValidation?.rule} onValidate={onValidate} onClear={() => apply(clearVisible(model, activeTabId, rect, hiddenRows))} onCopyHint={() => {
               const { rect: r, tab: t } = S.current;
               const lines = visibleRowsOf(r, hiddenRows, t.rows).map((row) => {
                 const out: string[] = [];
@@ -1222,332 +774,6 @@ export default function SheetView({ doc, live, setSelection, mode, snapshot, set
           />
         )}
       </CursorPopover>
-    </div>
-  );
-}
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-/** The selection's visible rows: a filtered range copies what is on screen. */
-function visibleRowsOf(rect: Rect, hidden: Set<number>, maxRow: number): number[] {
-  const out: number[] = [];
-  for (let r = rect.r0; r <= Math.min(rect.r1, Math.max(maxRow, rect.r0)); r++) if (!hidden.has(r)) out.push(r);
-  return out;
-}
-
-/** Clear contents of the rows a person can see (a filter's hidden rows stay as they are). */
-function clearVisible(model: SheetModel, tabId: string, rect: Rect, hidden: Set<number>) {
-  if (!hidden.size) return clearOps(model, tabId, rect, "contents");
-  const ops = [];
-  let r = rect.r0;
-  while (r <= rect.r1) {
-    while (r <= rect.r1 && hidden.has(r)) r++;
-    const start = r;
-    while (r <= rect.r1 && !hidden.has(r)) r++;
-    if (start <= rect.r1 && start < r) ops.push(...clearOps(model, tabId, { ...rect, r0: start, r1: r - 1 }, "contents"));
-  }
-  return ops;
-}
-
-/** F4: the reference at the caret, cycled A1 -> $A$1 -> A$1 -> $A1 -> A1. */
-export function cycleAnchors(text: string, caret: number): { text: string; caret: number } | null {
-  if (!isFormula(text)) return null;
-  let toks;
-  try {
-    toks = tokenize(text.slice(1));
-  } catch {
-    return null;
-  }
-  const at = caret - 1;
-  const t = toks.find((x) => x.type === "ref" && at >= x.start && at <= x.end) as Extract<ReturnType<typeof tokenize>[number], { type: "ref" }> | undefined;
-  if (!t || t.shape === "cols" || t.shape === "rows") return null;
-  const next = (p: { absCol: boolean; absRow: boolean }) =>
-    !p.absCol && !p.absRow ? { absCol: true, absRow: true } : p.absCol && p.absRow ? { absCol: false, absRow: true } : !p.absCol && p.absRow ? { absCol: true, absRow: false } : { absCol: false, absRow: false };
-  const a = { ...t.a, ...next(t.a) };
-  const b = t.b ? { ...t.b, ...next(t.a) } : undefined;
-  const body = refText({ ...t, a, b });
-  const out = "=" + text.slice(1, 1 + t.start) + body + text.slice(1 + t.end);
-  return { text: out, caret: 1 + t.start + body.length };
-}
-
-const QUERY_LABEL: Record<QuerySource, string> = { tasks: "Tasks", sessions: "Sessions", prs: "Pull requests", metrics: "Metrics" };
-
-function ago(at: number, now: number): string {
-  const s = Math.max(0, Math.round((now - at) / 1000));
-  if (s < 45) return "just now";
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-  return `${Math.round(s / 86400)}d ago`;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
-
-function cellNumOfKey(key: string): number {
-  const m = key.match(/!([A-Z]+)(\d+)$/)!;
-  let col = 0;
-  for (const ch of m[1]) col = col * 26 + ch.charCodeAt(0) - 64;
-  return cellNum(col, Number(m[2]));
-}
-
-function elementsHaveTab(elements: readonly { key: string }[], tabId: string): boolean {
-  return elements.some((e) => e.key === `tab:${tabId}`);
-}
-
-function shiftFormulaSafe(input: string, dc: number, dr: number): string {
-  return shiftFormula(input, dc, dr);
-}
-
-/** The contiguous block of data around a cell (Sheets' "current region"). */
-function dataRegion(tab: TabData, col: number, row: number): Rect {
-  const has = (c: number, r: number) => {
-    const el = tab.cells.get(cellNum(c, r));
-    return !!el && typeof el.input === "string" && el.input !== "";
-  };
-  let r: Rect = { c0: col, c1: col, r0: row, r1: row };
-  for (let grew = true; grew; ) {
-    grew = false;
-    const tryGrow = (next: Rect, probe: () => boolean) => {
-      if (probe()) {
-        r = next;
-        grew = true;
-      }
-    };
-    tryGrow({ ...r, r1: r.r1 + 1 }, () => range(r.c0, r.c1).some((c) => has(c, r.r1 + 1)));
-    if (r.r0 > 1) tryGrow({ ...r, r0: r.r0 - 1 }, () => range(r.c0, r.c1).some((c) => has(c, r.r0 - 1)));
-    tryGrow({ ...r, c1: r.c1 + 1 }, () => range(r.r0, r.r1).some((rr) => has(r.c1 + 1, rr)));
-    if (r.c0 > 1) tryGrow({ ...r, c0: r.c0 - 1 }, () => range(r.r0, r.r1).some((rr) => has(r.c0 - 1, rr)));
-  }
-  return r;
-}
-
-function range(a: number, b: number): number[] {
-  return Array.from({ length: b - a + 1 }, (_, i) => a + i);
-}
-
-/** A first row of text over a column of numbers reads as a header. */
-function isHeaderRow(wb: Workbook, tabId: string, r: Rect): boolean {
-  if (r.r1 <= r.r0) return false;
-  let textTop = 0, numBelow = 0;
-  for (let c = r.c0; c <= r.c1; c++) {
-    if (typeof wb.value(tabId, c, r.r0) === "string") textTop++;
-    if (typeof wb.value(tabId, c, r.r0 + 1) === "number") numBelow++;
-  }
-  return textTop === r.c1 - r.c0 + 1 || (textTop > 0 && numBelow > 0);
-}
-
-function columnValues(wb: Workbook, tab: TabData, col: number, headerRow: number): Array<{ text: string; count: number }> {
-  const counts = new Map<string, number>();
-  for (let r = headerRow + 1; r <= tab.rows; r++) {
-    const info = wb.cell(tab.meta.id, col, r);
-    const text = info ? formatValue(info.value, styleOf(tab.cells.get(cellNum(col, r))), info.implied) : "";
-    counts.set(text, (counts.get(text) ?? 0) + 1);
-  }
-  return [...counts].map(([text, count]) => ({ text, count })).sort((a, b) => (a.text === "" ? 1 : b.text === "" ? -1 : a.text.localeCompare(b.text, undefined, { numeric: true })));
-}
-
-/** References in the formula being typed, as "tab|A1:B2;..." so the grid can color them. */
-function refsKeyOf(text: string | undefined): string {
-  if (!text || !isFormula(text)) return "";
-  try {
-    return tokenize(text.slice(1))
-      .filter((t): t is Extract<ReturnType<typeof tokenize>[number], { type: "ref" }> => t.type === "ref")
-      .slice(0, 12)
-      .map((t) => {
-        const a = a1(t.a.col, Math.min(t.a.row, 1_000_000));
-        const b = t.b ? a1(Math.min(t.b.col, 18_278), Math.min(t.b.row, 100_000)) : null;
-        return `${t.tab ?? ""}|${b ? `${a}:${b}` : a}`;
-      })
-      .join(";");
-  } catch {
-    return "";
-  }
-}
-
-function TabMenu({ tabId, model, onRename, onDelete }: { tabId: string; model: SheetModel; onRename: () => void; onDelete: () => void }) {
-  const t = model.byId.get(tabId);
-  if (!t) return null;
-  return (
-    <>
-      <CtxItem onSelect={onRename} disabled={!!t.meta.query}>Rename</CtxItem>
-      <CtxItem danger onSelect={onDelete} disabled={model.tabs.length === 1}>Delete tab</CtxItem>
-    </>
-  );
-}
-
-function CellMenu({ kind, readOnly, onFormat, onClear, onCopyHint }: { kind: "cell" | "colHeader" | "rowHeader"; readOnly: boolean; onFormat: (a: FormatAction) => void; onClear: () => void; onCopyHint: () => void }) {
-  if (readOnly) return <CtxItem onSelect={onCopyHint}>Copy</CtxItem>;
-  return (
-    <>
-      {kind !== "colHeader" && (
-        <>
-          <CtxItem onSelect={() => onFormat({ type: "insert", axis: "row", after: false })}>Insert row above</CtxItem>
-          <CtxItem onSelect={() => onFormat({ type: "insert", axis: "row", after: true })}>Insert row below</CtxItem>
-        </>
-      )}
-      {kind !== "rowHeader" && (
-        <>
-          <CtxItem onSelect={() => onFormat({ type: "insert", axis: "col", after: false })}>Insert column left</CtxItem>
-          <CtxItem onSelect={() => onFormat({ type: "insert", axis: "col", after: true })}>Insert column right</CtxItem>
-        </>
-      )}
-      <DropdownMenuSeparator />
-      {kind !== "colHeader" && <CtxItem danger onSelect={() => onFormat({ type: "delete", axis: "row" })}>Delete rows</CtxItem>}
-      {kind !== "rowHeader" && <CtxItem danger onSelect={() => onFormat({ type: "delete", axis: "col" })}>Delete columns</CtxItem>}
-      <DropdownMenuSeparator />
-      <CtxItem onSelect={() => onFormat({ type: "sort", desc: false })}>Sort A to Z</CtxItem>
-      <CtxItem onSelect={() => onFormat({ type: "sort", desc: true })}>Sort Z to A</CtxItem>
-      <CtxItem icon={FilterIcon} onSelect={() => onFormat({ type: "filter" })}>Filter</CtxItem>
-      {kind !== "colHeader" && <CtxItem onSelect={() => onFormat({ type: "freeze", axis: "row" })}>Freeze rows to here</CtxItem>}
-      {kind !== "rowHeader" && <CtxItem onSelect={() => onFormat({ type: "freeze", axis: "col" })}>Freeze columns to here</CtxItem>}
-      <CtxItem onSelect={() => onFormat({ type: "freeze", axis: "none" })}>Unfreeze</CtxItem>
-      <DropdownMenuSeparator />
-      <CtxItem onSelect={onClear}>Clear contents</CtxItem>
-    </>
-  );
-}
-
-function FilterPanel({ values, hidden, onApply }: { values: Array<{ text: string; count: number }>; hidden: string[]; onApply: (hidden: string[]) => void }) {
-  const [off, setOff] = useState(() => new Set(hidden));
-  const [q, setQ] = useState("");
-  const shown = values.filter((v) => !q || v.text.toLowerCase().includes(q.toLowerCase()));
-  return (
-    <div className="sheet-filter-panel" data-sheet-filter-panel>
-      <input autoFocus placeholder="Search values" value={q} onChange={(e) => setQ(e.target.value)} />
-      <div className="sheet-filter-actions">
-        <button type="button" onClick={() => setOff(new Set())}>All</button>
-        <button type="button" onClick={() => setOff(new Set(values.map((v) => v.text)))}>None</button>
-      </div>
-      <div className="sheet-filter-list">
-        {shown.map((v) => {
-          const on = !off.has(v.text);
-          return (
-            <button
-              type="button"
-              key={v.text}
-              className={on ? "is-on" : ""}
-              onClick={() => setOff((s) => {
-                const n = new Set(s);
-                if (n.has(v.text)) n.delete(v.text);
-                else n.add(v.text);
-                return n;
-              })}
-            >
-              <span className="sheet-check">{on && <Check className="w-3 h-3" />}</span>
-              <span className="truncate flex-1 text-left">{v.text === "" ? "(blank)" : v.text}</span>
-              <span className="text-sol-text-dim tabular-nums">{v.count}</span>
-            </button>
-          );
-        })}
-      </div>
-      <button type="button" className="sheet-filter-ok" onClick={() => onApply([...off])}>Apply</button>
-    </div>
-  );
-}
-
-function FilterButtons({
-  tab,
-  filter,
-  cols,
-  rows,
-  frozenCols,
-  frozenRows,
-  scrollerRef,
-  scrollTick,
-  onOpen,
-}: {
-  tab: TabData;
-  filter: NonNullable<TabData["meta"]["filter"]>;
-  cols: AxisLayout;
-  rows: AxisLayout;
-  frozenCols: number;
-  frozenRows: number;
-  scrollerRef: React.RefObject<HTMLDivElement | null>;
-  scrollTick: number;
-  onOpen: (col: number, e: React.MouseEvent) => void;
-}) {
-  // Re-place on scroll: one cheap pass over the filtered columns.
-  const [, force] = useState(0);
-  useEffect(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    let raf = 0;
-    const on = () => {
-      if (raf) return;
-      raf = requestAnimationFrame(() => {
-        raf = 0;
-        force((n) => n + 1);
-      });
-    };
-    el.addEventListener("scroll", on, { passive: true });
-    return () => el.removeEventListener("scroll", on);
-  }, [scrollerRef]);
-  void scrollTick;
-  void tab;
-  const el = scrollerRef.current;
-  if (!el) return null;
-  const out = [];
-  for (let c = filter.c0; c <= filter.c1; c++) {
-    const r = cellViewportRect(el, cols, rows, frozenCols, frozenRows, c, filter.row);
-    if (!r.visible || r.x + r.w > el.clientWidth || r.y < COL_HEADER_H - 2 || r.y > el.clientHeight) continue;
-    const active = (filter.hidden?.[String(c)] ?? []).length > 0;
-    out.push(
-      <button
-        key={c}
-        type="button"
-        data-sheet-filter={c}
-        aria-label={`Filter column ${a1(c, 1).replace(/\d+/, "")}`}
-        className={`sheet-filter-btn ${active ? "is-active" : ""}`}
-        style={{ left: r.x + r.w - 20, top: r.y + (r.h - 18) / 2 }}
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => onOpen(c, e)}
-      >
-        <FilterIcon className="w-3 h-3" />
-      </button>,
-    );
-  }
-  return <>{out}</>;
-}
-
-/** ⌘F: find text or formulas on this tab; Enter goes to the next match, Shift+Enter back. */
-function FindBar({ find, onGo, from, onClose }: { find: (q: string) => Array<{ col: number; row: number }>; onGo: (c: { col: number; row: number }) => void; from: () => { col: number; row: number }; onClose: () => void }) {
-  const [q, setQ] = useState("");
-  const [at, setAt] = useState<number | null>(null);
-  const matches = useMemo(() => find(q), [find, q]);
-  const go = (dir: 1 | -1) => {
-    if (!matches.length) return;
-    let i: number;
-    if (at === null) {
-      const f = from();
-      i = matches.findIndex((m) => m.row > f.row || (m.row === f.row && m.col >= f.col));
-      if (i < 0) i = 0;
-    } else i = (at + dir + matches.length) % matches.length;
-    setAt(i);
-    onGo(matches[i]);
-  };
-  return (
-    <div className="sheet-find" data-sheet-find onPointerDown={(e) => e.stopPropagation()}>
-      <input
-        autoFocus
-        placeholder="Find"
-        value={q}
-        onChange={(e) => {
-          setQ(e.target.value);
-          setAt(null);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
-          if (e.key === "Enter") {
-            e.preventDefault();
-            go(e.shiftKey ? -1 : 1);
-          }
-        }}
-      />
-      <span className="sheet-find-count">{q ? `${at === null ? 0 : at + 1}/${matches.length}` : ""}</span>
-      <button type="button" aria-label="Close find" onClick={onClose}>
-        <X className="w-3.5 h-3.5" />
-      </button>
     </div>
   );
 }

@@ -1,0 +1,380 @@
+/* Formula help: suggestions, the argument hint and the function list. */
+
+.sheet-assist {
+  position: absolute;
+  z-index: 21;
+  min-width: 200px;
+  max-width: 420px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  background: var(--sol-card);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  font-size: var(--fs-ui);
+}
+.sheet-assist > button {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  text-align: left;
+  padding: 4px 8px;
+  border-radius: 5px;
+  color: var(--sol-text-muted);
+}
+.sheet-assist > button.is-picked {
+  background: color-mix(in srgb, var(--sol-blue) 14%, transparent);
+  color: var(--sol-text);
+}
+.sheet-assist-name {
+  flex-shrink: 0;
+  min-width: 9ch;
+  color: var(--sol-text);
+}
+.sheet-assist-about {
+  min-width: 0;
+  color: var(--sol-text-dim);
+  font-size: var(--fs-meta);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet-assist:not(.sheet-assist-hint) > .sheet-assist-sig {
+  margin-top: 4px;
+  padding: 6px 8px 3px;
+  border-top: 1px solid color-mix(in srgb, var(--sol-border) 35%, transparent);
+}
+.sheet-assist-sig {
+  font-family: inherit;
+  font-size: var(--fs-meta);
+  color: var(--sol-text-muted);
+  white-space: normal;
+}
+.sheet-assist-sig .is-arg {
+  color: var(--sol-text);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: var(--sol-blue);
+  text-underline-offset: 3px;
+}
+.sheet-assist-hint {
+  gap: 2px;
+  padding: 6px 10px;
+  pointer-events: none;
+}
+.sheet-assist-hint .sheet-assist-about { white-space: normal; }
+
+/* fx: opens the function list. */
+.sheet-fx-button {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  padding: 0 8px 0 12px;
+  color: var(--sol-text-dim);
+  font-style: italic;
+  user-select: none;
+}
+.sheet-fx-button:hover,
+.sheet-fx-button[data-state="open"] { color: var(--sol-text); }
+
+.sheet-fn-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 420px;
+  max-height: min(440px, 70vh);
+  font-size: var(--fs-ui);
+}
+.sheet-fn-search {
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent);
+  background: var(--sol-bg-alt);
+  color: var(--sol-text);
+  outline: none;
+}
+.sheet-fn-search:focus { border-color: var(--sol-blue); }
+.sheet-fn-cats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.sheet-fn-cats button {
+  padding: 2px 7px;
+  border-radius: 5px;
+  font-size: var(--fs-meta);
+  color: var(--sol-text-dim);
+}
+.sheet-fn-cats button:hover { color: var(--sol-text); }
+.sheet-fn-cats button.is-on {
+  background: color-mix(in srgb, var(--sol-blue) 14%, transparent);
+  color: var(--sol-text);
+}
+.sheet-fn-rows {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -4px;
+}
+.sheet-fn-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  text-align: left;
+}
+.sheet-fn-row:hover { background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.sheet-fn-row .sheet-assist-sig { color: var(--sol-text); }
+.sheet-fn-empty {
+  padding: 10px 8px;
+  color: var(--sol-text-dim);
+}
+
+.sheet-formula-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+}
+
+/* Error card: what an error means and a one-step fix. */
+.sheet-error-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 300px;
+  font-size: var(--fs-ui);
+}
+.sheet-error-card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.sheet-error-code {
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: var(--fs-meta);
+  color: var(--sol-red);
+  background: color-mix(in srgb, var(--sol-red) 12%, transparent);
+}
+.sheet-error-title { color: var(--sol-text); font-weight: 600; }
+.sheet-error-message { color: var(--sol-text-muted); font-size: var(--fs-meta); }
+.sheet-error-hint { color: var(--sol-text-dim); font-size: var(--fs-meta); }
+.sheet-error-fix {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  margin-top: 2px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  text-align: left;
+  border: 1px solid color-mix(in srgb, var(--sol-blue) 35%, transparent);
+  background: color-mix(in srgb, var(--sol-blue) 8%, transparent);
+  color: var(--sol-text);
+}
+.sheet-error-fix:hover { background: color-mix(in srgb, var(--sol-blue) 14%, transparent); }
+.sheet-error-fix code {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: inherit;
+  font-size: var(--fs-meta);
+  color: var(--sol-text-muted);
+}
+button.sheet-error-chip { cursor: pointer; }
+
+/* Tab labels: who is working on a tab, and agent edits not yet seen. */
+.sheet-tab-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: -2px;
+}
+.sheet-tab-face {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  box-shadow: 0 0 0 1.5px var(--sol-bg);
+}
+.sheet-tab-face.is-agent { border-radius: 2px; }
+.sheet-tab-unseen {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--sol-blue);
+}
+
+/* Validated cells: chips and the pickers they open. */
+.sheet-chip {
+  display: inline-block;
+  max-width: 100%;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: var(--fs-meta);
+  line-height: 18px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sheet-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 220px;
+  font-size: var(--fs-ui);
+}
+.sheet-picker-rows {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+  margin: 0 -4px;
+}
+.sheet-picker-row {
+  display: flex;
+  padding: 4px 6px;
+  border-radius: 5px;
+  text-align: left;
+}
+.sheet-picker-row.is-picked { background: color-mix(in srgb, var(--sol-text) 7%, transparent); }
+.sheet-picker-clear,
+.sheet-date-foot button {
+  align-self: flex-start;
+  padding: 2px 6px;
+  border-radius: 5px;
+  font-size: var(--fs-meta);
+  color: var(--sol-text-dim);
+}
+.sheet-picker-clear:hover,
+.sheet-date-foot button:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.sheet-date { width: 248px; }
+.sheet-date-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--sol-text);
+  font-weight: 600;
+}
+.sheet-date-head button {
+  display: inline-flex;
+  padding: 4px;
+  border-radius: 5px;
+  color: var(--sol-text-muted);
+}
+.sheet-date-head button:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.sheet-date-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  text-align: center;
+}
+.sheet-date-dow {
+  padding: 2px 0;
+  font-size: var(--fs-meta);
+  color: var(--sol-text-dim);
+}
+.sheet-date-day {
+  height: 30px;
+  border-radius: 6px;
+  font-variant-numeric: tabular-nums;
+  color: var(--sol-text-muted);
+}
+.sheet-date-day:hover { background: color-mix(in srgb, var(--sol-text) 7%, transparent); color: var(--sol-text); }
+.sheet-date-day.is-today { color: var(--sol-blue); font-weight: 600; }
+.sheet-date-day.is-sel { background: var(--sol-blue); color: var(--sol-bg); }
+.sheet-date-foot { display: flex; gap: 6px; }
+.sheet-cell .sheet-chip { line-height: 18px; }
+.sheet-cell-caret {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  margin-top: -2px;
+  border-style: solid;
+  border-width: 4px 3.5px 0 3.5px;
+  border-color: var(--sol-text-dim) transparent transparent transparent;
+}
+.sheet-cell.is-invalid::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 0;
+  border-style: solid;
+  border-width: 0 6px 6px 0;
+  border-color: transparent var(--sol-orange) transparent transparent;
+}
+/* The active cell's picker: a real button, so the control is visible where you are. */
+.sheet-picker-btn {
+  position: absolute;
+  z-index: 19;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  border-radius: 4px;
+  color: var(--sol-text-muted);
+}
+.sheet-picker-btn:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
+
+/* Dropdown editor. */
+.sheet-dv { display: flex; flex-direction: column; gap: 8px; width: 280px; font-size: var(--fs-ui); }
+.sheet-dv-head { display: flex; align-items: baseline; gap: 8px; color: var(--sol-text); font-weight: 600; }
+.sheet-dv-head code { font-family: inherit; font-weight: 400; font-size: var(--fs-meta); color: var(--sol-text-dim); }
+.sheet-dv-rows { display: flex; flex-direction: column; gap: 4px; max-height: 260px; overflow-y: auto; }
+.sheet-dv-row { display: flex; align-items: center; gap: 6px; }
+.sheet-dv-swatch { flex-shrink: 0; width: 18px; height: 18px; border-radius: 999px; }
+.sheet-dv-row input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent);
+  background: var(--sol-bg-alt);
+  color: var(--sol-text);
+  outline: none;
+}
+.sheet-dv-row input:focus { border-color: var(--sol-blue); }
+.sheet-dv-x { display: inline-flex; padding: 4px; border-radius: 5px; color: var(--sol-text-dim); }
+.sheet-dv-x:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.sheet-dv-add { display: inline-flex; align-items: center; gap: 4px; align-self: flex-start; padding: 2px 6px; border-radius: 5px; color: var(--sol-text-muted); font-size: var(--fs-meta); }
+.sheet-dv-add:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.sheet-dv-strict { display: flex; align-items: center; gap: 8px; color: var(--sol-text-muted); }
+.sheet-dv-foot { display: flex; align-items: center; gap: 6px; }
+.sheet-dv-remove { padding: 4px 8px; border-radius: 6px; color: var(--sol-red); font-size: var(--fs-meta); }
+.sheet-dv-remove:hover { background: color-mix(in srgb, var(--sol-red) 10%, transparent); }
+.sheet-dv-apply { padding: 4px 14px; border-radius: 6px; background: var(--sol-blue); color: var(--sol-bg); font-weight: 600; }
+.sheet-dv-apply:disabled { opacity: 0.4; }
+
+/* Error card on hover over an error cell. */
+.sheet-error-pop {
+  position: absolute;
+  z-index: 30;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
+  background: var(--sol-card);
+  box-shadow: 0 14px 34px -12px rgba(0, 0, 0, 0.45);
+}
+/* File drop target. */
+.sheet-drop {
+  position: absolute;
+  inset: 8px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  border: 2px dashed var(--sol-blue);
+  background: color-mix(in srgb, var(--sol-blue) 8%, var(--sol-bg));
+  color: var(--sol-text);
+  font-size: var(--fs-body);
+  pointer-events: none;
+}

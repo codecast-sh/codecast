@@ -8,6 +8,7 @@
 //   row:<tab>!<n>     {h}
 //   cf:<id>           {tab, range, rule, value?, color?}   conditional color
 //   tbl:<id>          {tab, range, color, banded?}          banded table style
+//   dv:<id>           {tab, range, rule, options?, strict?} data validation (dropdown chips, dates)
 import type { ArtifactElement } from "../core";
 import { Workbook } from "./engine";
 import { isError, parseLiteral, type ImpliedFormat, type Scalar } from "./values";
@@ -64,6 +65,34 @@ export type CondRule = "sign" | "scale" | "gt" | "lt" | "eq" | "contains";
 export type CondFormat = { key: string; tab: string; rect: Rect; rule: CondRule; value?: string | number; color?: PaletteColor };
 export type TableStyle = { key: string; tab: string; rect: Rect; color: PaletteColor; banded: boolean };
 
+/** One choice of a dropdown, with the chip color it paints. */
+export type ValidationOption = { v: string; color?: PaletteColor };
+/**
+ * What a range accepts: one of a list (drawn as colored chips with a
+ * dropdown) or a date (a date picker). Strict refuses anything else on entry;
+ * otherwise a value outside the list is kept and flagged.
+ */
+export type Validation = { key: string; tab: string; rect: Rect; rule: "list" | "date"; options: ValidationOption[]; strict: boolean };
+
+/** Element kinds that style a range rather than hold a cell: they live outside the tab's cell maps. */
+export const RANGE_KINDS: ReadonlySet<string> = new Set(["cf", "table", "dv"]);
+
+/** The validation covering a cell, if any (the last written wins on overlap). */
+export function validationAt(model: SheetModel, tabId: string, col: number, row: number): Validation | undefined {
+  for (let i = model.validations.length - 1; i >= 0; i--) {
+    const v = model.validations[i];
+    if (v.tab === tabId && col >= v.rect.c0 && col <= v.rect.c1 && row >= v.rect.r0 && row <= v.rect.r1) return v;
+  }
+  return undefined;
+}
+
+function toOptions(raw: unknown): ValidationOption[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((o) => (typeof o === "string" ? { v: o } : o && typeof o === "object" && typeof (o as any).v === "string" ? { v: (o as any).v, color: (PALETTE as readonly string[]).includes((o as any).color) ? (o as any).color : undefined } : null))
+    .filter((o): o is ValidationOption => !!o && o.v !== "");
+}
+
 export type TabData = {
   meta: TabMeta;
   cells: Map<number, CellEl>;
@@ -71,13 +100,23 @@ export type TabData = {
   rowHeights: Map<number, number>;
   rows: number;
   cols: number;
+  /** The newest cell an agent session wrote here: tab labels show agent activity on tabs nobody is looking at. */
+  agentWrite?: AgentWrite;
 };
+
+export type AgentWrite = { rev: number; by: string; at?: number };
+
+/** Fold a cell write into its tab's newest agent write. */
+function noteAgentWrite(t: TabData, el: ArtifactElement): void {
+  if (typeof el.by === "string" && el.by.startsWith("s:") && el.rev > (t.agentWrite?.rev ?? -1)) t.agentWrite = { rev: el.rev, by: el.by, at: el.at };
+}
 
 export type SheetModel = {
   tabs: TabMeta[];
   byId: Map<string, TabData>;
   conds: CondFormat[];
   tables: TableStyle[];
+  validations: Validation[];
 };
 
 /** Cells are stored per tab under row * 2^15 + col. */
@@ -97,11 +136,13 @@ export function buildModel(elements: readonly ArtifactElement[]): SheetModel {
   };
   const conds: CondFormat[] = [];
   const tables: TableStyle[] = [];
+  const validations: Validation[] = [];
   for (const el of elements) {
-    if (el.kind === "cf" || el.kind === "table") {
+    if (RANGE_KINDS.has(el.kind)) {
       const rect = typeof el.range === "string" ? parseRectA1(el.range) : null;
       if (!rect || typeof el.tab !== "string") continue;
-      if (el.kind === "cf") conds.push({ key: el.key, tab: el.tab, rect, rule: (el.rule as CondRule) ?? "sign", value: el.value as any, color: el.color as PaletteColor | undefined });
+      if (el.kind === "dv") validations.push({ key: el.key, tab: el.tab, rect, rule: el.rule === "date" ? "date" : "list", options: toOptions(el.options), strict: el.strict === true });
+      else if (el.kind === "cf") conds.push({ key: el.key, tab: el.tab, rect, rule: (el.rule as CondRule) ?? "sign", value: el.value as any, color: el.color as PaletteColor | undefined });
       else tables.push({ key: el.key, tab: el.tab, rect, color: (el.color as PaletteColor) ?? "blue", banded: el.banded !== false });
       continue;
     }
@@ -124,6 +165,7 @@ export function buildModel(elements: readonly ArtifactElement[]): SheetModel {
         break;
       case "cell":
         t.cells.set(cellNum(k.col, k.row), el as CellEl);
+        noteAgentWrite(t, el);
         if (k.row > t.rows) t.rows = k.row;
         if (k.col > t.cols) t.cols = k.col;
         break;
@@ -137,7 +179,7 @@ export function buildModel(elements: readonly ArtifactElement[]): SheetModel {
   }
   if (byId.size === 0) tabFor(DEFAULT_TAB).meta.order = 0;
   const tabs = [...byId.values()].map((t) => t.meta).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
-  return { tabs, byId, conds, tables };
+  return { tabs, byId, conds, tables, validations };
 }
 
 export function tabByName(model: SheetModel, name: string): TabMeta | undefined {
@@ -247,12 +289,22 @@ export class LiveSheet {
   version = 0;
   private byKey = new Map<string, ArtifactElement>();
   private others = new Map<string, ArtifactElement>();
+  /** The array the last update read: the store keeps element order, so most slots hold the same object. */
+  private last: readonly ArtifactElement[] = [];
 
   /** Fold in the current elements; returns whether anything changed. */
   update(elements: readonly ArtifactElement[]): boolean {
     const changed: ArtifactElement[] = [];
     let kept = 0;
-    for (const el of elements) {
+    const last = this.last;
+    this.last = elements;
+    for (let i = 0; i < elements.length; i++) {
+      const el = elements[i];
+      // Same object in the same slot: unchanged, no key lookup (a 500k-cell sheet diffs in a few ms).
+      if (last[i] === el) {
+        kept++;
+        continue;
+      }
       const prev = this.byKey.get(el.key);
       if (prev === undefined) changed.push(el);
       else {
@@ -288,7 +340,7 @@ export class LiveSheet {
       if (gone) this.byKey.delete(el.key);
       else this.byKey.set(el.key, el);
       const k = parseKey(el.key);
-      if (!k || k.type === "tab" || el.kind === "cf" || el.kind === "table") {
+      if (!k || k.type === "tab" || RANGE_KINDS.has(el.kind)) {
         if (gone) this.others.delete(el.key);
         else this.others.set(el.key, el);
         structure = true;
@@ -302,6 +354,7 @@ export class LiveSheet {
         if (gone) t.cells.delete(n);
         else {
           t.cells.set(n, el as CellEl);
+          noteAgentWrite(t, el);
           if (k.row > t.rows) t.rows = k.row;
           if (k.col > t.cols) t.cols = k.col;
         }
@@ -325,7 +378,7 @@ export class LiveSheet {
       if (!byId.has(id)) structure = true;
       byId.set(id, t);
     }
-    let { tabs, conds, tables } = this.model;
+    let { tabs, conds, tables, validations } = this.model;
     if (structure) {
       // Tab metas, conditional colors and tables come from the few non-cell elements.
       const meta = buildModel([...this.others.values()]);
@@ -340,9 +393,10 @@ export class LiveSheet {
       tabs = [...byId.values()].map((t) => t.meta).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
       conds = meta.conds;
       tables = meta.tables;
+      validations = meta.validations;
       this.wb.setTabs(tabs.map((t) => ({ id: t.id, name: t.name })));
     }
-    this.model = { tabs, byId, conds, tables };
+    this.model = { tabs, byId, conds, tables, validations };
     this.wb.update(inputs);
     this.version++;
     return true;
@@ -363,7 +417,7 @@ export class LiveSheet {
     this.others = new Map();
     for (const el of elements) {
       const k = parseKey(el.key);
-      if (!k || k.type === "tab" || el.kind === "cf" || el.kind === "table") this.others.set(el.key, el);
+      if (!k || k.type === "tab" || RANGE_KINDS.has(el.kind)) this.others.set(el.key, el);
     }
     this.version++;
   }

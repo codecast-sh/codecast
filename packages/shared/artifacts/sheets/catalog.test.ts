@@ -1,0 +1,65 @@
+import { describe, expect, test } from "bun:test";
+import { FUNCTIONS } from "./functions";
+import { FUNCTION_DOCS, argIndexFor, callAt, errorFix, fnSignature, nearestFunction, ERROR_DOCS } from "./catalog";
+import { ERROR_CODES } from "./formula";
+
+describe("function catalog", () => {
+  test("documents every engine function with the engine's argument counts", () => {
+    expect(Object.keys(FUNCTION_DOCS).sort()).toEqual(Object.keys(FUNCTIONS).sort());
+    for (const [name, def] of Object.entries(FUNCTIONS)) {
+      const args = FUNCTION_DOCS[name].args;
+      const repeats = args.some((a) => a.endsWith("..."));
+      const required = args.filter((a) => !a.endsWith("?") && !a.endsWith("...")).length;
+      expect([name, required]).toEqual([name, def.min]);
+      expect([name, repeats ? undefined : args.length]).toEqual([name, def.max]);
+    }
+  });
+
+  test("every error code has a card", () => {
+    for (const code of ERROR_CODES) expect(ERROR_DOCS[code]?.title).toBeTruthy();
+  });
+
+  test("signature reads like Sheets", () => {
+    expect(fnSignature("ROUND")).toBe("ROUND(value, [places])");
+    expect(fnSignature("SUM")).toBe("SUM(value1, value2, …)");
+  });
+
+  test("callAt follows the caret through nesting, strings and tab names", () => {
+    expect(callAt("=ROUND(SUM(A1:A4), ", 19)).toEqual({ name: "ROUND", arg: 1 });
+    expect(callAt("=ROUND(SUM(A1,", 14)).toEqual({ name: "SUM", arg: 1 });
+    expect(callAt('=IF(A1=",", ', 12)).toEqual({ name: "IF", arg: 1 });
+    expect(callAt("=SUM('a,b'!A1, ", 15)).toEqual({ name: "SUM", arg: 1 });
+    expect(callAt("=SUM(A1)+", 9)).toBeNull();
+    expect(callAt("=(A1+", 5)).toBeNull();
+    expect(callAt("plain, text", 6)).toBeNull();
+  });
+
+  test("argIndexFor wraps repeating tails", () => {
+    expect(argIndexFor("SUM", 5)).toBe(1);
+    expect(argIndexFor("ROUND", 4)).toBe(-1);
+    // SUMIFS(sum_range, criteria_range1, criterion1, more...): arg 3 is the next range, 4 its criterion.
+    expect(argIndexFor("SUMIFS", 3)).toBe(1);
+    expect(argIndexFor("SUMIFS", 4)).toBe(2);
+    expect(argIndexFor("IFS", 2)).toBe(0);
+  });
+
+  test("nearestFunction suggests close spellings only", () => {
+    const names = Object.keys(FUNCTIONS);
+    expect(nearestFunction("SUMM", names)).toBe("SUM");
+    expect(nearestFunction("VLOKUP", names)).toBe("VLOOKUP");
+    expect(nearestFunction("BANANAS", names)).toBeNull();
+  });
+});
+
+describe("errorFix", () => {
+  test("offers the closest function for a typo", () => {
+    expect(errorFix("#NAME?", "unknown function SUMM", "=SUMM(A1:A4)/2")).toEqual({ label: "Use SUM", text: "=SUM(A1:A4)/2" });
+    expect(errorFix("#NAME?", "unknown function BANANA", "=BANANA(1)")).toBeNull();
+  });
+  test("wraps division and lookup errors once", () => {
+    expect(errorFix("#DIV/0!", "division by zero", "=A1/B1")?.text).toBe("=IFERROR(A1/B1, 0)");
+    expect(errorFix("#DIV/0!", undefined, "=IFERROR(A1/B1)")).toBeNull();
+    expect(errorFix("#N/A", undefined, "=VLOOKUP(A2,B:C,2,FALSE)")?.text).toBe('=IFNA(VLOOKUP(A2,B:C,2,FALSE), "")');
+    expect(errorFix("#N/A", undefined, "#N/A")).toBeNull();
+  });
+});
