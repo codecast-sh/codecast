@@ -332,3 +332,57 @@ describe("living pages over HTTP", () => {
     expect(calls[0].comments.map((c: any) => c.deliver)).toEqual([true, undefined, undefined]);
   });
 });
+
+// F43: the email wall's ?meta=1 exception is for the page's own meta JSON.
+// It must not open the live data route or assets behind the wall.
+describe("email wall and ?meta=1", () => {
+  const artifact = {
+    _id: "a1", slug: "s1", title: "T", version: 1, updated_at: 100, kind: "html", views: 0,
+    comment_count: 0, open_comments: [], owner_key: "ok", email_gate: true,
+  };
+  const ctxFor = (seen: string[]) => ({
+    runQuery: async (fn: unknown) => {
+      const name = getFunctionName(fn as never);
+      seen.push(name);
+      if (name === "artifacts:bySlug") return artifact;
+      if (name === "artifacts:historyBySlug") return { ...artifact, versions: [] };
+      if (name === "artifacts:agentStateBySlug") return null;
+      throw new Error(`unexpected query ${name}`);
+    },
+  });
+
+  test("_data?meta=1 without the e token stays behind the wall", async () => {
+    const seen: string[] = [];
+    const res = await (serve as any)._handler(ctxFor(seen), new Request("https://x/cli/a/s1/_data?meta=1"));
+    expect(res.headers.get("Content-Type")).toContain("text/html");
+    expect(seen).toEqual(["artifacts:bySlug"]);
+  });
+
+  test("the page's own ?meta=1 stays open", async () => {
+    const res = await (serve as any)._handler(ctxFor([]), new Request("https://x/cli/a/s1?meta=1"));
+    expect(res.status).toBe(200);
+    expect((await res.json()).gated.email).toBe(true);
+  });
+});
+
+// The editor document holds the owner/edit key in its fragment, so its
+// markdown preview must never turn an editor's source into a script link.
+import { editorPage } from "./artifactPages";
+
+describe("editor markdown preview links", () => {
+  const html = editorPage({ slug: "s", title: "t", kind: "markdown", source: "x", version: 1, apiBase: "https://a", shareUrl: "https://s" } as any);
+  const src = html.match(/var mdr=function\(src\)\{[\s\S]*?\n  \};/)![0];
+  const mdr = new Function(`${src}; return mdr;`)() as (s: string) => string;
+
+  test("script and data schemes render as text", () => {
+    for (const s of ["[a](javascript:alert(1))", "[a](java\tscript:x)", "[a](JaVaScRiPt:x)", "[a](data:text/html,x)"]) {
+      expect(mdr(s)).not.toContain("<a ");
+    }
+  });
+
+  test("web, mail and relative links still link", () => {
+    expect(mdr("[a](https://x.com)")).toContain('<a href="https://x.com">');
+    expect(mdr("[a](/rel)")).toContain('<a href="/rel">');
+    expect(mdr("[a](mailto:a@b.c)")).toContain('href="mailto:a@b.c"');
+  });
+});

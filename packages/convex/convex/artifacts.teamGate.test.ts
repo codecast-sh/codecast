@@ -108,10 +108,42 @@ describe("team gate on a regulated team's pages", () => {
     const unlock = await as(member).query(api.artifacts.ownerUnlock, { slug });
     expect(unlock?.m).toBeTruthy();
     expect((await as(member).query(api.artifacts.embedInfo, { pages: [{ slug }] }))[0]).toMatchObject({ gated: true, m: unlock!.m });
-    expect((await as(admin).query(api.artifacts.ownerUnlock, { slug }))?.m).toBe(unlock!.m);
+    // Each person holds their own token; the owner's opens the page too.
+    const ownerM = (await as(admin).query(api.artifacts.ownerUnlock, { slug }))?.m;
+    expect(ownerM).toBeTruthy();
+    expect(ownerM).not.toBe(unlock!.m);
+    expect((await serve(t, slug, `?m=${ownerM}`)).status).toBe(200);
     const opened = await serve(t, slug, `?m=${unlock!.m}`);
     expect(opened.status).toBe(200);
     expect(opened.text).toContain("chart");
+  });
+
+  // F46: the member token is checked against current membership every time,
+  // so a removed member's token (and any link they forwarded) stops working,
+  // while the remaining members see no change. A token cannot be re-pointed at
+  // another person either.
+  test("a removed member's token stops opening the page; current members are unaffected", async () => {
+    const { t, admin, member, outsider, team, as } = await setup();
+    const conv = await conversation(t, admin, team);
+    const { body } = await publish(t, await token(t, admin), { session_ref: String(conv) });
+    const slug = body.slug as string;
+    const m = (await as(member).query(api.artifacts.ownerUnlock, { slug }))!.m!;
+    const ownerM = (await as(admin).query(api.artifacts.ownerUnlock, { slug }))!.m!;
+    expect((await serve(t, slug, `?m=${m}`)).status).toBe(200);
+    // Swapping the user id in a genuine token does not make a token for them.
+    const forged = `${outsider}.${m.split(".")[1]}`;
+    expect((await serve(t, slug, `?m=${forged}`)).status).toBe(403);
+
+    await t.run(async (ctx: any) => {
+      const row = await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", member).eq("team_id", team)).first();
+      await ctx.db.delete(row._id);
+    });
+    expect((await serve(t, slug, `?m=${m}`)).status).toBe(403);
+    expect((await serve(t, slug, `/_data?m=${m}`)).status).not.toBe(200);
+    expect(await t.mutation(api.artifacts.recordView, { slug, m })).toEqual({ ok: false });
+    expect((await post(t, "/cli/artifacts/comment", { slug, author_name: "Mo", version: 1, comments: [{ text: "hi" }], m })).body.error).toContain("regulated data");
+    // The owner's link still opens it.
+    expect((await serve(t, slug, `?m=${ownerM}`)).status).toBe(200);
   });
 
   test("comments and views need the member token", async () => {
@@ -174,5 +206,44 @@ describe("team gate on a regulated team's pages", () => {
     const res = await post(t, "/cli/artifacts/attach", { api_token: apiToken, slug: body.slug, task: "ct-1" });
     expect(res.body.error).toBeUndefined();
     expect((await row(t, body.slug)).team_gate).toBe(team);
+  });
+});
+
+// F47: a team that turned public sharing off keeps its live data off open
+// pages, whichever device publishes, and a policy turned on later stops pages
+// already out there from serving it.
+describe("live data under a team's public-sharing-off policy", () => {
+  async function sharingSetup() {
+    const t = convexTest(schema, allModules);
+    const ids = await t.run(async (ctx) => {
+      const admin = await ctx.db.insert("users", { name: "Ada", email: "ada@co.dev" } as any);
+      const team = await ctx.db.insert("teams", { name: "Co", invite_code: "COCOCO12", created_at: 1 } as any);
+      await ctx.db.insert("team_memberships", { user_id: admin, team_id: team, role: "admin", joined_at: 1 } as any);
+      return { admin, team };
+    });
+    const as = (user: Id<"users">) => t.withIdentity({ subject: `${user}|session` });
+    return { t, ...ids, as };
+  }
+  const data = (team: Id<"teams">) => ({ workspace: `team:${team}`, queries: { done: { reader: "tasks", args: { view: "status" } } } });
+
+  test("publishing a team's live data from a personal device is refused while sharing is off", async () => {
+    const { t, admin, team, as } = await sharingSetup();
+    await as(admin).mutation(api.managedDevices.setTeamPolicy, { team_id: team, policy: { public_sharing_disabled: true } });
+    const res = await publish(t, await token(t, admin), { data: data(team) });
+    expect(res.status).toBe(403);
+    // Pages without the team's data still publish.
+    expect((await publish(t, await token(t, admin), { source_path: "/w/other.html" })).status).toBe(200);
+  });
+
+  test("a page published before the policy stops serving the team's data once it is on", async () => {
+    const { t, admin, team, as } = await sharingSetup();
+    const res = await publish(t, await token(t, admin), { data: data(team) });
+    expect(res.status).toBe(200);
+    const slug = res.body.slug as string;
+    expect((await serve(t, slug, "/_data")).status).toBe(200);
+    await as(admin).mutation(api.managedDevices.setTeamPolicy, { team_id: team, policy: { public_sharing_disabled: true } });
+    const blocked = await serve(t, slug, "/_data");
+    expect(blocked.status).toBe(403);
+    expect(blocked.text).not.toContain("columns");
   });
 });
