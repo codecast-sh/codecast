@@ -10,7 +10,7 @@
 // wrote would run the flow on part of its change, which is worse than carrying
 // a neighbour's edit the change names.
 import { buildCommits } from "../land/commitGroups.js";
-import { defaultMessage, freezeAndAttribute } from "../land/shipCheckout.js";
+import { defaultMessage, freezeAndAttribute, upstreamRef } from "../land/shipCheckout.js";
 import type { SessionEdits } from "../land/attribute.js";
 import { git } from "../wipSnapshot.js";
 import type { FrozenChange } from "./flowChangeFile.js";
@@ -39,7 +39,10 @@ async function lastCommitTimes(root: string, paths: string[]): Promise<Map<strin
 
 /** What a session's change would hold, read from the frozen tree: its files, the ones another session also wrote, and the ones held out. */
 export async function previewSessionChange(root: string, session: string, only?: ReadonlyArray<string> | null) {
-  const { frozen, attribution, credentials } = await freezeAndAttribute(root);
+  // Without an upstream, HEAD stands in: stale copies are still read from its history.
+  const upstream = await upstreamRef(root).catch(() => "HEAD");
+  const { frozen, attribution, credentials, stale } = await freezeAndAttribute(root, upstream);
+  const heldWhy = (p: string) => credentials.get(p) ?? (stale.has(p) ? `a stale copy: ${stale.get(p)!.reason}` : undefined);
   const mine = attribution.sessions.find((s) => sessionMatches(s, session));
   if (!mine) throw new Error(`No uncommitted change in ${root} was written by session ${session}`);
   // A write is in a file's uncommitted diff only when it came after the file's last commit.
@@ -48,8 +51,8 @@ export async function previewSessionChange(root: string, session: string, only?:
   // A session that changed more than this change names the files that belong to it (globs, repo-relative).
   const globs = (only ?? []).map((g) => new Bun.Glob(g));
   const wrote = frozen.changes.map((c) => c.path).filter((p) => inDiff(mine, p) && (!globs.length || globs.some((g) => g.match(p))));
-  const held = wrote.filter((p) => credentials.has(p)).map((p) => ({ path: p, why: credentials.get(p)! }));
-  const paths = wrote.filter((p) => !credentials.has(p)).sort();
+  const held = wrote.filter((p) => heldWhy(p)).map((p) => ({ path: p, why: heldWhy(p)! }));
+  const paths = wrote.filter((p) => !heldWhy(p)).sort();
   const shared = paths
     .map((p) => ({ path: p, also: attribution.sessions.filter((s) => s !== mine && inDiff(s, p)).map(idOf) }))
     .filter((s) => s.also.length);

@@ -23,7 +23,7 @@ writes files nobody in the checkout has changed.
 |---|---|---|
 | Freeze | The whole working tree becomes one git tree through the turn snapshot's private index. What ships is this tree: an agent writing a second later ships next time. | `commitGroups.ts`, `treeSnapshot.ts` |
 | Attribute | Each changed file goes to the session that wrote it last, read from the transcripts in the sync ledger (and workflow transcripts under their parent): Edit and Write calls, shell commands that write (sed -i, a python heredoc, a redirect, mv), Codex patches. Incremental: each transcript is read once, then only what it appended. | `attribute.ts` |
-| Plan | One group per session, titled from the session, with its state, whether it is mid-turn and its last words. Files named or shaped like credentials are held. The plan is written to `.git/codecast/ship-plan.json` and pins the frozen tree. | `shipCheckout.ts` `makePlan` |
+| Plan | One group per session, titled from the session, with its state, whether it is mid-turn and its last words. Files named or shaped like credentials are held, and so are stale copies: a file whose content is an older version of itself (it never caught up when HEAD moved), whose diff would revert the commits since. The plan is written to `.git/codecast/ship-plan.json` and pins the frozen tree. | `shipCheckout.ts` `makePlan` |
 | Judge | An agent (the `/deploy` flow, or a person) reads the plan: holds a group that is half done, splits or merges groups, rewrites messages. Optional: without it the default plan ships. | |
 | Commit | Each shipping group becomes a commit built from the frozen tree in a private index, with the session trailer when the session is team visible. | `buildCommits` |
 | Replay | The checkout's own unlanded commits, then the new ones, are rebased onto upstream in the object store (`git merge-tree --write-tree --merge-base`). A commit upstream already holds is dropped. | `replay.ts` |
@@ -37,6 +37,37 @@ and the pass about 6 seconds before the check and deploys.
 
 `mode = "pr"` (the default) pushes a branch and opens a pull request instead
 of pushing the default branch, and leaves the checkout's branch where it is.
+
+## Stale copies
+
+A checkout's HEAD can move while some of its files stay behind: it lagged
+upstream and caught up without rewriting them, a per-file level skipped them,
+a worktree's patch was applied on an older base. Against HEAD such a file
+reads as an edit that removes what later commits added, and shipping it
+replays those removals onto upstream as reverts (union-mobile, Nov 8: a
+73-commit batch undid e7fb2f23cc across eleven files). `land/staleCopy.ts`
+streams HEAD's recent history of the changed paths (`git log --raw -p -U0`,
+3000 commits or 60 days) and holds a changed file in the `stale` group when:
+
+- its frozen content is exactly an earlier version of that path;
+- it is absent, no session removed it, and a commit in the window added it;
+- it resembles an earlier version more than HEAD's, and most of the lines it
+  removes were added after that version;
+- a hunk of its frozen diff undoes a commit hunk whole: every line the commit
+  added is gone (and did not move to another changed file), what it removed
+  is back, and the frozen hunk adds no more than a genuine edit beside it
+  accounts for. Big real edits around the stale part do not hide it.
+
+The group's note names the commits each file would revert. Replayed on the
+Nov 8 batch (its first commit's parent as HEAD, its last tree as the freeze)
+it holds 24 of 926 files, every file that lost e7fb2f23cc among them.
+
+What it does not hold: removing part of a commit hunk (a function deleted
+from a file a recent commit created, which is how refactors read), rewriting
+lines a commit added, a file's creation, and anything older than the window.
+What it holds that may be meant: a session deliberately reverting a recent
+commit's hunk or restoring an earlier version of a file. A held path ships
+once a person moves it to another group.
 
 ## Configuration
 

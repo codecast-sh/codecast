@@ -27,10 +27,11 @@ import { MANIFEST_REL_PATH, parseManifest } from "../workspace/manifest.js";
 import type { ShipDeployStep, ShipSpec } from "../workspace/types.js";
 import { readDeployTargetEntries } from "../workspace/deployTargetsFile.js";
 import { attributeEdits, isMidTurn, type Attribution, type SessionEdits } from "./attribute.js";
-import { buildCommits, freezeWorktree, type Frozen } from "./commitGroups.js";
+import { buildCommits, freezeWorktree, frozenChanges, type Frozen } from "./commitGroups.js";
 import { levelCheckout, treeDiff, type LevelResult } from "./level.js";
 import { isAncestor, linearCommits, replayOnto } from "./replay.js";
 import { readBlobs, type RosterRow } from "./scan.js";
+import { findStaleCopies, type StaleFile } from "./staleCopy.js";
 
 export const PLAN_VERSION = 1;
 /** Transcripts older than this are never read for attribution. */
@@ -52,7 +53,7 @@ export interface ShipSession {
 }
 
 export interface ShipGroup {
-  /** "s:<session id>", "unattributed", "credentials", or anything the editor names. */
+  /** "s:<session id>", "unattributed", "credentials", "stale", or anything the editor names. */
   id: string;
   session: ShipSession | null;
   message: string;
@@ -186,11 +187,12 @@ function shipSession(s: SessionEdits, roster: Map<string, RosterRow>): ShipSessi
 
 /**
  * The working tree frozen as one git tree, each changed file's writers read
- * from the transcripts, and the files held as credentials (with why). The
- * first half of a ship plan, and what a flow's session freeze reads
- * (workflow/flowChange.ts).
+ * from the transcripts, the files held as credentials (with why), and the
+ * files that are stale copies of older versions rather than edits
+ * (staleCopy.ts). The first half of a ship plan, and what a flow's session
+ * freeze reads (workflow/flowChange.ts).
  */
-export async function freezeAndAttribute(root: string, log: Log = () => {}): Promise<{ frozen: Frozen; paths: string[]; attribution: Attribution; credentials: Map<string, string> }> {
+export async function freezeAndAttribute(root: string, upstream: string, log: Log = () => {}): Promise<{ frozen: Frozen; paths: string[]; attribution: Attribution; credentials: Map<string, string>; stale: Map<string, StaleFile> }> {
   const frozen = await freezeWorktree(root);
   const paths = frozen.changes.map((c) => c.path);
   log(`froze ${paths.length} changed file(s) at ${frozen.tree.slice(0, 9)}`);
@@ -203,7 +205,9 @@ export async function freezeAndAttribute(root: string, log: Log = () => {}): Pro
     const reason = credentialReason(change.path, change.blob ? texts.get(change.blob) ?? null : null);
     if (reason) credentials.set(change.path, reason);
   }
-  return { frozen, paths, attribution, credentials };
+  const stale = await findStaleCopies(root, { base: frozen.base, tree: frozen.tree, upstream, changes: frozen.changes.filter((c) => !credentials.has(c.path)), claimed: (p) => attribution.owners.has(p) });
+  if (stale.size) log(`holding ${stale.size} stale cop${stale.size === 1 ? "y" : "ies"} of older versions`);
+  return { frozen, paths, attribution, credentials, stale };
 }
 
 export async function makePlan(root: string, opts: { roster?: (ids: string[]) => Promise<RosterRow[] | null>; fetch?: boolean; log?: Log } = {}): Promise<ShipPlan> {
@@ -215,20 +219,29 @@ export async function makePlan(root: string, opts: { roster?: (ids: string[]) =>
     await gitTry(root, ["fetch", "--quiet", remote, branch]);
   }
 
-  const { frozen, paths, attribution, credentials: held } = await freezeAndAttribute(root, log);
+  const { frozen, paths, attribution, credentials: held, stale } = await freezeAndAttribute(root, upstream, log);
   const owning = [...new Set([...attribution.owners.values()].map((s) => s.conversationId?.slice(0, 7)).filter((id): id is string => !!id))];
   const rows = opts.roster && owning.length ? await opts.roster(owning).catch(() => null) : null;
   const roster = new Map((rows ?? []).filter((r) => r.short_id).map((r) => [r.short_id!, r]));
 
   const stats = await numstat(root, frozen.base, frozen.tree);
   const byKey = new Map<string, ShipGroup>();
-  const credentials: ShipGroup = { id: "credentials", session: null, message: "", paths: [], ship: false, note: "", stat: { files: 0, added: 0, removed: 0 }, last_edit: null };
+  const heldGroup = (id: string): ShipGroup => ({ id, session: null, message: "", paths: [], ship: false, note: "", stat: { files: 0, added: 0, removed: 0 }, last_edit: null });
+  const credentials = heldGroup("credentials");
+  const staleGroup = heldGroup("stale");
   const reasons: string[] = [];
+  const staleReasons: string[] = [];
   for (const change of frozen.changes) {
     const reason = held.get(change.path);
     if (reason) {
       credentials.paths.push(change.path);
       reasons.push(`${change.path}: ${reason}`);
+      continue;
+    }
+    const old = stale.get(change.path);
+    if (old) {
+      staleGroup.paths.push(change.path);
+      staleReasons.push(`${change.path}: ${old.reason}${old.reverts.length ? `; shipping it reverts ${old.reverts.slice(0, 5).join(", ")}${old.reverts.length > 5 ? ` and ${old.reverts.length - 5} more` : ""}` : ""}`);
       continue;
     }
     const owner = attribution.owners.get(change.path);
@@ -245,10 +258,14 @@ export async function makePlan(root: string, opts: { roster?: (ids: string[]) =>
     credentials.note = `Held: ${reasons.join("; ")}. Move a path to another group only if it holds no live secret.`;
     groups.push(credentials);
   }
+  if (staleGroup.paths.length) {
+    staleGroup.note = `Held as stale copies of older versions, not edits: ${staleReasons.join("; ")}. Bring each up to date with upstream (or restore it) before it ships; move a path to another group only if the removal is meant.`;
+    groups.push(staleGroup);
+  }
   for (const g of groups) {
     g.paths.sort();
     g.stat = g.paths.reduce((acc, p) => ({ files: acc.files + 1, added: acc.added + (stats.get(p)?.added ?? 0), removed: acc.removed + (stats.get(p)?.removed ?? 0) }), { files: 0, added: 0, removed: 0 });
-    if (!g.message) g.message = g.id === "credentials" ? "" : defaultMessage(g.session?.title ?? null, g.paths);
+    if (!g.message) g.message = g.ship ? defaultMessage(g.session?.title ?? null, g.paths) : "";
     const newest = Math.max(0, ...g.paths.map((p) => attribution.owners.get(p)?.edits.get(p) ?? mtimeOf(root, p)));
     g.last_edit = newest ? new Date(newest).toISOString() : null;
   }
@@ -299,7 +316,7 @@ export async function validatePlan(root: string, plan: ShipPlan): Promise<string
 }
 
 async function freezeChanges(root: string, plan: Pick<ShipPlan, "base" | "tree">): Promise<Frozen["changes"]> {
-  return (await treeDiff(root, plan.base, plan.tree)).map((e) => ({ path: e.path, blob: e.dst, mode: e.dst ? e.dstMode : e.srcMode, added: !e.src }));
+  return frozenChanges(await treeDiff(root, plan.base, plan.tree));
 }
 
 // ── run ──────────────────────────────────────────────────────────────────────

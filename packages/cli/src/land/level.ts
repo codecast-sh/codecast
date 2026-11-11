@@ -46,7 +46,7 @@ export interface LevelResult {
   reason?: string;
 }
 
-interface DiffEntry { path: string; srcMode: string; dstMode: string; src: string | null; dst: string | null }
+export interface DiffEntry { path: string; srcMode: string; dstMode: string; src: string | null; dst: string | null }
 
 type Action =
   | { kind: "absorb"; entry: DiffEntry }

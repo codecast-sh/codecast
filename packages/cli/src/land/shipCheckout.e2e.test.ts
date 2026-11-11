@@ -188,6 +188,77 @@ describe("cast ship checkout, direct mode", () => {
     expect(w.originLog()).toBe(before);
   });
 
+  test("stale copies of older versions are held with the commits they would revert; a genuine edit still ships", async () => {
+    const lines = (n: number, tag: string) => Array.from({ length: n }, (_, i) => `export const ${tag}${i} = ${i};`).join("\n") + "\n";
+    const base = lines(8, "core");
+    const w = world({ "copy.ts": base, "grown.ts": base, "edit.ts": base, "notes.md": "# notes\n" }, DIRECT);
+    const { shared } = w;
+    w.upstream({ "copy.ts": base + lines(5, "later"), "grown.ts": base + lines(6, "prospect") }, "feat: prospecting");
+    w.upstream({ "edit.ts": base + lines(3, "extra"), "added.ts": "export const added = 1;\n" }, "feat: extra");
+    // HEAD catches up while these files stay behind: the old copy, the old copy with a session's small edit, and a
+    // file upstream added that never reached the disk.
+    sh(shared, "pull", "-q", "--rebase");
+    write(shared, "copy.ts", base);
+    write(shared, "grown.ts", base + "export const mine = 1;\n");
+    fs.rmSync(path.join(shared, "added.ts"));
+    // A genuine edit removes a line that was there from the start, and adds one.
+    write(shared, "edit.ts", base.replace("export const core3 = 3;\n", "") + lines(3, "extra") + "export const fresh = 1;\n");
+    write(shared, "notes.md", "# notes\n\nmore\n");
+    transcript("sess-g", "jx7ggggggggggggggggggggggggggggg", [edit(shared, "edit.ts", 30_000), edit(shared, "grown.ts", 20_000)]);
+
+    const plan = await makePlan(shared, {});
+    const stale = plan.groups.find((g) => g.id === "stale")!;
+    expect(stale.ship).toBe(false);
+    expect(stale.paths).toEqual(["added.ts", "copy.ts", "grown.ts"]);
+    expect(stale.note).toContain("copy.ts: an exact copy of the version");
+    expect(stale.note).toContain("feat: prospecting");
+    expect(stale.note).toMatch(/grown\.ts: grew from the version \w+ left and would remove 6 of 6/);
+    expect(stale.note).toContain("added.ts: absent as it was before");
+    expect(plan.groups.find((g) => g.id === "s:jx7gggg")!.paths).toEqual(["edit.ts"]);
+    expect(plan.groups.find((g) => g.id === "unattributed")!.paths).toEqual(["notes.md"]);
+
+    const r = await runPlan(plan);
+    expect(r.reason).toBeUndefined();
+    expect(r.ok).toBe(true);
+    expect(r.held.map((h) => h.group)).toEqual(["stale"]);
+    // Upstream keeps the work the stale copies would have reverted; the genuine edit landed.
+    expect(w.originFile("copy.ts")).toContain("later4");
+    expect(w.originFile("grown.ts")).toContain("prospect5");
+    expect(w.originFile("added.ts")).toBe("export const added = 1;");
+    expect(w.originFile("edit.ts")).toContain("fresh");
+    expect(w.originFile("edit.ts")).not.toContain("core3 = 3");
+  });
+
+  test("a big genuine edit with a stale hunk inside is held and names the commit it reverts; a partial removal from a new file ships", async () => {
+    const base = Array.from({ length: 20 }, (_, i) => `export const l${i} = ${i};`);
+    const w = world({ "outreach.ts": base.join("\n") + "\n" }, DIRECT);
+    const { shared } = w;
+    // Upstream replaces one line and inserts a block; another commit creates a file.
+    const upstreamVersion = [...base.slice(0, 5), `export const l5 = "prospect";`, ...base.slice(6, 11), "export function prospect() {", "  return findPeopleOutsideNetwork();", "}", ...base.slice(11)];
+    w.upstream({ "outreach.ts": upstreamVersion.join("\n") + "\n" }, "feat: cockpit prospecting");
+    const fresh = Array.from({ length: 5 }, (_, i) => `export const fresh${i} = ${i};`);
+    w.upstream({ "fresh.ts": fresh.join("\n") + "\n" }, "feat: fresh file");
+    sh(shared, "pull", "-q", "--rebase");
+    // A session's large real edit, written on top of the version before the prospecting commit.
+    const edited = base.map((l, i) => (i % 3 === 0 && i !== 5 ? l.replace(" = ", " = 100 + ") : l));
+    write(shared, "outreach.ts", [...edited, ...Array.from({ length: 20 }, (_, i) => `export const market${i} = ${i};`)].join("\n") + "\n");
+    // A real edit to the new file: two of its lines go, one is added.
+    write(shared, "fresh.ts", [...fresh.slice(0, 3), "export const fresher = 1;"].join("\n") + "\n");
+    transcript("sess-h", "jx7hhhhhhhhhhhhhhhhhhhhhhhhhhhhh", [edit(shared, "outreach.ts", 30_000), edit(shared, "fresh.ts", 20_000)]);
+
+    const plan = await makePlan(shared, {});
+    const stale = plan.groups.find((g) => g.id === "stale")!;
+    expect(stale.paths).toEqual(["outreach.ts"]);
+    expect(stale.note).toMatch(/outreach\.ts: undoes 2 hunk\(s\) of 1 later commit\(s\).*feat: cockpit prospecting/);
+    expect(plan.groups.find((g) => g.id === "s:jx7hhhh")!.paths).toEqual(["fresh.ts"]);
+
+    const r = await runPlan(plan);
+    expect(r.reason).toBeUndefined();
+    expect(r.ok).toBe(true);
+    expect(w.originFile("outreach.ts")).toContain("findPeopleOutsideNetwork");
+    expect(w.originFile("fresh.ts")).toContain("fresher");
+  });
+
   test("the checkout's own commits ship first, replayed onto upstream", async () => {
     const w = world({ "x.ts": "1\n", "y.ts": "1\n" }, DIRECT);
     const { shared } = w;

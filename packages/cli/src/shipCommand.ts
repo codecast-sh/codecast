@@ -152,7 +152,8 @@ whatever changed since. --hold, --only, --commits-only and --message work on
 
 The plan file (.git/codecast/ship-plan.json, and --dry-run --json prints the
 same object plus plan_file and ship) holds groups[], each with:
-  id        s:<session>, unattributed, or credentials (held: a likely secret)
+  id        s:<session>, unattributed, credentials (held: a likely secret), or
+            stale (held: an older version of the file, whose diff would revert later commits)
   session   who wrote it: id, title, state, mid_turn, last_text; null when unattributed
   message   the commit message
   paths     its files; move one to another group to split or regroup

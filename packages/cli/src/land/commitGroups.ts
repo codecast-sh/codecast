@@ -13,15 +13,20 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createTurnSnapshot } from "../treeSnapshot.js";
 import { git } from "../wipSnapshot.js";
-import { treeDiff, withIndexLockRetry } from "./level.js";
+import { treeDiff, withIndexLockRetry, type DiffEntry } from "./level.js";
 
 export interface Frozen {
   /** HEAD when the tree was frozen. */
   base: string;
   /** The working tree as a git tree. */
   tree: string;
-  /** Every path whose frozen content differs from HEAD's, with its frozen blob (null when deleted). */
-  changes: Array<{ path: string; blob: string | null; mode: string; added: boolean }>;
+  /** Every path whose frozen content differs from HEAD's, with its frozen blob (null when deleted) and HEAD's (`from`, null when added). */
+  changes: Array<{ path: string; blob: string | null; from: string | null; mode: string; added: boolean }>;
+}
+
+/** A base-to-frozen tree diff as the changes a freeze holds. */
+export function frozenChanges(entries: DiffEntry[]): Frozen["changes"] {
+  return entries.map((e) => ({ path: e.path, blob: e.dst, from: e.src, mode: e.dst ? e.dstMode : e.srcMode, added: !e.src }));
 }
 
 export async function freezeWorktree(root: string): Promise<Frozen> {
@@ -31,7 +36,7 @@ export async function freezeWorktree(root: string): Promise<Frozen> {
   return {
     base: snap.base,
     tree: snap.tree,
-    changes: entries.map((e) => ({ path: e.path, blob: e.dst, mode: e.dst ? e.dstMode : e.srcMode, added: !e.src })),
+    changes: frozenChanges(entries),
   };
 }
 
