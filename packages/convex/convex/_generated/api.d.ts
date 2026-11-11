@@ -299,6 +299,7 @@ import type * as lib_groupPeople from "../lib/groupPeople.js";
 import type * as lib_groupWrite from "../lib/groupWrite.js";
 import type * as lib_guardedFetch from "../lib/guardedFetch.js";
 import type * as lib_hash from "../lib/hash.js";
+import type * as lib_heartbeatTailnet from "../lib/heartbeatTailnet.js";
 import type * as lib_hmac from "../lib/hmac.js";
 import type * as lib_hogqlNow from "../lib/hogqlNow.js";
 import type * as lib_httpRateLimit from "../lib/httpRateLimit.js";
@@ -997,6 +998,7 @@ declare const fullApi: ApiFromModules<{
   "lib/groupWrite": typeof lib_groupWrite;
   "lib/guardedFetch": typeof lib_guardedFetch;
   "lib/hash": typeof lib_hash;
+  "lib/heartbeatTailnet": typeof lib_heartbeatTailnet;
   "lib/hmac": typeof lib_hmac;
   "lib/hogqlNow": typeof lib_hogqlNow;
   "lib/httpRateLimit": typeof lib_httpRateLimit;

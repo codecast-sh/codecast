@@ -9,7 +9,7 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { allModules } from "./testModules.testkit";
 import { hashToken } from "./apiTokens";
-import { heartbeatTailnetArg, heartbeatTailnetPatch } from "./users";
+import { heartbeatTailnetArg, heartbeatTailnetPatch } from "./lib/heartbeatTailnet";
 
 setDefaultTimeout(120_000);
 
@@ -79,17 +79,17 @@ describe("listDevices and setDeviceDirectLinks", () => {
   test("the owner sees tailnet and direct_links_off; the switch flips only its own machine", async () => {
     const { t, as, owner, other, token, beat } = await setup();
     await beat(TAILNET);
-    await as(owner).mutation(api.devices.setDeviceDirectLinks, { device_id: "there", enabled: false });
+    await as(owner).mutation(api.peerLinks.setDeviceDirectLinks, { device_id: "there", enabled: false });
     const rows = await as(owner).query(api.devices.listDevices, {});
     const here = rows.find((d: any) => d.device_id === "here")!;
     expect(here.tailnet).toEqual(TAILNET);
     expect(here.direct_links_off).toBeUndefined();
     expect(rows.find((d: any) => d.device_id === "there")).toMatchObject({ direct_links_off: true });
 
-    await t.mutation(api.devices.setDeviceDirectLinks, { api_token: token, device_id: "there", enabled: true });
+    await t.mutation(api.peerLinks.setDeviceDirectLinks, { api_token: token, device_id: "there", enabled: true });
     expect((await as(owner).query(api.devices.listDevices, {})).find((d: any) => d.device_id === "there")!.direct_links_off).toBeUndefined();
 
-    await expect(as(other).mutation(api.devices.setDeviceDirectLinks, { device_id: "there", enabled: false })).rejects.toThrow("Unknown device");
+    await expect(as(other).mutation(api.peerLinks.setDeviceDirectLinks, { device_id: "there", enabled: false })).rejects.toThrow("Unknown device");
     expect((await as(other).query(api.devices.listDevices, {})).map((d: any) => d.device_id)).toEqual(["bos-mac"]);
   });
 });

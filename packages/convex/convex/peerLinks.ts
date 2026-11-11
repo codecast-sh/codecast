@@ -60,3 +60,16 @@ export const listPeerLinks = query({
     return await ctx.db.query("peer_links").withIndex("by_user", (q) => q.eq("user_id", userId)).collect();
   },
 });
+
+/** Settings → Machines "Accept direct links": off keeps folderSync from asking this machine for a direct grant. */
+export const setDeviceDirectLinks = mutation({
+  args: { api_token: v.optional(v.string()), device_id: v.string(), enabled: v.boolean() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const device = await ownDevice(ctx, userId, args.device_id);
+    if (!device) throw new Error("Unknown device");
+    await ctx.db.patch(device._id, { direct_links_off: args.enabled ? undefined : true });
+    return { direct_links_off: !args.enabled };
+  },
+});

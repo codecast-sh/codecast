@@ -1290,8 +1290,7 @@ export const listDevices = query({
         pending_sync_messages: d.pending_sync_messages ?? undefined,
         pending_sync_conversations: d.pending_sync_conversations ?? undefined,
         sync_no_progress_ms: d.sync_no_progress_ms ?? undefined,
-        // Owner-only, like ssh_host: where the machine sits on a tailnet and
-        // whether it accepts direct links (peer-transport.md).
+        // Owner-only, like ssh_host (peer-transport.md).
         tailnet: d.tailnet ?? undefined,
         direct_links_off: d.direct_links_off ?? undefined,
         online: now - d.last_seen < DEVICE_ONLINE_MS,
@@ -1611,16 +1610,6 @@ export const setDeviceSshHost = mutation({
     }
     await ctx.db.patch(device._id, { ssh_host: cleaned ?? undefined });
     return { ssh_host: cleaned };
-  },
-});
-
-/** Settings → Machines "Accept direct links": off keeps folderSync from asking this machine for a direct grant. */
-export const setDeviceDirectLinks = mutation({
-  args: { api_token: v.optional(v.string()), device_id: v.string(), enabled: v.boolean() },
-  handler: async (ctx, args) => {
-    const { device } = await requireOwnDevice(ctx, args.api_token, args.device_id);
-    await ctx.db.patch(device._id, { direct_links_off: args.enabled ? undefined : true });
-    return { direct_links_off: !args.enabled };
   },
 });
 

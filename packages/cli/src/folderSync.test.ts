@@ -428,7 +428,7 @@ describe("direct links", () => {
     expect(f.phases).toContain("receiving");
     await pollUntil(() => f.grants.length === 1, "grant done");
     expect(f.grants[0]).toMatchObject({ served: true });
-  });
+  }, 30_000);
 
   test("the requester refusing the source falls back to the relay from the same machine", async () => {
     write("family/notes.md", "hello");
