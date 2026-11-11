@@ -74,7 +74,8 @@ export function missingFolderError(recordedPath: string): string {
 }
 
 // The same refusal for a session that already ran somewhere else.
-export function missingResumeFolderError(recordedPath: string): string {
+export function missingResumeFolderError(recordedPath: string, peerFailure?: string): string {
+  if (peerFailure) return `${recordedPath} isn't on this machine and couldn't be fetched from your other machines: ${peerFailure}`;
   return `${recordedPath} isn't on this machine and no repository is recorded to clone. Move the session to a machine that has it.`;
 }
 
