@@ -72,6 +72,8 @@ function Dead({ noun, onRetry }: { noun: string; onRetry?: () => void }) {
   );
 }
 
+const wideAttr = (w: boolean | "full" | undefined) => (w === "full" ? "full" : w ? "" : undefined);
+
 export function SharedObjectPage<T>({
   kind,
   query,
@@ -87,8 +89,8 @@ export function SharedObjectPage<T>({
   noun: string;
   /** A rail beside the column on wide screens (a doc's outline). */
   aside?: (data: T) => ReactNode;
-  /** The object is a picture, not prose: the column widens to the page. */
-  wide?: boolean;
+  /** The object is a picture, not prose: the column widens ("full": to the whole page). A function decides per object. */
+  wide?: boolean | "full" | ((data: T) => boolean | "full");
   children: (data: T) => ReactNode;
 }) {
   const token = useParams().token as string;
@@ -113,7 +115,7 @@ export function SharedObjectPage<T>({
         <span className="share-kind">shared {noun}</span>
         <CopyPageLink />
       </header>
-      <div className="share-layout" data-aside={rail ? "" : undefined} data-wide={wide ? "" : undefined}>
+      <div className="share-layout" data-aside={rail ? "" : undefined} data-wide={wideAttr(typeof wide === "function" ? wide(data) : wide)}>
         {rail}
         <article className="share-col">{children(data)}</article>
       </div>
