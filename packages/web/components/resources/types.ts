@@ -101,6 +101,8 @@ export type OffloadPlan = {
   deviceId: string;
   /** The source's sample the plan was built from: the base every "after the move" figure is computed against. */
   sourceSample: ResourcePoint;
+  /** When the source's process list was captured, if earlier than the sample: per-session usage is that old. */
+  usageAt?: number;
   /** Sustained pressure on the source, when there is any; a plan is offered either way. */
   incident: ResourceIncident | null;
   generatedAt: number;

@@ -22,6 +22,7 @@ export const resourceSnapshot = v.object({
   })),
   groups: v.array(v.object({ kind, cpu: v.number(), rss: v.number(), processCount: v.number() })),
   omittedProcessCount: v.number(), collectionDurationMs: v.number(), limitations: v.array(v.string()),
+  processesAt: v.optional(v.number()),
 });
 export const machineResourceTables = {
   machine_resources: defineTable({

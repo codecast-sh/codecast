@@ -9,8 +9,10 @@ import { getLabelColor } from "../../lib/labelColors";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { modernPill, modernPillShape } from "../ui/modernLook";
 
-export function DocRow({ doc, onStar, timeKey = "updated_at" }: {
+export function DocRow({ doc, onStar, timeKey = "updated_at", match }: {
   doc: DocItem;
+  /** The words inside the doc a search matched, shown after its title. */
+  match?: string;
   /** The time the row shows: the list's sort key (created or updated), so
    *  the column agrees with the order. */
   timeKey?: "created_at" | "updated_at";
@@ -38,7 +40,14 @@ export function DocRow({ doc, onStar, timeKey = "updated_at" }: {
       >
         <Star className={`w-3 h-3 ${doc.pinned ? "fill-current" : ""}`} />
       </button>
-      <span className="flex-1 text-sol-text truncate min-w-0">{title}</span>
+      {match ? (
+        <>
+          <span className="shrink text-sol-text truncate min-w-0 max-w-[45%]">{title}</span>
+          <span className="flex-1 text-sol-text-dim truncate min-w-0" data-doc-match>{match}</span>
+        </>
+      ) : (
+        <span className="flex-1 text-sol-text truncate min-w-0">{title}</span>
+      )}
       {docOrigin(doc) === "agent" && (
         <span className="flex-shrink-0 cq-hide-compact" title={`${doc.source} created`}><Bot className="w-3.5 h-3.5 text-sol-text-dim/60" /></span>
       )}

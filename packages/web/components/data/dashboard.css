@@ -9,19 +9,9 @@
   gap: 16px;
 }
 .data-cell { grid-column: span 12; }
-.data-cell[data-span="3"] { grid-column: span 3; }
-.data-cell[data-span="4"] { grid-column: span 4; }
-.data-cell[data-span="6"] { grid-column: span 6; }
-.data-cell[data-span="8"] { grid-column: span 8; }
-
-/* Two columns, then one, as the dashboard's own width narrows (a side panel open, a pane, a phone). */
-@container (max-width: 860px) {
-  .data-cell[data-span="3"], .data-cell[data-span="4"] { grid-column: span 6; }
-  .data-cell[data-span="6"], .data-cell[data-span="8"] { grid-column: span 12; }
-}
+/* Spans are set per block from its packed row (packSpans), so they follow the grid's own width. */
 @container (max-width: 480px) {
   .data-grid { gap: 12px; }
-  .data-cell[data-span] { grid-column: span 12; }
 }
 
 .data-drop { position: absolute; background: var(--sol-blue); border-radius: 2px; pointer-events: none; z-index: 5; }
@@ -67,6 +57,37 @@
   .story-step { grid-template-columns: minmax(0, 5fr) minmax(0, 8fr); gap: 56px; }
   .story-words { position: sticky; top: 22vh; }
 }
+/* Scrollyteller: words scroll past a pinned stage that swaps to the step being read. */
+.scrolly-group { position: relative; display: grid; grid-template-columns: 1fr; }
+.scrolly-stage { position: sticky; top: 0; z-index: 1; height: 56vh; padding: 12px 0; background: var(--sol-bg); }
+.scrolly-stage-inner { position: relative; height: 100%; }
+.scrolly-visual {
+  position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center;
+  opacity: 0; transform: translateY(12px) scale(0.985); pointer-events: none;
+  transition: opacity 0.5s ease, transform 0.6s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.scrolly-visual.is-on { opacity: 1; transform: none; pointer-events: auto; }
+.scrolly-steps { position: relative; z-index: 2; }
+/* One column: the stage holds the top half, so a step's words sit low, under the chart, never over its axis. */
+.scrolly-step { min-height: 85vh; display: flex; align-items: flex-end; padding-bottom: 6vh; }
+.scrolly-card {
+  max-width: 520px; padding: 18px 20px; border-radius: 14px;
+  background: color-mix(in srgb, var(--sol-card) 94%, transparent); border: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
+  opacity: 0.45; transition: opacity 0.4s ease;
+}
+.scrolly-card.is-on { opacity: 1; }
+@container (min-width: 900px) {
+  .scrolly-group { grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 56px; }
+  .scrolly-stage { grid-column: 2; grid-row: 1; top: 4vh; height: 76vh; padding: 0; background: none; }
+  .scrolly-steps { grid-column: 1; grid-row: 1; }
+  .scrolly-step { min-height: 70vh; align-items: center; padding-bottom: 0; }
+  .scrolly-step:first-child { margin-top: 0; }
+  .scrolly-card { background: none; border-color: transparent; padding: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .scrolly-visual, .scrolly-card { transition: none; }
+}
+
 /* A narrow pane gets a portrait stage so a beat's headline, number and line all fit. */
 @container (max-width: 640px) {
   .data-stage { aspect-ratio: 4 / 5; }
