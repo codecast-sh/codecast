@@ -7,7 +7,8 @@
 // visible, `want` tells the server which queries the blocks bind to, and it
 // starts one refresh for each answer past its interval. The answer arrives
 // through the results feed like any other change.
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
+import { useWatchEffect } from "./useWatchEffect";
 import { useAction, useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { dashboard, type ArtifactElement } from "@codecast/shared/artifacts";
@@ -35,7 +36,7 @@ export function useDashboardFeed(docId: string, blocks: readonly ArtifactElement
   const want = useMutation(api.dataRefresh.want);
   const wantShared = useMutation(api.dataRefresh.wantShared);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!docId || !opts.canWant) return;
     let first = true;
     const send = () => {
