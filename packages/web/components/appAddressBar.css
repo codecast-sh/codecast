@@ -59,7 +59,7 @@
 
 .aab-group {
   padding: 4px 16px 4px;
-  font-size: 10px;
+  font-size: var(--fs-mark);
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;

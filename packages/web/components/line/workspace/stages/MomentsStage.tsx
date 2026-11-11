@@ -79,7 +79,7 @@ function KindCard({ k, now, open, href }: { k: LineKindRow; now: number; open: (
         <span className="sd-spacer" />
         <span className="sd-counts">
           {(["waiting", "extracting", "ready", "failed", "skipped"] as const).map((s) => (
-            <span key={s} data-tone={k.counts[s] ? STATUS_TONE[s] : "dim"}><b className="lw-num">{k.counts[s].toLocaleString("en-US")}</b> {s}</span>
+            <span key={s} data-tone={k.counts[s] ? STATUS_TONE[s] : "dim"}><b className="lw-num">{(k.counts[s] ?? 0).toLocaleString("en-US")}</b> {s}</span>
           ))}
         </span>
       </header>

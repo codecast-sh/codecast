@@ -271,6 +271,8 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   lineTries: "Written only by tryLineStep, which has the graph's machine run each case at once; never undoable.",
   liveFlows: "Written only by setLiveFlowOn and clearLiveFlowHold, which start or stop runs, moveLiveFlow, which picks the graph new runs take, and startLiveFlow, a create; never undoable.",
   sessionFlows: "Written only by saveSessionFlow, which writes a new library version; never undoable.",
+  liveElements:
+    "Written only by applyLiveOps and liveDraft, neither undoable here: a board, sheet or dashboard takes an edit back through its own undo stack of inverse ops, which it writes as ordinary applyLiveOps.",
   modObjects:
     "Written by createModObject, a create and never undoable, and updateModObject, whose spec carries an inverse naming the prior fields.",
   agentTasks:

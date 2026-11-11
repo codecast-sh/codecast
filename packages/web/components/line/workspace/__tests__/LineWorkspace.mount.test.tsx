@@ -116,7 +116,7 @@ test("the nav: For you first with its count, then the stages on a rail, the open
   search = "view=flows";
   useInboxStore.setState({ sessionDecisions: { d1: { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, task_id: "t1", workflow_run_id: "a", created_at: now - 3_600_000, question: "Ship it?", options: [{ label: "Ship" }, { label: "Drop" }] } } } as any);
   const { host, root } = await mount(React.createElement(LineWorkspace));
-  expect([...host.querySelectorAll<HTMLElement>("[data-pipeline-stage]")].map((b) => b.dataset.pipelineStage)).toEqual(["decisions", "signals", "problems", "flows", "shipped"]);
+  expect([...host.querySelectorAll<HTMLElement>("[data-pipeline-stage]")].map((b) => b.dataset.pipelineStage)).toEqual(["decisions", "volume", "signals", "problems", "flows", "shipped"]);
   expect([...host.querySelectorAll<HTMLElement>("[data-pipeline-rail] [data-pipeline-stage]")].map((b) => b.dataset.pipelineStage)).toEqual(["signals", "problems", "flows", "shipped"]);
   // The library sits under Flows.
   expect(host.querySelector("[data-pipeline-stage='flows']")?.getAttribute("aria-current")).toBe("page");

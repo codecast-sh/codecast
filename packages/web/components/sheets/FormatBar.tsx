@@ -2,11 +2,10 @@
 // italic / underline, alignment, text and fill color, borders, number
 // formats and decimals, conditional color, table style, more actions, and
 // Ask agent on the selection. Every control shows the active cell's state.
-import { AskButton, useAskDraft, useClaimAsk } from "../live/AskAgentControl";
-
-/** The sheet's Ask draft: its words survive closing the bar and a cancelled start. */
-export const SHEET_ASK_SLOT = "sheet-ask";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { AskButton } from "../live/AskAgentControl";
+import { useAskDraft, useClaimAsk } from "../live/askAgent";
+import { SHEET_ASK_SLOT } from "./askSlot";
+import { useRef, useState, type ReactNode } from "react";
 import {
   AlignCenter,
   AlignLeft,
@@ -37,6 +36,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
 import { solVar, tint } from "./cellPaint";
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 export type FormatAction =
   | { type: "style"; patch: Record<string, unknown> }
@@ -163,17 +164,17 @@ export function FormatBar({
   const [asking, setAsking] = useState(!!autoAsk);
   // This bar is the page's Ask: the shell's header button steps aside.
   useClaimAsk();
-  useEffect(() => { if (autoAsk) setAsking(true); }, [autoAsk]);
+  useWatchEffect(() => { if (autoAsk) setAsking(true); }, [autoAsk]);
   const barRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
-  useEffect(() => {
+  useMountEffect(() => {
     // Below ~760px of room the rarer controls fold into More.
     const host = barRef.current?.parentElement;
     if (!host) return;
     const ro = new ResizeObserver(() => setCompact(host.clientWidth < 760));
     ro.observe(host);
     return () => ro.disconnect();
-  }, []);
+  });
   const { text: prompt, setText: setPrompt } = useAskDraft(docId, SHEET_ASK_SLOT, () => setAsking(true));
   const mod = isMac ? "⌘" : "Ctrl";
   if (readOnly) return null;
