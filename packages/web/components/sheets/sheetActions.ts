@@ -1,9 +1,11 @@
 // The sheet's pure helpers and the handlers that write through live.apply
 // (format, copy, paste), lifted out of SheetView so the view stays readable.
 // Handlers read the view's state through SheetCtx, refreshed on every render.
+import { createElement } from "react";
 import { toast } from "sonner";
-import { Workbook, a1, borderOps, cellNum, clearOps, clipOf, formatValue, gridOps, inputOps, moveOps, isFormula, tokenize, newElementKey, normRect, parseQualifiedRange, parseTsv, pasteClipOps, rectA1, sortOps, structuralOps, styleOf, styleOps, tabPatchOps, toTsv, inheritedFormat, shiftFormula, type PaletteColor, type Rect, type SheetClip, type SheetModel, type TabData, type QuerySource } from "./sheetCore";
-import type { EditStore } from "./editStore";
+import { PasteHint } from "./SheetMenus";
+import { Workbook, mergeAt, mergeOps, unmergeOps, condOps, hideOps, parseFormula, validateInput, validationAt, a1, borderOps, cellNum, clearOps, clipOf, formatValue, gridOps, inputOps, moveOps, isFormula, tokenize, newElementKey, normRect, parseQualifiedRange, parseTsv, pasteClipOps, rectA1, sortOps, structuralOps, styleOf, styleOps, tabPatchOps, toTsv, inheritedFormat, shiftFormula, type PaletteColor, type Rect, type SheetClip, type SheetModel, type TabData, type QuerySource } from "./sheetCore";
+import { finishInput, type EditStore } from "./editStore";
 import type { AxisLayout } from "./layout";
 import type { FormatAction } from "./FormatBar";
 import type { MutableRefObject, Dispatch, SetStateAction } from "react";
@@ -18,7 +20,7 @@ export type Sel = { anchor: { col: number; row: number }; focus: { col: number; 
 export type Menu = { kind: "cell" | "colHeader" | "rowHeader"; col: number; row: number } | { kind: "tab"; tabId: string };
 
 /** Internal clipboard: cell fields with their origin, so a paste here shifts formulas. */
-let lastClip: { id: string; docId: string; tabId: string; rect: Rect; clip: SheetClip; cut: boolean } | null = null;
+let lastClip: { id: string; docId: string; tabId: string; rect: Rect; clip: SheetClip; cut: boolean; text: string } | null = null;
 export const CLIP_MIME = "application/x-codecast-sheet";
 
 export function selRect(s: Sel): Rect {
@@ -185,16 +187,20 @@ export function formatSelection(a: FormatAction, c: SheetCtx) {
         apply(borderOps(model, activeTabId, rect, a.mode));
         break;
       case "cond": {
-        const range = rectA1(rect);
-        const existing = model.conds.filter((c) => c.tab === activeTabId && rectA1(c.rect) === range);
         if (a.rule === "clear") {
           const hits = model.conds.filter((c) => c.tab === activeTabId && c.rect.c0 <= rect.c1 && c.rect.c1 >= rect.c0 && c.rect.r0 <= rect.r1 && c.rect.r1 >= rect.r0);
           apply(hits.map((c) => ({ k: c.key, del: true as const })));
         } else {
-          apply([{ k: existing[0]?.key ?? newElementKey("cf"), put: { kind: "cf", tab: activeTabId, range, rule: a.rule, ...(a.color ? { color: a.color } : {}) } }]);
+          apply(condOps(model, activeTabId, rect, a.rule, undefined, a.color));
         }
         break;
       }
+      case "rules":
+        c.openRules();
+        break;
+      case "merge":
+        apply(a.on ? mergeOps(model, activeTabId, rect) : unmergeOps(model, activeTabId, rect));
+        break;
       case "table": {
         const hits = model.tables.filter((t) => t.tab === activeTabId && t.rect.c0 <= rect.c1 && t.rect.c1 >= rect.c0 && t.rect.r0 <= rect.r1 && t.rect.r1 >= rect.r0);
         if (!a.color) apply(hits.map((t) => ({ k: t.key, del: true as const })));
@@ -210,7 +216,7 @@ export function formatSelection(a: FormatAction, c: SheetCtx) {
         const hasHeader = region.r0 <= tab.meta.frozenRows || (filter && filter.row === region.r0) || isHeaderRow(wb, activeTabId, region);
         const body = { ...region, r0: hasHeader ? region.r0 + 1 : region.r0 };
         apply(sortOps(model, wb, activeTabId, body, sel.anchor.col, a.desc));
-        toast(`Sorted ${rectA1(body)} by ${a1(sel.anchor.col, body.r0).replace(/\d+/, "")} ${a.desc ? "Z→A" : "A→Z"}`);
+        toast(`Sorted ${rectA1(body)} by ${a1(sel.anchor.col, body.r0).replace(/\d+/, "")} ${a.desc ? "Z→A" : "A→Z"}`, { action: { label: "Undo", onClick: () => c.live.undo() } });
         break;
       }
       case "filter": {
@@ -263,11 +269,13 @@ export function writeSheetClipboard(e: React.ClipboardEvent, cut: boolean, c: Sh
     });
     const id = Math.random().toString(36).slice(2, 10);
     const clipRect = { ...rect, c1, r1: rowsList[rowsList.length - 1] ?? rect.r0 };
-    e.clipboardData.setData("text/plain", toTsv(grid));
-    e.clipboardData.setData("text/html", `<table>${grid.map((r) => `<tr>${r.map((v) => `<td>${escapeHtml(v)}</td>`).join("")}</tr>`).join("")}</table>`);
+    const tsv = toTsv(grid);
+    e.clipboardData.setData("text/plain", tsv);
+    // The system clipboard keeps only text and HTML (Chrome drops custom types), so the HTML carries the copy's id.
+    e.clipboardData.setData("text/html", `<table data-codecast-clip="${id}">${grid.map((r) => `<tr>${r.map((v) => `<td>${escapeHtml(v)}</td>`).join("")}</tr>`).join("")}</table>`);
     // Our own payload names the copy, so a paste knows it came from here (and whether it is a move).
     e.clipboardData.setData(CLIP_MIME, JSON.stringify({ id, doc: docId }));
-    lastClip = { id, docId: docId, tabId: activeTabId, rect: clipRect, clip: clipOf(model, activeTabId, clipRect, rowsList), cut };
+    lastClip = { id, docId: docId, tabId: activeTabId, rect: clipRect, clip: clipOf(model, activeTabId, clipRect, rowsList), cut, text: tsv };
     setCopyRect({ tab: activeTabId, rect: clipRect });
 }
 
@@ -283,6 +291,9 @@ export function pasteSheetClipboard(e: React.ClipboardEvent, c: SheetCtx) {
       mine = null;
     }
     const text = e.clipboardData.getData("text/plain");
+    // Our own copy, recognized by its id (custom type, else the HTML), else by being exactly the text we put there.
+    const htmlId = e.clipboardData.getData("text/html").match(/data-codecast-clip="([a-z0-9]+)"/)?.[1];
+    if (!mine && lastClip && (htmlId === lastClip.id || (text && text === lastClip.text))) mine = { id: lastClip.id, doc: lastClip.docId };
     const valuesOnly = pasteValuesRef.current;
     pasteValuesRef.current = false;
     if (!valuesOnly && mine && lastClip && lastClip.id === mine.id && lastClip.docId === docId) {
@@ -310,6 +321,120 @@ export function pasteSheetClipboard(e: React.ClipboardEvent, c: SheetCtx) {
       }
     }
     setCopyRect(null);
+}
+
+/**
+ * What an edit commits: the input (a listed dropdown value takes its listed
+ * case), or why not: a formula that doesn't parse, or a strict cell's refusal.
+ */
+export function checkCommit(model: SheetModel, e: { tab: string; col: number; row: number; text: string }): { input: string } | { error: string } | { refuse: string } {
+  const typed = finishInput(e.text);
+  if (typed.startsWith("=") && typed.length > 1) {
+    try {
+      parseFormula(typed.slice(1));
+    } catch (x) {
+      return { error: x instanceof Error ? x.message : "This formula can't be read" };
+    }
+  }
+  return validateInput(validationAt(model, e.tab, e.col, e.row), typed);
+}
+
+/** Column widths as the layout takes them: hidden columns at zero. */
+export function layoutWidths(tab: TabData): Map<number, number> {
+  if (!tab.hiddenCols?.size) return tab.colWidths;
+  const widths = new Map(tab.colWidths);
+  for (const c of tab.hiddenCols) widths.set(c, 0);
+  return widths;
+}
+
+/** Arrow-key movement: a step (over hidden lines and out of merges), or with jump the Ctrl/⌘+arrow edge of the data. */
+export function moveSelection(dc: number, dr: number, extend: boolean, jump: boolean, S: MutableRefObject<SheetState>, select: (next: Sel, opts?: { reveal?: boolean }) => void) {
+  const { sel, cols, rows, tab } = S.current;
+  const from = extend ? sel.focus : sel.anchor;
+  let col = from.col, row = from.row;
+  // Stepping out of a merged cell starts from its far edge in the direction of travel.
+  const inMerge = !extend && mergeAt(S.current.model, S.current.activeTabId, col, row);
+  if (inMerge) {
+    col = dc > 0 ? inMerge.rect.c1 : dc < 0 ? inMerge.rect.c0 : col;
+    row = dr > 0 ? inMerge.rect.r1 : dr < 0 ? inMerge.rect.r0 : row;
+  }
+  if (jump) {
+    // Ctrl/⌘+arrow: to the edge of the current run of data, or the next data.
+    const has = (c: number, r: number) => {
+      const el = tab.cells.get(cellNum(c, r));
+      return !!el && typeof el.input === "string" && el.input !== "";
+    };
+    const limitC = Math.max(tab.cols, 1), limitR = Math.max(tab.rows, 1);
+    const step = () => {
+      const nc = col + dc, nr = row + dr;
+      if (nc < 1 || nr < 1 || (dc > 0 && nc > limitC) || (dr > 0 && nr > limitR)) return false;
+      col = nc;
+      row = nr;
+      return true;
+    };
+    const startFilled = has(col, row);
+    const nextFilled = has(col + dc, row + dr);
+    if (startFilled && nextFilled) {
+      while (has(col + dc, row + dr) && step());
+    } else {
+      while (step() && !has(col, row));
+    }
+  } else {
+    for (let i = 0; i < Math.abs(dc); i++) col = cols.step(col, dc > 0 ? 1 : -1);
+    for (let i = 0; i < Math.abs(dr); i++) row = rows.step(row, dr > 0 ? 1 : -1);
+  }
+  col = Math.max(1, Math.min(cols.count, col));
+  row = Math.max(1, Math.min(rows.count, row));
+  select(extend ? { anchor: sel.anchor, focus: { col, row } } : { anchor: { col, row }, focus: { col, row } });
+}
+
+/** Show the run of hidden columns or rows that ends just before `at` (the header mark's click). */
+export function unhideBefore(axis: "col" | "row", at: number, c: SheetCtx) {
+  const { model, activeTabId, tab } = c.S.current;
+  const hidden = axis === "col" ? tab.hiddenCols : tab.hiddenRows;
+  const run: number[] = [];
+  for (let i = at - 1; i >= 1 && hidden?.has(i); i--) run.push(i);
+  if (run.length) c.apply(hideOps(model, activeTabId, axis, run, false));
+}
+
+/** Hide the selected columns or rows; unhiding also shows hidden ones at the selection's edges, so selecting around a gap works. */
+export function hideSelection(axis: "col" | "row", hide: boolean, c: SheetCtx) {
+  const { model, activeTabId, rect, tab } = c.S.current;
+  const lo = axis === "col" ? rect.c0 : rect.r0, hi = axis === "col" ? rect.c1 : rect.r1;
+  const indices: number[] = [];
+  for (let i = lo; i <= Math.min(hi, lo + 5000); i++) indices.push(i);
+  if (!hide) {
+    const hidden = axis === "col" ? tab.hiddenCols : tab.hiddenRows;
+    for (let i = lo - 1; i >= 1 && hidden?.has(i); i--) indices.push(i);
+    for (let i = hi + 1; hidden?.has(i); i++) indices.push(i);
+  }
+  c.apply(hideOps(model, activeTabId, axis, indices, hide));
+}
+
+/** The cell menu's Cut / Copy / Paste: copy and cut run the sheet's own handlers; paste reads the system clipboard. */
+export function sheetClipboardCommand(kind: "cut" | "copy" | "paste" | "values", c: SheetCtx) {
+  if (kind === "cut" || kind === "copy") {
+    c.sinkRef.current?.focus({ preventScroll: true });
+    document.execCommand(kind);
+    return;
+  }
+  void (async () => {
+    try {
+      const items = await navigator.clipboard.read();
+      const data = new Map<string, string>();
+      for (const item of items) for (const type of item.types) if (type === "text/plain" || type === "text/html") data.set(type, await (await item.getType(type)).text());
+      if (kind === "values") c.pasteValuesRef.current = true;
+      pasteSheetClipboard({ preventDefault() {}, clipboardData: { getData: (t: string) => data.get(t) ?? "" } } as unknown as React.ClipboardEvent, c);
+    } catch {
+      // The browser won't hand over the clipboard: paste the sheet's own last copy if there is one, else point at the keys.
+      if (lastClip && lastClip.docId === c.docId) {
+        if (kind === "values") c.pasteValuesRef.current = true;
+        const clip = lastClip;
+        const fake = { preventDefault() {}, clipboardData: { getData: (t: string) => (t === CLIP_MIME ? JSON.stringify({ id: clip.id, doc: clip.docId }) : t === "text/plain" ? clip.text : "") } };
+        pasteSheetClipboard(fake as unknown as React.ClipboardEvent, c);
+      } else toast(createElement(PasteHint));
+    }
+  })();
 }
 
 export type SheetState = {
@@ -355,5 +480,11 @@ export type SheetCtx = {
   setFillPreview: (v: Rect | null) => void;
   setFindOpen: (v: boolean) => void;
   /** Open the dropdown or date picker of a validated cell (the active one by default); false when it has none. */
-  openPicker: (col?: number, row?: number) => boolean;
+  openPicker: (col?: number, row?: number, query?: string) => boolean;
+  /** Where a run of Tab entries started, so Enter goes back to that column on the next row (null outside a run). */
+  tabRunRef: MutableRefObject<number | null>;
+  /** Comment on the active cell (its open thread, or a new one). */
+  openCellComment: () => void;
+  /** Open the conditional color rules panel. */
+  openRules: () => void;
 };

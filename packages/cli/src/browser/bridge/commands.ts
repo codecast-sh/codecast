@@ -27,6 +27,7 @@ import { BRIDGE_EXTENSION_ID, BRIDGE_STORE_URL, bridgePairingUrl } from "./proto
 import { connectRealBridge, hostBrowserChoice, hostOwnsBrowser, isRealMode, requireRealBridge, setStickyTarget, stickyTarget } from "./real.js";
 import { CHROME_LAUNCHER_NAME, installChromeLauncher, openInRealChrome, REAL_CHROME_LAUNCH_ARGS, restartRealChrome, settlePairingPage } from "./realChrome.js";
 import { ownedDesktopPane, PANE_HOW_TO } from "../desktopPane.js";
+import { agentSetupPageLink } from "../../agentSetupPage.js";
 
 const OK = `${fmt.success(icons.check)}`;
 const BAD = `${fmt.error(icons.cross)}`;
@@ -159,6 +160,8 @@ function printConnectedProfiles(s: BridgeHostStatus): void {
  * is a person's reaction time, not a socket's.
  */
 const PAIRING_WAIT_MS = 30_000;
+/** How long setup at a terminal waits for the human to finish the Web Store install. */
+const INSTALL_WAIT_MS = 10 * 60_000;
 
 export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): void {
   const { me } = deps;
@@ -221,7 +224,7 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       // Which profile gets the pairing. Chrome opens a URL in its last-used
       // profile unless told otherwise, and the extension's page in a profile
       // without the extension is `chrome-extension://invalid`.
-      const found = extensionProfiles();
+      let found = extensionProfiles();
       let chosen: RealProfile | null = null;
       if (o.profile) {
         if (!found.known) die("Chrome's profile list could not be read on this machine, so --profile cannot be matched.");
@@ -234,14 +237,36 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
       const installedInChosen = !!chosen && found.withExtension.some((p) => p.dir === chosen!.dir);
       if (found.known && !installedInChosen && !o.json) {
         // Nothing to pair with: the extension's page would only be an error.
-        // The store page, in the profile that should get it, is the next step.
+        // The setup page, in the profile that should get it, explains what
+        // this is and carries the install button; at a terminal this command
+        // then waits for the install and goes straight on to pairing.
         const where = chosen ?? found.all.find((p) => p.lastUsed) ?? found.all[0];
-        const opened = openInRealChrome(BRIDGE_STORE_URL, where ? [`--profile-directory=${where.dir}`] : []);
+        const page = agentSetupPageLink("browser");
+        const opened = openInRealChrome(page, where ? [`--profile-directory=${where.dir}`] : []);
         console.log(`${WARN} Codecast is not installed in ${chosen ? `Chrome profile ${describeProfile(chosen)}` : "any Chrome profile"}`);
-        console.log(`  ${opened ? "Opened" : "Open"} ${fmt.highlight(BRIDGE_STORE_URL)}${opened && where ? ` in ${describeProfile(where)}` : ""}`);
-        console.log(`  Install it in the profile agents should work in, then run ${fmt.highlight(o.profile ? `cast browser extension setup --profile "${o.profile}"` : "cast browser extension setup")} again.`);
+        console.log(`  ${opened ? "Opened" : "Open"} ${fmt.highlight(page)}${opened && where ? ` in ${describeProfile(where)}` : ""} and click ${fmt.highlight("Add to Chrome")}`);
         if (found.withExtension.length) console.log(fmt.muted(`  installed in: ${found.withExtension.map(describeProfile).join(", ")}`));
-        return;
+        const rerun = o.profile ? `cast browser extension setup --profile "${o.profile}"` : "cast browser extension setup";
+        if (!(process.stdin.isTTY && process.stdout.isTTY)) {
+          console.log(`  Install it in the profile agents should work in, then run ${fmt.highlight(rerun)} again.`);
+          return;
+        }
+        console.log(fmt.muted(`  Waiting for the install${where ? ` in ${describeProfile(where)}` : ""}… (Ctrl C to stop)`));
+        const deadline = Date.now() + INSTALL_WAIT_MS;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 2_000));
+          found = extensionProfiles();
+          const landed = found.withExtension.find((p) => (where ? p.dir === where.dir : true));
+          if (landed) {
+            chosen = landed;
+            break;
+          }
+        }
+        if (!chosen || !found.withExtension.some((p) => p.dir === chosen!.dir)) {
+          console.log(`${WARN} no install seen in ${INSTALL_WAIT_MS / 60_000} minutes. Install it, then run ${fmt.highlight(rerun)} again.`);
+          return;
+        }
+        console.log(`${OK} installed in ${describeProfile(chosen)}`);
       }
       let state;
       try {
@@ -338,7 +363,10 @@ export function registerBridgeCommands(br: Command, deps: BridgeCommandDeps): vo
           }
         }
         const paired = !!state?.extensionSeenAt || connected;
-        console.log(JSON.stringify({ paired, connected, chrome_running: !!realChromePid(), ...(detail ? { detail } : {}) }));
+        // Reads Chrome's profile prefs from disk: no Chrome launch, nothing on screen.
+        const profiles = extensionProfiles();
+        const installed = connected || (profiles.known ? profiles.withExtension.length > 0 : undefined);
+        console.log(JSON.stringify({ ...(installed !== undefined ? { installed } : {}), paired, connected, chrome_running: !!realChromePid(), ...(detail ? { detail } : {}) }));
         return;
       }
       if (printLaptopBrowser()) return;

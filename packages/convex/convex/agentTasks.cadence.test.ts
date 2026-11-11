@@ -135,3 +135,13 @@ test("a one-shot that books a recheck stays armed instead of finishing", async (
   await complete(ctx, { api_token: "test", task_id: task._id, summary: "done" });
   expect(task.status).toBe("completed");
 });
+
+test("a running trigger takes --every, which restates its schedule type", async () => {
+  const { ctx, task } = await fixture({ status: "running", interval_ms: 2 * 3_600_000 });
+  const actor = { userId: "users_one" as any, source: "cli" as const };
+  // The CLI sends schedule_type with every --every; the same type is no change.
+  expect((await applyTaskUpdate(ctx, task, { schedule_type: "recurring", interval_ms: D } as any, actor)).ok).toBe(true);
+  expect(task.interval_ms).toBe(D);
+  // A different schedule type still waits for the run to end.
+  expect((await applyTaskUpdate(ctx, task, { schedule_type: "once" } as any, actor)).ok).toBe(false);
+});

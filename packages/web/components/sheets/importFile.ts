@@ -2,7 +2,7 @@
 // text, or an Excel workbook (.xlsx, one table per worksheet, with formulas,
 // shared strings and date formats). No dependency: an .xlsx is a zip of XML,
 // read here with the browser's DecompressionStream.
-import { parseTable, serialToDate } from "@codecast/shared/artifacts/sheets";
+import { parseTable, serialToDate, shiftFormula } from "@codecast/shared/artifacts/sheets";
 
 export type ImportedTable = { name: string; grid: string[][] };
 
@@ -15,7 +15,20 @@ export async function readSheetFile(file: File): Promise<ImportedTable[]> {
   const base = file.name.replace(/\.[^.]+$/, "") || "Imported";
   if (/\.xlsx$/i.test(file.name) || file.type.includes("spreadsheetml")) return readXlsx(new Uint8Array(await file.arrayBuffer()));
   if (/\.xls$/i.test(file.name)) throw new Error("Old .xls files can't be read. Save it as .xlsx or .csv");
-  return [{ name: base, grid: parseTable(await file.text()).slice(0, MAX_ROWS) }];
+  return [{ name: base, grid: parseTable(await file.text()).slice(0, MAX_ROWS).map((row) => row.map(keepAsText)) }];
+}
+
+/**
+ * A value from a file that should stay exactly as written: zip codes and ids
+ * with leading zeros (02134), digit strings too long for a number (card or
+ * order ids), and anything starting with "=" (a CSV is data; running its
+ * formulas would let a file compute against the sheet). Marked as text the
+ * way a person types it: a leading apostrophe.
+ */
+export function keepAsText(v: string): string {
+  const t = v.trim();
+  if (/^0\d+$/.test(t) || /^\d{16,}$/.test(t) || /^[=+@]/.test(t) || (t.startsWith("-") && /^-[^\d.]/.test(t))) return `'${v}`;
+  return v;
 }
 
 // ── Zip ─────────────────────────────────────────────────────────────────────
@@ -68,11 +81,16 @@ const attr = (tag: string, name: string) => tag.match(new RegExp(`\\s${name}="([
 /** All text runs of a string item (<si>), joined: rich text keeps its words. */
 const textOf = (xml: string) => [...xml.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)].map((m) => unescape(m[1])).join("");
 
-/** Built-in Excel number formats that are dates (14 to 22, 45 to 47). */
+/** Built-in Excel number formats: dates (14 to 22, 45 to 47), percents (9, 10), currency (5 to 8, 44). */
 const DATE_FMT_IDS = new Set([14, 15, 16, 17, 18, 19, 20, 21, 22, 45, 46, 47]);
+const PERCENT_FMT_IDS = new Set([9, 10]);
+const CURRENCY_FMT_IDS = new Set([5, 6, 7, 8, 44]);
 
-function dateStyles(stylesXml: string | undefined): Set<number> {
-  const out = new Set<number>();
+type CellKind = "date" | "percent" | "currency";
+
+/** What each cell style shows a number as, so an import types it the same way ("12%", "$1,200", a date). */
+function styleKinds(stylesXml: string | undefined): Map<number, CellKind> {
+  const out = new Map<number, CellKind>();
   if (!stylesXml) return out;
   const custom = new Map<number, string>();
   for (const m of stylesXml.matchAll(/<numFmt\s[^>]*>/g)) custom.set(Number(attr(m[0], "numFmtId")), unescape(attr(m[0], "formatCode") ?? ""));
@@ -80,8 +98,11 @@ function dateStyles(stylesXml: string | undefined): Set<number> {
   [...xfs.matchAll(/<xf\s[^>]*?\/?>/g)].forEach((m, i) => {
     const id = Number(attr(m[0], "numFmtId") ?? 0);
     const code = custom.get(id);
+    const bare = code?.replace(/"[^"]*"|\[[^\]]*\]/g, "") ?? "";
     // A custom code is a date when it names days, months or years outside quotes and brackets.
-    if (DATE_FMT_IDS.has(id) || (code && /[dmy]/i.test(code.replace(/"[^"]*"|\[[^\]]*\]/g, "")))) out.add(i);
+    if (DATE_FMT_IDS.has(id) || (code && /[dmy]/i.test(bare))) out.set(i, "date");
+    else if (PERCENT_FMT_IDS.has(id) || bare.includes("%")) out.set(i, "percent");
+    else if (CURRENCY_FMT_IDS.has(id) || code?.includes("$")) out.set(i, "currency");
   });
   return out;
 }
@@ -101,7 +122,7 @@ export async function readXlsx(bytes: Uint8Array): Promise<ImportedTable[]> {
   const wb = text("xl/workbook.xml");
   if (!wb) throw new Error("This file isn't a valid .xlsx");
   const shared = [...(text("xl/sharedStrings.xml") ?? "").matchAll(/<si>([\s\S]*?)<\/si>/g)].map((m) => textOf(m[1]));
-  const dates = dateStyles(text("xl/styles.xml"));
+  const kinds = styleKinds(text("xl/styles.xml"));
   // Sheet name -> part path, through the workbook's relationships.
   const rels = new Map<string, string>();
   for (const m of (text("xl/_rels/workbook.xml.rels") ?? "").matchAll(/<Relationship\s[^>]*>/g)) {
@@ -114,6 +135,8 @@ export async function readXlsx(bytes: Uint8Array): Promise<ImportedTable[]> {
     const xml = text(rels.get(attr(m[0], "r:id") ?? "") ?? "");
     if (!xml) continue;
     const grid: string[][] = [];
+    /** Shared formulas: Excel writes the first of a run in full and the rest by its id; each copy shifts from the first. */
+    const sharedF = new Map<string, { text: string; col: number; row: number }>();
     for (const c of xml.matchAll(/<c\s([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
       const tag = ` ${c[1]}`;
       const ref = attr(tag, "r");
@@ -123,17 +146,29 @@ export async function readXlsx(bytes: Uint8Array): Promise<ImportedTable[]> {
       const col = colIndexOf(ref);
       const body = c[2] ?? "";
       const type = attr(tag, "t");
-      const formula = body.match(/<f(?:\s[^>]*)?>([\s\S]*?)<\/f>/)?.[1];
+      const fTag = body.match(/<f(\s[^>]*?)?(?:\/>|>([\s\S]*?)<\/f>)/);
+      const si = fTag ? attr(` ${fTag[1] ?? ""}`, "si") : undefined;
+      let formula = fTag?.[2] ? unescape(fTag[2]) : undefined;
+      if (si !== undefined) {
+        const first = sharedF.get(si);
+        if (formula) sharedF.set(si, { text: formula, col, row });
+        else if (first) formula = shiftFormula(`=${first.text}`, col - first.col, row - first.row).slice(1);
+      }
       const v = body.match(/<v>([\s\S]*?)<\/v>/)?.[1];
       let input: string;
-      if (formula) input = `=${unescape(formula)}`;
-      else if (type === "s") input = shared[Number(v)] ?? "";
-      else if (type === "inlineStr") input = textOf(body);
+      if (formula) input = `=${formula}`;
+      else if (type === "s") input = keepAsText(shared[Number(v)] ?? "");
+      else if (type === "inlineStr") input = keepAsText(textOf(body));
       else if (type === "b") input = v === "1" ? "TRUE" : "FALSE";
       else if (type === "str" || type === "e") input = unescape(v ?? "");
-      else if (v !== undefined && dates.has(Number(attr(tag, "s") ?? -1))) {
-        const d = serialToDate(Number(v));
-        input = `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`;
+      else if (v !== undefined && kinds.has(Number(attr(tag, "s") ?? -1))) {
+        const n = Number(v);
+        const kind = kinds.get(Number(attr(tag, "s")));
+        if (kind === "date") {
+          const d = serialToDate(n);
+          input = `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`;
+        } else if (kind === "percent") input = `${Number((n * 100).toPrecision(12))}%`;
+        else input = n < 0 ? `-$${-n}` : `$${n}`;
       } else input = v ?? "";
       // Text that would read as a formula stays text.
       if (!formula && input.startsWith("=")) input = `'${input}`;

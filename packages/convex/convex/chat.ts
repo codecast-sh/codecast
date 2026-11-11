@@ -595,7 +595,7 @@ export const listChannels = query({
       (c) => !isRestricted(c) || myRestricted.has(c._id.toString()),
     );
 
-    const { reads, rail } = await railFor(ctx, userId, channels);
+    const { reads, rail, unread_dm_messages } = await railFor(ctx, userId, channels);
     // Slack mirrors for the channels on this page (slackSync). Rides the same
     // subscription so the rail and header can show the mirror mark from the
     // store without a second feed.
@@ -606,7 +606,7 @@ export const listChannels = query({
         .withIndex("by_team", (q: any) => q.eq("team_id", teamId))
         .collect()
     ).filter((l) => visibleIds.has(l.chat_channel_id.toString()));
-    return { team_id: teamId, channels, reads, rail, slack_links: await slackLinksWithSendAuth(ctx, slack_links, userId) };
+    return { team_id: teamId, channels, reads, rail, unread_dm_messages, slack_links: await slackLinksWithSendAuth(ctx, slack_links, userId) };
   },
 });
 
@@ -707,7 +707,7 @@ async function railFor(
   ctx: ReadCtx,
   userId: Id<"users"> | null,
   channels: Doc<"chat_channels">[],
-): Promise<{ reads: Doc<"chat_reads">[]; rail: ChatRailRow[] }> {
+): Promise<{ reads: Doc<"chat_reads">[]; rail: ChatRailRow[]; unread_dm_messages: Doc<"chat_messages">[] }> {
   const allReads = userId
     ? await ctx.db
       .query("chat_reads")
@@ -719,6 +719,10 @@ async function railFor(
     channels.some((c) => c._id.toString() === r.channel_id.toString()));
 
   const rail: ChatRailRow[] = [];
+  // A DM's unread lines themselves, from the rows already read to count them:
+  // the client caches them in the same push that raises the badge, so a face
+  // that says "unread" opens onto the lines with nothing left to fetch.
+  const unread_dm_messages: Doc<"chat_messages">[] = [];
   for (const channel of channels) {
     const read = readByChannel.get(channel._id.toString());
     const lastReadAt = read?.last_read_at ?? 0;
@@ -765,6 +769,9 @@ async function railFor(
     const tally = userId
       ? tallyUnread(unreadRows, lastReadAt, userId.toString(), { isDm: channel.kind === "dm" })
       : { unread: 0, mentions: 0 };
+    if (channel.kind === "dm" && tally.unread > 0) {
+      for (const m of unreadRows) if (!m.deleted_at && visible(m) && !isSilentAgentRow(m)) unread_dm_messages.push(m);
+    }
 
     rail.push({
       channel_id: channel._id,
@@ -809,7 +816,7 @@ async function railFor(
     });
   }
 
-  return { reads, rail };
+  return { reads, rail, unread_dm_messages };
 }
 
 // One page of a channel, newest-first internally and returned oldest-first.

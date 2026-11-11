@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import { agentSetupPagePath } from "@codecast/shared/contracts";
 import { SOL } from "../../blog/blogChrome";
 import { BLOCKED_APPS, CURSOR_ORANGE, DO_PLAN, DO_RESULTS, DO_WORDS, ERRORS, FLAGS, GRANTS, OUTCOMES, ROUTES, VERB_GROUPS } from "./data";
 import { AgentCursorGlyph, C, HumanCursorGlyph, Lights, Term, TermLineView } from "./parts";
@@ -282,7 +284,7 @@ export function SetupPanel() {
           height={575}
         />
         <p className="text-[15px] leading-relaxed" style={{ color: SOL.base00 }}>
-          In {b("Agent features")}, switch on the {b("Computer")} card. It lists the two grants still missing, and its {b("Open System Settings")} button opens the pane for the next one. When both land, the card reads {b("Permissions granted")}.
+          The <Link href={agentSetupPagePath("computer")} className="underline underline-offset-2">setup page</Link> grants both from the browser, or in {b("Agent features")}, switch on the {b("Computer")} card. It lists the two grants still missing, and its {b("Open System Settings")} button opens the pane for the next one. When both land, the card reads {b("Permissions granted")}.
         </p>
         <p className="text-[15px] leading-relaxed" style={{ color: SOL.base00 }}>
           In the desktop app, {b("Settings")}, {b("Desktop")}, {b("Permissions")} shows them under {b("Agent computer use")} as Computer control and Computer screenshots. If an agent reaches for an app before they are granted, the same steps appear as a card under its step in the conversation, with {b("Tell the agent to continue")} once they are done.
