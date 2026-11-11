@@ -27,6 +27,7 @@
 import type { EventEmitter } from "node:events";
 import { setTimeout as sleep } from "node:timers/promises";
 import { agentSetupLines } from "@codecast/shared/contracts";
+import { agentSetupPageLink } from "../agentSetupPage.js";
 import { askYesNo } from "../terminalAsk.js";
 import { ComputerError } from "./errors.js";
 import type { ComputerPermissionApi } from "./run.js";
@@ -76,6 +77,8 @@ export interface ComputerSetupDeps {
   /** Registers a Ctrl C handler and answers with the way to remove it. */
   onCancel: (fn: () => void) => () => void;
   log?: (line: string) => void;
+  /** The web setup page for this machine, offered when nobody is at a terminal. */
+  setupPage?: () => string;
   pollIntervalMs?: number;
   pollTimeoutMs?: number;
 }
@@ -200,6 +203,7 @@ async function allowed(
   if (!deps.isTty()) {
     say("This is not a terminal, so there is nobody here to confirm, and nothing will be opened.");
     say("Run `cast computer setup` in a terminal, or pass --yes to open the panes without asking.");
+    if (deps.setupPage) say(`Or grant them from a browser: ${deps.setupPage()}`);
     for (const line of agentSetupLines("computer")) say(line);
     return false;
   }
@@ -227,6 +231,7 @@ export function defaultSetupDeps(permissions: ComputerPermissionApi, isTty: () =
     },
     confirm: askYesNo,
     isTty,
+    setupPage: () => agentSetupPageLink("computer"),
     wait: (ms) => sleep(ms) as Promise<void>,
     onCancel: (fn) => {
       // Through the plain emitter surface: `process.removeListener` is typed

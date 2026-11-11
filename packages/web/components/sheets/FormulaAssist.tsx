@@ -3,7 +3,7 @@
 // the signature of the call the caret sits in with the current argument
 // marked, and the full function list behind the fx mark.
 import { useState } from "react";
-import { FN_CATEGORIES, FUNCTION_DOCS, FUNCTION_NAMES, argIndexFor, argLabel, type FnCategory } from "@codecast/shared/artifacts/sheets";
+import { FN_CATEGORIES, FUNCTION_DOCS, FUNCTION_NAMES, argHelp, argIndexFor, argLabel, type FnCategory } from "@codecast/shared/artifacts/sheets";
 import type { FormulaAssist } from "./useFormulaAssist";
 import "./formulaAssist.css";
 
@@ -38,7 +38,11 @@ export function AssistPopup({ assist, style }: { assist: FormulaAssist; style: R
   return (
     <div className="sheet-assist sheet-assist-hint" style={style} data-sheet-arg-hint>
       <Signature name={call.name} arg={argIndexFor(call.name, call.arg)} />
-      <span className="sheet-assist-about">{FUNCTION_DOCS[call.name].about}</span>
+      {argHelp(call.name, argIndexFor(call.name, call.arg)) ? (
+        <span className="sheet-assist-arg">{argHelp(call.name, argIndexFor(call.name, call.arg))}</span>
+      ) : (
+        <span className="sheet-assist-about">{FUNCTION_DOCS[call.name].about}</span>
+      )}
     </div>
   );
 }

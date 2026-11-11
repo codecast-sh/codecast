@@ -51,7 +51,11 @@ async function pageCtx(choice: TargetChoice, deps: PublishDeps): Promise<PageCtx
 }
 
 async function engineTab(choice: TargetChoice, deps: PublishDeps): Promise<SessionTab> {
-  const ctx = await pageCtx(choice, deps);
+  return engineTabFor(await pageCtx(choice, deps));
+}
+
+/** The tab of a browser the engine verbs already chose (cliEngine ctx). */
+export async function engineTabFor(ctx: PageCtx): Promise<SessionTab> {
   await ensurePinnedTab(ctx.session);
   const tab = await connectToTab(ctx);
   if ("error" in tab) throw Object.assign(new Error(tab.error), { hint: tab.hint });

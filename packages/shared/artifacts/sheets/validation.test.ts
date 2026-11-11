@@ -71,7 +71,7 @@ describe("import verb", () => {
   });
 });
 
-import { validateInput } from "./ops";
+import { validateInput } from "./ruleOps";
 describe("validateInput", () => {
   const list = { rule: "list" as const, options: [{ v: "Offer" }, { v: "Screen" }], strict: true };
   test("strict lists refuse, take any case, and leave formulas and blanks alone", () => {
@@ -85,5 +85,120 @@ describe("validateInput", () => {
     const date = { rule: "date" as const, options: [], strict: true };
     expect(validateInput(date, "2026-11-12")).toEqual({ input: "2026-11-12" });
     expect("refuse" in validateInput(date, "soon")).toBe(true);
+  });
+});
+
+import { enforceValidation } from "./ruleOps";
+describe("enforceValidation", () => {
+  test("strict cells drop refused writes from any batch; listed values take their case", () => {
+    const d = doc(sheetSpec.seed!());
+    d.verb("validate", ["B2:B10", "list", "Open,Done", "--strict"]);
+    const m = buildModel(d.elements());
+    const id = m.tabs[0].id;
+    const r = enforceValidation(m, [
+      { k: `c:${id}!B2`, put: { kind: "cell", input: "Hired" } },
+      { k: `c:${id}!B3`, set: { input: "done" } },
+      { k: `c:${id}!C3`, put: { kind: "cell", input: "anything" } },
+      { k: `c:${id}!B4`, set: { b: true } },
+    ]);
+    expect(r.refused).toBe(1);
+    expect(r.ops.map((o) => o.k)).toEqual([`c:${id}!B3`, `c:${id}!C3`, `c:${id}!B4`]);
+    expect((r.ops[0] as any).set.input).toBe("Done");
+  });
+});
+
+describe("hide and unhide", () => {
+  test("columns and rows hide and show, keep their size, and read in describe", () => {
+    const d = doc(sheetSpec.seed!());
+    d.verb("width", ["B", "200"]);
+    d.verb("hide", ["cols", "B:C"]);
+    d.verb("hide", ["rows", "4"]);
+    let t = buildModel(d.elements()).byId.get(buildModel(d.elements()).tabs[0].id)!;
+    expect([...t.hiddenCols!].sort()).toEqual([2, 3]);
+    expect([...t.hiddenRows!]).toEqual([4]);
+    expect(t.colWidths.get(2)).toBe(200);
+    expect(sheetSpec.describe(d.view())).toContain("hidden cols B,C · hidden rows 4");
+    const live = new LiveSheet();
+    live.update(d.elements());
+    d.verb("unhide", ["cols", "B:C"]);
+    live.update(d.elements());
+    t = buildModel(d.elements()).byId.get(buildModel(d.elements()).tabs[0].id)!;
+    expect(t.hiddenCols?.size ?? 0).toBe(0);
+    expect(t.colWidths.get(2)).toBe(200);
+    expect(live.model.byId.get(t.meta.id)!.hiddenCols?.size ?? 0).toBe(0);
+    expect([...live.model.byId.get(t.meta.id)!.hiddenRows!]).toEqual([4]);
+  });
+});
+
+import { formatValue } from "./format";
+describe("number formats", () => {
+  test("accounting, scientific, other currencies and custom codes", () => {
+    expect(formatValue(-1234.5, { nf: "accounting" })).toBe("($1,234.50)");
+    expect(formatValue(1234.5, { nf: "currency", cur: "€" })).toBe("€1,234.50");
+    expect(formatValue(12345.678, { nf: "scientific" })).toBe("1.23E+04");
+    expect(formatValue(1234.56, { nf: "custom", code: '#,##0.0 "kg"' })).toBe("1,234.6 kg");
+  });
+  test("the fmt verb sets them and describe reads them back", () => {
+    const d = doc(sheetSpec.seed!());
+    d.verb("write", ["A1"], "1234.5\n2");
+    d.verb("fmt", ["A1", "cur=€"]);
+    d.verb("fmt", ["A2", 'code="0.0 \\"kg\\""']);
+    const out = sheetSpec.describe(d.view());
+    expect(out).toContain("nf=currency cur=€");
+    expect(out).toContain("nf=custom");
+    expect(sheetSpec.verbs!.range.run(d.view(), ["A1:A2"]).status).toBe("1234.5\n2");
+  });
+});
+
+describe("conditional rules", () => {
+  test("date rules and text rules stack on one range; describe lists them", () => {
+    const d = doc(sheetSpec.seed!());
+    d.verb("cond", ["C2:C40", "before", "today", "red"]);
+    d.verb("cond", ["C2:C40", "after", "2026-12-31", "green"]);
+    d.verb("cond", ["C2:C40", "before", "today", "orange"]);
+    const conds = buildModel(d.elements()).conds;
+    expect(conds.map((c) => [c.rule, c.value, c.color])).toEqual([["before", "today", "orange"], ["after", "2026-12-31", "green"]]);
+    expect(sheetSpec.describe(d.view())).toContain("cond C2:C40 before today orange");
+  });
+});
+
+import { expandToMerges } from "./ruleOps";
+describe("merged cells", () => {
+  test("merge, describe, selection expands, unmerge; inserting a row moves the merge", () => {
+    const d = doc(sheetSpec.seed!());
+    d.verb("merge", ["A1:D1"]);
+    let m = buildModel(d.elements());
+    expect(m.merges.map((x) => x.rect)).toEqual([{ c0: 1, r0: 1, c1: 4, r1: 1 }]);
+    expect(sheetSpec.describe(d.view())).toContain("merged A1:D1");
+    expect(expandToMerges(m, m.tabs[0].id, { c0: 2, r0: 1, c1: 2, r1: 2 })).toEqual({ c0: 1, r0: 1, c1: 4, r1: 2 });
+    d.apply(structuralOps(m, m.tabs[0].id, "row", 1, 1));
+    m = buildModel(d.elements());
+    expect(m.merges[0].rect).toEqual({ c0: 1, r0: 2, c1: 4, r1: 2 });
+    d.verb("unmerge", ["B2"]);
+    expect(buildModel(d.elements()).merges).toHaveLength(0);
+  });
+});
+
+describe("agents and strict cells", () => {
+  test("set into a strict dropdown is skipped and says so", () => {
+    const d = doc(sheetSpec.seed!());
+    d.verb("validate", ["B2:B10", "list", "Open,Done", "--strict"]);
+    const r = sheetSpec.verbs!.set.run(d.view(), ["B2", "Maybe"]);
+    expect(r.status).toContain("skipped 1 value");
+    expect(r.ops.some((o) => o.k.endsWith("!B2"))).toBe(false);
+    expect(sheetSpec.verbs!.set.run(d.view(), ["B2", "done"]).ops.find((o) => o.k.endsWith("!B2"))).toBeTruthy();
+  });
+});
+
+import { mergeOps } from "./ruleOps";
+describe("merge keeps the top-left value only", () => {
+  test("other values in the range are cleared and counted", () => {
+    const d = doc(sheetSpec.seed!());
+    d.verb("write", ["A1"], "keep\tlost\nalso");
+    const m = buildModel(d.elements());
+    const ops = mergeOps(m, m.tabs[0].id, { c0: 1, r0: 1, c1: 2, r1: 2 });
+    expect(ops.dropped).toBe(2);
+    d.apply(ops);
+    expect(sheetSpec.verbs!.range.run(d.view(), ["A1:B2"]).status).toBe("keep\t\n\t");
   });
 });

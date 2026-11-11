@@ -63,6 +63,8 @@ export interface MachineResourceSnapshot {
   omittedProcessCount: number;
   collectionDurationMs: number;
   limitations: string[];
+  /** Set when the process list is older than the sample: the capture timed out and the server kept the last list it had, captured at this time. */
+  processesAt?: number;
 }
 
 export const RESOURCE_PROCESS_LIMIT = 256;

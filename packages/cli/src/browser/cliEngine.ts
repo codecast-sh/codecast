@@ -246,8 +246,8 @@ const PASSTHROUGH: Array<{ verb: string; engine?: string; args: string; desc: st
   { verb: "snapshot", args: "[args...]", desc: "The page as an accessibility tree with refs (-i interactive only, -s <sel> scope, -c compact, -d <n> depth, -u link urls, --redact-values hides every field value (passwords and codes always are), --json for {url, refs, text})" },
   { verb: "read", args: "[args...]", desc: 'The page, or a URL, as clean readable text (--outline, --filter <text>) — best for "what does this page say"' },
   { verb: "click", args: "[args...]", desc: "Click an element (#e42 ref or CSS selector)" },
-  { verb: "type", args: "[args...]", desc: "Type into an element (--submit presses Enter after)" },
-  { verb: "fill", args: "[args...]", desc: "Clear a field and fill it" },
+  { verb: "type", args: "[args...]", desc: "Type into an element (--submit presses Enter after; --vault <name>[/field] or --stdin for a secret)" },
+  { verb: "fill", args: "[args...]", desc: "Clear a field and fill it (--vault <name>[/username|/otp] types a Vault login unseen, --stdin a piped value)" },
   { verb: "press", args: "[args...]", desc: 'Press a key ("Enter", "Control+a")' },
   { verb: "hover", args: "[args...]", desc: "Hover an element, revealing menus" },
   { verb: "focus", args: "[args...]", desc: "Focus an element without clicking" },
@@ -286,6 +286,18 @@ const CAST_HELP_EXTRAS = `Cast additions:
   --no-shot      Skip the automatic screenshot after a page-changing command
   --no-capture   Skip the failure context (console, network, screenshot) when a step fails`;
 
+/** What `type` and `fill` add for a value that must never be an argument (secretInput.ts). */
+const SECRET_INPUT_HELP = `A secret, never as an argument (ps and the transcript would keep it):
+  --vault <name>[/field]   type a Vault value without seeing it: a login's password by default,
+                           /username, /otp (its current 2FA code), /value (a key). Typed only on
+                           a site the secret names, over https (cast vault show <name> lists them)
+  --stdin                  the value from a pipe: cast vault get <name> | cast browser fill #e3 --stdin
+  Any other --flag is an error; text that starts with -- goes after a bare --.
+
+  cast browser fill #e12 --vault acme-login/username
+  cast browser fill #e13 --vault acme-login --submit
+  cast browser fill #e20 --vault acme-login/otp`;
+
 /** Hand-written help for `text`: its selector form is ours (it fans out to two
  *  engine verbs), so no single engine help page describes it. */
 const TEXT_HELP = `cast browser text - Visible text, for reading rather than acting
@@ -313,10 +325,11 @@ export function verbHelp(p: { verb: string; engine?: string; desc: string }): st
   if (p.verb === "text") return `${TEXT_HELP}\n\n${CAST_HELP_EXTRAS}`;
   const engineVerb = p.engine ?? p.verb;
   const raw = engineHelpText(engineVerb);
+  const secret = p.verb === "type" || p.verb === "fill" ? `\n\n${SECRET_INPUT_HELP}` : "";
   if (!raw) {
     return (
       `Usage: cast browser ${p.verb} [args...]\n\n${p.desc}\n\n` +
-      `(run \`cast browser start\` once to install the engine — the per-flag help comes from it)\n\n${CAST_HELP_EXTRAS}`
+      `(run \`cast browser start\` once to install the engine — the per-flag help comes from it)${secret}\n\n${CAST_HELP_EXTRAS}`
     );
   }
   const body = castVoice(raw)
@@ -327,7 +340,7 @@ export function verbHelp(p: { verb: string; engine?: string; desc: string }): st
     // and recovers a closed one itself.
     .replace(/^[ \t]*--(?:session <name>|pin-tab\b).*\n?/gm, "")
     .replace(/\n[^\n]*remembers its active tab[\s\S]*?--no-pin-tab[^\n]*\n/, "");
-  return `${body}\n\n${CAST_HELP_EXTRAS}`;
+  return `${body}${secret}\n\n${CAST_HELP_EXTRAS}`;
 }
 
 /** Our preset sizes, kept so the names in CLAUDE.md keep meaning the same
@@ -414,6 +427,8 @@ let auditOwner: () => string | null = () => ownerKey();
 /** Same detector `auditOwner` uses, so the engine session key and the audit
  *  trail name one agent. Unset until registerEngineCommands. */
 let detectSessionId: (() => string | null) | undefined;
+/** For the verbs that read the Vault (type/fill --vault). Unset until registerEngineCommands. */
+let engineDeps: PublishDeps | undefined;
 
 type Ctx = Awaited<ReturnType<typeof engineBrowserFor>>;
 
@@ -662,6 +677,31 @@ function refuseEngineCommand(verb: string, args: string[], o: Ctx, owner: string
 }
 
 /**
+ * `type`/`fill`: unknown flags are refused (the engine would type them as
+ * text), and a `--vault` or `--stdin` value goes in over CDP, never as an
+ * engine argument (secretInput.ts). Null means plain text for the engine.
+ */
+async function typeFromSecretSource(verb: string, args: string[], o: Ctx, run: RunOptions): Promise<number | null> {
+  const { parseTypeArgs, runSecretInput } = await import("./secretInput.js");
+  const parsed = parseTypeArgs(verb, args, recallFind(o.session));
+  const fail = (message: string, hint?: string): never => {
+    if (run.quiet) throw new Error(hint ? `${message} (${hint})` : message);
+    die(message, hint);
+  };
+  if ("error" in parsed) return fail(parsed.error, parsed.hint);
+  if (parsed.mode === "text") return null;
+  if (parsed.mode === "stdin" && run.quiet) return fail("--stdin is not read inside `do`", `run \`cast browser ${verb} <target> --stdin\` as its own command`);
+  if (!engineDeps) return fail("cast browser is not set up to read the Vault here");
+  try {
+    console.log(await runSecretInput(verb, parsed, o, engineDeps));
+  } catch (err) {
+    const { refusalText } = await import("./secretType.js");
+    return fail(refusalText(err));
+  }
+  return parsed.submit ? runVerb("press", ["Enter", ...parsed.stepFlags], o, run) : 0;
+}
+
+/**
  * Run one command in our vocabulary against the engine, with every hook that
  * must apply to ALL of them:
  *
@@ -699,6 +739,11 @@ export async function runVerb(verb: string, args: string[], o: Ctx, run: RunOpti
   }
 
   refuseEngineCommand(verb, args, o, owner);
+
+  if (verb === "type" || verb === "fill") {
+    const typed = await typeFromSecretSource(verb, args, o, run);
+    if (typed !== null) return typed;
+  }
 
   if (verb === "open") {
     const url = args.find((a) => !a.startsWith("--"));
@@ -1574,6 +1619,7 @@ function refuseMisnamedShotFlag(args: readonly unknown[]): void {
 export function registerEngineCommands(br: Command, deps: PublishDeps): void {
   registerAdvancedClone(br, (program) => registerEngineCommands(program.command("browser"), deps));
   detectSessionId = deps.detectCurrentSessionId;
+  engineDeps = deps;
   auditOwner = () => ownerKey(deps.detectCurrentSessionId);
   registerAuditCommand(br, auditOwner);
   registerBridgeCommands(br, { me: auditOwner });
