@@ -131,6 +131,7 @@ export async function gatherShipFacts(ctx: Ctx, userId: Id<"users">, target: Shi
     }
     work ??= shepherd;
     task = pr.task_ids?.length ? await ctx.db.get(pr.task_ids[0]).catch(() => null) : (work?.active_task_id ? await ctx.db.get(work.active_task_id).catch(() => null) : null);
+    if (task && !(await canAccessTask(ctx, userId, task))) task = null;
   }
   if (!pr && work) pr = openFirst(await pullRequestsLinkedToConversation(ctx, work._id));
 
