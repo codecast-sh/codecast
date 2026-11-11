@@ -215,6 +215,16 @@ describe("reply to the session that wrote to you", () => {
     ).rejects.toThrow(/No session found/);
   });
 
+  // F29: the reply channel lasts only while the two still share a team.
+  test("a member removed since may no longer answer", async () => {
+    const { ctx, tables } = world({ now: Date.now() });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "please take this" });
+    tables.team_memberships = tables.team_memberships.filter((m: any) => m.user_id !== "uBob");
+    await expect(
+      performSessionSend(ctx as any, "uBob" as any, { to: "jxalice", from: "jxbob01", body: "still here" }),
+    ).rejects.toThrow(/No session found/);
+  });
+
   test("a sender cannot borrow a session it does not run", async () => {
     const { ctx } = world({ now: Date.now() });
     await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "please take this" });

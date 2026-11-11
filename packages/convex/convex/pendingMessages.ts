@@ -13,7 +13,7 @@ import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { HOSTED_IMAGE_REFUSAL, HOSTED_INPUT_MAX_CHARS, type WakeCause } from "@codecast/shared/contracts/assistant";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
-import { checkConversationAccess } from "./privacy";
+import { checkConversationAccess, standsWithRunner } from "./privacy";
 import { hasGrantedSendAccess } from "./collab";
 import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
 import { requireUser } from "./lib/auth";
@@ -824,7 +824,9 @@ export { formatSessionMessage };
 // beyond it. Without this, a session moved onto a teammate's machine (now run
 // by their account) could not reply to the private session that briefed it
 // (jx74yqy to jx75sbx, 2026-10-24). The recent rows suffice: a reply follows
-// the message it answers.
+// the message it answers. The channel lasts while the replier still stands on
+// a team with the writer's runner: a member removed since keeps no way into
+// a former teammate's agent.
 const REPLY_WINDOW = 200;
 async function wroteTo(ctx: { db: any }, writer: any, recipient: any): Promise<boolean> {
   const recent = await ctx.db
@@ -909,7 +911,8 @@ export async function performSessionSend(
     ? ((await canSendProductMessage(ctx, authUserId, roleTarget)) ? roleTarget : null)
     : await findConversationByAnyRefWhere(ctx, args.to, async (conversation) => {
       return await canSendProductMessage(ctx, authUserId, conversation)
-        || (!!ownSender && await wroteTo(ctx, conversation, ownSender));
+        || (!!ownSender && await wroteTo(ctx, conversation, ownSender)
+          && await standsWithRunner(ctx, authUserId, conversation.user_id));
     });
   if (!target) {
     throw new Error(`No session found for "${args.to}" (you can only message your own sessions, sessions shared with your team, sessions whose owner granted you send access, or a session that messaged yours)`);
