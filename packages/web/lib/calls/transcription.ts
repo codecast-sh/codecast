@@ -16,7 +16,7 @@
 // Module singleton beside callManager, same pattern: components read the small
 // status snapshot via subscribe/getSnapshot; nothing here touches the store
 // except through convex mutations.
-import { Room, RoomEvent, Track } from "livekit-client";
+import { Room, RoomEvent, Track, TrackEvent, type LocalTrack } from "livekit-client";
 import { addressesAgent, agentSpokenNames, callSpeakerName, isAgentFaceIdentity, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { agentStatusAt } from "../liveness";
 import { useInboxStore } from "../../store/inboxStore";
@@ -85,11 +85,26 @@ function attachTrack(
   engine.attach(key, track, speakerId, speakerName);
 }
 
+/** The local mic track whose restarts the run follows. A device change
+ *  (headphones connecting, a picked mic) restarts it in place: same
+ *  publication and sid, a new MediaStreamTrack, the old one stopped with no
+ *  event the room reports. Re-reading the room on `Restarted` moves the pipe
+ *  onto the live track; without it the scribe's own voice goes silent. */
+let watchedMic: LocalTrack | null = null;
+const onMicRestarted = () => attachRoomTracks();
+function watchLocalMic(track: LocalTrack | null) {
+  if (track === watchedMic) return;
+  watchedMic?.off(TrackEvent.Restarted, onMicRestarted);
+  watchedMic = track;
+  watchedMic?.on(TrackEvent.Restarted, onMicRestarted);
+}
+
 function attachRoomTracks() {
   if (!room) return;
   // Local mic.
   const micPub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
   const me = room.localParticipant;
+  watchLocalMic(micPub?.track ?? null);
   if (micPub?.track?.mediaStreamTrack) {
     attachTrack(
       `local:${micPub.trackSid}`,
@@ -184,6 +199,7 @@ async function startScribeOnce(opts: {
 export async function stopScribe(opts?: { keepLive?: boolean; graceful?: boolean }): Promise<void> {
   roomListener?.();
   roomListener = null;
+  watchLocalMic(null);
   room = null;
   keysBySid.clear();
   await engine.stop(opts);

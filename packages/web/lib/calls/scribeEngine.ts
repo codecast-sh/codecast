@@ -134,7 +134,9 @@ export type ScribeEngine = {
     pacing?: ScribePacing;
   }): Promise<string | null>;
   /** Put a microphone on the run. `key` is the caller's handle for it and the
-   *  only thing `detach` needs; a repeat attach on a live key is ignored. */
+   *  only thing `detach` needs. A repeat attach with the same track is
+   *  ignored; with a different track it replaces the pipe, because a
+   *  restarted microphone keeps its publication and stops its old track. */
   attach(key: string, track: MediaStreamTrack, speakerId: string, speakerName: string): void;
   detach(key: string): void;
   /** Milliseconds since `start`, which is the clock every segment offset uses. */
@@ -158,6 +160,11 @@ export function createScribeEngine(): ScribeEngine {
   // start, and one huddle is many runs (handoffs, adoptions, off and on).
   let epoch = 0;
   const pipes = new Map<string, AsrPipe>();
+  // The track each pipe reads. A key whose track changed under it (LiveKit
+  // restarts a mic on a device change and stops the old track without an
+  // `ended` event) must reopen on the new one, or the pipe hears silence for
+  // the rest of the huddle.
+  const pipeTracks = new Map<string, MediaStreamTrack>();
   let lastSpeechEndMs = 0;
   let anySegmentsSinceFlush = false;
   let addressedSinceFlush = false;
@@ -194,6 +201,7 @@ export function createScribeEngine(): ScribeEngine {
     if (!pipe) return;
     pipe.close();
     pipes.delete(key);
+    pipeTracks.delete(key);
     emit({ trackCount: pipes.size });
   }
 
@@ -203,7 +211,11 @@ export function createScribeEngine(): ScribeEngine {
     speakerId: string,
     speakerName: string,
   ): void {
-    if (!convex || pipes.has(key)) return;
+    if (!convex) return;
+    if (pipes.has(key)) {
+      if (pipeTracks.get(key) === mediaTrack) return;
+      detach(key);
+    }
     // Dropping a pipe from the map IS closing it — they were two functions
     // doing almost the same thing, and the "almost" was the bug: a forgotten
     // pipe still holds a recognizer and, since capture starts at open(), an
@@ -211,8 +223,11 @@ export function createScribeEngine(): ScribeEngine {
     // reach them, and the scribe re-attaches on every TrackSubscribed and
     // every reconnect — so a huddle where the mint keeps failing accumulates
     // them for its whole length. One function, so the two can never disagree.
-    const forget = () => detach(key);
-    const pipe = openAsrPipe({
+    // Only ever this pipe: a replaced one must not take its successor down.
+    const forget = () => {
+      if (pipes.get(key) === pipe) detach(key);
+    };
+    const pipe: AsrPipe = openAsrPipe({
       convex,
       roomKey,
       track: mediaTrack,
@@ -246,6 +261,7 @@ export function createScribeEngine(): ScribeEngine {
       },
     });
     pipes.set(key, pipe);
+    pipeTracks.set(key, mediaTrack);
     emit({ trackCount: pipes.size });
   }
 
