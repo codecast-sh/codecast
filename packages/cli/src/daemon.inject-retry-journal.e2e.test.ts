@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { injectViaTmux } from "./daemon.js";
+import { injectViaTmux, setSyncServiceForTests } from "./daemon.js";
+import type { SyncService } from "./syncService.js";
 import { prepareTmuxDelivery, TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { DeliveryEchoLedger } from "./deliveryEchoLedger.js";
 import { tmuxRun } from "./tmux.js";
@@ -315,6 +316,42 @@ test.skipIf(!Bun.which("tmux"))("a slash command that opens a panel is delivered
     await injectViaTmux(target, "next message", "claude", { delivery: { ...delivery, messageId: "next" }, journal });
     expect(state()).toMatchObject({ commands: ["/mcp"], panelKeys: 0, queued: ["Existing worker report.", "next message"] });
   } finally {
+    journal.close();
+    pane.tearDown();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 120_000);
+
+// #81 review: a verified panel command the server never acknowledged returned
+// without telling the server, so the row stayed injected and every retry
+// returned the same way. It is final, so the server hears it was delivered.
+test.skipIf(!Bun.which("tmux"))("a verified panel command the server never acknowledged is marked delivered", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "codecast-slash-unacked-"));
+  const statePath = join(cwd, "state.json");
+  const fixture = fileURLToPath(new URL("./test-helpers/codexQueuedTui.ts", import.meta.url));
+  const pane = spawnHarness({ cwd, jsonlPath: statePath,
+    command: `exec bun ${[fixture, statePath, join(cwd, "finish"), "claude"].map(shellQuote).join(" ")}` });
+  const target = `${pane.tmuxSession}:0.0`;
+  const journal = new TmuxDeliveryJournal(join(cwd, "delivery.sqlite"));
+  const delivery = { messageId: "unacked-mcp", conversationId: "fixture" };
+  const state = () => JSON.parse(readFileSync(statePath, "utf8"));
+  const writes: { messageId: string; status: string }[] = [];
+  try {
+    await waitFor(() => pane.capturePane().includes("shift+tab"));
+    await injectViaTmux(target, "/mcp", "claude", { delivery, journal });
+    expect(journal.get(delivery.messageId)?.phase).toBe("verified");
+    await waitFor(() => pane.capturePane().includes("⏺ Done."));
+    tmuxRun(["send-keys", "-t", target, "Escape"]);
+    await waitFor(() => pane.capturePane().includes("shift+tab"));
+    setSyncServiceForTests({
+      getPendingMessageStatus: async () => writes.length ? "delivered" : "injected",
+      updateMessageStatus: async ({ messageId, status }: { messageId: string; status: string }) => { writes.push({ messageId, status }); },
+    } as unknown as SyncService);
+    await injectViaTmux(target, "/mcp", "claude", { delivery, journal, receiptSettleMs: 0, readTranscript: async () => "" });
+    expect(writes).toEqual([{ messageId: delivery.messageId, status: "delivered" }]);
+    expect(state()).toMatchObject({ commands: ["/mcp"], panelKeys: 0 });
+  } finally {
+    setSyncServiceForTests(null);
     journal.close();
     pane.tearDown();
     rmSync(cwd, { recursive: true, force: true });

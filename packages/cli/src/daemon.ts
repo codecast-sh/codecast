@@ -18513,7 +18513,10 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   // echoes only once the panel closes, so writing it again on the missing echo
   // repeats it (commandPanel.ts).
   const panelCommand = mayOpenPanel(sanitized);
-  if (delivery?.prior?.phase === "verified" && (!delivery.unacknowledged || panelCommand)) return;
+  if (delivery?.prior?.phase === "verified" && (!delivery.unacknowledged || panelCommand)) {
+    if (delivery.unacknowledged && syncServiceRef) await syncServiceRef.updateMessageStatus({ messageId: delivery.prior.messageId, status: "delivered", deliveredAt: Date.now() }).catch(logConvexFailure);
+    return;
+  }
   let prior = delivery?.prior ?? null;
   const contentLines = content.split(/\r?\n/).length;
   const captureLines = Math.max(80, contentLines + Math.ceil(sanitized.length / 60) + 10);
