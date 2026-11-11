@@ -1020,6 +1020,12 @@ export default defineSchema({
     profile_pinned_at: v.optional(v.number()),
     draft_message: v.optional(v.string()),
     last_user_message_at: v.optional(v.number()),
+    // Who started the latest turn: a person's own send ("person") or a
+    // machine-delivered one (a wake, a session message, a program's send).
+    // Written by messages.ts through lib/userSend.turnOrigin; tool results and
+    // noise leave it alone. A standing session's turn a person started files
+    // in the inbox like any session's (inboxProjection placeInboxRow).
+    last_turn_origin: v.optional(v.union(v.literal("person"), v.literal("machine"))),
     is_subagent: v.optional(v.boolean()),
     // Started with nobody watching (`cast spawn --unattended`, a role's hand).
     // Read through isUnattendedConversation (@codecast/shared), which also
@@ -4340,7 +4346,11 @@ export default defineSchema({
     decision: v.optional(v.object({ question: v.string(), picked: v.boolean() })),
   })
     .index("by_team_timestamp", ["team_id", "timestamp"])
-    .index("by_message", ["message_id"]),
+    .index("by_message", ["message_id"])
+    // One person's sends across every team and their personal workspace,
+    // newest first: the Messages feed (userSends.mine).
+    .index("by_user_timestamp", ["user_id", "timestamp"])
+    .searchIndex("search_text", { searchField: "text", filterFields: ["user_id"] }),
 
   // Per-day token and spend counters (the "Tokens" and "Spend" chart
   // metrics). One row per (user, team, UTC day), 24 UTC-hour buckets each;
@@ -5134,6 +5144,13 @@ export default defineSchema({
       exit_code: v.optional(v.number()),
       output: v.optional(v.string()),
       at: v.optional(v.number()),
+      // What a Yes approves (commandRun.ts RunSubject): drawn on the card,
+      // and the only content the command may record (sessionDecisions.approvedRun).
+      approves: v.optional(v.object({
+        title: v.string(),
+        folder: v.string(),
+        items: v.array(v.object({ label: v.string(), lines: v.array(v.string()), note: v.optional(v.string()) })),
+      })),
     })),
     // true = the agent ended its turn and is parked on this answer.
     // false = advisory: the agent proceeded with default_option and the
@@ -8349,6 +8366,8 @@ export default defineSchema({
     // A daemon's sweep for its own live runs whose runner is gone.
     .index("by_runner_device_status", ["runner_device", "status"])
     .index("by_user_id", ["user_id"])
+    // One person's live runs (sessionMigrations.movabilityFacts), without reading everyone's.
+    .index("by_user_status", ["user_id", "status"])
     .index("by_workflow_id", ["workflow_id"])
     .index("by_external_run", ["external_run_id"])
     .index("by_status", ["status"])

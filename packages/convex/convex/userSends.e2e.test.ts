@@ -183,3 +183,12 @@ test("a pointer at a team the owner has left attributes the send to no team", as
   const db = makeFakeDb({ users: [{ _id: "users_owner", active_team_id: "teams_left" }], team_memberships: [] });
   expect(await resolveCounterTeam({ db }, { _id: "conversations_1", user_id: "users_owner" } as any)).toBeUndefined();
 });
+
+test("a send a person queued is recorded at once; a terminal one waits for launch links", async () => {
+  const conversation = { _id: "conversations_a", user_id: "users_owner", team_id: "teams_team" } as any;
+  const delays: number[] = [];
+  const ctx = { db: makeFakeDb({ conversations: [conversation] }), scheduler: { async runAfter(delay: number) { delays.push(delay); } } };
+  await scheduleUserSend(ctx, conversation, { role: "user", content: "from the composer", queued: "person" }, 1);
+  await scheduleUserSend(ctx, conversation, { role: "user", content: "typed at the terminal" }, 1);
+  expect(delays).toEqual([0, 60_000]);
+});

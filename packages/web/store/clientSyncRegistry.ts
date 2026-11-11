@@ -1406,6 +1406,33 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     feeds: ["conversations.getMessageFeed"],
   },
+  // What the viewer typed into sessions (userSends.mine): one row per send,
+  // `ms:<message id>`, newest first, with a 600-char snippet and the session
+  // it went to. The Messages feed reads it. A live tail and one-shot older
+  // pages overlay it (delta); hydration keeps the newest rows
+  // (COLLECTION_RETENTION), so the cache is contiguous from the top and
+  // paging resumes below the oldest held row.
+  mySends: {
+    persistence: { kind: "collection", key: "mySends" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, timestamp",
+    sync: { isDelta: true },
+    feeds: ["userSends.mine"],
+  },
+  // Server matches for a Messages feed search (userSends.searchMine), keyed
+  // `<query>\u0000<row id>` with the query on `q`. Kept apart from mySends:
+  // a match older than the cached window would break its contiguity.
+  // Transient: a reload searches again.
+  mySendSearch: {
+    sync: { isDelta: true },
+    feeds: ["userSends.searchMine"],
+  },
+  // The whole text of a send the feed opened (userSends.fullText), keyed by
+  // message id. Transient: the row's snippet is what persists.
+  mySendText: {
+    sync: { isDelta: true },
+    feeds: ["userSends.fullText"],
+  },
   // The viewer's device roster (listDevices), keyed by device_id. Persisted so
   // /capabilities, device chips and the terminal picker paint at boot. The
   // path-seeding gate (pathOnMyMachines) reads it only once a LIVE push has
@@ -2070,6 +2097,9 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   guestSuggestions: "shared",
   pendingMessageStatus: "shared",
   messageFeed: "shared",
+  mySends: "shared",
+  mySendSearch: "local",
+  mySendText: "local",
   machineRoster: "shared",
   accountPool: "shared",
   teamMachines: "shared",

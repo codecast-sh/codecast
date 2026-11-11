@@ -1,6 +1,7 @@
 import { internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
+import type { Doc } from "./_generated/dataModel";
 import { isProgramLaunched, maybeRecordUserSend, typedWords } from "./lib/userSend";
 import { recordUsageDays, turnCost, turnTokens, type UsageTurn } from "./lib/usageDaily";
 import { approxMessageBytes } from "./userMessagesFilter";
@@ -158,9 +159,7 @@ export const step = internalMutation({
                 lastUsage = sig;
               }
             } else {
-              const brief = launched && m.timestamp < c._creationTime + BRIEF_WINDOW_MS;
-              const queued = m.from_user_id ? (brief ? "program" : "person") : undefined;
-              await maybeRecordUserSend(ctx, c, { _id: m._id, role: m.role, content: m.content, tool_results: m.tool_results, from_user_id: m.from_user_id, queued }, m.timestamp);
+              await recordPastSend(ctx, c, launched, m);
             }
           }
           if (bytes > STEP_BYTES) {
@@ -175,6 +174,67 @@ export const step = internalMutation({
       msgAfter = args.after - 1;
     }
     await ctx.scheduler.runAfter(0, internal.sendBackfill.step, { ...range, conv_before: convBefore });
+  },
+});
+
+// One past user-role message through the live rule. Rows from before the
+// queue recorded who wrote a message are told apart by when they landed: a
+// queued message this soon after a program launched the session is its brief.
+async function recordPastSend(ctx: { db: any }, c: Doc<"conversations">, launched: boolean, m: Doc<"messages">, opts: { logOnly?: boolean } = {}) {
+  const brief = launched && m.timestamp < c._creationTime + BRIEF_WINDOW_MS;
+  const queued = m.from_user_id ? (brief ? "program" : "person") : undefined;
+  return maybeRecordUserSend(ctx, c, { _id: m._id, role: m.role, content: m.content, tool_results: m.tool_results, from_user_id: m.from_user_id, queued }, m.timestamp, opts);
+}
+
+// Fill the per-send log (user_sends) for one person's sessions, leaving the
+// day counters as they are. The log began on 2026-10-31, so older sends were
+// counted but never logged, and the Messages feed reads the log. A row per
+// message at most (logUserSend checks by_message), so a rerun or an overlap
+// with live logging adds nothing twice. Walks the person's sessions a page at
+// a time, a byte budget per step, and schedules itself until done.
+// `packages/convex/run.sh sendBackfill:logHistory '{"user_id":"…"}'`.
+const LOG_CONVERSATIONS = 40;
+export const logHistory = internalMutation({
+  args: {
+    user_id: v.id("users"),
+    cursor: v.optional(v.string()),
+    // Resume inside a session a step's budget cut short.
+    conv_id: v.optional(v.id("conversations")),
+    msg_after: v.optional(v.number()),
+    logged: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    let logged = args.logged ?? 0;
+    let bytes = 0;
+    const page = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_id", (q) => q.eq("user_id", args.user_id))
+      .paginate({ numItems: LOG_CONVERSATIONS, cursor: args.cursor ?? null });
+    let skipping = !!args.conv_id;
+    for (const c of page.page) {
+      if (skipping && c._id !== args.conv_id) continue;
+      const resuming = skipping;
+      skipping = false;
+      if (c.parent_conversation_id) continue;
+      const launched = isProgramLaunched(c);
+      const from = Math.max(resuming ? args.msg_after ?? -1 : -1, c.forked_from ? c._creationTime - 1 : -1);
+      const msgs = ctx.db
+        .query("messages")
+        .withIndex("by_conversation_role_timestamp", (q) => q.eq("conversation_id", c._id).eq("role", "user").gt("timestamp", from));
+      for await (const m of msgs) {
+        bytes += approxMessageBytes(m as any);
+        if (await recordPastSend(ctx, c, launched, m, { logOnly: true })) logged++;
+        if (bytes > STEP_BYTES) {
+          await ctx.scheduler.runAfter(0, internal.sendBackfill.logHistory, { user_id: args.user_id, cursor: args.cursor, conv_id: c._id, msg_after: m.timestamp, logged });
+          return;
+        }
+      }
+    }
+    if (page.isDone) {
+      console.log(`[sendBackfill.logHistory] ${args.user_id}: done, ${logged} sends found`);
+      return;
+    }
+    await ctx.scheduler.runAfter(0, internal.sendBackfill.logHistory, { user_id: args.user_id, cursor: page.continueCursor, logged });
   },
 });
 

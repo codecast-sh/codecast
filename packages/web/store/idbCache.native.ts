@@ -26,7 +26,7 @@ import {
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
 import { diffCollection, durableDeletes } from "./idbCollectionDiff";
-import { partitionSessionRetention, partitionDocDetailRetention, expireExcludeTombstones, persistedMessageTail } from "./cacheRetention";
+import { partitionSessionRetention, COLLECTION_RETENTION, expireExcludeTombstones, persistedMessageTail } from "./cacheRetention";
 
 let Storage: any = null;
 // Send writes the pending-input journal with setItemSync. That used to hit the
@@ -495,9 +495,10 @@ function materializeLoadedCache(
         keptRows = keep;
         for (const id of drop) dropped.add(id);
       }
-      // Opened-docs body cache: bound by last-open recency (see idbCache.ts).
-      if (key === "docDetails" && keptRows.length > 0) {
-        const { keep, drop } = partitionDocDetailRetention(keptRows, Date.now());
+      // Collections that bound themselves at boot (COLLECTION_RETENTION).
+      const retain = COLLECTION_RETENTION[key];
+      if (retain && keptRows.length > 0) {
+        const { keep, drop } = retain(keptRows, Date.now());
         keptRows = keep;
         for (const id of drop) dropped.add(id);
       }

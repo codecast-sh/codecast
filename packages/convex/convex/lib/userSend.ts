@@ -163,6 +163,18 @@ export function classifyUserSend(conversation: Doc<"conversations">, msg: SendMe
   return words === null ? null : { user_id: msg.from_user_id ?? conversation.user_id, words };
 }
 
+// Who started the turn a user-role message opens (conversations.last_turn_origin):
+// "person" for a person's own send, "machine" for a program's send or a
+// machine-delivered message (a wake, a session message, a scheduled task).
+// Null for what opens no turn of its own (tool results, noise): the stamp keeps
+// its previous value.
+export function turnOrigin(conversation: Doc<"conversations">, msg: SendMessage): "person" | "machine" | null {
+  if (msg.role !== "user" || (msg.tool_results && msg.tool_results.length > 0)) return null;
+  if (classifyUserSend(conversation, msg)) return "person";
+  if (msg.queued === "program" || isMachineDeliveredMessage(msg.content)) return "machine";
+  return null;
+}
+
 // Team attribution for the per-day counters (sends here, tokens in
 // usageDaily.ts) follows ROUTING: conversations are often created teamless
 // and restamped later, so the stored team_id alone under-attributes. Fall back
@@ -220,7 +232,10 @@ export async function scheduleUserSend(
 ): Promise<boolean> {
   const send = classifyUserSend(conversation, msg);
   if (!send || (await isCommandBody(ctx, conversation._id, msg, timestamp))) return false;
-  await ctx.scheduler.runAfter(LAUNCH_LINK_GRACE_MS, internal.userSends.record, {
+  // A message a person queued counts whatever launched the session, so it
+  // needs no wait for the launch links and reaches the feed at once.
+  const delay = msg.queued === "person" ? 0 : LAUNCH_LINK_GRACE_MS;
+  await ctx.scheduler.runAfter(delay, internal.userSends.record, {
     ...send,
     conversation_id: conversation._id,
     message_id: msg._id,
@@ -232,6 +247,8 @@ export async function scheduleUserSend(
 
 // Count a classified send, unless a program launched its session and no
 // person queued the message, and log which message it was (user_sends).
+// `logOnly` writes the log row and leaves the counters alone: a backfill of
+// the log for history the counters already hold.
 export async function recordSendFor(
   ctx: { db: any },
   conversation: Doc<"conversations">,
@@ -239,13 +256,14 @@ export async function recordSendFor(
   byPerson: boolean,
   timestamp: number,
   messageId?: Id<"messages">,
+  opts: { logOnly?: boolean } = {},
 ): Promise<boolean> {
   if (!byPerson && isProgramLaunched(conversation)) return false;
   const message = messageId ? await ctx.db.get(messageId) : null;
   const decision = await decisionOf(ctx, message?.content);
   const counted = { ...send, team_id: await resolveCounterTeam(ctx, conversation) };
   if (decision?.picked) counted.words = 0;
-  else await recordUserSend(ctx, counted, timestamp);
+  else if (!opts.logOnly) await recordUserSend(ctx, counted, timestamp);
   if (message) await logUserSend(ctx, counted, { conversation_id: conversation._id, message_id: message._id, timestamp }, message, decision);
   return !decision?.picked;
 }
@@ -284,10 +302,11 @@ export async function maybeRecordUserSend(
   conversation: Doc<"conversations">,
   msg: SendMessage,
   timestamp: number,
+  opts: { logOnly?: boolean } = {},
 ): Promise<boolean> {
   const send = classifyUserSend(conversation, msg);
   if (!send || (await isCommandBody(ctx, conversation._id, msg, timestamp))) return false;
-  return recordSendFor(ctx, conversation, send, msg.queued === "person", timestamp, msg._id);
+  return recordSendFor(ctx, conversation, send, msg.queued === "person", timestamp, msg._id, opts);
 }
 
 // Bump the (user, team, UTC day) counter row.

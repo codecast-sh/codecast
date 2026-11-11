@@ -138,3 +138,21 @@ export function expireExcludeTombstones(
 ): Record<string, any> {
   return engineExpireExcludeTombstones(pending, now, SESSION_CACHE_TTL_MS, isUnprotectedField);
 }
+
+// The Messages feed's own sends (mySends): the newest rows, contiguous from
+// the top, so "load older" always resumes below the oldest held row. Older
+// history stays one page (or one search) away on the server.
+export const MAX_CACHED_MY_SENDS = 10_000;
+
+// Hydration retention per persisted collection, applied by every cache
+// engine (idbCache, idbCache.native). Sessions take the live inbox and the
+// focused id as well, so they keep their own call.
+export const COLLECTION_RETENTION: Record<string, (rows: any[], now: number) => { keep: any[]; drop: string[] }> = {
+  docDetails: partitionDocDetailRetention,
+  mySends: (rows, now) => partitionCacheRetention(rows, now, {
+    ttlMs: Number.POSITIVE_INFINITY,
+    maxRows: MAX_CACHED_MY_SENDS,
+    alwaysKeep: () => false,
+    stampedAt: (row) => row.timestamp ?? 0,
+  }),
+};

@@ -11,6 +11,7 @@ import { EntityIdPill } from "./EntityIdPill";
 import { EstablishedRefsProvider } from "../hooks/entityMentionScope";
 import { parseAgentAuthoredMessage } from "./sessionMessage";
 import { classifyFeedMessage } from "../lib/conversationProcessor";
+import { MyMessages } from "./messages/MyMessages";
 
 type FeedMessage = {
   _id: string;
@@ -192,7 +193,14 @@ type FeedItem =
   | { kind: "agent"; msg: FeedMessage; label: string; from: string; body: string }
   | { kind: "text"; msg: FeedMessage; text: string };
 
+// "Mine" is what the viewer typed (components/messages/MyMessages, from the
+// per-send log); "team" is every person's prompts across the team.
 export function MessageFeed({ filter }: MessageFeedProps) {
+  return filter === "my" ? <MyMessages /> : <TeamMessageFeed />;
+}
+
+function TeamMessageFeed() {
+  const filter = "team" as const;
   // Default hides everything an agent wrote — session→session cast sends and the
   // briefs that start subagents and spawned sessions. The feed is about what
   // people typed. "All" re-adds the agent cards.
