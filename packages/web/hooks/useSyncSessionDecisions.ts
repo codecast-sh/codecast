@@ -5,6 +5,8 @@ import { useConvexSync } from "./useConvexSync";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useSyncCollection } from "./useSyncCollection";
 import { useWatchEffect } from "./useWatchEffect";
+import { useLineSpaceKeys } from "./useLineSpace";
+import { useActiveWorkspaceKey } from "./useWorkspaceCollection";
 
 const api = _api as any;
 
@@ -59,4 +61,13 @@ export function useSyncTeamDecisions(workspace: string | null) {
     [workspace],
   );
   return useSyncCollection("sessionDecisions", api.decisionTeamList.listForTeam, args as any, opts);
+}
+
+/** Feeder (the sync host's): the open line decisions of every workspace the line reads, and the active one, so the
+ *  Line's decision inbox paints from the store before its page mounts. */
+export function useSyncLineDecisionsEverywhere() {
+  const spaces = useLineSpaceKeys();
+  const active = useActiveWorkspaceKey();
+  const keys = useMemo(() => [...new Set([...spaces, ...(active ? [active] : [])])], [spaces, active]);
+  useSyncTeamLineDecisions(keys);
 }

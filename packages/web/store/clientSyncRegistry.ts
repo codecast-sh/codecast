@@ -357,8 +357,8 @@ export const CLIENT_SYNC_REGISTRY = {
     feeds: ["sessionDecisions.listHandledByRoles"],
   },
   // The decision document page's context (doc body, task, stack, ladder,
-  // people, grant offer), one row per decision viewed. Delta: each page
-  // feeds its own row and must not evict the others. Every field but _id is an
+  // people, grant offer), one row per decision viewed or open. Delta: each
+  // feed sends its own rows and must not evict the others. Every field but _id is an
   // object, and a row whose scalars match keeps its old identity, so each is
   // compared by content: otherwise a pass, an escalation or an answer that
   // lands while the page is cached never reaches it.
@@ -366,7 +366,8 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "decisionDetails" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true, deepFields: ["decision", "doc", "task", "stack", "ladder", "asked_users", "holder_role", "grant_offer", "grant", "superseded"] },
-    feeds: ["sessionDecisions.getWithDoc"],
+    // getWithDocMany: the sync host keeps every open decision's context cached (useSyncOpenDecisionDetails).
+    feeds: ["sessionDecisions.getWithDoc", "sessionDecisions.getWithDocMany"],
   },
   // A decision's team thread (decisionThread.thread, store/decisionThreadTypes.ts).
   // decisionThreads: who the thread talks to, one row per decision viewed.
@@ -1031,9 +1032,12 @@ export const CLIENT_SYNC_REGISTRY = {
   // bot identity, scope name and coarse session state. listAnchors returns the
   // complete visible set, so snapshot. Feeds the global anchor chip/drawer, the
   // inbox's anchor marking and the /anchor page's scope switcher.
+  // localFirst: a seat's clean chat (setAnchorCleanChat) paints from the
+  // draft and holds until the echo.
   anchors: {
     persistence: { kind: "collection", key: "anchors" },
     hydration: { phase: "deferred" },
+    localFirst: true,
     sync: {},
     feeds: ["anchors.listAnchors"],
   },

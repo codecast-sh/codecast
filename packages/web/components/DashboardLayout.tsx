@@ -97,6 +97,8 @@ import { useThreadUnreadSync, useThreadUnreadByWorkspaceSync } from "../hooks/us
 import { ProfileSignInDialogHost } from "./ProfileSignInDialog";
 import { useChatToasts } from "../hooks/useChatToasts";
 import { ChatPrefetchFeeder } from "../hooks/useChatPrefetch";
+import { useSyncLineDecisionsEverywhere } from "../hooks/useSyncSessionDecisions";
+import { useSyncOpenDecisionDetails } from "../hooks/useSyncDecisionDetail";
 import { useSyncDocs } from "../hooks/useSyncDocs";
 import { isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionFocusKind } from "../lib/inboxRouting";
 import { useOpenSession } from "../hooks/useOpenSession";
@@ -526,6 +528,11 @@ function HostFeeders() {
   useSyncSettings();
   // Machine resource reports: the pressure notice and /resources read them.
   useSyncMachineResources();
+  // Decisions open on every page, not only where they are listed: the Line's
+  // decision inbox (every workspace with a line), and the page context of
+  // every open decision the store holds, so opening one paints from cache.
+  useSyncLineDecisionsEverywhere();
+  useSyncOpenDecisionDetails();
   // Every run the store holds as live, checked against the server's live runs, so no surface shows an ended run as
   // live; a leaf of its own, so its wakes re-render nothing here.
   return <><LiveRunsCheck /><PendingAgentFeatures /></>;

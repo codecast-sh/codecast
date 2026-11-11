@@ -51,7 +51,7 @@ import { applyCommandRunReport, commandRunRefusal, settleCommandRun } from "./li
 import { RUN_OPTION, RUN_OPTIONS, parseRunCommand, type CommandRun } from "@codecast/shared/contracts/commandRun";
 import { proposalAnswersError } from "@codecast/shared/contracts/expectations";
 import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
-import { currentDecisions, decisionSuperseded } from "./lib/superseded";
+import { currentDecisions, decisionSuperseded, newLineMemo, type LineMemo } from "./lib/superseded";
 import { CARD_GATE_NODE_ID, validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 
 export const optionValidator = v.object({
@@ -2356,6 +2356,14 @@ async function decisionContext(ctx: Ctx, row: DecisionRow, viewerId: Id<"users">
   };
 }
 
+// One decision's page payload: the row with its live session, its context,
+// and what replaced it. Unfiltered: a superseded decision's own page opens,
+// and says what replaced it (line-versions.md LV3).
+async function decisionDetail(ctx: Ctx, row: DecisionRow, viewerId: Id<"users">, memo?: LineMemo) {
+  const [live] = await withLiveSession(ctx, [row]);
+  return { decision: live, ...(await decisionContext(ctx, row, viewerId)), superseded: await decisionSuperseded(ctx, row, memo) };
+}
+
 // The document page (D4): the decision, its doc body, task title, stack,
 // ladder and people in one read.
 export const getWithDoc = query({
@@ -2365,9 +2373,30 @@ export const getWithDoc = query({
     if (!userId) return null;
     const row = await findDecision(ctx, args.decision_id);
     if (!row || !(await userMayRead(ctx, userId, row))) return null;
-    const [live] = await withLiveSession(ctx, [row]);
-    // Unfiltered: a superseded decision's own page opens, and says what replaced it (line-versions.md LV3).
-    return { decision: live, ...(await decisionContext(ctx, row, userId)), superseded: await decisionSuperseded(ctx, row) };
+    return decisionDetail(ctx, row, userId);
+  },
+});
+
+/** Decisions one prefetch reads at most: the open ones a person's queue and the Line's inbox hold. */
+const DETAIL_PREFETCH_CAP = 200;
+
+// The page payload of many decisions at once (getWithDoc's shape, one per
+// readable id), so every open decision the web lists already holds its
+// document when it is opened. Ids the viewer may not read are left out.
+export const getWithDocMany = query({
+  args: { decision_ids: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return [];
+    const memo = newLineMemo();
+    const out = [];
+    for (const id of [...new Set(args.decision_ids)].slice(0, DETAIL_PREFETCH_CAP)) {
+      const docId = ctx.db.normalizeId("session_decisions", id);
+      const row: DecisionRow | null = docId ? await ctx.db.get(docId) : null;
+      if (!row || !(await userMayRead(ctx, userId, row))) continue;
+      out.push(await decisionDetail(ctx, row, userId, memo));
+    }
+    return out;
   },
 });
 
