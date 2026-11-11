@@ -14,7 +14,8 @@ import * as fs from "node:fs";
 import * as nodePath from "node:path";
 import { routeProbe } from "./workers/bridge.js";
 import { promisify } from "node:util";
-import { SLOW_SYNC_SPAWN_MS, reportSpawnTimeout, timeSync } from "./slowSync.js";
+import { SLOW_SYNC_SPAWN_MS, reportKeychainLock, reportSpawnTimeout, timeSync } from "./slowSync.js";
+import { loginKeychainLocked } from "./keychainLock.js";
 
 export type {
   ChildProcess,
@@ -90,16 +91,51 @@ function wrap<T extends (...args: never[]) => unknown>(fn: T): T {
   return wrapped as unknown as T;
 }
 
+// A process nobody is watching (the daemon) must not call `security` while the
+// login keychain is locked: each call puts an unlock dialog on the person's
+// screen, and its timers make another every 30 seconds (keychainLock.ts). Such
+// a process opts in at startup; a call it makes against a locked keychain then
+// fails at once, the way a refused keychain read fails. A command a person
+// runs keeps the prompt, which is how they unlock it.
+let refuseLockedKeychain = false;
+let keychainWasLocked = false;
+export function refuseKeychainCallsWhileLocked(on = true): void {
+  refuseLockedKeychain = on;
+}
+function lockedKeychainRefusal(file: unknown, args: unknown): Error | null {
+  if (!refuseLockedKeychain || typeof file !== "string" || nodePath.basename(file) !== "security") return null;
+  // Lock and unlock leave the keychain usable; only a read or write prompts.
+  if (Array.isArray(args) && /^(un)?lock-keychain$/.test(String(args[0]))) return null;
+  const locked = loginKeychainLocked();
+  if (locked !== keychainWasLocked) {
+    keychainWasLocked = locked;
+    reportKeychainLock(locked);
+  }
+  if (!locked) return null;
+  return Object.assign(new Error(`login keychain is locked: ${describeSpawnArgs([file, args])}`), { code: "KEYCHAIN_LOCKED", status: 36, stdout: "", stderr: "" });
+}
+
+function gateSync<T extends (...args: never[]) => unknown>(fn: T, refused: (error: Error) => unknown): T {
+  return ((...args: unknown[]) => {
+    const error = lockedKeychainRefusal(args[0], args[1]);
+    return error ? refused(error) : (fn as unknown as (...a: unknown[]) => unknown)(...args);
+  }) as unknown as T;
+}
+
 export const spawn: typeof cp.spawn = wrap(cp.spawn);
-export const spawnSync: typeof cp.spawnSync = wrapSync("spawnSync", cp.spawnSync);
+export const spawnSync: typeof cp.spawnSync = gateSync(wrapSync("spawnSync", cp.spawnSync), error =>
+  ({ pid: 0, output: [null, "", ""], stdout: "", stderr: "", status: null, signal: null, error }));
 export const exec: typeof cp.exec = wrap(cp.exec);
 export const execSync: typeof cp.execSync = wrapSync("execSync", cp.execSync);
 export const execFile: typeof cp.execFile = wrap(cp.execFile);
-export const execFileSync: typeof cp.execFileSync = wrapSync("execFileSync", cp.execFileSync);
+export const execFileSync: typeof cp.execFileSync = gateSync(wrapSync("execFileSync", cp.execFileSync), error => { throw error; });
 /** The promise form of the wrapped execFile, shared so no caller promisifies its own copy. */
 const execFileDirectAsync = promisify(execFile);
-export const execFileAsync: typeof execFileDirectAsync = ((file: string, args: string[], options?: unknown) =>
-  routeProbe(file, args, options, opts => execFileDirectAsync(file, args, opts as cp.ExecFileOptionsWithStringEncoding))) as typeof execFileDirectAsync;
+export const execFileAsync: typeof execFileDirectAsync = ((file: string, args: string[], options?: unknown) => {
+  const refused = lockedKeychainRefusal(file, args);
+  if (refused) return Promise.reject(refused);
+  return routeProbe(file, args, options, opts => execFileDirectAsync(file, args, opts as cp.ExecFileOptionsWithStringEncoding));
+}) as typeof execFileDirectAsync;
 
 // A keychain read answers in tens of milliseconds on an idle machine. A locked
 // keychain or an access prompt can hang it, and the daemon's credential ticks

@@ -8,7 +8,7 @@
 // sink and one message shape serve both, so the log report and the freeze
 // SLO read them the same way.
 
-export type SlowSyncTag = "SLOW-SYNC-SPAWN" | "SLOW-SYNC-FS" | "SPAWN-TIMEOUT" | "WORKER-ENV-DROPPED";
+export type SlowSyncTag = "SLOW-SYNC-SPAWN" | "SLOW-SYNC-FS" | "SPAWN-TIMEOUT" | "WORKER-ENV-DROPPED" | "KEYCHAIN-LOCKED";
 
 export const SLOW_SYNC_SPAWN_MS = 1_000;
 // Filesystem work is finer grained than a spawn: one walk of the transcript
@@ -37,6 +37,17 @@ export function setSlowSyncFsThresholdForTests(ms: number | null): void {
 export function reportSpawnTimeout(name: string, detail: string, timeoutMs: number): void {
   try {
     slowSyncSink?.(`[SPAWN-TIMEOUT] ${name} killed after ${timeoutMs}ms: ${detail}`);
+  } catch {}
+}
+
+/** A keychain call skipped because the login keychain is locked, reported when
+ *  the lock state changes rather than per call: the ticks that make them run
+ *  every 30 seconds. */
+export function reportKeychainLock(locked: boolean): void {
+  try {
+    slowSyncSink?.(locked
+      ? "[KEYCHAIN-LOCKED] the login keychain is locked; keychain calls are skipped (each would put an unlock prompt on screen) until it is unlocked"
+      : "[KEYCHAIN-LOCKED] the login keychain is unlocked again; keychain calls resume");
   } catch {}
 }
 
