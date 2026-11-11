@@ -80,7 +80,12 @@ look like keys or credentials (`.env*`, `id_*`, `*.pem`, `*.key`, `*.p12`,
 | Payload | Command | Direct body | Relay fallback |
 |---|---|---|---|
 | Session folder | `export_folder` | streamed `tar.gz` of the include list, up to 2 GB | storage archive (300 MB) |
-| Session transcript (new) | `export_session` | streamed `tar.gz` of the session's transcript file and session folder, resolved from the conversation's session id only | the same archive through storage; regeneration from the Convex export only when no source is online |
+| Session transcript | `export_session` | streamed `tar.gz` of the Claude Code `<id>.jsonl` and its `<id>/` folder, found by the source in its own conversation cache from the conversation id alone (no path in the request; UUID ids only; symlinks refused) | the same archive through storage; regeneration from the Convex export when no machine answers with it within 45 s, the requester does not own the conversation, or the agent is not Claude Code |
+
+The requester files the transcript under the slug of its own resume cwd and
+rewrites the source's home, cwd and project folder in it (and in every
+`.jsonl` under the session folder) the way `cast move` does
+(`relocateTranscript`). It never replaces a transcript already there.
 
 Later: terminal and browser-watch tunnels between laptops, `git fetch` of wip
 refs from a peer, a confirm for folders over 2 GB.
@@ -109,3 +114,7 @@ refs from a peer, a confirm for folders over 2 GB.
   so hot paths never `spawnSync`; `selfTailnet(status)`, `peerOnline(status, record)`.
 - `packages/cli/src/folderSync.ts` — direct-first, relay fallback.
 - `packages/convex/convex/folderSync.ts` — passes requester tailnet through.
+- `packages/cli/src/sessionTransfer.ts` — `export_session` on both sides, on
+  the folder machinery (`servePlan`, `syncFolderFromPeer` with `receive`).
+- `packages/convex/convex/sessionTransfer.ts` — the request, outcomes and
+  discard for it, sharing `requestPeerExport` and the folder rate limit.

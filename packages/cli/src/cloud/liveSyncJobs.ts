@@ -59,6 +59,8 @@ export interface LiveSyncJobsDeps {
   report: (conversationId: string, report: MirrorReport) => Promise<void>;
   activity: (conversationIds: string[]) => Promise<MirrorActivity[]>;
   hostFor: (hostDeviceId: string) => RemoteHost | null;
+  /** A tick against that host threw: the next one may need another address. */
+  hostFailed?: (hostDeviceId: string) => void;
   log: (line: string) => void;
   jobsFile: string;
   /** The person's always/never patterns for this repo. */
@@ -345,6 +347,7 @@ export class LiveSyncJobs {
     } catch (err) {
       const msg = (err instanceof Error ? err.message : String(err)).split("\n")[0]!.slice(0, 300);
       job.nextTickAt = now + MIRROR_ERROR_BACKOFF_MS;
+      this.deps.hostFailed?.(job.spec.host_device_id);
       if (job.error !== msg) this.deps.log(`[MIRROR] ${job.spec.conversation_id.slice(0, 7)}: ${msg}`);
       await this.setStatus(job, "error", { error: msg });
       return null;

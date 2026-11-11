@@ -478,6 +478,7 @@ export async function ensureUp(
     } catch {
       if (dial !== address) {
         onProgress(`tailnet address ${dial} did not answer; using ${address}`);
+        tailnetFailedAt.set(dial, Date.now());
         dial = address;
         socket = socketFor(dial);
         continue;
@@ -583,4 +584,24 @@ export function toRemoteHost(host: CloudHost): RemoteHost {
     remoteBaseDir: `${home}/work`,
     homeDir: home,
   };
+}
+
+const TAILNET_SHUN_MS = 5 * 60_000;
+const tailnetFailedAt = new Map<string, number>();
+
+/**
+ * toRemoteHost for a caller that dials again and again (a 3 s live-sync tick)
+ * and cannot afford a probe each time: a tailnet address that failed lately
+ * gives way to the public address until TAILNET_SHUN_MS has passed.
+ */
+export function dialRemoteHost(host: CloudHost, now = Date.now()): RemoteHost {
+  const first = toRemoteHost(host);
+  const failed = tailnetFailedAt.get(first.address);
+  return failed !== undefined && now - failed < TAILNET_SHUN_MS ? toRemoteHost({ ...host, tailnet: undefined }) : first;
+}
+
+/** A dial through dialRemoteHost failed: when it went over the tailnet, use public for a while. */
+export function noteDialFailure(host: CloudHost, now = Date.now()): void {
+  const dialed = dialRemoteHost(host, now).address;
+  if (host.address && dialed !== host.address) tailnetFailedAt.set(dialed, now);
 }
