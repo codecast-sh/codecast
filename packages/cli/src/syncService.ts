@@ -461,6 +461,23 @@ export class SyncService {
     });
   }
 
+  async requestFolderExport(conversationId: string, deviceId: string, folder: string): Promise<{ command_ids: string[]; labels: Record<string, string> }> {
+    return await this.mutate("folderSync:requestFolderExport", {
+      api_token: this.apiToken,
+      device_id: deviceId,
+      conversation_id: conversationId,
+      path: folder,
+    });
+  }
+
+  async folderExportOutcomes(commandIds: string[]): Promise<Array<{ command_id: string; executed_at: number | null; result: string | null; error: string | null; label: string | null }>> {
+    return await this.client.query("folderSync:folderExportOutcomes" as any, { api_token: this.apiToken, command_ids: commandIds });
+  }
+
+  async discardFolderBundle(commandId: string): Promise<void> {
+    await this.mutate("folderSync:discardFolderBundle", { api_token: this.apiToken, command_id: commandId });
+  }
+
   /**
    * Publish one checkout's git metadata into the repository cache
    * (repos.ingestLocal). The server decides who may read it from the
@@ -1023,14 +1040,14 @@ export class SyncService {
    * images and sent files share this one leg. Callers own their own validation
    * and size caps before they get here; `label` only names the thing in logs.
    */
-  async uploadBytes(bytes: Uint8Array, mediaType: string, label = "File"): Promise<string | null> {
+  async uploadBytes(bytes: Uint8Array, mediaType: string, label = "File", timeoutMs = this.imageUploadTimeoutMs): Promise<string | null> {
     try {
       const uploadUrl = await withTimeout(
         this.mutate(
           "images:generateUploadUrl" as any,
           { api_token: this.apiToken }
         ),
-        this.imageUploadTimeoutMs,
+        timeoutMs,
         "images:generateUploadUrl",
       );
       const response = await withTimeout(
@@ -1038,9 +1055,9 @@ export class SyncService {
           method: "POST",
           headers: { "Content-Type": mediaType },
           body: new Uint8Array(bytes),
-          signal: AbortSignal.timeout(this.imageUploadTimeoutMs),
+          signal: AbortSignal.timeout(timeoutMs),
         }),
-        this.imageUploadTimeoutMs,
+        timeoutMs,
         "upload fetch",
       );
       if (!response.ok) {
