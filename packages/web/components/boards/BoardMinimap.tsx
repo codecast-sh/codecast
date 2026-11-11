@@ -7,8 +7,8 @@ import type { BoardCamera } from "./useBoardCamera";
 import type { BoardEl } from "./boardTypes";
 import { colorToken, stickyFill } from "./boardColors";
 
-const W = 200;
-const H = 132;
+const W = 168;
+const H = 108;
 
 function fillFor(el: BoardEl): string {
   if (el.kind === "sticky") return stickyFill(el.color);
@@ -42,14 +42,15 @@ export const BoardMinimap = memo(function BoardMinimap({ elements, byKey, cam }:
   return (
     <div
       data-board-ui
-      style={{ position: "absolute", top: 52, right: 12, zIndex: 20, padding: 4, background: "var(--sol-card)", border: "1px solid var(--sol-border)", borderRadius: 9, boxShadow: "var(--board-chrome-shadow)" }}
+      // Bottom-right, clear of the toolbar, translucent: an overview, not a panel over the work.
+      style={{ position: "absolute", bottom: 16, right: 12, zIndex: 20, padding: 3, background: "color-mix(in srgb, var(--sol-card) 82%, transparent)", backdropFilter: "blur(6px)", border: "1px solid var(--sol-border)", borderRadius: 9, boxShadow: "var(--board-chrome-shadow)" }}
     >
       <svg
         width={W}
         height={H}
         role="img"
         aria-label="Board overview"
-        style={{ display: "block", cursor: "pointer", touchAction: "none", borderRadius: 6, background: "var(--sol-bg)" }}
+        style={{ display: "block", cursor: "pointer", touchAction: "none", borderRadius: 6, background: "color-mix(in srgb, var(--sol-bg) 70%, transparent)" }}
         onPointerDown={(e) => { drag.current = true; e.currentTarget.setPointerCapture(e.pointerId); goTo(e); }}
         onPointerMove={(e) => { if (drag.current) goTo(e); }}
         onPointerUp={() => { drag.current = false; }}

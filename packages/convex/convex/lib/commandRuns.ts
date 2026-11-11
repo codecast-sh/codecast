@@ -128,3 +128,21 @@ export async function clientRunAnswerRefusal(ctx: Ctx, content: string, clientId
   const row = id ? await ctx.db.get(id) : null;
   return row?.run ? "This app is out of date: Run on this card needs the current version, which confirms with Touch ID and returns the command's output" : null;
 }
+
+/**
+ * What a run's Yes approved, read back by the command it started
+ * (APPROVED_RUN_ENV), so a command that records an approval of content records
+ * only what the person saw. Answers only while the run is in flight (queued or
+ * running): those states are reached through settleCommandRun alone, after a
+ * signed-in owner's Yes and Touch ID, so the answer is the proof of the
+ * person's act. Null otherwise, and for any account but the session's.
+ */
+export async function readApprovedRun(ctx: Ctx, userId: Id<"users">, decisionId: string): Promise<{ argv: string[]; cwd?: string; approves?: CommandRun["approves"] } | null> {
+  const id = ctx.db.normalizeId?.("session_decisions", decisionId);
+  const row: Row | null = id ? await ctx.db.get(id) : null;
+  const run = row?.run;
+  if (!row || !run || (run.state !== "queued" && run.state !== "running")) return null;
+  const conversation: Doc<"conversations"> | null = await ctx.db.get(row.conversation_id);
+  if (!conversation || String(conversation.user_id) !== String(userId)) return null;
+  return { argv: run.argv, ...(run.cwd ? { cwd: run.cwd } : {}), ...(run.approves ? { approves: run.approves } : {}) };
+}

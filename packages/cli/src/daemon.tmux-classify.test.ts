@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { autoContinueArmedOnPane, classifyStartedPane, parsePermissionModeFooter, stepPermissionMode, clearUnresolvablePane, extractTmuxLiveRegion, limitDialogOnPane, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
-import { classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, GROK_TRUST_PANE_CAPTURE_LINES, isClaudeIdleResumeDialog, isGrokTrustDialog, isIdleResumeOptionRow } from "./tmuxPaneState.js";
+import { autoContinueArmedOnPane, inputGuard, classifyStartedPane, parsePermissionModeFooter, stepPermissionMode, clearUnresolvablePane, extractTmuxLiveRegion, limitDialogOnPane, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
+import { classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, GROK_TRUST_PANE_CAPTURE_LINES, isClaudeIdleResumeDialog, isClaudeRewindDialog, isGrokTrustDialog, isIdleResumeOptionRow } from "./tmuxPaneState.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import { CLAUDE_BYPASS_WARNING_PANE, CODEX_TRUST_PANE, GROK_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
 
@@ -1171,5 +1171,40 @@ describe("Claude idle-resume dialog", () => {
     expect(rows).toEqual(["❯ 1. Resume"]);
     expect(isIdleResumeOptionRow("  1. Resume")).toBe(true);
     expect(isIdleResumeOptionRow("❯ 3. Resume from summary")).toBe(false);
+  });
+});
+
+// Captured 2026-11-11 from jx7f403: the Rewind picker after repeated Escapes
+// under a limit message. Its "Continue / Cancel" footer parsed as a question,
+// so every message was held for an hour instead of the picker being cancelled.
+const LIMIT_REWIND_PANE = [
+  "  ⎿  You've hit your weekly limit · resets Nov 16 at 1pm (America/New_York)",
+  "     /usage-credits to finish what you're working on.",
+  "✻ Worked for 1s · done 11:42 AM",
+  "▔".repeat(120),
+  "   Rewind",
+  "   Restore the code and/or conversation to the point before…",
+  "     Your agent process exited while this work was still in progress, and codecast restarted the session.",
+  "     2 files changed +31",
+  "   ❯ (current)",
+  "   Enter to continue · Esc to cancel",
+].join("\n");
+
+describe("Claude Code's Rewind picker (2026-11-11)", () => {
+  test("is cancelled by delivery, never held as a question", async () => {
+    expect(isClaudeRewindDialog(LIMIT_REWIND_PANE)).toBe(true);
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(LIMIT_REWIND_PANE))).toBe("rewind");
+    await expect(inputGuard(async () => LIMIT_REWIND_PANE)()).resolves.toBeUndefined();
+  });
+
+  test("a real numbered question is still held", async () => {
+    const question = [
+      "⏺ Which schema should I use?",
+      "   ❯ 1. Keep the old schema",
+      "     2. Migrate now",
+      "   Enter to confirm · Esc to cancel",
+    ].join("\n");
+    expect(isClaudeRewindDialog(question)).toBe(false);
+    await expect(inputGuard(async () => question)()).rejects.toThrow(/waiting for a human answer/);
   });
 });

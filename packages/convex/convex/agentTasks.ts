@@ -2571,7 +2571,9 @@ export async function applyTaskUpdate(
   args: TaskUpdateArgs,
   actor: { userId: Id<"users">; source: "cli" | "web" },
 ): Promise<{ ok: boolean; changed: string[] }> {
-  const whileRunning = task.status === "running" && Object.entries(args).every(([k, value]) => value === undefined || RUNNING_SAFE_FIELDS.has(k));
+  // `--every` restates the schedule type; one equal to the current one changes nothing.
+  const whileRunning = task.status === "running" && Object.entries(args).every(([k, value]) =>
+    value === undefined || RUNNING_SAFE_FIELDS.has(k) || (k === "schedule_type" && value === task.schedule_type));
   if (task.status !== "scheduled" && task.status !== "paused" && !whileRunning) return { ok: false, changed: [] };
 
   const patch: Record<string, unknown> = {};

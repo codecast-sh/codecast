@@ -8,9 +8,10 @@ import type { MachineResourceSnapshot } from "@codecast/shared/contracts";
 setDefaultTimeout(60_000);
 
 const start = makeFunctionReference<"mutation">("resourceOffload:start");
+const preflight = makeFunctionReference<"query">("resourceOffload:preflight");
 const modules = {
   "./dispatch.ts": () => import("./dispatch"), "./_generated/server.ts": () => import("./_generated/server"),
-  "./syncOutbox.ts": () => import("./syncOutbox"), "./resourceOffload.ts": () => import("./resourceOffload"), "./sessionMigrations.ts": () => import("./sessionMigrations"),
+  "./syncOutbox.ts": () => import("./syncOutbox"), "./resourceOffload.ts": () => import("./resourceOffload"), "./sessionMigrations.ts": () => import("./sessionMigrations"), "./moveRehearsals.ts": () => import("./moveRehearsals"),
 };
 async function setup() {
   const t = convexTest(schema, modules);
@@ -33,7 +34,7 @@ test("authenticated preflight writes nothing; attested start produces only safe 
   const { t, authed, args, other } = await setup();
   await expect(t.mutation(start, args)).rejects.toThrow("Authentication required");
   await expect(t.withIdentity({ subject: other }).mutation(start, args)).rejects.toThrow("source laptop");
-  const preview = await authed.mutation(start, { ...args, dry_run: true });
+  const preview = await authed.query(preflight, args);
   expect(preview.checks[0].blockers).toEqual([]);
   expect(preview.checks[0].pending.length).toBeGreaterThan(0);
   expect(await t.run(ctx => ctx.db.query("migration_batches").collect())).toEqual([]);
@@ -48,7 +49,7 @@ test("authenticated preflight writes nothing; attested start produces only safe 
 
 test("a pin or host failure after preview cannot be overridden by attestations", async () => {
   const { t, authed, args, conv, target } = await setup();
-  args.selections[0].attested = (await authed.mutation(start, { ...args, dry_run: true })).checks[0].pending;
+  args.selections[0].attested = (await authed.query(preflight, args)).checks[0].pending;
   await t.run(ctx => ctx.db.patch(conv, { inbox_pinned_at: Date.now() }));
   await expect(authed.mutation(start, args)).rejects.toThrow("Pinned");
   await t.run(async ctx => {
@@ -73,12 +74,12 @@ test("live children and combined destination memory prevent unsafe bulk starts",
   const { t, authed, args, conv, user, snapshot } = await setup();
   const child = await t.run(ctx => ctx.db.insert("conversations", { user_id: user, session_id: "child", parent_conversation_id: conv, is_subagent: true, agent_type: "claude_code", status: "active", is_private: true, message_count: 0, started_at: Date.now(), updated_at: Date.now() }));
   // A child row with no process of its own (a Task subagent that ran inside the parent) moves with it.
-  expect((await authed.mutation(start, { ...args, dry_run: true })).checks[0].blockers.join()).not.toContain("unfinished subagents");
+  expect((await authed.query(preflight, args)).checks[0].blockers.join()).not.toContain("unfinished subagents");
   await t.run(async ctx => {
     const report = (await ctx.db.query("machine_resources").collect())[0];
     await ctx.db.patch(report._id, { snapshot: { ...snapshot, processes: [...snapshot.processes, { ...snapshot.processes[0], pid: 200, sessionId: "child" }] } });
   });
-  expect((await authed.mutation(start, { ...args, dry_run: true })).checks[0].blockers.join()).toContain("unfinished subagents");
+  expect((await authed.query(preflight, args)).checks[0].blockers.join()).toContain("unfinished subagents");
   const second = await t.run(async ctx => {
     await ctx.db.patch(child, { status: "completed" });
     const second = await ctx.db.insert("conversations", { user_id: user, session_id: "s2", owner_device_id: "mac", agent_type: "claude_code", status: "active", is_private: true, message_count: 1, started_at: Date.now(), updated_at: Date.now() });
@@ -88,7 +89,7 @@ test("live children and combined destination memory prevent unsafe bulk starts",
     return second;
   });
   args.selections.push({ conversation_id: second, session_id: "s2", destination_id: "linux", attested: [] });
-  const preview = await authed.mutation(start, { ...args, dry_run: true });
+  const preview = await authed.query(preflight, args);
   expect(preview.checks.every((c: any) => c.blockers.some((b: string) => b.includes("selected group")))).toBe(true);
   expect(await t.run(ctx => ctx.db.query("migration_batches").collect())).toEqual([]);
 });
@@ -104,7 +105,7 @@ test("one session that fails its checks stays with its own reason while the rest
     return second;
   });
   args.selections.push({ conversation_id: second, session_id: "s2", destination_id: "linux", attested: [] });
-  const pending = (await authed.mutation(start, { ...args, dry_run: true })).checks.map((c: any) => c.pending);
+  const pending = (await authed.query(preflight, args)).checks.map((c: any) => c.pending);
   args.selections.forEach((s, i) => { s.attested = pending[i]; });
   const result = await authed.mutation(start, { ...args, client_batch_id: "rb_mixed", batch_ids: [{ destination_id: "linux", batch_id: "mg-mixed123" }] });
   expect(result.error).toBeUndefined();
@@ -116,7 +117,7 @@ test("one session that fails its checks stays with its own reason while the rest
 
 test("an older runner cannot claim destination continuation before resume executes", async () => {
   const { t, authed, args } = await setup();
-  args.selections[0].attested = (await authed.mutation(start, { ...args, dry_run: true })).checks[0].pending;
+  args.selections[0].attested = (await authed.query(preflight, args)).checks[0].pending;
   await authed.mutation(start, args);
   const migration = await t.run(async ctx => {
     const row = (await ctx.db.query("session_migrations").collect())[0];
@@ -130,7 +131,7 @@ test("an older runner cannot claim destination continuation before resume execut
 
 test("stable client batch identities survive replay without duplicate moves", async () => {
   const { t, authed, args } = await setup();
-  args.selections[0].attested = (await authed.mutation(start, { ...args, dry_run: true })).checks[0].pending;
+  args.selections[0].attested = (await authed.query(preflight, args)).checks[0].pending;
   const request = { ...args, client_batch_id: "rb_test", batch_ids: [{ destination_id: "linux", batch_id: "mg-stable123" }] };
   const first = await authed.mutation(start, request);
   expect(first.batches[0].batch_id).toBe("mg-stable123");
@@ -156,7 +157,7 @@ test("a refused queued request is a durable failed batch and cannot bypass new p
 
 test("named dispatch creates and cancels a real batch with the exact optimistic acknowledgement", async () => {
   const { t, authed, args } = await setup();
-  args.selections[0].attested = (await authed.mutation(start, { ...args, dry_run: true })).checks[0].pending;
+  args.selections[0].attested = (await authed.query(preflight, args)).checks[0].pending;
   const dispatch = makeFunctionReference<"mutation">("dispatch:dispatch");
   const result = await authed.mutation(dispatch, { action: "startResourceOffload",
     args: [{ ...args, client_batch_id: "rb_dispatch" }],
@@ -170,3 +171,16 @@ test("named dispatch creates and cancels a real batch with the exact optimistic 
   expect(batches[0].resource_offload.client_batch_id).toBe("rb_dispatch");
   expect(await t.run(ctx => ctx.db.query("migration_batches").collect())).toHaveLength(1);
 }, 60000);
+
+test("a running teammate holds its spawner; a spawned session outside a team does not", async () => {
+  const { t, authed, args, conv, user, snapshot } = await setup();
+  const mate = await t.run(ctx => ctx.db.insert("conversations", { user_id: user, session_id: "mate", spawned_by_conversation_id: conv, agent_type: "claude_code", status: "active", is_private: true, message_count: 0, started_at: Date.now(), updated_at: Date.now() }));
+  await t.run(async ctx => {
+    const report = (await ctx.db.query("machine_resources").collect())[0];
+    await ctx.db.patch(report._id, { snapshot: { ...snapshot, processes: [...snapshot.processes, { ...snapshot.processes[0], pid: 300, sessionId: "mate" }] } });
+  });
+  expect((await authed.query(preflight, args)).checks[0].blockers.join()).not.toContain("unfinished subagents");
+  await t.run(ctx => ctx.db.patch(mate, { agent_team_name: "crew" }));
+  expect((await authed.query(preflight, args)).checks[0].blockers.join()).toContain("unfinished subagents");
+  await expect(t.query(preflight, args)).rejects.toThrow("Authentication required");
+});

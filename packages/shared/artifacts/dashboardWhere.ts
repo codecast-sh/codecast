@@ -98,7 +98,7 @@ export function num(v: unknown): number | null {
 // ── dashboard filters ──
 
 /** Columns a dashboard offers as filters when any of its sources carries them. */
-export const FILTER_COLUMNS = ["person", "agent", "project", "repository", "assignee", "status", "kind", "source", "model", "group"] as const;
+export const FILTER_COLUMNS = ["person", "author", "agent", "project", "repository", "assignee", "status", "kind", "source", "model", "group"] as const;
 const DATE_COLUMNS = ["day", "date"];
 
 export type FilterDimension = { column: string; kind: "time" | "category"; values: string[] };
@@ -151,8 +151,9 @@ export function scopeFromParams(params: Iterable<[string, string]>, today: strin
       const r = dateRangeWhere(v, today);
       if (r) out[col] = r;
     } else {
-      const list = v.split(",").map(decodeURIComponent).filter(Boolean);
-      if (list.length) out[col] = { in: list };
+      // Each pick is its own param (f.person=ada&f.person=bo); they gather into one list.
+      const prev = out[col] as { in?: Json[] } | undefined;
+      out[col] = { in: [...(prev?.in ?? []), v] };
     }
   }
   return Object.keys(out).length ? out : undefined;

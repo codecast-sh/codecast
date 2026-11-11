@@ -234,14 +234,20 @@ export function signInLandingNote(
   const host = signInHost(url);
   if (!host) return null;
   if (o.real) {
-    return `landed on a sign-in page (${host}) in the human's own Chrome: they are signed out of this site there, and signing in is theirs. Tell them which site and account, run \`cast browser show\` once so the tab is in front, then continue in this same tab after they say it is done. Never type their credentials, copy cookies or move to another browser.`;
+    return `landed on a sign-in page (${host}) in the human's own Chrome: they are signed out of this site there. ${VAULT_SIGN_IN} Otherwise the sign-in is theirs: \`cast browser handoff "Sign in to ${host}"\` and continue in this same tab when it wakes you. Never type a credential as an argument, copy cookies or move to another browser.`;
   }
   const why = keepsOwn(host)
     ? "the agent browser keeps its own login for this site (never copied from your Chrome — a shared one signs both out; Chrome normally signs it in from your account on launch)"
     : "your Chrome's cookies for it were carried, so this site keeps its session elsewhere or you are signed out there too";
   const fix = o.realHint ? ` Or ${o.realHint}` : "";
-  return `landed on a sign-in page (${host}) — ${why}. Run \`cast browser login\` yourself now: it brings this tab to the front for the human and waits while they sign in. Report blocked only if it times out.${fix}`;
+  return `landed on a sign-in page (${host}) — ${why}. ${VAULT_SIGN_IN} Otherwise run \`cast browser login\` yourself now: it brings this tab to the front for the human and waits while they sign in. Report blocked only if it times out.${fix}`;
 }
+
+/** Signing in from the Vault: the one way an agent types a person's credentials (secretInput.ts). */
+const VAULT_SIGN_IN =
+  "If the Vault holds a login for this site (`cast vault ls <site> --kind login`), sign in with it: " +
+  "`cast browser fill <user field> --vault <name>/username`, then `cast browser fill <password field> --vault <name> --submit`; " +
+  "a 2FA code goes in with `--vault <name>/otp`, or read the texted code with `imsg` and type it.";
 
 // ---------------------------------------------------------------------------
 // Ask first sign-ins in the shared agent browser

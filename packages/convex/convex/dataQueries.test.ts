@@ -157,3 +157,37 @@ describe("data dashboards", () => {
     expect(r.rows).toEqual([]);
   });
 });
+
+describe("scheduled refresh and KPI alerts", () => {
+  test("a scheduled dashboard reads while closed, and a KPI alert fires on the crossing and on the recovery", async () => {
+    const { t, as, rosa, sheet, dash } = await setup();
+    await writeSheet(t, as, rosa, sheet);
+    const block = { ...kpi(sheet), alert: { above: 5000 } };
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: dash, layer: "main", ops: [{ k: "b_orders", put: block }, { k: "layout", put: { kind: "layout", refresh: "hourly" } }] });
+    const q = dashboard.blockQuery(block)!;
+    await as(rosa).mutation(api.dataRefresh.want, { doc_id: dash, queries: [q as any] });
+    await settle(t);
+
+    const row = await t.run(async (ctx) => (await ctx.db.query("data_queries").collect())[0]);
+    expect(row.scheduled_ms).toBe(3_600_000);
+    expect(row.alert_keys).toEqual(["b_orders"]);
+    expect(row.alert_state).toEqual({ b_orders: "above" });
+    const alerts = async () => (await t.run(async (ctx) => ctx.db.query("notifications").collect())).filter((n: any) => n.recipient_user_id === rosa).map((n: any) => n.message);
+    expect(await alerts()).toEqual(["Pre-orders is 7,000, above 5,000 on Holiday pre-orders"]);
+
+    // Nobody has the page open: the sheet drops, the schedule comes due, the cron reads it and the alert recovers.
+    await writeSheet(t, as, rosa, sheet, { B2: "1000" });
+    await t.run(async (ctx) => ctx.db.patch(row._id, { next_scheduled_at: 1, refreshed_at: 1 }));
+    const { ran } = await t.mutation(internal.dataQueries.runSchedules, {});
+    expect(ran).toBe(1);
+    await settle(t);
+    expect(await alerts()).toEqual(["Pre-orders is 7,000, above 5,000 on Holiday pre-orders", "Pre-orders is back at 3,900 on Holiday pre-orders"]);
+
+    // Turning the schedule off while closed: the next pass unschedules the row instead of reading it.
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: dash, layer: "main", ops: [{ k: "layout", set: { refresh: null } }] });
+    await t.run(async (ctx) => ctx.db.patch(row._id, { next_scheduled_at: 1 }));
+    expect((await t.mutation(internal.dataQueries.runSchedules, {})).ran).toBe(0);
+    const after = await t.run(async (ctx) => ctx.db.get(row._id));
+    expect(after?.scheduled_ms).toBeUndefined();
+  });
+});

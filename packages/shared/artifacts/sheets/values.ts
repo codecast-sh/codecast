@@ -26,7 +26,7 @@ export function isGrid(v: unknown): v is Grid {
 
 /** Format hints implied by typed input ("10%" reads as a percent, "$5" as currency). */
 export type ImpliedFormat = { nf: NumberFormatKind; dp?: number };
-export type NumberFormatKind = "number" | "percent" | "currency" | "date" | "datetime" | "text" | "plain" | "check";
+export type NumberFormatKind = "number" | "percent" | "currency" | "accounting" | "scientific" | "custom" | "date" | "datetime" | "text" | "plain" | "check";
 
 const DAY_MS = 86_400_000;
 const EPOCH_UTC = Date.UTC(1899, 11, 30);

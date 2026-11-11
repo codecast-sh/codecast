@@ -4,7 +4,7 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { makeFunctionReference } from "convex/server";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { allModules } from "./testModules.testkit";
 
@@ -105,6 +105,16 @@ describe("sheet live query tabs", () => {
     expect(c["c:q!B3"]).toBe("Renamed");
     // Title + Updated stamp of one row, plus the tab's refreshed_at.
     expect(r.changed).toBeLessThanOrEqual(3);
+  });
+
+  test("the CLI refresh runs as the session's user, finds a tab by name, and skips the throttle", async () => {
+    const { t, sheet, rosa } = await setup();
+    const as = t.withIdentity({ subject: `${rosa}|session` });
+    await as.mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [{ k: "tab:q", put: { kind: "tab", name: "Open work", order: 1, query: { source: "tasks" } } }] });
+    const first: any = await t.mutation(internal.sheetQueries.refreshAs, { user_id: rosa, doc_id: sheet, tab: "open work" });
+    expect(first).toMatchObject({ rows: 2, tabName: "Open work" });
+    const again: any = await t.mutation(internal.sheetQueries.refreshAs, { user_id: rosa, doc_id: sheet, tab: "q" });
+    expect(again.skipped).toBeUndefined();
   });
 
   test("a failing source writes its error onto the tab", async () => {

@@ -21,6 +21,8 @@ import {
   type Value,
 } from "./values";
 import { formatWithCode } from "./format";
+import { ARRAY_FUNCTION_DEFS } from "./arrayFunctions";
+import { MORE_FUNCTION_DEFS, SPLIT_DEF } from "./moreFunctions";
 import {
   scalarOf,
   cells,
@@ -732,6 +734,9 @@ function joinTexts(items: Scalar[], delim: string): Value {
   }
   return out.join(delim);
 }
+
+// Array functions spill into the cells beside them; they live in their own module.
+Object.assign(FUNCTIONS, ARRAY_FUNCTION_DEFS, MORE_FUNCTION_DEFS, { SPLIT: SPLIT_DEF });
 
 export const FUNCTION_NAMES = Object.keys(FUNCTIONS).sort();
 
