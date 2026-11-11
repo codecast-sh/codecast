@@ -1487,7 +1487,8 @@ const TITLEBAR_H = 36;
 // leaving is one spot; rows at the left edge clear it too.
 const ZEN_TOGGLE_LEFT_DESKTOP = TRAFFIC_LIGHTS_W + 12;
 const ZEN_TOGGLE_LEFT_WEB = 12;
-const ZEN_TOGGLE_SIZE = 28;
+// In the corner the toggle carries its label ("Exit zen"), at a fixed width.
+export const ZEN_EXIT_W = 92;
 const ZEN_TOGGLE_GAP = 6;
 // The workspace switcher's crest button sits beside the toggle in zen.
 const ZEN_SWITCHER_SIZE = 28;
@@ -1501,7 +1502,7 @@ export function zenToggleLeft(): number {
 export function zenCornerWidth(): number {
   // A phone has no corner toggle (zen's controls are desktop width only).
   if (!isElectron() && window.innerWidth < 768) return 0;
-  return zenToggleLeft() + ZEN_TOGGLE_SIZE + ZEN_TOGGLE_GAP + ZEN_SWITCHER_SIZE + ZEN_TOGGLE_GAP;
+  return zenToggleLeft() + ZEN_EXIT_W + ZEN_TOGGLE_GAP + ZEN_SWITCHER_SIZE + ZEN_TOGGLE_GAP;
 }
 
 // Zen mode hides the global header, yet the window still needs a surface to
