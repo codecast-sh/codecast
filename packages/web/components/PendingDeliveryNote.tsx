@@ -3,7 +3,7 @@ import { useDaemonHealth, holdsUndeliveredMessage } from "../hooks/useDaemonHeal
 import { describeDaemonHealth } from "../lib/daemonHealthCopy";
 import { withDaemonHealth, type PendingBannerState } from "../lib/pendingBanner";
 import { copyToClipboard } from "../lib/utils";
-import { useInboxStore } from "../store/inboxStore";
+import { useConversationOwnerDevice } from "../hooks/useConversationOwnerDevice";
 import { useHostWake } from "../hooks/useHostWake";
 import { HostWakeNote } from "./HostWakeStatus";
 
@@ -31,9 +31,7 @@ export function PendingDeliveryNote({
 }) {
   // The machine whose daemon carries this conversation's messages
   // (sessions.owner_device_id); health is judged for that daemon alone.
-  const ownerDeviceId = useInboxStore((s) =>
-    conversationId ? (s.sessions[conversationId]?.owner_device_id as string | undefined) : undefined,
-  );
+  const ownerDeviceId = useConversationOwnerDevice(conversationId);
   const health = useDaemonHealth(ownerDeviceId);
   const wake = useHostWake(ownerDeviceId);
   const [copied, setCopied] = useState(false);

@@ -6,7 +6,7 @@ import { useMemo } from "react";
 import { deviceDisplayName } from "@codecast/shared/contracts";
 import { useInboxStore } from "../store/inboxStore";
 import { useCoarseNow } from "./useCoarseNow";
-import { useDaemonHealth } from "./useDaemonHealth";
+import { useDaemonHealth, useObserverSettling } from "./useDaemonHealth";
 import { hostWakeStage, type HostWakeDevice, type HostWakeStage } from "../lib/hostWake";
 
 /** A manager whose minute-floored beat is this recent is online (DEVICE_ONLINE_MS plus the floor). */
@@ -18,7 +18,9 @@ export type HostWake = HostWakeStage & { deviceId: string; host: string; now: nu
 
 export function useHostWake(deviceId: string | null | undefined): HostWake | null {
   const sig = useInboxStore((s) => {
-    if (!deviceId) return "";
+    // Only a roster this page load has heard live: a cached one can say a
+    // host that woke an hour ago is still asleep.
+    if (!deviceId || !s.machineRosterLive) return "";
     const roster = s.machineRoster as RosterRow[];
     const d = roster.find((r) => r.device_id === deviceId);
     if (!d || !d.is_remote) return "";
@@ -29,7 +31,11 @@ export function useHostWake(deviceId: string | null | undefined): HostWake | nul
       mgr && [mgr.label, mgr.platform, mgr.is_remote, mgr.last_seen],
     ]);
   });
-  const health = useDaemonHealth(sig ? deviceId : null);
+  // No grace on the health: a wake in progress is on record, not inferred,
+  // and shows at once. Only "asleep", read from silence alone, waits out the
+  // grace after this tab slept, when the roster it holds may be stale.
+  const health = useDaemonHealth(sig ? deviceId : null, { grace: false });
+  const settling = useObserverSettling();
   // Seconds matter while a machine boots; an idle asleep host needs no clock.
   const parsed = useMemo(() => (sig ? JSON.parse(sig) : null), [sig]);
   const waking = !!parsed && (!!parsed[3] || parsed[5]?.last_action?.status === "running" || health.kind === "restarting");
@@ -41,7 +47,7 @@ export function useHostWake(deviceId: string | null | undefined): HostWake | nul
       ? { online: now - (mgr[3] ?? 0) < MANAGER_ONLINE_MS, name: deviceDisplayName({ label: mgr[0] ?? "", platform: mgr[1] ?? "", is_remote: !!mgr[2] }) }
       : null;
     const stage = hostWakeStage({ is_remote: true, platform, last_seen, wake_requested_at, cloud_wake, cloud_host }, health, { now, manager });
-    if (!stage) return null;
+    if (!stage || (stage.stage === "asleep" && settling)) return null;
     return { ...stage, deviceId, host: deviceDisplayName({ label: label ?? "", platform: platform ?? "", is_remote: true }), now };
-  }, [parsed, deviceId, health, now]);
+  }, [parsed, deviceId, health, now, settling]);
 }

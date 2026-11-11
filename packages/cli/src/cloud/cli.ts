@@ -156,8 +156,17 @@ export function registerCloudCommand(program: Command): void {
       const { learnHostDeviceId } = await import("./prepare.js");
       const cloud = resolveCloudHost(hostId);
       const say = (m: string) => console.log(`  ${m}`);
-      const up = await ensureUp(cloud, say);
+      // One `::wake-phase` line per phase, read live by the daemon that runs
+      // this (HostReports.run). Written synchronously: on macOS a pipe write
+      // is async, and the blocking ssh probes that follow a phase would hold
+      // its line back until they finish.
+      const { writeSync } = await import("node:fs");
+      const { wakePhaseLine } = await import("@codecast/shared/contracts");
+      const phase = (p: Parameters<typeof wakePhaseLine>[0]) => { try { writeSync(1, `${wakePhaseLine(p)}\n`); } catch { /* stdout gone: nobody is watching */ } };
+      const up = await ensureUp(cloud, say, phase);
+      phase("daemon");
       const deviceId = await learnHostDeviceId(up, toRemoteHost(up));
+      phase("home");
       // A freshly booted box gets the home steps too (each non-fatal): the
       // work queued for it may run before any laptop-side prepare happens.
       // Step 1 there is the agent logins push (remote/agentAuth.ts) and the

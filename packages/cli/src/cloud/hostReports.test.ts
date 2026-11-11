@@ -57,6 +57,35 @@ describe("HostReports", () => {
     expect(sent.at(-1).rep.last_action).toMatchObject({ action: "wake", status: "ok" });
   });
 
+  test("a wake's phases reach the host's row as they pass, throttled, and stay out of the outcome", async () => {
+    const sent: any[] = [];
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const r = new HostReports({
+      runCast: async (args, opts) => {
+        if (args[1] === "report") return { code: 0, stdout: JSON.stringify([{ host_device_id: "dev-h", report: report() }]), stderr: "" };
+        const say = (l: string) => opts?.onStdoutLine?.(l);
+        say("  starting i-1"); say("::wake-phase booting"); say("::wake-phase running");
+        await wait(80);
+        say("::wake-phase ssh_wait");
+        await wait(80);
+        say("::wake-phase not_a_phase");
+        return { code: 0, stdout: "::wake-phase booting\n{\"host\":\"i-1\"}", stderr: "" };
+      },
+      report: async (id, rep) => { sent.push(structuredClone(rep.last_action)); },
+      hostIdForDevice: () => "i-1",
+      log: () => {},
+      phaseReportMinMs: 50,
+    });
+    await r.refresh();
+    sent.length = 0;
+    const out = await r.run("dev-h", "wake", ["cloud", "wake", "i-1"], 5000);
+    const details = sent.filter((a) => a?.status === "running").map((a) => a.detail);
+    // The start goes out bare; booting and running land in one window, so only running is sent; then ssh_wait.
+    expect(details).toEqual([undefined, "running", "ssh_wait"]);
+    expect(sent.at(-1)).toMatchObject({ status: "ok", detail: '{"host":"i-1"}' });
+    expect(out.tail).toBe('{"host":"i-1"}');
+  });
+
   test("a host this laptop does not manage is refused", async () => {
     const { r, calls } = rig();
     await expect(r.act({ host_device_id: "other", action: "wake" })).rejects.toThrow("does not manage");

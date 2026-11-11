@@ -71,11 +71,40 @@ export interface CloudHostReport {
   images: Array<{ id: string; name: string; created: string }>;
   /** Logins the laptop has but did not push, with why (a lapsed token, laptop paths). */
   logins_held: Array<{ id: string; reason: string }>;
+  /** While a wake runs, `detail` holds its current WakePhase; once it ends, the child's last lines. */
   last_action?: { action: CloudHostAction; status: "running" | "ok" | "failed"; detail?: string; at: number };
   /** Launched by autoscale (it counts against a template's max_extra). */
   autoscaled?: boolean;
   at: number;
 }
+
+/**
+ * Where a host's boot is, as the wake command passes it along: `cast cloud
+ * wake` prints one `::wake-phase <key>` line per phase, the laptop's daemon
+ * puts the key in the running wake's `last_action.detail`, and the web shows
+ * its label under the step it belongs to. A key, never free text, so the web
+ * can place it and a phase's wording lives here alone.
+ */
+export const WAKE_PHASES = {
+  booting: { label: "booting the instance", step: "starting" },
+  running: { label: "instance running", step: "starting" },
+  ssh_wait: { label: "waiting for SSH", step: "starting" },
+  ssh_up: { label: "SSH connected", step: "connecting" },
+  daemon: { label: "finding the daemon", step: "connecting" },
+  home: { label: "copying logins and tools", step: "connecting" },
+} as const satisfies Record<string, { label: string; step: "starting" | "connecting" }>;
+export type WakePhase = keyof typeof WAKE_PHASES;
+
+const WAKE_PHASE_PREFIX = "::wake-phase ";
+export const wakePhaseLine = (phase: WakePhase): string => `${WAKE_PHASE_PREFIX}${phase}`;
+/** The phase a wake child's output line announces, or null for any other line. */
+export function parseWakePhaseLine(line: string): WakePhase | null {
+  const t = line.trim();
+  if (!t.startsWith(WAKE_PHASE_PREFIX)) return null;
+  const key = t.slice(WAKE_PHASE_PREFIX.length);
+  return isWakePhase(key) ? key : null;
+}
+export const isWakePhase = (v: unknown): v is WakePhase => typeof v === "string" && Object.prototype.hasOwnProperty.call(WAKE_PHASES, v);
 
 /** The login file on the host → the tool it belongs to (for HostReadiness.logins). */
 export function loginIdForHostPath(p: string): string {

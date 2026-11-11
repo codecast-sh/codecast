@@ -15,7 +15,7 @@ import { listImages } from "../hosts/image.js";
 import { collectAgentAuthBundle, laptopHome } from "../remote/agentAuth.js";
 import { remoteHome } from "../remote/session-move.js";
 import { toRemoteHost } from "../browser/cloudHost.js";
-import { CLOUD_HOST_SIZES, isCloudHostSize, type CloudHostAction, type CloudHostReport } from "@codecast/shared/contracts";
+import { CLOUD_HOST_SIZES, isCloudHostSize, parseWakePhaseLine, type CloudHostAction, type CloudHostReport } from "@codecast/shared/contracts";
 
 export function buildCloudHostReport(host: CloudHost, managedBy: string, now = Date.now()): CloudHostReport {
   const facts = inspectHost(host);
@@ -65,11 +65,16 @@ export function hostActionArgs(action: CloudHostAction, hostId: string, imageId?
   }
 }
 
+/** At most one report per this while a wake passes its phases: a phase the web misses is replaced by the next one within it. */
+export const PHASE_REPORT_MIN_MS = 3_000;
+
 export interface HostReportsDeps {
-  runCast: (args: string[], opts?: { timeoutMs?: number }) => Promise<{ code: number | null; stdout: string; stderr: string }>;
+  runCast: (args: string[], opts?: { timeoutMs?: number; onStdoutLine?: (line: string) => void }) => Promise<{ code: number | null; stdout: string; stderr: string }>;
   report: (hostDeviceId: string, report: CloudHostReport) => Promise<void>;
   hostIdForDevice: (hostDeviceId: string) => string | null;
   log: (line: string) => void;
+  /** Tests shorten the phase report window; the daemon keeps PHASE_REPORT_MIN_MS. */
+  phaseReportMinMs?: number;
 }
 
 /** The daemon's side: periodic reports, and every action on a host (the web's, and the wakes queued work asks for) with its outcome folded into the next report. */
@@ -109,12 +114,39 @@ export class HostReports {
    * and the outcome rides a fresh report once it ends.
    */
   async run(hostDeviceId: string, action: CloudHostAction, cmd: string[], timeoutMs: number): Promise<{ ok: boolean; code: number | null; tail: string }> {
-    this.lastAction.set(hostDeviceId, { action, status: "running", at: Date.now() });
+    const started = Date.now();
+    this.lastAction.set(hostDeviceId, { action, status: "running", at: started });
+    const failed = (what: string) => (err: unknown) => this.deps.log(`[HOSTS] ${action} ${what} report failed: ${err instanceof Error ? err.message : String(err)}`);
     const known = this.lastReport.get(hostDeviceId);
-    void (known ? this.send(hostDeviceId, known) : this.refresh())
-      .catch((err) => this.deps.log(`[HOSTS] ${action} start report failed: ${err instanceof Error ? err.message : String(err)}`));
-    const r = await this.deps.runCast(cmd, { timeoutMs });
-    const tail = `${r.stdout}\n${r.stderr}`.trim().split("\n").filter(Boolean).slice(-2).join(" · ").replace(/\x1b\[[0-9;]*m/g, "").slice(0, 400);
+    void (known ? this.send(hostDeviceId, known) : this.refresh()).catch(failed("start"));
+
+    // Each phase the child announces rides the running action's detail, at
+    // most one report per PHASE_REPORT_MIN_MS; the last phase inside a window
+    // goes out when it closes. Without a report to fold it into (the first
+    // pass still running), a phase waits for that pass, which carries it.
+    let lastSent = 0;
+    let pending: ReturnType<typeof setTimeout> | null = null;
+    let done = false;
+    const flush = () => {
+      pending = null;
+      const base = this.lastReport.get(hostDeviceId);
+      if (done || !base) return;
+      lastSent = Date.now();
+      void this.send(hostDeviceId, base).catch(failed("phase"));
+    };
+    const onStdoutLine = (line: string) => {
+      const phase = parseWakePhaseLine(line);
+      if (!phase || done) return;
+      this.lastAction.set(hostDeviceId, { action, status: "running", detail: phase, at: started });
+      if (pending) return;
+      const wait = Math.max(0, lastSent + (this.deps.phaseReportMinMs ?? PHASE_REPORT_MIN_MS) - Date.now());
+      pending = setTimeout(flush, wait);
+    };
+    const r = await this.deps.runCast(cmd, { timeoutMs, onStdoutLine });
+    done = true;
+    if (pending) clearTimeout(pending);
+    const out = r.stdout.split("\n").filter((l) => !parseWakePhaseLine(l)).join("\n");
+    const tail = `${out}\n${r.stderr}`.trim().split("\n").filter(Boolean).slice(-2).join(" · ").replace(/\x1b\[[0-9;]*m/g, "").slice(0, 400);
     this.lastAction.set(hostDeviceId, { action, status: r.code === 0 ? "ok" : "failed", ...(tail ? { detail: tail } : {}), at: Date.now() });
     await this.refresh();
     return { ok: r.code === 0, code: r.code, tail };

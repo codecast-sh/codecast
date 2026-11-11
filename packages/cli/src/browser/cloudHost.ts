@@ -37,6 +37,7 @@ import { agentSpawnPath } from "../agentSpawnPath.js";
 import type { RemoteHost } from "../remote/session-move.js";
 import { codecastPath } from "../codecastDir.js";
 import { HOST_TAILNET_COMMAND, localTailnet, readHostTailnet, tailnetDialAddress, type TailnetRecord } from "../cloud/tailnet.js";
+import type { WakePhase } from "@codecast/shared/contracts";
 
 export type HostState = "running" | "stopped" | "pending" | "missing";
 
@@ -392,6 +393,9 @@ export class HostGone extends Error {
 export async function ensureUp(
   host: CloudHost,
   onProgress: (msg: string) => void = () => {},
+  // Where the boot is, for a person watching it (WAKE_PHASES): a session
+  // waiting on this host shows each one as it passes.
+  onPhase: (phase: WakePhase) => void = () => {},
 ): Promise<CloudHost> {
   if (host.provider !== "aws") return host;
 
@@ -404,6 +408,7 @@ export async function ensureUp(
     onProgress(`starting ${host.id}`);
     aws(["ec2", "start-instances", "--instance-ids", host.id], host.region, host.profile);
     state = "pending";
+    onPhase("booting");
   }
 
   const bootMinutes = host.platform === "darwin" ? 25 : 3;
@@ -417,6 +422,7 @@ export async function ensureUp(
   }
 
   if (!address) throw new Error(`${host.id} is running but has no public address`);
+  if (!wasRunning) onPhase("running");
 
   healSecurityGroup(host, onProgress, inst);
 
@@ -478,6 +484,7 @@ export async function ensureUp(
       }
       if (Date.now() > sshDeadline) throw new Error(`${host.id} is running but never accepted SSH at ${address}`);
       onProgress("waiting for it to accept connections…");
+      onPhase("ssh_wait");
       await new Promise((r) => setTimeout(r, 5000));
     }
   }
@@ -485,6 +492,7 @@ export async function ensureUp(
   // Learn the host's tailnet node over the connection just made, so the next
   // dial can prefer it (or stop preferring it, once the host leaves). A laptop
   // with no tailnet of its own could not use the answer, so it does not ask.
+  onPhase("ssh_up");
   const tailnet = localTailnet() ? learnHostTailnet(host, dial, socket) : host.tailnet;
 
   // Only these fields: a field-level patch under the registry lock, so a

@@ -318,7 +318,8 @@ export function computeDaemonHealth(
 // that mounts mid-session sees the true verdict at once instead of a fresh
 // 30s "ok" grace, and the page runs one interval instead of one per reader.
 type ObserverClock = { now: number; wokeAt: number };
-let clock: ObserverClock = { now: Date.now(), wokeAt: Date.now() };
+const COLD_LOAD_AT = Date.now();
+let clock: ObserverClock = { now: COLD_LOAD_AT, wokeAt: COLD_LOAD_AT };
 const clockListeners = new Set<() => void>();
 let clockStop: (() => void) | null = null;
 
@@ -391,7 +392,21 @@ const ROSTER_SIG_FIELDS: Array<keyof DaemonDeviceRow> = [
 export const sigCell = (v: unknown): string =>
   v === null || v === undefined || v === false ? "" : String(v).replace(/[|\n\r]+/g, " ");
 
-export function useDaemonHealth(deviceId: string | null | undefined): DeviceDaemonHealth {
+/**
+ * True while this tab is inside its observe grace after it slept or was hidden
+ * (the cold-load grace is excluded): the roster it holds may predate the gap.
+ */
+export function useObserverSettling(): boolean {
+  const { now, wokeAt } = useSyncExternalStore(subscribeClock, getClock, getServerClock);
+  return now - wokeAt < OBSERVE_GRACE_MS && wokeAt !== COLD_LOAD_AT;
+}
+
+/**
+ * `grace: false` judges a machine on the roster as it stands, with no observe
+ * grace, for a reader that waits for a live roster and applies the grace
+ * itself where silence is its only evidence (useHostWake).
+ */
+export function useDaemonHealth(deviceId: string | null | undefined, opts?: { grace?: boolean }): DeviceDaemonHealth {
   const rosterSig = useInboxStore((s) => {
     const row = deviceId
       ? (s.machineRoster as DaemonDeviceRow[]).find((d) => d.device_id === deviceId)
@@ -413,7 +428,7 @@ export function useDaemonHealth(deviceId: string | null | undefined): DeviceDaem
     };
   }, [rosterSig]);
   const { now, wokeAt } = useSyncExternalStore(subscribeClock, getClock, getServerClock);
-  const recentlyWoke = now - wokeAt < OBSERVE_GRACE_MS;
+  const recentlyWoke = opts?.grace !== false && now - wokeAt < OBSERVE_GRACE_MS;
   return useMemo(() => {
     if (!row) return { kind: "unknown" };
     return { ...computeDaemonHealth(deviceHealthInput(row), now, { recentlyWoke }), device: row.label };

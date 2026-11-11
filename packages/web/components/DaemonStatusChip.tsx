@@ -16,6 +16,7 @@ import { HoverCard } from "./ui/HoverCard";
 import { StatusPanelHeader, StatusPanelSection } from "./StatusPanel";
 import { useHooksReminderHidden } from "../lib/hooksReminder";
 import { useHostWake } from "../hooks/useHostWake";
+import { useConversationOwnerDevice } from "../hooks/useConversationOwnerDevice";
 import { SessionHostWakeChip } from "./HostWakeStatus";
 
 // Two shapes for one story. The pill, with its glow and pulsing dot, is for a
@@ -111,9 +112,7 @@ export function DaemonStatusChip() {
 export function SessionDaemonChip({ conversationId }: { conversationId?: string | null }) {
   useSyncDevices();
   const localDeviceId = useLocalDeviceId(true);
-  const ownerDeviceId = useInboxStore((s) =>
-    conversationId ? (s.sessions[conversationId]?.owner_device_id as string | undefined) : undefined,
-  );
+  const ownerDeviceId = useConversationOwnerDevice(conversationId);
   const ownerName = useInboxStore((s) => {
     if (!ownerDeviceId) return "";
     const d: ((typeof s.machineRoster)[number] & { label?: string }) | undefined = s.machineRoster.find((r) => r.device_id === ownerDeviceId);
@@ -152,9 +151,7 @@ export function SessionDaemonChip({ conversationId }: { conversationId?: string 
  */
 export function SessionHooksOffChip({ conversationId }: { conversationId?: string | null }) {
   useSyncDevices();
-  const deviceId = useInboxStore((s) =>
-    conversationId ? (s.sessions[conversationId]?.owner_device_id as string | undefined) : undefined,
-  );
+  const deviceId = useConversationOwnerDevice(conversationId);
   const hooksOff = useInboxStore((s) => {
     if (!deviceId) return false;
     const d = s.machineRoster.find((r) => r.device_id === deviceId) as { settings?: { hooks_enabled?: boolean } } | undefined;

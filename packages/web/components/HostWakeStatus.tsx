@@ -6,6 +6,7 @@
 import { Check, Moon } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { WAKE_STEPS, wakeElapsed } from "../lib/hostWake";
+import { WAKE_PHASES } from "@codecast/shared/contracts";
 import type { HostWake } from "../hooks/useHostWake";
 import { StatusDot } from "./StatusDot";
 import { TopbarChip } from "./TopbarButton";
@@ -42,13 +43,16 @@ const isWaking = (w: HostWake) => w.stage === "requested" || w.stage === "starti
  */
 function WakeSteps({ w, column = false }: { w: HostWake; column?: boolean }) {
   const at = isWaking(w) ? WAKE_STEPS.indexOf(w.stage as (typeof WAKE_STEPS)[number]) : 0;
+  // Where the boot is inside the current step, as the laptop running it reports.
+  const phaseKey = "phase" in w ? w.phase : undefined;
+  const phase = phaseKey ? WAKE_PHASES[phaseKey].label : null;
   return (
     <span className={column ? "flex flex-col gap-1.5" : "inline-flex items-center gap-1.5"} data-wake-steps={w.stage}>
       {WAKE_STEPS.map((step, i) => {
         const done = i < at;
         const current = i === at;
         return (
-          <span key={step} className="inline-flex items-center gap-1.5">
+          <span key={step} className={column ? "flex flex-col gap-0.5" : "inline-flex items-center gap-1.5"}>
             {i > 0 && !column && <span className={`h-px w-3 ${done || current ? "bg-sol-cyan/50" : "bg-sol-border"}`} aria-hidden />}
             <span
               className={`inline-flex items-center gap-1.5 whitespace-nowrap ${current ? "font-medium text-sol-cyan" : done ? "text-sol-text-muted" : "text-sol-text-dim/70"}`}
@@ -58,7 +62,9 @@ function WakeSteps({ w, column = false }: { w: HostWake; column?: boolean }) {
                 {done ? <Check className="h-3 w-3" /> : current ? <StatusDot color="var(--sol-cyan)" ping /> : <span className="h-1.5 w-1.5 rounded-full border border-current" aria-hidden />}
               </span>
               {STEP_LABEL[step]}
+              {current && phase && !column && <span className="font-normal text-sol-text-muted" data-wake-phase={phaseKey}>· {phase}</span>}
             </span>
+            {current && phase && column && <span className="block pl-[18px] text-sol-text-muted" data-wake-phase={phaseKey}>{phase}</span>}
           </span>
         );
       })}

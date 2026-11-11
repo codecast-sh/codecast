@@ -44,6 +44,16 @@ describe("hostWakeStage", () => {
       .toEqual({ stage: "connecting", since: at });
   });
 
+  test("a reported phase places the wake on its step and names where the boot is", () => {
+    const at = NOW - 60_000;
+    const phase = (detail: string) => stage(host({ wake_requested_at: at, cloud_host: { state: "stopped", managed_by: "lap", at, last_action: { action: "wake", status: "running", detail, at: at + 1000 } } }));
+    expect(phase("ssh_wait")).toEqual({ stage: "starting", since: at, phase: "ssh_wait" });
+    expect(phase("home")).toEqual({ stage: "connecting", since: at, phase: "home" });
+    // An older laptop's free text, or no detail at all, is the plain step.
+    expect(phase("waiting for it to accept connections")).toEqual({ stage: "starting", since: at });
+    expect(phase("toString")).toEqual({ stage: "starting", since: at });
+  });
+
   test("an outcome from before the request is not this wake's", () => {
     const at = NOW - 30_000;
     const old = { action: "wake" as const, status: "failed" as const, detail: "old", at: at - 3 * 3600_000 };
@@ -73,10 +83,22 @@ describe("hostWakeStage", () => {
     expect(stage(d("failed"), offline, null)).toEqual({ stage: "failed", since: at, error: "NoHeartbeat", retry: false });
   });
 
-  test("the daemon's boot beat after a wake is connecting; the next beat ends the wake", () => {
+  test("the daemon's boot beat after a wake is connecting, timed from the wake; the next beat ends it", () => {
     const woke = host({ last_seen: NOW - 10_000, cloud_host: { state: "running", managed_by: "lap", at: NOW - 30_000, last_action: { action: "wake", status: "ok", at: NOW - 30_000 } } });
-    expect(stage(woke, { kind: "restarting", sinceMs: 20_000 })).toEqual({ stage: "connecting", since: NOW - 20_000 });
+    expect(stage(woke, { kind: "restarting", sinceMs: 20_000 })).toEqual({ stage: "connecting", since: NOW - 30_000 });
     expect(stage(woke, ok)).toBeNull();
+  });
+
+  // The MacBook run of Nov 8: union-line-5's daemon beat at 20:02:12, three
+  // seconds after SSH answered, while the wake copied logins until 20:03:32.
+  test("a host that beats while its wake still runs keeps the wake's phase, and never goes back to starting", () => {
+    const started = NOW - 60_000;
+    const beatingHost = (detail?: string) => host({ last_seen: NOW - 5_000, cloud_host: { state: "running", managed_by: "lap", at: NOW - 5_000, last_action: { action: "wake", status: "running", ...(detail ? { detail } : {}), at: started } } });
+    for (const h of [{ kind: "restarting", sinceMs: 4_000 } as DaemonHealth, ok]) {
+      expect(stage(beatingHost("home"), h)).toEqual({ stage: "connecting", since: started, phase: "home" });
+      expect(stage(beatingHost("running"), h)).toEqual({ stage: "connecting", since: started });
+      expect(stage(beatingHost(), h)).toEqual({ stage: "connecting", since: started });
+    }
   });
 
   test("a restart with no wake behind it (an update) is not a wake", () => {

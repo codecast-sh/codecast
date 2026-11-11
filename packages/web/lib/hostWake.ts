@@ -12,7 +12,7 @@
 // recovers its sessions before it takes messages), a normal beat is awake.
 // Pure, so every surface that shows a wake tells the same story.
 
-import { deviceWakesOnUse, type CloudHostReport } from "@codecast/shared/contracts";
+import { WAKE_PHASES, deviceWakesOnUse, isWakePhase, type CloudHostReport, type WakePhase } from "@codecast/shared/contracts";
 import type { DaemonHealth } from "../hooks/useDaemonHealth";
 
 export type HostWakeStage =
@@ -21,9 +21,9 @@ export type HostWakeStage =
   /** Work is waiting and the wake was asked for; nobody has started the machine yet. */
   | { stage: "requested"; since: number }
   /** The machine is booting. */
-  | { stage: "starting"; since: number; attempt?: number }
+  | { stage: "starting"; since: number; attempt?: number; phase?: WakePhase }
   /** The machine is up; its daemon is coming back and recovering sessions. */
-  | { stage: "connecting"; since: number }
+  | { stage: "connecting"; since: number; phase?: WakePhase }
   /** The start failed. `retry` is whether a Wake from here can go anywhere. */
   | { stage: "failed"; since: number; error: string; retry: boolean }
   /** Work is waiting but the laptop that starts this host is offline, and nothing else can. */
@@ -61,11 +61,20 @@ export function hostWakeStage(
   const last = report?.last_action?.action === "wake" ? report.last_action : undefined;
 
   if (beating(health)) {
+    // A Linux host's daemon beats seconds after SSH answers, while the wake
+    // that started it is still finding the daemon and copying logins: until
+    // that wake ends, it is the story, timed from its start. Up and beating is
+    // past "Starting machine" whatever the last phase report said.
+    if (last?.status === "running" && now - last.at < ACTION_STALE_MS) {
+      const r = running(last.detail, last.at);
+      return r.stage === "starting" ? { stage: "connecting", since: last.at } : r;
+    }
     // The boot beat after a wake: up, recovering its sessions before it takes
     // messages. A restart with no wake behind it (an update) is the daemon's
     // own story, told by its health chip.
-    const woke = (last && now - last.at < RECENT_ACTION_MS) || (d.cloud_wake && now - d.cloud_wake.request_at < RECENT_ACTION_MS);
-    return health.kind === "restarting" && woke ? { stage: "connecting", since: now - health.sinceMs } : null;
+    const wokeAt = last && now - last.at < RECENT_ACTION_MS ? last.at
+      : d.cloud_wake && now - d.cloud_wake.request_at < RECENT_ACTION_MS ? d.cloud_wake.request_at : undefined;
+    return health.kind === "restarting" && wokeAt !== undefined ? { stage: "connecting", since: wokeAt } : null;
   }
 
   // The stamp outlives nothing: the host's first beat clears it. Compared on
@@ -86,7 +95,7 @@ export function hostWakeStage(
     const lastAfter = last && last.at >= requestAt - LAST_SEEN_BUCKET_MS ? last : undefined;
     if (lastAfter?.status === "failed") return { stage: "failed", since: requestAt, error: lastAfter.detail ?? "the machine did not start", retry: !!ctx.manager?.online };
     if (lastAfter?.status === "ok") return { stage: "connecting", since: requestAt };
-    if (lastAfter?.status === "running" && now - lastAfter.at < ACTION_STALE_MS) return { stage: "starting", since: requestAt };
+    if (lastAfter?.status === "running" && now - lastAfter.at < ACTION_STALE_MS) return running(lastAfter.detail, requestAt);
     const fresh = report && report.at >= requestAt ? report.state : undefined;
     if (fresh === "pending") return { stage: "starting", since: requestAt };
     if (fresh === "running") return { stage: "connecting", since: requestAt };
@@ -96,7 +105,7 @@ export function hostWakeStage(
 
   // Nothing waiting. A Wake pressed in Settings still shows its progress.
   if (last && now - last.at < RECENT_ACTION_MS) {
-    if (last.status === "running") return { stage: "starting", since: last.at };
+    if (last.status === "running") return running(last.detail, last.at);
     if (last.status === "failed") return { stage: "failed", since: last.at, error: last.detail ?? "the machine did not start", retry: !!ctx.manager?.online };
   }
   // A host that stopped answering is asleep once its laptop says so, or once
@@ -104,6 +113,12 @@ export function hostWakeStage(
   // a host reported running is a daemon problem, and the health chip says it.
   if (report?.state === "stopped" || report?.state === "stopping" || health.kind === "offline") return { stage: "asleep" };
   return null;
+}
+
+/** A running wake: the step its reported phase belongs to, and the phase itself. */
+function running(detail: string | undefined, since: number): HostWakeStage {
+  if (!isWakePhase(detail)) return { stage: "starting", since };
+  return { stage: WAKE_PHASES[detail].step, since, phase: detail };
 }
 
 /** "45s", "3m", "1h 5m": how long a wake has run, for a glance. */
