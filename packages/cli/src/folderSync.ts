@@ -151,7 +151,7 @@ export async function planFolderExport(dir: string, cap = MAX_FOLDER_BYTES): Pro
   return { ok: true, dir, entries: out.entries, bytes: out.bytes, files: out.entries.length };
 }
 
-type PlannedFolder = Extract<FolderPlan, { ok: true }>;
+export type PlannedFolder = Extract<FolderPlan, { ok: true }>;
 
 /** Stream a plan as a gzipped tar. A tar that fails errors the stream rather than ending it. */
 export function packFolderStream(plan: PlannedFolder): { stream: NodeJS.ReadableStream; kill: () => void } {
@@ -440,9 +440,21 @@ export async function exportFolder(args: ExportFolderArgs, deps: ExportFolderDep
   const dir = [recorded, localFolderFor(recorded, deps.home)].find((p) => fs.existsSync(p)) ?? recorded;
   const refused = refusedFolder(dir, deps.home);
   if (refused) return { ok: false, reason: `${refused}; refusing to carry it` };
-  const direct = args.relay_only === true ? null : directRequest(args.direct);
-  const plan = await planFolderExport(dir, direct ? MAX_DIRECT_BYTES : MAX_FOLDER_BYTES);
+  const plan = await planFolderExport(dir, wantsDirect(args) ? MAX_DIRECT_BYTES : MAX_FOLDER_BYTES);
   if (!plan.ok) return { ok: false, missing: plan.missing, reason: plan.reason };
+  return servePlan(plan, args, deps);
+}
+
+/** Whether the request offers a direct link this source may consider. */
+export function wantsDirect(args: ExportFolderArgs): boolean {
+  return args.relay_only !== true && directRequest(args.direct) !== null;
+}
+
+/** Serve a planned export: directly when the requester offered a link and it
+ *  can be granted, else packed and uploaded within the relay cap. */
+export async function servePlan(plan: PlannedFolder, args: ExportFolderArgs, deps: ExportFolderDeps): Promise<ExportFolderResult> {
+  const dir = plan.dir;
+  const direct = args.relay_only === true ? null : directRequest(args.direct);
   let skipped: string | undefined;
   if (direct) {
     const granted = await grantDirect(plan, direct, deps);
@@ -452,9 +464,9 @@ export async function exportFolder(args: ExportFolderArgs, deps: ExportFolderDep
     }
     skipped = granted.reason;
     deps.log?.(`[FOLDER] direct link to ${direct.requester.name} skipped: ${skipped}`);
-    if (plan.bytes > MAX_FOLDER_BYTES) {
-      return { ok: false, reason: `${dir} is over ${Math.round(MAX_FOLDER_BYTES / (1024 * 1024))} MB, too large to carry`, direct_skipped: skipped };
-    }
+  }
+  if (plan.bytes > MAX_FOLDER_BYTES) {
+    return { ok: false, reason: `${dir} is over ${Math.round(MAX_FOLDER_BYTES / (1024 * 1024))} MB, too large to carry`, ...(skipped ? { direct_skipped: skipped } : {}) };
   }
   const bytes = await packFolder(plan);
   deps.log?.(`[FOLDER] packed ${dir}: ${plan.files} files, ${plan.bytes} bytes -> ${bytes.length} bytes`);
@@ -496,7 +508,11 @@ export interface PeerProgress {
   total?: number;
 }
 
+export type ExportAnswer = Extract<ExportFolderResult, { ok: true }>;
+
 export interface SyncFromPeerDeps {
+  /** Unpack an answer's archive; the default unpacks the folder at `dest`. */
+  receive?: (body: NodeJS.ReadableStream, answer: ExportAnswer, limits: { maxBytes: number; maxUnpackedBytes?: number }) => Promise<void>;
   request: (opts?: PeerRequestOpts) => Promise<PeerRequest>;
   outcomes: (ids: string[]) => Promise<PeerOutcome[]>;
   download: (storageId: string) => Promise<Uint8Array | null>;
@@ -506,6 +522,8 @@ export interface SyncFromPeerDeps {
   tailnetStatus?: () => Promise<TailnetStatus | null>;
   onAttempt?: (a: PeerAttempt) => void;
   onProgress?: (p: PeerProgress) => void;
+  /** True once the person cancelled: checked each poll, and it aborts a direct pull in flight. */
+  cancelled?: () => boolean;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   log?: (m: string) => void;
@@ -518,8 +536,10 @@ export type SyncFromPeerResult =
 export const PEER_WAIT_MS = 120_000;
 const POLL_MS = 1_500;
 const PROGRESS_MS = 1_000;
+const CANCEL_CHECK_MS = 250;
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const CANCELLED = { ok: false as const, reason: "cancelled" };
 
 /** The destination side: ask every other online machine, take the first that
  *  has the folder (directly when it granted a link, else through the relay),
@@ -543,7 +563,9 @@ async function askPeers(dest: string, deps: SyncFromPeerDeps, waitMs: number, id
     last = { phase: p.phase, at: t };
     deps.onProgress?.(p);
   };
+  const stop = () => deps.cancelled?.() === true;
   progress({ phase: "asking" });
+  if (stop()) return CANCELLED;
   const offer = await deps.direct?.().catch(() => null) ?? null;
   let secret = offer ? newGrantSecret() : null;
   const labels: Record<string, string> = {};
@@ -568,6 +590,7 @@ async function askPeers(dest: string, deps: SyncFromPeerDeps, waitMs: number, id
   let deadline = now() + waitMs;
   const reasons = new Map<string, string>();
   while (now() < deadline) {
+    if (stop()) return CANCELLED;
     const rows = await deps.outcomes([...ids]).catch(() => [] as PeerOutcome[]);
     for (const row of rows) {
       if (!row.executed_at || reasons.has(row.command_id)) continue;
@@ -580,6 +603,7 @@ async function askPeers(dest: string, deps: SyncFromPeerDeps, waitMs: number, id
         const got = await pullDirect(dest, parsed, secret.secret, label, deviceId, deps, progress);
         deadline += now() - started;
         if (got.ok) return { ok: true, path: dest, from: label, files: parsed.files, mode: "direct" };
+        if (got.reason === CANCELLED.reason) return CANCELLED;
         reasons.set(row.command_id, `${label}: direct link failed (${got.reason})`);
         if (row.device_id) {
           try {
@@ -600,8 +624,9 @@ async function askPeers(dest: string, deps: SyncFromPeerDeps, waitMs: number, id
             deps.onAttempt?.({ device: label, device_id: deviceId, mode: "relay", ok: false, reason: "download failed" });
             continue;
           }
+          if (stop()) return CANCELLED;
           progress({ phase: "unpacking", from: label, mode: "relay", bytes: bytes.length, total: parsed.bytes });
-          await unpackFolder(bytes, dest);
+          await receiveWith(dest, deps)(Readable.from([Buffer.from(bytes)]), parsed, { maxBytes: MAX_DIRECT_BYTES, maxUnpackedBytes: MAX_FOLDER_BYTES + UNPACK_SLACK });
           deps.onAttempt?.({ device: label, device_id: deviceId, mode: "relay", ok: true, bytes: bytes.length });
           deps.log?.(`[FOLDER] synced ${dest} from ${label} through the relay: ${parsed.files} files`);
           return { ok: true, path: dest, from: label, files: parsed.files, mode: "relay" };
@@ -615,6 +640,7 @@ async function askPeers(dest: string, deps: SyncFromPeerDeps, waitMs: number, id
       reasons.set(row.command_id, why?.missing ? "" : `${label}: ${why?.reason ?? row.error ?? "no answer"}`);
     }
     if (reasons.size === ids.length) break;
+    progress({ phase: "asking" });
     await sleep(POLL_MS);
   }
   const said = [...reasons.values()].filter(Boolean);
@@ -623,9 +649,12 @@ async function askPeers(dest: string, deps: SyncFromPeerDeps, waitMs: number, id
   return { ok: false, reason: `no answer from ${[...new Set(Object.values(labels))].join(", ")} in ${Math.round(waitMs / 1000)}s` };
 }
 
+const receiveWith = (dest: string, deps: SyncFromPeerDeps) =>
+  deps.receive ?? ((body: NodeJS.ReadableStream, _a: ExportAnswer, limits: { maxBytes: number; maxUnpackedBytes?: number }) => unpackFolderStream(body, dest, limits));
+
 async function pullDirect(
   dest: string,
-  answer: { direct: DirectEndpoint; bytes: number },
+  answer: Extract<ExportAnswer, { direct: DirectEndpoint }>,
   secret: string,
   label: string,
   deviceId: string | undefined,
@@ -640,6 +669,8 @@ async function pullDirect(
   const source = verifyOwnerPeer(await (deps.tailnetStatus ?? localTailnetAsync)().catch(() => null), answer.direct);
   if (!source.ok) return fail(source.reason);
   const maxBytes = MAX_DIRECT_BYTES + 64 * 1024 * 1024;
+  const abort = new AbortController();
+  const watch = setInterval(() => { if (deps.cancelled?.()) abort.abort(); }, CANCEL_CHECK_MS);
   try {
     progress({ phase: "receiving", from: label, mode: "direct", bytes: 0, total: answer.bytes });
     const { bytes } = await pullGrantInto({
@@ -647,16 +678,22 @@ async function pullDirect(
       port: answer.direct.port,
       secret,
       maxBytes,
-      onBytes: (n) => progress({ phase: "receiving", from: label, mode: "direct", bytes: n, total: answer.bytes }),
+      signal: abort.signal,
+      onBytes: (n) => {
+        progress({ phase: "receiving", from: label, mode: "direct", bytes: n, total: answer.bytes });
+        if (deps.cancelled?.()) abort.abort();
+      },
       sink: (body) => {
         body.on("end", () => progress({ phase: "unpacking", from: label, mode: "direct", total: answer.bytes }));
-        return unpackFolderStream(body, dest, { maxBytes });
+        return receiveWith(dest, deps)(body, answer, { maxBytes });
       },
     });
     deps.onAttempt?.({ device: label, device_id: deviceId, mode: "direct", ok: true, bytes });
     deps.log?.(`[FOLDER] synced ${dest} from ${label} directly: ${bytes} bytes`);
     return { ok: true };
   } catch (e) {
-    return fail(message(e));
+    return abort.signal.aborted ? CANCELLED : fail(message(e));
+  } finally {
+    clearInterval(watch);
   }
 }

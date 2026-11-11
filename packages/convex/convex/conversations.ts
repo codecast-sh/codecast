@@ -1041,6 +1041,7 @@ const SHARE_HIDDEN_CONVERSATION_FIELDS = [
   "needs_input_notified_key",
   "hand_wake_notified_key",
   "title_embedding",
+  "peer_transfer",
 ] as const;
 
 /** A remote URL without its user:password@ part (an https remote can carry a token). */

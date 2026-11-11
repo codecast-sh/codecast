@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { Readable } from "node:stream";
 import {
   exportFolder,
@@ -505,5 +506,33 @@ describe("direct links", () => {
     );
     expect(relayOnly).toMatchObject({ ok: true, storage_id: "s" });
     expect(liveGrantCount()).toBe(0);
+  });
+
+  test("a cancel before anything is asked sends no request", async () => {
+    write("family/notes.md", "hello");
+    const f = fleet(path.join(root, "family"));
+    const dest = path.join(root, "here", "family");
+    const r = await syncFolderFromPeer(dest, { ...f.deps, cancelled: () => true });
+    expect(r).toEqual({ ok: false, reason: "cancelled" });
+    expect(f.requests).toEqual([]);
+    expect(fs.existsSync(dest)).toBe(false);
+  });
+
+  test("a cancel during a direct pull aborts it, leaves nothing at dest and never falls back", async () => {
+    fs.mkdirSync(path.join(root, "big"));
+    fs.writeFileSync(path.join(root, "big/blob.bin"), randomBytes(8 * 1024 * 1024));
+    const f = fleet(path.join(root, "big"));
+    const dest = path.join(root, "here", "big");
+    let cancel = false;
+    const r = await syncFolderFromPeer(dest, {
+      ...f.deps,
+      onProgress: (p) => { f.phases.push(p.phase); if (p.phase === "receiving") cancel = true; },
+      cancelled: () => cancel,
+    });
+    expect(r).toEqual({ ok: false, reason: "cancelled" });
+    expect(f.requests).toHaveLength(1);
+    expect(f.attempts).toEqual([]);
+    expect(fs.existsSync(dest)).toBe(false);
+    expect(fs.readdirSync(path.join(root, "here"))).toEqual([]);
   });
 });

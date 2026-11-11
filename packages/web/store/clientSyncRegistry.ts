@@ -161,10 +161,13 @@ export const CLIENT_SYNC_REGISTRY = {
     },
   },
   conversations: {
-    writtenBy: ["conversations"],
+    writtenBy: ["conversations", "peerTransfers"],
     persistence: { kind: "meta", key: "conversations" },
     localFirst: true,
     dispatchTable: { table: "conversations", kind: "collection" },
+    // The daemon rewrites peer_transfer every second, so the row a Cancel
+    // painted is never echoed exactly; a lock would freeze the strip.
+    unprotectedFields: ["peer_transfer"],
   },
   tasks: {
     writtenBy: ["tasks"],

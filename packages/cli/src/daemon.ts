@@ -94,7 +94,7 @@ import {
 import { readInputIdleMs } from "./inputIdle.js";
 import { checkoutOfMoveClone, copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, shq, type RemoteHost } from "./remote/session-move.js";
 import { AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, collectAgentAuthBundle, describeBundle, laptopHome, planAgentAuthPush, primeGhToken } from "./remote/agentAuth.js";
-import { hostForDevice, reachableRemoteHost, reachableRemoteHosts, readHosts, sshReachable, toRemoteHost, type CloudHost } from "./browser/cloudHost.js";
+import { dialRemoteHost, hostForDevice, noteDialFailure, reachableRemoteHost, reachableRemoteHosts, readHosts, sshReachable, toRemoteHost, type CloudHost } from "./browser/cloudHost.js";
 import {
   AGENT_BRIDGE_REFUSED_EXIT, AGENT_BRIDGE_TICK_MS, HOST_AGENT_SOCK, agentBridgeArgs, hostAgentSocket, hostAgentSocketEnv,
   bridgeAddressStale, shouldRunBridge,
@@ -715,7 +715,18 @@ async function fetchFolderFromPeers(conversationId: string, recorded: string): P
       return null;
     }
     log(`[FOLDER] ${recorded} isn't here; asking your other machines for it`);
+    const startedAt = Date.now();
+    let cancelled = false;
+    let reports = Promise.resolve();
+    const report = (p: Parameters<SyncService["reportPeerTransfer"]>[3]) => {
+      reports = reports
+        .then(() => svc.reportPeerTransfer(conversationId, deviceId(), startedAt, { ...p, path: recorded }))
+        .then((res) => { if (res?.cancel) cancelled = true; })
+        .catch((e) => log(`[FOLDER] transfer progress not reported: ${e instanceof Error ? e.message : String(e)}`));
+    };
     const r = await syncFolderFromPeer(dest, {
+      onProgress: report,
+      cancelled: () => cancelled,
       request: (opts) => svc.requestFolderExport(conversationId, deviceId(), recorded, opts),
       outcomes: (ids) => svc.folderExportOutcomes(ids),
       direct: async () => {
@@ -737,10 +748,13 @@ async function fetchFolderFromPeers(conversationId: string, recorded: string): P
       log,
     });
     if (!r.ok) {
-      folderFetchFailures.set(key, { at: Date.now(), reason: r.reason });
-      log(`[FOLDER] couldn't fetch ${recorded}: ${r.reason}`);
+      const reason = r.reason === "cancelled" ? "you cancelled the transfer" : r.reason;
+      report({ phase: "failed", reason });
+      folderFetchFailures.set(key, { at: Date.now(), reason });
+      log(`[FOLDER] couldn't fetch ${recorded}: ${reason}`);
       return null;
     }
+    report({ phase: "done", from: r.from, mode: r.mode });
     folderFetchFailures.delete(key);
     log(`[FOLDER] ${recorded} arrived from ${r.from} at ${r.path} (${r.files} files)`);
     return r.path;
@@ -3769,7 +3783,7 @@ export function discardPrimedClaim(commandId: string, siteUrl: string, apiToken:
  */
 // A backend switch waits on a turn's wind-down and an SDK host's start (minutes at worst); a kill
 // queued behind it must still run, and cancels it.
-const DETACHED_COMMANDS: ReadonlySet<string> = new Set(["cloud_agent_action", "switch_claude_backend", "export_folder"]);
+const DETACHED_COMMANDS: ReadonlySet<string> = new Set(["cloud_agent_action", "switch_claude_backend", "export_folder", "export_session"]);
 
 /** Run one delivery batch: drop what this daemon already handled, claim the
  *  whole batch in one round trip, then execute in order. Shared by the three
@@ -4228,7 +4242,8 @@ async function liveSyncJobs(): Promise<import("./cloud/liveSyncJobs.js").LiveSyn
   liveSyncJobsInstance = new LiveSyncJobs({
     report: async (conversationId, report) => { await syncServiceRef?.reportLocalMirror(conversationId, deviceId(), report); },
     activity: async (ids) => (syncServiceRef ? syncServiceRef.localMirrorActivity(ids) : []),
-    hostFor: (hostDeviceId) => { const h = hostForDevice(hostDeviceId); return h?.address ? toRemoteHost(h) : null; },
+    hostFor: (hostDeviceId) => { const h = hostForDevice(hostDeviceId); return h?.address ? dialRemoteHost(h) : null; },
+    hostFailed: (hostDeviceId) => { const h = hostForDevice(hostDeviceId); if (h?.address) noteDialFailure(h); },
     scopeFor: (spec) => readSyncScope(spec.local_root),
     log,
     jobsFile: path.join(defaultConfigDir(), "live-syncs.json"),
@@ -7043,6 +7058,25 @@ async function executeRemoteCommand(
         result = JSON.stringify(out);
         const how = out.ok ? ("direct" in out ? `granted a direct link on ${out.direct.ip}:${out.direct.port}` : "sent through the relay") : out.reason;
         log(`[FOLDER] export_folder ${parsed.path}: ${how}${"direct_skipped" in out && out.direct_skipped ? ` (direct skipped: ${out.direct_skipped})` : ""}`);
+        break;
+      }
+      case "export_session": {
+        const svc = syncServiceRef;
+        if (!svc) { error = "export_session: not connected"; break; }
+        const { FOLDER_BUNDLE_MEDIA_TYPE } = await import("./folderSync.js");
+        const { exportSession } = await import("./sessionTransfer.js");
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const home = process.env.HOME || require("os").homedir();
+        const out = await exportSession(parsed, {
+          home,
+          projectsDirs: claudeProjectsDirs(home),
+          sessionIdsFor: (conv) => Object.entries(readConversationCache()).filter(([, c]) => c === conv).map(([sid]) => sid),
+          upload: (bytes) => svc.uploadBytes(bytes, FOLDER_BUNDLE_MEDIA_TYPE, "Transcript", 5 * 60_000),
+          log,
+          onGrantDone: (g) => log(`[SESSION] direct link for ${parsed.conversation_id} closed: ${g.reason} (${g.bytes} bytes)`),
+        });
+        result = JSON.stringify(out);
+        log(`[SESSION] export_session ${parsed.conversation_id}: ${out.ok ? ("direct" in out ? "granted a direct link" : "sent through the relay") : out.reason}`);
         break;
       }
       case "cap_publish": {
@@ -25643,6 +25677,26 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   // needed only when the store lacks the session (cross-device, or a synthetic
   // fork key) — an existing session resumes as-is.
   const storeLacksSession = storeOwnedResumeType === "opencode" && !sessionExistsInOpencodeDb(sessionId);
+  // The real transcript from the machine that ran it beats a regenerated one,
+  // which has no tool results and no session folder (sessionTransfer.ts).
+  if (!sessionFile && !forkFromSessionId && conversationId && (agentTypeHint ?? "claude") === "claude" && syncServiceRef) {
+    const { fetchSessionForResume } = await import("./sessionTransfer.js");
+    const home = process.env.HOME || os.homedir();
+    const fetched = await fetchSessionForResume({
+      svc: syncServiceRef,
+      conversationId,
+      deviceId: deviceId(),
+      home,
+      projectsDir: path.join(home, ".claude", "projects"),
+      localCwd: (recorded) => resolveResumeCwdOrRefuse({ recordedCwd: recorded, cwdOverride, conversationId }),
+      log: logDelivery,
+    });
+    if (fetched) {
+      if (fetched.sessionId !== sessionId) rebindConversationSession(sessionId, fetched.sessionId, conversationId);
+      sessionId = fetched.sessionId;
+      sessionFile = await awaitRecentSessionFile(fetched.sessionId);
+    }
+  }
   if (mayReconstituteResumeTranscript(storeOwnedResumeType) && !sessionFile && (!isStoreOwnedResume || storeLacksSession) && conversationId && config?.auth_token && config?.convex_url) {
     logDelivery(`Session ${sessionId.slice(0, 8)} not found locally, reconstituting from codecast...`);
     try {
