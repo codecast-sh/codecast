@@ -32,10 +32,10 @@ async function seed(extra: Record<string, any[]> = {}) {
   return { ctx, tables };
 }
 
-const snapshot = (ctx: any, status: string) =>
+const snapshot = (ctx: any, status: string, external_run_id = "wf_c6c86999-01a") =>
   (ingestSnapshot as any)._handler(ctx, {
     api_token: TOKEN,
-    external_run_id: "wf_c6c86999-01a",
+    external_run_id,
     session_id: "sess-host",
     workflow_name: "huddles-deep-review",
     status,
@@ -59,6 +59,34 @@ describe("a dynamic run's host session is not the run's log", () => {
     await snapshot(ctx, "completed");
     const conv = tables.conversations.find((c) => c._id === "conversations_host")!;
     expect(conv.is_workflow_primary).toBeFalsy();
+  });
+});
+
+// A session can run several workflows at once. Each progress post used to
+// claim the pointer, so it flapped between runs and every flip re-pushed the
+// whole inbox list to every open window.
+describe("concurrent runs in one session", () => {
+  test("the newest live run holds the pointer while an older one keeps posting", async () => {
+    const { ctx, tables } = await seed();
+    const older = await snapshot(ctx, "running", "wf_older");
+    await ctx.db.patch(older.run_id, { created_at: Date.now() - 60_000 });
+    const newer = await snapshot(ctx, "running", "wf_newer");
+    const conv = () => tables.conversations.find((c) => c._id === "conversations_host")!;
+    expect(conv().workflow_run_id).toBe(newer.run_id);
+    await snapshot(ctx, "running", "wf_older");
+    await snapshot(ctx, "running", "wf_older");
+    expect(conv().workflow_run_id).toBe(newer.run_id);
+  });
+
+  test("once the holder finishes, the next live run takes the pointer", async () => {
+    const { ctx, tables } = await seed();
+    const older = await snapshot(ctx, "running", "wf_older");
+    await ctx.db.patch(older.run_id, { created_at: Date.now() - 60_000 });
+    const newer = await snapshot(ctx, "running", "wf_newer");
+    await snapshot(ctx, "completed", "wf_newer");
+    await snapshot(ctx, "running", "wf_older");
+    expect(tables.conversations.find((c) => c._id === "conversations_host")!.workflow_run_id).toBe(older.run_id);
+    expect(newer.run_id).toBeTruthy();
   });
 });
 

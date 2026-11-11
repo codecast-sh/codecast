@@ -1385,11 +1385,14 @@ export const ingestSnapshot = mutation({
     // Stamp the host conversation with its current run, the same link the DOT
     // path writes in updateProgress. This is what feeds the inbox row's
     // workflow_run_status enrichment — without it a session running a workflow
-    // has no card-level "workflow running" signal at all. A live run always
-    // claims the pointer (a session runs its waves one after another; the
-    // newest live run is the current one); a terminal snapshot only claims it
-    // when nothing is stamped yet, so a finished wave's final re-post can't
-    // steal the pointer back from the wave that's running now.
+    // has no card-level "workflow running" signal at all. The newest live run
+    // holds the pointer: a live run claims it when nothing live holds it or
+    // it started later than the run that does. A session can run several at
+    // once, and letting each progress post claim it rewrote the conversation
+    // on every post, which re-pushed the whole inbox list to every client.
+    // A terminal snapshot only claims it when nothing is stamped yet, so a
+    // finished wave's final re-post can't steal the pointer back from the
+    // wave that's running now.
     //
     // The pointer only, never is_workflow_primary: a dynamic run's host is a
     // person's own session that called the Workflow tool mid-conversation, not
@@ -1401,8 +1404,13 @@ export const ingestSnapshot = mutation({
     // decision discussion.
     if (primaryConvId) {
       const conv = await ctx.db.get(primaryConvId);
-      if (conv && conv.workflow_run_id !== runId && (!isTerminal || !conv.workflow_run_id)) {
-        await ctx.db.patch(primaryConvId, { workflow_run_id: runId });
+      if (conv && conv.workflow_run_id !== runId) {
+        const held = conv.workflow_run_id ? await ctx.db.get(conv.workflow_run_id) : null;
+        const heldLive = !!held && held.status !== "completed" && held.status !== "failed";
+        const claims = isTerminal
+          ? !conv.workflow_run_id
+          : !heldLive || (held.created_at ?? 0) < (existing?.created_at ?? now);
+        if (claims) await ctx.db.patch(primaryConvId, { workflow_run_id: runId });
       }
     }
     return { ok: true, run_id: runId };
