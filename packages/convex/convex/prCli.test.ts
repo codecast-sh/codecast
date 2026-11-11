@@ -211,6 +211,18 @@ describe("show", () => {
     expect(result.pull_request).toBeNull();
   });
 
+  test("lists only the linked tasks the caller may read, even if the row names another tenant's (F9)", async () => {
+    const base = await tables({
+      tasks: [
+        { _id: "task_ours", short_id: "ct-1", user_id: MEMBER, team_id: TEAM, workspace: `team:${TEAM}`, title: "Ours", status: "open" },
+        { _id: "task_theirs", short_id: "ct-2", user_id: OUTSIDER, team_id: OTHER_TEAM, workspace: `team:${OTHER_TEAM}`, title: "Secret", status: "open" },
+      ],
+    });
+    base.pull_requests[0].task_ids = ["task_ours", "task_theirs"];
+    const result = await call(show, { db: makeFakeDb(base) } as any, { api_token: TOKEN, number: 42 });
+    expect(result.tasks.map((t: any) => t.short_id)).toEqual(["ct-1"]);
+  });
+
   test("lists only the linked sessions the caller may open", async () => {
     const base = await tables();
     const testCtx = await ctx({

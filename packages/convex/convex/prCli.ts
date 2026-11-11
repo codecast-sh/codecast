@@ -29,7 +29,7 @@ import { withoutOthersPending } from "./codeComments";
 import { foldShepherdState, normalizeRepository, prUrl, PASSING_CONCLUSIONS, type CheckEntry } from "./lib/gitRefs";
 import { parsePrRef, codecastPrUrl } from "@codecast/shared/contracts";
 import { pullRequestsLinkedToConversation } from "./lib/prSessions";
-import { canAccessConversation } from "./lib/access";
+import { canAccessConversation, canAccessTask } from "./lib/access";
 
 const EVENT_LIMIT = 10;
 const LIST_LIMIT = 20;
@@ -404,7 +404,8 @@ export const show = query({
     const tasks = [];
     for (const id of pr.task_ids ?? []) {
       const task = await ctx.db.get(id);
-      if (!task) continue;
+      // Reading the pull request is team membership; a linked task keeps its own rule.
+      if (!task || !(await canAccessTask(ctx, userId, task))) continue;
       tasks.push({ id: String(task._id), short_id: task.short_id, title: task.title, status: task.status });
     }
 
