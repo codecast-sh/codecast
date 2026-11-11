@@ -48,6 +48,7 @@ import BlogUndo from "@/app/(marketing)/blog/undo-with-a-history/page";
 import BlogClaudeSessions from "@/app/(marketing)/blog/claude-code-sessions/page";
 import BlogAgentsTogether from "@/app/(marketing)/blog/claude-code-cursor-codex/page";
 import BlogFromYourPhone from "@/app/(marketing)/blog/claude-code-from-your-phone/page";
+import BlogHistoryOnDayOne from "@/app/(marketing)/blog/claude-code-history-on-day-one/page";
 import BlogChartReply from "@/app/(marketing)/blog/the-chart-in-the-reply/page";
 import BlogQuestions from "@/app/(marketing)/blog/the-questions-your-agents-save-for-you/page";
 import BlogTaskPage from "@/app/(marketing)/blog/the-task-your-agent-reports-to/page";
@@ -117,6 +118,7 @@ export function render(path: string): string {
             <Route path="blog/undo-with-a-history" element={<BlogUndo />} />
             <Route path="blog/claude-code-sessions" element={<BlogClaudeSessions />} />
             <Route path="blog/claude-code-cursor-codex" element={<BlogAgentsTogether />} />
+            <Route path="blog/claude-code-history-on-day-one" element={<BlogHistoryOnDayOne />} />
             <Route path="blog/claude-code-from-your-phone" element={<BlogFromYourPhone />} />
             <Route path="blog/the-chart-in-the-reply" element={<BlogChartReply />} />
             <Route path="blog/the-questions-your-agents-save-for-you" element={<BlogQuestions />} />

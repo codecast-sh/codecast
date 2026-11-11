@@ -20,6 +20,16 @@ export type BlogPost = {
 
 export const POSTS: BlogPost[] = [
   {
+    slug: "claude-code-history-on-day-one",
+    title: "Your old Claude Code sessions, on the day you install Codecast",
+    dek: "By the time most people try Codecast, they have months of Claude Code sessions sitting in files on their laptop. When you sign in on a machine, Codecast now uploads all of them in the background. The ones from the past week go in your inbox. The rest are in search and open in full, from the first day.",
+    author: "the codecast team",
+    date: "2026-11-08",
+    dateLabel: "November 8, 2026",
+    readingMinutes: 4,
+    cover: { src: "/blog/claude-code-history-on-day-one/search-older.png", alt: "Codecast search results from September, all in the codecast project, one matched by its title Hibernated badge placement and one by its summary" },
+  },
+  {
     slug: "claude-code-from-your-phone",
     title: "Answering Claude Code from your phone",
     dek: "You start Claude Code in a terminal on your laptop, give it a job, and walk away. Codecast's iPhone app shows you that session, lets you answer its questions and approve its edits, and sends your next message to the same terminal, as if you had typed it there.",
