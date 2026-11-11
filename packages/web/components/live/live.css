@@ -27,4 +27,4 @@
 
 /* Focus (the artifact's zen): the list column beside the open doc folds away
    while an artifact is open in it. Set on <html> by FocusToggle. */
-html[data-live-focus] .cc-detail-split[data-cc-detail-split="open"] > .cc-detail-split__list { display: none; }
+html[data-live-focus] .cc-dsplit[data-cc-split="open"] > .cc-dsplit__list { display: none; }

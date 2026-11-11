@@ -782,7 +782,7 @@ export function ActionSubmenu({
           const state = d.is_remote
             ? (d.online ? "cloud host" : usable ? "cloud host · asleep, wakes on move" : "cloud host · offline")
             : `${d.runner_name ? `${d.runner_name}'s machine` : "laptop"}${d.online ? "" : " · offline"}`;
-          return { key: d.device_id, label: `${deviceDisplayName(d)} — ${state}${d.device_id === everyOwner ? " · running here" : ""}`, active: d.device_id === everyOwner, icon: d.is_remote ? Cloud : Laptop, usable: usable && d.device_id !== everyOwner };
+          return { key: d.device_id, label: `${deviceDisplayName(d)} — ${state}${d.device_id === everyOwner ? " · running" : ""}`, active: d.device_id === everyOwner, icon: d.is_remote ? Cloud : Laptop, usable: usable && d.device_id !== everyOwner };
         })
         .filter((row) => row.label.toLowerCase().includes(q));
     }
@@ -1027,7 +1027,7 @@ export function ActionSubmenu({
     }
 
     if (mode === "device") {
-      if (item.usable === false) { toast.error(item.label.includes("running here") ? "Already running there" : "That machine is offline"); return; }
+      if (item.usable === false) { toast.error(item.label.endsWith(" · running") ? "Already running there" : "That machine is offline"); return; }
       const device = moveTargets.find((d: any) => d.device_id === item.key);
       if (device) void bulkMove(targets, device);
       onClose();
