@@ -1,6 +1,6 @@
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useState, type CSSProperties } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { useShallow } from "zustand/react/shallow";
 import { toast } from "sonner";
@@ -13,13 +13,13 @@ import { Button } from "../../../components/ui/button";
 import { Textarea } from "../../../components/ui/textarea";
 import { Switch } from "../../../components/ui/switch";
 import { SelectBox } from "../../../components/ui/select-box";
-import { useInboxStore, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, type ClientUI } from "../../../store/inboxStore";
+import { useInboxStore, resolveSimpleView, resolveInboxCompact, type ClientUI } from "../../../store/inboxStore";
 import { BUBBLE_HUE_VAR, BUBBLE_PRESETS, DEFAULT_BUBBLE_PRESET, isCustomBubbleColor, resolveBubbleHue } from "../../../lib/bubbleColor";
-import { useTheme, type VisualStyle } from "../../../components/ThemeProvider";
+import { useTheme } from "../../../components/ThemeProvider";
 import { ThemePicker } from "../../../components/theme/ThemePicker";
 import { resolveCommentsEnabled, resolveImageThumbs, resolveShowBranchPill, resolveShowCharacters } from "../../../lib/uiPrefDefaults";
 import {
-  SettingsField, SettingsLinkRow, SettingsOptionGroup, SettingsPanel, SettingsRow, SettingsSection,
+  SettingsField, SettingsLinkRow, SettingsPanel, SettingsRow, SettingsSection,
 } from "../../../components/settings/ui";
 
 export default function ProfilePage() {
@@ -116,32 +116,19 @@ function ProfileSection({ user }: { user: any }) {
 // ── interface preferences ──────────────────────────────────────────────────
 
 function AppearanceSection() {
-  const { theme, toggleTheme, visualStyle, setVisualStyle } = useTheme();
-  const options = ([
-    { value: "classic", label: "Classic", description: <StyleOptionPreview variant="classic" caption="Solarized, compact, information-dense" /> },
-    { value: "minimal", label: "Minimal", description: <StyleOptionPreview variant="minimal" caption="Neutral, spacious, reading-first" /> },
-  ] satisfies Array<{ value: VisualStyle; label: string; description: ReactNode }>);
+  const { theme, toggleTheme } = useTheme();
   return (
-    <SettingsSection title="Appearance" icon={Palette} description="Choose the visual language for every Codecast surface.">
+    <SettingsSection title="Appearance" icon={Palette} description="How Codecast looks on every surface.">
       <SettingsRow label={<label htmlFor="dark-mode">Dark mode</label>} description="Applies to all your windows and popups, on every device.">
         <Switch id="dark-mode" checked={theme === "dark"} onCheckedChange={toggleTheme} aria-label="Dark mode" />
       </SettingsRow>
-      <SettingsField label="Interface style">
-        <SettingsOptionGroup
-          value={visualStyle}
-          onChange={(value) => setVisualStyle(value as VisualStyle)}
-          label="Interface style"
-          options={options}
-          className="visual-style-options w-full"
-        />
-      </SettingsField>
       <ColorThemeField />
-      {visualStyle === "minimal" && <BubbleColorField />}
+      <BubbleColorField />
     </SettingsSection>
   );
 }
 
-/** The color theme, over either style: codecast's own, then any a mod adds. */
+/** The color theme: codecast's own, then any a mod adds. */
 function ColorThemeField() {
   return (
     <SettingsField label="Color theme">
@@ -208,19 +195,6 @@ function BubbleColorField() {
   );
 }
 
-function StyleOptionPreview({ variant, caption }: { variant: VisualStyle; caption: string }) {
-  return (
-    <span className="mt-2 block">
-      <span aria-hidden="true" className={`cc-style-preview cc-style-preview--${variant}`}>
-        <span className="cc-style-preview__nav"><i /><i /><i /></span>
-        <span className="cc-style-preview__body"><i /><i /><i /></span>
-        <span className="cc-style-preview__rail"><i /><i /></span>
-      </span>
-      <span className="mt-1.5 block">{caption}</span>
-    </span>
-  );
-}
-
 const INTERFACE_TOGGLES: Array<{
   prefKey: keyof ClientUI;
   label: string;
@@ -234,7 +208,7 @@ const INTERFACE_TOGGLES: Array<{
    *  on the style). Overrides `defaultOn`. */
   resolve?: (ui: ClientUI | undefined) => boolean;
 }> = [
-  { prefKey: "simple_view", label: "Simple view", desc: "Calmer conversations and inbox cards — secondary badges, counts and meta rows drop away", defaultOn: true, locked: (ui) => (resolveVisualStyle(ui) === "minimal" && resolveSimpleView(ui) ? { on: true, why: "Always on in the Minimal style" } : undefined) },
+  { prefKey: "simple_view", label: "Simple view", desc: "Calmer conversations and inbox cards — secondary badges, counts and meta rows drop away", defaultOn: true, locked: (ui) => (resolveSimpleView(ui) ? { on: true, why: "Always on" } : undefined) },
   { prefKey: "inbox_compact", label: "Compact session list", desc: "One line per session in the inbox: the title, its state and when it last moved. Works in every style, and is how Minimal lists sessions unless you turn it off", resolve: resolveInboxCompact },
   { prefKey: "inbox_image_thumbs", label: "Image thumbnails", desc: "Show a small thumbnail on inbox session rows when a session contains images", resolve: resolveImageThumbs },
   { prefKey: "show_agent_icon", label: "Agent icon", desc: "Show each session's agent client (Claude Code, opencode, …) next to its title in the inbox", defaultOn: true },

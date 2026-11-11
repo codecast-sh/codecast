@@ -39,6 +39,13 @@ html body :where(.cc-btn-cyan) {
   --btn-tint: #2aa198;
   --btn-ink: #002b36;
 }
+/* In the app's one style the cyan button is the primary action in the accent
+   (indigo, white label); the Solarized face above stays for Classic, which
+   only the marketing pages still render. */
+html.minimal-style body :where(.cc-btn-cyan) {
+  --btn-tint: hsl(var(--primary));
+  --btn-ink: hsl(var(--primary-foreground));
+}
 
 /* Accent tones: a filled button in one of the theme's accents (the same
    --sol-class-* variable bg-sol-<accent> reads). The label is worked out from the tint: light text on a dark fill,

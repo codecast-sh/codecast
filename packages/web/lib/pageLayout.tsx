@@ -128,9 +128,11 @@ export function PageShell({
       <TitlebarStrip />
       <div
         data-main-scroll
-        className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 lg:px-8 py-6"
+        className="flex-1 min-h-0 overflow-y-auto px-5 py-4"
       >
-        <div className={`mx-auto w-full ${pageMaxWidth(pathname)}`}>{children}</div>
+        {/* Left-aligned, Linear's way: every page's title starts on the same
+            edge as the toolbars of the list pages beside it. */}
+        <div className={`w-full ${pageMaxWidth(pathname)}`}>{children}</div>
       </div>
     </div>
   );

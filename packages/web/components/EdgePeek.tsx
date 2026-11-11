@@ -71,7 +71,7 @@ export function EdgePeek({
     <>
       <div className={`absolute inset-y-0 ${edge} w-1 z-[80]`} onMouseEnter={onEdgeEnter} onMouseLeave={onEdgeLeave} />
       <div
-        className={`absolute inset-y-0 ${edge} z-[85] ${border} border-sol-border/50 bg-sol-bg-alt shadow-2xl transition-transform duration-200 ease-out ${open ? "translate-x-0" : `${hidden} pointer-events-none`}`}
+        className={`absolute inset-y-0 ${edge} z-[85] ${border} border-sol-border/50 bg-sol-bg-alt transition-transform duration-200 ease-out ${open ? "translate-x-0 shadow-2xl" : `${hidden} pointer-events-none`}`}
         style={{ width }}
         onMouseLeave={onLeave}
       >

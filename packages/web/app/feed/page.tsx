@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { MessageFeed } from "../../components/MessageFeed";
+import { SegmentedToggle } from "../../components/SegmentedToggle";
 
 export default function FeedPage() {
   const [filter, setFilter] = useState<"my" | "team">("my");
@@ -10,34 +11,17 @@ export default function FeedPage() {
     <AuthGuard>
       <DashboardLayout>
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h1 className="text-2xl font-bold text-sol-text">Message Feed</h1>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setFilter("my")}
-                className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
-                  filter === "my"
-                    ? "bg-sol-blue/20 text-sol-blue border border-sol-blue/30"
-                    : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt"
-                }`}
-              >
-                My Messages
-              </button>
-              <button
-                onClick={() => setFilter("team")}
-                className={`px-3 py-1.5 text-sm rounded-lg transition-colors ${
-                  filter === "team"
-                    ? "bg-sol-violet/20 text-sol-violet border border-sol-violet/30"
-                    : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt"
-                }`}
-              >
-                Team
-              </button>
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex min-w-0 items-baseline gap-3">
+              <h1 className="shrink-0 text-[18px] font-semibold text-sol-text">Message feed</h1>
+              <span className="hidden min-w-0 truncate text-[13px] text-sol-text-dim sm:inline">All messages across your sessions in chronological order.</span>
             </div>
+            <SegmentedToggle
+              value={filter}
+              onChange={(k) => setFilter(k as "my" | "team")}
+              items={[{ key: "my", label: "My messages" }, { key: "team", label: "Team" }]}
+            />
           </div>
-          <p className="text-sol-text-muted text-sm">
-            All messages across your sessions in chronological order.
-          </p>
           <MessageFeed filter={filter} />
         </div>
       </DashboardLayout>

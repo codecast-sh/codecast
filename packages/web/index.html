@@ -50,10 +50,8 @@
         // the system asks for: the loader before it must not flash light.
         if (location.pathname.indexOf('/meet/') === 0) theme = 'dark';
         document.documentElement.classList.add(theme);
-        var visualStyle = localStorage.getItem('codecast-visual-style');
-        if (visualStyle === 'minimal' || visualStyle === 'codex') {
-          document.documentElement.classList.add('minimal-style');
-        }
+        // One style for every signed-in page (store/inboxStore.ts resolveVisualStyle).
+        document.documentElement.classList.add('minimal-style');
         // The color theme, as ThemeProvider cached it (lib/theme/colorTheme.ts),
         // or the default one when nothing is cached (plugins/colorThemeBoot.ts).
         try {

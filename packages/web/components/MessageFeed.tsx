@@ -136,10 +136,10 @@ function MessageCard({ message, text }: { message: FeedMessage; text: string }) 
       href={`/conversation/${message.conversation_id}`}
       className="block group"
     >
-      <div className="relative rounded-lg border border-l-[3px] border-l-sol-blue/50 border-sol-border/20 bg-sol-bg px-4 py-3 transition-all duration-150 hover:border-l-sol-blue hover:bg-sol-bg-alt/40">
+      <div className="relative rounded-md border border-sol-border bg-sol-card px-4 py-3 transition-colors duration-150 hover:bg-sol-card-hover motion-reduce:transition-none">
         <div className="flex items-center gap-2 mb-1.5">
-          <span className="text-mark font-semibold uppercase tracking-wider text-sol-blue">
-            {message.is_own ? "you" : message.author_name}
+          <span className="text-meta font-medium text-sol-text">
+            {message.is_own ? "You" : message.author_name}
           </span>
           <span className="text-meta text-sol-text-dim/30">&middot;</span>
           <span className="text-xs text-sol-text-muted truncate group-hover:text-sol-text transition-colors">
@@ -323,7 +323,7 @@ export function MessageFeed({ filter }: MessageFeedProps) {
               title={opt.title}
               className={`px-3 py-1 text-sm rounded-md transition-colors ${
                 mode === opt.key
-                  ? "bg-sol-blue/20 text-sol-blue"
+                  ? "bg-sol-bg-highlight text-sol-text"
                   : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt"
               }`}
             >

@@ -125,6 +125,9 @@ export function TriageBar() {
   if (!onInboxView || (s.clientState.ui?.zen_mode ?? false)) return null;
   if (!hasCollectionRows(s.sessions)) return null;
   if (isTriageBarCompact(s.clientState.ui)) return null;
+  // Verbs with no session to act on are noise: the board with nothing open
+  // shows no bar rather than a row of disabled buttons.
+  if (!activeId) return null;
 
   const run = (verb: TriageVerb) => {
     if (!activeId) return;

@@ -15,6 +15,9 @@ import type { ModTheme, ThemePalette } from "@codecast/shared/contracts/theme";
 export const BUILTIN_THEME_SOURCE = "codecast";
 
 export const BUILTIN_THEMES: readonly ModTheme[] = [
+  // The standard: no palette of its own, so the stylesheet paints the app's
+  // neutral greys and indigo accent (app/globals.css .minimal-style).
+  { id: "original", title: "Standard" },
   {
     id: "verdigris",
     title: "Verdigris",
@@ -33,7 +36,6 @@ export const BUILTIN_THEMES: readonly ModTheme[] = [
       green: "#7ec76b", cyan: "#4ccac0", blue: "#6aa8e8", violet: "#a28ee6", magenta: "#e27aa9",
     },
   },
-  { id: "original", title: "Original" },
   {
     id: "fjord",
     title: "Fjord",
@@ -132,7 +134,7 @@ export const BUILTIN_THEMES: readonly ModTheme[] = [
   },
 ];
 
-/** Verdigris, the theme a person who never chose sees. */
+/** Standard, the theme a person who never chose sees. */
 export const DEFAULT_THEME: ModTheme = BUILTIN_THEMES[0]!;
 
 /**
@@ -150,12 +152,12 @@ export const ORIGINAL_PREVIEW: Record<"classic" | "minimal", Record<"light" | "d
   },
   minimal: {
     light: {
-      bg: "#ffffff", "bg-alt": "#f7f7f5", card: "#ffffff", border: "#d9d9d5", text: "#1f1f1f", "text-muted": "#595957",
-      red: "#d34b4b", orange: "#d85d38", amber: "#b36b22", yellow: "#a86f13", green: "#5f7f38", cyan: "#2f7168", blue: "#3f76c4", violet: "#7667b6", magenta: "#b44b7f",
+      bg: "#ffffff", "bg-alt": "#f7f7f8", card: "#ffffff", border: "#e4e4e7", text: "#18181b", "text-muted": "#6b6b74",
+      red: "#d93d42", orange: "#c8561a", amber: "#b2620e", yellow: "#9a7300", green: "#2f8a57", cyan: "#5e6ad2", blue: "#2f6fd0", violet: "#7559cc", magenta: "#c03f86",
     },
     dark: {
-      bg: "#161615", "bg-alt": "#1c1c1b", card: "#252523", border: "#393936", text: "#e7e5e0", "text-muted": "#a19f98",
-      red: "#e8787a", orange: "#e88a64", amber: "#d9a05e", yellow: "#dcb25a", green: "#9bb873", cyan: "#73b2a8", blue: "#7ea7e2", violet: "#a99ce6", magenta: "#d185ad",
+      bg: "#0f0f11", "bg-alt": "#141417", card: "#17171a", border: "#2a2a30", text: "#ededef", "text-muted": "#a1a1aa",
+      red: "#ef5f63", orange: "#f0884a", amber: "#e3a24a", yellow: "#d9bd52", green: "#4cb782", cyan: "#7c86e8", blue: "#6ea8ff", violet: "#a591f0", magenta: "#e17ab2",
     },
   },
 };

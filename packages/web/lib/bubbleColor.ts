@@ -7,6 +7,9 @@
 export type BubblePreset = { id: string; label: string; hue: string };
 
 export const BUBBLE_PRESETS: BubblePreset[] = [
+  // The app's accent: the default, so a person who never chose sees their
+  // messages in the same indigo as the rest of the interface.
+  { id: "indigo", label: "Indigo", hue: "#5e6ad2" },
   { id: "blue", label: "Blue", hue: "#2f7df6" },
   { id: "green", label: "Green", hue: "#5fa617" },
   { id: "teal", label: "Teal", hue: "#0f9f92" },
@@ -16,7 +19,7 @@ export const BUBBLE_PRESETS: BubblePreset[] = [
   { id: "graphite", label: "Graphite", hue: "#5b6068" },
 ];
 
-export const DEFAULT_BUBBLE_PRESET = "amber";
+export const DEFAULT_BUBBLE_PRESET = "indigo";
 
 const HEX = /^#[0-9a-f]{6}$/i;
 

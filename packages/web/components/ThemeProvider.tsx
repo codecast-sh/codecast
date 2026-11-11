@@ -17,8 +17,8 @@ export type VisualStyle = "classic" | "minimal";
 interface ThemeContextType {
   theme: Theme;
   toggleTheme: () => void;
+  /** Always "minimal" in the app; "classic" only while a theme lock is held. */
   visualStyle: VisualStyle;
-  setVisualStyle: (style: VisualStyle) => void;
 }
 
 export const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
@@ -31,22 +31,11 @@ function getInitialTheme(): Theme {
   return localStorage.getItem("codecast-theme") === "dark" ? "dark" : "light";
 }
 
-function normalizeVisualStyle(value: string | null | undefined): VisualStyle {
-  return value === "minimal" || value === "codex" ? "minimal" : "classic";
-}
-
-function getInitialVisualStyle(): VisualStyle {
-  if (typeof window === "undefined") return "classic";
-  return normalizeVisualStyle(localStorage.getItem("codecast-visual-style"));
-}
-
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [initialTheme] = useState<Theme>(getInitialTheme);
-  const [visualStyle, setVisualStyleState] = useState<VisualStyle>(getInitialVisualStyle);
   const [mounted, setMounted] = useState(false);
   const storedTheme = useInboxStore((s) => s.clientState.ui?.theme);
   const theme = storedTheme ?? initialTheme;
-  const serverVisualStyle = useInboxStore((s) => s.clientState.ui?.visual_style);
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
   const bubbleHue = useInboxStore((s) => resolveBubbleHue(s.clientState.ui?.user_bubble_color));
   // A held lock (useThemeLock) renders its theme in Classic style and leaves
@@ -60,7 +49,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => setLock((cur) => (cur === locked ? null : cur));
   }, []);
   const shownTheme = lock ?? theme;
-  const shownStyle: VisualStyle = lock ? "classic" : resolveVisualStyle({ visual_style: visualStyle });
+  const shownStyle: VisualStyle = lock ? "classic" : resolveVisualStyle();
 
   // One custom property on the root; the stylesheet mixes the fill from it.
   useWatchEffect(() => {
@@ -86,31 +75,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [shownTheme, mounted]);
 
   useWatchEffect(() => {
-    if (!mounted || !serverVisualStyle) return;
-    const normalizedServerStyle = normalizeVisualStyle(serverVisualStyle);
-    if (normalizedServerStyle === visualStyle) {
-      if (serverVisualStyle !== normalizedServerStyle) updateClientUI({ visual_style: normalizedServerStyle });
-      return;
-    }
-    const stored = localStorage.getItem("codecast-visual-style");
-    if (!stored) {
-      setVisualStyleState(normalizedServerStyle);
-    } else if (normalizeVisualStyle(stored) !== normalizedServerStyle) {
-      updateClientUI({ visual_style: normalizeVisualStyle(stored) });
-    }
-  }, [serverVisualStyle, mounted]);
-
-  useWatchEffect(() => {
-    if (mounted) localStorage.setItem("codecast-visual-style", visualStyle);
-  }, [visualStyle, mounted]);
-
-  useWatchEffect(() => {
     if (!styleReady) return;
     document.documentElement.classList.remove("codex-style");
     document.documentElement.classList.toggle("minimal-style", shownStyle === "minimal");
   }, [shownStyle, styleReady]);
 
-  // The color theme (lib/theme): Verdigris unless the person chose another,
+  // The color theme (lib/theme): Standard unless the person chose another,
   // its variables inline on the root for the mode on screen. A lock keeps
   // Classic's, so it shows codecast's own palette. Until a mod's theme is in the store the root keeps what
   // index.html replayed from the cache, so a cold load never flashes the
@@ -137,16 +107,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     updateClientUI({ theme: current === "dark" ? "light" : "dark" });
   }, [initialTheme, updateClientUI]);
 
-  const setVisualStyle = useCallback((style: VisualStyle) => {
-    setVisualStyleState(style);
-    updateClientUI({ visual_style: style });
-  }, [updateClientUI]);
-
   if (!mounted) return null;
 
   return (
     <ThemeLockContext.Provider value={acquireLock}>
-      <ThemeContext.Provider value={{ theme: shownTheme, toggleTheme, visualStyle: shownStyle, setVisualStyle }}>
+      <ThemeContext.Provider value={{ theme: shownTheme, toggleTheme, visualStyle: shownStyle }}>
         {children}
       </ThemeContext.Provider>
     </ThemeLockContext.Provider>
@@ -159,7 +124,7 @@ export function useTheme(): ThemeContextType {
     // No provider mounted (e.g. SSR/boot fallback): default to light with a
     // no-op toggle so the shape matches ThemeContextType and callers like
     // ThemeToggle can read `toggleTheme` unconditionally.
-    return { theme: "light", toggleTheme: () => {}, visualStyle: "classic", setVisualStyle: () => {} };
+    return { theme: "light", toggleTheme: () => {}, visualStyle: "classic" };
   }
   return context;
 }

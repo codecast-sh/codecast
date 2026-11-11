@@ -41,8 +41,8 @@ let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
 
 function Probe() {
-  const { visualStyle, setVisualStyle } = useTheme();
-  return <button onClick={() => setVisualStyle(visualStyle === "minimal" ? "classic" : "minimal")}>{visualStyle}</button>;
+  const { visualStyle } = useTheme();
+  return <span>{visualStyle}</span>;
 }
 
 function ThemeProbe() {
@@ -149,41 +149,35 @@ describe("ThemeProvider shared dark mode", () => {
   });
 });
 
+// One style: the app renders Minimal whatever was stored when Classic
+// existed, and neither reads nor rewrites that old preference.
 describe("ThemeProvider Minimal style", () => {
-  test("boots from local storage and switches back to Classic locally first", async () => {
-    localStorage.setItem("codecast-visual-style", "minimal");
+  test("renders Minimal over a stored Classic choice and leaves the old preference alone", async () => {
+    localStorage.setItem("codecast-visual-style", "classic");
+    useInboxStore.setState({ clientState: { ui: { visual_style: "classic" } }, clientStateInitialized: true });
     await act(async () => root.render(<ThemeProvider><Probe /></ThemeProvider>));
 
     expect(host.textContent).toBe("minimal");
     expect(document.documentElement.classList.contains("minimal-style")).toBe(true);
-
-    await act(async () => host.querySelector("button")!.click());
-
-    expect(host.textContent).toBe("classic");
-    expect(document.documentElement.classList.contains("minimal-style")).toBe(false);
     expect(localStorage.getItem("codecast-visual-style")).toBe("classic");
     expect(useInboxStore.getState().clientState.ui?.visual_style).toBe("classic");
   });
 
-  test("adopts the stored client preference when this device has no choice yet", async () => {
-    useInboxStore.setState({ clientState: { ui: { visual_style: "minimal" } }, clientStateInitialized: true });
+  test("renders Minimal with nothing stored, and never writes a style preference", async () => {
     await act(async () => root.render(<ThemeProvider><Probe /></ThemeProvider>));
 
     expect(host.textContent).toBe("minimal");
-    expect(localStorage.getItem("codecast-visual-style")).toBe("minimal");
     expect(document.documentElement.classList.contains("minimal-style")).toBe(true);
+    expect(localStorage.getItem("codecast-visual-style")).toBeNull();
+    expect(useInboxStore.getState().clientState.ui?.visual_style).toBeUndefined();
   });
 
-  test("migrates the legacy Codex preference to Minimal", async () => {
-    localStorage.setItem("codecast-visual-style", "codex");
-    useInboxStore.setState({ clientState: { ui: { visual_style: "codex" } as any }, clientStateInitialized: true });
+  test("drops the legacy Codex class from the root", async () => {
+    document.documentElement.classList.add("codex-style");
     await act(async () => root.render(<ThemeProvider><Probe /></ThemeProvider>));
 
-    expect(host.textContent).toBe("minimal");
-    expect(localStorage.getItem("codecast-visual-style")).toBe("minimal");
-    expect(document.documentElement.classList.contains("minimal-style")).toBe(true);
     expect(document.documentElement.classList.contains("codex-style")).toBe(false);
-    expect(useInboxStore.getState().clientState.ui?.visual_style).toBe("minimal");
+    expect(document.documentElement.classList.contains("minimal-style")).toBe(true);
   });
 });
 
@@ -194,9 +188,8 @@ describe("ThemeProvider lock", () => {
     return <span>{`${theme} ${visualStyle}`}</span>;
   }
 
-  test("holds light Classic over a dark Minimal viewer, keeps their preference, and restores it on release", async () => {
+  test("holds light Classic over a dark viewer in the app's Minimal, keeps their preference, and restores both on release", async () => {
     localStorage.setItem("codecast-theme", "dark");
-    localStorage.setItem("codecast-visual-style", "minimal");
     await act(async () => root.render(<ThemeProvider><Locked /></ThemeProvider>));
 
     expect(host.textContent).toBe("light classic");
@@ -204,12 +197,11 @@ describe("ThemeProvider lock", () => {
 
     // The viewer's preference changing live does not break the lock or get overwritten.
     await act(async () => {
-      useInboxStore.getState().syncTable("clientState", { ui: { theme: "dark", "theme:ts": 100, visual_style: "minimal" } });
+      useInboxStore.getState().syncTable("clientState", { ui: { theme: "dark", "theme:ts": 100 } });
       flushSyncPublishes();
     });
     expect(document.documentElement.className.split(" ").sort()).toEqual(["light"]);
     expect(localStorage.getItem("codecast-theme")).toBe("dark");
-    expect(localStorage.getItem("codecast-visual-style")).toBe("minimal");
 
     await act(async () => root.render(<ThemeProvider><ThemeProbe /></ThemeProvider>));
     expect(document.documentElement.classList.contains("dark")).toBe(true);
@@ -222,7 +214,6 @@ describe("ThemeProvider boot lock", () => {
     dom.reconfigure({ url: "https://local.codecast.sh/" });
     try {
       localStorage.setItem("codecast-theme", "dark");
-      localStorage.setItem("codecast-visual-style", "minimal");
       const seen: string[] = [];
       const watch = new MutationObserver(() => seen.push(document.documentElement.className));
       watch.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });

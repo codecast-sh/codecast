@@ -370,7 +370,7 @@ function EmptyVault({ onPick }: { onPick: (m: AddMode) => void }) {
     <div className="flex h-full flex-col items-center justify-center px-8" data-vault-empty>
       <div className="flex w-full max-w-[30rem] flex-col items-center gap-4">
         <div className="flex flex-col items-center gap-1 text-center">
-          <ShieldCheck size={22} className="text-sol-yellow" />
+          <ShieldCheck size={22} className="text-sol-text-dim" />
           <h2 className="text-[14px] font-semibold text-sol-text">Keys and logins for your agents</h2>
           <p className="text-[12.5px] text-sol-text-muted">Agents use them at run time; values stay out of transcripts.</p>
         </div>
@@ -390,7 +390,7 @@ function EmptyVault({ onPick }: { onPick: (m: AddMode) => void }) {
         </div>
         <section className="mt-3 flex w-full flex-col items-center gap-1 border-t border-sol-border/40 pt-3" data-vault-requests-slot>
           <span className="flex items-center gap-1.5 text-[12px] text-sol-text-dim">
-            <span className="size-1.5 rounded-full bg-sol-magenta/60" />
+            <span className="size-1.5 rounded-full bg-sol-text-muted0" />
             Agent requests for missing keys show up here
           </span>
           <CommandDisclosure label="For scripts" text={REQUEST_LINE} data-vault-request-command />
@@ -599,7 +599,7 @@ function VaultBody({ fit }: { fit: Fit }) {
   const searchShut = fit === "narrow" && !searching && !query;
   const header = (
     <div ref={titlebarRef} className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-sol-border/40 px-5 pb-2.5 pt-4">
-      <h1 className="text-xl font-semibold text-sol-text">Vault</h1>
+      <h1 className="text-[18px] font-semibold text-sol-text">Vault</h1>
       {sample && (
         <span className="self-center rounded border border-sol-violet/50 px-1.5 text-meta font-medium leading-[18px] text-sol-violet" data-vault-sample>
           Sample
@@ -637,9 +637,13 @@ function VaultBody({ fit }: { fit: Fit }) {
           </label>
         </div>
       )}
-      <div className={listFit === "narrow" || rows.length === 0 ? "ml-auto" : ""}>
-        <AddMenu onPick={setAdding} compact={fit === "narrow"} />
-      </div>
+      {/* An empty Vault's own page offers the adds, so the header holds none:
+          one primary action on screen at a time. */}
+      {rows.length > 0 && (
+        <div className={listFit === "narrow" ? "ml-auto" : ""}>
+          <AddMenu onPick={setAdding} compact={fit === "narrow"} />
+        </div>
+      )}
     </div>
   );
 

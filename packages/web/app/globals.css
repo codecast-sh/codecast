@@ -468,55 +468,69 @@ html, body {
 }
 
 .minimal-style {
+  /* The one style (the category standard): neutral greys, one indigo accent
+     that marks selection, the primary action and what waits on you, and the
+     platform's own UI sans. Red, amber and green only for real state. */
   color-scheme: light;
-  --font-ui: "SF Pro Text", "SF Pro Display", "Helvetica Neue", ui-sans-serif, sans-serif;
+  --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", Inter, Roboto, ui-sans-serif, sans-serif;
   --sol-bg: #ffffff;
-  --sol-bg-alt: #f7f7f5;
-  --sol-bg-highlight: #ececea;
-  --sol-bg-inset: #f3f3f1;
+  --sol-bg-alt: #f7f7f8;
+  --sol-bg-highlight: #efeff1;
+  --sol-bg-inset: #f7f7f8;
   --sol-card: #ffffff;
-  --sol-card-hover: #fafaf9;
-  --sol-border: #d9d9d5;
-  --sol-text: #1f1f1f;
-  --sol-text-secondary: #353535;
-  --sol-text-muted: #595957;
-  --sol-text-dim: #72726f;
-  --sol-text-muted0: #a4a49f;
-  --logo-c: #333333;
-  --sol-yellow: #a86f13;
-  --sol-orange: #d85d38;
-  --sol-amber: #b36b22;
-  --sol-red: #d34b4b;
-  --sol-magenta: #b44b7f;
-  --sol-violet: #7667b6;
-  --sol-blue: #3f76c4;
-  --sol-cyan: #2f7168;
-  --sol-green: #5f7f38;
-  --sol-link: #b14f2f;
+  --sol-card-hover: #fafafa;
+  --sol-border: #e4e4e7;
+  --sol-text: #18181b;
+  --sol-text-secondary: #3f3f46;
+  --sol-text-muted: #6b6b74;
+  --sol-text-dim: #75757e;
+  --sol-text-muted0: #a1a1aa;
+  --logo-c: #27272a;
+  --sol-yellow: #9a7300;
+  --sol-orange: #c8561a;
+  --sol-amber: #b2620e;
+  --sol-red: #d93d42;
+  --sol-magenta: #c03f86;
+  --sol-violet: #7559cc;
+  --sol-blue: #2f6fd0;
+  --sol-cyan: #5e6ad2;
+  --sol-green: #2f8a57;
+  --sol-link: #5e6ad2;
+  /* The utility classes paint the same palette: cyan is the accent slot, so
+     every text-sol-cyan, ring-sol-cyan and bg-sol-cyan/N reads as indigo. */
+  --sol-class-yellow: var(--sol-yellow);
+  --sol-class-orange: var(--sol-orange);
+  --sol-class-amber: var(--sol-amber);
+  --sol-class-red: var(--sol-red);
+  --sol-class-magenta: var(--sol-magenta);
+  --sol-class-violet: var(--sol-violet);
+  --sol-class-blue: var(--sol-blue);
+  --sol-class-cyan: var(--sol-cyan);
+  --sol-class-green: var(--sol-green);
   --background: 0 0% 100%;
-  --foreground: 0 0% 12%;
+  --foreground: 240 6% 10%;
   --card: 0 0% 100%;
-  --card-foreground: 0 0% 12%;
-  --popover: 60 9% 98%;
-  --popover-foreground: 0 0% 12%;
-  --primary: 0 0% 12%;
+  --card-foreground: 240 6% 10%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 240 6% 10%;
+  --primary: 234 56% 60%;
   --primary-foreground: 0 0% 100%;
-  --secondary: 60 7% 95%;
-  --secondary-foreground: 0 0% 20%;
-  --muted: 60 7% 95%;
-  --muted-foreground: 60 2% 40%;
-  --accent: 60 7% 93%;
-  --accent-foreground: 0 0% 12%;
-  --border: 60 5% 85%;
-  --input: 60 5% 85%;
-  --ring: 0 0% 30%;
+  --secondary: 240 5% 96%;
+  --secondary-foreground: 240 4% 16%;
+  --muted: 240 5% 96%;
+  --muted-foreground: 240 4% 44%;
+  --accent: 240 5% 94%;
+  --accent-foreground: 240 6% 10%;
+  --border: 240 6% 90%;
+  --input: 240 6% 88%;
+  --ring: 234 56% 60%;
   --conv-col-w: 43rem;
   --cc-panel-head-h: 42px;
-  --cc-panel-rule: #e7e7e4;
-  --cc-panel-motion: 180ms cubic-bezier(0.23, 1, 0.32, 1);
-  --radius: 0.75rem;
+  --cc-panel-rule: #ececef;
+  --cc-panel-motion: 160ms cubic-bezier(0.23, 1, 0.32, 1);
+  --radius: 0.375rem;
   /* Your own messages. ThemeProvider writes the hue (lib/bubbleColor.ts). */
-  --cc-user-bubble-hue: #e58a00;
+  --cc-user-bubble-hue: #5e6ad2;
 }
 
 /* The fill is mixed from the hue against the page, so one choice serves light
@@ -535,51 +549,50 @@ html, body {
 
 .dark.minimal-style {
   color-scheme: dark;
-  /* Warm graphite: the light variant's stone neutrals carried into the dark.
-     The page is the deepest surface and the sidebar sits one step above it;
-     every other surface steps up from there, so rules stay hairlines and
-     text is the brightest thing on screen. */
-  --sol-bg: #161615;
-  --sol-bg-alt: #1c1c1b;
-  --sol-bg-highlight: #2a2a28;
-  --sol-bg-inset: #232321;
-  --sol-card: #252523;
-  --sol-card-hover: #2b2b29;
-  --sol-border: #393936;
-  --sol-text: #e7e5e0;
-  --sol-text-secondary: #d2d0ca;
-  --sol-text-muted: #a19f98;
-  --sol-text-dim: #898781;
-  --sol-text-muted0: #6c6a65;
-  --logo-c: #d2d0ca;
-  --sol-yellow: #dcb25a;
-  --sol-orange: #e88a64;
-  --sol-amber: #d9a05e;
-  --sol-red: #e8787a;
-  --sol-magenta: #d185ad;
-  --sol-violet: #a99ce6;
-  --sol-blue: #7ea7e2;
-  --sol-cyan: #73b2a8;
-  --sol-green: #9bb873;
-  --sol-link: #e9a07c;
-  --cc-panel-rule: #2b2b29;
-  --background: 60 2% 11%;
-  --foreground: 43 12% 89%;
-  --card: 60 2% 14%;
-  --card-foreground: 43 12% 89%;
-  --popover: 60 2% 15%;
-  --popover-foreground: 43 12% 89%;
-  --primary: 43 12% 89%;
-  --primary-foreground: 60 2% 11%;
-  --secondary: 60 2% 16%;
-  --secondary-foreground: 43 8% 82%;
-  --muted: 60 2% 16%;
-  --muted-foreground: 45 4% 62%;
-  --accent: 60 2% 19%;
-  --accent-foreground: 43 12% 89%;
-  --border: 60 2% 21%;
-  --input: 60 2% 21%;
-  --ring: 45 4% 60%;
+  /* Near-black graphite: the page is the deepest surface and the sidebar sits
+     one step above it; rules stay hairlines and text is the brightest thing
+     on screen. */
+  --sol-bg: #0f0f11;
+  --sol-bg-alt: #141417;
+  --sol-bg-highlight: #1f1f24;
+  --sol-bg-inset: #17171a;
+  --sol-card: #17171a;
+  --sol-card-hover: #1c1c20;
+  --sol-border: #2a2a30;
+  --sol-text: #ededef;
+  --sol-text-secondary: #d4d4d8;
+  --sol-text-muted: #a1a1aa;
+  --sol-text-dim: #8b8b94;
+  --sol-text-muted0: #63636b;
+  --logo-c: #d4d4d8;
+  --sol-yellow: #d9bd52;
+  --sol-orange: #f0884a;
+  --sol-amber: #e3a24a;
+  --sol-red: #ef5f63;
+  --sol-magenta: #e17ab2;
+  --sol-violet: #a591f0;
+  --sol-blue: #6ea8ff;
+  --sol-cyan: #7c86e8;
+  --sol-green: #4cb782;
+  --sol-link: #8f98f0;
+  --cc-panel-rule: #222227;
+  --background: 240 6% 6%;
+  --foreground: 240 5% 93%;
+  --card: 240 6% 9%;
+  --card-foreground: 240 5% 93%;
+  --popover: 240 6% 10%;
+  --popover-foreground: 240 5% 93%;
+  --primary: 234 56% 60%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 240 5% 13%;
+  --secondary-foreground: 240 5% 84%;
+  --muted: 240 5% 13%;
+  --muted-foreground: 240 4% 64%;
+  --accent: 240 5% 15%;
+  --accent-foreground: 240 5% 93%;
+  --border: 240 6% 17%;
+  --input: 240 6% 19%;
+  --ring: 234 71% 70%;
 }
 
 @layer components {
@@ -4712,22 +4725,24 @@ diffs-container {
   scrollbar-color: color-mix(in srgb, var(--sol-text-dim) 30%, transparent) transparent;
 }
 
-/* The group head reads like the Needs Attention band above it: the section's
-   own accent (currentColor; renderSection puts the color class on the button)
-   as an uppercase caption on a faint tint of that accent, so each group stands
-   apart from the rows instead of fading into them. */
+/* The group head is a quiet caption: sentence case in secondary ink on the
+   list's own ground, a hairline under it. Colour stays with the rows that
+   wait on you, never on the heading. */
 .minimal-style [data-sv-rail] [data-sv-sec] {
   margin-top: 0;
-  padding: 6px 16px 6px 22px;
-  border-bottom: 1px solid color-mix(in srgb, currentColor 15%, transparent) !important;
-  background: color-mix(in srgb, currentColor 6%, var(--sol-bg-alt)) !important;
+  padding: 10px 16px 6px 22px;
+  border-bottom: 1px solid var(--cc-panel-rule) !important;
+  background: var(--sol-bg) !important;
+  color: var(--sol-text-muted) !important;
   font-family: var(--font-ui);
   line-height: 16px;
 }
 .minimal-style [data-sv-rail] [data-sv-sec] > span {
-  font-size: var(--t-mark);
-  font-weight: 600;
-  letter-spacing: 0.08em;
+  font-size: var(--t-sub);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: inherit !important;
 }
 .minimal-style [data-sv-rail] [data-sv-sec] svg {
   width: 12px;
@@ -4803,24 +4818,36 @@ diffs-container {
 
 /* ==== Minimal: rest on the conversation ====================================
    A Minimal conversation is a title, a transcript and a composer. The header's
-   metadata and icon actions, the top bar's people row and account cluster,
-   the session list's filter chips and view tools are hidden, not faded: the
-   session menu at the end of the header carries every action (search, view
-   density, copy link, send to chat, restart, rename, resume commands, thinking,
-   git diff, branch map, model and agent), the command palette carries the
+   metadata and icon actions and the top bar's people row and account cluster
+   are hidden, not faded: the session menu at the end of the header carries
+   every action (search, view density, copy link, send to chat, restart,
+   rename, resume commands, thinking, git diff, branch map, model and agent),
+   the command palette carries the
    terminal and the pages, and the context menus carry the rest. What must
    never disappear does not: a live status, a live huddle, a daemon warning, an
-   open search, a filter that is narrowing the list, the blocked sessions alert,
-   and a call in the people row. The list's view tools stay: the team inbox
+   open search, the blocked sessions alert, and a call in the people row. The
+   session list's Filter button and view tools stay: the filter, the team inbox
    switch and favorites have no other door. */
 .minimal-style [data-sv-convhead] [data-cc-conv-meta],
 .minimal-style [data-sv-convhead] [data-cc-conv-actions] > :not([data-cc-keep]),
 .minimal-style [data-sv-convhead] [data-cc-conv-actions] [data-huddle-idle],
 .minimal-style [data-cc-topbar] .people-bar:not([data-live], [data-floating]),
 .minimal-style [data-cc-topbar-tray]:not(:has([data-topbar-chip="alert"])),
-.minimal-style [data-cc-topbar-tray] > :not([data-topbar-chip="alert"], :has([data-topbar-chip="alert"])),
-.minimal-style [data-sv-rail] [data-sv-label-chips]:not(:has([aria-pressed="true"])) {
+.minimal-style [data-cc-topbar-tray] > :not([data-topbar-chip="alert"], :has([data-topbar-chip="alert"])) {
   display: none !important;
+}
+
+/* Session list filter (components/LabelChipsRow). The rail head no longer
+   carries a row of label and folder chips: one quiet Filter button opens one
+   menu, and names the filter while one is on. So nothing here hides it when
+   idle (the chip row used to be hidden until a chip was pressed), and the
+   button sits in the head's own ink beside the grouping picker. */
+.minimal-style [data-sv-rail] [data-sv-filter-button]:not([data-active]) {
+  color: var(--sol-text-dim);
+}
+.minimal-style [data-sv-rail] [data-sv-filter-button]:not([data-active]):hover,
+.minimal-style [data-sv-rail] [data-sv-filter-button][data-state="open"] {
+  color: var(--sol-text);
 }
 
 /* The session menu is the one header control that never hides. */
@@ -4980,6 +5007,31 @@ diffs-container {
   --t-ui: 13px;
   --t-sub: 12px;
   --t-mark: 11px;
+  /* One sans family: page titles and documents set in the UI face too. */
+  --font-serif: var(--font-ui);
+}
+
+/* Labels speak in sentence case. A tracked all-caps micro label (the
+   category's most common tell) reads as the label it is: no forced caps, no
+   letterspacing, the medium weight. Short codes typed in caps in the source
+   (an ID, a key name) keep their case, since only the transform is removed. */
+.minimal-style .uppercase:is(.tracking-wide, .tracking-wider, .tracking-widest, [class*="tracking-[0."]) {
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* No thick coloured stripe down a card's or a row's left edge: a selected or
+   flagged item carries its state in its fill and a hairline. */
+.minimal-style :is(.border-l-2, .border-l-\[3px\], .cm-live-callout, .cc-quote) {
+  border-left-width: 1px;
+}
+
+/* One primary colour. The tinted button faces (amber for triggers, violet,
+   blue, green and the rest) are all the primary action in this style; red
+   stays the destructive one. */
+html.minimal-style body :where(.cc-btn-violet, .cc-btn-green, .cc-btn-blue, .cc-btn-amber, .cc-btn-orange, .cc-btn-yellow) {
+  --btn-tint: hsl(var(--primary));
+  --btn-ink: hsl(var(--primary-foreground));
 }
 
 /* Conversation header: title at the pane's left edge, menu at its right. The
@@ -5065,6 +5117,11 @@ diffs-container {
 [data-nudge-slot] > [data-nudge] ~ [data-nudge] {
   display: none;
 }
+/* One strip above the page at a time: the first child of the strips line that
+   draws a banner shows, every later one waits its turn (DashboardLayout). */
+[data-cc-strips] > :is([data-cc-banner], :has([data-cc-banner])) ~ :is([data-cc-banner], :has([data-cc-banner])) {
+  display: none;
+}
 
 .minimal-style [data-cc-banner] {
   border-bottom: 1px solid var(--cc-panel-rule);
@@ -5096,6 +5153,28 @@ diffs-container {
 .minimal-style [data-cc-banner] button[aria-label="Dismiss"] {
   color: var(--sol-text-dim);
 }
+/* A strip's call to action is one quiet secondary button, whatever tint the
+   banner drew it in: a hairline, the card ground, ink text. */
+.minimal-style [data-cc-banner] a[href],
+.minimal-style [data-cc-banner] button:not([aria-label="Dismiss"]) {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--sol-border);
+  border-radius: 6px;
+  background: var(--sol-card);
+  color: var(--sol-text);
+  font-size: var(--t-sub);
+  font-weight: 500;
+  transition: background-color 150ms ease-out, border-color 150ms ease-out;
+}
+.minimal-style [data-cc-banner] :is(a[href], button:not([aria-label="Dismiss"])):hover {
+  background: var(--sol-bg-highlight);
+}
+.minimal-style [data-cc-banner] :is(a[href], button) svg {
+  width: 12px;
+  height: 12px;
+  color: currentColor;
+}
 
 /* Left navigation: the Chat list is a plain list here: no crosshatch, no inset shadow, no
    source mark on every row. Classic keeps its texture. */
@@ -5106,13 +5185,6 @@ diffs-container {
 .minimal-style [data-sv-nav] .nav-slack-mark {
   display: none;
 }
-/* The groups a non technical person does not need. Each page is one command
-   palette entry away. */
-.minimal-style [data-sv-nav] [data-rail-heading="Agents"],
-.minimal-style [data-sv-nav] [data-rail-group] {
-  display: none;
-}
-
 /* Session list head */
 .minimal-style [data-sv-rail] .cc-panel__head {
   height: var(--cc-panel-head-h);
@@ -5196,7 +5268,7 @@ diffs-container {
   background: var(--sv-card-bg) !important;
 }
 :root :is(.inbox-compact, .minimal-style) [data-sv-rail] [data-session-id][data-selected="true"][data-active="true"] {
-  box-shadow: inset 3px 0 0 var(--sol-cyan), 0 2px 8px -3px color-mix(in srgb, var(--sol-text) 35%, transparent) !important;
+  box-shadow: inset 1px 0 0 var(--sol-cyan) !important;
 }
 /* Rows carry no frame, so a hairline between neighbours keeps a long group
    scannable. It sits on the wrapper (below the row and any schedule rows
@@ -6130,7 +6202,7 @@ diffs-container {
 @keyframes org-intro-nod { 0%, 100% { transform: none; } 45% { transform: translateY(-7px); } }
 @keyframes org-intro-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 @keyframes org-intro-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
-.org-intro-face { border-radius: 9999px; box-shadow: 0 0 0 3px var(--sol-bg), 0 10px 24px -12px rgba(0, 0, 0, 0.45); animation: org-intro-pop 520ms cubic-bezier(0.34, 1.45, 0.64, 1) var(--d, 0ms) both, org-intro-nod 600ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--dn, 0ms) 1; }
+.org-intro-face { border-radius: 9999px; box-shadow: 0 0 0 3px var(--sol-bg), 0 10px 24px -12px rgba(0, 0, 0, 0.45); animation: org-intro-pop 520ms cubic-bezier(0.25, 1, 0.5, 1) var(--d, 0ms) both, org-intro-nod 600ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--dn, 0ms) 1; }
 .org-intro-in { animation: org-intro-in 460ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--d, 0ms) both; }
 .org-intro-draw { stroke-dasharray: 1; animation: org-intro-draw 420ms cubic-bezier(0.2, 0.8, 0.2, 1) var(--d, 0ms) both; }
 /* The screen leaving into the tour: the guide's easing, so the two read as one motion. */
@@ -6349,7 +6421,7 @@ diffs-container {
   overflow: clip;
   border: 1px solid color-mix(in srgb, var(--reveal-accent) 28%, var(--sol-border));
   margin: 0 var(--reveal-gutter);
-  border-left: 3px solid var(--reveal-accent);
+  border-left: 1px solid var(--reveal-accent);
   border-radius: 10px;
   background: var(--sol-bg);
   box-shadow:
@@ -6407,7 +6479,7 @@ diffs-container {
   pointer-events: auto;
   border: 1px solid color-mix(in srgb, var(--reveal-accent) 28%, var(--sol-border));
   border-top: 0;
-  border-left: 3px solid var(--reveal-accent);
+  border-left: 1px solid var(--reveal-accent);
   border-radius: 0 0 10px 10px;
   box-shadow: 0 8px 18px -12px color-mix(in srgb, var(--sol-text) 45%, transparent);
 }

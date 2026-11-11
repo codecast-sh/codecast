@@ -1131,10 +1131,10 @@ function TriggersContent() {
 
   return (
     <div className="h-full overflow-y-auto bg-sol-bg" data-main-scroll>
-      <div className="mx-auto w-full max-w-3xl px-5 sm:px-6 py-8">
+      <div className="w-full max-w-3xl px-5 py-4">
         <div ref={titlebarRef} className="flex gap-2 items-center mb-5">
-          <Zap className="w-4 h-4 text-sol-amber" />
-          <h1 className="text-lg font-semibold text-sol-text whitespace-nowrap">Triggers</h1>
+          <h1 className="text-[18px] font-semibold text-sol-text whitespace-nowrap">Triggers</h1>
+          <span className="hidden sm:inline min-w-0 truncate text-[13px] text-sol-text-dim">Agents that run on their own, later</span>
           {/* One way to start a trigger at a time: the empty state offers its
               own, and an open form is already the new trigger. */}
           {!showForm && hasTasks && (

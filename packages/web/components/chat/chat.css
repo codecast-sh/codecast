@@ -1051,6 +1051,16 @@ div.ch-reaction-tip {
   text-transform: uppercase;
   color: var(--sol-text-muted);
 }
+/* In the app's one style the day is a plain caption on the rule, Slack's way:
+   no pill, no caps. */
+.minimal-style .ch-day-label {
+  padding: 0 4px;
+  border: 0;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
 
 /* Unread rule. Matches the transcript's existing NEW divider so the two surfaces
  * teach the same thing. */

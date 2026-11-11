@@ -651,7 +651,10 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
               {/* Which roles read this room on their next wake, and "follow
                   as @handle" for the viewer's own roles. */}
               {activeChannel && !community && <ChannelListeners channel={activeChannel} hasAgents={(activeChannel.agents?.length ?? 0) > 0} />}
-              {activeChannel && activeChannel.kind !== "dm" && !community && !isGuest && (
+              {/* Only a mirrored channel says so in its header; setting up a
+                  mirror lives in the channel menu (ChannelMenu), not on every
+                  channel's title line. */}
+              {activeChannel && activeChannel.kind !== "dm" && !community && !isGuest && slackLink && (
                 <SlackMirrorPill channelId={activeChannel.id} link={slackLink} />
               )}
               {activeChannel?.kind !== "dm" && activeChannel?.topic

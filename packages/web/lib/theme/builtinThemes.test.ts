@@ -12,12 +12,16 @@ describe("built-in color themes", () => {
     }
   });
 
-  test("a person who never chose gets Verdigris; Original sets no variables", () => {
-    expect(DEFAULT_THEME.id).toBe("verdigris");
+  test("a person who never chose gets Standard, which sets no variables; Verdigris stays on offer", () => {
+    expect(DEFAULT_THEME.id).toBe("original");
+    expect(DEFAULT_THEME.title).toBe("Standard");
+    expect(BUILTIN_THEMES[0]).toBe(DEFAULT_THEME);
+    expect(DEFAULT_COLOR_THEME).toBe(ORIGINAL_COLOR_THEME);
     expect(resolveColorThemeKey(undefined)).toBe(DEFAULT_COLOR_THEME);
     expect(resolveColorThemeKey("")).toBe(DEFAULT_COLOR_THEME);
     const original = availableThemes([], []).find((c) => c.key === ORIGINAL_COLOR_THEME)!;
     expect(themeVarsByMode(original.theme)).toEqual({ light: {}, dark: {} });
+    expect(BUILTIN_THEMES.some((t) => t.id === "verdigris" && t.light && t.dark)).toBe(true);
   });
 
   test("dim text stays readable: 4.5:1 on the page and 4:1 on a hovered row, muted a step above it", () => {

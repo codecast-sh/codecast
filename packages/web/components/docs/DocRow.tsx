@@ -23,7 +23,8 @@ export function DocRow({ doc, onStar, timeKey = "updated_at" }: {
   const title = (doc as any).display_title || doc.title || "Untitled";
   return (
     <>
-      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${cfg.dot}`} />
+      {/* The type dot marks a typed doc only; a plain note keeps the slot empty so titles stay aligned. */}
+      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${doc.doc_type && doc.doc_type !== "note" ? cfg.dot : ""}`} />
       {/* The star (stored as `pinned`): a starred doc sits on the shelf and
           sorts first. Hidden until hover on an unstarred row so the list
           stays quiet; always shown once set. */}
@@ -67,8 +68,10 @@ export function DocRow({ doc, onStar, timeKey = "updated_at" }: {
           })}
         </div>
       )}
-      <span className="text-meta text-sol-text-dim flex-shrink-0 tabular-nums cq-hide-minimal">{docTypeLabel(doc.doc_type)}</span>
-      <DocDates doc={doc} className="text-xs text-sol-text-dim flex-shrink-0 cq-hide-minimal" />
+      {/* A plain note is the default and says nothing; only a typed doc (a
+          spec, a plan, a report) names its type. */}
+      {doc.doc_type && doc.doc_type !== "note" && <span className="text-meta text-sol-text-dim flex-shrink-0 cq-hide-minimal">{docTypeLabel(doc.doc_type)}</span>}
+      <DocDates doc={doc} className="text-meta tabular-nums text-sol-text-dim flex-shrink-0 cq-hide-minimal" />
     </>
   );
 }

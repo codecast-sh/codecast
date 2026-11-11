@@ -150,7 +150,7 @@ import { openFiles } from "../lib/filesPane";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import { CursorPopover, useContextMenu } from "./ui/context-menu";
-import { IdentityFace } from "./identity";
+import { IdentityFace, SessionMark } from "./identity";
 import { CharacterPicker } from "./identity/CharacterPicker";
 import { type IdentityRow } from "../lib/sessionIdentity";
 import { useConversationIdentityRow } from "../hooks/useLiveIdentityRow";
@@ -4127,6 +4127,7 @@ const ConversationViewInner = (
               />
             ) : (
               <ConversationHeaderTitle
+                lead={conversation && <SessionMark session={conversation as any} size={20} className="flex-shrink-0" />}
                 text={identityRow
                   ? <SessionIdentityLine row={identityRow} title={truncatedTitle} className="max-w-full align-bottom" />
                   : truncatedTitle}
@@ -4135,6 +4136,8 @@ const ConversationViewInner = (
               />
             )}
         titlePills={conversation && !guest && <>
+            {/* The session's short ID, the handle cast and every reference use. */}
+            <span data-cc-conv-id className="shrink-0 font-mono text-[12px] tabular-nums text-sol-text-dim" title="Session ID">{conversation.short_id ?? String(conversation._id).slice(0, 7)}</span>
             <AnchorHeaderPill conversationId={conversation._id.toString()} />
             <SessionCallPill conversationId={conversation._id.toString()} />
             <BrowserPaneOfferChip conversationId={conversation._id.toString()} />
