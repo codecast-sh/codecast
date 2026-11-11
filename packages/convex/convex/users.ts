@@ -5,7 +5,7 @@ import { getUserOrToken } from "./lib/auth";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { mutation, query, internalMutation, internalQuery } from "./functions";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
-import { wakeDevicesFor } from "./cloud";
+import { wakeDevicesFor } from "./cloudWake";
 import { internal } from "./_generated/api";
 import { ConvexError, v } from "convex/values";
 import { peopleOf } from "@codecast/shared/team/memberKind";
@@ -28,7 +28,8 @@ import { verifyApiToken } from "./apiTokens";
 import { findSessionCommandByRequest, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, isTeamMember, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
 import { DAEMON_COMMAND_TTL_MS, repositoryKeyOfRemote } from "@codecast/shared/contracts";
-import { activeTeamMembershipFor, canAccessTask, canAccessDoc, patchConversationVisibility, workspaceGrantsAccess } from "./lib/access";
+import { activeTeamMembershipFor, canAccessTask, canAccessDoc, workspaceGrantsAccess } from "./lib/access";
+import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { canReleaseCommandClaim, commandVisibleToClaimer, decideCommandClaim } from "./lib/daemonCommandClaim";
 import { stripMessageTags, isUserMessageNoise, fetchUserSendDays } from "./lib/userSend";
 import { bucketActivityDays, loadUserActivity } from "./lib/profileActivity";
@@ -784,7 +785,7 @@ export const daemonHeartbeat = mutation({
       .withIndex("by_key", (q) => q.eq("key", "capabilities_mode"))
       .unique();
 
-    // Cloud hosts asleep with work waiting (cloud.requestRemoteWake). Only a
+    // Cloud hosts asleep with work waiting (cloudWake.requestRemoteWake). Only a
     // LOCAL daemon gets the list — it holds the host registry and the SSH key
     // — and the device's own beat above already cleared its stamp.
     const wakeDevices = args.is_remote_device

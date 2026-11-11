@@ -74,7 +74,7 @@ import {
 } from "./ccAccountsShared";
 import { decideSwitchAhead } from "./ccSwitchAhead";
 import { poolUsageOverlay } from "./accountPool";
-import { deliverSessionNotificationToParties } from "./notifications";
+import { deliverSessionNotificationToParties } from "./lib/sessionNotify";
 import { canOwnerOrTeamAccess } from "./privacy";
 import { recoveryFleet } from "./lib/hostRecovery";
 import { withSafetyBlock, describeDecision, peggedWindowLabel, oauthApprovalCode, CONTEXT_RECOVERY_DELAY_MS } from "@codecast/shared/contracts";
