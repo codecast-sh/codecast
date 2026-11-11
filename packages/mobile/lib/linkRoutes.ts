@@ -6,7 +6,7 @@
  * `lib/links.ts` is the half that actually opens things.
  */
 
-import { entityRoute, isOrgObjectKind, parseEntityUrl, parseRepoObjectId, parseSharePath, isAppHost, type EntityType } from '@codecast/shared/entities';
+import { entityRoute, isOrgObjectKind, parseEntityUrl, parseMessageRefUrl, parseRepoObjectId, parseSharedEntityUrl, parseSharePath, sharePath, isAppHost, type EntityType } from '@codecast/shared/entities';
 import { laneRedirectTarget, pageAliasTarget } from '@codecast/web/lib/laneRedirect';
 import { settingsPathFor } from '@codecast/web/lib/settingsSections';
 import { isMobileSettingsSection } from './settingsSections';
@@ -103,6 +103,11 @@ const PAGE_ROUTES: Record<string, string> = {
   '/triggers': '/(tabs)/tasks?segment=routines',
   '/team/activity': '/(tabs)/chat?segment=activity',
   '/vault': '/settings/vault',
+  // The settings sections the phone has a page for (components/settings/SettingsPages).
+  [settingsPathFor('general')]: '/settings/profile',
+  [settingsPathFor('notifications')]: '/settings/notifications',
+  [settingsPathFor('devices')]: '/settings/devices',
+  [settingsPathFor('team')]: '/settings/team',
   [settingsPathFor('plan')]: '/settings/plan',
   [settingsPathFor('integrations')]: '/settings/mail',
 };
@@ -116,7 +121,25 @@ export function mobileRouteForUrl(url: string): string | null {
   // The company's objects (a role, a person) are addressed under /org, which
   // the org handler below maps to the phone's org screens.
   const ref = parseEntityUrl(url);
-  if (ref && !isOrgObjectKind(ref.type)) return mobileEntityRoute(ref.type, ref.id);
+  if (ref && !isOrgObjectKind(ref.type)) {
+    // A link to one message of a session (`#msg-<id>`) opens the session there.
+    const msg = ref.type === 'session' ? parseMessageRefUrl(url) : null;
+    const route = mobileEntityRoute(ref.type, ref.id);
+    return route && msg?.kind === 'message' ? `${route}?message=${msg.id}` : route;
+  }
+  // A page link carrying its share token (`/conversation/<id>?share=<token>`,
+  // what the web's share button copies) opens the same screen with the token
+  // presented, so a reader outside the owner's team can still read it. A
+  // session presents it through the /share resolver, which records the token
+  // for the transcript queries; docs and plans read `?share=` themselves.
+  const shared = parseSharedEntityUrl(url);
+  if (shared && !isOrgObjectKind(shared.type)) {
+    const token = new URLSearchParams(shared.to.split(/[?#]/)[1] ?? '').get('share');
+    if (token && shared.type === 'session') return sharePath('conversation', token);
+    const route = mobileEntityRoute(shared.type, shared.id);
+    if (route && token && (shared.type === 'doc' || shared.type === 'plan')) return `${route}?share=${encodeURIComponent(token)}`;
+    return route;
+  }
 
   let path: string;
   try {

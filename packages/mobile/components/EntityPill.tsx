@@ -11,7 +11,7 @@ import Feather from '@expo/vector-icons/Feather';
 import { Theme, useTheme } from '@/constants/Theme';
 import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, entityRoute, parseCallRef, callRefLabelSuffix, parseProposalChangeRef, proposalChangeLabelSuffix, parseReplayRef, replayRefLabelSuffix, CODECAST_BASE_URL, type EntityType } from '@codecast/shared/entities';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
-import { openWebPage } from '@/lib/links';
+import { openLink, openWebPage } from '@/lib/links';
 import { replayTitle } from '@codecast/web/components/ops/opsModel';
 import { identityLine, identityRowOf } from '@codecast/web/lib/sessionIdentity';
 import { useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
@@ -124,7 +124,15 @@ function entityQueryArgs(type: EntityType, id: string): { short_id?: string; id?
  * not a bare id. Text-based so it sits inline in markdown prose as well as in
  * header rows. Tap navigates to the object's screen.
  */
-export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { shortId?: string; type?: EntityType; id?: string; fallback?: React.ReactNode }) {
+export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }: {
+  shortId?: string;
+  type?: EntityType;
+  id?: string;
+  fallback?: React.ReactNode;
+  /** The link the pill was drawn from, when it carries more than the id (a
+   *  share token): the tap opens through it, so the token reaches the screen. */
+  to?: string;
+}) {
   const Theme = useTheme();
   const router = useRouter();
   const rawId = (idProp ?? shortId ?? '').trim();
@@ -223,7 +231,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback }: { 
   return (
     <RNText
       style={[styles.pill, { backgroundColor: color + '1a', color }]}
-      onPress={route ? () => router.push(route as any) : webPage ? () => void openWebPage(`${CODECAST_BASE_URL}${webPage}`) : undefined}
+      onPress={to ? () => void openLink(to) : route ? () => router.push(route as any) : webPage ? () => void openWebPage(`${CODECAST_BASE_URL}${webPage}`) : undefined}
       suppressHighlighting
     >
       {type === 'task' ? (

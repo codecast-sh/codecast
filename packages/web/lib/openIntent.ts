@@ -195,6 +195,19 @@ export function openIn(target: OpenTarget, path: string): void {
 /** Plain navigation to an in-app path from outside a Link: the tab routes it
  *  when the shell can, a settings section opens its modal, anything else is a
  *  real page load. */
+/**
+ * The in-app path an href names, or null when it leaves the app. A relative
+ * route is ours; so is a full codecast URL for a route inside the shell
+ * (https://codecast.sh/org?proposal=op-19), where a new tab would be the
+ * system browser on desktop. Marketing and public pages stay ordinary links.
+ */
+export function inAppPath(href: string | null | undefined): string | null {
+  if (typeof href !== "string") return null;
+  if (href.startsWith("/") && !href.startsWith("//")) return href;
+  const path = appPathOf(href);
+  return path && !isNonTabRoute(path) ? path : null;
+}
+
 export function navigateHere(path: string): void {
   if (divertNavigation(path)) return;
   goHere(path);

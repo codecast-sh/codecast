@@ -29,6 +29,29 @@ describe('mobileRouteForUrl', () => {
     expect(mobileRouteForUrl('https://codecast.sh/share/doc')).toBeNull();
   });
 
+  test('a page link carrying its share token opens in the app with the token', () => {
+    // The web share button's link, pasted in team chat: it used to fall
+    // through to Safari because the token kept it from parsing as a reference.
+    expect(mobileRouteForUrl('https://codecast.sh/conversation/jx72x09rbqp73a1ah3dg5p6dc98hmbwg?share=296274eb-764f-46fb-b73c-b5dd0c2a1ce0'))
+      .toBe('/share/296274eb-764f-46fb-b73c-b5dd0c2a1ce0');
+    expect(mobileRouteForUrl('https://codecast.sh/docs/jd7abc123def456ghi789jkl012mno34?share=Tok123')).toBe('/doc/jd7abc123def456ghi789jkl012mno34?share=Tok123');
+    expect(mobileRouteForUrl('https://codecast.sh/plans/pl-88?share=Tok123')).toBe('/plan/pl-88?share=Tok123');
+    expect(mobileRouteForUrl('https://codecast.sh/tasks/ct-4102?share=Tok123')).toBe('/task/ct-4102');
+    expect(mobileRouteForUrl('https://example.com/conversation/jx72x09rbqp73a1ah3dg5p6dc98hmbwg?share=x')).toBeNull();
+  });
+
+  test('settings sections the phone has a page for open there', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/settings/devices')).toBe('/settings/devices');
+    expect(mobileRouteForUrl('https://codecast.sh/settings/notifications')).toBe('/settings/notifications');
+    expect(mobileRouteForUrl('https://codecast.sh/settings')).toBe('/(tabs)/settings');
+    expect(mobileRouteForUrl('https://codecast.sh/settings/keyboard')).toBeNull();
+  });
+
+  test('a link to one message opens its session at that message', () => {
+    expect(mobileRouteForUrl('https://codecast.sh/conversation/jx72x09rbqp73a1ah3dg5p6dc98hmbwg#msg-jn7abcdefghijklmnopqrstuvwxyz012'))
+      .toBe('/session/jx72x09rbqp73a1ah3dg5p6dc98hmbwg?message=jn7abcdefghijklmnopqrstuvwxyz012');
+  });
+
   test('the retired assistant lane leads to the main app screens', () => {
     expect(mobileRouteForUrl('https://codecast.sh/simple')).toBe('/(tabs)/inbox');
     expect(mobileRouteForUrl('https://codecast.sh/simple/approvals')).toBe('/decisions');

@@ -31,7 +31,7 @@ import { DecisionCard } from './decisions/DecisionCard';
 import { SearchHighlightContext, markedRuns } from './search/highlight';
 import { parseMarkdown, plainText, planTable } from '@/lib/markdown';
 import type { Nodes, Paragraph, Image, List, Table } from 'mdast';
-import { parseEntityUrl, isEntityId, entityTypeFromId, parseProposalChangeRef, parsePublishedPageUrl, parseClaudeArtifactUrl, BARE_ID_AFTER, BARE_ID_BEFORE, BARE_ID_SOURCE, MENTION_ID_SOURCE, type EntityType } from '@codecast/shared/entities';
+import { parseEntityUrl, parseSharedEntityUrl, isEntityId, entityTypeFromId, parseProposalChangeRef, parsePublishedPageUrl, parseClaudeArtifactUrl, BARE_ID_AFTER, BARE_ID_BEFORE, BARE_ID_SOURCE, MENTION_ID_SOURCE, type EntityType } from '@codecast/shared/entities';
 // Canonical "★ Insight ─────" parser shared with web (pure string/regex module,
 // Hermes-safe). Mobile used to carry its own narrower copy in session/[id].tsx
 // which silently missed most real-world insight forms — one parser, one truth.
@@ -71,6 +71,16 @@ const TEXT_REF_SOURCE =
   // Bounded as the shared scanner is, so "5-in-1" stays prose.
   + `|${BARE_ID_BEFORE}(${BARE_ID_SOURCE})${BARE_ID_AFTER}`;
 
+/** The codecast object a URL names, as the pill to draw. A link carrying its
+ *  share token is the same object; its pill opens through the link itself, so
+ *  the token reaches the screen (web's EntityAwareLink does the same). */
+function linkedEntity(url: string): { type: EntityType; id: string; to?: string } | null {
+  const ref = parseEntityUrl(url);
+  if (ref) return ref;
+  const shared = parseSharedEntityUrl(url);
+  return shared ? { type: shared.type, id: shared.id, to: url } : null;
+}
+
 function renderTextRefs(text: string, ctx: MdCtx, kp: string): React.ReactNode[] {
   const out: React.ReactNode[] = [];
   const plain = (s: string) => out.push(markedRuns(s, ctx.found, `${kp}h${out.length}-`));
@@ -84,9 +94,9 @@ function renderTextRefs(text: string, ctx: MdCtx, kp: string): React.ReactNode[]
       // Bare URL. Sentence punctuation glued to the end is prose, so it is
       // pushed back as plain text instead of ending up inside the target.
       const url = trimUrlTail(m[1]);
-      const entityRef = parseEntityUrl(url);
+      const entityRef = linkedEntity(url);
       out.push(entityRef
-        ? <EntityPill key={k} type={entityRef.type} id={entityRef.id} />
+        ? <EntityPill key={k} type={entityRef.type} id={entityRef.id} to={entityRef.to} />
         : <LinkText key={k} url={url} isUser={ctx.isUser} />);
       const tail = m[1].slice(url.length);
       if (tail) plain(tail);
@@ -182,8 +192,8 @@ function renderInlineNode(node: Nodes, ctx: MdCtx, k: string): React.ReactNode {
     case 'link': {
       // A codecast object URL becomes a rich in-app pill, not an external link
       // (web's EntityAwareLink parity).
-      const entityRef = parseEntityUrl(node.url);
-      if (entityRef) return <EntityPill key={k} type={entityRef.type} id={entityRef.id} />;
+      const entityRef = linkedEntity(node.url);
+      if (entityRef) return <EntityPill key={k} type={entityRef.type} id={entityRef.id} to={entityRef.to} />;
       // An autolink (<https://…>) reads as its shortened URL.
       const label = plainText(node) === node.url ? undefined : renderInline(node.children, ctx, k);
       return <LinkText key={k} url={node.url} label={label} isUser={ctx.isUser} />;
@@ -356,7 +366,7 @@ function trustedImages(p: Paragraph): Image[] | null {
 // (web's entity cards, doc embeds and page embeds): an object, a doc embed
 // (`![[doc:<id>]]`), or a page URL with the caption a writer gave it.
 type SoloRef =
-  | { kind: 'entity'; shortId?: string; type?: EntityType; id?: string }
+  | { kind: 'entity'; shortId?: string; type?: EntityType; id?: string; to?: string }
   | { kind: 'url'; url: string; caption?: string };
 
 const DOC_EMBED_RE = /^!\[\[doc:([a-z0-9]{32})\]\]$/i;
@@ -379,8 +389,8 @@ function soloReference(p: Paragraph): SoloRef | null {
     if (label && label.replace(/^https?:\/\//, '') !== url.replace(/^https?:\/\//, '')) caption = label;
   }
   if (!url) return null;
-  const entity = parseEntityUrl(url);
-  if (entity && !caption) return { kind: 'entity', type: entity.type, id: entity.id };
+  const entity = linkedEntity(url);
+  if (entity && !caption) return { kind: 'entity', type: entity.type, id: entity.id, to: entity.to };
   return { kind: 'url', url, caption };
 }
 
@@ -396,7 +406,7 @@ function SoloRefCard({ solo, isUser }: { solo: SoloRef; isUser: boolean }) {
     if (ref && type === 'decision') return <DecisionCard decisionRef={ref} />;
     return (
       <RNView style={mdStyles.refCard}>
-        <EntityPill shortId={solo.shortId} type={solo.type} id={solo.id} />
+        <EntityPill shortId={solo.shortId} type={solo.type} id={solo.id} to={solo.to} />
       </RNView>
     );
   }

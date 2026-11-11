@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { useState, useCallback, useMemo } from "react";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore } from "../../store/inboxStore";
+import { inAppPath } from "../../lib/openIntent";
 import { useConvexSync } from "../../hooks/useConvexSync";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import {
@@ -57,10 +58,12 @@ export default function NotificationsPage() {
     chatMessageId?: string
   ) => {
     markAsRead(notificationId);
-    // A deep link wins (artifact comments: opens the published page with that
-    // comment thread selected). New tab — the page lives outside the app.
+    // A deep link wins. An app route opens here; a page outside the app (a
+    // published page with a comment thread selected) opens in a new tab.
     if (link) {
-      window.open(link, "_blank", "noopener");
+      const path = inAppPath(link);
+      if (path) router.push(path);
+      else window.open(link, "_blank", "noopener");
       return;
     }
     const route = notificationRoute(entityType, entityId, chatMessageId);

@@ -11,6 +11,7 @@ import { useCollectionRows } from "../hooks/useCollectionRows";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
 import { notificationHref, notificationRoute } from "../lib/notificationTypes";
+import { inAppPath } from "../lib/openIntent";
 import { NotificationList } from "./notifications/NotificationList";
 import { ArrowUpRight, Bell, ExternalLink, Check, CheckCheck } from "lucide-react";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
@@ -102,10 +103,12 @@ export function NotificationBell() {
     chatMessageId?: string
   ) => {
     markAsRead(notificationId);
-    // A deep link wins (artifact comments: opens the published page with that
-    // comment thread selected). New tab — the page lives outside the app.
+    // A deep link wins. An app route opens here; a page outside the app (a
+    // published page with a comment thread selected) opens in a new tab.
     if (link) {
-      window.open(link, "_blank", "noopener");
+      const path = inAppPath(link);
+      if (path) router.push(path);
+      else window.open(link, "_blank", "noopener");
       setIsOpen(false);
       return;
     }

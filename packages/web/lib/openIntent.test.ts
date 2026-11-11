@@ -8,6 +8,7 @@ import {
   divertNavigation,
   divertSessionOpen,
   endClickIntent,
+  inAppPath,
   installOpenIntent,
   isPrewarmTab,
   openTargetForClick,
@@ -192,5 +193,19 @@ describe("capture listener", () => {
     optionClick(true);
     expect(pendingOpenTarget()).toBeNull();
     expect(divertSessionOpen("s_top")).toBe(false);
+  });
+});
+
+describe("inAppPath", () => {
+  it("keeps app routes in the app and leaves the rest outside", () => {
+    // Notification deep links are mostly relative app routes.
+    expect(inAppPath("/decisions/sd-12")).toBe("/decisions/sd-12");
+    expect(inAppPath("/vault?s=sc-4")).toBe("/vault?s=sc-4");
+    expect(inAppPath("https://codecast.sh/conversation/jx7abc?share=t#msg-1")).toBe("/conversation/jx7abc?share=t#msg-1");
+    // Public pages outside the shell and other sites stay real links.
+    expect(inAppPath("https://codecast.sh/")).toBeNull();
+    expect(inAppPath("https://example.com/tasks/ct-1")).toBeNull();
+    expect(inAppPath("//example.com/x")).toBeNull();
+    expect(inAppPath(undefined)).toBeNull();
   });
 });

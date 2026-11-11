@@ -8,6 +8,7 @@ import { Text as RNText } from '@/components/Themed';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
+import { openLink } from '@/lib/links';
 import { SlackLogo } from '@/components/SlackLogo';
 import { MobileIdentityFace, MobileSessionIdentityLine } from '@/components/identity';
 import type { IdentityRow } from '@codecast/web/lib/sessionIdentity';
@@ -47,8 +48,8 @@ function AttachmentImage({ storageId, previewUrl, onOpen }: {
   );
 }
 
-/** One attached video. The app ships no native video player, so the tile
- *  hands the stored file to the system player. */
+/** One attached video. The tile opens the stored file in the in-app browser
+ *  sheet, which plays it without leaving the conversation. */
 function AttachmentVideo({ storageId }: { storageId: string }) {
   const { width } = useWindowDimensions();
   const url = useStorageImageUrl(storageId || undefined);
@@ -57,7 +58,7 @@ function AttachmentVideo({ storageId }: { storageId: string }) {
     <TouchableOpacity
       activeOpacity={0.85}
       disabled={!url}
-      onPress={() => url && Linking.openURL(url)}
+      onPress={() => url && void openLink(url)}
       style={[styles.attachment, styles.attachmentVideo, { width: side, height: side * 0.5625 }]}
       accessibilityRole="button"
       accessibilityLabel="Play video"

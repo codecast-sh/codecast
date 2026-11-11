@@ -77,8 +77,7 @@ import {
 import { prState, repoObjectRefOf } from "../lib/repoObjects";
 import { githubLocationHref } from "../lib/repoNavigation";
 import { loopbackLinkUrl } from "../lib/browserPaneLinks";
-import { appPathOf } from "../lib/browserPane";
-import { isNonTabRoute } from "../src/compat/tabRouting";
+import { inAppPath } from "../lib/openIntent";
 import { LoopbackUrlPill } from "./LoopbackUrlPill";
 import { CallTurns, CardMetaLine, EntityObjectCard } from "./EntityObjectCard";
 import { productViewLink } from "./line/widgets/ProductViewLink";
@@ -1030,10 +1029,7 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
   // new tab there is the system browser on desktop. Marketing and public
   // pages stay ordinary links. A link to a role opens the role's card on
   // hover, the way its mention does.
-  const appPath = typeof href === "string" ? appPathOf(href) : null;
-  const ownPath = typeof href === "string" && href.startsWith("/") && !href.startsWith("//")
-    ? href
-    : appPath && !isNonTabRoute(appPath) ? appPath : null;
+  const ownPath = inAppPath(href);
   if (ownPath) {
     return withRoleHover(ownPath, "", <Link href={ownPath} {...props}>{children}</Link>);
   }
