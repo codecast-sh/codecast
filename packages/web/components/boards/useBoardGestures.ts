@@ -7,6 +7,9 @@ import type { ArtifactOp } from "@codecast/shared/artifacts";
 import {
   BOARD_DEFAULT_SIZE,
   cloneOps,
+  connectorGeometry,
+  elbowObstacles,
+  nearestAlong,
   contains,
   elementBounds,
   elementBox,
@@ -30,6 +33,7 @@ export type Handle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw" | "rotate
 type Gesture =
   | { type: "pan"; last: Pt }
   | { type: "pinch"; dist: number; mid: Pt; origin: Pt }
+  | { type: "label"; key: string; moved: boolean }
   | { type: "move"; start: Pt; moved: boolean; origin: Map<string, Pt>; ends: Map<string, { x1?: number; y1?: number; x2?: number; y2?: number }>; snapBase: Box | null; others: Box[]; toggleOff?: string }
   | { type: "marquee"; start: Pt; base: string[]; groups: Map<string, string[]> }
   | { type: "resize"; handle: Handle; start: Pt; box: Box; items: Map<string, BoardEl>; rot: number }
@@ -217,6 +221,12 @@ export function useBoardGestures(d: GestureDeps) {
       if (box) g.current = { type: "resize", handle, start: p, box, items, rot };
       return;
     }
+    // A selected arrow's label slides along the arrow.
+    const labelKey = target.closest(".board-connector-label") ? hitKey(e.target) : null;
+    if (labelKey && dd.selection.length === 1 && dd.selection[0] === labelKey && dd.tool === "select") {
+      g.current = { type: "label", key: labelKey, moved: false };
+      return;
+    }
     // A live card's own controls (open, expand) work when its card is the selection.
     if (target.closest(".board-card.is-interactive a, .board-card.is-interactive button")) return;
     const key = hitKey(e.target);
@@ -294,6 +304,14 @@ export function useBoardGestures(d: GestureDeps) {
     }
     const p = worldOf(e);
     switch (cur.type) {
+      case "label": {
+        const el = dd.byKey.current.get(cur.key);
+        const geo = el && connectorGeometry(el, (k) => dd.byKey.current.get(k), el.curve === "elbow" ? elbowObstacles(dd.byKey.current.values()) : undefined);
+        if (!geo) return;
+        cur.moved = true;
+        dd.live.preview([{ k: cur.key, set: { label_at: Math.round(nearestAlong(geo.points, p) * 1000) / 1000 } }]);
+        return;
+      }
       case "pan": {
         const dx = e.clientX - cur.last.x, dy = e.clientY - cur.last.y;
         cur.last = { x: e.clientX, y: e.clientY };
@@ -377,6 +395,35 @@ export function useBoardGestures(d: GestureDeps) {
     }
   }, []);
 
+  /**
+   * Make what a tool makes: at `start` for a click (the tool's own size,
+   * centered), or filling start→end for a drag. The keyboard places one the
+   * same way at the middle of the view.
+   */
+  const place = (tool: BoardTool, start: Pt, end: Pt) => {
+    const dd = deps.current;
+    const all = () => ({ elements: [...dd.byKey.current.values()] });
+    const drag = normBox(start, end);
+    const dragged = drag.w * dd.cam.cam.current.z > 6 && drag.h * dd.cam.cam.current.z > 6;
+    const k = newElementKey("el");
+    const size = BOARD_DEFAULT_SIZE[tool] ?? { w: 160, h: 100 };
+    const at = (w: number, h: number) => (dragged ? { x: Math.round(drag.x), y: Math.round(drag.y), w: Math.round(drag.w), h: Math.round(drag.h) } : { x: Math.round(start.x - w / 2), y: Math.round(start.y - h / 2), w, h });
+    let op: ArtifactOp;
+    if (tool === "sticky") op = { k, put: { kind: "sticky", ...at(200, 160), text: "", color: "yellow", z: nextZ(all()) } };
+    else if (tool === "text") op = { k, put: { kind: "text", x: Math.round(start.x), y: Math.round(start.y - 13), text: "", size: 20, z: nextZ(all()) } };
+    else if (tool === "shape") op = { k, put: { kind: "shape", shape: dd.shapeKind, ...at(size.w, size.h), color: "gray", z: nextZ(all()) } };
+    else if (tool === "frame") op = { k, put: { kind: "frame", ...at(size.w, size.h), title: "Frame", z: bottomZ(all()) } };
+    else op = { k, put: { kind: "stamp", x: Math.round(start.x - 24), y: Math.round(start.y - 24), size: 48, emoji: dd.stamp, z: nextZ(all()) } };
+    dd.live.apply([op]);
+    dd.byKey.current.set(k, { ...(op.put as any), key: k, rev: 0 });
+    if (tool !== "stamp") {
+      dd.setSelection([k]);
+      if (!dd.locked) dd.setTool("select");
+      // A new sticky, text, shape or frame opens for typing straight away.
+      dd.startEdit(k);
+    }
+  };
+
   const onPointerUp = useCallback((e: React.PointerEvent) => {
     const dd = deps.current;
     touches.current.delete(e.pointerId);
@@ -402,6 +449,9 @@ export function useBoardGestures(d: GestureDeps) {
       case "rotate":
         dd.live.commit();
         return;
+      case "label":
+        if (cur.moved) dd.live.commit();
+        return;
       case "pen": {
         const pts = simplifyStroke(cur.pts, 0.8 / dd.cam.cam.current.z);
         if (pts.length < 2 && cur.pts.length < 2) return;
@@ -411,28 +461,9 @@ export function useBoardGestures(d: GestureDeps) {
         dd.live.apply([{ k: newElementKey("el"), put: { kind: "pen", x: Math.round(minX), y: Math.round(minY), points: flat, width: 3, color: dd.penColor, z: nextZ(all()) } }]);
         return;
       }
-      case "create": {
-        const drag = normBox(cur.start, cur.end);
-        const dragged = drag.w * dd.cam.cam.current.z > 6 && drag.h * dd.cam.cam.current.z > 6;
-        const k = newElementKey("el");
-        const size = BOARD_DEFAULT_SIZE[cur.tool] ?? { w: 160, h: 100 };
-        const at = (w: number, h: number) => (dragged ? { x: Math.round(drag.x), y: Math.round(drag.y), w: Math.round(drag.w), h: Math.round(drag.h) } : { x: Math.round(cur.start.x - w / 2), y: Math.round(cur.start.y - h / 2), w, h });
-        let op: ArtifactOp;
-        if (cur.tool === "sticky") op = { k, put: { kind: "sticky", ...at(200, 160), text: "", color: "yellow", z: nextZ(all()) } };
-        else if (cur.tool === "text") op = { k, put: { kind: "text", x: Math.round(cur.start.x), y: Math.round(cur.start.y - 13), text: "", size: 20, z: nextZ(all()) } };
-        else if (cur.tool === "shape") op = { k, put: { kind: "shape", shape: dd.shapeKind, ...at(size.w, size.h), color: "gray", z: nextZ(all()) } };
-        else if (cur.tool === "frame") op = { k, put: { kind: "frame", ...at(size.w, size.h), title: "Frame", z: bottomZ(all()) } };
-        else op = { k, put: { kind: "stamp", x: Math.round(cur.start.x - 24), y: Math.round(cur.start.y - 24), size: 48, emoji: dd.stamp, z: nextZ(all()) } };
-        dd.live.apply([op]);
-        dd.byKey.current.set(k, { ...(op.put as any), key: k, rev: 0 });
-        if (cur.tool !== "stamp") {
-          dd.setSelection([k]);
-          if (!dd.locked) dd.setTool("select");
-          // A new sticky, text, shape or frame opens for typing straight away.
-          dd.startEdit(k);
-        }
+      case "create":
+        place(cur.tool, cur.start, cur.end);
         return;
-      }
       case "connect": {
         const z = dd.cam.cam.current.z;
         if (Math.hypot(cur.end.x - cur.start.x, cur.end.y - cur.start.y) * z < 8) return;
@@ -476,7 +507,10 @@ export function useBoardGestures(d: GestureDeps) {
     dd.startEdit(key);
   }, []);
 
-  return { onPointerDown, onPointerMove, onPointerUp, onDoubleClick, overlay };
+  /** Place the armed tool's element at a canvas point (keyboard creation). */
+  const placeAt = (tool: BoardTool, at: Pt) => place(tool, at, at);
+
+  return { onPointerDown, onPointerMove, onPointerUp, onDoubleClick, overlay, placeAt };
 }
 
 /** The selection box after dragging `handle` by (dx, dy); shift keeps the aspect ratio. */

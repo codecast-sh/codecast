@@ -1,7 +1,9 @@
 // The sheet's menus and small panels: tab and cell menus, the filter panel,
 // the filter buttons and the find bar.
 import { useMemo, useState } from "react";
-import { CalendarDays, Check, Filter as FilterIcon, ListChecks, X } from "lucide-react";
+import { CalendarDays, Check, ClipboardPaste, Copy, Eye, EyeOff, MessageSquare, Filter as FilterIcon, ListChecks, Scissors, X } from "lucide-react";
+import { KeyCap } from "../KeyCap";
+import { isMac } from "../../shortcuts/registry";
 import { a1, type SheetModel, type TabData } from "./sheetCore";
 import { CtxItem } from "../ui/context-menu";
 import { DropdownMenuSeparator } from "../ui/dropdown-menu";
@@ -29,6 +31,9 @@ export function CellMenu({
   onCopyHint,
   validation,
   onValidate,
+  onClipboard,
+  onComment,
+  onHide,
 }: {
   kind: "cell" | "colHeader" | "rowHeader";
   readOnly: boolean;
@@ -38,10 +43,24 @@ export function CellMenu({
   /** What the active cell accepts, if it has a dropdown or date picker. */
   validation?: "list" | "date";
   onValidate: (kind: "list" | "date" | "none") => void;
+  onClipboard: (kind: ClipKind) => void;
+  onComment: () => void;
+  onHide: (axis: "col" | "row", hide: boolean) => void;
 }) {
   if (readOnly) return <CtxItem onSelect={onCopyHint}>Copy</CtxItem>;
   return (
     <>
+      <CtxItem icon={Scissors} onSelect={() => onClipboard("cut")} trailing={<Keys k="X" />}>Cut</CtxItem>
+      <CtxItem icon={Copy} onSelect={() => onClipboard("copy")} trailing={<Keys k="C" />}>Copy</CtxItem>
+      <CtxItem icon={ClipboardPaste} onSelect={() => onClipboard("paste")} trailing={<Keys k="V" />}>Paste</CtxItem>
+      <CtxItem onSelect={() => onClipboard("values")} trailing={<Keys k="V" shift />}>Paste values only</CtxItem>
+      <DropdownMenuSeparator />
+      {kind === "cell" && (
+        <>
+          <CtxItem icon={MessageSquare} onSelect={onComment} trailing={<Keys k="M" alt />}>Comment</CtxItem>
+          <DropdownMenuSeparator />
+        </>
+      )}
       {kind !== "colHeader" && (
         <>
           <CtxItem onSelect={() => onFormat({ type: "insert", axis: "row", after: false })}>Insert row above</CtxItem>
@@ -52,6 +71,18 @@ export function CellMenu({
         <>
           <CtxItem onSelect={() => onFormat({ type: "insert", axis: "col", after: false })}>Insert column left</CtxItem>
           <CtxItem onSelect={() => onFormat({ type: "insert", axis: "col", after: true })}>Insert column right</CtxItem>
+        </>
+      )}
+      {kind === "colHeader" && (
+        <>
+          <CtxItem icon={EyeOff} onSelect={() => onHide("col", true)}>Hide columns</CtxItem>
+          <CtxItem icon={Eye} onSelect={() => onHide("col", false)}>Unhide columns</CtxItem>
+        </>
+      )}
+      {kind === "rowHeader" && (
+        <>
+          <CtxItem icon={EyeOff} onSelect={() => onHide("row", true)}>Hide rows</CtxItem>
+          <CtxItem icon={Eye} onSelect={() => onHide("row", false)}>Unhide rows</CtxItem>
         </>
       )}
       <DropdownMenuSeparator />
@@ -75,6 +106,28 @@ export function CellMenu({
       )}
       <CtxItem onSelect={onClear}>Clear contents</CtxItem>
     </>
+  );
+}
+
+export type ClipKind = "cut" | "copy" | "paste" | "values";
+
+function Keys({ k, shift, alt }: { k: string; shift?: boolean; alt?: boolean }) {
+  return (
+    <span className="inline-flex gap-0.5">
+      <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap>
+      {alt && <KeyCap size="xs">{isMac ? "⌥" : "Alt"}</KeyCap>}
+      {shift && <KeyCap size="xs">⇧</KeyCap>}
+      <KeyCap size="xs">{k}</KeyCap>
+    </span>
+  );
+}
+
+/** The toast when the browser won't let the menu read the clipboard: the keyboard paste always works. */
+export function PasteHint() {
+  return (
+    <span className="inline-flex items-center gap-1">
+      Paste with <Keys k="V" />
+    </span>
   );
 }
 

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { type CSSProperties } from "react";
+import { agentSetupPagePath } from "@codecast/shared/contracts";
 import { InstallTabs } from "@/components/install-tabs";
 import { SOL } from "../../blog/blogChrome";
 import { featureHref, featureDeepDives } from "../catalog";
@@ -10,7 +11,7 @@ import { BX_CSS, C, CAST_RED, INK } from "./kit";
 import { Shot } from "../kit";
 import { DoSection, ElsewhereSection, EvidenceSection, LimitsSection, ReferenceSection, RefsSection, SafetySection, ScenariosSection, TabGroupSection, WheelSection } from "./Sections";
 
-const STORE_URL = "https://chromewebstore.google.com/detail/codecast/odfpgkdaibmjhhnbndgbjlhdbciciifd";
+const SETUP_PATH = agentSetupPagePath("browser");
 const RELATED = ["computer", "publish", "cloud", "agents"];
 
 const rise = (d: number): CSSProperties => ({ ["--d" as string]: `${d}s` });
@@ -51,16 +52,14 @@ function Hero() {
             Each agent session drives its own background tab in your real Chrome, inside a red Cast tab group. It reads the page as numbered refs, acts on them, and posts every screenshot, console error and failed request into the conversation. You keep working in your own tabs.
           </p>
           <div className="bx-rise mt-8 flex flex-wrap items-center gap-x-5 gap-y-3" style={rise(0.24)}>
-            <a
-              href={STORE_URL}
-              target="_blank"
-              rel="noreferrer"
+            <Link
+              href={SETUP_PATH}
               className="inline-flex h-11 items-center gap-2 rounded-lg px-4 text-[14px] font-semibold transition-all hover:-translate-y-px"
               style={{ backgroundColor: CAST_RED, color: "#fff", boxShadow: "0 8px 22px -10px rgba(220,50,47,.7)" }}
             >
-              Add the extension
-              <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4}><path d="M7 17L17 7M9 7h8v8" /></svg>
-            </a>
+              Set it up
+              <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.4}><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+            </Link>
             <a href="#evidence" className="font-mono text-[13px] underline underline-offset-4" style={{ color: SOL.base01 }}>what you see in the thread</a>
           </div>
         </div>
@@ -78,7 +77,7 @@ function Hero() {
 function SetupStrip() {
   const beats = [
     { k: "1", title: "Install the extension", body: <>From the Chrome Web Store, in the Chrome profile agents should use.</> },
-    { k: "2", title: "Switch on Browser", body: <>In <b style={{ color: INK }}>Agent features</b>, turn on the Browser card and click <b style={{ color: INK }}>Pair</b>. Chrome opens the extension; click Pair there too.</> },
+    { k: "2", title: "Pair it", body: <>Click <b style={{ color: INK }}>Pair</b> on the <Link href={SETUP_PATH} className="underline underline-offset-2">setup page</Link> or the Browser card in Agent features. Chrome opens the extension; click Pair there too.</> },
     { k: "3", title: "Done", body: <>The card reads <span className="font-mono text-[13px]" style={{ color: SOL.green }}>Chrome connected</span>. Every agent on the machine now uses your Chrome.</> },
   ];
   return (
@@ -147,10 +146,9 @@ function Closing() {
           <InstallTabs location="feature_browser" showAlternatives={false} />
         </div>
         <div className="mt-6 flex flex-wrap items-center justify-center gap-3 text-[14px]">
-          <a href={STORE_URL} target="_blank" rel="noreferrer" className="inline-flex h-10 items-center rounded-lg px-4 font-semibold text-white" style={{ backgroundColor: CAST_RED }}>
-            Codecast for Chrome
-          </a>
-          <span className="font-mono text-[13px]" style={{ color: SOL.base01 }}>then Pair it from Agent features</span>
+          <Link href={SETUP_PATH} className="inline-flex h-10 items-center rounded-lg px-4 font-semibold text-white" style={{ backgroundColor: CAST_RED }}>
+            Set up the browser
+          </Link>
         </div>
       </div>
     </section>

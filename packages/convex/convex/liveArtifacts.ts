@@ -17,8 +17,10 @@ import { action, internalAction, internalMutation, internalQuery, mutation, quer
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireLiveDoc, resolveCaller, upsertPresence, userName, vCaller, type Caller } from "./lib/liveArtifactAccess";
+import { canAccessDoc } from "./lib/access";
 import { liveArtifactValidators } from "./liveArtifactsSchema";
 import { notifyLiveComments, type NewComment } from "./liveComments";
+import { scheduleLiveSearch } from "./liveSearch";
 import {
   applyOp,
   artifactSpec,
@@ -81,6 +83,16 @@ async function headOf(ctx: any, docId: Id<"docs">): Promise<Doc<"live_heads"> | 
   return await ctx.db.query("live_heads").withIndex("by_doc", (q: any) => q.eq("doc_id", docId)).first();
 }
 
+/** Whether this user may change the artifact: everyone who can open it, unless its owner limited editing. */
+export function mayEditLive(doc: Doc<"docs">, head: Doc<"live_heads"> | null, userId: Id<"users">): boolean {
+  if (head?.edit !== "owners") return true;
+  return String(doc.user_id) === String(userId) || (head.editors ?? []).some((e) => String(e) === String(userId));
+}
+
+async function requireLiveEdit(ctx: any, doc: Doc<"docs">, userId: Id<"users">) {
+  if (!mayEditLive(doc, await headOf(ctx, doc._id), userId)) throw new ConvexError("You can view and comment on this artifact; its owner limited who can edit it");
+}
+
 function wireRow(r: Doc<"live_elements">) {
   return {
     doc_id: r.doc_id,
@@ -114,8 +126,9 @@ export const elementsSince = query({
   args: { doc_id: v.id("docs"), since: v.number(), ...vCaller },
   handler: async (ctx, args) => {
     let doc: Doc<"docs">;
+    let caller: Caller;
     try {
-      const caller = await resolveCaller(ctx, args);
+      caller = await resolveCaller(ctx, args);
       doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
     } catch {
       return null;
@@ -134,6 +147,12 @@ export const elementsSince = query({
       head: head?.rev ?? 0,
       draft: wireDraft(head),
       restoring: wireRestoring(head),
+      // Who may edit, and whether the caller may.
+      edit: head?.edit ?? "team",
+      editors: (head?.editors ?? []).map(String),
+      can_edit: mayEditLive(doc, head, caller.userId),
+      // How many element rows a complete copy of the doc holds; null when unknown.
+      total: head?.rows !== undefined && head.rows >= 0 ? head.rows : null,
       rows: page.map(wireRow),
       more,
       next: page.length ? page[page.length - 1].rev : args.since,
@@ -185,6 +204,23 @@ async function insertVersion(
   return id;
 }
 
+/** Fields of a comment anyone with access may change: its thread state, not its words. */
+const COMMENT_SHARED_FIELDS = new Set(["resolved", "sent_to", "answered_at", "answered_by", "answered_by_name"]);
+
+/**
+ * Whether this caller may make this change to an existing comment. Its words
+ * are its author's: only they edit or delete it (the artifact's owner may
+ * delete, to moderate). Resolving, reopening and the ask stamps are anyone's.
+ * A comment is never replaced whole.
+ */
+function commentWriteProblem(state: ElementState, op: ArtifactOp, caller: Caller, doc: Doc<"docs">): string | null {
+  const mine = state.fields.author === caller.actor || state.fields.author === `u:${caller.userId}`;
+  if ("put" in op) return "A comment can't be replaced; edit or delete it";
+  if ("del" in op) return mine || String(doc.user_id) === String(caller.userId) ? null : "Only its author can delete a comment";
+  if ("set" in op && !mine && Object.keys(op.set).some((f) => !COMMENT_SHARED_FIELDS.has(f))) return "Only its author can edit a comment";
+  return null;
+}
+
 type BatchInput = {
   doc: Doc<"docs">;
   layer: Layer;
@@ -216,8 +252,12 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
 
   const now = Date.now();
   let head = await headOf(ctx, doc._id);
+  // Comments are open to everyone who can see it; the artifact itself to its editors.
+  if (layer !== "comments" && !mayEditLive(doc, head, caller.userId)) {
+    throw new ConvexError("You can view and comment on this artifact; its owner limited who can edit it");
+  }
   if (!head) {
-    const id = await ctx.db.insert("live_heads", { doc_id: doc._id, rev: 0, last_write_at: now });
+    const id = await ctx.db.insert("live_heads", { doc_id: doc._id, rev: 0, last_write_at: now, rows: 0 });
     head = (await ctx.db.get(id))!;
   }
   if (layer === "draft" && !head!.draft) {
@@ -236,11 +276,16 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
   let draftBytes = layer === "draft" ? (head!.draft_bytes ?? 0) : 0;
   const written: ArtifactOp[] = [];
   const createdComments: NewComment[] = [];
+  let addedRows = 0;
   for (const op of ops) {
     const { row, state } = await stateOf(ctx, doc._id, layer, op.k);
     let prev = state;
     // A draft edit of an element the draft has not touched yet starts from main.
     if ((!row || row.dead) && layer === "draft") prev = (await stateOf(ctx, doc._id, "main", op.k)).state;
+    if (layer === "comments" && state && !state.deleted) {
+      const problem = commentWriteProblem(state, op, caller, doc);
+      if (problem) throw new ConvexError(problem);
+    }
     if ("set" in op && (!prev || prev.deleted)) continue;
     if ("del" in op && (!prev || prev.deleted) && layer !== "draft") continue;
     const next = applyOp(prev, op);
@@ -258,6 +303,7 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
     const fields = { kind: next.kind, fields: next.fields, rev, by: caller.actor, at: now, deleted: next.deleted ? true : undefined, dead: undefined };
     if (row) await ctx.db.patch(row._id, fields);
     else await ctx.db.insert("live_elements", { doc_id: doc._id, layer, key: op.k, ...fields });
+    if (!row || row.dead) addedRows += 1;
     written.push(op);
     if (layer === "comments" && "put" in op && !state && typeof next.fields.text === "string") {
       createdComments.push({ key: op.k, text: next.fields.text, parent: next.fields.parent as string | undefined, sent_to: next.fields.sent_to as string | undefined });
@@ -281,8 +327,15 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
     });
     start += part.length;
   }
-  await ctx.db.patch(head!._id, { rev, last_write_at: now, ...(layer === "draft" ? { draft_count: draftCount, draft_bytes: Math.max(0, draftBytes) } : {}) });
+  await ctx.db.patch(head!._id, {
+    rev,
+    last_write_at: now,
+    ...(head!.rows !== undefined && head!.rows >= 0 ? { rows: head!.rows + addedRows } : {}),
+    ...(layer === "draft" ? { draft_count: draftCount, draft_bytes: Math.max(0, draftBytes) } : {}),
+  });
+  if (head!.rows === undefined) await ctx.scheduler.runAfter(0, internal.liveArtifacts.countLiveRows, { doc_id: doc._id });
   if (layer !== "comments") await ctx.db.patch(doc._id, { updated_at: now });
+  if (layer === "main") await scheduleLiveSearch(ctx, head!, doc._id);
   // Mentions, replies and asks: the follow-up stamps are `set`s, so they create no comments of their own.
   const followUps = await notifyLiveComments(ctx, doc, caller, createdComments);
   if (followUps.length) rev = (await applyBatchCore(ctx, { doc, layer: "comments", ops: followUps, caller, unbounded: true })).rev;
@@ -355,17 +408,37 @@ async function retireDraft(ctx: any, docId: Id<"docs">, rows: Doc<"live_elements
     rev += 1;
     await ctx.db.patch(r._id, { dead: true, rev, at: now });
   }
-  await ctx.db.patch(head._id, { rev, draft: undefined, draft_count: 0, draft_bytes: 0 });
+  await ctx.db.patch(head._id, { rev, draft: undefined, draft_count: 0, draft_bytes: 0, ...(head.rows !== undefined && head.rows >= 0 ? { rows: Math.max(0, head.rows - rows.length) } : {}) });
 }
+
+/** Rows countLiveRows counts in one transaction; a bigger doc keeps no count (-1) and every open reads it whole. */
+const COUNT_ROWS_MAX = 4000;
+
+/**
+ * Fill in a head's row count, in one transaction so no write can slip between
+ * the read and the stamp. Scheduled by the first write to a head without one.
+ */
+export const countLiveRows = internalMutation({
+  args: { doc_id: v.id("docs") },
+  handler: async (ctx, args) => {
+    const head = await headOf(ctx, args.doc_id);
+    if (!head || head.rows !== undefined) return;
+    const rows = await ctx.db.query("live_elements").withIndex("by_doc_rev", (q: any) => q.eq("doc_id", args.doc_id)).take(COUNT_ROWS_MAX + 1);
+    // -1: too big to count; its writes stop asking and every open reads it whole.
+    if (rows.length > COUNT_ROWS_MAX) return void (await ctx.db.patch(head._id, { rows: -1 }));
+    await ctx.db.patch(head._id, { rows: rows.filter((r) => !r.dead).length });
+  },
+});
 
 export const draftStart = mutation({
   args: { doc_id: v.id("docs"), label: v.optional(v.string()), ...vCaller },
   handler: async (ctx, args) => {
     const caller = await resolveCaller(ctx, args);
     const doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
+    await requireLiveEdit(ctx, doc, caller.userId);
     let head = await headOf(ctx, doc._id);
     const draft = { by: caller.actor, by_name: caller.name, at: Date.now(), label: args.label?.slice(0, 120) };
-    if (!head) await ctx.db.insert("live_heads", { doc_id: doc._id, rev: 0, last_write_at: Date.now(), draft });
+    if (!head) await ctx.db.insert("live_heads", { doc_id: doc._id, rev: 0, last_write_at: Date.now(), draft, rows: 0 });
     else if (!head.draft) await ctx.db.patch(head._id, { draft });
     head = await headOf(ctx, doc._id);
     return wireDraft(head);
@@ -380,6 +453,7 @@ export const draftSave = mutation({
   handler: async (ctx, args) => {
     const caller = await resolveCaller(ctx, args);
     const doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
+    await requireLiveEdit(ctx, doc, caller.userId);
     const head = await headOf(ctx, doc._id);
     if (!head?.draft) return { saved: 0 };
     if (args.draft_at !== undefined && head.draft.at !== args.draft_at) return { saved: 0, stale: true };
@@ -400,6 +474,7 @@ export const draftDiscard = mutation({
   handler: async (ctx, args) => {
     const caller = await resolveCaller(ctx, args);
     const doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
+    await requireLiveEdit(ctx, doc, caller.userId);
     const head = await headOf(ctx, doc._id);
     if (!head?.draft) return { discarded: 0 };
     if (args.draft_at !== undefined && head.draft.at !== args.draft_at) return { discarded: 0, stale: true };
@@ -439,10 +514,39 @@ export const checkpoint = mutation({
   handler: async (ctx, args) => {
     const caller = await resolveCaller(ctx, args);
     const doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
+    await requireLiveEdit(ctx, doc, caller.userId);
     const head = await headOf(ctx, doc._id);
     const rev = head?.rev ?? 0;
     await insertVersion(ctx, doc._id, rev, "manual", (args.label || "Saved version").slice(0, 120), caller);
     return { rev };
+  },
+});
+
+/**
+ * Who may change the artifact: "team" (everyone who can open it) or "owners"
+ * (its owner plus `editors`, each of whom must be able to open it). Only the
+ * owner sets it.
+ */
+export const setEditAccess = mutation({
+  args: { doc_id: v.id("docs"), edit: v.union(v.literal("team"), v.literal("owners")), editors: v.optional(v.array(v.id("users"))) },
+  handler: async (ctx, args) => {
+    const caller = await resolveCaller(ctx, {});
+    const doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
+    if (String(doc.user_id) !== String(caller.userId)) throw new ConvexError("Only the artifact's owner can change who edits it");
+    const editors: Id<"users">[] = [];
+    for (const id of [...new Set((args.editors ?? []).map(String))].slice(0, 50)) {
+      const uid = id as Id<"users">;
+      if (uid === doc.user_id) continue;
+      if (await canAccessDoc(ctx, uid, doc)) editors.push(uid);
+    }
+    let head = await headOf(ctx, doc._id);
+    if (!head) {
+      const id = await ctx.db.insert("live_heads", { doc_id: doc._id, rev: 0, last_write_at: Date.now(), rows: 0 });
+      head = (await ctx.db.get(id))!;
+    }
+    // Every open page's feed reads the head, so it learns at once.
+    await ctx.db.patch(head!._id, { edit: args.edit, editors });
+    return { edit: args.edit, editors: editors.map(String) };
   },
 });
 

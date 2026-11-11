@@ -13,11 +13,13 @@ export function useDashboardScope(now: number) {
   const today = todayUtc(now);
   const scope = useMemo(() => dashboard.scopeFromParams(new URLSearchParams(sig).entries(), today), [sig, today]);
   const value = useCallback((column: string) => new URLSearchParams(sig).get(`f.${column}`) ?? "", [sig]);
+  /** A category filter's picks, one param each (`f.person=ada&f.person=bo`), so a name with a comma survives and nothing is encoded twice. */
+  const values = useCallback((column: string) => new URLSearchParams(sig).getAll(`f.${column}`).filter(Boolean), [sig]);
   const set = useCallback(
-    (column: string, v: string | null) => {
+    (column: string, v: string | readonly string[] | null) => {
       const next = new URLSearchParams(window.location.search);
-      if (v) next.set(`f.${column}`, v);
-      else next.delete(`f.${column}`);
+      next.delete(`f.${column}`);
+      for (const one of typeof v === "string" ? [v] : (v ?? [])) if (one) next.append(`f.${column}`, one);
       const q = next.toString();
       router.replace(`${window.location.pathname}${q ? `?${q}` : ""}`, { scroll: false });
     },
@@ -29,6 +31,6 @@ export function useDashboardScope(now: number) {
     const q = next.toString();
     router.replace(`${window.location.pathname}${q ? `?${q}` : ""}`, { scroll: false });
   }, [router]);
-  return { scope, value, set, clear };
+  return { scope, value, values, set, clear };
 }
 

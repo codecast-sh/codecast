@@ -6,6 +6,7 @@ import { mutation, query } from "./functions";
 import { PRESENCE_TTL_MS } from "@codecast/shared/artifacts";
 import { liveArtifactValidators } from "./liveArtifactsSchema";
 import { requireLiveDoc, resolveCaller, upsertPresence, vCaller } from "./lib/liveArtifactAccess";
+import { ensureLiveSearch } from "./liveSearch";
 
 const { vPosition } = liveArtifactValidators;
 
@@ -24,6 +25,8 @@ export const setPresence = mutation({
     await requireLiveDoc(ctx, caller.userId, args.doc_id);
     const actor = caller.kind === "agent" ? caller.actor : `${caller.actor}:${(args.tab ?? "cli").slice(0, 24)}`;
     await upsertPresence(ctx, args.doc_id, caller, actor, args);
+    // An artifact written before search existed is indexed the first time someone opens it.
+    if (!args.position && !args.selection) await ensureLiveSearch(ctx, args.doc_id);
     return null;
   },
 });

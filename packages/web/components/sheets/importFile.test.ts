@@ -71,7 +71,41 @@ describe("readXlsx", () => {
     expect(tables[1].grid).toEqual([["", "hello"]]);
   });
 
+  test("shared formulas shift per copy; percent and currency cells keep their type", async () => {
+    const bytes = zip({
+      "xl/workbook.xml": `<workbook><sheets><sheet name="Plan" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+      "xl/_rels/workbook.xml.rels": `<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`,
+      "xl/styles.xml": `<styleSheet><numFmts><numFmt numFmtId="165" formatCode="&quot;$&quot;#,##0.00"/></numFmts><cellXfs><xf numFmtId="0"/><xf numFmtId="9"/><xf numFmtId="165"/></cellXfs></styleSheet>`,
+      "xl/worksheets/sheet1.xml": `<worksheet><sheetData>
+        <row r="1"><c r="A1"><v>10</v></c><c r="B1"><f t="shared" ref="B1:B3" si="0">A1*2</f><v>20</v></c><c r="C1" s="1"><v>0.125</v></c><c r="D1" s="2"><v>1200.5</v></c></row>
+        <row r="2"><c r="A2"><v>11</v></c><c r="B2"><f t="shared" si="0"/><v>22</v></c></row>
+        <row r="3"><c r="A3"><v>12</v></c><c r="B3"><f t="shared" si="0"/><v>24</v></c></row>
+      </sheetData></worksheet>`,
+    });
+    const [t] = await readXlsx(bytes);
+    expect(t.grid).toEqual([
+      ["10", "=A1*2", "12.5%", "$1200.5"],
+      ["11", "=A2*2"],
+      ["12", "=A3*2"],
+    ]);
+  });
+
   test("a file that is not a zip says so", async () => {
     await expect(readXlsx(new TextEncoder().encode("name,qty\n"))).rejects.toThrow(/valid .xlsx/);
+  });
+});
+
+import { keepAsText } from "./importFile";
+describe("keepAsText", () => {
+  test("leading zeros, long ids and formula-looking text stay text; plain numbers and words don't change", () => {
+    expect(keepAsText("02134")).toBe("'02134");
+    expect(keepAsText("12345678901234567890")).toBe("'12345678901234567890");
+    expect(keepAsText("=1+1")).toBe("'=1+1");
+    expect(keepAsText("@SUM(A1)")).toBe("'@SUM(A1)");
+    expect(keepAsText("-12.5")).toBe("-12.5");
+    expect(keepAsText("120")).toBe("120");
+    expect(keepAsText("0")).toBe("0");
+    expect(keepAsText("0.5")).toBe("0.5");
+    expect(keepAsText("Pecan")).toBe("Pecan");
   });
 });

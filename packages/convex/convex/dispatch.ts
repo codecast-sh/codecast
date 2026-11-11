@@ -1639,6 +1639,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const fn = op === "save" ? api.liveArtifacts.draftSave : api.liveArtifacts.draftDiscard;
     return await (ctx as any).runMutation(fn, { doc_id: docId, ...(typeof draftAt === "number" ? { draft_at: draftAt } : {}) });
   },
+  liveSetEditAccess: async (ctx, _userId, [docId, edit, editors]: [string, "team" | "owners", string[]]) => {
+    if (!ctx.db.normalizeId("docs", docId)) return null;
+    return await (ctx as any).runMutation(api.liveArtifacts.setEditAccess, { doc_id: docId, edit, editors });
+  },
   liveCheckpoint: async (ctx, _userId, [docId, label]: [string, string | undefined]) => {
     if (!ctx.db.normalizeId("docs", docId)) return null;
     return await (ctx as any).runMutation(api.liveArtifacts.checkpoint, { doc_id: docId, ...(label ? { label } : {}) });

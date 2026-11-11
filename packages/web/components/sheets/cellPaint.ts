@@ -13,6 +13,8 @@ import {
   type TableStyle,
   type Validation,
   styleOf,
+  todaySerial,
+  parseDateText,
 } from "@codecast/shared/artifacts/sheets";
 
 export function solVar(c: PaletteColor): string {
@@ -46,6 +48,8 @@ export type Paint = {
   picker?: "list" | "date";
   /** The value is outside the cell's list or is not a date. */
   invalid?: boolean;
+  /** The cell has an open comment thread. */
+  comment?: boolean;
 };
 
 export type PaintContext = {
@@ -61,6 +65,10 @@ export type PaintContext = {
   scaleRange: (key: string) => { min: number; max: number } | null;
   /** The validation covering a cell (dropdown or date). */
   validation?: (col: number, row: number) => Validation | undefined;
+  /** Cells with an open comment thread (row * 2^15 + col). */
+  comments?: ReadonlyMap<number, unknown>;
+  /** The tab's merged ranges. */
+  merges?: readonly { rect: { c0: number; r0: number; c1: number; r1: number } }[];
 };
 
 export function paintCell(el: CellEl | undefined, value: Scalar, implied: ImpliedFormat | undefined, col: number, row: number, ctx: PaintContext): Paint {
@@ -126,6 +134,16 @@ export function paintCell(el: CellEl | undefined, value: Scalar, implied: Implie
         }
         break;
       }
+      case "before":
+      case "after": {
+        // Dates are serials; the rule's value is "today" or a date as typed.
+        const target = String(c.value ?? "").trim().toLowerCase() === "today" ? todaySerial() : parseDateText(String(c.value ?? ""));
+        if (numeric && target !== null && (c.rule === "before" ? value < target : value > target)) {
+          p.fill = tint(color ?? "orange", 22);
+          p.color = ruleText(color ?? "orange");
+        }
+        break;
+      }
       case "contains":
         if (typeof value === "string" && value.toLowerCase().includes(String(c.value ?? "").toLowerCase())) {
           p.fill = tint(color ?? "yellow", 22);
@@ -137,6 +155,7 @@ export function paintCell(el: CellEl | undefined, value: Scalar, implied: Implie
   // The cell's own colors win over table and rule colors.
   if (s.fill) p.fill = tint(s.fill, 20);
   if (s.color) p.color = solVar(s.color);
+  if (ctx.comments?.has(row * 32768 + col)) p.comment = true;
   const dv = ctx.validation?.(col, row);
   if (dv) {
     p.picker = dv.rule;
@@ -161,4 +180,27 @@ export function chipStyle(color: PaletteColor | undefined): { fill: string; colo
 /** Rule-hit text: the color pulled toward the body text so it reads on its own tint in both themes. */
 function ruleText(c: PaletteColor): string {
   return `color-mix(in srgb, ${solVar(c)} 55%, var(--sol-text))`;
+}
+
+/** Character width of the grid font at the default size, and a cell's horizontal padding. */
+const CHAR_PX = 7.6;
+const PAD_PX = 14;
+
+/**
+ * An automatic-format number shown in a column too narrow for it: fewer
+ * decimals until it fits (0.70875908 -> 0.7087591), then scientific, the way
+ * Sheets and Excel round to the column instead of cutting the digits off.
+ */
+export function fitNumber(text: string, value: number, widthPx: number, sizePx = 13): string {
+  const room = Math.floor((widthPx - PAD_PX) / (CHAR_PX * (sizePx / 13)));
+  if (text.length <= room || room < 1) return text;
+  const intLen = String(Math.trunc(Math.abs(value))).length + (value < 0 ? 1 : 0);
+  const dp = room - intLen - 1;
+  if (dp >= 0 && intLen <= room) return String(Number(value.toFixed(dp)));
+  if (intLen <= room) return String(Math.round(value));
+  for (let digits = Math.max(0, room - 6); digits >= 0; digits--) {
+    const sci = value.toExponential(digits).replace("e+", "E+").replace("e-", "E-");
+    if (sci.length <= room) return sci;
+  }
+  return "#".repeat(Math.max(1, room));
 }
