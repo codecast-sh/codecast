@@ -558,8 +558,10 @@ describe("command groups stay off the boot graph", () => {
     // traded for tmuxSuspendedAgent.ts, now loaded where an injection needs it.
     // 583 after keychainLock.ts and contracts/sessionEscalation.ts, the same two
     // files as on index.ts's graph above. 584 after mtimeGatedCache.ts, the
-    // same split as on index.ts's graph.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(584);
+    // same split as on index.ts's graph. 585 after folderFetchGate.ts, the
+    // import-free retry gate split out of folderSync.ts so the folder fetch
+    // itself stays a lazy import.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(585);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
