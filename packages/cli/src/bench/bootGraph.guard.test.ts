@@ -283,8 +283,10 @@ describe("command groups stay off the boot graph", () => {
     // synchronously whether the login keychain is locked, so the daemon's
     // credential timers stop raising an unlock dialog every 30 seconds after
     // securityd restarts) and contracts/sessionEscalation.ts (split out of
-    // machineMessages.ts for its max-lines cap; no new code).
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(350);
+    // machineMessages.ts for its max-lines cap; no new code). 351 after
+    // mtimeGatedCache.ts, split out of ccAccounts.ts for its max-lines cap
+    // (no new code).
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(351);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -555,8 +557,9 @@ describe("command groups stay off the boot graph", () => {
     // and codexSessionMeta.ts, split out of parser.ts for its max-lines cap,
     // traded for tmuxSuspendedAgent.ts, now loaded where an injection needs it.
     // 583 after keychainLock.ts and contracts/sessionEscalation.ts, the same two
-    // files as on index.ts's graph above.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(583);
+    // files as on index.ts's graph above. 584 after mtimeGatedCache.ts, the
+    // same split as on index.ts's graph.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(584);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
