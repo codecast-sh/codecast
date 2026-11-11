@@ -19,7 +19,7 @@ import {
 } from "./deviceRouting";
 import { activeTokenProfile } from "./ccAccountsShared";
 import { bucketTs } from "./presenceState";
-import { checkConversationAccess, isTeamAdmin, isTeamMember } from "./privacy";
+import { checkConversationAccess, isTeamAdmin, isTeamMember, shareATeam } from "./privacy";
 import { isSessionOwner } from "./sessionOwners";
 import { navPromptField } from "./userMessagesFilter";
 import { localAgentTypeOf, findModelOption, deviceDisplayName, formatMachineSwitchNotice, type DeviceNameSource,
@@ -1062,7 +1062,16 @@ export type ClaimDeviceAccountResult = {
   // Sessions left with the previous account because the caller could not have
   // pulled them (private to that account).
   skipped?: number;
+  // Refused for want of the previous account's token. The daemon keeps the
+  // handover and asks again; nothing was moved.
+  needs_proof?: boolean;
 };
+
+// Until this moment a claim that carries no previous_api_token is still
+// accepted (and logged): daemons released before the proof existed send none,
+// and their account stamps hold no token to send. After it, the proof is
+// required. A token that IS presented must always check out.
+export const LEGACY_DEVICE_CLAIM_SUNSET_MS = Date.UTC(2026, 11, 9);
 
 /**
  * This machine signed into a different account. Sessions it still owns under
@@ -1092,18 +1101,7 @@ export async function performClaimDeviceAccount(
   if (!mine || now - (mine.last_seen ?? 0) >= DEVICE_ONLINE_MS) {
     return { moved: 0, more: false, error: "this device is not online on the new account" };
   }
-  const memberships = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_id", (q: any) => q.eq("user_id", callerId))
-    .collect();
-  let shared = false;
-  for (const membership of memberships) {
-    if (await isTeamMember(ctx, args.previousUserId, membership.team_id)) {
-      shared = true;
-      break;
-    }
-  }
-  if (!shared) return { moved: 0, more: false, error: "the two accounts do not share a team" };
+  if (!(await shareATeam(ctx, callerId, args.previousUserId))) return { moved: 0, more: false, error: "the two accounts do not share a team" };
 
   const previousDevice = await ctx.db
     .query("devices")
@@ -1158,6 +1156,11 @@ export const claimDeviceAccount = mutation({
     api_token: v.optional(v.string()),
     previous_user_id: v.id("users"),
     device_id: v.string(),
+    // The previous login's own token, kept by the daemon in its account stamp.
+    // It is the one thing only the machine holds: a device id is public to
+    // teammates and a token can be minted bound to any device id, so neither
+    // proves the previous account ever signed out of THIS machine.
+    previous_api_token: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<ClaimDeviceAccountResult> => {
     // The daemon on the machine is the only caller: a token, never a browser
@@ -1166,6 +1169,18 @@ export const claimDeviceAccount = mutation({
     if (!caller) throw new Error("Authentication required");
     if (caller.boundDeviceId && caller.boundDeviceId !== args.device_id) {
       return { moved: 0, more: false, error: "this token is bound to a different machine" };
+    }
+    if (args.previous_api_token || Date.now() >= LEGACY_DEVICE_CLAIM_SUNSET_MS) {
+      const previous = await deviceTokenCaller(ctx, args.previous_api_token);
+      if (
+        !previous ||
+        previous.userId.toString() !== args.previous_user_id.toString() ||
+        (previous.boundDeviceId && previous.boundDeviceId !== args.device_id)
+      ) {
+        return { moved: 0, more: false, needs_proof: true, error: "no proof this machine was signed in as the previous account" };
+      }
+    } else {
+      console.warn(`[claimDeviceAccount] legacy claim without proof: caller=${caller.userId} previous=${args.previous_user_id} device=${args.device_id}`);
     }
     const userId = caller.userId;
     return performClaimDeviceAccount(ctx, userId, {

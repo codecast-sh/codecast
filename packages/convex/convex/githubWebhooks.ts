@@ -727,7 +727,8 @@ export const processPRMetaEvent = internalMutation({
 
     const action = event.action ?? "";
     const requested = (prPayload.requested_reviewers ?? []).map((r: any) => r.login);
-    const links = await resolveTaskLinksFromText(ctx, prPayload.title, prPayload.body, prPayload.head?.ref);
+    const authorId = await resolveActorUserIdForTeam(ctx, existing.team_id, existing.author_github_username);
+    const links = await resolveTaskLinksFromText(ctx, { userId: authorId, teamId: existing.team_id }, prPayload.title, prPayload.body, prPayload.head?.ref);
 
     const patch: Record<string, any> = {
       title: prPayload.title,
@@ -876,11 +877,13 @@ export const processReviewEvent = internalMutation({
         submitted_at: submittedAt,
         commit_sha: review.commit_id,
         html_url: review.html_url,
+        author_association: review.author_association ?? undefined,
       });
     } else {
       await ctx.db.insert("reviews", {
         pull_request_id: pr._id,
         author_github_username: author,
+        author_association: review.author_association ?? undefined,
         github_review_id: review.id,
         commit_sha: review.commit_id,
         html_url: review.html_url,
@@ -1031,6 +1034,7 @@ async function ingestReviewComment(ctx: any, payload: any): Promise<boolean> {
     created_at: new Date(comment.created_at).getTime(),
     updated_at: new Date(comment.updated_at).getTime(),
     author_github_username: comment.user?.login,
+    author_association: comment.author_association ?? undefined,
     author_kind: "github" as const,
     author_avatar_url: comment.user?.avatar_url,
     conversation_id: pr.shepherd_conversation_id,
@@ -1618,7 +1622,7 @@ export const processPushEvent = internalMutation({
     const pusher: string | undefined = payload.pusher?.name ?? payload.sender?.login;
     const pusherId = pusher ? await resolveActorUserIdForTeam(ctx, teamId, pusher) : null;
     const pusherAvatar: string | undefined = payload.sender?.avatar_url;
-    const branchLinks = await resolveTaskLinks(ctx, extractTaskShortIds(branch));
+    const branchLinks = await resolveTaskLinks(ctx, extractTaskShortIds(branch), { userId: pusherId, teamId });
 
     let created = 0;
     let firstConversation: Id<"conversations"> | undefined;
@@ -1634,7 +1638,7 @@ export const processPushEvent = internalMutation({
       // the files but not their line counts; those stay zero.
       const files = pushCommitFiles(commit);
 
-      const links = await resolveTaskLinksFromText(ctx, message, branch);
+      const links = await resolveTaskLinksFromText(ctx, { userId: pusherId, teamId }, message, branch);
       // A Codecast-Session trailer is the session's own word on which session
       // made the commit, so it beats every guess below. A push carries no
       // proof of who wrote the trailer, so it links only a session the team
@@ -1920,7 +1924,7 @@ export const matchPRToConversation = internalMutation({
     const committed = (await Promise.all(committedIds.map((id) => ctx.db.get(id)))).filter((c): c is Doc<"conversations"> => !!c);
     const linkedIds = [...new Map([...conversations, ...committed].map((c) => [String(c._id), c._id])).values()];
 
-    const links = await resolveTaskLinksFromText(ctx, args.title, args.body, args.head_ref);
+    const links = await resolveTaskLinksFromText(ctx, { userId: authorId, teamId }, args.title, args.body, args.head_ref);
     const shepherd = chooseShepherdConversation(conversations, args.repository, args.head_ref, committed);
 
     const fields = {
@@ -2203,6 +2207,7 @@ async function handleIssueCommentCreated(ctx: any, payload: any): Promise<boolea
     created_at: new Date(comment.created_at).getTime(),
     updated_at: new Date(comment.updated_at).getTime(),
     author_github_username: comment.user.login,
+    author_association: comment.author_association ?? undefined,
     codecast_origin: false,
   });
 
