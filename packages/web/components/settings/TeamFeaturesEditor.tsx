@@ -23,6 +23,7 @@ import { startTour } from "../../tours/engine";
 
 export function TeamFeaturesEditor({ teamId, isAdmin }: { teamId: Id<"teams">; isAdmin: boolean }) {
   const team = useInboxStore((s) => (s.teams || []).find((t: any) => String(t._id) === String(teamId)));
+  const staff = useInboxStore((s) => (s.currentUser as { staff?: boolean } | null | undefined)?.staff === true);
 
   return (
     <SettingsSection
@@ -48,7 +49,7 @@ export function TeamFeaturesEditor({ teamId, isAdmin }: { teamId: Id<"teams">; i
             )}
             <Switch
               checked={on}
-              disabled={!isAdmin || !!blocked}
+              disabled={!isAdmin || !!blocked || (!on && !!f.inDevelopment && !staff)}
               onCheckedChange={(v) => useInboxStore.getState().setTeamFeature(teamId, f.key, v)}
               aria-label={f.name}
             />
