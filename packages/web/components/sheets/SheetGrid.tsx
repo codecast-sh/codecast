@@ -9,7 +9,7 @@ import type { ArtifactPresence } from "@codecast/shared/artifacts";
 import { cellNum, colLetters, type Rect, type TabData, type Workbook } from "@codecast/shared/artifacts/sheets";
 import { CursorTag } from "../live/LiveCursors";
 import { CursorArrow } from "../presence/CursorArrow";
-import { paintCell, tint, type Paint, type PaintContext } from "./cellPaint";
+import { fitNumber, paintCell, tint, type Paint, type PaintContext } from "./cellPaint";
 import type { AxisLayout } from "./layout";
 import { BOTTOM_ROOM, COL_HEADER_H, ROW_HEADER_W, hitTest, type GridHit } from "./gridGeometry";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -37,6 +37,10 @@ export type GridProps = {
   readOnly: boolean;
   scrollerRef: React.RefObject<HTMLDivElement | null>;
   onPointerDown: (hit: GridHit, e: React.PointerEvent) => void;
+  /** The active cell's box when it heads a merge (the whole merged range). */
+  activeRect?: Rect;
+  /** Show the hidden columns or rows just before this one. */
+  onUnhide?: (axis: "col" | "row", at: number) => void;
   onDoubleClick: (hit: GridHit) => void;
   onContextMenu: (hit: GridHit, e: React.MouseEvent) => void;
   onResizeStart: (axis: "col" | "row", index: number, e: React.PointerEvent) => void;
@@ -152,9 +156,9 @@ export const SheetGrid = memo(function SheetGrid(p: GridProps) {
       <PaneCells pane={pane} tab={p.tab} wb={p.wb} version={p.version} cols={cols} rows={rows} paintCtx={p.paintCtx} flash={p.flash} />
       <PaneOverlays pane={pane} {...p} />
       {(pane.name === "corner" || pane.name === "top") && (
-        <ColHeaders pane={pane} cols={cols} rows={rows} sel={p.sel} active={p.active} onResizeStart={p.onResizeStart} onAutoFit={p.onAutoFit} />
+        <ColHeaders pane={pane} cols={cols} rows={rows} sel={p.sel} active={p.active} onResizeStart={p.onResizeStart} onAutoFit={p.onAutoFit} hidden={p.tab.hiddenCols} onUnhide={p.onUnhide} />
       )}
-      {(pane.name === "corner" || pane.name === "left") && <RowHeaders pane={pane} rows={rows} cols={cols} sel={p.sel} active={p.active} onResizeStart={p.onResizeStart} />}
+      {(pane.name === "corner" || pane.name === "left") && <RowHeaders pane={pane} rows={rows} cols={cols} sel={p.sel} active={p.active} onResizeStart={p.onResizeStart} hidden={p.tab.hiddenRows} onUnhide={p.onUnhide} />}
       {pane.name === "corner" && <div className="sheet-corner" style={{ width: ROW_HEADER_W, height: COL_HEADER_H }} />}
     </div>
   );
@@ -225,7 +229,8 @@ const PaneLines = memo(function PaneLines({ pane, cols, rows }: { pane: Pane; co
 
 // ── Cells ───────────────────────────────────────────────────────────────────
 
-type CellBox = { x: number; y: number; w: number; h: number; spill: number };
+/** solid: a merged cell, painted over the gridlines it covers. */
+type CellBox = { x: number; y: number; w: number; h: number; spill: number; solid?: boolean };
 
 const Cell = memo(
   function Cell({ box, paint, a1, flash }: { box: CellBox; paint: Paint; a1: string; flash?: boolean }) {
@@ -241,8 +246,8 @@ const Cell = memo(
       color: paint.color,
       whiteSpace: paint.wrap ? "normal" : "pre",
       alignItems: paint.wrap ? "flex-start" : undefined,
-      background: paint.fill ?? (box.spill ? "var(--sheet-bg)" : undefined),
-      zIndex: box.spill ? 1 : undefined,
+      background: box.solid && paint.fill ? `linear-gradient(${paint.fill}, ${paint.fill}), var(--sheet-bg)` : paint.fill ?? (box.spill || box.solid ? "var(--sheet-bg)" : undefined),
+      zIndex: box.spill || box.solid ? 1 : undefined,
       paddingRight: paint.padRight ? 26 : undefined,
       fontSize: paint.check ? "18px" : paint.size ? `${paint.size}px` : undefined,
     };
@@ -255,10 +260,10 @@ const Cell = memo(
     }
     return (
       <div
-        className={`sheet-cell${paint.error ? " is-error" : ""}${paint.invalid ? " is-invalid" : ""}${flash ? " is-flash" : ""}`}
+        className={`sheet-cell${paint.error ? " is-error" : ""}${paint.invalid ? " is-invalid" : ""}${paint.comment ? " is-comment" : ""}${flash ? " is-flash" : ""}`}
         data-a1={a1}
         data-picker={paint.picker}
-        style={paint.picker ? { ...style, paddingRight: 22 } : style}
+        style={paint.picker === "list" ? { ...style, paddingRight: 22 } : style}
       >
         {paint.chip ? (
           <span className="sheet-chip" style={{ background: paint.chip.fill, color: paint.chip.color }}>
@@ -272,7 +277,7 @@ const Cell = memo(
     );
   },
   (a, b) =>
-    a.box.x === b.box.x && a.box.y === b.box.y && a.box.w === b.box.w && a.box.h === b.box.h && a.box.spill === b.box.spill && a.a1 === b.a1 && a.flash === b.flash && samePaint(a.paint, b.paint),
+    a.box.x === b.box.x && a.box.y === b.box.y && a.box.w === b.box.w && a.box.h === b.box.h && a.box.spill === b.box.spill && a.box.solid === b.box.solid && a.a1 === b.a1 && a.flash === b.flash && samePaint(a.paint, b.paint),
 );
 
 function samePaint(a: Paint, b: Paint): boolean {
@@ -292,6 +297,8 @@ function samePaint(a: Paint, b: Paint): boolean {
     a.check === b.check &&
     a.picker === b.picker &&
     a.invalid === b.invalid &&
+    a.comment === b.comment &&
+    a.link === b.link &&
     a.chip?.fill === b.chip?.fill &&
     a.chip?.color === b.chip?.color
   );
@@ -323,11 +330,17 @@ const PaneCells = memo(function PaneCells({
   const slots = (c1 - c0 + 1) * (r1 - r0 + 1);
   const visit = (col: number, row: number) => {
     if (rows.sizeOf(row) === 0 || cols.sizeOf(col) === 0) return;
+    // A merged range draws once, from its top-left, across the whole range; the cells under it stay hidden.
+    const merge = paintCtx.merges?.find((m) => col >= m.rect.c0 && col <= m.rect.c1 && row >= m.rect.r0 && row <= m.rect.r1);
+    if (merge && (col !== merge.rect.c0 || row !== merge.rect.r0)) return;
     const el = tab.cells.get(cellNum(col, row));
-    if (!el) return;
+    // A cell without input still draws when a comment is anchored to it, an array formula spills into it, or it heads a merge.
     const info = wb.cell(tabId, col, row);
-    const paint = paintCell(el, info?.value ?? null, info?.implied, col, row, paintCtx);
-    if (!paint.text && !paint.fill && !paint.bd) return;
+    if (!el && !info?.spilled && !merge && !paintCtx.comments?.has(cellNum(col, row))) return;
+    let paint = paintCell(el, info?.value ?? null, info?.implied, col, row, paintCtx);
+    if (!paint.text && !paint.fill && !paint.bd && !paint.comment && !merge) return;
+    // An automatic-format number rounds to its column rather than being cut off.
+    if (el && typeof info?.value === "number" && !el.nf && !info.implied && !paint.wrap) paint = { ...paint, text: fitNumber(paint.text, info.value, cols.sizeOf(col), paint.size) };
     let spill = 0;
     if (paint.align === "left" && !paint.wrap && !paint.chip && paint.text && typeof info?.value === "string") {
       // Text runs on into empty neighbours, like Sheets.
@@ -343,7 +356,11 @@ const PaneCells = memo(function PaneCells({
     out.push(
       <Cell
         key={`${col}:${row}`}
-        box={{ x: cols.offset(col) - pane.ox, y: rows.offset(row) - pane.oy, w: cols.sizeOf(col), h: rows.sizeOf(row), spill }}
+        box={
+          merge
+            ? { x: cols.offset(col) - pane.ox, y: rows.offset(row) - pane.oy, w: cols.offset(merge.rect.c1 + 1) - cols.offset(col), h: rows.offset(merge.rect.r1 + 1) - rows.offset(row), spill: 0, solid: true }
+            : { x: cols.offset(col) - pane.ox, y: rows.offset(row) - pane.oy, w: cols.sizeOf(col), h: rows.sizeOf(row), spill }
+        }
         paint={paint}
         a1={`${colLetters(col)}${row}`}
         flash={flash?.has(`${col}:${row}`)}
@@ -355,6 +372,14 @@ const PaneCells = memo(function PaneCells({
       const col = n % 32768, row = Math.floor(n / 32768);
       if (col >= c0 && col <= c1 && row >= r0 && row <= r1) visit(col, row);
     }
+    for (const n of paintCtx.comments?.keys() ?? []) {
+      const col = n % 32768, row = Math.floor(n / 32768);
+      if (!tab.cells.has(n) && col >= c0 && col <= c1 && row >= r0 && row <= r1) visit(col, row);
+    }
+    for (const m of paintCtx.merges ?? []) if (m.rect.c0 >= c0 && m.rect.c0 <= c1 && m.rect.r0 >= r0 && m.rect.r0 <= r1 && !tab.cells.has(cellNum(m.rect.c0, m.rect.r0))) visit(m.rect.c0, m.rect.r0);
+    for (const sp of wb.spillRects(tabId))
+      for (let row = Math.max(sp.r0, r0); row <= Math.min(sp.r1, r1); row++)
+        for (let col = Math.max(sp.c0, c0); col <= Math.min(sp.c1, c1); col++) if (!tab.cells.has(cellNum(col, row)) && !paintCtx.comments?.has(cellNum(col, row))) visit(col, row);
   } else {
     for (let row = r0; row <= r1; row++) for (let col = c0; col <= c1; col++) visit(col, row);
   }
@@ -371,6 +396,8 @@ function ColHeaders({
   active,
   onResizeStart,
   onAutoFit,
+  hidden,
+  onUnhide,
 }: {
   pane: Pane;
   cols: AxisLayout;
@@ -379,6 +406,8 @@ function ColHeaders({
   active: { col: number };
   onResizeStart: GridProps["onResizeStart"];
   onAutoFit?: (col: number) => void;
+  hidden?: ReadonlySet<number>;
+  onUnhide?: GridProps["onUnhide"];
 }) {
   const [c0, c1] = pane.cols;
   const out: ReactNode[] = [];
@@ -394,6 +423,7 @@ function ColHeaders({
         style={{ left: cols.offset(c) - pane.ox, width: w, height: COL_HEADER_H }}
       >
         {colLetters(c)}
+        {hidden?.has(c - 1) && <UnhideMark axis="col" at={c} onUnhide={onUnhide} />}
         <div data-sheet-resize="col" className="sheet-resize-col" onPointerDown={(e) => onResizeStart("col", c, e)} onDoubleClick={(e) => { e.stopPropagation(); onAutoFit?.(c); }} />
       </div>,
     );
@@ -401,7 +431,25 @@ function ColHeaders({
   return <>{out}</>;
 }
 
-function RowHeaders({ pane, rows, cols, sel, active, onResizeStart }: { pane: Pane; rows: AxisLayout; cols: AxisLayout; sel: Rect; active: { row: number }; onResizeStart: GridProps["onResizeStart"] }) {
+/** Where hidden columns or rows sit: a mark on the next header that shows them again. */
+function UnhideMark({ axis, at, onUnhide }: { axis: "col" | "row"; at: number; onUnhide?: GridProps["onUnhide"] }) {
+  return (
+    <button
+      type="button"
+      className={`sheet-unhide sheet-unhide-${axis}`}
+      data-sheet-unhide={axis}
+      aria-label={axis === "col" ? "Show hidden columns" : "Show hidden rows"}
+      title={axis === "col" ? "Show hidden columns" : "Show hidden rows"}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => {
+        e.stopPropagation();
+        onUnhide?.(axis, at);
+      }}
+    />
+  );
+}
+
+function RowHeaders({ pane, rows, cols, sel, active, onResizeStart, hidden, onUnhide }: { pane: Pane; rows: AxisLayout; cols: AxisLayout; sel: Rect; active: { row: number }; onResizeStart: GridProps["onResizeStart"]; hidden?: ReadonlySet<number>; onUnhide?: GridProps["onUnhide"] }) {
   const [r0, r1] = pane.rows;
   const out: ReactNode[] = [];
   const fullRow = sel.c0 === 1 && sel.c1 >= cols.count;
@@ -418,6 +466,7 @@ function RowHeaders({ pane, rows, cols, sel, active, onResizeStart }: { pane: Pa
         style={{ top: rows.offset(r) - pane.oy, height: h, width: ROW_HEADER_W }}
       >
         {r}
+        {hidden?.has(r - 1) && <UnhideMark axis="row" at={r} onUnhide={onUnhide} />}
         <div data-sheet-resize="row" className="sheet-resize-row" onPointerDown={(e) => onResizeStart("row", r, e)} />
       </div>,
     );
@@ -436,8 +485,9 @@ function rectBox(pane: Pane, cols: AxisLayout, rows: AxisLayout, r: Rect) {
 function PaneOverlays(p: GridProps & { pane: Pane }) {
   const { pane, cols, rows, sel, active, outlines, readOnly } = p;
   const s = rectBox(pane, cols, rows, sel);
-  const a = rectBox(pane, cols, rows, { c0: active.col, c1: active.col, r0: active.row, r1: active.row });
-  const multi = sel.c0 !== sel.c1 || sel.r0 !== sel.r1;
+  const ar = p.activeRect ?? { c0: active.col, c1: active.col, r0: active.row, r1: active.row };
+  const a = rectBox(pane, cols, rows, ar);
+  const multi = sel.c0 !== ar.c0 || sel.c1 !== ar.c1 || sel.r0 !== ar.r0 || sel.r1 !== ar.r1;
   return (
     <>
       {outlines.map((o) => {

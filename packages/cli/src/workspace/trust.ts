@@ -8,7 +8,8 @@
  *
  * So we record a sha256 of each of them the first time a HUMAN acquires, and
  * refuse afterwards whenever what is on disk no longer matches what was
- * recorded. Re-approving is one command: `cast ws trust`.
+ * recorded. A person re-approves with `cast ws trust` at a terminal, or with
+ * one click on the approval card an agent's refusal posts (trustApproval.ts).
  *
  * Three rules make the gate worth having:
  *   - A change always refuses, even for a human, until it is trusted again.
@@ -68,6 +69,7 @@ export class WorkspaceTrustError extends Error {
     message: string,
     public readonly findings: TrustFinding[],
     public readonly agentDriven: boolean,
+    public readonly repoRoot: string = "",
   ) {
     super(message);
     this.name = "WorkspaceTrustError";
@@ -326,13 +328,15 @@ export function enforceWorkspaceTrust(opts: TrustGateOptions): TrustTarget[] {
   const findings = reviewRepoTrust(opts.repoRoot, targets);
   const agent = opts.agentDriven ?? isAgentContext(opts.env);
 
-  if (opts.grant) {
+  // --trust is a person's yes at a keyboard. An agent passing it is asking,
+  // so it gets the same refusal (and approval card) as any agent acquire.
+  if (opts.grant && !agent) {
     recordTrust(opts.repoRoot, targets, targets);
     return targets;
   }
   if (findings.length === 0) return targets;
   if (agent || findings.some((f) => f.verdict === "changed")) {
-    throw new WorkspaceTrustError(refusalMessage(opts.repoRoot, findings, agent), findings, agent);
+    throw new WorkspaceTrustError(refusalMessage(opts.repoRoot, findings, agent), findings, agent, opts.repoRoot);
   }
   // A person, running this repo's setup for the first time. Record what they
   // just ran, so any later change has something to differ from.
@@ -345,6 +349,8 @@ export function refusalMessage(
   repoRoot: string,
   findings: TrustFinding[],
   agentDriven: boolean,
+  /** The last line, when the caller already acted (trustApproval.ts posted the card). */
+  next?: string,
 ): string {
   const lines: string[] = [
     `workspace setup in ${repoRoot} runs code this machine has not approved:`,
@@ -363,9 +369,10 @@ export function refusalMessage(
   }
   lines.push("");
   lines.push(
-    agentDriven
-      ? "This acquire is agent driven, so it cannot approve them. Ask a human to review the files above and run: cast ws trust"
-      : "Review the files above, then approve them with: cast ws trust",
+    next ??
+      (agentDriven
+        ? `This acquire is agent driven, so it cannot approve them. From your codecast session run \`cast ws trust\` in ${repoRoot}: it posts an approval card for your person. Never ask them to type a command.`
+        : "Review the files above, then approve them with: cast ws trust"),
   );
   return lines.join("\n");
 }

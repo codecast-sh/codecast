@@ -14,7 +14,9 @@ export type RefToken = {
   /** Tab name as written, unquoted; undefined means the formula's own tab. */
   tab?: string;
   /** cell: a only. range: a:b. cols: A:C (rows unbounded). rows: 2:5 (cols unbounded). */
-  shape: "cell" | "range" | "cols" | "rows";
+  /** colsFrom: an open-ended column range from a cell down, "A2:A" (b sits on the last row). */
+  /** spill: a cell's whole spilled block, "E1#". */
+  shape: "cell" | "range" | "cols" | "rows" | "colsFrom" | "spill";
   a: RefPart;
   b?: RefPart;
   start: number;
@@ -31,13 +33,14 @@ export type Token =
   | { type: "op"; v: string; start: number; end: number }
   | RefToken;
 
-export const ERROR_CODES = ["#DIV/0!", "#N/A", "#NAME?", "#NULL!", "#NUM!", "#REF!", "#VALUE!", "#CIRC!", "#ERROR!"] as const;
+export const ERROR_CODES = ["#DIV/0!", "#N/A", "#NAME?", "#NULL!", "#NUM!", "#REF!", "#VALUE!", "#CIRC!", "#SPILL!", "#ERROR!"] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
 const SHEET_PREFIX = String.raw`(?:'((?:[^']|'')+)'|([A-Za-z_][A-Za-z0-9_.]*))!`;
 const CELL = String.raw`(\$?)([A-Za-z]{1,3})(\$?)(\d{1,7})`;
 const RE_CELL_RANGE = new RegExp(`^(?:${SHEET_PREFIX})?${CELL}(?::${CELL})?(?![A-Za-z0-9_(])`);
 const RE_COLS = new RegExp(String.raw`^(?:${SHEET_PREFIX})?(\$?)([A-Za-z]{1,3}):(\$?)([A-Za-z]{1,3})(?![A-Za-z0-9_(])`);
+const RE_COLS_FROM = new RegExp(String.raw`^(?:${SHEET_PREFIX})?${CELL}:(\$?)([A-Za-z]{1,3})(?![A-Za-z0-9_(])`);
 const RE_ROWS = new RegExp(String.raw`^(?:${SHEET_PREFIX})?(\$?)(\d{1,7}):(\$?)(\d{1,7})(?![A-Za-z0-9_(])`);
 const RE_NUM = /^(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?/;
 const RE_IDENT = /^[A-Za-z_][A-Za-z0-9_.]*/;
@@ -54,6 +57,8 @@ export class FormulaSyntaxError extends Error {}
 export function tokenize(src: string): Token[] {
   const out: Token[] = [];
   let i = 0;
+  /** Inside an array constant ({1,2;3,4}) a semicolon starts a row instead of separating arguments. */
+  let brace = 0;
   while (i < src.length) {
     const ch = src[i];
     if (ch === " " || ch === "\n" || ch === "\t" || ch === "\r") {
@@ -90,6 +95,11 @@ export function tokenize(src: string): Token[] {
     // References come before numbers (2:5 is a row range) and identifiers (A1, Sheet1!A1).
     const ref = matchRef(rest, i);
     if (ref) {
+      // E1#: the block E1 spills.
+      if (ref.shape === "cell" && src[ref.end] === "#") {
+        ref.shape = "spill";
+        ref.end += 1;
+      }
       out.push(ref);
       i = ref.end;
       continue;
@@ -119,8 +129,10 @@ export function tokenize(src: string): Token[] {
       i += 2;
       continue;
     }
-    if ("+-*/^&=<>%(),;:".includes(ch)) {
-      out.push({ type: "op", v: ch === ";" ? "," : ch, start: i, end: i + 1 });
+    if ("+-*/^&=<>%(),;:{}".includes(ch)) {
+      if (ch === "{") brace++;
+      if (ch === "}") brace = Math.max(0, brace - 1);
+      out.push({ type: "op", v: ch === ";" && !brace ? "," : ch, start: i, end: i + 1 });
       i++;
       continue;
     }
@@ -135,7 +147,15 @@ function sheetName(m: RegExpMatchArray): string | undefined {
 }
 
 function matchRef(rest: string, at: number): RefToken | null {
-  let m = rest.match(RE_CELL_RANGE);
+  // "A2:A" (from a cell to the bottom of its columns) before "A2", which would otherwise end the match early.
+  let m = rest.match(RE_COLS_FROM);
+  if (m) {
+    const a: RefPart = { absCol: !!m[3], col: colIdx(m[4]), absRow: !!m[5], row: Number(m[6]) };
+    const c1 = colIdx(m[8]);
+    if (a.row >= 1 && a.row <= MAX_ROW && a.col <= MAX_COL && c1 <= MAX_COL)
+      return { type: "ref", tab: sheetName(m), shape: "colsFrom", a, b: { absCol: !!m[7], col: c1, absRow: true, row: MAX_ROW }, start: at, end: at + m[0].length };
+  }
+  m = rest.match(RE_CELL_RANGE);
   if (m) {
     const a: RefPart = { absCol: !!m[3], col: colIdx(m[4]), absRow: !!m[5], row: Number(m[6]) };
     if (a.row < 1 || a.row > MAX_ROW || a.col > MAX_COL) return null;
@@ -190,6 +210,8 @@ export type Node =
   | { t: "neg"; a: Node }
   | { t: "pct"; a: Node }
   | { t: "bin"; op: string; a: Node; b: Node }
+  | { t: "array"; rows: Array<Array<number | string | boolean>> }
+  | { t: "spill"; tab?: string; col: number; row: number }
   | { t: "empty" };
 
 const BINARY: Record<string, number> = { "=": 1, "<>": 1, "<": 1, ">": 1, "<=": 1, ">=": 1, "&": 2, "+": 3, "-": 3, "*": 4, "/": 4, "^": 5 };
@@ -238,7 +260,13 @@ export function parseFormula(src: string): Node {
 
   function primary(): Node {
     const t = toks[p++];
-    if (!t) throw new FormulaSyntaxError("formula ends early");
+    if (!t) {
+      // Say what is missing: "=B2*" needs a value after *, "=SUM(A1," another argument.
+      const last = toks[toks.length - 1];
+      if (last?.type === "op" && last.v === ",") throw new FormulaSyntaxError("Missing an argument after the last comma");
+      if (last?.type === "op" && last.v !== ")") throw new FormulaSyntaxError(`Missing a value after ${last.v}`);
+      throw new FormulaSyntaxError("The formula ends too early");
+    }
     switch (t.type) {
       case "num":
         return { t: "num", v: t.v };
@@ -285,6 +313,29 @@ export function parseFormula(src: string): Node {
           p++;
           return inner;
         }
+        if (t.v === "{") {
+          // An array constant: {1,2,3} is a row, {1;2;3} a column, {1,2;3,4} a block.
+          const rows: Array<Array<number | string | boolean>> = [[]];
+          for (;;) {
+            const neg = isOp("-");
+            if (neg) p++;
+            const v = toks[p++];
+            if (!v) throw new FormulaSyntaxError("missing }");
+            if (v.type === "num") rows[rows.length - 1].push(neg ? -v.v : v.v);
+            else if (!neg && (v.type === "str" || v.type === "bool")) rows[rows.length - 1].push(v.v);
+            else throw new FormulaSyntaxError("an array holds only numbers, text and TRUE/FALSE");
+            if (isOp(",")) p++;
+            else if (isOp(";")) {
+              p++;
+              rows.push([]);
+            } else if (isOp("}")) {
+              p++;
+              break;
+            } else throw new FormulaSyntaxError("expected , ; or } in the array");
+          }
+          if (rows.some((r) => r.length !== rows[0].length)) throw new FormulaSyntaxError("every row of an array needs the same length");
+          return { t: "array", rows };
+        }
         throw new FormulaSyntaxError(`unexpected ${t.v}`);
     }
   }
@@ -301,6 +352,7 @@ function tokText(t: Token, src: string): string {
 
 function refNode(t: RefToken): Node {
   if (t.shape === "cell") return { t: "ref", tab: t.tab, col: t.a.col, row: t.a.row };
+  if (t.shape === "spill") return { t: "spill", tab: t.tab, col: t.a.col, row: t.a.row };
   const b = t.b!;
   return {
     t: "range",

@@ -63,3 +63,22 @@ describe("errorFix", () => {
     expect(errorFix("#N/A", undefined, "#N/A")).toBeNull();
   });
 });
+
+import { functionMatches } from "./catalog";
+import { FUNCTION_NAMES } from "./functions";
+describe("functionMatches", () => {
+  test("common functions come first", () => {
+    expect(functionMatches("SU", FUNCTION_NAMES)[0]).toBe("SUM");
+    expect(functionMatches("CO", FUNCTION_NAMES).slice(0, 3)).toEqual(["COUNT", "COUNTIF", "COUNTA"]);
+    expect(functionMatches("VL", FUNCTION_NAMES)).toEqual(["VLOOKUP"]);
+  });
+});
+
+import { ARG_HELP, argHelp } from "./catalog";
+describe("argument help", () => {
+  test("every help entry names a real argument, and lookups strip the optional mark", () => {
+    for (const [fn, args] of Object.entries(ARG_HELP)) for (const a of Object.keys(args)) expect([fn, FUNCTION_DOCS[fn].args.map((x) => x.replace(/[?.]+$/, "")).includes(a)]).toEqual([fn, true]);
+    expect(argHelp("ROUND", 1)).toContain("Decimal places");
+    expect(argHelp("SUM", 0)).toBeUndefined();
+  });
+});

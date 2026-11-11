@@ -46,17 +46,23 @@ export function textHeight(text: string, size: number, w: number): number {
 
 /** Lines a paragraph takes in a monospace face, wrapped at spaces the way the page wraps it. */
 function wrappedLines(line: string, perLine: number): number {
-  let lines = 1, used = 0;
+  return wrapLine(line, perLine).length;
+}
+
+/** A paragraph broken into lines of at most `perLine` characters, at spaces (a longer word breaks anywhere). */
+export function wrapLine(line: string, perLine: number): string[] {
+  const out: string[] = [];
+  let cur = "";
   for (const word of line.split(" ")) {
-    let len = word.length;
-    const need = used === 0 ? len : used + 1 + len;
-    if (need <= perLine) { used = need; continue; }
-    if (used > 0) { lines++; used = 0; }
-    // A word longer than a line breaks anywhere (overflow-wrap: anywhere).
-    while (len > perLine) { lines++; len -= perLine; }
-    used = len;
+    const next = cur ? `${cur} ${word}` : word;
+    if (next.length <= perLine) { cur = next; continue; }
+    if (cur) out.push(cur);
+    let w = word;
+    while (w.length > perLine) { out.push(w.slice(0, perLine)); w = w.slice(perLine); }
+    cur = w;
   }
-  return lines;
+  out.push(cur);
+  return out;
 }
 
 /** Flat [x0,y0,x1,y1,...] point list -> points. */
@@ -163,7 +169,8 @@ export function anchorPoint(b: Box, shape: string | undefined, toward: Pt): Pt {
   return { x: c.x + dx * t, y: c.y + dy * t };
 }
 
-export type ConnectorGeometry = { a: Pt; b: Pt; d: string; mid: Pt; box: Box; angleEnd: number; angleStart: number; points?: Pt[] };
+/** `points`: the drawn path as a polyline (the route of an elbow, samples of a curve), for hit-testing and placing a label along it. */
+export type ConnectorGeometry = { a: Pt; b: Pt; d: string; mid: Pt; box: Box; angleEnd: number; angleStart: number; points: Pt[] };
 
 /**
  * A connector's drawn path. Attached ends follow their element (computed from
@@ -194,14 +201,16 @@ export function connectorGeometry(el: ArtifactElement, lookup: (key: string) => 
     c1 = horizontal ? { x: a.x + Math.sign(dx) * k, y: a.y } : { x: a.x, y: a.y + Math.sign(dy) * k };
     c2 = horizontal ? { x: b.x - Math.sign(dx) * k, y: b.y } : { x: b.x, y: b.y - Math.sign(dy) * k };
     d = `M${r(a.x)},${r(a.y)} C${r(c1.x)},${r(c1.y)} ${r(c2.x)},${r(c2.y)} ${r(b.x)},${r(b.y)}`;
-    mid = cubicAt(a, c1, c2, b, labelT(el.label_at));
+    mid = a;
   } else {
     d = `M${r(a.x)},${r(a.y)} L${r(b.x)},${r(b.y)}`;
-    const t = labelT(el.label_at);
-    mid = { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t };
+    mid = a;
   }
+  const points = curved ? Array.from({ length: 25 }, (_, i) => cubicAt(a, c1, c2, b, i / 24)) : [a, b];
+  // The label sits `label_at` of the way along the drawn line, by length (the same measure a drag sets).
+  mid = pointAlong(points, labelT(el.label_at));
   return {
-    a, b, d, mid,
+    a, b, d, mid, points,
     box: boxOfPoints([a, b, c1, c2]),
     // Tangents at each end: from the control point for a curve, along the line for a straight one.
     angleEnd: curved ? Math.atan2(b.y - c2.y, b.x - c2.x) : Math.atan2(b.y - a.y, b.x - a.x),
@@ -268,7 +277,7 @@ function tidy(pts: Pt[]): Pt[] {
 
 function polyLength(pts: readonly Pt[]): number {
   let n = 0;
-  for (let i = 1; i < pts.length; i++) n += Math.abs(pts[i].x - pts[i - 1].x) + Math.abs(pts[i].y - pts[i - 1].y);
+  for (let i = 1; i < pts.length; i++) n += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
   return n;
 }
 
@@ -278,7 +287,7 @@ export function pointAlong(pts: readonly Pt[], t: number): Pt {
   let left = Math.max(0, Math.min(1, t)) * total;
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1], b = pts[i];
-    const len = Math.abs(b.x - a.x) + Math.abs(b.y - a.y);
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
     if (left <= len && len > 0) { const k = left / len; return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k }; }
     left -= len;
   }
@@ -577,4 +586,46 @@ export function stickyIconHeight(icon: unknown, art: boolean, w: number, h: numb
 export function stickyFitHeight(text: string, w: number, h: number, iconH: number): number {
   const need = Math.ceil(28 + (iconH ? iconH + 6 : 0) + textHeight(text || " ", STICKY_MIN_FONT, w - 28));
   return Math.max(h, need);
+}
+
+/** How far along a polyline (0..1, by length) the point nearest `p` lies: where a dragged label lands. */
+export function nearestAlong(pts: readonly Pt[], p: Pt): number {
+  let total = 0, best = Infinity, at = 0;
+  const lens: number[] = [];
+  for (let i = 1; i < pts.length; i++) { const l = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y); lens.push(l); total += l; }
+  if (total === 0) return 0.5;
+  let run = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i], l = lens[i - 1];
+    const t = l ? Math.max(0, Math.min(1, ((p.x - a.x) * (b.x - a.x) + (p.y - a.y) * (b.y - a.y)) / (l * l))) : 0;
+    const d = Math.hypot(a.x + (b.x - a.x) * t - p.x, a.y + (b.y - a.y) * t - p.y);
+    if (d < best) { best = d; at = (run + t * l) / total; }
+    run += l;
+  }
+  return at;
+}
+
+/** What elbow arrows route around: everything a line should not cross (frames hold things, pens and stamps sit on them). */
+export function elbowObstacles(els: Iterable<ArtifactElement>): Box[] {
+  const out: Box[] = [];
+  for (const e of els) if (e.kind !== "connector" && e.kind !== "frame" && e.kind !== "pen" && e.kind !== "stamp") out.push(elementBounds(e));
+  return out;
+}
+
+/**
+ * How a sticky draws its illustration and words inside w x h: the
+ * illustration at its full size when everything fits; when the words need the
+ * room, the illustration gives it up first (down to a third of its size), then
+ * the type shrinks, never below `floor`. The canvas and exports both use it.
+ */
+export function stickyLayout(text: string, w: number, h: number, icon: unknown, art: boolean, floor = 10): { iconH: number; size: number } {
+  const full = stickyIconHeight(icon, art, w, h);
+  const innerW = w - 28;
+  const room = (ih: number) => h - 28 - (ih ? ih + 6 : 0);
+  let iconH = full;
+  if (full) {
+    const need = textHeight(text || " ", STICKY_MIN_FONT, innerW);
+    if (need > room(full)) iconH = Math.max(Math.round(full / 3), Math.min(full, h - 28 - 6 - need));
+  }
+  return { iconH, size: stickyFontSize(text || " ", w, h - (iconH ? iconH + 6 : 0), 17, floor) };
 }

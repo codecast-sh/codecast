@@ -78,6 +78,7 @@ export function HostedApprovalBody({
   clampPlan = true,
   later,
   yesIcon,
+  subject,
 }: {
   question?: string;
   contextMd?: string;
@@ -91,6 +92,8 @@ export function HostedApprovalBody({
   later?: { label: string; title?: string; onClick: () => void };
   /** Drawn before Yes: a permission ask's fingerprint, since its Yes confirms with Touch ID. */
   yesIcon?: ReactNode;
+  /** What a Yes approves, drawn between the question and the buttons (a permission ask's RunSubjectView). */
+  subject?: ReactNode;
 }) {
   const yes = options.find((o) => o.label === APPROVAL_ANSWERS.approve) ?? options[0];
   const always = options.find((o) => o.label === APPROVAL_ANSWERS.always);
@@ -116,6 +119,7 @@ export function HostedApprovalBody({
     <>
       {question && <p className="text-[15px] font-medium leading-snug text-sol-text">{question}</p>}
       {contextMd && <HostedApprovalPlan contextMd={contextMd} clamp={clampPlan} />}
+      {subject}
       {/* What Yes does sits with the plan it answers, above both buttons,
           so it never reads as describing Not now. */}
       {yes?.description && <p data-hosted-approval-yes className="mt-2 text-[12.5px] leading-snug text-sol-text-dim">{yesWords(yes.description)}</p>}

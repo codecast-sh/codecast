@@ -1,9 +1,9 @@
 // What the resource monitor can do on live data. Park and resume ride the
-// existing session command paths; preflight is a read-only dry run of
-// resourceOffload.start whose checks tighten the planner's readiness for this
-// view; start, retry and cancel are the store's local-first actions.
+// existing session command paths; preflight is the read-only
+// resourceOffload.preflight query whose checks tighten the planner's readiness
+// for this view; start, retry and cancel are the store's local-first actions.
 import { useMemo, useState } from "react";
-import { useMutation } from "convex/react";
+import { useConvex } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
@@ -21,8 +21,9 @@ const api = _api as any;
 type Check = { session_id: string; destination_id: string; blockers: string[]; pending: string[]; passed: string[]; unconfirmed: string[] };
 type Preflight = { at: number; checks: Check[] };
 
-/** The most sessions resourceOffload.start checks in one call. */
-const PREFLIGHT_CHUNK = 50;
+/** The most sessions one server call checks or rehearses (resourceOffload.preflight, moveRehearsals.request). */
+const SERVER_CHUNK = 50;
+const inChunks = <T,>(all: T[]) => Array.from({ length: Math.ceil(all.length / SERVER_CHUNK) }, (_, i) => all.slice(i * SERVER_CHUNK, (i + 1) * SERVER_CHUNK));
 
 /** A dry run is evidence for a few minutes; after that the planner's view stands alone. */
 const PREFLIGHT_TTL_MS = 5 * 60_000;
@@ -75,7 +76,7 @@ const clientBatchId = () => `rb_${crypto.randomUUID().replace(/-/g, "").slice(0,
 export function useResourceActions(sessions: ResourceSession[], plans: OffloadPlan[], batches: MigrationBatch[], now: number, rehearsals: RehearsalRow[] = []) {
   const router = useRouter();
   const { request: requestPark } = useHibernationCommands();
-  const dryRun = useMutation(api.resourceOffload.start);
+  const convex = useConvex();
   const [preflight, setPreflight] = useState<Record<string, Preflight>>({});
   const byId = useMemo(() => new Map(sessions.map((s) => [s.sessionId, s])), [sessions]);
 
@@ -108,10 +109,8 @@ export function useResourceActions(sessions: ResourceSession[], plans: OffloadPl
     onPreflight: (sel) => {
       const source = sourceOf(sel);
       if (!source) return;
-      // The server checks at most PREFLIGHT_CHUNK sessions a call; a busy machine offers more.
-      const all = toServer(sel);
-      const chunks = Array.from({ length: Math.ceil(all.length / PREFLIGHT_CHUNK) }, (_, i) => all.slice(i * PREFLIGHT_CHUNK, (i + 1) * PREFLIGHT_CHUNK));
-      Promise.all(chunks.map((selections) => dryRun({ source_device_id: source, selections, wait_for_idle_ms: 10 * 60_000, dry_run: true })))
+      // A busy machine offers more sessions than one call checks.
+      Promise.all(inChunks(toServer(sel)).map((selections) => convex.query(api.resourceOffload.preflight, { source_device_id: source, selections, wait_for_idle_ms: 10 * 60_000 })))
         .then((res: Array<{ checks: Check[] }>) => setPreflight((m) => ({ ...m, [source]: { at: Date.now(), checks: res.flatMap((r) => r.checks) } })))
         .catch(report("resources.preflight"));
     },
@@ -119,7 +118,8 @@ export function useResourceActions(sessions: ResourceSession[], plans: OffloadPl
     onRehearse: (sel) => {
       const source = sourceOf(sel);
       const asked = toServer(sel).map(({ conversation_id, session_id, destination_id }) => ({ conversation_id, session_id, destination_id }));
-      if (source && asked.length) useInboxStore.getState().requestMoveRehearsals({ request_id: rehearsalRequestId(), source_device_id: source, selections: asked }).catch(report("resources.rehearse"));
+      if (!source) return;
+      for (const selections of inChunks(asked)) useInboxStore.getState().requestMoveRehearsals({ request_id: rehearsalRequestId(), source_device_id: source, selections }).catch(report("resources.rehearse"));
     },
     onStartOffload: (sel, { waitForTurnMs }) => {
       const source = sourceOf(sel);

@@ -11,12 +11,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { closeSessionTab, closeTargetLater, detachSessionDaemon, ownerState, reapEngineOrphans, sessionEndpoint, withEndedSession, type LiveOwners } from "./engineReap.js";
+import { closeSessionTab, closeTargetLater, detachSessionDaemon, ownerState, reapEngineOrphans, sessionEndpoint, sessionPinnedTabs, withEndedSession, type LiveOwners } from "./engineReap.js";
 import type { LivenessVerdict } from "@codecast/shared/contracts";
 import { writeBridgeState } from "./bridge/host.js";
 import { FakeExtension, testBridgeHost } from "./bridge/host.testutil.js";
 import { targetIdOfTab } from "./bridge/protocol.js";
-import { engineSessionKey, engineStateDir, realSessionKey } from "./engine.js";
+import { engineSessionKey, engineStateDir, realSessionKey, withTabName } from "./engine.js";
 import { writeBoundTarget } from "./pinnedTab.js";
 
 let dir: string;
@@ -279,4 +279,34 @@ describe("detachSessionDaemon", () => {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   }, 15_000);
+});
+
+// A session that works through named tabs keeps a default pin on a tab closed
+// long ago; "open tab" for the session tries every pin, newest first.
+describe("sessionPinnedTabs", () => {
+  test("lists the session's default and named tabs in every browser, newest pin first, and nobody else's", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-pins-"));
+    try {
+      const mine = engineSessionKey("env:6e42ed88-c09b-42e6-929e-d7f61c3eb16c");
+      const pin = (key: string, targetId: string, ageS: number) => {
+        writeBoundTarget(key, targetId, stateDir);
+        const at = new Date(Date.now() - ageS * 1000);
+        fs.utimesSync(path.join(stateDir, `${key}.target`), at, at);
+      };
+      pin(realSessionKey(mine), "1E230A3E", 3000);
+      pin(realSessionKey(withTabName(mine, "li")), "1E230F26", 2000);
+      pin(realSessionKey(withTabName(mine, "litok")), "1E230F93", 1000);
+      pin(mine, "CLONE0000000000000000000000000001", 4000);
+      pin(realSessionKey(engineSessionKey("env:0fb19696-1663-4c95-be76-058e42af27fb")), "1E230000", 10);
+      expect(sessionPinnedTabs(["session:6e42ed88-c09b-42e6-929e-d7f61c3eb16c", "env:6e42ed88-c09b-42e6-929e-d7f61c3eb16c"], stateDir)).toEqual([
+        "1E230F93",
+        "1E230F26",
+        "1E230A3E",
+        "CLONE0000000000000000000000000001",
+      ]);
+      expect(sessionPinnedTabs([], stateDir)).toEqual([]);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
 });

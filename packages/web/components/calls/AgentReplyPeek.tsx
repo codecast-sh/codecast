@@ -135,7 +135,7 @@ function Reply({
   );
 }
 
-/** On the stage, while the thread is closed: over the bottom of the video. */
+/** On the stage: over the bottom of the video, thread open or closed. */
 export function AgentReplyPeek({ row, onOpen }: { row: ThreadRow | null; onOpen: () => void }) {
   const r = useShownReply(row, true);
   if (!r.shown) return null;

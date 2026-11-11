@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { dashboard, type ArtifactElement } from "@codecast/shared/artifacts";
 import { CheckMark, type BlockEnv } from "./blocks";
 import { CheckRows, type RowsScope } from "./CheckRows";
+import { useInboxStore } from "../../store/inboxStore";
 import { blockCheck } from "./blockCheck";
 import { resultFor, useRerun, type DataResult } from "../../hooks/useDashboardData";
 
@@ -86,8 +87,12 @@ export function CheckPanel({ docId, block, env, onClose, canRerun = true, point 
           </Field>
 
           <Field label="Source">
-            <div className="text-sm text-sol-text">{source?.label ?? q.source}</div>
-            <div className="text-meta text-sol-text-muted break-words">{result?.query_text ?? "Not read yet"}</div>
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-sm text-sol-text truncate">{source?.label ?? q.source}</span>
+              {result?.workspace ? <WorkspaceChip workspace={result.workspace} /> : null}
+            </div>
+            {q.source === "sheet" && typeof q.args?.doc === "string" ? <SheetLink id={q.args.doc} range={typeof q.args.range === "string" ? q.args.range : undefined} /> : null}
+            <div className="text-meta text-sol-text-muted break-words">{result?.query_text?.replace(/; in the (team|publisher's personal) workspace$/, "") ?? "Not read yet"}</div>
             {result?.refreshed_at ? (
               <div className="text-meta text-sol-text-dim mt-0.5">
                 Read {dashboard.ago(env.now - result.refreshed_at)} · every {Math.round(result.refresh_ms / 60_000)}m
@@ -121,7 +126,7 @@ export function CheckPanel({ docId, block, env, onClose, canRerun = true, point 
 
           {result && result.columns.length ? (
             <Field label="Rows">
-              <CheckRows key={point ? `${point.x}|${point.series ?? ""}` : "all"} columns={result.columns} rows={result.rows} scopes={scopes} truncated={result.truncated} />
+              <CheckRows key={point ? `${point.x}|${point.series ?? ""}` : "all"} columns={result.columns} rows={result.rows} scopes={scopes} truncated={result.truncated} lead={leadColumns(block, result.columns)} formats={columnFormats(block)} />
             </Field>
           ) : null}
         </>
@@ -165,4 +170,43 @@ export function Field({ label, children }: { label: string; children: React.Reac
       {children}
     </div>
   );
+}
+
+/** Whose data a source read: the team by name, or the person's own workspace. The same query reads different rows in different teams. */
+function WorkspaceChip({ workspace }: { workspace: string }) {
+  const teamId = workspace.startsWith("team:") ? workspace.slice(5) : null;
+  const name = useInboxStore((s: any) => (teamId ? ((s.teams ?? []) as Array<{ _id: string; name?: string }>).find((t) => String(t._id) === teamId)?.name : null));
+  return (
+    <span className="shrink-0 h-5 px-1.5 rounded bg-sol-bg-alt text-meta leading-5 text-sol-text-muted" title={teamId ? "Rows from this team's workspace" : "Rows from your personal workspace"} data-workspace-chip>
+      {teamId ? (name ?? "Team") : "Personal"}
+    </span>
+  );
+}
+
+/** The sheet a range comes from, by name, opening on its tab. */
+function SheetLink({ id, range }: { id: string; range?: string }) {
+  const title = useInboxStore((s: any) => s.docs?.[id]?.title as string | undefined);
+  const tab = range?.includes("!") ? range.slice(0, range.lastIndexOf("!")).replace(/^'|'$/g, "").replace(/''/g, "'") : undefined;
+  return (
+    <a href={`/docs/${id}${tab ? `?tab=${encodeURIComponent(tab)}` : ""}`} className="block text-meta text-sol-blue hover:underline truncate">
+      {title || "Open the sheet"}
+      {range ? <span className="text-sol-text-dim"> · {range}</span> : null}
+    </a>
+  );
+}
+
+/** The columns a block's number is made of: the folded or charted values, then what they are placed and split by. */
+function leadColumns(b: ArtifactElement, columns: string[]): string[] {
+  const list = (v: unknown) => (typeof v === "string" ? v.split(",").map((s) => s.trim()).filter(Boolean) : []);
+  if (b.kind === "kpi") return [...list(b.field), ...list(b.label)];
+  if (b.kind === "chart") return [...list(b.y), ...list(b.x ?? columns[0]), ...list(b.series)];
+  return [];
+}
+
+/** The block's number format on the columns it measures, so the rows read in the same units as the tile. */
+function columnFormats(b: ArtifactElement): Record<string, string> {
+  const format = typeof b.format === "string" ? b.format : undefined;
+  if (!format) return {};
+  const measured = b.kind === "kpi" ? [b.field] : b.kind === "chart" ? String(b.y ?? "").split(",") : [];
+  return Object.fromEntries(measured.filter((c): c is string => typeof c === "string" && !!c.trim()).map((c) => [c.trim(), format]));
 }
