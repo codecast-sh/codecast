@@ -541,6 +541,7 @@ import type * as passkeys from "../passkeys.js";
 import type * as passkeysSchema from "../passkeysSchema.js";
 import type * as pathStats from "../pathStats.js";
 import type * as patterns from "../patterns.js";
+import type * as peerLinks from "../peerLinks.js";
 import type * as pendingMessageWrites from "../pendingMessageWrites.js";
 import type * as pendingMessages from "../pendingMessages.js";
 import type * as permissionRules from "../permissionRules.js";
@@ -1238,6 +1239,7 @@ declare const fullApi: ApiFromModules<{
   passkeysSchema: typeof passkeysSchema;
   pathStats: typeof pathStats;
   patterns: typeof patterns;
+  peerLinks: typeof peerLinks;
   pendingMessageWrites: typeof pendingMessageWrites;
   pendingMessages: typeof pendingMessages;
   permissionRules: typeof permissionRules;
