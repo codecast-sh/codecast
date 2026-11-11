@@ -1209,6 +1209,7 @@ describe("the room's thread sees transcription go on", () => {
     call_invites: [],
     users: [{ _id: "ua", name: "Ada", email: "ada@x.org" }],
     team_members: [{ team_id: "team1", user_id: "ua" }],
+    team_memberships: [{ _id: "tm1", team_id: "team1", user_id: "ua", role: "member" }],
     teams: [{ _id: "team1", features: { calls: true } }],
     conversations: [{ _id: "conv1", short_id: "conv1", title: "Fix the auth race", agent_type: "claude_code", user_id: "ua", team_id: "team1" }],
     messages: [],

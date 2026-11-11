@@ -4,6 +4,8 @@ import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { canAccessDoc } from "./lib/access";
 import { checkRateLimit } from "./rateLimit";
+import { verifyApiToken } from "./apiTokens";
+import { MODEL_CALL_LIMITS } from "@codecast/shared/contracts/modelCall";
 import { callModel, parseJsonBlock } from "./lib/anthropic";
 import { requireVendorAllowed, type VendorGate } from "./lib/vendorGuard";
 import {
@@ -151,8 +153,17 @@ function toRequest(args: { tool: string; target?: string; context?: string; leve
   return { tool: "typos" };
 }
 
+/** The built prompt, held to the same size cap as every other server model call. */
+export function labPromptWithinLimits(req: LabRequest, text: string): { prompt: string; max_tokens: number } {
+  const built = labPrompt(req, text);
+  if (built.prompt.length > MODEL_CALL_LIMITS.prompt_chars) {
+    throw new Error(`The Lab reads up to ${MODEL_CALL_LIMITS.prompt_chars.toLocaleString("en-US")} characters at a time; run it on a shorter stretch`);
+  }
+  return built;
+}
+
 async function runLab(gate: VendorGate, req: LabRequest, text: string): Promise<LabResult> {
-  const { prompt, max_tokens } = labPrompt(req, text);
+  const { prompt, max_tokens } = labPromptWithinLimits(req, text);
   // A regulated team's doc is refused in words the editor can show (a FORBIDDEN ConvexError).
   await requireVendorAllowed(gate.ctx, gate.scope, "anthropic");
   const reply = await callModel({ system: SYSTEM, prompt, max_tokens, model: LAB_MODEL, label: "Doc lab", timeout_ms: LAB_TIMEOUT_MS, gate });
@@ -179,6 +190,16 @@ export const admitRun = internalMutation({
   },
 });
 
+/** Admits one `cast doc lab` run on the same per person limit as the web's. */
+export const admitCliRun = internalMutation({
+  args: { api_token: v.string() },
+  handler: async (ctx, args): Promise<void> => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    await checkRateLimit(ctx, auth.userId, "docLab.run", LAB_RUNS_PER_MINUTE);
+  },
+});
+
 /**
  * The web editor's Lab. The editor sends its own current text (it is ahead of
  * the stored markdown while the writer types) and lands the result itself.
@@ -189,9 +210,11 @@ export const run = action({
     // The caller must be able to read the doc they name: the vendor gate below
     // is keyed on it, so a doc of someone else's would decide where this text
     // may be sent. The same step meters the model call per person.
+    const req = toRequest(args);
+    labPromptWithinLimits(req, args.text);
     const docId: string = await ctx.runMutation(internal.docLab.admitRun, { doc_id: args.doc_id });
     // The doc the editor's text comes from decides where it may be sent.
-    return runLab({ ctx, scope: { row: { table: "docs", id: docId } } }, toRequest(args), args.text);
+    return runLab({ ctx, scope: { row: { table: "docs", id: docId } } }, req, args.text);
   },
 });
 
@@ -205,6 +228,7 @@ export const runOnDoc = action({
     const doc: any = await ctx.runQuery(api.docs.get, { api_token: args.api_token, id: args.id });
     if (!doc) throw new Error("Doc not found");
     const req = toRequest(args);
+    await ctx.runMutation(internal.docLab.admitCliRun, { api_token: args.api_token });
     const md: string = doc.content ?? "";
     const clean = stripDrafting(md);
     const context = req.tool === "alternatives" ? surrounding(clean, req.target) : "";

@@ -638,6 +638,12 @@ export async function authorizeRoomMembership(
     if (!conversation.team_id) {
       return { ok: false, reason: "conversation has no team" };
     }
+    // team_id is routing: owning the session opens its room only while the
+    // owner is on that team (a client-chosen team_id, or a member removed
+    // since, names a team they cannot speak in).
+    if (!(await isTeamMember(ctx, userId, conversation.team_id))) {
+      return { ok: false, reason: "not a team member" };
+    }
     return { ok: true, teamId: conversation.team_id, parsed };
   }
   if (!conversation.team_id) {
