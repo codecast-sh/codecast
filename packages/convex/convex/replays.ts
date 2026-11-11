@@ -176,9 +176,15 @@ export async function linkReplayToGroup(ctx: Db, source: Doc<"event_sources">, e
 }
 
 /**
- * A chunk the SDK is about to upload (the sign route). The key replaces any
- * earlier key for the same sequence number, so a retried upload of a changed
- * chunk does not leave two. Refuses past REPLAY_LIMITS.max_chunks_per_replay.
+ * A chunk the SDK is about to upload (the sign route). Chunks are append-only:
+ * a sequence number that already holds a different key keeps it and the
+ * answer names it as `held`, so a holder of the public ingest key cannot
+ * swap a landed chunk for its own. The sign route checks whether `held` ever
+ * landed in the bucket; only if it did not (the SDK's PUT failed and it is
+ * re-signing that sequence with a grown batch) does it call again with
+ * `replaceUnlanded: held`, which swaps exactly that key and nothing newer.
+ * Re-signing the same key (same content) is a no-op. Refuses past
+ * REPLAY_LIMITS.max_chunks_per_replay.
  */
 export async function recordReplayChunk(
   ctx: Db,
@@ -188,29 +194,26 @@ export async function recordReplayChunk(
   key: string,
   now: number,
   kind: ReplayChunkKind = "events",
-): Promise<{ ok: true; replay_id: Id<"replays"> } | { ok: false; reason: string }> {
+  replaceUnlanded?: string,
+): Promise<{ ok: true; replay_id: Id<"replays">; held?: string } | { ok: false; reason: string }> {
   const max = kind === "dom" ? REPLAY_DOM_LIMITS.max_chunks_per_replay : REPLAY_LIMITS.max_chunks_per_replay;
   if (!Number.isInteger(seq) || seq < 0 || seq >= max) {
     return { ok: false, reason: `seq must be 0 to ${max - 1}` };
   }
   const row = await ensureReplay(ctx, source, externalId, now);
   if (!row) return { ok: false, reason: `this source opened ${REPLAYS_NEW_PER_HOUR} recordings in the last hour; try again later` };
-  if (kind === "dom") {
-    // The capture the player plays: listed apart from the stream, so the
-    // assembly (which reads chunk_keys) never sees it.
-    const dom = row.dom_chunk_keys ?? [];
-    if (dom.includes(key)) return { ok: true, replay_id: row._id };
-    const next = dom.filter((k) => parseReplayDomChunkKey(k)?.seq !== seq);
-    next.push(key);
-    next.sort((a, b) => (parseReplayDomChunkKey(a)?.seq ?? 0) - (parseReplayDomChunkKey(b)?.seq ?? 0));
-    await ctx.db.patch(row._id, { dom_chunk_keys: next, updated_at: now });
-    return { ok: true, replay_id: row._id };
-  }
-  if (row.chunk_keys.includes(key)) return { ok: true, replay_id: row._id };
-  const keys = row.chunk_keys.filter((k) => parseReplayChunkKey(k)?.seq !== seq);
-  keys.push(key);
-  keys.sort((a, b) => (parseReplayChunkKey(a)?.seq ?? 0) - (parseReplayChunkKey(b)?.seq ?? 0));
-  await ctx.db.patch(row._id, { chunk_keys: keys, chunks_at: now, updated_at: now });
+  // The DOM capture the player plays is listed apart from the stream, so the
+  // assembly (which reads chunk_keys) never sees it.
+  const dom = kind === "dom";
+  const parse = dom ? parseReplayDomChunkKey : parseReplayChunkKey;
+  const current = (dom ? row.dom_chunk_keys : row.chunk_keys) ?? [];
+  if (current.includes(key)) return { ok: true, replay_id: row._id };
+  const existing = current.find((k) => parse(k)?.seq === seq);
+  if (existing && existing !== replaceUnlanded) return { ok: true, replay_id: row._id, held: existing };
+  const next = current.filter((k) => k !== existing);
+  next.push(key);
+  next.sort((a, b) => (parse(a)?.seq ?? 0) - (parse(b)?.seq ?? 0));
+  await ctx.db.patch(row._id, dom ? { dom_chunk_keys: next, updated_at: now } : { chunk_keys: next, chunks_at: now, updated_at: now });
   return { ok: true, replay_id: row._id };
 }
 
@@ -244,8 +247,8 @@ export const linkGroup = internalMutation({
 });
 
 export const recordChunk = internalMutation({
-  args: { source_id: v.id("event_sources"), replay_external_id: v.string(), seq: v.number(), key: v.string(), kind: v.optional(v.union(v.literal("events"), v.literal("dom"))) },
-  handler: async (ctx, args) => recordReplayChunk(ctx, await sourceOrThrow(ctx, args.source_id), args.replay_external_id, args.seq, args.key, Date.now(), args.kind ?? "events"),
+  args: { source_id: v.id("event_sources"), replay_external_id: v.string(), seq: v.number(), key: v.string(), kind: v.optional(v.union(v.literal("events"), v.literal("dom"))), replace_unlanded: v.optional(v.string()) },
+  handler: async (ctx, args) => recordReplayChunk(ctx, await sourceOrThrow(ctx, args.source_id), args.replay_external_id, args.seq, args.key, Date.now(), args.kind ?? "events", args.replace_unlanded),
 });
 
 // ── Assembling a recording's timeline ──
