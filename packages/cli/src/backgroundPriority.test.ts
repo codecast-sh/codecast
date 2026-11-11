@@ -1,5 +1,5 @@
 import { beforeEach, expect, test } from "bun:test";
-import { applyBackground, resetBackgroundForTest, setBackgroundSessions, setGovernorBackground } from "./backgroundPriority";
+import { applyBackground, DELIVERY_HOLD_MS, holdForDelivery, isDeliveryHeld, resetBackgroundForTest, setBackgroundSessions, setGovernorBackground } from "./backgroundPriority";
 import type { ResourceProcess } from "@codecast/shared/contracts";
 
 const proc = (pid: number, sessionId?: string, startedAt = 100): ResourceProcess => ({ pid, ppid: 1, name: "ffmpeg", kind: "tool", cpu: 300, rss: 1, startedAt, ...(sessionId ? { sessionId } : {}) });
@@ -60,4 +60,28 @@ test("the governor's set and a person's set are one union: releasing one keeps w
   expect(calls.slice(2)).toEqual([[2, false]]);
   await setBackgroundSessions([], run);
   expect(calls.slice(3)).toEqual([[1, false]]);
+});
+
+// jx70102, 2026-11-11: a `cast send` was typed three times into a session the
+// governor held at background priority; it never redrew the paste and the
+// message failed while its text sat in the composer.
+test("a session a message is going into leaves background priority at once, whoever put it there, until the hold lapses", async () => {
+  const calls: Array<[number, boolean]> = [];
+  const run = async (pid: number, bg: boolean) => { calls.push([pid, bg]); return true; };
+  await applyBackground([proc(1, "s1"), proc(2, "s2")], run);
+  await setGovernorBackground(["s1"], run);
+  await setBackgroundSessions(["s2"], run);
+  expect(calls).toEqual([[1, true], [2, true]]);
+
+  const now = Date.now();
+  await holdForDelivery("s1", run, now);
+  await holdForDelivery("s2", run, now);
+  expect(calls.slice(2)).toEqual([[1, false], [2, false]]);
+  expect((await applyBackground([proc(1, "s1"), proc(2, "s2")], run)).some((p) => p.background)).toBe(false);
+
+  // A retry renews the hold without touching the process again.
+  await holdForDelivery("s1", run, now + 1000);
+  expect(calls).toHaveLength(4);
+
+  expect(isDeliveryHeld("s1", now + 1000 + DELIVERY_HOLD_MS)).toBe(false);
 });
