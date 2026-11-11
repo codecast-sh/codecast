@@ -27,17 +27,27 @@ export function AgentStatusPill({
 
 export function ConversationHeaderTitle({
   text,
+  lead,
   tooltip,
   onDoubleClick,
 }: {
   text: ReactNode;
+  /** The session's mark, ahead of the title (SessionMark). */
+  lead?: ReactNode;
   tooltip?: string;
   onDoubleClick?: () => void;
 }) {
-  return (
+  const title = (
     <h1 data-cc-conv-title className="cc-panel__title truncate flex-1 min-w-0 cursor-default" title={tooltip} onDoubleClick={onDoubleClick}>
       {text}
     </h1>
+  );
+  if (!lead) return title;
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-2">
+      {lead}
+      {title}
+    </span>
   );
 }
 

@@ -10,11 +10,9 @@ import { sessionCardLine } from "../../lib/sessionCardLine";
 import { formatRowTime, sessionCardTitle } from "../../lib/sessionCard";
 import { sessionCardSummary } from "../../lib/sessionSummary";
 import { threadStateView } from "../../lib/threadState";
-import { identityRowOf } from "../../lib/sessionIdentity";
 import { fleetProgress } from "../fleetBands";
 import { cleanUserMessage } from "../sessionMessage";
-import { SessionGlyph } from "../identity";
-import { AgentTypeIcon } from "../AgentTypeIcon";
+import { SessionMark } from "../identity";
 import { SessionStatusMark, SessionStatusWord } from "../inbox/SessionStatusMark";
 import { ModernBranchChip, ModernProjectChip } from "../inbox/ModernCardParts";
 
@@ -70,7 +68,7 @@ const ModernFleetTile = memo(function ModernFleetTile({ session, status, time, r
     >
       <span className="flex min-w-0 items-start gap-2">
         <span className="flex h-5 w-5 shrink-0 items-center justify-center text-sol-text-muted">
-          <SessionGlyph row={identityRowOf(session as any)} size={18} fallback={<AgentTypeIcon agentType={session.agent_type || "claude_code"} className="h-4 w-4" />} />
+          <SessionMark session={session as any} size={18} />
         </span>
         <span className="line-clamp-2 min-w-0 flex-1 text-body font-semibold text-sol-text">{title}</span>
         <span className="shrink-0 pt-0.5 text-meta tabular-nums text-sol-text-dim">{time}</span>

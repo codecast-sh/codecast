@@ -23,6 +23,7 @@ import { cleanUserMessage } from "../sessionMessage";
 import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
 import { AnchorScopePill, HeadOfPeopleFace } from "../anchor/AnchorIdentity";
 import { IdentityFace, SessionIdentityLine } from "../identity";
+import { WorkspaceTile } from "../identity/WorkspaceTile";
 import { SessionTaskChip } from "../work/SessionTaskChip";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
 import { badgeVariants } from "../ui/badge";
@@ -270,9 +271,9 @@ export function ModernSessionCardView({
   ) : session.is_anchor ? (
     <span className="flex items-center" title="The workspace's agent"><HeadOfPeopleFace size={16} /></span>
   ) : (
-    <span className="flex items-center text-sol-text-muted" title={`${agentWord}${session.model ? ` · ${formatModel(session.model)}` : ""}`}>
-      <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-4 h-4" />
-    </span>
+    // The session's mark: a tile in its workspace's colour with the agent
+    // inside, so a long list of sessions sorts by eye (WorkspaceTile).
+    <WorkspaceTile row={session} size={20} showAgent={chrome.showAgentIcon} />
   );
 
   const pinnable = !isForeignSession && !isSetAside;

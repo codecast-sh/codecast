@@ -4,8 +4,8 @@ import { CornerUpLeft, ArrowRight, GitBranch, GitPullRequest, MessageSquare, Tag
 import { badgeVariants } from "../ui/badge";
 import { Button } from "../ui/button";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
-import { useLabelColor } from "../../lib/labelColors";
-import { projectDotClass } from "../../lib/projectColors";
+import { useLabelColor, useWorkspaceColor } from "../../lib/labelColors";
+import { projectDotClass, workspaceColorOf } from "../../lib/projectColors";
 import { WORK_PROJECT_SEP } from "../../lib/workProjectSig";
 import { workProjectChipKey } from "../../store/workProjects";
 import { clickProjectChip } from "../../store/chipFilterClicks";
@@ -45,13 +45,16 @@ export function ModernProjectChip({ project, label, directory, workProject, onFi
   className?: string;
 }) {
   const getLabelColor = useLabelColor();
+  const workspaceColor = useWorkspaceColor();
   const [pid, color, title] = workProject ? workProject.split(WORK_PROJECT_SEP) : [];
   const known = project !== "unknown";
   const name = title || label || (known ? project : "");
   if (!name && !device) return null;
   const dot = title
     ? <span aria-hidden className={`w-1.5 h-1.5 rotate-45 rounded-[1px] shrink-0 ${projectDotClass({ color: color || undefined, title })}`} />
-    : name ? <span aria-hidden className={`w-1.5 h-1.5 rounded-full shrink-0 ${getLabelColor(name).dot}`} /> : null;
+    // A label keeps its label colour; a repository wears its workspace
+    // colour, the one the card's lead tile is drawn in (WorkspaceTile).
+    : name ? <span aria-hidden className={`w-1.5 h-1.5 rounded-full shrink-0 ${label ? getLabelColor(name).dot : workspaceColorOf(name, workspaceColor).dot}`} /> : null;
   const where = [title && `In ${title}`, label && `Label ${label}`, known && `${project} · ${directory || "no directory"}`, device?.title].filter(Boolean).join("\n");
   const onPress = title
     ? (e: React.MouseEvent) => clickProjectChip(workProjectChipKey(pid), null, e.altKey, e.shiftKey)
