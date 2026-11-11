@@ -258,6 +258,70 @@ describe("live artifacts", () => {
     }
   });
 
+  test("the head counts the rows a complete copy holds, through deletes, drafts and old heads", async () => {
+    const { t, doc, rosa, as } = await setup();
+    const total = async () => (await as(rosa).query(api.liveArtifacts.elementsSince, { doc_id: doc, since: 0 }))!.total;
+    const stored = async () => (await t.run((ctx: any) => ctx.db.query("live_elements").withIndex("by_doc_rev", (q: any) => q.eq("doc_id", doc)).collect())).filter((r: any) => !r.dead).length;
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_a", put: { kind: "sticky", x: 0 } }, { k: "el_b", put: { kind: "sticky", x: 1 } }] });
+    expect(await total()).toBe(2);
+    // A delete leaves a tombstone row: still counted.
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_b", del: true }] });
+    expect(await total()).toBe(2);
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "draft", ops: [{ k: "el_a", set: { x: 5 } }, { k: "el_c", put: { kind: "sticky", x: 2 } }] });
+    expect(await total()).toBe(4);
+    await as(rosa).mutation(api.liveArtifacts.draftDiscard, { doc_id: doc });
+    expect(await total()).toBe(2);
+    // A draft row revived after it was retired counts again.
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "draft", ops: [{ k: "el_a", set: { x: 6 } }] });
+    expect(await total()).toBe(3);
+    expect(await total()).toBe(await stored());
+
+    // A head from before the count: unknown until its next write counts it.
+    await t.run(async (ctx: any) => {
+      const head = await ctx.db.query("live_heads").withIndex("by_doc", (q: any) => q.eq("doc_id", doc)).first();
+      await ctx.db.patch(head._id, { rows: undefined });
+    });
+    expect(await total()).toBeNull();
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_d", put: { kind: "sticky", x: 3 } }] });
+    await new Promise((r) => setTimeout(r, 20));
+    await t.finishAllScheduledFunctions(() => {});
+    expect(await total()).toBe(await stored());
+  });
+
+  test("search finds an artifact by the words inside it, only in the viewer's workspaces", async () => {
+    const { t, doc, privateDoc, rosa, dev, outsider, as } = await setup();
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_a", put: { kind: "sticky", x: 0, text: "Ship on Friday" } }] });
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: privateDoc, ops: [{ k: "c:Sheet1!A1", put: { kind: "cell", input: "Friday budget" } }, { k: "c:Sheet1!A2", put: { kind: "cell", input: "=SUM(Fridays)" } }] });
+    // The writes asked for a reindex SEARCH_REINDEX_MS out; run it now.
+    for (const d of [doc, privateDoc]) await t.mutation(internal.liveSearch.reindex, { doc_id: d });
+    const find = async (who: any, q: string) => (await as(who).query(api.liveSearch.search, { query: q })).map((h: any) => h.title).sort();
+    expect(await find(rosa, "friday")).toEqual(["Launch timeline", "Rosa's sheet"]);
+    // A teammate finds the team board, not Rosa's personal sheet; an outsider finds nothing.
+    expect(await find(dev, "friday")).toEqual(["Launch timeline"]);
+    expect(await find(outsider, "friday")).toEqual([]);
+    // Formulas are not words.
+    expect(await find(rosa, "SUM")).toEqual([]);
+    const [hit] = await as(rosa).query(api.liveSearch.search, { query: "ship" });
+    expect(hit.snippet).toContain("Ship on Friday");
+  });
+
+  test("a comment's words are its author's; thread state is anyone's; your own agent's reply reaches you", async () => {
+    const { t, doc, rosa, dev, as, agent } = await setup();
+    await as(dev).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_d", put: { kind: "comment", text: "Dev's note", sent_to: "x" } }] });
+    // Rosa (the owner) can resolve it and delete it, but not rewrite it or replace it.
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_d", set: { resolved: true } }] });
+    await expect(as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_d", set: { text: "edited" } }] })).rejects.toThrow(/Only its author can edit/);
+    await expect(as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_d", put: { kind: "comment", text: "mine now" } }] })).rejects.toThrow(/can't be replaced/);
+    // Rosa's comment: Dev may not delete it.
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_r", put: { kind: "comment", text: "Rosa's note" } }] });
+    await expect(as(dev).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_r", del: true }] })).rejects.toThrow(/Only its author can delete/);
+    // Dev's own agent session replies on Dev's ask: Dev hears about it.
+    await t.mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_a", put: { kind: "comment", text: "Done", parent: "cm_d" } }], ...agent });
+    const devBell = (await t.run((ctx: any) => ctx.db.query("notifications").collect())).filter((n: any) => String(n.recipient_user_id) === String(dev));
+    expect(devBell.map((n: any) => n.type)).toContain("comment_reply");
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_d", del: true }] });
+  });
+
   test("comments carry their writer's identity, whatever the client claims", async () => {
     const { t, doc, rosa, as, agent } = await setup();
     await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_1", put: { kind: "comment", text: "@agent lay this out", author_name: "Someone else" } }] });

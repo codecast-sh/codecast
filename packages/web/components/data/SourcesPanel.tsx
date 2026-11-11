@@ -138,7 +138,7 @@ function SourceItem({ docId, s, open, onToggle, canEdit, blocks, onAdd }: { docI
       {open ? (
         <div className="px-2 pb-2 space-y-2">
           <ArgsEditor docId={docId} source={s.source} args={args} onChange={setArgs} />
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <button type="button" onClick={run} disabled={running} className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs font-medium bg-sol-text text-sol-bg disabled:opacity-40">
               {running ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />} Run
             </button>

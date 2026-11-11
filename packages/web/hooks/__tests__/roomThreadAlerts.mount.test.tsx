@@ -32,6 +32,7 @@ const { createRoot } = await import("react-dom/client");
 const { useInboxStore } = await import("../../store/inboxStore");
 const { useRoomThreadAlerts } = await import("../useRoomThreadAlerts");
 const { setRoomThreadWatching } = await import("../../lib/calls/roomThreadSeen");
+const { useRoomThreadUnread } = await import("../useRoomThreadUnread");
 
 afterAll(() => {
   mock.module("../useQueryNoThrow", () => realNoThrow);
@@ -119,5 +120,34 @@ describe("the call chat knock", () => {
     await land([row(1), row(2), next]);
     expect(knocks).toEqual([next._id]);
     await act(async () => root.unmount());
+  });
+});
+
+describe("the stage with the thread open", () => {
+  // Nothing is unread while the thread is open, so the peek over the video
+  // used to stay down and an agent's answer landed only as a line in the
+  // rail, where nobody watching faces saw it.
+  let seen: ThreadRow | null = null;
+  function OpenRail({ roomKey }: { roomKey: string }) {
+    seen = useRoomThreadUnread(roomKey, true).arrived;
+    return null;
+  }
+
+  test("an agent's answer that lands is handed to the peek; the backlog never is", async () => {
+    const roomKey = `room:open-${room++}`;
+    const old = row(1, { agent });
+    rows = [old];
+    const r = createRoot(dom.window.document.body.appendChild(dom.window.document.createElement("div")));
+    await act(async () => r.render(<OpenRail roomKey={roomKey} />));
+    expect(seen).toBeNull();
+    const person = row(2);
+    rows = [old, person];
+    await act(async () => r.render(<OpenRail roomKey={roomKey} />));
+    expect(seen).toBeNull();
+    const answer = row(3, { agent });
+    rows = [old, person, answer];
+    await act(async () => r.render(<OpenRail roomKey={roomKey} />));
+    expect(seen?._id).toBe(answer._id);
+    await act(async () => r.unmount());
   });
 });

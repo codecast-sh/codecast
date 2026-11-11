@@ -20,7 +20,7 @@ describe("chart options", () => {
     expect(o.series[0].endLabel).toBeUndefined();
     const two: any = chartOption(ok({ chart: "line", x: "w", y: "this_year,last_year" }, res(["w", "this_year", "last_year"], [["w1", 1, 2]])), t, { compact: true });
     expect(two.series.map((s: any) => s.name)).toEqual(["This year", "Last year"]);
-    expect(two.legend).toBeUndefined();
+    expect(two.legend).toEqual({ show: false });
   });
   test("axis labels read as dates and hours", () => {
     expect(axisLabel("2026-11-07")).toBe("Nov 7");
@@ -38,7 +38,7 @@ describe("chart options", () => {
     const story: any = chartOption(ev, t, { compact: false, revealMs: 1200 });
     expect(tile.series[0].areaStyle).toBeTruthy();
     expect(tile.series[0].endLabel.show).toBe(true);
-    expect(tile.legend).toBeUndefined();
+    expect(tile.legend).toEqual({ show: false });
     expect(story.series[0].endLabel.show).toBe(true);
     expect(story.animationDuration).toBe(1200);
     expect(tile.animation).toBe(false);
@@ -49,4 +49,22 @@ describe("chart options", () => {
     expect(o.series[0].data[0].itemStyle.color).toBe(t.blue);
     expect(o.series[0].data[1].itemStyle.color).not.toBe(t.blue);
   });
+});
+
+test("a redraw that drops the legend hides it, since ECharts merges into the last option", () => {
+  const o: any = chartOption(ok({ chart: "stacked", x: "day", y: "spend", series: "person" }, res(["day", "person", "spend"], [["2026-11-01", "a", 1]])), t, { compact: true });
+  expect(o.legend).toEqual({ show: false });
+});
+
+test("a series keeps the dashboard's color slot for its name; ranked bars carry no tooltip", () => {
+  const o: any = chartOption(ok({ chart: "stacked", x: "day", y: "spend", series: "person" }, res(["day", "person", "spend"], [["2026-11-01", "ada", 1], ["2026-11-01", "bo", 2]])), t, { compact: true, slotOf: (n) => (n === "ada" ? 2 : n === "bo" ? 0 : undefined) });
+  expect(o.series.map((s: any) => s.itemStyle.color)).toEqual([t.green, t.blue]);
+  const h: any = chartOption(ok({ chart: "hbar", x: "person", y: "spend" }, res(["person", "spend"], [["ada", 1], ["bo", 2]])), t, { compact: true });
+  expect(h.tooltip).toEqual({ show: false });
+});
+
+test("two series get a gap row in the tooltip", () => {
+  const o: any = chartOption(ok({ chart: "line", x: "day", y: "a,b" }, res(["day", "a", "b"], [["2026-11-01", 5, 3]])), t, { compact: true });
+  const html = o.tooltip.formatter([{ axisValue: "2026-11-01", value: 5, seriesName: "a", color: "red" }, { axisValue: "2026-11-01", value: 3, seriesName: "b", color: "blue" }]);
+  expect(html).toContain("Gap");
 });

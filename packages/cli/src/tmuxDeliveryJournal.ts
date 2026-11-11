@@ -77,7 +77,15 @@ export class TmuxDeliveryJournal {
     return this.db.query<TmuxPasteReceipt, [string]>("SELECT * FROM tmux_pastes WHERE generation = ? AND phase != 'verified'").get(generation);
   }
 
-  begin(identity: TmuxDeliveryIdentity, generation: string, payload: string): { receipt: TmuxPasteReceipt; fresh: boolean } {
+  /**
+   * Opens the receipt for a write. `atPrompt` is the receipt for a payload an
+   * earlier write already put at the prompt, which this attempt only submits:
+   * nothing is written, so it neither counts toward the cap nor is refused by
+   * it. A starved agent drew the third write's text only after the daemon gave
+   * up, and the cap then refused the Enter that would have sent it (jx70102,
+   * 2026-11-11).
+   */
+  begin(identity: TmuxDeliveryIdentity, generation: string, payload: string, opts: { atPrompt?: boolean } = {}): { receipt: TmuxPasteReceipt; fresh: boolean } {
     const payloadHash = createHash("sha256").update(payload).digest("hex");
     return this.db.transaction(() => {
       const prior = this.get(identity.messageId);
@@ -92,10 +100,13 @@ export class TmuxDeliveryJournal {
         return { receipt: prior, fresh: false };
       }
       if (this.pending(generation)) throw new TmuxDeliveryUncertainError("an earlier message still owns the terminal input");
-      const writes = this.writesOf(identity.messageId);
-      if (writes >= TMUX_PASTE_WRITE_CAP) throw new TmuxDeliveryExhaustedError(identity.messageId, writes, this.submittedOnce(identity.messageId));
-      this.db.query("INSERT INTO tmux_paste_writes VALUES (?, 1) ON CONFLICT(messageId) DO UPDATE SET writes = writes + 1").run(identity.messageId);
-      const receipt: TmuxPasteReceipt = { ...identity, generation, payloadHash, phase: "paste", pasteAt: Date.now(), writes: writes + 1 };
+      let writes = this.writesOf(identity.messageId);
+      if (!opts.atPrompt) {
+        if (writes >= TMUX_PASTE_WRITE_CAP) throw new TmuxDeliveryExhaustedError(identity.messageId, writes, this.submittedOnce(identity.messageId));
+        this.db.query("INSERT INTO tmux_paste_writes VALUES (?, 1) ON CONFLICT(messageId) DO UPDATE SET writes = writes + 1").run(identity.messageId);
+        writes++;
+      }
+      const receipt: TmuxPasteReceipt = { ...identity, generation, payloadHash, phase: "paste", pasteAt: Date.now(), writes };
       this.db.query("INSERT INTO tmux_pastes VALUES (?, ?, ?, ?, ?, ?)")
         .run(receipt.messageId, receipt.conversationId, generation, payloadHash, receipt.phase, receipt.pasteAt);
       return { receipt, fresh: true };
@@ -212,10 +223,10 @@ export async function prepareTmuxDelivery(
   exec: TmuxQuery,
   isDelivered: (messageId: string) => Promise<boolean>,
   journal?: TmuxDeliveryJournal,
-  opts?: { settleMs?: number },
+  opts?: { settleMs?: number; submitSpent?: () => Promise<boolean> },
 ): Promise<TmuxDeliveryPreparation> {
   try {
-    return await prepareDelivery(target, identity, exec, isDelivered, journal ?? tmuxDeliveryJournal(), opts?.settleMs);
+    return await prepareDelivery(target, identity, exec, isDelivered, journal ?? tmuxDeliveryJournal(), opts?.settleMs, opts?.submitSpent);
   } catch (error) {
     if (error instanceof TmuxDeliveryUncertainError) throw error;
     throw new TmuxDeliveryUncertainError(`receipt reconciliation failed: ${String(error)}`);
@@ -229,6 +240,7 @@ async function prepareDelivery(
   isDelivered: (messageId: string) => Promise<boolean>,
   journal: TmuxDeliveryJournal,
   settleMs?: number,
+  submitSpent?: () => Promise<boolean>,
 ): Promise<TmuxDeliveryPreparation> {
   const generation = await generationFor(target, exec);
   const pending = journal.pending(generation);
@@ -239,6 +251,13 @@ async function prepareDelivery(
     // retrying, and holding the pane for it refused every later message
     // (2026-09-14). The next write drains whatever residue it left.
     else if (pending.phase === "paste" && receiptSettled(pending, settleMs)) journal.release(pending.messageId);
+    // A settled submit whose Enter an idle agent has since taken: the prompt
+    // is empty and the agent is reading its terminal, so none of the earlier
+    // payload is left to submit or to merge with the next one. Its echo can
+    // still fail to match (a starved agent drew two sends into one turn), and
+    // holding the pane for it refused every later message for hours
+    // (jx742pa, 2026-11-11). Its own row stays with the server's healer.
+    else if (pending.phase === "submit" && receiptSettled(pending, settleMs) && await submitSpent?.()) journal.release(pending.messageId);
     else throw new TmuxDeliveryUncertainError("an earlier message still owns the terminal input");
   }
   let prior = journal.get(identity.messageId);
