@@ -106,10 +106,14 @@ export function ModernSessionsRow({ row, inbox, now, busy, expanded, parking, on
     row.isAlive && row.current_pid_count ? `${row.current_pid_count} procs` : null,
   ].filter(Boolean);
   const process = PROCESS_WORDS[row.bucket];
+  // A row with no live process, or one stashed from the inbox, recedes by
+  // losing its card ground and its bold title. It is not faded as a whole:
+  // its times and actions are still read and pressed.
+  const quiet = row.bucket === "dead" || row.dismissed;
   return (
     <div
       data-mc-status={status}
-      className={`rounded-card border bg-sol-card transition-colors ${row.pinned ? "border-sol-magenta/40" : "border-sol-border"} ${row.bucket === "dead" || row.dismissed ? "opacity-60" : ""} ${busy ? "opacity-40" : "hover:border-sol-text-dim/50"}`}
+      className={`rounded-card border transition-colors ${quiet ? "bg-transparent" : "bg-sol-card"} ${row.pinned ? "border-sol-magenta/40" : "border-sol-border"} ${busy ? "opacity-40" : "hover:border-sol-text-dim/50"}`}
     >
       <div
         className="cursor-pointer px-4 py-3"
@@ -123,7 +127,7 @@ export function ModernSessionsRow({ row, inbox, now, busy, expanded, parking, on
           <span className="flex min-w-0 flex-1 basis-[16rem] items-center gap-2">
             <span className="flex w-4 shrink-0 justify-center"><SessionStatusMark status={status} /></span>
             {row.conversation_id ? (
-              <Link href={`/conversation/${row.conversation_id}`} className="min-w-0 truncate text-body font-medium text-sol-text hover:underline underline-offset-2">{title}</Link>
+              <Link href={`/conversation/${row.conversation_id}`} className={`min-w-0 truncate text-body hover:underline underline-offset-2 ${quiet ? "text-sol-text-muted" : "font-medium text-sol-text"}`}>{title}</Link>
             ) : (
               <span className="min-w-0 truncate text-body text-sol-text-muted">{title}</span>
             )}

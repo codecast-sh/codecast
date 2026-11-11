@@ -113,11 +113,14 @@ nav[data-modern-rail] [data-sv-count=""] {
 .dark nav[data-modern-rail] [data-sv-count="alert"] {
   color: var(--sol-bg);
 }
-/* A sub-row keeps readable ink when its person is away: the dimming is on the
-   avatar and the presence dot, not the name. */
-nav[data-modern-rail] [data-nav-subrow] > span.truncate {
-  opacity: 1;
-  color: var(--sol-text-muted);
+/* A dimmed sub-row (a teammate who is away) keeps readable ink: the row is not
+   faded as a whole. Its name steps down to the dim token and the fade sits on
+   the avatar and the trailing marker. */
+nav[data-modern-rail] [data-nav-dim] > [data-nav-subrow] > span.truncate {
+  color: var(--sol-text-dim);
+}
+nav[data-modern-rail] [data-nav-dim]:not(:hover) > [data-nav-subrow] > :first-child:not(span.truncate) {
+  opacity: 0.6;
 }
 
 /* ---- Headings ------------------------------------------------------------- */

@@ -58,11 +58,12 @@ export function SectionRow({ row, className }: { row: SectionRowSpec; className?
     <div
       onContextMenu={row.onContextMenu}
       {...(row.path ? paneDragProps(row.path, row.name) : {})}
+      data-nav-dim={row.dim ? "" : undefined}
       className={`flex items-center group/v transition-colors ${
         row.active
           ? "bg-sol-bg-highlight text-sol-text"
           : "text-sol-text-muted hover:bg-sol-bg-highlight/40"
-      } ${row.dim ? "opacity-60 hover:opacity-100" : ""} ${className ?? ""}`}
+      } ${row.dim ? "opacity-60 hover:opacity-100 modern:opacity-100" : ""} ${className ?? ""}`}
     >
       <button
         onClick={() => {

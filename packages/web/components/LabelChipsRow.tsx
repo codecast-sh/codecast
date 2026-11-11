@@ -501,7 +501,7 @@ export function LabelChipsRow({
               ? `${bc.bg} ${bc.text}`
               : count === 0
                 ? "bg-sol-text-dim/10 text-sol-text-dim hover:bg-sol-text-dim/20 hover:text-sol-text-muted modern:text-sol-text-muted"
-                : "bg-sol-text-dim/10 text-sol-text-muted hover:bg-sol-text-dim/20 hover:text-sol-text"
+                : "bg-sol-text-dim/10 text-sol-text-muted hover:bg-sol-text-dim/20 hover:text-sol-text modern:text-sol-text"
         }`}
         title={active ? filterChipTitle(bucket.name, excluded, sole) : `Label: ${bucket.name} — click to filter, right-click for more, drag to reorder`}
       >
@@ -520,7 +520,7 @@ export function LabelChipsRow({
             replacing it, so the chip never changes size and the row never
             shifts under the pointer. */}
         <span className="ml-0.5 relative inline-flex items-center justify-center min-w-[10px]">
-          <span className="opacity-50 modern:opacity-80 group-hover:opacity-0 tabular-nums">{count}</span>
+          <span className="opacity-50 modern:opacity-100 modern:text-sol-text-muted group-hover:opacity-0 tabular-nums">{count}</span>
           <span
             role="button"
             aria-label={`Delete label ${bucket.name}`}
@@ -616,7 +616,7 @@ export function LabelChipsRow({
               } ${
                 active
                   ? `${pc.bg} ${pc.text}`
-                  : "bg-sol-text-dim/10 text-sol-text-muted hover:bg-sol-text-dim/20 hover:text-sol-text"
+                  : "bg-sol-text-dim/10 text-sol-text-muted hover:bg-sol-text-dim/20 hover:text-sol-text modern:text-sol-text"
               }`}
               title={active ? filterChipTitle(label, excluded, sole) : `${workProjectIdOfChipKey(name) ? "Project" : "Folder"}: ${label} — click to filter, right-click for more`}
             >
@@ -627,7 +627,7 @@ export function LabelChipsRow({
                 <span aria-hidden className="invisible font-medium col-start-1 row-start-1">{label}</span>
                 <span className={`col-start-1 row-start-1 ${active ? "font-medium" : ""} ${excluded ? "opacity-75" : ""}`}>{label}</span>
               </span>
-              <span className="ml-0.5 opacity-50 modern:opacity-80">{count}</span>
+              <span className="ml-0.5 opacity-50 modern:opacity-100">{count}</span>
             </button>
           );
         })}
@@ -664,7 +664,7 @@ export function LabelChipsRow({
             <span className={`w-1.5 flex-shrink-0 ${excluded ? "h-[2px] rounded-full bg-current" : `h-1.5 rounded-[2px] ${bc.dot}`}`} />
             <span className={`truncate ${excluded ? "opacity-75" : ""}`}>{bucket.name}</span>
             <span className="ml-0.5 relative inline-flex flex-shrink-0 items-center justify-center min-w-[10px]">
-              <span className="opacity-50 modern:opacity-80 group-hover:opacity-0 tabular-nums">{bucketCounts[bucket._id] || 0}</span>
+              <span className="opacity-50 modern:opacity-100 group-hover:opacity-0 tabular-nums">{bucketCounts[bucket._id] || 0}</span>
               <span className="absolute inset-0 hidden group-hover:flex items-center justify-center opacity-70">
                 <X className="w-2.5 h-2.5" />
               </span>
@@ -689,7 +689,7 @@ export function LabelChipsRow({
           >
             <span className={`w-1.5 flex-shrink-0 ${excluded ? "h-[2px] rounded-full bg-current" : `h-1.5 rounded-full ${pc.dot}`}`} />
             <span className={`truncate ${excluded ? "opacity-75" : ""}`}>{label}</span>
-            <span className="ml-0.5 opacity-50 modern:opacity-80 tabular-nums flex-shrink-0">{count}</span>
+            <span className="ml-0.5 opacity-50 modern:opacity-100 tabular-nums flex-shrink-0">{count}</span>
           </button>
         );
       })}

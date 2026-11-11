@@ -1513,7 +1513,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
           <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         <span className="shrink-0 whitespace-nowrap text-mark font-semibold uppercase tracking-wider text-sol-amber">
-          Triggers <span className="text-sol-amber/60 tabular-nums">{rows.length}</span>
+          Triggers <span className="text-sol-amber/60 modern:text-sol-amber tabular-nums">{rows.length}</span>
         </span>
         {/* The next fire and the pills share what is left of the row and clip
             there, so the chevron keeps its slot on a narrow rail. */}

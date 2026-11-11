@@ -22,13 +22,13 @@ export const BUILTIN_THEMES: readonly ModTheme[] = [
       // Near-white surfaces with a faint cool tint, and a white card. The
       // earlier sage (#edf3ee) read as warm paper next to the teal ink.
       bg: "#f6f9f8", "bg-alt": "#ecf1ef", card: "#ffffff", border: "#d2ddd9",
-      text: "#1a2d29", "text-muted": "#3e564f", "text-dim": "#576d66", link: "#0d7865",
+      text: "#1a2d29", "text-muted": "#3e564f", "text-dim": "#50655e", link: "#0d7865",
       red: "#c3352b", orange: "#a95219", amber: "#8e630c", yellow: "#746c0e",
-      green: "#357827", cyan: "#107771", blue: "#2a66b4", violet: "#694ebf", magenta: "#ae3977",
+      green: "#337425", cyan: "#107771", blue: "#2a66b4", violet: "#694ebf", magenta: "#ae3977",
     },
     dark: {
       bg: "#0e1918", "bg-alt": "#13221f", card: "#172925", border: "#233f39",
-      text: "#d6e5dd", "text-muted": "#93afa5", "text-dim": "#779288", link: "#5fd6b9",
+      text: "#d6e5dd", "text-muted": "#93afa5", "text-dim": "#7d988e", link: "#5fd6b9",
       red: "#f0645a", orange: "#f08a4b", amber: "#e3ad4a", yellow: "#d8cd6b",
       green: "#7ec76b", cyan: "#4ccac0", blue: "#6aa8e8", violet: "#a28ee6", magenta: "#e27aa9",
     },

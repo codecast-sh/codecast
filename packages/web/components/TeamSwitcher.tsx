@@ -28,7 +28,7 @@ export const TeamSwitcherButton = forwardRef<
     /** Workspaces not on screen where something waiting on you arrived since
      *  you last visited them: the dot. Visiting one clears it. */
     elsewhereNew?: number;
-    variant?: "bar" | "rail";
+    variant?: "bar" | "rail" | "corner";
     isNarrow?: boolean;
   }
 >(function TeamSwitcherButton({ team, label, elsewhereNew = 0, variant = "bar", isNarrow = false, ...props }, ref) {
@@ -47,6 +47,21 @@ export const TeamSwitcherButton = forwardRef<
       className="absolute -right-0.5 -top-1 h-2 w-2 rounded-full bg-sol-red ring-2 ring-sol-bg"
     />
   );
+  // Zen's corner: the crest alone, the size of the toggle it sits beside.
+  if (variant === "corner") {
+    return (
+      <button
+        ref={ref}
+        {...props}
+        data-cc-team-trigger="corner"
+        title={`Workspace: ${label}`}
+        aria-label={`Workspace: ${label}. Switch workspace`}
+        className="relative flex size-7 items-center justify-center rounded-md transition-colors hover:bg-sol-bg-alt data-[state=open]:bg-sol-bg-alt modern:rounded-control"
+      >
+        <span className="relative flex">{crest}{dot}</span>
+      </button>
+    );
+  }
   if (rail && isNarrow) {
     return (
       <button ref={ref} {...props} title={label} className="relative flex w-full justify-center py-2.5 transition-colors hover:bg-sol-bg-alt data-[state=open]:bg-sol-bg-alt">
@@ -89,8 +104,9 @@ export function TeamSwitcher({
 }: {
   value?: string | null;
   teamsOnly?: boolean;
-  /** "rail": the header of the sidebar's workspace block. */
-  variant?: "bar" | "rail";
+  /** "rail": the header of the sidebar's workspace block. "corner": the crest
+   *  alone, beside zen's toggle, where neither the bar nor the rail is shown. */
+  variant?: "bar" | "rail" | "corner";
   isNarrow?: boolean;
 } = {}) {
   const router = useRouter();
@@ -131,6 +147,8 @@ export function TeamSwitcher({
   };
 
   if (!teams || teams.length === 0) {
+    // The corner has room for a crest, not for the words of an invitation.
+    if (variant === "corner") return null;
     return (
       <button
         onClick={() => router.push("/settings/team/create")}

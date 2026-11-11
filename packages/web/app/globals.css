@@ -7926,3 +7926,72 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   --cc-panel-rule: var(--sol-border);
   color: var(--sol-text);
 }
+
+/* ---- Modern: contrast --------------------------------------------------- */
+/* Classic quiets the rail's filter strip and the conversation header's
+   controls to 75% until the pointer reaches them. Modern keeps full ink: its
+   quiet comes from the colour of each element, and 75% took the strip's
+   labels and counts below readable contrast. */
+.modern-style .simple-view [data-sv-rail] > div:first-child:not([data-sel-bar]),
+.modern-style .simple-view [data-sv-convhead] button:not(.cc-changes-pill),
+.modern-style .simple-view [data-sv-convhead] a {
+  opacity: 1;
+}
+/* Accent text on a tint of the same accent (a badge, a status chip) is deeper
+   than the accent on the page, so it holds 4.5:1 against its own tint. The
+   dark theme's accents already pass, except red. */
+.modern-style:not(.dark) :is(.text-sol-red, .modern\:text-sol-red)[class*="bg-sol-red/"] { color: color-mix(in srgb, var(--sol-red) 86%, #000); }
+.modern-style:not(.dark) :is(.text-sol-orange, .modern\:text-sol-orange)[class*="bg-sol-orange/"] { color: color-mix(in srgb, var(--sol-orange) 86%, #000); }
+.modern-style:not(.dark) :is(.text-sol-amber, .modern\:text-sol-amber)[class*="bg-sol-amber/"] { color: color-mix(in srgb, var(--sol-amber) 86%, #000); }
+.modern-style:not(.dark) :is(.text-sol-yellow, .modern\:text-sol-yellow)[class*="bg-sol-yellow/"] { color: color-mix(in srgb, var(--sol-yellow) 86%, #000); }
+.modern-style:not(.dark) :is(.text-sol-green, .modern\:text-sol-green)[class*="bg-sol-green/"] { color: color-mix(in srgb, var(--sol-green) 86%, #000); }
+.modern-style:not(.dark) :is(.text-sol-cyan, .modern\:text-sol-cyan)[class*="bg-sol-cyan/"] { color: color-mix(in srgb, var(--sol-cyan) 86%, #000); }
+.modern-style:not(.dark) :is(.text-sol-blue, .modern\:text-sol-blue)[class*="bg-sol-blue/"] { color: color-mix(in srgb, var(--sol-blue) 88%, #000); }
+.modern-style:not(.dark) :is(.text-sol-violet, .modern\:text-sol-violet)[class*="bg-sol-violet/"] { color: color-mix(in srgb, var(--sol-violet) 92%, #000); }
+.modern-style:not(.dark) :is(.text-sol-magenta, .modern\:text-sol-magenta)[class*="bg-sol-magenta/"] { color: color-mix(in srgb, var(--sol-magenta) 88%, #000); }
+.modern-style.dark :is(.text-sol-red, .modern\:text-sol-red)[class*="bg-sol-red/"] { color: color-mix(in srgb, var(--sol-red) 86%, #fff); }
+/* Translucent text. Classic thins secondary text further with an alpha step
+   (text-sol-text-dim/60 and the like); on Modern's near-white ground those
+   land between 2:1 and 4:1. In Modern the dim token is the floor for anything
+   a person reads: the alpha steps from 50 up resolve to the solid token.
+   Steps below 50 are left alone, they mark separators and resting icons.
+   :where() keeps this at single-class weight, so hover:, dark: and modern:
+   variants on the same element still win. */
+.modern-style :where([class~="text-sol-text-dim/50"], [class~="text-sol-text-dim/55"], [class~="text-sol-text-dim/60"], [class~="text-sol-text-dim/70"], [class~="text-sol-text-dim/80"]) {
+  color: var(--sol-text-dim);
+}
+.modern-style :where([class~="text-sol-text-muted/50"], [class~="text-sol-text-muted/70"], [class~="text-sol-text-muted/80"], [class~="text-sol-text-muted/85"]) {
+  color: var(--sol-text-muted);
+}
+.modern-style :where([class~="text-sol-text/60"], [class~="text-sol-text/70"], [class~="text-sol-text/75"]) {
+  color: var(--sol-text-muted);
+}
+.modern-style :where([class~="text-sol-cyan/50"], [class~="text-sol-cyan/60"], [class~="text-sol-cyan/70"], [class~="text-sol-cyan/80"], [class~="text-sol-cyan/90"]) {
+  color: var(--sol-cyan);
+}
+.modern-style :where([class~="text-sol-amber/60"], [class~="text-sol-amber/70"]) {
+  color: var(--sol-amber);
+}
+/* An ops pill sets its ink inline and paints its ground as 14% of that ink.
+   Its words step deeper than the ink so they hold contrast on that ground. */
+.modern-style:not(.dark) .ops-pill > span { color: color-mix(in srgb, currentColor 82%, #000); }
+.modern-style .ops-pill .iss-state-rel { opacity: 1; }
+/* Raw Tailwind palette text (text-amber-400, text-red-400 and the like) was
+   picked for dark grounds and lands near 2:1 to 3.5:1 on Modern's near-white.
+   On the light theme it resolves to the theme's own accent of that hue, which
+   is tuned to pass. Single-class weight: hover: and dark: variants still win. */
+:where(.modern-style:not(.dark)) :is(.text-red-300, .text-red-400, .text-red-500, .text-rose-300, .text-rose-400, .text-rose-500) { color: var(--sol-red); }
+:where(.modern-style:not(.dark)) :is(.text-amber-300, .text-amber-400, .text-amber-500) { color: var(--sol-amber); }
+:where(.modern-style:not(.dark)) :is(.text-yellow-300, .text-yellow-400, .text-yellow-500, .text-lime-300, .text-lime-400, .text-lime-500) { color: var(--sol-yellow); }
+:where(.modern-style:not(.dark)) :is(.text-orange-300, .text-orange-400, .text-orange-500) { color: var(--sol-orange); }
+:where(.modern-style:not(.dark)) :is(.text-green-300, .text-green-400, .text-green-500, .text-emerald-300, .text-emerald-400, .text-emerald-500) { color: var(--sol-green); }
+:where(.modern-style:not(.dark)) :is(.text-blue-300, .text-blue-400, .text-blue-500, .text-sky-300, .text-sky-400, .text-sky-500) { color: var(--sol-blue); }
+:where(.modern-style:not(.dark)) :is(.text-cyan-300, .text-cyan-400, .text-cyan-500, .text-teal-300, .text-teal-400, .text-teal-500) { color: var(--sol-cyan); }
+:where(.modern-style:not(.dark)) :is(.text-violet-300, .text-violet-400, .text-violet-500, .text-purple-300, .text-purple-400, .text-purple-500, .text-indigo-300, .text-indigo-400, .text-indigo-500) { color: var(--sol-violet); }
+:where(.modern-style:not(.dark)) :is(.text-pink-300, .text-pink-400, .text-pink-500, .text-fuchsia-300, .text-fuchsia-400, .text-fuchsia-500) { color: var(--sol-magenta); }
+/* A span of words faded with a static opacity step (a suffix, a unit, a
+   second name) keeps its parent's ink at full strength in Modern. Fills,
+   overlays and dots are left alone, and hover: and group-hover: steps still win. */
+:where(.modern-style) span:is(.opacity-50, .opacity-60, .opacity-70, .opacity-75, .opacity-80):where(:not([class*="bg-"]):not(.absolute):not(.fixed)) {
+  opacity: 1;
+}

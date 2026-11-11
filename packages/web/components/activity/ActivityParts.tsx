@@ -56,7 +56,7 @@ export function PrChip({ pr, withTitle = false }: { pr: ActivityPr; withTitle?: 
       {/* On a phone a row's chip is the number in its state's colour; the
           word comes back from sm up, and always with a title beside it. */}
       <span className={withTitle ? "shrink-0" : "hidden shrink-0 sm:inline modern:inline"}>{pr.label}</span>
-      {withTitle && pr.title ? <span className="min-w-0 truncate font-normal opacity-80">{pr.title}</span> : null}
+      {withTitle && pr.title ? <span className="min-w-0 truncate font-normal">{pr.title}</span> : null}
     </>
   );
   const title = `${pr.repository} #${pr.number}${pr.title ? ` · ${pr.title}` : ""} · ${pr.label}`;
@@ -81,7 +81,7 @@ export function TaskChip({ task, withTitle = false }: { task: ActivityTask; with
     >
       <CircleCheck aria-hidden className="size-3 shrink-0" />
       <span className="shrink-0 font-mono">{task.shortId}</span>
-      {withTitle && task.title ? <span className="min-w-0 truncate font-normal opacity-80">{task.title}</span> : null}
+      {withTitle && task.title ? <span className="min-w-0 truncate font-normal">{task.title}</span> : null}
     </Link>
   );
 }

@@ -13,6 +13,8 @@ import { useTipActions } from "../tips";
 import { zenToggleLeft } from "../lib/desktop";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
+import { TeamSwitcher } from "./TeamSwitcher";
+import { ErrorBoundary } from "./ErrorBoundary";
 
 export function ZenToggle() {
   const zen = useInboxStore((s) => s.clientState.ui?.zen_mode ?? false);
@@ -32,11 +34,17 @@ export function ZenToggle() {
   );
 }
 
-/** Zen's corner: the toggle, pinned level with the traffic lights. */
+/** Zen's corner: the toggle, pinned level with the traffic lights, and the
+ *  workspace switcher beside it. Zen hides the top bar and the sidebar, the
+ *  only two places the switcher otherwise lives, so without it here a switch
+ *  means leaving zen first. */
 export function ZenCorner() {
   return (
-    <div data-zen-corner data-flyout className="fixed top-1 z-[110] hidden md:block" style={{ left: zenToggleLeft() }}>
+    <div data-zen-corner data-flyout className="fixed top-1 z-[110] hidden items-center gap-1.5 md:flex" style={{ left: zenToggleLeft() }}>
       <ZenToggle />
+      <ErrorBoundary name="TeamSwitcher" level="inline">
+        <TeamSwitcher variant="corner" />
+      </ErrorBoundary>
     </div>
   );
 }
