@@ -70,6 +70,22 @@ export interface CommandGroup {
 }
 
 export const COMMAND_GROUPS: readonly CommandGroup[] = [
+  // Live artifacts (liveArtifactCommand.ts): one module, three groups, verbs from the shared specs.
+  {
+    token: "board",
+    description: "Read and edit boards: canvases people and agent sessions work on together",
+    load: () => import("./liveArtifactCommand.js").then((m) => m.registerBoardCommand),
+  },
+  {
+    token: "sheet",
+    description: "Read and edit sheets: spreadsheets people and agent sessions work on together",
+    load: () => import("./liveArtifactCommand.js").then((m) => m.registerSheetCommand),
+  },
+  {
+    token: "data",
+    description: "Read and edit dashboards: data views people and agent sessions build together",
+    load: () => import("./liveArtifactCommand.js").then((m) => m.registerDataCommand),
+  },
   {
     token: "sharing",
     hasOptions: true,

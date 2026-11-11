@@ -114,6 +114,8 @@
 }
 /* A picture rather than prose (a weekly card): the column takes the page. */
 .share-layout[data-wide] .share-col { max-width: 1040px; }
+.share-layout[data-wide="full"] { max-width: none; padding-top: clamp(20px, 3vw, 32px); }
+.share-layout[data-wide="full"] .share-col { max-width: none; }
 
 /* The page arrives in order, a beat apart. */
 .share-col > * {

@@ -1,0 +1,713 @@
+// Live artifacts: boards, sheets and dashboards (docs rows of those types)
+// whose content is a set of keyed elements, edited at once by people in the
+// browser and agent sessions through `cast board|sheet|data`.
+//
+// One write path: applyBatchCore. It validates the ops against the product's
+// spec, folds each onto the element's stored row with @codecast/shared's
+// applyOp, stamps every element write with the next doc revision, and logs
+// the batch. Revisions are unique per doc, so a client's live tail is one
+// index range ("rows with rev > what I hold") and the first load is the same
+// query from 0. Every field converges on the server's arrival order.
+//
+// Access is the doc's: every entry point resolves the caller (web auth, or the
+// CLI's api_token) and runs requireAccessibleDoc.
+import { ConvexError, v } from "convex/values";
+import { makeFunctionReference } from "convex/server";
+import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
+import { internal } from "./_generated/api";
+import type { Doc, Id } from "./_generated/dataModel";
+import { requireLiveDoc, resolveCaller, upsertPresence, userName, vCaller, type Caller } from "./lib/liveArtifactAccess";
+import { liveArtifactValidators } from "./liveArtifactsSchema";
+import {
+  applyOp,
+  artifactSpec,
+  chunkOps,
+  coalesceOps,
+  diffStates,
+  foldOps,
+  isArtifactDocType,
+  jsonBytes,
+  ARTIFACT_LIMITS,
+  opsProblem,
+  specForCli,
+  type ArtifactLayer,
+  type ArtifactOp,
+  type ElementState,
+} from "@codecast/shared/artifacts";
+
+const { vLayer, vPosition } = liveArtifactValidators;
+type Layer = ArtifactLayer | "comments";
+
+/** Rows one elementsSince page returns. */
+const PAGE_ROWS = 500;
+/** A write after this much quiet checkpoints the state it rested in. */
+const QUIET_CHECKPOINT_MS = 5 * 60_000;
+/** Rows a draft save or discard handles in one transaction. */
+const DRAFT_ROWS_MAX = 1500;
+/** Bytes the open draft may hold: a save reads them and writes them twice, under the 16 MiB transaction budget. */
+const DRAFT_BYTES_MAX = 4 * 1024 * 1024;
+/** One op-log record's serialized size, well under Convex's 1 MiB document limit. */
+const LOG_RECORD_BYTES = 600 * 1024;
+/** Ops one restore transaction writes (each reads its element row). */
+const RESTORE_CHUNK = 400;
+
+/** Split ops into runs whose JSON stays under `bytes`. */
+export function splitByBytes(ops: ArtifactOp[], bytes: number): ArtifactOp[][] {
+  const out: ArtifactOp[][] = [];
+  let cur: ArtifactOp[] = [];
+  let size = 0;
+  for (const op of ops) {
+    const n = jsonBytes(op) + 1;
+    if (cur.length && size + n > bytes) {
+      out.push(cur);
+      cur = [];
+      size = 0;
+    }
+    cur.push(op);
+    size += n;
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+
+// ── Identity ────────────────────────────────────────────────────────────────
+
+// ── Reads ───────────────────────────────────────────────────────────────────
+
+async function headOf(ctx: any, docId: Id<"docs">): Promise<Doc<"live_heads"> | null> {
+  return await ctx.db.query("live_heads").withIndex("by_doc", (q: any) => q.eq("doc_id", docId)).first();
+}
+
+function wireRow(r: Doc<"live_elements">) {
+  return {
+    doc_id: r.doc_id,
+    layer: r.layer,
+    key: r.key,
+    kind: r.kind,
+    fields: r.fields,
+    rev: r.rev,
+    by: r.by,
+    at: r.at,
+    ...(r.deleted ? { deleted: true } : {}),
+    ...(r.dead ? { dead: true } : {}),
+  };
+}
+
+function wireDraft(head: Doc<"live_heads"> | null) {
+  return head?.draft ? { by: head.draft.by, by_name: head.draft.by_name, at: head.draft.at, label: head.draft.label } : null;
+}
+
+/**
+ * Element rows written after `since`, oldest first, with the doc's head. The
+ * first load (since 0) and the live tail are the same read; a client keeps
+ * the highest rev it holds and asks again from there.
+ */
+export const elementsSince = query({
+  args: { doc_id: v.id("docs"), since: v.number(), ...vCaller },
+  handler: async (ctx, args) => {
+    let doc: Doc<"docs">;
+    try {
+      const caller = await resolveCaller(ctx, args);
+      doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
+    } catch {
+      return null;
+    }
+    const rows = await ctx.db
+      .query("live_elements")
+      .withIndex("by_doc_rev", (q: any) => q.eq("doc_id", args.doc_id).gt("rev", args.since))
+      .take(PAGE_ROWS + 1);
+    const head = await headOf(ctx, args.doc_id);
+    const more = rows.length > PAGE_ROWS;
+    const page = more ? rows.slice(0, PAGE_ROWS) : rows;
+    return {
+      doc_id: args.doc_id,
+      title: doc.title,
+      doc_type: doc.doc_type,
+      head: head?.rev ?? 0,
+      draft: wireDraft(head),
+      rows: page.map(wireRow),
+      more,
+      next: page.length ? page[page.length - 1].rev : args.since,
+    };
+  },
+});
+
+// ── Writes ──────────────────────────────────────────────────────────────────
+
+async function stateOf(ctx: any, docId: Id<"docs">, layer: Layer, key: string): Promise<{ row: Doc<"live_elements"> | null; state?: ElementState }> {
+  const row = await ctx.db
+    .query("live_elements")
+    .withIndex("by_doc_layer_key", (q: any) => q.eq("doc_id", docId).eq("layer", layer).eq("key", key))
+    .first();
+  if (!row || row.dead) return { row, state: undefined };
+  return { row, state: { kind: row.kind, fields: row.fields ?? {}, ...(row.deleted ? { deleted: true } : {}) } };
+}
+
+function kindsProblem(type: string, layer: Layer, ops: readonly ArtifactOp[]): string | null {
+  const allowed = layer === "comments" ? ["comment"] : artifactSpec(type as any).kinds;
+  for (const op of ops) {
+    if ("put" in op && !allowed.includes(op.put.kind)) {
+      return `kind "${op.put.kind}" is not a ${layer === "comments" ? "comment" : type} element (one of: ${allowed.join(", ")})`;
+    }
+  }
+  return null;
+}
+
+async function insertVersion(
+  ctx: any,
+  docId: Id<"docs">,
+  rev: number,
+  reason: Doc<"live_versions">["reason"],
+  label: string,
+  caller: Pick<Caller, "actor" | "name">,
+): Promise<Id<"live_versions"> | null> {
+  const existing = await ctx.db
+    .query("live_versions")
+    .withIndex("by_doc_rev", (q: any) => q.eq("doc_id", docId).eq("rev", rev))
+    .first();
+  if (existing) {
+    if (reason !== "auto" && existing.reason === "auto") await ctx.db.patch(existing._id, { reason, label });
+    return existing._id;
+  }
+  const id = await ctx.db.insert("live_versions", { doc_id: docId, rev, reason, label, by: caller.actor, by_name: caller.name, at: Date.now() });
+  await ctx.scheduler.runAfter(0, internal.liveArtifacts.snapshotVersion, { version_id: id });
+  return id;
+}
+
+type BatchInput = {
+  doc: Doc<"docs">;
+  layer: Layer;
+  ops: ArtifactOp[];
+  caller: Caller;
+  client_id?: string;
+  /** Internal writes (draft save, restore) may exceed the per-batch op limit. */
+  unbounded?: boolean;
+};
+
+/** The one write path. Returns the revision the batch ended at. */
+export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev: number; keys: string[] }> {
+  const { doc, layer, caller } = input;
+  // A comment's author is whoever wrote it, never what the client claims:
+  // stamped on create, and no later edit may change it.
+  const ops = coalesceOps(input.ops).map((op): ArtifactOp => {
+    if (layer !== "comments") return op;
+    if ("put" in op) return { k: op.k, put: { ...op.put, author: caller.actor, author_name: caller.name } };
+    if ("set" in op) {
+      const { author: _a, author_name: _n, ...rest } = op.set;
+      return { k: op.k, set: rest };
+    }
+    return op;
+  });
+  const problem = input.unbounded ? null : opsProblem(ops);
+  if (problem) throw new ConvexError(problem);
+  const kindProblem = kindsProblem(doc.doc_type, layer, ops);
+  if (kindProblem) throw new ConvexError(kindProblem);
+
+  const now = Date.now();
+  let head = await headOf(ctx, doc._id);
+  if (!head) {
+    const id = await ctx.db.insert("live_heads", { doc_id: doc._id, rev: 0, last_write_at: now });
+    head = (await ctx.db.get(id))!;
+  }
+  if (layer === "draft" && !head!.draft) {
+    await ctx.db.patch(head!._id, { draft: { by: caller.actor, by_name: caller.name, at: now } });
+  }
+  // A write after a quiet spell checkpoints the state the artifact rested in.
+  if (layer === "main" && head!.rev > 0 && now - head!.last_write_at > QUIET_CHECKPOINT_MS) {
+    await insertVersion(ctx, doc._id, head!.rev, "auto", "Before edits", caller);
+  }
+
+  const revFrom = head!.rev;
+  let rev = revFrom;
+  let draftCount = layer === "draft" ? (head!.draft_count ?? 0) : 0;
+  let draftBytes = layer === "draft" ? (head!.draft_bytes ?? 0) : 0;
+  const written: ArtifactOp[] = [];
+  for (const op of ops) {
+    const { row, state } = await stateOf(ctx, doc._id, layer, op.k);
+    let prev = state;
+    // A draft edit of an element the draft has not touched yet starts from main.
+    if ((!row || row.dead) && layer === "draft") prev = (await stateOf(ctx, doc._id, "main", op.k)).state;
+    if ("set" in op && (!prev || prev.deleted)) continue;
+    if ("del" in op && (!prev || prev.deleted) && layer !== "draft") continue;
+    const next = applyOp(prev, op);
+    if (!next.deleted && jsonBytes(next.fields) > ARTIFACT_LIMITS.elementBytes) throw new ConvexError(`element ${op.k} would be over ${ARTIFACT_LIMITS.elementBytes} bytes`);
+    // The draft holds at most DRAFT_ROWS_MAX elements, so it can always be saved or discarded in one go.
+    if (layer === "draft") {
+      if (!row || row.dead) {
+        draftCount += 1;
+        if (draftCount > DRAFT_ROWS_MAX) throw new ConvexError(`A draft holds at most ${DRAFT_ROWS_MAX} changed elements; save or discard it first`);
+      }
+      draftBytes += jsonBytes(next.fields) - (row && !row.dead ? jsonBytes(row.fields ?? {}) : 0);
+      if (draftBytes > DRAFT_BYTES_MAX) throw new ConvexError(`A draft holds at most ${DRAFT_BYTES_MAX >> 20} MB; save or discard it first`);
+    }
+    rev += 1;
+    const fields = { kind: next.kind, fields: next.fields, rev, by: caller.actor, at: now, deleted: next.deleted ? true : undefined, dead: undefined };
+    if (row) await ctx.db.patch(row._id, fields);
+    else await ctx.db.insert("live_elements", { doc_id: doc._id, layer, key: op.k, ...fields });
+    written.push(op);
+  }
+  if (written.length === 0) return { rev: revFrom, keys: [] };
+  // The log holds the batch in records under the document size limit; op i
+  // of the batch is revision revFrom + 1 + i, so a record's range follows.
+  let start = 0;
+  for (const part of splitByBytes(written, LOG_RECORD_BYTES)) {
+    await ctx.db.insert("live_batches", {
+      doc_id: doc._id,
+      layer,
+      rev_from: revFrom + 1 + start,
+      rev_to: revFrom + start + part.length,
+      ops: part,
+      actor: caller.actor,
+      actor_name: caller.name,
+      client_id: input.client_id,
+      at: now,
+    });
+    start += part.length;
+  }
+  await ctx.db.patch(head!._id, { rev, last_write_at: now, ...(layer === "draft" ? { draft_count: draftCount, draft_bytes: Math.max(0, draftBytes) } : {}) });
+  if (layer !== "comments") await ctx.db.patch(doc._id, { updated_at: now });
+  return { rev, keys: written.map((o) => o.k) };
+}
+
+const vOps = v.array(v.any());
+
+/**
+ * Write a batch. The web reaches this through the store's applyLiveOps
+ * dispatch; the CLI through /cli/live/apply, as its session. A session's
+ * write moves its cursor to what it wrote.
+ */
+export const apply = mutation({
+  args: {
+    doc_id: v.id("docs"),
+    layer: v.optional(vLayer),
+    ops: vOps,
+    client_id: v.optional(v.string()),
+    position: v.optional(vPosition),
+    selection: v.optional(v.array(v.string())),
+    status: v.optional(v.string()),
+    ...vCaller,
+  },
+  handler: async (ctx, args) => {
+    const caller = await resolveCaller(ctx, args);
+    const doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
+    const result = await applyBatchCore(ctx, { doc, layer: args.layer ?? "main", ops: args.ops as ArtifactOp[], caller, client_id: args.client_id });
+    if (caller.kind === "agent") {
+      await upsertPresence(ctx, doc._id, caller, caller.actor, {
+        position: args.position,
+        selection: args.selection ?? result.keys.slice(-50),
+        status: args.status ?? "editing",
+      });
+    }
+    return result;
+  },
+});
+
+/** The web's write, run by the dispatch side effect `applyLiveOps` as the signed-in person. */
+export async function applyAsWebUser(ctx: any, userId: Id<"users">, docId: string, layer: Layer, ops: ArtifactOp[], clientId?: string) {
+  const id = ctx.db.normalizeId("docs", docId);
+  if (!id) return null;
+  const user = await ctx.db.get(userId);
+  const caller: Caller = { userId, actor: `u:${userId}`, name: userName(user), kind: "person" };
+  const doc = await requireLiveDoc(ctx, userId, id);
+  return await applyBatchCore(ctx, { doc, layer, ops, caller, client_id: clientId });
+}
+
+// ── Presence ────────────────────────────────────────────────────────────────
+
+// ── Drafts ──────────────────────────────────────────────────────────────────
+
+async function draftRows(ctx: any, docId: Id<"docs">): Promise<Doc<"live_elements">[]> {
+  const rows = await ctx.db
+    .query("live_elements")
+    .withIndex("by_doc_layer_key", (q: any) => q.eq("doc_id", docId).eq("layer", "draft"))
+    .filter((q: any) => q.neq(q.field("dead"), true))
+    .take(DRAFT_ROWS_MAX + 1);
+  if (rows.length > DRAFT_ROWS_MAX) throw new ConvexError(`A draft holds at most ${DRAFT_ROWS_MAX} changed elements`);
+  return rows;
+}
+
+/** Retire every draft row (each gets a revision so clients drop it) and clear the head's draft. */
+async function retireDraft(ctx: any, docId: Id<"docs">, rows: Doc<"live_elements">[]) {
+  const head = (await headOf(ctx, docId))!;
+  let rev = head.rev;
+  const now = Date.now();
+  for (const r of rows) {
+    rev += 1;
+    await ctx.db.patch(r._id, { dead: true, rev, at: now });
+  }
+  await ctx.db.patch(head._id, { rev, draft: undefined, draft_count: 0, draft_bytes: 0 });
+}
+
+export const draftStart = mutation({
+  args: { doc_id: v.id("docs"), label: v.optional(v.string()), ...vCaller },
+  handler: async (ctx, args) => {
+    const caller = await resolveCaller(ctx, args);
+    const doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
+    let head = await headOf(ctx, doc._id);
+    const draft = { by: caller.actor, by_name: caller.name, at: Date.now(), label: args.label?.slice(0, 120) };
+    if (!head) await ctx.db.insert("live_heads", { doc_id: doc._id, rev: 0, last_write_at: Date.now(), draft });
+    else if (!head.draft) await ctx.db.patch(head._id, { draft });
+    head = await headOf(ctx, doc._id);
+    return wireDraft(head);
+  },
+});
+
+/** Fold the draft onto the artifact as one write, checkpointed before and after. */
+export const draftSave = mutation({
+  // draft_at names the draft the caller saw: a retried or late request for a
+  // draft that has since closed (and maybe been replaced) does nothing.
+  args: { doc_id: v.id("docs"), draft_at: v.optional(v.number()), ...vCaller },
+  handler: async (ctx, args) => {
+    const caller = await resolveCaller(ctx, args);
+    const doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
+    const head = await headOf(ctx, doc._id);
+    if (!head?.draft) return { saved: 0 };
+    if (args.draft_at !== undefined && head.draft.at !== args.draft_at) return { saved: 0, stale: true };
+    const rows = await draftRows(ctx, doc._id);
+    const ops: ArtifactOp[] = rows.map((r) => (r.deleted ? { k: r.key, del: true as const } : { k: r.key, put: { kind: r.kind, ...(r.fields ?? {}) } }));
+    if (head.rev > 0) await insertVersion(ctx, doc._id, head.rev, "manual", "Before draft", caller);
+    const result = ops.length ? await applyBatchCore(ctx, { doc, layer: "main", ops, caller, unbounded: true }) : { rev: head.rev };
+    await retireDraft(ctx, doc._id, rows);
+    await insertVersion(ctx, doc._id, result.rev, "draft_saved", head.draft.label ? `Draft saved: ${head.draft.label}` : "Draft saved", caller);
+    return { saved: ops.length, rev: result.rev };
+  },
+});
+
+export const draftDiscard = mutation({
+  // draft_at names the draft the caller saw: a retried or late request for a
+  // draft that has since closed (and maybe been replaced) does nothing.
+  args: { doc_id: v.id("docs"), draft_at: v.optional(v.number()), ...vCaller },
+  handler: async (ctx, args) => {
+    const caller = await resolveCaller(ctx, args);
+    const doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
+    const head = await headOf(ctx, doc._id);
+    if (!head?.draft) return { discarded: 0 };
+    if (args.draft_at !== undefined && head.draft.at !== args.draft_at) return { discarded: 0, stale: true };
+    const rows = await draftRows(ctx, doc._id);
+    await retireDraft(ctx, doc._id, rows);
+    return { discarded: rows.length };
+  },
+});
+
+// ── History ─────────────────────────────────────────────────────────────────
+
+export const versions = query({
+  args: { doc_id: v.id("docs"), ...vCaller },
+  handler: async (ctx, args) => {
+    try {
+      const caller = await resolveCaller(ctx, args);
+      await requireLiveDoc(ctx, caller.userId, args.doc_id);
+    } catch {
+      return null;
+    }
+    const head = await headOf(ctx, args.doc_id);
+    const rows = await ctx.db
+      .query("live_versions")
+      .withIndex("by_doc_rev", (q: any) => q.eq("doc_id", args.doc_id))
+      .order("desc")
+      .take(100);
+    return {
+      doc_id: args.doc_id,
+      head: head?.rev ?? 0,
+      versions: rows.map((r) => ({ _id: r._id, doc_id: r.doc_id, rev: r.rev, label: r.label, reason: r.reason, by: r.by, by_name: r.by_name, at: r.at, elements: r.elements })),
+    };
+  },
+});
+
+export const checkpoint = mutation({
+  args: { doc_id: v.id("docs"), label: v.optional(v.string()), ...vCaller },
+  handler: async (ctx, args) => {
+    const caller = await resolveCaller(ctx, args);
+    const doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
+    const head = await headOf(ctx, doc._id);
+    const rev = head?.rev ?? 0;
+    await insertVersion(ctx, doc._id, rev, "manual", (args.label || "Saved version").slice(0, 120), caller);
+    return { rev };
+  },
+});
+
+/** The caller, checked against the doc, for an action (actions have no db). */
+export const callerForAction = internalQuery({
+  args: { doc_id: v.id("docs"), ...vCaller },
+  handler: async (ctx, args) => {
+    const caller = await resolveCaller(ctx, args);
+    await requireLiveDoc(ctx, caller.userId, args.doc_id);
+    return { userId: caller.userId, actor: caller.actor, name: caller.name, kind: caller.kind };
+  },
+});
+
+/** The newest checkpoint at or before `rev` that has its snapshot written. */
+export const snapshotBase = internalQuery({
+  args: { doc_id: v.id("docs"), rev: v.number() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("live_versions")
+      .withIndex("by_doc_rev", (q: any) => q.eq("doc_id", args.doc_id).lte("rev", args.rev))
+      .order("desc")
+      .take(20);
+    const base = rows.find((r) => r.snapshot);
+    return base ? { rev: base.rev, snapshot: base.snapshot! } : null;
+  },
+});
+
+/** Log records with rev_to past `after`, oldest first: up to 200, or about 4 MB, whichever comes first. */
+export const batchesPage = internalQuery({
+  args: { doc_id: v.id("docs"), after: v.number() },
+  handler: async (ctx, args) => {
+    const out: Array<{ layer: string; rev_from: number; rev_to: number; ops: any }> = [];
+    let bytes = 0;
+    const q = ctx.db.query("live_batches").withIndex("by_doc_rev", (q: any) => q.eq("doc_id", args.doc_id).gt("rev_to", args.after));
+    for await (const r of q) {
+      out.push({ layer: r.layer, rev_from: r.rev_from, rev_to: r.rev_to, ops: r.ops });
+      bytes += jsonBytes(r.ops);
+      if (out.length >= 200 || bytes > 4 * 1024 * 1024) return { rows: out, more: true };
+    }
+    return { rows: out, more: false };
+  },
+});
+
+/** The current main layer in key order, up to 1000 rows or about 4 MB a page. */
+export const mainPage = internalQuery({
+  args: { doc_id: v.id("docs"), after_key: v.string() },
+  handler: async (ctx, args) => {
+    const rows: Array<{ key: string; kind: string; fields: any; deleted: boolean }> = [];
+    let bytes = 0;
+    const q = ctx.db.query("live_elements").withIndex("by_doc_layer_key", (q: any) => q.eq("doc_id", args.doc_id).eq("layer", "main").gt("key", args.after_key));
+    for await (const r of q) {
+      rows.push({ key: r.key, kind: r.kind, fields: r.fields, deleted: !!r.deleted });
+      bytes += jsonBytes(r.fields ?? {});
+      if (rows.length >= 1000 || bytes > 4 * 1024 * 1024) return { rows, more: true };
+    }
+    return { rows, more: false };
+  },
+});
+
+type SnapshotEntry = [string, ElementState];
+
+/** Fold the main layer's state at `rev`: the nearest snapshot, then the batches after it. */
+async function stateAtRev(ctx: any, docId: Id<"docs">, rev: number): Promise<Map<string, ElementState>> {
+  const base = await ctx.runQuery(internal.liveArtifacts.snapshotBase, { doc_id: docId, rev });
+  const state = new Map<string, ElementState>();
+  let after = 0;
+  if (base) {
+    const blob = await ctx.storage.get(base.snapshot);
+    if (blob) {
+      for (const [k, s] of JSON.parse(await blob.text()) as SnapshotEntry[]) state.set(k, s);
+      after = base.rev;
+    }
+  }
+  // A record straddling `rev` contributes only the ops at or before it (op i is revision rev_from + i).
+  outer: for (;;) {
+    const { rows: page, more } = await ctx.runQuery(internal.liveArtifacts.batchesPage, { doc_id: docId, after });
+    for (const b of page) {
+      if (b.rev_from > rev) break outer;
+      const ops = (b.ops as ArtifactOp[]).slice(0, rev - b.rev_from + 1);
+      if (b.layer === "main") foldOps(state, ops);
+      after = b.rev_to;
+      if (b.rev_to >= rev) break outer;
+    }
+    if (!more) break;
+  }
+  for (const [k, s] of state) if (s.deleted) state.delete(k);
+  return state;
+}
+
+export const snapshotVersion = internalAction({
+  args: { version_id: v.id("live_versions") },
+  handler: async (ctx, args) => {
+    const version = await ctx.runQuery(internal.liveArtifacts.versionRow, { version_id: args.version_id });
+    if (!version || version.snapshot) return;
+    const state = await stateAtRev(ctx, version.doc_id, version.rev);
+    const snapshot = await ctx.storage.store(new Blob([JSON.stringify([...state.entries()])], { type: "application/json" }));
+    await ctx.runMutation(internal.liveArtifacts.setVersionSnapshot, { version_id: args.version_id, snapshot, elements: state.size });
+  },
+});
+
+export const versionRow = internalQuery({
+  args: { version_id: v.id("live_versions") },
+  handler: async (ctx, args) => await ctx.db.get(args.version_id),
+});
+
+export const setVersionSnapshot = internalMutation({
+  args: { version_id: v.id("live_versions"), snapshot: v.id("_storage"), elements: v.number() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db.get(args.version_id);
+    if (!row) {
+      await ctx.storage.delete(args.snapshot);
+      return;
+    }
+    await ctx.db.patch(args.version_id, { snapshot: args.snapshot, elements: args.elements });
+  },
+});
+
+/** The artifact as it was at `rev`: elements in key order. Opening a version reads this. */
+export const stateAt = action({
+  args: { doc_id: v.id("docs"), rev: v.number(), ...vCaller },
+  handler: async (ctx, args): Promise<Array<{ key: string; kind: string; fields: any }>> => {
+    await ctx.runQuery(internal.liveArtifacts.callerForAction, { doc_id: args.doc_id, api_token: args.api_token, session_id: args.session_id });
+    const state = await stateAtRev(ctx, args.doc_id, args.rev);
+    return [...state.entries()].sort(([a], [b]) => (a < b ? -1 : 1)).map(([key, s]) => ({ key, kind: s.kind, fields: s.fields }));
+  },
+});
+
+/**
+ * Put the artifact back to how it was at `rev`. The current state is
+ * checkpointed first, then the difference is written as ordinary batches of
+ * at most RESTORE_CHUNK ops: the restore syncs to every open page and can
+ * itself be restored away. The diff is computed against the head it read; if
+ * a write lands before the first batch, the restore starts over.
+ */
+export const restore = action({
+  args: { doc_id: v.id("docs"), rev: v.number(), ...vCaller },
+  handler: async (ctx, args): Promise<{ changed: number; rev: number }> => {
+    const caller: { userId: Id<"users">; actor: string; name: string; kind: "person" | "agent" } = await ctx.runQuery(internal.liveArtifacts.callerForAction, {
+      doc_id: args.doc_id, api_token: args.api_token, session_id: args.session_id,
+    });
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const head: number = await ctx.runQuery(internal.liveArtifacts.headRev, { doc_id: args.doc_id });
+      if (args.rev > head) throw new ConvexError(`r${args.rev} is past the artifact's head (r${head})`);
+      const target = await stateAtRev(ctx, args.doc_id, args.rev);
+      const current = new Map<string, ElementState>();
+      let afterKey = "";
+      for (;;) {
+        const { rows: page, more } = await ctx.runQuery(internal.liveArtifacts.mainPage, { doc_id: args.doc_id, after_key: afterKey });
+        for (const r of page) if (!r.deleted) current.set(r.key, { kind: r.kind, fields: r.fields ?? {} });
+        if (!more || page.length === 0) break;
+        afterKey = page[page.length - 1].key;
+      }
+      const ops = diffStates(current, target);
+      const chunks = ops.length ? chunkOps(ops, RESTORE_CHUNK) : [[]];
+      let last = { rev: head };
+      let ok = true;
+      for (let i = 0; i < chunks.length; i++) {
+        // Every batch expects the head the previous one left: a write in between
+        // starts the restore over, re-diffed against what is there now.
+        const r: { rev: number } | null = await ctx.runMutation(internal.liveArtifacts.applyRestore, {
+          doc_id: args.doc_id, rev: args.rev, ops: chunks[i], caller, expect_head: last.rev, first: i === 0, last: i === chunks.length - 1,
+        });
+        if (!r) { ok = false; break; }
+        last = r;
+      }
+      if (ok) return { changed: ops.length, rev: last.rev };
+    }
+    throw new ConvexError("The artifact kept changing during the restore; try again");
+  },
+});
+
+export const headRev = internalQuery({
+  args: { doc_id: v.id("docs") },
+  handler: async (ctx, args): Promise<number> => (await headOf(ctx, args.doc_id))?.rev ?? 0,
+});
+
+/** One restore batch. The first carries the head it diffed against and returns null if a write landed since. */
+export const applyRestore = internalMutation({
+  args: {
+    doc_id: v.id("docs"),
+    rev: v.number(),
+    ops: v.array(v.any()),
+    expect_head: v.number(),
+    first: v.boolean(),
+    last: v.boolean(),
+    caller: v.object({ userId: v.id("users"), actor: v.string(), name: v.string(), kind: v.union(v.literal("person"), v.literal("agent")) }),
+  },
+  handler: async (ctx, args): Promise<{ rev: number } | null> => {
+    const doc = await requireLiveDoc(ctx, args.caller.userId, args.doc_id);
+    const head = await headOf(ctx, doc._id);
+    const caller: Caller = { ...args.caller };
+    if ((head?.rev ?? 0) !== args.expect_head) return null;
+    if (args.first && head && head.rev > 0) await insertVersion(ctx, doc._id, head.rev, "manual", "Before restore", caller);
+    const result = args.ops.length ? await applyBatchCore(ctx, { doc, layer: "main", ops: args.ops as ArtifactOp[], caller, unbounded: true }) : { rev: head?.rev ?? 0 };
+    if (args.last) await insertVersion(ctx, doc._id, result.rev, "restore", `Restored to r${args.rev}`, caller);
+    return { rev: result.rev };
+  },
+});
+
+// ── Helpers for product convex code ─────────────────────────────────────────
+
+/**
+ * A doc's current elements, without tombstones: the main layer, the draft
+ * layer alone, or main with the draft laid over it. Callers check access.
+ */
+export async function readLiveElements(
+  ctx: any,
+  docId: Id<"docs">,
+  layer: "main" | "draft" | "merged",
+): Promise<Array<Record<string, any> & { key: string; kind: string; rev: number }>> {
+  const read = async (l: "main" | "draft") =>
+    (await ctx.db
+      .query("live_elements")
+      .withIndex("by_doc_layer_key", (q: any) => q.eq("doc_id", docId).eq("layer", l))
+      .collect()) as Doc<"live_elements">[];
+  const byKey = new Map<string, Doc<"live_elements">>();
+  if (layer !== "draft") for (const r of await read("main")) byKey.set(r.key, r);
+  if (layer !== "main") for (const r of await read("draft")) if (!r.dead) byKey.set(r.key, r);
+  return [...byKey.values()]
+    .filter((r) => !r.deleted && !r.dead)
+    .map((r) => ({ ...(r.fields ?? {}), key: r.key, kind: r.kind, rev: r.rev, by: r.by, at: r.at }));
+}
+
+// ── Remote product verbs (`cast data query ...`) ────────────────────────────
+
+/** Resolve and check a remote verb's caller; the route runs the action after. */
+export const remoteCaller = internalQuery({
+  args: { cli: v.string(), verb: v.string(), doc_id: v.optional(v.string()), ...vCaller },
+  handler: async (ctx, args) => {
+    const spec = specForCli(args.cli);
+    const verb = spec?.remote?.[args.verb];
+    if (!spec || !verb) throw new ConvexError(`cast ${args.cli} has no verb "${args.verb}"`);
+    const caller = await resolveCaller(ctx, args);
+    let docId: Id<"docs"> | undefined;
+    if (args.doc_id) {
+      const id = ctx.db.normalizeId("docs", args.doc_id);
+      if (!id) throw new ConvexError(`${args.doc_id} is not a doc id`);
+      const doc = await requireLiveDoc(ctx, caller.userId, id);
+      if (doc.doc_type !== spec.type) throw new ConvexError(`${doc.title} is a ${doc.doc_type}, not a ${spec.type}`);
+      docId = id;
+    } else if (verb.needsDoc) {
+      throw new ConvexError(`usage: cast ${args.cli} ${verb.usage}`);
+    }
+    return { action: verb.action, user_id: caller.userId, actor: caller.actor, actor_name: caller.name, doc_id: docId };
+  },
+});
+
+export const runRemote = action({
+  args: { cli: v.string(), verb: v.string(), doc_id: v.optional(v.string()), args: v.array(v.string()), stdin: v.optional(v.string()), ...vCaller },
+  handler: async (ctx, args): Promise<{ text?: string; json?: any }> => {
+    const c: { action: string; user_id: Id<"users">; actor: string; actor_name: string; doc_id?: Id<"docs"> } = await ctx.runQuery(internal.liveArtifacts.remoteCaller, {
+      cli: args.cli, verb: args.verb, doc_id: args.doc_id, api_token: args.api_token, session_id: args.session_id,
+    });
+    const ref = makeFunctionReference<"action">(c.action) as any;
+    return await ctx.runAction(ref, {
+      user_id: c.user_id, actor: c.actor, actor_name: c.actor_name,
+      ...(c.doc_id ? { doc_id: c.doc_id } : {}), args: args.args, ...(args.stdin !== undefined ? { stdin: args.stdin } : {}),
+    });
+  },
+});
+
+// ── Shared link (read only) ─────────────────────────────────────────────────
+
+const SHARED_ELEMENTS_MAX = 5000;
+
+/**
+ * A shared artifact as anyone holding its link sees it: the saved (main)
+ * layer only, never the draft, comments or who is in it. Null when the token
+ * names nothing or names a doc that is not a board, sheet or dashboard.
+ */
+export const sharedElements = query({
+  args: { share_token: v.string() },
+  handler: async (ctx, args) => {
+    if (!args.share_token) return null;
+    const doc = await ctx.db.query("docs").withIndex("by_share_token", (q: any) => q.eq("share_token", args.share_token)).first();
+    if (!doc || !isArtifactDocType(doc.doc_type) || doc.archived_at) return null;
+    const rows = await ctx.db
+      .query("live_elements")
+      .withIndex("by_doc_layer_key", (q: any) => q.eq("doc_id", doc._id).eq("layer", "main"))
+      .take(SHARED_ELEMENTS_MAX);
+    const user = await ctx.db.get(doc.user_id);
+    return {
+      doc: { _id: doc._id, title: doc.title, doc_type: doc.doc_type, updated_at: doc.updated_at, user: user ? { name: user.name, image: user.image } : null },
+      elements: rows.filter((r) => !r.deleted).map((r) => ({ ...(r.fields ?? {}), key: r.key, kind: r.kind, rev: r.rev })),
+      truncated: rows.length >= SHARED_ELEMENTS_MAX,
+    };
+  },
+});

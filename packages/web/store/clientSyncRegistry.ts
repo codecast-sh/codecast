@@ -2,6 +2,8 @@ import { DISPATCHABLE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
 import { CHAT_SYNC_COLLECTIONS } from "./clientSyncRegistry.chat";
 import { FLOW_SYNC_COLLECTIONS } from "./clientSyncRegistry.flows";
 import { OPS_SYNC_COLLECTIONS } from "./clientSyncRegistry.ops";
+import { LIVE_SYNC_COLLECTIONS } from "./clientSyncRegistry.live";
+import { DATA_SYNC_COLLECTIONS } from "./clientSyncRegistry.data";
 import { ORG_SYNC_COLLECTIONS } from "./clientSyncRegistry.org";
 import { POOL_SYNC_COLLECTIONS } from "./clientSyncRegistry.pool";
 
@@ -993,6 +995,8 @@ export const CLIENT_SYNC_REGISTRY = {
     feeds: ["lineActions.editability"],
   },
   ...OPS_SYNC_COLLECTIONS,
+  ...LIVE_SYNC_COLLECTIONS,
+  ...DATA_SYNC_COLLECTIONS,
   // Published pages (artifacts). listForWeb returns the complete visible set
   // — own plus shareable teammates' — so snapshot. Rows have no server _id;
   // the feeder keys them by slug.
@@ -1298,11 +1302,14 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: {},
     feeds: ["managedSessions.listActiveSessions"],
   },
+  // One row per device, fed by a subscription per device (getMine), so each
+  // answer is that device's row alone: a delta. Rows of a removed device stay
+  // and are never shown; readers join reports onto the device roster.
   machineResources: {
     persistence: { kind: "collection", key: "machineResources" },
     hydration: { phase: "deferred" },
-    sync: {},
-    feeds: ["machineResources.listMine"],
+    sync: { isDelta: true },
+    feeds: ["machineResources.getMine"],
   },
   migrationCandidates: {
     persistence: { kind: "meta", key: "migrationCandidates" },
@@ -2005,6 +2012,15 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   lineGraphVersions: "shared",
   lineGraphEditability: "shared",
   opsSources: "shared",
+  // Live artifacts are fed per view (each window that opens one subscribes
+  // itself), so no window takes another's copy: a host that never opened the
+  // doc would broadcast stale rows over a follower's fresh ones.
+  liveElements: "local",
+  liveHeads: "local",
+  livePresence: "local",
+  liveVersions: "local",
+  dataResults: "local",
+  dataSources: "local",
   opsGroups: "shared",
   opsSamples: "shared",
   opsEvents: "shared",

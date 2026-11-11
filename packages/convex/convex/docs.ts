@@ -37,7 +37,7 @@ import {
 import { notFound } from "./lib/auth";
 import { claimShareToken } from "./publicShare";
 import { packSnapshotContent } from "./lib/docSnapshot";
-import { docTitleFromContent, draftTextNodes, renderDocMentionExcerpt, setTitleHeading, withTitleHeading } from "@codecast/shared/docs";
+import { docTitleFromContent, docTypeChangeAllowed, draftTextNodes, renderDocMentionExcerpt, setTitleHeading, withTitleHeading } from "@codecast/shared/docs";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
 import { conversationProjectRoot, knownCheckoutRoots } from "./projectPaths";
 export { canAccessDoc };
@@ -678,7 +678,10 @@ export const update = mutation({
 
     const text = docTextUpdates(doc, { title: args.title || undefined, content: args.content });
     const updates: any = { updated_at: Date.now(), ...text };
-    if (args.doc_type) updates.doc_type = args.doc_type;
+    if (args.doc_type) {
+      if (!docTypeChangeAllowed(doc.doc_type, args.doc_type)) throw new Error(`A ${doc.doc_type} cannot become a ${args.doc_type}`);
+      updates.doc_type = args.doc_type;
+    }
     if (args.labels) updates.labels = args.labels;
     if (args.pinned !== undefined) updates.pinned = args.pinned;
     if (args.archived !== undefined) updates.archived_at = args.archived ? Date.now() : undefined;
@@ -1387,7 +1390,7 @@ export async function updateDocAs(ctx: MutationCtx, userId: Id<"users">, args: O
   if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
 
   const updates: any = { updated_at: Date.now(), ...docTextUpdates(doc, args) };
-  if (args.doc_type !== undefined) updates.doc_type = args.doc_type;
+  if (args.doc_type !== undefined && docTypeChangeAllowed(doc.doc_type, args.doc_type)) updates.doc_type = args.doc_type;
   if (args.labels !== undefined) updates.labels = args.labels;
   if (args.pinned !== undefined) updates.pinned = args.pinned;
   if (args.archived !== undefined) updates.archived_at = args.archived ? Date.now() : undefined;

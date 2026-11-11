@@ -20,6 +20,9 @@ const DOC_TYPE_STYLE: Record<DocType, { icon: IconName; color: string }> = {
   decision: { icon: "balance-scale", color: Theme.red },
   charter: { icon: "gavel", color: Theme.violet },
   brief: { icon: "sticky-note-o", color: Theme.green },
+  board: { icon: "object-group", color: Theme.accent },
+  sheet: { icon: "table", color: Theme.green },
+  dashboard: { icon: "bar-chart", color: Theme.blue },
 };
 
 export const DOC_TYPE_CONFIG = Object.fromEntries(

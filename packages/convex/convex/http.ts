@@ -11,6 +11,8 @@ import { installCallbackHandler } from "./githubApp";
 import { verifyLinearSignature, linearDeliveryId } from "./linearWebhooks";
 import { readConversationRange } from "./conversations";
 import { SHARED_CALL_VIDEO_PATH, signForCli } from "./callRecordings";
+import { SHARED_CALL_AUDIO_PATH, sharedCallAudio } from "./publicShare";
+import { VAULT_BODY_UPLOAD_PATH, uploadBody as vaultUploadBody } from "./vaultMirror";
 import { callRecordingGetUrl } from "./lib/r2";
 import { ipRateLimited } from "./lib/httpRateLimit";
 import { cliErrorReply } from "./lib/cliErrorStatus";
@@ -4876,6 +4878,24 @@ cliRoute("/cli/docs/update", async (ctx, body) => {
   }
   return result;
 });
+// Live artifacts: `cast board|sheet|data` (liveArtifacts.ts). Each acts as
+// the session named by session_id, so its cursor shows on the open page.
+cliRoute("/cli/live/elements", async (ctx, body) => await ctx.runQuery(api.liveArtifacts.elementsSince, body));
+cliRoute("/cli/live/apply", async (ctx, body) => await ctx.runMutation(api.liveArtifacts.apply, body));
+cliRoute("/cli/live/presence", async (ctx, body) => await ctx.runMutation(api.livePresence.setPresence, body));
+cliRoute("/cli/live/leave", async (ctx, body) => await ctx.runMutation(api.livePresence.leave, body));
+cliRoute("/cli/live/draft", async (ctx, body) => {
+  const { op, ...rest } = body;
+  if (op === "start") return await ctx.runMutation(api.liveArtifacts.draftStart, rest);
+  if (op === "save") return await ctx.runMutation(api.liveArtifacts.draftSave, rest);
+  if (op === "discard") return await ctx.runMutation(api.liveArtifacts.draftDiscard, rest);
+  throw new Error("draft op must be start, save or discard");
+});
+cliRoute("/cli/live/versions", async (ctx, body) => await ctx.runQuery(api.liveArtifacts.versions, body));
+cliRoute("/cli/live/checkpoint", async (ctx, body) => await ctx.runMutation(api.liveArtifacts.checkpoint, body));
+cliRoute("/cli/live/state-at", async (ctx, body) => await ctx.runAction(api.liveArtifacts.stateAt, body));
+cliRoute("/cli/live/restore", async (ctx, body) => await ctx.runAction(api.liveArtifacts.restore, body));
+cliRoute("/cli/live/remote", async (ctx, body) => await ctx.runAction(api.liveArtifacts.runRemote, body));
 cliRoute("/cli/docs/comment", async (ctx, body) => {
   return await ctx.runMutation(api.docs.addComment, body);
 });
@@ -5300,7 +5320,10 @@ http.route({ path: "/cli/motion.js", method: "GET", handler: artifactMotionJs })
 // same function under a second name.
 cliRoute("/cli/vault/register", async (ctx, body) => ctx.runMutation(api.vaultMirror.cliRegisterMirror, body), { forwardDeviceId: true });
 cliRoute("/cli/vault/upsert", async (ctx, body) => ctx.runMutation(api.vaultMirror.cliUpsertNotes, body), { forwardDeviceId: true });
-cliRoute("/cli/vault/upload-url", async (ctx, body) => ctx.runMutation(api.images.generateUploadUrl, body));
+// The body upload URL points at our own route, which records who uploaded the
+// blob (vaultMirror.uploadBody); cliUpsertNotes refuses a body without that.
+cliRoute("/cli/vault/upload-url", async (ctx, body) => ctx.runMutation(api.vaultMirror.cliBodyUploadUrl, body));
+http.route({ path: VAULT_BODY_UPLOAD_PATH, method: "POST", handler: vaultUploadBody });
 
 // Remote pane watching — the daemon's frame push (packages/cli/src/terminal/
 // paneStream.ts). Only reached while a viewer holds a lease on the pane; the
@@ -5411,6 +5434,9 @@ const sharedCallVideo = httpAction(async (ctx, request) => {
   return new Response(null, { status: 302, headers: { Location: signed.url, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
 });
 http.route({ path: SHARED_CALL_VIDEO_PATH, method: "GET", handler: sharedCallVideo });
+// A shared call's audio, re-checked against the link on every request the
+// same way (publicShare.sharedCallAudio).
+http.route({ path: SHARED_CALL_AUDIO_PATH, method: "GET", handler: sharedCallAudio });
 
 // Reading a public repository with no account at all — the standalone /r/ shell
 // runs on this. The handler is repoPublicHttp.ts; see the file header for why a

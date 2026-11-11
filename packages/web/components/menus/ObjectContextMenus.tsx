@@ -41,6 +41,7 @@ import {
   PRIORITY_OPTIONS,
   PLAN_STATUS_OPTIONS,
   DOC_TYPE_OPTIONS,
+  DOC_RETYPE_OPTIONS,
   type EntityOption,
 } from "./entityOptions";
 import { statusByKey, statusEntityOptions, statusWriteFields, taskStatusKey, useTeamTaskStatusList } from "../../lib/taskStatuses";
@@ -292,7 +293,7 @@ export function DocMenuItems({
       <OptionSubmenu
         icon={FileText}
         label="Type"
-        options={DOC_TYPE_OPTIONS}
+        options={DOC_RETYPE_OPTIONS}
         currentKey={(single as any)?.doc_type}
         onPick={(key) => {
           const { updateDoc } = useInboxStore.getState();

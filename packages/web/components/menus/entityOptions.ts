@@ -10,7 +10,7 @@ import {
   PauseCircle,
   XCircle,
 } from "lucide-react";
-import { DOC_TYPES, DOC_TYPE_LABELS } from "@codecast/shared/docs";
+import { DOC_TYPES, DOC_TYPE_LABELS, RETYPABLE_DOC_TYPES } from "@codecast/shared/docs";
 
 // The one place status/priority/type vocabularies live. The command palette's
 // drill-in submenus and the right-click context menus both render from these
@@ -52,3 +52,5 @@ export const PLAN_STATUS_OPTIONS: EntityOption[] = [
 // list exactly the types the schema accepts, in the same order as the docs
 // page tabs and the create modal.
 export const DOC_TYPE_OPTIONS: EntityOption[] = DOC_TYPES.map((key) => ({ key, label: DOC_TYPE_LABELS[key] }));
+/** What a prose doc can be retyped to: boards, sheets and dashboards hold elements, not markdown. */
+export const DOC_RETYPE_OPTIONS: EntityOption[] = RETYPABLE_DOC_TYPES.map((key) => ({ key, label: DOC_TYPE_LABELS[key] }));

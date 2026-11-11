@@ -351,6 +351,7 @@ import { createTrialSlice, type TrialSliceActions } from "./trialSlice";
 import { taskCreateStub, taskStubId } from "./taskStub";
 import { createExpectationsSlice, type ExpectationsSliceActions } from "./expectationsSlice";
 import { createOpsSlice, type OpsSliceActions } from "./opsSlice";
+import { createLiveArtifactsSlice, type LiveArtifactsSliceActions } from "./liveArtifactsSlice";
 import { createComposeSlice, type ComposeInstance, type ComposeSliceState } from "./composeSlice";
 // Re-exported so chat surfaces import their selectors from the store, like every
 // other view does, instead of reaching into the slice file.
@@ -4461,7 +4462,7 @@ export function computeChipCounts(
   activeSessions: InboxSession[],
   bucketByConv: Record<string, string | undefined>,
   // Which project each session works in: projects get chips of their own
-  // (`pj:<id>` keys, store/workProjects), ahead of the folders.
+  // (`pj:<id>` keys, store/workProjects), after the folders.
   projectOf?: (sessionId: string) => string | null,
 ): {
   bucketCounts: Record<string, number>;
@@ -4489,7 +4490,7 @@ export function computeChipCounts(
   const byCount = (a: [string, number], b: [string, number]) => b[1] - a[1];
   return {
     bucketCounts,
-    projectCounts: [...Object.entries(workCounts).sort(byCount), ...Object.entries(projCounts).sort(byCount)],
+    projectCounts: [...Object.entries(projCounts).sort(byCount), ...Object.entries(workCounts).sort(byCount)],
     projectPathByName,
   };
 }
@@ -5521,7 +5522,7 @@ function dropGuestKnock(draft: any, guestId: string): void {
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
 // typed `Record<string, any>` slot here by registration alone; the explicit
 // fields below narrow the ones with a real row type.
-interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, LineWorkflowSliceActions, LineSliceActions, TrialSliceActions, ExpectationsSliceActions, OpsSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
+interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, LineWorkflowSliceActions, LineSliceActions, TrialSliceActions, ExpectationsSliceActions, OpsSliceActions, LiveArtifactsSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -12220,7 +12221,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
     // Exclude pending — entire record blocked from sync
     const excludeKey = `${field}:${id}`;
-    if (this.pending[excludeKey]?.type === "exclude") return;
+    if (this.pending[excludeKey]?.type === "exclude") {
+      // A prune excludes both twins, but reopening the session (injectSession)
+      // puts back only the sessions row, and its include lock replaces only
+      // the sessions exclude. The conversations exclude left behind blinds the
+      // view to its own meta for good (no machine, no runner). A sessions row
+      // held and not excluded proves the prune was undone: lift it.
+      const revived = field === "conversations" && !!this.sessions[id]
+        && this.pending[`sessions:${id}`]?.type !== "exclude";
+      if (!revived) return;
+      delete this.pending[excludeKey];
+    }
 
     const collection = (this as any)[field];
     const existing = collection?.[id];
@@ -15200,6 +15211,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   // Ops writes (store/opsSlice.ts): group triage, sources, app grants.
   ...createOpsSlice(),
+  // Live artifact writes (store/liveArtifactsSlice.ts): element batches, drafts, checkpoints.
+  ...createLiveArtifactsSlice(),
 
 });
 

@@ -44,6 +44,8 @@ import { accountPoolTables } from "./accountPoolSchema";
 import { managedDeviceTables, teamPolicyValidator } from "./managedDevicesSchema";
 import { externalEventDataValidator, ingestTables } from "./ingestSchema";
 import { momentsTables } from "./momentsSchema";
+import { liveArtifactTables } from "./liveArtifactsSchema";
+import { dataQueryTables } from "./dataQueriesSchema";
 import { deployTables } from "./deploySchema";
 import { lineTrialTables } from "./lineTrialSchema";
 import { orgRoleTokenTables } from "./orgRoleTokensSchema";
@@ -139,6 +141,8 @@ export default defineSchema({
   // External data: sources, groups, samples, replays, metric watches, app calls (external-data.md).
   ...ingestTables,
   ...momentsTables,
+  ...liveArtifactTables,
+  ...dataQueryTables,
   ...deployTables,
   ...lineTrialTables,
   ...orgRoleTokenTables,
@@ -557,8 +561,10 @@ export default defineSchema({
     // 5xx). Newer than `subscription_read_at`: the plan is unconfirmed, and
     // the seat gate fails open.
     refresh_failed_at: v.optional(v.number()),
-    // An admin opened checkout; until its subscription lands the gate fails open.
+    // An admin opened checkout; until its subscription lands the gate fails
+    // open, up to the seats that checkout is for (`checkout_seats`).
     checkout_started_at: v.optional(v.number()),
+    checkout_seats: v.optional(v.number()),
     // The team was already over the free capacity when seat billing first
     // judged it: it keeps adding seats without a plan.
     grandfathered_at: v.optional(v.number()),
@@ -576,6 +582,9 @@ export default defineSchema({
     invited_by: v.id("users"),
     created_at: v.number(),
     accepted_at: v.optional(v.number()),
+    // An admin removed this person; a code generated before this no longer
+    // admits them until they are invited again (teams.joinTeam).
+    removed_at: v.optional(v.number()),
   })
     .index("by_team_email", ["team_id", "email"]),
 
@@ -3723,6 +3732,10 @@ export default defineSchema({
     // have no codecast account; those carry author_github_username instead.
     reviewer_user_id: v.optional(v.id("users")),
     author_github_username: v.optional(v.string()),
+    // GitHub's author_association for a webhook review (OWNER, MEMBER,
+    // COLLABORATOR, CONTRIBUTOR, NONE, ...): what standing the author has on
+    // the repository, which the shepherd's wake names beside the review body.
+    author_association: v.optional(v.string()),
     github_review_id: v.optional(v.number()),
     commit_sha: v.optional(v.string()),
     html_url: v.optional(v.string()),
@@ -3837,6 +3850,8 @@ export default defineSchema({
     pending_review: v.optional(v.boolean()),
     codecast_origin: v.optional(v.boolean()),
     author_github_username: v.optional(v.string()),
+    // GitHub's author_association for a comment that arrived by webhook; see reviews.
+    author_association: v.optional(v.string()),
     author_user_id: v.optional(v.id("users")),
     // ── Review notes written from a worktree (`cast review`, ct-49560) ──
     // A note is a comment first, so it lives here and the web diff view picks
@@ -7624,6 +7639,18 @@ export default defineSchema({
   })
     .index("by_user", ["user_id"])
     .index("by_user_vault", ["user_id", "vault_id", "device_id"]),
+
+  // One-shot tickets for a vault note body upload (vaultMirror.cliBodyUploadUrl).
+  // The daemon POSTs the body to a URL carrying the token; the upload consumes
+  // the ticket and records the blob in artifact_uploads under the ticket's
+  // user, which is the proof cliUpsertNotes requires before a row may hold it.
+  vault_upload_tickets: defineTable({
+    token: v.string(),
+    user_id: v.id("users"),
+    expires_at: v.number(),
+  })
+    .index("by_token", ["token"])
+    .index("by_expires_at", ["expires_at"]),
 
   // Note METADATA only. A body is never a field here: the docs table's 12-per-
   // page clamp exists because Convex materializes whole bodies into a 64MB
