@@ -10,6 +10,8 @@ export type CellNumberFormat = {
   sign?: boolean;
   /** Currency symbol, default "$". */
   cur?: string;
+  /** A custom format code (nf "custom"), the TEXT() codes: "#,##0.0 \"kg\"", "0.00%", "mmm d". */
+  code?: string;
 };
 
 const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -62,9 +64,21 @@ export function formatValue(v: Scalar, fmt: CellNumberFormat | undefined, implie
     case "percent":
       return plus + formatFixed(v * 100, dp ?? 0) + "%";
     case "currency": {
-      const sym = fmt?.cur ?? "$";
+      const sym = fmt?.cur ?? implied?.cur ?? "$";
       const body = formatFixed(Math.abs(v), dp ?? 2);
       return (v < 0 ? "-" : plus) + sym + body;
+    }
+    case "accounting": {
+      // Negatives in parentheses, the symbol kept apart from the digits, as ledgers show money.
+      const sym = fmt?.cur ?? implied?.cur ?? "$";
+      const body = formatFixed(Math.abs(v), dp ?? 2);
+      return v < 0 ? `(${sym}${body})` : `${sym}${body}`;
+    }
+    case "scientific":
+      return plus + v.toExponential(dp ?? 2).toUpperCase().replace(/E\+?(-?)(\d)$/, "E+$10$2").replace("E+-", "E-");
+    case "custom": {
+      const code = fmt?.code ?? implied?.code;
+      return code ? formatWithCode(v, code) : plainNumber(v);
     }
     case "date":
       return formatDate(v);
@@ -87,16 +101,33 @@ export function isNumericValue(v: Scalar): boolean {
  * Numbers: 0, 0.00, #,##0, #,##0.00, 0%, 0.0%, $#,##0, 0.00E+00.
  * Dates: yyyy yy mmmm mmm mm m dddd ddd dd d hh h mm(min) ss AM/PM.
  */
+/** The section of a format code a value uses (positive;negative), and the color it names ([Red], [Blue], ...). */
+function codeSection(v: number, code: string): { section: string; color?: string } {
+  const raw = code.split(";")[v < 0 && code.includes(";") ? 1 : 0] ?? code;
+  const color = raw.match(/\[(red|blue|green|yellow|magenta|cyan)\]/i)?.[1]?.toLowerCase();
+  return { section: raw.replace(/\[[^\]]*\]/g, ""), color };
+}
+
+/** The color a custom code paints a value in ("#,##0;[Red](#,##0)" makes negatives red), if any. */
+export function codeColor(v: number, code: string): string | undefined {
+  return codeSection(v, code).color;
+}
+
 export function formatWithCode(v: number, code: string): string {
-  const section = code.split(";")[v < 0 && code.includes(";") ? 1 : 0] ?? code;
+  const { section } = codeSection(v, code);
   const useAbs = v < 0 && code.includes(";");
   const n = useAbs ? Math.abs(v) : v;
+  // A section with no digit placeholder is plain text: it shows as written.
+  if (!/[0#?]/.test(section.replace(/"[^"]*"/g, "")) && !/[ymdhs]/i.test(section.replace(/"[^"]*"/g, ""))) return strip(section);
   if (/[ymdhs]/i.test(section.replace(/"[^"]*"/g, "")) && !/[0#]/.test(section)) return formatDateCode(n, section);
   const literalPrefix = section.match(/^[^0#.,%]*/)?.[0] ?? "";
   const literalSuffix = section.match(/[^0#.,%]*$/)?.[0] ?? "";
-  const core = section.slice(literalPrefix.length, section.length - literalSuffix.length);
+  let core = section.slice(literalPrefix.length, section.length - literalSuffix.length);
   const percent = section.includes("%");
-  const scaled = percent ? n * 100 : n;
+  // Each comma after the last digit placeholder divides by 1,000 ("#,##0.0,," shows millions).
+  const thousands = core.replace(/%/g, "").match(/,+$/)?.[0].length ?? 0;
+  if (thousands) core = core.replace(/,+(%?)$/, "$1");
+  const scaled = (percent ? n * 100 : n) / 1000 ** thousands;
   if (/E\+/i.test(core)) {
     const dp = (core.split(".")[1] ?? "").replace(/E.*/i, "").length;
     return strip(literalPrefix) + scaled.toExponential(dp).toUpperCase().replace(/E\+?(-?)(\d)$/, "E+$10$2") + strip(literalSuffix);

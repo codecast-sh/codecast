@@ -301,14 +301,11 @@ button.sheet-error-chip { cursor: pointer; }
   border-width: 4px 3.5px 0 3.5px;
   border-color: var(--sol-text-dim) transparent transparent transparent;
 }
-.sheet-cell.is-invalid::after {
-  content: "";
-  position: absolute;
-  right: 0;
-  top: 0;
-  border-style: solid;
-  border-width: 0 6px 6px 0;
-  border-color: transparent var(--sol-orange) transparent transparent;
+/* A value its dropdown or date cell doesn't accept: a dotted underline, not a corner, so it never reads as a comment or an error. */
+.sheet-cell.is-invalid .sheet-cell-text {
+  text-decoration: underline dotted var(--sol-orange);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 3px;
 }
 /* The active cell's picker: a real button, so the control is visible where you are. */
 .sheet-picker-btn {
@@ -321,7 +318,8 @@ button.sheet-error-chip { cursor: pointer; }
   border-radius: 4px;
   color: var(--sol-text-muted);
 }
-.sheet-picker-btn:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
+.sheet-picker-btn[data-rule="date"] { background: var(--sheet-bg); }
+.sheet-picker-btn:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, var(--sheet-bg)); }
 
 /* Dropdown editor. */
 .sheet-dv { display: flex; flex-direction: column; gap: 8px; width: 280px; font-size: var(--fs-ui); }
@@ -378,3 +376,137 @@ button.sheet-error-chip { cursor: pointer; }
   font-size: var(--fs-body);
   pointer-events: none;
 }
+.sheet-error-pop { animation: sheet-error-pop-in 140ms ease-out 320ms both; }
+@keyframes sheet-error-pop-in {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) { .sheet-error-pop { animation: none; } }
+
+/* A formula that can't be committed yet: the reason, under the editor. */
+.sheet-formula-error {
+  position: absolute;
+  z-index: 21;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: var(--fs-meta);
+  color: var(--sol-red);
+  background: color-mix(in srgb, var(--sol-red) 10%, var(--sol-card));
+  border: 1px solid color-mix(in srgb, var(--sol-red) 35%, transparent);
+  white-space: nowrap;
+}
+
+/* Cells with an open comment thread: a yellow corner, as in Sheets. */
+.sheet-cell.is-comment::before {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 0;
+  border-style: solid;
+  border-width: 0 8px 8px 0;
+  border-color: transparent color-mix(in srgb, var(--sol-yellow) 85%, var(--sol-orange)) transparent transparent;
+}
+.sheet-comment-peek { width: 260px; display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-ui); }
+.sheet-comment-peek-head { display: flex; align-items: baseline; gap: 6px; color: var(--sol-text); }
+.sheet-comment-peek-head span { color: var(--sol-text-dim); font-size: var(--fs-meta); }
+.sheet-comment-peek p {
+  margin: 0;
+  color: var(--sol-text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  white-space: pre-wrap;
+}
+
+/* Hidden columns and rows: a mark at the boundary that shows them again. */
+.sheet-unhide {
+  position: absolute;
+  z-index: 4;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--sol-text-dim) 55%, transparent);
+}
+.sheet-unhide:hover { background: var(--sol-blue); }
+.sheet-unhide-col { left: -6px; top: 3px; bottom: 3px; width: 11px; }
+.sheet-unhide-row { top: -6px; left: 3px; right: 3px; height: 11px; }
+
+/* Custom number format: the code and a live sample. */
+.sheet-custom-code { display: flex; flex-direction: column; gap: 4px; padding: 6px; width: 220px; }
+.sheet-custom-code input {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent);
+  background: var(--sol-bg-alt);
+  color: var(--sol-text);
+  font-size: var(--fs-ui);
+  outline: none;
+}
+.sheet-custom-code input:focus { border-color: var(--sol-blue); }
+.sheet-custom-sample { padding: 0 2px; font-size: var(--fs-meta); color: var(--sol-text-dim); }
+
+/* List picker: the add row, the current value, invalid filter text. */
+.sheet-fn-search.is-invalid { border-color: var(--sol-orange); }
+.sheet-picker-add { align-items: center; gap: 6px; color: var(--sol-text-muted); }
+.sheet-picker-row { align-items: center; }
+.sheet-picker-current { margin-left: auto; color: var(--sol-blue); flex-shrink: 0; }
+.sheet-picker-foot { display: flex; gap: 4px; }
+
+/* Conditional color rules panel (the shell's side drawer). */
+.sheet-cond { display: flex; flex-direction: column; height: 100%; min-height: 0; font-size: var(--fs-ui); }
+.sheet-cond-head { display: flex; align-items: baseline; gap: 8px; padding: 10px 12px; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent); color: var(--sol-text); font-weight: 600; }
+.sheet-cond-head code { font-family: inherit; font-weight: 400; font-size: var(--fs-meta); color: var(--sol-text-dim); }
+.sheet-cond-list { display: flex; flex-direction: column; gap: 2px; padding: 8px; overflow-y: auto; flex: 1; min-height: 0; }
+.sheet-cond-row { display: flex; align-items: center; gap: 10px; padding: 6px 6px; border-radius: 6px; }
+.sheet-cond-row:hover { background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
+.sheet-cond-swatch { flex-shrink: 0; width: 22px; height: 16px; border-radius: 4px; }
+.sheet-cond-text { display: flex; flex-direction: column; flex: 1; min-width: 0; color: var(--sol-text); }
+.sheet-cond-text code { font-family: inherit; font-size: var(--fs-meta); color: var(--sol-text-dim); }
+.sheet-cond-form { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-top: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent); }
+.sheet-cond-form input,
+.sheet-cond-form select {
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent);
+  background: var(--sol-bg-alt);
+  color: var(--sol-text);
+  font-size: var(--fs-ui);
+  outline: none;
+}
+.sheet-cond-form input:focus, .sheet-cond-form select:focus { border-color: var(--sol-blue); }
+.sheet-cond-field { display: flex; align-items: center; gap: 6px; }
+.sheet-cond-field input { flex: 1; min-width: 0; }
+.sheet-cond-colors { display: flex; flex-wrap: wrap; gap: 6px; }
+.sheet-dv-swatch.is-on { box-shadow: 0 0 0 2px var(--sol-bg), 0 0 0 3.5px var(--sol-text); }
+.sheet-cond-error { color: var(--sol-red); font-size: var(--fs-meta); }
+.sheet-cond-add { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 30px; }
+.sheet-comment-peek-actions { display: flex; gap: 6px; }
+.sheet-comment-peek-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: var(--fs-ui);
+  color: var(--sol-text);
+  border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
+}
+.sheet-comment-peek-actions button:hover { background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.sheet-date-day.is-focus { box-shadow: inset 0 0 0 1.5px var(--sol-blue); }
+.sheet-date-day:focus { outline: none; }
+.sheet-assist-arg { color: var(--sol-text-muted); font-size: var(--fs-meta); white-space: normal; }
+.sheet-formula-input.is-spilled { color: var(--sol-text-dim); }
+.sheet-link-url { word-break: break-all; color: var(--sol-text-muted); font-size: var(--fs-meta); }
+.sheet-link-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: var(--sol-text);
+  border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent);
+}
+.sheet-link-open:hover { background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.sheet-cond-row { cursor: pointer; }
+.sheet-cond-row.is-editing { background: color-mix(in srgb, var(--sol-blue) 12%, transparent); }

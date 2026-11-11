@@ -12,6 +12,8 @@
   --sheet-font: 13px;
   --sheet-sel-fill: 9%;
   --sheet-freeze: color-mix(in srgb, var(--sol-border) 75%, transparent);
+  /* The frozen panes' edge: a bar, not a gridline, so the split reads at a glance. */
+  --sheet-freeze-bar: color-mix(in srgb, var(--sol-text-dim) 45%, transparent);
   position: relative;
   display: flex;
   flex-direction: column;
@@ -136,9 +138,9 @@
   background: var(--sheet-bg);
 }
 .sheet-band-top > div:not(.sheet-sticky-left) { background: var(--sheet-bg); }
-.sheet-pane-frozen-x { box-shadow: inset -2px 0 0 var(--sheet-freeze); }
-[data-sheet-pane="corner"], [data-sheet-pane="top"] { box-shadow: inset 0 -2px 0 var(--sheet-freeze); }
-[data-sheet-pane="corner"] { box-shadow: inset -2px -2px 0 var(--sheet-freeze); }
+.sheet-pane-frozen-x { box-shadow: inset -3px 0 0 var(--sheet-freeze-bar); }
+[data-sheet-pane="corner"], [data-sheet-pane="top"] { box-shadow: inset 0 -3px 0 var(--sheet-freeze-bar); }
+[data-sheet-pane="corner"] { box-shadow: inset -3px -3px 0 var(--sheet-freeze-bar); }
 
 .sheet-line {
   position: absolute;
@@ -167,7 +169,7 @@
   border-width: 0 6px 6px 0;
   border-color: transparent var(--sol-red) transparent transparent;
 }
-.sheet-cell.is-flash { animation: sheet-flash 1.4s ease-out; }
+.sheet-cell.is-flash { animation: sheet-flash 2.2s ease-out; }
 @keyframes sheet-flash {
   from { box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--sol-magenta) 22%, transparent); }
   to { box-shadow: inset 0 0 0 999px transparent; }
@@ -381,6 +383,8 @@
   height: 40px;
   padding: 0 5px;
   max-width: calc(100% - 24px);
+  /* Never wider than the sheet beside a side panel: what doesn't fit is in More. */
+  overflow: hidden;
   border-radius: 12px;
   border: 1px solid color-mix(in srgb, var(--sol-border) 40%, transparent);
   background: color-mix(in srgb, var(--sol-card) 94%, transparent);
@@ -465,6 +469,8 @@
 .sheet-ask-alt:hover:not(:disabled) { background: var(--sol-bg-alt); }
 .sheet-ask-send { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border-radius: 7px; background: var(--sol-violet); color: var(--sol-bg); font-weight: 500; white-space: nowrap; }
 .sheet-ask-send:disabled, .sheet-ask-alt:disabled { opacity: 0.4; }
+.sheet-ask-close { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: 6px; color: var(--sol-text-dim); }
+.sheet-ask-close:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 7%, transparent); }
 
 /* ── Tabs and summary ────────────────────────────────────────────────────── */
 

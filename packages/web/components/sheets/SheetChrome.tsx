@@ -18,6 +18,7 @@ export function FormulaBar({
   edit,
   refLabel,
   activeInput,
+  spilledFrom,
   readOnly,
   onJump,
   onBeginBarEdit,
@@ -27,6 +28,8 @@ export function FormulaBar({
   edit: EditStore;
   refLabel: string;
   activeInput: string;
+  /** The array formula a spilled cell shows a value of: the bar shows it, muted, as Sheets does. */
+  spilledFrom?: string;
   /** The active cell's error and why, shown beside the formula. */
   error?: string;
   readOnly: boolean;
@@ -36,8 +39,10 @@ export function FormulaBar({
 }) {
   const state = useEditState(edit);
   const [refDraft, setRefDraft] = useState<string | null>(null);
+  // A new selection replaces whatever was half-typed in the name box (a grid click doesn't blur it).
+  useWatchEffect(() => setRefDraft(null), [refLabel]);
   const barRef = useRef<HTMLInputElement>(null);
-  const value = state ? state.text : activeInput;
+  const value = state ? state.text : spilledFrom ?? activeInput;
   const barEditing = state?.surface === "bar";
   const assist = useFormulaAssist(edit, barEditing ? state.text : null, barRef);
   const [fnOpen, setFnOpen] = useState(false);
@@ -110,7 +115,7 @@ export function FormulaBar({
       <span className="sheet-formula-field">
       <input
         ref={barRef}
-        className="sheet-formula-input"
+        className={`sheet-formula-input${!state && spilledFrom ? " is-spilled" : ""}`}
         data-sheet-formula-input
         aria-label="Formula"
         value={value}
@@ -121,7 +126,7 @@ export function FormulaBar({
           else if (edit.get()) edit.patch({ surface: "bar" });
         }}
         onChange={(e) => {
-          edit.patch({ text: e.target.value, surface: "bar" });
+          edit.patch({ text: e.target.value, surface: "bar", error: undefined });
           assist.track(e.target);
         }}
         onSelect={(e) => assist.track(e.currentTarget)}
@@ -130,7 +135,13 @@ export function FormulaBar({
           onKey(e, "bar");
         }}
       />
-      {barEditing && <AssistPopup assist={assist} style={{ left: 0, top: "calc(100% + 4px)" }} />}
+      {barEditing && state?.error ? (
+        <div className="sheet-formula-error" style={{ left: 0, top: "calc(100% + 4px)" }} role="alert" data-sheet-formula-error>
+          {state.error}
+        </div>
+      ) : (
+        barEditing && <AssistPopup assist={assist} style={{ left: 0, top: "calc(100% + 4px)" }} />
+      )}
       </span>
       {error && !state && (
         <Popover>
@@ -223,7 +234,7 @@ export const CellEditor = memo(function CellEditor({
         onChange={(e) => {
           if (readOnly) return;
           if (!edit.get()) onBegin(e.target.value);
-          else edit.patch({ text: e.target.value });
+          else edit.patch({ text: e.target.value, error: undefined });
           assist.track(e.target);
           onCaret(e.target.selectionStart ?? e.target.value.length);
         }}
@@ -239,7 +250,13 @@ export const CellEditor = memo(function CellEditor({
         onCut={editing ? undefined : onCut}
         onPaste={editing ? undefined : onPaste}
       />
-      {editing && <AssistPopup assist={assist} style={{ left: placement.x, top: placement.y + placement.h + 2 }} />}
+      {editing && state?.error ? (
+        <div className="sheet-formula-error" style={{ left: placement.x, top: placement.y + placement.h + 2 }} role="alert" data-sheet-formula-error>
+          {state.error}
+        </div>
+      ) : (
+        editing && <AssistPopup assist={assist} style={{ left: placement.x, top: placement.y + placement.h + 2 }} />
+      )}
     </>
   );
 });
@@ -376,7 +393,11 @@ export function SelectionSummary({ values, style }: { values: Array<unknown>; st
     }
   }
   if (count < 2) return null;
-  const tidy = (x: number) => Number(x.toPrecision(12));
+  // Dates are serial numbers underneath: their sum means nothing, so a date selection shows its count only.
+  const dates = style?.nf === "date" || style?.nf === "datetime";
+  if (dates) n = 0;
+  // 15 significant digits: as many as a double holds exactly, so a large sum never shows invented zeros.
+  const tidy = (x: number) => Number(x.toPrecision(15));
   // Totals read in the format of the cells summed (a growth column averages to a percent).
   const fmt = style?.nf && style.nf !== "text" ? style : undefined;
   const shown = (x: number) => formatValue(tidy(x), fmt ? { ...fmt, sign: false } : { nf: "number", dp: Number.isInteger(tidy(x)) ? 0 : 2 });

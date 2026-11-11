@@ -25,8 +25,9 @@ export function isGrid(v: unknown): v is Grid {
 }
 
 /** Format hints implied by typed input ("10%" reads as a percent, "$5" as currency). */
-export type ImpliedFormat = { nf: NumberFormatKind; dp?: number };
-export type NumberFormatKind = "number" | "percent" | "currency" | "date" | "datetime" | "text" | "plain" | "check";
+/** The format a value reads in without one of its own; cur and code carry a currency symbol or custom code inherited from what a formula reads. */
+export type ImpliedFormat = { nf: NumberFormatKind; dp?: number; cur?: string; code?: string };
+export type NumberFormatKind = "number" | "percent" | "currency" | "accounting" | "scientific" | "custom" | "date" | "datetime" | "text" | "plain" | "check";
 
 const DAY_MS = 86_400_000;
 const EPOCH_UTC = Date.UTC(1899, 11, 30);

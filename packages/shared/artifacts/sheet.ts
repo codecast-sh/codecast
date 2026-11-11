@@ -27,9 +27,9 @@ import {
   fitWidthOps,
   importTablesOps,
   parseTable,
-  validationOps,
   type StylePatch,
 } from "./sheets/ops";
+import { COND_RULES, condOps, condTakesValue, enforceValidation, hideOps, mergeOps, unmergeOps, validationOps } from "./sheets/ruleOps";
 import { DEFAULT_TAB, a1, colIndex as colIdx, colLetters as colLtrs, parseA1 as parseA1Ref, parseKey, parseQualifiedRange, quoteTabName, rectA1, tabKey, type Rect } from "./sheets/refs";
 
 export { readSheetRange, readSheetTab, buildModel, workbookFor, DEFAULT_TAB };
@@ -92,6 +92,8 @@ function styleTokens(el: CellEl): string[] {
   if (s.color) out.push(`color=${s.color}`);
   if (s.fill) out.push(`fill=${s.fill}`);
   if (s.nf) out.push(`nf=${s.nf}`);
+  if (s.cur) out.push(`cur=${s.cur}`);
+  if (s.code) out.push(`code=${JSON.stringify(s.code)}`);
   if (s.dp !== undefined) out.push(`dp=${s.dp}`);
   if (s.sign) out.push("sign");
   if (s.bd) out.push(`border=${s.bd}`);
@@ -143,6 +145,8 @@ export function describeSheet(view: ArtifactView): string {
     if (meta.frozenCols) notes.push(`frozen ${meta.frozenCols} col${meta.frozenCols > 1 ? "s" : ""}`);
     if (meta.query) notes.push(`live query: ${meta.query.source}${meta.query.project ? ` project=${meta.query.project}` : ""} (read only, refreshes itself)`);
     if (meta.filter) notes.push(`filter on row ${meta.filter.row}`);
+    if (t.hiddenCols?.size) notes.push(`hidden cols ${[...t.hiddenCols].sort((a, b) => a - b).map(colLtrs).join(",")}`);
+    if (t.hiddenRows?.size) notes.push(`hidden rows ${[...t.hiddenRows].sort((a, b) => a - b).join(",")}`);
     out.push("");
     out.push(`[${meta.name}] ${notes.join(" · ")}`);
     const byRow = new Map<number, Array<[number, CellEl]>>();
@@ -163,7 +167,8 @@ export function describeSheet(view: ArtifactView): string {
         .map(([c, el]) => {
           const info = wb.cell(meta.id, c, r);
           const header = model.tables.some((tb) => tb.tab === meta.id && tb.rect.r0 === r && c >= tb.rect.c0 && c <= tb.rect.c1);
-          return `${a1(c, r)} ${cellText(el, info?.value ?? null, info?.implied, () => inheritedFormat(model, meta.id, String(el.input)), header)}`;
+          const spill = wb.spillRange(meta.id, c, r);
+          return `${a1(c, r)} ${cellText(el, info?.value ?? null, info?.implied, () => inheritedFormat(model, meta.id, String(el.input)), header)}${spill ? ` (spills to ${rectA1(spill)})` : ""}`;
         });
       out.push(parts.join(" | "));
     }
@@ -180,6 +185,7 @@ export function describeSheet(view: ArtifactView): string {
     const tables = model.tables.filter((c) => c.tab === meta.id);
     for (const c of conds) out.push(`  cond ${rectA1(c.rect)} ${c.rule}${c.value !== undefined ? ` ${c.value}` : ""}${c.color ? ` ${c.color}` : ""}`);
     for (const tb of tables) out.push(`  table ${rectA1(tb.rect)} ${tb.color}${tb.banded ? " banded" : ""}`);
+    for (const m of model.merges.filter((x) => x.tab === meta.id)) out.push(`  merged ${rectA1(m.rect)}`);
     for (const v of model.validations.filter((x) => x.tab === meta.id))
       out.push(`  validate ${rectA1(v.rect)} ${v.rule}${v.options.length ? ` ${v.options.map((o) => (o.color ? `${o.v}:${o.color}` : o.v)).join(",")}` : ""}${v.strict ? " --strict" : ""}`);
   }
@@ -216,7 +222,10 @@ function pos(tab: TabMeta, rect: Rect): ArtifactPosition {
 }
 
 function done(t: Target, ops: ArtifactOp[], status: string): VerbResult {
-  return { ops: [...t.created, ...ops], position: pos(t.tab, t.rect), status };
+  // Strict dropdown and date cells hold agents to the same values as people.
+  const held = enforceValidation(t.model, ops);
+  const note = held.refused ? ` (skipped ${held.refused} value${held.refused === 1 ? "" : "s"} a strict dropdown or date cell doesn't allow; read the sheet's validate lines)` : "";
+  return { ops: [...t.created, ...held.ops], position: pos(t.tab, t.rect), status: status + note };
 }
 
 /** After a write, widen the touched columns nobody sized so headers and numbers are not clipped. */
@@ -277,7 +286,7 @@ function parseStyleArgs(args: string[]): { patch: StylePatch; border?: "all" | "
         patch.dp = off ? null : Math.max(0, Math.min(10, Number(v)));
         break;
       case "nf":
-        if (!["number", "percent", "currency", "date", "datetime", "text", "plain", "check"].includes(v)) throw new Error("nf must be number, percent, currency, date, datetime, text, check or plain");
+        if (!["number", "percent", "currency", "accounting", "scientific", "date", "datetime", "text", "plain", "check"].includes(v)) throw new Error("nf must be number, percent, currency, accounting, scientific, date, datetime, text, check or plain (custom codes: code=...)");
         patch.nf = v === "plain" ? null : (v as "number");
         break;
       case "num":
@@ -288,7 +297,6 @@ function parseStyleArgs(args: string[]): { patch: StylePatch; border?: "all" | "
       case "percent":
         patch.nf = "percent";
         break;
-      case "cur":
       case "currency":
         patch.nf = "currency";
         break;
@@ -298,12 +306,27 @@ function parseStyleArgs(args: string[]): { patch: StylePatch; border?: "all" | "
       case "check":
         patch.nf = "check";
         break;
+      case "cur":
+        if (v) {
+          // cur=€ sets the symbol (and currency, unless accounting is chosen); bare "cur" stays the currency shorthand.
+          patch.cur = off ? null : v;
+          if (!off && patch.nf === undefined) patch.nf = "currency";
+        } else patch.nf = "currency";
+        break;
+      case "code":
+        if (off || !v) {
+          patch.code = null;
+        } else {
+          patch.code = v.replace(/^"|"$/g, "");
+          patch.nf = "custom";
+        }
+        break;
       case "border":
         if (!["all", "outer", "bottom", "none"].includes(v)) throw new Error("border must be all, outer, bottom or none");
         border = v as "all";
         break;
       case "clear":
-        for (const f of ["b", "i", "u", "fs", "al", "color", "fill", "nf", "dp", "sign", "cur", "bd", "wrap"] as const) (patch as Record<string, null>)[f] = null;
+        for (const f of ["b", "i", "u", "fs", "al", "color", "fill", "nf", "dp", "sign", "cur", "code", "bd", "wrap"] as const) (patch as Record<string, null>)[f] = null;
         break;
       default:
         throw new Error(`unknown format ${raw}`);
@@ -312,7 +335,6 @@ function parseStyleArgs(args: string[]): { patch: StylePatch; border?: "all" | "
   return { patch, border };
 }
 
-const COND_RULES = ["sign", "scale", "gt", "lt", "eq", "contains"] as const;
 
 const verbs: ArtifactSpec["verbs"] = {
   set: {
@@ -339,7 +361,7 @@ const verbs: ArtifactSpec["verbs"] = {
     },
   },
   fmt: {
-    summary: "Format a range: b i u size=N align=left|center|right color=C fill=C num|pct|cur|date dp=N sign border=all|outer|bottom|none wrap clear (-b etc. removes)",
+    summary: "Format a range: b i u size=N align=left|center|right color=C fill=C num|pct|cur|date nf=accounting|scientific cur=€ code=\"#,##0 kg\" dp=N sign border=all|outer|bottom|none wrap clear (-b etc. removes)",
     usage: "fmt <doc> <Tab!A1:C4> <format...>",
     run(view, args) {
       const [ref, ...rest] = args;
@@ -371,7 +393,7 @@ const verbs: ArtifactSpec["verbs"] = {
     },
   },
   cond: {
-    summary: `Conditional color on a range: sign (green positive, red negative) | scale [color] | gt|lt|eq <n> <color> | contains <text> <color> | clear (all rules on the range). Rules stack: run it once per rule`,
+    summary: `Conditional color on a range: sign (green positive, red negative) | scale [color] | gt|lt|eq <n> <color> | contains <text> <color> | before|after <today|2026-12-01> <color> | formula '=$B2="Offer"' <color> (written for the range's first cell; colors each cell where it is TRUE) | clear (all rules on the range). Rules stack: run it once per rule`,
     usage: "cond <doc> <Tab!B2:G6> <rule> [value] [color]",
     run(view, args) {
       const [ref, rule, ...rest] = args;
@@ -380,21 +402,10 @@ const verbs: ArtifactSpec["verbs"] = {
       const existing = t.model.conds.filter((c) => c.tab === t.tab.id && rectA1(c.rect) === range);
       if (rule === "clear") return done(t, existing.map((c) => ({ k: c.key, del: true as const })), `clearing colors on ${range}`);
       if (!(COND_RULES as readonly string[]).includes(rule ?? "")) throw new Error(`rule must be one of ${COND_RULES.join(", ")}, or clear`);
-      const fields: Record<string, Json> = { tab: t.tab.id, range, rule: rule! };
-      const needsValue = rule === "gt" || rule === "lt" || rule === "eq" || rule === "contains";
-      if (needsValue) {
-        if (rest[0] === undefined) throw new Error(`${rule} needs a value`);
-        fields.value = rule === "contains" || Number.isNaN(Number(rest[0])) ? rest[0] : Number(rest[0]);
-      }
-      const color = needsValue ? rest[1] : rest[0];
-      if (color) {
-        if (!(PALETTE as readonly string[]).includes(color)) throw new Error(`color must be one of ${PALETTE.join(", ")}`);
-        fields.color = color;
-      }
-      // Rules stack on a range (Offer green and Rejected gray on one Stage column); the same rule and value restyles in place.
-      const same = existing.find((c) => c.rule === rule && String(c.value ?? "") === String(fields.value ?? ""));
-      const key = same?.key ?? newElementKey("cf");
-      return done(t, [{ k: key, put: { kind: "cf", ...fields } }], `coloring ${range}`);
+      const r = rule as (typeof COND_RULES)[number];
+      const color = condTakesValue(r) ? rest[1] : rest[0];
+      if (color && !(PALETTE as readonly string[]).includes(color)) throw new Error(`color must be one of ${PALETTE.join(", ")}`);
+      return done(t, condOps(t.model, t.tab.id, t.rect, r, condTakesValue(r) ? rest[0] : undefined, color), `coloring ${range}`);
     },
   },
   table: {
@@ -447,6 +458,32 @@ const verbs: ArtifactSpec["verbs"] = {
       }
       return done(t, validationOps(t.model, t.tab.id, t.rect, rule, options, args.includes("--strict")), `validating ${range}`);
     },
+  },
+  merge: {
+    summary: "Merge a range into one cell (titles, section headers); the top-left value shows across it",
+    usage: "merge <doc> <Tab!A1:D1>",
+    run(view, args) {
+      const t = target(view, args[0], "merge <doc> <Tab!A1:D1>", false);
+      return done(t, mergeOps(t.model, t.tab.id, t.rect), `merging ${rectA1(t.rect)}`);
+    },
+  },
+  unmerge: {
+    summary: "Split merged cells in a range back apart",
+    usage: "unmerge <doc> <Tab!A1:D1>",
+    run(view, args) {
+      const t = target(view, args[0], "unmerge <doc> <Tab!A1:D1>", false);
+      return done(t, unmergeOps(t.model, t.tab.id, t.rect), `unmerging ${rectA1(t.rect)}`);
+    },
+  },
+  hide: {
+    summary: "Hide rows or columns: hide <doc> rows Tab!5:7 | hide <doc> cols Tab!C:D (they keep their contents; formulas still read them)",
+    usage: "hide <doc> rows <Tab!5:7> | hide <doc> cols <Tab!C:D>",
+    run: (view, args) => hideVerb(view, args, true),
+  },
+  unhide: {
+    summary: "Show hidden rows or columns again: unhide <doc> rows Tab!5:7 | unhide <doc> cols Tab!C:D",
+    usage: "unhide <doc> rows <Tab!5:7> | unhide <doc> cols <Tab!C:D>",
+    run: (view, args) => hideVerb(view, args, false),
   },
   insert: {
     summary: "Insert rows before a row, or columns before a column; formulas everywhere adjust",
@@ -542,9 +579,10 @@ const verbs: ArtifactSpec["verbs"] = {
         else throw new Error(`unknown query option ${kv}`);
       }
       const tab = tabByName(model, name);
-      if (tab) return { ops: tabPatchOps(model, tab.id, { query, refreshed_at: null }), status: `query tab ${name}` };
+      // The rows come from the server: the CLI runs `refresh` once the tab is written, so the tab reads full at once.
+      if (tab) return { ops: tabPatchOps(model, tab.id, { query, refreshed_at: null }), status: `query tab ${name}`, after: [{ verb: "refresh", args: [tab.id] }] };
       const add = addTabOps(model, name, { query, frozen_rows: 1 });
-      return { ops: add.ops, status: `query tab ${name}` };
+      return { ops: add.ops, status: `query tab ${name}`, after: [{ verb: "refresh", args: [add.id] }] };
     },
   },
   range: {
@@ -561,9 +599,8 @@ const verbs: ArtifactSpec["verbs"] = {
   },
 };
 
-function structuralVerb(view: ArtifactView, args: string[], sign: 1 | -1): VerbResult {
-  const [what, ref, countArg] = args;
-  const usage = sign > 0 ? "insert <doc> rows <Tab!5> [count] | cols <Tab!C> [count]" : "delete <doc> rows <Tab!5:7> | cols <Tab!C:D>";
+/** "rows Tab!5:7" or "cols Tab!C:D" -> the tab and the inclusive index span. */
+function axisTarget(view: ArtifactView, what: string | undefined, ref: string | undefined, usage: string) {
   if ((what !== "rows" && what !== "cols") || !ref) throw new Error(`usage: ${usage}`);
   const bang = ref.lastIndexOf("!");
   const tabPart = bang > 0 ? ref.slice(0, bang) : undefined;
@@ -575,24 +612,40 @@ function structuralVerb(view: ArtifactView, args: string[], sign: 1 | -1): VerbR
   const toIdx = (s: string) => (what === "rows" ? Number(s) : colIdx(s.replace(/[^A-Za-z]/g, "")));
   const lo = Math.min(toIdx(a), toIdx(b)), hi = Math.max(toIdx(a), toIdx(b));
   if (!lo || lo < 1) throw new Error(`usage: ${usage}`);
+  return { model, tab, lo, hi, axis: (what === "rows" ? "row" : "col") as "row" | "col" };
+}
+
+function structuralVerb(view: ArtifactView, args: string[], sign: 1 | -1): VerbResult {
+  const [what, ref, countArg] = args;
+  const usage = sign > 0 ? "insert <doc> rows <Tab!5> [count] | cols <Tab!C> [count]" : "delete <doc> rows <Tab!5:7> | cols <Tab!C:D>";
+  const { model, tab, lo, hi, axis } = axisTarget(view, what, ref, usage);
   const count = sign > 0 ? Math.max(1, Number(countArg ?? 1)) : hi - lo + 1;
-  const axis = what === "rows" ? "row" : "col";
   return { ops: structuralOps(model, tab.id, axis, lo, sign * count), status: `${sign > 0 ? "inserted" : "deleted"} ${count} ${what}` };
+}
+
+function hideVerb(view: ArtifactView, args: string[], hide: boolean): VerbResult {
+  const { model, tab, lo, hi, axis } = axisTarget(view, args[0], args[1], `${hide ? "hide" : "unhide"} <doc> rows <Tab!5:7> | cols <Tab!C:D>`);
+  const indices = Array.from({ length: hi - lo + 1 }, (_, i) => lo + i);
+  return { ops: hideOps(model, tab.id, axis, indices, hide), status: `${hide ? "hid" : "showed"} ${indices.length} ${args[0]}` };
 }
 
 export const sheetSpec: ArtifactSpec = {
   type: "sheet",
   label: "Sheet",
   cli: "sheet",
-  kinds: ["cell", "tab", "col", "row", "cf", "table", "dv"],
+  kinds: ["cell", "tab", "col", "row", "cf", "table", "dv", "merge"],
   describe: describeSheet,
   presenceFor: (_view, keys) => rangeOf(keys),
   seed: () => [{ k: tabKey(DEFAULT_TAB), put: { kind: "tab", name: DEFAULT_TAB, order: 0 } }],
   verbs,
+  remote: {
+    refresh: { summary: "Fill a live query tab now (it refreshes itself while someone has the sheet open)", usage: "refresh <doc> <tab name>", needsDoc: true, action: "sheetQueries:cliRefresh" },
+  },
   agentGuide: [
     "A sheet has tabs of cells. Read it with `read` (inputs, formulas → values, and formats per range). Address cells as Tab!A1; with no tab prefix you write the first tab. Quote tab names with spaces: 'Q4 plan'!A1.",
     "Write blocks with `write <doc> Tab!A1 < block.tsv` (one line per row, tabs between cells). Write formulas, not computed numbers, whenever a value derives from other cells, so people can change an input and watch it flow: =B2*(1+C2), =SUM(B2:B5), =Historical!B2, =XLOOKUP(A2,Historical!A:A,Historical!B:B).",
     "Functions: SUM AVERAGE MIN MAX COUNT COUNTA ROUND IF IFS IFERROR XLOOKUP VLOOKUP INDEX MATCH SUMIF(S) COUNTIF(S) AVERAGEIF TEXT DATE TODAY EDATE EOMONTH YEAR MONTH LEFT RIGHT MID CONCAT TEXTJOIN and more. Typed 10% is a percent, $1,200 currency, 2026-11-10 a date.",
+    "Array functions fill the cells below and to the right of the formula: =UNIQUE(Tasks!E2:E200) lists each owner once (then =COUNTIF(Tasks!E:E,A2) beside it counts theirs), =FILTER(A2:D200,C2:C200=\"Open\"), =SORT(A2:C50,3,FALSE), =SORTBY(A2:A50,B2:B50,-1), =SEQUENCE(12). Leave those cells empty: anything in the way shows #SPILL!.",
     "Then format: `fmt <doc> A1:G1 b fill=blue`, `fmt <doc> C2:C6 pct sign`, `fmt <doc> B2:B6 num`, `fmt <doc> A6:G6 b border=outer`. Colors: red orange yellow green cyan blue violet magenta gray. A done/status column of TRUE/FALSE reads as checkboxes with `fmt <doc> Tab!E2:E40 check`. `table <doc> A1:G6 blue` gives a header and bands; `cond <doc> G2:G6 sign` colors gains green and losses red.",
     "Columns you write widen to fit on their own; `fit <doc> Tab!A:G` refits after you change content, `width <doc> Tab!A 220` sets one exactly.",
     "A column with a fixed set of values (status, stage, owner, priority) gets a dropdown: `validate <doc> Tab!C2:C200 list \"Todo:gray,Doing:blue,Done:green\"`; its values paint as colored chips and people pick from the list. A date column gets `validate <doc> Tab!F2:F200 date` and a date picker. Cover the rows people will add, not only the rows you wrote.",
