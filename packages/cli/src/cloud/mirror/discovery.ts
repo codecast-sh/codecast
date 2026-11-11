@@ -106,6 +106,39 @@ export function credentialStoreFor(homeRel: string, orHolds = false): string | n
   return CREDENTIAL_STORE_PATHS.find((s) => rel === s || rel.startsWith(`${s}/`) || (orHolds && s.startsWith(`${rel}/`))) ?? null;
 }
 
+/**
+ * Home-relative places that hold logins beyond the stores above: agent auth
+ * and transcripts, browser profiles, git's stored passwords, and all of
+ * ~/Library on a Mac (keychains, cookies, every app's tokens).
+ */
+const HOME_LOGIN_PATHS: readonly string[] = [
+  ...CREDENTIAL_STORE_PATHS, "Library", ".mozilla", ".config/google-chrome", ".config/chromium", ".config/BraveSoftware", ".config/microsoft-edge",
+  ".claude.json", ".claude/.credentials.json", ".claude/projects", ".claude/sessions", ".claude/history.jsonl",
+  ".codex/auth.json", ".codex/sessions", ".codex/archived_sessions", ".codex/history", ".gemini/oauth_creds.json", ".gemini/google_accounts.json",
+  ".git-credentials", ".config/git/credentials",
+];
+
+/**
+ * Why a home path may not leave the laptop on another machine's request, or
+ * null: a credential store or login place (the path, something inside it, or
+ * a folder that holds one), or a file named like a key or token. The answer
+ * names the place so a refusal reads plainly.
+ */
+export function homeLoginReason(homeRel: string): string | null {
+  const rel = homeRel.split(path.sep).join("/").replace(/\/+$/, "");
+  const place = HOME_LOGIN_PATHS.find((s) => rel === s || rel.startsWith(`${s}/`)) ?? HOME_LOGIN_PATHS.find((s) => s.startsWith(`${rel}/`));
+  if (place) return `${place === rel || rel.startsWith(`${place}/`) ? "is in" : "holds"} ~/${place}, which keeps credentials`;
+  if (isCredentialFilePath(rel) || /(?:^|\/)id_(?:rsa|dsa|ecdsa|ed25519)(?:_sk)?$/.test(rel)) return "is named like a key or token file";
+  return null;
+}
+
+/** Names tar leaves out of a folder fetched from outside a repo: keys, token files and stores at any depth. */
+export const FETCH_EXCLUDED_NAMES: readonly string[] = [
+  ".ssh", ".aws", ".gnupg", ".kube", ".netrc", ".npmrc", ".pgpass", ".git-credentials", ".credentials.json", "auth.json", "oauth_creds.json", "hosts.yml",
+  ".env", ".env.*", "*.pem", "*.key", "*.p8", "*.p12", "*.pfx", "*.jks", "*.keystore", "*.kdbx", "*.keychain", "*.keychain-db",
+  "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_ecdsa_sk", "id_ed25519_sk",
+];
+
 export const CONTEXT_DENYLIST: readonly string[] = [
   ".claude/.credentials.json", ".claude.json", ".claude/history.jsonl",
   ".claude/sessions", ".claude/session-env", ".claude/shell-snapshots", ".claude/file-history",
