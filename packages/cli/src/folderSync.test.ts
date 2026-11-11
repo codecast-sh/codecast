@@ -12,8 +12,14 @@ import {
   planFolderExport,
   syncFolderFromPeer,
   unpackFolder,
+  type ExportFolderResult,
+  type PeerAttempt,
   type PeerOutcome,
+  type PeerRequestOpts,
 } from "./folderSync";
+import type { TailnetStatus } from "./cloud/tailnet";
+import { closeAllGrants, liveGrantCount, type GrantOutcome } from "./peer/grant";
+import { pollUntil } from "./test-helpers/pollUntil";
 
 let root: string;
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), "folder-sync-test-")); });
@@ -206,5 +212,180 @@ describe("syncFolderFromPeer", () => {
       now: () => t,
     }, 5_000);
     expect(r).toEqual({ ok: false, reason: "Old Mac: Unknown command" });
+  });
+});
+
+describe("hardened extraction", () => {
+  function tarOf(dir: string): Uint8Array {
+    return new Uint8Array(execFileSync("tar", ["-czf", "-", "-C", dir, "."], { env: { ...process.env, COPYFILE_DISABLE: "1" } }));
+  }
+
+  test("escaping symlinks, special files, hooks and program-running git config do not survive", async () => {
+    const src = path.join(root, "evil");
+    write("evil/a.txt", "ok");
+    write("evil/sub/b.txt", "ok");
+    fs.symlinkSync("a.txt", path.join(src, "inside"));
+    fs.symlinkSync("../a.txt", path.join(src, "sub", "up-inside"));
+    fs.symlinkSync("../../..", path.join(src, "climb"));
+    fs.symlinkSync("/etc/passwd", path.join(src, "abs"));
+    fs.symlinkSync(".", path.join(src, "dot"));
+    fs.symlinkSync("dot/..", path.join(src, "via-dot"));
+    execFileSync("mkfifo", [path.join(src, "pipe")]);
+    write("evil/.git/hooks/post-checkout", "#!/bin/sh\ntouch /tmp/pwned\n");
+    write("evil/.git/HEAD", "ref: refs/heads/main\n");
+    write("evil/.git/config", [
+      "[core]", "\tbare = false", "\tfsmonitor = /tmp/x", "\thooksPath = /tmp/hooks", "\tsshCommand = evil",
+      "[credential]", "\thelper = !evil", "[include]", "\tpath = /tmp/inc",
+      '[includeIf "gitdir:/x/"]', "\tpath = /tmp/inc2", '[filter "lfs"]', "\tsmudge = evil",
+      "[user]", "\tname = Kept", "",
+    ].join("\n"));
+    const dest = path.join(root, "out", "evil");
+    await unpackFolder(tarOf(src), dest);
+    const names = fs.readdirSync(dest).sort();
+    expect(names).toEqual([".git", "a.txt", "dot", "inside", "sub"]);
+    expect(fs.readFileSync(path.join(dest, "inside"), "utf-8")).toBe("ok");
+    expect(fs.readFileSync(path.join(dest, "sub", "up-inside"), "utf-8")).toBe("ok");
+    expect(fs.readdirSync(path.join(dest, ".git", "hooks"))).toEqual([]);
+    const keys = execFileSync("git", ["config", "--file", path.join(dest, ".git", "config"), "--list", "--name-only"], { encoding: "utf-8" }).trim().split("\n").sort();
+    expect(keys).toEqual(["core.bare", "user.name"]);
+  });
+
+  test("a symlinked hooks folder or .git is replaced", async () => {
+    const src = path.join(root, "evil2");
+    write("evil2/scripts/post-checkout", "#!/bin/sh\n");
+    write("evil2/.git/HEAD", "ref: refs/heads/main\n");
+    fs.symlinkSync("../scripts", path.join(src, ".git", "hooks"));
+    write("evil2/nested/real/HEAD", "x");
+    fs.symlinkSync("real", path.join(src, "nested", ".git"));
+    const dest = path.join(root, "out", "evil2");
+    await unpackFolder(tarOf(src), dest);
+    expect(fs.lstatSync(path.join(dest, ".git", "hooks")).isDirectory()).toBe(true);
+    expect(fs.readdirSync(path.join(dest, ".git", "hooks"))).toEqual([]);
+    expect(fs.existsSync(path.join(dest, "nested", ".git"))).toBe(false);
+  });
+
+  test("a truncated archive rejects and leaves nothing behind", async () => {
+    write("big/a.bin", Array.from({ length: 4000 }, (_, i) => `line ${i} ${Math.random()}`).join("\n"));
+    const bytes = tarOf(path.join(root, "big"));
+    const parent = path.join(root, "out");
+    await expect(unpackFolder(bytes.subarray(0, Math.floor(bytes.length / 2)), path.join(parent, "big"))).rejects.toThrow();
+    expect(fs.readdirSync(parent)).toEqual([]);
+  });
+});
+
+describe("direct links", () => {
+  const SRC = { ip: "127.0.0.1", name: "source.tail1234.ts.net." };
+  const DST = { ip: "127.0.0.1", name: "dest.tail1234.ts.net." };
+  const node = (n: { ip: string; name: string }, extra: Record<string, unknown> = {}) => ({ DNSName: n.name, TailscaleIPs: [n.ip], Online: true, UserID: 7, ...extra });
+  const seenBy = (self: typeof SRC, peer: typeof SRC, extra: Record<string, unknown> = {}): TailnetStatus =>
+    ({ BackendState: "Running", Self: node(self), Peer: { k: node(peer, extra) } });
+
+  afterEach(async () => {
+    closeAllGrants();
+    await pollUntil(() => liveGrantCount() === 0, "grants closed");
+  });
+
+  /** Convex and the source daemon in one: each request runs export_folder at once. */
+  function fleet(dir: string, opts: { sourceStatus?: TailnetStatus; destStatus?: TailnetStatus; firewall?: boolean } = {}) {
+    const rows: PeerOutcome[] = [];
+    const requests: PeerRequestOpts[] = [];
+    const store = new Map<string, Uint8Array>();
+    const grants: GrantOutcome[] = [];
+    const attempts: PeerAttempt[] = [];
+    const phases: string[] = [];
+    const deps = {
+      direct: async () => ({ self: DST }),
+      tailnetStatus: async () => opts.destStatus ?? seenBy(DST, SRC),
+      request: async (o: PeerRequestOpts = {}) => {
+        requests.push(o);
+        const id = `c${rows.length + 1}`;
+        const out = await exportFolder(
+          { path: dir, relay_only: o.relay_only, direct: o.tailnet ? { requester: o.tailnet, token_hash: o.token_hash } : undefined },
+          {
+            home: root,
+            upload: async (b) => { store.set(id, b); return id; },
+            tailnetStatus: async () => opts.sourceStatus ?? seenBy(SRC, DST),
+            firewallBlocks: async () => opts.firewall ?? false,
+            onGrantDone: (g) => grants.push(g),
+          },
+        );
+        rows.push({ command_id: id, executed_at: 1, result: JSON.stringify(out), error: null, label: "Mac mini", device_id: "mini" });
+        return { command_ids: [id], labels: { [id]: "Mac mini" } };
+      },
+      outcomes: async () => rows,
+      download: async (id: string) => store.get(id) ?? null,
+      discard: async () => {},
+      sleep: async () => {},
+      onAttempt: (a: PeerAttempt) => attempts.push(a),
+      onProgress: (p: { phase: string }) => phases.push(p.phase),
+    };
+    return { deps, rows, requests, grants, attempts, phases, results: () => rows.map((r) => JSON.parse(r.result!) as ExportFolderResult) };
+  }
+
+  test("a git checkout travels end to end over a real grant", async () => {
+    const src = path.join(root, "repo");
+    write("repo/a.txt", "tracked");
+    write("repo/.env", "SECRET=1");
+    execFileSync("git", ["init", "-q", src]);
+    execFileSync("git", ["-C", src, "add", "a.txt"]);
+    execFileSync("git", ["-C", src, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"]);
+    write("repo/untracked.txt", "new work");
+    const f = fleet(src);
+    const dest = path.join(root, "elsewhere", "repo");
+    const r = await syncFolderFromPeer(dest, f.deps);
+    expect(r).toMatchObject({ ok: true, mode: "direct", from: "Mac mini", files: 2 });
+    expect(f.results()[0]).toMatchObject({ ok: true, direct: { ip: SRC.ip, name: SRC.name } });
+    expect(f.requests[0].tailnet).toEqual(DST);
+    expect(f.requests[0].token_hash).toMatch(/^[0-9a-f]{64}$/);
+    expect(listTree(dest).filter((x) => !x.startsWith(".git/"))).toEqual(["a.txt", "untracked.txt"]);
+    expect(execFileSync("git", ["-C", dest, "log", "--format=%s"], { encoding: "utf-8" }).trim()).toBe("init");
+    expect(f.attempts).toEqual([expect.objectContaining({ device: "Mac mini", mode: "direct", ok: true })]);
+    expect(f.phases[0]).toBe("asking");
+    expect(f.phases).toContain("receiving");
+    await pollUntil(() => f.grants.length === 1, "grant done");
+    expect(f.grants[0]).toMatchObject({ served: true });
+  });
+
+  test("the requester refusing the source falls back to the relay from the same machine", async () => {
+    write("family/notes.md", "hello");
+    const f = fleet(path.join(root, "family"), { destStatus: seenBy(DST, SRC, { UserID: 99 }) });
+    const dest = path.join(root, "here", "family");
+    const r = await syncFolderFromPeer(dest, f.deps);
+    expect(r).toMatchObject({ ok: true, mode: "relay", from: "Mac mini" });
+    expect(fs.readFileSync(path.join(dest, "notes.md"), "utf-8")).toBe("hello");
+    expect(f.requests[1]).toEqual({ relay_only: true, only_device_id: "mini" });
+    expect(f.attempts.map((a) => [a.mode, a.ok])).toEqual([["direct", false], ["relay", true]]);
+    expect(f.attempts[0].reason).toStartWith("other_user");
+  });
+
+  test("the source skips the grant when it cannot be trusted or reached, and answers through the relay at once", async () => {
+    write("family/notes.md", "hello");
+    const cases: [Parameters<typeof fleet>[1], string][] = [
+      [{ firewall: true }, "firewall"],
+      [{ sourceStatus: seenBy(SRC, DST, { ShareeNode: true }) }, "shared_node"],
+      [{ sourceStatus: { ...seenBy(SRC, DST), Self: { ...node(SRC), TailscaleIPs: ["100.99.99.99"] } } }, "userspace"],
+    ];
+    for (const [opts, why] of cases) {
+      const f = fleet(path.join(root, "family"), opts);
+      const dest = path.join(root, `here-${why}`, "family");
+      const r = await syncFolderFromPeer(dest, f.deps);
+      expect(r).toMatchObject({ ok: true, mode: "relay" });
+      expect(f.requests).toHaveLength(1);
+      expect((f.results()[0] as { direct_skipped?: string }).direct_skipped).toStartWith(why);
+    }
+  });
+
+  test("relay_only and no offer never open a grant", async () => {
+    write("family/notes.md", "hello");
+    const f = fleet(path.join(root, "family"));
+    const r = await syncFolderFromPeer(path.join(root, "here", "family"), { ...f.deps, direct: async () => null });
+    expect(r).toMatchObject({ ok: true, mode: "relay" });
+    expect(f.requests[0]).toEqual({});
+    const relayOnly = await exportFolder(
+      { path: path.join(root, "family"), relay_only: true, direct: { requester: DST, token_hash: "a".repeat(64) } },
+      { home: root, upload: async () => "s", tailnetStatus: async () => seenBy(SRC, DST), firewallBlocks: async () => false },
+    );
+    expect(relayOnly).toMatchObject({ ok: true, storage_id: "s" });
+    expect(liveGrantCount()).toBe(0);
   });
 });
