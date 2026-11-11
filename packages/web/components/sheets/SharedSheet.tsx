@@ -4,10 +4,11 @@
 // or editing.
 import "./sheet.css";
 import "./sharedSheet.css";
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useMemo, useRef, useState, type CSSProperties } from "react";
 import { cellNum, colLetters, LiveSheet } from "./sheetCore";
 import { paintCell, tint, type PaintContext } from "./cellPaint";
 import type { LiveSharedViewProps } from "../live/registry";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 const DEF_COL_W = 104;
 const DEF_ROW_H = 26;
@@ -145,6 +146,6 @@ function useScrollEdges(dep: unknown) {
     if (el.firstElementChild) ro.current.observe(el.firstElementChild);
     update();
   }, [update]);
-  useEffect(() => update(), [dep, update]);
+  useWatchEffect(() => update(), [dep, update]);
   return { ...edges, ref, update };
 }

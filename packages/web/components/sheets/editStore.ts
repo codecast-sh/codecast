@@ -1,6 +1,7 @@
 // The cell being edited, held outside React state so a keystroke re-renders
 // only the in-cell editor and the formula bar, never the grid.
 import { useSyncExternalStore } from "react";
+import { isFormula, refText, tokenize } from "./sheetCore";
 
 export type EditState = {
   /** The tab the edit belongs to: a commit always writes there, whatever tab is showing by then. */
@@ -84,3 +85,23 @@ export function finishInput(text: string): string {
   return text + (inStr ? '"' : "") + ")".repeat(depth);
 }
 
+/** F4: the reference at the caret, cycled A1 -> $A$1 -> A$1 -> $A1 -> A1. */
+export function cycleAnchors(text: string, caret: number): { text: string; caret: number } | null {
+  if (!isFormula(text)) return null;
+  let toks;
+  try {
+    toks = tokenize(text.slice(1));
+  } catch {
+    return null;
+  }
+  const at = caret - 1;
+  const t = toks.find((x) => x.type === "ref" && at >= x.start && at <= x.end) as Extract<ReturnType<typeof tokenize>[number], { type: "ref" }> | undefined;
+  if (!t || t.shape === "cols" || t.shape === "rows") return null;
+  const next = (p: { absCol: boolean; absRow: boolean }) =>
+    !p.absCol && !p.absRow ? { absCol: true, absRow: true } : p.absCol && p.absRow ? { absCol: false, absRow: true } : !p.absCol && p.absRow ? { absCol: true, absRow: false } : { absCol: false, absRow: false };
+  const a = { ...t.a, ...next(t.a) };
+  const b = t.b ? { ...t.b, ...next(t.a) } : undefined;
+  const body = refText({ ...t, a, b });
+  const out = "=" + text.slice(1, 1 + t.start) + body + text.slice(1 + t.end);
+  return { text: out, caret: 1 + t.start + body.length };
+}

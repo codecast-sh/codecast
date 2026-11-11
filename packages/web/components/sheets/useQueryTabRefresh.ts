@@ -2,10 +2,11 @@
 // to refresh it when it is stale (older than a minute) and every minute after.
 // The server writes the rows as ordinary cell ops, so every viewer, the CLI
 // and dashboards reading the sheet see the same data.
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useMutation } from "convex/react";
 import { makeFunctionReference } from "convex/server";
 import type { TabMeta } from "@codecast/shared/artifacts/sheets";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 const refreshRef = makeFunctionReference<"mutation", { doc_id: string; tab: string }, { rows?: number; changed?: number; skipped?: boolean }>("sheetQueries:refresh");
 const STALE_MS = 60_000;
@@ -31,7 +32,7 @@ export function useQueryTabRefresh(docId: string, meta: TabMeta, readOnly: boole
   }, [run, docId, meta.id, isQuery, readOnly]);
 
   const refreshedAt = meta.refreshedAt;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!isQuery || readOnly) return;
     if (!refreshedAt || Date.now() - refreshedAt > STALE_MS) refresh();
     const t = setInterval(refresh, STALE_MS);
