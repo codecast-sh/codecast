@@ -1,12 +1,12 @@
 // Functions that return a block of values and spill it into the cells below
 // and to the right of the formula: FILTER, UNIQUE, SORT, SORTBY, SEQUENCE,
-// TRANSPOSE. The engine places the block (engine.ts, spill anchors); these
+// TRANSPOSE, the stacking and slicing ones (VSTACK, TAKE, CHOOSECOLS, TOCOL…). The engine places the block (engine.ts, spill anchors); these
 // only compute it. Semantics follow Google Sheets / Excel 365.
 import { compareScalars, err, isError, isGrid, scalarsEqual, toBool, toNumber, type Grid, type Scalar, type Value } from "./values";
 import type { FnDef } from "./functions";
 
 /** The names whose formulas spill. A formula spills only when one of these is its outermost function. */
-export const ARRAY_FUNCTIONS = new Set(["FILTER", "UNIQUE", "SORT", "SORTBY", "SEQUENCE", "TRANSPOSE", "SPLIT"]);
+export const ARRAY_FUNCTIONS = new Set(["FILTER", "UNIQUE", "SORT", "SORTBY", "SEQUENCE", "TRANSPOSE", "SPLIT", "VSTACK", "HSTACK", "TAKE", "DROP", "CHOOSECOLS", "CHOOSEROWS", "TOCOL", "TOROW", "ARRAYFORMULA"]);
 
 const MAX_CELLS = 200_000;
 
@@ -44,7 +44,102 @@ function orderRows(rows: Scalar[][], keys: Array<{ vec: Scalar[]; dir: number }>
   return idx.map((i) => rows[i]);
 }
 
+/** Rows padded to one width with #N/A, as Excel pads a ragged stack. */
+function padded(rows: Scalar[][]): Scalar[][] {
+  const w = Math.max(0, ...rows.map((r) => r.length));
+  return rows.map((r) => (r.length < w ? [...r, ...Array.from({ length: w - r.length }, () => err("#N/A", "this block is narrower"))] : r));
+}
+
+/** Keep the first n (or, negative, the last -n) of a list; undefined n keeps all. */
+function takeOf<T>(list: T[], n: number | undefined): T[] {
+  if (n === undefined) return list;
+  return n >= 0 ? list.slice(0, n) : list.slice(Math.max(0, list.length + n));
+}
+
+function dropOf<T>(list: T[], n: number | undefined): T[] {
+  if (n === undefined) return list;
+  return n >= 0 ? list.slice(n) : list.slice(0, Math.max(0, list.length + n));
+}
+
+/** CHOOSECOLS / CHOOSEROWS: pick lines by 1-based index, negative from the end. */
+function pickLines(rows: Scalar[][], picks: Value[]): Scalar[][] | Scalar {
+  const out: Scalar[][] = [];
+  for (const p of picks) {
+    for (const v of rowsOf(p).flat()) {
+      const n = toNumber(v);
+      if (isError(n)) return n;
+      const i = n > 0 ? Math.trunc(n) - 1 : rows.length + Math.trunc(n);
+      if (!n || i < 0 || i >= rows.length) return err("#VALUE!", `there is no line ${n} in a block of ${rows.length}`);
+      out.push(rows[i]);
+    }
+  }
+  return out;
+}
+
+/** TOCOL / TOROW: every value in one line, optionally skipping blanks (1), errors (2) or both (3), read by row or by column. */
+function lineOf(arr: Value, ignoreArg: Value | undefined, byColArg: Value | undefined): Scalar[] | Scalar {
+  const ignore = intArg(ignoreArg, 0);
+  if (typeof ignore !== "number") return ignore;
+  const byCol = byColArg === undefined ? false : toBool(rowsOf(byColArg)[0][0]);
+  if (isError(byCol)) return byCol;
+  const rows = byCol ? transpose(rowsOf(arr)) : rowsOf(arr);
+  return rows.flat().filter((v) => !((ignore & 1 && (v === null || v === "")) || (ignore & 2 && isError(v))));
+}
+
 export const ARRAY_FUNCTION_DEFS: Record<string, FnDef> = {
+  ARRAYFORMULA: { min: 1, max: 1, eager: ([v]) => v },
+  VSTACK: { min: 1, eager: (args) => block(padded(args.flatMap(rowsOf))) },
+  HSTACK: { min: 1, eager: (args) => block(transpose(padded(args.flatMap((a) => transpose(rowsOf(a)))))) },
+  TAKE: {
+    min: 2,
+    max: 3,
+    eager: ([arr, r, c]) => {
+      const rn = r === undefined || r === null ? undefined : intArg(r, 0), cn = c === undefined || c === null ? undefined : intArg(c, 0);
+      if (rn !== undefined && typeof rn !== "number") return rn;
+      if (cn !== undefined && typeof cn !== "number") return cn;
+      return block(takeOf(rowsOf(arr), rn as number | undefined).map((row) => takeOf(row, cn as number | undefined)), err("#VALUE!", "nothing left to take"));
+    },
+  },
+  DROP: {
+    min: 2,
+    max: 3,
+    eager: ([arr, r, c]) => {
+      const rn = r === undefined || r === null ? undefined : intArg(r, 0), cn = c === undefined || c === null ? undefined : intArg(c, 0);
+      if (rn !== undefined && typeof rn !== "number") return rn;
+      if (cn !== undefined && typeof cn !== "number") return cn;
+      return block(dropOf(rowsOf(arr), rn as number | undefined).map((row) => dropOf(row, cn as number | undefined)), err("#VALUE!", "nothing left after the drop"));
+    },
+  },
+  CHOOSEROWS: {
+    min: 2,
+    eager: ([arr, ...picks]) => {
+      const out = pickLines(rowsOf(arr), picks);
+      return Array.isArray(out) ? block(out) : out;
+    },
+  },
+  CHOOSECOLS: {
+    min: 2,
+    eager: ([arr, ...picks]) => {
+      const out = pickLines(transpose(rowsOf(arr)), picks);
+      return Array.isArray(out) ? block(transpose(out)) : out;
+    },
+  },
+  TOCOL: {
+    min: 1,
+    max: 3,
+    eager: ([arr, ignore, byCol]) => {
+      const line = lineOf(arr, ignore, byCol);
+      return Array.isArray(line) ? block(line.map((v) => [v])) : line;
+    },
+  },
+  TOROW: {
+    min: 1,
+    max: 3,
+    eager: ([arr, ignore, byCol]) => {
+      const line = lineOf(arr, ignore, byCol);
+      return Array.isArray(line) ? block([line]) : line;
+    },
+  },
   FILTER: {
     min: 2,
     eager: ([range, ...rest]) => {

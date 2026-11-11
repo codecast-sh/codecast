@@ -2,7 +2,8 @@
 // editor (which is also the grid's keyboard focus), function autocomplete,
 // the tab strip, and the selection summary.
 import { memo, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
-import { Plus, Radio } from "lucide-react";
+import { List, Plus, Radio } from "lucide-react";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import type { ArtifactPresence } from "@codecast/shared/artifacts";
 import { formatValue, splitError, type CellNumberFormat, type TabMeta } from "@codecast/shared/artifacts/sheets";
 import { useEditState, type EditStore } from "./editStore";
@@ -306,6 +307,11 @@ export function TabStrip({
     onRenameDone?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [renameRequest]);
+  // The open tab stays in view when the strip scrolls (a pick from All tabs, a link to a tab).
+  const listRef = useRef<HTMLDivElement>(null);
+  useWatchEffect(() => {
+    listRef.current?.querySelector<HTMLElement>(".sheet-tab.is-active")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [activeId]);
   return (
     <div className="sheet-tabs" data-sheet-tabs>
       {!readOnly && (
@@ -313,7 +319,7 @@ export function TabStrip({
           <Plus className="w-3.5 h-3.5" />
         </button>
       )}
-      <div className="sheet-tab-list">
+      <div className="sheet-tab-list" ref={listRef}>
         {tabs.map((t) =>
           renaming === t.id ? (
             <input
@@ -355,6 +361,24 @@ export function TabStrip({
           ),
         )}
       </div>
+      {tabs.length > 1 && (
+        // Every tab, by name: a narrow pane hides some of the strip.
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button type="button" className="sheet-tab-add" aria-label="All tabs" title="All tabs" data-sheet-all-tabs>
+              <List className="w-3.5 h-3.5" />
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" side="top" className="min-w-[180px]">
+            {tabs.map((t) => (
+              <DropdownMenuItem key={t.id} onSelect={() => onSelect(t.id)} className={t.id === activeId ? "font-semibold" : undefined}>
+                {t.query && <Radio className="w-3 h-3 text-sol-green" />}
+                {t.name}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      )}
       <span className="flex-1" />
       {summary}
     </div>

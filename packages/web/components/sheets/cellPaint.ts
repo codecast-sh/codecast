@@ -17,6 +17,7 @@ import {
   parseDateText,
   shiftFormula,
   codeColor,
+  betweenOf,
   PALETTE,
 } from "@codecast/shared/artifacts/sheets";
 
@@ -129,12 +130,22 @@ export function paintCell(el: CellEl | undefined, value: Scalar, implied: Implie
       }
       case "gt":
       case "lt":
-      case "eq": {
+      case "between":
+      case "eq":
+      case "ne":
+      case "empty":
+      case "filled": {
         const target = c.value;
+        const same = String(value ?? "").toLowerCase() === String(target ?? "").toLowerCase() || (numeric && value === Number(target));
+        const range = c.rule === "between" ? betweenOf(target) : null;
+        const blank = value === null || value === "";
         const hit =
-          c.rule === "eq"
-            ? String(value ?? "").toLowerCase() === String(target ?? "").toLowerCase() || (numeric && value === Number(target))
-            : numeric && typeof target === "number" && (c.rule === "gt" ? value > target : value < target);
+          c.rule === "eq" ? same
+          : c.rule === "ne" ? !blank && !same
+          : c.rule === "empty" ? blank
+          : c.rule === "filled" ? !blank
+          : c.rule === "between" ? numeric && !!range && value >= range[0] && value <= range[1]
+          : numeric && typeof target === "number" && (c.rule === "gt" ? value > target : value < target);
         if (hit) {
           p.fill = tint(color ?? "yellow", 22);
           p.color = ruleText(color ?? "yellow");

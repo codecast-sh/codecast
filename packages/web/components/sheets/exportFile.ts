@@ -3,7 +3,7 @@
 // bold, and date cells as real dates. Written without a dependency: an .xlsx
 // is a zip of XML parts, stored uncompressed here.
 import type { MutableRefObject } from "react";
-import { a1, cellNum, formatValue, inheritedFormat, isError, rectA1, styleOf, type Rect, type SheetModel, type Workbook } from "./sheetCore";
+import { a1, betweenOf, cellNum, formatValue, inheritedFormat, isError, rectA1, styleOf, type Rect, type SheetModel, type Workbook } from "./sheetCore";
 import type { LiveExport } from "../live/registry";
 import type { SheetState } from "./sheetActions";
 
@@ -65,12 +65,19 @@ const XLWS = ["FILTER", "SORT"];
 export function excelFormula(f: string): string {
   return f
     .split(/("(?:[^"]|"")*")/)
-    .map((part, i) => (i % 2 ? part : part.replace(/\b([A-Z][A-Z0-9.]*)(?=\s*\()/g, (name) => (XLWS.includes(name) ? `_xlfn._xlws.${name}` : XLFN.includes(name) ? `_xlfn.${name}` : name))))
+    .map((part, i) =>
+      i % 2
+        ? part
+        : part
+            .replace(/\b([A-Z][A-Z0-9.]*)(?=\s*\()/g, (name) => (XLWS.includes(name) ? `_xlfn._xlws.${name}` : XLFN.includes(name) ? `_xlfn.${name}` : name))
+            // E1# (a spilled block) is ANCHORARRAY(E1) in the file.
+            .replace(/((?:'[^']*'|[A-Za-z0-9_.]+)!)?(\$?[A-Z]{1,3}\$?\d+)#/g, (_m, tab: string | undefined, cell: string) => `_xlfn.ANCHORARRAY(${tab ?? ""}${cell})`),
+    )
     .join("");
 }
 
 /** The palette as Excel colors (ARGB): fills are a light tint, text the full color. */
-const PALETTE_HEX: Record<string, { fill: string; text: string }> = {
+export const PALETTE_HEX: Record<string, { fill: string; text: string }> = {
   red: { fill: "FFF4CCCC", text: "FFDC322F" },
   orange: { fill: "FFFCE5CD", text: "FFCB4B16" },
   yellow: { fill: "FFFFF2CC", text: "FFB58900" },
@@ -110,6 +117,7 @@ class XlsxStyles {
       : nf === "scientific" ? `0${dec(dp ?? 2)}E+00`
       : nf === "custom" ? (fmt?.code ?? "General")
       : nf === "datetime" ? "yyyy-mm-dd hh:mm"
+      : nf === "time" ? "[h]:mm"
       : "";
     if (!code) return 0;
     let id = this.numFmtIds.get(code);
@@ -121,17 +129,17 @@ class XlsxStyles {
     return id;
   }
 
-  id(o: { bold?: boolean; color?: string; fill?: string; date?: boolean; numFmt?: number }): number {
+  id(o: { bold?: boolean; italic?: boolean; underline?: boolean; color?: string; fill?: string; date?: boolean; numFmt?: number; align?: string; wrap?: boolean }): number {
     const numFmt = o.numFmt ?? (o.date ? 14 : 0);
-    if (!o.bold && !o.color && !o.fill && !numFmt) return 0;
-    const key = `${o.bold ? "b" : ""}|${o.color ?? ""}|${o.fill ?? ""}|${numFmt}`;
+    if (!o.bold && !o.italic && !o.underline && !o.color && !o.fill && !numFmt && !o.align && !o.wrap) return 0;
+    const key = `${o.bold ? "b" : ""}${o.italic ? "i" : ""}${o.underline ? "u" : ""}|${o.color ?? ""}|${o.fill ?? ""}|${numFmt}|${o.align ?? ""}|${o.wrap ? "w" : ""}`;
     const known = this.ids.get(key);
     if (known !== undefined) return known;
-    const fontKey = `${o.bold ? "b" : ""}|${o.color ?? ""}`;
+    const fontKey = `${o.bold ? "b" : ""}${o.italic ? "i" : ""}${o.underline ? "u" : ""}|${o.color ?? ""}`;
     let fontId = this.fontIds.get(fontKey);
     if (fontId === undefined) {
       fontId = this.fonts.length;
-      this.fonts.push(`<font>${o.bold ? "<b/>" : ""}<sz val="11"/>${o.color && PALETTE_HEX[o.color] ? `<color rgb="${PALETTE_HEX[o.color].text}"/>` : ""}<name val="Calibri"/></font>`);
+      this.fonts.push(`<font>${o.bold ? "<b/>" : ""}${o.italic ? "<i/>" : ""}${o.underline ? "<u/>" : ""}<sz val="11"/>${o.color && PALETTE_HEX[o.color] ? `<color rgb="${PALETTE_HEX[o.color].text}"/>` : ""}<name val="Calibri"/></font>`);
       this.fontIds.set(fontKey, fontId);
     }
     let fillId = this.fillIds.get(o.fill ?? "");
@@ -141,7 +149,8 @@ class XlsxStyles {
       this.fillIds.set(o.fill!, fillId);
     }
     const id = this.xfs.length;
-    this.xfs.push(`<xf numFmtId="${numFmt}" fontId="${fontId}" fillId="${fillId}"${fontId ? ' applyFont="1"' : ""}${fillId ? ' applyFill="1"' : ""}${numFmt ? ' applyNumberFormat="1"' : ""}/>`);
+    const alignment = o.align || o.wrap ? `<alignment${o.align ? ` horizontal="${o.align}"` : ""}${o.wrap ? ' wrapText="1"' : ""}/>` : "";
+    this.xfs.push(`<xf numFmtId="${numFmt}" fontId="${fontId}" fillId="${fillId}"${fontId ? ' applyFont="1"' : ""}${fillId ? ' applyFill="1"' : ""}${numFmt ? ' applyNumberFormat="1"' : ""}${alignment ? ' applyAlignment="1">' + alignment + "</xf>" : "/>"}`);
     this.ids.set(key, id);
     return id;
   }
@@ -185,6 +194,18 @@ function conditionalXml(model: SheetModel, tabId: string, styles: XlsxStyles): s
       case "eq":
         body = rule(`type="cellIs" operator="${c.rule === "gt" ? "greaterThan" : c.rule === "lt" ? "lessThan" : "equal"}"`, lit(v));
         break;
+      case "ne":
+        body = rule(`type="cellIs" operator="notEqual"`, lit(v));
+        break;
+      case "between": {
+        const b = betweenOf(v);
+        if (b) body = `<cfRule type="cellIs" operator="between" dxfId="${styles.dxf(c.color ?? "yellow")}" priority="${priority++}"><formula>${b[0]}</formula><formula>${b[1]}</formula></cfRule>`;
+        break;
+      }
+      case "empty":
+      case "filled":
+        body = rule(`type="${c.rule === "empty" ? "containsBlanks" : "notContainsBlanks"}"`, `${c.rule === "empty" ? "" : "NOT("}LEN(TRIM(${first}))=0${c.rule === "empty" ? "" : ")"}`);
+        break;
       case "contains":
         body = `<cfRule type="containsText" operator="containsText" text="${xml(String(v))}" dxfId="${styles.dxf(c.color ?? "yellow")}" priority="${priority++}"><formula>${xml(`NOT(ISERROR(SEARCH(${lit(String(v))},${first})))`)}</formula></cfRule>`;
         break;
@@ -219,26 +240,31 @@ export function sheetXlsx(model: SheetModel, wb: Workbook): Uint8Array {
   const sheets = model.tabs.map((meta, i) => {
     const t = model.byId.get(meta.id)!;
     const byRow = new Map<number, number[]>();
-    for (const n of t.cells.keys()) {
-      const row = Math.floor(n / 32768);
+    const add = (col: number, row: number) => {
       const list = byRow.get(row) ?? [];
-      list.push(n % 32768);
+      list.push(col);
       byRow.set(row, list);
-    }
+    };
+    for (const n of t.cells.keys()) add(n % 32768, Math.floor(n / 32768));
+    // A spilled block's values go in too, so Excel shows the array before it recalculates.
+    for (const sp of wb.spillRects(meta.id))
+      for (let row = sp.r0; row <= sp.r1; row++) for (let col = sp.c0; col <= sp.c1; col++) if (!t.cells.has(cellNum(col, row))) add(col, row);
     const rows = [...byRow.keys()].sort((a, b) => a - b).map((row) => {
       const cells = byRow.get(row)!.sort((a, b) => a - b).map((col) => {
-        const el = t.cells.get(cellNum(col, row))!;
+        const el = t.cells.get(cellNum(col, row));
         const info = wb.cell(meta.id, col, row);
-        const input = typeof el.input === "string" ? el.input : "";
+        const input = typeof el?.input === "string" ? el.input : "";
         const style = styleOf(el);
         const date = style.nf === "date" || style.nf === "datetime" || info?.implied?.nf === "date" || info?.implied?.nf === "datetime";
         const isDate = date && typeof info?.value === "number";
         // A formula's number takes the format it shows in the grid (its own, else the one it inherits from what it reads).
         const fmt = style.nf ? style : info?.formula ? inheritedFormat(model, meta.id, input) ?? info.implied : info?.implied;
-        const s = styles.id({ bold: style.b, color: style.color, fill: style.fill, date: isDate, numFmt: typeof info?.value === "number" ? styles.fmtId(fmt, isDate) : 0 });
+        const s = styles.id({ bold: style.b, italic: style.i, underline: style.u, color: style.color, fill: style.fill, date: isDate, numFmt: typeof info?.value === "number" ? styles.fmtId(fmt, isDate) : 0, align: style.al, wrap: style.wrap });
         const ref = a1(col, row);
         const sAttr = s ? ` s="${s}"` : "";
-        const f = input.startsWith("=") && input.length > 1 ? `<f>${xml(excelFormula(input.slice(1)))}</f>` : "";
+        // An array formula carries the block it fills, as Excel stores one.
+        const spill = input.startsWith("=") ? wb.spillRange(meta.id, col, row) : null;
+        const f = input.startsWith("=") && input.length > 1 ? `<f${spill ? ` t="array" ref="${rectA1(spill)}"` : ""}>${xml(excelFormula(input.slice(1)))}</f>` : "";
         const v = info?.value ?? null;
         if (v === null || v === "") return f ? `<c r="${ref}"${sAttr}>${f}</c>` : s ? `<c r="${ref}"${sAttr}/>` : "";
         if (typeof v === "number") return `<c r="${ref}"${sAttr}>${f}<v>${v}</v></c>`;

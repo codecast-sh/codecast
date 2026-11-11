@@ -171,6 +171,7 @@ const NUMBER_FORMATS: Array<{ nf: CellStyle["nf"] | null; label: string; sample:
   { nf: "scientific", label: "Scientific", sample: "1.23E+03" },
   { nf: "date", label: "Date", sample: "2026-11-10" },
   { nf: "datetime", label: "Date time", sample: "2026-11-10 09:30" },
+  { nf: "time", label: "Time or duration", sample: "9:30" },
   { nf: "text", label: "Plain text", sample: "1234.5" },
   { nf: "check", label: "Checkbox", sample: "☑" },
 ];
@@ -184,6 +185,7 @@ export function FormatBar({
   tabName,
   autoAsk,
   merged,
+  filtered,
   sample,
   onAsk,
 }: {
@@ -198,6 +200,8 @@ export function FormatBar({
   autoAsk?: boolean;
   /** The selection touches merged cells (Unmerge is offered only then). */
   merged?: boolean;
+  /** The tab has a filter on, so the item turns it off. */
+  filtered?: boolean;
   /** The active cell's number, to preview a custom format on. */
   sample?: number;
   onAsk: (prompt: string, target: "new" | "pick") => void;
@@ -370,7 +374,7 @@ export function FormatBar({
             )}
             <DropdownMenuItem className={ITEM} onSelect={() => onAction({ type: "sort", desc: false })}><ArrowDownAZ className="w-4 h-4" /> Sort A to Z</DropdownMenuItem>
             <DropdownMenuItem className={ITEM} onSelect={() => onAction({ type: "sort", desc: true })}><ArrowUpAZ className="w-4 h-4" /> Sort Z to A</DropdownMenuItem>
-            <DropdownMenuItem className={ITEM} onSelect={() => onAction({ type: "filter" })}><Filter className="w-4 h-4" /> Filter</DropdownMenuItem>
+            <DropdownMenuItem className={ITEM} onSelect={() => onAction({ type: "filter" })}><Filter className="w-4 h-4" /> {filtered ? "Remove filter" : "Filter"}</DropdownMenuItem>
             <DropdownMenuItem className={ITEM} onSelect={() => onAction({ type: "freeze", axis: "row" })}><Pin className="w-4 h-4" /> Freeze rows to here</DropdownMenuItem>
             <DropdownMenuItem className={ITEM} onSelect={() => onAction({ type: "freeze", axis: "col" })}><Pin className="w-4 h-4" /> Freeze columns to here</DropdownMenuItem>
             <DropdownMenuItem className={ITEM} onSelect={() => onAction({ type: "freeze", axis: "none" })}>Unfreeze</DropdownMenuItem>

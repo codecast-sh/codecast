@@ -9,6 +9,8 @@ import { adjustFormula, adjustRangeText, mapFormulaRefs, refText, renameTabInFor
 import { cellKey, colKey, colLetters, newTabId, normRect, parseKey, rectA1, rowKey, tabKey, type Rect } from "./refs";
 import { buildModel, cellNum, inheritedFormat, STYLE_FIELDS, styleOf, workbookFor, type CellEl, type CellStyle, type SheetModel, type TabData, type TabMeta } from "./model";
 import { formatValue } from "./format";
+import { validationOps } from "./ruleOps";
+import { newElementKey } from "../spec";
 import { compareScalars, parseLiteral, type Scalar } from "./values";
 
 type CellFields = Record<string, Json>;
@@ -249,9 +251,13 @@ export function fillOps(model: SheetModel, tabId: string, src: Rect, dest: Rect)
     const seq = Array.from({ length: len }, (_, j) => at(lane, along[0] + j));
     const inputs = seq.map((el) => (typeof el?.input === "string" ? el.input : ""));
     const nums = inputs.map((s) => (s && !isFormula(s) ? parseLiteral(s).value : null));
-    const allNum = len >= 2 && nums.every((v) => typeof v === "number");
-    let step = 0;
-    if (allNum) {
+    // One date steps by a day, as in Google and Excel; one plain number copies.
+    const oneDate = len === 1 && typeof nums[0] === "number" && /^date/.test(parseLiteral(inputs[0]).implied?.nf ?? "");
+    const allNum = (len >= 2 || oneDate) && nums.every((v) => typeof v === "number");
+    const names = inputs.map(nameInSeries);
+    const named = names.every((n) => n && n.list === names[0]!.list) ? (names as NonNullable<ReturnType<typeof nameInSeries>>[]) : null;
+    let step = oneDate ? 1 : 0;
+    if (allNum && !oneDate) {
       const ns = nums as number[];
       // Least-squares step, like Sheets' linear trend.
       const n = ns.length;
@@ -274,7 +280,12 @@ export function fillOps(model: SheetModel, tabId: string, src: Rect, dest: Rect)
       const col = vertical ? lane : i, row = vertical ? i : lane;
       const k = cellKey(tabId, col, row);
       const fields: Record<string, Json> = source ? fieldsOf(source) : {};
-      if (allNum) {
+      if (named) {
+        const list = SERIES[named[0].list];
+        const by = len >= 2 ? named[1].at - named[0].at : 1;
+        const at = (((named[0].at + by * offset) % list.length) + list.length) % list.length;
+        fields.input = named[0].cased(list[at]);
+      } else if (allNum) {
         const ns = nums as number[];
         const mean = ns.reduce((a, b) => a + b, 0) / ns.length;
         const v = mean + step * (offset - (ns.length - 1) / 2);
@@ -301,6 +312,25 @@ export function fillOps(model: SheetModel, tabId: string, src: Rect, dest: Rect)
     }
   }
   return ops;
+}
+
+/** Month and weekday names that fill as a series (Jan, Feb… / Monday, Tuesday…). */
+const SERIES = {
+  mon: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+  month: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"],
+  day: ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+  weekday: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+};
+
+function nameInSeries(text: string): { list: keyof typeof SERIES; at: number; cased: (s: string) => string } | null {
+  const t = text.trim();
+  for (const list of Object.keys(SERIES) as Array<keyof typeof SERIES>) {
+    const at = SERIES[list].findIndex((n) => n.toLowerCase() === t.toLowerCase());
+    if (at < 0) continue;
+    const cased = t === t.toUpperCase() ? (s: string) => s.toUpperCase() : t === t.toLowerCase() ? (s: string) => s.toLowerCase() : (s: string) => s;
+    return { list, at, cased };
+  }
+  return null;
 }
 
 // ── Insert / delete rows and columns ────────────────────────────────────────
@@ -678,7 +708,16 @@ export function fitWidthOps(model: SheetModel, wb: Workbook, tabId: string, cols
  * Imported tables (a CSV, or each sheet of a workbook) as new tabs after the
  * existing ones, names kept unique, columns fitted to what they hold.
  */
-export function importTablesOps(model: SheetModel, tables: Array<{ name: string; grid: string[][] }>): { ops: ArtifactOp[]; tabIds: string[] } {
+/** A table read from a file: its typed cells, and what an .xlsx also carries (cell styles, merges, dropdown lists). */
+export type ImportTable = {
+  name: string;
+  grid: string[][];
+  styles?: Array<{ col: number; row: number; style: CellStyle }>;
+  merges?: Rect[];
+  lists?: Array<{ rect: Rect; values: string[]; strict?: boolean }>;
+};
+
+export function importTablesOps(model: SheetModel, tables: ImportTable[]): { ops: ArtifactOp[]; tabIds: string[] } {
   const ops: ArtifactOp[] = [];
   const tabIds: string[] = [];
   let m = model;
@@ -693,8 +732,36 @@ export function importTablesOps(model: SheetModel, tables: Array<{ name: string;
     const alone = buildModel([...foldOps(new Map(), [...add.ops, ...cells])].map(([k, st]) => toElement(k, st)));
     const width = Math.max(0, ...table.grid.map((r) => r.length));
     const fit = fitWidthOps(alone, workbookFor(alone), add.id, Array.from({ length: Math.min(width, 200) }, (_, i) => i + 1));
-    ops.push(...add.ops, ...cells, ...fit);
+    // Styles ride on the cells just written; a styled blank cell (a fill alone) is a new one.
+    const written = new Set(cells.map((o) => o.k));
+    const styled = (table.styles ?? []).map(({ col, row, style }) => {
+      const k = cellKey(add.id, col, row);
+      return written.has(k) ? { k, set: style as CellFields } : { k, put: { kind: "cell", ...(style as CellFields) } };
+    });
+    const merges = (table.merges ?? []).map((rect) => ({ k: newElementKey("mg"), put: { kind: "merge", tab: add.id, range: rectA1(rect) } }));
+    const lists = (table.lists ?? []).flatMap((l) => validationOps(m, add.id, l.rect, "list", l.values.map((v) => ({ v })), l.strict));
+    ops.push(...add.ops, ...cells, ...styled, ...merges, ...lists, ...fit);
     tabIds.push(add.id);
   }
   return { ops, tabIds };
+}
+
+/**
+ * Find and replace: every occurrence of `find` (any case) in the typed text of
+ * a tab's cells, or of one cell. Formulas are left alone, so a replace never
+ * rewrites references. Returns the ops and how many cells changed.
+ */
+export function replaceOps(model: SheetModel, tabId: string, find: string, replacement: string, only?: { col: number; row: number }): { ops: ArtifactOp[]; count: number } {
+  const t = tabData(model, tabId);
+  if (!t || !find) return { ops: [], count: 0 };
+  const re = new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  const cells: Array<{ col: number; row: number; input: string }> = [];
+  for (const [n, el] of t.cells) {
+    const col = n % 32768, row = Math.floor(n / 32768);
+    if (only && (only.col !== col || only.row !== row)) continue;
+    if (typeof el.input !== "string" || el.input.startsWith("=") || !re.test(el.input)) continue;
+    re.lastIndex = 0;
+    cells.push({ col, row, input: el.input.replace(re, () => replacement) });
+  }
+  return { ops: inputOps(model, tabId, cells), count: cells.length };
 }

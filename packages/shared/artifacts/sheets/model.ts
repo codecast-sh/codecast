@@ -61,7 +61,7 @@ export type TabMeta = {
   queryError?: string;
 };
 
-export type CondRule = "sign" | "scale" | "gt" | "lt" | "eq" | "contains" | "before" | "after" | "formula";
+export type CondRule = "sign" | "scale" | "gt" | "lt" | "eq" | "ne" | "between" | "empty" | "filled" | "contains" | "before" | "after" | "formula";
 export type CondFormat = { key: string; tab: string; rect: Rect; rule: CondRule; value?: string | number; color?: PaletteColor };
 export type TableStyle = { key: string; tab: string; rect: Rect; color: PaletteColor; banded: boolean };
 
@@ -474,6 +474,7 @@ const FORMAT_KEEPING = new Set(["SUM", "AVERAGE", "MIN", "MAX", "MEDIAN", "ROUND
 const FN_FORMATS: Record<string, ImpliedFormat> = {
   TODAY: { nf: "date" }, DATE: { nf: "date" }, EDATE: { nf: "date" }, EOMONTH: { nf: "date" }, WORKDAY: { nf: "date" }, DATEVALUE: { nf: "date" },
   NOW: { nf: "datetime" },
+  TIME: { nf: "time" }, TIMEVALUE: { nf: "time" },
   PMT: { nf: "currency", dp: 2 },
 };
 

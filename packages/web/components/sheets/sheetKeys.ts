@@ -158,6 +158,12 @@ export function handleSheetKey(e: ReactKeyboardEvent<HTMLTextAreaElement | HTMLI
         setFindOpen(true);
         return;
       }
+      // ⌘⇧H: find and replace, as in Google Sheets.
+      if (k === "h" && e.shiftKey) {
+        e.preventDefault();
+        setFindOpen("replace");
+        return;
+      }
       if (k === "z") {
         e.preventDefault();
         if (e.shiftKey) live.redo();

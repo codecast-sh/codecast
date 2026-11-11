@@ -109,3 +109,34 @@ describe("keepAsText", () => {
     expect(keepAsText("Pecan")).toBe("Pecan");
   });
 });
+
+describe("Excel round trip", () => {
+  test("styles, merges, dropdowns and array formulas come back", async () => {
+    const { LiveSheet, importTablesOps, buildModel } = await import("@codecast/shared/artifacts/sheets");
+    const { foldOps, toElement } = await import("@codecast/shared/artifacts");
+    const { sheetXlsx } = await import("./exportFile");
+    const ops = [
+      { k: "tab:S", put: { kind: "tab", name: "Plan", order: 0 } },
+      { k: "c:S!A1", put: { kind: "cell", input: "Status", b: true, i: true, u: true, fill: "blue", color: "red", al: "center" } },
+      { k: "c:S!B1", put: { kind: "cell", input: "b" } },
+      { k: "c:S!B2", put: { kind: "cell", input: "a" } },
+      { k: "c:S!C1", put: { kind: "cell", input: "=SORT(B1:B2)" } },
+      { k: "c:S!D1", put: { kind: "cell", input: "=ROWS(C1#)" } },
+      { k: "c:S!E5", put: { kind: "cell", fill: "yellow" } },
+      { k: "mg1", put: { kind: "merge", tab: "S", range: "A3:B4" } },
+      { k: "dv1", put: { kind: "dv", tab: "S", range: "A2:A9", rule: "list", options: [{ v: "Open" }, { v: "Done" }], strict: true } },
+    ];
+    const live = new LiveSheet();
+    live.update([...foldOps(new Map(), ops as never)].map(([k, st]) => toElement(k, st)) as never);
+    const [table] = await readXlsx(sheetXlsx(live.model, live.wb));
+    expect(table.grid[0]).toEqual(["Status", "b", "=SORT(B1:B2)", "=ROWS(C1#)"]);
+    expect(table.grid[1]).toEqual(["", "a"]);
+    const back = importTablesOps(buildModel([]), [table]);
+    const model = buildModel([...foldOps(new Map(), back.ops)].map(([k, st]) => toElement(k, st)));
+    const tab = model.byId.get(back.tabIds[0])!;
+    expect(tab.cells.get(1 * 32768 + 1)).toMatchObject({ input: "Status", b: true, i: true, u: true, fill: "blue", color: "red", al: "center" });
+    expect(tab.cells.get(5 * 32768 + 5)).toMatchObject({ fill: "yellow" });
+    expect(model.merges.map((m) => m.rect)).toEqual([{ c0: 1, r0: 3, c1: 2, r1: 4 }]);
+    expect(model.validations[0]).toMatchObject({ rule: "list", strict: true, options: [{ v: "Open" }, { v: "Done" }] });
+  });
+});

@@ -489,7 +489,7 @@ export type SheetCtx = {
   setSel: Dispatch<SetStateAction<Sel>>;
   setCopyRect: (v: { tab: string; rect: Rect } | null) => void;
   setFillPreview: (v: Rect | null) => void;
-  setFindOpen: (v: boolean) => void;
+  setFindOpen: (v: boolean | "replace") => void;
   /** Open the dropdown or date picker of a validated cell (the active one by default); false when it has none. */
   openPicker: (col?: number, row?: number, query?: string) => boolean;
   /** Where a run of Tab entries started, so Enter goes back to that column on the next row (null outside a run). */

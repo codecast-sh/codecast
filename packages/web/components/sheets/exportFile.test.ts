@@ -74,3 +74,21 @@ describe("conditional colors in Excel", () => {
     expect(text).toContain('<dxfs count="3">');
   });
 });
+
+describe("arrays in Excel", () => {
+  test("a spill is an array formula with its block's values; E1# is ANCHORARRAY", () => {
+    expect(excelFormula("ROWS(E1#)+SUM(Data!B2#)")).toBe("ROWS(_xlfn.ANCHORARRAY(E1))+SUM(_xlfn.ANCHORARRAY(Data!B2))");
+    const ops: ArtifactOp[] = [
+      { k: "tab:S", put: { kind: "tab", name: "S", order: 0 } },
+      { k: "c:S!A1", put: { kind: "cell", input: "b" } },
+      { k: "c:S!A2", put: { kind: "cell", input: "a" } },
+      { k: "c:S!C1", put: { kind: "cell", input: "=SORT(A1:A2)", i: true } },
+    ];
+    const live = new LiveSheet();
+    live.update([...foldOps(new Map(), ops)].map(([k, st]) => toElement(k, st)) as ArtifactElement[]);
+    const text = new TextDecoder().decode(sheetXlsx(live.model, live.wb));
+    expect(text).toContain('<f t="array" ref="C1:C2">_xlfn._xlws.SORT(A1:A2)</f><v>a</v>');
+    expect(text).toContain('<c r="C2" t="inlineStr"><is><t xml:space="preserve">b</t></is></c>');
+    expect(text).toContain("<i/>");
+  });
+});

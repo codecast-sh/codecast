@@ -9,7 +9,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { RefreshCw, Radio } from "lucide-react";
 import type { ArtifactPresence } from "@codecast/shared/artifacts";
-import { a1, addTabOps, LiveSheet, enforceValidation, expandToMerges, mergeAt, cellNum, deleteTabOps, formatValue, inputOps, isFormula, parseQualifiedRange, quoteTabName, rectA1, renameTabOps, styleOf, tabPatchOps, toTsv, fitWidthOps, inheritedFormat, uniqueTabName, type CellStyle, type Rect, type TabData, type QuerySource } from "./sheetCore";
+import { a1, addTabOps, LiveSheet, enforceValidation, replaceOps, expandToMerges, mergeAt, cellNum, deleteTabOps, formatValue, inputOps, isFormula, parseQualifiedRange, quoteTabName, rectA1, renameTabOps, styleOf, tabPatchOps, toTsv, fitWidthOps, inheritedFormat, uniqueTabName, type CellStyle, type Rect, type TabData, type QuerySource } from "./sheetCore";
 import type { LiveViewProps } from "../live/registry";
 import { useLiveElements, useLivePresence } from "../live/useLiveArtifact";
 import { sendAsk, pickAskTarget, reopenAsk } from "../live/askAgent";
@@ -512,7 +512,7 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
     select({ anchor: { col: 1, row: 1 }, focus: { col: 1, row: 1 } });
   }, [apply, select, elements, showTab]);
   const addMenu = useContextMenu<null>();
-  const [findOpen, setFindOpen] = useState(false);
+  const [findOpen, setFindOpen] = useState<boolean | "replace">(false);
   /** Every cell of the tab whose shown text or formula holds the query, in reading order. */
   const findMatches = useCallback((q: string) => {
     const { tab: t, wb: w, activeTabId: id, hiddenRows: hid } = S.current;
@@ -633,6 +633,12 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
             find={findMatches}
             onGo={(c) => select({ anchor: c, focus: c })}
             from={() => S.current.sel.anchor}
+            replace={findOpen === "replace"}
+            onReplace={readOnly ? undefined : (q, r, at) => {
+              const res = replaceOps(S.current.model, activeTabId, q, r, at);
+              apply(res.ops);
+              return res.count;
+            }}
             onClose={() => {
               setFindOpen(false);
               sinkRef.current?.focus({ preventScroll: true });
@@ -653,7 +659,7 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
           onCaret={(c) => { caretRef.current = c; }}
         />
         <SheetExtrasView x={x} placement={placement} editing={!!editState} readOnly={readOnly} edit={edit} select={select} apply={apply} sinkRef={sinkRef} live={live} />
-        <FormatBar sample={typeof activeInfo?.value === "number" ? activeInfo.value : undefined} merged={model.merges.some((m) => m.tab === activeTabId && m.rect.c0 <= rect.c1 && m.rect.c1 >= rect.c0 && m.rect.r0 <= rect.r1 && m.rect.r1 >= rect.r0)} docId={doc._id} style={activeStyle} onAction={onFormat} readOnly={readOnlyDoc || loading} selectionLabel={refLabel} tabName={tab.meta.name} autoAsk={tab.rows === 0 && !queryTab} onAsk={onAsk} />
+        <FormatBar filtered={!!tab.meta.filter} sample={typeof activeInfo?.value === "number" ? activeInfo.value : undefined} merged={model.merges.some((m) => m.tab === activeTabId && m.rect.c0 <= rect.c1 && m.rect.c1 >= rect.c0 && m.rect.r0 <= rect.r1 && m.rect.r1 >= rect.r0)} docId={doc._id} style={activeStyle} onAction={onFormat} readOnly={readOnlyDoc || loading} selectionLabel={refLabel} tabName={tab.meta.name} autoAsk={tab.rows === 0 && !queryTab} onAsk={onAsk} />
       </div>
       <TabStrip
         tabs={model.tabs}
@@ -713,7 +719,7 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
               }}
             />
           ) : (
-            <CellMenu kind={m.kind} readOnly={readOnly} onFormat={onFormat} validation={activeValidation?.rule} onValidate={onValidate} onClipboard={onClipboard} onComment={() => openCellComment()} onHide={(axis, hide) => hideSelection(axis, hide, ctx.current)} onClear={() => apply(clearVisible(model, activeTabId, rect, hiddenRows))} onCopyHint={() => {
+            <CellMenu filtered={!!tab.meta.filter} kind={m.kind} readOnly={readOnly} onFormat={onFormat} validation={activeValidation?.rule} onValidate={onValidate} onClipboard={onClipboard} onComment={() => openCellComment()} onHide={(axis, hide) => hideSelection(axis, hide, ctx.current)} onClear={() => apply(clearVisible(model, activeTabId, rect, hiddenRows))} onCopyHint={() => {
               const { rect: r, tab: t } = S.current;
               const lines = visibleRowsOf(r, hiddenRows, t.rows).map((row) => {
                 const out: string[] = [];

@@ -854,8 +854,11 @@ export function GenericListView<T>({
       // shortcut dispatcher follows: its Enter, Space, Home, End and Esc are
       // not the list's.
       if (keyBelongsElsewhere(target)) return;
-      // Arrows belong to an open menu or listbox (filter dropdowns, pickers).
-      if (e.key.startsWith("Arrow") && target.closest?.('[role="menu"],[role="listbox"],[role="dialog"]')) return;
+      // A key something already handled (a menu item's Enter, a picker's Escape) is not the list's.
+      if (e.defaultPrevented) return;
+      // Every key inside an open menu, listbox or dialog belongs to it (filter dropdowns, pickers, a
+      // sheet's format menu): Enter there picks the item, never the list's focused row.
+      if (target.closest?.('[role="menu"],[role="listbox"],[role="dialog"]')) return;
 
       const stop = () => { e.preventDefault(); };
 

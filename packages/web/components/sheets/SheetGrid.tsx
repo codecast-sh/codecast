@@ -6,7 +6,7 @@
 // the fill handle are overlays drawn per pane and clipped to it.
 import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { ArtifactPresence } from "@codecast/shared/artifacts";
-import { cellNum, colLetters, type Rect, type TabData, type Workbook } from "@codecast/shared/artifacts/sheets";
+import { cellNum, colLetters, rectContains, type Rect, type TabData, type Workbook } from "@codecast/shared/artifacts/sheets";
 import { CursorTag } from "../live/LiveCursors";
 import { CursorArrow } from "../presence/CursorArrow";
 import { fitNumber, paintCell, tint, type Paint, type PaintContext } from "./cellPaint";
@@ -328,15 +328,19 @@ const PaneCells = memo(function PaneCells({
   const tabId = tab.meta.id;
   // Sparse tabs: walk the stored cells when there are fewer of them than visible slots.
   const slots = (c1 - c0 + 1) * (r1 - r0 + 1);
+  /** "Is empty" rules color blank cells, so those cells draw too. */
+  const blankRules = paintCtx.conds.filter((c) => c.rule === "empty" && c.tab === tabId);
+  const seen = new Set<number>();
   const visit = (col: number, row: number) => {
-    if (rows.sizeOf(row) === 0 || cols.sizeOf(col) === 0) return;
+    if (rows.sizeOf(row) === 0 || cols.sizeOf(col) === 0 || seen.has(cellNum(col, row))) return;
+    seen.add(cellNum(col, row));
     // A merged range draws once, from its top-left, across the whole range; the cells under it stay hidden.
     const merge = paintCtx.merges?.find((m) => col >= m.rect.c0 && col <= m.rect.c1 && row >= m.rect.r0 && row <= m.rect.r1);
     if (merge && (col !== merge.rect.c0 || row !== merge.rect.r0)) return;
     const el = tab.cells.get(cellNum(col, row));
     // A cell without input still draws when a comment is anchored to it, an array formula spills into it, or it heads a merge.
     const info = wb.cell(tabId, col, row);
-    if (!el && !info?.spilled && !merge && !paintCtx.comments?.has(cellNum(col, row))) return;
+    if (!el && !info?.spilled && !merge && !paintCtx.comments?.has(cellNum(col, row)) && !blankRules.some((c) => rectContains(c.rect, col, row))) return;
     let paint = paintCell(el, info?.value ?? null, info?.implied, col, row, paintCtx);
     if (!paint.text && !paint.fill && !paint.bd && !paint.comment && !merge) return;
     // An automatic-format number rounds to its column rather than being cut off.
@@ -380,6 +384,9 @@ const PaneCells = memo(function PaneCells({
     for (const sp of wb.spillRects(tabId))
       for (let row = Math.max(sp.r0, r0); row <= Math.min(sp.r1, r1); row++)
         for (let col = Math.max(sp.c0, c0); col <= Math.min(sp.c1, c1); col++) if (!tab.cells.has(cellNum(col, row)) && !paintCtx.comments?.has(cellNum(col, row))) visit(col, row);
+    for (const c of blankRules)
+      for (let row = Math.max(c.rect.r0, r0); row <= Math.min(c.rect.r1, r1); row++)
+        for (let col = Math.max(c.rect.c0, c0); col <= Math.min(c.rect.c1, c1); col++) visit(col, row);
   } else {
     for (let row = r0; row <= r1; row++) for (let col = c0; col <= c1; col++) visit(col, row);
   }

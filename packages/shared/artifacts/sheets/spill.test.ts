@@ -133,3 +133,55 @@ describe("round 2 critic: spills and arrays", () => {
     expect(inheritedFormat(m, m.tabs[0].id, "=PMT(0.05/12,36,10000)")).toEqual({ nf: "currency", dp: 2 });
   });
 });
+
+import { formatValue } from "./format";
+import { parseLiteral } from "./values";
+describe("times of day", () => {
+  test("typed times are values; sums run past a day; TIME and TIMEVALUE", () => {
+    expect(parseLiteral("9:15 PM")).toEqual({ value: 21.25 / 24, implied: { nf: "time" } });
+    const w = wb({ A1: "8:30", A2: "17:45", B1: "=A2-A1", B2: "=TIME(1,30,0)", B3: "=TIMEVALUE(\"10:30\")*24", B4: "=B1*24" });
+    expect(formatValue(v(w, "B1"), { nf: "time" })).toBe("9:15");
+    expect(v(w, "B3")).toBe(10.5);
+    expect(v(w, "B4")).toBeCloseTo(9.25);
+    expect(formatValue(1.25, { nf: "time" })).toBe("30:00");
+    expect(parseLiteral("€1,234")).toEqual({ value: 1234, implied: { nf: "currency", dp: 0, cur: "€" } });
+  });
+});
+
+describe("more everyday functions", () => {
+  test("LARGE, SMALL, PERCENTILE, MROUND, WEEKNUM, ISOWEEKNUM, FV, NPV, CORREL, SUBTOTAL", () => {
+    const w = wb({ A1: "4", A2: "9", A3: "1", A4: "7", B1: "2", B2: "4", B3: "6", B4: "8",
+      C1: "=LARGE(A1:A4,2)", C2: "=SMALL(A1:A4,1)", C3: "=PERCENTILE(A1:A4,0.5)", C4: "=MROUND(17,5)",
+      D1: "=WEEKNUM(DATE(2026,1,1))", D2: "=ISOWEEKNUM(DATE(2026,1,1))", D3: "=ISOWEEKNUM(DATE(2026,12,31))", D4: "=WEEKNUM(DATE(2026,3,15))",
+      E1: "=ROUND(FV(0.05,10,-100),2)", E2: "=ROUND(NPV(0.1,100,100),2)", E3: "=CORREL(B1:B4,B1:B4)", E4: "=SUBTOTAL(9,A1:A4)" });
+    expect([v(w, "C1"), v(w, "C2"), v(w, "C3"), v(w, "C4")]).toEqual([7, 1, 5.5, 15]);
+    expect([v(w, "D1"), v(w, "D2"), v(w, "D3"), v(w, "D4")]).toEqual([1, 1, 53, 12]);
+    expect([v(w, "E1"), v(w, "E2"), v(w, "E3"), v(w, "E4")]).toEqual([1257.79, 173.55, 1, 21]);
+  });
+});
+
+describe("stacking and slicing", () => {
+  test("VSTACK, HSTACK, TAKE, DROP, CHOOSECOLS, TOCOL spill; IRR, ADDRESS, FORECAST compute", () => {
+    const w = wb({
+      A1: "1", B1: "2", A2: "3", B2: "4",
+      D1: "=VSTACK(A1:B2,A1:A1)",
+      G1: "=TAKE(A1:B2,-1)",
+      G3: "=CHOOSECOLS(A1:B2,-1)",
+      G6: "=TOCOL(A1:B2)",
+      I1: "=HSTACK(A1:A2,B1:B2,A1:A2)",
+      I4: "=DROP(A1:B2,1,1)",
+      M1: "=IRR({-100,60,60})",
+      M2: '=ADDRESS(2,28,4,TRUE,"My tab")',
+      M3: "=FORECAST(4,A1:A2,B1:B2)",
+    });
+    expect([v(w, "D3"), v(w, "E3"), v(w, "F3")]).toEqual([1, expect.objectContaining({ error: "#N/A" }), null]);
+    expect([v(w, "G1"), v(w, "H1"), v(w, "G2")]).toEqual([3, 4, null]);
+    expect([v(w, "G3"), v(w, "G4")]).toEqual([2, 4]);
+    expect(["G6", "G7", "G8", "G9"].map((r) => v(w, r))).toEqual([1, 2, 3, 4]);
+    expect([v(w, "I1"), v(w, "J1"), v(w, "K2")]).toEqual([1, 2, 3]);
+    expect(v(w, "I4")).toBe(4);
+    expect(Number((v(w, "M1") as number).toFixed(4))).toBe(0.1307);
+    expect(v(w, "M2")).toBe("'My tab'!AB2");
+    expect(v(w, "M3")).toBe(3);
+  });
+});

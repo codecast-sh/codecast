@@ -286,7 +286,7 @@ function parseStyleArgs(args: string[]): { patch: StylePatch; border?: "all" | "
         patch.dp = off ? null : Math.max(0, Math.min(10, Number(v)));
         break;
       case "nf":
-        if (!["number", "percent", "currency", "accounting", "scientific", "date", "datetime", "text", "plain", "check"].includes(v)) throw new Error("nf must be number, percent, currency, accounting, scientific, date, datetime, text, check or plain (custom codes: code=...)");
+        if (!["number", "percent", "currency", "accounting", "scientific", "date", "datetime", "time", "text", "plain", "check"].includes(v)) throw new Error("nf must be number, percent, currency, accounting, scientific, date, datetime, time, text, check or plain (custom codes: code=...)");
         patch.nf = v === "plain" ? null : (v as "number");
         break;
       case "num":
@@ -393,7 +393,7 @@ const verbs: ArtifactSpec["verbs"] = {
     },
   },
   cond: {
-    summary: `Conditional color on a range: sign (green positive, red negative) | scale [color] | gt|lt|eq <n> <color> | contains <text> <color> | before|after <today|2026-12-01> <color> | formula '=$B2="Offer"' <color> (written for the range's first cell; colors each cell where it is TRUE) | clear (all rules on the range). Rules stack: run it once per rule`,
+    summary: `Conditional color on a range: sign (green positive, red negative) | scale [color] | gt|lt|eq|ne <n or text> <color> | between "10, 20" <color> | empty|filled [color] | contains <text> <color> | before|after <today|2026-12-01> <color> | formula '=$B2="Offer"' <color> (written for the range's first cell; colors each cell where it is TRUE) | clear (all rules on the range). Rules stack: run it once per rule`,
     usage: "cond <doc> <Tab!B2:G6> <rule> [value] [color]",
     run(view, args) {
       const [ref, rule, ...rest] = args;
@@ -644,7 +644,7 @@ export const sheetSpec: ArtifactSpec = {
   agentGuide: [
     "A sheet has tabs of cells. Read it with `read` (inputs, formulas → values, and formats per range). Address cells as Tab!A1; with no tab prefix you write the first tab. Quote tab names with spaces: 'Q4 plan'!A1.",
     "Write blocks with `write <doc> Tab!A1 < block.tsv` (one line per row, tabs between cells). Write formulas, not computed numbers, whenever a value derives from other cells, so people can change an input and watch it flow: =B2*(1+C2), =SUM(B2:B5), =Historical!B2, =XLOOKUP(A2,Historical!A:A,Historical!B:B).",
-    "Functions: SUM AVERAGE MIN MAX COUNT COUNTA ROUND IF IFS IFERROR XLOOKUP VLOOKUP INDEX MATCH SUMIF(S) COUNTIF(S) AVERAGEIF TEXT DATE TODAY EDATE EOMONTH YEAR MONTH LEFT RIGHT MID CONCAT TEXTJOIN and more. Typed 10% is a percent, $1,200 currency, 2026-11-10 a date.",
+    "Functions: SUM AVERAGE MIN MAX COUNT COUNTA ROUND IF IFS IFERROR XLOOKUP VLOOKUP INDEX MATCH SUMIF(S) COUNTIF(S) AVERAGEIF TEXT DATE TODAY EDATE EOMONTH YEAR MONTH LEFT RIGHT MID CONCAT TEXTJOIN and more. Typed 10% is a percent, $1,200 currency (€ £ too), 2026-11-10 a date, 9:30 or 5:15 PM a time (subtract times for durations).",
     "Array functions fill the cells below and to the right of the formula: =UNIQUE(Tasks!E2:E200) lists each owner once (then =COUNTIF(Tasks!E:E,A2) beside it counts theirs), =FILTER(A2:D200,C2:C200=\"Open\"), =SORT(A2:C50,3,FALSE), =SORTBY(A2:A50,B2:B50,-1), =SEQUENCE(12). Leave those cells empty: anything in the way shows #SPILL!.",
     "Then format: `fmt <doc> A1:G1 b fill=blue`, `fmt <doc> C2:C6 pct sign`, `fmt <doc> B2:B6 num`, `fmt <doc> A6:G6 b border=outer`. Colors: red orange yellow green cyan blue violet magenta gray. A done/status column of TRUE/FALSE reads as checkboxes with `fmt <doc> Tab!E2:E40 check`. `table <doc> A1:G6 blue` gives a header and bands; `cond <doc> G2:G6 sign` colors gains green and losses red.",
     "Columns you write widen to fit on their own; `fit <doc> Tab!A:G` refits after you change content, `width <doc> Tab!A 220` sets one exactly.",

@@ -88,11 +88,18 @@ export function enforceValidation(model: SheetModel, ops: ArtifactOp[]): { ops: 
 
 // ── Conditional colors ──────────────────────────────────────────────────────
 
-export const COND_RULES = ["sign", "scale", "gt", "lt", "eq", "contains", "before", "after", "formula"] as const satisfies readonly CondRule[];
+export const COND_RULES = ["sign", "scale", "gt", "lt", "between", "eq", "ne", "contains", "empty", "filled", "before", "after", "formula"] as const satisfies readonly CondRule[];
+
+/** The two ends of a "between" rule's value ("10, 20", "10 to 20", "10..20"), low first. */
+export function betweenOf(value: string | number | undefined): [number, number] | null {
+  const parts = String(value ?? "").split(/\s*(?:,|\.\.|\bto\b|\band\b)\s*/i).filter(Boolean).map(Number);
+  if (parts.length !== 2 || parts.some((n) => Number.isNaN(n))) return null;
+  return parts[0] <= parts[1] ? [parts[0], parts[1]] : [parts[1], parts[0]];
+}
 
 /** Rules that compare against a value the person gives. */
 export function condTakesValue(rule: CondRule): boolean {
-  return rule === "gt" || rule === "lt" || rule === "eq" || rule === "contains" || rule === "before" || rule === "after" || rule === "formula";
+  return rule !== "sign" && rule !== "scale" && rule !== "empty" && rule !== "filled";
 }
 
 /** How a rule reads in a list: "Value > 100", "Text contains Rejected", "Date before today". */
@@ -104,6 +111,13 @@ export function condLabel(c: { rule: CondRule; value?: string | number }): strin
     case "gt": return `Value > ${v}`;
     case "lt": return `Value < ${v}`;
     case "eq": return `Is ${v}`;
+    case "ne": return `Is not ${v}`;
+    case "between": {
+      const b = betweenOf(v);
+      return b ? `Between ${b[0]} and ${b[1]}` : `Between ${v}`;
+    }
+    case "empty": return "Is empty";
+    case "filled": return "Is not empty";
     case "contains": return `Text contains ${v}`;
     case "before": return `Date before ${v}`;
     case "after": return `Date after ${v}`;
@@ -126,7 +140,11 @@ export function condOps(model: SheetModel, tabId: string, rect: Rect, rule: Cond
       const f = String(value).trim();
       // Written for the range's top-left cell; it shifts to each cell like a fill ($ pins a column or row).
       fields.value = f.startsWith("=") ? f : `=${f}`;
-    } else fields.value = rule === "contains" || rule === "before" || rule === "after" || Number.isNaN(Number(value)) ? String(value) : Number(value);
+    } else if (rule === "between") {
+      const b = betweenOf(value);
+      if (!b) throw new Error('between needs two numbers, like "10, 20"');
+      fields.value = `${b[0]}, ${b[1]}`;
+    } else fields.value = rule === "contains" || rule === "ne" || rule === "before" || rule === "after" || Number.isNaN(Number(value)) ? String(value) : Number(value);
   }
   if (color) fields.color = color;
   const same = key ?? model.conds.find((c) => c.tab === tabId && rectA1(c.rect) === range && c.rule === rule && String(c.value ?? "") === String(fields.value ?? ""))?.key;

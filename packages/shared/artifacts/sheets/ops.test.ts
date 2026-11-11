@@ -3,6 +3,7 @@ import { doc } from "./sheetDoc.testkit";
 import { sheetSpec, readSheetRange, describeSheet } from "../sheet";
 import { adjustFormula, renameTabInFormula, shiftFormula } from "./rewrite";
 import { buildModel, workbookFor } from "./model";
+import { dateToSerial } from "./values";
 import { fillOps, parseTsv, structuralOps, sortOps, toTsv, clipOf, pasteClipOps } from "./ops";
 
 describe("rewrite", () => {
@@ -89,6 +90,18 @@ describe("verbs and ops", () => {
     d.apply(fillOps(buildModel(d.elements()), "Sheet1", { c0: 2, r0: 1, c1: 3, r1: 1 }, { c0: 2, r0: 1, c1: 3, r1: 3 }));
     expect(d.input("c:Sheet1!B3")).toBe("Item 3");
     expect(d.input("c:Sheet1!C3")).toBe("=A3*2");
+  });
+
+  test("fill handle: one date steps a day; month and weekday names form a series", () => {
+    const d = doc(sheetSpec.seed!());
+    d.verb("write", ["A1"], "2026-11-30\tJan\tMONDAY\t5\n\tMar\t\t");
+    d.apply(fillOps(buildModel(d.elements()), "Sheet1", { c0: 1, r0: 1, c1: 1, r1: 1 }, { c0: 1, r0: 1, c1: 1, r1: 3 }));
+    expect(d.input("c:Sheet1!A3")).toBe(String(dateToSerial(2026, 12, 2)));
+    d.apply(fillOps(buildModel(d.elements()), "Sheet1", { c0: 2, r0: 1, c1: 2, r1: 2 }, { c0: 2, r0: 1, c1: 2, r1: 7 }));
+    expect([3, 4, 7].map((r) => d.input(`c:Sheet1!B${r}`))).toEqual(["May", "Jul", "Jan"]);
+    d.apply(fillOps(buildModel(d.elements()), "Sheet1", { c0: 3, r0: 1, c1: 4, r1: 1 }, { c0: 3, r0: 1, c1: 4, r1: 3 }));
+    expect(d.input("c:Sheet1!C3")).toBe("WEDNESDAY");
+    expect(d.input("c:Sheet1!D3")).toBe("5");
   });
 
   test("sort moves rows and their formulas", () => {

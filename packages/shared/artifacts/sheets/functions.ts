@@ -22,7 +22,7 @@ import {
 } from "./values";
 import { formatWithCode } from "./format";
 import { ARRAY_FUNCTION_DEFS } from "./arrayFunctions";
-import { MORE_FUNCTION_DEFS, SPLIT_DEF } from "./moreFunctions";
+import { MORE_FUNCTION_DEFS, SPLIT_DEF, STAT_FUNCTION_DEFS, TIME_FUNCTION_DEFS, subtotalDef } from "./moreFunctions";
 import {
   scalarOf,
   cells,
@@ -736,7 +736,8 @@ function joinTexts(items: Scalar[], delim: string): Value {
 }
 
 // Array functions spill into the cells beside them; they live in their own module.
-Object.assign(FUNCTIONS, ARRAY_FUNCTION_DEFS, MORE_FUNCTION_DEFS, { SPLIT: SPLIT_DEF });
+Object.assign(FUNCTIONS, ARRAY_FUNCTION_DEFS, MORE_FUNCTION_DEFS, TIME_FUNCTION_DEFS, STAT_FUNCTION_DEFS, { SPLIT: SPLIT_DEF });
+FUNCTIONS.SUBTOTAL = subtotalDef(FUNCTIONS);
 
 export const FUNCTION_NAMES = Object.keys(FUNCTIONS).sort();
 

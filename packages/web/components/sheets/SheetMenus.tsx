@@ -1,7 +1,7 @@
 // The sheet's menus and small panels: tab and cell menus, the filter panel,
 // the filter buttons and the find bar.
 import { useMemo, useState } from "react";
-import { CalendarDays, Check, ClipboardPaste, Copy, Eye, EyeOff, MessageSquare, Filter as FilterIcon, ListChecks, Scissors, X } from "lucide-react";
+import { CalendarDays, Check, ChevronRight, ClipboardPaste, Copy, Eye, EyeOff, MessageSquare, Filter as FilterIcon, ListChecks, Scissors, X } from "lucide-react";
 import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
 import { a1, type SheetModel, type TabData } from "./sheetCore";
@@ -26,6 +26,7 @@ export function TabMenu({ tabId, model, onRename, onDelete }: { tabId: string; m
 export function CellMenu({
   kind,
   readOnly,
+  filtered,
   onFormat,
   onClear,
   onCopyHint,
@@ -46,6 +47,7 @@ export function CellMenu({
   onClipboard: (kind: ClipKind) => void;
   onComment: () => void;
   onHide: (axis: "col" | "row", hide: boolean) => void;
+  filtered?: boolean;
 }) {
   if (readOnly) return <CtxItem onSelect={onCopyHint}>Copy</CtxItem>;
   return (
@@ -91,7 +93,7 @@ export function CellMenu({
       <DropdownMenuSeparator />
       <CtxItem onSelect={() => onFormat({ type: "sort", desc: false })}>Sort A to Z</CtxItem>
       <CtxItem onSelect={() => onFormat({ type: "sort", desc: true })}>Sort Z to A</CtxItem>
-      <CtxItem icon={FilterIcon} onSelect={() => onFormat({ type: "filter" })}>Filter</CtxItem>
+      <CtxItem icon={FilterIcon} onSelect={() => onFormat({ type: "filter" })}>{filtered ? "Remove filter" : "Filter"}</CtxItem>
       {kind !== "colHeader" && <CtxItem onSelect={() => onFormat({ type: "freeze", axis: "row" })}>Freeze rows to here</CtxItem>}
       {kind !== "rowHeader" && <CtxItem onSelect={() => onFormat({ type: "freeze", axis: "col" })}>Freeze columns to here</CtxItem>}
       <CtxItem onSelect={() => onFormat({ type: "freeze", axis: "none" })}>Unfreeze</CtxItem>
@@ -234,9 +236,28 @@ export function FilterButtons({
 }
 
 /** ⌘F: find text or formulas on this tab; Enter goes to the next match, Shift+Enter back. */
-export function FindBar({ find, onGo, from, onClose }: { find: (q: string) => Array<{ col: number; row: number }>; onGo: (c: { col: number; row: number }) => void; from: () => { col: number; row: number }; onClose: () => void }) {
+export function FindBar({
+  find,
+  onGo,
+  from,
+  onClose,
+  replace: replaceInitially,
+  onReplace,
+}: {
+  find: (q: string) => Array<{ col: number; row: number }>;
+  onGo: (c: { col: number; row: number }) => void;
+  from: () => { col: number; row: number };
+  onClose: () => void;
+  /** Open with the replace row showing (⌘⇧H). */
+  replace?: boolean;
+  /** Replace in one cell (at) or everywhere; returns how many cells changed. Absent when the sheet is read-only. */
+  onReplace?: (q: string, replacement: string, at?: { col: number; row: number }) => number;
+}) {
   const [q, setQ] = useState("");
+  const [r, setR] = useState("");
+  const [showReplace, setShowReplace] = useState(!!replaceInitially);
   const [at, setAt] = useState<number | null>(null);
+  const [replaced, setReplaced] = useState<number | null>(null);
   const matches = useMemo(() => find(q), [find, q]);
   const go = (dir: 1 | -1) => {
     if (!matches.length) return;
@@ -249,28 +270,64 @@ export function FindBar({ find, onGo, from, onClose }: { find: (q: string) => Ar
     setAt(i);
     onGo(matches[i]);
   };
+  const replaceOne = () => {
+    if (!onReplace || !q) return;
+    if (at === null) return go(1);
+    onReplace(q, r, matches[at]);
+    setReplaced(null);
+    go(1);
+  };
   return (
-    <div className="sheet-find" data-sheet-find onPointerDown={(e) => e.stopPropagation()}>
-      <input
-        autoFocus
-        placeholder="Find"
-        value={q}
-        onChange={(e) => {
-          setQ(e.target.value);
-          setAt(null);
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") onClose();
-          if (e.key === "Enter") {
-            e.preventDefault();
-            go(e.shiftKey ? -1 : 1);
-          }
-        }}
-      />
-      <span className="sheet-find-count">{q ? `${at === null ? 0 : at + 1}/${matches.length}` : ""}</span>
-      <button type="button" aria-label="Close find" onClick={onClose}>
-        <X className="w-3.5 h-3.5" />
-      </button>
+    <div className="sheet-find" data-sheet-find data-owns-keys onPointerDown={(e) => e.stopPropagation()}>
+      <div className="sheet-find-row">
+        {onReplace && (
+          <button type="button" className="sheet-find-toggle" aria-label={showReplace ? "Hide replace" : "Replace"} aria-expanded={showReplace} onClick={() => setShowReplace((v) => !v)}>
+            <ChevronRight className={`w-3.5 h-3.5 ${showReplace ? "rotate-90" : ""}`} />
+          </button>
+        )}
+        <input
+          autoFocus
+          placeholder="Find"
+          value={q}
+          onChange={(e) => {
+            setQ(e.target.value);
+            setAt(null);
+            setReplaced(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") onClose();
+            if (e.key === "Enter") {
+              e.preventDefault();
+              go(e.shiftKey ? -1 : 1);
+            }
+          }}
+        />
+        <span className="sheet-find-count">{q ? `${at === null ? 0 : at + 1}/${matches.length}` : ""}</span>
+        <button type="button" aria-label="Close find" onClick={onClose}>
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+      {showReplace && onReplace && (
+        <div className="sheet-find-row">
+          <span className="sheet-find-toggle" />
+          <input
+            placeholder="Replace with"
+            value={r}
+            onChange={(e) => setR(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") onClose();
+              if (e.key === "Enter") {
+                e.preventDefault();
+                replaceOne();
+              }
+            }}
+          />
+          <button type="button" className="sheet-find-action" disabled={!q || !matches.length} onClick={replaceOne}>Replace</button>
+          <button type="button" className="sheet-find-action" disabled={!q || !matches.length} onClick={() => { setReplaced(onReplace(q, r)); setAt(null); }}>
+            All{replaced !== null ? ` · ${replaced}` : ""}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

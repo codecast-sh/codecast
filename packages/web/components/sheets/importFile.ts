@@ -2,9 +2,10 @@
 // text, or an Excel workbook (.xlsx, one table per worksheet, with formulas,
 // shared strings and date formats). No dependency: an .xlsx is a zip of XML,
 // read here with the browser's DecompressionStream.
-import { parseTable, serialToDate, shiftFormula } from "@codecast/shared/artifacts/sheets";
+import { parseRectA1, parseTable, serialToDate, shiftFormula, type CellStyle, type ImportTable, type PaletteColor, type Rect } from "@codecast/shared/artifacts/sheets";
+import { PALETTE_HEX } from "./exportFile";
 
-export type ImportedTable = { name: string; grid: string[][] };
+export type ImportedTable = ImportTable;
 
 /** Files the importer reads, for an <input accept>. */
 export const IMPORT_ACCEPT = ".csv,.tsv,.txt,.xlsx,text/csv,text/tab-separated-values,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -89,15 +90,62 @@ const CURRENCY_FMT_IDS = new Set([5, 6, 7, 8, 44]);
 type CellKind = "date" | "percent" | "currency";
 
 /** What each cell style shows a number as, so an import types it the same way ("12%", "$1,200", a date). */
-function styleKinds(stylesXml: string | undefined): Map<number, CellKind> & { symbols?: Map<number, string> } {
-  const out: Map<number, CellKind> & { symbols?: Map<number, string> } = new Map<number, CellKind>();
+type Styles = Map<number, CellKind> & { symbols?: Map<number, string>; looks?: Map<number, CellStyle> };
+
+/** The palette color nearest an Excel ARGB, among fills or text colors; none for the defaults (white fill, black text). */
+function snapColor(argb: string | undefined, as: "fill" | "text"): PaletteColor | undefined {
+  if (!argb || argb.length < 6) return undefined;
+  const rgb = (h: string) => [0, 2, 4].map((i) => parseInt(h.slice(-6).slice(i, i + 2), 16));
+  const [r, g, b] = rgb(argb);
+  if (as === "fill" ? r + g + b > 750 : r + g + b < 120) return undefined;
+  let best: PaletteColor | undefined;
+  let bestD = Infinity;
+  for (const [name, hex] of Object.entries(PALETTE_HEX)) {
+    const [pr, pg, pb] = rgb(hex[as]);
+    const d = (r - pr) ** 2 + (g - pg) ** 2 + (b - pb) ** 2;
+    if (d < bestD) [best, bestD] = [name as PaletteColor, d];
+  }
+  return best;
+}
+
+/** How each cell style looks: bold, italic, underline, colors snapped to the sheet's palette, alignment and wrap. */
+function styleLooks(stylesXml: string, xfs: string[]): Map<number, CellStyle> {
+  const section = (tag: string) => [...(stylesXml.match(new RegExp(`<${tag}s[^>]*>([\\s\\S]*?)</${tag}s>`))?.[1] ?? "").matchAll(new RegExp(`<${tag}(?:\\s[^>]*)?(?:/>|>[\\s\\S]*?</${tag}>)`, "g"))].map((m) => m[0]);
+  const fonts = section("font");
+  const fills = section("fill");
+  const looks = new Map<number, CellStyle>();
+  xfs.forEach((xf, i) => {
+    const style: CellStyle = {};
+    const font = fonts[Number(attr(xf, "fontId") ?? 0)] ?? "";
+    if (/<b(?:\s+val="(?:1|true)")?\s*\/>/.test(font)) style.b = true;
+    if (/<i(?:\s+val="(?:1|true)")?\s*\/>/.test(font)) style.i = true;
+    if (/<u(?:\s+val="(?!none)[^"]*")?\s*\/>/.test(font)) style.u = true;
+    const color = snapColor(attr(font.match(/<color\s[^>]*>/)?.[0] ?? "", "rgb"), "text");
+    if (color) style.color = color;
+    const fill = fills[Number(attr(xf, "fillId") ?? 0)] ?? "";
+    if (/patternType="solid"/.test(fill)) {
+      const bg = snapColor(attr(fill.match(/<fgColor\s[^>]*>/)?.[0] ?? "", "rgb"), "fill");
+      if (bg) style.fill = bg;
+    }
+    const align = xf.match(/<alignment\s[^>]*>/)?.[0] ?? "";
+    const al = attr(align, "horizontal");
+    if (al === "left" || al === "center" || al === "right") style.al = al;
+    if (/wrapText="(?:1|true)"/.test(align)) style.wrap = true;
+    if (Object.keys(style).length) looks.set(i, style);
+  });
+  return looks;
+}
+
+function styleKinds(stylesXml: string | undefined): Styles {
+  const out: Styles = new Map<number, CellKind>();
   out.symbols = new Map();
   if (!stylesXml) return out;
   const custom = new Map<number, string>();
   for (const m of stylesXml.matchAll(/<numFmt\s[^>]*>/g)) custom.set(Number(attr(m[0], "numFmtId")), unescape(attr(m[0], "formatCode") ?? ""));
-  const xfs = stylesXml.match(/<cellXfs[^>]*>([\s\S]*?)<\/cellXfs>/)?.[1] ?? "";
-  [...xfs.matchAll(/<xf\s[^>]*?\/?>/g)].forEach((m, i) => {
-    const id = Number(attr(m[0], "numFmtId") ?? 0);
+  const xfList = [...(stylesXml.match(/<cellXfs[^>]*>([\s\S]*?)<\/cellXfs>/)?.[1] ?? "").matchAll(/<xf\s[^>]*?(?:\/>|>[\s\S]*?<\/xf>)/g)].map((m) => m[0]);
+  out.looks = styleLooks(stylesXml, xfList);
+  xfList.forEach((xf, i) => {
+    const id = Number(attr(xf, "numFmtId") ?? 0);
     const code = custom.get(id);
     const bare = code?.replace(/"[^"]*"|\[[^\]]*\]/g, "") ?? "";
     // A custom code is a date when it names days, months or years outside quotes and brackets.
@@ -141,6 +189,9 @@ export async function readXlsx(bytes: Uint8Array): Promise<ImportedTable[]> {
     const xml = text(rels.get(attr(m[0], "r:id") ?? "") ?? "");
     if (!xml) continue;
     const grid: string[][] = [];
+    const styles: NonNullable<ImportTable["styles"]> = [];
+    /** Blocks an array formula fills: Excel writes their values as cells, which the sheet recomputes instead. */
+    const arrays: Rect[] = [];
     /** Shared formulas: Excel writes the first of a run in full and the rest by its id; each copy shifts from the first. */
     const sharedF = new Map<string, { text: string; col: number; row: number }>();
     for (const c of xml.matchAll(/<c\s([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
@@ -150,12 +201,18 @@ export async function readXlsx(bytes: Uint8Array): Promise<ImportedTable[]> {
       const row = Number(ref.match(/\d+$/)?.[0]);
       if (!row || row > MAX_ROWS) continue;
       const col = colIndexOf(ref);
+      const look = kinds.looks?.get(Number(attr(tag, "s") ?? 0));
+      if (look) styles.push({ col, row, style: look });
+      if (arrays.some((a) => col >= a.c0 && col <= a.c1 && row >= a.r0 && row <= a.r1)) continue;
       const body = c[2] ?? "";
       const type = attr(tag, "t");
       const fTag = body.match(/<f(\s[^>]*?)?(?:\/>|>([\s\S]*?)<\/f>)/);
       const si = fTag ? attr(` ${fTag[1] ?? ""}`, "si") : undefined;
+      const arrayRef = fTag && attr(` ${fTag[1] ?? ""}`, "t") === "array" ? parseRectA1(attr(` ${fTag[1] ?? ""}`, "ref") ?? "") : null;
+      // The anchor (this cell) keeps the formula; the rest of its block is skipped above.
+      if (arrayRef) arrays.push(arrayRef);
       // Excel stores newer functions with a prefix (_xlfn.XLOOKUP, _xlfn._xlws.FILTER); the sheet names them plainly.
-      let formula = fTag?.[2] ? unescape(fTag[2]).replace(/_xlfn\.(?:_xlws\.)?/gi, "") : undefined;
+      let formula = fTag?.[2] ? unescape(fTag[2]).replace(/_xlfn\.ANCHORARRAY\(([^()]+)\)/gi, "$1#").replace(/_xlfn\.(?:_xlws\.)?/gi, "") : undefined;
       if (si !== undefined) {
         const first = sharedF.get(si);
         if (formula) sharedF.set(si, { text: formula, col, row });
@@ -188,7 +245,20 @@ export async function readXlsx(bytes: Uint8Array): Promise<ImportedTable[]> {
       while (line.length < col) line.push("");
       line[col - 1] = input;
     }
-    tables.push({ name, grid });
+    const merges = [...xml.matchAll(/<mergeCell\s[^>]*>/g)].map((mc) => parseRectA1(attr(mc[0], "ref") ?? "")).filter((r): r is Rect => !!r);
+    // Dropdowns with their choices written out ("a,b,c"); a list read from a range has nothing to carry over.
+    const lists: NonNullable<ImportTable["lists"]> = [];
+    for (const dv of xml.matchAll(/<dataValidation\s([^>]*)>([\s\S]*?)<\/dataValidation>/g)) {
+      const head = ` ${dv[1]}`;
+      const values = (unescape(dv[2].match(/<formula1>([\s\S]*?)<\/formula1>/)?.[1] ?? "").match(/^"([\s\S]*)"$/)?.[1] ?? "").split(",").map((v) => v.trim()).filter(Boolean);
+      if (attr(head, "type") !== "list" || !values.length) continue;
+      const strict = attr(head, "showErrorMessage") === "1" && (attr(head, "errorStyle") ?? "stop") === "stop";
+      for (const part of (attr(head, "sqref") ?? "").split(/\s+/)) {
+        const rect = parseRectA1(part);
+        if (rect) lists.push({ rect, values, strict });
+      }
+    }
+    tables.push({ name, grid, ...(styles.length ? { styles } : {}), ...(merges.length ? { merges } : {}), ...(lists.length ? { lists } : {}) });
   }
   if (!tables.length) throw new Error("This workbook has no sheets");
   return tables;

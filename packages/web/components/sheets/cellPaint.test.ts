@@ -82,3 +82,16 @@ describe("custom formula rules", () => {
     expect(seen).toEqual(['=$B3="Offer"', '=$B2="Offer"']);
   });
 });
+
+describe("more rule conditions", () => {
+  test("between, is not, empty and not empty", async () => {
+    const { paintCell } = await import("./cellPaint");
+    const rect = { c0: 1, r0: 1, c1: 1, r1: 9 };
+    const ctx = (rule: string, value?: string | number) => ({ conds: [{ key: "k", tab: "t", rect, rule, value, color: "red" }], tables: [], scaleRange: () => null }) as never;
+    const hit = (rule: string, value: string | number | undefined, v: string | number | null) => !!paintCell(v === null ? undefined : ({ key: "c", kind: "cell", input: String(v) } as never), v, undefined, 1, 1, ctx(rule, value)).fill;
+    expect([hit("between", "10, 20", 15), hit("between", "10, 20", 25)]).toEqual([true, false]);
+    expect([hit("ne", "Done", "Open"), hit("ne", "Done", "done"), hit("ne", "Done", null)]).toEqual([true, false, false]);
+    expect([hit("empty", undefined, null), hit("empty", undefined, "x")]).toEqual([true, false]);
+    expect([hit("filled", undefined, "x"), hit("filled", undefined, null)]).toEqual([true, false]);
+  });
+});

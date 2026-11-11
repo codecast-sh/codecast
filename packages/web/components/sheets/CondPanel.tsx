@@ -11,7 +11,11 @@ import "./formulaAssist.css";
 const RULE_NAMES: Record<CondRule, string> = {
   gt: "Greater than",
   lt: "Less than",
+  between: "Between",
   eq: "Is exactly",
+  ne: "Is not",
+  empty: "Is empty",
+  filled: "Is not empty",
   contains: "Text contains",
   before: "Date before",
   after: "Date after",
@@ -90,7 +94,7 @@ export function CondPanel({ live, tabId, tabName, selection, onClose }: { live: 
           {COND_RULES.map((r) => <option key={r} value={r}>{RULE_NAMES[r]}</option>)}
         </select>
         {condTakesValue(rule) && (
-          <input value={value} onChange={(e) => setValue(e.target.value)} aria-label="Value" spellCheck={false} placeholder={rule === "formula" ? '=$B2="Offer"' : rule === "before" || rule === "after" ? "today, or 2026-12-01" : rule === "contains" || rule === "eq" ? "Rejected" : "100"} />
+          <input value={value} onChange={(e) => setValue(e.target.value)} aria-label="Value" spellCheck={false} placeholder={rule === "formula" ? '=$B2="Offer"' : rule === "before" || rule === "after" ? "today, or 2026-12-01" : rule === "contains" || rule === "eq" || rule === "ne" ? "Rejected" : rule === "between" ? "10, 20" : "100"} />
         )}
         <div className="sheet-cond-colors" role="radiogroup" aria-label="Color">
           {PALETTE.map((c) => (

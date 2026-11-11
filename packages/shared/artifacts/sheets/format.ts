@@ -34,6 +34,13 @@ export function formatFixed(n: number, dp: number, group = true): string {
   return (neg && rounded !== 0 ? "-" : "") + body;
 }
 
+/** A time of day or a duration: 9:05, 14:30:15, or 27:30 past a day (hours keep counting, as a timesheet needs). */
+export function formatTime(v: number): string {
+  const total = Math.round(Math.abs(v) * 86400);
+  const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), sec = total % 60;
+  return `${v < 0 ? "-" : ""}${h}:${String(m).padStart(2, "0")}${sec ? `:${String(sec).padStart(2, "0")}` : ""}`;
+}
+
 export function formatDate(serial: number, withTime = false): string {
   const d = serialToDate(serial);
   const base = `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`;
@@ -84,6 +91,8 @@ export function formatValue(v: Scalar, fmt: CellNumberFormat | undefined, implie
       return formatDate(v);
     case "datetime":
       return formatDate(v, true);
+    case "time":
+      return formatTime(v);
     case "text":
       return plainNumber(v);
     default:

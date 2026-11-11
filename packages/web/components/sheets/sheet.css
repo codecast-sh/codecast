@@ -556,15 +556,17 @@
   right: 16px;
   z-index: 26;
   display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 34px;
-  padding: 0 6px 0 10px;
+  flex-direction: column;
+  padding: 0 6px 0 6px;
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--sol-border) 45%, transparent);
   background: var(--sol-card);
   box-shadow: 0 10px 28px -12px rgba(0, 0, 0, 0.4);
 }
+.sheet-find-row { display: flex; align-items: center; gap: 6px; height: 34px; }
+.sheet-find-toggle { width: 22px; flex-shrink: 0; }
+.sheet-find button.sheet-find-action { padding: 3px 8px; font-size: var(--fs-meta); color: var(--sol-text); border: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent); }
+.sheet-find button.sheet-find-action:disabled { opacity: 0.4; }
 .sheet-find input { width: 200px; background: transparent; border: 0; outline: none; color: var(--sol-text); font-size: 12.5px; }
 .sheet-find-count { min-width: 40px; text-align: right; color: var(--sol-text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
 .sheet-find button { display: inline-flex; padding: 4px; border-radius: 6px; color: var(--sol-text-muted); }

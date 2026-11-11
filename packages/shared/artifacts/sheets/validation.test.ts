@@ -213,3 +213,18 @@ describe("custom format codes", () => {
     expect(formatWithCode(1234.5, "foo")).toBe("foo");
   });
 });
+
+import { replaceOps } from "./ops";
+describe("replace", () => {
+  test("replaces text in typed cells, any case, leaving formulas alone; one cell or all", () => {
+    const d = doc(sheetSpec.seed!());
+    d.verb("write", ["A1"], "Pending\tpending review\n=\"pending\"\tdone");
+    const m = buildModel(d.elements());
+    const all = replaceOps(m, m.tabs[0].id, "pending", "Open");
+    expect(all.count).toBe(2);
+    d.apply(all.ops);
+    expect(sheetSpec.verbs!.range.run(d.view(), ["A1:B2"]).status).toBe("Open\tOpen review\npending\tdone");
+    const one = replaceOps(buildModel(d.elements()), m.tabs[0].id, "open", "X", { col: 2, row: 1 });
+    expect(one.count).toBe(1);
+  });
+});
