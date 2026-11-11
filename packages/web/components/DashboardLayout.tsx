@@ -17,7 +17,8 @@ import { isNonTabRoute } from "../src/compat/tabRouting";
 import { PANE_EMBED, appDocumentTitle } from "../lib/browserPane";
 import { withApplyingViewHistory, sameFilterExtras, type InboxViewSnapshot } from "../lib/inboxViewHistory";
 import { RecentlyViewedMenu } from "./RecentlyViewedMenu";
-import { useMutation } from "convex/react";
+import { useConvex, useMutation } from "convex/react";
+import { startWarmLoop } from "../hooks/inboxWarm";
 import { useAuthGate } from "@platform/auth/web";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Panel, Group, Separator, usePanelRef } from "react-resizable-panels";
@@ -41,7 +42,7 @@ import { OrgIntroAnywhere } from "./org/OrgIntroAnywhere";
 import { ThemeIntroAnywhere } from "./theme/ThemeIntroAnywhere";
 import { NativeAppBanner } from "./NativeAppBanner";
 import { CliOfflineBanner } from "./CliOfflineBanner";
-import { useSyncMachineResources } from "../hooks/useResourceMonitor";
+import { MachineResourceFeeders } from "./resources/MachineResourceFeeders";
 import { NotificationNudgeBanner } from "./NotificationNudgeBanner";
 import { TeamSharingNudgeBanner } from "./TeamSharingNudgeBanner";
 import { SharingSetupBanner } from "./SharingSetupBanner";
@@ -526,8 +527,6 @@ function HostFeeders() {
   useSyncOrgProposals(orgOn);
   useSyncOrgTreeFeeder(undefined, orgOn);
   useSyncSettings();
-  // Machine resource reports: the pressure notice and /resources read them.
-  useSyncMachineResources();
   // Decisions open on every page, not only where they are listed: the Line's
   // decision inbox (every workspace with a line), and the page context of
   // every open decision the store holds, so opening one paints from cache.
@@ -535,7 +534,8 @@ function HostFeeders() {
   useSyncOpenDecisionDetails();
   // Every run the store holds as live, checked against the server's live runs, so no surface shows an ended run as
   // live; a leaf of its own, so its wakes re-render nothing here.
-  return <><LiveRunsCheck /><PendingAgentFeatures /></>;
+  // Machine resource reports (one feeder per device): the pressure notice and /resources read them.
+  return <><LiveRunsCheck /><PendingAgentFeatures /><MachineResourceFeeders /></>;
 }
 
 /** The store's feeders and write wiring for one window. An embedded pane
@@ -561,6 +561,7 @@ export function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEf
         change while the document lives, but the rule stays visible. */}
     {windowEffects ? <WindowOnlyEffects /> : null}
     <SessionCommandResultsFeeder />
+    <InboxWarmLoop />
     <LocalDeviceProbe />
     {isSyncHost ? <HostFeeders /> : null}
     {isSyncHost ? <ChatPrefetchFeeder /> : null}
@@ -573,6 +574,15 @@ export function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEf
  *  request re-renders only this. */
 function SessionCommandResultsFeeder() {
   useSessionCommandResults();
+  return null;
+}
+
+/** Keeps this window's inbox rows' messages cached so opening or dismissing
+ *  onto one is instant. Messages never replicate between windows, so every
+ *  window warms its own: never host-gated (see startWarmLoop). */
+function InboxWarmLoop() {
+  const convex = useConvex();
+  useWatchEffect(() => startWarmLoop(convex), [convex]);
   return null;
 }
 
