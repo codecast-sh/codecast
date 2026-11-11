@@ -51,6 +51,7 @@ import { setWeeklyCardEnabledFor, setWeeklyCardOptionsFor } from "./weeklyCards"
 import { deleteSessionAsOwner } from "./sessionDelete";
 import { reactivateTasksCanceledOnKill } from "./agentTasks";
 import { canAccessDoc } from "./docs";
+import { requireArtifactEditor } from "./lib/liveArtifactAccess";
 import { applyAsWebUser } from "./liveArtifacts";
 import { docTypeChangeAllowed } from "@codecast/shared/docs";
 import { startHostedConversationFor } from "./assistant/entry";
@@ -78,7 +79,8 @@ import { hideConversationForViewer, unhideConversationForViewer } from "./inboxH
 import { patchCommentWithRevision } from "./commentViewWrites";
 import { getComment } from "./commentStore";
 import type { CommentId } from "./lib/conversationCommentRows";
-import { canAccessConversation, canAccessProject, requireTeamMembership, patchConversationVisibility } from "./lib/access";
+import { canAccessConversation, canAccessProject, requireTeamMembership } from "./lib/access";
+import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { enqueueConfigCommand } from "./users";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
 import { startShipCore } from "./ship";
@@ -1616,6 +1618,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!doc) throw new Error("Doc not found");
     // The doc's own workspace rule, as pinDoc: team_id is routing, never access.
     if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Not authorized");
+    await requireArtifactEditor(ctx, doc, userId);
     await ctx.db.patch(doc._id, { archived_at: Date.now(), updated_at: Date.now() });
   },
 
@@ -1623,6 +1626,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const doc = await ctx.db.get(docId as Id<"docs">);
     if (!doc) throw new Error("Doc not found");
     if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
+    await requireArtifactEditor(ctx, doc, userId);
     // Preserve the undo snapshot's exact metadata: only clear the archive flag;
     // do not synthesize a new updated_at that would reorder the restored doc.
     await ctx.db.patch(doc._id, { archived_at: undefined });
@@ -1639,6 +1643,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const fn = op === "save" ? api.liveArtifacts.draftSave : api.liveArtifacts.draftDiscard;
     return await (ctx as any).runMutation(fn, { doc_id: docId, ...(typeof draftAt === "number" ? { draft_at: draftAt } : {}) });
   },
+  liveSetEditAccess: async (ctx, _userId, [docId, edit, editors]: [string, "team" | "owners", string[]]) => {
+    if (!ctx.db.normalizeId("docs", docId)) return null;
+    return await (ctx as any).runMutation(api.liveArtifacts.setEditAccess, { doc_id: docId, edit, editors });
+  },
   liveCheckpoint: async (ctx, _userId, [docId, label]: [string, string | undefined]) => {
     if (!ctx.db.normalizeId("docs", docId)) return null;
     return await (ctx as any).runMutation(api.liveArtifacts.checkpoint, { doc_id: docId, ...(label ? { label } : {}) });
@@ -1647,6 +1655,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const doc = await ctx.db.get(docId as Id<"docs">);
     if (!doc) throw new Error("Doc not found");
     if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
+    await requireArtifactEditor(ctx, doc, userId);
     const updates: any = { updated_at: Date.now() };
     if (fields.content !== undefined) updates.content = fields.content;
     if (fields.title !== undefined) updates.title = fields.title;

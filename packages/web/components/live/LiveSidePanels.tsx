@@ -1,11 +1,15 @@
 // The shell's right-hand panels for a live artifact: comment threads and the
 // version history. Both read the store through the live hooks.
 import { useMemo, useRef, useState } from "react";
-import { Bot, Check, History, RotateCcw, Trash2 } from "lucide-react";
+import { Bot, Check, History, Link2, Pencil, RotateCcw, Trash2, X } from "lucide-react";
+import { toast } from "sonner";
+import { Button } from "../ui/button";
+import { Switch } from "../ui/switch";
 import type { ArtifactElement } from "@codecast/shared/artifacts";
-import { useLiveComments, useLiveVersions, type LiveHandle } from "./useLiveArtifact";
+import { useLiveComments, useLiveElement, useLiveVersions, type LiveHandle } from "./useLiveArtifact";
 import { pickAskTarget, sendAsk, type AskDoc } from "./askAgent";
 import { relativeTime } from "../../lib/entityDisplay";
+import { sharePageUrl } from "../../lib/utils";
 import { useInboxStore } from "../../store/inboxStore";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { CommentComposer } from "../comments/CommentComposer";
@@ -21,7 +25,12 @@ export function CommentsPanel({
   selectedElements,
   onFocus,
   readOnly = false,
+  composeTick,
+  onClose,
 }: {
+  onClose?: () => void;
+  /** Bumped when a product asks for a new comment: the box takes focus. */
+  composeTick?: number;
   /** A version is open, or the viewer cannot edit: read the threads, write nothing. */
   readOnly?: boolean;
   doc: AskDoc & { team_id?: string };
@@ -60,7 +69,7 @@ export function CommentsPanel({
   };
 
   return (
-    <div className="flex flex-col h-full" data-live-comments>
+    <div className="flex flex-col h-full min-w-0" data-live-comments>
       <div className="flex items-center gap-1 px-2 h-9 border-b border-sol-border/40 shrink-0" role="tablist">
         {(["open", "resolved"] as const).map((k) => (
           <button
@@ -75,11 +84,15 @@ export function CommentsPanel({
             {k === "open" ? "Open" : "Resolved"} <span className="text-sol-text-dim tabular-nums">{k === "open" ? open.length : resolved.length}</span>
           </button>
         ))}
+        <span className="flex-1" />
+        {onClose && <PanelClose onClose={onClose} />}
       </div>
       {!readOnly && (
-        <div className="p-2 border-b border-sol-border/30 shrink-0" data-live-comment-new>
-          {anchor && <div className="mb-1 text-meta font-mono text-sol-text-dim truncate">on {anchor}</div>}
+        <div className="p-2 border-b border-sol-border/30 shrink-0 min-w-0" data-live-comment-new>
+          {anchor && <AnchorLabel docId={doc._id} anchor={anchor} />}
           <CommentComposer
+            key={composeTick ?? 0}
+            autoFocus={!!composeTick}
             conversationId={`live:${doc._id}`}
             scopeKey={`live:${doc._id}:new`}
             enabled={false}
@@ -87,11 +100,10 @@ export function CommentsPanel({
             mentionTeamId={doc.team_id}
             chatMentionMode
             placeholder="Comment, @ to mention"
-            className="ch-composer"
             onSubmit={post}
           />
-          <label className="mt-1.5 inline-flex items-center gap-1.5 text-meta text-sol-text-muted cursor-pointer select-none">
-            <input type="checkbox" data-live-comment-agent checked={toAgent} onChange={(e) => setToAgent(e.target.checked)} className="accent-[var(--sol-violet)]" />
+          <label className="mt-1.5 inline-flex items-center gap-2 text-meta text-sol-text-muted cursor-pointer select-none">
+            <Switch checked={toAgent} onCheckedChange={setToAgent} aria-label="Send to agent" />
             Send to agent
           </label>
         </div>
@@ -99,14 +111,26 @@ export function CommentsPanel({
       <div className="flex-1 overflow-y-auto">
         {shown.length === 0 && <div className="px-3 py-6 text-center text-xs text-sol-text-dim">{tab === "open" ? "No open comments" : "Nothing resolved"}</div>}
         {shown.map(({ root, replies }) => (
-          <Thread key={root.key} doc={doc} live={live} me={me} root={root} replies={replies} focused={focusKey === root.key} readOnly={readOnly} onFocus={onFocus} />
+          <Thread
+            key={root.key}
+            doc={doc}
+            live={live}
+            me={me}
+            root={root}
+            replies={replies}
+            focused={focusKey === root.key}
+            readOnly={readOnly}
+            onFocus={onFocus}
+            onReopened={() => { setTab("open"); onFocus(root.key, root.anchor ? String(root.anchor) : undefined); }}
+          />
         ))}
       </div>
     </div>
   );
 }
 
-function Thread({ doc, live, me, root, replies, focused, readOnly, onFocus }: {
+function Thread({ doc, live, me, root, replies, focused, readOnly, onFocus, onReopened }: {
+  onReopened: () => void;
   doc: AskDoc & { team_id?: string };
   live: LiveHandle;
   me?: string;
@@ -121,12 +145,23 @@ function Thread({ doc, live, me, root, replies, focused, readOnly, onFocus }: {
     if (focused) ref.current?.scrollIntoView({ block: "nearest" });
   }, [focused]);
   const setRoot = (set: Record<string, any>) => live.apply([{ k: root.key, set }], { layer: "comments", undoable: false });
-  const remove = (c: ArtifactElement) => {
-    // Deleting a thread's first comment takes its replies with it.
-    const keys = c.key === root.key ? [root.key, ...replies.map((r) => r.key)] : [c.key];
-    live.apply(keys.map((k) => ({ k, del: true as const })), { layer: "comments", undoable: false });
-  };
   const mine = (c: ArtifactElement) => !!me && c.author === `u:${me}`;
+  // A thread goes with its first comment, so only when every reply in it is yours too.
+  const canDeleteThread = mine(root) && replies.every(mine);
+  const remove = (c: ArtifactElement) => {
+    const gone = c.key === root.key ? [root, ...replies] : [c];
+    live.apply(gone.map((x) => ({ k: x.key, del: true as const })), { layer: "comments", undoable: false });
+    toast(gone.length > 1 ? `Thread deleted` : "Comment deleted", {
+      action: {
+        label: "Undo",
+        onClick: () => live.apply(gone.map((x) => ({ k: x.key, put: commentFields(x) })), { layer: "comments", undoable: false }),
+      },
+    });
+  };
+  const edit = (c: ArtifactElement, text: string) => live.apply([{ k: c.key, set: { text, edited_at: Date.now() } }], { layer: "comments", undoable: false });
+  const copyLink = () => {
+    void navigator.clipboard?.writeText(sharePageUrl(`/docs/${live.docId}?c=${root.key}`)).then(() => toast.success("Link to comment copied"));
+  };
   return (
     <div
       ref={ref}
@@ -134,11 +169,11 @@ function Thread({ doc, live, me, root, replies, focused, readOnly, onFocus }: {
       onClick={() => onFocus(root.key, root.anchor ? String(root.anchor) : undefined)}
       className={`group px-3 py-2.5 border-b border-sol-border/20 cursor-pointer ${focused ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-alt/60"}`}
     >
-      <CommentLine c={root} canDelete={!readOnly && mine(root)} onDelete={() => remove(root)} />
+      <CommentLine docId={live.docId} c={root} canDelete={!readOnly && canDeleteThread} onDelete={() => remove(root)} onEdit={!readOnly && mine(root) ? (text) => edit(root, text) : undefined} />
       {root.sent_to ? <AskState root={root} /> : null}
       {replies.map((r) => (
         <div key={r.key} className="mt-2 pl-3 border-l border-sol-border/40">
-          <CommentLine c={r} canDelete={!readOnly && mine(r)} onDelete={() => remove(r)} />
+          <CommentLine docId={live.docId} c={r} canDelete={!readOnly && mine(r)} onDelete={() => remove(r)} onEdit={!readOnly && mine(r) ? (text) => edit(r, text) : undefined} />
         </div>
       ))}
       {!readOnly && (
@@ -146,11 +181,29 @@ function Thread({ doc, live, me, root, replies, focused, readOnly, onFocus }: {
           <button
             type="button"
             data-live-resolve={root.key}
-            onClick={() => setRoot({ resolved: root.resolved ? null : true })}
+            onClick={() => {
+              const toastId = `resolve:${root.key}`;
+              if (root.resolved) {
+                setRoot({ resolved: null });
+                toast.dismiss(toastId);
+                onReopened();
+              } else {
+                setRoot({ resolved: true });
+                toast("Thread resolved", { id: toastId, action: { label: "Undo", onClick: () => setRoot({ resolved: null }) } });
+              }
+            }}
             className="inline-flex items-center gap-1 h-6 px-1.5 rounded text-meta text-sol-text-dim hover:text-sol-green hover:bg-sol-green/10"
           >
             {root.resolved ? <RotateCcw className="w-3 h-3" /> : <Check className="w-3 h-3" />}
             {root.resolved ? "Reopen" : "Resolve"}
+          </button>
+          <button
+            type="button"
+            data-live-comment-link={root.key}
+            onClick={copyLink}
+            className="inline-flex items-center gap-1 h-6 px-1.5 rounded text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt"
+          >
+            <Link2 className="w-3 h-3" /> Copy link
           </button>
         </div>
       )}
@@ -165,13 +218,38 @@ function Thread({ doc, live, me, root, replies, focused, readOnly, onFocus }: {
             chatMentionMode
             placeholder="Reply"
             autoFocus
-            className="ch-composer"
             onSubmit={(text) => { live.comment({ text, parent: root.key }); }}
           />
         </div>
       )}
     </div>
   );
+}
+
+function PanelClose({ onClose }: { onClose: () => void }) {
+  return (
+    <button type="button" title="Close" aria-label="Close panel" data-live-panel-close onClick={onClose} className="p-1 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt">
+      <X className="w-3.5 h-3.5" />
+    </button>
+  );
+}
+
+/** A comment's own fields, to put it back (Undo of a delete). */
+function commentFields(c: ArtifactElement): { kind: string } & Record<string, any> {
+  const { key: _k, rev: _r, by: _b, at: _a, kind, ...rest } = c as any;
+  return { kind: kind ?? "comment", ...rest };
+}
+
+/** What a new comment pins to, in words a person reads: a cell's address, an element's kind and text. */
+function AnchorLabel({ docId, anchor, inline = false }: { docId: string; anchor: string; inline?: boolean }) {
+  const el = useLiveElement(docId, anchor);
+  // A sheet cell "c:<tabId>!A1" reads with its tab's name, from the tab:<id> element.
+  const cell = anchor.startsWith("c:") ? anchor.slice(2).split("!") : null;
+  const tab = useLiveElement(docId, cell && cell.length === 2 ? `tab:${cell[0]}` : "");
+  const text = typeof el?.text === "string" ? el.text.trim().replace(/\s+/g, " ") : typeof el?.title === "string" ? el.title : "";
+  const words = cell ? (cell.length === 2 ? `${typeof tab?.name === "string" && tab.name ? tab.name : cell[0]}!${cell[1]}` : cell[0]) : el ? `${el.kind}${text ? ` "${text.length > 28 ? `${text.slice(0, 28)}…` : text}"` : ""}` : inline ? "a removed element" : "selection";
+  if (inline) return <span className="text-sol-text-dim truncate min-w-0">{words}</span>;
+  return <div className="mb-1 text-meta text-sol-text-dim truncate" data-live-comment-anchor>on {words}</div>;
 }
 
 /** Where an ask stands: with the agent, or answered in this thread. */
@@ -185,14 +263,34 @@ function AskState({ root }: { root: ArtifactElement }) {
   );
 }
 
-function CommentLine({ c, canDelete, onDelete }: { c: ArtifactElement; canDelete: boolean; onDelete: () => void }) {
+function CommentLine({ docId, c, canDelete, onDelete, onEdit }: { docId: string; c: ArtifactElement; canDelete: boolean; onDelete: () => void; onEdit?: (text: string) => void }) {
+  // The author's own words open into an editor; Enter saves, Esc leaves them as they were.
+  const [draft, setDraft] = useState<string | null>(null);
+  const cancelled = useRef(false);
+  const save = () => {
+    if (cancelled.current) { cancelled.current = false; return; }
+    const next = draft?.trim();
+    if (next && next !== c.text) onEdit?.(next);
+    setDraft(null);
+  };
   return (
     <div>
       <div className="flex items-center gap-1.5 text-meta">
         <span className={`font-medium ${String(c.author ?? "").startsWith("s:") ? "text-sol-violet" : "text-sol-text"}`}>{String(c.author_name ?? "Someone")}</span>
-        {c.anchor ? <span className="font-mono text-sol-text-dim truncate">{String(c.anchor)}</span> : null}
+        {c.anchor ? <AnchorLabel docId={docId} anchor={String(c.anchor)} inline /> : null}
         <span className="flex-1" />
-        <span className="text-sol-text-dim">{formatRelative(Number(c.created_at ?? c.at ?? 0))}</span>
+        <span className="text-sol-text-dim">{formatRelative(Number(c.created_at ?? c.at ?? 0))}{c.edited_at ? " · edited" : ""}</span>
+        {onEdit && draft === null && (
+          <button
+            type="button"
+            title="Edit"
+            aria-label="Edit comment"
+            onClick={(e) => { e.stopPropagation(); cancelled.current = false; setDraft(String(c.text ?? "")); }}
+            className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-sol-text-dim hover:text-sol-text"
+          >
+            <Pencil className="w-3 h-3" />
+          </button>
+        )}
         {canDelete && (
           <button
             type="button"
@@ -205,21 +303,64 @@ function CommentLine({ c, canDelete, onDelete }: { c: ArtifactElement; canDelete
           </button>
         )}
       </div>
-      <div className="mt-0.5 text-xs text-sol-text break-words"><CommentMarkdown content={String(c.text ?? "")} /></div>
+      {draft !== null ? (
+        <textarea
+          autoFocus
+          data-live-comment-edit
+          value={draft}
+          rows={Math.min(6, Math.max(2, draft.split("\n").length))}
+          onClick={(e) => e.stopPropagation()}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={save}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); save(); }
+            if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelled.current = true; setDraft(null); }
+          }}
+          className="mt-1 w-full resize-none rounded-md bg-sol-bg-alt border border-sol-blue/50 px-2 py-1.5 text-xs text-sol-text outline-none"
+        />
+      ) : (
+        <div className="mt-0.5 text-xs text-sol-text break-words"><CommentMarkdown content={String(c.text ?? "")} /></div>
+      )}
     </div>
   );
 }
 
-export function HistoryPanel({ live, openRev, onOpen }: { live: LiveHandle; openRev: number | null; onOpen: (rev: number | null) => void }) {
+export function HistoryPanel({ live, openRev, onOpen, onClose, canEdit = true }: { live: LiveHandle; openRev: number | null; onOpen: (rev: number | null) => void; onClose?: () => void; canEdit?: boolean }) {
   const versions = useLiveVersions(live.docId);
-  const [busy, setBusy] = useState(false);
+  // Naming a version: null while not saving, the typed name while saving.
+  const [naming, setNaming] = useState<string | null>(null);
+  const save = () => {
+    live.history.checkpoint(naming?.trim() || undefined);
+    setNaming(null);
+  };
   return (
     <div className="flex flex-col h-full" data-live-history>
-      <div className="flex items-center gap-2 px-3 h-9 border-b border-sol-border/40 text-xs font-medium text-sol-text-muted">
+      <div className="flex items-center gap-2 px-3 h-9 border-b border-sol-border/40 text-xs font-medium text-sol-text-muted shrink-0">
         <History className="w-3.5 h-3.5" /> History
         <span className="flex-1" />
-        {openRev === null && <button type="button" onClick={() => live.history.checkpoint()} className="text-meta text-sol-text-dim hover:text-sol-text">Save version</button>}
+        {canEdit && openRev === null && naming === null && (
+          <button type="button" data-live-save-version onClick={() => setNaming("")} className="h-6 px-1.5 rounded text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt">Save version</button>
+        )}
+        {onClose && <PanelClose onClose={onClose} />}
       </div>
+      {naming !== null && (
+        <div className="flex items-center gap-1.5 px-2.5 py-2 border-b border-sol-border/30 shrink-0">
+          <input
+            autoFocus
+            data-live-version-name
+            value={naming}
+            onChange={(e) => setNaming(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); e.stopPropagation(); save(); }
+              if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setNaming(null); }
+            }}
+            placeholder="Name this version"
+            maxLength={120}
+            className="flex-1 min-w-0 h-7 px-2 rounded-md bg-sol-bg-alt border border-sol-border/40 text-xs text-sol-text placeholder:text-sol-text-dim outline-none focus:border-sol-blue/50"
+          />
+          <Button type="button" size="xs" variant="primary" onClick={save} className="h-7">Save</Button>
+        </div>
+      )}
       <div className="flex-1 overflow-y-auto">
         <button
           type="button"
@@ -230,45 +371,29 @@ export function HistoryPanel({ live, openRev, onOpen }: { live: LiveHandle; open
         </button>
         {versions.length === 0 && <div className="px-3 py-6 text-center text-xs text-sol-text-dim">No versions yet</div>}
         {versions.map((v) => (
-          <div
+          <button
+            type="button"
             key={v._id}
             data-live-version={v.rev}
             onClick={() => onOpen(v.rev)}
-            className={`group px-3 py-2 border-b border-sol-border/20 cursor-pointer ${openRev === v.rev ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-alt/60"}`}
+            className={`w-full text-left px-3 py-2 border-b border-sol-border/20 ${openRev === v.rev ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-alt/60"}`}
           >
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-sol-text truncate flex-1">{v.label}</span>
-              <span className="text-meta font-mono text-sol-text-dim">r{v.rev}</span>
-            </div>
-            <div className="flex items-center gap-2 text-meta text-sol-text-dim">
+            <div className="text-xs text-sol-text truncate">{v.label}</div>
+            <div className="flex items-center gap-1.5 text-meta text-sol-text-dim min-w-0">
+              <span className="shrink-0 tabular-nums">{versionTime(v.at)}</span>
+              <span>·</span>
               <span className="truncate">{v.by_name}</span>
-              <span>{formatRelative(v.at)}</span>
-              {v.elements !== undefined && <span>{v.elements} el</span>}
-              <span className="flex-1" />
-              {openRev === v.rev && (
-                <button
-                  type="button"
-                  data-live-restore={v.rev}
-                  disabled={busy}
-                  onClick={async (e) => {
-                    e.stopPropagation();
-                    setBusy(true);
-                    try {
-                      await live.history.restore(v.rev);
-                      onOpen(null);
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-blue/15 text-sol-blue hover:bg-sol-blue/25 disabled:opacity-50"
-                >
-                  <RotateCcw className="w-3 h-3" /> {busy ? "Restoring" : "Restore"}
-                </button>
-              )}
             </div>
-          </div>
+          </button>
         ))}
       </div>
     </div>
   );
+}
+
+/** When a version was taken, as a person reads it: "12:31" today, "Nov 9, 12:31" before. */
+function versionTime(at: number): string {
+  const d = new Date(at);
+  const time = d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  return d.toDateString() === new Date().toDateString() ? `Today ${time}` : `${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}, ${time}`;
 }

@@ -24,6 +24,9 @@ import { router } from 'expo-router';
 import { mobileRouteForUrl } from '@/lib/linkRoutes';
 import { Theme } from '@/constants/Theme';
 
+/** The web app's address, for a page the phone has no screen of its own for. */
+export const WEB_ORIGIN = 'https://codecast.sh';
+
 export {
   MOBILE_ENTITY_ROUTE,
   mobileEntityRoute,

@@ -21,6 +21,8 @@ import { isConvexId } from "@codecast/web/store/inboxStore";
 import { DOC_TYPE_CONFIG } from "@/components/DocItem";
 import { MarkdownContent } from "@/components/MarkdownRenderer";
 import { describeDates } from "@codecast/shared/time";
+import { isArtifactDocType } from "@codecast/shared/artifacts";
+import { openWebPage, WEB_ORIGIN } from "@/lib/links";
 
 export default function DocDetailScreen() {
   const Theme = useTheme();
@@ -124,7 +126,19 @@ export default function DocDetailScreen() {
           </TouchableOpacity>
         )}
 
-        {content ? (
+        {isArtifactDocType(doc.doc_type) ? (
+          // Boards, sheets and dashboards are drawn by the web app; the phone opens them there.
+          <TouchableOpacity
+            style={styles.webOnly}
+            onPress={() => void openWebPage(`${WEB_ORIGIN}/docs/${doc._id}`)}
+            activeOpacity={0.7}
+            accessibilityRole="link"
+          >
+            <FontAwesome name={cfg.icon as any} size={18} color={cfg.color} />
+            <RNText style={styles.webOnlyText}>Open {cfg.label.toLowerCase()} on the web</RNText>
+            <FontAwesome name="external-link" size={12} color={Theme.textMuted0} />
+          </TouchableOpacity>
+        ) : content ? (
           <RNView style={styles.section}>
             <MarkdownContent text={content} baseStyle={styles.bodyText} />
           </RNView>
@@ -252,6 +266,23 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontSize: 14,
     color: Theme.text,
     lineHeight: 21,
+  },
+  webOnly: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    backgroundColor: Theme.bgAlt,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.borderLight,
+    marginTop: Spacing.sm,
+  },
+  webOnlyText: {
+    flex: 1,
+    fontSize: 15,
+    color: Theme.text,
   },
   emptyContent: {
     alignItems: "center",

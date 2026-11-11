@@ -69,6 +69,8 @@ export type LiveArtifactsSliceActions = {
   settleLiveRows: (rowIds: string[], before: number) => void;
   /** A named checkpoint of the artifact as it is now. */
   liveCheckpoint: (docId: string, label?: string) => void;
+  /** Who may change the artifact: everyone who can open it ("team"), or its owner and `editors` ("owners"). Owner only. */
+  liveSetEditAccess: (docId: string, edit: "team" | "owners", editors: string[]) => void;
 };
 
 // The middleware wraps an asyncAction so its CALLER receives the server
@@ -127,6 +129,12 @@ export function createLiveArtifactsSlice(): LiveArtifactsSliceActions {
 
     // Nothing to paint: the version list fills from the server.
     liveCheckpoint: action(function (this: LiveDraft, _docId: string, _label?: string) {}),
+
+    liveSetEditAccess: action(function (this: LiveDraft, docId: string, edit: "team" | "owners", editors: string[]) {
+      const head = this.liveHeads[docId] ?? (this.liveHeads[docId] = { _id: docId, head: 0 });
+      head.edit = edit;
+      head.editors = editors;
+    }),
   };
   return impl as unknown as LiveArtifactsSliceActions;
 }

@@ -1,4 +1,5 @@
 import { FOREIGN_TEXT_CAPS, fenceForeignText, inlineForeignText } from "@codecast/shared/contracts";
+import { requireArtifactEditor } from "./lib/liveArtifactAccess";
 import { FOREIGN_PLAN_CAPS, foreignProse, referenceGuidance, foreignTaskSource } from "@codecast/shared/tasks";
 import type { RegisteredQuery } from "convex/server";
 import { resolveActor } from "./lib/actor";
@@ -680,6 +681,7 @@ export const update = mutation({
     if (!auth) throw new Error("Unauthorized");
 
     const doc = await requireAccessibleDoc(ctx, auth.userId, args.id);
+    await requireArtifactEditor(ctx, doc, auth.userId);
     await refuseRoleCharterWrite(ctx, auth.userId, doc, args.session_id);
 
     const text = docTextUpdates(doc, { title: args.title || undefined, content: args.content });
@@ -822,6 +824,7 @@ export const patch = mutation({
     if (!auth) throw new Error("Unauthorized");
 
     const doc = await requireAccessibleDoc(ctx, auth.userId, args.id);
+    await requireArtifactEditor(ctx, doc, auth.userId);
     await refuseRoleCharterWrite(ctx, auth.userId, doc, args.session_id);
 
     const content = doc.content || "";
@@ -1394,6 +1397,7 @@ export async function updateDocAs(ctx: MutationCtx, userId: Id<"users">, args: O
   const doc = await ctx.db.get(args.id);
   if (!doc) throw new Error("Doc not found");
   if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
+  await requireArtifactEditor(ctx, doc, userId);
 
   const updates: any = { updated_at: Date.now(), ...docTextUpdates(doc, args) };
   if (args.doc_type !== undefined && docTypeChangeAllowed(doc.doc_type, args.doc_type)) updates.doc_type = args.doc_type;
@@ -1439,6 +1443,7 @@ export const webPatch = mutation({
     if (!doc) throw new Error("Doc not found");
     // The same rule as webUpdate and the CLI patch: the doc's workspace.
     if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Not authorized");
+    await requireArtifactEditor(ctx, doc, userId);
 
     const idx = doc.content.indexOf(args.old_string);
     if (idx === -1) throw new Error("old_string not found in document");
@@ -2463,6 +2468,7 @@ export const generateShareLink = mutation({
     // Owner-or-team, matching plans.generateShareLink and webUpdate: docs are
     // team-visible/editable, so a teammate can mint the share link too.
     const doc = await requireAccessibleDoc(ctx, userId, args.id);
+    await requireArtifactEditor(ctx, doc, userId);
     const share_token = doc.share_token ?? crypto.randomUUID();
     await claimShareToken(ctx, "docs", doc, share_token, userId);
     return { share_token };
@@ -2476,7 +2482,9 @@ export const unshare = mutation({
       ? (await verifyApiToken(ctx, args.api_token))?.userId
       : await getAuthUserId(ctx);
     if (!userId) throw new Error("Unauthorized");
-    await claimShareToken(ctx, "docs", await requireAccessibleDoc(ctx, userId, args.id), null, userId);
+    const doc = await requireAccessibleDoc(ctx, userId, args.id);
+    await requireArtifactEditor(ctx, doc, userId);
+    await claimShareToken(ctx, "docs", doc, null, userId);
     return { success: true };
   },
 });

@@ -6,10 +6,10 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import { PRESENCE_TTL_MS, type PresenceAction, type PresenceGrant } from '@codecast/shared/contracts/secrets';
 import { confirmPresenceViaWeb, type OpenedChallenge, type PresenceHandoffDeps } from '@codecast/web/lib/presenceHandoff';
 import { convex } from '@/lib/convex';
-import { openInAppBrowser } from '@/lib/links';
+import { openInAppBrowser, WEB_ORIGIN } from '@/lib/links';
 
 const phone: PresenceHandoffDeps = {
-  webBase: 'https://codecast.sh',
+  webBase: WEB_ORIGIN,
   begin: (action, target) => convex.action(api.passkeys.presenceBegin, { action, target }) as Promise<OpenedChallenge>,
   enroll: () => convex.action(api.passkeys.registrationBegin, {}) as Promise<OpenedChallenge>,
   open: async (url) => ((await openInAppBrowser(url)).type === WebBrowser.WebBrowserResultType.OPENED ? 'opened' : 'closed'),

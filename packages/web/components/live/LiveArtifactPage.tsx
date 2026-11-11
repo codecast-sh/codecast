@@ -6,7 +6,7 @@
 import { Suspense, useCallback, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useRouter, useSearchParams } from "next/navigation";
-import { History, MessageSquare, Redo2, Undo2, X } from "lucide-react";
+import { Archive, Check, Copy, Download, Link2, Lock, Maximize2, Minimize2, Plus, RotateCcw, Upload, Users, History, MessageSquare, MoreHorizontal, Redo2, Undo2, X } from "lucide-react";
 import { artifactSpec, type ArtifactElement, type ArtifactPosition, type ArtifactType } from "@codecast/shared/artifacts";
 import { useInboxStore } from "../../store/inboxStore";
 import { ShareControl } from "../ShareControl";
@@ -19,13 +19,20 @@ import { isMac } from "../../shortcuts/registry";
 import { docTypeStyle } from "../../lib/docTypeStyle";
 import { DocTypeMark } from "../docs/DocTypeMark";
 import "./live.css";
-import { useLiveArtifact, useLiveElements, useLivePresence, useLiveRestoring, useLiveUnsettled } from "./useLiveArtifact";
+import { useLiveArtifact, useLiveVersions, useLiveDraftState, useLiveElements, useLivePresence, useLiveRefusal, useLiveRestoring, useLiveUnsettled } from "./useLiveArtifact";
 import { useWsConnected } from "../../hooks/useWsConnected";
+import { useShortcuts } from "../../shortcuts";
+import { useTitlebarHead } from "../../hooks/useTitlebarHead";
+import { sharePageUrl } from "../../lib/utils";
 import { LiveCursors } from "./LiveCursors";
 import { AskAgentControl, AskConfirmHost } from "./AskAgentControl";
 import { AskClaimProvider, useAskClaims } from "./askAgent";
 import { CommentsPanel, HistoryPanel } from "./LiveSidePanels";
-import { LIVE_VIEWS, MINIMAL_VIEWS, type ScreenPoint } from "./registry";
+import { LIVE_VIEWS, MINIMAL_VIEWS, type LiveExport, type LiveImport, type ScreenPoint } from "./registry";
+import { SwitchReview } from "../consequential/ConsequentialSwitch";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
+import { duplicateLiveArtifact } from "../../lib/createLiveArtifact";
 import { Button } from "../ui/button";
 import { toast } from "sonner";
 
@@ -66,11 +73,29 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
   const minimal = params.get("view") === "minimal";
   const View = (minimal ? MINIMAL_VIEWS : LIVE_VIEWS)[doc.doc_type];
   const askClaims = useAskClaims();
+  // In zen the header is the window's top row: it clears the zen corner (and is the desktop drag region).
+  const titlebarHead = useTitlebarHead<HTMLElement>();
 
   const [selection, setSelectionState] = useState<string[]>(() => (params.get("el") ? [params.get("el")!] : []));
   const [panel, setPanelKind] = useState<PanelKind>(() => (params.get("v") ? "history" : params.get("c") ? "comments" : null));
   const [productPanel, setProductPanel] = useState<ReactNode | null>(null);
   const [toolbar, setToolbar] = useState<ReactNode>(null);
+  const [exports, setExports] = useState<LiveExport[] | null>(null);
+  const [fileImport, setImport] = useState<LiveImport | null>(null);
+  const [typeLabel, setTypeLabel] = useState<string | null>(null);
+  const [discarding, setDiscarding] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  // A new comment a product asked for (openComments): where it anchors, and a tick that refocuses the box.
+  const [commentAsk, setCommentAsk] = useState<{ anchor?: string; tick: number } | null>(null);
+  const openComments = useCallback((opts?: { anchor?: string; thread?: string }) => {
+    setPanelKind("comments");
+    if (opts?.thread) {
+      setFocusComment(opts.thread);
+      setCommentAsk(null);
+    } else {
+      setCommentAsk((c) => ({ anchor: opts?.anchor, tick: (c?.tick ?? 0) + 1 }));
+    }
+  }, []);
   // ?c=<thread> (a notification, a copied comment link) opens that thread.
   const [focusComment, setFocusComment] = useState<string | null>(() => params.get("c"));
   const linkedComment = params.get("c");
@@ -108,6 +133,7 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
 
   const setSelection = useCallback((keys: string[]) => {
     setSelectionState(keys);
+    setCommentAsk(null);
     live.setPresence({ selection: keys, position: keys.length ? { key: keys[keys.length - 1] } : undefined });
   }, [live]);
 
@@ -118,7 +144,11 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
     setPanelKind(node ? "product" : (k) => (k === "product" ? null : k));
   }, []);
 
-  const togglePanel = (k: PanelKind) => setPanelKind((cur) => (cur === k ? null : k));
+  const togglePanel = (k: PanelKind) => {
+    setPanelKind((cur) => (cur === k ? null : k));
+    // A thread in the address belongs to the comments panel showing it.
+    if (params.get("c") && !(k === "comments" && panel !== "comments")) setParam("c", null);
+  };
 
   const selected = useMemo(() => {
     const keys = new Set(selection);
@@ -167,7 +197,11 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
 
   // The view element only changes when its own props do: presence, the
   // facepile, panels and the cursor mapping re-render the shell, not the view.
-  const mode = openRev !== null ? "view" : "edit";
+  // An archived artifact refuses every write: it opens read only until restored.
+  const archived = !!(doc as any).archived_at;
+  // Who may change it (the head's edit setting); until the feed says, assume they may.
+  const canEdit = useInboxStore((s: any) => s.liveHeads?.[doc._id]?.can_edit !== false);
+  const mode = openRev !== null || archived || !canEdit ? "view" : "edit";
   const viewSnapshot = openRev !== null ? snapshot ?? EMPTY : undefined;
   const view = useMemo(
     () => (
@@ -181,12 +215,26 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
         toScreen={toScreen}
         setToolbar={setToolbar}
         setPanel={setPanel}
+        setExports={setExports}
+        setImport={setImport}
+        openComments={openComments}
+        setTypeLabel={setTypeLabel}
       />
     ),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- doc fields named explicitly
-    [View, doc._id, doc.title, doc.doc_type, doc.project_path, doc.git_root, live, selection, setSelection, mode, viewSnapshot, toScreen, setPanel],
+    [View, doc._id, doc.title, doc.doc_type, doc.project_path, doc.git_root, live, selection, setSelection, mode, viewSnapshot, toScreen, setPanel, openComments],
   );
 
+  const draftCount = useLiveElements(doc._id, { layer: "draft" }).length;
+  // Share carries the view a person chose (a dashboard's filters, a sheet's tab), never where they happen to be:
+  // an open comment, a version, a selected element.
+  const shareQuery = useMemo(() => {
+    const q = new URLSearchParams(params.toString());
+    for (const k of ["c", "v", "el"]) q.delete(k);
+    return q.toString();
+  }, [params]);
+  const openVersion = useLiveVersions(doc._id).find((v) => v.rev === openRev);
+  const draftLabel = useLiveDraftState(doc._id)?.label;
   const commentCount = useLiveElements(doc._id, { layer: "comments" }).filter((c) => !c.parent && !c.resolved).length;
   const typeStyle = docTypeStyle(doc.doc_type);
   const mod = isMac ? "⌘" : "Ctrl";
@@ -194,22 +242,26 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
   return (
     <div className="h-full min-w-0 flex flex-col bg-sol-bg" data-live-page={doc.doc_type}>
       <AskConfirmHost />
-      <header className="live-head flex items-center gap-2 px-3 h-11 border-b border-sol-border/40 shrink-0">
+      <header ref={titlebarHead} className="live-head flex items-center gap-2 px-3 h-11 border-b border-sol-border/40 shrink-0">
         <DocTypeMark type={doc.doc_type} size={15} title={spec.label} />
-        <TitleInput docId={doc._id} title={doc.title} placeholder={`Untitled ${spec.label.toLowerCase()}`} readOnly={openRev !== null} />
-        <span data-live-type-label className={`text-meta shrink-0 ${typeStyle.color}`}>{spec.label}</span>
-        {openRev === null && <SyncState docId={doc._id} />}
-        <span className="flex-1" />
+        <TitleInput docId={doc._id} title={doc.title} placeholder={`Untitled ${spec.label.toLowerCase()}`} readOnly={mode === "view"} />
+        <span data-live-type-label className={`text-meta shrink-0 ${typeStyle.color}`}>{typeLabel ?? spec.label}</span>
+        {mode === "edit" && <SyncState docId={doc._id} />}
+        {/* The product's controls take the room left between the title and the
+            shell's own, and clip past it: the shell's buttons always stay reachable. */}
+        <div data-live-toolbar className="flex-1 min-w-0 flex items-center justify-end gap-2 overflow-hidden">{toolbar}</div>
         {faces.length > 0 && <span data-live-facepile className="shrink-0"><PresenceFacepile present={faces} size={22} max={5} /></span>}
-        {toolbar}
-        {!askClaims.claimed && openRev === null && <AskAgentControl doc={doc} selected={selected} />}
+        {!askClaims.claimed && mode === "edit" && <span className="shrink-0"><AskAgentControl doc={doc} selected={selected} /></span>}
         <IconToggle on={panel === "comments"} title="Comments" onClick={() => togglePanel("comments")} badge={commentCount}>
           <MessageSquare className="w-4 h-4" />
         </IconToggle>
         <IconToggle on={panel === "history"} title="History" onClick={() => togglePanel("history")}>
           <History className="w-4 h-4" />
         </IconToggle>
-        <ShareControl label={spec.label.toLowerCase()} path={`/docs/${doc._id}`} publicShare={{ kind: "doc", id: doc._id, token: (doc as any).share_token, team: policyTeamOf("docs", doc as any) }} />
+        <EditAccess doc={doc as any} canEdit={canEdit} />
+        <FocusToggle />
+        <ArtifactMenu doc={doc as any} canEdit={canEdit && !archived} ready={live.ready} exports={exports} fileImport={mode === "edit" ? fileImport : null} selection={selection} />
+        <ShareControl className="shrink-0" label={spec.label.toLowerCase()} path={`/docs/${doc._id}${shareQuery ? `?${shareQuery}` : ""}`} publicShare={{ kind: "doc", id: doc._id, token: (doc as any).share_token, team: policyTeamOf("docs", doc as any) }} />
       </header>
 
       {live.draft.active && openRev === null && (
@@ -219,17 +271,65 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
           <span className="flex-1" />
           <button type="button" title={`Undo (${mod}Z)`} disabled={!live.canUndo} onClick={live.undo} className="p-1 rounded text-sol-text-muted hover:text-sol-text disabled:opacity-30"><Undo2 className="w-3.5 h-3.5" /></button>
           <button type="button" title={`Redo (${mod}⇧Z)`} disabled={!live.canRedo} onClick={live.redo} className="p-1 rounded text-sol-text-muted hover:text-sol-text disabled:opacity-30"><Redo2 className="w-3.5 h-3.5" /></button>
-          <button type="button" data-live-draft-discard onClick={live.draft.discard} className="inline-flex items-center gap-1 h-6 px-2 rounded text-xs text-sol-text-muted hover:text-sol-red hover:bg-sol-red/10"><X className="w-3 h-3" /> Discard</button>
+          <button type="button" data-live-draft-discard onClick={() => setDiscarding(true)} className="inline-flex items-center gap-1 h-6 px-2 rounded text-xs text-sol-text-muted hover:text-sol-red hover:bg-sol-red/10"><X className="w-3 h-3" /> Discard</button>
           <Button type="button" variant="violet" size="xs" data-live-draft-save onClick={live.draft.save} className="h-6">Save</Button>
         </div>
       )}
+      {discarding && (
+        <SwitchReview
+          ledger={{
+            name: "Discard draft",
+            subject: [draftLabel, live.draft.by_name].filter(Boolean).join(" · ") || "Draft",
+            shift: null,
+            alert: "Can't be undone",
+            figures: [{ value: String(draftCount), label: draftCount === 1 ? "changed element" : "changed elements" }],
+            rows: [{ k: "Saved layer", v: "Stays as it is" }],
+            confirm: "Discard draft",
+            keep: "Keep draft",
+          }}
+          onClose={() => setDiscarding(false)}
+          onConfirm={() => { setDiscarding(false); live.draft.discard(); }}
+        />
+      )}
       {openRev === null && <RestoreStoppedBar live={live} />}
-      {openRev !== null && (
-        <div className="flex items-center gap-2 px-3 h-9 border-b border-sol-blue/30 bg-sol-blue/10 shrink-0" data-live-version-bar>
-          <span className="text-xs font-medium text-sol-blue">Version r{openRev}</span>
+      {archived && openRev === null && (
+        <div className="flex items-center gap-2 px-3 h-9 border-b border-sol-border/40 bg-sol-bg-alt shrink-0" data-live-archived>
+          <span className="text-xs font-medium text-sol-text">Archived</span>
           <span className="text-meta text-sol-text-muted">read only</span>
           <span className="flex-1" />
-          <button type="button" onClick={() => setParam("v", null)} className="h-6 px-2 rounded text-xs text-sol-text-muted hover:text-sol-text">Back to current <KeyCap>Esc</KeyCap></button>
+          <Button type="button" variant="outline" size="xs" className="h-6" onClick={() => (useInboxStore.getState() as any).restoreArchivedDoc(doc._id)}>Restore</Button>
+        </div>
+      )}
+      {openRev !== null && (
+        <div className="flex items-center gap-2 px-3 h-9 border-b border-sol-blue/30 bg-sol-blue/10 shrink-0" data-live-version-bar>
+          <span className="text-xs font-medium text-sol-blue truncate">{openVersion?.label ?? "Version"}</span>
+          <span className="text-meta text-sol-text-muted shrink-0">read only</span>
+          <span className="flex-1" />
+          <button type="button" onClick={() => setParam("v", null)} className="h-6 px-2 rounded text-xs text-sol-text-muted hover:text-sol-text shrink-0">Back to current <KeyCap>Esc</KeyCap></button>
+          {!archived && canEdit ? (
+            <Button
+              type="button"
+              variant="blue"
+              size="xs"
+              data-live-restore={openRev}
+              disabled={restoring || snapshot === undefined}
+              className="h-6 shrink-0"
+              onClick={async () => {
+                setRestoring(true);
+                try {
+                  const r = await live.history.restore(openRev);
+                  setParam("v", null);
+                  toast.success(r.changed ? `Restored: ${r.changed} element${r.changed === 1 ? "" : "s"} changed` : "Already matches this version");
+                } catch (e: any) {
+                  toast.error(typeof e?.data === "string" ? e.data : "The restore did not finish");
+                } finally {
+                  setRestoring(false);
+                }
+              }}
+            >
+              <RotateCcw className="w-3 h-3" /> {restoring ? "Restoring…" : "Restore this version"}
+            </Button>
+          ) : null}
         </div>
       )}
 
@@ -250,19 +350,22 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
           {openRev === null && <CursorLayer others={others} screenMap={screenMap} />}
         </div>
         {panel && (
-          <aside className="live-panel w-[300px] shrink-0 border-l border-sol-border/40 bg-sol-bg min-h-0" data-live-panel={panel}>
+          <aside className="live-panel w-[300px] shrink-0 overflow-hidden flex flex-col border-l border-sol-border/40 bg-sol-bg min-h-0" data-live-panel={panel}>
             {panel === "comments" && (
               <CommentsPanel
                 doc={doc as any}
                 live={live}
-                selection={selection}
+                selection={commentAsk?.anchor ? [commentAsk.anchor] : selection}
+                composeTick={commentAsk?.tick}
                 selectedElements={selected}
                 focusKey={focusComment}
-                readOnly={openRev !== null}
-                onFocus={(k, anchor) => { setFocusComment(k); if (anchor) setSelection([anchor]); }}
+                // A viewer still comments; an open version or an archived artifact takes none.
+                readOnly={openRev !== null || archived}
+                onFocus={(k, anchor) => { setFocusComment(k); setParam("c", k); if (anchor) setSelection([anchor]); }}
+                onClose={() => { setPanelKind(null); setParam("c", null); }}
               />
             )}
-            {panel === "history" && <HistoryPanel live={live} openRev={openRev} onOpen={(rev) => setParam("v", rev === null ? null : String(rev))} />}
+            {panel === "history" && <HistoryPanel live={live} openRev={openRev} onOpen={(rev) => setParam("v", rev === null ? null : String(rev))} onClose={() => setPanelKind(null)} canEdit={canEdit && !archived} />}
             {panel === "product" && productPanel}
           </aside>
         )}
@@ -274,7 +377,14 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
 function TitleInput({ docId, title, placeholder, readOnly }: { docId: string; title: string; placeholder: string; readOnly?: boolean }) {
   const [value, setValue] = useState(title);
   useWatchEffect(() => setValue(title), [title]);
+  // Esc ends the edit through blur, which commits: the flag makes that blur throw the edit away.
+  const cancelled = useRef(false);
   const commit = () => {
+    if (cancelled.current) {
+      cancelled.current = false;
+      setValue(title);
+      return;
+    }
     const next = value.trim();
     if (next && next !== title) (useInboxStore.getState() as any).updateDoc(docId, { title: next });
     else setValue(title);
@@ -294,11 +404,10 @@ function TitleInput({ docId, title, placeholder, readOnly }: { docId: string; ti
         if (e.key !== "Enter" && e.key !== "Escape") return;
         e.preventDefault();
         e.stopPropagation();
-        if (e.key === "Escape") setValue(title);
-        else commit();
+        if (e.key === "Escape") cancelled.current = true;
         (e.target as HTMLInputElement).blur();
       }}
-      className="min-w-[10ch] max-w-[40%] shrink-0 bg-transparent text-sm font-semibold text-sol-text placeholder:text-sol-text-dim outline-none rounded px-1 -mx-1 hover:bg-sol-bg-alt focus:bg-sol-bg-alt"
+      className="min-w-[6ch] max-w-[40%] shrink bg-transparent text-sm font-semibold text-sol-text placeholder:text-sol-text-dim outline-none rounded px-1 -mx-1 hover:bg-sol-bg-alt focus:bg-sol-bg-alt"
       style={{ width: `${Math.max(8, (value || placeholder).length + 1)}ch` }}
     />
   );
@@ -311,7 +420,7 @@ function IconToggle({ on, title, onClick, badge, children }: { on: boolean; titl
       title={title}
       aria-pressed={on}
       onClick={onClick}
-      className={`relative inline-flex items-center justify-center w-7 h-7 rounded-md transition-colors ${on ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt"}`}
+      className={`relative inline-flex items-center justify-center w-7 h-7 shrink-0 rounded-md transition-colors ${on ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt"}`}
     >
       {children}
       {!!badge && (
@@ -325,12 +434,14 @@ function IconToggle({ on, title, onClick, badge, children }: { on: boolean; titl
 function SyncState({ docId }: { docId: string }) {
   const online = useWsConnected();
   const waiting = useLiveUnsettled(docId);
-  const state = !online ? "offline" : waiting > 0 ? "saving" : "saved";
-  const label = state === "offline" ? (waiting > 0 ? `Offline · ${waiting} waiting` : "Offline") : state === "saving" ? "Saving…" : "Saved";
+  const refusal = useLiveRefusal(docId);
+  const state = !online ? "offline" : waiting > 0 ? "saving" : refusal ? "refused" : "saved";
+  const label = state === "offline" ? (waiting > 0 ? `Offline · ${waiting} waiting` : "Offline") : state === "saving" ? "Saving…" : state === "refused" ? "Not saved" : "Saved";
   return (
     <span
       data-live-sync={state}
-      className={`text-meta shrink-0 tabular-nums ${state === "offline" ? "text-sol-red" : "text-sol-text-dim"}`}
+      title={state === "refused" ? refusal ?? undefined : undefined}
+      className={`text-meta shrink-0 tabular-nums ${state === "offline" || state === "refused" ? "text-sol-red" : "text-sol-text-dim"}`}
     >
       {label}
     </span>
@@ -364,5 +475,204 @@ function RestoreStoppedBar({ live }: { live: ReturnType<typeof useLiveArtifact> 
         {busy === "finish" ? "Finishing…" : "Finish restore"}
       </Button>
     </div>
+  );
+}
+
+/** The artifact's "..." menu: Duplicate, and every download the view offers. */
+function ArtifactMenu({ doc, canEdit, ready, exports, fileImport, selection }: { doc: { _id: string; title: string; doc_type: ArtifactType; team_id?: string; workspace?: string }; canEdit: boolean; ready: boolean; exports: LiveExport[] | null; fileImport: LiveImport | null; selection: string[] }) {
+  const router = useRouter();
+  const [archiving, setArchiving] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const download = async (x: LiveExport, sel: string[]) => {
+    const pending = toast.loading(`Preparing ${x.format.toUpperCase()}…`);
+    try {
+      const blob = await x.run({ selection: sel });
+      toast.dismiss(pending);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${(doc.title || "Untitled").replace(/[\\/:*?"<>|]+/g, " ").trim()}${sel.length ? " (selection)" : ""}.${x.format}`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (e: any) {
+      toast.dismiss(pending);
+      toast.error(`Could not export ${x.format.toUpperCase()}: ${e?.message ?? "failed"}`);
+    }
+  };
+  const words = (x: LiveExport) => x.label ?? x.format.toUpperCase();
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" title="More" aria-label="More" data-live-menu className="inline-flex items-center justify-center w-7 h-7 shrink-0 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt">
+          <MoreHorizontal className="w-4 h-4" />
+        </button>
+      </DropdownMenuTrigger>
+      {/* The menu owns its keys: the Enter that picks a row must not also open the list row behind the page. */}
+      <DropdownMenuContent align="end" data-owns-keys="" className="min-w-[200px]">
+        {/* A copy holds the whole saved layer: offered once the page has read all of it. */}
+        <DropdownMenuItem
+          data-live-duplicate
+          disabled={!ready}
+          onSelect={() => {
+            toast.promise(duplicateLiveArtifact(doc, (href) => router.push(href)).then((id) => { if (!id) throw new Error("no copy"); return id; }), {
+              loading: "Making a copy…",
+              success: "Copy opened",
+              error: "Could not make a copy",
+            });
+          }}
+        >
+          <Copy className="w-3.5 h-3.5" /> Duplicate
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          data-live-copy-link
+          onSelect={() => { void navigator.clipboard?.writeText(sharePageUrl(`/docs/${doc._id}`)).then(() => toast.success("Link copied")); }}
+        >
+          <Link2 className="w-3.5 h-3.5" /> Copy link
+        </DropdownMenuItem>
+        {(!!exports?.length || fileImport) && <DropdownMenuSeparator />}
+        {fileImport && (
+          <DropdownMenuItem data-live-import onSelect={() => fileInput.current?.click()}>
+            <Upload className="w-3.5 h-3.5" /> {fileImport.label}
+          </DropdownMenuItem>
+        )}
+        {exports?.map((x) => (
+          <DropdownMenuItem key={`${x.format}:${x.label ?? ""}`} data-live-export={x.format} onSelect={() => void download(x, [])}>
+            <Download className="w-3.5 h-3.5" /> Download {words(x)}
+          </DropdownMenuItem>
+        ))}
+        {selection.length > 0 && exports?.filter((x) => x.selectionAware).map((x) => (
+          <DropdownMenuItem key={`sel:${x.format}:${x.label ?? ""}`} data-live-export-selection={x.format} onSelect={() => void download(x, selection)}>
+            <Download className="w-3.5 h-3.5" /> Download selection as {words(x)}
+          </DropdownMenuItem>
+        ))}
+        {canEdit && <DropdownMenuSeparator />}
+        {canEdit && (
+          <DropdownMenuItem data-live-archive onSelect={() => setArchiving(true)} className="text-sol-red focus:text-sol-red">
+            <Archive className="w-3.5 h-3.5" /> Archive…
+          </DropdownMenuItem>
+        )}
+      </DropdownMenuContent>
+      {archiving && (
+        <SwitchReview
+          ledger={{
+            name: `Archive ${artifactSpec(doc.doc_type).label.toLowerCase()}`,
+            subject: doc.title || "Untitled",
+            shift: null,
+            figures: [],
+            rows: [{ k: "Who loses it", v: String(doc.workspace ?? "").startsWith("team:") ? "Everyone in the team" : "Only you" }, { k: "Undo", v: "From the toast that follows" }],
+            confirm: "Archive",
+            keep: "Keep",
+          }}
+          onClose={() => setArchiving(false)}
+          onConfirm={() => {
+            setArchiving(false);
+            (useInboxStore.getState() as any).archiveDoc(doc._id);
+            router.push("/docs");
+          }}
+        />
+      )}
+      {fileImport && (
+        <input
+          ref={fileInput}
+          type="file"
+          hidden
+          accept={fileImport.accept}
+          multiple={fileImport.multiple}
+          onChange={(e) => {
+            const files = [...(e.target.files ?? [])];
+            e.target.value = "";
+            if (files.length) fileImport.run(files);
+          }}
+        />
+      )}
+    </DropdownMenu>
+  );
+}
+
+/**
+ * Who may change the artifact. Its owner picks: everyone who can open it, or
+ * only the owner and the people named. Anyone else who cannot edit sees that
+ * they are viewing; comments stay open to them.
+ */
+function EditAccess({ doc, canEdit }: { doc: { _id: string; user_id?: string; workspace?: string }; canEdit: boolean }) {
+  const me = useInboxStore((s: any) => s.currentUser?._id as string | undefined);
+  const edit = useInboxStore((s: any) => (s.liveHeads?.[doc._id]?.edit as "team" | "owners" | undefined) ?? "team");
+  const editorsSig = useInboxStore((s: any) => (s.liveHeads?.[doc._id]?.editors ?? []).join(","));
+  const editors: string[] = useMemo(() => (editorsSig ? String(editorsSig).split(",") : []), [editorsSig]);
+  const roster = useTeamRosterIdentity();
+  const owner = !!me && String(doc.user_id) === me;
+  // A personal artifact opens for its owner alone: there is no one to let in or keep out.
+  if (String(doc.workspace ?? "").startsWith("user:")) return null;
+  if (!owner) {
+    return canEdit ? null : <span data-live-view-only className="text-meta shrink-0 px-1.5 h-6 inline-flex items-center rounded bg-sol-bg-alt text-sol-text-muted">View only</span>;
+  }
+  const set = (next: "team" | "owners", list: string[]) => (useInboxStore.getState() as any).liveSetEditAccess(doc._id, next, list);
+  const nameOf = (id: string) => roster.find((m) => m._id === id)?.name ?? "Someone";
+  const addable = roster.filter((m) => m._id !== me && !editors.includes(m._id) && !(m as any).is_bot);
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" data-live-edit-access={edit} title={edit === "team" ? "Anyone can edit" : "Only you and editors edit"} className="inline-flex items-center gap-1 h-6 px-1.5 rounded text-meta shrink-0 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt">
+          {edit === "team" ? <Users className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
+          <span data-live-edit-access-label>{edit === "team" ? "Anyone can edit" : editors.length ? `You + ${editors.length} edit` : "Only you edit"}</span>
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" data-owns-keys="" className="min-w-[240px]">
+        <DropdownMenuItem onSelect={() => set("team", editors)} data-live-edit-team>
+          <Users className="w-3.5 h-3.5" /> <span className="flex-1">Anyone who can open it edits</span>{edit === "team" && <Check className="w-3.5 h-3.5" />}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => set("owners", editors)} data-live-edit-owners>
+          <Lock className="w-3.5 h-3.5" /> <span className="flex-1">Only you and editors</span>{edit === "owners" && <Check className="w-3.5 h-3.5" />}
+        </DropdownMenuItem>
+        {edit === "owners" && (
+          <>
+            <DropdownMenuSeparator />
+            {editors.map((id) => (
+              <DropdownMenuItem key={id} onSelect={(e) => { e.preventDefault(); set("owners", editors.filter((x) => x !== id)); }} data-live-editor={id}>
+                <span className="flex-1 truncate">{nameOf(id)}</span><X className="w-3.5 h-3.5 text-sol-text-dim" />
+              </DropdownMenuItem>
+            ))}
+            {addable.length > 0 && (
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger><Plus className="w-3.5 h-3.5" /> Add editor</DropdownMenuSubTrigger>
+                <DropdownMenuSubContent data-owns-keys="" className="max-h-[320px] overflow-y-auto">
+                  {addable.map((m) => (
+                    <DropdownMenuItem key={m._id} onSelect={() => set("owners", [...editors, m._id])}>{m.name}</DropdownMenuItem>
+                  ))}
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            )}
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * Focus: the canvas gets the window. It is the app's zen mode (top bar and
+ * sidebar folded away, remembered per person), and while an artifact is open
+ * in it the list column beside the open doc folds away too.
+ */
+function FocusToggle() {
+  const zen = useInboxStore((s: any) => s.clientState.ui?.zen_mode ?? false);
+  const { dispatchAction } = useShortcuts();
+  useWatchEffect(() => {
+    if (!zen) return;
+    document.documentElement.dataset.liveFocus = "";
+    return () => { delete document.documentElement.dataset.liveFocus; };
+  }, [zen]);
+  return (
+    <button
+      type="button"
+      data-live-focus-toggle={zen ? "on" : "off"}
+      aria-pressed={zen}
+      title={zen ? "Exit focus" : "Focus"}
+      aria-label={zen ? "Exit focus" : "Focus"}
+      onClick={() => dispatchAction("ui.zenToggle")}
+      className={`inline-flex items-center justify-center w-7 h-7 rounded-md shrink-0 transition-colors ${zen ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt"}`}
+    >
+      {zen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+    </button>
   );
 }

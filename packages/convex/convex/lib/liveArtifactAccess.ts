@@ -61,6 +61,25 @@ export async function requireLiveDoc(ctx: any, userId: Id<"users">, docId: Id<"d
 }
 
 
+/** Whether this user may change an artifact: everyone who can open it, unless its owner limited editing to editors. */
+export function mayEditLive(doc: Doc<"docs">, head: Doc<"live_heads"> | null, userId: Id<"users">): boolean {
+  if (head?.edit !== "owners") return true;
+  return String(doc.user_id) === String(userId) || (head.editors ?? []).some((e) => String(e) === String(userId));
+}
+
+export const VIEW_ONLY_MESSAGE = "You can view and comment on this artifact; its owner limited who can edit it";
+
+/**
+ * Refuse a write to a board, sheet or dashboard (its elements, or its doc
+ * row: title, type, labels, archive) from someone its owner did not let edit.
+ * Any other doc passes.
+ */
+export async function requireArtifactEditor(ctx: any, doc: Doc<"docs">, userId: Id<"users">): Promise<void> {
+  if (!isArtifactDocType(doc.doc_type)) return;
+  const head = await ctx.db.query("live_heads").withIndex("by_doc", (q: any) => q.eq("doc_id", doc._id)).first();
+  if (!mayEditLive(doc, head, userId)) throw new ConvexError(VIEW_ONLY_MESSAGE);
+}
+
 /** Upsert one participant's presence row; a new arrival sweeps out the departed. */
 export async function upsertPresence(
   ctx: any,

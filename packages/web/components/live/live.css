@@ -5,8 +5,17 @@
   .live-head [data-live-type-label],
   .live-head [data-freshness] { display: none !important; }
 }
+@container (max-width: 640px) {
+  .live-head [data-live-sync],
+  .live-head [data-live-edit-access-label] { display: none; }
+}
 @container (max-width: 560px) {
   .live-head [data-live-facepile] { display: none; }
+}
+/* The narrowest pane keeps the title, Comments, History, "..." and Share. */
+@container (max-width: 480px) {
+  .live-head [data-live-focus-toggle],
+  .live-head [data-live-toolbar] { display: none; }
 }
 
 /* A side panel in a narrow pane covers the body below the header instead of
@@ -15,3 +24,7 @@
 @container live-page (max-width: 640px) {
   .live-panel { position: absolute; top: 2.75rem; right: 0; bottom: 0; left: 0; width: auto; z-index: 30; border-left: 0; }
 }
+
+/* Focus (the artifact's zen): the list column beside the open doc folds away
+   while an artifact is open in it. Set on <html> by FocusToggle. */
+html[data-live-focus] .cc-detail-split[data-cc-detail-split="open"] > .cc-detail-split__list { display: none; }
