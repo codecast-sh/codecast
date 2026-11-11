@@ -268,7 +268,7 @@ function fixture(transport = "tmux", cached = true) {
     messagesInFlight: new Map(), conversationDeliveryActive: new Set(), injectedMessageTs,
     IN_FLIGHT_HARD_TTL_MS: 10000, compactionRedeliveryBypass: new Set(), injectionDedupWindowMs: () => 10000,
     messageRetryTimers: new Set(), injectedMarkWrites, syncService, conversationCache: cached ? { sid: "conv" } : {}, titleCache: {},
-    sendAgentStatus: () => {}, recentSessionInjections: new Map(), resetReconnectDelay: () => {},
+    sendAgentStatus: () => {}, awaitDeliveryEcho: () => {}, recentSessionInjections: new Map(), resetReconnectDelay: () => {},
     checkForInteractivePrompt: async () => {},
     claudeSdkBackend: null,
   };

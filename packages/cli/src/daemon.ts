@@ -18248,8 +18248,14 @@ export async function injectViaTmux(target: string, content: string, agentType?:
   }
 }
 
+// Loaded on first delivery, so the daemon's boot graph stays out of
+// tmuxSuspendedAgent's imports. A module-level name, so the inject suites
+// that rebuild injectViaTmuxInner from source can still hand in their own.
+async function restoreSuspendedAgent(target: string, exec: typeof tmuxExec): Promise<boolean> {
+  return (await import("./tmuxSuspendedAgent.js")).restoreSuspendedAgent(target, exec);
+}
+
 async function injectViaTmuxInner(target: string, content: string, agentType?: AgentClientId, opts?: TmuxInjectionOptions): Promise<void> {
-  const { restoreSuspendedAgent } = await import("./tmuxSuspendedAgent.js");
   if (await restoreSuspendedAgent(target, tmuxExec)) log(`[RECOVER] Restored suspended agent and terminal input in ${target}`);
   // Does this client's TUI bracket a paste? Decides whether newlines in the
   // payload survive as composer newlines or get flattened to spaces — see
