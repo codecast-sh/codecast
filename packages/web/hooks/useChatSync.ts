@@ -135,6 +135,9 @@ export function useChatChannelsSync(): { error?: Error } {
         syncTable("chatChannels", data.channels ?? [], prune);
         syncTable("chatReads", data.reads ?? [], prune);
         syncTable("chatSlackLinks", data.slack_links ?? []);
+        // A DM's unread lines land before the rail that counts them, so no
+        // face or row is badged for a line the cache does not hold.
+        if (data.unread_dm_messages?.length) syncTable("chatMessages", data.unread_dm_messages);
         syncChatRail(syncTable, data.rail ?? [], "team");
         // This rail came from the server, not from IndexedDB. Only now is a
         // change in it evidence that something ARRIVED — see lib/chatLive.

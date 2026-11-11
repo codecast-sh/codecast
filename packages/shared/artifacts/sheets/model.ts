@@ -35,7 +35,7 @@ export type CellStyle = CellNumberFormat & {
 
 export type CellEl = ArtifactElement & CellStyle & { input?: string };
 
-export const STYLE_FIELDS = ["nf", "dp", "sign", "cur", "b", "i", "u", "fs", "al", "color", "fill", "bd", "wrap"] as const;
+export const STYLE_FIELDS = ["nf", "dp", "sign", "cur", "code", "b", "i", "u", "fs", "al", "color", "fill", "bd", "wrap"] as const;
 
 export type QuerySource = "tasks" | "sessions" | "prs" | "metrics";
 export type TabQuery = { source: QuerySource; project?: string; status?: string; limit?: number };
@@ -61,7 +61,7 @@ export type TabMeta = {
   queryError?: string;
 };
 
-export type CondRule = "sign" | "scale" | "gt" | "lt" | "eq" | "contains";
+export type CondRule = "sign" | "scale" | "gt" | "lt" | "eq" | "contains" | "before" | "after";
 export type CondFormat = { key: string; tab: string; rect: Rect; rule: CondRule; value?: string | number; color?: PaletteColor };
 export type TableStyle = { key: string; tab: string; rect: Rect; color: PaletteColor; banded: boolean };
 
@@ -75,7 +75,15 @@ export type ValidationOption = { v: string; color?: PaletteColor };
 export type Validation = { key: string; tab: string; rect: Rect; rule: "list" | "date"; options: ValidationOption[]; strict: boolean };
 
 /** Element kinds that style a range rather than hold a cell: they live outside the tab's cell maps. */
-export const RANGE_KINDS: ReadonlySet<string> = new Set(["cf", "table", "dv"]);
+export const RANGE_KINDS: ReadonlySet<string> = new Set(["cf", "table", "dv", "merge"]);
+
+/** Cells merged into one: the top-left shows across the range; the others keep their input, hidden under it. */
+export type Merge = { key: string; tab: string; rect: Rect };
+
+/** The merge covering a cell, if any. */
+export function mergeAt(model: SheetModel, tabId: string, col: number, row: number): Merge | undefined {
+  return model.merges.find((m) => m.tab === tabId && col >= m.rect.c0 && col <= m.rect.c1 && row >= m.rect.r0 && row <= m.rect.r1);
+}
 
 /** The validation covering a cell, if any (the last written wins on overlap). */
 export function validationAt(model: SheetModel, tabId: string, col: number, row: number): Validation | undefined {
@@ -98,6 +106,9 @@ export type TabData = {
   cells: Map<number, CellEl>;
   colWidths: Map<number, number>;
   rowHeights: Map<number, number>;
+  /** Columns and rows someone hid (`hidden` on their col:/row: element). */
+  hiddenCols?: Set<number>;
+  hiddenRows?: Set<number>;
   rows: number;
   cols: number;
   /** The newest cell an agent session wrote here: tab labels show agent activity on tabs nobody is looking at. */
@@ -117,6 +128,7 @@ export type SheetModel = {
   conds: CondFormat[];
   tables: TableStyle[];
   validations: Validation[];
+  merges: Merge[];
 };
 
 /** Cells are stored per tab under row * 2^15 + col. */
@@ -137,11 +149,13 @@ export function buildModel(elements: readonly ArtifactElement[]): SheetModel {
   const conds: CondFormat[] = [];
   const tables: TableStyle[] = [];
   const validations: Validation[] = [];
+  const merges: Merge[] = [];
   for (const el of elements) {
     if (RANGE_KINDS.has(el.kind)) {
       const rect = typeof el.range === "string" ? parseRectA1(el.range) : null;
       if (!rect || typeof el.tab !== "string") continue;
-      if (el.kind === "dv") validations.push({ key: el.key, tab: el.tab, rect, rule: el.rule === "date" ? "date" : "list", options: toOptions(el.options), strict: el.strict === true });
+      if (el.kind === "merge") merges.push({ key: el.key, tab: el.tab, rect });
+      else if (el.kind === "dv") validations.push({ key: el.key, tab: el.tab, rect, rule: el.rule === "date" ? "date" : "list", options: toOptions(el.options), strict: el.strict === true });
       else if (el.kind === "cf") conds.push({ key: el.key, tab: el.tab, rect, rule: (el.rule as CondRule) ?? "sign", value: el.value as any, color: el.color as PaletteColor | undefined });
       else tables.push({ key: el.key, tab: el.tab, rect, color: (el.color as PaletteColor) ?? "blue", banded: el.banded !== false });
       continue;
@@ -171,15 +185,17 @@ export function buildModel(elements: readonly ArtifactElement[]): SheetModel {
         break;
       case "col":
         if (typeof el.w === "number") t.colWidths.set(k.col, el.w);
+        if (el.hidden === true) (t.hiddenCols ??= new Set()).add(k.col);
         break;
       case "row":
         if (typeof el.h === "number") t.rowHeights.set(k.row, el.h);
+        if (el.hidden === true) (t.hiddenRows ??= new Set()).add(k.row);
         break;
     }
   }
   if (byId.size === 0) tabFor(DEFAULT_TAB).meta.order = 0;
   const tabs = [...byId.values()].map((t) => t.meta).sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
-  return { tabs, byId, conds, tables, validations };
+  return { tabs, byId, conds, tables, validations, merges };
 }
 
 export function tabByName(model: SheetModel, name: string): TabMeta | undefined {
@@ -364,10 +380,22 @@ export class LiveSheet {
         if (t.colWidths === this.model.byId.get(k.tab)?.colWidths) t.colWidths = new Map(t.colWidths);
         if (gone || typeof el.w !== "number") t.colWidths.delete(k.col);
         else t.colWidths.set(k.col, el.w);
+        const hid = !gone && el.hidden === true;
+        if (hid !== !!t.hiddenCols?.has(k.col)) {
+          t.hiddenCols = new Set(t.hiddenCols);
+          if (hid) t.hiddenCols.add(k.col);
+          else t.hiddenCols.delete(k.col);
+        }
       } else if (k.type === "row") {
         if (t.rowHeights === this.model.byId.get(k.tab)?.rowHeights) t.rowHeights = new Map(t.rowHeights);
         if (gone || typeof el.h !== "number") t.rowHeights.delete(k.row);
         else t.rowHeights.set(k.row, el.h);
+        const hid = !gone && el.hidden === true;
+        if (hid !== !!t.hiddenRows?.has(k.row)) {
+          t.hiddenRows = new Set(t.hiddenRows);
+          if (hid) t.hiddenRows.add(k.row);
+          else t.hiddenRows.delete(k.row);
+        }
       }
     };
     for (const el of changed) visit(el, false);
@@ -378,7 +406,7 @@ export class LiveSheet {
       if (!byId.has(id)) structure = true;
       byId.set(id, t);
     }
-    let { tabs, conds, tables, validations } = this.model;
+    let { tabs, conds, tables, validations, merges } = this.model;
     if (structure) {
       // Tab metas, conditional colors and tables come from the few non-cell elements.
       const meta = buildModel([...this.others.values()]);
@@ -394,9 +422,10 @@ export class LiveSheet {
       conds = meta.conds;
       tables = meta.tables;
       validations = meta.validations;
+      merges = meta.merges;
       this.wb.setTabs(tabs.map((t) => ({ id: t.id, name: t.name })));
     }
-    this.model = { tabs, byId, conds, tables, validations };
+    this.model = { tabs, byId, conds, tables, validations, merges };
     this.wb.update(inputs);
     this.version++;
     return true;

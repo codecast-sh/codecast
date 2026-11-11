@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { realChromePid } from "./localChrome.js";
+import { lastBrowserProcesses, realChromePid } from "./localChrome.js";
 
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 
@@ -21,5 +21,17 @@ describe("realChromePid", () => {
   test("only agent Chromes running means no real Chrome", () => {
     expect(realChromePid([{ pid: 1, command: `${CHROME} --remote-debugging-port=1 --user-data-dir=/x` }])).toBeNull();
     expect(realChromePid([])).toBeNull();
+  });
+});
+
+// A click on "open tab" for a closed tab is answered by every engine, and a
+// fresh `ps` took 3 to 17s on a loaded machine: the pill read "focusing…"
+// for that long before it could say the tab was gone.
+describe("lastBrowserProcesses", () => {
+  test("only the first call waits on ps; later calls get the last listing at once", async () => {
+    const first = await lastBrowserProcesses();
+    expect(first.length).toBeGreaterThan(0);
+    const again = await Promise.race([lastBrowserProcesses(), new Promise<"waited">((r) => setImmediate(() => r("waited")))]);
+    expect(again).toBe(first);
   });
 });

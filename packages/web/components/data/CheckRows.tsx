@@ -19,7 +19,19 @@ function compare(a: unknown, b: unknown): number {
 
 export type RowsScope = { label: string; rows: Set<number> };
 
-export function CheckRows({ columns, rows, scopes, initialScope = 0, truncated }: { columns: string[]; rows: unknown[][]; scopes: RowsScope[]; initialScope?: number; truncated?: boolean }) {
+/** Money keeps its unit and every cent the source sent; other numbers stay exact. */
+const shown = (v: unknown, format?: string) =>
+  typeof v === "number" && format === "usd" ? `${v < 0 ? "−" : ""}$${Math.abs(v).toLocaleString("en-US", { minimumFractionDigits: Number.isInteger(v) ? 0 : 2, maximumFractionDigits: 20 })}` : exact(v);
+
+export function CheckRows({ columns: allColumns, rows: allRows, scopes, initialScope = 0, truncated, lead = [], formats = {} }: { columns: string[]; rows: unknown[][]; scopes: RowsScope[]; initialScope?: number; truncated?: boolean; lead?: string[]; formats?: Record<string, string> }) {
+  // The columns the number is made of come first, so a narrow panel shows them before it scrolls. Row order (and so every scope's row set) is unchanged.
+  const leadSig = lead.join(",");
+  const perm = useMemo(() => {
+    const first = leadSig.split(",").filter((c) => c && allColumns.includes(c));
+    return [...new Set([...first, ...allColumns])].map((c) => allColumns.indexOf(c));
+  }, [allColumns, leadSig]);
+  const columns = useMemo(() => perm.map((i) => allColumns[i]), [perm, allColumns]);
+  const rows = useMemo(() => allRows.map((r) => perm.map((i) => r[i])), [allRows, perm]);
   const [scopeAt, setScopeAt] = useState(initialScope);
   const scope = scopes[scopeAt] as RowsScope | undefined;
   const [query, setQuery] = useState("");
@@ -43,8 +55,8 @@ export function CheckRows({ columns, rows, scopes, initialScope = 0, truncated }
 
   return (
     <div className="space-y-1.5 min-w-0" data-check-rows>
-      <div className="flex items-center gap-1.5">
-        <label className="relative flex-1 min-w-0">
+      <div className="flex flex-wrap items-center gap-1.5">
+        <label className="relative flex-1 min-w-[160px]">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-sol-text-dim pointer-events-none" />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Find in rows" aria-label="Find in rows" className="w-full h-7 rounded-md bg-sol-bg border border-sol-border/60 pl-7 pr-6 text-xs text-sol-text outline-none focus:border-sol-blue" />
           {query ? (
@@ -54,7 +66,7 @@ export function CheckRows({ columns, rows, scopes, initialScope = 0, truncated }
           ) : null}
         </label>
         {scopes.length ? (
-          <div className="inline-flex shrink-0 rounded-md bg-sol-bg-alt p-0.5" role="radiogroup" aria-label="Which rows">
+          <div className="inline-flex max-w-full overflow-x-auto rounded-md bg-sol-bg-alt p-0.5" role="radiogroup" aria-label="Which rows">
             {[...scopes, null].map((s, i) => {
               const on = s ? i === scopeAt : scopeAt >= scopes.length;
               return (
@@ -96,7 +108,7 @@ export function CheckRows({ columns, rows, scopes, initialScope = 0, truncated }
                 <tr key={ri} style={{ height: ROW_H }} className={highlight?.has(ri) && scopeAt >= scopes.length ? "bg-sol-blue/10" : "hover:bg-sol-bg-alt/50"} data-row={ri}>
                   {columns.map((c, i) => (
                     <td key={c} className={`px-3 border-b border-sol-border/20 whitespace-nowrap ${numeric[i] ? "text-right text-sol-text" : "text-sol-text-secondary max-w-[260px] truncate"}`} title={numeric[i] ? undefined : exact(r[i])}>
-                      {exact(r[i])}
+                      {shown(r[i], formats[c])}
                     </td>
                   ))}
                 </tr>

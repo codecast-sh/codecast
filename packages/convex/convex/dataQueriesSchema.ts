@@ -30,8 +30,20 @@ export const dataQueryTables = {
     run_started: v.optional(v.number()),
     /** Its reader refused the args or the source is gone; `error` says why. Re-checked on its interval, never run. */
     invalid: v.optional(v.boolean()),
-    /** Last time a viewer's dashboard asked for it; rows nobody asks for in a day are dropped. */
+    /** Last time a viewer's dashboard asked for it; rows nobody asks for in a day are dropped, unless the dashboard has a schedule. */
     wanted_at: v.number(),
     created_at: v.number(),
-  }).index("by_doc_qkey", ["doc_id", "qkey"]),
+    /**
+     * The dashboard's refresh schedule (its layout's `refresh`), mirrored here
+     * by wantCore so the cron finds what is due without opening every
+     * dashboard. Absent: the row reads only while someone has the page open.
+     */
+    scheduled_ms: v.optional(v.number()),
+    next_scheduled_at: v.optional(v.number()),
+    /** KPI blocks bound to this query that carry an alert (mirrored by wantCore), and where each last stood. */
+    alert_keys: v.optional(v.array(v.string())),
+    alert_state: v.optional(v.record(v.string(), v.string())),
+  })
+    .index("by_doc_qkey", ["doc_id", "qkey"])
+    .index("by_next_scheduled", ["next_scheduled_at"]),
 };

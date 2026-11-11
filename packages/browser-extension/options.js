@@ -95,8 +95,8 @@ async function pairFromFragment() {
   root.classList.add("state-wait");
   root.querySelector("[data-title]").textContent = code ? `Pair with cast? Code ${code.slice(0, 4)}-${code.slice(4)}` : "Pair with cast?";
   root.querySelector("[data-text]").textContent =
-    `A terminal on this machine asked to pair this Chrome profile with the bridge host on port ${port}. ` +
-    "Continue only if you just ran cast browser extension setup.";
+    `Codecast on this machine asked to pair this Chrome profile with the bridge host on port ${port}. ` +
+    "Continue only if you just asked to pair, from the Codecast app or a terminal.";
   $("reconnect").hidden = true;
   $("pair").hidden = false;
   return true;

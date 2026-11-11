@@ -29,7 +29,8 @@ import { CdpConnection, listTargets, type CdpEndpoint, type CdpTarget } from "./
 import { raiseAppByPid, raiseAppByPidSync } from "./raiseApp.js";
 import { noteDeliberateRaise } from "./focusSentinel.js";
 import { readState } from "./instance.js";
-import { knownRealChromePid, listBrowserProcessesAsync, listChromeDebugPorts } from "./localChrome.js";
+import { knownRealChromePid, lastBrowserProcesses, listChromeDebugPorts } from "./localChrome.js";
+import { sessionPinnedTabs } from "./engineReap.js";
 import { bridgeEndpoint, proveBridgeHost, readBridgeState, type BridgeState, type ProvenBridge } from "./bridge/host.js";
 import { isPidAlive } from "../workspace/chrome.js";
 import {
@@ -128,13 +129,16 @@ export const builtinFocusEngine: FocusEngine = {
  * Every other Chrome on the machine that answers CDP — agent-browser sessions,
  * throwaway debug Chromes. A port that stopped answering between the scan and
  * the probe is skipped, not fatal: it belongs to some other agent's browser.
+ * The process list is the last one taken (localChrome.ts lastBrowserProcesses):
+ * a click for a tab that is gone is answered by every engine, and a fresh
+ * `ps` held that answer for 3 to 17s on a loaded machine (2026-11-11).
  */
 export const localChromeFocusEngine: FocusEngine = {
   name: "local-chrome",
   async listTabs() {
     const tabs: FocusTab[] = [];
     await Promise.all(
-      listChromeDebugPorts(await listBrowserProcessesAsync()).map(async ({ port, pid }) => {
+      listChromeDebugPorts(await lastBrowserProcesses()).map(async ({ port, pid }) => {
         try {
           for (const t of await listTargets(port)) tabs.push({ id: t.targetId, url: t.url, port, pid });
         } catch {
@@ -215,17 +219,23 @@ export interface FocusDeps {
   log?: (line: string) => void;
   /** How /browser/reopen runs the open; injectable for tests. */
   reopen?: ReopenDeps;
-  /** The tab a session drives, from its owner keys: the watch stream's own
-   *  resolution, so "open tab" raises exactly the tab "watch live" shows. */
-  resolveSessionTab?: (candidates: string[]) => string | null;
+  /** The tabs a session drives, from its owner keys, in the order to try
+   *  them. */
+  resolveSessionTabs?: (candidates: string[]) => string[];
 }
 
-const sessionTabOf = (candidates: string[]): string | null => {
-  const resolved = cdpWatchEngine().resolveTab(candidates);
-  return "tabId" in resolved ? resolved.tabId : null;
+/**
+ * Every tab the session has pinned, newest first, then the one the watch
+ * stream resolves (which also knows the built-in driver's ownership table).
+ * Pins are only names: a session that drives named tabs keeps a default pin
+ * on a tab closed long ago, and the browser's listing says which are alive.
+ */
+const sessionTabsOf = (candidates: string[]): string[] => {
+  const watched = cdpWatchEngine().resolveTab(candidates);
+  return [...sessionPinnedTabs(candidates), ...("tabId" in watched ? [watched.tabId] : [])];
 };
 
-const defaultDeps = (raiseApp = raiseAppByPid): FocusDeps => ({ engines, raiseApp, resolveSessionTab: sessionTabOf });
+const defaultDeps = (raiseApp = raiseAppByPid): FocusDeps => ({ engines, raiseApp, resolveSessionTabs: sessionTabsOf });
 
 /** The session a request names, the way the watch stream's hello does. */
 function ownerOf(fields: { session_uuid?: unknown; tmux_session?: unknown }): Promise<string[]> {
@@ -350,13 +360,13 @@ export async function probeBrowserTab(query: string | string[], deps: Pick<Focus
 
 /**
  * The focus route's request: `tab` names the tab a row printed, and the
- * session it ran in rides along. The session's current tab (the one "watch
- * live" shows) stands in when the row named none (its output went through
+ * session it ran in rides along. The session's own tabs, most recently
+ * pinned first, stand in when the row named none (its output went through
  * grep or tail) and when the row's tab is gone: agents switch, share and
- * close each other's tabs, so an older row's tab often is. Both are looked
- * for in one pass, the row's first: a browser that holds the session's tab
- * and not the row's says the row's is gone, without waiting on the slowest
- * engine to say so too.
+ * close each other's tabs, so an older row's tab often is. All are looked
+ * for in one pass, the row's first: a browser that holds one of the
+ * session's tabs and not the row's says the row's is gone, without waiting
+ * on the slowest engine to say so too.
  */
 export async function focusRequestedTab(
   params: URLSearchParams,
@@ -364,9 +374,9 @@ export async function focusRequestedTab(
   act: (tabs: string[], deps: FocusDeps) => Promise<FocusResult> = focusBrowserTab,
 ): Promise<{ tab: string; result: FocusResult }> {
   const rowTab = params.get("tab") ?? "";
-  const sessionTab =
-    deps.resolveSessionTab?.(await ownerOf({ session_uuid: params.get("session_uuid"), tmux_session: params.get("tmux_session") })) ?? "";
-  const queries = [rowTab, sessionTab].filter((q, i, all) => q && !(i > 0 && matchTab([{ id: q }], all[0])));
+  const sessionTabs =
+    deps.resolveSessionTabs?.(await ownerOf({ session_uuid: params.get("session_uuid"), tmux_session: params.get("tmux_session") })) ?? [];
+  const queries = [rowTab, ...sessionTabs].filter((q, i, all) => q && !all.slice(0, i).some((earlier) => earlier && matchTab([{ id: q }], earlier)));
   if (!queries.length) return { tab: "", result: { ok: false, reason: "tab-not-found" } };
   const result = await act(queries, deps);
   return { tab: result.tab ?? queries[0], result };

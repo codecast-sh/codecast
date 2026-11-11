@@ -67,17 +67,17 @@ export function RichText({ text, titleFirst }: { text: string; titleFirst?: bool
         const body = inlineMarks(l.text);
         if (l.kind !== "text") {
           return (
-            <span key={i} style={LI}>
+            <span key={i} className="board-line board-li" style={LI}>
               <span aria-hidden style={{ flex: "none", opacity: 0.7 }}>{l.kind === "bullet" ? "•" : `${l.n}.`}</span>
               <span>{body}</span>
             </span>
           );
         }
-        if (titleFirst && i === 0) return <strong key={i} style={{ display: "block" }}>{body}</strong>;
-        return <span key={i} style={{ display: "block" }}>{l.text ? body : "\u00a0"}</span>;
+        if (titleFirst && i === 0) return <strong key={i} className="board-line">{body}</strong>;
+        return <span key={i} className="board-line">{l.text ? body : "\u00a0"}</span>;
       })}
     </>
   );
 }
 
-const LI: CSSProperties = { display: "flex", gap: "0.45em", textAlign: "left", width: "100%" };
+const LI: CSSProperties = { gap: "0.45em", textAlign: "left", width: "100%" };

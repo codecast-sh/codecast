@@ -27,11 +27,16 @@ import { locateWorkspace, readState, recordWorkspaceSession } from "./contract.j
 import { publishWorktrees } from "../worktreeMirror.js";
 import { sessionIdFromEnv } from "../sessionIdentity.js";
 import {
+  WorkspaceTrustError,
   clearRepoTrust,
   collectTrustTargets,
+  isAgentContext,
   recordTrust,
+  refusalMessage,
   reviewRepoTrust,
 } from "./trust.js";
+import { agentTrustLine, askTrustApproval, recordApprovedTrust } from "./trustApproval.js";
+import { APPROVED_RUN_ENV } from "@codecast/shared/contracts/commandRun";
 import { defaultRegistry } from "./backends/registry.js";
 import type { WorkspaceManifest } from "./types.js";
 import { commandGroup } from "../commandGroups.js";
@@ -201,7 +206,7 @@ export function registerWorkspaceCommand(program: Command): void {
             process.exit(2);
           }
         } catch (err) {
-          console.error(`acquire failed: ${(err as Error).message}`);
+          console.error(`acquire failed: ${await refusalForAgent(err)}`);
           process.exit(1);
         }
       },
@@ -239,7 +244,7 @@ export function registerWorkspaceCommand(program: Command): void {
           process.exit(2);
         }
       } catch (err) {
-        console.error(`root failed: ${(err as Error).message}`);
+        console.error(`root failed: ${await refusalForAgent(err)}`);
         process.exit(1);
       }
     });
@@ -324,7 +329,7 @@ export function registerWorkspaceCommand(program: Command): void {
         console.log(`healed: ${ws.name} → ${ws.state}`);
         if (ws.state !== "ready") process.exit(2);
       } catch (err) {
-        console.error(`heal failed: ${(err as Error).message}`);
+        console.error(`heal failed: ${await refusalForAgent(err)}`);
         process.exit(1);
       }
     });
@@ -351,10 +356,26 @@ export function registerWorkspaceCommand(program: Command): void {
     .option("--list", "Show what is approved and what changed, approving nothing")
     .addOption(new Option("--dry-run", "same as --list").hideHelp())
     .option("--revoke", "Forget every approval for this repo")
-    .action((targets: string[], opts: { list?: boolean; dryRun?: boolean; revoke?: boolean }) => {
+    .action(async (targets: string[], opts: { list?: boolean; dryRun?: boolean; revoke?: boolean }) => {
       if (opts.dryRun) opts.list = true;
       const repoRoot = findRepoRoot();
       const all = collectTrustTargets({ hooksRoot: repoRoot });
+      const approvedRun = process.env[APPROVED_RUN_ENV];
+      if (approvedRun && !opts.list && !opts.revoke) {
+        // A person's Yes on the approval card started this run: record what the card showed, nothing else.
+        try {
+          const { approved, unseen } = await recordApprovedTrust(repoRoot, approvedRun);
+          for (const id of approved) console.log(`approved: ${id}`);
+          if (unseen.length > 0) {
+            console.error(`not approved, it changed after the card was shown or was not on it: ${unseen.join(", ")}`);
+            process.exit(1);
+          }
+        } catch (err) {
+          console.error((err as Error).message);
+          process.exit(1);
+        }
+        return;
+      }
       if (opts.revoke) {
         clearRepoTrust(repoRoot);
         console.log(`revoked every approval for ${repoRoot}`);
@@ -373,6 +394,15 @@ export function registerWorkspaceCommand(program: Command): void {
         }
         if (findings.length > 0) process.exit(2);
         return;
+      }
+      if (isAgentContext()) {
+        // Approval is a person's: an agent asking for it posts the card.
+        if (findings.length === 0) {
+          console.log("Everything here is approved already.");
+          return;
+        }
+        console.error(refusalMessage(repoRoot, findings, true, agentTrustLine(await askTrustApproval(repoRoot, findings), repoRoot)));
+        process.exit(3);
       }
       const picked = targets.length === 0 ? all : all.filter((t) => targets.some((q) => t.id.includes(q)));
       if (picked.length === 0) {
@@ -621,4 +651,11 @@ function printPickup(p: ResolvedPickup): void {
   console.log(`  taken:   ${s.takenAt ? formatRelativeTime(s.takenAt) : "not recorded by this snapshot"}`);
   if (c.updatedAt) console.log(`  session: last active ${formatRelativeTime(c.updatedAt)}`);
   for (const w of s.warnings) console.error(`  warning: ${w}`);
+}
+
+/** An acquire's error as its caller prints it: an agent's trust refusal posts the approval card first and says so. */
+async function refusalForAgent(err: unknown): Promise<string> {
+  if (!(err instanceof WorkspaceTrustError) || !err.agentDriven || !err.repoRoot) return (err as Error).message;
+  const posted = await askTrustApproval(err.repoRoot, err.findings);
+  return refusalMessage(err.repoRoot, err.findings, true, agentTrustLine(posted, err.repoRoot));
 }
