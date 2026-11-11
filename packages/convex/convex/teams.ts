@@ -5,17 +5,16 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { isTeamAdmin, isTeamMember, shareATeam } from "./privacy";
-import { isTeamMachineFor } from "./sessionLaunch";
-import { runnerDeviceOf } from "./lib/runnerDevice";
-import { syncPrimaryOwnerCache } from "./sessionOwners";
+import { isTeamAdmin, shareATeam } from "./privacy";
+import { dropOwnerRow, endMembership, ownerGrantHolds } from "./lib/teamMembershipEnd";
+import { INVITE_CODE_TTL_MS, recordAdminRemoval, removedSinceCodeIssued } from "./lib/teamInvites";
 import {
   nextMembershipVisibility,
   type TeamVisibilityLevel,
   type VisibilityChangeMode,
 } from "./teamVisibility";
 import { canAccessConversation } from "./lib/access";
-import { invalidateForMember, withdrawMember } from "./lib/changesDirty";
+import { invalidateForMember } from "./lib/changesDirty";
 import {
   PRESENCE_FRESH_MS,
   bucketTs,
@@ -25,7 +24,6 @@ import { authorizeRoom, liveMembers } from "./callRooms";
 import { roomSeatClass, type SeatClass } from "./lib/callSeats";
 import { normalizeTeamTaskStatuses } from "@codecast/shared/tasks";
 import { DEFAULT_TEAM_FEATURES, teamFeatureEnabled } from "@codecast/shared/contracts";
-import { purgeChatMembership } from "./chat";
 import { decommissionAnchorRow } from "./anchors";
 import { readLocalViewRevision } from "./localFirstCommands";
 import { bumpWindow } from "./ipRateLimit";
@@ -48,8 +46,6 @@ import {
   unauthenticatedView,
 } from "./smallViewContracts";
 
-// How long a team invite code lives from the moment it is generated.
-const INVITE_CODE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function generateInviteCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -390,53 +386,6 @@ export const addMemberByOperator = internalMutation({
   },
 });
 
-function inviteRowFor(ctx: { db: any }, teamId: Id<"teams">, email: string): Promise<any | null> {
-  return ctx.db
-    .query("team_invites")
-    .withIndex("by_team_email", (q: any) => q.eq("team_id", teamId).eq("email", email))
-    .first();
-}
-
-// An admin removal is recorded on the person's invite row for the team
-// (team_invites, keyed by email), so the link they still hold does not let them
-// straight back in. Everyone else's link keeps working: it refuses only a code
-// generated before the removal, and only until an admin invites them again
-// (a fresh invite email, or a new code).
-async function recordAdminRemoval(
-  ctx: { db: any },
-  team: { _id: Id<"teams">; invite_code?: string },
-  email: string | undefined,
-  adminId: Id<"users">,
-): Promise<void> {
-  const key = email?.trim().toLowerCase();
-  if (!key) return;
-  const now = Date.now();
-  const row = await inviteRowFor(ctx, team._id, key);
-  if (row) {
-    await ctx.db.patch(row._id, { removed_at: now, ...(row.accepted_at ? {} : { accepted_at: now }) });
-    return;
-  }
-  // accepted_at keeps this row from holding a seat as a pending invite.
-  await ctx.db.insert("team_invites", {
-    team_id: team._id, email: key, invite_code: team.invite_code ?? "", invited_by: adminId,
-    created_at: now, accepted_at: now, removed_at: now,
-  });
-}
-
-async function removedSinceCodeIssued(
-  ctx: { db: any },
-  team: { _id: Id<"teams">; invite_code_expires_at?: number },
-  email: string | undefined,
-): Promise<boolean> {
-  const key = email?.trim().toLowerCase();
-  if (!key) return false;
-  const row = await inviteRowFor(ctx, team._id, key);
-  if (!row?.removed_at) return false;
-  if (row.created_at > row.removed_at) return false; // invited again since
-  const issuedAt = team.invite_code_expires_at ? team.invite_code_expires_at - INVITE_CODE_TTL_MS : 0;
-  return issuedAt <= row.removed_at;
-}
-
 export const joinTeam = mutation({
   args: {
     invite_code: v.string(),
@@ -739,56 +688,8 @@ export const getTeamMembersV2 = query({
   },
 });
 
-// An owner row on a session another account runs steers that account's
-// daemon, and it was granted inside one team: starting the session on a
-// teammate's shared machine (the machine's device_shares team), a team agent
-// box (the bot's team), or a handoff or claim, which needs the session's own
-// team (sessionOwnership.resolveOwnerRef). The row holds while that grant
-// still does. Another team the two people happen to share grants nothing
-// here: it would not let them start a session on that machine either.
-async function ownerGrantHolds(ctx: { db: any }, userId: Id<"users">, conv: any): Promise<boolean> {
-  const runner = await ctx.db.get(conv.user_id);
-  if (!runner) return false;
-  if (runner.is_bot) return !runner.team_id || (await isTeamMember(ctx, userId, runner.team_id));
-  if (conv.team_id && (await isTeamMember(ctx, userId, conv.team_id))) return true;
-  const device = await runnerDeviceOf(ctx, conv);
-  return !!device && (await isTeamMachineFor(ctx, userId, device));
-}
-
-// Whether `teamId` is one a grant on this session could have come through.
-async function grantRunsThrough(ctx: { db: any }, conv: any, teamId: Id<"teams">): Promise<boolean> {
-  const runner = await ctx.db.get(conv.user_id);
-  if (runner?.is_bot) return String(runner.team_id ?? "") === String(teamId);
-  if (String(conv.team_id ?? "") === String(teamId)) return true;
-  if (!conv.owner_device_id) return false;
-  const shares = await ctx.db.query("device_shares")
-    .withIndex("by_user_device", (q: any) => q.eq("user_id", conv.user_id).eq("device_id", conv.owner_device_id))
-    .collect();
-  return shares.some((sh: any) => String(sh.team_id) === String(teamId));
-}
-
-async function dropOwnerRow(ctx: { db: any }, row: any): Promise<void> {
-  await ctx.db.delete(row._id);
-  await syncPrimaryOwnerCache(ctx, row.conversation_id);
-}
-
-// When a membership ends, drop the person's owner rows on sessions others run
-// whose grant came through that team and no longer holds.
-async function releaseStrandedSessionOwnership(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">): Promise<void> {
-  const rows = await ctx.db
-    .query("session_owners")
-    .withIndex("by_user", (q: any) => q.eq("user_id", userId))
-    .collect();
-  for (const row of rows) {
-    const conv = await ctx.db.get(row.conversation_id);
-    if (!conv || String(conv.user_id) === String(userId)) continue;
-    if (!(await grantRunsThrough(ctx, conv, teamId))) continue;
-    if (await ownerGrantHolds(ctx, userId, conv)) continue;
-    await dropOwnerRow(ctx, row);
-  }
-}
-
-// One-off cleanup, run once after the deploy that added the release above:
+// One-off cleanup, run once after the deploy that added the owner-row release
+// in endMembership (lib/teamMembershipEnd):
 // owner rows left by removals made before it. Which team a past removal was
 // from is not recorded, so a row goes only when its grant is gone AND that is
 // knowable: a team box, a session with a team, a machine shared with teams,
@@ -822,61 +723,6 @@ export const sweepStaleSessionOwners = internalMutation({
   },
 });
 
-// End one user's membership in one team, and everything that rides on it:
-// the roster row, chat state (reads, follows, room seats, queued pushes), the
-// directory mappings that would keep stamping new conversations with the team,
-// owner rows on sessions others run whose grant came through this team,
-// and the user's own pointers when they name this team. The fallback pointer is
-// the user's oldest remaining team (never index order), else no team. Every
-// path that ends a membership goes through here: admin removal, self leave,
-// team deletion and test cleanup, so none of them can diverge on what "gone"
-// means.
-export async function endMembership(
-  ctx: { db: any },
-  userId: Id<"users">,
-  teamId: Id<"teams">,
-  actor: Id<"users"> = userId,
-): Promise<void> {
-  const rows = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId))
-    .collect();
-  for (const row of rows) await ctx.db.delete(row._id);
-  if (rows.length && "scheduler" in ctx) await scheduleSeatSync(ctx as any, teamId, "member_left");
-  if (rows.length) {
-    await recordAuthorityEvent(ctx, {
-      kind: "team_member_removed", actor_user_id: actor, team_id: teamId, target_user_id: userId,
-      detail: { before: { role: rows[0].role, visibility: rows[0].visibility } },
-    });
-  }
-  await purgeChatMembership(ctx as any, userId, teamId);
-  const mappings = await ctx.db
-    .query("directory_team_mappings")
-    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId))
-    .collect();
-  for (const dm of mappings) await ctx.db.delete(dm._id);
-  await withdrawMember(ctx, userId, teamId);
-  await releaseStrandedSessionOwnership(ctx, userId, teamId);
-
-  const user = await ctx.db.get(userId);
-  if (!user) return;
-  const pointsHere = (id: unknown) => !!id && String(id) === String(teamId);
-  if (!pointsHere(user.team_id) && !pointsHere(user.active_team_id)) return;
-  const remaining = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-    .collect();
-  const fallback = remaining
-    .slice()
-    .sort((a: any, b: any) => (a.joined_at ?? 0) - (b.joined_at ?? 0))[0];
-  const patch: Record<string, unknown> = {};
-  if (pointsHere(user.team_id)) {
-    patch.team_id = fallback?.team_id;
-    patch.role = fallback?.role;
-  }
-  if (pointsHere(user.active_team_id)) patch.active_team_id = fallback?.team_id;
-  await ctx.db.patch(userId, patch);
-}
 
 // Retire a team: end every membership, drop every directory mapping to it,
 // decommission its anchors, and leave the row as a tombstone (deleted_at) that

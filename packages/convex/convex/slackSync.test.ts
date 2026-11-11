@@ -32,7 +32,7 @@ import {
   applyFileRepair,
 } from "./slackSync";
 import { markdownToSlack, slackToMarkdown } from "./lib/slackText";
-import { USER_SCOPES } from "./slack";
+import { USER_SCOPES } from "./lib/slackOAuth";
 import { pushReaction, reactionSpeaker } from "./slackReactions";
 import { listChannels, sendMessage, toggleReaction, updateChannel } from "./chat";
 import { resolveChatMentions } from "./lib/mentionResolve";
