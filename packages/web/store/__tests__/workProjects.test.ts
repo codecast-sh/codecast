@@ -36,13 +36,13 @@ describe("workProjectsBySession", () => {
 });
 
 describe("project chips", () => {
-  it("count projects ahead of folders, each under its own key", () => {
+  it("count folders ahead of projects, each under its own key", () => {
     const { projectCounts } = computeChipCounts(Object.values(sessions), {}, (id) => workProjectsBySession(state).get(id) ?? null);
     expect(projectCounts).toEqual([
-      [workProjectChipKey("projA"), 3],
-      [workProjectChipKey("projB"), 1],
       ["app", 4],
       ["other", 1],
+      [workProjectChipKey("projA"), 3],
+      [workProjectChipKey("projB"), 1],
     ]);
   });
 
