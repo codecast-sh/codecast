@@ -1,9 +1,9 @@
 import { CallsNavRow } from "./sidebar/CallsNav";
+import { workspaceNameOf, workspaceColorOf } from "../lib/projectColors";
 import { useCallsAvailable, useTeamFeature, useWorkspaceFeature, useWorkspaceFeatureState } from "../lib/teamFeatures";
 import { usePathname, useRouter } from "next/navigation";
 import { lazy, Suspense, useState, useMemo, useCallback, useRef, memo } from "react";
-import { useShallow } from "zustand/react/shallow";
-import { railFocused, railFocusOffered } from "../lib/railFocus";
+import { railFolded } from "../lib/railFocus";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { AvatarImg } from "../lib/avatarCache";
@@ -115,6 +115,8 @@ const QuestionsNavRow = memo(function QuestionsNavRow({
 }) {
   // The open decisions the viewer owns, as Mine lists them. A session parked
   // on a terminal question counts on the inbox's Needs You instead.
+  // Always shown: Decisions is one of the rail's six daily pages, so its
+  // place never moves; the count appears only when something waits.
   const pending = useOwnedDecisionCount();
   return <QuestionsNavRowView isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} pending={pending} />;
 });
@@ -338,14 +340,8 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
   const router = useRouter();
   const isSessions = pathname?.startsWith("/sessions");
   const orgRows = orgRowsActive(pathname);
-  // A solo account's rail opens on its sessions and work (lib/railFocus.ts).
-  const focusFacts = useInboxStore(useShallow((st) => ({
-    createdAt: st.currentUser?._creationTime as number | undefined,
-    teams: st.teams,
-    everything: st.clientState.ui?.rail_everything,
-  })));
-  const railMoreOffered = railFocusOffered(focusFacts);
-  const railIsFocused = railFocused(focusFacts);
+  // Six daily pages lead the rail; the rest wait under More (lib/railFocus.ts).
+  const railIsFocused = useInboxStore((st) => railFolded(st.clientState.ui?.rail_everything));
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isChat = pathname === "/chat" || pathname?.startsWith("/chat/");
@@ -656,7 +652,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
         {!isNarrow && pinnedRail}
         <SidebarNavView
           flowsOn={flowsOn}
-          railMore={railMoreOffered ? { focused: railIsFocused, onToggle: () => useInboxStore.getState().updateClientUI({ rail_everything: railIsFocused }) } : undefined}
+          railMore={{ focused: railIsFocused, onToggle: () => useInboxStore.getState().updateClientUI({ rail_everything: railIsFocused }) }}
           isNarrow={isNarrow}
           scope={scope}
           onMobileClose={onMobileClose}
@@ -677,7 +673,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
             {/* The page's saved views, while it is open. */}
             {!isNarrow && decisionViewItems.map((row) => <SectionRow key={row.id} row={row} className="pl-8" />)}
           </>}
-          chat={chatOn && !railIsFocused && <ChatNavRow
+          chat={chatOn && <ChatNavRow
             isActive={!!isChat}
             isNarrow={isNarrow}
             pathname={pathname}
@@ -687,7 +683,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
             onDrill={chatDrills ? () => drill.open("chat") : undefined}
             onMobileClose={onMobileClose}
           />}
-          calls={callsOn && !railIsFocused && (<>
+          calls={callsOn && (<>
             <CallsNavRow
               isActive={!!isCalls}
               isNarrow={isNarrow}
@@ -702,6 +698,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
           </>)}
           workAction={<AppPopOutButton app="work" className="-my-1" />}
           active={{
+            inbox: pathname === "/inbox",
             tasks: isTasks,
             docs: isDocs || isPlans,
             code: pathname === "/repo" || /^\/(repo|commit|pr)\//.test(pathname || ""),
@@ -877,9 +874,15 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
                   }`}
                   title={dir}
                 >
-                  <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-                  </svg>
+                  {/* The folder in the workspace's colour, the colour every
+                      session tile from this workspace wears (WorkspaceTile).
+                      Wrapped so the rail's one-ink rule for row icons, which
+                      reads a row's direct svg, leaves it be. */}
+                  <span className={`flex flex-shrink-0 ${workspaceColorOf(workspaceNameOf({ project_path: dir })).text}`}>
+                    <svg className="h-[17px] w-[17px]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.7} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+                    </svg>
+                  </span>
                   <span className="truncate">{getShortPath(dir)}</span>
                 </button>
               ))}

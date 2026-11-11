@@ -4,8 +4,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { SidebarNavView, type SidebarNavActive } from "./SidebarNav";
 
-// A solo account's rail (lib/railFocus.ts): focused, it keeps approvals,
-// tasks and docs and ends on More; expanded, every row and a Fewer.
+// The rail's More group (lib/railFocus.ts): six daily rows lead for everyone,
+// and a More toggle folds or opens every other page beneath them.
 const ACTIVE: SidebarNavActive = {
   tasks: false, docs: false, code: false, files: false, pages: false,
   sessions: false, line: false, triggers: false, org: false, windows: false,
@@ -20,6 +20,8 @@ function rail(focused: boolean | null) {
         threads={<span>threads-row</span>}
         feed={<span>feed-row</span>}
         questions={<span>questions-row</span>}
+        chat={<span>chat-row</span>}
+        calls={<span>calls-row</span>}
         active={ACTIVE}
         tasks={shut}
         docs={shut}
@@ -30,48 +32,56 @@ function rail(focused: boolean | null) {
   );
 }
 
-test("focused: approvals, tasks and docs, then More", () => {
+const MORE_ROWS = ["threads-row", "feed-row", 'href="/deploys"', 'href="/flows"', 'href="/ops"', 'href="/goals"', 'href="/projects"', 'href="/org"', 'href="/repo"', 'href="/vault"', 'href="/pages"', 'href="/triggers"', 'href="/windows"', 'href="/files"'];
+
+test("folded: the six daily rows, then a closed More", () => {
   const html = rail(true);
-  for (const kept of ["questions-row", 'href="/tasks"', 'href="/docs"', ">More<"]) expect(html).toContain(kept);
-  for (const gone of ["threads-row", "feed-row", 'href="/goals"', 'href="/projects"', 'href="/org"', 'href="/repo"', 'href="/files"', 'href="/triggers"', 'href="/pages"', 'href="/deploys"', 'href="/ops"', 'href="/vault"']) expect(html).not.toContain(gone);
+  for (const kept of ['href="/inbox"', "questions-row", "chat-row", 'href="/tasks"', 'href="/docs"', "calls-row", ">More<"]) expect(html).toContain(kept);
+  expect(html).toMatch(/aria-expanded="false"[^>]*data-rail-more/);
+  expect(html).not.toContain('data-rail-group="more"');
+  for (const gone of MORE_ROWS) expect(html).not.toContain(gone);
 });
 
-test("expanded: every row, and Fewer to fold them again", () => {
+test("open: every other page in the More group, in order, below the toggle", () => {
   const html = rail(false);
-  for (const shown of ["threads-row", "feed-row", 'href="/projects"', 'href="/repo"', 'href="/triggers"', 'href="/deploys"', 'href="/ops"', 'href="/vault"', ">Fewer<"]) expect(html).toContain(shown);
+  expect(html).toMatch(/aria-expanded="true"[^>]*data-rail-more/);
+  expect(html).not.toContain(">Fewer<");
+  const more = html.indexOf('data-rail-group="more"');
+  expect(more).toBeGreaterThan(html.indexOf("data-rail-more"));
+  const at = MORE_ROWS.map((m) => html.indexOf(m, more));
+  for (const i of at) expect(i).toBeGreaterThan(more);
+  expect([...at].sort((a, b) => a - b)).toEqual(at);
 });
 
-test("everyone else gets no More/Fewer row at all", () => {
+test("with no More control (the marketing hero) every row shows and there is no toggle", () => {
   const html = rail(null);
   expect(html).not.toContain("data-rail-more");
+  expect(html).toContain('data-rail-group="more"');
   expect(html).toContain('href="/projects"');
 });
 
-// The switcher heads a block holding every row a switch changes (its content,
-// or whether the team has it on); the rows that ignore the switch sit outside.
-test("workspace block: team rows inside, every-workspace rows outside", () => {
+// The switcher sits on top on its own, unboxed: no bordered block holds the
+// rows, which start in the primary group right after it.
+test("workspace switcher: a plain wrapper above the primary rows", () => {
   const html = renderToStaticMarkup(
     <MemoryRouter>
       <SidebarNavView
         isNarrow={false}
-        threads={<span>threads-row</span>}
-        feed={<span>feed-row</span>}
         questions={<span>questions-row</span>}
-        calls={<span>calls-row</span>}
         active={ACTIVE}
         tasks={shut}
         docs={shut}
         orgOn
         workspaceHeader={<span>switcher</span>}
-        workspaceColor="blue"
       />
     </MemoryRouter>,
   );
   const start = html.indexOf("data-rail-workspace");
-  const end = html.indexOf('data-rail-group="agents"');
-  const inBlock = (m: string) => { const i = html.indexOf(m); return i > start && i < end; };
+  const primary = html.indexOf('data-rail-group="primary"');
   expect(start).toBeGreaterThan(-1);
-  expect(html.indexOf("switcher")).toBeGreaterThan(start);
-  for (const m of ["threads-row", "feed-row", "calls-row", 'href="/flows"', 'href="/ops"', 'href="/tasks"', 'href="/docs"', 'href="/projects"', 'href="/vault"']) expect(inBlock(m)).toBe(true);
-  for (const m of ["questions-row", 'href="/files"', 'href="/windows"', 'href="/triggers"']) expect(inBlock(m)).toBe(false);
+  expect(start).toBeLessThan(primary);
+  const wrapper = html.slice(start, primary);
+  expect(wrapper).toContain("switcher");
+  expect(wrapper).not.toContain("border");
+  for (const m of ['href="/inbox"', "questions-row", 'href="/tasks"']) expect(wrapper).not.toContain(m);
 });

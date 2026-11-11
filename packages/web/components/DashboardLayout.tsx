@@ -75,7 +75,7 @@ import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader, SlowBootNote } from "./AppLoader";
 import { freshHomeLaunchPending, settleFreshHomeLaunch } from "../store/viewNav";
-import { useInboxStore, useTrackedStore, getProjectName, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, resolveSimpleView, resolveInboxCompact, resolveVisualStyle } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, getProjectName, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, resolveInboxHome } from "../store/inboxStore";
 import { newConversationAgentType } from "../lib/defaultAgent";
 import { ConnectToast } from "./simple/ConnectToast";
 import { pathOnMyMachines, savedDefaultProject } from "../lib/machinePicker";
@@ -98,7 +98,7 @@ import { ProfileSignInDialogHost } from "./ProfileSignInDialog";
 import { useChatToasts } from "../hooks/useChatToasts";
 import { ChatPrefetchFeeder } from "../hooks/useChatPrefetch";
 import { useSyncDocs } from "../hooks/useSyncDocs";
-import { isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionFocusKind } from "../lib/inboxRouting";
+import { isInboxRoute, isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionFocusKind } from "../lib/inboxRouting";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { RecentSwitcherHost } from "./RecentSwitcher";
 import { UndoTimelineHost } from "./undo/UndoTimeline";
@@ -147,7 +147,8 @@ interface DashboardLayoutProps {
   allowUnhydratedGuest?: boolean;
 }
 
-const DEFAULT_LAYOUT = { sidebar: 25, main: 75 };
+// About 220px of a 1440px window: the rail holds six rows and More.
+const DEFAULT_LAYOUT = { sidebar: 15, main: 85 };
 // One handle for every split in the app (see .cc-split in globals.css).
 const separatorClass = "cc-split";
 
@@ -262,24 +263,27 @@ const ShellBanners = memo(function ShellBanners() {
     <ErrorBoundary name="Banners" level="inline">
       <StatusNoticeStack />
       <ConnectionBanner />
-      <StorageHealthBanner />
-      <SetupPromptBanner />
-      <NewSnippetsBanner />
-      <OrgIntroAnywhere />
-      <FeatureOfferAnywhere />
-      <ThemeIntroAnywhere />
       <CliOfflineBanner />
       <TmuxMissingBanner />
-      <SeatBanner />
-      {/* The nudges share one slot, in priority order: only the first that
-          renders shows (globals.css [data-nudge-slot]), and dismissing it
-          brings up the next. Stacked, a new account met four at once. */}
-      <div data-nudge-slot>
-        <NativeAppBanner />
-        <TeamDomainBanner />
-        <NotificationNudgeBanner />
-        <SharingSetupBanner />
-        <TeamSharingNudgeBanner />
+      {/* The strips in the flow share one line, in priority order: only the
+          first that renders shows (globals.css [data-cc-strips]), and
+          dismissing it brings up the next. Stacked, a new account met two
+          to four strips above every page. */}
+      <div data-cc-strips>
+        <StorageHealthBanner />
+        <SetupPromptBanner />
+        <SeatBanner />
+        <NewSnippetsBanner />
+        <OrgIntroAnywhere />
+        <FeatureOfferAnywhere />
+        <ThemeIntroAnywhere />
+        <div data-nudge-slot>
+          <NativeAppBanner />
+          <TeamDomainBanner />
+          <NotificationNudgeBanner />
+          <SharingSetupBanner />
+          <TeamSharingNudgeBanner />
+        </div>
       </div>
       <DeviceSetupDialog />
     </ErrorBoundary>
@@ -634,6 +638,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     // The terminal toggle lights while the dock is open.
     s => s.workspace.dock.pane != null,
     s => s.currentConversation?.source,
+    s => s.showMySessions,
+    s => resolveInboxHome(s.clientState.ui),
     s => selectSessionRailOpen(s),
     // The session pointers, the comments map, and the palette's and people
     // wall's open flags are read by leaves of their own (SessionRailList,
@@ -671,7 +677,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // The nav slot owns the sidebar's width (so a workbench restores it with the
   // rest of the chrome); the legacy layouts.dashboard value seeds it once for
   // users whose width predates the slot taking ownership.
-  const rawLayout = s.clientState.layouts?.dashboard ?? (resolveVisualStyle(s.clientState.ui) === "minimal" ? { sidebar: 18, main: 82 } : DEFAULT_LAYOUT);
+  const rawLayout = s.clientState.layouts?.dashboard ?? DEFAULT_LAYOUT;
   const navSize = s.workspace.nav.size ?? rawLayout.sidebar ?? 25;
   const layout = {
     sidebar: Math.max(10, Math.min(50, navSize)),
@@ -787,7 +793,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // rail to a thin strip (StageRail below) for as long as it is there; the
   // rail's own open state is untouched, so leaving brings it back as it was.
   const stageWideHere = !!s.stageWide && s.stageWide.tabId === s.activeTabId;
-  const showSessionList = railOpen && !isMobile && !isOnSettingsPage && !appWindow && !stageWideHere;
+  // On the inbox's own board (/inbox, nothing open, Board home) the board IS
+  // the session list, so the rail would only list every session a second
+  // time beside it. Opening a session brings the rail back as navigation.
+  const inboxBoardHere = isInboxRoute(pathname) && s.showMySessions && resolveInboxHome(s.clientState.ui) === "board";
+  const showSessionList = railOpen && !isMobile && !isOnSettingsPage && !appWindow && !stageWideHere && !inboxBoardHere;
   const showMobileSessionList = isMobileSessionListOpen && isMobile && !isOnSettingsPage && !appWindow;
   // Right session list, collapsed: no persistent rail — a right-edge hover-peek
   // slides the full list out, mirroring the left sidebar's collapsed behavior.

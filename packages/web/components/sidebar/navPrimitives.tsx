@@ -302,5 +302,11 @@ export function NavSection({
 /** The needs-input count. Silent at zero. */
 export function NeedsInputCount({ n }: { n: number }) {
   if (n === 0) return null;
-  return <NavCount n={n} tone="bg-teal-600 text-white" />;
+  // Labelled, so a bare number beside another section's name reads as what it
+  // is: sessions whose turn it is, waiting in the inbox.
+  return (
+    <span className="whitespace-nowrap text-[12px] tabular-nums text-sol-text-dim" title={`${n} session${n === 1 ? "" : "s"} in the inbox wait on you`}>
+      {n} waiting
+    </span>
+  );
 }

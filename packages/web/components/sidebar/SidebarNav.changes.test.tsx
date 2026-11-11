@@ -51,49 +51,89 @@ test("the row reads as active on /changes", () => {
   expect(row(on)).not.toEqual(row(off));
 });
 
-test("no Inbox row and no heading over the conversation rows", () => {
-  const html = rail(true);
-  expect(html).not.toContain('data-nav-page="/inbox"');
-  expect(html).not.toContain('data-rail-heading="Conversations"');
-  expect(html.indexOf("feed-row")).toBeLessThan(html.indexOf('data-rail-heading="Work"'));
-  for (const href of ["/org", "/repo", "/files", "/pages", "/flows", "/ops", "/windows", "/triggers"]) expect(html).toContain(`href="${href}"`);
+// The slice of the rail inside one data-rail-group, up to the next group or the More toggle.
+function group(html: string, name: string) {
+  const from = html.indexOf(`data-rail-group="${name}"`);
+  if (from < 0) return "";
+  const rest = html.slice(from + 1);
+  const stops = [rest.indexOf("data-rail-group="), rest.indexOf("data-rail-more")].filter((i) => i >= 0);
+  return rest.slice(0, stops.length ? Math.min(...stops) : undefined);
+}
+
+test("Inbox leads the six daily rows, with no section headings over the rail", () => {
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <SidebarNavView
+        isNarrow={false}
+        feed={<span>feed-row</span>}
+        questions={<span>questions-row</span>}
+        chat={<span>chat-row</span>}
+        calls={<span>calls-row</span>}
+        active={ACTIVE}
+        tasks={shut}
+        docs={shut}
+        orgOn
+      />
+    </MemoryRouter>,
+  );
+  expect(html).not.toContain("data-rail-heading");
+  const primary = group(html, "primary");
+  const order = ['href="/inbox"', "questions-row", "chat-row", 'href="/tasks"', 'href="/docs"', "calls-row"].map((m) => primary.indexOf(m));
+  for (const i of order) expect(i).toBeGreaterThan(-1);
+  expect([...order].sort((a, b) => a - b)).toEqual(order);
+  expect(primary).not.toContain("feed-row");
+  for (const href of ["/org", "/repo", "/files", "/pages", "/flows", "/ops", "/windows", "/triggers"]) expect(group(html, "more")).toContain(`href="${href}"`);
 });
 
-test("Ops is a top-level row outside the Agents group, lit on /ops", () => {
+test("the Inbox row lights on /inbox", () => {
+  const current = (h: string) => [...h.matchAll(/aria-current="page"[^>]*>(?:<[^>]+>)*([^<]+)</g)].map((m) => m[1]);
+  expect(current(rail(false))).toEqual([]);
+  expect(current(rail(false, { ...ACTIVE, inbox: true }))).toEqual(["Inbox"]);
+});
+
+test("the Work window's rail keeps only Tasks and Docs up top", () => {
+  const html = renderToStaticMarkup(
+    <MemoryRouter>
+      <SidebarNavView isNarrow={false} scope="work" questions={<span>questions-row</span>} chat={<span>chat-row</span>} calls={<span>calls-row</span>} active={ACTIVE} tasks={shut} docs={shut} orgOn />
+    </MemoryRouter>,
+  );
+  const primary = group(html, "primary");
+  expect(primary).toContain('href="/tasks"');
+  expect(primary).toContain('href="/docs"');
+  for (const gone of ['href="/inbox"', "questions-row", "chat-row", "calls-row"]) expect(html).not.toContain(gone);
+});
+
+test("Ops is a row under More, lit on /ops", () => {
   const view = (active: SidebarNavActive) => renderToStaticMarkup(
     <MemoryRouter>
       <SidebarNavView isNarrow={false} active={active} tasks={shut} docs={shut} orgOn />
     </MemoryRouter>,
   );
   const html = view(ACTIVE);
-  expect(html.indexOf('href="/ops"')).toBeGreaterThan(-1);
-  expect(html.indexOf('href="/ops"')).toBeLessThan(html.indexOf('data-rail-heading="Work"'));
-  expect(html.slice(html.indexOf('data-rail-heading="Agents"'))).not.toContain('href="/ops"');
+  expect(group(html, "more")).toContain('href="/ops"');
+  expect(group(html, "primary")).not.toContain('href="/ops"');
   const current = (h: string) => [...h.matchAll(/aria-current="page"[^>]*>(?:<[^>]+>)*([^<]+)</g)].map((m) => m[1]);
   expect(current(view({ ...ACTIVE, ops: true }))).toEqual(["Ops"]);
 });
 
-test("Org is the first Work row, with its count and its two read views always under it; no project rows, no chevron, and no Org under Agents", () => {
+test("Goals, Projects and Org sit under More in that order, Org with its count and no rows nested under it", () => {
   const html = renderToStaticMarkup(
     <MemoryRouter>
       <SidebarNavView isNarrow={false} active={ACTIVE} tasks={shut} docs={shut} orgOn orgBadge={<span data-org-count>4</span>} />
     </MemoryRouter>,
   );
-  const work = html.slice(html.indexOf('data-rail-heading="Work"'), html.indexOf('data-rail-heading="Agents"'));
-  const org = work.indexOf('href="/org"');
-  const tasks = work.indexOf('href="/tasks"');
-  expect(org).toBeGreaterThan(0);
-  expect(org).toBeLessThan(tasks);
-  expect(work).toContain("data-org-count");
-  // Goals and Projects are rows of their own above Org, never nested in it.
-  const goals = work.indexOf('href="/goals"');
-  const projects = work.indexOf('href="/projects"');
-  expect(goals).toBeGreaterThan(0);
+  const more = group(html, "more");
+  const goals = more.indexOf('href="/goals"');
+  const projects = more.indexOf('href="/projects"');
+  const org = more.indexOf('href="/org"');
+  const code = more.indexOf('href="/repo"');
+  expect(goals).toBeGreaterThan(-1);
   expect(projects).toBeGreaterThan(goals);
   expect(org).toBeGreaterThan(projects);
-  expect(work.slice(org, tasks)).not.toContain("data-nav-subrow");
-  const agents = html.slice(html.indexOf('data-rail-heading="Agents"'));
-  expect(agents).not.toContain('href="/org"');
+  expect(code).toBeGreaterThan(org);
+  expect(more).toContain("data-org-count");
+  expect(more.slice(org, code)).not.toContain("data-nav-subrow");
+  expect(group(html, "primary")).not.toContain('href="/org"');
   // The workspace's agent is a role in Org, reached through the chart or a header pin, never a rail row.
   expect(html).not.toContain('href="/anchor"');
 });
@@ -131,10 +171,10 @@ test("the narrow rail shows Goals, Projects and Org as icons", () => {
   for (const href of ["/goals", "/projects", "/org"]) expect(html).toContain(`href="${href}"`);
 });
 
-test("Org and Flows rows: on shows them, a team that never decided sees them marked new, a team that turned them off sees neither", () => {
+test("Org and Flows rows: on shows them, a team that never decided sees them unmarked, a team that turned them off sees neither", () => {
   const view = (orgOn: boolean, offers: { org?: boolean; line?: boolean }, flowsOn: boolean) => renderToStaticMarkup(
     <MemoryRouter>
-      <SidebarNavView isNarrow={false} active={ACTIVE} tasks={shut} docs={shut} orgOn={orgOn} offers={offers} flowsOn={flowsOn} />
+      <SidebarNavView isNarrow={false} active={ACTIVE} tasks={shut} docs={shut} orgOn={orgOn} offers={offers} flowsOn={flowsOn} orgBadge={<span data-org-count>4</span>} />
     </MemoryRouter>,
   );
   const off = view(false, {}, false);
@@ -143,9 +183,11 @@ test("Org and Flows rows: on shows them, a team that never decided sees them mar
   const offered = view(false, { org: true, line: true }, false);
   expect(offered).toContain('href="/org"');
   expect(offered).toContain('href="/flows"');
-  expect(offered.match(/data-feature-new/g)?.length).toBe(2);
+  // No NEW marks anymore, and the count waits until the team turns Org on.
+  expect(offered).not.toContain(">NEW<");
+  expect(offered).not.toContain("data-org-count");
   const on = view(true, {}, true);
   expect(on).toContain('href="/org"');
   expect(on).toContain('href="/flows"');
-  expect(on).not.toContain("data-feature-new");
+  expect(on).toContain("data-org-count");
 });

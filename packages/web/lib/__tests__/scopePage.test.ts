@@ -126,8 +126,9 @@ describe("the panel answers who acts next (F4.3)", () => {
     // The status branch runs from Questions to the empty state.
     const file = readFileSync(join(import.meta.dir, "../../components/GlobalSessionPanel.tsx"), "utf8");
     const src = file.slice(file.indexOf('renderSection("Decisions"'), file.indexOf("sortedSessions.length === 0"));
-    const STATE: Record<string, string> = { NeedsYou: "needs_input", Done: "done", Working: "working", Dormant: "dormant" };
-    const rendered = [...src.matchAll(/renderSection\("(Needs You|Done|Working|Dormant)"/g)]
+    // The needs-input section is captioned "Your turn" in the rail.
+    const STATE: Record<string, string> = { Yourturn: "needs_input", Done: "done", Working: "working", Dormant: "dormant" };
+    const rendered = [...src.matchAll(/renderSection\("(Your turn|Done|Working|Dormant)"/g)]
       .map((m) => STATE[m[1].replace(" ", "")]);
     expect(rendered).toEqual(HAND_GROUPS.filter((g) => g.state !== "idle").map((g) => g.state));
     expect(HAND_GROUPS[HAND_GROUPS.length - 1].state).toBe("idle");

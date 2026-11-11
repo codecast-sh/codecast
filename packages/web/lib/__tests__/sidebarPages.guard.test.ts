@@ -9,9 +9,10 @@ describe("Pages sidebar navigation", () => {
     // The row is found by its href, whatever form its label takes. "Simple
     // view" is the .simple-view rail that hides [data-simple-hide] rows; the
     // hosted lane's own rule for Pages lives in lib/surfaceRules.ts.
-    const pagesSection = sidebar.split("<NavSection").map((chunk) => chunk.slice(0, chunk.indexOf("/>"))).find((chunk) => chunk.includes('href="/pages"'));
+    // The rail draws Pages through its row helper: row("Pages", "/pages", …).
+    const pagesSection = sidebar.split("\n").find((line) => line.includes('"/pages"'));
     expect(pagesSection).toBeDefined();
-    expect(pagesSection).toContain('href="/pages"');
+    expect(pagesSection).toContain('row("Pages", "/pages"');
     expect(pagesSection).not.toContain("simpleHide");
   });
 });
