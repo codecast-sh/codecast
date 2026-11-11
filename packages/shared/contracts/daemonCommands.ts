@@ -273,6 +273,13 @@ export const DAEMON_COMMANDS = [
   // The daemon runs the same publish as `cast cap publish`. Old daemons:
   // "Unknown command" (the item never leaves "publishing").
   "cap_publish",
+  // A session moved to another of the owner's machines whose folder is not
+  // there (no checkout, nothing to clone). That machine asks every other
+  // online one (folderSync.requestFolderExport); the one holding the folder
+  // packs it, uploads it to storage and answers { ok, storage_id, bytes,
+  // files, path }, or { ok: false, missing?, reason }. args: { path,
+  // conversation_id }. Old daemons: "Unknown command".
+  "export_folder",
 ] as const;
 
 /** How long a command waits for its daemon: one not picked up by then is
