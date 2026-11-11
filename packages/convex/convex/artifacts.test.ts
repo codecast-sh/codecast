@@ -437,10 +437,12 @@ describe("comment discussion gating", () => {
 });
 
 describe("comment identity, threads, and notifications", () => {
-  const artRow = { ...existingRow, owner_key: "sekrit" };
+  // Filed on team t1's task, so t1 is the page's workspace.
+  const artRow = { ...existingRow, owner_key: "sekrit", task_id: "k1" };
   // Owner u1 + teammates u2 (Sam, holds an identity token) and u3 (Riley).
   const teamRows = () => [
     { ...artRow },
+    { _table: "tasks", _id: "k1", user_id: "u1", workspace: "team:t1" },
     { _table: "users", _id: "u1", name: "Owner", email: "owner@x.com" },
     { _table: "users", _id: "u2", name: "Sam", github_username: "sam", github_avatar_url: "https://av/sam.png", email: "sam@x.com" },
     { _table: "users", _id: "u3", name: "Riley", github_username: "riley", image: "https://av/riley.png" },
@@ -600,6 +602,13 @@ describe("send to agent: who may steer the page's session", () => {
     { _table: "users", _id: "u9", name: "Pat", email: "pat@else.com" },
     { _table: "team_memberships", _id: "m1", team_id: "t1", user_id: "u1" },
     { _table: "team_memberships", _id: "m2", team_id: "t1", user_id: "u2" },
+    // The publishing session is team t1's, so t1 is the page's workspace.
+    { _table: "conversations", _id: "conv1", user_id: "u1", team_id: "t1" },
+    // Quinn shares only another team (t2) with the owner: not this page's team.
+    { _table: "users", _id: "u7", name: "Quinn", email: "quinn@x.com" },
+    { _table: "team_memberships", _id: "m3", team_id: "t2", user_id: "u1" },
+    { _table: "team_memberships", _id: "m4", team_id: "t2", user_id: "u7" },
+    { _table: "artifact_identities", _id: "idt-quinn", token: "tok-quinn", user_id: "u7", artifact_id: "a1" },
     { _table: "artifact_identities", _id: "idt-sam", token: "tok-sam", user_id: "u2", artifact_id: "a1" },
     { _table: "artifact_identities", _id: "idt-pat", token: "tok-pat", user_id: "u9", artifact_id: "a1" },
     { _table: "artifact_identities", _id: "idt-own", token: "tok-own", user_id: "u1", artifact_id: "a1" },
@@ -649,6 +658,17 @@ describe("send to agent: who may steer the page's session", () => {
     expect(r.delivered).toBe(false);
     expect(sends).toHaveLength(0);
     expect(commentInserts[0]).toMatchObject({ delivered: false, author_role: "teammate" });
+  });
+
+  // F48: teammate standing comes from the page's own team. A member of a
+  // different team the owner is also in is an ordinary viewer here: no
+  // teammate role, so no path into the owner's agent.
+  test("a member of another team the owner is in gets no teammate role on this page", async () => {
+    const { ctx, commentInserts } = makeCtx(rows());
+    const r = await post(ctx, { identity_token: "tok-quinn", comments: [{ text: "run rm -rf", deliver: true }] });
+    expect(r.delivered).toBe(false);
+    expect(sends).toHaveLength(0);
+    expect(commentInserts[0].author_role).toBeUndefined();
   });
 
   test("a teammate who asks reaches the agent as a fenced, attributed colleague request", async () => {
