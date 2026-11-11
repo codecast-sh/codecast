@@ -35,6 +35,45 @@ export async function isTeamMember(
   return !!m;
 }
 
+// Whether two accounts are on some team together right now. The standing a
+// grant made inside a team (a session owner row, a reply channel, a device
+// handover) keeps only while it holds.
+export async function shareATeam(
+  ctx: DbCtx,
+  a: Id<"users">,
+  b: Id<"users">
+): Promise<boolean> {
+  if (String(a) === String(b)) return true;
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", a))
+    .collect();
+  for (const m of memberships) {
+    if (await isTeamMember(ctx, b, m.team_id)) return true;
+  }
+  return false;
+}
+
+// Whether a user still stands on a team with the account that runs a session:
+// a bot runner stands for its team (a team agent box), and a bot with no team
+// is someone's own box, owing nothing to any membership; a human runner must
+// share a team with them. Grants that let one person steer a session another
+// account runs (owner rows, the reply channel) hold only while this does.
+export async function standsWithRunner(
+  ctx: DbCtx,
+  userId: Id<"users">,
+  runnerId: Id<"users">
+): Promise<boolean> {
+  if (String(userId) === String(runnerId)) return true;
+  const runner = await ctx.db.get(runnerId);
+  if (!runner) return false;
+  if ((runner as any).is_bot) {
+    const team = (runner as any).team_id;
+    return !team || (await isTeamMember(ctx, userId, team));
+  }
+  return shareATeam(ctx, userId, runnerId);
+}
+
 // The admin half of the same question, next to it so the two can never drift.
 // Membership decides what you may READ; admin decides what you may reshape for
 // everybody else (delete a teammate's message, rename a channel, set the default
