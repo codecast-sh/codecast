@@ -46,7 +46,8 @@ ${TASK_PULSE_JOB}
 ${THREAD_STATE_JOB}
 
 STATUS=thinking
-codecast_status_emit
+# On the SDK backend the host reports the turn itself (statusHook.ts stands down there too).
+[ -n "\${CODECAST_SDK_SESSION:-}" ] || codecast_status_emit
 session_register_job
 task_pulse_job
 thread_state_job

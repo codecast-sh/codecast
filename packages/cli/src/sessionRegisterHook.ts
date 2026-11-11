@@ -7,6 +7,9 @@ import { HOOK_FIELDS_READ, HOOK_STATE_DIR } from "./hookJson.js";
  *  SessionStart (HOOK_hook_event_name) always writes. */
 export const SESSION_REGISTER_JOB = `
 session_register_job() {
+# A session on the SDK backend has no terminal, and the claim below is written
+# only for a process with a TTY: skip the \`ps\` walk that could never find one.
+[ "\${CODECAST_SDK_SESSION:-}" = "1" ] && return 0
 REGISTRY_DIR="$CC_DIR/session-registry"
 # Fast path for UserPromptSubmit: a live claim for this session already names
 # the process. Re-walking \`ps\` four times on every prompt is what stacked
@@ -97,7 +100,8 @@ case "\${CLAUDE_CODE_ENTRYPOINT:-}:\${HOOK_source:-}" in
         DECL_DIR="$CC_DIR/spawn-parents"
         if [ ! -f "$DECL_DIR/$SESSION_ID.json" ]; then
           mkdir -p "$DECL_DIR"
-          find "$DECL_DIR" -name '*.json' -mtime +7 -delete 2>/dev/null
+          # The session waits for this hook to exit: sweep old declarations beside it, not before it.
+          (find "$DECL_DIR" -name '*.json' -mtime +7 -delete) >/dev/null 2>&1 </dev/null &
           echo "{\\"parent_conversation_id\\":\\"$PARENT_CONV\\",\\"ts\\":$(date +%s)000}" > "$DECL_DIR/$SESSION_ID.json"
         fi
         ;;

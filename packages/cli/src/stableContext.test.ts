@@ -4,6 +4,10 @@ import os from "os";
 import path from "path";
 import {
   buildStableContext,
+  prepareLaunchStableContext,
+  runStableContextServed,
+  refreshStableCache,
+  whereForNewSession,
   STABLE_CONTEXT_BUDGET,
   ensureStableHookForLaunch,
   installStableHookCodex,
@@ -133,6 +137,136 @@ describe("stable-context recording", () => {
     });
 
     expect(calls).toBe(0);
+  });
+});
+
+describe("stable-context at session start", () => {
+  const config = { auth_token: "secret", convex_url: "https://example.cloud" };
+  const where = {
+    workspace: { kind: "team" as const, id: "t1", name: "Acme" },
+    session: { short_id: "jx7aaaa", title: "Old session", person: "Ashot", lead: { short_id: "jx7bbbb", title: "Lead" } },
+    work: { task: { short_id: "ct-1", title: "Task" }, plan: null, project: null },
+    seat: { how: "owner" as const, handles: ["growth"] },
+    card: null,
+    chain: ["Ashot"],
+    roles: [{ handle: "growth", name: "Growth lead", reports_to: "Ashot", scope: ["Growth"], whole_workspace: false, seat: true }],
+    people: [{ name: "Ashot", role: "admin", is_me: true }],
+  };
+  const conversations = [{ id: "conversation1", title: "Prior work", updated_at: Date.now(), message_count: 3, preview: [] }];
+  const serve = (fail: string[] = []) => (async (input: unknown) => {
+    const url = String(input);
+    if (fail.some((f) => url.endsWith(f))) return new Response("{}", { status: 500 });
+    if (url.endsWith("/cli/org/where")) return new Response(JSON.stringify(where), { status: 200 });
+    if (url.endsWith("/cli/mods/guide")) return new Response("{}", { status: 200 });
+    if (url.endsWith("/cli/teams/projects")) return new Response(JSON.stringify({ projects: [] }), { status: 200 });
+    if (url.endsWith("/cli/workflows/pool")) return new Response(JSON.stringify({ flows: [] }), { status: 200 });
+    return new Response(JSON.stringify({ conversations }), { status: 200 });
+  }) as typeof fetch;
+  const scratch = () => (scratchHome = fs.mkdtempSync(path.join(os.tmpdir(), "stable-cache-")));
+
+  test("a warm cache renders with no network call, the org filled in for the new session", async () => {
+    const cacheDir = scratch();
+    globalThis.fetch = serve();
+    await refreshStableCache(config, { mode: "team", global: false, cwd: "/repo", cacheDir });
+    globalThis.fetch = (async () => { throw new Error("no network at session start"); }) as unknown as typeof fetch;
+    const built = await buildStableContext(config, { mode: "team", global: false, cwd: "/repo", session: "jx7cccccccccccccccc", cacheDir, start: { budgetMs: 1500, source: "startup" } });
+    expect(built!.stale).toBe(true);
+    expect(built!.text).toContain("This session: jx7cccc, Ashot's session");
+    expect(built!.text).toContain("Working on: no task or plan is bound to this session yet.");
+    expect(built!.text).not.toContain("Spawned by");
+    expect(built!.text).toContain("Prior work");
+  });
+
+  test("a session's own org read, made while it was starting, wins over the filled one", async () => {
+    const cacheDir = scratch();
+    globalThis.fetch = serve();
+    await refreshStableCache(config, { mode: "team", global: false, cwd: "/repo", cacheDir, session: "jx7aaaaaaaaaaaaaaaaa" });
+    globalThis.fetch = (async () => { throw new Error("no network at session start"); }) as unknown as typeof fetch;
+    const built = await buildStableContext(config, { mode: "team", global: false, cwd: "/repo", session: "jx7aaaaaaaaaaaaaaaaa", cacheDir, start: { budgetMs: 1500, source: "startup" } });
+    expect(built!.text).toContain("Spawned by: jx7bbbb Lead");
+  });
+
+  test("a cold start prints the lead blocks when the feed fails", async () => {
+    const cacheDir = scratch();
+    globalThis.fetch = serve(["/cli/feed"]);
+    const built = await buildStableContext(config, { mode: "team", global: false, cwd: "/repo", cacheDir, start: { budgetMs: 1500, source: "startup" } });
+    expect(built!.text).toContain("<org-context");
+    expect(built!.text).not.toContain("<stable-context");
+    expect(built!.stale).toBe(true);
+  });
+
+  test("a failed read keeps the cached copy", async () => {
+    const cacheDir = scratch();
+    globalThis.fetch = serve();
+    await refreshStableCache(config, { mode: "team", global: false, cwd: "/repo", cacheDir });
+    globalThis.fetch = serve(["/cli/feed"]);
+    const reads = await refreshStableCache(config, { mode: "team", global: false, cwd: "/repo", cacheDir });
+    expect(reads!.feed.conversations[0].title).toBe("Prior work");
+  });
+
+  test("a launch's block is rendered ahead and the hook prints it once with no process to start", async () => {
+    const home = scratch();
+    const ccDir = path.join(home, ".codecast");
+    const cacheDir = path.join(ccDir, "stable-cache");
+    globalThis.fetch = serve();
+    await prepareLaunchStableContext(config, { mode: "team", global: false, cwd: "/repo", session: "jx7dddddddddddddddd", cacheDir });
+    const hook = path.join(home, "hook.sh");
+    fs.writeFileSync(hook, STABLE_FEED_HOOK, { mode: 0o755 });
+    // No codecast on PATH: only the rendered file can answer.
+    const run = () => Bun.spawnSync(["/bin/bash", hook], { env: { HOME: home, CODECAST_DIR: ccDir, CODECAST_STABLE_MODE: "team", CODECAST_CONVERSATION_ID: "jx7dddddddddddddddd", PATH: "/usr/bin:/bin" } }).stdout.toString();
+    const first = run();
+    expect(first).toContain("Spawned by: jx7bbbb Lead");
+    expect(first).toContain("Prior work");
+    expect(run()).toBe("");
+  });
+
+  test("a terminal start prints its folder's block from the script; resumes and exclusions take the full path", async () => {
+    const home = scratch();
+    const ccDir = path.join(home, ".codecast");
+    const cacheDir = path.join(ccDir, "stable-cache");
+    fs.mkdirSync(ccDir, { recursive: true });
+    fs.writeFileSync(path.join(ccDir, "config.json"), JSON.stringify({ stable_mode: "team", stable_global: false }, null, 2));
+    globalThis.fetch = serve();
+    await refreshStableCache(config, { mode: "team", global: false, cwd: "/repo", cacheDir });
+    const hook = path.join(home, "hook.sh");
+    fs.writeFileSync(hook, STABLE_FEED_HOOK, { mode: 0o755 });
+    const run = (payload: object, env: Record<string, string> = {}) => Bun.spawnSync(["/bin/bash", hook], {
+      stdin: Buffer.from(JSON.stringify(payload)),
+      // No codecast on PATH: only the folder's block can answer.
+      env: { HOME: home, CODECAST_DIR: ccDir, PATH: "/usr/bin:/bin:/sbin", ...env },
+    }).stdout.toString();
+    const block = run({ session_id: "0b7e2f3c-1111-2222-3333-444455556666", cwd: "/repo", source: "startup" });
+    expect(block).toContain("<org-context workspace=\"Acme\">");
+    expect(block).toContain("Prior work");
+    expect(block).not.toContain("This session:");
+    expect(run({ session_id: "0b7e2f3c-1111-2222-3333-444455556666", cwd: "/repo", source: "startup" })).toBe(block);
+    expect(run({ session_id: "s1", cwd: "/repo", source: "resume" })).toBe("");
+    expect(run({ session_id: "s1", cwd: "/repo", source: "startup" }, { CODECAST_STABLE_EXCLUDE: "conversation1" })).toBe("");
+    expect(run({ session_id: "s1", cwd: "/elsewhere", source: "startup" })).toBe("");
+  });
+
+  test("a served folder block is recorded against the session that got it", async () => {
+    const cacheDir = scratch();
+    globalThis.fetch = serve();
+    await refreshStableCache(config, { mode: "team", global: false, cwd: "/repo", cacheDir });
+    const key = fs.readdirSync(cacheDir).find((n) => n.startsWith("rendered-dir-") && n.endsWith(".json"))!.slice("rendered-dir-".length, -".json".length);
+    const recorded: any[] = [];
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
+      if (String(input).endsWith("/cli/stable-context")) recorded.push(JSON.parse(String(init?.body)));
+      return serve()(input as any, init);
+    }) as typeof fetch;
+    await runStableContextServed(config, key, "0b7e2f3c-1111-2222-3333-444455556666", cacheDir);
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0].session_id).toBe("0b7e2f3c-1111-2222-3333-444455556666");
+    expect(JSON.parse(recorded[0].data).items[0].title).toBe("Prior work");
+  });
+
+  test("the filled org keeps the workspace and drops what belonged to the other session", () => {
+    const filled = whereForNewSession(where, "a1b2c3d4-0000-0000-0000-000000000000");
+    expect(filled.session).toBeNull();
+    expect(filled.seat).toEqual({ how: "none", handles: [] });
+    expect(filled.roles[0].seat).toBe(false);
+    expect(filled.people).toEqual(where.people);
   });
 });
 

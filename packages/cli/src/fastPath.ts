@@ -36,6 +36,11 @@ function isSessionStartVerb(argv: string[], verb: string): boolean {
   return argv[2] === verb && (argv.length === 3 || (argv.length === 5 && argv[3] === "--client"));
 }
 
+/** The stable-context hook's detached half: `cast _stable-context-after <job file>`. */
+export const STABLE_CONTEXT_AFTER_VERB = "_stable-context-after";
+/** After stable-feed.sh printed a folder's block: `cast _stable-context-served <key> <session id>`. */
+export const STABLE_CONTEXT_SERVED_VERB = "_stable-context-served";
+
 export function isStableContextFastPath(argv: string[]): boolean {
   return isSessionStartVerb(argv, "stable-context");
 }
@@ -138,7 +143,9 @@ export function runFastPath(argv: string[]): boolean {
   if (isStableContextFastPath(argv)) {
     // SessionStart hook. Stdout must be exactly one stable-context block (or
     // empty): no Commander, no preAction logging or daemon startup, no update
-    // check, no config migration write.
+    // check, no config migration write. The agent waits for this process to
+    // exit, so it exits as soon as the block is written, leaving any read it
+    // no longer needs behind.
     Promise.all([import("./stableContext.js"), import("./config/readAuthConfig.js")])
       .then(([hook, cfg]) =>
         hook.runStableContextHook(
@@ -146,7 +153,23 @@ export function runFastPath(argv: string[]): boolean {
           hook.parseStableHookClient(argv[4]),
         ),
       )
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => process.exit(0));
+    return true;
+  }
+  if (argv[2] === STABLE_CONTEXT_SERVED_VERB && argv.length === 5) {
+    Promise.all([import("./stableContext.js"), import("./config/readAuthConfig.js")])
+      .then(([hook, cfg]) => hook.runStableContextServed(cfg.readAuthConfig(cfg.defaultConfigDir()), argv[3], argv[4]))
+      .catch(() => {})
+      .finally(() => process.exit(0));
+    return true;
+  }
+  if (argv[2] === STABLE_CONTEXT_AFTER_VERB && argv.length === 4) {
+    // The hook's detached half (stableContext.ts startStableContextAfter).
+    Promise.all([import("./stableContext.js"), import("./config/readAuthConfig.js")])
+      .then(([hook, cfg]) => hook.runStableContextAfter(cfg.readAuthConfig(cfg.defaultConfigDir()), argv[3]))
+      .catch(() => {})
+      .finally(() => process.exit(0));
     return true;
   }
   if (isTaskContextFastPath(argv)) {

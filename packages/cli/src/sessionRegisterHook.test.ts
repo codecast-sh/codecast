@@ -13,7 +13,7 @@ let bin: string;
 function run(payload: Record<string, unknown>, extraEnv: Record<string, string> = {}): void {
   execFileSync("bash", [hookFile], {
     input: JSON.stringify(payload),
-    env: { ...process.env, HOME: home, CODECAST_DIR: path.join(home, ".codecast"), PATH: `${bin}:${process.env.PATH}`, ...extraEnv },
+    env: { ...process.env, CODECAST_SDK_SESSION: "", HOME: home, CODECAST_DIR: path.join(home, ".codecast"), PATH: `${bin}:${process.env.PATH}`, ...extraEnv },
   });
 }
 
@@ -34,6 +34,13 @@ if [ "$1" = "-o" ] && [ "$2" = "ppid=" ]; then echo 1; exit 0; fi
 if [ "$1" = "-o" ] && [ "$2" = "tty=" ]; then echo ttys001; exit 0; fi
 exit 0
 `, { mode: 0o755 });
+});
+
+test("a session on the SDK backend writes no claim: it has no terminal", () => {
+  run({ session_id: "sdk-sess", hook_event_name: "SessionStart" }, { CODECAST_SDK_SESSION: "1" });
+  expect(fs.existsSync(path.join(home, ".codecast", "session-registry", "sdk-sess.json"))).toBe(false);
+  run({ session_id: "tty-sess", hook_event_name: "SessionStart" });
+  expect(claim("tty-sess").tty).toBe("ttys001");
 });
 
 afterAll(() => {

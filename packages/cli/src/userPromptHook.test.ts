@@ -28,7 +28,7 @@ function run(sessionId: string, extra: Record<string, unknown> = {}, extraEnv: R
       transcript_path: extra.transcript_path ?? transcript(sessionId, Number(extra.messages ?? 0)),
       ...extra,
     }),
-    env: { ...process.env, HOME: home, CODECAST_DIR: path.join(home, ".codecast"), PATH: `${bin}:${process.env.PATH}`, ...extraEnv },
+    env: { ...process.env, CODECAST_SDK_SESSION: "", HOME: home, CODECAST_DIR: path.join(home, ".codecast"), PATH: `${bin}:${process.env.PATH}`, ...extraEnv },
   }).toString();
 }
 
