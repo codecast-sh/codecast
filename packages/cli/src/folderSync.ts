@@ -32,8 +32,27 @@ export const SKIPPED_DIRS: ReadonlySet<string> = new Set([
   "node_modules", ".venv", "venv", "__pycache__", ".next", ".turbo", ".cache", ".pytest_cache", ".mypy_cache",
 ]);
 
+const SECRET_NAMES = /^(\.env(\..*)?|\.netrc|\.npmrc|\.pypirc|\.pgpass|id_[a-z0-9_]+(\.pub)?|credentials.*|.*\.(pem|key|p12|pfx|keystore|jks))$/i;
+
+/** Files that look like keys or credentials never travel, whatever the folder's .gitignore says. */
 export function isSecretFile(name: string): boolean {
-  return name === ".env" || name.startsWith(".env.");
+  return SECRET_NAMES.test(name);
+}
+
+/**
+ * Where a session folder may be carried from or to: inside home, not in a
+ * dot-folder at the top of home (~/.ssh, ~/.aws, ~/.config...), not under
+ * ~/Library, and never home itself. Null when allowed, else the reason.
+ */
+export function refusedFolder(dir: string, home: string): string | null {
+  const abs = path.resolve(dir);
+  const h = path.resolve(home);
+  if (!home || abs === h || abs === "/") return `${dir} is a home or root folder`;
+  const rel = path.relative(h, abs);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return `${dir} is outside your home folder`;
+  const top = rel.split(path.sep)[0];
+  if (top.startsWith(".") || top === "Library") return `${dir} is a private folder`;
+  return null;
 }
 
 /** The recorded path as it would sit on this machine: another user's home
@@ -57,7 +76,11 @@ async function gitFiles(dir: string): Promise<string[] | null> {
   try {
     const top = await gitOut(dir, ["rev-parse", "--show-toplevel"]);
     if (fs.realpathSync(top.trim()) !== fs.realpathSync(dir)) return null;
-    return (await gitOut(dir, ["ls-files", "-co", "--exclude-standard", "-z"])).split("\0").filter(Boolean);
+    const split = (out: string) => out.split("\0").filter(Boolean);
+    const tracked = split(await gitOut(dir, ["ls-files", "-c", "-z"]));
+    const untracked = split(await gitOut(dir, ["ls-files", "-o", "--exclude-standard", "-z"]))
+      .filter((rel) => !isSecretFile(path.basename(rel)));
+    return [...new Set([...tracked, ...untracked])];
   } catch {
     return null;
   }
@@ -165,7 +188,8 @@ export async function exportFolder(
   const recorded = typeof args.path === "string" && path.isAbsolute(args.path) ? args.path : null;
   if (!recorded) return { ok: false, reason: "export_folder: missing or relative path" };
   const dir = [recorded, localFolderFor(recorded, deps.home)].find((p) => fs.existsSync(p)) ?? recorded;
-  if (path.resolve(dir) === path.resolve(deps.home) || dir === "/") return { ok: false, reason: `${dir} is a home or root folder; refusing to carry it` };
+  const refused = refusedFolder(dir, deps.home);
+  if (refused) return { ok: false, reason: `${refused}; refusing to carry it` };
   const plan = await planFolderExport(dir);
   if (!plan.ok) return { ok: false, missing: plan.missing, reason: plan.reason };
   const bytes = await packFolder(plan);

@@ -27,6 +27,17 @@ export function pickFolderPeers(devices: PeerDevice[], requester: string, now: n
     .slice(0, FOLDER_EXPORT_PEER_CAP);
 }
 
+function trimSlash(p: string): string {
+  return p.length > 1 ? p.replace(/\/+$/, "") : p;
+}
+
+/** The folders a conversation recorded: the only paths a fetch may name. */
+export function conversationFolders(conv: { project_path?: string; git_root?: string; worktree_path?: string }): string[] {
+  return [conv.project_path, conv.git_root, conv.worktree_path]
+    .filter((p): p is string => typeof p === "string" && p.startsWith("/") && p !== "/")
+    .map(trimSlash);
+}
+
 export const requestFolderExport = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -39,7 +50,7 @@ export const requestFolderExport = mutation({
     if (!userId) throw new Error("Authentication required");
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
-    if (!args.path.startsWith("/")) throw new Error("path must be absolute");
+    if (!conversationFolders(conv).includes(trimSlash(args.path))) throw new Error("path is not this conversation's folder");
     const now = Date.now();
     const devices = await ctx.db
       .query("devices")
