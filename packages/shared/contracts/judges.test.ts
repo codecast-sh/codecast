@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { briefAt, evidenceMessage, evidenceScopes, evidenceSubject, findingConversation, findingKey, findingSignal, firstSentence, judgeRequest, narrowBrief, parseJudgeReply, parseJudgeSpec, quotesShareMessage, rulingsShown } from "./judges";
+import { briefAt, evidenceMessage, evidenceScopes, evidenceSubject, findingConversation, findingKey, findingSignal, firstSentence, judgeRequest, narrowBrief, parseJudgeReply, parseJudgeSpec, quotesShareMessage, readsNoLines, rulingsShown } from "./judges";
 import { momentWindow, renderMoment } from "./moments";
 import { CHEAP_MODEL } from "./modelOptions";
 import type { MomentRecord } from "./moments";
@@ -69,7 +69,50 @@ describe("the judge's one call", () => {
       { project: "AgentWatch Trial", version: 1, text: "ex-agentwatch-trial-1: Lead with the result.\n", ids: ["ex-agentwatch-trial-1"] },
     ];
     expect(judgeRequest(spec, briefs, moment, T).system).toContain('"<the id alone, in full as listed, such as ex-agentwatch-trial-1>"');
-    expect(judgeRequest(spec, [], moment, T).system).toContain('"<the id alone, in full as listed>"');
+    expect(judgeRequest(spec, [{ project: "Agent Quality", version: 4, text: "ex-aq-1: Reply within a business day.\n", ids: ["ex-aq-1"] }], moment, T).system).toContain('"<the id alone, in full as listed, such as ex-aq-1>"');
+  });
+});
+
+describe("a judge with no lines (parts: none)", () => {
+  const brief = { project: "Funnel", version: 2, text: "## Cold email\nex-f-1: One message, one language.\n", ids: ["ex-f-1"] };
+
+  it("reads no expectations, and is asked for findings that cite none", () => {
+    const spec = parseJudgeSpec("visitor", FILE.replace("max_tokens: 1500", "parts: none"));
+    if ("error" in spec) throw new Error(spec.error);
+    expect(readsNoLines(spec.parts)).toBe(true);
+    expect(readsNoLines(["Cold email"])).toBe(false);
+    expect(readsNoLines(undefined)).toBe(false);
+    const narrow = narrowBrief(brief, spec.parts);
+    expect(narrow.ids).toEqual([]);
+    const req = judgeRequest(spec, [narrow], moment, T);
+    expect(req.prompt).not.toContain("<expectations");
+    expect(req.prompt).toContain("<moment>");
+    expect(req.system).not.toContain('"expectation"');
+    expect(req.system).toContain('"what_happened"');
+  });
+
+  it("keeps every finding, citing none, while a judge with lines still sets uncited ones aside", () => {
+    const reply = '{"deviations": [{"expectation": "ex-whatever", "severity": 4, "what_happened": "Start did nothing on the first press.", "quote": "click button \\"Start\\"", "markers": []}, {"severity": 2, "what_happened": "The deck took long to open."}]}';
+    expect(parseJudgeReply(reply, [])).toEqual({
+      findings: [
+        { expectation: "", severity: 4, what_happened: "Start did nothing on the first press.", quote: 'click button "Start"', markers: [] },
+        { expectation: "", severity: 2, what_happened: "The deck took long to open.", quote: "", markers: [] },
+      ],
+      uncited: 0,
+    });
+    expect(parseJudgeReply(reply, ["ex-aq-1"])).toEqual({ findings: [], uncited: 2 });
+  });
+
+  it("keys a finding by its judge and subject, so a repeat finds it, and groups it under the judge", () => {
+    const f = { expectation: "", severity: 4, what_happened: "Start did nothing on the first press. The visitor pressed it three times.", quote: 'click button "Start"', markers: [] };
+    const origin = { judge: "visitor", judge_version: "v1", moment: "mo-1", subject: "replay/rp-7296" };
+    const key = findingKey(f, origin);
+    expect(key).toBe(findingKey({ ...f, quote: 'CLICK button  "Start"' }, { ...origin, moment: "mo-2" }));
+    expect(key).not.toBe(findingKey(f, { ...origin, judge: "other" }));
+    expect(key).not.toBe(findingKey(f, { ...origin, subject: "replay/rp-7208" }));
+    expect(key).toStartWith("evidence:replay/rp-7296:@visitor:");
+    expect(findingKey({ ...f, quote: "" }, origin)).toBe("moment:mo-1:@visitor");
+    expect(findingSignal(f, origin)).toMatchObject({ source: "judge:visitor", subject: "visitor", fingerprint: key, title: "Start did nothing on the first press." });
   });
 });
 

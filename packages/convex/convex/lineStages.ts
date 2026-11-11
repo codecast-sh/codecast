@@ -125,7 +125,7 @@ export const flow = query({
     const kindRows = await Promise.all([...kinds.entries()].map(async ([key, k]) => {
       const kind = key.split("|")[1];
       const ex = extractors.find((e) => `${e.source_id}|${e.kind}` === key) ?? null;
-      const counts = { waiting: 0, extracting: 0, ready: 0, failed: 0 };
+      const counts = { waiting: 0, extracting: 0, ready: 0, failed: 0, skipped: 0 };
       const versions = new Map<string, { version: string; n: number; last_at: number }>();
       for (const m of k.rows) {
         counts[m.status]++;

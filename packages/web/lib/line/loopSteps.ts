@@ -86,7 +86,7 @@ export type LoopMomentRow = {
   _id: string;
   short_id: string;
   kind: string;
-  status: "waiting" | "extracting" | "ready" | "failed";
+  status: "waiting" | "extracting" | "ready" | "failed" | "skipped";
   extractor_version?: string;
   extracted_at?: number;
   blocks?: number;

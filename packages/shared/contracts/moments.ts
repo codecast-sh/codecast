@@ -92,6 +92,8 @@ export interface ExtractorOutput {
   /** The moment rendered whole for an agent judge's review (agentJudges.agentJudgePrompt): everything the review reads, with long pieces folded to the
    *  command that opens them, ending in what stands now. Absent: the review reads the blocks. */
   review?: string;
+  /** Set when the extractor declines the moment (`{"skip": "<why>"}`): nothing is judged, and the moment is kept as skipped with the reason. */
+  skip?: string;
 }
 
 /** A moment as codecast keeps it: the extractor's output plus where and when it came from. */
@@ -213,6 +215,9 @@ export function parseExtractorOutput(raw: unknown): ExtractorOutput | { error: s
     }
   }
   if (!isObject(value)) return { error: "the extractor printed no object" };
+  // A decline: this moment is not one its judges read (a recording of a staff page, say). The reason is all it carries.
+  const skip = text(value.skip, 500);
+  if (skip) return { blocks: [], refs: [], skip };
   if (!Array.isArray(value.blocks)) return { error: "the moment needs blocks: a list of message, facts and text blocks" };
   if (value.blocks.length > MOMENT_LIMITS.blocks) return { error: `the moment has ${value.blocks.length} blocks, at most ${MOMENT_LIMITS.blocks}` };
   const blocks: MomentBlock[] = [];
@@ -319,6 +324,8 @@ export function parseDuration(raw: string): number | null {
 export interface ExtractorHeader {
   quiet_ms: number;
   timeout_ms: number;
+  /** The one source it publishes to (`// source: <name>`, publishedFor); absent, any source. */
+  source?: string;
 }
 
 /**
@@ -332,6 +339,8 @@ export function parseExtractorHeader(source: string): ExtractorHeader & { proble
     const t = line.trim();
     if (!t) continue;
     if (!t.startsWith("//")) break;
+    const named = t.slice(2).trim().match(/^source\s*:\s*(\S+)\s*$/i);
+    if (named) { header.source = named[1]; continue; }
     const kv = t.slice(2).trim().match(/^(quiet|timeout)\s*:\s*(.+)$/i);
     if (!kv) continue;
     const ms = parseDuration(kv[2]);
@@ -342,6 +351,17 @@ export function parseExtractorHeader(source: string): ExtractorHeader & { proble
     else header.timeout_ms = ms;
   }
   return header;
+}
+
+/**
+ * The files a publish to `source` carries: those whose header names it, or,
+ * when none does, those that name no source. So a repo serving two sources
+ * names the newer one in its files and the older one's publish is unchanged.
+ */
+export function publishedFor<T extends { source?: string }>(files: readonly T[], source: string): T[] {
+  const named = (f: T) => f.source?.trim().toLowerCase();
+  const want = source.trim().toLowerCase();
+  return files.some((f) => named(f) === want) ? files.filter((f) => named(f) === want) : files.filter((f) => !named(f));
 }
 
 /** Where moment bodies live: on the extractor's host (the default, nothing leaves it to storage) or in codecast. */

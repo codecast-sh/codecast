@@ -71,6 +71,31 @@ describe("what a checkout publishes", () => {
   }, 60_000);
 });
 
+describe("a file that names its source", () => {
+  test("publishes only to that source, and a publish elsewhere carries the files that name none, with only their problems", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "moments-sources-"));
+    try {
+      fs.mkdirSync(path.join(dir, ".codecast/moments"), { recursive: true });
+      fs.mkdirSync(path.join(dir, ".codecast/judges"), { recursive: true });
+      fs.writeFileSync(path.join(dir, ".codecast/moments/conversation.ts"), "// quiet: forever\nconsole.log('{}');\n");
+      fs.writeFileSync(path.join(dir, ".codecast/moments/replay.ts"), "// quiet: 30m\n// source: product-posthog\nconsole.log('{}');\n");
+      fs.writeFileSync(path.join(dir, ".codecast/judges/comms.md"), "---\nmoment: conversation\nprojects: Agent Quality\n---\nRead it.\n");
+      fs.writeFileSync(path.join(dir, ".codecast/judges/visitor.md"), "---\nmoment: replay\nprojects: Funnel\nparts: none\nsource: Product-PostHog\n---\nSay what went wrong.\n");
+      const replay = await readPublishSet(dir, "product-posthog");
+      expect(replay.extractors.map((e) => e.kind)).toEqual(["replay"]);
+      expect(replay.judges.map((j) => [j.name, j.parts])).toEqual([["visitor", ["none"]]]);
+      expect(replay.files.map((f) => f.path)).toEqual([".codecast/moments/replay.ts", ".codecast/judges/visitor.md"]);
+      expect(replay.problems).toEqual([]);
+      const app = await readPublishSet(dir, "product-app");
+      expect(app.extractors.map((e) => e.kind)).toEqual(["conversation"]);
+      expect(app.judges.map((j) => j.name)).toEqual(["comms"]);
+      expect(app.problems).toEqual([expect.stringContaining("conversation.ts: quiet")]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
+});
+
 describe("running an extractor", () => {
   test("its stdout is the moment, at the file's current version", async () => {
     const r = await runExtractor(claim("t_81"));

@@ -14,7 +14,7 @@ import { dayWords } from "../../widgets";
 import type { LineViewProps } from "../views/types";
 import { Back, DayStrip, Gap, Section, StageHead, Version } from "./parts";
 
-const STATUS_TONE: Record<string, string> = { waiting: "dim", extracting: "live", ready: "ok", failed: "bad" };
+const STATUS_TONE: Record<string, string> = { waiting: "dim", extracting: "live", ready: "ok", failed: "bad", skipped: "dim" };
 const minutes = (ms: number) => (ms >= 3_600_000 ? `${Math.round(ms / 3_600_000)} h` : ms >= 60_000 ? `${Math.round(ms / 60_000)} min` : `${Math.round(ms / 1000)} s`);
 
 export function MomentsStage({ workspace: ws, selection, select, href, projectId }: LineViewProps & { projectId: string | null }) {
@@ -78,7 +78,7 @@ function KindCard({ k, now, open, href }: { k: LineKindRow; now: number; open: (
         <Version v={ex?.version ?? null} current />
         <span className="sd-spacer" />
         <span className="sd-counts">
-          {(["waiting", "extracting", "ready", "failed"] as const).map((s) => (
+          {(["waiting", "extracting", "ready", "failed", "skipped"] as const).map((s) => (
             <span key={s} data-tone={k.counts[s] ? STATUS_TONE[s] : "dim"}><b className="lw-num">{k.counts[s].toLocaleString("en-US")}</b> {s}</span>
           ))}
         </span>

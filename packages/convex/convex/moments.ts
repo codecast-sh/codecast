@@ -304,6 +304,17 @@ export const markFailed = internalMutation({
   },
 });
 
+/** The extractor declined the moment: kept as skipped with its reason, never judged. */
+export const markSkipped = internalMutation({
+  args: { moment_id: v.id("moments"), extractor_version: v.string(), reason: v.string() },
+  handler: async (ctx, args) => {
+    const m = await ctx.db.get(args.moment_id);
+    if (!m || m.status !== "extracting") return;
+    const now = Date.now();
+    await ctx.db.patch(m._id, { status: "skipped", error: args.reason.slice(0, 500), extractor_version: args.extractor_version, extracted_at: now, due_at: now, claim_device: undefined, updated_at: now });
+  },
+});
+
 export const markReady = internalMutation({
   args: {
     moment_id: v.id("moments"),
@@ -358,7 +369,7 @@ export const complete = action({
     output: v.optional(v.string()),
     error: v.optional(v.string()),
   },
-  handler: async (ctx, args): Promise<{ moment: string; status: "ready" | "failed" | "waiting"; storage?: string; judged?: JudgeOutcome[]; judge_here?: JudgeHandoff; error?: string }> => {
+  handler: async (ctx, args): Promise<{ moment: string; status: "ready" | "failed" | "waiting" | "skipped"; storage?: string; judged?: JudgeOutcome[]; judge_here?: JudgeHandoff; error?: string }> => {
     const f: Finishing = await ctx.runQuery(internal.moments.finishing, { api_token: args.api_token, device_id: args.device_id, moment: args.moment });
     if (args.error !== undefined || args.output === undefined) {
       const error = args.error || "the extractor printed nothing";
@@ -370,6 +381,10 @@ export const complete = action({
       // The same code on the same data prints the same thing: no retry.
       await ctx.runMutation(internal.moments.markFailed, { moment_id: f.moment._id, error: parsed.error, retry: false });
       return { moment: args.moment, status: "failed", error: parsed.error };
+    }
+    if (parsed.skip) {
+      await ctx.runMutation(internal.moments.markSkipped, { moment_id: f.moment._id, extractor_version: args.extractor_version, reason: parsed.skip });
+      return { moment: args.moment, status: "skipped", error: parsed.skip };
     }
     const extractedAt = Date.now();
     // An extractor that reads as of an earlier time (a replay's refs.as_of)
@@ -719,7 +734,7 @@ export const prune = internalMutation({
       await ctx.db.patch(m._id, { body_key: undefined, body_expires_at: undefined });
       cleared++;
     }
-    for (const status of ["waiting", "failed"] as const) {
+    for (const status of ["waiting", "failed", "skipped"] as const) {
       const stale = await ctx.db.query("moments").withIndex("by_status_due", (q: any) => q.eq("status", status).lte("due_at", now - STALE_MS)).take(500);
       for (const m of stale) {
         await ctx.db.delete(m._id);

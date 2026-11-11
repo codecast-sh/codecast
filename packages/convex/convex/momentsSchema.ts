@@ -32,7 +32,8 @@ export const agentJudgeFields = v.object({
 
 export const agentReviewStatus = v.union(v.literal("queued"), v.literal("running"), v.literal("done"), v.literal("failed"), v.literal("cancelled"));
 
-const momentStatus = v.union(v.literal("waiting"), v.literal("extracting"), v.literal("ready"), v.literal("failed"));
+// skipped: its extractor declined it (ExtractorOutput.skip); nothing judges it.
+const momentStatus = v.union(v.literal("waiting"), v.literal("extracting"), v.literal("ready"), v.literal("failed"), v.literal("skipped"));
 const budgetPurposes = v.object({ judge: v.number(), grouping: v.number(), call: v.number() });
 
 export const momentsTables = {
@@ -83,7 +84,7 @@ export const momentsTables = {
   })
     .index("by_source_kind_subject_status", ["source_id", "kind", "subject", "status"])
     .index("by_source_kind_status_due", ["source_id", "kind", "status", "due_at"])
-    // The daily prune: waiting moments no extractor ever took, and failed ones.
+    // The daily prune: waiting moments no extractor ever took, and failed and skipped ones.
     .index("by_status_due", ["status", "due_at"])
     .index("by_workspace_created", ["workspace", "created_at"])
     .index("by_body_expires", ["body_expires_at"])

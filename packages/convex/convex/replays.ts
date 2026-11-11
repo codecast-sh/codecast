@@ -309,21 +309,24 @@ export const saveSummary = internalMutation({
       ...(row.provider === "sdk" && args.first_t !== undefined ? { dom_t0: row.started_at + args.first_t } : {}),
       updated_at: now,
     });
-    // Our recorder sends no "recording ended" signal, so every complete
-    // assembly is a moment event and the replay extractor's quiet window
-    // decides when the recording is over (learning-loop.md LL7). Only a
-    // source with a published replay extractor opens moments, and only for a
-    // recording someone used: a reload or a glance has nothing to judge, and
-    // each judged replay costs an agent session.
-    if (!pending && row.provider === "sdk" && isUsedRecording(args.counts, args.duration_ms)) {
-      const extractor = await ctx.db.query("moment_extractors").withIndex("by_source_kind", (q: any) => q.eq("source_id", row.source_id).eq("kind", "replay")).first();
-      const source = extractor ? await ctx.db.get(row.source_id) : null;
-      if (source) {
-        await recordMomentEvents(ctx, source, [{ type: "moment", kind: "replay", subject: row.short_id, at: row.started_at + args.duration_ms, refs: { replay: row.short_id } }], now);
-      }
-    }
+    if (!pending && row.provider === "sdk") await openReplayMoment(ctx, row, args.counts, args.duration_ms, now);
   },
 });
+
+/**
+ * A recording someone used, as a moment event of kind `replay` on its own
+ * source (learning-loop.md LL7). Neither our recorder nor a vendor import
+ * says "recording ended", so every complete save is an event and the replay
+ * extractor's quiet window decides when the recording is over. Only a source
+ * with a published replay extractor opens moments, and only for a recording
+ * someone used: a reload or a glance has nothing to judge.
+ */
+async function openReplayMoment(ctx: any, row: Doc<"replays">, counts: { clicks: number }, durationMs: number, now: number): Promise<void> {
+  if (!isUsedRecording(counts, durationMs)) return;
+  const extractor = await ctx.db.query("moment_extractors").withIndex("by_source_kind", (q: any) => q.eq("source_id", row.source_id).eq("kind", "replay")).first();
+  const source = extractor ? await ctx.db.get(row.source_id) : null;
+  if (source) await recordMomentEvents(ctx, source, [{ type: "moment", kind: "replay", subject: row.short_id, at: row.started_at + durationMs, refs: { replay: row.short_id } }], now);
+}
 
 /** Read a recording's chunks and cache its text timeline and counts on the row. */
 export const assemble = internalAction({
@@ -629,6 +632,7 @@ export const saveImported = internalMutation({
     if (args.expect_gen === undefined && row && importShrinks(row, args)) return { saved: false };
     if (!row) return { saved: false };
     await writeReplayTimeline(ctx, args.replay_id, args.timeline_md, now);
+    const length = Math.max(args.duration_ms, args.vendor_length_ms ?? 0, row?.facts?.length_ms ?? 0);
     await patchReplay(ctx, row, {
       provider: args.provider,
       chunk_keys: args.chunk_keys,
@@ -640,8 +644,8 @@ export const saveImported = internalMutation({
       vendor_refresh_why: undefined,
       counts: args.counts,
       ...(args.shape ? { shape: args.shape } : {}),
-      duration_ms: Math.max(args.duration_ms, args.vendor_length_ms ?? 0, row?.facts?.length_ms ?? 0),
-      captured_ms: args.whole ? Math.max(args.duration_ms, args.vendor_length_ms ?? 0, row?.facts?.length_ms ?? 0) : args.duration_ms,
+      duration_ms: length,
+      captured_ms: args.whole ? length : args.duration_ms,
       ...(args.vendor_length_ms ? { facts: { ...(row?.facts ?? { at: now }), length_ms: args.vendor_length_ms } } : {}),
       ...(args.url ? { url: args.url } : {}),
       ...(args.user ? { user: args.user } : {}),
@@ -657,6 +661,8 @@ export const saveImported = internalMutation({
       read_to: args.read_to,
       updated_at: now,
     });
+    // A vendor's recording (PostHog, Sentry) is judged the way our recorder's is.
+    await openReplayMoment(ctx, { ...row, ...(args.started_at ? { started_at: args.started_at } : {}) }, args.counts, length, now);
     return { saved: true };
   },
 });

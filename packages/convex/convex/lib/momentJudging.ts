@@ -12,7 +12,7 @@ import type { ModelCallResult, ModelCallSpec } from "@codecast/shared/contracts/
 import { momentEvidence, reembedFinding } from "../findingGroups";
 import { newOnResample, type Ruling } from "../judgeRetire";
 import type { MomentRecord, MomentWindow } from "@codecast/shared/contracts/moments";
-import { briefAt, evidenceMessage, evidenceScopes, evidenceSubject, findingKey, findingKeyScope, findingSignal, judgeRequest, parseJudgeReply, quotesShareMessage, rulingsShown, type ExpectationsBrief, type JudgeFinding, type JudgeHandoff, type JudgeRuling, type JudgeSpec } from "@codecast/shared/contracts/judges";
+import { briefAt, evidenceMessage, evidenceScopes, evidenceSubject, findingKey, findingKeyScope, findingSignal, judgeRequest, parseJudgeReply, quotesShareMessage, readsNoLines, rulingsShown, type ExpectationsBrief, type JudgeFinding, type JudgeHandoff, type JudgeRuling, type JudgeSpec } from "@codecast/shared/contracts/judges";
 
 /** A moment being judged: its row, its source, the judges of its kind. */
 export type Finishing = {
@@ -106,7 +106,8 @@ export async function prepareJudge(ctx: any, f: Finishing, record: MomentRecord,
   const expectations = briefs.map((b) => ({ project_id: b.project_id, version: b.version }));
   const base = { judge_id: judge._id, moment_id: f.moment._id, expectations, model: judge.model, inputs: reading.inputs, ...(reading.scoped ? { lines: [...reading.scoped] } : {}) };
   const ids = briefs.flatMap((b) => b.ids);
-  if (!ids.length) {
+  // A judge with no lines (parts: none) runs on its own prompt; any other judge waits until its projects have lines.
+  if (!ids.length && !readsNoLines(judge.parts)) {
     const reason = "its projects have no expectations to grade against yet";
     await ctx.runMutation(internal.moments.recordRun, { ...base, status: "skipped", reason, findings: 0, cost_usd: 0 });
     return { outcome: { judge: judge.name, status: "skipped", findings: 0, filed: 0, reason, cost_usd: 0 } };
@@ -140,7 +141,7 @@ export async function settleJudge(ctx: any, f: Finishing, record: MomentRecord, 
   // Judged again: this moment now stands behind what the run filed or found again, and no longer behind
   // what it filed before and did not find now, which leaves its problems once no moment stands behind it.
   if (judge.mode === "live") {
-    await ctx.runMutation(internal.judgeRetire.settleRun, { moment_id: f.moment._id, moment: f.moment.short_id, judge: judge.name, judge_version: judge.version, held: [...signalIds, ...filedNow.held], keep: filedNow.keys, shown: ids.filter(inScope), ...(later.some(inScope) ? { later: later.filter(inScope) } : {}), inputs: reading.inputs, ...(scoped ? { fresh: [...scoped] } : {}), before: startedAt, actor: f.source.owner_user_id });
+    await ctx.runMutation(internal.judgeRetire.settleRun, { moment_id: f.moment._id, moment: f.moment.short_id, judge: judge.name, judge_version: judge.version, held: [...signalIds, ...filedNow.held], keep: filedNow.keys, shown: ids.length ? ids.filter(inScope) : [judge.name], ...(later.some(inScope) ? { later: later.filter(inScope) } : {}), inputs: reading.inputs, ...(scoped ? { fresh: [...scoped] } : {}), before: startedAt, actor: f.source.owner_user_id });
   }
   await ctx.runMutation(internal.moments.recordRun, {
     ...base,
@@ -226,7 +227,8 @@ async function fileFindings(ctx: any, f: Finishing, judge: Doc<"judges">, briefs
   for (const [key, i] of first) {
     if (filed.has(key)) continue;
     const finding = findings[i]!;
-    const project = briefs.find((b) => b.ids.includes(finding.expectation))?.project_id;
+    // A finding that cites no line files into the judge's first project, as an agent judge's does.
+    const project = finding.expectation ? briefs.find((b) => b.ids.includes(finding.expectation))?.project_id : judge.project_ids[0];
     try {
       const result = await ctx.runAction(internal.signals.ingestAs, {
         user_id: f.source.owner_user_id,
