@@ -36,6 +36,7 @@ import {
   parseWorkflowHarnessFrame,
   CHAT_WAKE_HEADER,
   isCompactionSummaryMessage,
+  restoreFrameTags,
 } from "@codecast/shared/contracts";
 import { LRUCache } from "../lib/lruCache";
 export type { HuddleSummaryTag } from "@codecast/shared/contracts";
@@ -88,7 +89,7 @@ export function parseSessionMessage(text: string): { from: string; body: string;
   const match = text.match(SESSION_MESSAGE_RE);
   if (!match) return null;
   const name = text.match(SESSION_MESSAGE_NAME_RE)?.[1]?.trim() || undefined;
-  return { from: match[1].trim(), body: removeSessionMessageFraming(match[2]), name };
+  return { from: match[1].trim(), body: restoreFrameTags(removeSessionMessageFraming(match[2])), name: name && restoreFrameTags(name) };
 }
 
 // Full parse of an inbound session→session message from a raw user-message
@@ -103,11 +104,8 @@ export function parseInboundSessionMessage(
   return parseSessionMessage(cleaned);
 }
 
-// Mirror of the server-side formatter, for any client that wants to construct one
-// (and for round-trip tests).
-export function formatSessionMessage(fromShortId: string, body: string): string {
-  return `<session-message from="${fromShortId}">\n${body}\n</session-message>`;
-}
+// The one writer, re-exported for clients and round-trip tests.
+export { formatSessionMessage } from "@codecast/shared/contracts";
 
 // The two envelopes an agent's words arrive in: `cast send` between sessions
 // (<session-message>) and a subagent reporting to its parent (<agent-message>).
@@ -135,8 +133,8 @@ export function parseAgentAuthoredMessage(
     const close = rest.lastIndexOf(`</${tag}>`);
     return {
       from: open[1].trim(),
-      name: open[0].match(/\sname="([^"]*)"/)?.[1]?.trim() || undefined,
-      body: (close === -1 ? rest : rest.slice(0, close)).trim(),
+      name: restoreFrameTags(open[0].match(/\sname="([^"]*)"/)?.[1]?.trim() ?? "") || undefined,
+      body: restoreFrameTags((close === -1 ? rest : rest.slice(0, close)).trim()),
       label,
     };
   }
@@ -290,10 +288,10 @@ export function parseMachineDeliveredMessage(
       return { kind: "session", source: parsed.name || parsed.from, body: parsed.body };
     }
     const open = rawContent.match(/<session-message\s+from="([^"]*)"(?:\s+name="([^"]*)")?[^>]*>([\s\S]*)$/);
-    const body = removeLeadingFramingNewline(
+    const body = restoreFrameTags(removeLeadingFramingNewline(
       (open?.[3] ?? "").replace(/<\/session-message>[\s\S]*$/, ""),
-    );
-    return { kind: "session", source: open?.[2] || open?.[1] || "session", body };
+    ));
+    return { kind: "session", source: restoreFrameTags(open?.[2] ?? "") || open?.[1] || "session", body };
   }
   // A subagent's report to its parent is another agent's words, like a teammate
   // broadcast — same kind, so labels and icons need no new variant.
