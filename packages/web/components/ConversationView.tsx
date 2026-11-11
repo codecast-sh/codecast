@@ -3441,22 +3441,22 @@ const ConversationViewInner = (
     }
     return null;
   };
-  // What the agent said back to a row: the last assistant text before the next
-  // row that starts a turn. Undefined while nothing follows yet, null when the
-  // turn ended without a word.
-  const replyAfter = (index: number): string | null | undefined => {
-    let reply: string | null | undefined;
+  // Whether the agent's turn after a row ended without a word: it started
+  // working and the next row that starts a turn came before any assistant
+  // text. Rows delivered together before it started are one batch, answered
+  // by the same turn. False while nothing has followed yet.
+  const turnEndedSilent = (index: number): boolean => {
+    let started = false;
     for (let i = index + 1; i < timeline.length; i++) {
       const item = timeline[i];
       if (item?.type !== "message") continue;
       const m = item.data as Message;
-      if (m.role === "user") {
-        if (userMsgKindMap.get(m._id)?.kind === "tool_results_only") continue;
-        return reply ?? null;
-      }
-      if (m.role === "assistant" && m.content?.trim()) reply = m.content.trim();
+      if (m.role === "assistant") {
+        if (m.content?.trim()) return false;
+        started = true;
+      } else if (m.role === "user" && started && userMsgKindMap.get(m._id)?.kind !== "tool_results_only") return true;
     }
-    return reply;
+    return false;
   };
   // The person's own words before a row: what a hosted notice's Try again sends.
   const lastPersonWords = (index: number): string | undefined => {
@@ -3736,7 +3736,7 @@ const ConversationViewInner = (
         case 'task_notification':
           return <TaskNotificationLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} agentNameToChildMap={agentNameToChildMap} />;
         case 'scheduled_task':
-          return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} hosted={isHostedAgentType(conversation?.agent_type)} reply={replyAfter(index)} />;
+          return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} hosted={isHostedAgentType(conversation?.agent_type)} unanswered={turnEndedSilent(index)} />;
         case 'goal_round': {
           const line = goalFrameLine(kind.frame);
           return <FoldedPromptBlock key={msg._id} label={line.label} preview={line.detail} content={goalMessageBody(msg.content!)} timestamp={msg.timestamp} />;
