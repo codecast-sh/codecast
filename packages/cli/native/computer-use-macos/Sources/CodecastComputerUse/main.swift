@@ -1255,15 +1255,26 @@ private func focusedWindow(
         if let window = settledWindow, outcome.settled {
             return window
         }
-        throw ProviderError(
-            .permissionDenied,
-            "app '\(app.name)' has visible windows but no accessibility window (AX reads stayed blocked for \(outcome.waitedMs)ms). Toggle codecast computer off and on again under Accessibility in System Settings."
+        let verdict = WindowReadDiagnosis.verdict(
+            appName: app.name,
+            errors: windowReadErrors(appElement),
+            waitedMs: outcome.waitedMs
         )
+        throw ProviderError(verdict.code, verdict.message)
     }
     throw ProviderError(
         .windowNotFound,
         "app '\(app.name)' has no accessibility window; make sure it has a visible window, then retry with --restore-window."
     )
+}
+
+/// The AXError of each window read, so a failed lookup can say what macOS
+/// answered instead of guessing.
+private func windowReadErrors(_ appElement: AXUIElement) -> [Int32] {
+    [kAXFocusedWindowAttribute, kAXWindowsAttribute].map { attribute in
+        var value: CFTypeRef?
+        return AXUIElementCopyAttributeValue(appElement, attribute as CFString, &value).rawValue
+    }
 }
 
 private func lookupUsableWindow(systemWide: AXUIElement, appElement: AXUIElement, app: AppDescriptor) -> AXUIElement? {
@@ -2673,6 +2684,7 @@ struct WindowCapture {
             }
             let alpha = info[kCGWindowAlpha as String] as? CGFloat ?? 1
             guard WindowCandidateFilter.keeps(
+                layer: layer,
                 width: bounds.width,
                 height: bounds.height,
                 alpha: alpha,

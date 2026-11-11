@@ -12,14 +12,19 @@ public enum WindowCandidateFilter {
     /// the filter would discard every candidate and leave the accessibility
     /// tree unreachable even for `--no-screenshot`, which needs nothing but
     /// Accessibility. The field is therefore read only when it says something.
+    /// Windows below the normal level are the desktop and its icons (Finder
+    /// always owns a full screen one). They are never a target, and counting
+    /// one made Finder with no open window read as an app whose windows
+    /// accessibility could not see.
     public static func keeps(
+        layer: Int,
         width: Double,
         height: Double,
         alpha: Double,
         sharingState: Int?,
         screenRecordingGranted: Bool
     ) -> Bool {
-        guard width >= minimumEdge, height >= minimumEdge, alpha > minimumAlpha else { return false }
+        guard layer >= 0, width >= minimumEdge, height >= minimumEdge, alpha > minimumAlpha else { return false }
         guard screenRecordingGranted else { return true }
         return sharingState != 0
     }

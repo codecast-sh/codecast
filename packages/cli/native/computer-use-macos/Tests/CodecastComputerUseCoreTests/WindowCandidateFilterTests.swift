@@ -9,6 +9,12 @@ final class WindowCandidateFilterTests: XCTestCase {
         XCTAssertTrue(keeps())
     }
 
+    func testDesktopLevelWindowsAreDropped() {
+        XCTAssertFalse(keeps(layer: -2147483603))
+        XCTAssertTrue(keeps(layer: 0))
+        XCTAssertTrue(keeps(layer: 3))
+    }
+
     func testAnUnsharedWindowIsDroppedOnlyWhenTheFieldMeansSomething() {
         XCTAssertFalse(keeps(sharingState: 0, screenRecordingGranted: true))
         XCTAssertTrue(keeps(sharingState: 1, screenRecordingGranted: true))
@@ -28,6 +34,7 @@ final class WindowCandidateFilterTests: XCTestCase {
     }
 
     private func keeps(
+        layer: Int = 0,
         width: Double = 900,
         height: Double = 700,
         alpha: Double = 1,
@@ -35,6 +42,7 @@ final class WindowCandidateFilterTests: XCTestCase {
         screenRecordingGranted: Bool = true
     ) -> Bool {
         WindowCandidateFilter.keeps(
+            layer: layer,
             width: width,
             height: height,
             alpha: alpha,
