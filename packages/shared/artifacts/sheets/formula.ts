@@ -14,7 +14,8 @@ export type RefToken = {
   /** Tab name as written, unquoted; undefined means the formula's own tab. */
   tab?: string;
   /** cell: a only. range: a:b. cols: A:C (rows unbounded). rows: 2:5 (cols unbounded). */
-  shape: "cell" | "range" | "cols" | "rows";
+  /** colsFrom: an open-ended column range from a cell down, "A2:A" (b sits on the last row). */
+  shape: "cell" | "range" | "cols" | "rows" | "colsFrom";
   a: RefPart;
   b?: RefPart;
   start: number;
@@ -31,13 +32,14 @@ export type Token =
   | { type: "op"; v: string; start: number; end: number }
   | RefToken;
 
-export const ERROR_CODES = ["#DIV/0!", "#N/A", "#NAME?", "#NULL!", "#NUM!", "#REF!", "#VALUE!", "#CIRC!", "#ERROR!"] as const;
+export const ERROR_CODES = ["#DIV/0!", "#N/A", "#NAME?", "#NULL!", "#NUM!", "#REF!", "#VALUE!", "#CIRC!", "#SPILL!", "#ERROR!"] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
 const SHEET_PREFIX = String.raw`(?:'((?:[^']|'')+)'|([A-Za-z_][A-Za-z0-9_.]*))!`;
 const CELL = String.raw`(\$?)([A-Za-z]{1,3})(\$?)(\d{1,7})`;
 const RE_CELL_RANGE = new RegExp(`^(?:${SHEET_PREFIX})?${CELL}(?::${CELL})?(?![A-Za-z0-9_(])`);
 const RE_COLS = new RegExp(String.raw`^(?:${SHEET_PREFIX})?(\$?)([A-Za-z]{1,3}):(\$?)([A-Za-z]{1,3})(?![A-Za-z0-9_(])`);
+const RE_COLS_FROM = new RegExp(String.raw`^(?:${SHEET_PREFIX})?${CELL}:(\$?)([A-Za-z]{1,3})(?![A-Za-z0-9_(])`);
 const RE_ROWS = new RegExp(String.raw`^(?:${SHEET_PREFIX})?(\$?)(\d{1,7}):(\$?)(\d{1,7})(?![A-Za-z0-9_(])`);
 const RE_NUM = /^(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?/;
 const RE_IDENT = /^[A-Za-z_][A-Za-z0-9_.]*/;
@@ -135,7 +137,15 @@ function sheetName(m: RegExpMatchArray): string | undefined {
 }
 
 function matchRef(rest: string, at: number): RefToken | null {
-  let m = rest.match(RE_CELL_RANGE);
+  // "A2:A" (from a cell to the bottom of its columns) before "A2", which would otherwise end the match early.
+  let m = rest.match(RE_COLS_FROM);
+  if (m) {
+    const a: RefPart = { absCol: !!m[3], col: colIdx(m[4]), absRow: !!m[5], row: Number(m[6]) };
+    const c1 = colIdx(m[8]);
+    if (a.row >= 1 && a.row <= MAX_ROW && a.col <= MAX_COL && c1 <= MAX_COL)
+      return { type: "ref", tab: sheetName(m), shape: "colsFrom", a, b: { absCol: !!m[7], col: c1, absRow: true, row: MAX_ROW }, start: at, end: at + m[0].length };
+  }
+  m = rest.match(RE_CELL_RANGE);
   if (m) {
     const a: RefPart = { absCol: !!m[3], col: colIdx(m[4]), absRow: !!m[5], row: Number(m[6]) };
     if (a.row < 1 || a.row > MAX_ROW || a.col > MAX_COL) return null;
@@ -238,7 +248,13 @@ export function parseFormula(src: string): Node {
 
   function primary(): Node {
     const t = toks[p++];
-    if (!t) throw new FormulaSyntaxError("formula ends early");
+    if (!t) {
+      // Say what is missing: "=B2*" needs a value after *, "=SUM(A1," another argument.
+      const last = toks[toks.length - 1];
+      if (last?.type === "op" && last.v === ",") throw new FormulaSyntaxError("Missing an argument after the last comma");
+      if (last?.type === "op" && last.v !== ")") throw new FormulaSyntaxError(`Missing a value after ${last.v}`);
+      throw new FormulaSyntaxError("The formula ends too early");
+    }
     switch (t.type) {
       case "num":
         return { t: "num", v: t.v };

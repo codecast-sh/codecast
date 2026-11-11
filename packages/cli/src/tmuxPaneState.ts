@@ -77,6 +77,14 @@ export function isClaudeIdleResumeDialog(text: string): boolean {
   return /has been inactive for\b/i.test(text) && /^[^\S\n]*[❯›>]?[^\S\n]*(?:\d+[.)][^\S\n]*)?Start a new conversation\b/im.test(text);
 }
 
+// Claude Code's Rewind picker (opened by a double Escape on an empty composer).
+// Its "Continue / Cancel" footer parses as a question, but nobody asked one:
+// delivery cancels it with Escape. Read as a question, it held every message
+// for jx7f403 for an hour (2026-11-11).
+export function isClaudeRewindDialog(text: string): boolean {
+  return /^\s*Rewind\s*$/m.test(text) && /❯\s*\(current\)/.test(text);
+}
+
 // What a machine wake answers there. Resume keeps the session id codecast maps
 // and the history the wake was written against; the runner armed the wake.
 export const MACHINE_WAKE_IDLE_RESUME_CHOICE = "Resume";
