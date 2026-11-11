@@ -123,7 +123,7 @@ export function HandRow({ s, stateLine, task, progress, now, onOpen }: {
   return (
     <button type="button" onClick={onOpen} className="group w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-colors hover:bg-sol-bg-highlight/70" data-hand={s._id} data-hand-state={s.state}>
       <span className="w-[3px] self-stretch rounded-full shrink-0" style={{ background: m.color }} />
-      <SessionMark session={s as any} iconClassName="w-4 h-4" className="shrink-0" />
+      <SessionMark session={s as any} className="shrink-0" />
       <span className="min-w-0 flex-1">
         <span className="flex min-w-0 text-[12.5px]"><SessionIdentityLine row={s as any} title={s.title || "Untitled"} titleClassName="font-medium" /></span>
         <span className="block truncate text-meta mt-[1px]" style={{ color: stateLine ? "var(--sol-text-muted)" : "var(--sol-text-dim)" }} data-hand-line>{stateLine ?? m.label}</span>

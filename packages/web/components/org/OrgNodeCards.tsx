@@ -690,7 +690,7 @@ export const SessionCard = memo(function SessionCard({ data }: NodeProps<Node<Se
       <div className="flex items-start gap-2" style={{ height: rows.header }}>
         {/* Who the session is (session-characters.md S3), the agent brand on
             its corner; a session nobody personified keeps the brand alone. */}
-        <SessionMark session={s as any} size={20} iconClassName="w-4 h-4" className="mt-[1px] shrink-0" />
+        <SessionMark session={s as any} size={20} className="mt-[1px] shrink-0" />
         <div className="min-w-0 flex-1">
           <div className="text-[13px] font-medium" style={{ lineHeight: `${CARD.sessionTitleLine}px`, color: "var(--sol-text)", ...clamp(rows.titleLines) }} title={s.title} data-session-title>
             {s.character_name && <span className="font-semibold" style={{ color: "var(--sol-text-secondary)" }}>{s.character_name} · </span>}

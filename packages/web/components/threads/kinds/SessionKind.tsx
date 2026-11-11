@@ -21,7 +21,7 @@ export function SessionLabel({ card }: { card: ThreadCardModel }) {
   const session = sessionOf(card);
   return (
     <>
-      <SessionMark session={session as any} size={14} iconClassName="w-3 h-3" />
+      <SessionMark session={session as any} size={14} />
       <SessionIdentityLine row={session as any} title={sessionLabel(session) ?? "Session"} />
     </>
   );
