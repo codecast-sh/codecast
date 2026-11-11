@@ -408,9 +408,12 @@ export const completeEnrollment = mutation({
 /**
  * Publishing (`cast publish`) from a device enrolled in a team that turned
  * public sharing off. A published page belongs to its publisher, not to a
- * workspace, so the device is the only side of the rule that applies.
+ * workspace, so the device is the one side of the rule that always applies;
+ * a page that shows a team's live data (cast-data.json) also answers to that
+ * team, named by `workspace`.
  */
 export const publishRefusal = internalQuery({
-  args: { api_token: v.string() },
-  handler: async (ctx, args) => teamPolicyRefusal(ctx, { apiToken: args.api_token }, "public_sharing_disabled"),
+  args: { api_token: v.string(), workspace: v.optional(v.string()) },
+  handler: async (ctx, args) =>
+    teamPolicyRefusal(ctx, { apiToken: args.api_token, workspace: args.workspace }, "public_sharing_disabled"),
 });
