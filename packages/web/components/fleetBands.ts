@@ -20,7 +20,7 @@ import {
   isAgentActive,
   getProjectName,
 } from "../store/inboxStore";
-import { isLivenessStale, THREAD_STATE_STALE_MSGS } from "@codecast/shared/contracts";
+import { agentDisplayName, isLivenessStale, THREAD_STATE_STALE_MSGS } from "@codecast/shared/contracts";
 import { makeCollectionSig } from "../store/wakeSig";
 import { agentStatusAt } from "../lib/liveness";
 import { threadStateView, compactAge } from "../lib/threadState";
@@ -237,6 +237,8 @@ const firstLine = (t: string) => (t.split("\n").find((l) => l.trim()) ?? "").tri
  */
 export function fleetTileContext(s: InboxSession): string {
   const parts: string[] = [];
+  // Who runs it first (Claude, Codex…), then where, on what, how long.
+  if (s.agent_type) parts.push(agentDisplayName(s.agent_type));
   const proj = getProjectName(s.git_root ?? undefined, s.project_path ?? undefined);
   if (proj && proj !== "unknown") parts.push(s.worktree_name ? `${proj}/${s.worktree_name}` : proj);
   const model = formatModel(s.model ?? undefined);

@@ -23,9 +23,10 @@ import { DeviceIcon, deviceDisplayName, type Device } from "../DeviceBadge";
 import { SessionWorktreeChip } from "../SessionWorktreeChip";
 import { SubagentFleetChip } from "../SubagentFleetChip";
 import { cleanUserMessage } from "../sessionMessage";
-import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
+import { AgentTypeIcon } from "../AgentTypeIcon";
 import { AnchorScopePill, HeadOfPeopleFace } from "../anchor/AnchorIdentity";
 import { IdentityFace, SessionIdentityLine } from "../identity";
+import { WorkspaceTile } from "../identity/WorkspaceTile";
 import { sessionIdentity, type IdentityPrefs, type IdentityRow } from "../../lib/sessionIdentity";
 import type { AvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { RoleFace } from "../org/RoleFace";
@@ -121,7 +122,10 @@ export type SessionCardViewProps = {
   // trigger, not of a parent session).
   // "role": one of a role's sessions under the role's card (org-roles-run-work
   // .md R1): a subagent row whose arrow names the role.
-  subRow?: "trigger" | "role";
+  // "worker": a session an agent spawned (cast spawn, a workflow sub) drawn
+  // under its spawner's card (inboxStore.isSpawnedWorker). On its own row it
+  // stays a full card.
+  subRow?: "trigger" | "role" | "worker";
   /** On a role's own card: how many of its sessions ride it (org-staffing.md S23.3); the pill opens the role's page. */
   roleSessions?: number;
   /** On a "role" sub row: the role above it, which its arrow names. */
@@ -386,16 +390,12 @@ export function SessionCardView({
                 only when the parent is directly above; this makes the
                 sub-of-parent relationship explicit when a nested row is
                 focused or pinned without the parent immediately above. */}
-            <svg className={`w-3 h-3 flex-shrink-0 ${subRow === "trigger" ? "text-sol-amber/60" : "text-sol-violet/60"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label={subRow === "trigger" ? "Trigger session" : roleAbove ? `Reports to @${roleAbove.handle}` : "Subagent"}>
-              <title>{subRow === "trigger" ? "Session driven by the trigger above" : roleAbove ? `Reports to @${roleAbove.handle}, which decides what reaches you` : "Subagent — child of its parent session"}</title>
+            <svg className={`w-3 h-3 flex-shrink-0 ${subRow === "trigger" ? "text-sol-amber/60" : "text-sol-violet/60"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} role="img" aria-label={subRow === "trigger" ? "Trigger session" : roleAbove ? `Reports to @${roleAbove.handle}` : subRow === "worker" ? "Worker" : "Subagent"}>
+              <title>{subRow === "trigger" ? "Session driven by the trigger above" : roleAbove ? `Reports to @${roleAbove.handle}, which decides what reaches you` : subRow === "worker" ? "Worker — spawned by the session above" : "Subagent — child of its parent session"}</title>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
               <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
             </svg>
-            {showAgentIcon && (
-              <span className="flex-shrink-0 flex items-center opacity-70" title={formatAgentType(session.agent_type || "claude_code")}>
-                <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3 h-3" />
-              </span>
-            )}
+            <WorkspaceTile row={session} size={14} showAgent={showAgentIcon} />
             {isUnread && !isActive && <UnreadDot />}
             <span data-sv-title className={`truncate text-xs leading-tight flex-1 ${
               isActive ? "text-sol-violet font-medium" : isUnread ? "text-sol-text font-medium" : "text-sol-text-muted font-normal"
@@ -566,10 +566,10 @@ export function SessionCardView({
               role's when the row is a role's standing session. Clicking it
               opens the picker; hovering it says who they are, and the agent
               brand rides it as a corner badge so one glyph carries both. A
-              row nobody opted in keeps the icon it has always had. 22px: at
+              row nobody opted in wears its workspace tile, the agent inside
+              in the workspace's colour (WorkspaceTile). 22px: at
               18 the painted faces were a smudge. Whatever leads the row sits
               in one 22px slot, so every title starts on the same edge. */}
-          {(isPersonified || session.is_anchor || showAgentIcon) && (
             <span data-sv-lead className="flex-shrink-0 w-[22px] flex items-center justify-center">
             {isPersonified ? (
               <IdentityFace
@@ -586,13 +586,10 @@ export function SessionCardView({
               <span className="flex-shrink-0 flex items-center" title="The workspace's agent">
                 <HeadOfPeopleFace size={14} />
               </span>
-            ) : showAgentIcon ? (
-              <span className="flex-shrink-0 flex items-center" title={formatAgentType(session.agent_type || "claude_code")}>
-                <AgentTypeIcon agentType={session.agent_type || "claude_code"} className="w-3.5 h-3.5" />
-              </span>
-            ) : null}
+            ) : (
+              <WorkspaceTile row={session} size={18} showAgent={showAgentIcon} />
+            )}
             </span>
-          )}
           {isStashed && isStashHidden(session) && (
             <span className="flex-shrink-0 flex items-center text-sol-text-dim" title="Stashed and hidden — trigger wakes don't bring it back; only an ask does">
               <EyeOff className="w-3 h-3" />

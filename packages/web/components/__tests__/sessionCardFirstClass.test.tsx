@@ -42,7 +42,7 @@ const base: InboxSession = {
   git_root: worktreePath,
 };
 
-function render(overrides: Partial<InboxSession>, subRow?: "trigger") {
+function render(overrides: Partial<InboxSession>, subRow?: "trigger" | "worker") {
   return renderToStaticMarkup(
     <ConvexProvider client={client}>
       <SessionCard
@@ -128,13 +128,21 @@ describe("SessionCard: worktree and cloud sessions are first-class cards", () =>
     expect(html).not.toContain(FAVORITE);
   });
 
-  test("a cast-spawn worker in a worktree is a full card (spawned rows never nest)", () => {
-    // nestParentIdOf's agent_team_name gate: spawned_by alone is a click-through
-    // pointer, not a parent, so the worker renders as its own card with its
-    // location chip.
+  test("a cast-spawn worker on its own row is a full card", () => {
+    // The shared nestParentIdOf leaves spawned_by alone first-class; the web
+    // list folds a worker under its spawner itself (inboxStore.isSpawnedWorker)
+    // and draws it there as a "worker" sub row. On its own row (spawner absent,
+    // or it needs you) it keeps the full card with its location chip.
     const html = render({ spawned_by_conversation_id: "lead", worktree_name: "cloud-d03aaa" });
     expect(html).not.toContain(SUBAGENT);
     expect(html).toContain(FAVORITE);
     expect(html).toContain("Worktree cloud-d03aaa");
+  });
+
+  test("a cast-spawn worker drawn under its spawner takes the compact worker row", () => {
+    const html = render({ spawned_by_conversation_id: "lead" }, "worker");
+    expect(html).toContain('aria-label="Worker"');
+    expect(html).not.toContain(SUBAGENT);
+    expect(html).not.toContain(FAVORITE);
   });
 });

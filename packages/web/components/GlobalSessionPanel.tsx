@@ -26,7 +26,7 @@ import type { WorkState } from "@codecast/shared/contracts";
 import { useConversationMessages } from "../hooks/useConversationMessages";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, viewerCommandsSession, computeManualSortKey, getSessionRenderKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
-import { sessionsWakeSig, resolveInboxViewMode, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
+import { sessionsWakeSig, resolveInboxViewMode, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, isSpawnedWorker, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -77,6 +77,7 @@ import { InboxViewOptions, type CardBarsMode } from "./InboxViewOptions";
 import { resolveCardBars } from "../lib/uiPrefDefaults";
 import { inboxViewModes } from "../store/inboxViewModes";
 import { SessionCard } from "./inbox/SessionCard";
+import { CardWorkersLine } from "./inbox/SessionCardParts";
 import { SectionHeader } from "./inbox/SectionHeader";
 import { hostedStopOf, hostedStopsSig, lastAskOf, lastNoticeKind, splitHostedStops } from "../lib/hostedNotice";
 import { actionFor } from "./conversation/HostedNotice";
@@ -2088,7 +2089,7 @@ function SessionListPanelImpl({
       "--hold-delay": `${left - NEW_SESSION_HOLD_MS}ms`,
     } as React.CSSProperties;
   };
-  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, roleSessionsByLead } = placed;
+  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, roleSessionsByLead, workerCountByParent, workersNeedingYouByParent } = placed;
 
   // -- Schedules in the inbox (status view) --
   // The same per-user webList the badges/strip/schedules page subscribe to
@@ -2160,7 +2161,7 @@ function SessionListPanelImpl({
   // is_favorite out, so a placed row still carries the flag from before the toggle.
   // Resolved to a scalar so each card memoizes on it.
   const cardIsFavorite = (sess: InboxSession) => isFavoriteInStore(s, sess._id);
-  const { bucketCounts, projectCounts, projectPathByName } = useMemo(
+  const { bucketCounts, projectCounts, projectPathByName, projectActivity } = useMemo(
     // Project chips resolve each session's project off the store's sessions,
     // tasks and plans (store/workProjects, memoized on their refs).
     () => computeChipCounts(activeSessions, bucketByConv, projectOfFromState(useInboxStore.getState())),
@@ -2586,6 +2587,14 @@ function SessionListPanelImpl({
     for (const subs of globalSubByParent.values()) count += subs.length;
     return count;
   }, [globalSubByParent]);
+  // Spawned workers folded under a card (isSpawnedWorker): in the flat views
+  // they are hoisted rows of their own, and these take the compact sub row.
+  const nestedWorkerIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const subs of globalSubByParent.values()) for (const sub of subs) if (isSpawnedWorker(sub)) ids.add(sub._id);
+    return ids;
+  }, [globalSubByParent]);
+  const subRowOf = (sub: InboxSession) => (isUnderRole(sub) ? "role" : isSpawnedWorker(sub) ? "worker" : undefined);
   // Whether ANY card could wear a bar — schedules aside, a workflow run in
   // flight or a daemon-reported open task is enough. Gates the ⚡ pill so the
   // control only appears when it has something to govern. open_tasks is the
@@ -3067,7 +3076,7 @@ function SessionListPanelImpl({
                     onRestore={variant === "snoozed" ? s.wakeSnoozedSession : restoreWithNotice}
                     onKill={onKill}
                     variant={variant}
-                    subRow={isUnderRole(sub) ? "role" : undefined}
+                    subRow={subRowOf(sub)}
                     sessionLabel={labelByConv[sub._id] ?? null}
                     isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
@@ -3272,7 +3281,7 @@ function SessionListPanelImpl({
                   sectionStatus={SECTION_DECLARED_STATUS[key]}
                   forkColorKey={forkColorKeyOf(session)}
                   roleSessions={roleSessionsByLead.get(session._id)}
-                  subRow={flatNestParentOf && isUnderRole(session) && flatNestParentOf(session) ? "role" : undefined}
+                  subRow={flatNestParentOf && isUnderRole(session) && flatNestParentOf(session) ? "role" : flat && nestedWorkerIds.has(session._id) ? "worker" : undefined}
                   sessionLabel={labelByConv[session._id] ?? null}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
@@ -3296,6 +3305,16 @@ function SessionListPanelImpl({
                   onOpen={handleSelect}
                   onOpenSchedule={openScheduleTarget}
                 />
+                {/* The workers this agent spawned fold under its card; the
+                    line keeps them counted while folded, and names any that
+                    wait on you even when the option lists them. */}
+                {(!showSubagents || workersNeedingYouByParent.has(session._id)) && (
+                  <CardWorkersLine
+                    count={workerCountByParent.get(session._id) ?? 0}
+                    needsYou={workersNeedingYouByParent.get(session._id) ?? []}
+                    onOpen={handleSelect}
+                  />
+                )}
                 {visibleSubs.map((sub) => (
                   <SessionCard
                     key={sub._id}
@@ -3310,7 +3329,7 @@ function SessionListPanelImpl({
                     onDismiss={handleAnimatedDismiss}
                     onStash={handleAnimatedStash}
                     variant={sectionVariant || "default"}
-                    subRow={isUnderRole(sub) ? "role" : undefined}
+                    subRow={subRowOf(sub)}
                     sessionLabel={labelByConv[sub._id] ?? null}
                     isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
@@ -3381,6 +3400,7 @@ function SessionListPanelImpl({
           bucketCounts={favoritesView ? favChipCounts!.bucketCounts : bucketCounts}
           projectCounts={favoritesView ? favChipCounts!.projectCounts : projectCounts}
           projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
+          projectActivity={favoritesView ? favChipCounts!.projectActivity : projectActivity}
           dropSessionOnLabel={dropSessionOnLabel}
         />
         {/* The rail header's tools: the blocked-fleet alert when there is
@@ -3673,7 +3693,7 @@ function SessionListPanelImpl({
             user's rest verdict (setSessionRest), the same stamp the context
             menu and the dormant chord write. Working is not a target — nobody
             can file a row as "the agent is producing". */}
-        {renderSection("Needs You", statusNeedsInput, "text-sol-yellow", undefined, undefined, { key: "needs_input", floor: true, count: countOf(statusNeedsInput, needsInput, placed.counts.needsInput), onDropSession: dropSessionOnRest.needs_input })}
+        {renderSection("Your turn", statusNeedsInput, "text-sol-text-muted", undefined, undefined, { key: "needs_input", floor: true, count: countOf(statusNeedsInput, needsInput, placed.counts.needsInput), onDropSession: dropSessionOnRest.needs_input })}
         {renderSection(STOPPED_SECTION.label, filteredStopped, "text-sol-red", undefined, undefined, {
           key: "hosted_stopped",
           floor: true,

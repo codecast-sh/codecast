@@ -13,17 +13,15 @@ import {
 } from "../store/inboxStore";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { rowSigExcluding } from "../store/wakeSig";
-import { LivenessDot } from "./LivenessDot";
-import { SessionGlyph } from "./identity";
-import { identityRowOf } from "../lib/sessionIdentity";
-import { sessionLivenessState } from "../lib/liveness";
+import { SessionMark } from "./identity";
+import { compactAge } from "../lib/threadState";
 import { SegmentedToggle } from "./SegmentedToggle";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { InboxConversation } from "./GlobalSessionPanel";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { animatedHideSession } from "../store/undoActions";
 import { getSessionRenderKey } from "../store/inboxStore";
-import { splitFleetBands, fleetTileMeta, fleetTileContext, fleetTileSummary, fleetProgress, type FleetBand, type FleetBands } from "./fleetBands";
+import { splitFleetBands, fleetTileMeta, fleetTileContext, fleetTileSummary, type FleetBand, type FleetBands } from "./fleetBands";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { overlayConversationId } from "../store/workspace";
 import { useContextMenu, ContextMenu } from "./ui/context-menu";
@@ -33,10 +31,9 @@ import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { LivePulseDot } from "./SessionActivityLine";
 // The fleet board: the inbox home surface when clientState.ui.inbox_home is
-// "board" (the default). Every visible session as a dense two-line tile,
-// grouped into NEEDS YOU / RUNNING / FINISHED bands — supervision by scanning,
+// "board" (the default). Every visible session as a three-line list row,
+// grouped into Needs you / Running / Finished bands — supervision by scanning,
 // not reading. Clicking a tile drills in as an OVERLAY over the board (the
 // workspace `secondary` slot, presentation "overlay"); close or Escape returns
 // to the board. It is never a navigation — the board never unmounts.
@@ -49,42 +46,22 @@ import { LivePulseDot } from "./SessionActivityLine";
 // useCoarseNow(15s), one shared timer. Do not add a dep on `s.sessions` or on
 // a whole row here.
 
-// Four visual levels per tile, in reading order:
-//   1. TITLE   — the anchor: largest, heaviest, full-contrast.
-//   2. STATE   — the second beat: bold, COLORED by meaning (amber = your move,
-//                red = broken, green = alive, grey = done). This is what you
-//                scan a band by, so it must be the loudest thing after the title.
-//   3. BODY    — the summary: normal weight, muted, readable, clamped.
-//   4. FOOTER  — project · model · msgs: smallest, dimmest, uppercase tracking
-//                so it reads as metadata, not content.
-// A colored rail on the tile's left edge repeats the state color so a band
-// reads as a color field even before you read a word.
-const TONE: Record<string, { text: string; rail: string }> = {
-  amber: { text: "text-sol-yellow", rail: "bg-sol-yellow" },
-  red: { text: "text-sol-red", rail: "bg-sol-red" },
-  green: { text: "text-sol-green", rail: "bg-sol-green" },
-  dim: { text: "text-sol-text-dim", rail: "bg-sol-border" },
+// Three lines per row, in reading order: the title (medium, full ink), the
+// blocker on a row that waits on you (the accent, red when broken) or the
+// summary elsewhere (muted), and ID · project · model · msgs (dim), with the
+// age on the right edge. Colour marks only what waits on you.
+const TONE: Record<string, { text: string }> = {
+  // Your move is the accent; a failure stays red; the rest is ink.
+  amber: { text: "text-sol-cyan" },
+  red: { text: "text-sol-red" },
+  green: { text: "text-sol-text-muted" },
+  dim: { text: "text-sol-text-dim" },
 };
 
-const BAND_META: Record<FleetBand, { label: string; accent: string; box: string; count: string }> = {
-  needsYou: {
-    label: "NEEDS YOU",
-    accent: "text-sol-yellow",
-    box: "border-sol-yellow/40 bg-sol-yellow/[0.05]",
-    count: "bg-sol-yellow text-sol-bg",
-  },
-  running: {
-    label: "RUNNING",
-    accent: "text-sol-green",
-    box: "border-sol-green/30 bg-sol-green/[0.045]",
-    count: "bg-sol-green text-sol-bg",
-  },
-  finished: {
-    label: "FINISHED",
-    accent: "text-sol-text-dim",
-    box: "border-transparent bg-sol-bg-alt/40",
-    count: "bg-sol-border/60 text-sol-text-dim",
-  },
+const BAND_META: Record<FleetBand, { label: string }> = {
+  needsYou: { label: "Needs you" },
+  running: { label: "Working" },
+  finished: { label: "Done" },
 };
 
 /** The Board / Feed switch — writes the persisted per-user pref. */
@@ -102,10 +79,9 @@ export function InboxHomeToggle() {
   );
 }
 
-// The tile takes what the clock decides (its state line, summary and progress)
-// as plain values computed by its band, never the clock itself: a 15s tick then
-// re-renders only the tiles whose words or bar actually moved.
-const FleetTile = memo(function FleetTile({
+/** One session as a list row: title; the state or the summary; ID ·
+ *  project · model · msgs; the age on the right edge. */
+const FleetRow = memo(function FleetRow({
   session,
   band,
   metaText,
@@ -125,63 +101,34 @@ const FleetTile = memo(function FleetTile({
   onOpen: (id: string) => void;
   onContextMenu?: (e: ReactMouseEvent, session: InboxSession) => void;
 }) {
-  const meta = { text: metaText };
-  const tone = TONE[metaTone];
-  const context = fleetTileContext(session);
+  const meta = fleetTileMeta(session, band, now);
+  const tone = TONE[meta.tone];
   const title = cleanTitle(session.title ?? "") || "Untitled";
-  const finished = band === "finished";
+  // The blocker is the line that matters on a row that waits on you; elsewhere
+  // the summary says what the agent is about, and the band already says state.
+  // A working row's live status ("thinking") is worth a line; a done row's
+  // state only repeats its heading, and its age sits on the right.
+  const line = band === "needsYou" ? meta.text : fleetTileSummary(session, now) || (band === "running" ? meta.text : "");
+  // The short ID cast prints (jx7c6zk): the stored one, else the id's first seven.
+  const shortId = (session as { short_id?: string }).short_id ?? String(session._id).slice(0, 7);
+  const context = [shortId, fleetTileContext(session)].filter(Boolean).join(" · ");
+  const age = compactAge(now - (session.updated_at ?? now));
   return (
     <button
       onClick={() => onOpen(session._id)}
       onContextMenu={onContextMenu ? (e) => onContextMenu(e, session) : undefined}
-      title={`${title}\n${context}\n${meta.text}${summary ? `\n${summary}` : ""}`}
-      className={`group relative flex min-w-0 flex-col items-stretch overflow-hidden rounded-md border text-left transition-colors ${
-        band === "needsYou"
-          ? "border-sol-yellow/50 bg-sol-card shadow-sm hover:border-sol-yellow hover:shadow"
-          : band === "running"
-          ? "border-sol-green/35 bg-[color-mix(in_srgb,var(--sol-green)_6%,var(--sol-card))] shadow-sm hover:border-sol-green/70 hover:shadow"
-          : "border-sol-border/30 bg-transparent hover:bg-sol-card hover:border-sol-border/60"
-      } pl-3 pr-2.5 pt-2 pb-2.5`}
+      title={`${title}\n${line}`}
+      className="group grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 rounded-md px-3 py-2 text-left transition-colors duration-150 hover:bg-sol-bg-highlight motion-reduce:transition-none"
     >
-      {/* State rail: the band's color, at the edge, before any text. */}
-      <span className={`absolute inset-y-0 left-0 ${finished ? "w-[2px] opacity-30" : "w-[4px] opacity-100"} ${tone.rail}`} />
-
-      {/* 1. Title — the anchor. */}
-      <span className="flex items-start gap-1.5 min-w-0">
-        {/* Who the session is (session-characters.md S3), then its liveness. */}
-        <SessionGlyph row={identityRowOf(session as any)} size={18} className="mt-[1px] flex-shrink-0" />
-        <LivenessDot state={sessionLivenessState(session)} size="xs" className="mt-[5px] flex-shrink-0" />
-        <span className={`line-clamp-2 text-[13px] leading-[1.2] tracking-tight ${finished ? "font-medium text-sol-text-muted" : "font-bold text-sol-text"}`}>
-          {title}
+      <span className="flex min-w-0 items-start gap-2.5">
+        <SessionMark session={session as any} size={20} className="flex-shrink-0" />
+        <span className="min-w-0">
+          <span className="block truncate text-[14px] font-medium leading-5 text-sol-text">{title}</span>
+          {line && <span className={`block truncate text-[13px] leading-5 ${band === "needsYou" ? tone.text : "text-sol-text-muted"}`}>{line}</span>}
+          {context && <span className="block truncate text-[12px] leading-5 text-sol-text-dim">{context}</span>}
         </span>
       </span>
-
-      {/* 2. State — bold and colored; the scan target. line-clamp sets
-          display:-webkit-box, so no `block` here or the clamp stops working. */}
-      <span className={`mt-1.5 leading-4 ${tone.text} ${finished ? "text-meta font-medium" : "text-meta font-bold"} ${band === "needsYou" ? "line-clamp-2" : "truncate"}`}>
-        {meta.text}
-      </span>
-
-      {/* 3. Body — the summary, readable but clearly subordinate. */}
-      {summary && (
-        <span className={`mt-0.5 line-clamp-2 text-meta leading-[1.35] ${finished ? "text-sol-text-dim" : "text-sol-text-muted"}`}>{summary}</span>
-      )}
-
-      {/* 4. Footer — metadata, deliberately the quietest thing on the tile. */}
-      {context && (
-        <span className="mt-auto pt-1.5 block truncate text-mark uppercase tracking-[0.08em] text-sol-text-dim/70">
-          {context}
-        </span>
-      )}
-
-      {band === "running" && (
-        <span className="absolute bottom-0 left-[3px] right-0 h-[2px] bg-sol-border/25">
-          <span
-            className="block h-full bg-sol-green/70"
-            style={{ width: `${progress}%` }}
-          />
-        </span>
-      )}
+      <span className="pt-0.5 text-meta leading-5 tabular-nums text-sol-text-dim">{age}</span>
     </button>
   );
 });
@@ -208,35 +155,18 @@ function BandSection({
   const capped = band === "finished" && !showAll && rows.length > FINISHED_TILE_CAP;
   const shown = capped ? rows.slice(0, FINISHED_TILE_CAP) : rows;
   return (
-    <section className={`rounded-lg border px-2.5 pb-2.5 pt-2 ${m.box}`}>
-      <h3 className={`mb-2 flex items-center gap-2 px-0.5 text-meta font-bold tracking-[0.18em] ${m.accent}`}>
+    <section>
+      <h3 className="mb-2 flex items-baseline gap-2 text-[13px] font-medium text-sol-text-muted">
         {m.label}
-        <span className={`rounded-full px-1.5 py-px text-meta font-bold tabular-nums tracking-normal ${m.count}`}>
-          {rows.length}
-        </span>
+        <span className={`tabular-nums ${band === "needsYou" && rows.length > 0 ? "text-sol-cyan" : "text-sol-text-dim"}`}>{rows.length}</span>
       </h3>
       {rows.length === 0 ? (
-        <div className="px-1 pb-1 text-meta text-sol-text-dim">nothing needs you right now</div>
+        <div className="pb-1 text-[13px] text-sol-text-dim">Nothing needs you right now.</div>
       ) : (
-        <div className="grid items-stretch gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))" }}>
-          {shown.map((s) => {
-            const meta = fleetTileMeta(s, band, now);
-            return (
-              <FleetTile
-                key={s._id}
-                session={s}
-                band={band}
-                metaText={meta.text}
-                metaTone={meta.tone}
-                // The blocker line already carries the substance on a needs-you
-                // tile; the summary only earns its rows where the state line is generic.
-                summary={band === "needsYou" ? "" : fleetTileSummary(s, now)}
-                progress={band === "running" ? Math.round(fleetProgress(s, now) * 100) : 0}
-                onOpen={onOpen}
-                onContextMenu={onTileContextMenu}
-              />
-            );
-          })}
+        <div className="-mx-3 flex flex-col">
+          {rows.map((s) => (
+            <FleetRow key={s._id} session={s} band={band} now={now} onOpen={onOpen} onContextMenu={onTileContextMenu} />
+          ))}
         </div>
       )}
       {capped && (
@@ -425,25 +355,22 @@ export function FleetBoard() {
   return (
     <div className="relative h-full">
       <div className="h-full overflow-y-auto" data-main-scroll>
-        <div className="mx-auto max-w-6xl px-4 pb-8 pt-4 sm:px-6">
+        <div className="px-5 pb-8 pt-4">
           <div ref={titlebarRef} className="mb-3 flex items-center justify-between gap-3">
             <div className="flex min-w-0 items-baseline gap-3">
-              <h2 className="flex items-center gap-1.5 text-meta font-semibold tracking-[0.2em] text-sol-text">
-                <LivePulseDot still className="h-1.5 w-1.5" />
-                FLEET
-              </h2>
-              <span className="truncate text-meta tracking-[0.1em] text-sol-text-dim">
-                {bands.running.length} RUNNING · {bands.needsYou.length} NEED YOU · {bands.finished.length} FINISHED
+              <h2 className="shrink-0 whitespace-nowrap text-[18px] font-semibold text-sol-text">Inbox</h2>
+              <span className="hidden min-w-0 truncate text-[13px] text-sol-text-dim sm:block">
+                {bands.needsYou.length} need you · {bands.running.length} working · {bands.finished.length} done
               </span>
             </div>
-            <InboxHomeToggle />
+            <div className="shrink-0 whitespace-nowrap"><InboxHomeToggle /></div>
           </div>
           {total === 0 ? (
-            <div className="rounded-lg border border-sol-border/30 px-4 py-10 text-center text-sm text-sol-text-dim">
+            <div className="px-4 py-16 text-center text-[13px] text-sol-text-dim">
               No sessions yet — start one from the CLI or the composer.
             </div>
           ) : (
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-6">
               <BandSection band="needsYou" rows={bands.needsYou} now={coarseNow} onOpen={handleOpen} onTileContextMenu={handleTileContextMenu} />
               <BandSection band="running" rows={bands.running} now={coarseNow} onOpen={handleOpen} onTileContextMenu={handleTileContextMenu} />
               <BandSection band="finished" rows={bands.finished} now={coarseNow} onOpen={handleOpen} onTileContextMenu={handleTileContextMenu} />

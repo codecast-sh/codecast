@@ -83,7 +83,7 @@ test("the views render from props alone and leave the store untouched", () => {
     </>,
   );
   expect(rail).toContain(">Work<");
-  expect(rail).toContain(">4<");
+  expect(rail).toContain(">4 waiting<");
   expect(rail).toContain("Ready to ship");
 
   const search = render(

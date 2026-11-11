@@ -76,7 +76,7 @@ export function InboxViewOptions(props: {
         )}
         {p.subagentCount > 0 && (
           <DropdownMenuCheckboxItem checked={p.showSubagents} onCheckedChange={(on) => p.onShowSubagents(!!on)} onSelect={(e) => e.preventDefault()}>
-            <span className="flex-1">Subagents</span>
+            <span className="flex-1">Sub-agents and workers</span>
             <span className="tabular-nums text-sol-text-dim">{p.subagentCount}</span>
           </DropdownMenuCheckboxItem>
         )}

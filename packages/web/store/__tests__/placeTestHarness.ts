@@ -168,6 +168,8 @@ export function placeSections(
     dismissed: rows(placed.dismissed),
     subsByParent: rowMap(placed.subsByParent),
     forksByParent: rowMap(placed.forksByParent),
+    workerCountByParent: new Map([...placed.workerCountByParent].map(([k, n]) => [rk.from(k), n])),
+    workersNeedingYouByParent: rowMap(placed.workersNeedingYouByParent),
     isQuestion: (s: InboxSession) => questionIds.has(s._id) || placed.isQuestion(s),
   };
 }

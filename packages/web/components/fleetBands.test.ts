@@ -177,12 +177,17 @@ describe("fleetTileMeta", () => {
   it("RUNNING shows the live status and elapsed; context line carries model and count", () => {
     const s = sess({ is_idle: false, agent_status: "thinking", model: "claude-opus-5", message_count: 789, updated_at: NOW - 12 * 60_000, git_root: "/Users/x/src/codecast" });
     expect(fleetTileMeta(s, "running", NOW).text).toBe("thinking · 12m");
-    expect(fleetTileContext(s)).toBe("codecast · opus-5 · 789 msgs");
+    expect(fleetTileContext(s)).toBe("Claude · codecast · opus-5 · 789 msgs");
+  });
+
+  it("context line leads with the agent when the session names one", () => {
+    const s = sess({ agent_type: "codex", git_root: "/Users/x/src/codecast", model: "gpt-5", message_count: 4 });
+    expect(fleetTileContext(s)).toStartWith("Codex · codecast");
   });
 
   it("context line includes the worktree when the session runs in one", () => {
     const s = sess({ git_root: "/Users/x/src/codecast", worktree_name: "fix-auth", model: "claude-fable-5" });
-    expect(fleetTileContext(s)).toBe("codecast/fix-auth · fable-5 · 3 msgs");
+    expect(fleetTileContext(s)).toBe("Claude · codecast/fix-auth · fable-5 · 3 msgs");
   });
 
   it("FINISHED shows a relative completion time", () => {
