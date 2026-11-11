@@ -2,7 +2,7 @@
 // formula bar: the function names matching the word at the caret and the
 // call the caret sits in. FormulaAssist.tsx draws it.
 import { useMemo, useState, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from "react";
-import { FUNCTION_DOCS, FUNCTION_NAMES, callAt } from "@codecast/shared/artifacts/sheets";
+import { FUNCTION_DOCS, FUNCTION_NAMES, callAt, functionMatches } from "@codecast/shared/artifacts/sheets";
 import { fnPrefixAt, type EditStore } from "./editStore";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 
@@ -23,7 +23,7 @@ export function useFormulaAssist(edit: EditStore, text: string | null, fieldRef:
   const [caret, setCaret] = useState<number | null>(null);
   const at = text === null ? 0 : Math.min(caret ?? text.length, text.length);
   const prefix = text !== null ? fnPrefixAt(text, at) : null;
-  const matches = useMemo(() => (prefix ? FUNCTION_NAMES.filter((n) => n.startsWith(prefix)).slice(0, 8) : []), [prefix]);
+  const matches = useMemo(() => (prefix ? functionMatches(prefix, FUNCTION_NAMES) : []), [prefix]);
   const call = useMemo(() => (text !== null && !matches.length ? callAt(text, at) : null), [text, at, matches.length]);
   const [pick, setPick] = useState(0);
   useWatchEffect(() => setPick(0), [prefix]);

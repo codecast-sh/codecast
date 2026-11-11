@@ -47,8 +47,8 @@ import { settleCardWaiting } from "./lineNotices";
 import { gateTrialPages, settleTrialCard, trialDeciderOf, trialProjectOf, trialStackOf, trialStationOf } from "./lib/trialDecision";
 import { linkProposalDecision, proposalToAsk, settleExpectationCard } from "./lib/expectationsApply";
 import { pendingApproval, secretApprovalRefusal, settleSecretApproval } from "./lib/secretApprovals";
-import { applyCommandRunReport, commandRunRefusal, settleCommandRun } from "./lib/commandRuns";
-import { RUN_OPTION, RUN_OPTIONS, parseRunCommand, type CommandRun } from "@codecast/shared/contracts/commandRun";
+import { applyCommandRunReport, commandRunRefusal, readApprovedRun, settleCommandRun } from "./lib/commandRuns";
+import { RUN_OPTION, RUN_OPTIONS, parseRunCommand, parseRunSubject, type CommandRun } from "@codecast/shared/contracts/commandRun";
 import { proposalAnswersError } from "@codecast/shared/contracts/expectations";
 import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
 import { currentDecisions, decisionSuperseded, newLineMemo, type LineMemo } from "./lib/superseded";
@@ -870,6 +870,15 @@ export const reportCommandRun = mutation({
   },
 });
 
+// A command a person's Yes started reads back what that Yes approved (commandRun.ts APPROVED_RUN_ENV).
+export const approvedRun = query({
+  args: { api_token: v.string(), decision_id: v.string() },
+  handler: async (ctx, { api_token, decision_id }) => {
+    const auth = await verifyApiToken(ctx, api_token);
+    return auth ? await readApprovedRun(ctx, auth.userId, decision_id) : null;
+  },
+});
+
 // A run_cast the machine could not take (an old daemon's "Unknown command",
 // bad args): the card says so and the session hears it (users.reportCommandResult).
 export const failCommandRun = internalMutation({
@@ -1024,6 +1033,8 @@ export type AskArgs = {
   card?: ChangeCard;
   /** A cast command for a person to run (`cast decide --run`): the line as the agent wrote it, parsed here (commandRun.ts). */
   run?: string;
+  /** What a Yes on that run approves (commandRun.ts RunSubject); its folder is where the command runs. */
+  approves?: unknown;
   blocking?: boolean;
   /** A pointer card: answering resolves it and delivers nothing into the
    *  asking session (a staffing proposal's queue card, org-staffing.md S4). */
@@ -1131,6 +1142,9 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   // A run request is always the same card: the command, Run or Don't run.
   const parsedRun = args.run !== undefined ? parseRunCommand(args.run) : null;
   if (parsedRun && "error" in parsedRun) return { error: parsedRun.error };
+  const subject = args.approves !== undefined ? parseRunSubject(args.approves) : null;
+  if (subject && !parsedRun) return { error: "approves goes with run: it is what the run's Yes approves" };
+  if (subject && "error" in subject) return { error: subject.error };
   if (parsedRun) args = { ...args, options: RUN_OPTIONS.map((o) => ({ ...o })), kind: "single", form: undefined, default_option: undefined, blocking: true };
   const kind: DecisionKind = args.kind ?? "single";
   const shapeError = validateShape(kind, args) ?? (await missingOptionPage(ctx, args.options));
@@ -1167,7 +1181,14 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   // Running a command in the person's name is always the person's (never a role's under a grant).
   const { category, pinned } = parsedRun && !isProtectedCategory(assigned.category) ? { category: "access", pinned: true } : assigned;
   const run: CommandRun | undefined = parsedRun
-    ? { argv: parsedRun.argv, state: "waiting", device_id: conversation.owner_device_id, cwd: conversation.git_root ?? conversation.project_path, at: now }
+    ? {
+        argv: parsedRun.argv,
+        state: "waiting",
+        device_id: conversation.owner_device_id,
+        cwd: subject ? subject.subject.folder : conversation.git_root ?? conversation.project_path,
+        at: now,
+        ...(subject ? { approves: subject.subject } : {}),
+      }
     : undefined;
 
   // Re-asking the same question from the same session updates the open row
@@ -1342,6 +1363,7 @@ export const ask = mutation({
     report_slug: v.optional(v.string()),
     card: v.optional(v.any()),
     run: v.optional(v.string()),
+    approves: v.optional(v.any()),
     blocking: v.optional(v.boolean()),
     default_option: v.optional(v.number()),
     kind: v.optional(kindValidator),

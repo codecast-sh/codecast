@@ -5101,6 +5101,13 @@ export default defineSchema({
       exit_code: v.optional(v.number()),
       output: v.optional(v.string()),
       at: v.optional(v.number()),
+      // What a Yes approves (commandRun.ts RunSubject): drawn on the card,
+      // and the only content the command may record (sessionDecisions.approvedRun).
+      approves: v.optional(v.object({
+        title: v.string(),
+        folder: v.string(),
+        items: v.array(v.object({ label: v.string(), lines: v.array(v.string()), note: v.optional(v.string()) })),
+      })),
     })),
     // true = the agent ended its turn and is parked on this answer.
     // false = advisory: the agent proceeded with default_option and the
@@ -8316,6 +8323,8 @@ export default defineSchema({
     // A daemon's sweep for its own live runs whose runner is gone.
     .index("by_runner_device_status", ["runner_device", "status"])
     .index("by_user_id", ["user_id"])
+    // One person's live runs (sessionMigrations.movabilityFacts), without reading everyone's.
+    .index("by_user_status", ["user_id", "status"])
     .index("by_workflow_id", ["workflow_id"])
     .index("by_external_run", ["external_run_id"])
     .index("by_status", ["status"])

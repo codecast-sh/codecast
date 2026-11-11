@@ -29,7 +29,19 @@ const setPriority: SetPriority = async (pid, background) => {
 /** Sessions the server says a person backgrounded, and the ones the governor holds there. */
 const byPerson = new Set<string>();
 const byGovernor = new Set<string>();
-const wanted = { has: (id: string) => byPerson.has(id) || byGovernor.has(id) };
+/**
+ * Sessions a message is being typed into, to when the hold lapses. A process at
+ * background priority gets almost no CPU on a busy Mac, so it never redraws the
+ * paste and the daemon reads the message as lost: a `cast send` into a confined
+ * session was written three times and failed while the text sat in its
+ * composer (jx70102, 2026-11-11). The server also exempts a session with a
+ * pending message, but its answer only arrives with an accepted resource
+ * report, which a loaded machine sends minutes apart; the daemon knows at once.
+ */
+const delivering = new Map<string, number>();
+export const DELIVERY_HOLD_MS = 3 * 60_000;
+export const isDeliveryHeld = (id: string, now = Date.now()) => (delivering.get(id) ?? 0) > now;
+const wanted = { has: (id: string) => !isDeliveryHeld(id) && (byPerson.has(id) || byGovernor.has(id)) };
 /** Processes this daemon put at background priority: pid to the start time it had. */
 const applied = new Map<number, number | undefined>();
 let lastSeen: ResourceProcess[] = [];
@@ -68,6 +80,13 @@ export async function setGovernorBackground(ids: readonly string[], run: SetPrio
   if (replace(byGovernor, ids)) await reconcile(lastSeen, run);
 }
 
+/** Lifts a session out of background priority while a message goes in; each attempt renews it, and the next tick after it lapses confines it again. */
+export async function holdForDelivery(id: string, run: SetPriority = setPriority, now = Date.now()): Promise<void> {
+  const held = isDeliveryHeld(id, now);
+  delivering.set(id, now + DELIVERY_HOLD_MS);
+  if (!held) await reconcile(lastSeen, run);
+}
+
 function replace(set: Set<string>, ids: readonly string[]): boolean {
   const next = new Set(ids);
   if (next.size === set.size && [...next].every((id) => set.has(id))) return false;
@@ -80,5 +99,6 @@ export function resetBackgroundForTest(): void {
   byPerson.clear();
   byGovernor.clear();
   applied.clear();
+  delivering.clear();
   lastSeen = [];
 }

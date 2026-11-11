@@ -58,7 +58,9 @@ export async function notifyLiveComments(
   for (const c of created) {
     const rootKey = c.parent ?? c.key;
     const link = `/docs/${doc._id}?c=${rootKey}`;
-    const notified = new Set<string>([String(caller.userId)]);
+    // A person never hears about their own comment; an agent session's comment
+    // reaches its owner like anyone's (that is how an Ask reports back).
+    const notified = new Set<string>(caller.kind === "person" ? [String(caller.userId)] : []);
     const emit = async (event_type: "mention" | "comment_reply" | "doc_commented", to: Id<"users">, message: string) => {
       if (notified.has(String(to))) return;
       notified.add(String(to));
@@ -66,8 +68,9 @@ export async function notifyLiveComments(
       if (!(await canAccessDoc(ctx, to, doc))) return;
       await ctx.runMutation(internal.notificationRouter.emit, {
         event_type,
-        actor_user_id: caller.userId,
-        ...(caller.kind === "agent" ? { actor_name: caller.name } : {}),
+        // An agent session acts for its owner; naming the owner as actor would
+        // drop the owner's own notification (the router skips self-notices).
+        ...(caller.kind === "agent" ? { actor_name: caller.name } : { actor_user_id: caller.userId }),
         entity_type: "doc",
         entity_id: String(doc._id),
         message,
