@@ -845,6 +845,10 @@ describe("planStuckSendNotify — pure decision", () => {
     expect(planStuckSendNotify(own, "stuck", now)).toEqual({ kind: "notify", reach: "stuck" });
     expect(planStuckSendNotify(own, "offline", now)).toEqual({ kind: "notify", reach: "offline" });
   });
+  test("typed in and awaiting its echo → skip: the unconfirmed path tells the sender", () => {
+    expect(planStuckSendNotify({ ...base, status: "injected" }, "stuck", now).kind).toBe("skip");
+    expect(planStuckSendNotify({ ...base, status: "injected", owner_user_id: "uAlice" as any }, "stuck", now).kind).toBe("skip");
+  });
   test("no sender conversation → skip", () => {
     expect(planStuckSendNotify({ ...base, from_conversation_id: undefined }, "offline", now).kind).toBe("skip");
   });

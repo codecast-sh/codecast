@@ -4,11 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { configureDaemonWorkers, closeDaemonWorkers, ingestWorkerHost } from './bridge.js';
 import { WorkerUnavailable } from './host.js';
-import { readTranscriptIngest, serializeTranscript, IngestDeadlineExceeded, IngestCapacityError, ingestIdentity, retryOnIngestCapacity } from './ingestClient.js';
+import { readTranscriptIngest, serializeTranscript, IngestDeadlineExceeded, IngestCapacityError, ingestIdentity, retryOnIngestCapacity, awaitDeliveryEcho, ORDINARY_RESERVATIONS } from './ingestClient.js';
 import { ingestTokens } from './ingestTransport.js';
 import { checkTranscriptDeadline } from './ingestDeadline.js';
 import { IngestCursors } from './ingestCursors.js';
-import { MAX_QUEUE, MAX_INFLIGHT } from './protocol.js';
 
 test('actual ingest client applies one budget to pages, local reads, fallback and validation',async()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'f3-client-bounds-'));
@@ -107,7 +106,7 @@ test('waiters that give up free their slots while the pass ahead is still hung',
   const owned=new Promise<void>(resolve=>{owning=resolve;});
   const holder=serializeTranscript('stuck-owner',async()=>{owning();await blocked;});
   await owned;
-  const waiters=Array.from({length:MAX_QUEUE+MAX_INFLIGHT-1},()=>serializeTranscript('stuck-owner',async()=>'ran',{timeoutMs:30}).catch(error=>error));
+  const waiters=Array.from({length:ORDINARY_RESERVATIONS-1},()=>serializeTranscript('stuck-owner',async()=>'ran',{timeoutMs:30}).catch(error=>error));
   const gaveUp=await Promise.all(waiters);
   expect(gaveUp.every(error=>error instanceof IngestDeadlineExceeded)).toBe(true);
   await expect(serializeTranscript('unrelated-owner',async()=>42)).resolves.toBe(42);
@@ -117,7 +116,7 @@ test('waiters that give up free their slots while the pass ahead is still hung',
 test('a sweep refused for capacity syncs its transcript once a reservation frees, instead of skipping it',async()=>{
   let release!:()=>void;
   const blocked=new Promise<void>(resolve=>{release=resolve;});
-  const holders=Array.from({length:MAX_QUEUE+MAX_INFLIGHT},(_,i)=>serializeTranscript(`busy-${i}`,()=>blocked));
+  const holders=Array.from({length:ORDINARY_RESERVATIONS},(_,i)=>serializeTranscript(`busy-${i}`,()=>blocked));
   await expect(serializeTranscript('swept-file',async()=>{})).rejects.toBeInstanceOf(IngestCapacityError);
   let attempts=0,synced=false;
   const swept=retryOnIngestCapacity(()=>{attempts++;return serializeTranscript('swept-file',async()=>{synced=true;});},{waitMs:60_000});
@@ -147,4 +146,16 @@ test('cursor absolute lifetime rejects an otherwise valid next page and closes r
     if(original)Object.defineProperty(performance,'now',original);else delete (performance as any).now;
     fs.rmSync(dir,{recursive:true,force:true});
   }
+});
+test('a session just typed into still syncs when ordinary passes hold every slot they may take',async()=>{
+  let release!:()=>void;
+  const blocked=new Promise<void>(resolve=>{release=resolve;});
+  const holders=Array.from({length:ORDINARY_RESERVATIONS},(_,i)=>serializeTranscript(`ingest-session:flood-${i}`,()=>blocked));
+  await expect(serializeTranscript('ingest-session:new-subagent',async()=>{})).rejects.toBeInstanceOf(IngestCapacityError);
+  await expect(serializeTranscript('ingest-session:recipient',async()=>{})).rejects.toBeInstanceOf(IngestCapacityError);
+  awaitDeliveryEcho('recipient');
+  await expect(serializeTranscript('ingest-session:recipient',async()=>'echo synced')).resolves.toBe('echo synced');
+  awaitDeliveryEcho('expired',Date.now()-6*60_000);
+  await expect(serializeTranscript('ingest-session:expired',async()=>{})).rejects.toBeInstanceOf(IngestCapacityError);
+  release();await Promise.all(holders);
 });

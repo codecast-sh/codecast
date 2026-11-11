@@ -3,8 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {TranscriptRetryOwner} from './ingestRetryOwner.js';
-import {serializeTranscript} from './ingestClient.js';
-import {MAX_QUEUE,MAX_INFLIGHT} from './protocol.js';
+import {ORDINARY_RESERVATIONS,serializeTranscript} from './ingestClient.js';
 const turn=()=>new Promise<void>(resolve=>setImmediate(resolve));
 
 test('normal-return retained work arms a due wake from cold and survives pause and stop',async()=>{
@@ -66,7 +65,7 @@ test('a live pass refused for capacity waits for a freed reservation instead of 
   for(const file of files)fs.writeFileSync(file,'x');
   let release!:()=>void;
   const blocked=new Promise<void>(resolve=>{release=resolve;});
-  const holders=Array.from({length:MAX_QUEUE+MAX_INFLIGHT},(_,i)=>serializeTranscript(`held-${i}`,()=>blocked));
+  const holders=Array.from({length:ORDINARY_RESERVATIONS},(_,i)=>serializeTranscript(`held-${i}`,()=>blocked));
   const owner=new TranscriptRetryOwner({allowed:()=>true,retryable:()=>true}),map=new Map();
   const attempts=[0,0],synced=[false,false],warn=console.warn;let warnings=0;console.warn=()=>{warnings++;};
   try{

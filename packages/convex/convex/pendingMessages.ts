@@ -2030,6 +2030,11 @@ export function planStuckSendNotify(
   if (msg.status === "delivered" || msg.status === "cancelled") return { kind: "skip" };
   // Not stuck, and not retrying: it shows as not confirmed on the sender's card.
   if (isUnconfirmedRow(msg)) return { kind: "skip" };
+  // Already typed in and waiting on its transcript echo: the healer either confirms it, fails
+  // it as unconfirmed (which tells the sender itself), or re-pends it, after which this applies
+  // again. Saying "not delivered" here contradicted the card and doubled the notice whenever
+  // transcript sync lagged (jx77htq, 2026-11-11).
+  if (msg.status === "injected") return { kind: "skip" };
   if (!msg.from_conversation_id) return { kind: "skip" }; // no sender session to notify
   if (msg.sender_notified_at) return { kind: "skip" }; // already told them once
   if (!msg.owner_user_id) return { kind: "skip" }; // legacy/unknown owner

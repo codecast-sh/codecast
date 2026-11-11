@@ -114,9 +114,35 @@ const capacityWaiters = new Set<() => void>();
 export class IngestCapacityError extends Error {
   constructor() { super('ingest reservation capacity'); this.name = 'IngestCapacityError'; }
 }
+// A message typed into a session is confirmed only when that session's
+// transcript syncs and the server sees the echo. A burst of new transcripts
+// (hundreds of Agent subagents) held every reservation for ~9 minutes, so two
+// delivered messages read as undelivered to their sender (jx77htq,
+// 2026-11-11). The last few reservations are kept for a session this daemon
+// just typed into.
+const ECHO_RESERVED_SLOTS = 6;
+const ECHO_PRIORITY_MS = 5 * 60_000;
+const echoAwaited = new Map<string, number>();
+/** Give the session's next transcript passes the reserved slots, so the message just typed into it is confirmed. */
+export function awaitDeliveryEcho(sessionId: string, now = Date.now()): void {
+  echoAwaited.set(sessionId, now + ECHO_PRIORITY_MS);
+}
+function awaitsEcho(key: string, now = Date.now()): boolean {
+  if (!key.startsWith('ingest-session:')) return false;
+  const sessionId = key.slice('ingest-session:'.length);
+  const until = echoAwaited.get(sessionId);
+  if (until === undefined) return false;
+  if (until > now) return true;
+  echoAwaited.delete(sessionId);
+  return false;
+}
+export const ORDINARY_RESERVATIONS = MAX_QUEUE + MAX_INFLIGHT - ECHO_RESERVED_SLOTS;
+function reservationLimit(key: string): number {
+  return awaitsEcho(key) ? MAX_QUEUE + MAX_INFLIGHT : ORDINARY_RESERVATIONS;
+}
 /** Resolves once a transcript reservation is free, or after timeoutMs, whichever comes first. */
 export function waitForIngestCapacity(timeoutMs: number): Promise<void> {
-  if (transcriptReservations < MAX_QUEUE + MAX_INFLIGHT) return Promise.resolve();
+  if (transcriptReservations < ORDINARY_RESERVATIONS) return Promise.resolve();
   return new Promise(resolve => {
     const done = () => { clearTimeout(timer); capacityWaiters.delete(done); resolve(); };
     const timer = setTimeout(done, timeoutMs);
@@ -146,7 +172,7 @@ export async function serializeTranscript<T>(key: string, run: () => Promise<T>,
   return withTranscriptDeadline(async () => {
     const deadline = currentTranscriptDeadline()!;
     deadline.check();
-    if (!inherited && transcriptReservations >= MAX_QUEUE + MAX_INFLIGHT) throw new IngestCapacityError();
+    if (!inherited && transcriptReservations >= reservationLimit(key)) throw new IngestCapacityError();
     if (!inherited) transcriptReservations++;
     const before = fileTails.get(key);
     let release!: () => void;
