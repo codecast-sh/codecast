@@ -18,4 +18,5 @@ public enum ComputerErrorCode: String, Sendable, CaseIterable {
     case actionTimeout = "action_timeout"
     case screenshotFailed = "screenshot_failed"
     case accessibilityError = "accessibility_error"
+    case screenLocked = "screen_locked"
 }

@@ -23,7 +23,8 @@ export type ComputerErrorCode =
   | "invalid_argument"
   | "action_timeout"
   | "screenshot_failed"
-  | "accessibility_error";
+  | "accessibility_error"
+  | "screen_locked";
 
 export type ComputerAppInfo = { name: string; bundleId: string | null; pid: number };
 

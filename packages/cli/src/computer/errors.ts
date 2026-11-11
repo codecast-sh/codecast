@@ -94,6 +94,10 @@ const RECOVERY: Record<ComputerErrorCode, string[]> = {
     "If it names the helper app, run `cast doctor`.",
     "Do not loop while availability is unchanged.",
   ],
+  screen_locked: [
+    "Only the human can fix this: tell them the Mac must be unlocked, and declare `cast state --status blocked` naming it.",
+    "Retry once they say it is unlocked. Do not touch the grants or open System Settings; they are fine.",
+  ],
 };
 
 /**

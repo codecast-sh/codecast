@@ -5,6 +5,7 @@ import CoreGraphics
 import Darwin
 import Foundation
 import ImageIO
+import IOKit.pwr_mgt
 import Vision
 
 // The codecast computer helper. One signed app with a fixed identity asks for
@@ -239,8 +240,10 @@ final class Provider {
         case "listApps":
             return ["apps": listApps().map(renderListedApp)]
         case "listWindows":
+            try requireUsableScreen()
             return try listWindows(params: params)
         case "getAppState":
+            try requireUsableScreen()
             // Read before observing, which replaces the cached entry.
             let previous = params["diff"]?.bool == true ? try cachedSnapshot(params: params)?.treeText : nil
             var result = renderSnapshot(try observe(params: params))
@@ -272,6 +275,7 @@ final class Provider {
     /// Every action returns a fresh snapshot, so the agent never has to ask for
     /// state between two actions.
     private func actionResult(params: [String: JSONValue], action runAction: () throws -> [String: Any]) throws -> [String: Any] {
+        try requireUsableScreen()
         preActionTree = nil
         settleMark = nil
         prePixels = nil
@@ -1200,6 +1204,27 @@ private func matches(_ app: AppDescriptor, query: String) -> Bool {
 
 private func pidIsLive(_ pid: pid_t) -> Bool {
     kill(pid, 0) == 0
+}
+
+/// Refuses with `screen_locked` while macOS blocks every read and capture
+/// (locked screen, another user's console), and wakes a display that is only
+/// asleep, since an asleep display captures nothing.
+private func requireUsableScreen() throws {
+    let session = CGSessionCopyCurrentDictionary() as? [String: Any]
+    let state = ScreenSessionGate.state(session: session, displayAsleep: CGDisplayIsAsleep(CGMainDisplayID()) != 0)
+    if let refusal = ScreenSessionGate.refusal(state) {
+        throw ProviderError(.screenLocked, refusal)
+    }
+    guard state == .displayAsleep else { return }
+    var assertion = IOPMAssertionID(0)
+    IOPMAssertionDeclareUserActivity("codecast computer" as CFString, kIOPMUserActiveLocal, &assertion)
+    let deadline = Date().addingTimeInterval(2)
+    while CGDisplayIsAsleep(CGMainDisplayID()) != 0, Date() < deadline { usleep(50_000) }
+    // Waking can start the lock screen when the lock delay has passed.
+    let woke = ScreenSessionGate.state(session: CGSessionCopyCurrentDictionary() as? [String: Any], displayAsleep: false)
+    if let refusal = ScreenSessionGate.refusal(woke) {
+        throw ProviderError(.screenLocked, refusal)
+    }
 }
 
 /// A freshly launched process gets transient TCC denials before the real answer
