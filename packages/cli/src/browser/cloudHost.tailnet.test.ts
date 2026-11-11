@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { reachableRemoteHosts, toRemoteHost, writeHosts, type CloudHost } from "./cloudHost";
-import { readHostTailnet } from "../cloud/tailnet";
+import { localTailnetAsync, readHostTailnet } from "../cloud/tailnet";
 import { resolveCarryHost } from "../cloud/browserSync";
 import { readProjectRegistrations } from "../cloud/mirror/projectRefresh";
 import type { RemoteHost } from "../remote/session-move";
@@ -190,5 +190,28 @@ describe("readHostTailnet — what ensureUp records from the host's own status",
     expect(readHostTailnet(self("Running", ["fd7a:115c:a1e0::1"]))).toBeUndefined();
     expect(readHostTailnet(self("Running", [TAILNET], ""))).toBeUndefined();
     expect(readHostTailnet("{oops")).toBeUndefined();
+  });
+});
+
+describe("localTailnetAsync — the daemon's non-blocking read", () => {
+  test("concurrent callers share one spawn and its answer", async () => {
+    const count = path.join(dir, "spawns");
+    fakeTailscale({ status: { ...status("Running"), Self: { DNSName: "laptop.tail1234.ts.net.", TailscaleIPs: ["100.64.0.1"], UserID: 7 } } });
+    const bin = process.env.PATH!.split(":")[0];
+    fs.writeFileSync(path.join(bin, "tailscale"), `#!/bin/sh\necho x >> '${count}'\ncat '${path.join(bin, "status.json")}'\n`, { mode: 0o755 });
+    const all = await Promise.all([localTailnetAsync(), localTailnetAsync(), localTailnetAsync()]);
+    expect(all[0]?.Self?.UserID).toBe(7);
+    expect(all[1]).toBe(all[0]);
+    expect(all[2]).toBe(all[0]);
+    expect(fs.readFileSync(count, "utf-8").trim().split("\n")).toHaveLength(1);
+    expect(await localTailnetAsync()).toBe(all[0]);
+    expect(fs.readFileSync(count, "utf-8").trim().split("\n")).toHaveLength(1);
+  });
+  test("stopped, missing or broken: null", async () => {
+    expect(await localTailnetAsync()).toBeNull();
+    fakeTailscale({ status: status("Stopped") });
+    expect(await localTailnetAsync()).toBeNull();
+    fakeTailscale({ script: "exit 1" });
+    expect(await localTailnetAsync()).toBeNull();
   });
 });

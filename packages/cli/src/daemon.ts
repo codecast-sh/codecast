@@ -295,6 +295,8 @@ import { subagentPromptParent } from "./agentPromptOrigin.js";
 import { declaredSpawnParent } from "./spawnParents.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { SECRET_PAYLOAD_MAX } from "@codecast/shared/contracts/secrets";
+import { heartbeatTailnetField, reportedPeerTailnet } from "@codecast/shared/contracts/peerTransport";
+import { localTailnetAsync, selfTailnet } from "./cloud/tailnet.js";
 import { RUN_TIMEOUT_MS } from "@codecast/shared/contracts/commandRun";
 import { personEnv } from "./sessionIdentity.js";
 import { RetryQueue, flushRetryQueueForShutdown, isSessionRefusal, isStaleConversationError, type RetryOperation } from "./retryQueue.js";
@@ -5618,6 +5620,7 @@ async function claimDeviceAccountIfNeeded(): Promise<void> {
   }
 }
 
+const heartbeatTailnet = heartbeatTailnetField();
 async function sendHeartbeat(): Promise<void> {
   if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size,
     [...lastSentAgentStatus.keys()].map((sessionId) => subagentActiveAgoMs(sessionId)))) touchHostActivity();
@@ -5663,6 +5666,10 @@ async function sendHeartbeat(): Promise<void> {
 
   try {
     const deviceHostname = await stableHostnameAsync();
+    // A slow tailscaled never holds the beat: past the wait this beat says
+    // nothing about the tailnet and the call fills the cache for the next one.
+    const tailnet = await heartbeatTailnet(localTailnetAsync().then((status) => reportedPeerTailnet(selfTailnet(status), status,
+      Object.values(os.networkInterfaces()).flatMap((list) => (list ?? []).map((a) => a.address)))), 500);
     const siteUrl = config.convex_url.replace(".cloud", ".site");
     // The body is built BEFORE the request timer starts. Its fields await
     // subprocesses and file reads (ioreg, account files, sync backlog), and
@@ -5750,6 +5757,8 @@ async function sendHeartbeat(): Promise<void> {
         model_inventory: modelInventory,
         capability_state: capabilityPayload,
         capability_contents: capabilityContents,
+        // This machine's place on its tailnet (peer-transport.md); null when it is on none.
+        tailnet,
         ...await syncHealthFields(),
     });
     // Bound the request: an untimed fetch here can hang indefinitely (observed
