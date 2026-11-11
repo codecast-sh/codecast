@@ -2,7 +2,6 @@
 // delete, sort, tab changes) becomes a list of element ops here, so the web
 // grid, the CLI verbs and tests all produce the same writes.
 import { foldOps, toElement, type ArtifactOp } from "../core";
-import { newElementKey } from "../spec";
 import type { Json } from "../core";
 import { isFormula } from "./formula";
 import { Workbook } from "./engine";
@@ -366,7 +365,7 @@ export function structuralOps(model: SheetModel, tabId: string, axis: "row" | "c
     }
   }
   // Conditional colors, tables and validations.
-  for (const item of [...model.conds, ...model.tables, ...model.validations]) {
+  for (const item of [...model.conds, ...model.tables, ...model.validations, ...model.merges]) {
     if (item.tab !== tabId) continue;
     const next = adjustRangeText(rectA1(item.rect), { axis, at, count });
     if (next === null) dels.add(item.key);
@@ -485,7 +484,7 @@ export function deleteTabOps(model: SheetModel, tabId: string): ArtifactOp[] {
   for (const el of t.cells.values()) ops.push({ k: el.key, del: true });
   for (const c of t.colWidths.keys()) ops.push({ k: colKey(tabId, c), del: true });
   for (const r of t.rowHeights.keys()) ops.push({ k: rowKey(tabId, r), del: true });
-  for (const item of [...model.conds, ...model.tables, ...model.validations]) if (item.tab === tabId) ops.push({ k: item.key, del: true });
+  for (const item of [...model.conds, ...model.tables, ...model.validations, ...model.merges]) if (item.tab === tabId) ops.push({ k: item.key, del: true });
   return ops;
 }
 
@@ -652,6 +651,16 @@ export function fitWidthOps(model: SheetModel, wb: Workbook, tabId: string, cols
     const text = formatValue(info.value, styleOf(el), implied);
     widest.set(col, Math.max(widest.get(col) ?? 0, textWidth(text, typeof el.fs === "number" ? el.fs : 13, !!el.b)));
   }
+  // Values an array formula spills into cells with no input of their own count too.
+  for (const sp of wb.spillRects(tabId))
+    for (let col = sp.c0; col <= sp.c1; col++) {
+      if (!want.has(col)) continue;
+      for (let row = sp.r0; row <= sp.r1; row++) {
+        if (t.cells.has(cellNum(col, row))) continue;
+        const text = formatValue(wb.value(tabId, col, row), undefined);
+        widest.set(col, Math.max(widest.get(col) ?? 0, textWidth(text, 13, false)));
+      }
+    }
   const def = opts.defaultWidth ?? 104;
   const ops: ArtifactOp[] = [];
   for (const col of cols) {
@@ -688,40 +697,4 @@ export function importTablesOps(model: SheetModel, tables: Array<{ name: string;
     tabIds.push(add.id);
   }
   return { ops, tabIds };
-}
-
-/**
- * Set what a range accepts: a list (with chip colors) or a date, replacing a
- * validation on exactly that range; rule null removes every validation the
- * range covers. The CLI verb and the web editor both write through this.
- */
-export function validationOps(model: SheetModel, tabId: string, rect: Rect, rule: "list" | "date" | null, options: Array<{ v: string; color?: string }> = [], strict = false): ArtifactOp[] {
-  const range = rectA1(rect);
-  const mine = model.validations.filter((v) => v.tab === tabId);
-  if (rule === null) {
-    const inside = (r: Rect) => r.c0 >= rect.c0 && r.c1 <= rect.c1 && r.r0 >= rect.r0 && r.r1 <= rect.r1;
-    return mine.filter((v) => inside(v.rect) || rectA1(v.rect) === range).map((v) => ({ k: v.key, del: true as const }));
-  }
-  const seen = new Set<string>();
-  const opts = options
-    .map((o) => ({ v: o.v.trim(), ...(o.color ? { color: o.color } : {}) }))
-    .filter((o) => o.v && !seen.has(o.v.toLowerCase()) && seen.add(o.v.toLowerCase()));
-  const fields: Record<string, Json> = { kind: "dv", tab: tabId, range, rule };
-  if (rule === "list") fields.options = opts as Json;
-  if (strict) fields.strict = true;
-  const key = mine.find((v) => rectA1(v.rect) === range)?.key ?? newElementKey("dv");
-  return [{ k: key, put: fields as { kind: string } & Record<string, Json> }];
-}
-
-/** A typed value checked against the cell's validation: the input to write (a list value in its listed case), or why it is refused. */
-export function validateInput(v: { rule: "list" | "date"; options: Array<{ v: string }>; strict: boolean } | undefined, input: string): { input: string } | { refuse: string } {
-  if (!v || input === "" || input.startsWith("=")) return { input };
-  if (v.rule === "list") {
-    const hit = v.options.find((o) => o.v.toLowerCase() === input.trim().toLowerCase());
-    if (hit) return { input: hit.v };
-    return v.strict ? { refuse: `Pick one of: ${v.options.map((o) => o.v).join(", ")}` } : { input };
-  }
-  const nf = parseLiteral(input).implied?.nf;
-  if (nf === "date" || nf === "datetime") return { input };
-  return v.strict ? { refuse: "Enter a date, like 2026-11-12" } : { input };
 }

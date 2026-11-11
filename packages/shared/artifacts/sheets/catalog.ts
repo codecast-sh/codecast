@@ -2,7 +2,7 @@
 // argument hints, the function list) and agents (the guide). Argument names
 // ending in "?" are optional; one ending in "..." repeats. A test holds this
 // in step with the engine's FUNCTIONS table.
-export type FnCategory = "Math" | "Statistics" | "Lookup" | "Logic" | "Text" | "Date" | "Info";
+export type FnCategory = "Math" | "Statistics" | "Lookup" | "Array" | "Logic" | "Text" | "Date" | "Info";
 
 export type FnDoc = { args: readonly string[]; about: string; cat: FnCategory };
 
@@ -59,6 +59,22 @@ export const FUNCTION_DOCS: Record<string, FnDoc> = {
   CHOOSE: d("Lookup", "Picks one of several values by number", "index", "choice1", "choice2..."),
   ROWS: d("Lookup", "Number of rows in a range", "range"),
   COLUMNS: d("Lookup", "Number of columns in a range", "range"),
+  // Array: the result fills the cells below and to the right
+  FILTER: d("Array", "The rows of a range that meet every condition", "range", "condition1", "condition2..."),
+  UNIQUE: d("Array", "Each distinct row of a range, once", "range", "by_column?", "exactly_once?"),
+  SORT: d("Array", "A range sorted by one of its columns", "range", "sort_column?", "is_ascending?", "by_column?"),
+  SORTBY: d("Array", "A range sorted by other ranges", "range", "by_range1", "order1?", "more..."),
+  SEQUENCE: d("Array", "A block of numbers counting up", "rows", "columns?", "start?", "step?"),
+  TRANSPOSE: d("Array", "A range with rows and columns swapped", "range"),
+  SPLIT: d("Array", "A text split into cells side by side", "text", "delimiter", "split_by_each?"),
+  COUNTUNIQUE: d("Statistics", "Counts distinct values", "value1", "value2..."),
+  RANK: d("Statistics", "A number's rank in a list (1 is the largest)", "value", "range", "is_ascending?"),
+  PMT: d("Math", "The payment per period of a loan", "rate", "periods", "present_value", "future_value?", "end_or_beginning?"),
+  WORKDAY: d("Date", "The working day some days away, skipping weekends", "start_date", "days", "holidays?"),
+  REGEXMATCH: d("Text", "TRUE when a text matches a pattern", "text", "pattern"),
+  REGEXEXTRACT: d("Text", "The part of a text a pattern matches", "text", "pattern"),
+  REGEXREPLACE: d("Text", "Replaces every match of a pattern", "text", "pattern", "replacement"),
+  HYPERLINK: d("Text", "A link, shown as its label", "url", "label?"),
   // Logic
   IF: d("Logic", "One value if a condition is true, another if false", "condition", "if_true", "if_false?"),
   IFS: d("Logic", "The value of the first true condition", "condition1", "value1", "more..."),
@@ -120,7 +136,7 @@ export const FUNCTION_DOCS: Record<string, FnDoc> = {
   NA: d("Info", "The #N/A error"),
 };
 
-export const FN_CATEGORIES: readonly FnCategory[] = ["Math", "Statistics", "Lookup", "Logic", "Text", "Date", "Info"];
+export const FN_CATEGORIES: readonly FnCategory[] = ["Math", "Statistics", "Lookup", "Array", "Logic", "Text", "Date", "Info"];
 
 /** "XLOOKUP(search_key, lookup_range, result_range, [if_not_found], …)" */
 export function fnSignature(name: string): string {
@@ -204,6 +220,7 @@ export const ERROR_DOCS: Record<string, ErrorDoc> = {
   "#VALUE!": { title: "Wrong kind of value", fix: "An argument is text where a number or date belongs" },
   "#NUM!": { title: "Number out of range", fix: "The result is too big, or an argument is outside what the function accepts" },
   "#CIRC!": { title: "Circular reference", fix: "The formula depends on its own cell. Point it elsewhere" },
+  "#SPILL!": { title: "No room for the result", fix: "Clear the cells below and to the right of the formula; its result fills them" },
   "#NULL!": { title: "Ranges don't meet", fix: "Separate ranges with a comma, not a space" },
   "#ERROR!": { title: "Formula can't be read", fix: "Check the parentheses, commas and quotes" },
 };
@@ -263,4 +280,52 @@ export function errorFix(code: string, message: string | undefined, input: strin
 export function splitError(text: string): { code: string; message?: string } {
   const sp = text.indexOf(" ");
   return sp < 0 ? { code: text } : { code: text.slice(0, sp), message: text.slice(sp + 1) };
+}
+
+/** The functions people reach for most, most used first: autocomplete offers these ahead of rarer names ("SU" -> SUM, not SUBSTITUTE). */
+const COMMON = ["SUM", "IF", "COUNT", "AVERAGE", "COUNTIF", "SUMIF", "VLOOKUP", "XLOOKUP", "COUNTA", "MAX", "MIN", "ROUND", "IFERROR", "INDEX", "MATCH", "SUMIFS", "COUNTIFS", "AND", "OR", "TODAY", "TEXT", "LEFT", "RIGHT", "MID", "LEN", "CONCAT", "DATE", "YEAR", "MONTH", "AVERAGEIF", "SUMPRODUCT", "ABS", "TRIM", "UPPER", "LOWER", "NOW", "IFS", "TEXTJOIN", "EOMONTH", "EDATE", "NETWORKDAYS", "MEDIAN"];
+const COMMON_RANK = new Map(COMMON.map((n, i) => [n, i]));
+
+/** Function names starting with a prefix, common ones first, then alphabetical. */
+export function functionMatches(prefix: string, names: readonly string[], limit = 8): string[] {
+  const p = prefix.toUpperCase();
+  return names
+    .filter((n) => n.startsWith(p))
+    .sort((a, b) => (COMMON_RANK.get(a) ?? 999) - (COMMON_RANK.get(b) ?? 999) || a.localeCompare(b))
+    .slice(0, limit);
+}
+
+/** The usual fix for an error, sharpened by what the engine said ("no tab named X" is a typo, not a deletion). */
+export function errorHint(code: string, message?: string): string | undefined {
+  if (message?.startsWith("no tab named")) return "No tab has that name. Check its spelling, and quote names with spaces: 'Q4 plan'!A1";
+  if (message?.startsWith("unknown name")) return "Put text in quotes, or check the name's spelling";
+  return ERROR_DOCS[code]?.fix;
+}
+
+/** What the current argument wants, for the functions people use most (the hint shows it under the signature). */
+export const ARG_HELP: Record<string, Record<string, string>> = {
+  IF: { condition: "A test that is TRUE or FALSE, like B2>100", if_true: "What to show when the test is TRUE", if_false: "What to show otherwise (blank if left out)" },
+  SUMIF: { range: "The cells to test", criterion: 'The test, like ">100", "Done" or "a*"', sum_range: "The cells to add (the tested ones if left out)" },
+  SUMIFS: { sum_range: "The cells to add", criteria_range1: "Cells to test", criterion1: 'Their test, like ">100" or "Done"' },
+  COUNTIF: { range: "The cells to test", criterion: 'The test, like ">100", "Done" or "a*"' },
+  COUNTIFS: { criteria_range1: "Cells to test", criterion1: 'Their test, like ">100" or "Done"' },
+  VLOOKUP: { search_key: "The value to find in the table's first column", range: "The table, first column included", column: "Which column of the table to return (1 is the first)", is_sorted: "FALSE for an exact match (the usual choice)" },
+  XLOOKUP: { search_key: "The value to find", lookup_range: "Where to find it (one column or row)", result_range: "What to return from the same position", if_not_found: "Shown when nothing matches (#N/A otherwise)" },
+  INDEX: { range: "The table", row: "Which row of it (1 is the first)", column: "Which column of it" },
+  MATCH: { search_key: "The value to find", range: "One row or column to search", match_type: "0 for an exact match" },
+  ROUND: { value: "The number to round", places: "Decimal places to keep (0 if left out; negative rounds to tens, hundreds)" },
+  IFERROR: { value: "The formula that may fail", if_error: "What to show instead of the error" },
+  TEXT: { value: "The number or date", format: 'A format code, like "0.0%", "$#,##0" or "mmm d"' },
+  DATE: { year: "Four-digit year", month: "1 to 12 (13 rolls into next year)", day: "Day of the month" },
+  FILTER: { range: "The rows to choose from", condition1: 'A column of TRUE/FALSE as tall as the range, like C2:C99="Open"' },
+  UNIQUE: { range: "The values to list once each", by_column: "TRUE to compare columns instead of rows", exactly_once: "TRUE to keep only values that appear once" },
+  SORT: { range: "The rows to sort", sort_column: "Which column of the range to sort by (1 is the first)", is_ascending: "TRUE for A to Z, FALSE for Z to A" },
+  EDATE: { start_date: "The date to start from", months: "Months later (negative for earlier)" },
+  TEXTJOIN: { delimiter: 'What goes between the parts, like ", "', ignore_empty: "TRUE to skip blank cells" },
+};
+
+/** The help line for one argument of a call ("The cells to test"), when known. */
+export function argHelp(name: string, argIndex: number): string | undefined {
+  const arg = FUNCTION_DOCS[name]?.args[argIndex];
+  return arg ? ARG_HELP[name]?.[arg.replace(/[?.]+$/, "")] : undefined;
 }

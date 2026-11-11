@@ -6,25 +6,28 @@ import type { KpiEval } from "./dashboardData";
 // ── text with live numbers ──
 
 /** What a {b_key}, {b_key.delta} or {b_key.trend} token reads as for an evaluated KPI. */
-export function kpiPartText(ev: KpiEval, part: "value" | "delta" | "trend"): string {
+export function kpiPartText(ev: KpiEval, part: TokenPart): string {
   if (ev.state === "unbound") return part === "value" ? ev.display : "";
   if (ev.state !== "ok") return "…";
   if (part === "value") return ev.display;
   if (!ev.delta) return "";
   if (part === "delta") return ev.delta.display;
+  if (part === "vs") return ev.delta.against;
   return ev.delta.dir === "flat" ? "flat" : `${ev.delta.dir} ${ev.delta.display.replace(/^[+−±]/, "")}`;
 }
 
 /** A text block's pieces: literal text, and {b_key} / {b_key.delta} references to a KPI's live value. */
-export type TextPart = { text: string } | { ref: string; part: "value" | "delta" | "trend" };
+/** What a token reads: the value, its signed change, its direction ("up 12%"), or what it is compared with ("the prior 7 days"). */
+export type TokenPart = "value" | "delta" | "trend" | "vs";
+export type TextPart = { text: string } | { ref: string; part: TokenPart };
 
 export function parseText(text: string): TextPart[] {
   const parts: TextPart[] = [];
-  const re = /\{(b_[A-Za-z0-9_]+)(?:\.(value|delta|trend))?\}/g;
+  const re = /\{(b_[A-Za-z0-9_]+)(?:\.(value|delta|trend|vs))?\}/g;
   let last = 0;
   for (let m = re.exec(text); m; m = re.exec(text)) {
     if (m.index > last) parts.push({ text: text.slice(last, m.index) });
-    parts.push({ ref: m[1], part: (m[2] as "value" | "delta" | "trend") ?? "value" });
+    parts.push({ ref: m[1], part: (m[2] as TokenPart) ?? "value" });
     last = m.index + m[0].length;
   }
   if (last < text.length) parts.push({ text: text.slice(last) });
