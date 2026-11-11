@@ -26,6 +26,7 @@ import { sha256Hex } from "./lib/hash";
 import { nextShortId } from "./counters";
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { withCiRun } from "@codecast/shared/contracts/volumeWatch";
+import { capForeignText, inlineForeignText } from "@codecast/shared/contracts";
 import { recordExternalEventOnce } from "./externalEvents";
 import { recordDeployMarker } from "./deploys";
 import { appSourceIn, refreshAppManifestSoon } from "./lib/appSource";
@@ -1142,6 +1143,18 @@ export const promoteDue = internalMutation({
 });
 
 /**
+ * The deploy's name as an armed trigger's run reads it. Whoever holds the
+ * source's key writes the version and environment, and a browser key is public,
+ * so the run gets them as identifiers: one line each, capped to what a release
+ * name needs. The run reads the deploy itself through the fenced event view.
+ */
+const DEPLOY_TRIGGER_FIELD_CHARS = 64;
+export function deployTriggerTitle(d: { version: string; environment?: string }): string {
+  const field = (value: string) => capForeignText(inlineForeignText(value), DEPLOY_TRIGGER_FIELD_CHARS);
+  return `Deployed ${field(d.version)}${d.environment ? ` to ${field(d.environment)}` : ""}`;
+}
+
+/**
  * A deploy marker and its triggers, once per version and environment: a
  * retried batch or an SDK that reports its version at every boot records and
  * fires nothing again. New markers past SOURCE_CAPS.deploys_per_hour are
@@ -1177,7 +1190,7 @@ async function announceDeploy(ctx: any, source: Doc<"event_sources">, d: Extract
     team_id: source.team_id,
     workspace: source.workspace,
     source: source.name,
-    event_ref: { external_event_id: eventId, title },
+    event_ref: { external_event_id: eventId, title: deployTriggerTitle(d) },
   });
   return true;
 }
