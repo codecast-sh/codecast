@@ -41,6 +41,12 @@ export const liveArtifactTables = {
     doc_id: v.id("docs"),
     rev: v.number(),
     last_write_at: v.number(),
+    // Element rows the doc holds that are not dead (tombstones count): what a
+    // client compares its cache against before trusting it as a base for the
+    // tail. Absent on heads that predate it until countLiveRows fills it in.
+    rows: v.optional(v.number()),
+    // A search reindex is scheduled (liveSearch.ts): later writes ride it.
+    search_due: v.optional(v.number()),
     // When the newest version was taken: steady editing autosaves from it.
     last_version_at: v.optional(v.number()),
     draft: v.optional(v.object({ by: v.string(), by_name: v.string(), at: v.number(), label: v.optional(v.string()) })),
@@ -80,6 +86,18 @@ export const liveArtifactTables = {
     elements: v.optional(v.number()),
     snapshot: v.optional(v.id("_storage")),
   }).index("by_doc_rev", ["doc_id", "rev"]),
+
+  // The words in an artifact (shared/artifacts/search.ts), one row per doc,
+  // under the doc's workspace key so a search reads only the viewer's
+  // workspaces. Rewritten a little after writes settle (liveSearch.ts).
+  live_search: defineTable({
+    doc_id: v.id("docs"),
+    workspace: v.string(),
+    text: v.string(),
+    at: v.number(),
+  })
+    .index("by_doc", ["doc_id"])
+    .searchIndex("search_text", { searchField: "text", filterFields: ["workspace"] }),
 
   // Who is in an artifact now: a person's tab or an agent session.
   live_presence: defineTable({

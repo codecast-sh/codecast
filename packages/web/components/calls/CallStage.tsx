@@ -287,7 +287,7 @@ export function CallStage({
   // The thread's rows, read here so the header can count what arrived while
   // the rail was closed (lib/calls/roomThreadSeen: the same count the door to
   // the call in the app header wears when this stage is collapsed).
-  const { rows, unread, latest } = useRoomThreadUnread(call.roomKey, threadOpen);
+  const { rows, unread, latest, arrived } = useRoomThreadUnread(call.roomKey, threadOpen);
   useWatchEffect(
     () =>
       onCallThreadRequest(() => {
@@ -642,9 +642,9 @@ export function CallStage({
           )}
         </div>
         </StageHostProvider>
-        {/* An agent's answer that landed while the rail was closed, over the
+        {/* An agent's answer that just landed (unread, or arriving with the rail open), over the
             bottom of the video where the people talking are looking. */}
-        <AgentReplyPeek row={latest} onOpen={() => !threadOpen && toggleThread()} />
+        <AgentReplyPeek row={threadOpen ? arrived : latest} onOpen={() => !threadOpen && toggleThread()} />
         {call.roomKey && <StagePersonMenu roomKey={call.roomKey} state={personMenu} selfId={myUserId ?? null} />}
         {(threadOpen || railClosing) && call.roomKey && (
           <ThreadRail

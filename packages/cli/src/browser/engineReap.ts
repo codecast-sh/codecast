@@ -287,6 +287,31 @@ export function sessionTarget(key: string, stateDir = engineStateDir()): Session
   }
 }
 
+/**
+ * Every tab a session has pinned, most recently pinned first: its default tab
+ * and each named one (`--tab <name>`), in whichever browser. A session that
+ * works through named tabs leaves its default pin on a tab long closed, so
+ * "the tab this session drives" is a list to try, not one file.
+ */
+export function sessionPinnedTabs(candidates: string[], stateDir = engineStateDir()): string[] {
+  const owners = new Set(candidates.map(engineSessionKey));
+  let names: string[];
+  try {
+    names = fs.readdirSync(stateDir);
+  } catch {
+    return [];
+  }
+  const pins: SessionTarget[] = [];
+  for (const name of names) {
+    if (!name.endsWith(".target")) continue;
+    const key = name.slice(0, -".target".length);
+    if (!owners.has(ownerOfSessionKey(key))) continue;
+    const pin = sessionTarget(key, stateDir);
+    if (pin) pins.push(pin);
+  }
+  return [...new Set(pins.sort((a, b) => b.mtimeMs - a.mtimeMs).map((pin) => pin.targetId))];
+}
+
 export function sessionTargetId(key: string, stateDir = engineStateDir()): string | null {
   return sessionTarget(key, stateDir)?.targetId ?? null;
 }

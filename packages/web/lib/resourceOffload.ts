@@ -30,7 +30,8 @@ export function buildOffloadPlan(input: OffloadPlanInput): OffloadPlan | null {
   const incident = sustainedResourcePressure(source.history, now);
   const hosts = machines.filter(m => m.role === "cloud_linux" || m.role === "cloud_mac");
   const plan: OffloadPlan = {
-    deviceId: source.deviceId, sourceSample: source.snapshot!.sample, incident, generatedAt: source.snapshot!.sample.at,
+    deviceId: source.deviceId, sourceSample: source.snapshot!.sample, incident,
+    ...(source.snapshot!.processesAt !== undefined ? { usageAt: source.snapshot!.processesAt } : {}), generatedAt: source.snapshot!.sample.at,
     destinations: hosts.map(m => {
       const sample = freshResourceMachine(m, now) ? m.snapshot?.sample : undefined;
       const report = devices.find(d => d.device_id === m.deviceId)?.cloud_host;
@@ -237,6 +238,8 @@ export function sliceForPercent(candidates: OffloadCandidate[], sample: Resource
  * a session gone from it can no longer move.
  */
 export function holdPlan(held: OffloadPlan, live: OffloadPlan): OffloadPlan {
+  // Opened on a sample without a process list, every session's usage is unknown: the first sample that has one replaces it.
+  if (held.sourceSample.processCount === undefined && live.sourceSample.processCount !== undefined) return live;
   const current = new Map(live.candidates.map((c) => [c.sessionId, c]));
   const staying = new Map(live.staying.map((s) => [s.sessionId, s]));
   return {

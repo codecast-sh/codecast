@@ -677,7 +677,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--context <text>", stdinText("Markdown context for someone who never saw this session, read alone: what went wrong (one real case), what you would pick and why, what cuts against it. Explain everything where you mention it, with no ids, file paths or rule numbers; never repeat the question or options. A cast-canvas block renders inline, so options worth comparing can sit side by side"))
     .option("--report <file>", "HTML/markdown report published as the decision's body (reuses cast publish)")
     .option("--proposal <xp-N>", "The expectations proposal this decision settles: an answer opening with Apply lands it, one opening with Keep closes it, any other course leaves it open for you")
-    .option("--run <command>", "Ask permission for a step only your person may take (a grant, a spend, a publish): the question says in plain words what will happen, the card asks Yes or Not now and never shows the command, and Yes runs this cast command on this machine as theirs; its output comes back as the answer")
+    .option("--run <command>", "Ask permission for a step only your person may take (a grant, a spend, a publish): the question says in plain words what will happen, the card asks Yes or Not now with the command only as a small terminal line at its foot, and Yes runs this cast command on this machine as theirs; its output comes back as the answer")
     .option("--card <card.json>", "A change card (cast card build) the decision is about; the queue draws it natively. Without -o the options are Ship, Revise, Drop")
     .option("--advisory", "Don't block: proceed with --default. Only when the default is cheap to undo: the answer often lands an hour later and may override you")
     .option("--default <n>", "1-based option you proceed with when --advisory (required with it)")
@@ -1028,7 +1028,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       if (runLine !== undefined) {
         const parsed = parseRunCommand(runLine);
         if ("argv" in parsed) console.log(fmt.muted(`  runs: ${commandLine(parsed.argv)}`));
-        console.log(fmt.muted("\nThe card asks your question with Yes and Not now; it does not show the command. Do not run it yourself and do not paste it for them: end your turn. Yes runs it on this machine as theirs, and the answer arrives with its output."));
+        console.log(fmt.muted("\nThe card asks your question with Yes and Not now. Do not run it yourself and do not paste it for them: end your turn. Yes runs it on this machine as theirs, and the answer arrives with its output."));
         return;
       }
       console.log(fmt.muted("\nThis renders as a card in the conversation and in their queue. Do not repeat the question, options, or reasoning in prose."));

@@ -32,13 +32,26 @@
 import * as fs from "fs";
 import * as path from "path";
 import { isLaunchToken, LAUNCH_TOKEN_VAR } from "../agentEnv.js";
-import { tmuxExecSync as defaultTmuxExecSync } from "../tmux.js";
+import { tmuxRunAsync } from "../tmux.js";
 import { tmuxLiteralArg } from "../tmuxPaste.js";
 import type { Config } from "../config/types.js";
 import type { AgentClientId } from "@codecast/shared/contracts";
 
-/** Arg-array tmux runner. Mirrors tmux.ts `tmuxExecSync` — execFile, never a shell. */
-export type TmuxRunner = (args: string[], opts?: { timeout?: number }) => string;
+/** Arg-array tmux runner: execFile, never a shell; throws on a failed call. */
+export type TmuxRunner = (args: string[], opts?: { timeout?: number }) => string | Promise<string>;
+
+/**
+ * The real runner, off the event loop. A spawn runs on the daemon's loop, and
+ * `new-session` starts the session's own tmux server: done synchronously that
+ * took a whole-machine `ps` and then slept until the server answered, which
+ * held the daemon for 5 to 24s per scheduled start on a loaded machine
+ * (2026-11-11) and every loopback request behind it, "open tab" included.
+ */
+const defaultTmux: TmuxRunner = async (args, opts) => {
+  const r = await tmuxRunAsync(args, opts);
+  if (r.status !== 0) throw Object.assign(new Error(r.stderr.trim() || `tmux ${args[0]} failed`), { stderr: r.stderr });
+  return r.stdout;
+};
 
 export interface SpawnAgentTmuxDeps {
   /** ~/.codecast/config.json (for agent flags etc.). */
@@ -148,7 +161,7 @@ export async function spawnAgentTmux(
   deps: SpawnAgentTmuxDeps,
 ): Promise<SpawnAgentTmuxResult> {
   const { config: _config, log } = deps;
-  const tmux = deps.tmux ?? ((args, opts) => defaultTmuxExecSync(args, opts));
+  const tmux = deps.tmux ?? defaultTmux;
 
   if (!SAFE_TMUX_NAME_RE.test(req.tmuxSession)) {
     log(`[spawnAgentTmux] refusing unsafe tmux name: ${req.tmuxSession}`, "error");
@@ -187,16 +200,16 @@ export async function spawnAgentTmux(
   // (b) No shell interpolation — arg arrays only; command sent literally.
   try {
     if (req.killExisting !== false) {
-      try { tmux(["kill-session", "-t", req.tmuxSession]); } catch { /* none to kill */ }
+      try { await tmux(["kill-session", "-t", req.tmuxSession]); } catch { /* none to kill */ }
     }
-    tmux(["new-session", "-d", "-s", req.tmuxSession, "-c", cwd]);
+    await tmux(["new-session", "-d", "-s", req.tmuxSession, "-c", cwd]);
 
     // (c) Managed-session tag — same options autoResumeSession sets, so a
     // recovered tmux is always matchable and orphans can't slip reconciliation.
     if (req.sessionId) {
-      tmux(["set-option", "-q", "-t", req.tmuxSession, "@codecast_session_id", req.sessionId]);
+      await tmux(["set-option", "-q", "-t", req.tmuxSession, "@codecast_session_id", req.sessionId]);
     }
-    tmux(["set-option", "-q", "-t", req.tmuxSession, "@codecast_agent_type", req.agentType]);
+    await tmux(["set-option", "-q", "-t", req.tmuxSession, "@codecast_agent_type", req.agentType]);
 
     // `-l` (literal): the command text is typed into the pane, never expanded by
     // the daemon's shell, so an injection attempt stays inert text. The token
@@ -205,8 +218,8 @@ export async function spawnAgentTmux(
     const command = isLaunchToken(req.launchToken)
       ? `${LAUNCH_TOKEN_VAR}=${req.launchToken} ${req.command}`
       : req.command;
-    tmux(["send-keys", "-t", req.tmuxSession, "-l", tmuxLiteralArg(command)]);
-    tmux(["send-keys", "-t", req.tmuxSession, "Enter"]);
+    await tmux(["send-keys", "-t", req.tmuxSession, "-l", tmuxLiteralArg(command)]);
+    await tmux(["send-keys", "-t", req.tmuxSession, "Enter"]);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`[spawnAgentTmux] failed to spawn ${req.tmuxSession}: ${msg}`, "error");
