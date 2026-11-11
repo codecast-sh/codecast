@@ -13,6 +13,7 @@ import {
   cloudAgentSetupSentence,
   cliErrorMessage,
   deviceDisplayName,
+  distinctDeviceNames,
   getProviderKeySpec,
   isMachineSetting,
   machineOutOfService,
@@ -87,12 +88,7 @@ const pad = (text: string, width: number) => text + " ".repeat(Math.max(1, width
 
 /** Names for a list: the display name, plus the hostname where two machines would otherwise read the same. */
 function listNames(rows: any[]): Map<string, string> {
-  const counts = new Map<string, number>();
-  for (const d of rows) counts.set(deviceDisplayName(d), (counts.get(deviceDisplayName(d)) ?? 0) + 1);
-  return new Map(rows.map((d) => {
-    const name = deviceDisplayName(d);
-    return [d.device_id, (counts.get(name) ?? 0) > 1 && d.hostname && d.hostname !== name ? `${name} ${fmt.muted(d.hostname)}` : name];
-  }));
+  return new Map([...distinctDeviceNames(rows)].map(([id, n]) => [id, n.host ? `${n.name} ${fmt.muted(n.host)}` : n.name]));
 }
 
 const seen = (d: any) => (d.online ? fmt.success("online") : fmt.muted(`${formatAgeShort(Date.now() - d.last_seen)} ago`));

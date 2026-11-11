@@ -75,6 +75,22 @@ export function deviceDisplayName(d: DeviceNameSource | undefined | null): strin
 }
 
 /**
+ * Names for a list of machines: the display name, plus the hostname that tells
+ * apart machines that would otherwise read the same (six "Cloud Linux" boxes).
+ */
+export function distinctDeviceNames<T extends DeviceNameSource & { device_id: string; hostname?: string | null }>(
+  rows: readonly T[],
+): Map<string, { name: string; host?: string }> {
+  const counts = new Map<string, number>();
+  for (const d of rows) counts.set(deviceDisplayName(d), (counts.get(deviceDisplayName(d)) ?? 0) + 1);
+  return new Map(rows.map((d) => {
+    const name = deviceDisplayName(d);
+    const host = (d.hostname || hostnameFromLabel(d.label)).replace(/\.local$/i, "").replace(/\.([a-z0-9-]+\.)*(compute\.)?internal$/i, "");
+    return [d.device_id, (counts.get(name) ?? 0) > 1 && host && host !== name ? { name, host } : { name }];
+  }));
+}
+
+/**
  * Machine chip order for every picker: the machines you sit at first, then
  * remotes (flagged or cloud-named), each group by display name. Machines
  * sharing a name (three "Cloud Linux") put the online one first, then the

@@ -11,8 +11,9 @@ import { useMemo } from "react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { deviceDisplayName, deviceKindLabel } from "@codecast/shared/contracts";
+import { deviceDisplayName, deviceKindLabel, distinctDeviceNames } from "@codecast/shared/contracts";
 import { useInboxStore } from "../store/inboxStore";
+import { localDeviceIdOf } from "../hooks/useLocalDeviceId";
 import { wakesOnUse } from "../lib/machinePicker";
 import { useSyncDevices } from "../hooks/useSyncDevices";
 import type { RestartPhase, RestartStage } from "../hooks/useSessionRestart";
@@ -322,7 +323,7 @@ export const RUNNING_HERE_ROW = "data-[disabled]:opacity-100 bg-sol-blue/10 ring
 export function RunningHereTag({ online, suffix }: { online: boolean; suffix?: string }) {
   return (
     <span className="ml-2 flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-sol-blue/20 px-2 py-0.5 text-meta font-medium text-sol-blue">
-      running here{suffix ? ` · ${suffix}` : ""}
+      running{suffix ? ` · ${suffix}` : ""}
       <DeviceDot online={online} />
     </span>
   );
@@ -330,9 +331,10 @@ export function RunningHereTag({ online, suffix }: { online: boolean; suffix?: s
 
 /**
  * Dropdown-menu items to move a conversation between devices. Drop inside an open
- * DropdownMenuContent. Shows every device; the current owner is marked, online
- * locals offer "Run here", and the remote box offers "Move to remote Mac" (which
- * transfers the worktree). Offline devices are shown disabled.
+ * DropdownMenuContent. Shows every device, the machine this window runs on
+ * first and tagged "this device"; the session's current machine is marked
+ * running, every other usable machine offers "Move to". Offline devices are
+ * shown disabled.
  */
 export function RunOnDeviceItems({
   conversationId,
@@ -351,8 +353,39 @@ export function RunOnDeviceItems({
   // A refusal ends the row failed and raises the dispatch-failure toast.
   const move = (d: Device, isRemote: boolean) =>
     void requestSessionMove(conversationId, { device_id: d.device_id, is_remote: isRemote, label: deviceDisplayName(d) }).catch(() => {});
-  const runHere = (d: Device) => move(d, false);
-  const toRemote = (d: Device) => move(d, true);
+  const localDeviceId = useInboxStore(localDeviceIdOf);
+  const names = useMemo(() => distinctDeviceNames([...locals, ...remotes]), [locals, remotes]);
+
+  const row = (d: Device, isRemote: boolean) => {
+    const isOwner = d.device_id === ownerDeviceId;
+    // An asleep cloud box is still a valid destination: the move wakes it.
+    // Only a machine that CANNOT wake (a laptop or remote Mac gone dark) is dead.
+    const usable = d.online || (isRemote && deviceWakesOnUse(d));
+    const { name, host } = names.get(d.device_id) ?? { name: deviceDisplayName(d) };
+    return (
+      <DropdownMenuItem
+        key={d.device_id}
+        disabled={isOwner || !usable}
+        onSelect={() => !isOwner && usable && move(d, isRemote)}
+        className={isOwner ? RUNNING_HERE_ROW : undefined}
+      >
+        <DeviceIcon d={d} className="w-3 h-3 mr-1.5" />
+        <span className="flex-1 truncate">
+          {isOwner || !usable ? name : `Move to ${name}`}
+          {host && <span className="ml-1.5 text-sol-text-dim">{host}</span>}
+        </span>
+        {d.device_id === localDeviceId && (
+          <span className="ml-2 shrink-0 whitespace-nowrap rounded-full border border-sol-border px-2 py-0.5 text-meta text-sol-text-muted">this device</span>
+        )}
+        {isOwner ? <RunningHereTag online={d.online} /> : (
+          <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-meta text-sol-text-muted">
+            {d.online ? "" : usable ? "asleep, wakes on move" : "offline"}
+            <DeviceDot online={d.online} />
+          </span>
+        )}
+      </DropdownMenuItem>
+    );
+  };
 
   return (
     <>
@@ -371,51 +404,9 @@ export function RunOnDeviceItems({
           />
         </DropdownMenuItem>
       )}
-      {locals.map((d) => {
-        const isOwner = d.device_id === ownerDeviceId;
-        return (
-          <DropdownMenuItem
-            key={d.device_id}
-            disabled={isOwner || !d.online}
-            onSelect={() => !isOwner && d.online && runHere(d)}
-            className={isOwner ? RUNNING_HERE_ROW : undefined}
-          >
-            <DeviceIcon d={d} className="w-3 h-3 mr-1.5" />
-            <span className="flex-1 truncate">{deviceDisplayName(d)}</span>
-            {isOwner ? <RunningHereTag online={d.online} /> : (
-              <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-meta text-sol-text-muted">
-                {d.online ? "run here" : "offline"}
-                <DeviceDot online={d.online} />
-              </span>
-            )}
-          </DropdownMenuItem>
-        );
-      })}
+      {[...locals].sort((a, b) => Number(b.device_id === localDeviceId) - Number(a.device_id === localDeviceId)).map((d) => row(d, false))}
       {allowRemoteMove && remotes.length > 0 && <DropdownMenuSeparator />}
-      {allowRemoteMove && remotes.map((d) => {
-        const isOwner = d.device_id === ownerDeviceId;
-        // An asleep cloud box is still a valid destination — the move wakes
-        // it. Only a remote that CANNOT wake (a remote Mac gone dark) is dead.
-        const usable = d.online || deviceWakesOnUse(d);
-        const name = deviceDisplayName(d);
-        return (
-          <DropdownMenuItem
-            key={d.device_id}
-            disabled={isOwner || !usable}
-            onSelect={() => !isOwner && usable && toRemote(d)}
-            className={isOwner ? RUNNING_HERE_ROW : undefined}
-          >
-            <DeviceIcon d={d} className="w-3 h-3 mr-1.5" />
-            <span className="flex-1 truncate">{isOwner ? name : `Move to ${name}`}</span>
-            {isOwner ? <RunningHereTag online={d.online} /> : (
-              <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-meta text-sol-text-muted">
-                {d.online ? "" : usable ? "asleep — wakes on move" : "offline"}
-                <DeviceDot online={d.online} />
-              </span>
-            )}
-          </DropdownMenuItem>
-        );
-      })}
+      {allowRemoteMove && remotes.map((d) => row(d, true))}
     </>
   );
 }

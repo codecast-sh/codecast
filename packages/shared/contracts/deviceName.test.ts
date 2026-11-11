@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { compareMachineChips, deviceDisplayName, deviceKindLabel, isCloudAssignedHostname, isRemoteHost } from "./deviceName";
+import { compareMachineChips, deviceDisplayName, deviceKindLabel, distinctDeviceNames, isCloudAssignedHostname, isRemoteHost } from "./deviceName";
 
 describe("deviceDisplayName", () => {
   it("shows a laptop by its hostname without the OS prefix and .local", () => {
@@ -80,5 +80,21 @@ describe("compareMachineChips", () => {
     const host = (id: string, online: boolean, last_seen: number) => ({ id, label: "Linux - ip-10-0-0-1", platform: "linux", is_remote: true, online, last_seen });
     const devices = [host("dead-long", false, 1), host("asleep", false, 50), host("live", true, 10)];
     expect([...devices].sort(compareMachineChips).map((d) => d.id)).toEqual(["live", "asleep", "dead-long"]);
+  });
+});
+
+describe("distinctDeviceNames", () => {
+  it("adds the hostname only where two machines would read the same", () => {
+    const cloud = (id: string, host: string) => ({ device_id: id, label: `Linux - ${host}`, platform: "linux", is_remote: true, hostname: host });
+    const names = distinctDeviceNames([
+      { device_id: "mac", label: "macOS - MacBook-Pro-182.local", platform: "darwin" },
+      { device_id: "a", label: "Linux - ip-172-31-34-114", platform: "linux", is_remote: true, hostname: "ip-172-31-34-114.us-west-2.compute.internal" },
+      cloud("b", "ip-172-31-40-243"),
+      cloud("c", "grok-bot-vm-1"),
+    ]);
+    expect(names.get("mac")).toEqual({ name: "MacBook-Pro-182" });
+    expect(names.get("a")!.name).toBe(names.get("b")!.name);
+    expect(names.get("a")!.host).toBe("ip-172-31-34-114");
+    expect(names.get("b")!.host).toBe("ip-172-31-40-243");
   });
 });
