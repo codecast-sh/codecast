@@ -1,0 +1,26 @@
+import { describe, expect, test } from "bun:test";
+import { paintCell, type PaintContext } from "./cellPaint";
+
+const ctx = (over: Partial<PaintContext> = {}): PaintContext => ({ tables: [], conds: [], scaleRange: () => null, ...over });
+const table = { key: "tbl:1", tab: "Sheet1", rect: { c0: 1, r0: 1, c1: 3, r1: 5 }, color: "blue" as const, banded: true };
+
+describe("paintCell", () => {
+  test("a table header shows a year as typed even under a number format", () => {
+    const el = { key: "c:Sheet1!B1", kind: "cell", rev: 1, input: "2025", nf: "number" as const };
+    expect(paintCell(el as any, 2025, undefined, 2, 1, ctx({ tables: [table] })).text).toBe("2025");
+    // The same cell outside a table header keeps its format.
+    expect(paintCell(el as any, 2025, undefined, 2, 1, ctx()).text).toBe("2,025");
+    expect(paintCell({ ...el, key: "c:Sheet1!B2" } as any, 21000, undefined, 2, 2, ctx({ tables: [table] })).text).toBe("21,000");
+  });
+  test("a header over a numeric column aligns right and is bold", () => {
+    const el = { key: "c:Sheet1!B1", kind: "cell", rev: 1, input: "2025 actual" };
+    const p = paintCell(el as any, "2025 actual", undefined, 2, 1, ctx({ tables: [table], numericAt: () => true }));
+    expect(p.align).toBe("right");
+    expect(p.bold).toBe(true);
+  });
+  test("a formula over a formatted cell takes its format", () => {
+    const el = { key: "c:Sheet1!B18", kind: "cell", rev: 1, input: "=MAX(B15:E15)" };
+    const p = paintCell(el as any, 24726, undefined, 2, 18, ctx({ inherited: () => ({ nf: "number" }) }));
+    expect(p.text).toBe("24,726");
+  });
+});

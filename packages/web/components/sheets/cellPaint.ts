@@ -1,0 +1,137 @@
+// What one cell paints: its text, alignment and colors, after its own style,
+// any table style over it and any conditional color. Colors are palette names
+// resolved to the theme's --sol-* tokens, so light and dark both hold.
+import {
+  formatValue,
+  isError,
+  rectContains,
+  type CellEl,
+  type CondFormat,
+  type PaletteColor,
+  type Scalar,
+  type ImpliedFormat,
+  type TableStyle,
+  styleOf,
+} from "@codecast/shared/artifacts/sheets";
+
+export function solVar(c: PaletteColor): string {
+  return c === "gray" ? "var(--sol-text-muted)" : `var(--sol-${c})`;
+}
+
+/** A fill tint of a palette color at a strength (percent). */
+export function tint(c: PaletteColor, pct: number): string {
+  return `color-mix(in srgb, ${solVar(c)} ${pct}%, transparent)`;
+}
+
+export type Paint = {
+  text: string;
+  align: "left" | "center" | "right";
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  size?: number;
+  color?: string;
+  fill?: string;
+  /** Border letters t r b l. */
+  bd?: string;
+  wrap?: boolean;
+  error?: string;
+  /** Room on the right for a filter button over the header cell. */
+  padRight?: boolean;
+  check?: boolean;
+};
+
+export type PaintContext = {
+  tables: TableStyle[];
+  conds: CondFormat[];
+  /** Whether the cell under a table header holds a number (its header then aligns right). */
+  numericAt?: (col: number, row: number) => boolean;
+  /** The number format a formula takes from the cell it reads, when it has none of its own. */
+  inherited?: (el: CellEl) => ImpliedFormat | undefined;
+  /** The header cells of a filter block (they carry a filter button). */
+  filterHeader?: (col: number, row: number) => boolean;
+  /** min/max per scale rule key, computed once per render pass. */
+  scaleRange: (key: string) => { min: number; max: number } | null;
+};
+
+export function paintCell(el: CellEl | undefined, value: Scalar, implied: ImpliedFormat | undefined, col: number, row: number, ctx: PaintContext): Paint {
+  const s = styleOf(el);
+  if (!s.nf && el && typeof el.input === "string" && el.input.startsWith("=") && typeof value === "number") implied = ctx.inherited?.(el) ?? implied;
+  // A table's header row is labels: a number there reads as typed ("2025", not "2,025"),
+  // whatever number format the column carries.
+  const inHeader = ctx.tables.some((t) => row === t.rect.r0 && rectContains(t.rect, col, row));
+  const text = inHeader && typeof value === "number" ? formatValue(value, undefined, implied?.nf === "date" ? implied : undefined) : formatValue(value, s, implied);
+  const numeric = typeof value === "number";
+  const err = isError(value);
+  const p: Paint = {
+    text,
+    align: s.al ?? (err || typeof value === "boolean" ? "center" : numeric ? "right" : "left"),
+    bold: s.b,
+    italic: s.i,
+    underline: s.u,
+    size: s.fs,
+    bd: s.bd,
+    wrap: s.wrap,
+  };
+  if (s.nf === "check") {
+    p.check = true;
+    p.align = s.al ?? "center";
+  }
+  if (ctx.filterHeader?.(col, row)) p.padRight = true;
+  if (err) {
+    p.error = value.message ?? value.error;
+    p.color = "var(--sol-red)";
+  }
+  for (const t of ctx.tables) {
+    if (!rectContains(t.rect, col, row)) continue;
+    // The stripes themselves are a layer under the cells (SheetGrid PaneBands).
+    if (row === t.rect.r0) {
+      p.bold = p.bold ?? true;
+      p.color = p.color ?? solVar(t.color);
+      if (!s.al && ctx.numericAt?.(col, row + 1)) p.align = "right";
+    }
+  }
+  for (const c of ctx.conds) {
+    if (!rectContains(c.rect, col, row) || err) continue;
+    const color = c.color;
+    switch (c.rule) {
+      case "sign":
+        if (numeric && value !== 0) p.color = solVar(value > 0 ? "green" : "red");
+        break;
+      case "scale": {
+        const r = ctx.scaleRange(c.key);
+        if (numeric && r && r.max > r.min) p.fill = tint(color ?? "green", Math.round(6 + 34 * ((value - r.min) / (r.max - r.min))));
+        break;
+      }
+      case "gt":
+      case "lt":
+      case "eq": {
+        const target = c.value;
+        const hit =
+          c.rule === "eq"
+            ? String(value ?? "").toLowerCase() === String(target ?? "").toLowerCase() || (numeric && value === Number(target))
+            : numeric && typeof target === "number" && (c.rule === "gt" ? value > target : value < target);
+        if (hit) {
+          p.fill = tint(color ?? "yellow", 22);
+          p.color = ruleText(color ?? "yellow");
+        }
+        break;
+      }
+      case "contains":
+        if (typeof value === "string" && value.toLowerCase().includes(String(c.value ?? "").toLowerCase())) {
+          p.fill = tint(color ?? "yellow", 22);
+          p.color = ruleText(color ?? "yellow");
+        }
+        break;
+    }
+  }
+  // The cell's own colors win over table and rule colors.
+  if (s.fill) p.fill = tint(s.fill, 20);
+  if (s.color) p.color = solVar(s.color);
+  return p;
+}
+
+/** Rule-hit text: the color pulled toward the body text so it reads on its own tint in both themes. */
+function ruleText(c: PaletteColor): string {
+  return `color-mix(in srgb, ${solVar(c)} 55%, var(--sol-text))`;
+}
