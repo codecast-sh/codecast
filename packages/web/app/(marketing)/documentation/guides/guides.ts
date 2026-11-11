@@ -106,6 +106,13 @@ export const GUIDES: Guide[] = [
     category: "Working together",
   },
   {
+    slug: "opencode",
+    published: "2026-11-09",
+    title: "Use Codecast with OpenCode",
+    dek: "Sessions you run in the OpenCode TUI appear in Codecast within seconds, with no plugin. Reply to them from the app, start new OpenCode sessions there, and search them beside every other agent you use.",
+    category: "Working together",
+  },
+  {
     slug: "share-a-session",
     published: "2026-09-13",
     title: "Share a session with your team",
