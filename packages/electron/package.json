@@ -52,6 +52,7 @@
       "shellRecovery.js",
       "shortcutSettings.js",
       "updaterNet.js",
+      "updatePolicy.js",
       "preload.js",
       "native/notifications.node",
       "assets/icon.png",
