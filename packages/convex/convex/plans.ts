@@ -1273,7 +1273,7 @@ export const webCreate = mutation({
     await ctx.db.patch(id, { doc_id: docId });
 
     // Row rides back with the receipt: the client seeds its store before navigating.
-    return { id, short_id, doc_id: docId, row: await ctx.db.get(id) };
+    return { id, short_id, doc_id: docId, row: await ctx.db.get(id as Id<"plans">) };
   },
 });
 

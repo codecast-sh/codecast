@@ -222,10 +222,11 @@ describe("small v2 complete-view envelopes", () => {
     ]) expect(field in result.user).toBe(false);
 
     // V1 remains broad, except the skills catalog, which travels on
-    // getMySkills so a daemon stamp on the row does not re-send it.
+    // getMySkills so a daemon stamp on the row does not re-send it, and the
+    // credentials stored on the row, which no client reads.
     const legacy = await (getCurrentUser as any)._handler(ctx, {});
     expect(legacy.daemon_last_seen).toBe(999);
-    expect(legacy.github_access_token).toBe("must-not-persist");
+    expect("github_access_token" in legacy).toBe(false);
     expect("available_skills" in legacy).toBe(false);
     expect((await (getMySkills as any)._handler(ctx, {})).skills).toBe("authoritative-skills");
   });
