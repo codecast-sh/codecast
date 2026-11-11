@@ -123,3 +123,22 @@ test("opening the thread reads it", async () => {
   expect(marked).toEqual([["decision", "decision:d1"]]);
   await unmount();
 });
+
+test("discussing from a card away from the session selects that session, so its reply is followed in the inbox", async () => {
+  const navigated: any[] = [];
+  useInboxStore.setState({
+    currentSessionId: "other",
+    askDecisionSession: async (...args: any[]) => { sent.push(["ask", ...args]); return { ok: true }; },
+    requestNavigate: (id: string) => { navigated.push(id); },
+  } as any);
+  const { container, unmount } = await mount(<DecisionCompactCard decision={decision} />);
+  await click(container.querySelector("[data-decision-ask]"));
+  const box = container.querySelector<HTMLTextAreaElement>(".cc-cmt-composer textarea")!;
+  expect(box).not.toBeNull();
+  await type(box, "Why only the cart total?");
+  await act(async () => { box.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  expect(sent.map((s) => s[0])).toEqual(["comment", "ask"]);
+  expect(navigated).toEqual(["c1"]);
+  await unmount();
+});

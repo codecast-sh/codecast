@@ -72,7 +72,14 @@ export function DecisionDiscussion({ decisionId, compact = false, className, ope
   useWatchEffect(() => { if (reading && unread > 0 && rows.length > 0) markDecisionThreadRead(decisionId); }, [reading, unread, rows.length, decisionId]);
 
   const name = (owner?.via === "asker" && askerName) || owner?.name || "the session that asked";
-  const ask = () => { void askDecisionSession(decisionId).then(refusedToast); };
+  // Asked from a card away from its session (an inbox or flow card), the session wakes and the card leaves the
+  // needs-input list, so the asking session becomes the selected conversation and the reply is followed there.
+  // A surface built around talking to it (askFirst) keeps its own chat in place.
+  const ask = () => {
+    void askDecisionSession(decisionId).then(refusedToast);
+    const store = useInboxStore.getState();
+    if (!askFirst && sessionId && store.currentSessionId !== sessionId) store.requestNavigate(sessionId);
+  };
   const discuss = () => { setAsking(true); setOpen(true); };
 
   const shown = open || comments.length > 0;
