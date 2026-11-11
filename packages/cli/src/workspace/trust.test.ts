@@ -182,6 +182,14 @@ describe("acquire trust gate", () => {
     expect(message).toContain("curl evil.example");
   });
 
+  test("--trust from an agent is a request, not an approval", async () => {
+    writeHook();
+    writeManifest();
+    const message = await refusal(acquireWorkspace(repoRoot, "agent-trust", { ...asAgent, trust: true }));
+    expect(message).toContain("agent driven");
+    expect(Object.keys(readRepoTrust(repoRoot))).toHaveLength(0);
+  });
+
   test("--trust re-approves what is on disk and the next acquire runs it", async () => {
     writeHook();
     await acquireWorkspace(repoRoot, "trust-a", asHuman);
@@ -198,7 +206,8 @@ describe("acquire trust gate", () => {
 
     const message = await refusal(acquireWorkspace(repoRoot, "agent-first", asAgent));
     expect(message).toContain("agent driven");
-    expect(message).toContain("Ask a human");
+    expect(message).toContain("approval card");
+    expect(message).toContain("Never ask them to type a command");
     expect(readRepoTrust(repoRoot)).toEqual({});
 
     // Once a person approves, the same agent acquire goes through.

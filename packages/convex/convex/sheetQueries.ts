@@ -6,7 +6,8 @@
 // what the person pressing refresh happens to be able to see.
 import { ConvexError, v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { mutation } from "./functions";
+import { internalAction, internalMutation, mutation } from "./functions";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { parseWorkspaceKey, requireAccessibleDoc, resolveWorkspaceKey } from "./lib/access";
@@ -14,7 +15,7 @@ import { createDataContext } from "./data";
 import { isConversationTeamVisible, teamVisibleConvTeam } from "./privacy";
 import { assigneeNamesFor } from "./tasks";
 import { applyBatchCore, readLiveElements } from "./liveArtifacts";
-import { buildModel, queryTabOps, type TabQuery } from "@codecast/shared/artifacts/sheets";
+import { buildModel, queryTabOps, tabByName, type TabQuery } from "@codecast/shared/artifacts/sheets";
 import { DEFAULT_TASK_STATUS_NAMES, TASK_STATUS_CATEGORIES, isTaskStatusCategory } from "@codecast/shared/tasks";
 
 const THROTTLE_MS = 20_000;
@@ -166,6 +167,36 @@ export const refresh = mutation({
   handler: async (ctx, args) => {
     const userId = args.api_token ? ((await verifyApiToken(ctx, args.api_token))?.userId as Id<"users"> | undefined) : await getAuthUserId(ctx);
     if (!userId) throw new ConvexError({ code: "UNAUTHENTICATED", message: "Not authenticated" });
+    return refreshCore(ctx, userId, args.doc_id, args.tab);
+  },
+});
+
+/** The CLI's refresh (an agent's `cast sheet query` or `refresh`): runs as the session's user, a tab named or by id. */
+export const refreshAs = internalMutation({
+  args: { user_id: v.id("users"), doc_id: v.id("docs"), tab: v.string() },
+  handler: async (ctx, args) => {
+    const doc = await requireAccessibleDoc(ctx, args.user_id, args.doc_id);
+    const model = buildModel(await readLiveElements(ctx, doc._id, "main"));
+    const tab = model.byId.has(args.tab) ? args.tab : tabByName(model, args.tab)?.id;
+    if (!tab) throw new ConvexError(`No tab named ${args.tab}`);
+    const r = await refreshCore(ctx, args.user_id, args.doc_id, tab, true);
+    return { ...r, tabName: model.byId.get(tab)?.meta.name ?? tab };
+  },
+});
+
+export const cliRefresh = internalAction({
+  args: { user_id: v.id("users"), actor: v.string(), actor_name: v.string(), doc_id: v.optional(v.id("docs")), args: v.array(v.string()), stdin: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ text: string; json: unknown }> => {
+    if (!args.doc_id || !args.args[0]) throw new ConvexError("usage: refresh <doc> <tab>");
+    const r: any = await ctx.runMutation(internal.sheetQueries.refreshAs, { user_id: args.user_id, doc_id: args.doc_id, tab: args.args.join(" ") });
+    const text = r.error ? `${r.tabName}: ${r.error}` : `${r.tabName}: ${r.rows} rows from the live query`;
+    return { text, json: r };
+  },
+});
+
+async function refreshCore(ctx: any, userId: Id<"users">, docId: Id<"docs">, tabId: string, force = false) {
+  {
+    const args = { doc_id: docId, tab: tabId };
     const doc = await requireAccessibleDoc(ctx, userId, args.doc_id);
     if (doc.doc_type !== "sheet") throw new ConvexError(`${doc.title} is a ${doc.doc_type}, not a sheet`);
     if (doc.archived_at) throw new ConvexError("This sheet is archived");
@@ -174,7 +205,7 @@ export const refresh = mutation({
     const meta = model.byId.get(args.tab)?.meta;
     if (!meta?.query) throw new ConvexError("This tab is not a live query");
     const now = Date.now();
-    if (meta.refreshedAt && now - meta.refreshedAt < THROTTLE_MS) return { skipped: true };
+    if (!force && meta.refreshedAt && now - meta.refreshedAt < THROTTLE_MS) return { skipped: true };
 
     const write = async (grid: string[][], error?: string) => {
       const ops = queryTabOps(model, args.tab, grid, now, error);
@@ -206,5 +237,5 @@ export const refresh = mutation({
       const message = typeof e?.data === "string" ? e.data : e?.data?.message ?? e?.message ?? "Query failed";
       return { rows: 0, changed: await write([], message), error: message };
     }
-  },
-});
+  }
+}

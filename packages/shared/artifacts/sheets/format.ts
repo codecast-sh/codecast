@@ -10,6 +10,8 @@ export type CellNumberFormat = {
   sign?: boolean;
   /** Currency symbol, default "$". */
   cur?: string;
+  /** A custom format code (nf "custom"), the TEXT() codes: "#,##0.0 \"kg\"", "0.00%", "mmm d". */
+  code?: string;
 };
 
 const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -66,6 +68,16 @@ export function formatValue(v: Scalar, fmt: CellNumberFormat | undefined, implie
       const body = formatFixed(Math.abs(v), dp ?? 2);
       return (v < 0 ? "-" : plus) + sym + body;
     }
+    case "accounting": {
+      // Negatives in parentheses, the symbol kept apart from the digits, as ledgers show money.
+      const sym = fmt?.cur ?? "$";
+      const body = formatFixed(Math.abs(v), dp ?? 2);
+      return v < 0 ? `(${sym}${body})` : `${sym}${body}`;
+    }
+    case "scientific":
+      return plus + v.toExponential(dp ?? 2).toUpperCase().replace(/E\+?(-?)(\d)$/, "E+$10$2").replace("E+-", "E-");
+    case "custom":
+      return fmt?.code ? formatWithCode(v, fmt.code) : plainNumber(v);
     case "date":
       return formatDate(v);
     case "datetime":

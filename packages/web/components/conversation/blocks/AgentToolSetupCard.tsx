@@ -9,7 +9,8 @@
 import { useRef, useState } from "react";
 import { Check, ExternalLink, Loader2, RotateCw } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { AGENT_SETUP_CONTINUE_MESSAGE, BROWSER_EXTENSION_STORE_URL, deviceDisplayName, type AgentSetupTool, type AgentToolSetupStatus } from "@codecast/shared/contracts";
+import { AGENT_SETUP_CONTINUE_MESSAGE, deviceDisplayName, type AgentSetupTool } from "@codecast/shared/contracts";
+import { agentSetupSteps, type AgentSetupStep } from "../../../lib/agentToolSetupSteps";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { useAgentToolSetup, type AgentSetupTarget } from "../../../lib/useAgentToolSetup";
 import { useInboxStore } from "../../../store/inboxStore";
@@ -23,58 +24,6 @@ const READY_LINE: Record<AgentSetupTool, string> = {
   browser: "Chrome extension connected",
   computer: "Accessibility and Screen Recording granted",
 };
-
-interface Step {
-  label: string;
-  /** The step as the next thing to do, for the one-line version. */
-  next: string;
-  hint?: string;
-  done: boolean;
-  action?: { label: string; href?: string; onClick?: () => void };
-}
-
-function browserSteps(s: AgentToolSetupStatus & { tool: "browser" } | undefined, start: () => void): Step[] {
-  return [
-    {
-      label: "Add Codecast to Chrome",
-      next: "install the Chrome extension",
-      hint: "Use the Chrome profile you want agents to work in.",
-      done: !!s?.paired,
-      action: { label: "Install extension", href: BROWSER_EXTENSION_STORE_URL },
-    },
-    {
-      label: "Pair it with this machine",
-      next: "pair it",
-      hint: s?.paired && !s.connected
-        ? s.chrome_running
-          ? "Paired before but not answering: pair again, or reload it at chrome://extensions."
-          : "Chrome is not running. Pairing starts it."
-        : "Opens the extension in Chrome; click Pair there.",
-      done: !!s?.connected,
-      action: { label: s?.paired ? "Pair again" : "Pair", onClick: start },
-    },
-  ];
-}
-
-function computerSteps(s: AgentToolSetupStatus & { tool: "computer" } | undefined, start: () => void): Step[] {
-  const open = { label: "Open System Settings", onClick: start };
-  return [
-    {
-      label: "Accessibility",
-      next: "turn on Accessibility",
-      hint: "Lets the agent read a window and click, type and scroll in it.",
-      done: !!s?.accessibility,
-      action: open,
-    },
-    {
-      label: "Screen Recording",
-      next: "turn on Screen Recording",
-      hint: "Lets it see a picture of the window it reads.",
-      done: !!s?.screen_recording,
-      action: s?.accessibility ? open : undefined,
-    },
-  ];
-}
 
 export function AgentToolSetupCard({ tool, conversationId }: { tool: AgentSetupTool; conversationId: string }) {
   // Enrichment only: without it the card still shows the steps, just unnamed.
@@ -165,11 +114,9 @@ export function AgentToolSetupPanel({
     );
   }
 
-  const steps = tool === "browser"
-    ? browserSteps(status as (AgentToolSetupStatus & { tool: "browser" }) | undefined, () => void setup.start())
-    : computerSteps(status as (AgentToolSetupStatus & { tool: "computer" }) | undefined, () => void setup.start());
+  const steps = agentSetupSteps(tool, status);
   const next = steps.findIndex((st) => !st.done);
-  const action = (st: Step) => st.action && <StepAction action={st.action} waiting={setup.waiting} />;
+  const action = (st: AgentSetupStep) => st.action && <StepAction action={st.action} waiting={setup.waiting} onStart={() => void setup.start()} />;
 
   if (compact) {
     const left = steps.filter((st) => !st.done);
@@ -236,8 +183,8 @@ export function AgentToolSetupPanel({
   );
 }
 
-function StepAction({ action, waiting }: { action: NonNullable<Step["action"]>; waiting: boolean }) {
-  if (action.href) {
+function StepAction({ action, waiting, onStart }: { action: NonNullable<AgentSetupStep["action"]>; waiting: boolean; onStart: () => void }) {
+  if ("href" in action) {
     return (
       <a
         href={action.href}
@@ -256,7 +203,7 @@ function StepAction({ action, waiting }: { action: NonNullable<Step["action"]>; 
       disabled={waiting}
       onClick={(e) => {
         e.stopPropagation();
-        action.onClick?.();
+        onStart();
       }}
       className="shrink-0 px-2 py-0.5 rounded border border-sol-cyan/50 bg-sol-cyan/10 text-sol-cyan hover:bg-sol-cyan/20 disabled:opacity-50"
     >

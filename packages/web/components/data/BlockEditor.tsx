@@ -4,6 +4,7 @@
 import { ArgsEditor } from "./ArgsEditor";
 import { LiveTextField } from "./LiveTextField";
 import { WhereBuilder } from "./WhereBuilder";
+import { useInboxStore } from "../../store/inboxStore";
 import { useCommittedDraft } from "../../hooks/useCommittedDraft";
 import { Trash2 } from "lucide-react";
 import { dashboard, type ArtifactElement, type ArtifactOp, type Json } from "@codecast/shared/artifacts";
@@ -53,12 +54,11 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
                 <Select label="of" value={block.field} options={columns} empty="–" onChange={(v) => set({ field: v || null })} />
               </Row>
               {block.agg === "top" ? <Select label="Named by" value={block.label} options={columns} empty="auto" onChange={(v) => set({ label: v || null })} /> : null}
-              <Row>
-                <Select label="Format" value={block.format ?? "number"} options={FORMATS} onChange={(v) => set({ format: v })} />
-                <Select label="Compare to" value={block.compare} options={["halves", "prev", ...columns]} labels={{ halves: "earlier half", prev: "previous row" }} empty="none" onChange={(v) => set({ compare: v || null })} />
-              </Row>
+              <Select label="Format" value={block.format ?? "number"} options={FORMATS} onChange={(v) => set({ format: v })} />
+              <Select label="Compare to" value={block.compare} options={["halves", "prev", ...columns]} labels={{ halves: "the window's earlier half", prev: "the previous row" }} empty="nothing" onChange={(v) => set({ compare: v || null })} />
               {block.compare ? <Select label="Good when" value={block.good} options={["up", "down"]} empty="neutral" onChange={(v) => set({ good: v || null })} /> : null}
               {!q ? <TextField label="Typed value (not verified)" value={block.value === undefined ? undefined : String(block.value)} onCommit={(v) => set({ value: v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : v })} /> : null}
+              {q ? <AlertFields block={block} onSet={(alert) => set({ alert })} /> : null}
             </>
           ) : null}
           {block.kind === "chart" ? (
@@ -66,7 +66,7 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
               <Select label="Chart" value={block.chart ?? "line"} options={dashboard.CHART_TYPES} labels={{ hbar: "ranked bars", stacked: "stacked bars" }} onChange={(v) => set({ chart: v })} />
               <Row>
                 <Select label="X" value={block.x} options={labels.length ? labels : columns} empty="first" onChange={(v) => set({ x: v || null })} />
-                <Select label="Split by" value={block.series} options={labels.filter((c) => c !== (block.x ?? columns[0]))} empty="none" onChange={(v) => set({ series: v || null, ...(v && String(block.y ?? "").includes(",") ? { y: String(block.y).split(",")[0] } : {}) })} />
+                <Select label="Series" value={block.series} options={labels.filter((c) => c !== (block.x ?? columns[0]))} empty="none" onChange={(v) => set({ series: v || null, ...(v && String(block.y ?? "").includes(",") ? { y: String(block.y).split(",")[0] } : {}) })} />
               </Row>
               <SeriesPicker value={block.y} options={numeric} single={!!block.series} onChange={(v) => set({ y: v })} />
               <Row>
@@ -211,5 +211,28 @@ function SeriesPicker({ value, options, single, onChange }: { value: unknown; op
         ))}
       </div>
     </div>
+  );
+}
+
+/** Notify me when this number goes above or below a line. Empty both to stop. The alert fires whenever the number is read: while the page is open, or on the dashboard's schedule. */
+function AlertFields({ block, onSet }: { block: ArtifactElement; onSet: (alert: Json) => void }) {
+  const me = useInboxStore((s: any) => (s.currentUser?._id ? String(s.currentUser._id) : undefined));
+  const alert = dashboard.readAlert(block);
+  const write = (side: "above" | "below", v: string) => {
+    const n = v.trim() === "" ? undefined : Number(v.replace(/[$,\s]/g, ""));
+    if (n !== undefined && !Number.isFinite(n)) return;
+    const next = { ...(alert ?? {}), [side]: n };
+    const above = next.above;
+    const below = next.below;
+    onSet(above === undefined && below === undefined ? null : { ...(above !== undefined ? { above } : {}), ...(below !== undefined ? { below } : {}), ...(me ? { by: me } : {}) });
+  };
+  const num = (v: string) => (v.trim() === "" || Number.isFinite(Number(v.replace(/[$,\s]/g, ""))) ? null : "A number");
+  return (
+    <Field label="Alert me when it goes">
+      <Row>
+        <TextField label="Above" value={alert?.above} placeholder="–" validate={num} onCommit={(v) => write("above", v)} />
+        <TextField label="Below" value={alert?.below} placeholder="–" validate={num} onCommit={(v) => write("below", v)} />
+      </Row>
+    </Field>
   );
 }

@@ -626,4 +626,7 @@ crons.interval("sweep unattached page uploads", { hours: 6 }, internal.artifacts
 // A regulated team's permanent delete whose chain of passes stopped picks up where it left off (regulatedDeletion.ts).
 crons.interval("resume stalled data deletions", { minutes: 15 }, internal.regulatedDeletion.resumeStalledDeletions, {});
 
+// Dashboards with a refresh schedule read their queries while nobody has them open, so KPI alerts can fire (dataQueries.ts).
+crons.interval("refresh scheduled dashboards", { minutes: 10 }, internal.dataQueries.runSchedules, {});
+
 export default crons;

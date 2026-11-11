@@ -8,6 +8,8 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useDashboardFeed, useDataResults } from "../../hooks/useDashboardData";
 import { DashboardGrid, FormatBody } from "./DashboardGrid";
 import { CheckPanel } from "./CheckPanel";
+import { DashboardFilters } from "./DashboardFilters";
+import { useDashboardScope } from "../../hooks/useDashboardScope";
 import type { BlockEnv } from "./blocks";
 
 export default function SharedDashboard({ doc, elements, shareToken }: { doc: { _id: string; title: string; user?: { name?: string; image?: string } | null }; elements: ArtifactElement[]; shareToken: string }) {
@@ -19,7 +21,11 @@ export default function SharedDashboard({ doc, elements, shareToken }: { doc: { 
   const now = useCoarseNow(15_000);
   const [check, setCheck] = useState<string | null>(null);
   const onCheck = useCallback((k: string) => setCheck(k), []);
-  const env: BlockEnv = useMemo(() => ({ results, blocks: byKey, now, onCheck }), [results, byKey, now, onCheck]);
+  // A filtered view travels in its link (?f.day=30d&f.person=ada): the shared page opens on the same rows, and its readers can change them.
+  const filter = useDashboardScope(now);
+  const scope = layout.format === "dashboard" ? filter.scope : undefined;
+  const dims = useMemo(() => dashboard.filterDimensions([...dashboard.dashboardQueries(blocks).keys()].map((k) => results.get(k))), [blocks, results]);
+  const env: BlockEnv = useMemo(() => ({ results, blocks: byKey, now, scope, onCheck }), [results, byKey, now, scope, onCheck]);
   const noop = useCallback(() => {}, []);
   // The byline speaks for the whole page: the oldest read among the queries it shows.
   const latest = useMemo(() => {
@@ -37,6 +43,7 @@ export default function SharedDashboard({ doc, elements, shareToken }: { doc: { 
     <div className="data-wrap relative h-full min-h-screen bg-sol-bg flex" data-shared-dashboard={doc._id}>
       <div className={`flex-1 min-w-0 ${layout.format === "short" ? "h-screen" : ""}`} onKeyDown={(e) => e.key === "Escape" && setCheck(null)}>
         <FormatBody title={doc.title} layout={layout} elements={elements} env={env} byline={byline}>
+          {blocks.length ? <DashboardFilters dims={dims} value={filter.value} values={filter.values} set={filter.set} clear={filter.clear} /> : null}
           <DashboardGrid blocks={blocks} env={env} edit={false} selected={null} me={null} onSelect={noop} onEdit={noop} onRemove={noop} onSpan={noop} onMove={noop} />
         </FormatBody>
       </div>

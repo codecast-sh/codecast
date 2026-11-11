@@ -88,10 +88,18 @@ export async function settleCardWaiting(ctx: any, decision: { short_id?: string;
   }
 }
 
-/** The line landed the change for a cause (LE12). */
-export async function noticeChangeShipped(ctx: any, task: any, watchUntil?: number) {
+/**
+ * The line landed the change for a cause (LE12). Like a waiting card, the
+ * notice names the change by its card's headline and opens that card, which
+ * shows what shipped; a run with no card opens its own report.
+ */
+export async function noticeChangeShipped(ctx: any, task: any, run: { _id: unknown; gate_decision_id?: Id<"session_decisions"> }, watchUntil?: number) {
+  const card = run.gate_decision_id ? await ctx.db.get(run.gate_decision_id) : null;
+  const headline = typeof card?.card?.headline === "string" ? card.card.headline.trim() : "";
+  const what = headline ? `${headline} (${task.short_id})` : `the change for ${label(task)}`;
   const watch = watchUntil ? `, watching until ${new Date(watchUntil).toISOString().slice(0, 10)}` : "";
-  await emit(ctx, "change_shipped", task, await causePeople(ctx, task), `shipped the change for ${label(task)}${watch}`);
+  await emit(ctx, "change_shipped", task, await causePeople(ctx, task), `shipped ${what}${watch}`,
+    card?.short_id ? cardLink(card.short_id) : `/workflows/runs/${run._id}`);
 }
 
 /** A signal came back while the cause was in watch (LE12). */

@@ -46,7 +46,9 @@ export function ShareControl({
   const setObjectShareLink = useInboxStore((s) => s.setObjectShareLink);
   const policyRefusal = usePolicyRefusal("public_sharing_disabled", publicShare?.team);
   const token = publicShare?.token ?? null;
-  const publicUrl = (t: string) => `${shareOrigin()}${sharePath(publicShare!.kind, t)}`;
+  // The view a person is looking at (a dashboard's filters, a sheet's tab) rides the public link too.
+  const query = path.includes("?") ? path.slice(path.indexOf("?")) : "";
+  const publicUrl = (t: string) => `${shareOrigin()}${sharePath(publicShare!.kind, t)}${query}`;
   const control = (
     <SharePopover
       canManage={!!publicShare}
