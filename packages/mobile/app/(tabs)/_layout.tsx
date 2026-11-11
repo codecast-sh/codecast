@@ -4,7 +4,7 @@ import { SlideOutDrawer } from '@/components/inbox/SlideOutDrawer';
 import { TabBarIcon, useTabSignals } from '@/components/nav/TabBarIcon';
 import { InboxDrawer } from '@/components/inbox/InboxDrawer';
 import { setInboxDrawerOpen, useInboxDrawerOpen } from '@/lib/inboxDrawer';
-import { TAB_BAR_HEIGHT, useActiveScheme, useTheme } from '@/constants/Theme';
+import { TAB_BAR_HEIGHT, useAppearanceKey, useTheme } from '@/constants/Theme';
 import { Mono, useMonoFace } from '@/constants/fonts';
 import {
   MOBILE_HEADER_STYLE,
@@ -17,8 +17,8 @@ import {
 export default function TabLayout() {
   const Theme = useTheme();
   // The palette is one object repainted in place, so the memo below keys on
-  // the scheme itself.
-  const scheme = useActiveScheme();
+  // the look and scheme themselves.
+  const appearance = useAppearanceKey();
   const labelFace = useMonoFace(Mono.medium);
   const titleFace = useMonoFace(Mono.semiBold);
   const { unreadCount, chatMentions, anyLive } = useTabSignals();
@@ -112,7 +112,7 @@ export default function TabLayout() {
         }}
       />
     </Tabs>
-  ), [Theme, scheme, labelFace, titleFace, unreadCount, chatMentions, anyLive]);
+  ), [Theme, appearance, labelFace, titleFace, unreadCount, chatMentions, anyLive]);
 
   return (
     <SlideOutDrawer enabled={onInbox} open={drawerOpen} setOpen={setInboxDrawerOpen} drawer={drawerPanel}>

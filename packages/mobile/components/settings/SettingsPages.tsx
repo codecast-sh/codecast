@@ -26,6 +26,7 @@ import { DevicesSection } from '@/components/DevicesSection';
 import { liveActivityNative } from '@/modules/codecast-live-activity';
 import type { MobileSettingsSection } from '@/lib/settingsSections';
 import { SettingsScroll, SettingsGroup, ToggleRow, NavRow, SettingsSwitch, settingsStyles } from './SettingsUI';
+import { STYLE_ROW_SHOWN, StyleRow } from './StyleRow';
 
 export const THEME_OPTIONS = [
   { key: undefined, label: 'System', icon: 'mobile' as const },
@@ -344,6 +345,7 @@ function AppearancePage() {
             </RNView>
           }
         />
+        {STYLE_ROW_SHOWN ? <StyleRow /> : null}
         <ToggleRow
           label="Image Thumbnails"
           description="Show a small thumbnail on inbox rows when a session contains images"
