@@ -247,10 +247,11 @@ export const startSeatCheckout = action({
     try {
       if (context.customer && (await liveSeatSubscription(stripe, context.customer))) return await portal(stripe, context.customer);
       const metadata = { kind: TEAM_SEATS_KIND, team_id };
+      const seats = Math.max(1, context.members);
       const params = checkoutParams({
         mode: "subscription",
         price: seatPriceId(env, billing)!,
-        quantity: Math.max(1, context.members),
+        quantity: seats,
         successUrl: teamReturnUrl("done"),
         cancelUrl: teamReturnUrl("canceled"),
         customer: context.customer ?? undefined,
@@ -265,7 +266,7 @@ export const startSeatCheckout = action({
         idempotencyKey: `team-checkout:${team_id}:${userId}:${context.customer ?? "new"}:${billing ?? "monthly"}:${Math.floor(Date.now() / CHECKOUT_REUSE_MS)}`,
       });
       if (!session.url) throw new StripeError("Stripe returned a checkout session without a url", 200);
-      await ctx.runMutation(internal.teamBilling.markCheckoutStarted, { team_id });
+      await ctx.runMutation(internal.teamBilling.markCheckoutStarted, { team_id, seats });
       return { ok: true, url: session.url, via: "checkout" };
     } catch (error) {
       return stripeRefusal(error);
@@ -300,8 +301,20 @@ async function upsertRow(ctx: MutationCtx, teamId: Id<"teams">, patch: Partial<D
 }
 
 export const markCheckoutStarted = internalMutation({
-  args: { team_id: v.id("teams") },
-  handler: async (ctx, { team_id }) => upsertRow(ctx, team_id, { checkout_started_at: Date.now() }),
+  args: { team_id: v.id("teams"), seats: v.optional(v.number()) },
+  // The grace window opens once: a checkout reopened (or abandoned and opened
+  // again) keeps the first one's start, until a subscription is mapped and
+  // clears it (applyTeamSubscription).
+  // A team the gate would grandfather now is stamped first, since an open
+  // checkout ends grandfathering by counts (lib/teamSeats grandfathered).
+  handler: async (ctx, { team_id, seats }) => {
+    const row = await teamSubscriptionRow(ctx, team_id);
+    if (row?.checkout_started_at) return;
+    const team = await ctx.db.get(team_id);
+    const now = Date.now();
+    const stamp = team && !row?.grandfathered_at && grandfathered(row, await countSeats(ctx, team), now, seatBillingEnv().grandfatherUntil);
+    await upsertRow(ctx, team_id, { checkout_started_at: now, checkout_seats: seats ?? 0, ...(stamp ? { grandfathered_at: now } : {}) });
+  },
 });
 
 export const markRefreshFailed = internalMutation({
@@ -349,6 +362,7 @@ export const applyTeamSubscription = internalMutation({
       subscription_read_at: args.read_at,
       refresh_failed_at: undefined,
       checkout_started_at: undefined,
+      checkout_seats: undefined,
     });
     if (args.sync !== false && isLiveSubscription(sub.status)) await scheduleSeatSync(ctx, teamId, "subscription_changed");
     return `team:${sub.status}`;

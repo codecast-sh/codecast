@@ -103,6 +103,9 @@ export interface SeatCounts {
   members: number;
   /** Emailed invites and join requests still waiting. */
   pending: number;
+  /** The join requests among `pending`: asked for by the person joining, not
+   *  sent by an admin, so they hold capacity but never grandfather a team. */
+  requests?: number;
 }
 
 /** Why a seat was refused, with what the invite UI needs to offer the upgrade. */
@@ -124,7 +127,7 @@ export type SeatDecision =
 
 export interface SeatInput {
   on: boolean;
-  row: Pick<Doc<"team_subscriptions">, "subscription_status" | "subscription_read_at" | "refresh_failed_at" | "checkout_started_at" | "grandfathered_at" | "stripe_customer_id"> | null;
+  row: Pick<Doc<"team_subscriptions">, "subscription_status" | "subscription_read_at" | "refresh_failed_at" | "checkout_started_at" | "checkout_seats" | "grandfathered_at" | "stripe_customer_id"> | null;
   counts: SeatCounts;
   /** Seats the operation adds: 1 for an invite or a join. */
   adding: number;
@@ -162,7 +165,21 @@ export function isLapsed(status: string | null | undefined): boolean {
 export function grandfathered(row: SeatInput["row"], counts: SeatCounts, now: number, until?: number): boolean {
   if (until !== undefined && now >= until) return false;
   if (row?.grandfathered_at) return true;
-  return !row?.stripe_customer_id && counts.members + counts.pending > STARTER_FREE_CAPACITY;
+  // Join requests are left out: anyone with a proven address can file one, and
+  // they would otherwise push a team over capacity and stamp it for good.
+  // A team that opened checkout has met the gate: seats a checkout let in
+  // while it was landing never grandfather it either.
+  if (row?.stripe_customer_id || row?.checkout_started_at) return false;
+  return counts.members + counts.pending - (counts.requests ?? 0) > STARTER_FREE_CAPACITY;
+}
+
+/** Whether an open checkout covers this add: it fails open only up to the
+ *  seats it is for plus the one seat the upgrade was opened to add, so an
+ *  abandoned checkout cannot admit a crowd. The window opens once per team
+ *  until a subscription lands (teamBilling.markCheckoutStarted). */
+function checkoutCovers(row: SeatInput["row"], counts: SeatCounts, adding: number, now: number): boolean {
+  if (!row?.checkout_started_at || now - row.checkout_started_at >= CHECKOUT_GRACE_MS) return false;
+  return counts.members + adding <= Math.max(STARTER_FREE_CAPACITY, row.checkout_seats ?? 0) + 1;
 }
 
 /** The pure decision; `checkSeat` adds the reads, the stamp and the log. */
@@ -174,7 +191,7 @@ export function decideSeat({ on, row, counts, adding, now, grandfatherUntil }: S
   const status = row?.subscription_status;
   if (row?.refresh_failed_at && row.refresh_failed_at > (row.subscription_read_at ?? 0)) return { kind: "fail_open", why: "plan_unconfirmed" };
   if (status === "incomplete") return { kind: "fail_open", why: "payment_processing" };
-  if (!isLapsed(status) && row?.checkout_started_at && now - row.checkout_started_at < CHECKOUT_GRACE_MS) return { kind: "fail_open", why: "checkout_pending" };
+  if (!isLapsed(status) && checkoutCovers(row, counts, adding, now)) return { kind: "fail_open", why: "checkout_pending" };
   return { kind: "blocked", limit: seatLimit(isLapsed(status) ? "subscription_lapsed" : "upgrade_required", counts) };
 }
 
@@ -210,7 +227,7 @@ export async function countSeats(ctx: Ctx, team: Doc<"teams">, exclude: SeatExcl
     : [];
   const requests = (await ctx.db.query("team_join_requests").withIndex("by_team_status", (q) => q.eq("team_id", team._id).eq("status", "pending")).collect())
     .filter((r) => r.user_id !== exclude.userId);
-  return { members, pending: invites.length + requests.length };
+  return { members, pending: invites.length + requests.length, requests: requests.length };
 }
 
 /** Judges adding `adding` seats to `team` for `operation`, logs a fail-open or

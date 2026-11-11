@@ -88,6 +88,21 @@ describe("decideSeat", () => {
     expect(decide({ ...over, row: { stripe_customer_id: "cus_1", subscription_status: "canceled", subscription_read_at: 5, refresh_failed_at: 9 } as any })).toMatchObject({ kind: "fail_open", why: "plan_unconfirmed" });
   });
 
+  test("an open checkout fails open only up to its seats plus the one the upgrade is for (F73)", () => {
+    const row = { checkout_started_at: base.now - 1000, checkout_seats: 3 } as any;
+    expect(decide({ row, counts: { members: 3, pending: 0 } })).toMatchObject({ kind: "fail_open", why: "checkout_pending" });
+    expect(decide({ row, counts: { members: 4, pending: 0 } })).toMatchObject({ kind: "blocked" });
+    expect(decide({ row, counts: { members: 40, pending: 0 } })).toMatchObject({ kind: "blocked" });
+  });
+
+  test("join requests hold capacity but never grandfather a team (F74)", () => {
+    // Three members and two requests anyone with a proven address could file.
+    const counts = { members: 3, pending: 2, requests: 2 };
+    expect(decide({ counts, row: null })).toMatchObject({ kind: "blocked", limit: { code: "upgrade_required" } });
+    // Pending admin invites from before the gate still grandfather.
+    expect(decide({ counts: { members: 3, pending: 2, requests: 0 } })).toMatchObject({ kind: "allowed", why: "grandfathered" });
+  });
+
   test("a team over the free capacity that never subscribed is grandfathered; one that lapsed is not", () => {
     expect(decide({ counts: { members: 5, pending: 0 } })).toMatchObject({ kind: "allowed", why: "grandfathered" });
     expect(decide({ counts: { members: 2, pending: 0 }, row: { grandfathered_at: 1 } as any, adding: 4 })).toMatchObject({ kind: "allowed", why: "grandfathered" });
@@ -235,6 +250,25 @@ describe("Starter limits", () => {
     expect(await seatRefusalOf(as(outsiders[2]).mutation(api.teams.joinTeam, { invite_code: code }))).toMatchObject({ code: "upgrade_required", current_seats: 3 });
   });
 
+  test("join requests past capacity do not stamp the team grandfathered; the next invite is refused (F74)", async () => {
+    const { t, admin, team, outsiders, row } = await setup(3);
+    await t.run(async (ctx) => {
+      for (const user of outsiders.slice(0, 2)) await ctx.db.insert("team_join_requests", { team_id: team, user_id: user, status: "pending", created_at: 1 });
+    });
+    const refused = await admin.mutation(api.teams.sendInviteEmail, { team_id: team, email: "new@acme.test" });
+    expect(refused).toMatchObject({ sent: false, upgrade_required: expect.objectContaining({ code: "upgrade_required" }) });
+    expect((await row())?.grandfathered_at).toBeUndefined();
+  });
+
+  test("a stranger let in while a checkout was open never grandfathers the team (F73)", async () => {
+    const { t, admin, team, outsiders, row } = await setup(3);
+    await t.run((ctx) => ctx.db.insert("team_subscriptions", { team_id: team, checkout_started_at: Date.now() - CHECKOUT_GRACE_MS - 1, checkout_seats: 3 }));
+    await t.mutation(internal.teams.addMemberByOperator, { user_id: outsiders[0], team_id: team });
+    const refused = await admin.mutation(api.teams.sendInviteEmail, { team_id: team, email: "new@acme.test" });
+    expect(refused).toMatchObject({ sent: false });
+    expect((await row())?.grandfathered_at).toBeUndefined();
+  });
+
   test("an operator add skips the gate", async () => {
     const { t, team, outsiders, admin } = await setup(3);
     await t.mutation(internal.teams.addMemberByOperator, { user_id: outsiders[0], team_id: team });
@@ -314,6 +348,18 @@ describe("upgrade", () => {
     });
     expect(checkout.headers["Idempotency-Key"]).toStartWith(`team-checkout:${team}:`);
     expect((await row())?.checkout_started_at).toBeNumber();
+  });
+
+  test("reopening checkout keeps the first grace window and its seats (F73)", async () => {
+    const { admin, team, row } = await setup(3);
+    fakeStripe();
+    setSystemTime(new Date(1_800_000_000_000));
+    await admin.action(api.teamBilling.startSeatCheckout, { team_id: team });
+    const first = await row();
+    expect(first).toMatchObject({ checkout_started_at: 1_800_000_000_000, checkout_seats: 3 });
+    setSystemTime(new Date(1_800_000_000_000 + CHECKOUT_GRACE_MS + 1));
+    await admin.action(api.teamBilling.startSeatCheckout, { team_id: team });
+    expect((await row())?.checkout_started_at).toBe(1_800_000_000_000);
   });
 
   test("the webhook maps the team's subscription onto the team, never a wallet; then the team is Pro", async () => {
