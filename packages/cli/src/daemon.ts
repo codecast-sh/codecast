@@ -6,7 +6,6 @@ import { chooseClaudeBackend, sdkBackendRefusal } from "./claudeSdk/select.js";
 import { BackendSwitchHoldError, backendSwitchHeld, cancelBackendSwitch, switchClaudeBackend } from "./claudeSdk/switchBackend.js";
 import type { SdkLaunchSpec } from "./claudeSdk/options.js";
 import type { SdkPermissionAnswer } from "./claudeSdk/protocol.js";
-import { restoreSuspendedAgent } from "./tmuxSuspendedAgent.js";
 import { DeliveryEchoLedger, deliveryEchoLedger, deliveryRecordUuid, echoCandidatesOf } from "./deliveryEchoLedger.js";
 import { VersionedObservationSet } from "./versionedObservationSet.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
@@ -24,7 +23,7 @@ import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_CLIENTS, INGEST_WINDOW_ROWS, type IngestJob } from "./workers/ingestTypes.js";
 import { TranscriptRetryOwner, type TranscriptRetrySource } from "./workers/ingestRetryOwner.js";
 import { ingestRetainedWeight } from "./workers/ingestTransport.js";
-import { computeIngestSyncDelta, provenSyncedPrefix, samePersistedFile, transcriptSignatureWatermark, ingestIdentity, ingestMessageTitle, ingestRecord, ingestSource, readTranscriptIngest, retryOnIngestCapacity, sameIngestFile, serializeTranscript, validateTranscriptIngest } from "./workers/ingestClient.js";
+import { awaitDeliveryEcho, computeIngestSyncDelta, provenSyncedPrefix, samePersistedFile, transcriptSignatureWatermark, ingestIdentity, ingestMessageTitle, ingestRecord, ingestSource, readTranscriptIngest, retryOnIngestCapacity, sameIngestFile, serializeTranscript, validateTranscriptIngest } from "./workers/ingestClient.js";
 import { checkTranscriptDeadline, outsideTranscriptDeadline } from "./workers/ingestDeadline.js";
 import { selfExecInfo } from "./selfExec.js";
 import { cursorPassBoundary, readCodexSessionMetaHeadAsync, readCompleteLines, readCompleteLinesSync, readIngestWindow, sessionMetaHeadCut } from "./transcriptWindow.js";
@@ -40,7 +39,7 @@ import * as os from "os";
 import { randomUUID, createHash, randomBytes } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
-import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, spawn, spawnSync, whichBin } from "./proc.js";
+import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, refuseKeychainCallsWhileLocked, spawn, spawnSync, whichBin } from "./proc.js";
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { raiseThreadToInteractiveQos } from "./threadQos.js";
 import { countingSemaphore } from "./semaphore.js";
@@ -236,7 +235,8 @@ import {
   type HangMarker,
 } from "./daemonMarkers.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
-import { claudeBannerText, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, extractCwd, extractGrokCwd, extractMuseCwd, extractSummaryTitle, extractTeamInfo, isCodexProgramLaunch, isGrokInternalSession, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
+import { claudeBannerText, extractCwd, extractGrokCwd, extractMuseCwd, extractSummaryTitle, extractTeamInfo, isGrokInternalSession, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
+import { extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCodexProgramLaunch } from "./codexSessionMeta.js";
 import {
   CodexAppServer,
   threadForkTimeoutMsForBytes,
@@ -320,7 +320,6 @@ import {
 import { getVersion, performUpdate, ensureCastAlias, checkForUpdates, isDevMode, installChannel } from "./update.js";
 import { isManagedInstall } from "./managedInstall.js";
 import { readInventoryAsync, toInvocableList } from "./capabilities/inventory.js";
-import { checkForDesktopUpdate } from "./desktopUpdate.js";
 import {
   isTranscriptFileInSyncScope,
   performReconciliation,
@@ -7986,6 +7985,7 @@ async function executeRemoteCommand(
       // the gate broadcasts to every daemon of the user, and a second Mac that
       // is fine must stay untouched.
       case "desktop_update": {
+        const { checkForDesktopUpdate } = await import("./desktopUpdate.js");
         const applied = await checkForDesktopUpdate((msg) => log(msg), {
           force: true,
           reinstall: false,
@@ -9416,6 +9416,12 @@ async function executeRemoteCommand(
               jobs: await liveSyncJobs(),
               hostFor: (id) => { const h = hostForDevice(id); return h?.address ? toRemoteHost(h) : null; },
               scopeFor: (root) => readSyncScope(root),
+              isProjectRoot: async (root) => {
+                if (computeLocalProjectRoots().includes(root)) return true;
+                invalidateLocalProjectRoots();
+                await refreshLocalProjectRoots();
+                return computeLocalProjectRoots().includes(root);
+              },
             });
             result = JSON.stringify(answer);
           } else {
@@ -18243,6 +18249,7 @@ export async function injectViaTmux(target: string, content: string, agentType?:
 }
 
 async function injectViaTmuxInner(target: string, content: string, agentType?: AgentClientId, opts?: TmuxInjectionOptions): Promise<void> {
+  const { restoreSuspendedAgent } = await import("./tmuxSuspendedAgent.js");
   if (await restoreSuspendedAgent(target, tmuxExec)) log(`[RECOVER] Restored suspended agent and terminal input in ${target}`);
   // Does this client's TUI bracket a paste? Decides whether newlines in the
   // payload survive as composer newlines or get flattened to spaces — see
@@ -29385,6 +29392,7 @@ function maybeUpdateDesktopApp(syncService: SyncService): void {
     try {
       minVersion = await syncService.getMinDesktopVersion();
     } catch {}
+    const { checkForDesktopUpdate } = await import("./desktopUpdate.js");
     await checkForDesktopUpdate((msg) => log(msg), { minVersion, warn: (msg) => logWarn(msg) });
   })().catch(() => {});
 }
@@ -30266,6 +30274,9 @@ async function main(): Promise<void> {
     console.error(`Daemon already running (PID: ${existingPid}). Exiting.`);
     process.exit(0);
   }
+
+  // Nobody watches the daemon: a locked keychain fails its calls instead of prompting (proc.ts).
+  refuseKeychainCallsWhileLocked();
 
   // The control plane outranks the work it supervises (threadQos.ts).
   if (!raiseThreadToInteractiveQos() && process.platform === "darwin") log("[RESOURCES] could not raise the daemon thread to interactive QoS; it competes with the fleet at default priority");
@@ -33348,6 +33359,7 @@ async function main(): Promise<void> {
             if (submit && submit.outcome !== "delivered") {
               logDelivery(`msg=${msg._id.slice(0, 8)} submit ${submit.outcome}, not reporting a turn`);
             } else if (injectedSessionId) {
+              awaitDeliveryEcho(injectedSessionId);
               sendAgentStatus(syncService, msg.conversation_id, injectedSessionId, "thinking", undefined, undefined, true);
             } else {
               syncService.updateSessionAgentStatus(msg.conversation_id, "thinking", undefined, undefined, undefined, true).catch(logConvexFailure);
