@@ -396,11 +396,16 @@ const agentStatusValidator = v.union(
 // The throttle means the stamp advances on the first flush PAST it, not on the
 // flush cadence: 60s apart in steady state and 85s behind a late flush, which
 // is why HEARTBEAT_ALIVE_MS is derived from this number rather than guessed
-// alongside it. Status observations still persist their ordering stamp
-// immediately: even an active reassertion must defeat a delayed older park write.
+// alongside it. A status change and an ACTIVE reassertion persist their
+// ordering stamp immediately: a reasserted "working" must defeat a delayed
+// older park write. A SETTLED reassertion (idle, done, stopped, dormant,
+// hibernated) rides the same throttle as last_heartbeat: every beat carries a
+// fresh client_ts, so stamping each one wrote every settled session's row on
+// every 30s flush and re-ran each subscription that reads it (89k row writes
+// an hour across 810 sessions, 707 of them settled, 2026-11-10).
 
 // Returns null when neither status ordering nor heartbeat freshness advances.
-function buildHeartbeatPatch(
+export function buildHeartbeatPatch(
   session: { agent_status?: string; agent_status_updated_at?: number; agent_status_write_at?: number; last_heartbeat?: number },
   agentStatus: string | undefined,
   clientTs: number | undefined,
@@ -408,9 +413,11 @@ function buildHeartbeatPatch(
 ): Record<string, any> | null {
   const patch: Record<string, any> = {};
   let statusChanged = false;
+  const heartbeatStale = !session.last_heartbeat || now - session.last_heartbeat > HEARTBEAT_REFRESH_MS;
   if (agentStatus) {
     const tsStale = statusWriteIsStale(session, agentStatus, clientTs);
-    if (!tsStale && (clientTs ?? now) > (session.agent_status_write_at ?? 0)) {
+    const settledReassertion = agentStatus === session.agent_status && !ACTIVE_AGENT_STATUSES.has(agentStatus);
+    if (!tsStale && (clientTs ?? now) > (session.agent_status_write_at ?? 0) && (!settledReassertion || heartbeatStale)) {
       patch.agent_status_write_at = clientTs ?? now;
     }
     // Only write agent_status when it actually changes — re-writing the same
@@ -424,7 +431,6 @@ function buildHeartbeatPatch(
       statusChanged = true;
     }
   }
-  const heartbeatStale = !session.last_heartbeat || now - session.last_heartbeat > HEARTBEAT_REFRESH_MS;
   if (statusChanged || heartbeatStale) {
     patch.last_heartbeat = now;
   }
@@ -517,14 +523,21 @@ export const heartbeatBatch = mutation({
 
     const now = Date.now();
     let updated = 0;
+    // Sessions this caller has no row for. The daemon stops beating an id the
+    // server keeps answering this way: 64% of the fleet's batches named only
+    // such ids, every 30s, and did nothing (2026-11-10).
+    const unknown: string[] = [];
     for (const entry of args.sessions) {
       const session = await ctx.db
         .query("managed_sessions")
         .withIndex("by_session_id", (q: any) => q.eq("session_id", entry.session_id))
         .first();
-      // Silently skip unknown / cross-user rows (a stale daemon can carry either);
+      // Skip unknown / cross-user rows (a stale daemon can carry either);
       // throwing would abort the whole batch and pollute logs every 30s.
-      if (!session || session.user_id.toString() !== authUserId.toString()) continue;
+      if (!session || session.user_id.toString() !== authUserId.toString()) {
+        unknown.push(entry.session_id);
+        continue;
+      }
       if (session.conversation_id && !(await canExecuteConversation(ctx, authUserId, session.conversation_id))) continue;
       const patch = buildHeartbeatPatch(session, entry.agent_status, entry.client_ts, now);
       if (!patch) continue;
@@ -536,7 +549,10 @@ export const heartbeatBatch = mutation({
       }
       updated++;
     }
-    return { updated };
+    // The function log carries no arguments, so this line is what names who
+    // sends beats for rows that do not exist.
+    if (unknown.length > 0) console.log(`heartbeatBatch: ${unknown.length} of ${args.sessions.length} sessions have no row (user ${authUserId})`);
+    return { updated, unknown };
   },
 });
 

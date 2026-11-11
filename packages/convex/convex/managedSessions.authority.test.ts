@@ -138,7 +138,7 @@ describe("managed session identity and liveness", () => {
     const ctx = fixture();
     ctx.db._tables.managed_sessions[0].user_id = CALLER;
     expect(await (heartbeat as any)._handler(ctx, { session_id: "target", agent_status: "working" })).toEqual({ found: false });
-    expect(await (heartbeatBatch as any)._handler(ctx, { sessions: [{ session_id: "target", agent_status: "working" }] })).toEqual({ updated: 0 });
+    expect(await (heartbeatBatch as any)._handler(ctx, { sessions: [{ session_id: "target", agent_status: "working" }] })).toMatchObject({ updated: 0 });
     unchanged(ctx);
   });
   test("a runner can relink and rotate its own session ID", async () => {

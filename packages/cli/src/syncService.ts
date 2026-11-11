@@ -1937,7 +1937,7 @@ export class SyncService {
       agent_status?: AgentStatus;
       client_ts?: number;
     }>,
-  ): Promise<{ updated: number } | undefined> {
+  ): Promise<{ updated: number; unknown?: string[] } | undefined> {
     if (sessions.length === 0) return;
     return await this.mutate("managedSessions:heartbeatBatch" as any, {
       api_token: this.apiToken,

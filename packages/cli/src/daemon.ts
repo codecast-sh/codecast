@@ -32,6 +32,7 @@ export { sessionMetaHeadCut, readCodexSessionMetaHeadAsync } from "./transcriptW
 export { readCompleteLines, readCompleteLinesSync, cursorPassBoundary, type PassBoundary, type ReadWindowOpts } from "./transcriptWindow.js";
 import { registerAppServerSpawnTracking, TmuxSpawnRegistry } from "./tmuxSpawns.js";
 import { countTrackedFleet, type FleetCounts } from "./fleetCounts.js";
+import { deadTranscriptBeats, strikeUnknownBeats } from "./heartbeatMembership.js";
 import * as fs from "fs";
 import { heicToJpeg, isHeicImage } from "./heicImage.js";
 import * as path from "path";
@@ -6181,9 +6182,19 @@ async function runApprovedCast(decisionId: string, argv: string[], cwd: string |
 
 function runCastCommand(
   args: string[],
-  opts: { timeoutMs?: number; killGroup?: boolean; env?: Record<string, string>; cwd?: string; inheritEnv?: boolean } = {},
+  opts: { timeoutMs?: number; killGroup?: boolean; env?: Record<string, string>; cwd?: string; inheritEnv?: boolean; onStdoutLine?: (line: string) => void } = {},
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   const timeoutMs = opts.timeoutMs ?? 30 * 60 * 1000;
+  // Each complete stdout line as it arrives, for a caller following the
+  // child's progress; the whole output still comes back at exit.
+  let partial = "";
+  const takeLines = (chunk: string) => {
+    if (!opts.onStdoutLine) return;
+    partial += chunk;
+    const lines = partial.split("\n");
+    partial = lines.pop() ?? "";
+    for (const line of lines) { try { opts.onStdoutLine(line); } catch { /* a watcher's failure is not the child's */ } }
+  };
   const { cmd, prefixArgs } = resolveCastInvocation();
   return new Promise((resolve) => {
     let stdout = "";
@@ -6211,7 +6222,7 @@ function runCastCommand(
       if (opts.killGroup && child.pid) { try { process.kill(-child.pid, "SIGKILL"); } catch { /* group already gone */ } }
       try { child.kill("SIGKILL"); } catch { /* already gone */ }
     }, timeoutMs);
-    child.stdout?.on("data", (d) => { stdout += d.toString(); });
+    child.stdout?.on("data", (d) => { const s = d.toString(); stdout += s; takeLines(s); });
     child.stderr?.on("data", (d) => { stderr += d.toString(); });
     child.on("error", (err) => {
       clearTimeout(timer);
@@ -13199,6 +13210,7 @@ async function processCodexSessionPass(
             teamId,
             sessionId,
             agentType: "codex",
+            agentTaskId: triggerRunTaskId(sessionId, firstUserMessage?.content),
             projectPath,
             slug: undefined,
             title,
@@ -14323,13 +14335,14 @@ function deltaSessionTitle(metadata: { title?: string }, messages: RawMessage[],
 function tryRegisterSessionProcess(sessionId: string, agentType: AgentClientId): void {
   try {
     // Heartbeat membership is in-memory and lost on daemon restart, while registry
-    // files persist on disk. Always ensure heartbeat is running for known sessions,
-    // even when skipping the expensive process discovery below.
-    if (syncServiceRef && !managedHeartbeatSessions.has(sessionId)) {
+    // files persist on disk. A known session whose registered process still runs
+    // beats again at once, without the expensive process discovery below; one
+    // whose process is gone is left to that discovery, which finds only live ones.
+    if (syncServiceRef && !managedHeartbeatSessions.has(sessionId) && sessionRegistryProcessAlive(sessionId)) {
       const cache = readConversationCache();
       const conversationId = cache[sessionId];
       if (conversationId) {
-        ensureManagedSessionHeartbeat(sessionId);
+        ensureManagedSessionHeartbeat(sessionId, "transcript");
       }
     }
 
@@ -14366,7 +14379,7 @@ function tryRegisterSessionProcess(sessionId: string, agentType: AgentClientId):
           }).catch(() => {
             syncServiceRef!.registerManagedSession(sessionId, result.pid, undefined, conversationId).catch(() => {});
           });
-          ensureManagedSessionHeartbeat(sessionId);
+          ensureManagedSessionHeartbeat(sessionId, "transcript");
         }
       }
     }).catch(() => {});
@@ -21073,12 +21086,43 @@ export function shouldStartBlankSessionAfterResumeFailure(reason: ResumeFatalRea
 function stopManagedSessionHeartbeat(sessionId: string | undefined): void {
   if (!sessionId) return;
   managedHeartbeatSessions.delete(sessionId);
+  transcriptHeartbeatSessions.delete(sessionId);
 }
 
-function ensureManagedSessionHeartbeat(sessionId: string): void {
+// Sessions that beat only because a transcript sync found a process writing
+// them (heartbeatMembership.ts). Anything this daemon runs or holds itself
+// (a resume, a bind, a park) takes the session out of this set.
+const transcriptHeartbeatSessions = new Set<string>();
+// Flushes in a row the server answered "no row" for a session (heartbeatMembership.ts).
+const unknownBeatStrikes = new Map<string, number>();
+
+function ensureManagedSessionHeartbeat(sessionId: string, source?: "transcript"): void {
   if (!syncServiceRef || isSupersededAppServerSession(sessionId)) return;
+  if (source !== "transcript") transcriptHeartbeatSessions.delete(sessionId);
+  else if (!managedHeartbeatSessions.has(sessionId)) transcriptHeartbeatSessions.add(sessionId);
   managedHeartbeatSessions.add(sessionId);
   ensureHeartbeatFlushLoop();
+}
+
+/** Whether the process a session's registry file names is still running. */
+function sessionRegistryProcessAlive(sessionId: string): boolean {
+  try {
+    const reg = JSON.parse(fs.readFileSync(path.join(CONFIG_DIR, "session-registry", `${sessionId}.json`), "utf-8"));
+    return typeof reg.pid === "number" && isProcessRunning(reg.pid);
+  } catch {
+    return false;
+  }
+}
+
+/** Stop beating the transcript-added sessions whose process has exited. */
+function pruneDeadTranscriptHeartbeats(): void {
+  const dead = deadTranscriptBeats(transcriptHeartbeatSessions, {
+    hasPane: (id) => resumeSessionCache.has(id),
+    parked: (id) => hibernatedSessions.has(id),
+    processAlive: sessionRegistryProcessAlive,
+  });
+  for (const id of dead) stopManagedSessionHeartbeat(id);
+  if (dead.length > 0) log(`[HEARTBEAT-FLUSH] stopped beating ${dead.length} session(s) whose process exited`);
 }
 
 // Armed lazily by whichever call site registers the first session, often from
@@ -21154,6 +21198,7 @@ export async function runHeartbeatFlush(): Promise<void> {
   const sync = syncServiceRef;
   if (!sync) return;
   retryHibernationStamps();
+  pruneDeadTranscriptHeartbeats();
   const ids = currentHeartbeatSessions();
   const now = Date.now();
 
@@ -21177,7 +21222,12 @@ export async function runHeartbeatFlush(): Promise<void> {
         : { session_id: sessionId };
     });
     try {
-      await sync.heartbeatManagedSessionsBatch(payload);
+      const answer = await sync.heartbeatManagedSessionsBatch(payload);
+      const disowned = strikeUnknownBeats(unknownBeatStrikes, payload.map((p) => p.session_id), answer?.unknown)
+        // A parked session's row is this daemon's to restore, never to forget.
+        .filter((id) => !hibernatedSessions.has(id));
+      for (const id of disowned) stopManagedSessionHeartbeat(id);
+      if (disowned.length > 0) log(`[HEARTBEAT-FLUSH] stopped beating ${disowned.length} session(s) the server has no row for`);
     } catch (err) {
       // A failed send leaves every session in the batch reading as stopped on
       // the server within the liveness window, so it must be visible here.
