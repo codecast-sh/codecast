@@ -12,6 +12,16 @@ const restoreGlobals = replaceGlobals({
   window: dom.window,
   document: dom.window.document,
   navigator: dom.window.navigator,
+  // The text variant's popover (Radix) measures and observes its trigger.
+  getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
+  ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
+  Event: dom.window.Event,
+  CustomEvent: dom.window.CustomEvent,
+  HTMLElement: dom.window.HTMLElement,
+  NodeFilter: dom.window.NodeFilter,
+  HTMLInputElement: dom.window.HTMLInputElement,
+  Node: dom.window.Node,
+  Element: dom.window.Element,
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 afterAll(() => {
@@ -138,5 +148,36 @@ test("a team that turned cloud hosting off locks the cloud chip and names why", 
   expect(chip.title).toBe(refusal);
   act(() => chip.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
   expect(picks).toEqual([]);
+  unmount();
+});
+
+test("the new-session line's text variant: the machine's short name, its chips in a popover", () => {
+  const studio: SessionMachine = { ...laptop, device_id: "studio", label: "macOS - Alexanders-Mac-Studio.local" };
+  const opens: number[] = [];
+  const closed = mount(
+    <MachineChips variant="text" machines={[studio, cloud]} selectedDeviceId="studio" open={false} onOpen={() => opens.push(1)} onPick={() => {}} />,
+  );
+  const trigger = closed.host.querySelector("button")!;
+  expect(trigger.textContent).toBe("Mac Studio");
+  expect(trigger.getAttribute("title")).toContain("Alexanders-Mac-Studio");
+  expect(document.body.textContent).not.toContain("Cloud Linux");
+  closed.unmount();
+
+  const picks: SessionMachine[] = [];
+  const open = mount(
+    <MachineChips variant="text" machines={[studio, cloud]} selectedDeviceId="studio" open onOpen={() => {}} onPick={(d) => picks.push(d)} />,
+  );
+  const chip = Array.from(document.body.querySelectorAll("button")).find((b) => b.textContent?.includes("Cloud Linux"));
+  expect(chip).toBeDefined();
+  act(() => chip!.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })));
+  expect(picks).toEqual([cloud]);
+  open.unmount();
+});
+
+test("the text variant renders nothing with one machine: there is nothing to choose", () => {
+  const { host, unmount } = mount(
+    <MachineChips variant="text" machines={[laptop]} selectedDeviceId="laptop" open={false} onOpen={() => {}} onPick={() => {}} />,
+  );
+  expect(host.innerHTML).toBe("");
   unmount();
 });

@@ -4,6 +4,7 @@ import { JSDOM } from "jsdom";
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import { SessionModeToggles } from "./SessionModeToggles";
+import { sessionPlacementNotes } from "../lib/newSessionLine";
 import type { SessionMachine } from "../lib/sessionMachines";
 import { CLOUD_AGENT_PROVIDERS } from "@codecast/shared/contracts";
 
@@ -199,4 +200,17 @@ test("a problem no sign-in fixes (the provider changed, a limit, a workspace tha
   const off = mount(<SessionModeToggles {...props} cloudAgent={{ spec: codex, on: false, onToggle: () => {}, connected: true, problem: { kind: "changed", sentence, credential: false } }} />);
   expect(byText(off.host, "paused")).toBeUndefined();
   off.unmount();
+});
+
+test("the new-session line names where it runs only when set away from the default", () => {
+  // This checkout, and a cloud host's own worktree from my checkout, are the defaults.
+  expect(sessionPlacementNotes({ cloudMode: false, isolated: false })).toEqual([]);
+  expect(sessionPlacementNotes({ cloudMode: true, isolated: true })).toEqual([]);
+  expect(sessionPlacementNotes({ cloudMode: false, isolated: true })).toEqual(["worktree"]);
+  expect(sessionPlacementNotes({ cloudMode: true, isolated: false, shared: true })).toEqual(["main checkout"]);
+  expect(sessionPlacementNotes({ cloudMode: true, isolated: true, startFrom: "origin_main" })).toEqual(["from origin/main"]);
+  const spec = CLOUD_AGENT_PROVIDERS.cursor;
+  const agent = { spec, on: true, onToggle: () => {}, connected: true };
+  expect(sessionPlacementNotes({ cloudMode: false, isolated: true, cloudAgent: agent })).toEqual([spec.label]);
+  expect(sessionPlacementNotes({ cloudMode: false, isolated: true, cloudAgent: { ...agent, on: false } })).toEqual(["worktree"]);
 });

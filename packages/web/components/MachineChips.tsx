@@ -14,6 +14,8 @@ import { DeviceDot, DeviceIcon, deviceAccentClasses } from "./DeviceBadge";
 import { machineChipNote, machineChipTitle, type SessionMachine } from "../lib/sessionMachines";
 import { listedMachines } from "../lib/machinePicker";
 import { formatHostLoad, type HostLoad } from "../lib/hostLoad";
+import { LINE_PICK, shortMachineName } from "../lib/newSessionLine";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
 export type MachineChipsProps = {
   machines: SessionMachine[];
@@ -30,6 +32,11 @@ export type MachineChipsProps = {
   onJoin?: (id: string) => void;
   /** Why the session's team turns cloud hosting off: cloud host chips are locked. */
   cloudRefusal?: string | null;
+  /** "pill" (default): a bordered pill that unfolds the chips in place.
+   *  "text": the new-session line's plain machine name, the chips in a
+   *  popover under it; `onClose` is how a click outside folds it. */
+  variant?: "pill" | "text";
+  onClose?: () => void;
 };
 
 /** A machine someone on your team opened to you, or an agent box. */
@@ -47,13 +54,31 @@ function chipLabel(d: SessionMachine, roster: SessionMachine[], load?: HostLoad)
   );
 }
 
-export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen, onPick, onShare, loads, joinable = [], onJoin, cloudRefusal }: MachineChipsProps) {
+export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen, onPick, onShare, loads, joinable = [], onJoin, cloudRefusal, variant = "pill", onClose }: MachineChipsProps) {
   // Notes and titles judge each chip against the whole roster (a host is
   // "gone" relative to its siblings); only the row leaves dead machines out.
   const machines = listedMachines(roster, selectedDeviceId);
   const routedMachine = machines.find((d) => d.device_id === selectedDeviceId) ?? machines[0];
   const joins = onJoin ? joinable : [];
   if ((machines.length <= 1 && joins.length === 0) || !routedMachine) return null;
+  const teamCount = machines.filter(isTeamMachine).length;
+  const title = `Runs on ${deviceDisplayName(routedMachine)}. Click to choose a machine${teamCount ? ` (your team shared ${teamCount} more)` : ""}`;
+  if (variant === "text") {
+    const note = machineChipNote(routedMachine, roster) ?? (routedMachine.online ? null : "offline");
+    return (
+      <Popover open={open} onOpenChange={(next) => (next ? onOpen() : onClose?.())}>
+        <PopoverTrigger asChild>
+          <button type="button" title={title} className={LINE_PICK}>
+            {shortMachineName(deviceDisplayName(routedMachine))}
+            {note && <span className={note === "gone" ? "text-sol-red/80" : "text-sol-text-dim"}>{note}</span>}
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-auto max-w-[min(28rem,calc(100vw-1rem))] p-2">
+          <MachineChips machines={roster} selectedDeviceId={selectedDeviceId} open onOpen={onOpen} onPick={onPick} onShare={onShare} loads={loads} joinable={joinable} onJoin={onJoin} cloudRefusal={cloudRefusal} />
+        </PopoverContent>
+      </Popover>
+    );
+  }
   if (open) {
     const chip = (d: SessionMachine) => {
       const selected = d.device_id === selectedDeviceId;
@@ -117,11 +142,10 @@ export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen,
       </div>
     );
   }
-  const teamCount = machines.filter(isTeamMachine).length;
   return (
     <button
       onClick={onOpen}
-      title={`Runs on ${deviceDisplayName(routedMachine)}. Click to choose a machine${teamCount ? ` (your team shared ${teamCount} more)` : ""}`}
+      title={title}
       className="group/machine inline-flex items-center gap-1.5 px-2 py-0.5 text-meta rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70 hover:bg-sol-bg-alt/50 transition-all"
     >
       <DeviceIcon d={routedMachine} className="w-3 h-3 shrink-0" />

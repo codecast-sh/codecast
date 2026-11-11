@@ -41,13 +41,16 @@ import { isParkedDispatchError } from "../../store/mutativeMiddleware";
 import { withoutUndo } from "../../store/undoStack";
 import { getLabelColor } from "../../lib/labelColors";
 import { browseProjectOrder, frequentProjectChips } from "../../lib/recentProjectPaths";
-import { ChevronDown, Search } from "lucide-react";
+import { ChevronDown, Search, SlidersHorizontal } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { deviceDisplayName } from "../DeviceBadge";
 import { useHostLoads } from "../../hooks/useHostLoads";
 import { MachineChips } from "../MachineChips";
 import { SharedWithMark } from "../ProjectPathPicker";
 import { ModeSwitch, SessionModeToggles, SessionPlacementMenu, type SessionModeTogglesProps, type SessionPlacement } from "../SessionModeToggles";
+import { LINE_PARTS, LINE_PICK, contextNote, effortNote, sessionPlacementNotes } from "../../lib/newSessionLine";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { useAgentDefinitions } from "../../hooks/useSyncAgentDefinitions";
 import { dedupeProjectsByRepoName, pathOnMyMachines, repoName, resolveMachineSelection } from "../../lib/machinePicker";
 import { cloudHostOf, cloudParkNeeded, cloudToggleAvailable, defaultSessionMachineId, isCloudHost, machineSelectionAfterCloudToggle, machineSelectionAfterPick, switchReconfigureArgs, type SessionMachine } from "../../lib/sessionMachines";
 import { useSessionMachines } from "../../hooks/useSessionMachines";
@@ -107,12 +110,18 @@ function restorePickerFocus(prev: HTMLElement | null) {
   document.querySelector<HTMLTextAreaElement>("textarea")?.focus();
 }
 
-export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline = false, modeSlot }: {
+export function ProjectSwitcher({ conversation, handleRef, machineSlot, folderSlot, noteSlot, modeSlot }: {
   conversation: ConversationData;
   handleRef?: React.MutableRefObject<PickerHandle | null>;
-  // The new-session page's question over the chips ("What should we build in
-  // <project>?"); the project name opens the folder search.
-  headline?: boolean;
+  // The new-session page's line under the composer ("in littlebird · Claude
+  // · Mac Studio"). Provided → the folder renders there as "in <folder>",
+  // which opens the folder search over the composer; the resting chip row
+  // goes, and the machine reads as plain text. null while the slot element
+  // hasn't mounted yet.
+  folderSlot?: HTMLElement | null;
+  // The line's note of where the session runs, when set away from the
+  // default ("worktree"); nothing at the default.
+  noteSlot?: HTMLElement | null;
   // Where the worktree/cloud switches render. Omitted → the meta row under the
   // chips. Provided → portaled into the host's slot (the composer foot on the
   // new-session page), and the meta row goes.
@@ -638,11 +647,16 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
     [joinableSig],
   );
 
+  // The new-session page's line (see folderSlot).
+  const inLine = folderSlot !== undefined;
   // Mouse-first, and hidden entirely for the single-machine case so that
   // experience is untouched. Rests collapsed as one pill (the machine the
-  // session will run on); a click unfolds the full chip row.
+  // session will run on); a click unfolds the full chip row. On the line, the
+  // machine's name, its chips in a popover.
   const machineUi = (
     <MachineChips
+      variant={inLine ? "text" : "pill"}
+      onClose={() => setMachinesOpen(false)}
       loads={hostLoads}
       machines={machineChips}
       selectedDeviceId={selectedDeviceId}
@@ -708,33 +722,37 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
     else if (wantIsolated && currentPath) handleSwitch(currentPath, true);
   };
 
+  const placementNote = inLine ? sessionPlacementNotes(modeProps).join(" · ") : "";
+
   return (
-    <div className="flex flex-col items-center gap-3">
+    <div className={`flex flex-col items-center ${inLine ? "w-full" : "gap-3"}`}>
       {modeSlot && createPortal(<SessionPlacementMenu {...modeProps} onPick={pickPlacement} />, modeSlot)}
-      {headline && (
-        <h1 className="mb-1 text-center text-xl sm:text-2xl font-medium tracking-tight text-sol-text">
-          {currentPath ? <>
-            {startsProject ? "Start a project in" : "What should we build in"}{" "}
-            <button
-              type="button"
-              onClick={focusPicker}
-              title={`${currentPath}: search folders or paste any path`}
-              className="underline decoration-sol-cyan/60 decoration-2 underline-offset-[6px] hover:text-sol-cyan transition-colors"
-            >{currentName}</button>{startsProject ? "" : "?"}
-          </> : startsProject ? "Start a project" : "What should we build?"}
-        </h1>
+      {folderSlot && createPortal(
+        <button
+          type="button"
+          onClick={focusPicker}
+          title={currentPath ? `${currentPath}: search folders or paste any path` : "Search folders or paste any path"}
+          className={LINE_PICK}
+        >
+          {currentPath ? `${startsProject ? "new project in" : "in"} ${currentName}` : "choose a folder"}
+          {currentPath && <SharedWithMark {...sharedWith.get(currentPath)} />}
+        </button>,
+        folderSlot,
       )}
+      {noteSlot && placementNote && createPortal(<span className="px-1.5">{placementNote}</span>, noteSlot)}
       {machineSlot === undefined
         ? machineUi
         : machineUi && machineSlot
           ? createPortal(machineUi, machineSlot)
           : null}
 
-      {!headline && !currentPath && recentProjects.length > 0 && (
+      {!inLine && !currentPath && recentProjects.length > 0 && (
         <div className="text-sol-text-dim text-xs">select a project</div>
       )}
 
-      <div
+      {/* On the line, the folder search opens here, over the composer, only
+          while picking: the resting chip row is the line's "in <folder>". */}
+      {(!inLine || picking) && <div
         className={`rounded-lg transition-all ${picking ? "w-full max-w-3xl ring-1 ring-sol-cyan/40 bg-sol-cyan/[0.03] p-2" : ""}`}
       >
         {picking && (
@@ -870,7 +888,7 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
           </>
         )}
         </div>
-      </div>
+      </div>}
 
       {/* One quiet meta row instead of three stacked ones: label, worktree
           toggle, keyboard hints. While picking, the search input rides the top
@@ -916,11 +934,15 @@ function useNewSessionAgent(conversation: ConversationData) {
   return { storeSession, currentAgent };
 }
 
-function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedWorkflowId, onSelectWorkflow, workflows, handleRef, compact = false }: {
+function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedWorkflowId, onSelectWorkflow, workflows, handleRef, compact = false, line = false }: {
   conversation: ConversationData;
   // One dropdown (agent) beside the model pill, for the composer foot,
   // instead of the row of agent chips.
   compact?: boolean;
+  // Compact, as the new-session line's plain "Claude" part: the agent (and
+  // the model, once one is picked), with effort and the agent definition
+  // left to the line's Options.
+  line?: boolean;
   showWorkflow: boolean;
   onToggleWorkflow: () => void;
   selectedWorkflowId: string;
@@ -1063,12 +1085,19 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
       <>
         <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
           <DropdownMenuTrigger asChild>
-            <button type="button" className={FOOT_PICK} title="Agent and model for this session">
-              <AgentTypeIcon agentType={currentAgent} />
-              <span className={agentAccent(currentAgent).text}>{current?.label ?? currentAgent}</span>
-              {!hosted && launch.cfg && <span>{launch.label}</span>}
-              <ChevronDown className="w-3 h-3 opacity-50" />
-            </button>
+            {line ? (
+              <button type="button" className={LINE_PICK} title="Agent and model for this session">
+                {current?.label ?? currentAgent}
+                {!hosted && launch.cfg && launch.label !== "Default" && ` ${launch.label}`}
+              </button>
+            ) : (
+              <button type="button" className={FOOT_PICK} title="Agent and model for this session">
+                <AgentTypeIcon agentType={currentAgent} />
+                <span className={agentAccent(currentAgent).text}>{current?.label ?? currentAgent}</span>
+                {!hosted && launch.cfg && <span>{launch.label}</span>}
+                <ChevronDown className="w-3 h-3 opacity-50" />
+              </button>
+            )}
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="p-0 max-w-[calc(100vw-1rem)]" onCloseAutoFocus={(e) => { e.preventDefault(); restorePickerFocus(null); }}>
             <div className="flex">
@@ -1094,7 +1123,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
             </div>
           </DropdownMenuContent>
         </DropdownMenu>
-        {!hosted && (
+        {!hosted && !line && (
           <>
             <LaunchEffortPill conversationId={sessionId} />
             <AgentDefinitionPill conversationId={sessionId} variant="ghost" />
@@ -1189,13 +1218,16 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
 // has no buckets; otherwise a small pill showing where this session will be
 // filed (defaults to the focused bucket chip). Click opens the same palette
 // picker the Ctrl+Shift+M chord uses.
-function NewSessionBucketPill({ conversation }: { conversation: ConversationData }) {
+/** The label a blank is filed under, and the labels there are to pick from.
+ *  Also files a pre-warmed blank opened while a label chip is focused, so
+ *  whoever shows the label (the pill, or the new-session line while the pill
+ *  sits closed in Options) keeps that working. */
+function useNewSessionBucket(convId: string) {
   const buckets = useInboxStore((st) => st.buckets);
   const bucketAssignments = useInboxStore((st) => st.bucketAssignments);
   // Auto-filing applies only to an INCLUDE label chip — an excluded label must
   // never claim new blanks.
   const activeBucketFilter = useInboxStore((st) => (st.chipFilterExclude ? null : st.activeBucketFilter));
-  const convId = conversation._id;
 
   const visibleBuckets = useMemo(
     () => (Object.values(buckets) as BucketItem[]).filter((b) => !b.archived_at),
@@ -1218,7 +1250,13 @@ function NewSessionBucketPill({ conversation }: { conversation: ConversationData
     withoutUndo(() => store.assignSessionToBucket(real, activeBucketFilter));
   }, [convId, activeBucketFilter, assigned]);
 
-  if (visibleBuckets.length === 0) return null;
+  return { assigned, hasBuckets: visibleBuckets.length > 0 };
+}
+
+function NewSessionBucketPill({ conversation }: { conversation: ConversationData }) {
+  const convId = conversation._id;
+  const { assigned, hasBuckets } = useNewSessionBucket(convId);
+  if (!hasBuckets) return null;
 
   const openPicker = () => {
     const store = useInboxStore.getState();
@@ -1268,9 +1306,10 @@ function NewSessionProjectToggle({ conversation }: { conversation: ConversationD
   );
 }
 
-/** The new-session composer's foot: the slot NewSessionView fills with the
- *  launch pickers, and attach. The page (ConversationView) and the popup
- *  (ComposeView) both hand it to MessageInput as composerFoot. */
+/** The new-session composer's foot: attach, and a slot NewSessionView leaves
+ *  empty now that the launch pickers live on the line under the composer.
+ *  The page (ConversationView) and the popup (ComposeView) both hand it to
+ *  MessageInput as composerFoot. */
 export function NewSessionFoot({ slotRef, dropRef }: {
   slotRef: (el: HTMLElement | null) => void;
   dropRef: React.MutableRefObject<((files: File[]) => void) | null>;
@@ -1285,6 +1324,81 @@ export function NewSessionFoot({ slotRef, dropRef }: {
   );
 }
 
+/** The new-session line's notes: each launch setting behind Options that is
+ *  set away from its default, so nothing hidden changes a launch silently.
+ *  (Where it runs is ProjectSwitcher's note, beside these.) */
+function NewSessionNotes({ conversation }: { conversation: ConversationData }) {
+  const convId = conversation._id;
+  const { cfg, cloudLaunch, effort } = useLaunchModel(convId);
+  const contextMode = useInboxStore((s) => s.sessions[convId]?.stable_mode ?? null);
+  const definition = useLiveSessionMeta(convId)?.agentDefinition;
+  const { assigned } = useNewSessionBucket(convId);
+  const notes = [
+    cfg && cfg.efforts.length > 0 && !cloudLaunch ? effortNote(effort) : null,
+    contextNote(contextMode),
+    definition ? `as ${definition}` : null,
+    assigned?.name ?? null,
+  ].filter((n): n is string => !!n);
+  return <>{notes.map((n) => <span key={n} className="inline-flex items-center"><span className="px-1.5">{n}</span></span>)}</>;
+}
+
+/** The line's Options: the launch settings that rarely change, the existing
+ *  controls as they are. Where it runs is ProjectSwitcher's menu, portaled
+ *  into its row here while the popover is open. */
+function NewSessionOptions({ conversation, modeSlotRef }: {
+  conversation: ConversationData;
+  modeSlotRef: (el: HTMLElement | null) => void;
+}) {
+  const convId = conversation._id;
+  const { cfg, cloudLaunch } = useLaunchModel(convId);
+  const hasEffort = !!cfg && cfg.efforts.length > 0 && !cloudLaunch;
+  const hasDefinitions = useAgentDefinitions().length > 0;
+  const { hasBuckets } = useNewSessionBucket(convId);
+  // Starting a new project is offered before the session exists, and not for
+  // one already inside a project (NewSessionProjectToggle).
+  const projectOffered = useInboxStore((st) => !isConvexId(convId) && !st.sessions[convId]?.project_id);
+  const row = "contents [&>dt]:text-sol-text-dim [&>dt]:pr-3 [&>dt]:whitespace-nowrap";
+  // The Runs-in menu is ProjectSwitcher's, portaled in: inside this popover
+  // by the DOM but not by the React tree, so Radix reads a press on it, and
+  // the focus its menu takes, as outside. Neither closes Options.
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const keepOpen = (e: Event) => {
+    const t = e.target as Element | null;
+    if (t && (contentRef.current?.contains(t) || t.closest?.('[role="menu"]'))) e.preventDefault();
+  };
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type="button" className={`${LINE_PICK} ml-auto shrink-0`} title="Effort, where it runs, project, context and label">
+          <SlidersHorizontal className="w-3 h-3" />
+          Options
+        </button>
+      </PopoverTrigger>
+      <PopoverContent
+        ref={contentRef}
+        align="end"
+        className="w-80 max-w-[calc(100vw-1rem)] p-2 text-xs"
+        onPointerDownOutside={keepOpen}
+        onFocusOutside={keepOpen}
+        onCloseAutoFocus={(e) => { e.preventDefault(); restorePickerFocus(null); }}
+      >
+        <dl className="grid grid-cols-[auto_1fr] items-center gap-y-0.5 px-1">
+          {hasEffort && <div className={row}><dt>Effort</dt><dd><LaunchEffortPill conversationId={convId} /></dd></div>}
+          <div className={row}><dt>Runs in</dt><dd ref={modeSlotRef} className="flex flex-wrap items-center gap-1" /></div>
+          {hasDefinitions && <div className={row}><dt>Agent</dt><dd><AgentDefinitionPill conversationId={convId} variant="ghost" /></dd></div>}
+          {hasBuckets && <div className={row}><dt>Label</dt><dd className="px-2 py-1"><NewSessionBucketPill conversation={conversation} /></dd></div>}
+          {projectOffered && <div className={row}><dt>Project</dt><dd className="px-1 py-1"><NewSessionProjectToggle conversation={conversation} /></dd></div>}
+        </dl>
+        <div className="mt-2 border-t border-sol-border/50 px-1 pt-2">
+          <ErrorBoundary name="StableContextPicker" level="inline">
+            <StableContextPicker conversationId={convId} className="w-full min-w-0" />
+          </ErrorBoundary>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 /** The hosted assistant's intro (AssistantIntro), in place of the developer
  *  pickers. The composer this sits over (ConversationView and ComposeView
  *  both bridge it) takes a starter's request. */
@@ -1296,11 +1410,11 @@ function HostedComposeIntro() {
 export function NewSessionView({ conversation, agentControls, slots, role }: {
   conversation: ConversationData;
   agentControls?: NewSessionAgentControls;
-  // The new-session page (ConversationView): the host's composer foot and the
-  // space under the composer. Given, the launch pickers render in the foot
-  // and the context line below; null while a slot element hasn't mounted
-  // yet. Omitted (the compose popup), everything renders here above the
-  // host's input.
+  // The new-session page (ConversationView, and ComposeView's page layout):
+  // the host's composer foot and the space under the composer. Given, the
+  // launch pickers render as one line below (the foot is left alone); null
+  // while a slot element hasn't mounted yet. Omitted (the docked compose
+  // popup), everything renders here above the host's input.
   slots?: { foot: HTMLElement | null; below: HTMLElement | null };
   // The new-session page's recipient (ComposeRolePicker): picked, the request
   // goes to that role's standing session, which chooses project and agent, so
@@ -1333,6 +1447,10 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
   const [machineSlot, setMachineSlot] = useState<HTMLElement | null>(null);
   // Sub-slots inside the host's slots, so the pieces land in a fixed order.
   const [modeSlot, setModeSlot] = useState<HTMLElement | null>(null);
+  // The new-session line's folder and placement-note parts (ProjectSwitcher
+  // owns both).
+  const [folderSlot, setFolderSlot] = useState<HTMLElement | null>(null);
+  const [noteSlot, setNoteSlot] = useState<HTMLElement | null>(null);
   useMountEffect(() => {
     const onChord = (e: KeyboardEvent) => {
       // altChordDirection also releases ⌥←/⌥→ from a text caret (word jump).
@@ -1371,8 +1489,9 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
   const onlyHosted = useOnlyHostedAgent();
   const agentRow = !(hosted && onlyHosted);
 
-  const agentSwitcher = (compact: boolean) => (
+  const agentSwitcher = (compact: boolean, line = false) => (
     <AgentSwitcher
+      line={line}
       conversation={conversation}
       showWorkflow={ac.showWorkflow}
       onToggleWorkflow={ac.onToggleWorkflow}
@@ -1395,9 +1514,11 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
   );
 
   if (slots) {
-    // The new-session page: the question and the project chips here, right
-    // above the composer; the launch pickers in its foot; the context line,
-    // the label and this project's sessions under it.
+    // The new-session page: the message box, and under it one quiet line,
+    // "in littlebird · Claude · Mac Studio", each part opening its picker
+    // (the folder search opens over the composer). Effort, where it runs,
+    // context and label sit behind the line's Options, and the line names any
+    // of them set away from its default. The composer foot keeps attach only.
     return (
       <div ref={rootRef} className="flex flex-col items-center w-full">
         {role && !onlyHosted && (
@@ -1406,33 +1527,22 @@ export function NewSessionView({ conversation, agentControls, slots, role }: {
         {role?.picked ? null : <>
         {hosted ? <HostedComposeIntro /> : (
           <ErrorBoundary name="ProjectSwitcher" level="inline">
-            <ProjectSwitcher conversation={conversation} handleRef={projectsRef} machineSlot={machineSlot} headline modeSlot={modeSlot} />
+            <ProjectSwitcher conversation={conversation} handleRef={projectsRef} machineSlot={machineSlot} folderSlot={folderSlot} noteSlot={noteSlot} modeSlot={modeSlot} />
           </ErrorBoundary>
         )}
-        {slots.foot && createPortal(
-          <>
-            {agentRow && agentSwitcher(true)}
-            {!hosted && <div ref={setModeSlot} className="contents" />}
-            {!hosted && <span className="ml-2 inline-flex"><NewSessionProjectToggle conversation={conversation} /></span>}
-          </>,
-          slots.foot,
-        )}
-        {slots.below && !hosted && createPortal(
-          <>
-            {/* The strip tucked under the composer: which machine, what
-                context rides along, and the label. */}
-            <div className="mx-auto conv-col px-2 sm:px-4">
-              <div className="mx-4 flex flex-wrap items-start gap-x-3 gap-y-1 rounded-b-xl border border-t-0 border-sol-border/50 bg-sol-bg-alt/40 px-3 pt-1.5 pb-1.5">
-                <div ref={setMachineSlot} className="shrink-0 min-w-0 max-w-full" />
-                <ErrorBoundary name="StableContextPicker" level="inline">
-                  {/* 10rem is as narrow as the context line gets beside the
-                      machine chip; below it the line wraps under the chip. */}
-                  <StableContextPicker conversationId={conversation._id} className="flex-[1_1_10rem] min-w-0 pt-1" />
-                </ErrorBoundary>
-                <NewSessionBucketPill conversation={conversation} />
+        {slots.below && (agentRow || !hosted) && createPortal(
+          <div className="mx-auto conv-col px-2 sm:px-4">
+            <div className="mx-4 flex items-start gap-2 pt-1.5 text-xs text-sol-text-muted" data-new-session-line>
+              <div className={LINE_PARTS}>
+                {!hosted && <span ref={setFolderSlot} className="inline-flex items-center empty:hidden" />}
+                {agentRow && <span className="inline-flex items-center">{agentSwitcher(true, true)}</span>}
+                {!hosted && <span ref={setMachineSlot} className="inline-flex min-w-0 items-center empty:hidden" />}
+                {!hosted && <span ref={setNoteSlot} className="inline-flex items-center empty:hidden" />}
+                {!hosted && <NewSessionNotes conversation={conversation} />}
               </div>
+              {!hosted && <NewSessionOptions conversation={conversation} modeSlotRef={setModeSlot} />}
             </div>
-          </>,
+          </div>,
           slots.below,
         )}
         </>}

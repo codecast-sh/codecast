@@ -306,8 +306,9 @@ export function LaunchModelPill({ conversationId }: { conversationId: string }) 
   );
 }
 
-/** The new-session foot's effort menu. Hidden where the agent takes no effort
- *  from codecast (a cloud agent launch, a client without levels). */
+/** The new-session effort menu (the line's Options, beside an "Effort"
+ *  label). Hidden where the agent takes no effort from codecast (a cloud
+ *  agent launch, a client without levels). */
 export function LaunchEffortPill({ conversationId }: { conversationId: string }) {
   const { cfg, rowProps, cloudLaunch, effort } = useLaunchModel(conversationId);
   if (!cfg || cfg.efforts.length === 0 || cloudLaunch) return null;
@@ -315,7 +316,7 @@ export function LaunchEffortPill({ conversationId }: { conversationId: string })
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button type="button" className={FOOT_PICK} title="Effort for this session">
-          <span className={effort ? "capitalize" : "text-sol-text-dim"}>{effort ?? "effort"}</span>
+          <span className={effort ? "capitalize" : "text-sol-text-dim"}>{effort ?? "default"}</span>
           <Chevron />
         </button>
       </DropdownMenuTrigger>

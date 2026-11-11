@@ -10,6 +10,7 @@
  */
 
 import { deviceDisplayName, type CloudAgentLaunch, type CloudAgentProviderSpec } from "@codecast/shared/contracts";
+import { cloudAgentPlace } from "../lib/newSessionLine";
 import type { SessionMachine } from "../lib/sessionMachines";
 import { CloudAgentProblemNote, ConnectCloudAgentButton } from "./cloudAgents";
 import { cloudAgentUi } from "./cloudAgents/providerUi";
@@ -140,9 +141,6 @@ type CloudAgent = NonNullable<SessionModeTogglesProps["cloudAgent"]>;
 // its models), and the lane pills say how it is paid for.
 function cloudAgentLanes(cloudAgent: CloudAgent) {
   return (cloudAgent.lanes ?? []).filter((l) => l.lane);
-}
-function cloudAgentPlace(cloudAgent: CloudAgent) {
-  return cloudAgentLanes(cloudAgent).length > 1 ? `${cloudAgent.spec.vendor}'s cloud` : cloudAgent.spec.label;
 }
 
 /** While a cloud agent launch is on: its lane, launch options, and anything in its way. */
