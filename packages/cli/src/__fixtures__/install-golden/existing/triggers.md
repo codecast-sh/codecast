@@ -41,11 +41,11 @@ block by "everything to end of file" destroys this paragraph.
 
 Triggers run follow-up work later: checking CI, reviewing PRs, continuing a long refactor, reacting to events. Anything that should happen later, on a schedule or on an event goes through `cast trigger`, not a sleep loop, a background wait, or your harness's own wakeup, cron or loop tools: a trigger survives this process, shows on the dashboard, and wakes the right session.
 
-The prompt is the run's whole briefing, and people read it in the dashboard as markdown. One line suits a one-line job; anything bigger gets structure (goal, numbered steps, constraints). Pass `-` to read it from stdin.
+The prompt is the run's whole brief, shown as markdown. Use a line for a simple job, or a goal, steps and constraints. Pass `-` to read it from stdin.
 
 **Where a run happens.** A follow-up that continues this work and fires once or a few times runs here, the default: each firing arrives as a new turn with the full history. A standing duty that repeats (a monitor, a digest, a sweep) gets `--spawn`, a fresh session per run, because an inline repeat reloads this whole history every time and buries the thread. A fresh run knows only its prompt plus the previous run's summary, so write everything it needs into the prompt.
 
-**Where results go.** `--spawn` runs nest under the session that armed them. A once trigger posts its result here without waking you; a repeating one posts nothing on a clean run. You are woken if a run fails, dies without reporting, or completes `--needs-attention`. A fired run ends with `cast trigger complete <id> --summary -` (stdin): the summary is what the human reads, so state the outcome, and add `--needs-attention` only when they must read or act.
+**Where results go.** `--spawn` runs are this session's workers, never independent inbox threads. You own their follow-up. Once runs post here quietly; repeating runs stay quiet unless they fail, die without reporting, or complete `--needs-attention`. Each run ends with `cast trigger complete <id> --summary -` (stdin). Keep findings on existing work, not new report-only tasks. `--needs-attention` wakes the parent to handle a required human action; it never promotes the worker into the inbox.
 
 ```bash
 cast trigger add "Check if CI is green on main" --in 30m

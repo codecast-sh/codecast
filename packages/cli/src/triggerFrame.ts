@@ -82,7 +82,7 @@ export function buildTriggerFrame(task: any, now: number): string {
     parts.push(`- Refer to this trigger as ${task.short_id} in anything you write — that renders as a rich trigger reference. Never paste its 32-char id into prose.`);
   }
   parts.push(`- To look again later (a check that is not ready yet), add --again-in 30m (or --again-at 06:00) to the completion: the trigger fires once more then. A running trigger cannot be rescheduled with cast trigger update.`);
-  parts.push(`- The completion is this run's declaration of who acts next. A clean one says nobody: the run stays out of the user's inbox and the summary carries the outcome. If you found something the user must read or act on, add --needs-attention: that declares the run blocked on them and keeps it in their inbox.`);
+  parts.push(`- The completion is this run's declaration of who acts next. A clean one says nobody: the run stays out of the user's inbox and the summary carries the outcome. If a human must act, add --needs-attention: for a spawned worker this wakes its parent, which handles the ask. The worker stays nested under that parent; do not create an independent inbox thread.`);
   const lifecycle = triggerLifecycleInstructions(task);
   if (lifecycle) parts.push(lifecycle);
   parts.push('- To set a follow-up trigger: cast trigger add "..." --in <time>');
