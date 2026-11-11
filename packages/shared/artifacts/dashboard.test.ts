@@ -566,3 +566,13 @@ describe("tokens in written words", () => {
     expect(d).toContain("alert=above 10");
   });
 });
+
+describe("badly written blocks", () => {
+  test("a field of the wrong shape is coerced, never thrown on", () => {
+    const daily = result(["day", "opened", "merged"], [["d1", 1, 2], ["d2", 3, 4]]);
+    const ev = evaluateChart({ query: q, x: "day", y: ["opened", "merged"] as any, chart: "bar" }, daily);
+    expect(ev.state === "ok" && ev.series.map((s) => s.name)).toEqual(["opened", "merged"]);
+    expect(evaluateTable({ query: q, columns: 5 as any, sort: {} as any, limit: "x" as any }, daily).state).toBe("problem");
+    expect(evaluateKpi({ query: q, field: ["opened"] as any, where: "bad" as any }, daily)).toMatchObject({ state: "ok", value: 4 });
+  });
+});

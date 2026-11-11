@@ -12,7 +12,7 @@
 
 import type { Json } from "./core";
 import { WHERE_OPS, cellMatches, cellNumber, num, whereClauses, type Where, type WhereOp } from "./dashboardWhere";
-import { textProblems, type TextProblem } from "./dashboardWords";
+import { textProblems } from "./dashboardWords";
 
 export * from "./dashboardWhere";
 export * from "./dashboardWords";
@@ -274,6 +274,37 @@ function round(n: number): number {
   return Math.round(n * 1e6) / 1e6;
 }
 
+// ── reading a block's fields ──
+
+const TEXT_FIELDS = ["field", "label", "compare", "good", "x", "y", "series", "columns", "sort", "chart", "agg", "format"] as const;
+
+/**
+ * A block as the evaluators read it. Anyone can write an element (an agent's
+ * raw `apply`, an older client), so a field of the wrong shape is coerced, never
+ * trusted: a list becomes "a,b", a number its text, an object nothing. One
+ * badly written block must not take down a page of good ones.
+ */
+function shaped<T extends object>(block: T): T {
+  const b = block as Record<string, unknown>;
+  let out: Record<string, unknown> | null = null;
+  for (const f of TEXT_FIELDS) {
+    const v = b[f];
+    if (v === undefined || v === null || typeof v === "string") continue;
+    out ??= { ...b };
+    out[f] = Array.isArray(v) ? v.map(String).join(",") : typeof v === "number" || typeof v === "boolean" ? String(v) : undefined;
+  }
+  if (b.limit !== undefined && typeof b.limit !== "number") {
+    out ??= { ...b };
+    const n = Number(b.limit);
+    out.limit = Number.isFinite(n) && n > 0 ? n : undefined;
+  }
+  if (b.where !== undefined && (typeof b.where !== "object" || b.where === null || Array.isArray(b.where))) {
+    out ??= { ...b };
+    out.where = undefined;
+  }
+  return (out ?? b) as T;
+}
+
 // ── KPI ──
 
 export type KpiBlock = {
@@ -302,7 +333,8 @@ export type KpiEval =
   | { state: "loading" }
   | { state: "unbound"; display: string };
 
-export function evaluateKpi(block: KpiBlock, result: DataResult | undefined, scope?: Where): KpiEval {
+export function evaluateKpi(raw: KpiBlock, result: DataResult | undefined, scope?: Where): KpiEval {
+  const block = shaped(raw);
   const q = blockQuery(block);
   if (!q) return { state: "unbound", display: block.value === undefined || block.value === null ? "–" : formatValue(block.value, block.format) };
   if (!result || (!result.refreshed_at && !result.error)) return { state: "loading" };
@@ -481,7 +513,8 @@ export type ChartEval =
   | { state: "loading" }
   | { state: "unbound" };
 
-export function evaluateChart(block: ChartBlock, result: DataResult | undefined, scope?: Where): ChartEval {
+export function evaluateChart(raw: ChartBlock, result: DataResult | undefined, scope?: Where): ChartEval {
+  const block = shaped(raw);
   if (!blockQuery(block)) return { state: "unbound" };
   if (!result || (!result.refreshed_at && !result.error)) return { state: "loading" };
   if (result.error && !result.refreshed_at) return { state: "problem", problem: result.error };
@@ -553,7 +586,8 @@ export function evaluateChart(block: ChartBlock, result: DataResult | undefined,
  * when the chart splits by a column). A running total's point is the rows
  * added at that x, the step the line took there.
  */
-export function chartPointRows(block: ChartBlock, result: DataResult | undefined, x: string, series?: string, scope?: Where): number[] {
+export function chartPointRows(raw: ChartBlock, result: DataResult | undefined, x: string, series?: string, scope?: Where): number[] {
+  const block = shaped(raw);
   if (!result) return [];
   const filtered = filterRows(result, block.where, scope);
   if ("problem" in filtered) return [];
@@ -573,7 +607,8 @@ export type TableEval =
   | { state: "loading" }
   | { state: "unbound" };
 
-export function evaluateTable(block: TableBlock, result: DataResult | undefined, scope?: Where): TableEval {
+export function evaluateTable(raw: TableBlock, result: DataResult | undefined, scope?: Where): TableEval {
+  const block = shaped(raw);
   if (!blockQuery(block)) return { state: "unbound" };
   if (!result || (!result.refreshed_at && !result.error)) return { state: "loading" };
   if (result.error && !result.refreshed_at) return { state: "problem", problem: result.error };
@@ -732,28 +767,3 @@ export function sheetTable(values: Cell[][], header: boolean, firstCol = 1): { c
   return { columns, rows: values.slice(1) };
 }
 
-// ── checking words against the data ──
-
-/** A KPI lookup for text checks: evaluate the referenced block over its own result, under the dashboard's filter. */
-export function kpiResolver(get: (key: string) => Record<string, unknown> | undefined, resultOf: (block: Record<string, unknown>) => DataResult | undefined, scope?: Where): NonNullable<CheckContext["kpi"]> {
-  return (key) => {
-    const b = get(key);
-    if (!b || b.kind !== "kpi") return undefined;
-    return { title: typeof b.title === "string" ? b.title : undefined, ev: evaluateKpi(b as KpiBlock, resultOf(b), scope) };
-  };
-}
-
-/** Story words that disagree with the data or trace to nothing: the headline, the summary, and each block's story title and line. */
-export function storyProblems(layout: Record<string, unknown> | undefined, blocks: readonly Record<string, unknown>[], kpi: NonNullable<CheckContext["kpi"]>): Array<{ key: string; field: string } & TextProblem> {
-  const out: Array<{ key: string; field: string } & TextProblem> = [];
-  const look = (key: string, field: string, v: unknown) => {
-    if (typeof v === "string" && v.trim()) for (const p of textProblems(v, kpi)) out.push({ key, field, ...p });
-  };
-  look("layout", "headline", layout?.headline);
-  look("layout", "summary", layout?.summary);
-  for (const b of blocks) {
-    look(String(b.key), "say_title", b.say_title);
-    look(String(b.key), "say", b.say);
-  }
-  return out;
-}

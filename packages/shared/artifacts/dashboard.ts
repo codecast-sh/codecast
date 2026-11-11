@@ -14,6 +14,7 @@ import { readAlert, readSchedule } from "./dashboardWatch";
 
 export * from "./dashboardData";
 export * from "./dashboardWatch";
+export * from "./dashboardStory";
 
 export const BLOCK_KINDS = ["kpi", "chart", "table", "text", "section"] as const;
 export type BlockKind = (typeof BLOCK_KINDS)[number];
