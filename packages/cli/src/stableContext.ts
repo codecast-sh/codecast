@@ -244,6 +244,11 @@ function dirBlockFiles(key: string, dir = stableCacheDir()) {
   return { text: path.join(dir, `rendered-dir-${key}.txt`), meta: path.join(dir, `rendered-dir-${key}.json`) };
 }
 
+function hasDirBlock(opts: BuildStableContextOptions): boolean {
+  const key = opts.cwd ? dirBlockKey(opts.mode, opts.global, opts.cwd) : null;
+  return !key || fs.existsSync(dirBlockFiles(key, opts.cacheDir).text);
+}
+
 /** Render a folder's block from its cache for terminal starts to print with no process to start. */
 async function writeDirBlock(config: StableContextConfig, opts: BuildStableContextOptions): Promise<void> {
   if (!opts.cwd) return;
@@ -640,7 +645,7 @@ export async function runStableContextHook(
   // conversation registers), and a refresh of the cache this start read.
   startStableContextAfter({
     record: { conversation_id: launch.conversationId, session_id: payload.session_id, data: built.data },
-    ...(built.stale ? { refresh: buildOpts } : {}),
+    ...(built.stale || !hasDirBlock(buildOpts) ? { refresh: buildOpts } : {}),
   });
 }
 
