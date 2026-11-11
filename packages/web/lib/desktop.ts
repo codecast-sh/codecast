@@ -8,6 +8,7 @@ import { extractDeepLinkIntent, parseDesktopDeepLinkPath } from "./desktopHandof
 import { cmpVersions, parseShellVersion } from "./desktopFloor";
 import { agentAlertsSuppressed, deliverAlert, focusedViewChanged, focusedWindowShows, installFocusHold } from "./notificationDelivery";
 import type { GuestMedia } from "./calls/callMedia";
+import { whenInputQuiet } from "./inputQuiet";
 import type { MeetingDetectConfig, MeetingDetectMode, MeetingOffer } from "./desktopMeetings";
 
 declare global {
@@ -1582,6 +1583,85 @@ export function attachTitlebarHead(el: HTMLElement, corner: number = TRAFFIC_LIG
     window.removeEventListener("resize", onResize);
     el.classList.remove("titlebar-head", "titlebar-head--edge", "titlebar-head--under");
     el.style.removeProperty("--titlebar-edge-inset");
+  };
+}
+
+// The tallest element that still reads as a row rather than a region.
+const CORNER_ROW_MAX_H = 72;
+const CHECK_GAP_MS = 500;
+
+/** The element a hit in the zen corner belongs to: the outermost ancestor that
+ *  is still a single row starting in the titlebar band (a page header), or,
+ *  when the hit is page content with no header above it, its scroll region,
+ *  which then drops below the corner. Null for overlays and empty background. */
+function cornerOccupant(hit: Element): { el: HTMLElement; under: boolean } | null {
+  let row: HTMLElement | null = null;
+  for (let n: HTMLElement | null = hit as HTMLElement; n && n !== document.body; n = n.parentElement) {
+    if (n.matches("[data-cc-shell]")) break;
+    const style = getComputedStyle(n);
+    if (style.position === "fixed") return null;
+    if (/(auto|scroll)/.test(style.overflowY) && n.scrollHeight > n.clientHeight) return { el: n, under: true };
+    const r = n.getBoundingClientRect();
+    if (r.top >= TITLEBAR_H || r.height > CORNER_ROW_MAX_H) break;
+    row = n;
+  }
+  return row ? { el: row, under: false } : null;
+}
+
+/**
+ * Zen's safety net for the corner. Each surface should mark its own top row
+ * (useTitlebarHead), since it knows which element paints that row; whatever
+ * still lands under the corner (a page that never opted in, a pane opened
+ * inside another) is found here by hit-testing the corner and given the same
+ * treatment, so nothing ever renders under the traffic lights or the zen
+ * controls. Re-checked when the DOM settles after a change and on resize,
+ * waiting out typing (lib/inputQuiet).
+ */
+export function guardZenCorner(corner: number, controls: Element): () => void {
+  let adopted: { el: HTMLElement; detach: () => void } | null = null;
+  let pending: ReturnType<typeof setTimeout> | null = null;
+  let cancelQuiet: (() => void) | null = null;
+  // data-zen-adopted names the element in devtools: a page that should claim
+  // its own top row with useTitlebarHead.
+  const release = () => { if (adopted) { adopted.detach(); delete adopted.el.dataset.zenAdopted; } adopted = null; };
+  const check = () => {
+    pending = null;
+    if (adopted && !adopted.el.isConnected) release();
+    // Probe level with the lights, across the corner: at the edge, mid-way,
+    // and just inside its right end where the zen controls sit.
+    for (const x of [4, corner / 2, corner - 6]) {
+      const hit = document.elementsFromPoint(x, TRAFFIC_LIGHTS_H - 6).find((e) => !controls.contains(e));
+      if (!hit || hit.closest(".titlebar-head")) continue;
+      const found = cornerOccupant(hit);
+      if (!found || found.el === adopted?.el) continue;
+      release();
+      const { el, under } = found;
+      if (under) {
+        el.classList.add("titlebar-head--under");
+        adopted = { el, detach: () => el.classList.remove("titlebar-head--under") };
+      } else {
+        adopted = { el, detach: attachTitlebarHead(el, corner) };
+      }
+      el.dataset.zenAdopted = under ? "under" : "row";
+      return;
+    }
+  };
+  // At most one hit test per CHECK_GAP_MS however fast the DOM churns (a
+  // streaming transcript mutates continuously).
+  const schedule = () => {
+    if (pending) return;
+    pending = setTimeout(() => { cancelQuiet = whenInputQuiet(check, 2000); }, CHECK_GAP_MS);
+  };
+  schedule();
+  const mo = new MutationObserver(schedule);
+  mo.observe(document.body, { childList: true, subtree: true });
+  window.addEventListener("resize", schedule);
+  return () => {
+    mo.disconnect();
+    if (pending) clearTimeout(pending);
+    cancelQuiet?.();
+    window.removeEventListener("resize", schedule);
+    release();
   };
 }
 

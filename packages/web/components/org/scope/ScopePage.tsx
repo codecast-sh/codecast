@@ -26,6 +26,7 @@ import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useRoleBrief, useScopeSummary, type ScopeRef } from "../../../hooks/useScopeQueries";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { useTitlebarHead } from "../../../hooks/useTitlebarHead";
 import { cn } from "../../../lib/utils";
 import { ShortcutTooltip } from "../../KeyboardShortcutsHelp";
 import { canEditRole, queryProblem, roleStanding, scopeQueryRef, scopeSeatOf, stateLineBesideName } from "../../../lib/scopePage";
@@ -74,6 +75,9 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   const router = useRouter();
   const searchParams = useSearchParams();
   const { layout: panelLayout, phone, measureRef } = usePanelLayout();
+  // In zen the header is the window's top row: it clears the traffic lights
+  // and the zen corner, and drags the window (hooks/useTitlebarHead).
+  const titlebarRef = useTitlebarHead<HTMLElement>();
   const now = useCoarseNow(30_000);
   const s = useTrackedStore([(st) => st.currentUser?._id]);
   const meId = s.currentUser?._id ? String(s.currentUser._id) : null;
@@ -299,7 +303,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
       {/* header: one row. The face, the name, its state line, who it reports
           to; the rare controls (pause, retire) sit behind the menu, and the
           board is an icon. The composer below is Talk. */}
-      <header data-scope-head className={cn("scope-head-cq shrink-0 border-b", phone ? "px-2.5 py-1.5" : "px-4 py-1.5")} style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: stateMeta ? `linear-gradient(180deg, color-mix(in srgb, ${stateMeta.color} 5%, var(--sol-bg)) 0%, var(--sol-bg) 100%)` : undefined }}>
+      <header ref={titlebarRef} data-scope-head className={cn("scope-head-cq shrink-0 border-b", phone ? "px-2.5 py-1.5" : "px-4 py-1.5")} style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: stateMeta ? `linear-gradient(180deg, color-mix(in srgb, ${stateMeta.color} 5%, var(--sol-bg)) 0%, var(--sol-bg) 100%)` : undefined }}>
         <div className="flex items-center gap-2 min-w-0">
           {session?.onBack ? (
             <button type="button" onClick={session.onBack} className={HEAD_ICON} style={{ color: "var(--sol-text-muted)" }} aria-label="Back to the inbox" data-scope-back="inbox">

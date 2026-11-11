@@ -4,13 +4,16 @@
 // top bar, so the same control moves to the window's top-left corner (right of
 // the traffic lights on the desktop) and stays there on every page. The arrows
 // say what pressing does to the chrome: inward folds it away, outward brings it
-// back. Page top rows clear the corner (hooks/useTitlebarHead).
+// back. Page top rows clear the corner (hooks/useTitlebarHead), and the corner
+// clears anything that did not (guardZenCorner).
 
 import { Maximize2, Minimize2 } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useShortcuts } from "../shortcuts";
 import { useTipActions } from "../tips";
-import { ZEN_EXIT_W, zenToggleLeft } from "../lib/desktop";
+import { useState } from "react";
+import { ZEN_EXIT_W, guardZenCorner, zenCornerWidth, zenToggleLeft } from "../lib/desktop";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { TopbarButton } from "./TopbarButton";
 import { TeamSwitcher } from "./TeamSwitcher";
@@ -59,8 +62,11 @@ export function ZenToggle({ labelled = false }: { labelled?: boolean }) {
  *  only two places the switcher otherwise lives, so without it here a switch
  *  means leaving zen first. */
 export function ZenCorner() {
+  // Whatever lands under the corner without having claimed it gets cleared.
+  const [el, setEl] = useState<HTMLDivElement | null>(null);
+  useWatchEffect(() => el && zenCornerWidth() > 0 ? guardZenCorner(zenCornerWidth(), el) : undefined, [el]);
   return (
-    <div data-zen-corner data-flyout className="fixed top-1 z-[110] hidden items-center gap-1.5 md:flex" style={{ left: zenToggleLeft() }}>
+    <div ref={setEl} data-zen-corner data-flyout className="fixed top-1 z-[110] hidden items-center gap-1.5 md:flex" style={{ left: zenToggleLeft() }}>
       <ZenToggle labelled />
       <ErrorBoundary name="TeamSwitcher" level="inline">
         <TeamSwitcher variant="corner" />
