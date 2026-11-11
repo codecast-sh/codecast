@@ -2436,7 +2436,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       className={paletteClass}>
         {contextLabel && !TARGETLESS_MODES.has(actionMode) && (
           <div className="px-4 pt-3 pb-0">
-            <div className="text-xs font-mono text-sol-text-dim truncate">{contextLabel}</div>
+            <div className="text-xs font-mono modern:[font-family:inherit] text-sol-text-dim truncate">{contextLabel}</div>
           </div>
         )}
         <ActionSubmenu

@@ -41,12 +41,12 @@ export function ModernDetailSplit({ list, closeHref, children }: { list: ReactNo
   }, [active, close]);
 
   return (
-    <div className="cc-split" data-cc-split={hasDetail ? "open" : "list"}>
-      <div className="cc-split__list cq-container">
+    <div className="cc-dsplit" data-cc-split={hasDetail ? "open" : "list"}>
+      <div className="cc-dsplit__list cq-container">
         <DetailListCtx.Provider value={hasDetail}>{list}</DetailListCtx.Provider>
       </div>
       {hasDetail && (
-        <div className="cc-split__detail" data-cc-split-detail>
+        <div className="cc-dsplit__detail" data-cc-split-detail>
           <div className="min-h-0 flex-1">{children}</div>
         </div>
       )}

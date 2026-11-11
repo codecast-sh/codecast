@@ -703,13 +703,13 @@ export function ConversationAgeMenuItems({ startedAt, endedAt, messageCount }: {
   return (
     <>
       {startedAt && (
-        <DropdownMenuItem disabled className="tabular-nums">
+        <DropdownMenuItem disabled className="tabular-nums modern:text-sol-text-muted modern:data-[disabled]:opacity-100">
           <span className="truncate">{formatFullTimestamp(startedAt)}</span>
           <span className="ml-auto pl-3 text-sol-text-dim">{formatDuration(startedAt, endedAt)}</span>
         </DropdownMenuItem>
       )}
       {!!messageCount && (
-        <DropdownMenuItem disabled className="tabular-nums">
+        <DropdownMenuItem disabled className="tabular-nums modern:text-sol-text-muted modern:data-[disabled]:opacity-100">
           {messageCount.toLocaleString()} {messageCount === 1 ? "message" : "messages"}
         </DropdownMenuItem>
       )}

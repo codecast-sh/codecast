@@ -7995,3 +7995,18 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
 :where(.modern-style) span:is(.opacity-50, .opacity-60, .opacity-70, .opacity-75, .opacity-80):where(:not([class*="bg-"]):not(.absolute):not(.fixed)) {
   opacity: 1;
 }
+
+/* ---- MODERN · OPENED STATES ------------------------------------------------
+   Found by opening every menu, picker and panel in Modern (2026-11-11).
+   Simple view fades what it calls secondary to 55%: in the conversation head
+   that is the model name and the machine and terminal pills, which are
+   controls, and at 55% their marks fell to about 2:1 on the head's ground.
+   They already wear the quiet tokens; the fade goes. */
+.modern-style .simple-view [data-simple-dim] {
+  opacity: 1;
+}
+/* The pinned message hangs from the head with no strip of transcript showing
+   between the two. */
+.modern-style [data-cc-conversation] > div:has(> .conv-col > [data-sv-sticky]) {
+  padding-top: 0;
+}

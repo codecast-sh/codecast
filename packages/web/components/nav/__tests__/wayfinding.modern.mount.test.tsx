@@ -204,15 +204,15 @@ describe("Classic keeps its own", () => {
   test("a list's open item covers the list in Classic; Modern lays them side by side when wide", async () => {
     const page = <DetailSplitLayout list={<div data-list>list</div>} closeHref="/tasks"><div data-detail>detail</div></DetailSplitLayout>;
     await mount("/tasks/ct-1", page, "classic");
-    expect(host.querySelector(".cc-split")).toBeNull();
+    expect(host.querySelector(".cc-dsplit")).toBeNull();
     expect(host.querySelector("[data-list]")!.parentElement!.hasAttribute("inert")).toBe(true);
     await act(() => root!.unmount());
     root = null;
     await mount("/tasks/ct-1", page);
-    const split = host.querySelector(".cc-split")!;
+    const split = host.querySelector(".cc-dsplit")!;
     expect(split.getAttribute("data-cc-split")).toBe("open");
-    expect(split.querySelector(".cc-split__list [data-list]")).not.toBeNull();
-    expect(split.querySelector(".cc-split__detail [data-detail]")).not.toBeNull();
+    expect(split.querySelector(".cc-dsplit__list [data-list]")).not.toBeNull();
+    expect(split.querySelector(".cc-dsplit__detail [data-detail]")).not.toBeNull();
   });
 
   test("Esc on an open item in Modern goes back along the trail: to the conversation it was opened from", async () => {

@@ -1087,7 +1087,7 @@ function AgentSwitcher({ conversation, showWorkflow, onToggleWorkflow, selectedW
                 ))}
               </div>
               {!hosted && launch.cfg && (
-                <div className="w-64 p-1 border-l border-sol-border/40 max-h-[60vh] overflow-y-auto">
+                <div className="w-64 modern:w-80 p-1 border-l border-sol-border/40 max-h-[60vh] overflow-y-auto">
                   <ModelEffortRows {...launch.rowProps} part="model" />
                 </div>
               )}

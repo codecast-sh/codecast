@@ -6,7 +6,7 @@
  * takes focus, and its scroll is kept for the return). From 1000px the list
  * is a column beside the item, its open row lit by the list itself
  * (GenericListView activeItemId). */
-.cc-split {
+.cc-dsplit {
   container-type: inline-size;
   position: relative;
   display: flex;
@@ -14,13 +14,13 @@
   overflow: hidden;
 }
 
-.cc-split__list {
+.cc-dsplit__list {
   flex: 1 1 auto;
   min-width: 0;
   height: 100%;
 }
 
-.cc-split__detail {
+.cc-dsplit__detail {
   position: absolute;
   inset: 0;
   z-index: 30;
@@ -29,18 +29,18 @@
   background: var(--sol-bg);
 }
 
-.cc-split[data-cc-split="open"] > .cc-split__list {
+.cc-dsplit[data-cc-split="open"] > .cc-dsplit__list {
   visibility: hidden;
 }
 
 @container (min-width: 1000px) {
-  .cc-split[data-cc-split="open"] > .cc-split__list {
+  .cc-dsplit[data-cc-split="open"] > .cc-dsplit__list {
     visibility: visible;
     flex: 0 0 clamp(300px, 32%, 400px);
     border-right: 1px solid var(--sol-border);
   }
 
-  .cc-split[data-cc-split="open"] > .cc-split__detail {
+  .cc-dsplit[data-cc-split="open"] > .cc-dsplit__detail {
     position: relative;
     inset: auto;
     z-index: auto;

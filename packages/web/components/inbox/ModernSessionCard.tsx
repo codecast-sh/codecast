@@ -286,7 +286,7 @@ export function ModernSessionCardView({
       data-mc-unread={unread ? "true" : undefined}
       {...dragProps}
       onContextMenu={onCardContextMenu ? (e) => onCardContextMenu(e, session, isForeignSession) : undefined}
-      className={`group relative overflow-hidden transition-[opacity,background-color] duration-150 ${isDraggingCard ? "opacity-35" : ""} ${isDragOver ? "outline outline-1 -outline-offset-1 outline-[color:var(--sol-cyan)]" : ""} ${isSetAside ? "opacity-70 hover:opacity-100" : ""} ${isParentActive && !isActive ? "mc-parent-active" : ""} ${session.assigned_ping ? "mc-handoff" : ""}`}
+      className={`group relative overflow-hidden transition-[opacity,background-color] duration-150 ${isDraggingCard ? "opacity-35" : ""} ${isDragOver ? "outline outline-1 -outline-offset-1 outline-[color:var(--sol-cyan)]" : ""} ${isSetAside ? "mc-set-aside" : ""} ${isParentActive && !isActive ? "mc-parent-active" : ""} ${session.assigned_ping ? "mc-handoff" : ""}`}
     >
       {forkColorKey && <ForkCorner colorKey={forkColorKey} />}
       {unread && <span data-mc-unread-bar aria-hidden className="absolute left-0 top-2 bottom-2 w-[2px] rounded-r-full bg-sol-cyan" />}
@@ -310,7 +310,7 @@ export function ModernSessionCardView({
             title={displayTitle}
             className={`min-w-0 flex-1 ${nested ? "text-ui" : "text-body"} text-sol-text`}
             nameClassName={unread ? "font-semibold" : "font-medium"}
-            titleClassName={`${unread ? "font-semibold" : "font-medium"} text-sol-text ${isSlashCommand ? "font-mono" : ""}`}
+            titleClassName={`${unread ? "font-semibold" : isSetAside ? "font-normal" : "font-medium"} ${isSetAside ? "text-sol-text-muted" : "text-sol-text"} ${isSlashCommand ? "font-mono" : ""}`}
           />
           <span className="flex shrink-0 items-center gap-1.5">
             {line.reason && <span data-mc-compact-reason className={`hidden max-w-[9rem] truncate text-meta ${meta.text}`}>{line.reason}</span>}
