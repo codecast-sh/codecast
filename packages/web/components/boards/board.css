@@ -13,6 +13,16 @@
   --board-ink: #22211d;
   --board-on-solid: #fff;
   --board-chrome-shadow: 0 1px 2px rgb(0 0 0 / 0.12), 0 8px 22px -8px rgb(0 0 0 / 0.35);
+  /* Sticky paper per color. Dark themes wash the theme color into paper; light themes use clear pastels (a theme color mixed into white turns muddy). */
+  --board-sticky-yellow: color-mix(in srgb, var(--sol-yellow) var(--board-sticky-mix), var(--board-paper));
+  --board-sticky-orange: color-mix(in srgb, var(--sol-orange) var(--board-sticky-mix), var(--board-paper));
+  --board-sticky-red: color-mix(in srgb, var(--sol-red) var(--board-sticky-mix), var(--board-paper));
+  --board-sticky-pink: color-mix(in srgb, var(--sol-magenta) var(--board-sticky-mix), var(--board-paper));
+  --board-sticky-violet: color-mix(in srgb, var(--sol-violet) var(--board-sticky-mix), var(--board-paper));
+  --board-sticky-blue: color-mix(in srgb, var(--sol-blue) var(--board-sticky-mix), var(--board-paper));
+  --board-sticky-cyan: color-mix(in srgb, var(--sol-cyan) var(--board-sticky-mix), var(--board-paper));
+  --board-sticky-green: color-mix(in srgb, var(--sol-green) var(--board-sticky-mix), var(--board-paper));
+  --board-sticky-gray: color-mix(in srgb, var(--sol-text-dim) var(--board-sticky-mix), var(--board-paper));
   position: relative;
   width: 100%;
   height: 100%;
@@ -26,6 +36,17 @@
   contain: strict;
   container-type: size;
   container-name: board;
+}
+html.light .board-root {
+  --board-sticky-yellow: #ffe68f;
+  --board-sticky-orange: #ffd3a6;
+  --board-sticky-red: #ffc4bd;
+  --board-sticky-pink: #ffcbe5;
+  --board-sticky-violet: #ddd0ff;
+  --board-sticky-blue: #c9e0ff;
+  --board-sticky-cyan: #bdeef0;
+  --board-sticky-green: #c9efc1;
+  --board-sticky-gray: #e4e4e1;
 }
 .board-root.board-tool-hand,
 .board-root[data-space] { cursor: grab; }
@@ -305,7 +326,7 @@
   background: var(--sol-card);
   box-shadow: 0 0 0 1.5px var(--sol-blue), var(--board-chrome-shadow);
   color: var(--sol-text);
-  font-size: 10.5px;
+  font-size: var(--fs-mark);
   font-weight: 650;
   display: flex;
   align-items: center;
@@ -320,7 +341,7 @@
   top: -5px;
   right: -7px;
   font-style: normal;
-  font-size: 9.5px;
+  font-size: var(--fs-mark);
   min-width: 15px;
   height: 15px;
   padding: 0 3px;
@@ -494,13 +515,13 @@
   border-radius: 15px 15px 15px 3px;
   background: var(--sol-blue);
   color: #fff;
-  font-size: 10.5px;
+  font-size: var(--fs-mark);
   font-weight: 650;
   display: flex;
   align-items: center;
   justify-content: center;
 }
-.board-prompt-avatar.is-small { width: 22px; height: 22px; font-size: 9px; border-radius: 11px; }
+.board-prompt-avatar.is-small { width: 22px; height: 22px; font-size: var(--fs-mark); border-radius: 11px; }
 .board-prompt-card {
   width: min(400px, calc(100cqw - 60px));
   background: var(--sol-card);

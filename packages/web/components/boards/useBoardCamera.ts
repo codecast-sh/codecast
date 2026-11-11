@@ -12,6 +12,8 @@ export type Cam = { x: number; y: number; z: number };
 export const ZOOM_MIN = 0.1;
 export const ZOOM_MAX = 4;
 const GRID = 24;
+/** The smallest zoom an opening frame uses; stickies still read at it. */
+const READABLE_Z = 0.4;
 const clampZ = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
 
 function storageKey(docId: string) {
@@ -147,10 +149,16 @@ export function useBoardCamera(docId: string) {
     glide(zoomAround(cam.current, factor, center));
   }, [glide]);
 
-  const fit = useCallback((box: Box | null, opts?: { instant?: boolean; maxZ?: number }) => {
+  const fit = useCallback((box: Box | null, opts?: { instant?: boolean; maxZ?: number; minReadable?: boolean }) => {
     const root = rootRef.current;
     if (!root) return;
-    const target = box ? fitCam(box, root.clientWidth, root.clientHeight, fitMargin(root.clientWidth, root.clientHeight), opts?.maxZ ?? 1) : { x: root.clientWidth / 2, y: root.clientHeight / 2, z: 1 };
+    const W = root.clientWidth, H = root.clientHeight;
+    let target = box ? fitCam(box, W, H, fitMargin(W, H), opts?.maxZ ?? 1) : { x: W / 2, y: H / 2, z: 1 };
+    // A narrow pane (a phone, a split) would fit a big board at an unreadable size: open at half size on its top-left instead.
+    if (box && opts?.minReadable && W < 700 && target.z < READABLE_Z) {
+      const m = fitMargin(W, H);
+      target = { z: READABLE_Z, x: m - box.x * READABLE_Z, y: m - box.y * READABLE_Z };
+    }
     if (opts?.instant) set(target);
     else glide(target);
   }, [glide, set]);

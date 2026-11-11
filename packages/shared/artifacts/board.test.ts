@@ -16,6 +16,8 @@ import {
   simplifyStroke,
   snapBox,
   stickyFontSize,
+  BOARD_TEMPLATES,
+  BOARD_VERBS,
 } from "./board";
 
 function el(key: string, kind: string, fields: Record<string, any>): ArtifactElement {
@@ -315,5 +317,139 @@ describe("clearOffset", () => {
     const o = clearOffset({ x: 0, y: 0, w: 100, h: 100 }, [{ x: 0, y: 0, w: 100, h: 100 }]);
     const moved = { x: o.x, y: o.y, w: 100, h: 100 };
     expect(moved.x >= 124 || moved.y >= 124 || moved.x <= -124 || moved.y <= -124).toBe(true);
+  });
+});
+
+describe("elbow connectors", () => {
+  const box = (key: string, x: number, y: number, w = 100, h = 60) => ({ key, kind: "shape", rev: 1, x, y, w, h }) as any;
+  const axisAligned = (pts: { x: number; y: number }[]) => pts.every((p, i) => i === 0 || Math.abs(p.x - pts[i - 1].x) < 0.01 || Math.abs(p.y - pts[i - 1].y) < 0.01);
+  test("side by side boxes join with a straight run", () => {
+    const a = box("a", 0, 0), b = box("b", 300, 0);
+    const g = connectorGeometry({ key: "c", kind: "connector", rev: 1, from: "a", to: "b", curve: "elbow" } as any, (k) => ({ a, b } as any)[k])!;
+    expect(g.points!.length).toBe(2);
+    expect(g.points![0].x).toBeCloseTo(104);
+    expect(g.points![1].x).toBeCloseTo(296);
+  });
+  test("offset boxes route with right angles only", () => {
+    const a = box("a", 0, 0), b = box("b", 300, 200);
+    const g = connectorGeometry({ key: "c", kind: "connector", rev: 1, from: "a", to: "b", curve: "elbow" } as any, (k) => ({ a, b } as any)[k])!;
+    expect(axisAligned(g.points!)).toBe(true);
+    expect(g.points!.length).toBeGreaterThan(2);
+  });
+  test("goes around a box in the way", () => {
+    const a = box("a", 0, 0), b = box("b", 400, 0), wall = box("w", 180, -40, 60, 140);
+    const lookup = (k: string) => ({ a, b } as any)[k];
+    const obstacles = [a, b, wall].map((e) => elementBox(e));
+    const g = connectorGeometry({ key: "c", kind: "connector", rev: 1, from: "a", to: "b", curve: "elbow" } as any, lookup, obstacles)!;
+    const wb = elementBox(wall);
+    const crosses = g.points!.some((p, i) => {
+      if (i === 0) return false;
+      const q = g.points![i - 1];
+      return Math.min(p.x, q.x) < wb.x + wb.w && Math.max(p.x, q.x) > wb.x && Math.min(p.y, q.y) < wb.y + wb.h && Math.max(p.y, q.y) > wb.y;
+    });
+    expect(crosses).toBe(false);
+    expect(axisAligned(g.points!)).toBe(true);
+  });
+  test("label_at moves the label along the route", () => {
+    const a = box("a", 0, 0), b = box("b", 300, 0);
+    const c = { key: "c", kind: "connector", rev: 1, from: "a", to: "b", curve: "elbow", label_at: 0.25 } as any;
+    const g = connectorGeometry(c, (k) => ({ a, b } as any)[k])!;
+    expect(g.mid.x).toBeCloseTo(104 + 192 * 0.25);
+  });
+});
+
+describe("illustrations in item lines", () => {
+  test(":name: gives a sticky a painted illustration; unknown names stay text", () => {
+    expect(parseItem("sticky:blue :rocket: Launch")!.fields).toMatchObject({ icon: "rocket", text: "Launch", color: "blue" });
+    expect(parseItem(":unicorn: Launch")!.fields).toMatchObject({ text: ":unicorn: Launch" });
+    expect(parseItem("🫐 Lock flavor")!.fields).toMatchObject({ icon: "🫐", text: "Lock flavor" });
+  });
+  test("timeline stops take an illustration name with or without colons", () => {
+    const [a, b] = parseTimeline("Day 1 | Lock | Body | berries | green\nDay 2 | Ship | | :truck:");
+    expect(a.icon).toBe("berries");
+    expect(b.icon).toBe("truck");
+  });
+});
+
+describe("templates", () => {
+  for (const name of BOARD_TEMPLATES) {
+    test(`${name} lays out elements with fresh keys and no overlapping stickies`, () => {
+      const view = artifactView("board", "B", []);
+      const r = BOARD_VERBS.template.run(view, [name], undefined) as any;
+      const puts = r.ops.filter((o: any) => o.put);
+      expect(puts.length).toBeGreaterThan(4);
+      expect(new Set(puts.map((o: any) => o.k)).size).toBe(puts.length);
+      const stickies = puts.filter((o: any) => o.put.kind === "sticky").map((o: any) => elementBox({ key: o.k, rev: 0, ...o.put }));
+      for (let i = 0; i < stickies.length; i++) for (let j = i + 1; j < stickies.length; j++) {
+        const a = stickies[i], b = stickies[j];
+        const overlap = a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+        expect(overlap).toBe(false);
+      }
+    });
+  }
+  test("an unknown template names the choices", () => {
+    expect(() => BOARD_VERBS.template.run(artifactView("board", "B", []), ["mindmap"], undefined)).toThrow(/retro/);
+  });
+});
+
+describe("agent layout verbs", () => {
+  test("size variants and a long sticky grows instead of overflowing", () => {
+    const it = parseItem("sticky:w240:h100 " + "word ".repeat(40))!;
+    expect(it.w).toBe(240);
+    expect(it.h).toBeGreaterThan(100);
+  });
+  test("matrix: uniform columns, rows as tall as their tallest cell, one band per row", () => {
+    const { view: v } = run(board([]), "matrix", ["--cols", "A,B,C", "--cell", "200x120"], "Doing :: Short :: " + "long ".repeat(50) + " :: -\nFeeling :: x :: y :: z");
+    const stickies = v.elements.filter((e) => e.kind === "sticky");
+    expect(stickies.length).toBe(5);
+    const frames = v.elements.filter((e) => e.kind === "frame");
+    expect([...frames].sort((a, b) => Number(a.y) - Number(b.y)).map((f) => f.title)).toEqual(["Doing", "Feeling"]);
+    const short = stickies.find((s) => s.text === "Short")!;
+    const doing = stickies.filter((s) => s.y === short.y);
+    expect(doing.length).toBe(2);
+    expect(new Set(doing.map((s) => s.h)).size).toBe(1);
+    expect(Number(doing[0].h)).toBeGreaterThan(120);
+    expect(new Set(stickies.map((s) => s.w))).toEqual(new Set([200]));
+    expect(v.elements.filter((e) => e.kind === "shape").map((e) => e.text).sort()).toEqual(["A", "B", "C"]);
+  });
+  test("edit keeps the key and grows the sticky", () => {
+    const s = el("s1", "sticky", { x: 0, y: 0, w: 200, h: 160, text: "a" });
+    const { view: v } = run(board([s]), "edit", ["s1", "Title", "|", "word ".repeat(60)]);
+    const e = v.get("s1")!;
+    expect(String(e.text).startsWith("Title\n")).toBe(true);
+    expect(Number(e.h)).toBeGreaterThan(160);
+  });
+  test("read flags an overflowing sticky; clear empties the board", () => {
+    const s = el("s1", "sticky", { x: 0, y: 0, w: 200, h: 120, text: "word ".repeat(80) });
+    expect(boardSpec.describe(board([s]))).toContain("OVERFLOWS");
+    expect(run(board([s]), "clear", []).view.elements.length).toBe(0);
+  });
+});
+
+describe("item line edge cases", () => {
+  test("stamps take a size, unknown kinds with variants fail loudly, big titles stay on one line", () => {
+    expect(parseItem("stamp:w24 🔴")!.fields.size).toBe(24);
+    expect(() => parseItem("circle:red Vote")).toThrow(/unknown kind/);
+    expect(parseItem("Ship: it")!.fields.text).toBe("Ship: it");
+    const t = parseItem("text:44 Q4 Retro · Product team")!;
+    expect(t.h).toBeLessThan(44 * 1.3 * 1.5);
+  });
+});
+
+describe("elbow attachment", () => {
+  const box = (key: string, x: number, y: number, w = 100, h = 60) => ({ key, kind: "shape", rev: 1, x, y, w, h }) as any;
+  test("arrows from two boxes above a wide box land apart and drop straight", () => {
+    const a = box("a", 0, 0), b = box("b", 600, 0), gw = box("g", 0, 200, 1000, 60);
+    const lookup = (k: string) => ({ a, b, g: gw } as any)[k];
+    const ga = connectorGeometry({ key: "c1", kind: "connector", rev: 1, from: "a", to: "g", curve: "elbow" } as any, lookup)!;
+    const gb = connectorGeometry({ key: "c2", kind: "connector", rev: 1, from: "b", to: "g", curve: "elbow" } as any, lookup)!;
+    expect(Math.abs(ga.b.x - gb.b.x)).toBeGreaterThan(400);
+    expect(ga.points!.length).toBe(2);
+  });
+  test("a pinned end stays where it is pinned", () => {
+    const a = box("a", 0, 0), g = box("g", 0, 200, 1000, 60);
+    const c = { key: "c", kind: "connector", rev: 1, from: "a", to: "g", curve: "elbow", to_at: [0.9, 0] } as any;
+    const geo = connectorGeometry(c, (k) => ({ a, g } as any)[k])!;
+    expect(Math.round(geo.b.x)).toBe(Math.round(-4 + 0.9 * 1008));
   });
 });

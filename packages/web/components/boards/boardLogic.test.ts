@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resizedBox, resizeOps, hitKey, withGroup } from "./useBoardGestures";
+import { resizedBox, resizeOps, rotatedResizeBox, hitKey, withGroup } from "./useBoardGestures";
 import { fitCam, zoomAround } from "./useBoardCamera";
 import type { BoardEl } from "./boardTypes";
 
@@ -67,5 +67,35 @@ describe("hit and groups", () => {
   });
   test("hitKey on nothing is null", () => {
     expect(hitKey(null)).toBeNull();
+  });
+});
+
+describe("rotatedResizeBox", () => {
+  const corner = (b: { x: number; y: number; w: number; h: number }, rot: number, lx: number, ly: number) => {
+    const t = (rot * Math.PI) / 180, cx = b.x + b.w / 2, cy = b.y + b.h / 2;
+    const ox = lx - b.w / 2, oy = ly - b.h / 2;
+    return { x: cx + ox * Math.cos(t) - oy * Math.sin(t), y: cy + ox * Math.sin(t) + oy * Math.cos(t) };
+  };
+  test("unturned matches the plain resize", () => {
+    const b = { x: 10, y: 20, w: 200, h: 100 };
+    expect(rotatedResizeBox(b, 0, "se", 30, 40, false)).toEqual(resizedBox(b, "se", 30, 40, false));
+  });
+  test("a 90° turn reads the drag in the element's own axes and pins the opposite corner", () => {
+    const b = { x: 0, y: 0, w: 200, h: 100 };
+    // Turned 90°, the element's own +x points down the canvas: dragging the east handle down by 50 widens it by 50.
+    const nb = rotatedResizeBox(b, 90, "e", 0, 50, false);
+    expect(Math.round(nb.w)).toBe(250);
+    expect(Math.round(nb.h)).toBe(100);
+    const before = corner(b, 90, 0, 0), after = corner(nb, 90, 0, 0);
+    expect(Math.round(after.x)).toBe(Math.round(before.x));
+    expect(Math.round(after.y)).toBe(Math.round(before.y));
+  });
+  test("a 30° corner drag keeps the far corner fixed", () => {
+    const b = { x: 100, y: 100, w: 160, h: 120 };
+    const nb = rotatedResizeBox(b, 30, "se", 40, 25, false);
+    const before = corner(b, 30, 0, 0), after = corner(nb, 30, 0, 0);
+    expect(after.x).toBeCloseTo(before.x, 6);
+    expect(after.y).toBeCloseTo(before.y, 6);
+    expect(nb.w).toBeGreaterThan(b.w);
   });
 });

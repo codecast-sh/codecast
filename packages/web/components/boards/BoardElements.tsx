@@ -3,12 +3,18 @@
 // re-renders only what moved (and the connectors attached to it).
 import { memo, useLayoutEffect, useRef, useState } from "react";
 import {
+  boardArtFor,
   connectorGeometry,
   elementBox,
   smoothPath,
   stickyFontSize,
+  stickyIconHeight,
   unflatten,
+  type Box,
 } from "@codecast/shared/artifacts/board";
+import { BOARD_ART_URLS } from "./boardArtUrls";
+import { formatKey } from "./boardMarks";
+import { RichText } from "./BoardRichText";
 import { EntityObjectCard } from "../EntityObjectCard";
 import { colorToken, stickyFill, tint } from "./boardColors";
 import type { BoardEl } from "./boardTypes";
@@ -18,28 +24,23 @@ export type EditProps = {
   editing: boolean;
   onEditInput(text: string): void;
   onEditDone(): void;
+  /** Tab while typing in a sticky: a new sticky beside it (1) or below it (-1, with Shift). */
+  onEditNext?(dir: 1 | -1): void;
 };
 
 type ViewProps = { el: BoardEl } & EditProps;
-
-/** The field an element's inline edit writes. */
-export function editField(el: BoardEl): "text" | "title" | "label" | null {
-  if (el.kind === "sticky" || el.kind === "text" || el.kind === "shape") return "text";
-  if (el.kind === "frame") return "title";
-  if (el.kind === "connector") return "label";
-  return null;
-}
 
 /**
  * An uncontrolled textarea for in-place editing: React never rewrites its
  * text node, so a keystroke costs one preview write and nothing else.
  */
-function InlineEditor({ value, className, style, onInput, onDone, selectAll }: {
+function InlineEditor({ value, className, style, onInput, onDone, onNext, selectAll }: {
   value: string;
   className: string;
   style?: React.CSSProperties;
   onInput(text: string): void;
   onDone(): void;
+  onNext?(dir: 1 | -1): void;
   selectAll?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
@@ -64,6 +65,20 @@ function InlineEditor({ value, className, style, onInput, onDone, selectAll }: {
       onPointerDown={(e) => e.stopPropagation()}
       onKeyDown={(e) => {
         e.stopPropagation();
+        const t = e.currentTarget;
+        const f = formatKey(e, t.value, t.selectionStart, t.selectionEnd);
+        if (f) {
+          e.preventDefault();
+          t.value = f.value;
+          t.setSelectionRange(f.start, f.end);
+          onInput(f.value);
+          return;
+        }
+        if (e.key === "Tab" && onNext) {
+          e.preventDefault();
+          onNext(e.shiftKey ? -1 : 1);
+          return;
+        }
         if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) {
           e.preventDefault();
           onDone();
@@ -79,18 +94,22 @@ function boxStyle(el: BoardEl, extra?: React.CSSProperties): React.CSSProperties
   return { left: b.x, top: b.y, width: b.w, height: b.h, transform: rot, ...extra };
 }
 
-const StickyView = memo(function StickyView({ el, editing, onEditInput, onEditDone }: ViewProps) {
+const StickyView = memo(function StickyView({ el, editing, onEditInput, onEditDone, onEditNext }: ViewProps) {
   const b = elementBox(el);
   const icon = typeof el.icon === "string" ? el.icon : "";
+  const art = boardArtFor(icon);
   const text = typeof el.text === "string" ? el.text : "";
   const [draft, setDraft] = useState(text);
   const shown = editing ? draft : text;
-  const iconH = icon ? Math.min(64, b.h * 0.32) : 0;
-  const size = stickyFontSize(shown || " ", b.w, b.h - iconH, 17);
-  const [title, ...body] = shown.split("\n");
+  const iconH = stickyIconHeight(icon, !!art, b.w, b.h);
+  const size = stickyFontSize(shown || " ", b.w, b.h - (iconH ? iconH + 6 : 0), 17, 11);
   return (
     <div data-key={el.key} className="board-el board-sticky" style={boxStyle(el, { background: stickyFill(el.color) })}>
-      {icon && <div className="board-sticky-icon" style={{ fontSize: iconH * 0.82, height: iconH }} aria-hidden>{icon}</div>}
+      {art ? (
+        <img className="board-sticky-icon" src={BOARD_ART_URLS[art]} alt="" draggable={false} style={{ height: iconH, width: iconH, objectFit: "contain" }} />
+      ) : icon ? (
+        <div className="board-sticky-icon" style={{ fontSize: iconH * 0.82, height: iconH }} aria-hidden>{icon}</div>
+      ) : null}
       {editing ? (
         <InlineEditor
           value={text}
@@ -98,17 +117,11 @@ const StickyView = memo(function StickyView({ el, editing, onEditInput, onEditDo
           style={{ fontSize: size }}
           onInput={(t) => { setDraft(t); onEditInput(t); }}
           onDone={onEditDone}
+          onNext={onEditNext}
         />
       ) : (
         <div className="board-sticky-text" style={{ fontSize: size, ["--fs" as any]: `${size}px` }}>
-          {body.length > 0 ? (
-            <>
-              <strong>{title}</strong>
-              {body.map((line, i) => <span key={i}>{line}</span>)}
-            </>
-          ) : (
-            title
-          )}
+          <RichText text={shown} titleFirst />
         </div>
       )}
     </div>
@@ -127,10 +140,18 @@ const TextView = memo(function TextView({ el, editing, onEditInput, onEditDone }
   const text = typeof el.text === "string" ? el.text : "";
   return (
     <div data-key={el.key} className="board-el board-text" style={boxStyle(el, style)}>
-      {editing ? <InlineEditor value={text} className="board-text-edit" style={style} onInput={onEditInput} onDone={onEditDone} /> : text || <span className="board-placeholder">Text</span>}
+      {editing ? <InlineEditor value={text} className="board-text-edit" style={style} onInput={onEditInput} onDone={onEditDone} /> : text ? <RichText text={text} /> : <span className="board-placeholder">Text</span>}
     </div>
   );
 });
+
+/** A shape's illustration (or emoji) before its words. */
+function ShapeIcon({ icon, size }: { icon: unknown; size: number }) {
+  if (typeof icon !== "string" || !icon) return null;
+  const art = boardArtFor(icon);
+  if (art) return <img src={BOARD_ART_URLS[art]} alt="" draggable={false} style={{ height: size, width: size, objectFit: "contain", flex: "none" }} />;
+  return <span aria-hidden>{icon} </span>;
+}
 
 const ShapeView = memo(function ShapeView({ el, editing, onEditInput, onEditDone }: ViewProps) {
   const b = elementBox(el);
@@ -158,7 +179,7 @@ const ShapeView = memo(function ShapeView({ el, editing, onEditInput, onEditDone
       {editing ? (
         <InlineEditor value={text} className="board-shape-text" style={textStyle} onInput={onEditInput} onDone={onEditDone} />
       ) : (
-        text && <div className="board-shape-text" style={textStyle}>{typeof el.icon === "string" ? `${el.icon} ` : ""}{text}</div>
+        text && <div className="board-shape-text" style={{ ...textStyle, gap: "0.4em" }}><ShapeIcon icon={el.icon} size={fontSize * 1.6} /><div><RichText text={text} /></div></div>
       )}
     </div>
   );
@@ -193,8 +214,8 @@ function arrowHead(tip: { x: number; y: number }, angle: number, size: number): 
   return `${tip.x},${tip.y} ${tip.x + Math.cos(a1) * size},${tip.y + Math.sin(a1) * size} ${tip.x + Math.cos(a2) * size},${tip.y + Math.sin(a2) * size}`;
 }
 
-export const ConnectorView = memo(function ConnectorView({ el, from, to, editing, onEditInput, onEditDone }: ViewProps & { from?: BoardEl; to?: BoardEl }) {
-  const g = connectorGeometry(el, (k) => (k === el.from ? from : k === el.to ? to : undefined));
+export const ConnectorView = memo(function ConnectorView({ el, from, to, obstacles, editing, onEditInput, onEditDone }: ViewProps & { from?: BoardEl; to?: BoardEl; obstacles?: readonly Box[] }) {
+  const g = connectorGeometry(el, (k) => (k === el.from ? from : k === el.to ? to : undefined), el.curve === "elbow" ? obstacles : undefined);
   if (!g) return null;
   const color = colorToken(el.color, "gray");
   const width = typeof el.width === "number" ? el.width : 2;

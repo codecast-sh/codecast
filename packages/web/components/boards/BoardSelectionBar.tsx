@@ -14,6 +14,7 @@ import {
   ArrowDownToLine,
   ArrowUpToLine,
   Bold,
+  CornerDownRight,
   Circle,
   Diamond,
   ExternalLink,
@@ -149,6 +150,7 @@ export const BoardSelectionBar = memo(function BoardSelectionBar({ selected, at,
         <>
           <Btn label="Straight" active={first.curve !== "curved"} onClick={() => act({ type: "set", fields: { curve: null } })}><Minus {...I} /></Btn>
           <Btn label="Curved" active={first.curve === "curved"} onClick={() => act({ type: "set", fields: { curve: "curved" } })}><Spline {...I} /></Btn>
+          <Btn label="Elbow" active={first.curve === "elbow"} onClick={() => act({ type: "set", fields: { curve: "elbow" } })}><CornerDownRight {...I} /></Btn>
           <Btn label="Arrow ends" onClick={() => {
             const order = ["end", "both", "none"];
             const cur = typeof first.arrow === "string" ? first.arrow : "end";

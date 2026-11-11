@@ -188,10 +188,20 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
     .description(`Create a ${noun}`)
     .argument("<title>", "Title")
     .option("--project <ref>", "Project id, short id or title")
+    .option("--personal", "Only you can see it")
+    .option("--team <team>", "The team that can see it (name or id)")
     .option("--json", "Machine-readable output")
-    .action(guard(async (title: string, options: { project?: string; json?: boolean }) => {
+    .action(guard(async (title: string, options: { project?: string; personal?: boolean; team?: string; json?: boolean }) => {
+      if (options.personal && options.team) throw new Error("Pass --personal or --team, not both");
       const sid = deps.detectCurrentSessionId();
       const body: Record<string, any> = { title, content: "", doc_type: spec.type, project_path: process.cwd(), ...(sid ? { conversation_id: sid } : {}) };
+      // Without either flag the workspace follows the session's team, then the directory's mapping.
+      if (options.personal || options.team) {
+        const { loadWorkspaceRoster, resolveWorkspaceForWrite } = await import("./resolveWorkspace.js");
+        const roster = await loadWorkspaceRoster(async () => await apiPost(deps, "/cli/teams", {}, { read: true }));
+        const ws = resolveWorkspaceForWrite(roster, options.personal ? "personal" : options.team);
+        Object.assign(body, ws.kind === "team" ? { workspace: "team", team_id: ws.teamId } : { workspace: "personal" });
+      }
       if (options.project && deps.resolveProjectId) body.project_id = await deps.resolveProjectId(options.project);
       const result = await apiPost(deps, "/cli/docs/create", body);
       const id = String(result.id || result._id);

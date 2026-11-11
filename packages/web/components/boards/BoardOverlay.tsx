@@ -23,6 +23,21 @@ function boxOf(el: BoardEl, byKey: Map<string, BoardEl>): Box | null {
   return elementBounds(el);
 }
 
+function SelectionHandles({ box, resizable, rotatable, linkable }: { box: Box; resizable: boolean; rotatable: boolean; linkable: boolean }) {
+  const abs = (style: React.CSSProperties): React.CSSProperties => ({ position: "absolute", ...style });
+  return (
+    <>
+      {resizable && RESIZE.map((h) => (
+        <div key={h} data-handle={h} className={`board-handle board-handle-${h}`} style={abs(pos(h, box))} />
+      ))}
+      {rotatable && <div data-handle="rotate" className="board-handle-rotate" style={abs({ left: box.x + box.w, top: box.y })} />}
+      {linkable && (["n", "e", "s", "w"] as Handle[]).map((h) => (
+        <div key={`c${h}`} data-handle="connect" className={`board-link-dot board-link-${h}`} style={abs(pos(h, box))} />
+      ))}
+    </>
+  );
+}
+
 export const BoardOverlay = memo(function BoardOverlay({ selection, byKey, gesture, remote, editing, readOnly, showHandles }: {
   selection: string[];
   byKey: Map<string, BoardEl>;
@@ -39,8 +54,7 @@ export const BoardOverlay = memo(function BoardOverlay({ selection, byKey, gestu
   const onlyConnectors = sel.length > 0 && sel.every((e) => e.kind === "connector");
   const turned = !!single && typeof single.rot === "number" && single.rot % 180 !== 0;
   const handlesOn = !readOnly && showHandles && !!all && !onlyConnectors && !editing;
-  // A turned element keeps its rotate handle; resizing it needs the turn undone first.
-  const resizable = handlesOn && !turned;
+  const resizable = handlesOn;
   const rotatable = handlesOn && single && ["sticky", "shape", "text", "image", "stamp", "card"].includes(single.kind);
   const linkable = handlesOn && single && single.kind !== "pen" && single.kind !== "frame";
   return (
@@ -67,16 +81,24 @@ export const BoardOverlay = memo(function BoardOverlay({ selection, byKey, gestu
           </svg>
         );
       })()}
-      {all && !onlyConnectors && (
-        <div className="board-sel" style={{ left: all.x, top: all.y, width: all.w, height: all.h, }} />
+      {turned && single ? (() => {
+        // A turned element: the outline and its handles turn with it, so each handle drags the edge it sits on.
+        const b = elementBox(single);
+        const local = { x: 0, y: 0, w: b.w, h: b.h };
+        return (
+          <div style={{ left: b.x, top: b.y, width: b.w, height: b.h, transform: `rotate(${single.rot}deg)` }}>
+            <div className="board-sel" style={{ position: "absolute", inset: 0 }} />
+            <SelectionHandles box={local} resizable={resizable} rotatable={!!rotatable} linkable={!!linkable} />
+          </div>
+        );
+      })() : (
+        <>
+          {all && !onlyConnectors && (
+            <div className="board-sel" style={{ left: all.x, top: all.y, width: all.w, height: all.h, }} />
+          )}
+          {all && <SelectionHandles box={all} resizable={resizable} rotatable={!!rotatable} linkable={!!linkable} />}
+        </>
       )}
-      {resizable && all && RESIZE.map((h) => (
-        <div key={h} data-handle={h} className={`board-handle board-handle-${h}`} style={pos(h, all)} />
-      ))}
-      {rotatable && all && <div data-handle="rotate" className="board-handle-rotate" style={{ left: all.x + all.w, top: all.y }} />}
-      {linkable && all && (["n", "e", "s", "w"] as Handle[]).map((h) => (
-        <div key={`c${h}`} data-handle="connect" className={`board-link-dot board-link-${h}`} style={pos(h, all)} />
-      ))}
 
       {gesture.guides.map((g, i) => (
         <div

@@ -3,6 +3,7 @@
 import "./board.css";
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Minus, Plus, Scan } from "lucide-react";
+import { elementBounds } from "@codecast/shared/artifacts/board";
 import type { LiveSharedViewProps } from "../live/registry";
 import { BoardElementView, ConnectorView } from "./BoardElements";
 import { drawOrder, fitBox } from "./boardFrame";
@@ -19,6 +20,7 @@ export default function SharedBoard({ elements }: LiveSharedViewProps) {
   const byKey = useMemo(() => new Map(els.map((e) => [e.key, e])), [els]);
   const ordered = useMemo(() => drawOrder(els), [els]);
   const box = useMemo(() => fitBox(els, byKey), [els, byKey]);
+  const obstacles = useMemo(() => els.filter((e) => e.kind !== "connector" && e.kind !== "frame" && e.kind !== "pen" && e.kind !== "stamp").map(elementBounds), [els]);
   const ref = useRef<HTMLDivElement>(null);
   const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
@@ -67,6 +69,7 @@ export default function SharedBoard({ elements }: LiveSharedViewProps) {
                     el={el}
                     from={typeof el.from === "string" ? byKey.get(el.from) : undefined}
                     to={typeof el.to === "string" ? byKey.get(el.to) : undefined}
+                    obstacles={el.curve === "elbow" ? obstacles : undefined}
                     editing={false}
                     onEditInput={NOOP}
                     onEditDone={NOOP}

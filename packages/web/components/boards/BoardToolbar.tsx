@@ -9,6 +9,8 @@ import {
   Hand,
   Hash,
   Layers,
+  Lock,
+  LockOpen,
   MessageCircle,
   MousePointer2,
   Pencil,
@@ -21,17 +23,13 @@ import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { colorToken, STAMPS } from "./boardColors";
 import type { BoardTool } from "./boardTypes";
 
-export const TOOL_KEYS: Record<string, BoardTool> = {
-  v: "select", h: "hand", t: "text", f: "frame", s: "sticky", p: "pen", r: "shape", l: "connector", e: "stamp", c: "comment", o: "card",
-};
-
 const SHAPES = [
   { id: "rect", icon: Square, label: "Rectangle" },
   { id: "ellipse", icon: Circle, label: "Ellipse" },
   { id: "diamond", icon: Diamond, label: "Diamond" },
 ] as const;
 
-export const PEN_COLORS = ["gray", "blue", "red", "green", "orange", "violet"] as const;
+const PEN_COLORS = ["gray", "blue", "red", "green", "orange", "violet"] as const;
 
 type Props = {
   tool: BoardTool;
@@ -43,6 +41,9 @@ type Props = {
   penColor: string;
   setPenColor(c: string): void;
   askSlot?: React.ReactNode;
+  /** The tool stays on after each placement instead of returning to Select. */
+  locked: boolean;
+  setLocked(on: boolean): void;
   readOnly: boolean;
 };
 
@@ -60,9 +61,9 @@ export const BoardToolbar = memo(function BoardToolbar(p: Props) {
   const [open, setOpen] = useState<"shape" | "stamp" | "pen" | null>(null);
   const pick = (t: BoardTool, menu?: "shape" | "stamp" | "pen") => {
     p.setTool(t);
-    setOpen(menu && (p.tool === t || t === "connector") ? (open === menu ? null : menu) : null);
+    setOpen(menu && p.tool === t ? (open === menu ? null : menu) : null);
   };
-  const ShapeIcon = p.tool === "connector" ? ArrowUpRight : SHAPES.find((s) => s.id === p.shapeKind)?.icon ?? Square;
+  const ShapeIcon = SHAPES.find((s) => s.id === p.shapeKind)?.icon ?? Square;
   if (p.readOnly) return null;
   return (
     <div className="board-toolbar" data-board-ui role="toolbar" aria-label="Board tools">
@@ -73,11 +74,6 @@ export const BoardToolbar = memo(function BoardToolbar(p: Props) {
               <s.icon size={17} strokeWidth={1.75} />
             </button>
           ))}
-          <ShortcutTooltip label="Arrow" accel="L" side="top">
-            <button type="button" className={`board-tool${p.tool === "connector" ? " is-active" : ""}`} aria-label="Arrow" onClick={() => { p.setTool("connector"); setOpen(null); }}>
-              <ArrowUpRight size={17} strokeWidth={1.75} />
-            </button>
-          </ShortcutTooltip>
         </div>
       )}
       {open === "stamp" && (
@@ -104,14 +100,21 @@ export const BoardToolbar = memo(function BoardToolbar(p: Props) {
         <Pencil size={17} strokeWidth={1.75} />
         <span className="board-tool-dot" style={{ background: colorToken(p.penColor) }} />
       </ToolButton>
-      <ToolButton active={p.tool === "shape" || p.tool === "connector"} label="Shape" accel="R" onClick={() => { const t = p.tool === "connector" ? "connector" : "shape"; p.setTool(t); setOpen(open === "shape" ? null : "shape"); }}>
+      <ToolButton active={p.tool === "shape"} label="Shape" accel="R" onClick={() => { p.setTool("shape"); setOpen(open === "shape" ? null : "shape"); }}>
         <ShapeIcon size={17} strokeWidth={1.75} />
       </ToolButton>
+      <ToolButton active={p.tool === "connector"} label="Arrow" accel="L" onClick={() => pick("connector")}><ArrowUpRight size={17} strokeWidth={1.75} /></ToolButton>
       <ToolButton active={p.tool === "stamp"} label="Stamp" accel="E" onClick={() => { p.setTool("stamp"); setOpen(open === "stamp" ? null : "stamp"); }}>
         {p.tool === "stamp" ? <span className="board-tool-emoji">{p.stamp}</span> : <Smile size={17} strokeWidth={1.75} />}
       </ToolButton>
       <ToolButton active={p.tool === "comment"} label="Comment" accel="C" onClick={() => pick("comment")}><MessageCircle size={17} strokeWidth={1.75} /></ToolButton>
       <ToolButton active={p.tool === "card"} label="Codecast object" accel="O" onClick={() => pick("card")}><Layers size={17} strokeWidth={1.75} /></ToolButton>
+      <span className="board-toolbar-sep" />
+      <ShortcutTooltip label={p.locked ? "Unlock tool" : "Keep tool on after each use"} accel="Q" side="top">
+        <button type="button" className={`board-tool${p.locked ? " is-active" : ""}`} aria-label="Lock tool" aria-pressed={p.locked} onClick={() => p.setLocked(!p.locked)}>
+          {p.locked ? <Lock size={15} strokeWidth={1.75} /> : <LockOpen size={15} strokeWidth={1.75} />}
+        </button>
+      </ShortcutTooltip>
       {p.askSlot && <span className="board-toolbar-sep" />}
       {p.askSlot}
     </div>

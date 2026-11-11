@@ -3,7 +3,8 @@
 // into any field (inline edit, a prompt, the shell's inputs) are left alone.
 import { useRef } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { TOOL_KEYS } from "./BoardToolbar";
+import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
+import { TOOL_KEYS } from "./boardModel";
 import type { BoardTool } from "./boardTypes";
 
 export type KeyCommands = {
@@ -23,13 +24,17 @@ export type KeyCommands = {
   fit(selectionOnly: boolean): void;
   editSelection(): void;
   ask(): void;
+  /** Select the next (+1) or previous (-1) element in reading order; false when there is nothing to walk. */
+  cycle(dir: 1 | -1): boolean;
+  hasSelection(): boolean;
+  toggleHelp(): void;
+  toggleLock(): void;
   readOnly: boolean;
 };
 
-function typingInto(t: EventTarget | null): boolean {
-  const el = t as HTMLElement | null;
-  if (!el) return false;
-  return el.isContentEditable || el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT";
+/** A dialog, popover or menu is open over the page: its own Escape closes it. */
+function overlayOpen(): boolean {
+  return !!document.querySelector("[role=dialog][data-state=open], [data-radix-popper-content-wrapper], [role=menu], [role=listbox]");
 }
 
 export function useBoardKeys(cmds: KeyCommands, spaceHeld: React.MutableRefObject<boolean>, rootRef: React.RefObject<HTMLDivElement | null>) {
@@ -38,16 +43,23 @@ export function useBoardKeys(cmds: KeyCommands, spaceHeld: React.MutableRefObjec
   // The board owns the keyboard (and paste) from the moment it opens until a
   // press lands outside it (another pane, the sidebar), and again when pressed.
   const active = useRef(true);
+  /** Tab is walking elements (set by a walk, cleared by an Escape with nothing left to clear). */
+  const walked = useRef(false);
   useWatchEffect(() => {
     const onPress = (e: PointerEvent) => {
       const root = rootRef.current;
       active.current = !!root && root.contains(e.target as Node);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (!active.current || typingInto(e.target) || e.defaultPrevented) return;
+      // The page's own Escape goes back to the list; on a board, a stray Escape (after a popover closed, a press in the header) must not.
+      if (e.key === "Escape" && !active.current && !e.defaultPrevented && !keyBelongsElsewhere(e.target)) {
+        const root = rootRef.current;
+        if (root?.isConnected && !overlayOpen()) { e.preventDefault(); e.stopImmediatePropagation(); ref.current.clearSelection(); return; }
+      }
+      if (!active.current || keyBelongsElsewhere(e.target) || e.defaultPrevented) return;
       // Only when the board is on screen and no dialog sits over it.
       const root = rootRef.current;
-      if (!root || !root.isConnected || document.querySelector("[role=dialog][data-state=open]")) return;
+      if (!root || !root.isConnected || overlayOpen()) return;
       const c = ref.current;
       const mod = e.metaKey || e.ctrlKey;
       const k = e.key.toLowerCase();
@@ -64,7 +76,15 @@ export function useBoardKeys(cmds: KeyCommands, spaceHeld: React.MutableRefObjec
       if (mod && k === "0") { stop(); c.zoomTo(1); return; }
       if (e.shiftKey && (e.key === "!" || e.code === "Digit1")) { stop(); c.fit(false); return; }
       if (e.shiftKey && (e.key === "@" || e.code === "Digit2")) { stop(); c.fit(true); return; }
-      if (e.key === "Escape") { if (c.clearSelection()) stop(); c.setTool("select"); return; }
+      // Escape belongs to the board while it is in use: it backs out of a menu, a selection or a tool, never out of the page.
+      if (e.key === "Escape") { if (!c.clearSelection()) walked.current = false; c.setTool("select"); stop(); return; }
+      // Tab walks the board's elements (with Shift, backwards). With nothing selected after an Escape, Tab moves on through the page.
+      if (e.key === "Tab" && !mod && !e.altKey) {
+        const inBoard = c.hasSelection() || document.activeElement === root || walked.current;
+        if (inBoard && c.cycle(e.shiftKey ? -1 : 1)) { walked.current = true; stop(); return; }
+        return;
+      }
+      if (e.key === "?" || (e.shiftKey && e.code === "Slash")) { stop(); c.toggleHelp(); return; }
       // A version open in history, or a viewer without edit rights: nothing below writes.
       if (c.readOnly) return;
       if (mod && k === "z") { stop(); if (e.shiftKey) c.redo(); else c.undo(); return; }
@@ -86,6 +106,7 @@ export function useBoardKeys(cmds: KeyCommands, spaceHeld: React.MutableRefObjec
       }
       if (mod || e.altKey) return;
       if (k === "a") { stop(); c.ask(); return; }
+      if (k === "q") { stop(); c.toggleLock(); return; }
       const tool = TOOL_KEYS[k];
       if (tool) { stop(); c.setTool(tool); }
     };

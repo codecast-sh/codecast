@@ -3,12 +3,15 @@
 // both run these, so an agent and a person get the same clean layouts.
 import type { ArtifactElement, ArtifactOp, Json } from "./core";
 import { newElementKey } from "./spec";
+import { boardArtFor, isBoardArt } from "./boardArt";
 import type { ArtifactView } from "./spec";
 import {
   BOARD_COLORS,
   BOARD_DEFAULT_SIZE,
   BOARD_SHAPES,
   elementBox,
+  stickyFitHeight,
+  stickyIconHeight,
   textHeight,
   textWidth,
   unionBox,
@@ -20,6 +23,7 @@ import {
 export type BoardItem = { kind: string; fields: Record<string, Json>; w: number; h: number };
 
 const ITEM_KINDS = new Set(["sticky", "text", "shape", "frame", "stamp", "card", "image"]);
+const ART_LEAD = /^:([a-z]+):\s+/;
 const EMOJI_LEAD = /^(\p{Extended_Pictographic}(?:️|‍\p{Extended_Pictographic}|\p{Emoji_Modifier})*)\s+/u;
 
 /** "title | body" or a literal "\n" become a line break. */
@@ -30,10 +34,12 @@ export function itemText(raw: string): string {
 /**
  * Parse one item line: `[kind[:variant...]] text`. The kind defaults to
  * sticky. Variants are a color, a shape name or a number (text size). A
- * sticky or shape whose text starts with an emoji gets it as its icon.
+ * sticky or shape whose text starts with an emoji, or `:name:` naming a
+ * bundled illustration (boardArt.ts), gets it as its icon.
  *
  *   Lock flavor | Huckleberry it is        -> yellow sticky, two lines
  *   sticky:green 🫐 Lock flavor             -> green sticky with an icon
+ *   sticky:blue :rocket: Launch            -> blue sticky with the painted rocket
  *   shape:diamond:blue Ship?               -> blue diamond
  *   text:36 Launch timeline                -> 36px text
  *   card ct-4102                           -> live task card
@@ -50,21 +56,28 @@ export function parseItem(line: string): BoardItem | null {
     kind = m[1];
     variants = m[2] ? m[2].slice(1).split(":") : [];
     rest = m[3] ?? "";
+  } else if (m && m[2]) {
+    // `circle:red Vote` is a mistyped kind, not a sticky that says so.
+    throw new Error(`unknown kind "${m[1]}": use ${[...ITEM_KINDS].join(", ")} (a circle is shape:ellipse)`);
   }
   const fields: Record<string, Json> = {};
+  let sizeW: number | null = null, sizeH: number | null = null;
   for (const v of variants) {
     if ((BOARD_COLORS as readonly string[]).includes(v)) fields.color = v;
     else if ((BOARD_SHAPES as readonly string[]).includes(v)) fields.shape = v;
     else if (/^\d+$/.test(v)) fields.size = Number(v);
+    else if (/^w\d+$/.test(v)) sizeW = Number(v.slice(1));
+    else if (/^h\d+$/.test(v)) sizeH = Number(v.slice(1));
   }
   const d = BOARD_DEFAULT_SIZE[kind];
-  let w = d.w, h = d.h;
+  let w = sizeW ?? d.w, h = sizeH ?? d.h;
   if (kind === "card") {
     fields.ref = rest.trim();
     if (!fields.ref) return null;
   } else if (kind === "stamp") {
     fields.emoji = rest.trim() || "👍";
-    w = h = typeof fields.size === "number" ? fields.size : d.w;
+    w = h = typeof fields.size === "number" ? fields.size : sizeW ?? sizeH ?? d.w;
+    if (sizeW !== null || sizeH !== null) fields.size = w;
   } else if (kind === "image") {
     fields.src = rest.trim();
     if (!fields.src) return null;
@@ -72,21 +85,43 @@ export function parseItem(line: string): BoardItem | null {
     fields.title = itemText(rest);
   } else {
     let text = rest;
-    const icon = EMOJI_LEAD.exec(text);
+    // A leading emoji or `:name:` (a bundled illustration) is the item's icon.
+    const art = ART_LEAD.exec(text);
+    const icon = art && isBoardArt(art[1]) ? art : EMOJI_LEAD.exec(text);
     if (icon && (kind === "sticky" || kind === "shape")) {
       fields.icon = icon[1];
       text = text.slice(icon[0].length);
     }
     fields.text = itemText(text);
-    if (kind === "sticky" && fields.icon) h = 200;
+    if (kind === "sticky") {
+      if (fields.icon && sizeH === null) h = 200;
+      // Long text grows the card rather than shrinking its type past reading size.
+      h = stickyFitHeight(String(fields.text), w, h, stickyIconHeight(fields.icon, boardArtFor(fields.icon) !== null, w, h));
+    }
     if (kind === "text") {
       const size = typeof fields.size === "number" ? fields.size : 20;
-      w = Math.min(560, Math.max(40, textWidth(String(fields.text), size) + 4));
+      w = sizeW ?? Math.min(Math.max(560, size * 26), Math.max(40, textWidth(String(fields.text), size) + 4));
       h = textHeight(String(fields.text), size, w);
     }
   }
   if (kind === "sticky" && !fields.color) fields.color = "yellow";
   return { kind, fields, w, h };
+}
+
+/** Give an item a new size; a sticky still grows to keep its text readable. */
+export function resizeItem(item: BoardItem, w?: number, h?: number): BoardItem {
+  const next = { ...item, w: w ?? item.w, h: h ?? item.h };
+  if (item.kind === "stamp") {
+    const size = w ?? h ?? item.w;
+    return { ...item, w: size, h: size, fields: { ...item.fields, size } };
+  }
+  if (item.kind === "sticky") {
+    next.h = stickyFitHeight(String(item.fields.text ?? ""), next.w, next.h, stickyIconHeight(item.fields.icon, boardArtFor(item.fields.icon) !== null, next.w, next.h));
+  }
+  if (item.kind === "text" && w !== undefined && h === undefined) {
+    next.h = textHeight(String(item.fields.text ?? ""), typeof item.fields.size === "number" ? item.fields.size : 20, next.w);
+  }
+  return next;
 }
 
 export function parseItems(input: string): BoardItem[] {
@@ -177,11 +212,12 @@ export function parseTimeline(input: string): TimelineStop[] {
     const parts = line.split(/\s*\|\s*/).map((p) => p.trim());
     const [label, title = "", body, icon, color] = parts;
     if (!label) continue;
+    const art = icon ? /^:?([a-z]+):?$/.exec(icon) : null;
     out.push({
       label,
       title: title.replace(/\\n/g, "\n"),
       ...(body ? { body: body.replace(/\\n/g, "\n") } : {}),
-      ...(icon ? { icon } : {}),
+      ...(icon ? { icon: art && isBoardArt(art[1]) ? art[1] : icon } : {}),
       ...(color && (BOARD_COLORS as readonly string[]).includes(color) ? { color } : {}),
     });
   }
@@ -238,9 +274,11 @@ export function timelineOps(stops: readonly TimelineStop[], opts: TimelineOpts):
     const cardKey = newElementKey("el");
     // The last stop is the outcome the plan builds to: a bigger card, green unless named.
     const goal = n > 1 && i === n - 1;
-    const w = goal ? Math.round(cardW * 1.3) : cardW, h = goal ? Math.round(cardH * 1.2) : cardH;
-    const cardY = above ? cy - stem - 16 - h : cy + stem + 16;
     const text = s.body ? `${s.title}\n${s.body}` : s.title;
+    const w = goal ? Math.round(cardW * 1.3) : cardW;
+    const h0 = goal ? Math.round(cardH * 1.2) : cardH;
+    const h = stickyFitHeight(text, w, h0, stickyIconHeight(s.icon, boardArtFor(s.icon) !== null, w, h0));
+    const cardY = above ? cy - stem - 16 - h : cy + stem + 16;
     add({ k: cardKey, put: { kind: "sticky", x: Math.round(cx - w / 2), y: cardY, w, h, text, color: s.color ?? (goal ? "green" : "yellow"), ...(s.icon ? { icon: s.icon } : {}), z: z++ } });
     const pillW = Math.max(72, textWidth(s.label, 13) + 28);
     const pillKey = newElementKey("el");
@@ -307,12 +345,12 @@ export function themesOps(view: ArtifactView, themes: readonly Theme[], at: Pt |
 }
 
 /** A frame that wraps the given elements, with room for its title. */
-export function frameAround(boxes: readonly Box[], title: string, z: number, padding = 40): ArtifactOp | null {
+export function frameAround(boxes: readonly Box[], title: string, z: number, padding = 40, color?: string): ArtifactOp | null {
   const b = unionBox(boxes);
   if (!b) return null;
   return {
     k: newElementKey("el"),
-    put: { kind: "frame", x: Math.round(b.x - padding), y: Math.round(b.y - padding - 24), w: Math.round(b.w + padding * 2), h: Math.round(b.h + padding * 2 + 24), title, z },
+    put: { kind: "frame", x: Math.round(b.x - padding), y: Math.round(b.y - padding - 24), w: Math.round(b.w + padding * 2), h: Math.round(b.h + padding * 2 + 24), title, ...(color ? { color } : {}), z },
   };
 }
 
@@ -384,4 +422,60 @@ export function clearOffset(block: Box, taken: readonly Box[], step = 40, maxRin
     for (const c of candidates) if (!hits(c.x, c.y)) return c;
   }
   return { x: 0, y: 0 };
+}
+
+// ── Matrix ────────────────────────────────────────────────────────────────
+
+export type MatrixRow = { label: string; cells: (BoardItem | null)[] };
+
+/** `Row label :: item :: item` per line; `-` leaves a cell empty. */
+export function parseMatrix(input: string): MatrixRow[] {
+  const out: MatrixRow[] = [];
+  for (const raw of input.split("\n")) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#")) continue;
+    const [label, ...cells] = line.split(/\s*::\s*/);
+    out.push({ label: label.trim(), cells: cells.map((c) => (c.trim() === "-" || !c.trim() ? null : parseItem(c))) });
+  }
+  return out;
+}
+
+export type MatrixOpts = { at: Pt; cols: readonly string[]; cell: { w: number; h: number }; gap: number; title?: string; colColor?: string; zFrame: number; z: number };
+
+/**
+ * A grid of rows by columns (a journey map, a comparison, a swimlane plan):
+ * a header pill per column, then each row as a titled band holding one item
+ * per column. Every cell in a column has the column's width; a row is as tall
+ * as its tallest cell, so long text grows its row instead of overflowing.
+ */
+export function matrixOps(rows: readonly MatrixRow[], opts: MatrixOpts): { ops: ArtifactOp[]; keys: string[] } {
+  const ops: ArtifactOp[] = [];
+  let z = opts.z;
+  const { at, cell, gap } = opts;
+  const ncols = Math.max(opts.cols.length, ...rows.map((r) => r.cells.length));
+  const pad = 24;
+  let y = at.y;
+  if (opts.title) {
+    ops.push({ k: newElementKey("el"), put: { kind: "text", x: at.x, y, text: opts.title, size: 36, weight: "bold", z: z++ } });
+    y += 76;
+  }
+  const colX = (c: number) => at.x + pad + c * (cell.w + gap);
+  opts.cols.forEach((name, c) => {
+    ops.push({ k: newElementKey("el"), put: { kind: "shape", shape: "pill", x: colX(c), y, w: cell.w, h: 36, text: name, color: opts.colColor ?? "blue", solid: true, z: z++ } });
+  });
+  if (opts.cols.length) y += 36 + 48;
+  const width = pad * 2 + ncols * cell.w + (ncols - 1) * gap;
+  for (const row of rows) {
+    const sized = row.cells.map((it) => (it ? resizeItem(it, cell.w, it.kind === "sticky" || it.kind === "shape" ? cell.h : undefined) : null));
+    const rowH = Math.max(cell.h, ...sized.map((it) => (it ? it.h : 0)));
+    ops.push({ k: newElementKey("el"), put: { kind: "frame", x: at.x, y, w: width, h: rowH + pad * 2, title: row.label, color: "gray", z: opts.zFrame } });
+    sized.forEach((it, c) => {
+      if (!it) return;
+      const k = newElementKey("el");
+      const box: Record<string, Json> = it.kind === "stamp" ? {} : { w: it.w, h: it.kind === "sticky" || it.kind === "shape" ? rowH : it.h };
+      ops.push({ k, put: { kind: it.kind, x: colX(c), y: y + pad, ...box, ...it.fields, z: z++ } });
+    });
+    y += rowH + pad * 2 + 52;
+  }
+  return { ops, keys: ops.map((o) => o.k) };
 }

@@ -20,7 +20,8 @@ export function colorToken(name: unknown, fallback: BoardColor = "gray"): string
 
 /** A sticky's paper: the color washed into the card surface, strong enough to read as that color. */
 export function stickyFill(name: unknown): string {
-  return `color-mix(in srgb, ${colorToken(name, "yellow")} var(--board-sticky-mix), var(--board-paper))`;
+  const n = typeof name === "string" && name in TOKEN ? name : "yellow";
+  return `var(--board-sticky-${n})`;
 }
 
 /** A soft tint for frames and outlined shapes. */

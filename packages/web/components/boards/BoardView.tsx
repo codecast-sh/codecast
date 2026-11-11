@@ -3,16 +3,24 @@
 // draws the title, facepile, share, history and every cursor; this view owns
 // the canvas: camera, elements, gestures, keyboard, toolbar, the selection
 // bar, comment pins and the Ask agent bubble.
-import { AskButton, useAskDraft } from "../live/AskAgentControl";
+import { AskButton } from "../live/AskAgentControl";
+import { useAskDraft } from "../live/askAgent";
 import "./board.css";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useConvex } from "convex/react";
 import { toast } from "sonner";
-import { Minus, Plus, Scan } from "lucide-react";
+import { Map as MapIcon, Minus, Plus, Scan, ScanSearch } from "lucide-react";
 import type { ArtifactPosition } from "@codecast/shared/artifacts";
 import {
   alignBoxes,
+  boardArtFor,
+  BOARD_TEMPLATES,
+  BOARD_TEMPLATE_LABELS,
   bottomZ,
+  stickyFitHeight,
+  stickyIconHeight,
+  templateOps,
+  type BoardTemplate,
   cloneOps,
   connectorGeometry,
   distributeBoxes,
@@ -20,6 +28,7 @@ import {
   elementBox,
   intersects,
   nextZ,
+  readingOrder,
   unionBox,
   type Box,
   type Pt,
@@ -32,18 +41,30 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { KeyCap } from "../KeyCap";
-import { BoardElementView, ConnectorView, editField } from "./BoardElements";
+import { BoardElementView, ConnectorView } from "./BoardElements";
+import { BOARD_ASK_SLOT, editField } from "./boardModel";
 import { BoardOverlay, type RemoteSelection } from "./BoardOverlay";
 import { BoardToolbar } from "./BoardToolbar";
 import { BoardSelectionBar, type BarAction } from "./BoardSelectionBar";
-import { BOARD_ASK_SLOT, BoardPrompt, type PromptMode } from "./BoardPrompt";
-import { CommentPins, CommentThreadPopover, initialsOf, pinPoint, useThreads } from "./BoardComments";
+import { BoardPrompt, type PromptMode } from "./BoardPrompt";
+import { CommentPins, CommentThreadPopover } from "./BoardComments";
+import { initialsOf, pinPoint, useThreads } from "./commentThreads";
 import { useBoardCamera } from "./useBoardCamera";
 import { useBoardGestures, withFrameContents } from "./useBoardGestures";
 import { useBoardKeys } from "./useBoardKeys";
 import { pasteOps, placeImage, serializeSelection, stickiesToTasks } from "./boardActions";
 import type { BoardEl, BoardTool } from "./boardTypes";
 import { drawOrder, fitBox } from "./boardFrame";
+import { BoardMinimap } from "./BoardMinimap";
+import { BoardShortcuts } from "./BoardShortcuts";
+import { BoardEditBar } from "./BoardEditBar";
+import { BOARD_ART_URLS } from "./boardArtUrls";
+
+/** Each template's picture on the empty board's picker. */
+const TEMPLATE_ART: Record<BoardTemplate, keyof typeof BOARD_ART_URLS> = {
+  retro: "thumbsup", kanban: "clipboard", roadmap: "compass", timeline: "road", brainstorm: "lightbulb",
+};
+const MINIMAP_KEY = "board-minimap";
 
 const NOOP = () => {};
 const NOOP_EDIT = { editing: false, onEditInput: NOOP, onEditDone: NOOP };
@@ -75,6 +96,11 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   const [prompt, setPrompt] = useState<PromptState | null>(null);
   const [thread, setThread] = useState<string | null>(null);
   const [pressing, setPressing] = useState(false);
+  const editBaseH = useRef<number | null>(null);
+  const [locked, setLocked] = useState(false);
+  const [help, setHelp] = useState(false);
+  const [minimap, setMinimapState] = useState(() => { try { return localStorage.getItem(MINIMAP_KEY) === "1"; } catch { return false; } });
+  const setMinimap = (on: boolean) => { setMinimapState(on); try { localStorage.setItem(MINIMAP_KEY, on ? "1" : "0"); } catch { /* private mode */ } };
   const spaceHeld = useRef(false);
   const lastPointer = useRef<Pt | null>(null);
   const copiedFrom = useRef<Pt | null>(null);
@@ -108,7 +134,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     const untouched = autoCam.current && c.x === autoCam.current.x && c.y === autoCam.current.y && c.z === autoCam.current.z;
     if (fitted.current && !untouched) return;
     fitted.current = true;
-    cam.fit(fitBox(elements, byKey), { instant: true });
+    cam.fit(fitBox(elements, byKey), { instant: true, minReadable: true });
     autoCam.current = { ...cam.cam.current };
   }, [cam.viewport.w, cam.viewport.h, live.ready, elements.length]);
 
@@ -155,14 +181,41 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       onEditInput: (text: string) => {
         const el = byKeyRef.current.get(editing);
         const field = el && editField(el);
-        if (field) live.preview([{ k: editing, set: { [field]: text, ...(el!.kind === "text" ? { h: null } : {}) } }]);
+        if (!field) return;
+        const extra: Record<string, number | null> = {};
+        if (el!.kind === "text") extra.h = null;
+        if (el!.kind === "sticky") {
+          // A sticky grows with its text past reading size, and back down to where it started.
+          const b = elementBox(el!);
+          editBaseH.current ??= b.h;
+          const h = stickyFitHeight(text, b.w, editBaseH.current, stickyIconHeight(el!.icon, !!boardArtFor(el!.icon), b.w, editBaseH.current));
+          if (h !== b.h) extra.h = h;
+        }
+        live.preview([{ k: editing, set: { [field]: text, ...extra } }]);
+      },
+      onEditNext: (dir: 1 | -1) => {
+        // Tab types the next thought: a sticky like this one beside it (Shift: below), ready for words.
+        const el = byKeyRef.current.get(editing);
+        if (el?.kind !== "sticky") return;
+        const b = elementBox(el);
+        const k = newElementKey("el");
+        const put = { kind: "sticky", x: dir > 0 ? b.x + b.w + 24 : b.x, y: dir > 0 ? b.y : b.y + b.h + 24, w: b.w, h: editBaseH.current ?? b.h, text: "", color: el.color ?? "yellow", z: nextZ({ elements: [...byKeyRef.current.values()] }) };
+        live.commit();
+        editBaseH.current = null;
+        live.apply([{ k, put: put as any }]);
+        byKeyRef.current.set(k, { ...(put as any), key: k, rev: 0 });
+        setSelection([k]);
+        setEditing(k);
+        reveal(byKeyRef.current.get(k)!);
       },
       onEditDone: () => {
+        editBaseH.current = null;
         live.commit();
         const el = byKeyRef.current.get(editing);
         // An empty text box is nothing: it goes away instead of leaving an invisible element.
         if (el?.kind === "text" && !String(el.text ?? "").trim()) live.apply([{ k: editing, del: true }], { undoable: false });
-        setEditing(null);
+        // A blur that lands after Tab opened the next sticky must not close that one.
+        setEditing((cur) => (cur === editing ? null : cur));
       },
     };
   }, [editing, live]);
@@ -207,7 +260,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   }, [live, setSelection, setTool]);
 
   const gestures = useBoardGestures({
-    cam, live, byKey: byKeyRef, selection, setSelection, tool, setTool, shapeKind, stamp, penColor, spaceHeld, startEdit, onComment, onCardTool, readOnly,
+    cam, live, byKey: byKeyRef, selection, setSelection, tool, setTool, shapeKind, stamp, penColor, spaceHeld, startEdit, onComment, onCardTool, readOnly, locked,
   });
 
   // ── Commands (keyboard and the selection bar share them) ───────────────────
@@ -296,6 +349,25 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
         deleteSelection();
     }
   };
+  const startTemplate = (t: BoardTemplate) => {
+    const { ops } = templateOps(t, { x: 0, y: 0 }, bottomZ({ elements: allEls() }), nextZ({ elements: allEls() }));
+    live.apply(ops);
+    const placed = ops.flatMap((o) => ("put" in o ? [{ ...(o.put as any), key: o.k, rev: 0 } as BoardEl] : []));
+    const m = new Map(placed.map((e) => [e.key, e]));
+    cam.fit(fitBox(placed, m), { maxZ: 1 });
+  };
+  /** Bring an element into view at the current zoom when it is off screen (Tab walking). */
+  const reveal = (el: BoardEl) => {
+    const root = cam.rootRef.current;
+    if (!root) return;
+    const b = el.kind === "connector" ? connectorGeometry(el, (k) => byKeyRef.current.get(k))?.box : elementBounds(el);
+    if (!b) return;
+    const { x, y, z } = cam.cam.current;
+    const s = { x: b.x * z + x, y: b.y * z + y, w: b.w * z, h: b.h * z };
+    const W = root.clientWidth, H = root.clientHeight, m = 60;
+    if (s.x >= m && s.y >= m && s.x + s.w <= W - m && s.y + s.h <= H - 80) return;
+    cam.glide({ z, x: W / 2 - (b.x + b.w / 2) * z, y: H / 2 - (b.y + b.h / 2) * z });
+  };
   const fitTo = (selectionOnly: boolean) => {
     const els = selectionOnly && selectedEls.length ? selectedEls : elements;
     cam.fit(fitBox(els, byKey), { maxZ: selectionOnly ? 2 : 1 });
@@ -310,6 +382,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     duplicate,
     selectAll: () => setSelection(elements.map((e) => e.key)),
     clearSelection: () => {
+      if (help) { setHelp(false); return true; }
       if (prompt) { setPrompt(null); return true; }
       if (thread) { setThread(null); return true; }
       if (!selection.length) return false;
@@ -329,6 +402,18 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     zoomTo: (z) => cam.zoomBy(z / cam.cam.current.z),
     fit: fitTo,
     editSelection: () => { if (selection.length === 1) startEdit(selection[0]); },
+    cycle: (dir) => {
+      const order = readingOrder([...byKeyRef.current.values()].filter((e) => e.kind !== "pen")) as BoardEl[];
+      if (!order.length) return false;
+      const at = selection.length ? order.findIndex((e) => e.key === selection[selection.length - 1]) : -1;
+      const next = order[at === -1 ? (dir > 0 ? 0 : order.length - 1) : (at + dir + order.length) % order.length];
+      setSelection([next.key]);
+      reveal(next);
+      return true;
+    },
+    hasSelection: () => selection.length > 0,
+    toggleHelp: () => setHelp((h) => !h),
+    toggleLock: () => setLocked((l) => !l),
     ask: () => openAsk(selection.length ? "describe" : "ask"),
     readOnly,
   }, spaceHeld, cam.rootRef);
@@ -369,6 +454,9 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     files.forEach((f, i) => void placeImage(live, convex as any, f, { x: at.x + i * 40, y: at.y + i * 40 }, allEls()));
   };
 
+  // Elbow connectors route around these: everything a line should not cross.
+  const obstacles = useMemo(() => elements.filter((e) => e.kind !== "connector" && e.kind !== "frame" && e.kind !== "pen" && e.kind !== "stamp").map(elementBounds), [elements]);
+
   // ── Culling ────────────────────────────────────────────────────────────────
   const { world, cam: vcam } = cam.viewport;
   const visible = useMemo(() => {
@@ -405,6 +493,22 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     return { x, y: below ? Math.min(bottom + 34, cam.viewport.h - 120) : top - 34, below };
   }, [selBox, vcam, cam.viewport.w, cam.viewport.h]);
 
+  // Where the format bar sits while text is being edited: above the element, like the selection bar.
+  const editAt = useMemo(() => {
+    const el = editing ? byKey.get(editing) : undefined;
+    if (!el || readOnly || el.kind === "frame" || el.kind === "connector" || !cam.viewport.w) return null;
+    const b = elementBounds(el);
+    const top = b.y * vcam.z + vcam.y;
+    return { x: (b.x + b.w / 2) * vcam.z + vcam.x, y: Math.max(48, top - 12) };
+  }, [editing, byKey, vcam, readOnly, cam.viewport.w]);
+  // What a screen reader hears when the selection moves.
+  const announce = useMemo(() => {
+    if (selectedEls.length !== 1) return selectedEls.length ? `${selectedEls.length} selected` : "";
+    const e = selectedEls[0];
+    const words = String(e.text ?? e.title ?? e.label ?? e.ref ?? e.emoji ?? "").replace(/\s+/g, " ").slice(0, 120);
+    return `${e.kind}${e.shape ? ` ${e.shape}` : ""}${words ? `: ${words}` : ""}`;
+  }, [selectedEls]);
+
   const openThread = threads.find((t) => t.root.key === thread);
   const threadAt = openThread ? (() => { const p = pinPoint(openThread.root, byKey); return p ? cam.toScreen(p) : null; })() : null;
   const zoomPct = Math.round(vcam.z * 100);
@@ -416,7 +520,10 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       ref={cam.rootRef}
       className={`board-root board-tool-${tool}${readOnly ? " is-readonly" : ""}`}
       data-board
-      tabIndex={-1}
+      tabIndex={0}
+      role="application"
+      aria-label={`${doc.title}: board. Tab walks elements, Enter edits, ? lists shortcuts`}
+      aria-roledescription="board"
       onPointerDown={(e) => {
         if (!(e.target as HTMLElement).closest("[data-board-ui]")) {
           setPressing(true);
@@ -450,6 +557,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
               el={el}
               from={typeof el.from === "string" ? byKey.get(el.from) : undefined}
               to={typeof el.to === "string" ? byKey.get(el.to) : undefined}
+              obstacles={el.curve === "elbow" ? obstacles : undefined}
               {...(editing === el.key ? editHandlers : NOOP_EDIT)}
             />
           ) : (
@@ -473,6 +581,14 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
           <button type="button" className="board-empty-btn" title="Or paste a list: a sticky per line" onClick={() => setTool("sticky")}>
             <span>Sticky</span><KeyCap>S</KeyCap>
           </button>
+          <div role="group" aria-label="Templates" style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center", maxWidth: "calc(100vw - 48px)" }}>
+            {BOARD_TEMPLATES.map((t) => (
+              <button key={t} type="button" className="board-empty-btn" style={{ padding: "0 12px 0 6px" }} onClick={() => startTemplate(t)}>
+                <img src={BOARD_ART_URLS[TEMPLATE_ART[t]]} alt="" draggable={false} style={{ width: 26, height: 26, objectFit: "contain" }} />
+                <span>{BOARD_TEMPLATE_LABELS[t]}</span>
+              </button>
+            ))}
+          </div>
         </div>
       )}
 
@@ -489,7 +605,18 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
         <ShortcutTooltip label="Fit everything" accel="Shift+1" side="bottom">
           <button type="button" className="board-bar-btn" aria-label="Fit everything" onClick={() => fitTo(false)}><Scan size={14} strokeWidth={1.75} /></button>
         </ShortcutTooltip>
+        <ShortcutTooltip label="Zoom to selection" accel="Shift+2" side="bottom">
+          <button type="button" className="board-bar-btn" aria-label="Zoom to selection" disabled={selectedEls.length === 0} style={selectedEls.length ? undefined : { opacity: 0.35 }} onClick={() => fitTo(true)}><ScanSearch size={14} strokeWidth={1.75} /></button>
+        </ShortcutTooltip>
+        <ShortcutTooltip label={minimap ? "Hide overview" : "Overview"} side="bottom">
+          <button type="button" className={`board-bar-btn${minimap ? " is-active" : ""}`} aria-label="Overview" aria-pressed={minimap} onClick={() => setMinimap(!minimap)}><MapIcon size={14} strokeWidth={1.75} /></button>
+        </ShortcutTooltip>
       </div>
+
+      {minimap && elements.length > 0 && <BoardMinimap elements={elements} byKey={byKey} cam={cam} />}
+      {help && <BoardShortcuts onClose={() => setHelp(false)} />}
+      {editAt && <BoardEditBar at={editAt} />}
+      <div aria-live="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)" }}>{announce}</div>
 
       {!readOnly && barAt && !pressing && !editing && !prompt && selectedEls.length > 0 && (
         <BoardSelectionBar selected={selectedEls} at={barAt} paneWidth={cam.viewport.w} canMakeTasks={!live.draft.active} onAction={runBar} />
@@ -531,6 +658,8 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
         penColor={penColor}
         setPenColor={setPenColor}
         readOnly={readOnly}
+        locked={locked}
+        setLocked={setLocked}
         askSlot={
           <ShortcutTooltip label="Ask agent" accel="A" side="top">
             <AskButton className="board-ask" onClick={() => openAsk(selection.length ? "describe" : "ask")} />

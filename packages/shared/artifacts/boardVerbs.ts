@@ -11,6 +11,8 @@ import {
   center,
   distributeBoxes,
   elementBox,
+  stickyFitHeight,
+  stickyIconHeight,
   unionBox,
   type AlignMode,
   type Box,
@@ -21,9 +23,13 @@ import {
   frameAround,
   freeSpot,
   gridPositions,
+  itemText,
   nextZ,
+  matrixOps,
   parseItem,
   parseItems,
+  parseMatrix,
+  resizeItem,
   parseThemes,
   parseTimeline,
   placeItems,
@@ -31,6 +37,8 @@ import {
   themesOps,
   timelineOps,
 } from "./boardLayout";
+import { BOARD_TEMPLATES, isBoardTemplate, templateOps } from "./boardTemplates";
+import { boardArtFor } from "./boardArt";
 
 type Flags = { pos: string[]; flags: Record<string, string | true> };
 
@@ -93,13 +101,14 @@ function moveOps(els: readonly ArtifactElement[], dx: number, dy: number): Artif
 
 const place: ArtifactVerb = {
   summary: "Place a list of items (one per stdin line) in a grid, row or column",
-  usage: "place <doc> grid|row|column [--at x,y] [--cols n] [--gap 40] [--frame \"Title\"] < item lines",
+  usage: "place <doc> grid|row|column [--at x,y] [--cols n] [--gap 40] [--w n] [--h n] [--frame \"Title\"] [--frame-color c] < item lines (`[kind[:color][:shape][:w240][:h120]] [:art:] text | more`)",
   stdin: true,
   run(view, args, stdin) {
     const { pos, flags } = parseVerbArgs(args);
     const mode = pos[0] ?? "grid";
     if (!["grid", "row", "column"].includes(mode)) throw new Error("layout is grid, row or column");
-    const items = parseItems(stdin ?? "");
+    const sw = flags.w !== undefined ? count(flags.w, "--w", 0) : undefined, sh = flags.h !== undefined ? count(flags.h, "--h", 0) : undefined;
+    const items = parseItems(stdin ?? "").map((it) => (sw !== undefined || sh !== undefined ? resizeItem(it, sw, sh) : it));
     if (items.length === 0) throw new Error("no items on stdin (one per line)");
     const gap = count(flags.gap, "--gap", 40);
     const frameTitle = str(flags.frame);
@@ -111,7 +120,9 @@ const place: ArtifactVerb = {
     const { ops, keys } = placeItems(items, positions, nextZ(view));
     const boxes = boxesOf(ops);
     if (frameTitle) {
-      const f = frameAround(boxes, frameTitle, bottomZ(view));
+      const fc = str(flags["frame-color"]);
+      if (fc && !(BOARD_COLORS as readonly string[]).includes(fc)) throw new Error(`colors: ${BOARD_COLORS.join(", ")}`);
+      const f = frameAround(boxes, frameTitle, bottomZ(view), 40, fc);
       if (f) { ops.unshift(f); keys.unshift(f.k); }
     }
     return done(ops, keys, `placed ${items.length} item${items.length === 1 ? "" : "s"} in a ${mode}`, view, boxes);
@@ -120,27 +131,107 @@ const place: ArtifactVerb = {
 
 const add: ArtifactVerb = {
   summary: "Add one element: an item line as arguments",
-  usage: "add <doc> [kind[:variant...]] <text> [--at x,y] [--w n] [--h n]",
+  usage: "add <doc> [kind[:color][:shape][:w240][:h120]] [:art:] <text | more lines> [--at x,y] [--w n] [--h n]   e.g. add <doc> sticky:green :rocket: Launch | Out to everyone",
   run(view, args) {
     const { pos, flags } = parseVerbArgs(args);
-    const item = parseItem(pos.join(" "));
+    let item = parseItem(pos.join(" "));
     if (!item) throw new Error("say what to add, e.g. `cast board add <doc> sticky:pink Launch party`");
-    if (flags.w !== undefined) item.w = count(flags.w, "--w", item.w);
-    if (flags.h !== undefined) item.h = count(flags.h, "--h", item.h);
+    if (flags.w !== undefined || flags.h !== undefined) item = resizeItem(item, flags.w !== undefined ? count(flags.w, "--w", item.w) : undefined, flags.h !== undefined ? count(flags.h, "--h", item.h) : undefined);
     const at = point(flags.at, "--at") ?? freeSpot(view);
     const { ops, keys } = placeItems([item], [at], item.kind === "frame" ? bottomZ(view) : nextZ(view));
     return done(ops, keys, `added ${item.kind}`, view, boxesOf(ops));
   },
 };
 
+const matrix: ArtifactVerb = {
+  summary: "Lay out rows by columns (journey map, comparison, swimlanes): a pill per column, a titled band per row",
+  usage: "matrix <doc> --cols \"Discover,Evaluate,Sign up\" [--title \"...\"] [--cell 200x160] [--gap 24] [--at x,y] [--color blue] < rows (`Row label :: item line :: item line`, `-` for an empty cell)",
+  stdin: true,
+  run(view, args, stdin) {
+    const { flags } = parseVerbArgs(args);
+    const rows = parseMatrix(stdin ?? "");
+    if (rows.length === 0) throw new Error("no rows on stdin: `Row label :: item line :: item line` per line");
+    const cols = (str(flags.cols) ?? "").split(",").map((c) => c.trim()).filter(Boolean);
+    const m = /^(\d+)x(\d+)$/.exec(str(flags.cell) ?? "200x160");
+    if (!m) throw new Error("--cell takes WxH, e.g. 200x160");
+    const color = str(flags.color);
+    if (color && !(BOARD_COLORS as readonly string[]).includes(color)) throw new Error(`colors: ${BOARD_COLORS.join(", ")}`);
+    const { ops, keys } = matrixOps(rows, {
+      at: point(flags.at, "--at") ?? freeSpot(view),
+      cols,
+      cell: { w: Number(m[1]), h: Number(m[2]) },
+      gap: count(flags.gap, "--gap", 24),
+      title: str(flags.title),
+      colColor: color,
+      zFrame: bottomZ(view),
+      z: nextZ(view),
+    });
+    return done(ops, keys, `laid out ${rows.length} rows by ${Math.max(cols.length, ...rows.map((r) => r.cells.length))} columns`, view, boxesOf(ops));
+  },
+};
+
+const edit: ArtifactVerb = {
+  summary: "Change an element's words (and illustration or color) in place; its key and arrows stay",
+  usage: "edit <doc> <key> [text | more lines] [--icon name|emoji|none] [--color c]",
+  run(view, args) {
+    const { pos, flags } = parseVerbArgs(args);
+    const [el] = requireKeys(view, pos.slice(0, 1));
+    const set: Record<string, Json> = {};
+    const words = pos.slice(1).join(" ");
+    const field = el.kind === "frame" ? "title" : el.kind === "connector" ? "label" : ["sticky", "text", "shape"].includes(el.kind) ? "text" : null;
+    if (words) {
+      if (!field) throw new Error(`a ${el.kind} has no words to edit`);
+      set[field] = itemText(words);
+    }
+    const icon = str(flags.icon);
+    if (icon) set.icon = icon === "none" ? null : icon.replace(/^:(.*):$/, "$1");
+    const color = str(flags.color);
+    if (color) {
+      if (!(BOARD_COLORS as readonly string[]).includes(color)) throw new Error(`colors: ${BOARD_COLORS.join(", ")}`);
+      set.color = color;
+    }
+    if (!Object.keys(set).length) throw new Error("say what to change: new words, --icon or --color");
+    if (el.kind === "sticky") {
+      const b = elementBox(el);
+      const text = String(set.text ?? el.text ?? "");
+      const ic = "icon" in set ? set.icon : el.icon;
+      const h = stickyFitHeight(text, b.w, b.h, stickyIconHeight(ic, boardArtFor(ic) !== null, b.w, b.h));
+      if (h !== b.h) set.h = h;
+    }
+    if (el.kind === "text" && field) set.h = null;
+    return done([{ k: el.key, set }], [el.key], `edited ${el.key}`, view, [elementBox({ ...el, ...set } as ArtifactElement)]);
+  },
+};
+
+const clear: ArtifactVerb = {
+  summary: "Delete everything on the board (a version is kept in history)",
+  usage: "clear <doc>",
+  run(view) {
+    const keys = view.elements.map((e) => e.key);
+    return { ops: keys.map((k) => ({ k, del: true as const })), status: `cleared ${keys.length} elements` };
+  },
+};
+
+const template: ArtifactVerb = {
+  summary: "Start from a template: retro, kanban, roadmap, timeline or brainstorm",
+  usage: `template <doc> <${BOARD_TEMPLATES.join("|")}> [--title "..."] [--at x,y]`,
+  run(view, args) {
+    const { pos, flags } = parseVerbArgs(args);
+    const name = pos[0];
+    if (!isBoardTemplate(name)) throw new Error(`templates: ${BOARD_TEMPLATES.join(", ")}`);
+    const { ops, keys } = templateOps(name, point(flags.at, "--at") ?? freeSpot(view), bottomZ(view), nextZ(view), str(flags.title));
+    return done(ops, keys, `laid out the ${name} template`, view, boxesOf(ops));
+  },
+};
+
 const timeline: ArtifactVerb = {
   summary: "Lay out an illustrated timeline: a road, a pill per stop, a card per stop",
-  usage: "timeline <doc> [--title \"...\"] [--subtitle \"...\"] [--at x,y] [--step 190] [--road orange] [--pill red] < stop lines (label | title | body | emoji | color)",
+  usage: "timeline <doc> [--title \"...\"] [--subtitle \"...\"] [--at x,y] [--step 190] [--road orange] [--pill red] < stop lines (label | title | body | illustration | color)",
   stdin: true,
   run(view, args, stdin) {
     const { flags } = parseVerbArgs(args);
     const stops = parseTimeline(stdin ?? "");
-    if (stops.length === 0) throw new Error("no stops on stdin: `label | title | body | emoji | color` per line");
+    if (stops.length === 0) throw new Error("no stops on stdin: `label | title | body | illustration | color` per line");
     const road = str(flags.road), pill = str(flags.pill);
     for (const c of [road, pill]) if (c && !(BOARD_COLORS as readonly string[]).includes(c)) throw new Error(`colors: ${BOARD_COLORS.join(", ")}`);
     const { ops, keys } = timelineOps(stops, {
@@ -159,9 +250,9 @@ const timeline: ArtifactVerb = {
 
 const connect: ArtifactVerb = {
   summary: "Connect elements with arrows that stay attached (a b c chains a→b→c)",
-  usage: "connect <doc> <a> <b> [<c>...] [--curved] [--label \"...\"] [--arrow end|both|none] [--color gray] [--dashed]",
+  usage: "connect <doc> <a> <b> [<c>...] [--curved|--elbow] [--from-at fx,fy] [--to-at fx,fy] [--label \"...\"] [--arrow end|both|none] [--color gray] [--dashed]",
   run(view, args) {
-    const { pos, flags } = parseVerbArgs(args, ["curved", "dashed"]);
+    const { pos, flags } = parseVerbArgs(args, ["curved", "elbow", "dashed"]);
     const els = requireKeys(view, pos, 2);
     const arrow = str(flags.arrow) ?? "end";
     if (!["end", "both", "none"].includes(arrow)) throw new Error("--arrow is end, both or none");
@@ -170,6 +261,15 @@ const connect: ArtifactVerb = {
     for (let i = 0; i + 1 < els.length; i++) {
       const fields: Record<string, Json> = { kind: "connector", from: els[i].key, to: els[i + 1].key, arrow, z: z++ };
       if (flags.curved) fields.curve = "curved";
+      if (flags.elbow) fields.curve = "elbow";
+      for (const [flag, field] of [["from-at", "from_at"], ["to-at", "to_at"]] as const) {
+        const v = flags[flag];
+        if (v === undefined) continue;
+        const m = typeof v === "string" ? /^(0?\.\d+|[01](?:\.0+)?),(0?\.\d+|[01](?:\.0+)?)$/.exec(v.trim()) : null;
+        if (!m) throw new Error(`--${flag} takes fractions across the box, e.g. 0.5,1 for the bottom middle`);
+        fields[field] = [Number(m[1]), Number(m[2])];
+        fields.curve = "elbow";
+      }
       if (flags.dashed) fields.dash = true;
       if (str(flags.label)) fields.label = str(flags.label)!;
       if (str(flags.color)) fields.color = str(flags.color)!;
@@ -322,5 +422,5 @@ const order: ArtifactVerb = {
 };
 
 export const BOARD_VERBS: Record<string, ArtifactVerb> = {
-  add, place, timeline, connect, arrange, align, distribute, move, frame, themes, group, card, order,
+  add, place, template, matrix, edit, clear, timeline, connect, arrange, align, distribute, move, frame, themes, group, card, order,
 };

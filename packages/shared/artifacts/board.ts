@@ -3,11 +3,15 @@
 // boardGeometry.ts, layouts in boardLayout.ts, CLI verbs in boardVerbs.ts.
 import type { ArtifactElement } from "./core";
 import type { ArtifactSpec, ArtifactView } from "./spec";
-import { center, connectorGeometry, contains, elementBox, unionBox, type Box } from "./boardGeometry";
+import { center, connectorGeometry, contains, elementBox, stickyFitHeight, stickyIconHeight, unionBox, type Box } from "./boardGeometry";
+import { boardArtFor } from "./boardArt";
 import { BOARD_VERBS } from "./boardVerbs";
+import { BOARD_ART } from "./boardArt";
 
 export * from "./boardGeometry";
 export * from "./boardLayout";
+export * from "./boardArt";
+export * from "./boardTemplates";
 export { BOARD_VERBS, parseVerbArgs } from "./boardVerbs";
 
 export const BOARD_KINDS = ["sticky", "text", "shape", "connector", "frame", "pen", "image", "stamp", "card"] as const;
@@ -38,11 +42,15 @@ export function describeElement(el: ArtifactElement, view: Pick<ArtifactView, "g
   const b = elementBox(el);
   const parts: string[] = [el.key, el.kind];
   switch (el.kind) {
-    case "sticky":
+    case "sticky": {
       parts.push(String(el.color ?? "yellow"), fmtBox(b));
       if (el.icon) parts.push(String(el.icon));
       parts.push(quote(el.text));
+      // Say when the words no longer fit, so an agent fixes it without a screenshot.
+      const need = stickyFitHeight(String(el.text ?? ""), b.w, b.h, stickyIconHeight(el.icon, boardArtFor(el.icon) !== null, b.w, b.h));
+      if (need > b.h + 2) parts.push(`OVERFLOWS: needs h${need}`);
       break;
+    }
     case "text":
       parts.push(`${el.size ?? 20}px${el.weight === "bold" ? " bold" : ""}`, fmtBox(b), quote(el.text));
       break;
@@ -90,6 +98,23 @@ export function describeElement(el: ArtifactElement, view: Pick<ArtifactView, "g
   return parts.join("  ");
 }
 
+/** Pairs of cards, shapes and text that cover each other (stamps, pens, frames and arrows sit on things on purpose). */
+function overlaps(els: readonly ArtifactElement[], max = 20): string[] {
+  const solid = els.filter((e) => e.kind === "sticky" || e.kind === "shape" || e.kind === "text" || e.kind === "card" || e.kind === "image");
+  const boxes = solid.map((e) => elementBox(e));
+  const out: string[] = [];
+  for (let i = 0; i < solid.length && out.length < max; i++) {
+    for (let j = i + 1; j < solid.length && out.length < max; j++) {
+      const a = boxes[i], b = boxes[j];
+      const ox = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x), oy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+      // A few pixels of touch is layout, not a clash.
+      // One holding the other whole is a backdrop (a band, a panel), not a clash.
+      if (ox > 4 && oy > 4 && !contains(a, b) && !contains(b, a)) out.push(`${solid[i].key}×${solid[j].key}`);
+    }
+  }
+  return out;
+}
+
 export function describeBoard(view: ArtifactView): string {
   if (view.elements.length === 0) return `board "${view.title}": empty. Start anywhere; 0,0 is a fine top-left.`;
   const content = unionBox(view.elements.filter((e) => e.kind !== "connector").map(elementBox));
@@ -100,6 +125,8 @@ export function describeBoard(view: ArtifactView): string {
   const groups = new Map<string, string[]>();
   for (const e of view.elements) if (typeof e.group === "string") groups.set(e.group, [...(groups.get(e.group) ?? []), e.key]);
   for (const [g, keys] of groups) lines.push(`group ${g}: ${keys.join(" ")}`);
+  const clashes = overlaps(view.elements);
+  if (clashes.length) lines.push(`OVERLAPPING (move apart, or ignore if meant): ${clashes.join("  ")}`);
   return [head, ...lines].join("\n");
 }
 
@@ -129,12 +156,19 @@ export const boardSpec: ArtifactSpec = {
   agentGuide: [
     "Boards: `cast board read <doc>` lists every element (key, kind, box x,y wxh, text). Lay out with the verbs, never hand-computed coordinates.",
     "Without --at, new content goes below what is there. Keep 40px gaps; stickies are 200x160.",
-    "Item lines (place, add): `[kind[:variant...]] text`, ` | ` breaks a line; a leading emoji on a sticky is its illustration.",
-    "  Lock flavor | Huckleberry it is        sticky:green 🫐 Lock flavor        shape:diamond:blue Ship?        text:36 Heading        card ct-4102        stamp 🎉",
-    "Timeline stops: `label | title | body | emoji | color`, e.g. `Day 1 | Lock flavor | Huckleberry it is | 🫐 | yellow`. One call draws the title, road, pills and stemmed cards.",
+    "Item lines (place, add): `[kind[:variant...]] text`, ` | ` breaks a line; a leading `:name:` on a sticky gives it a painted illustration.",
+    "  Lock flavor | Huckleberry it is        sticky:green :berries: Lock flavor        shape:diamond:blue Ship?        text:36 Heading        card ct-4102        stamp 🎉",
+    `Illustrations (use them on cards a person should scan; one per card, matching its subject): ${BOARD_ART.join(" ")}.`,
+    "Timeline stops: `label | title | body | illustration | color`, e.g. `Day 1 | Lock flavor | Huckleberry it is | berries | yellow`. One call draws the title, road, pills and stemmed cards; the last stop is drawn as the goal (a larger card at the road's end).",
+    "Rows by columns (journey map, comparison, swimlanes): `cast board matrix <doc> --cols \"A,B,C\" --cell 200x160` with `Row label :: item :: item :: item` per stdin line. Size any item with `:w240:h120` variants or --w/--h.",
+    "Change words without losing a key or its arrows: `cast board edit <doc> <key> New title | body` (--icon, --color). Start over: `cast board clear <doc>`.",
+    "A sticky marked OVERFLOWS in `read` has more words than room: shorten it or `edit` it (edit grows it to fit).",
+    "Starting a retro, kanban, roadmap, timeline or brainstorm: `cast board template <doc> <name>`, then fill its stickies by key.",
+    "Diagrams (architecture, flows): shapes in a grid with `place --cols`, then `connect --elbow` so arrows run at right angles around boxes; label an arrow with --label. Elbow arrows land where they line up with the other end, so several arrows into a wide box stay apart; pin an end with --from-at/--to-at fx,fy (0.25,1 = a quarter along the bottom). Arrows can attach to frames.",
     "Themes: `Theme name: el_a el_b el_c` per line regroups existing stickies into titled frames.",
     "Colors: yellow orange red pink violet blue cyan green gray. Shapes: rect ellipse diamond pill.",
+    "Fields for `apply`: every element x y w h z rot group; sticky text color icon; text text size weight(bold) color align(left|center|right); shape shape text color solid icon; frame title color; connector from to (keys) or x1 y1 x2 y2, curve(curved|elbow) arrow(end|both|none) label label_at(0..1) color dash width; pen points [x,y,...] color width opacity; stamp emoji size; card ref; image src alt. Text takes **bold**, *italic*, - lists and links.",
     "Live codecast objects go on as cards: `cast board card <doc> ct-123`. Stickies into tasks: `cast task create` each, then `cast board card <doc> <ct-id> --replace <sticky key>` (same key, arrows stay attached).",
-    "Anything else: `cast board apply <doc>` with raw ops.",
+    "Anything else: `cast board apply <doc>` with raw ops; give each put a z (`read` shows the top), or it lands behind what is there.",
   ].join("\n"),
 };

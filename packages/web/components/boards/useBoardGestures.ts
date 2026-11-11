@@ -22,16 +22,17 @@ import {
   type SnapGuide,
 } from "@codecast/shared/artifacts/board";
 import { newElementKey } from "@codecast/shared/artifacts";
-import type { BoardCamera } from "./useBoardCamera";
+import { zoomAround, type BoardCamera } from "./useBoardCamera";
 import type { BoardEl, BoardLive, BoardTool } from "./boardTypes";
 
 export type Handle = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw" | "rotate" | "connect";
 
 type Gesture =
   | { type: "pan"; last: Pt }
+  | { type: "pinch"; dist: number; mid: Pt; origin: Pt }
   | { type: "move"; start: Pt; moved: boolean; origin: Map<string, Pt>; ends: Map<string, { x1?: number; y1?: number; x2?: number; y2?: number }>; snapBase: Box | null; others: Box[]; toggleOff?: string }
   | { type: "marquee"; start: Pt; base: string[]; groups: Map<string, string[]> }
-  | { type: "resize"; handle: Handle; start: Pt; box: Box; items: Map<string, BoardEl> }
+  | { type: "resize"; handle: Handle; start: Pt; box: Box; items: Map<string, BoardEl>; rot: number }
   | { type: "rotate"; key: string; center: Pt; startAngle: number; startRot: number }
   | { type: "pen"; pts: Pt[] }
   | { type: "create"; tool: BoardTool; start: Pt; end: Pt }
@@ -64,6 +65,8 @@ export type GestureDeps = {
   onComment(at: Pt, anchor: string | null): void;
   onCardTool(at: Pt): void;
   readOnly: boolean;
+  /** The tool stays on after a placement. */
+  locked: boolean;
 };
 
 /** Element under a pointer event, or null for empty canvas (a frame's body counts as empty). */
@@ -101,6 +104,8 @@ export function withGroup(key: string, byKey: Map<string, BoardEl>): string[] {
 
 export function useBoardGestures(d: GestureDeps) {
   const g = useRef<Gesture | null>(null);
+  /** Fingers on the canvas, by pointer id, in client coordinates. */
+  const touches = useRef(new Map<number, Pt>());
   const [overlay, setOverlay] = useState<GestureOverlay>(EMPTY);
   const deps = useRef(d);
   deps.current = d;
@@ -157,6 +162,22 @@ export function useBoardGestures(d: GestureDeps) {
     const target = e.target as HTMLElement;
     if (target.closest("[data-board-ui]")) return;
     try { root.setPointerCapture(e.pointerId); } catch { /* a pointer the browser no longer tracks */ }
+    if (e.pointerType === "touch") {
+      touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touches.current.size === 2) {
+        // A second finger turns whatever the first one started into a pinch: zoom and pan together.
+        const cur = g.current;
+        if (cur?.type === "move" && cur.moved) dd.live.commit();
+        if (cur?.type === "marquee") dd.setSelection(cur.base);
+        setOverlay(EMPTY);
+        const [a, b] = [...touches.current.values()];
+        const r = root.getBoundingClientRect();
+        g.current = { type: "pinch", dist: Math.hypot(a.x - b.x, a.y - b.y), mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, origin: { x: r.left, y: r.top } };
+        dd.cam.stopGlide();
+        return;
+      }
+      if (touches.current.size > 2) return;
+    }
     const p = worldOf(e);
     if (e.button === 1 || dd.tool === "hand" || dd.spaceHeld.current) {
       g.current = { type: "pan", last: { x: e.clientX, y: e.clientY } };
@@ -190,7 +211,10 @@ export function useBoardGestures(d: GestureDeps) {
         if (v && v.kind !== "connector") items.set(k, v);
       }
       const box = unionBox([...items.values()].map(elementBox));
-      if (box) g.current = { type: "resize", handle, start: p, box, items };
+      // One turned element resizes along its own axes (the handles sit on its turned outline).
+      const only = items.size === 1 ? [...items.values()][0] : null;
+      const rot = only && typeof only.rot === "number" ? only.rot : 0;
+      if (box) g.current = { type: "resize", handle, start: p, box, items, rot };
       return;
     }
     // A live card's own controls (open, expand) work when its card is the selection.
@@ -237,6 +261,13 @@ export function useBoardGestures(d: GestureDeps) {
       beginMove(p, next, e.altKey);
       return;
     }
+    // A finger on empty canvas pans, as in every touch canvas; a tap there still clears the selection.
+    if (e.pointerType === "touch") {
+      if (dd.selection.length) dd.setSelection([]);
+      g.current = { type: "pan", last: { x: e.clientX, y: e.clientY } };
+      dd.cam.stopGlide();
+      return;
+    }
     const base = e.shiftKey ? dd.selection : [];
     if (!e.shiftKey && dd.selection.length) dd.setSelection([]);
     // Index groups once per marquee, not once per hit per frame.
@@ -247,8 +278,20 @@ export function useBoardGestures(d: GestureDeps) {
 
   const onPointerMove = useCallback((e: React.PointerEvent) => {
     const dd = deps.current;
+    if (e.pointerType === "touch" && touches.current.has(e.pointerId)) touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     const cur = g.current;
     if (!cur) return;
+    if (cur.type === "pinch") {
+      if (touches.current.size < 2) return;
+      const [a, b] = [...touches.current.values()];
+      const dist = Math.hypot(a.x - b.x, a.y - b.y), mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const at = { x: mid.x - cur.origin.x, y: mid.y - cur.origin.y };
+      const zoomed = zoomAround(dd.cam.cam.current, cur.dist > 0 ? dist / cur.dist : 1, at);
+      dd.cam.set({ ...zoomed, x: zoomed.x + mid.x - cur.mid.x, y: zoomed.y + mid.y - cur.mid.y });
+      cur.dist = dist;
+      cur.mid = mid;
+      return;
+    }
     const p = worldOf(e);
     switch (cur.type) {
       case "pan": {
@@ -298,7 +341,9 @@ export function useBoardGestures(d: GestureDeps) {
         return;
       }
       case "resize": {
-        const nb = resizedBox(cur.box, cur.handle, p.x - cur.start.x, p.y - cur.start.y, e.shiftKey);
+        const nb = cur.rot
+          ? rotatedResizeBox(cur.box, cur.rot, cur.handle, p.x - cur.start.x, p.y - cur.start.y, e.shiftKey)
+          : resizedBox(cur.box, cur.handle, p.x - cur.start.x, p.y - cur.start.y, e.shiftKey);
         dd.live.preview(resizeOps(cur.items, cur.box, nb, cur.handle));
         return;
       }
@@ -334,7 +379,13 @@ export function useBoardGestures(d: GestureDeps) {
 
   const onPointerUp = useCallback((e: React.PointerEvent) => {
     const dd = deps.current;
+    touches.current.delete(e.pointerId);
     const cur = g.current;
+    // A pinch ends when either finger lifts; the one left on the glass starts nothing.
+    if (cur?.type === "pinch") {
+      if (touches.current.size < 2) g.current = null;
+      return;
+    }
     g.current = null;
     const root = dd.cam.rootRef.current;
     if (root) delete root.dataset.panning;
@@ -369,15 +420,16 @@ export function useBoardGestures(d: GestureDeps) {
         let op: ArtifactOp;
         if (cur.tool === "sticky") op = { k, put: { kind: "sticky", ...at(200, 160), text: "", color: "yellow", z: nextZ(all()) } };
         else if (cur.tool === "text") op = { k, put: { kind: "text", x: Math.round(cur.start.x), y: Math.round(cur.start.y - 13), text: "", size: 20, z: nextZ(all()) } };
-        else if (cur.tool === "shape") op = { k, put: { kind: "shape", shape: dd.shapeKind, ...at(size.w, size.h), color: "blue", z: nextZ(all()) } };
+        else if (cur.tool === "shape") op = { k, put: { kind: "shape", shape: dd.shapeKind, ...at(size.w, size.h), color: "gray", z: nextZ(all()) } };
         else if (cur.tool === "frame") op = { k, put: { kind: "frame", ...at(size.w, size.h), title: "Frame", z: bottomZ(all()) } };
         else op = { k, put: { kind: "stamp", x: Math.round(cur.start.x - 24), y: Math.round(cur.start.y - 24), size: 48, emoji: dd.stamp, z: nextZ(all()) } };
         dd.live.apply([op]);
         dd.byKey.current.set(k, { ...(op.put as any), key: k, rev: 0 });
         if (cur.tool !== "stamp") {
           dd.setSelection([k]);
-          dd.setTool("select");
-          if (cur.tool !== "shape") dd.startEdit(k);
+          if (!dd.locked) dd.setTool("select");
+          // A new sticky, text, shape or frame opens for typing straight away.
+          dd.startEdit(k);
         }
         return;
       }
@@ -390,7 +442,7 @@ export function useBoardGestures(d: GestureDeps) {
         if (cur.over) fields.to = cur.over; else { fields.x2 = Math.round(p.x); fields.y2 = Math.round(p.y); }
         dd.live.apply([{ k, put: fields as any }]);
         dd.setSelection([k]);
-        if (dd.tool === "connector") dd.setTool("select");
+        if (dd.tool === "connector" && !dd.locked) dd.setTool("select");
         return;
       }
     }
@@ -445,6 +497,20 @@ export function resizedBox(b: Box, handle: Handle, dx: number, dy: number, keepA
     w = nw; h = nh;
   }
   return { x, y, w, h };
+}
+
+/**
+ * Resize a box turned by `rot` degrees about its center: the drag is read in
+ * the box's own axes, and the edge (or corner) opposite the handle stays where
+ * it is on the canvas. Returns the new unturned box (same rotation).
+ */
+export function rotatedResizeBox(b: Box, rot: number, handle: Handle, dx: number, dy: number, keepAspect: boolean): Box {
+  const t = (rot * Math.PI) / 180, cos = Math.cos(t), sin = Math.sin(t);
+  const local = resizedBox({ x: 0, y: 0, w: b.w, h: b.h }, handle, dx * cos + dy * sin, -dx * sin + dy * cos, keepAspect);
+  // How far the center moved, in the box's axes, then on the canvas.
+  const ox = local.x + local.w / 2 - b.w / 2, oy = local.y + local.h / 2 - b.h / 2;
+  const cx = b.x + b.w / 2 + ox * cos - oy * sin, cy = b.y + b.h / 2 + ox * sin + oy * cos;
+  return { x: cx - local.w / 2, y: cy - local.h / 2, w: local.w, h: local.h };
 }
 
 /** Ops that map every item from the old selection box into the new one. */
