@@ -660,7 +660,7 @@ async function resolveResumeCwdOrRefuse(opts: {
 }): Promise<string | null> {
   const conversationId = opts.conversationId;
   const svc = syncServiceRef;
-  return resolveResumeCwd({
+  const local = await resolveResumeCwd({
     cwdOverride: opts.cwdOverride,
     recordedCwd: opts.recordedCwd,
     recordedRoot: opts.projectInfo?.git_root ?? null,
@@ -680,6 +680,62 @@ async function resolveResumeCwdOrRefuse(opts: {
         }
       : undefined,
   });
+  if (local) return local;
+  const recorded = opts.cwdOverride || opts.recordedCwd;
+  return conversationId && recorded ? fetchFolderFromPeers(conversationId, recorded) : null;
+}
+
+// A session this machine owns whose folder is only on another of the owner's
+// machines: ask them for it (folderSync.ts) before refusing. One fetch per
+// folder at a time, and a failed one is not retried for a minute, so the
+// resume, repair and delivery paths that all land here share one attempt.
+const folderFetches = new Map<string, Promise<string | null>>();
+const folderFetchFailures = new Map<string, { at: number; reason: string }>();
+const FOLDER_FETCH_RETRY_MS = 60_000;
+
+async function fetchFolderFromPeers(conversationId: string, recorded: string): Promise<string | null> {
+  const svc = syncServiceRef;
+  const home = process.env.HOME || "";
+  if (!svc || !path.isAbsolute(recorded) || isHomeDirectoryPath(recorded) || recorded === "/") return null;
+  const key = `${conversationId}\0${recorded}`;
+  const inFlight = folderFetches.get(key);
+  if (inFlight) return inFlight;
+  const failed = folderFetchFailures.get(key);
+  if (failed && Date.now() - failed.at < FOLDER_FETCH_RETRY_MS) return null;
+  const run = (async (): Promise<string | null> => {
+    const owner = await svc.getConversationOwner(conversationId).catch(() => null);
+    if (owner && owner !== deviceId()) return null;
+    const { localFolderFor, syncFolderFromPeer } = await import("./folderSync.js");
+    const dest = localFolderFor(recorded, home);
+    if (fs.existsSync(dest)) return dest;
+    log(`[FOLDER] ${recorded} isn't here; asking your other machines for it`);
+    const r = await syncFolderFromPeer(dest, {
+      request: () => svc.requestFolderExport(conversationId, deviceId(), recorded),
+      outcomes: (ids) => svc.folderExportOutcomes(ids),
+      download: async (storageId) => {
+        const url = await svc.getImageUrl(storageId);
+        if (!url) return null;
+        const res = await fetch(url, { signal: AbortSignal.timeout(5 * 60_000) });
+        return res.ok ? new Uint8Array(await res.arrayBuffer()) : null;
+      },
+      discard: (id) => svc.discardFolderBundle(id),
+      log,
+    });
+    if (!r.ok) {
+      folderFetchFailures.set(key, { at: Date.now(), reason: r.reason });
+      log(`[FOLDER] couldn't fetch ${recorded}: ${r.reason}`);
+      return null;
+    }
+    folderFetchFailures.delete(key);
+    log(`[FOLDER] ${recorded} arrived from ${r.from} at ${r.path} (${r.files} files)`);
+    return r.path;
+  })().finally(() => folderFetches.delete(key));
+  folderFetches.set(key, run);
+  return run;
+}
+
+function folderFetchFailure(conversationId: string | undefined, recorded: string | undefined): string | undefined {
+  return conversationId && recorded ? folderFetchFailures.get(`${conversationId}\0${recorded}`)?.reason : undefined;
 }
 
 // Where a transcript regenerated from Convex should say it ran — and where the
@@ -714,7 +770,10 @@ async function refuseResumeNoLocalCheckout(
   const short = sessionId.slice(0, 8);
   // What the refused command reports as its error, so whoever sent it (a move,
   // a migration) learns the session did not resume here.
-  const refused = `no checkout here for ${recordedCwd ?? "the session's project"}`;
+  const peerFailure = folderFetchFailure(conversationId, recordedCwd);
+  const refused = peerFailure && recordedCwd
+    ? missingResumeFolderError(recordedCwd, peerFailure)
+    : `no checkout here for ${recordedCwd ?? "the session's project"}`;
   if (conversationId && syncServiceRef) {
     const owner = await syncServiceRef.getConversationOwner(conversationId).catch(() => null);
     if (owner && owner !== deviceId()) {
@@ -729,7 +788,7 @@ async function refuseResumeNoLocalCheckout(
     // with nothing on screen: name the folder this machine lacks instead.
     if (!noLocalCheckoutBannerActionable({ remote, recordedPath: recordedCwd })) {
       if (owner === deviceId() && recordedCwd) {
-        const err = missingResumeFolderError(recordedCwd);
+        const err = missingResumeFolderError(recordedCwd, peerFailure);
         syncServiceRef.setSessionError(conversationId, err).catch(() => {});
         log(`[REMOTE] resume refused for ${short}: ${err}`);
         return err;
@@ -3695,7 +3754,7 @@ export function discardPrimedClaim(commandId: string, siteUrl: string, apiToken:
  */
 // A backend switch waits on a turn's wind-down and an SDK host's start (minutes at worst); a kill
 // queued behind it must still run, and cancels it.
-const DETACHED_COMMANDS: ReadonlySet<string> = new Set(["cloud_agent_action", "switch_claude_backend"]);
+const DETACHED_COMMANDS: ReadonlySet<string> = new Set(["cloud_agent_action", "switch_claude_backend", "export_folder"]);
 
 /** Run one delivery batch: drop what this daemon already handled, claim the
  *  whole batch in one round trip, then execute in order. Shared by the three
@@ -6945,6 +7004,20 @@ async function executeRemoteCommand(
         });
         setTimeout(() => void runSelfUpdate("remote update command"), 1000);
         return;
+      }
+      case "export_folder": {
+        const svc = syncServiceRef;
+        if (!svc) { error = "export_folder: not connected"; break; }
+        const { exportFolder, FOLDER_BUNDLE_MEDIA_TYPE } = await import("./folderSync.js");
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        const out = await exportFolder(parsed, {
+          home: process.env.HOME || require("os").homedir(),
+          upload: (bytes) => svc.uploadBytes(bytes, FOLDER_BUNDLE_MEDIA_TYPE, "Folder", 5 * 60_000),
+          log,
+        });
+        result = JSON.stringify(out);
+        log(`[FOLDER] export_folder ${parsed.path}: ${out.ok ? `sent ${out.files} files` : out.reason}`);
+        break;
       }
       case "cap_publish": {
         const { runCapPublishCommand } = await import("./capabilities/kitPublish.js");
