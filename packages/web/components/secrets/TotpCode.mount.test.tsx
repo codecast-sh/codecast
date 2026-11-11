@@ -41,8 +41,11 @@ test("copy on the masked 2FA row fetches the seed and copies the current code", 
   expect(document.querySelector("[data-vault-show-code]")).not.toBeNull();
   const before = (await totp(SEED)).code;
   await act(async () => (document.querySelector("[data-vault-copy]") as HTMLButtonElement).click());
-  const after = (await totp(SEED)).code;
+  // The copy lands after the seed fetch and the HMAC, both async: wait for it, not for a fixed number of flushes.
+  const end = Date.now() + 10_000;
+  while (copied.length === 0 && Date.now() < end) await act(async () => new Promise((r) => setTimeout(r, 10)));
   await act(async () => {});
+  const after = (await totp(SEED)).code;
 
   expect(fetches).toBe(1);
   expect(copied).toHaveLength(1);
