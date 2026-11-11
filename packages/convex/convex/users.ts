@@ -75,13 +75,33 @@ export async function readSkillsJson(ctx: QueryCtx, user: Doc<"users">): Promise
   return JSON.stringify(skillsMap);
 }
 
-// The signed-in user row without the legacy skills blob (see readSkillsJson).
+// The signed-in user row without the legacy skills blob (see readSkillsJson)
+// and without the credentials stored on it. No client reads those; the one
+// server reader of the GitHub token goes through githubTokenForCaller.
 async function getCurrentUserRow(ctx: QueryCtx, userId: Id<"users">) {
   const user = await ctx.db.get(userId);
   if (!user) return null;
-  const { available_skills: _skills, ...rest } = user;
+  const {
+    available_skills: _skills,
+    github_access_token: _githubToken,
+    encryption_master_key: _masterKey,
+    push_token: _pushToken,
+    voip_push_token: _voipPushToken,
+    email_unsub_token: _unsubToken,
+    ...rest
+  } = user;
   return rest;
 }
+
+/** The signed-in caller's GitHub token, for actions that call GitHub as them. */
+export const githubTokenForCaller = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<string | null> => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    return (await ctx.db.get(userId))?.github_access_token ?? null;
+  },
+});
 
 /** The viewer's skills catalog as JSON (see readSkillsJson); null when signed out. */
 export const getMySkills = query({
