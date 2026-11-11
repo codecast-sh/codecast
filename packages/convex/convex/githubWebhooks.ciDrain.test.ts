@@ -76,6 +76,16 @@ describe("CI deliveries drain per repository", () => {
     expect(await s.unprocessed()).toHaveLength(78);
   });
 
+  test("a drained delivery keeps its row for dedupe but drops its payload", async () => {
+    const s = await setup();
+    await s.checkRun(1000, HEAD, [12]);
+    await s.drain();
+    const rows = await s.t.run(async (ctx) => ctx.db.query("github_webhook_events").collect());
+    expect(rows.map((r) => [r.processed, r.payload])).toEqual([[true, ""]]);
+    const pr = await s.t.run(async (ctx) => ctx.db.get(s.ids.pr));
+    expect(pr?.checks?.length).toBe(1);
+  });
+
   test("a drain folds the batch into one PR write and asks for its merge state once", async () => {
     const s = await setup();
     await s.deliver("workflow_run", { workflow_run: { id: 5, check_suite_id: 900, event: "pull_request", head_sha: HEAD, status: "completed" } });

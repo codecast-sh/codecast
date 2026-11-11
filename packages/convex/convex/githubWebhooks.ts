@@ -1362,7 +1362,12 @@ export const drainCiEvents = internalMutation({
   args: { repository: v.string() },
   handler: async (ctx, args) => {
     const events: Doc<"github_webhook_events">[] = await pendingCiEvents(ctx, args.repository).take(CI_DRAIN_BATCH);
-    for (const event of events) await ctx.db.patch(event._id, { processed: true });
+    // A patch rewrites the whole row, and the row is mostly its payload (~16 KB
+    // a delivery). Nothing reads a drained payload again (the row stays for
+    // delivery_id dedupe until the prune), so it goes in the same write. Keeping
+    // it made each batch of 50 write ~0.8 MB, and a CI storm's drains pushed prod
+    // past its write limit, refusing message delivery writes (2026-11-10).
+    for (const event of events) await ctx.db.patch(event._id, { processed: true, payload: "" });
 
     const of = (type: string) => events.filter((e) => e.event_type === type).map(parsePayload).filter(Boolean);
     const failed: string[] = [];

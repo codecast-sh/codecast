@@ -483,17 +483,16 @@ export const getPRsForTimeline = query({
       .query("team_memberships")
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
       .collect();
-    let prs = (await Promise.all(memberships.map((membership) =>
-      ctx.db
+    // Each team's newest `limit`, merged: reading every PR a team has ran out of
+    // memory or time on large teams (~900 failures in 6h, 2026-11-10).
+    const repository = args.repository ? normalizeRepository(args.repository) : undefined;
+    const prs = (await Promise.all(memberships.map((membership) => {
+      const newest = ctx.db
         .query("pull_requests")
-        .withIndex("by_team_id", (q: any) => q.eq("team_id", membership.team_id))
-        .collect()
-    ))).flat();
-
-    if (args.repository) {
-      const repository = normalizeRepository(args.repository);
-      prs = prs.filter((pr) => pr.repository === repository);
-    }
+        .withIndex("by_team_updated", (q: any) => q.eq("team_id", membership.team_id))
+        .order("desc");
+      return (repository ? newest.filter((q: any) => q.eq(q.field("repository"), repository)) : newest).take(limit);
+    }))).flat();
 
     prs.sort((a, b) => b.updated_at - a.updated_at);
     return prs.slice(0, limit);

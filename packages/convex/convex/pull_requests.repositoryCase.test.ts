@@ -33,4 +33,14 @@ describe("pull request repository case", () => {
     const rows = await (getPRsForTimeline as any)._handler(context(), { repository: "Codecast-SH/Codecast" });
     expect(rows.map((r: any) => r._id)).toEqual(["pr_1"]);
   });
+
+  test("the timeline returns each team's newest, filtered by repository", async () => {
+    const pull_requests = Array.from({ length: 8 }, (_, i) => ({
+      _id: `pr_${i}`, team_id: "team_1", repository: i % 2 ? "a/b" : "codecast-sh/codecast", number: i, state: "open", updated_at: i,
+    }));
+    const newest = await (getPRsForTimeline as any)._handler(context({ pull_requests }), { limit: 3 });
+    expect(newest.map((r: any) => r._id)).toEqual(["pr_7", "pr_6", "pr_5"]);
+    const inRepo = await (getPRsForTimeline as any)._handler(context({ pull_requests }), { repository: "codecast-sh/codecast", limit: 2 });
+    expect(inRepo.map((r: any) => r._id)).toEqual(["pr_6", "pr_4"]);
+  });
 });
