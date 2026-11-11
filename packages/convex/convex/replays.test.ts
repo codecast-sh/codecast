@@ -124,13 +124,17 @@ describe("the manifest row", () => {
     expect(assemblies()).toBe(3);
   });
 
-  test("a chunk re-signed with new content replaces its sequence's key; keys stay in order; past the cap is refused", async () => {
+  test("a chunk re-signed with new content keeps its key unless the caller vouches the held one never landed; keys stay in order; past the cap is refused", async () => {
     const w = world();
     const { source } = await teamSource(w);
     await recordReplayChunk(w.internalCtx, source, "r1", 2, key(source, 2), NOW);
     await recordReplayChunk(w.internalCtx, source, "r1", 0, key(source, 0), NOW);
-    await recordReplayChunk(w.internalCtx, source, "r1", 2, key(source, 2, SHA("b")), NOW);
-    await recordReplayChunk(w.internalCtx, source, "r1", 0, key(source, 0), NOW);
+    expect(await recordReplayChunk(w.internalCtx, source, "r1", 2, key(source, 2, SHA("b")), NOW)).toMatchObject({ ok: true, held: key(source, 2) });
+    expect(await recordReplayChunk(w.internalCtx, source, "r1", 0, key(source, 0), NOW)).not.toHaveProperty("held");
+    expect(w.db._tables.replays[0].chunk_keys).toEqual([key(source, 0), key(source, 2)]);
+    // Vouching for a key other than the one held changes nothing.
+    expect(await recordReplayChunk(w.internalCtx, source, "r1", 2, key(source, 2, SHA("b")), NOW, "events", key(source, 2, SHA("z")))).toMatchObject({ held: key(source, 2) });
+    expect(await recordReplayChunk(w.internalCtx, source, "r1", 2, key(source, 2, SHA("b")), NOW, "events", key(source, 2))).not.toHaveProperty("held");
     expect(w.db._tables.replays[0].chunk_keys).toEqual([key(source, 0), key(source, 2, SHA("b"))]);
     expect(await recordReplayChunk(w.internalCtx, source, "r1", REPLAY_LIMITS.max_chunks_per_replay, "k", NOW)).toMatchObject({ ok: false });
   });
@@ -490,6 +494,30 @@ describe("the sign route", () => {
     exists = true;
     const again = await (await handleReplaySign(httpCtx(w), post(body), ingestKey)).json();
     expect(again).toEqual({ key: out.key, upload_url: null, exists: true });
+  });
+
+  test("a landed chunk is never replaced; a sequence whose upload never landed is re-signed", async () => {
+    process.env.R2_ENDPOINT = "https://acct.r2.cloudflarestorage.com";
+    process.env.REPLAYS_R2_ACCESS_KEY_ID = "rk";
+    process.env.REPLAYS_R2_SECRET_ACCESS_KEY = "rs";
+    const w = world();
+    const { source, key: ingestKey } = await teamSource(w);
+    const landed = new Set<string>();
+    globalThis.fetch = (async (url: string) => new Response(null, { status: [...landed].some((k) => url.includes(k)) ? 200 : 404 })) as any;
+    const sign = async (sha: string) => (await handleReplaySign(httpCtx(w), post({ replay_id: "r1", seq: 0, sha256: sha, size: 10 }), ingestKey)).json();
+    const first = await sign(SHA("a"));
+    expect(first.upload_url).toContain("X-Amz-Signature=");
+    // The SDK's PUT failed, so it re-signs seq 0 with a grown batch: allowed, the new key replaces the unlanded one.
+    const retry = await sign(SHA("b"));
+    expect(retry.upload_url).toContain("X-Amz-Signature=");
+    expect(w.db._tables.replays[0].chunk_keys).toEqual([retry.key]);
+    landed.add(retry.key);
+    // Once landed, other content for seq 0 gets the landed key back as already uploaded, and nothing changes.
+    const forged = await sign(SHA("f"));
+    expect(forged).toEqual({ key: retry.key, upload_url: null, exists: true });
+    expect(w.db._tables.replays[0].chunk_keys).toEqual([retry.key]);
+    // A retry with identical content still succeeds.
+    expect(await sign(SHA("b"))).toEqual({ key: retry.key, upload_url: null, exists: true });
   });
 
   test("an unknown key is a 401, a bad body a 400, a paused source a retryable 503", async () => {
