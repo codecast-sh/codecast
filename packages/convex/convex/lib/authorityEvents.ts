@@ -6,7 +6,7 @@
 // authorityEvents.guard.test.ts reads the source and fails any other file
 // that inserts into, patches or deletes from the table.
 //
-// A leaf like accessKeys.ts: access.ts (patchConversationVisibility) imports
+// A leaf like accessKeys.ts: conversationVisibility.ts (patchConversationVisibility) imports
 // it at load, so nothing here may reach a module that defines functions.
 import { Id } from "../_generated/dataModel";
 import { computeWorkspaceKey } from "./accessKeys";

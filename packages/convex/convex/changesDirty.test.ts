@@ -7,7 +7,7 @@ import { describe, expect, setDefaultTimeout, setSystemTime, test } from "bun:te
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import { internal } from "./_generated/api";
-import { patchConversationVisibility } from "./lib/access";
+import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { applyMembershipVisibilityChange } from "./teams";
 import { endMembership } from "./lib/teamMembershipEnd";
 import { upsertLocalCommit } from "./repos";

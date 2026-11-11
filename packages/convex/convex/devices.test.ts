@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
-import { enqueueStartSession, planConversationOwnershipClaim, resolveOwnerDeviceView } from "./devices";
+import { enqueueStartSession, planConversationOwnershipClaim } from "./devices";
+import { resolveOwnerDeviceView } from "./lib/ownerDevice";
 import { makeFakeDb } from "./testDb";
 
 const NOW = 1_000_000_000;

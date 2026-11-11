@@ -5,7 +5,7 @@ import { join } from "node:path";
 // CONVERSATION VISIBILITY PATCH RATCHET.
 //
 // A conversation's visibility decides the stored `workspace` access key of
-// every work item linked to it. patchConversationVisibility (lib/access.ts)
+// every work item linked to it. patchConversationVisibility (lib/conversationVisibility.ts)
 // is the one place that writes those fields and then recomputes the keys; a
 // raw ctx.db.patch of is_private, team_visibility, auto_shared or a
 // conversation's team_id changes what people may see and leaves every linked
@@ -63,11 +63,11 @@ const result = checkRatchet({
   dirs: ["."],
   exempt: (rel) =>
     // The chokepoint itself, and tests that assert on stored rows directly.
-    rel === "lib/access.ts" || /\.test\.ts$/.test(rel) || rel.startsWith("__tests__/"),
+    rel === "lib/conversationVisibility.ts" || /\.test\.ts$/.test(rel) || rel.startsWith("__tests__/"),
   count: rawVisibilityPatches,
   allowlist: ALLOWLIST,
   pin: PIN,
-  fix: "Call patchConversationVisibility from lib/access.ts instead — it patches the row and rewrites the workspace key of every linked work item.",
+  fix: "Call patchConversationVisibility from lib/conversationVisibility.ts instead — it patches the row and rewrites the workspace key of every linked work item.",
   pruneCommand: "cd packages/convex && RATCHET_WRITE=prune bun test convex/conversationVisibilityPatch.ratchet.test.ts",
   minScanned: 100,
 });

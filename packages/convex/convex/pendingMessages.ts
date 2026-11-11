@@ -21,7 +21,7 @@ import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, releaseQueuedRows, reviveConversationOnDelivery } from "./pendingMessageWrites";
 import { answeredThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isReviveClientId, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage } from "@codecast/shared/contracts";
 import { autoRecoveryEnabled, listOnlineDevices } from "./ccAccountsShared";
-import { resolveOwnerDeviceView } from "./devices";
+import { resolveOwnerDeviceView } from "./lib/ownerDevice";
 import {
   messagesCommandCoverageTarget,
 } from "./messageViewContracts";
@@ -31,7 +31,7 @@ import {
   isFencedPendingMessage,
   legacyConversationAcceptsDaemonWork,
 } from "./executionBindings";
-import { requestRemoteWake } from "./cloud";
+import { requestRemoteWake } from "./cloudWake";
 import { clearPaneRefused } from "./lib/paneRefusal";
 import { restoreNestingParent } from "./inboxFilters";
 import { hostedInputWaits } from "./assistant/input";

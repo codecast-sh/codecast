@@ -28,7 +28,7 @@ import {
   type OrgPartyRef,
   type OrgSessionParent,
 } from "@codecast/shared/contracts/orgChange";
-import { personName } from "../sessionOwnership";
+import { personName } from "./sessionTell";
 import { computeWorkspaceKey } from "./access";
 import { capsFor, trustOf } from "./orgCaps";
 import { listSessionOwnerIds, ownerRowsOf, ownerSetOf, type OwnerRowSnapshot } from "../sessionOwners";

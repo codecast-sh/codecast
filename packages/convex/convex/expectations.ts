@@ -32,7 +32,7 @@ import { nextShortId } from "./counters";
 import { finalizeAnswer, personMayResolve, withdrawCore } from "./sessionDecisions";
 import { allRolesInBoundary } from "./lib/orgAccess";
 import { answererOf } from "./orgLine";
-import { personName } from "./sessionOwnership";
+import { personName } from "./lib/sessionTell";
 import { expectationOpValidator } from "./expectationsSchema";
 import { latestExpectations, performApply } from "./lib/expectationsApply";
 import {

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
-import { requestRemoteWake, wakeDevicesFor } from "./cloud";
+import { requestRemoteWake, wakeDevicesFor } from "./cloudWake";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { CloudWakeAwsError } from "./cloudWakeAws";
 import { claimCloudWake, cloudWakeFailure, finishCloudWake, getCloudWakeHostForConversation, performCloudWake, reconcileCloudWakes, recoverPendingCloudWake, scheduleCloudWake } from "./cloudWake";

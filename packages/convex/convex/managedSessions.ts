@@ -17,10 +17,10 @@ import { isDaemonManagedRow } from "./lib/liveSessions";
 import { performListActiveSessions } from "./managedSessionsList";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { scheduleFedSessionSettle } from "./callChat";
-import { scheduleWorkerSettle } from "./workerSettle";
+import { scheduleWorkerSettle } from "./lib/workerSettleTrigger";
 import { closeSessionRepliesAfterTurn } from "./chatSessionReplies";
 import { onRoundTurnEnded } from "./chatRounds";
-import { scheduleGoalJudge } from "./sessionGoals";
+import { scheduleGoalJudge } from "./lib/sessionGoalTrigger";
 
 // A status CHANGE is the entry point to the needs-input push (see
 // notifications.checkNeedsInput). "idle" only settles into needs_input after

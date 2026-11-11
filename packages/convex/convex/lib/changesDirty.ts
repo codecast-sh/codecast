@@ -276,7 +276,7 @@ export async function withdrawNarrowedInputs(ctx: DirtyCtx, rows: Doc<"change_st
 }
 
 /**
- * A session's visibility changed (lib/access.patchConversationVisibility).
+ * A session's visibility changed (lib/conversationVisibility.patchConversationVisibility).
  * Stories it fed lose what it may no longer give, now. Then the days it
  * reaches are marked: the days of its stories, and, for a team with Changes
  * on, the days of its commits, where a session that just became visible

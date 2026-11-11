@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { BROWSER_SYNC_PENDING_CAP, claimSharedCheckout, commandOutcome, pickOnlineLocalDevice, placeConversation, placementFence, reportPlacementFailure, requestBrowserSync, requestRemoteWake, wakeDevicesFor } from "./cloud";
+import { BROWSER_SYNC_PENDING_CAP, claimSharedCheckout, commandOutcome, pickOnlineLocalDevice, placeConversation, placementFence, reportPlacementFailure, requestBrowserSync } from "./cloud";
+import { requestRemoteWake, wakeDevicesFor } from "./cloudWake";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { resumeConversationSession } from "./daemonCommandUtils";
 

@@ -4,7 +4,7 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
-import { patchConversationVisibility } from "./lib/access";
+import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { claimShareToken } from "./publicShare";
 import { sha256Hex } from "./lib/hash";

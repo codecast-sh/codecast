@@ -19,7 +19,6 @@ import { internal } from "./_generated/api";
 import { grantsContentsWrite, installationForRepo } from "./githubApp";
 import { Id } from "./_generated/dataModel";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
-import { scheduleCloudWake, serverOwnsCloudWake } from "./cloudWake";
 import { enqueueStartSession } from "./devices";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { releasePreviousOwner } from "./sessionRelease";
@@ -46,64 +45,6 @@ async function getAuthenticatedUserId(ctx: { db: any }, apiToken?: string): Prom
     if (result) return result.userId;
   }
   return null;
-}
-
-type WakeableDevice = {
-  user_id?: string;
-  device_id: string;
-  label?: string;
-  last_seen: number;
-  is_remote?: boolean;
-  wake_requested_at?: number;
-};
-
-/**
- * Remote devices that are asleep with work waiting: a wake stamp newer than
- * their last heartbeat. Pure, so the heartbeat can call it per beat and the
- * rule is unit-testable. A stamp older than the last beat was answered by that
- * beat (the device came up and the stamp is cleared there as well).
- */
-export function wakeDevicesFor(
-  devices: WakeableDevice[],
-  now: number,
-): Array<{ device_id: string; label: string | null }> {
-  return devices
-    .filter(
-      (d) =>
-        d.is_remote === true &&
-        !serverOwnsCloudWake(d.user_id ?? "", d.device_id) &&
-        typeof d.wake_requested_at === "number" &&
-        d.wake_requested_at > d.last_seen &&
-        now - d.last_seen >= DEVICE_ONLINE_MS,
-    )
-    .map((d) => ({ device_id: d.device_id, label: d.label ?? null }));
-}
-
-/**
- * Work was queued for a conversation. If its owner is a remote device that is
- * offline — a cloud host that powered itself off — retain wake intent until
- * its next heartbeat. Returns whether a wake is pending.
- * Never stamps a local device: nothing can open a closed laptop.
- */
-export async function requestRemoteWake(ctx: { db: any; scheduler?: { runAfter(delay: number, fn: any, args: any): Promise<unknown> } }, conversation: any): Promise<boolean> {
-  const owner = conversation?.owner_device_id as string | undefined;
-  if (!owner) return false;
-  // A row still waiting for a laptop to prepare the host has nothing for the
-  // host to do yet: its pending first message is the laptop's work, and
-  // `cast cloud start` wakes the box itself (ensureUp).
-  if (conversation?.cloud_placement === "pending") return false;
-  const device = await ctx.db
-    .query("devices")
-    .withIndex("by_user_device", (q: any) => q.eq("user_id", conversation.user_id).eq("device_id", owner))
-    .first();
-  if (!device?.is_remote) return false;
-  const now = Date.now();
-  const pending = typeof device.wake_requested_at === "number" && device.wake_requested_at > device.last_seen;
-  const retryFailed = device.cloud_wake?.status === "failed" && serverOwnsCloudWake(device.user_id, device.device_id);
-  const requestAt = pending && !retryFailed ? device.wake_requested_at : Math.max(now, device.last_seen + 1, (device.wake_requested_at ?? 0) + 1);
-  if (requestAt !== device.wake_requested_at) await ctx.db.patch(device._id, { wake_requested_at: requestAt });
-  await scheduleCloudWake(ctx, device, requestAt);
-  return true;
 }
 
 /**

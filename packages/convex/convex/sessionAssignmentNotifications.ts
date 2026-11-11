@@ -1,4 +1,4 @@
-import { deliverSessionNotification } from "./notifications";
+import { deliverSessionNotification } from "./lib/sessionNotify";
 import { listSessionOwnerIds } from "./sessionOwners";
 
 export async function notifySessionAssigned(

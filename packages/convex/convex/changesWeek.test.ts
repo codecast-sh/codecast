@@ -14,7 +14,7 @@ import schema from "./schema";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { STRONG_MODEL, modelCost } from "./lib/anthropic";
-import { patchConversationVisibility } from "./lib/access";
+import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { weekWindow } from "./changesQueries";
 import {
   WEEK_CAP_USD,

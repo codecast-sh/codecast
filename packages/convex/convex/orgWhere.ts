@@ -19,7 +19,7 @@ import { roleCardOf } from "./agentTasks";
 import { sessionWork } from "./lib/orgOwnership";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { activeTeamMembershipFor } from "./lib/access";
-import { personName } from "./sessionOwnership";
+import { personName } from "./lib/sessionTell";
 
 type Ref = OrgWhere["work"]["task"];
 

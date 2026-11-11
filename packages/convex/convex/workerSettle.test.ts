@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { performTellParent, REPORT_COVERS_SETTLE_MS, scheduleWorkerSettle } from "./workerSettle";
+import { performTellParent, REPORT_COVERS_SETTLE_MS } from "./workerSettle";
+import { scheduleWorkerSettle } from "./lib/workerSettleTrigger";
 import { makeFakeDb } from "./testDb";
 
 // A `cast spawn --subagent` worker reports to the session it nests under. On
