@@ -110,6 +110,11 @@ export const slackTables = {
     // Slack ts floor: events older than this are not mirrored (set at link time,
     // moved back by a backfill).
     since_ts: v.string(),
+    // Slack ts through which this channel's lines are known to be here. Live
+    // delivery is a push Slack gives up on after a few retries, so the
+    // catch-up pass (slackCatchUp.ts) reads history from this point and
+    // mirrors what never arrived. Absent until its first run.
+    caught_up_ts: v.optional(v.string()),
     // Status, for the settings surface. Counters are best effort.
     last_inbound_at: v.optional(v.number()),
     last_outbound_at: v.optional(v.number()),

@@ -283,6 +283,16 @@ crons.interval(
 );
 
 crons.interval(
+  // Slack drops an event after a few failed deliveries, so lines sent while
+  // the backend was unreachable never arrive live. Read each mirrored
+  // channel's history since its mark and bring over what is missing.
+  "catch up mirrored slack channels",
+  { minutes: 10 },
+  internal.slackCatchUp.catchUpAll,
+  {}
+);
+
+crons.interval(
   // Who is in each mirrored Slack workspace. Without this the people table
   // only learns somebody when they speak, and a codecast mention of a quiet
   // teammate or an agent posts to Slack as plain text instead of paging them.

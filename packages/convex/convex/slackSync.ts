@@ -104,7 +104,7 @@ const NOTICE_CLIENT_ID_PREFIX = "slack-notice:";
 
 // The chat row a Slack ts names, whichever way it crossed: an inbound line by
 // its derived client id, an outbound line by the ts stamped after the post.
-async function findMirroredRow(ctx: ReadCtx, link: Link, ts: string): Promise<Doc<"chat_messages"> | null> {
+export async function findMirroredRow(ctx: ReadCtx, link: Link, ts: string): Promise<Doc<"chat_messages"> | null> {
   const inbound = await findByClientId(ctx, link.chat_channel_id, slackClientId(link.workspace_id, link.slack_channel_id, ts));
   if (inbound) return inbound;
   const outbound = await ctx.db
@@ -2040,7 +2040,14 @@ export const rerenderSharedQuotes = internalAction({
 });
 
 // One Slack message (root, reply, broadcast, bot card, file share) to a chat line.
-async function mirrorMessage(
+// The message subtypes that carry a line a person or app wrote; every other
+// subtype is an edit, delete or system notice with its own path.
+export function isMirrorableMessage(m: { subtype?: string } | null | undefined): boolean {
+  const sub = m?.subtype;
+  return sub === undefined || sub === "file_share" || sub === "thread_broadcast" || sub === "bot_message";
+}
+
+export async function mirrorMessage(
   ctx: ActionCtx,
   c: { install: Install; link: Link; anchor_handle: string | null },
   msg: any,
@@ -2160,7 +2167,7 @@ export const processEvent = internalAction({
       const type = String(event.type ?? "");
       if (type === "message") {
         const sub = event.subtype as string | undefined;
-        if (sub === undefined || sub === "file_share" || sub === "thread_broadcast" || sub === "bot_message") {
+        if (isMirrorableMessage(event)) {
           const res = await mirrorMessage(ctx, { install, link, anchor_handle: c.anchor_handle }, event, { live: true });
           await finish(res.message_id ? "done" : "skipped", res.message_id ? undefined : res.status);
           return;
@@ -2789,7 +2796,7 @@ async function backfillRun(
       if (fetched >= BACKFILL_MAX_TOTAL) { capped = true; break; }
       if (Date.now() - runStarted > BACKFILL_RUN_BUDGET_MS) { outOfTime = true; break; }
       lastTs = m.ts;
-      if (m.subtype && m.subtype !== "file_share" && m.subtype !== "thread_broadcast" && m.subtype !== "bot_message") continue;
+      if (!isMirrorableMessage(m)) continue;
       await mirrorOne(m);
       if (link.options.threads && m.reply_count > 0) {
         // A long thread is applied whole, so the next run never revisits the
