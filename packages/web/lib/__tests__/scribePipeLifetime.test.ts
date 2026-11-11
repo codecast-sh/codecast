@@ -74,7 +74,8 @@ function fakeRoom(trackSid: string) {
   const publication = {
     trackSid,
     isSubscribed: true,
-    track: { mediaStreamTrack: { readyState: "live" } },
+    // A LocalTrack is an event emitter: the scribe listens for its restarts.
+    track: { mediaStreamTrack: { readyState: "live" }, on() {}, off() {} },
   };
   return {
     localParticipant: {

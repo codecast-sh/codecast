@@ -33,12 +33,11 @@ const { markChatRailLive } = await import("../../../lib/chatLive");
 markChatRailLive();
 
 const aivery = { name: "Aivery", avatar_url: "https://a/aivery.png", is_bot: true };
+// The card reads the line's stored row: the rail only says a new line exists.
 const cases = [
-  { label: "unopened channel", rail: aivery, full: undefined, name: "Aivery", avatar: aivery.avatar_url, agent: false },
-  { label: "loaded message with an older rail", rail: undefined, full: aivery, name: "Aivery", avatar: aivery.avatar_url, agent: false },
-  { label: "loaded sender takes precedence", rail: { name: "Old name" }, full: aivery, name: "Aivery", avatar: aivery.avatar_url, agent: false },
-  { label: "partial cached message", rail: aivery, full: {}, name: "Aivery", avatar: aivery.avatar_url, agent: false },
-  { label: "Slack sender without an avatar", rail: { name: "Aivery" }, full: undefined, name: "Aivery", avatar: undefined, agent: false },
+  { label: "Slack sender on the row", rail: aivery, full: aivery, name: "Aivery", avatar: aivery.avatar_url, agent: false },
+  { label: "row's sender over an older rail", rail: { name: "Old name" }, full: aivery, name: "Aivery", avatar: aivery.avatar_url, agent: false },
+  { label: "Slack sender without an avatar", rail: { name: "Aivery" }, full: { name: "Aivery" }, name: "Aivery", avatar: undefined, agent: false },
   { label: "ordinary teammate", rail: undefined, full: undefined, name: "Dana", avatar: "https://a/dana.png", agent: false },
   { label: "codecast agent", rail: undefined, full: undefined, name: "Anchor", avatar: undefined, agent: true },
 ];
@@ -68,9 +67,11 @@ for (const c of cases) test(c.label, async () => {
   try {
     await act(async () => root.render(<Probe />));
     expect(toasts).toHaveLength(0);
+    // The rail moves first; the card waits for the line's row.
+    await act(async () => useInboxStore.setState({ chatRail: [{ ...row, last_message: { ...last, _id: "arrival" }, unread: 1 }] }));
+    expect(toasts).toHaveLength(0);
     await act(async () => useInboxStore.setState({
-      chatRail: [{ ...row, last_message: { ...last, _id: "arrival" }, unread: 1 }],
-      chatMessages: c.full ? { arrival: { ...last, _id: "arrival", content: last.preview, external_author: "name" in c.full ? c.full : undefined } } : {},
+      chatMessages: { arrival: { ...last, _id: "arrival", channel_id: channelId, content: last.preview, external_author: c.full } },
     }));
     expect(toasts).toHaveLength(1);
     const popup = toasts[0]();
@@ -88,10 +89,9 @@ for (const c of cases) test(c.label, async () => {
 });
 
 // A huddle's digest is written under its scribe's account because the
-// transcript is theirs. The card names the huddle and wears the call badge,
-// whether only the rail says it is a call or the full row is already cached.
-for (const where of ["rail", "cached row"] as const) test(`huddle digest from the ${where} names the huddle, not its scribe`, async () => {
-  const channelId = `dm-huddle-${where}`;
+// transcript is theirs. The card names the huddle and wears the call badge.
+test("huddle digest names the huddle, not its scribe", async () => {
+  const channelId = "dm-huddle";
   const content = "**Team member out sick** · 1 min huddle with Cam and Ashot\n\nTesting issue noted.";
   const last = { _id: "before", user_id: "cam", created_at: Date.now(), preview: "Earlier line" };
   const row = { channel_id: channelId, last_message: last, unread: 0, unread_mentions: 0, notify_level: "all", joined: true, sort_at: Date.now() };
@@ -111,9 +111,10 @@ for (const where of ["rail", "cached row"] as const) test(`huddle digest from th
   try {
     await act(async () => root.render(<Probe />));
     const digest = { _id: "digest", user_id: "cam", created_at: Date.now(), preview: "Team member out sick · 1 min huddle with Cam and Ashot" };
+    await act(async () => useInboxStore.setState({ chatRail: [{ ...row, last_message: { ...digest, call: true } }] }));
+    expect(toasts).toHaveLength(0);
     await act(async () => useInboxStore.setState({
-      chatRail: [{ ...row, last_message: where === "rail" ? { ...digest, call: true } : digest }],
-      chatMessages: where === "rail" ? {} : { digest: { ...digest, channel_id: channelId, content, call: { transcript_id: "t1" } } },
+      chatMessages: { digest: { ...digest, channel_id: channelId, content, call: { transcript_id: "t1" } } },
     }));
     expect(toasts).toHaveLength(1);
     const popup = toasts[0]();
@@ -157,6 +158,8 @@ test("a session's line names the session, not the human it ran as", async () => 
       origin: "agent", origin_session_id: "sess-1", origin_session_title: "Build machine unblock", origin_agent_type: "codex",
     };
     await act(async () => useInboxStore.setState({ chatRail: [{ ...row, last_message: typed, unread: 1 }] }));
+    expect(toasts).toHaveLength(0);
+    await act(async () => useInboxStore.setState({ chatMessages: { typed: { ...typed, channel_id: channelId, content: typed.preview } } }));
     expect(toasts).toHaveLength(1);
     const popup = toasts[0]();
     expect(popup.props.data.authorName).toBe("Build machine unblock");

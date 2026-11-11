@@ -50,6 +50,7 @@ dom.window.HTMLCanvasElement.prototype.getContext = (() => null) as any;
 const restore = replaceGlobals({ window: dom.window, Event: dom.window.Event, CustomEvent: dom.window.CustomEvent, document: dom.window.document, navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, Element: dom.window.Element, Node: dom.window.Node, DOMRect: dom.window.DOMRect, getComputedStyle: dom.window.getComputedStyle.bind(dom.window), ResizeObserver: TestResizeObserver, requestAnimationFrame: dom.window.requestAnimationFrame.bind(dom.window), cancelAnimationFrame: dom.window.cancelAnimationFrame.bind(dom.window), localStorage: dom.window.localStorage, IS_REACT_ACT_ENVIRONMENT: true });
 afterAll(() => { dom.window.close(); restore(); });
 const { ConversationView } = await import("../../ConversationView");
+const { useInboxStore } = await import("../../../store/inboxStore");
 const useAuth = () => ({ isLoading: false, isAuthenticated: false, fetchAccessToken: async () => null });
 const client = { clearAuth() {}, setAuth() {}, watchQuery() { return { onUpdate() { return () => {}; }, localQueryResult() { return undefined; }, journal() { return undefined; } }; }, connectionState() { return { isWebSocketConnected: true }; }, subscribeToConnectionState() { return () => {}; }, mutation() { throw Error("Unexpected mutation"); }, query() { return Promise.resolve(undefined); } } as any;
 const empty: never[] = [];
@@ -141,14 +142,17 @@ test("fold mode draws the person's message and what the agent said, as bubbles, 
     { _id: "clean-a1", role: "assistant", timestamp: 1_001_000, content: "Let me look at the funnel first.", tool_calls: [say] },
     { _id: "clean-a2", role: "assistant", timestamp: 1_002_000, content: "Said it." },
   ] } as any;
+  const view = <ConvexProviderWithAuth client={client} useAuth={useAuth}><MemoryRouter><ConversationView conversation={data} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} initialDensity="condensed" foldWorkingTurns openAtTop /></MemoryRouter></ConvexProviderWithAuth>;
+  const anchors = (useInboxStore.getState() as any).anchors;
   try {
-    await act(async () => { root.render(
-      <ConvexProviderWithAuth client={client} useAuth={useAuth}><MemoryRouter><ConversationView conversation={data} commits={empty} pullRequests={empty} backHref="/" hideHeader showMessageInput={false} isOwner={false} initialDensity="condensed" foldWorkingTurns openAtTop /></MemoryRouter></ConvexProviderWithAuth>,
-    ); });
+    // The page asks for fold mode; the seat's own switch decides it.
+    await act(async () => { root.render(view); });
+    expect(host.textContent).toContain("Let me look at the funnel first.");
+    await act(async () => { useInboxStore.setState({ anchors: { ...anchors, "seat-fold": { _id: "seat-fold", conversation_id: "fold-clean", clean_chat: true } } } as any); });
     expect(host.textContent).toContain("What is your focus?");
     expect(host.textContent).toContain("One funnel: introductions per week.");
     expect(host.textContent).not.toContain("Let me look at the funnel first.");
     expect(host.textContent).not.toContain("Said it.");
     expect(host.querySelectorAll("[data-cc-bubble]").length).toBe(2);
-  } finally { await act(() => root.unmount()); host.remove(); }
+  } finally { useInboxStore.setState({ anchors } as any); await act(() => root.unmount()); host.remove(); }
 }, 30_000);

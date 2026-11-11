@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
+import { useWatchEffect } from "./useWatchEffect";
 import { useInboxStore } from "../store/inboxStore";
 import { decisionDraftKey } from "../lib/decisionQueue";
 import { flushDraftWrite, hasPendingDraftWrite, scheduleDraftWrite } from "../lib/pendingDraftWrites";
@@ -35,8 +36,8 @@ export function useDecisionDraftText(decisionId: string, field: string): [string
   const key = decisionDraftKey(decisionId);
   const stored = useInboxStore((s) => (s.drafts[key]?.[field] as string | undefined) ?? "");
   const [text, setText] = useState(stored);
-  useEffect(() => { if (!hasPendingDraftWrite(key)) setText(stored); }, [key, stored]);
-  useEffect(() => () => flushDraftWrite(key), [key]);
+  useWatchEffect(() => { if (!hasPendingDraftWrite(key)) setText(stored); }, [key, stored]);
+  useWatchEffect(() => () => flushDraftWrite(key), [key]);
   const type = useCallback((next: string) => {
     setText(next);
     scheduleDraftWrite(key, () => {

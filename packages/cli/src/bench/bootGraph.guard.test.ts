@@ -540,7 +540,9 @@ describe("command groups stay off the boot graph", () => {
     // 580 on 2026-11-09: imagePayload.ts (as on the index.ts graph above) and
     // pidAlive.ts, the import-free liveness probe that replaced four private
     // copies, came on; cursorProcessor.ts, which nothing called, went.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(580);
+    // 581 on 2026-11-10: heartbeatMembership.ts, an import-free leaf that
+    // decides which sessions the daemon stops heartbeating.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(581);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

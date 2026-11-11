@@ -114,7 +114,7 @@ packages/convex/convex/lineTrial.ts 2150
 packages/convex/convex/managedSessions.ts 1300
 packages/convex/convex/messages.ts
 packages/convex/convex/migrations.ts 950
-packages/convex/convex/notifications.needsInput.test.ts 1300
+packages/convex/convex/notifications.needsInput.test.ts 900
 packages/convex/convex/notifications.ts
 packages/convex/convex/oauthConnectors.test.ts 850
 packages/convex/convex/org.ts
