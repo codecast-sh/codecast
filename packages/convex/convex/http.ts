@@ -5341,6 +5341,9 @@ cliRoute("/cli/terminal/frame", async (ctx, body) => ctx.runMutation(api.termina
 cliRoute("/cli/terminal/watch", async (ctx, body) => ctx.runMutation(api.terminalStream.watchPane, body), { forwardDeviceId: true });
 cliRoute("/cli/terminal/pane", async (ctx, body) => ctx.runQuery(api.terminalStream.getPane, body), { forwardDeviceId: true });
 cliRoute("/cli/terminal/input", async (ctx, body) => ctx.runMutation(api.terminalStream.sendPaneInput, body), { forwardDeviceId: true });
+// Remote browser watching: the daemon's frame push (packages/cli/src/browser/
+// watchRelay.ts), same lease-in-the-reply shape as the terminal's.
+cliRoute("/cli/browser/frame", async (ctx, body) => ctx.runMutation(api.browserStream.cliPushBrowserFrame, body), { forwardDeviceId: true });
 
 // Image sharing (cast image): upload a screenshot/image to storage, then
 // resolve its stable public /api/storage/<uuid> URL for inline embedding in

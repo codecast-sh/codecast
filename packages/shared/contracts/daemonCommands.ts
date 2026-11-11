@@ -159,6 +159,14 @@ export const DAEMON_COMMANDS = [
   // split reports the machine can't stream and offers the ssh command instead).
   // See packages/shared/contracts/terminalStream.ts.
   "stream_pane",
+  // Watch the browser tab a session drives on THIS device, for a viewer that
+  // cannot reach the loopback watch socket (the agent runs on another of the
+  // user's machines). args: StreamBrowserArgs — { key, session_uuid?,
+  // tmux_session? }. The daemon runs the watch session and pushes frames to
+  // /cli/browser/frame while the viewer's lease is live. Old daemons: "Unknown
+  // command" (the viewer times out and says the machine did not answer). See
+  // packages/shared/contracts/browserStream.ts.
+  "stream_browser",
   // Park a session's pane to give the machine back its resources: the reaper's
   // teardown (heartbeat stopped first, transcript kept, tmux session and its
   // process tree killed) plus the "hibernated" agent status. The next message

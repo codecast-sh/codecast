@@ -116,10 +116,16 @@ export interface WatchServerDeps {
   paneIdFor(tmuxSession: string): Promise<string | null>;
 }
 
+let realDeps: WatchServerDeps | null = null;
+/** The real engine and pane lookup, shared by the socket and the relay. */
+export function defaultWatchDeps(): WatchServerDeps {
+  return (realDeps ??= { engine: cdpWatchEngine(), paneIdFor: tmuxPaneId });
+}
+
 export function attachWatchServer(
   server: http.Server,
   opts: TerminalServerOptions,
-  deps: WatchServerDeps = { engine: cdpWatchEngine(), paneIdFor: tmuxPaneId },
+  deps: WatchServerDeps = defaultWatchDeps(),
 ): { close(): void } {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
 
@@ -142,14 +148,50 @@ export function attachWatchServer(
   };
 }
 
-function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: WatchServerDeps): void {
+/** Where a watch session's messages go: the loopback socket, or the relay. */
+export interface WatchSink {
+  /** ready, frame, tab and action messages, in order. */
+  send(msg: Record<string, unknown>): void;
+  /** The stream is over: `msg` is its final error or exit message. */
+  finish(msg: { type: "error"; code: string; message: string } | { type: "exit"; reason: string }): void;
+  /** True while the transport is not draining; frames are held meanwhile. */
+  backlogged(): boolean;
+}
+
+export interface WatchSessionOptions {
+  session_uuid?: string;
+  tmux_session?: string;
+  minIntervalMs: number;
+  control: boolean;
+  quality: number;
+  maxDim: number;
+  log(msg: string): void;
+}
+
+export interface WatchSessionHandle {
+  /** One viewer input event (control mode); dropped between tabs. */
+  input(ev: unknown): void;
+  /** The viewer left. Idempotent. */
+  stop(): void;
+}
+
+/**
+ * One viewer watching one session's browser: resolve the tab the session
+ * drives, stream it, follow the session to a new tab, and end on its own
+ * when the tab or browser goes or the time cap is reached. Transport neutral:
+ * the loopback socket (handleConnection) and the Convex relay (watchRelay.ts)
+ * both drive it.
+ */
+export function runWatchSession(
+  opts: WatchSessionOptions,
+  sink: WatchSink,
+  deps: WatchServerDeps,
+): WatchSessionHandle {
   const { engine } = deps;
   let source: FrameSource | null = null;
   let candidates: string[] = [];
   let ownerTimer: NodeJS.Timeout | null = null;
   let lifeTimer: NodeJS.Timeout | null = null;
-  let minInterval = MIN_FRAME_INTERVAL_MS;
-  let controlWanted = false;
   let closed = false;
   // Actions go out live once the viewer has had ready; before that they are
   // only remembered, and the replay after ready delivers them in order.
@@ -159,9 +201,6 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: Watc
   let opening = false;
   const aborter = new AbortController();
 
-  const sendJson = (obj: unknown) => {
-    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
-  };
   const cleanup = () => {
     if (closed) return;
     closed = true;
@@ -171,70 +210,34 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: Watc
     source?.stop();
     source = null;
   };
+  const send = (msg: Record<string, unknown>) => {
+    if (!closed) sink.send(msg);
+  };
   const exit = (reason: string) => {
-    sendJson({ type: "exit", reason });
-    ws.close(1000);
+    if (closed) return;
     cleanup();
+    sink.finish({ type: "exit", reason });
   };
   const fail = (code: string, message: string) => {
-    sendJson({ type: "error", code, message });
-    ws.close(4000, code);
+    if (closed) return;
     cleanup();
+    sink.finish({ type: "error", code, message });
   };
 
-  ws.on("close", cleanup);
-  ws.on("error", cleanup);
-
-  const helloTimeout = setTimeout(() => fail("timeout", "hello timeout"), 10_000);
-  helloTimeout.unref?.();
-
-  ws.once("message", (raw, isBinary) => {
-    clearTimeout(helloTimeout);
-    if (isBinary) return fail("bad-hello", "expected hello");
-    let hello: WatchHello;
-    try {
-      hello = JSON.parse(raw.toString("utf8"));
-    } catch {
-      return fail("bad-hello", "bad hello");
+  void ownerCandidates(opts, deps.paneIdFor).then((keys) => {
+    if (closed) return; // the viewer left during the pane lookup
+    candidates = keys;
+    const resolved = engine.resolveTab(candidates);
+    if ("error" in resolved) {
+      fail(
+        resolved.error,
+        resolved.error === "no-browser"
+          ? "no managed browser is running on this machine"
+          : "this session has not driven a browser tab",
+      );
+      return;
     }
-    if (hello.type !== "hello") return fail("bad-hello", "bad hello");
-    if (!tokenMatches(hello.token, opts)) return fail("forbidden", "forbidden");
-    if (typeof hello.fps === "number" && hello.fps > 0) {
-      minInterval = Math.max(minInterval, Math.floor(1000 / hello.fps));
-    }
-    controlWanted = hello.control === true;
-    if (controlWanted) {
-      // After the hello the socket stays two-way: batches of input events
-      // ride back on it. Dropped silently between tabs (source === null) —
-      // a click into a tab that just died has nowhere meaningful to land.
-      ws.on("message", (raw2, isBinary2) => {
-        if (closed || isBinary2) return;
-        let m: any;
-        try {
-          m = JSON.parse(raw2.toString("utf8"));
-        } catch {
-          return;
-        }
-        if (m?.type !== "input" || !Array.isArray(m.events) || m.events.length > 64) return;
-        for (const ev of m.events) if (ev && typeof ev === "object") void source?.input?.(ev);
-      });
-    }
-
-    void ownerCandidates(hello, deps.paneIdFor).then((keys) => {
-      if (closed) return; // the viewer left during the pane lookup
-      candidates = keys;
-      const resolved = engine.resolveTab(candidates);
-      if ("error" in resolved) {
-        fail(
-          resolved.error,
-          resolved.error === "no-browser"
-            ? "no managed browser is running on this machine"
-            : "this session has not driven a browser tab",
-        );
-        return;
-      }
-      void open(resolved.tabId, true);
-    });
+    void open(resolved.tabId, true);
   });
 
   async function open(tabId: string, first: boolean): Promise<void> {
@@ -245,20 +248,16 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: Watc
       next = await engine.open(
         tabId,
         {
-          minIntervalMs: minInterval,
-          shouldHold: () => ws.bufferedAmount > HIGH_WATER_BYTES,
-          quality: FRAME_QUALITY,
-          maxWidth: FRAME_MAX_DIM,
-          maxHeight: FRAME_MAX_DIM,
+          minIntervalMs: opts.minIntervalMs,
+          shouldHold: () => sink.backlogged(),
+          quality: opts.quality,
+          maxWidth: opts.maxDim,
+          maxHeight: opts.maxDim,
           signal: aborter.signal,
         },
         {
-          onFrame: (f) => {
-            if (!closed) sendJson({ type: "frame", data: f.data, w: f.width, h: f.height });
-          },
-          onTab: (t) => {
-            if (!closed) sendJson({ type: "tab", title: t.title, url: t.url, targetId: t.id });
-          },
+          onFrame: (f) => send({ type: "frame", data: f.data, w: f.width, h: f.height }),
+          onTab: (t) => send({ type: "tab", title: t.title, url: t.url, targetId: t.id }),
           onGone: () => {
             // The tab died. The owner poll decides whether the session has a
             // new one; drop our handle so it knows to reopen.
@@ -266,7 +265,7 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: Watc
           },
           onAction: (a) => {
             recentActions.remember(tabId, a);
-            if (!closed && readySent) sendJson(a);
+            if (readySent) send(a as unknown as Record<string, unknown>);
           },
         },
       );
@@ -291,22 +290,22 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: Watc
     }
     source = next;
     readySent = false;
-    sendJson({
+    send({
       type: "ready",
       protocol: WATCH_PROTOCOL_VERSION,
       targetId: next.tab.id,
       title: next.tab.title,
       url: next.tab.url,
-      control: controlWanted && typeof next.input === "function",
+      control: opts.control && typeof next.input === "function",
     });
     readySent = true;
-    for (const a of recentActions.recall(tabId)) sendJson(a);
+    for (const a of recentActions.recall(tabId)) send(a as unknown as Record<string, unknown>);
     if (first) {
       lifeTimer = setTimeout(() => exit("timeout"), MAX_WATCH_MS);
       lifeTimer.unref?.();
       ownerTimer = setInterval(followOwner, OWNER_POLL_MS);
       ownerTimer.unref?.();
-      opts.log(`[WATCH] streaming tab ${next.tab.id.slice(0, 8)} (${minInterval}ms/frame)`);
+      opts.log(`[WATCH] streaming tab ${next.tab.id.slice(0, 8)} (${opts.minIntervalMs}ms/frame)`);
     }
   }
 
@@ -324,4 +323,89 @@ function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: Watc
     source = null;
     void open(resolved.tabId, false);
   }
+
+  return {
+    input(ev) {
+      if (!closed && opts.control && ev && typeof ev === "object") void source?.input?.(ev as any);
+    },
+    stop: cleanup,
+  };
+}
+
+function handleConnection(ws: WebSocket, opts: TerminalServerOptions, deps: WatchServerDeps): void {
+  let session: WatchSessionHandle | null = null;
+  let done = false;
+  const fail = (code: string, message: string) => {
+    if (done) return;
+    done = true;
+    if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "error", code, message }));
+    ws.close(4000, code);
+  };
+  const stop = () => {
+    done = true;
+    session?.stop();
+  };
+  ws.on("close", stop);
+  ws.on("error", stop);
+
+  const helloTimeout = setTimeout(() => fail("timeout", "hello timeout"), 10_000);
+  helloTimeout.unref?.();
+
+  ws.once("message", (raw, isBinary) => {
+    clearTimeout(helloTimeout);
+    if (isBinary) return fail("bad-hello", "expected hello");
+    let hello: WatchHello;
+    try {
+      hello = JSON.parse(raw.toString("utf8"));
+    } catch {
+      return fail("bad-hello", "bad hello");
+    }
+    if (hello.type !== "hello") return fail("bad-hello", "bad hello");
+    if (!tokenMatches(hello.token, opts)) return fail("forbidden", "forbidden");
+    let minInterval = MIN_FRAME_INTERVAL_MS;
+    if (typeof hello.fps === "number" && hello.fps > 0) {
+      minInterval = Math.max(minInterval, Math.floor(1000 / hello.fps));
+    }
+    const control = hello.control === true;
+    if (control) {
+      // After the hello the socket stays two-way: batches of input events
+      // ride back on it.
+      ws.on("message", (raw2, isBinary2) => {
+        if (done || isBinary2) return;
+        let m: any;
+        try {
+          m = JSON.parse(raw2.toString("utf8"));
+        } catch {
+          return;
+        }
+        if (m?.type !== "input" || !Array.isArray(m.events) || m.events.length > 64) return;
+        for (const ev of m.events) session?.input(ev);
+      });
+    }
+    session = runWatchSession(
+      {
+        session_uuid: hello.session_uuid,
+        tmux_session: hello.tmux_session,
+        minIntervalMs: minInterval,
+        control,
+        quality: FRAME_QUALITY,
+        maxDim: FRAME_MAX_DIM,
+        log: opts.log,
+      },
+      {
+        send: (msg) => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+        },
+        finish: (msg) => {
+          if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+          done = true;
+          if (msg.type === "error") ws.close(4000, msg.code);
+          else ws.close(1000);
+        },
+        backlogged: () => ws.bufferedAmount > HIGH_WATER_BYTES,
+      },
+      deps,
+    );
+    if (done) session.stop();
+  });
 }

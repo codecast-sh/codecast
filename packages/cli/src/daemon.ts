@@ -13,7 +13,7 @@ import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeli
 import { handoffParentSessionId, linkPlanHandoffChild, planHandoffTarget } from "./planHandoff.js";
 import { createPendingDeliveryBatches } from "./pendingDeliveryBatches.js";
 import { pendingMessageFinished, pendingMessageOutcome, prepareTmuxDelivery, receiptSettled, TmuxDeliveryExhaustedError, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
-import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isLocalCommandLine, isRecoveryContinueClientId, type ApiErrorBannerKind, isMachineDeliveredMessage, isValidPaneTarget, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isLocalCommandLine, isRecoveryContinueClientId, type ApiErrorBannerKind, isMachineDeliveredMessage, isValidPaneTarget, isValidBrowserStreamKey, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
 import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath } from "@codecast/shared/contracts";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
 import { mapLimit } from "@codecast/shared/async";
@@ -387,7 +387,8 @@ import {
   isSafeStatusSessionId,
 } from "./statusSpool.js";
 import { startPaneStream, isPaneStreaming, writePane } from "./terminal/paneStream.js";
-import { attachWatchServer } from "./browser/watchServer.js";
+import { attachWatchServer, defaultWatchDeps, runWatchSession } from "./browser/watchServer.js";
+import { startWatchRelay, type RelayAnswer } from "./browser/watchRelay.js";
 import { handleBrowserFocusHttp } from "./browser/focusHttp.js";
 import { handleNotificationHttp } from "./notificationDelivery.js";
 import { handleFsBrowseHttp } from "./fs/browseHttp.js";
@@ -7000,6 +7001,46 @@ async function executeRemoteCommand(
         });
         result = JSON.stringify({ target, streaming: true, already: alreadyRunning });
         log(`[PANE] Streaming ${target} for a remote viewer${alreadyRunning ? " (already running)" : ""}`);
+        break;
+      }
+      case "stream_browser": {
+        // A viewer on another machine wants to watch the browser tab a
+        // session here drives. It can't reach the loopback watch socket, so
+        // run the same watch session and publish it to the relay; the
+        // viewer's lease stops it (packages/cli/src/browser/watchRelay.ts).
+        const parsed = commandArgs ? JSON.parse(commandArgs) : {};
+        if (
+          !isValidBrowserStreamKey(parsed.key) ||
+          (parsed.session_uuid !== undefined && !isValidBrowserStreamKey(parsed.session_uuid)) ||
+          (parsed.tmux_session !== undefined && !isValidBrowserStreamKey(parsed.tmux_session))
+        ) {
+          error = `stream_browser: invalid args ${JSON.stringify(parsed)}`;
+          break;
+        }
+        const started = startWatchRelay(
+          { key: parsed.key, session_uuid: parsed.session_uuid, tmux_session: parsed.tmux_session },
+          {
+            log,
+            startSession: (opts, sink) => runWatchSession(opts, sink, defaultWatchDeps()),
+            now: () => Date.now(),
+            sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+            push: async (msg) => {
+              try {
+                const res = await fetch(`${siteUrl}/cli/browser/frame`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ api_token: config.auth_token, device_id: deviceId(), ...msg }),
+                });
+                if (!res.ok) return null;
+                return (await res.json()) as RelayAnswer;
+              } catch {
+                return null;
+              }
+            },
+          },
+        );
+        result = JSON.stringify({ key: parsed.key, streaming: true, already: !started });
+        log(`[BROWSER-RELAY] Streaming ${parsed.key} for a remote viewer${started ? "" : " (already running)"}`);
         break;
       }
       case "restart": {

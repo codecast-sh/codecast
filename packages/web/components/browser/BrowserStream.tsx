@@ -36,10 +36,12 @@ import {
   watchUnreachableStatus,
   type BrowserStreamReport,
   type WatchConnection,
+  type WatchHandlers,
   type WatchInputEvent,
   type WatchStatus,
   type WatchTabInfo,
 } from "../../lib/browserWatch";
+import { browserRelayKey, connectBrowserWatchRelay } from "../../lib/browserWatchRelay";
 import { createGhostStore, ghostView, type GhostStore } from "../../lib/browserGhost";
 import { CursorArrow } from "../presence/CursorArrow";
 import { DrivingHint } from "./watchControls";
@@ -120,59 +122,61 @@ export function BrowserStream({
 
     (async () => {
       if (foreign) {
-        setStatus(watchUnreachableStatus({ foreign: true, machineName, hasDevice: !!machine?.device_id }));
+        setStatus(watchUnreachableStatus({ foreign: true, machineName }));
         return;
       }
       const endpoint = await getTerminalEndpoint(convex, { deviceId: machine?.device_id });
       if (cancelled) return;
-      if (!endpoint) {
-        setStatus(
-          watchUnreachableStatus({ foreign: false, machineName, hasDevice: !!machine?.device_id }),
+      const handlers: WatchHandlers = {
+      onReady(t, granted) {
+        if (cancelled) return;
+        // A new stream starts with no cursor memory: the daemon replays
+        // the tab's recent actions right after ready, so a cursor that
+        // is still current comes straight back, and a stale one from a
+        // tab this session left does not.
+        ghost.reset();
+        setTab(t);
+        setControlAvailable(granted);
+        setStatus({ kind: "live" });
+      },
+      onFrame(dataUrl, w, h) {
+        if (cancelled) return;
+        setFrame(dataUrl);
+        if (w && h) setFrameSize((prev) => (prev && prev.width === w && prev.height === h ? prev : { width: w, height: h }));
+      },
+      onTab(t) {
+        if (!cancelled) setTab(t);
+      },
+      onAction(a) {
+        if (cancelled) return;
+        ghost.push(a);
+        if (a.kind === "nav" && a.url) {
+          // The address changes the moment the page does, not on the
+          // daemon's next tab poll; the host flashes it keyed on `at`.
+          const url = a.url;
+          setTab((t) => (t && t.url !== url ? { ...t, url } : t));
+          setNav({ url, at: a.at });
+        }
+      },
+      onError(code, message) {
+        if (!cancelled) setStatus(watchErrorStatus(code, message));
+      },
+      onExit(reason) {
+        if (!cancelled) setStatus(watchExitStatus(reason));
+      },
+      };
+      if (endpoint) {
+        connRef.current = connectBrowserWatch(endpoint, { sessionUuid, tmuxSession, control: true }, handlers);
+      } else if (machine?.device_id && browserRelayKey({ sessionUuid, tmuxSession })) {
+        // The agent's machine is yours but not this one: watch through the
+        // relay instead of the loopback socket.
+        connRef.current = connectBrowserWatchRelay(
+          { convex, deviceId: machine.device_id, sessionUuid, tmuxSession, machineName },
+          handlers,
         );
-        return;
+      } else {
+        setStatus(watchUnreachableStatus({ foreign: false, machineName }));
       }
-      connRef.current = connectBrowserWatch(
-        endpoint,
-        { sessionUuid, tmuxSession, control: true },
-        {
-          onReady(t, granted) {
-            if (cancelled) return;
-            // A new stream starts with no cursor memory: the daemon replays
-            // the tab's recent actions right after ready, so a cursor that
-            // is still current comes straight back, and a stale one from a
-            // tab this session left does not.
-            ghost.reset();
-            setTab(t);
-            setControlAvailable(granted);
-            setStatus({ kind: "live" });
-          },
-          onFrame(dataUrl, w, h) {
-            if (cancelled) return;
-            setFrame(dataUrl);
-            if (w && h) setFrameSize((prev) => (prev && prev.width === w && prev.height === h ? prev : { width: w, height: h }));
-          },
-          onTab(t) {
-            if (!cancelled) setTab(t);
-          },
-          onAction(a) {
-            if (cancelled) return;
-            ghost.push(a);
-            if (a.kind === "nav" && a.url) {
-              // The address changes the moment the page does, not on the
-              // daemon's next tab poll; the host flashes it keyed on `at`.
-              const url = a.url;
-              setTab((t) => (t && t.url !== url ? { ...t, url } : t));
-              setNav({ url, at: a.at });
-            }
-          },
-          onError(code, message) {
-            if (!cancelled) setStatus(watchErrorStatus(code, message));
-          },
-          onExit(reason) {
-            if (!cancelled) setStatus(watchExitStatus(reason));
-          },
-        },
-      );
     })();
 
     return () => {

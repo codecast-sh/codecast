@@ -66,21 +66,15 @@ describe("watchErrorStatus", () => {
 
 describe("watchUnreachableStatus", () => {
   test("someone else's machine: name it, and offer nothing", () => {
-    const s = watchUnreachableStatus({ foreign: true, machineName: "ada-mbp", hasDevice: true });
+    const s = watchUnreachableStatus({ foreign: true, machineName: "ada-mbp" });
     expect(s).toMatchObject({ canRetry: false, tabGone: false });
     expect((s as { message: string }).message).toContain("ada-mbp");
   });
 
   test("an unnamed foreign machine is still a full stop", () => {
-    const s = watchUnreachableStatus({ foreign: false, machineName: null, hasDevice: false });
+    const s = watchUnreachableStatus({ foreign: false, machineName: null });
     expect(s).toMatchObject({ canRetry: true });
     expect((s as { message: string }).message).toContain("cast running on this machine");
-  });
-
-  test("another machine of yours: say which one, and where watching works", () => {
-    const s = watchUnreachableStatus({ foreign: false, machineName: "mac-mini", hasDevice: true });
-    expect((s as { message: string }).message).toContain("mac-mini");
-    expect(s).toMatchObject({ canRetry: true });
   });
 });
 

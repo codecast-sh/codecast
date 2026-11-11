@@ -7689,6 +7689,48 @@ export default defineSchema({
     updated_at: v.number(),
   }).index("by_user_device_target", ["user_id", "device_id", "target"]),
 
+  // Live picture of the browser tab one session drives on one machine: the
+  // relay that lets a viewer on ANOTHER machine watch it (the loopback watch
+  // socket only reaches the machine the viewer sits at). Same lease protocol
+  // as terminal_frames; see convex/browserStream.ts.
+  //
+  // One row per (user, device, session key), reused: the daemon overwrites the
+  // frame in place while a lease is live and writes nothing once it lapses.
+  browser_frames: defineTable({
+    user_id: v.id("users"),
+    device_id: v.string(),
+    // The session uuid when known, else its tmux session name.
+    key: v.string(),
+    // Newest JPEG the tab painted, base64, with its pixel size.
+    frame: v.optional(v.string()),
+    frame_w: v.optional(v.number()),
+    frame_h: v.optional(v.number()),
+    // Bumped on every stored frame; the viewer repaints on change.
+    seq: v.number(),
+    // The tab being streamed. Set when the daemon attaches (the socket's
+    // `ready`) and kept current as the session moves between tabs.
+    tab_id: v.optional(v.string()),
+    tab_title: v.optional(v.string()),
+    tab_url: v.optional(v.string()),
+    // The daemon can dispatch the viewer's input into this tab.
+    control: v.optional(v.boolean()),
+    // The agent's recent actions (WatchAction frames, JSON array), newest
+    // last, for the cursor overlay. The viewer applies those it has not seen.
+    actions: v.optional(v.string()),
+    // How the last stream ended (BrowserRelayEnd, JSON). Cleared when a new
+    // stream is requested, so a viewer never reads a previous stream's end.
+    end: v.optional(v.string()),
+    watch_until: v.number(),
+    // While in the future a viewer is driving: the daemon pushes fast so their
+    // input is collected promptly.
+    interactive_until: v.optional(v.number()),
+    streamer_seen_at: v.optional(v.number()),
+    requested_at: v.optional(v.number()),
+    // Viewer input events (WatchInput, JSON array) waiting for the next push.
+    pending_input: v.optional(v.string()),
+    updated_at: v.number(),
+  }).index("by_user_device_key", ["user_id", "device_id", "key"]),
+
   // Remote mirror of a local markdown vault: one row per registered vault the
   // user turned mirroring on for (`cast vault mirror <dir> --on`). The daemon on
   // the owning device is the only writer; the browser reads. Mirroring is opt-in

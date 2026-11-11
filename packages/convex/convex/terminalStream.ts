@@ -59,10 +59,11 @@ import {
  * A device the viewer reaches through a conversation — an agent box whose bot
  * daemon runs a session they own (resolveReachableRunnerDevice) — the runner
  * account, because that is the daemon that will answer the stream command and
- * push the frames. Null is the "unknown-device" answer: not yours, not
+ * push the frames. The browser relay (browserStream.ts) applies the same rule.
+ * Null is the "unknown-device" answer: not yours, not
  * reachable through that conversation, or a conversation/device mismatch.
  */
-async function resolveQueueUser(
+export async function resolveQueueUser(
   ctx: any,
   userId: any,
   args: { device_id: string; conversation_id?: any },

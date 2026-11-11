@@ -322,6 +322,11 @@ export function watchErrorStatus(code: string, message: string): WatchStatus {
       return failed("no managed browser is running on the agent's machine", { tabGone: true });
     case "no-tab":
       return failed("this session hasn't driven a browser tab yet", { tabGone: true });
+    case "no-answer":
+      // The relay asked the agent's machine and heard nothing back.
+      return failed(message || "the agent's machine did not answer");
+    case "unknown-device":
+      return failed(message || "that machine is not registered to your account", { canRetry: false });
     case "forbidden":
       return failed("the daemon refused the stream — reload to refresh the endpoint");
     default:
@@ -333,23 +338,15 @@ export function watchErrorStatus(code: string, message: string): WatchStatus {
  * Nothing to dial: the machine the agent runs on is not one this viewer can
  * reach. `foreign` is another person's machine — relaying it would mean
  * driving their browser, so the answer is the machine's name and a full stop.
- * Otherwise a daemon of ours simply is not answering here.
+ * Otherwise there is no machine on record and no daemon answering here.
+ * (A machine of yours that is not this one is watched through the relay,
+ * lib/browserWatchRelay.ts, and never lands here.)
  */
-export function watchUnreachableStatus(a: {
-  foreign: boolean;
-  machineName: string | null;
-  /** The lookup named a device, so the browser is on another machine of yours. */
-  hasDevice: boolean;
-}): WatchStatus {
+export function watchUnreachableStatus(a: { foreign: boolean; machineName: string | null }): WatchStatus {
   if (a.foreign) {
     return failed(
       `This agent's browser runs on ${a.machineName ?? "someone else's machine"}, which only its owner can watch.`,
       { canRetry: false },
-    );
-  }
-  if (a.hasDevice) {
-    return failed(
-      `The browser runs on ${a.machineName ?? "another of your machines"} — watching works from a browser on that machine.`,
     );
   }
   return failed("No local daemon reachable — watching needs cast running on this machine.");

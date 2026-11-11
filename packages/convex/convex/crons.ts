@@ -167,6 +167,12 @@ crons.interval(
 );
 
 crons.interval(
+  "prune stale remote browser frames",
+  { hours: 6 },
+  internal.browserStream.pruneStaleFrames
+);
+
+crons.interval(
   "refresh plan timestamps from session insights",
   { hours: 6 },
   internal.taskMining.refreshPlanTimestamps
