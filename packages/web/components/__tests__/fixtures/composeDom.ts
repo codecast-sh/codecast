@@ -23,6 +23,8 @@ export const restoreGlobals = replaceGlobals({
   Node: w.Node,
   KeyboardEvent: w.KeyboardEvent,
   Event: w.Event,
+  // Radix's dismissable layer dispatches one, and jsdom accepts only its own.
+  CustomEvent: w.CustomEvent,
   getComputedStyle: w.getComputedStyle,
   requestAnimationFrame: (cb: any) => setTimeout(cb, 0),
   cancelAnimationFrame: (id: any) => clearTimeout(id),
