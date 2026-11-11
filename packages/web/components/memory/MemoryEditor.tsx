@@ -32,6 +32,7 @@ import { MemoryConflict, useMemoryStore } from "../../store/memoryStore";
 import { TYPE_TONE, formatBytes, toneCss, typeKey } from "./memoryView";
 import { BudgetMeter, MemoryLinkChip, ReachBadge } from "./parts";
 import { Button } from "../ui/button";
+import { modernChip } from "../ui/modernLook";
 
 export const NEW_MEMORY = "__new__";
 type BodyMode = "edit" | "preview" | "raw";
@@ -273,7 +274,7 @@ export function MemoryEditor({ atlas, file, onOpen, onClose, onJumpToLine, leave
                       key={t}
                       type="button"
                       onClick={() => setField("type", t)}
-                      className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors ${on ? "text-sol-text" : "text-sol-text-muted border-sol-border/50 hover:text-sol-text"}`}
+                      className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors ${on ? "text-sol-text" : "text-sol-text-muted border-sol-border/50 hover:text-sol-text"} ${modernChip({ active: on })}`}
                       style={on ? { borderColor: color, background: `color-mix(in srgb, ${color} 14%, transparent)` } : undefined}
                     >
                       <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />

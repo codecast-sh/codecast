@@ -4,6 +4,7 @@ import { formatCallTime, recordingSubject } from "@codecast/shared/contracts";
 import { takeDownFrameShare, useCallFrameShares, type CallFrameShare } from "../../hooks/useRoomRecording";
 import { ParticipantTag } from "./GuestTag";
 import { firstName } from "./speakers";
+import { modernButton } from "../ui/modernLook";
 
 // The pictures of a call on public links (`cast call snap --share`), under
 // the call's share control: what anyone outside codecast can open of it
@@ -63,14 +64,14 @@ function SharedFrameRow({ share }: { share: CallFrameShare }) {
           <button
             type="button"
             onClick={() => takeDownFrameShare(share._id)}
-            className="rounded px-1.5 py-0.5 text-meta font-medium text-sol-red transition-colors hover:bg-sol-red/10"
+            className={`rounded px-1.5 py-0.5 text-meta font-medium text-sol-red transition-colors hover:bg-sol-red/10 ${modernButton({ variant: "ghost", size: "xs" }, "modern:text-sol-red modern:hover:text-sol-red modern:hover:bg-sol-red/10")}`}
           >
             Take down
           </button>
           <button
             type="button"
             onClick={() => setConfirming(false)}
-            className="rounded px-1.5 py-0.5 text-meta text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text"
+            className={`rounded px-1.5 py-0.5 text-meta text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text ${modernButton({ variant: "ghost", size: "xs" })}`}
           >
             Keep
           </button>

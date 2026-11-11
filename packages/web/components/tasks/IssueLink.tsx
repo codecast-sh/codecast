@@ -1,6 +1,7 @@
 import type { CSSProperties } from "react";
 import { APP_LOOK, issueSyncTitle } from "../../lib/integrations";
 import type { TaskExternal } from "../../store/inboxStore";
+import { modernPill } from "../ui/modernLook";
 
 // The provider identity of a task backed by a Linear or GitHub issue
 // (docs/architecture/issue-sync.md S1.1): glyph + identifier as an external
@@ -35,7 +36,7 @@ export function IssueLink({
       title={issueSyncTitle(external)}
       className={`inline-flex items-center gap-1 font-mono rounded border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-[var(--issue-accent)] transition-colors flex-shrink-0 min-w-0 ${
         sm ? "text-xs px-1.5 py-0.5" : "text-meta px-1.5 py-0"
-      } ${className}`}
+      } ${className} ${modernPill({}, "modern:font-mono modern:font-normal modern:hover:text-sol-text")}`}
       style={{ "--issue-accent": look.accent } as CSSProperties}
     >
       <Icon className={`${sm ? "w-3 h-3" : "w-2.5 h-2.5"} flex-shrink-0`} style={{ color: look.accent }} />

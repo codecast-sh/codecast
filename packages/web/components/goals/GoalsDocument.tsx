@@ -46,6 +46,7 @@ import { stateClauses, type CompanyDoc, type DocGoal, type DocProject } from "..
 import { GoalGlyph, GoalOwnerPick, GoalStatusPick, LINE_SCOPE, ProjectLine, proposalChangeHref } from "../org/lines";
 import { AutoTextarea, DoneWhen, Numbers, ProjectNumbers, Prose } from "./goalFields";
 import { canPlace, carriedProjects, indentMove, insertAfterWrites, outdentMove, reorderedProjects, reorderWrites, type GoalMove } from "./goalsOutline";
+import { modernMenuRow } from "../ui/modernLook";
 
 const SERIF = { fontFamily: "var(--font-serif)" } as const;
 const DIM = "var(--sol-text-dim)";
@@ -250,7 +251,7 @@ export function GoalsDocumentView({ doc, now }: { doc: CompanyDoc; now: number }
           <GoalList goals={openGoals} parent={listParent} depth={0} d={d} />
           {listed.length === 0 && <p className="mt-10 pl-1" style={{ color: DIM }}>No goals yet.</p>}
           {!d.draft && (
-            <button type="button" onClick={() => d.setDraft({ parent: listParent, after: openGoals.filter((g) => g.row).at(-1)?.id ?? null })} className="mt-8 ml-1 inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-[12.5px] transition-colors hover:bg-sol-bg-highlight/70" style={{ color: MUTED }} data-goals-new>
+            <button type="button" onClick={() => d.setDraft({ parent: listParent, after: openGoals.filter((g) => g.row).at(-1)?.id ?? null })} className="mt-8 ml-1 inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-[12.5px] transition-colors hover:bg-sol-bg-highlight/70 modern:h-control-sm modern:rounded-control modern:text-ui modern:hover:bg-sol-text/[0.06]" style={{ color: MUTED }} data-goals-new>
               <Plus className="h-3.5 w-3.5" /> New goal
             </button>
           )}
@@ -449,7 +450,7 @@ function GoalBody({ goal, depth, d }: { goal: DocGoal; depth: number; d: Doc }) 
       {missing.length > 0 && (
         <div className="mt-2 -ml-1.5 flex flex-wrap items-center gap-0.5 opacity-0 transition-opacity group-hover/goal:opacity-100 focus-within:opacity-100" data-goal-add>
           {missing.map((m) => (
-            <button key={m.key} type="button" onClick={m.on} className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-meta transition-colors hover:bg-sol-bg-highlight/70" style={{ color: DIM }} data-goal-add-item={m.key}>
+            <button key={m.key} type="button" onClick={m.on} className="inline-flex h-6 items-center gap-1 rounded-md px-1.5 text-meta transition-colors hover:bg-sol-bg-highlight/70 modern:rounded-control modern:hover:bg-sol-text/[0.06]" style={{ color: DIM }} data-goal-add-item={m.key}>
               <Plus className="h-3 w-3" /> {m.words}
             </button>
           ))}
@@ -497,7 +498,7 @@ function GoalMenu({ goal, d }: { goal: InitiativeRow; d: Doc }) {
   const parent = goal.parent_initiative_id ?? null;
   const homes = d.siblings(null).filter((p) => p._id !== goal._id && p._id !== parent && canPlace(d.all, goal, p));
   const item = (label: string, on: () => void, danger = false) => (
-    <button key={label} type="button" onClick={() => { on(); setOpen(false); }} className={cn("flex w-full items-center rounded px-2 py-1.5 text-left text-[12.5px] hover:bg-sol-bg-highlight/70", danger && "hover:text-sol-red")}>{label}</button>
+    <button key={label} type="button" onClick={() => { on(); setOpen(false); }} className={cn("flex w-full items-center rounded px-2 py-1.5 text-left text-[12.5px] hover:bg-sol-bg-highlight/70", danger && "hover:text-sol-red", modernMenuRow(), "modern:text-sol-text", danger && "modern:hover:text-sol-red")}>{label}</button>
   );
   const moveUnder = (to: InitiativeRow | null) => d.move(goal, { parent: to?._id ?? null, position: reorderWrites([...d.siblings(to?._id ?? null), goal], goal._id, null) }, `Moved ${quoted(goal.title, "goal")} under ${quoted(to?.title ?? "the top", "goal")}`);
   return (

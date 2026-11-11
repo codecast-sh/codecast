@@ -52,6 +52,8 @@ import { projectStatusOf } from "../../../lib/projectStatus";
 import { projectTaskCounts } from "@codecast/shared/tasks";
 import { TaskHrefProvider } from "../../../lib/taskHrefContext";
 import { findEntityInStore } from "../../../lib/liveEntities";
+import { PageHeader } from "../../../components/ui/page-header";
+import { PlaceCrumbs } from "../../../components/nav/PlaceCrumbs";
 
 const api = _api as any;
 
@@ -179,47 +181,72 @@ function ProjectDetailContent() {
   }
 
   const body = "flex-1 min-h-0 overflow-y-auto";
+  // The facts and the verbs, drawn by whichever header is up: Classic's
+  // project board header, or Modern's page header.
+  const chips = (<>
+      <ProjectStatusPick status={project.status} onPick={handleStatusChange} data-project-pick="status" face={tab === "sessions" ? <ProjectStatusIcon status={project.status} /> : undefined} />
+      <ProjectLeadChip projectId={project._id} editable faceOnly={tab === "sessions"} />
+      {/* The session view keeps to who runs it; the deadline and the
+          goals it serves (initiatives-projects-role-page.md I1) show on
+          the other views. */}
+      {tab !== "sessions" && <>
+        <ProjectDeadlineChip project={project} now={now} data-project-pick="target" />
+        <ProjectInitiatives projectId={project._id} size="xs" label="Serves" />
+      </>}
+  </>);
+  const share = <ShareControl label="project" path={`/projects/${project.short_id || project._id}`} publicShare={{ kind: "project", id: project._id, token: project.share_token, team: policyTeamOf("projects", project) }} />;
+  const verbs = (<>
+      {/* Off the session, the one-press way back to it. */}
+      {tab !== "sessions" && (
+        <button type="button" onClick={() => setTab("sessions")} className="inline-flex items-center gap-1 h-6 px-2 rounded-md text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60 transition-colors" data-project-back-to-session>
+          <MessagesSquare className="w-3 h-3" />
+          Session
+        </button>
+      )}
+      <ProjectViewMenu tabs={tabs} active={tab} onTab={setTab} counts={{ tasks: openTasks }} shortId={project.short_id} />
+      <ProjectInboxFilter projectId={project._id} hasMain={hasMain} />
+  </>);
+  const actions = <>{verbs}{share}</>;
+  const glyph = <span className={cn("w-2 h-2 rotate-45 rounded-[2px] flex-shrink-0", projectDotClass(project))} data-project-glyph />;
+
 
   return (
     <div className="h-full flex flex-col" data-project-page={project._id} data-scope-tab-active={tab}>
-      <IntentHeader
-        accent={PROJECT_ACCENT}
-        back={{ href: "/projects", label: "Projects" }}
-        glyph={<span className={cn("w-2 h-2 rotate-45 rounded-[2px] flex-shrink-0", projectDotClass(project))} data-project-glyph />}
+      <PageHeader
+        legacy={
+          <IntentHeader
+            accent={PROJECT_ACCENT}
+            back={{ href: "/projects", label: "Projects" }}
+            glyph={glyph}
+            title={project.title}
+            onRename={(title) => updateProject(projectId, { title })}
+            renameLabel="Project title"
+            titleData={{ "data-project-title": "" }}
+            // The session view is the session: the id and the other facts wait
+            // on the other views, and the row stays one line at any width.
+            idChip={project.short_id && tab !== "sessions" ? <IntentIdChip id={project.short_id} /> : null}
+            phone={phone}
+            dense={tab === "sessions"}
+            chipsBelow={tab !== "sessions"}
+            chips={chips}
+            actions={actions}
+          />
+        }
+        data-project-head
         title={project.title}
         onRename={(title) => updateProject(projectId, { title })}
         renameLabel="Project title"
-        titleData={{ "data-project-title": "" }}
-        // The session view is the session: the id and the other facts wait
-        // on the other views, and the row stays one line at any width.
-        idChip={project.short_id && tab !== "sessions" ? <IntentIdChip id={project.short_id} /> : null}
-        phone={phone}
-        dense={tab === "sessions"}
-        chipsBelow={tab !== "sessions"}
-        chips={<>
-          <ProjectStatusPick status={project.status} onPick={handleStatusChange} data-project-pick="status" face={tab === "sessions" ? <ProjectStatusIcon status={project.status} /> : undefined} />
-          <ProjectLeadChip projectId={project._id} editable faceOnly={tab === "sessions"} />
-          {/* The session view keeps to who runs it; the deadline and the
-              goals it serves (initiatives-projects-role-page.md I1) show on
-              the other views. */}
-          {tab !== "sessions" && <>
-            <ProjectDeadlineChip project={project} now={now} data-project-pick="target" />
-            <ProjectInitiatives projectId={project._id} size="xs" label="Serves" />
-          </>}
-        </>}
-        actions={<>
-          {/* Off the session, the one-press way back to it. */}
-          {tab !== "sessions" && (
-            <button type="button" onClick={() => setTab("sessions")} className="inline-flex items-center gap-1 h-6 px-2 rounded-md text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60 transition-colors" data-project-back-to-session>
-              <MessagesSquare className="w-3 h-3" />
-              Session
-            </button>
-          )}
-          <ProjectViewMenu tabs={tabs} active={tab} onTab={setTab} counts={{ tasks: openTasks }} shortId={project.short_id} />
-          <ProjectInboxFilter projectId={project._id} hasMain={hasMain} />
-          <ShareControl label="project" path={`/projects/${project.short_id || project._id}`} publicShare={{ kind: "project", id: project._id, token: project.share_token, team: policyTeamOf("projects", project) }} />
-        </>}
-      />
+        glyph={glyph}
+        // With a task open the task's own header holds the way back.
+        back={taskRef ? false : undefined}
+        // Projects ›, never the project twice while a task inside it is open.
+        crumbs={<PlaceCrumbs crumbs={[{ label: "Projects", href: "/projects" }]} trailing={false} />}
+        status={project.short_id ? <IntentIdChip id={project.short_id} /> : null}
+        actions={verbs}
+        share={share}
+      >
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-meta">{chips}</div>
+      </PageHeader>
 
       {/* The Line and Expectations tabs read where the project lives, so they
           show from any workspace, under a note that names that workspace. */}

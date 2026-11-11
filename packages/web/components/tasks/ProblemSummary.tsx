@@ -30,6 +30,7 @@ import { cardAsRead, evidenceGone, fateWords, goneWhere } from "../../lib/trialE
 import { holdReasons } from "../decisions/ChangeCardView";
 import { evalsOwed } from "@codecast/shared/contracts/changeCard";
 import type { TrialWithdrawn } from "../../hooks/useSyncTrial";
+import { modernChip } from "../ui/modernLook";
 
 type ProblemTask = LineCauseTask & ReportTask & { _id: string; short_id: string; workspace?: string | null; project_id?: string | null };
 
@@ -346,7 +347,7 @@ function Findings({ signals, ruleText }: { signals: LineSignal[]; ruleText: stri
         {[["All", convCount(signals)] as const, ...groups.map(([p, xs]) => [p, convCount(xs)] as const)].map(([p, n]) => {
           const on = (p === "All" && !place) || p === place;
           return (
-            <button key={p} type="button" onClick={() => { setPlace(p === "All" ? null : p); setAll(false); }} aria-pressed={on} className={cn("rounded-full px-2.5 py-0.5 text-meta tabular-nums transition-colors", on ? "bg-sol-bg-alt text-sol-text ring-1 ring-sol-border" : "text-sol-text-dim hover:text-sol-text")} data-problem-place={p}>
+            <button key={p} type="button" onClick={() => { setPlace(p === "All" ? null : p); setAll(false); }} aria-pressed={on} className={cn("rounded-full px-2.5 py-0.5 text-meta tabular-nums transition-colors", on ? "bg-sol-bg-alt text-sol-text ring-1 ring-sol-border" : "text-sol-text-dim hover:text-sol-text", modernChip({ active: on }), "modern:ring-0")} data-problem-place={p}>
               {p} <span className="opacity-60">{n}</span>
             </button>
           );

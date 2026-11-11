@@ -27,6 +27,7 @@ import {
   type TeamVisibilityLevel,
   type VisibilityChangeMode,
 } from "../../lib/teamVisibility";
+import { modernButton } from "../ui/modernLook";
 
 /** The one control for "how much does this team see of my sessions". A menu
  *  whose items say what each level means, so the choice explains itself at the
@@ -68,7 +69,7 @@ export function TeamVisibilityControl({ team }: { team: TeamSharingFacts }) {
           <button
             type="button"
             aria-label={`What ${team.name} sees`}
-            className="flex min-w-[150px] items-center justify-between gap-2 rounded-md border border-sol-border bg-sol-bg px-3 py-1.5 text-sm text-sol-text transition-colors hover:bg-sol-bg-highlight/40"
+            className={`flex min-w-[150px] items-center justify-between gap-2 rounded-md border border-sol-border bg-sol-bg px-3 py-1.5 text-sm text-sol-text transition-colors hover:bg-sol-bg-highlight/40 ${modernButton({ variant: "outline", size: "md" }, "modern:justify-between")}`}
           >
             <span className="flex items-center gap-2">
               <Icon className="h-4 w-4 text-sol-text-muted" />

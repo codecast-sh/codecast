@@ -3820,6 +3820,10 @@ diffs-container {
 .cc-panel__btn:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
 .cc-panel__btn.is-on { color: var(--sol-cyan); }
 .cc-panel__btn.is-close:hover { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 12%, transparent); }
+/* Modern: the panel's icon buttons at the 24px floor for anything pressable,
+   the control radius and the one focus ring (components/ui/modernLook.ts). */
+.modern-style .cc-panel__btn { width: 24px; height: 24px; border-radius: var(--radius-control); }
+.modern-style .cc-panel__btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 
 /* One resize handle everywhere: a hairline that thickens into the accent on
    hover, with a generous invisible grab area. Three hand-rolled variants
@@ -7655,8 +7659,8 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   padding: 2px 0;
   border: 0;
 }
-/* The folded receipt under a condensed reply reads as a row too. */
-.modern-style [data-sv-feed] [data-cc-tool-receipt] {
+/* A hosted conversation's folded receipt keeps its words, on a solid outline. */
+.modern-style [data-sv-feed] [data-cc-tool-receipt]:not([data-cc-row-head]) {
   font-size: var(--fs-ui);
   line-height: 20px;
   padding: 4px 10px;
@@ -7664,10 +7668,12 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   border-radius: var(--radius-control, 6px);
 }
 /* An open permission ask stays a card (its answer is pressed right there),
-   on the same hairline and radius as the panels. */
+   on the same hairline and radius as the panels, with the asks' Needs you edge. */
 .modern-style [data-sv-feed] [data-permission-ask] > div {
   border-radius: var(--radius-card, 10px);
   box-shadow: none;
+  border-left-width: 2px;
+  border-left-color: var(--sol-class-yellow) !important;
 }
 
 /* ---- MODERN · HEADER -------------------------------------------------------
@@ -7798,4 +7804,107 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   padding-left: 6px;
 }
 .modern-style [data-triage-bar] [data-triage-verb] { color: var(--sol-text-dim); }
+/* ---- MODERN · RUNS, BLOCKS, ASKS AND DIVIDERS -----------------------------
+   The rest of the transcript on the one row anatomy above.
+   - A folded run of tool calls (the condensed receipt, ModernReceiptWords) is
+     a row as wide as the column, so its count and chevron sit at the right;
+     open, its calls are rows indented under its words.
+   - A row's own action (Retry, Compact, Send again) sits before the result,
+     a 28px button inside the row's line ([data-cc-row-actions]).
+   - Content a person reads (ModernQuietBlock, a message from another
+     session, team chat, a huddle) is a header row over a tinted panel.
+   - A created task, plan or doc under its `cast` row is a row of its own,
+     indented under the command.
+   - Dividers (a switch, a revive, an escalation, the idle gap) are rows; the
+     New line keeps its rule, the one boundary worth a line.
+   - Things that ask (ModernAsk) carry their own card; they only need room. */
+.modern-style [data-sv-feed] [data-cc-row="group"] { margin-top: 4px; }
+.modern-style [data-sv-feed] [data-cc-row="group"] > [data-cc-row-head] {
+  flex: 1 1 auto;
+  width: auto;
+  max-width: none;
+  cursor: pointer;
+}
+.modern-style [data-sv-feed] [data-cc-row="group"] > [data-cc-row-head] > img { align-self: center; }
+.modern-style [data-sv-feed] [data-cc-row-head] [data-cc-row-actions] {
+  order: 55;
+  flex: none;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: -4px 0;
+}
+.modern-style [data-sv-feed] [data-cc-row-head] [data-cc-path] { vertical-align: top; }
+.modern-style [data-sv-feed] :is([data-cc-block], [data-cc-session-msg], [data-cc-row="brief"], [data-cc-row="chat"], [data-cc-row="huddle"]) {
+  margin: 6px 0 8px;
+}
+.modern-style [data-sv-feed] [data-cc-row="entity"] {
+  width: auto;
+  max-width: none;
+  margin: 0 -8px 0 16px;
+}
+.modern-style [data-sv-feed] [data-cc-divider] { justify-content: flex-start; gap: 8px; }
+.modern-style [data-sv-feed] [data-cc-divider]:not([aria-label="New messages"]) > [data-cc-row-rule] { display: none; }
+.modern-style [data-sv-feed] [data-cc-row="divider"] { margin: 6px 0; }
+.modern-style [data-sv-feed] [data-cc-row="divider"] > [data-cc-row-head]:not([aria-expanded]) { cursor: default; }
+.modern-style [data-sv-feed] [data-cc-row="divider"] > [data-cc-row-head]:not([aria-expanded]):hover { background: transparent; }
+.modern-style [data-sv-feed] [data-cc-row="divider"] [data-cc-row-sub] { max-width: none; }
+.modern-style [data-sv-feed] [data-cc-ask] + [data-cc-ask] { margin-top: 8px; }
+/* A workflow gate posted before decisions existed asks with its own choices: the asks' Needs you edge while open. */
+.modern-style [data-sv-feed] [data-cc-gate="open"] { border-left: 2px solid var(--sol-class-yellow); }
+
+/* ---- MODERN · MESSAGE ACTIONS -----------------------------------------------
+   A message's actions (copy, link, comment, chat, share, bookmark; fork at the
+   right) are one row of 28px ghost icon buttons in the gap under the message,
+   shown on hover and on keyboard focus, so they never sit over its words. The
+   gap is held at 28px for them. A run of tool rows has no such row: its rows
+   are the thing to open, and its actions stay in the message's menu. */
+.modern-style [data-sv-feed] [data-cc-message="assistant"]:not([data-cc-tools-only]):not([data-cc-bubble]),
+.modern-style [data-sv-feed] [data-cc-message="user"]:not([data-cc-bubble]) {
+  margin-bottom: 28px;
+}
+.modern-style [data-sv-feed] :is([data-cc-assistant-message-toolbar], [data-cc-user-message-toolbar]) {
+  top: 100%;
+  bottom: auto;
+  gap: 2px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.modern-style [data-sv-feed] [data-cc-assistant-message-toolbar] { left: 32px; right: auto; }
+.modern-style [data-sv-feed] [data-cc-user-message-toolbar] { left: auto; right: 0; }
+.modern-style [data-sv-feed] [data-cc-tools-only] > [data-cc-assistant-message-toolbar] { display: none; }
+.modern-style [data-sv-feed] [data-cc-message-action] {
+  top: 100%;
+  bottom: auto;
+  right: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.modern-style [data-sv-feed] :is([data-cc-assistant-message-toolbar], [data-cc-user-message-toolbar]) > button,
+.modern-style [data-sv-feed] [data-cc-message-action] > span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: var(--radius-control, 6px);
+  color: var(--sol-text-dim);
+}
+.modern-style [data-sv-feed] :is([data-cc-assistant-message-toolbar], [data-cc-user-message-toolbar]) > button:hover,
+.modern-style [data-sv-feed] [data-cc-message-action]:hover > span {
+  background: var(--cc-m-hover);
+  color: var(--sol-text);
+}
+.modern-style [data-sv-feed] :is([data-cc-assistant-message-toolbar], [data-cc-user-message-toolbar]) > button[aria-label="Remove bookmark"] {
+  color: var(--sol-amber);
+}
+.modern-style [data-sv-feed] :is([data-cc-assistant-message-toolbar], [data-cc-user-message-toolbar], [data-cc-message-action]) svg {
+  width: 16px;
+  height: 16px;
+}
 /* ---- end of MODERN · THE CONVERSATION ---- */

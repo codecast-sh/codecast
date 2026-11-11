@@ -6,6 +6,7 @@ import type { ShareTeam } from "../../hooks/useDeviceSharing";
 import { TeamIcon } from "../TeamIcon";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog";
+import { modernChip } from "../ui/modernLook";
 
 export type ShareConfirm = {
   title: (team: ShareTeam) => ReactNode;
@@ -52,7 +53,7 @@ export function TeamSharePills({
               on
                 ? "border-sol-cyan/60 bg-sol-cyan/15 text-sol-text shadow-[0_0_0_3px_color-mix(in_srgb,var(--sol-cyan)_10%,transparent)]"
                 : "border-dashed border-sol-border text-sol-text-muted hover:border-sol-text-muted hover:text-sol-text"
-            }`}
+            } ${modernChip({ active: on }, "modern:active:scale-100")}`}
           >
             {!single && <TeamIcon icon={t.icon} color={t.icon_color} className="h-3 w-3 shrink-0" />}
             <span className="truncate max-w-[10rem]">{single ? (on ? "Shared" : "Share") : t.name}</span>

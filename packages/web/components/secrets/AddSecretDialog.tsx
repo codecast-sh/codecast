@@ -20,6 +20,7 @@ import { useFileDrop } from "../../hooks/useFileDrop";
 import { useCreate } from "../../hooks/useCreateSecret";
 import { ValueFields } from "./ValueForm";
 import { EMPTY_DRAFT, checkedPayload, loginEnv, nameIssue, namesIn, readEnvText, slugify, splitList, suggestName, type ValueDraft } from "./vaultModel";
+import { modernButton, modernTab } from "../ui/modernLook";
 
 /** One secret of a kind, or Import with the .env text so far ("" for an empty paste box). */
 export type AddMode = { kind: SecretKind } | { import: string };
@@ -44,7 +45,7 @@ export function ScopePicker({ scope, value, onChange }: { scope: VaultScope; val
           role="radio"
           aria-checked={value === o.id}
           onClick={() => onChange(o.id)}
-          className={`max-w-[14rem] truncate rounded px-2.5 py-1 transition-colors ${value === o.id ? "bg-sol-bg-alt text-sol-text shadow-[inset_0_0_0_1px_var(--sol-border)]" : "text-sol-text-muted hover:text-sol-text"}`}
+          className={`max-w-[14rem] truncate rounded px-2.5 py-1 transition-colors ${value === o.id ? "bg-sol-bg-alt text-sol-text shadow-[inset_0_0_0_1px_var(--sol-border)]" : "text-sol-text-muted hover:text-sol-text"} ${modernTab({ active: value === o.id })}`}
           data-vault-scope={o.id}
         >
           {o.id === "team" ? `Team · ${o.label}` : o.label}
@@ -85,7 +86,7 @@ export function AddSecretDialog({ mode, onClose, onSignin, scope, rows, onCreate
 function Footer({ onClose, submit, label, disabled }: { onClose: () => void; submit: () => void; label: string; disabled: boolean }) {
   return (
     <footer className="flex items-center justify-between gap-2 border-t border-sol-border/60 bg-sol-bg-alt/40 px-5 py-3">
-      <button type="button" onClick={onClose} className="inline-flex h-8 items-center gap-2 rounded-md border border-sol-border px-3 text-[12.5px] text-sol-text-muted hover:text-sol-text">
+      <button type="button" onClick={onClose} className={`inline-flex h-8 items-center gap-2 rounded-md border border-sol-border px-3 text-[12.5px] text-sol-text-muted hover:text-sol-text ${modernButton({ variant: "outline", size: "md" })}`}>
         Cancel <span className="hidden sm:inline-flex"><KeyCap size="xs">esc</KeyCap></span>
       </button>
       <Button
@@ -217,7 +218,7 @@ function SinglePane({
                 aria-checked={kind === k}
                 tabIndex={kind === k ? 0 : -1}
                 onClick={() => (k === "signin" ? onSignin() : setKind(k))}
-                className={`inline-flex min-w-0 grow items-center justify-center gap-1.5 rounded px-2.5 py-1.5 text-[12px] transition-colors focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_color-mix(in_srgb,var(--sol-yellow)_55%,transparent)] ${kind === k ? "bg-sol-bg-alt text-sol-text shadow-[inset_0_0_0_1px_var(--sol-border)]" : "text-sol-text-muted hover:text-sol-text"}`}
+                className={`inline-flex min-w-0 grow items-center justify-center gap-1.5 rounded px-2.5 py-1.5 text-[12px] transition-colors focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_color-mix(in_srgb,var(--sol-yellow)_55%,transparent)] ${kind === k ? "bg-sol-bg-alt text-sol-text shadow-[inset_0_0_0_1px_var(--sol-border)]" : "text-sol-text-muted hover:text-sol-text"} ${modernTab({ active: kind === k })}`}
                 data-vault-kind={k}
               >
                 <Icon size={13} className="shrink-0" style={{ color: kind === k ? KIND[k].tone : undefined }} />

@@ -6,6 +6,7 @@ import { Facepile } from "./OccupancyChip";
 import { LiveRoomLabel } from "./LiveRoomLabel";
 import { joinCall, knockRoom } from "../../lib/calls/actions";
 import { useGuestsWaiting, useLiveRooms, type GuestsWaitingRow, type LiveRoomRow } from "../../hooks/useLiveRooms";
+import { modernButton } from "../ui/modernLook";
 
 export { LiveRoomLabel };
 
@@ -52,7 +53,7 @@ export function LiveRoomAction({
           e.stopPropagation();
           void joinCall(row.roomKey, { intent: "deliberate" });
         }}
-        className={`shrink-0 rounded-full border border-sol-violet/30 bg-sol-violet/10 px-2 py-0.5 text-meta font-medium text-sol-violet transition-colors hover:bg-sol-violet/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-violet ${className}`}
+        className={`shrink-0 rounded-full border border-sol-violet/30 bg-sol-violet/10 px-2 py-0.5 text-meta font-medium text-sol-violet transition-colors hover:bg-sol-violet/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-violet ${className} ${modernButton({ variant: "soft", tone: "violet", size: "xs" })}`}
         // The visible word is one syllable because the row already says which
         // room. A screen reader reaches this button with the row's name
         // several stops behind it, so the label carries the room itself.
@@ -80,7 +81,7 @@ export function LiveRoomAction({
         e.stopPropagation();
         void knockRoom(row.roomKey);
       }}
-      className={`shrink-0 rounded-full border border-sol-border px-2 py-0.5 text-meta text-sol-text-muted transition-colors hover:border-sol-violet/40 hover:text-sol-violet focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-violet ${className}`}
+      className={`shrink-0 rounded-full border border-sol-border px-2 py-0.5 text-meta text-sol-text-muted transition-colors hover:border-sol-violet/40 hover:text-sol-violet focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-violet ${className} ${modernButton({ variant: "outline", size: "xs" }, "modern:hover:text-sol-violet")}`}
       aria-label={`Knock at ${row.label}`}
       title="This huddle is locked — knock to ask in"
     >
@@ -211,7 +212,7 @@ export function LiveNowRail({
               e.stopPropagation();
               letIn(row);
             }}
-            className="shrink-0 rounded-full border border-sol-yellow/40 bg-sol-yellow/10 px-2 py-0.5 text-meta font-medium text-sol-yellow opacity-90 transition-colors hover:bg-sol-yellow/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-yellow"
+            className={`shrink-0 rounded-full border border-sol-yellow/40 bg-sol-yellow/10 px-2 py-0.5 text-meta font-medium text-sol-yellow opacity-90 transition-colors hover:bg-sol-yellow/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-yellow ${modernButton({ variant: "soft", tone: "yellow", size: "xs" })}`}
             aria-label={`${waitingLine(row)}. Join to let them in`}
             title="Join the call to let them in"
           >

@@ -12,6 +12,7 @@ import type { TrialCardRow } from "../../hooks/useSyncTrial";
 import { cn } from "../../lib/utils";
 import { checkNotRun, costParts, costUsd, honestChecks } from "@codecast/shared/contracts/changeCard";
 import { overlapNote, reachSince, ruleId, trialReach, workTime } from "../../lib/trialEvidence";
+import { modernPill } from "../ui/modernLook";
 
 /** Longer than any build's working time: a card saying more counted a night at its gate. */
 const WORK_DAY_MIN = 8 * 60;
@@ -163,7 +164,7 @@ export function TrialFactsStrip({ card: c }: { card: TrialCardRow }) {
               const note = overlapNote({ ...o, how: c.proposal?.alongside?.find((a) => a.card === o.card)?.line });
               // A line that concludes the two cannot conflict is a quiet chip, its reasoning a hover away.
               return note.clear ? (
-                <Link key={o.card} href={`/trial?card=${o.card}`} className="w-fit rounded border border-sol-border/40 px-1.5 py-0.5 text-meta text-sol-text-dim hover:text-sol-text" title={note.text} data-trial-overlap="clear">no conflict with {o.card}</Link>
+                <Link key={o.card} href={`/trial?card=${o.card}`} className={`w-fit rounded border border-sol-border/40 px-1.5 py-0.5 text-meta text-sol-text-dim hover:text-sol-text ${modernPill({}, "modern:hover:text-sol-text")}`} title={note.text} data-trial-overlap="clear">no conflict with {o.card}</Link>
               ) : (
                 <Link key={o.card} href={`/trial?card=${o.card}`} className="text-sol-yellow hover:underline" title={o.title} data-trial-overlap="open"><span className="font-mono">{o.card}</span> <span className="text-sol-text-muted">{note.text}</span></Link>
               );

@@ -47,7 +47,7 @@ function Board({ kind, rows }: { kind: ModObjectKind; rows: Row[] }) {
                   draggable
                   onDragStart={() => setDrag(r._id)}
                   onClick={() => modNavigate(objectHref(r.short_id))}
-                  className="min-w-0 rounded-lg border border-sol-border bg-sol-card px-2.5 py-2 text-left transition-colors hover:border-[color-mix(in_srgb,var(--sol-violet)_45%,var(--sol-border))]"
+                  className={`min-w-0 rounded-lg border border-sol-border bg-sol-card px-2.5 py-2 text-left transition-colors hover:border-[color-mix(in_srgb,var(--sol-violet)_45%,var(--sol-border))] modern:rounded-card modern:border-sol-border`}
                 >
                   <div className="font-mono text-meta text-sol-text-dim">{r.short_id}</div>
                   <div className={`break-words text-[13px] text-sol-text ${objectStatusIsDone(kind, r.status) ? "line-through opacity-60" : ""}`}>{r.title}</div>

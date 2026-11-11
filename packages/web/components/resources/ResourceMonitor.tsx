@@ -20,6 +20,7 @@ import { PageHeader } from "../ui/page-header";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { Button } from "../ui/button";
 import "./resources.css";
+import { modernButton } from "../ui/modernLook";
 
 const FRESH_DOT: Record<Freshness, string> = {
   live: "bg-sol-green",
@@ -241,7 +242,7 @@ export function ResourceMonitor({ machines, sessions, ready, now, plans = [], ru
               <h1 className="text-[13px] font-semibold">Resources</h1>
               {machines.length > 0 && machinesNav("-mb-px ")}
               {plan && !incident && !reviewing && (
-                <button type="button" onClick={review} className="inline-flex shrink-0 items-center gap-1.5 rounded border border-sol-border/50 px-2 py-1 text-meta text-sol-text hover:bg-sol-bg-highlight">
+                <button type="button" onClick={review} className={`inline-flex shrink-0 items-center gap-1.5 rounded border border-sol-border/50 px-2 py-1 text-meta text-sol-text hover:bg-sol-bg-highlight ${modernButton({ variant: "outline", size: "sm" })}`}>
                   <CloudUpload className="h-3.5 w-3.5 text-sol-cyan" />Move load to cloud
                 </button>
               )}

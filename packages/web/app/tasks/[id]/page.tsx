@@ -2,10 +2,8 @@
 import { RepositoryLinks } from "../../../components/repo/RepositoryLinks";
 import { ShortId } from "../../../components/ShortId";
 import { taskRepository } from "../../../lib/repoNavigation";
-import { useState, useCallback, useMemo, useRef, type ReactNode } from "react";
-import { ShareControl } from "../../../components/ShareControl";
-import { policyTeamOf } from "@codecast/shared/contracts";
-import { copyToClipboard, formatDateFull, formatRelative } from "../../../lib/utils";
+import { useState, useCallback, useMemo, useRef } from "react";
+import { formatDateFull, formatRelative } from "../../../lib/utils";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useTabActive } from "../../../hooks/usePagePresence";
 import { useParams, useRouter } from "next/navigation";
@@ -18,7 +16,6 @@ import { type ExternalEventRecord } from "../../../lib/externalEvents";
 import { useOpenLinkedSession } from "../../../hooks/useOpenLinkedSession";
 import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { IssueLink } from "../../../components/tasks/IssueLink";
-import { CallListFeeder, TaskCallChip } from "../../../components/tasks/TaskCallChip";
 import { useIssueSyncSources } from "../../../hooks/useSyncIssueSyncSources";
 import { PaneLoader } from "../../../components/PaneLoader";
 import { TaskListContent } from "../page";
@@ -35,7 +32,6 @@ import { TaskEvidence } from "../../../components/tasks/TaskEvidence";
 import { TaskShipStation } from "../../../components/ShipControl";
 import { DocEditor } from "../../../components/editor/DocEditor";
 import "../../../components/editor/editor.css";
-import { toast } from "sonner";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
@@ -50,11 +46,9 @@ import { TaskSessionList } from "../../../components/tasks/TaskSessionList";
 import { PropertyDropdown, TaskStatusPicker } from "../../../components/tasks/TaskStatusPicker";
 import { SubtasksSection } from "../../../components/tasks/SubtasksSection";
 import { TaskSessionEmpty, TaskSessionSection } from "../../../components/work/TaskSessionSection";
-import { WatchButton } from "../../../components/WatchButton";
 import { Badge } from "../../../components/ui/badge";
 import { getLabelColor } from "../../../lib/labelColors";
 import Link from "next/link";
-import { projectDotClass } from "../../../lib/projectColors";
 import {
   Circle,
   CircleDot,
@@ -68,8 +62,6 @@ import {
   Zap,
   ListChecks,
   ShieldCheck,
-  X,
-  MoreHorizontal,
   CornerDownRight,
 } from "lucide-react";
 import { closeTaskWithGuard } from "../../../lib/taskActions";
@@ -79,6 +71,10 @@ import { keyBelongsElsewhere } from "../../../shortcuts/keyOwnership";
 import { matchesAction } from "../../../shortcuts";
 import { useFollowScroll } from "../../../hooks/useFollowSurface";
 import { useTaskHref } from "../../../lib/taskHrefContext";
+import { useNavClose } from "../../../hooks/useNavTrail";
+import { useIsModernStyle } from "../../../hooks/useVisualStyle";
+import { TaskHeadIdRow, TaskHeadTitle, TaskModernHeader, TaskParentLine, type TaskTitleEdit } from "./TaskHead";
+import { modernPill, modernPillShape } from "../../../components/ui/modernLook";
 
 const PRIORITY_OPTIONS = [
   { key: "urgent", icon: AlertTriangle, label: "Urgent", color: "text-sol-red" },
@@ -111,42 +107,6 @@ function ConfidenceBar({ value }: { value: number }) {
         <div className={`h-full rounded-full ${color} transition-all`} style={{ width: `${pct}%` }} />
       </div>
       <span className="text-sol-text-muted text-xs tabular-nums">{pct}%</span>
-    </div>
-  );
-}
-
-// Header ⋯ menu for secondary actions that don't earn a slot in the narrow
-// header row (watch state lives here). Clicking an item closes the menu.
-function OverflowMenu({ children }: { children: ReactNode }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useWatchEffect(() => {
-    if (!open) return;
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [open]);
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen(!open)}
-        className={`p-1 rounded-md transition-colors hover:bg-sol-bg-alt ${open ? "text-sol-text bg-sol-bg-alt" : "text-sol-text-dim hover:text-sol-text"}`}
-        title="More actions"
-      >
-        <MoreHorizontal className="w-4 h-4" />
-      </button>
-      {open && (
-        <div
-          className="absolute top-full right-0 mt-1 w-44 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-50 py-1 overflow-hidden"
-          onClick={() => setOpen(false)}
-        >
-          {children}
-        </div>
-      )}
     </div>
   );
 }
@@ -484,6 +444,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
   }, [data, openPalette]);
 
   const paneActive = useTabActive();
+  // ✕ and the back key: to the list in Classic, along the trail in Modern.
+  const navClose = useNavClose(closeHref);
+  const modern = useIsModernStyle();
   // The page's keys. The inline peek registers none: the list around it owns
   // every key for the peeked row. Esc is not here either: DetailSplitLayout
   // (every page host) owns it and closes to the host's own list.
@@ -522,12 +485,12 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
         startEditTitle();
       } else if (matchesAction(e, "task.back")) {
         stop();
-        router.push(closeHref);
+        navClose();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [paneActive, paletteOpen, shortcutsPanelOpen, isInline, data, openCmd, startEditTitle, router, closeHref]);
+  }, [paneActive, paletteOpen, shortcutsPanelOpen, isInline, data, openCmd, startEditTitle, navClose]);
 
   if (!data) {
     // directData === null: webGetTaskDetail resolved but the id is not a task
@@ -561,7 +524,8 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
   const status = statusVisual(taskStatusOf(data as any, taskStatuses), taskStatuses);
   // A line problem (learning-loop.md LL6) leads with its summary, its record folded.
   const isProblem = !!(data as any).cause;
-  const StatusIcon = status.icon;
+  const head = { data, teamInfo, taskProject, taskTeamId, isInline, onOpen, close: () => { if (isInline && onClose) onClose(); else navClose(); } };
+  const titleEdit: TaskTitleEdit = { editing: editingTitle, draft: titleDraft, setDraft: setTitleDraft, commit: commitTitle, cancel: () => setEditingTitle(false), start: startEditTitle, inputRef: titleRef };
 
   return (
         <div
@@ -576,109 +540,19 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
             <p className="text-sol-cyan text-sm font-medium">Drop images to attach</p>
           </div>
         )}
+        {modern && <TaskModernHeader {...head} status={status} edit={titleEdit} />}
         <div ref={bodyScrollRef} className="flex-1 overflow-y-auto">
         <div className="flex flex-col min-h-full">
         <div className={isInline ? "flex-1 px-4 py-4 w-full" : "flex-1 max-w-4xl mx-auto px-6 py-6 w-full"}>
-          {/* Card header: id + badges + watch, with actions */}
-          <div data-page-head className="flex items-center justify-between mb-3 gap-2">
-            <div className="flex items-center gap-2 min-w-0 overflow-hidden text-xs text-sol-text-dim">
-              <button
-                onClick={() => { copyToClipboard(data.short_id); toast.success("Task ID copied"); }}
-                className="font-mono px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/30 hover:border-sol-cyan/40 hover:text-sol-cyan transition-colors cursor-copy whitespace-nowrap flex-shrink-0"
-                title="Click to copy ID"
-              >
-                {data.short_id}
-              </button>
-              {data.external && <IssueLink external={data.external} size="sm" />}
-              {teamInfo && (
-                <span className="px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-meta truncate min-w-0">{teamInfo.name}</span>
-              )}
-              {/* Where this task lives. A link, because the project is a place
-                  you can work from — and suppressed when you are already inside
-                  that project, where the breadcrumb overhead has just said so. */}
-              {taskProject && (
-                <Link
-                  href={`/projects/${taskProject._id}`}
-                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/30 text-meta text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors truncate min-w-0"
-                  title={`Open project: ${taskProject.title}`}
-                >
-                  <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${projectDotClass(taskProject)}`} />
-                  <span className="truncate">{taskProject.title}</span>
-                </Link>
-              )}
-              {/* The call this task was pulled from: its recap and sibling tasks. */}
-              {data.from_call && <><TaskCallChip callId={data.from_call} size="head" /><CallListFeeder /></>}
-              {!taskTeamId && (
-                <span className="px-1.5 py-0.5 rounded bg-sol-text-dim/10 text-sol-text-dim border border-sol-text-dim/20 text-meta whitespace-nowrap flex-shrink-0">Personal</span>
-              )}
-              {data.source === "insight" && (
-                <span className="px-1.5 py-0.5 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 text-meta whitespace-nowrap flex-shrink-0">mined</span>
-              )}
-            </div>
-            <div className="flex items-center gap-1 flex-shrink-0">
-              {isInline && onOpen && (
-                <button onClick={onOpen} className="text-xs px-2 py-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors" title="Open full page">Open</button>
-              )}
-              <ShareControl label="task" path={`/tasks/${data.short_id}`} publicShare={{ kind: "task", id: data._id, token: data.share_token, team: policyTeamOf("tasks", data) }} />
-              <OverflowMenu>
-                <WatchButton entityType="task" entityId={data._id} variant="menuItem" />
-              </OverflowMenu>
-              <button
-                onClick={() => { if (isInline && onClose) onClose(); else router.push(closeHref); }}
-                className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
-                title="Close"
-                aria-label="Close"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          </div>
+          {!modern && <TaskHeadIdRow {...head} />}
 
           {!isProblem && <RepositoryLinks taskId={data._id} conversationIds={linkedIds} sessions={linkedConversations} repository={taskRepository(data) ?? undefined} />}
 
           <SupersededBanner task={data} />
 
-          {/* Parent breadcrumb — a subtask never renders context-free */}
-          {(data as any).parent_id && (
-            <button
-              onClick={() => parentRow && router.push(taskHref(parentRow._id))}
-              className="flex items-center gap-1.5 mb-2 text-xs text-sol-text-dim hover:text-sol-cyan transition-colors group"
-              title={parentRow ? `Open ${parentRow.short_id}` : "Parent task"}
-            >
-              <CornerDownRight className="w-3 h-3 flex-shrink-0" />
-              <span>Subtask of</span>
-              <span className="font-mono">{parentRow?.short_id ?? "…"}</span>
-              {parentRow && <span className="text-sol-text-muted group-hover:text-sol-cyan truncate max-w-[24rem]">{parentRow.title}</span>}
-            </button>
-          )}
+          {(data as any).parent_id && <TaskParentLine parent={parentRow} onOpen={() => parentRow && router.push(taskHref(parentRow._id))} />}
 
-          {/* Title */}
-          <div data-page-head className="flex items-start gap-2.5 mb-3">
-            <StatusIcon className={`w-5 h-5 mt-0.5 flex-shrink-0 ${status.color}`} />
-            <div className="flex-1 min-w-0">
-              {editingTitle ? (
-                <input
-                  ref={titleRef}
-                  value={titleDraft}
-                  onChange={(e) => setTitleDraft(e.target.value)}
-                  onBlur={commitTitle}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") commitTitle();
-                    if (e.key === "Escape") setEditingTitle(false);
-                  }}
-                  className="w-full text-lg font-semibold text-sol-text bg-transparent border-b border-sol-cyan focus:outline-none pb-0.5"
-                />
-              ) : (
-                <h1
-                  className={`text-lg font-semibold text-sol-text leading-snug cursor-text hover:text-sol-cyan/90 transition-colors `}
-                  onClick={startEditTitle}
-                  title="Rename"
-                >
-                  {data.title}
-                </h1>
-              )}
-            </div>
-          </div>
+          {!modern && <TaskHeadTitle title={data.title} status={status} edit={titleEdit} />}
 
           {isProblem && <ProblemSummary task={data as any} />}
 
@@ -800,7 +674,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
                   {data.labels.map((l: string) => {
                     const lc = getLabelColor(l);
                     return (
-                      <Link key={l} href={`/tasks?label=${encodeURIComponent(l)}`} className={`inline-flex items-center gap-1 text-meta px-2 py-0.5 rounded-full border ${lc.bg} ${lc.border} ${lc.text} hover:brightness-110 transition-all cursor-pointer`}>
+                      <Link key={l} href={`/tasks?label=${encodeURIComponent(l)}`} className={`inline-flex items-center gap-1 text-meta px-2 py-0.5 rounded-full border ${lc.bg} ${lc.border} ${lc.text} hover:brightness-110 transition-all cursor-pointer ${modernPillShape()}`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
                         {l}
                       </Link>
@@ -886,7 +760,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
               </h2>
               <div className="border border-sol-border/30 rounded-lg p-4 bg-sol-bg-alt/20 border-l-2 border-l-sol-violet/30">
                 <div className="flex items-center gap-2 mb-2">
-                  <Badge variant="outline" className="text-meta text-sol-cyan border-sol-cyan/30">
+                  <Badge variant="outline" className={`text-meta text-sol-cyan border-sol-cyan/30 ${modernPill({ tone: "cyan" })}`}>
                     {data.source_insight.outcome_type}
                   </Badge>
                 </div>
@@ -894,7 +768,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
                 {data.source_insight.themes?.length > 0 && (
                   <div className="flex gap-1 mt-2">
                     {data.source_insight.themes.map((t: string) => (
-                      <span key={t} className="text-meta px-1.5 rounded bg-sol-bg-highlight text-sol-text-dim">{t}</span>
+                      <span key={t} className={`text-meta px-1.5 rounded bg-sol-bg-highlight text-sol-text-dim ${modernPill()}`}>{t}</span>
                     ))}
                   </div>
                 )}
@@ -913,7 +787,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
                 <CircleDot className="w-4 h-4 text-sol-cyan flex-shrink-0" />
                 <span className="text-sm font-medium text-sol-cyan">{(data as any).plan.title}</span>
                 <ShortId id={(data as any).plan.short_id} className="text-meta text-sol-text-dim" />
-                <Badge variant="outline" className="text-meta px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto">{(data as any).plan.status}</Badge>
+                <Badge variant="outline" className={`text-meta px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto ${modernPill({ tone: "cyan" })}`}>{(data as any).plan.status}</Badge>
               </Link>
             </div>
           )}
@@ -928,7 +802,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
                     <FileText className="w-4 h-4 text-sol-violet flex-shrink-0" />
                     <span className="text-sm text-sol-text truncate">{(doc as any).display_title || doc.title || "Untitled"}</span>
                     <DocDates doc={doc} className="text-meta text-sol-text-dim ml-auto" />
-                    <Badge variant="outline" className="text-meta px-1.5 py-0 text-sol-violet border-sol-violet/30">{doc.doc_type}</Badge>
+                    <Badge variant="outline" className={`text-meta px-1.5 py-0 text-sol-violet border-sol-violet/30 ${modernPill({ tone: "violet" })}`}>{doc.doc_type}</Badge>
                   </Link>
                 ))}
               </div>

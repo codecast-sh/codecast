@@ -25,6 +25,7 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 import { CallVideoControls } from "./CallVideoControls";
 import { formatCallTime } from "@codecast/shared/entities";
 import "./callVideoPlayer.css";
+import { modernButton } from "../ui/modernLook";
 
 // A call's video on its page, kept in step with the transcript the way the
 // recording's audio always was: a line clicked seeks the picture there, and
@@ -606,7 +607,7 @@ function ViewChip({
       title={title}
       className={`flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors ${
         active ? "bg-sol-violet/15 text-sol-violet" : dim ? "text-sol-text-dim hover:text-sol-text-muted" : "hover:bg-white/[0.06] hover:text-sol-text"
-      }`}
+      } modern:min-h-6 modern:rounded-control`}
     >
       {children}
     </button>
@@ -653,7 +654,7 @@ export function CallVideoNoticeLine({
     <button
       type="button"
       onClick={onDelete}
-      className="shrink-0 rounded px-1.5 font-mono text-meta not-italic text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text"
+      className={`shrink-0 rounded px-1.5 font-mono text-meta not-italic text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text ${modernButton({ variant: "ghost", size: "xs" }, "modern:font-sans")}`}
       title="Remove this failed recording from the call"
     >
       Clear

@@ -21,6 +21,7 @@ import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { shareOutLedger, type ShareOutPreview } from "../consequential/ledgers";
 import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
+import { modernButton } from "../ui/modernLook";
 
 type MapRow = { user_id: string; name: string; takes_decisions: boolean; projects: Array<{ id: string; title: string }> };
 type Mapped = { assignments: MapRow[]; unplaced: string[]; text: string };
@@ -128,7 +129,7 @@ export function ChangeAreasView({ teamId, mapWords }: { teamId: string; mapWords
       {open && (
         <Dialog open onOpenChange={show}>
           <DialogContent className="w-[34rem] max-w-[calc(100vw-1.5rem)] gap-3 border-sol-border bg-sol-bg p-5 text-sol-text" data-change-areas-dialog>
-            <DialogTitle className="text-[15px] font-semibold">Who decides for which areas</DialogTitle>
+            <DialogTitle className="text-[15px] font-semibold modern:text-read">Who decides for which areas</DialogTitle>
             <DialogDescription className="sr-only">Each new decision about a project goes to whoever covers it, fewest open first.</DialogDescription>
             <AreasMap rows={mapped?.assignments ?? current} before={mapped ? current : undefined} />
             {mapped && mapped.unplaced.length > 0 && (
@@ -154,13 +155,13 @@ export function ChangeAreasView({ teamId, mapWords }: { teamId: string; mapWords
               </div>
             )}
             <div className="flex items-center justify-end gap-2 text-[12px]">
-              <button type="button" onClick={() => show(false)} className="px-2 py-1 text-sol-text-dim hover:text-sol-text">Cancel</button>
+              <button type="button" onClick={() => show(false)} className={`px-2 py-1 text-sol-text-dim hover:text-sol-text ${modernButton({ variant: "ghost", size: "sm" })}`}>Cancel</button>
               {mapped ? (
-                <button type="button" onClick={apply} className="flex items-center gap-1.5 rounded border border-sol-blue/50 bg-sol-blue/10 px-2.5 py-1 text-sol-blue" data-areas-apply>
+                <button type="button" onClick={apply} className={`flex items-center gap-1.5 rounded border border-sol-blue/50 bg-sol-blue/10 px-2.5 py-1 text-sol-blue ${modernButton({ variant: "primary", size: "sm" })}`} data-areas-apply>
                   Apply<Chord />
                 </button>
               ) : (
-                <button type="button" onClick={() => void map()} disabled={busy || !words.trim() || words.trim() === currentText} className="flex items-center gap-1.5 rounded border border-sol-border px-2.5 py-1 text-sol-text disabled:opacity-40" data-areas-map-words>
+                <button type="button" onClick={() => void map()} disabled={busy || !words.trim() || words.trim() === currentText} className={`flex items-center gap-1.5 rounded border border-sol-border px-2.5 py-1 text-sol-text disabled:opacity-40 ${modernButton({ variant: "outline", size: "sm" })}`} data-areas-map-words>
                   {busy ? "Reading…" : "Preview"}<Chord />
                 </button>
               )}

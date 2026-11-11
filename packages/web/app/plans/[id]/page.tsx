@@ -46,6 +46,7 @@ import {
   GitBranch,
 } from "lucide-react";
 import { toast } from "sonner";
+import { modernTab, modernTabList } from "../../../components/ui/modernLook";
 
 const api = _api as any;
 
@@ -345,7 +346,7 @@ export default function PlanDetailPage() {
           )}
 
           {hasTasks && (
-            <div className="flex items-center gap-1 mb-5 border-b border-sol-border/15">
+            <div className={`flex items-center gap-1 mb-5 border-b border-sol-border/15 ${modernTabList}`}>
               {([
                 { key: "overview", icon: CheckCircle2, label: "Overview" },
                 { key: "orchestration", icon: Zap, label: "Orchestration" },
@@ -359,7 +360,7 @@ export default function PlanDetailPage() {
                     activeTab === key
                       ? "text-sol-text border-sol-cyan"
                       : "text-sol-text-dim border-transparent hover:text-sol-text-muted"
-                  }`}
+                  } ${modernTab({ active: activeTab === key }, "modern:mb-0")}`}
                 >
                   <Icon className={`w-3.5 h-3.5 ${key === "orchestration" && hasActiveSessions ? "text-sol-green" : ""}`} />
                   {label}

@@ -11,6 +11,7 @@ import { useState } from "react";
 import { AlertTriangle, Mail, Plus, X } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
+import { modernButton, modernField, modernLook } from "../ui/modernLook";
 
 export function OtherAddresses() {
   const { user } = useCurrentUser();
@@ -65,7 +66,7 @@ export function OtherAddresses() {
           {addresses.map((email) => (
             <li
               key={email}
-              className="inline-flex items-center gap-1.5 rounded-md border border-sol-border/70 bg-sol-bg-alt/40 py-1 pl-2.5 pr-1 text-xs text-sol-text"
+              className="inline-flex items-center gap-1.5 rounded-md border border-sol-border/70 bg-sol-bg-alt/40 py-1 pl-2.5 pr-1 text-xs text-sol-text modern:h-control-sm modern:rounded-control modern:border-sol-border modern:bg-sol-card modern:py-0 modern:text-meta"
             >
               {email}
               <button
@@ -74,7 +75,7 @@ export function OtherAddresses() {
                 disabled={busy}
                 aria-label={`Remove ${email}`}
                 title="Remove"
-                className="rounded p-0.5 text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text disabled:opacity-50"
+                className={`rounded p-0.5 text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text disabled:opacity-50 ${modernButton({ variant: "ghost", size: "icon-xs" })}`}
               >
                 <X className="h-3 w-3" />
               </button>
@@ -96,12 +97,12 @@ export function OtherAddresses() {
           onChange={(e) => setValue(e.target.value)}
           placeholder="you@work.example"
           aria-label="Another address you use"
-          className="h-8 min-w-0 flex-1 rounded-md border border-sol-border/70 bg-sol-bg px-2.5 text-xs text-sol-text outline-none placeholder:text-sol-text-dim/60 focus:border-sol-cyan"
+          className={`h-8 min-w-0 flex-1 rounded-md border border-sol-border/70 bg-sol-bg px-2.5 text-xs text-sol-text outline-none placeholder:text-sol-text-dim/60 focus:border-sol-cyan ${modernLook(modernField, "modern:h-control-md modern:text-ui")}`}
         />
         <button
           type="submit"
           disabled={busy || !value.trim()}
-          className="inline-flex h-8 items-center gap-1 rounded-md border border-sol-border px-2.5 text-xs text-sol-text hover:bg-sol-bg-highlight disabled:opacity-50"
+          className={`inline-flex h-8 items-center gap-1 rounded-md border border-sol-border px-2.5 text-xs text-sol-text hover:bg-sol-bg-highlight disabled:opacity-50 ${modernButton({ variant: "outline", size: "md" })}`}
         >
           <Plus className="h-3 w-3" /> Add
         </button>

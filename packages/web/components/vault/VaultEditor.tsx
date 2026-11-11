@@ -77,6 +77,7 @@ import { useVaultLinkCtx } from "./useVaultLinkCtx";
 import type { VaultLinkContextValue } from "./VaultMarkdown";
 import { useVaultStore, resolveRecentMove } from "../../store/vaultStore";
 import { filesHref } from "../../lib/vault/vaultHref";
+import { modernButton } from "../ui/modernLook";
 
 const AUTOSAVE_MS = 800;
 // The word count re-parses the note to match the reading view's number exactly
@@ -754,14 +755,14 @@ export function VaultEditor({
             <button
               type="button"
               onClick={keepMine}
-              className="px-2 py-0.5 rounded border border-sol-border/40 text-sol-text hover:border-sol-cyan transition-colors"
+              className={`px-2 py-0.5 rounded border border-sol-border/40 text-sol-text hover:border-sol-cyan transition-colors ${modernButton({ variant: "outline", size: "xs" })}`}
             >
               Keep my version
             </button>
             <button
               type="button"
               onClick={takeDisk}
-              className="px-2 py-0.5 rounded border border-sol-border/40 hover:border-sol-cyan hover:text-sol-text transition-colors"
+              className={`px-2 py-0.5 rounded border border-sol-border/40 hover:border-sol-cyan hover:text-sol-text transition-colors ${modernButton({ variant: "outline", size: "xs" })}`}
             >
               Use the version on disk
             </button>

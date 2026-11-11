@@ -21,6 +21,7 @@ import { noteDisplayName } from "./VaultExplorer";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { isMac } from "../../shortcuts";
 import { hoverFocus } from "../../shortcuts/focusSource";
+import { modernDialog, modernScrim } from "../ui/modernLook";
 
 interface SwitchTarget {
   path: string;
@@ -221,8 +222,8 @@ export const VaultQuickSwitcher = memo(function VaultQuickSwitcher() {
         if (e.target === e.currentTarget) setOpen(false);
       }}
     >
-      <div className="absolute inset-0 bg-black/25" />
-      <div className="relative w-[560px] max-w-[92vw] rounded-lg border border-sol-border/50 bg-sol-card shadow-2xl overflow-hidden">
+      <div className={`absolute inset-0 bg-black/25 ${modernScrim}`} />
+      <div className={`relative w-[560px] max-w-[92vw] rounded-lg border border-sol-border/50 bg-sol-card shadow-2xl overflow-hidden ${modernDialog({ scroll: false })}`}>
         <input
           ref={inputRef}
           value={query}

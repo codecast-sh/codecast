@@ -1,0 +1,98 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`the Sessions page in Modern Classic draws the classes it drew before the Modern looks 1`] = `
+"div h-full min-h-0 overflow-y-auto bg-sol-bg text-sol-text
+div max-w-[1200px] mx-auto px-6 py-6
+div flex flex-wrap items-center justify-between gap-3 mb-6
+div flex flex-wrap items-center gap-4
+a text-sol-text-muted hover:text-sol-text-secondary transition-colors
+svg w-4 h-4
+h1 text-lg font-medium tracking-tight
+a rounded border border-sol-border px-2 py-0.5 text-xs text-sol-text-secondary hover:border-sol-text-dim hover:text-sol-text
+div flex flex-wrap items-center gap-3 text-xs text-sol-text-muted font-mono
+span text-sol-blue
+span text-sol-border
+span text-sol-yellow
+span text-sol-border
+span text-sol-text-dim
+span text-sol-border
+span text-sol-blue
+div flex items-center gap-2 flex-wrap
+button px-3 py-1.5 text-xs rounded border border-sol-blue/30 text-sol-blue disabled:opacity-40
+button px-3 py-1.5 text-xs bg-sol-red/15 text-sol-red border border-sol-red/30 rounded-md hover:bg-sol-red/20 transition-colors
+div flex flex-wrap items-center gap-2 mb-4
+div flex flex-wrap rounded-md border border-sol-border/60 overflow-hidden
+button px-3 py-1.5 text-xs font-mono transition-colors bg-sol-bg-highlight text-sol-text
+span text-sol-text-dim ml-1
+button px-3 py-1.5 text-xs font-mono transition-colors bg-sol-bg-alt/40 text-sol-text-muted hover:text-sol-text-secondary
+span text-sol-text-dim ml-1
+button px-3 py-1.5 text-xs font-mono transition-colors bg-sol-bg-alt/40 text-sol-text-muted hover:text-sol-text-secondary
+span text-sol-text-dim ml-1
+button px-3 py-1.5 text-xs font-mono transition-colors bg-sol-bg-alt/40 text-sol-text-muted hover:text-sol-text-secondary
+span text-sol-text-dim ml-1
+button px-3 py-1.5 text-xs font-mono transition-colors bg-sol-bg-alt/40 text-sol-text-muted hover:text-sol-text-secondary
+span text-sol-text-dim ml-1
+div ml-auto flex items-center gap-1.5 text-xs font-mono
+span text-sol-text-dim
+select bg-sol-bg-alt/60 border border-sol-border/60 rounded-md px-2 py-1.5 text-sol-text-secondary hover:text-sol-text focus:outline-none focus:border-sol-border cursor-pointer
+button px-2 py-1.5 bg-sol-bg-alt/60 border border-sol-border/60 rounded-md text-sol-text-muted hover:text-sol-text hover:border-sol-border transition-colors
+div flex flex-wrap items-center gap-2 mb-4 -mt-1
+span text-mark uppercase tracking-wider text-sol-text-dim font-mono w-12 shrink-0
+div flex flex-wrap rounded-md border border-sol-border/60 overflow-hidden
+button px-3 py-1.5 text-xs font-mono transition-colors bg-sol-bg-highlight text-sol-text
+span text-sol-text-dim ml-1
+button px-3 py-1.5 text-xs font-mono transition-colors bg-sol-bg-alt/40 text-sol-text-muted hover:text-sol-text-secondary
+span text-sol-text-dim ml-1
+button px-3 py-1.5 text-xs font-mono transition-colors bg-sol-bg-alt/40 text-sol-text-muted hover:text-sol-text-secondary
+span text-sol-text-dim ml-1
+button px-3 py-1.5 text-xs font-mono transition-colors bg-sol-bg-alt/40 text-sol-text-muted hover:text-sol-text-secondary
+span text-sol-text-dim ml-1
+button px-3 py-1.5 text-xs font-mono transition-colors bg-sol-bg-alt/40 text-sol-text-muted hover:text-sol-text-secondary
+span text-sol-text-dim ml-1
+div bg-sol-bg-alt/60 rounded-lg border border-sol-border/60 mb-4 overflow-hidden
+div flex items-center gap-6 px-4 py-2.5 text-meta font-mono
+span text-sol-text-muted
+span text-sol-text-secondary text-sm
+span text-sol-text-muted
+span text-sol-blue text-sm
+span text-sol-text-muted
+span text-sol-yellow text-sm
+span text-sol-text-muted
+span text-sol-text-secondary text-sm
+div space-y-1
+div bg-sol-bg-alt/60 rounded-lg border transition-colors border-sol-border/60 hover:bg-sol-bg-alt/80
+div px-4 py-3 cursor-pointer
+div flex flex-wrap items-center gap-3
+span w-2 h-2 rounded-full shrink-0 bg-sol-blue
+div min-w-0 basis-[calc(100%-2rem)] sm:basis-0 sm:flex-1
+span text-sm text-sol-text-muted truncate block
+span shrink-0 flex items-baseline gap-1 font-mono tabular-nums
+span text-sm text-sol-text
+span text-meta text-sol-text-muted
+span text-meta font-mono px-1.5 py-0.5 rounded border shrink-0 text-sol-green bg-sol-green/10 border-sol-green/30
+span text-xs font-mono shrink-0 text-sol-blue
+div mt-1.5 ml-5 flex items-center gap-3 text-meta text-sol-text-dim font-mono flex-wrap
+span text-sol-border
+span text-sol-text-muted truncate max-w-[16rem]
+span text-sol-border
+span text-sol-border
+span text-sol-border
+span text-sol-blue
+span text-sol-border
+span text-sol-yellow
+span text-sol-border
+div bg-sol-bg-alt/60 rounded-lg border transition-colors border-sol-border/60 hover:bg-sol-bg-alt/80
+div px-4 py-3 cursor-pointer
+div flex flex-wrap items-center gap-3
+span w-2 h-2 rounded-full shrink-0 bg-sol-yellow
+div min-w-0 basis-[calc(100%-2rem)] sm:basis-0 sm:flex-1
+span text-sm text-sol-text-muted truncate block
+span shrink-0 flex items-baseline gap-1 font-mono tabular-nums
+span text-sm text-sol-text
+span text-meta text-sol-text-muted
+span text-xs font-mono shrink-0 text-sol-yellow
+span text-xs font-mono tabular-nums shrink-0 text-sol-yellow
+div mt-1.5 ml-5 flex items-center gap-3 text-meta text-sol-text-dim font-mono flex-wrap
+span text-sol-border
+span text-sol-border"
+`;

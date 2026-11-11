@@ -1,5 +1,6 @@
 import type { ReactNode, Ref, ChangeEvent, InputHTMLAttributes } from "react";
 import { MenuKeyCaps } from "../KeyboardShortcutsHelp";
+import { modernField, modernLook } from "../ui/modernLook";
 
 /** The magnifier the search field and its folded button both draw. */
 export function SearchGlyph({ className }: { className?: string }) {
@@ -69,7 +70,7 @@ export function SearchField({
           expanded
             ? "pr-3 border-sol-cyan/50 ring-1 ring-sol-cyan/30 shadow-lg shadow-black/10"
             : `${hideCaps ? "pr-3" : "pr-12"} border-transparent hover:bg-sol-bg-highlight`
-        }`}
+        } ${modernLook(modernField, `modern:h-control-sm modern:text-ui modern:ring-0${expanded ? " modern:border-sol-cyan/50" : ""}`)}`}
       />
       <div
         className={`absolute inset-y-0 right-0 pr-2.5 items-center pointer-events-none transition-opacity duration-150 ${

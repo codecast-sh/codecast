@@ -456,3 +456,44 @@ button.ops-stat:hover .ops-stat-label { color: var(--sol-text); text-decoration:
 
 /* The tab crumb never shrinks to nothing behind its slash: the workspace name and the source crumb give way first. */
 .ops-crumbs > [data-ops-crumb="tab"] { flex-shrink: 0; }
+
+/* ── Modern (.modern-style on <html>): the area's controls are the app's
+   primitives (components/ui/modernLook.ts), drawn from the same tokens: the
+   control radius and heights, the white face on the hairline, the one focus
+   ring, the accent for what is chosen and what is primary, the popover
+   surface. Classic and Minimal never match these. ── */
+.modern-style .ops-btn {
+  height: var(--control-sm); padding: 0 10px; border-radius: var(--radius-control);
+  font-size: var(--fs-meta); font-weight: 500;
+  border-color: var(--sol-border); background-color: var(--sol-card); color: var(--sol-text);
+  transition: background-color var(--motion-press) var(--motion-ease), border-color var(--motion-press) var(--motion-ease), color var(--motion-press) var(--motion-ease);
+}
+.modern-style .ops-btn:hover { border-color: color-mix(in srgb, var(--sol-text-dim) 50%, var(--sol-border)); background-color: var(--sol-bg-alt); }
+.modern-style .ops-btn[data-tone="primary"] { background-color: var(--sol-class-cyan); border-color: transparent; color: var(--sol-bg); }
+.modern-style .ops-btn[data-tone="primary"]:hover { filter: none; background-color: color-mix(in srgb, var(--sol-class-cyan) 90%, var(--sol-bg)); }
+.modern-style .ops-btn[data-tone="danger"] { background-color: var(--sol-class-red); border-color: transparent; color: var(--sol-bg); }
+.modern-style .ops-confirm .ops-btn { height: 24px; padding: 0 8px; }
+/* The segmented tray, the chosen segment raised in white on the hairline. */
+.modern-style .ops-seg { gap: 2px; padding: 2px; border: 0; border-radius: var(--radius-control); background-color: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.modern-style .ops-seg button { height: 24px; padding: 0 8px; border-radius: 4px; font-weight: 500; color: var(--sol-text-muted); transition: background-color var(--motion-press) var(--motion-ease), color var(--motion-press) var(--motion-ease); }
+.modern-style .ops-seg button + button { border-left: 0; }
+.modern-style .ops-seg button:hover { color: var(--sol-text); }
+.modern-style .ops-seg button[data-on="true"] { background-color: var(--sol-card); color: var(--sol-text); box-shadow: 0 0 0 1px var(--sol-border); }
+/* Filter chips: the outline face, the accent's soft tint when on. */
+.modern-style .ops-chip,
+.modern-style .ops-source-chip {
+  height: var(--control-sm); padding: 0 10px; border-radius: var(--radius-control); gap: 6px;
+  border: 1px solid var(--sol-border); background-color: var(--sol-card); color: var(--sol-text-muted);
+  font-size: var(--fs-meta); font-weight: 500;
+}
+.modern-style .ops-chip:hover,
+.modern-style .ops-source-chip:hover { border-color: color-mix(in srgb, var(--sol-text-dim) 50%, var(--sol-border)); background-color: var(--sol-bg-alt); color: var(--sol-text); }
+.modern-style .ops-chip[data-on="true"],
+.modern-style .ops-source-chip[data-on="true"] { border-color: color-mix(in srgb, var(--sol-class-cyan) 40%, transparent); background-color: color-mix(in srgb, var(--sol-class-cyan) 10%, transparent); color: var(--sol-class-cyan); }
+.modern-style .ops-tab { font-size: var(--fs-ui); }
+.modern-style .ops-pill { height: 20px; border-radius: var(--radius-control); font-weight: 500; }
+.modern-style .ops-btn:focus-visible,
+.modern-style .ops-seg button:focus-visible,
+.modern-style .ops-chip:focus-visible,
+.modern-style .ops-source-chip:focus-visible,
+.modern-style .ops-tab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }

@@ -20,6 +20,7 @@ import { TimelineCharts, fmtK, fmtDayLabel, type PunchRow } from "../../../compo
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { DocDates } from "../../../components/DocDates";
 import { ShareControl } from "../../../components/ShareControl";
+import { PageHeader } from "../../../components/ui/page-header";
 
 export default function UserProfilePage() {
   return (
@@ -156,50 +157,61 @@ function UserProfileContent() {
 
   return (
     <div className="w-full py-4 px-4">
-      {/* Profile header */}
-      <div className="flex items-center gap-3 pb-3 mb-0">
-        <div className="relative flex-shrink-0">
-          <AvatarImg
-            src={profileUser.github_avatar_url}
-            alt=""
-            className="w-9 h-9 rounded-full ring-1 ring-sol-border/20"
-            fallback={
-              <div className="w-9 h-9 rounded-full bg-sol-bg-highlight flex items-center justify-center text-sol-text text-sm font-semibold">
-                {profileUser.name?.[0]?.toUpperCase() || "?"}
-              </div>
-            }
-          />
-          <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-sol-bg ${online ? "bg-sol-green" : recent ? "bg-sol-yellow" : "bg-sol-text-dim/50"}`} />
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-2 flex-wrap">
-            <span className="text-[13px] font-bold text-sol-text leading-tight">{profileUser.name || "Unnamed"}</span>
-            {profileUser.github_username && (
-              <a href={`https://github.com/${profileUser.github_username}`} target="_blank" rel="noopener noreferrer" className="text-meta text-sol-cyan/40 hover:text-sol-cyan transition-colors">@{profileUser.github_username}</a>
-            )}
-            {online && <span className="text-meta text-sol-green font-medium">online</span>}
-            {!online && recent && <span className="text-meta text-sol-yellow/60">recently active</span>}
-          </div>
-          {aa && (
-            <div className="flex items-center gap-1 mt-0.5 text-meta text-sol-text-muted leading-tight flex-wrap">
-              {aa.is_currently_active && aa.current_project && (
-                <span className="flex items-center gap-1 text-sol-cyan/70 font-medium mr-0.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan animate-pulse inline-block" />
-                  {aa.current_project}
-                </span>
-              )}
-              <span>{aa.week_sessions} sess</span>
-              <Sep />
-              <span>{fmtK(aa.week_messages)} msgs</span>
-              {(aa.team_activity?.week_commits ?? 0) > 0 && <><Sep /><span className="text-sol-green/50">{aa.team_activity!.week_commits}c</span></>}
-              {(aa.team_activity?.week_prs ?? 0) > 0 && <><Sep /><span className="text-sol-violet/50">{aa.team_activity!.week_prs} PRs</span></>}
-              {aa.activity_streak > 0 && <><Sep /><span className="text-sol-orange/60">{aa.activity_streak}d streak</span></>}
-              <span className="text-sol-text-dim ml-0.5">this week</span>
+      {/* Profile header: Classic's own; Modern's page header names the
+          teammate under Org, with the way back and Share. */}
+      <PageHeader
+        legacy={
+          <div className="flex items-center gap-3 pb-3 mb-0">
+            <div className="relative flex-shrink-0">
+              <AvatarImg
+                src={profileUser.github_avatar_url}
+                alt=""
+                className="w-9 h-9 rounded-full ring-1 ring-sol-border/20"
+                fallback={
+                  <div className="w-9 h-9 rounded-full bg-sol-bg-highlight flex items-center justify-center text-sol-text text-sm font-semibold">
+                    {profileUser.name?.[0]?.toUpperCase() || "?"}
+                  </div>
+                }
+              />
+              <div className={`absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2 border-sol-bg ${online ? "bg-sol-green" : recent ? "bg-sol-yellow" : "bg-sol-text-dim/50"}`} />
             </div>
-          )}
-        </div>
-        <ShareControl label="person" path={`/team/${profileUser.github_username || profileUser._id}`} />
-      </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <span className="text-[13px] font-bold text-sol-text leading-tight">{profileUser.name || "Unnamed"}</span>
+                {profileUser.github_username && (
+                  <a href={`https://github.com/${profileUser.github_username}`} target="_blank" rel="noopener noreferrer" className="text-meta text-sol-cyan/40 hover:text-sol-cyan transition-colors">@{profileUser.github_username}</a>
+                )}
+                {online && <span className="text-meta text-sol-green font-medium">online</span>}
+                {!online && recent && <span className="text-meta text-sol-yellow/60">recently active</span>}
+              </div>
+              {aa && (
+                <div className="flex items-center gap-1 mt-0.5 text-meta text-sol-text-muted leading-tight flex-wrap">
+                  {aa.is_currently_active && aa.current_project && (
+                    <span className="flex items-center gap-1 text-sol-cyan/70 font-medium mr-0.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-sol-cyan animate-pulse inline-block" />
+                      {aa.current_project}
+                    </span>
+                  )}
+                  <span>{aa.week_sessions} sess</span>
+                  <Sep />
+                  <span>{fmtK(aa.week_messages)} msgs</span>
+                  {(aa.team_activity?.week_commits ?? 0) > 0 && <><Sep /><span className="text-sol-green/50">{aa.team_activity!.week_commits}c</span></>}
+                  {(aa.team_activity?.week_prs ?? 0) > 0 && <><Sep /><span className="text-sol-violet/50">{aa.team_activity!.week_prs} PRs</span></>}
+                  {aa.activity_streak > 0 && <><Sep /><span className="text-sol-orange/60">{aa.activity_streak}d streak</span></>}
+                  <span className="text-sol-text-dim ml-0.5">this week</span>
+                </div>
+              )}
+            </div>
+            <ShareControl label="person" path={`/team/${profileUser.github_username || profileUser._id}`} />
+          </div>
+        }
+        className="-mx-4 -mt-4 mb-3"
+        title={profileUser.name || "Unnamed"}
+        glyph={<AvatarImg src={profileUser.github_avatar_url} alt="" className="size-5 rounded-full" fallback={<span className="flex size-5 items-center justify-center rounded-full bg-sol-bg-highlight text-meta font-semibold text-sol-text">{profileUser.name?.[0]?.toUpperCase() || "?"}</span>} />}
+        status={online ? <span className="text-meta font-medium text-sol-green">Online</span> : recent ? <span className="text-meta text-sol-yellow">Recently active</span> : null}
+        actions={profileUser.github_username ? <a href={`https://github.com/${profileUser.github_username}`} target="_blank" rel="noopener noreferrer" className="font-mono text-meta text-sol-text-dim hover:text-sol-cyan">@{profileUser.github_username}</a> : null}
+        share={<ShareControl label="person" path={`/team/${profileUser.github_username || profileUser._id}`} />}
+      />
 
       {/* Activity heatmap -- derived from feed data */}
       {heatmapData && heatmapData.length > 0 && <ActivityHeatmap data={heatmapData} />}

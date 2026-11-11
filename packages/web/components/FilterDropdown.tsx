@@ -1,6 +1,13 @@
 import { useState, useRef, useMemo, Fragment, type ReactNode } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { ChevronDown, Check, X } from "lucide-react";
+import { cn } from "../lib/utils";
+import { modernChip, modernField, modernLook, modernMenuLabel, modernMenuRow, modernPopover } from "./ui/modernLook";
+
+// The Modern looks (ui/modernLook.ts): a set filter is the chip in its on
+// state, its two halves sharing one face; the options are a menu.
+const M_CHIP_ON = cn(modernChip({ active: true }), "modern:gap-0 modern:px-0");
+const M_CHIP_HALF = "modern:h-full modern:rounded-control modern:hover:bg-sol-cyan/10";
 
 export type FilterOption = {
   key: string;
@@ -89,7 +96,7 @@ export function FilterOptionList({
   return (
     <>
       {showSearch && (
-        <div className="px-2 pt-1 pb-1.5 sticky top-0 bg-sol-bg z-10">
+        <div className="px-2 pt-1 pb-1.5 sticky top-0 bg-sol-bg z-10 modern:bg-sol-card">
           <input
             autoFocus
             value={query}
@@ -104,7 +111,7 @@ export function FilterOptionList({
               e.stopPropagation();
             }}
             placeholder="Search"
-            className="w-full h-6 px-1.5 text-xs bg-sol-bg-alt border border-sol-border/40 rounded text-sol-text placeholder:text-sol-text-dim outline-none focus:border-sol-cyan/50"
+            className={`w-full h-6 px-1.5 text-xs bg-sol-bg-alt border border-sol-border/40 rounded text-sol-text placeholder:text-sol-text-dim outline-none focus:border-sol-cyan/50 ${modernLook(modernField, "modern:h-control-sm modern:px-2 modern:text-ui")}`}
           />
         </div>
       )}
@@ -115,14 +122,14 @@ export function FilterOptionList({
         return (
           <Fragment key={opt.key}>
           {heading && (
-            <div className="px-3 pt-2 pb-1 text-mark font-semibold uppercase tracking-widest text-sol-text-dim/70">{heading}</div>
+            <div className={`px-3 pt-2 pb-1 text-mark font-semibold uppercase tracking-widest text-sol-text-dim/70 ${modernMenuLabel}`}>{heading}</div>
           )}
           <button
             onClick={() => handleClick(opt.key)}
             title={opt.label}
             className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
               sel ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
-            }`}
+            } ${modernMenuRow({ selected: sel })}`}
           >
             {opt.face ?? (OptIcon && <OptIcon className={`w-3.5 h-3.5 flex-shrink-0 ${opt.color || ""}`} />)}
             <span className="flex-1 text-left truncate">{opt.label}</span>
@@ -191,7 +198,7 @@ export function FilterDropdown({
     : active && value ? active.label : label;
 
   const optionsPopover = open && (
-    <div className="absolute top-full left-0 mt-1 w-max min-w-[11rem] max-w-[20rem] bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1 max-h-64 overflow-y-auto">
+    <div className={`absolute top-full left-0 mt-1 w-max min-w-[11rem] max-w-[20rem] bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1 max-h-64 overflow-y-auto ${modernLook(modernPopover, "modern:p-1")}`}>
       <FilterOptionList options={options} value={value} multi={multi} onChange={onChange} onPicked={() => setOpen(false)} />
     </div>
   );
@@ -199,12 +206,12 @@ export function FilterDropdown({
   if (chip) {
     return (
       <div ref={ref} className="relative">
-        <div className="flex items-center h-7 rounded-md border border-sol-cyan/30 bg-sol-cyan/5 text-sol-cyan text-xs">
-          <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-1 pl-1.5 pr-1 h-full" title={`Edit ${label}`}>
+        <div className={`flex items-center h-7 rounded-md border border-sol-cyan/30 bg-sol-cyan/5 text-sol-cyan text-xs ${M_CHIP_ON}`}>
+          <button onClick={() => setOpen((o) => !o)} className={`flex items-center gap-1 pl-1.5 pr-1 h-full ${modernLook(M_CHIP_HALF, "modern:pl-2")}`} title={`Edit ${label}`}>
             {icon}
             <span className="whitespace-nowrap truncate max-w-[12rem]" title={buttonLabel}>{buttonLabel}</span>
           </button>
-          <button onClick={() => onChange("")} className="flex items-center pr-1.5 pl-0.5 h-full hover:text-sol-text transition-colors" title={`Remove ${label} filter`}>
+          <button onClick={() => onChange("")} className={`flex items-center pr-1.5 pl-0.5 h-full hover:text-sol-text transition-colors ${modernLook(M_CHIP_HALF, "modern:px-1.5")}`} title={`Remove ${label} filter`} aria-label={`Remove ${label} filter`}>
             <X className="w-3 h-3 opacity-70" />
           </button>
         </div>
@@ -221,7 +228,7 @@ export function FilterDropdown({
           hasValue
             ? "border-sol-cyan/30 text-sol-cyan bg-sol-cyan/5"
             : "border-sol-border/30 text-sol-text-dim hover:text-sol-text hover:border-sol-border/60"
-        }`}
+        } ${modernChip({ active: hasValue })}`}
       >
         {icon}
         <span className="whitespace-nowrap truncate max-w-[12rem]" title={buttonLabel}>{buttonLabel}</span>

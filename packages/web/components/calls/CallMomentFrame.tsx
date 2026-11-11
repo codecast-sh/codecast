@@ -74,7 +74,7 @@ export function CallMomentFrame({
       // The ring stays neutral on hover: the call's own colour is on its
       // icon, as on every other call card and pill, and a red ring here
       // would read as the REC mark of a call being filmed now.
-      className="group my-1 block w-[min(100%,420px)] overflow-hidden rounded-lg bg-sol-bg-alt ring-1 ring-sol-border/40 transition-shadow hover:ring-sol-border/70"
+      className={`group my-1 block w-[min(100%,420px)] overflow-hidden rounded-lg bg-sol-bg-alt ring-1 ring-sol-border/40 transition-shadow hover:ring-sol-border/70 modern:rounded-card`}
       title={`Open ${title} at ${time}`}
       data-call-moment={rawId}
     >

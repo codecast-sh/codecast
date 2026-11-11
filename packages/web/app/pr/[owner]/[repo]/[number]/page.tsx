@@ -60,6 +60,8 @@ import { diffLineKey, parseDiffLineKey, type DiffLineAnchor } from "../../../../
 import { usePageMeta } from "../../../../(marketing)/pageMeta";
 import { accentVar } from "../../../../../lib/externalEvents";
 import { TitlebarStrip } from "../../../../../lib/pageLayout";
+import { PageHeader } from "../../../../../components/ui/page-header";
+import { ShareControl } from "../../../../../components/ShareControl";
 import "../../../../../components/pr/pr.css";
 import { keyBelongsElsewhere } from "../../../../../shortcuts/keyOwnership";
 import { matchesAction, withShortcut } from "../../../../../shortcuts";
@@ -476,7 +478,15 @@ export function PRContent({
       data-main-scroll
       style={{ ["--pr-accent" as string]: accentVar(PR_STATE_META[prStateKey(pr)].accent) }}
     >
-      <TitlebarStrip />
+      {/* Modern: the page header names the place (Code › repo › Pull
+          requests › PR #n) and the way back; the PR's own band below keeps
+          its title, state and verbs. */}
+      <PageHeader
+        legacy={<TitlebarStrip />}
+        title={`PR #${number}`}
+        icon={GitPullRequest}
+        share={<ShareControl label="pull request" path={`/pr/${repository}/${number}`} />}
+      />
       <PRHeader
         pr={pr}
         repository={repository}

@@ -407,3 +407,8 @@
 
 /* Modern (.modern-style): names, initials and words in the interface sans. */
 .modern-style :is(.face-avatar-fallback, .face-name, .face-waiting, .faces-btn-word, .faces-reconnecting) { font-family: var(--font-ui); }
+
+/* ── Modern (.modern-style on <html>): the stage's buttons at the control
+   radius (components/ui/modernLook.ts); their glass and colours stay. ── */
+.modern-style .faces-btn { border-radius: var(--radius-control); }
+.modern-style .faces-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }

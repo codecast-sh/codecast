@@ -1058,7 +1058,7 @@ function BlockedSessionsBanner({
           folded away, nothing competing. */}
       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
         {safetyCount > 0 && (
-          <button onClick={() => safetyCount === 1 ? onOpen?.(safetyBlocked[0]) : setExpanded(true)} className="rounded border border-amber-500/40 px-3 py-1 text-meta font-semibold text-amber-700 dark:text-amber-500 hover:bg-amber-500/10">
+          <button onClick={() => safetyCount === 1 ? onOpen?.(safetyBlocked[0]) : setExpanded(true)} className="rounded border border-amber-500/40 px-3 py-1 text-meta font-semibold text-amber-700 dark:text-amber-500 hover:bg-amber-500/10 modern:h-6 modern:rounded-control modern:border-sol-amber/40 modern:py-0 modern:font-medium modern:text-sol-amber modern:hover:bg-sol-amber/10">
             Review {safetyCount === 1 ? "safety stop" : `${safetyCount} safety stops`}
           </button>
         )}
@@ -1705,26 +1705,26 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
         )}
         {unreadCount > 0 && (
           <ShortcutTooltip label={`${unreadCount} outcome${unreadCount === 1 ? "" : "s"} landed since you last opened this list`} hint="marked inside">
-            <span className="shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30">
+            <span className="shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 modern:h-5 modern:rounded-control modern:border-transparent modern:font-medium modern:bg-sol-cyan/10">
               {unreadCount} new
             </span>
           </ShortcutTooltip>
         )}
         {runningCount > 0 && (
-          <span className="shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-green/10 text-sol-green border border-sol-green/30">
+          <span className="shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-green/10 text-sol-green border border-sol-green/30 modern:h-5 modern:rounded-control modern:border-transparent modern:font-medium">
             <LivePulseDot still />
             {runningCount} running
           </span>
         )}
         {overdueCount > 0 && (
           <ShortcutTooltip label="Due but unclaimed for over 2 minutes — is the daemon for that machine running?">
-            <span className="shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-red/15 text-sol-red border border-sol-red/30">
+            <span className="shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-red/15 text-sol-red border border-sol-red/30 modern:h-5 modern:rounded-control modern:border-transparent modern:font-medium modern:bg-sol-red/10">
               {overdueCount} overdue
             </span>
           </ShortcutTooltip>
         )}
         {attention && (
-          <span className="shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30">
+          <span className="shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30 modern:h-5 modern:rounded-control modern:border-transparent modern:font-medium modern:bg-sol-cyan/10">
             <span className="w-1 h-1 rounded-full bg-sol-cyan" />
             needs attention
           </span>
@@ -2995,7 +2995,7 @@ function SessionListPanelImpl({
               {label}{items.length > 0 ? ` (${items.length})` : null}
             </span>
             {liveCount > 0 && (
-              <span className="ml-1.5 shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-green/10 text-sol-green border border-sol-green/30 normal-case tracking-normal">
+              <span className="ml-1.5 shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-green/10 text-sol-green border border-sol-green/30 normal-case tracking-normal modern:h-5 modern:rounded-control modern:border-transparent modern:font-medium">
                 <LivePulseDot still />
                 {liveCount} running
               </span>
@@ -3365,11 +3365,11 @@ function SessionListPanelImpl({
           <button
             type="button"
             onClick={() => useInboxStore.getState().setShowFavorites(false)}
-            className="group flex items-center gap-1.5 flex-shrink-0 text-sol-yellow mr-0.5"
+            className="group flex items-center gap-1.5 flex-shrink-0 text-sol-yellow mr-0.5 modern:h-6 modern:rounded-control modern:px-1.5 modern:hover:bg-sol-text/[0.06]"
             title="Back to inbox"
           >
             <Star className="w-3.5 h-3.5 fill-current" />
-            <span className="text-mark font-semibold uppercase tracking-wider">Favorites</span>
+            <span className="text-mark font-semibold uppercase tracking-wider modern:text-ui modern:normal-case modern:tracking-normal">Favorites</span>
             {favoriteGroups && favoriteGroups.count > 0 && (
               <span className="text-meta text-sol-text-dim font-medium">{favoriteGroups.count}</span>
             )}
@@ -3397,7 +3397,7 @@ function SessionListPanelImpl({
               data-cc-keep
               onClick={openBlockedBanner}
               title={`${blockedSessions.length} session${blockedSessions.length === 1 ? "" : "s"} blocked on usage, login, connection, API errors, a full context window, or safety review — view blockers`}
-              className={`flex items-center gap-1 px-1.5 py-[3px] rounded-[5px] text-meta font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30 hover:bg-amber-500/20 transition-colors ${blockedIncidentTs > 0 ? "cc-blocked-pill-pulse" : ""}`}
+              className={`flex items-center gap-1 px-1.5 py-[3px] rounded-[5px] text-meta font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30 hover:bg-amber-500/20 transition-colors ${blockedIncidentTs > 0 ? "cc-blocked-pill-pulse" : ""} modern:h-6 modern:rounded-control modern:border-transparent modern:bg-sol-amber/10 modern:px-2 modern:py-0 modern:font-medium modern:text-sol-amber modern:hover:bg-sol-amber/15`}
             >
               <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path d="M6 3h12M6 21h12M8 3v3.5c0 2 4 4 4 5.5s-4 3.5-4 5.5V21M16 3v3.5c0 2-4 4-4 5.5s4 3.5 4 5.5V21" strokeLinecap="round" strokeLinejoin="round" />
@@ -3504,7 +3504,7 @@ function SessionListPanelImpl({
               <button
                 onClick={handleDismissStale}
                 disabled={dismissingStale}
-                className="rounded bg-sol-yellow/15 px-2.5 py-1 text-meta font-semibold text-sol-yellow transition-colors hover:bg-sol-yellow/25 disabled:opacity-60"
+                className="rounded bg-sol-yellow/15 px-2.5 py-1 text-meta font-semibold text-sol-yellow transition-colors hover:bg-sol-yellow/25 disabled:opacity-60 modern:h-6 modern:rounded-control modern:bg-sol-yellow/10 modern:py-0 modern:font-medium modern:hover:bg-sol-yellow/15"
               >
                 {dismissingStale ? "Dismissing…" : `Dismiss all ${staleSessions.length}`}
               </button>
@@ -3717,7 +3717,7 @@ function SessionListPanelImpl({
           headerAction: (
             <button
               onClick={handleKillAllStashed}
-              className={`px-1.5 py-0.5 rounded text-mark font-semibold uppercase tracking-wider transition-all shrink-0 ${
+              className={`px-1.5 py-0.5 rounded text-mark font-semibold uppercase tracking-wider transition-all shrink-0 modern:h-6 modern:rounded-control modern:px-2 modern:py-0 modern:text-meta modern:font-medium modern:normal-case modern:tracking-normal ${
                 killAllArmed
                   ? "text-sol-bg bg-sol-red hover:bg-sol-red/90"
                   : "text-sol-text-dim opacity-40 hover:opacity-100 hover:text-sol-red hover:bg-sol-red/10"

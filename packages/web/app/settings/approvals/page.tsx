@@ -11,6 +11,7 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { SettingsBadge, SettingsSection } from "../../../components/settings/ui";
 import { usePermissionRules, type PermissionRuleRow } from "../../../hooks/usePermissionRules";
 import { formatRelativeTime } from "../../../lib/conversationFormat";
+import { modernButton, modernPill } from "../../../components/ui/modernLook";
 
 /** `github.com/acme/app` reads as acme/app; a path as its last two parts. */
 function projectLabel(project: string): string {
@@ -106,15 +107,15 @@ function NeverRow({ project, scope }: { project: string; scope: string }) {
   };
   return (
     <form data-approval-never className="flex items-center gap-3 px-4 py-2" onSubmit={(e) => { e.preventDefault(); add(); }}>
-      <span className="shrink-0 rounded px-1.5 text-meta font-medium bg-sol-red/12 text-sol-red">Never</span>
+      <span className={`shrink-0 rounded px-1.5 text-meta font-medium bg-sol-red/12 text-sol-red ${modernPill({ tone: "red" })}`}>Never</span>
       <input
         value={pattern}
         onChange={(e) => setPattern(e.target.value)}
         placeholder="git push *"
         aria-label="Command this project's agents may never run"
-        className="min-w-0 flex-1 bg-transparent font-mono text-[13px] text-sol-text placeholder:text-sol-text-dim/60 outline-none"
+        className="min-w-0 flex-1 bg-transparent font-mono text-[13px] text-sol-text placeholder:text-sol-text-dim/60 outline-none modern:text-ui"
       />
-      <button type="submit" disabled={!pattern.trim()} className="shrink-0 rounded border border-sol-border px-2 py-0.5 text-meta text-sol-text-muted hover:text-sol-text disabled:opacity-40">Add</button>
+      <button type="submit" disabled={!pattern.trim()} className={`shrink-0 rounded border border-sol-border px-2 py-0.5 text-meta text-sol-text-muted hover:text-sol-text disabled:opacity-40 ${modernButton({ variant: "outline", size: "xs" })}`}>Add</button>
     </form>
   );
 }

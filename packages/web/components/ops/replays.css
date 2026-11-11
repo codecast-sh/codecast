@@ -683,3 +683,10 @@ a.rp-rest-tally-n.rp-cell:hover small { text-decoration: underline; }
 /* Import line: a 429 reads as a chip, and the backlog's rate sits in its own cell at the cell's own size. */
 .rp-import-chip { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; font-size: var(--fs-meta); font-weight: 500; white-space: nowrap; color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 13%, transparent); }
 .rp-cell[data-ops-rest-trend] .rp-rest-trend { font-size: inherit; font-weight: 600; }
+
+/* ── Modern (.modern-style on <html>): the rail's tabs are the segmented
+   tray (components/ui/modernLook.ts modernTab). ── */
+.modern-style .rp-rail-tabs { gap: 2px; padding: 2px; margin: 6px 8px 0; border-bottom: 0; border-radius: var(--radius-control); background-color: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.modern-style .rp-rail-tabs button { align-items: center; height: 24px; padding: 0 7px; margin-bottom: 0; border-bottom: 0; border-radius: 4px; font-weight: 500; }
+.modern-style .rp-rail-tabs button[data-on="true"] { background-color: var(--sol-card); color: var(--sol-text); box-shadow: 0 0 0 1px var(--sol-border); }
+.modern-style .rp-rail-tabs button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }

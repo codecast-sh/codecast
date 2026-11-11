@@ -25,6 +25,7 @@ import { BudgetMeter } from "./parts";
 import { MEMORY_VIEWS, TYPE_TONE, healthAlarm, memoryHealth, memoryHref, noteMatches, toneCss, typeKey, type MemoryView } from "./memoryView";
 import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
 import { Button } from "../ui/button";
+import { modernChip } from "../ui/modernLook";
 
 const MemoryMap = lazy(() => import("./MemoryMap"));
 
@@ -217,7 +218,7 @@ function MemoryBody({ fit }: { fit: Fit }) {
               >
                 {v.label}
                 {v.id === "health" && health && healthAlarm(health) > 0 && (
-                  <span className={`rounded-full px-1.5 text-meta tabular-nums ${view === "health" ? "bg-sol-bg/25" : "bg-sol-red/15 text-sol-red"}`}>{healthAlarm(health)}</span>
+                  <span className={`rounded-full px-1.5 text-meta tabular-nums ${view === "health" ? "bg-sol-bg/25" : "bg-sol-red/15 text-sol-red"} modern:rounded-control`}>{healthAlarm(health)}</span>
                 )}
               </button>
             ))}
@@ -239,7 +240,7 @@ function MemoryBody({ fit }: { fit: Fit }) {
                       return next;
                     })
                   }
-                  className={`inline-flex items-center gap-1.5 rounded-full border border-sol-border/50 px-2 py-0.5 text-meta transition-opacity ${off ? "opacity-40" : "text-sol-text-muted hover:text-sol-text"}`}
+                  className={`inline-flex items-center gap-1.5 rounded-full border border-sol-border/50 px-2 py-0.5 text-meta transition-opacity ${off ? "opacity-40" : "text-sol-text-muted hover:text-sol-text"} ${modernChip({ active: !off })}`}
                 >
                   <span className="w-1.5 h-1.5 rounded-full" style={{ background: toneCss(TYPE_TONE[t]) }} />
                   {t}

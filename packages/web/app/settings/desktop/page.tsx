@@ -24,6 +24,7 @@ import { Button } from "../../../components/ui/button";
 import { KeyCap } from "../../../components/KeyboardShortcutsHelp";
 import { SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
 import { formatAcceleratorParts } from "../../../shortcuts";
+import { modernButton } from "../../../components/ui/modernLook";
 
 function ShortcutRecorder({
   value,
@@ -80,7 +81,7 @@ function ShortcutRecorder({
         recording
           ? "border-sol-cyan bg-sol-cyan/10 text-sol-cyan animate-pulse"
           : "border-sol-border bg-sol-bg-alt text-sol-text hover:border-sol-text-dim"
-      }`}
+      } ${modernButton({ variant: recording ? "soft" : "outline", size: "md" }, "modern:animate-none")}`}
     >
       {recording ? (
         "Press shortcut..."

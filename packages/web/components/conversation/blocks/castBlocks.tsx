@@ -130,31 +130,31 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
     : "";
 
   return (
-    <button onClick={handleClick} className={`mt-1 w-full max-w-md text-left rounded-lg border transition-colors cursor-pointer ${borderColor}`}>
-      <div className="px-3 py-2">
-        <div className="flex items-center gap-2 min-w-0">
+    <button onClick={handleClick} data-cc-row="entity" data-cc-row-head className={`mt-1 w-full max-w-md modern:max-w-none text-left rounded-lg border transition-colors cursor-pointer ${borderColor}`}>
+      <div data-cc-row-lead className="px-3 py-2">
+        <div data-cc-row-lead className="flex items-center gap-2 min-w-0">
           {sc && (
-            <span className={`px-1.5 py-0 rounded text-meta font-mono ${sc.bg} ${sc.text}`}>
+            <span data-cc-row-meta className={`px-1.5 py-0 rounded text-meta font-mono ${sc.bg} ${sc.text}`}>
               {status!.replace(/_/g, " ")}
             </span>
           )}
           {type === "doc" && (entity as any).doc_type && (
-            <span className={`text-meta font-medium ${DOC_TYPE_LABELS[(entity as any).doc_type]?.color || "text-sol-text-dim"}`}>
+            <span data-cc-row-tag className={`text-meta font-medium ${DOC_TYPE_LABELS[(entity as any).doc_type]?.color || "text-sol-text-dim"}`}>
               {DOC_TYPE_LABELS[(entity as any).doc_type]?.label || (entity as any).doc_type}
             </span>
           )}
-          {shortId && <span className="text-meta font-mono text-sol-text-dim">{shortId}</span>}
-          <span className="flex-1 text-sm text-sol-text truncate">
+          {shortId && <span data-cc-row-object className="text-meta font-mono text-sol-text-dim">{shortId}</span>}
+          <span data-cc-row-text className="flex-1 text-sm text-sol-text truncate">
             {(entity as any).display_title || entity.title}
           </span>
           {type === "doc" && (entity as any).created_at ? (
             <DocDates doc={entity as any} className="text-meta text-sol-text-dim flex-shrink-0" />
           ) : (
-            <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0">{ageStr}</span>
+            <span data-cc-row-meta className="text-meta text-sol-text-dim tabular-nums flex-shrink-0">{ageStr}</span>
           )}
         </div>
         {type === "plan" && (entity as any).progress && (
-          <div className="flex items-center gap-2 mt-1.5">
+          <div className="flex items-center gap-2 mt-1.5 modern:hidden">
             <div className="flex-1 h-1 rounded-full bg-sol-bg-highlight overflow-hidden max-w-[200px]">
               <div
                 className="h-full rounded-full bg-emerald-500/70 transition-all"
@@ -167,7 +167,7 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
           </div>
         )}
         {type === "task" && (
-          <div className="flex items-center gap-1.5 mt-1">
+          <div className="flex items-center gap-1.5 mt-1 modern:hidden">
             {(entity as any).priority && (entity as any).priority !== "medium" && (
               <span className={`text-meta px-1 py-0 rounded font-mono ${
                 (entity as any).priority === "high" || (entity as any).priority === "critical"
@@ -181,7 +181,7 @@ function CastEntityCard({ type, shortId, convexId }: { type: "task" | "plan" | "
           </div>
         )}
         {type === "doc" && docPreview && (
-          <p className="text-meta text-sol-text-muted/70 mt-1 truncate">{docPreview}</p>
+          <p className="text-meta text-sol-text-muted/70 mt-1 truncate modern:hidden">{docPreview}</p>
         )}
       </div>
     </button>
@@ -988,31 +988,31 @@ function CastChatSendBlock({ send, isReply, isError }: { send: ChatSendArgs; isR
   // A reply always lands in the thread it was asked in; only a send needs the label.
   const inThread = !isReply && !!send.threadRootId;
   return (
-    <div className="my-2 mx-1 rounded border-l-2 border-sol-magenta/60 bg-sol-magenta/5">
-      <div className="flex items-center gap-2 px-3 pt-2 pb-1 flex-wrap">
-        <CornerUpRight className="w-3.5 h-3.5 text-sol-magenta/70 shrink-0" />
-        <span className="text-mark font-medium tracking-wide uppercase text-sol-magenta/70 shrink-0">{isReply ? "Reply in chat" : "Message to chat"}</span>
+    <div className="my-2 mx-1 rounded border-l-2 border-sol-magenta/60 bg-sol-magenta/5" data-cc-row="chat" data-cc-row-tone={isError || declined ? "error" : undefined}>
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1 flex-wrap" data-cc-row-head>
+        <CornerUpRight data-cc-row-icon className="w-3.5 h-3.5 text-sol-magenta/70 shrink-0" />
+        <span data-cc-row-verb className="text-mark font-medium tracking-wide uppercase text-sol-magenta/70 shrink-0">{isReply ? "Reply in chat" : "Message to chat"}</span>
         {channelName || direct ? (
           <ChatChannelPill name={channelName ?? ""} href={href} direct={direct} />
         ) : href ? (
           <Link href={href} className="text-meta font-mono text-sol-magenta hover:underline underline-offset-2">open thread</Link>
         ) : null}
-        {inThread && <span className="text-meta text-sol-text-dim">in thread</span>}
+        {inThread && <span data-cc-row-tag className="text-meta text-sol-text-dim">in thread</span>}
         {isError ? (
-          <span className="text-sol-red/80 text-meta ml-auto shrink-0">failed</span>
+          <span data-cc-row-meta className="text-sol-red/80 text-meta ml-auto shrink-0">failed</span>
         ) : declined ? (
-          <span className="text-sol-red/80 text-meta ml-auto shrink-0">could not answer</span>
+          <span data-cc-row-meta className="text-sol-red/80 text-meta ml-auto shrink-0">could not answer</span>
         ) : (
-          <span className="text-sol-green/70 text-meta ml-auto shrink-0 inline-flex items-center gap-0.5"><Check className="w-3 h-3" />sent</span>
+          <span data-cc-row-meta className="text-sol-green/70 text-meta ml-auto shrink-0 inline-flex items-center gap-0.5"><Check className="w-3 h-3 modern:hidden" />sent</span>
         )}
       </div>
       {send.kind === "dynamic" ? (
-        <div className="px-3 pb-2">
+        <div className="px-3 pb-2" data-cc-row-sub>
           <code className="text-xs font-mono text-sol-text-secondary break-all">{send.body}</code>
           <div className="text-meta text-sol-text-dim mt-1">shown as typed — the shell filled in the actual message; open the thread to read what arrived</div>
         </div>
       ) : (
-        <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+        <div className="px-3 pb-2 text-sm text-sol-text prose prose-invert prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0" data-cc-row-sub>
           <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
             components={MESSAGE_MD_COMPONENTS}
           >{send.body}</ReactMarkdown>

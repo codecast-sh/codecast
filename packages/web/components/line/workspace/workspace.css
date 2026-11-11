@@ -712,3 +712,39 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 /* A step where a person decides reads apart from every automated one, in every drawing (the Loop's legend says it). */
 .fd-step[data-kind="person"] { border-color: color-mix(in srgb, var(--lw-person) 50%, transparent); background: color-mix(in srgb, var(--lw-person) 9%, var(--lw-card)); }
 .fd-step[data-kind="person"] .fd-who { color: var(--lw-person); }
+
+/* ── Modern (.modern-style on <html>): the workspace's controls are the
+   app's primitives (components/ui/modernLook.ts), drawn from the same
+   tokens: the segmented tray, the control radius and heights, the white face
+   on the hairline, the accent for the chosen and the primary act, the one
+   focus ring and the popover surface. The line's own colours (agent orange,
+   person blue) stay on what they mean. ── */
+.modern-style .lw-seg { padding: 2px; gap: 2px; border-radius: var(--radius-control); background-color: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.modern-style .lw-seg button { height: 28px; padding: 0 10px; border-radius: 4px; font-size: var(--fs-ui); font-weight: 500; }
+.modern-style .lw-seg button[aria-selected="true"],
+.modern-style .lw-seg button[aria-pressed="true"] { background-color: var(--sol-card); color: var(--sol-text); box-shadow: 0 0 0 1px var(--sol-border); }
+.modern-style .lw-chip { height: var(--control-sm); border-radius: var(--radius-control); font-size: var(--fs-meta); font-weight: 500; }
+.modern-style .lw-chip:active,
+.modern-style .lw-act:active { transform: none; }
+.modern-style .lw-iconbtn { width: var(--control-sm); height: var(--control-sm); border-radius: var(--radius-control); }
+.modern-style .lw-act { height: var(--control-sm); padding: 0 10px; border-radius: var(--radius-control); border-color: var(--sol-border); background-color: var(--sol-card); color: var(--sol-text); font-size: var(--fs-meta); font-weight: 500; }
+.modern-style .lw-act:hover { border-color: color-mix(in srgb, var(--sol-text-dim) 50%, var(--sol-border)); background-color: var(--sol-bg-alt); }
+.modern-style .lw-act[data-primary] { background-color: var(--sol-class-cyan); border-color: transparent; color: var(--sol-bg); }
+.modern-style .lw-act[data-primary]:hover { background-color: color-mix(in srgb, var(--sol-class-cyan) 90%, var(--sol-bg)); }
+.modern-style .lw-act[data-hot] { background-color: var(--lw-agent); border-color: transparent; color: var(--lw-on-accent); }
+.modern-style .lw-filter { height: 24px; padding: 0 10px; border-radius: var(--radius-control); border-color: var(--sol-border); font-weight: 500; }
+.modern-style .lw-filter[aria-pressed="true"] { border-color: color-mix(in srgb, var(--sol-class-cyan) 40%, transparent); background-color: color-mix(in srgb, var(--sol-class-cyan) 10%, transparent); color: var(--sol-class-cyan); }
+.modern-style .lw-pop { border-radius: var(--radius-card); border-color: var(--sol-border); box-shadow: var(--shadow-popover); }
+.modern-style .lw-filter-pop button,
+.modern-style .lw-autostart-row { min-height: var(--control-sm); border-radius: var(--radius-control); font-size: var(--fs-ui); }
+.modern-style .lw-filter-pop button:hover,
+.modern-style .lw-autostart-row:hover { background-color: color-mix(in srgb, var(--sol-class-cyan) 10%, transparent); }
+.modern-style .fsp-tabs { gap: 2px; padding: 2px; border-radius: var(--radius-control); background-color: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.modern-style .fsp-tab { height: 24px; padding: 0 8px; border-radius: 4px; font-size: var(--fs-meta); font-weight: 500; letter-spacing: normal; text-transform: none; }
+.modern-style .fsp-tab[aria-selected="true"] { background-color: var(--sol-card); color: var(--sol-text); box-shadow: 0 0 0 1px var(--sol-border); }
+.modern-style .lw-seg button:focus-visible,
+.modern-style .lw-chip:focus-visible,
+.modern-style .lw-iconbtn:focus-visible,
+.modern-style .lw-act:focus-visible,
+.modern-style .lw-filter:focus-visible,
+.modern-style .fsp-tab:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }

@@ -218,10 +218,10 @@ export function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = fa
   return (
     // Orange is a trigger's colour wherever it appears (its pill, /triggers);
     // the pill carries the bolt, so the frame draws one only when there is no pill.
-    <div className="mb-3 rounded border-l-2 border-sol-orange/60 bg-sol-orange/5">
-      <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-        {!frame?.trigger && <Zap className="w-3.5 h-3.5 text-sol-orange/70 shrink-0" />}
-        <span className="text-mark font-medium tracking-wide uppercase text-sol-orange/70 shrink-0">{spawned ? "Trigger run" : "Trigger"}</span>
+    <div className="mb-3 rounded border-l-2 border-sol-orange/60 bg-sol-orange/5" data-cc-row="brief">
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1" data-cc-row-head>
+        {!frame?.trigger && <Zap data-cc-row-icon className="w-3.5 h-3.5 text-sol-orange/70 shrink-0" />}
+        <span data-cc-row-verb className="text-mark font-medium tracking-wide uppercase text-sol-orange/70 shrink-0">{spawned ? "Trigger run" : "Trigger"}</span>
         {/* Apply is the norm and unmarked; read-only runs get the chip. */}
         {spawned && spawned.mode !== "apply" && (
           <ShortcutTooltip label="Read-only run — investigates and reports, changes nothing" hint="file-editing tools are disabled">
@@ -232,8 +232,8 @@ export function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = fa
         )}
         {/* The trigger's pill carries its title and opens it, where the person
             edits, pauses or cancels it; a run without one names itself. */}
-        {frame?.trigger ? <span className="min-w-0 truncate"><EntityIdPill shortId={frame.trigger} /></span> : <span className="text-xs text-sol-text-muted truncate">{title}</span>}
-        <span className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        {frame?.trigger ? <span className="min-w-0 truncate"><EntityIdPill shortId={frame.trigger} /></span> : <span data-cc-row-text className="text-xs text-sol-text-muted truncate">{title}</span>}
+        <span data-cc-row-meta className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
       {frame?.waiting && <WaitingSessionLine waiting={frame.waiting} firedAt={timestamp} />}
       {/* The prompt is authored markdown in both wire formats (spawn header
@@ -251,7 +251,7 @@ export function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = fa
           )}
         </div>
       ) : (
-        <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
+        <CollapsibleBody className="px-3 pb-2 modern:ml-6 modern:mt-0.5 modern:mb-2 modern:rounded-card modern:border modern:border-sol-border modern:bg-[var(--cc-m-tint)] modern:px-4 modern:py-3" toggleClassName="mt-1">
           <div className="text-sm text-sol-text prose prose-invert prose-sm max-w-none">
             <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{prompt}</ReactMarkdown>
           </div>

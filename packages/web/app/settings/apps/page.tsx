@@ -13,6 +13,7 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { Button } from "../../../components/ui/button";
 import { Switch } from "../../../components/ui/switch";
 import { SettingsLinkRow, SettingsPanel, SettingsRow, SettingsSection } from "../../../components/settings/ui";
+import { modernPill } from "../../../components/ui/modernLook";
 
 /**
  * Settings > Apps: every way to run codecast beyond this browser tab. The app
@@ -81,7 +82,7 @@ function MacSection() {
           }
         >
           {update && (
-            <span className="rounded-md bg-sol-cyan/15 px-2 py-0.5 text-meta text-sol-cyan">Update available</span>
+            <span className={`rounded-md bg-sol-cyan/15 px-2 py-0.5 text-meta text-sol-cyan ${modernPill({ tone: "cyan" })}`}>Update available</span>
           )}
         </SettingsRow>
       ) : (

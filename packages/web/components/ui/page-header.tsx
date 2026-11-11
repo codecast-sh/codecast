@@ -3,6 +3,12 @@ import { ChevronRight } from "lucide-react";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { cn } from "../../lib/utils";
+import { crumbsForTitle } from "../../lib/navPlace";
+import { usePlaceCrumbs } from "../../hooks/usePlace";
+import { useIsListBesideItem } from "../../lib/detailSplitContext";
+import { BackControl } from "../nav/BackControl";
+import { PlaceCrumbs } from "../nav/PlaceCrumbs";
+import { PageHeaderTitle } from "./page-header-title";
 import "./page-header.css";
 
 // THE page header of the Modern style. Every top-level page names itself with
@@ -20,6 +26,11 @@ import "./page-header.css";
 // The bar is the page's titlebar in zen mode (hooks/useTitlebarHead), so a
 // page that draws it never lends a TitlebarStrip of its own. Sizes and
 // wrapping live in page-header.css.
+//
+// Wayfinding: the row opens with the back control, which names where it goes
+// (the trail's last step, else the page's parent), then the page's place as
+// crumbs (Section › Parent), then the title. A person always knows where they
+// are and how to get back to where they were.
 
 export interface PageHeaderProps extends Omit<HTMLAttributes<HTMLElement>, "title" | "children"> {
   /** The page's own header, drawn instead of the bar in Classic and Minimal. */
@@ -30,7 +41,9 @@ export interface PageHeaderProps extends Omit<HTMLAttributes<HTMLElement>, "titl
   icon?: ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
   /** How many things the page shows, said quietly after the title. */
   count?: number | string | null;
-  /** Where a detail page sits, before the title; the header draws the chevron. */
+  /** Where a detail page sits, before the title; the header draws the chevron.
+   *  Left out, the header draws the page's place from its address
+   *  (lib/navPlace): Section › Parent, each a link. */
   crumbs?: ReactNode;
   /** The page's views, normally a SegmentedToggle, after the title and count. */
   tabs?: ReactNode;
@@ -40,28 +53,55 @@ export interface PageHeaderProps extends Omit<HTMLAttributes<HTMLElement>, "titl
   share?: ReactNode;
   /** A second row for filters or a search field. */
   children?: ReactNode;
+  /** The way back, first in the row. Left out, the back control that names
+   *  where it goes (components/nav/BackControl); false for none (a page drawn
+   *  inside another page, which owns the way out). */
+  back?: ReactNode | false;
+  /** With no trail to walk back along, the parent Back goes up to, when the
+   *  page knows it better than its address does. */
+  backFallback?: { label: string; href: string } | null;
+  /** In place of the icon: the object's own mark (a project's diamond, a face). */
+  glyph?: ReactNode;
+  /** The object's state, right after its name: a status chip or picker. */
+  status?: ReactNode;
+  /** Present when the viewer may rename the object: click the title to edit. */
+  onRename?: (next: string) => void;
+  renameLabel?: string;
+  /** The title as the page draws it (its own rename field), in place of the h1. */
+  titleNode?: ReactNode;
 }
 
 export function PageHeader({ legacy, ...props }: PageHeaderProps) {
   return useIsModernStyle() ? <PageHeaderBar {...props} /> : <>{legacy}</>;
 }
 
-function PageHeaderBar({ title, icon: Icon, count, crumbs, tabs, actions, share, children, className, ...rest }: Omit<PageHeaderProps, "legacy">) {
+/** The page's place from its address, minus any crumb the title already says. */
+function AutoCrumbs({ title }: { title: string }) {
+  return <PlaceCrumbs crumbs={crumbsForTitle(usePlaceCrumbs(), title)} />;
+}
+
+function PageHeaderBar({ title, icon: Icon, count, crumbs, tabs, actions, share, children, className, back, backFallback, glyph, status, onRename, renameLabel, titleNode, ...rest }: Omit<PageHeaderProps, "legacy">) {
   // The first row is the titlebar, not the whole header: it holds the side
   // padding the zen inset replaces, and it sits on the header's own surface.
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
+  // The list beside an open item leaves the way back to the item's header.
+  const besideItem = useIsListBesideItem();
   return (
     <header data-cc-page-head className={cn("border-b border-sol-border bg-sol-bg", className)} {...rest}>
       <div ref={titlebarRef} className="cc-page-head__row">
         <div className="flex min-w-0 items-center gap-2">
-          {crumbs ? (
+          {back === undefined ? (besideItem ? null : <BackControl fallback={backFallback} divider />) : back || null}
+          {crumbs === undefined ? (
+            <AutoCrumbs title={title} />
+          ) : crumbs ? (
             <>
               <div className="flex shrink-0 items-center gap-1 text-ui text-sol-text-dim">{crumbs}</div>
               <ChevronRight className="size-3.5 shrink-0 text-sol-text-dim" aria-hidden />
             </>
           ) : null}
-          {Icon ? <Icon className="size-4 shrink-0 text-sol-text-muted" aria-hidden /> : null}
-          <h1 title={title} className="min-w-0 truncate text-read font-semibold text-sol-text">{title}</h1>
+          {glyph ? <span className="inline-flex shrink-0 items-center">{glyph}</span> : Icon ? <Icon className="size-4 shrink-0 text-sol-text-muted" aria-hidden /> : null}
+          {titleNode ?? <PageHeaderTitle title={title} onRename={onRename} renameLabel={renameLabel} />}
+          {status ? <div data-cc-page-status className="flex shrink-0 items-center gap-1.5">{status}</div> : null}
           {count != null && count !== "" ? (
             <span data-cc-page-count className="shrink-0 text-meta tabular-nums text-sol-text-dim">{count}</span>
           ) : null}

@@ -108,7 +108,7 @@ export function AutoStage({
                     t.key === hero.key
                       ? "bg-sol-violet/30 text-white"
                       : "bg-black/45 text-white/70 hover:text-white"
-                  }`}
+                  } modern:rounded-control modern:font-sans modern:font-medium`}
                 >
                   <span className="flex items-center gap-1">
                     {t.isLocal ? "your screen" : `${firstName(t.name)}'s screen`}
@@ -283,7 +283,7 @@ function StripVoiceRow({ m, speaking, onPin }: { m: any; speaking?: ReadonlySet<
         onClick={() => onPin(String(m.user_id))}
         className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.06] ${
           on ? "bg-sol-cyan/10" : ""
-        }`}
+        } modern:rounded-control`}
         title="Pin this person"
       >
         <Avatar m={m} size={24} />

@@ -8,6 +8,7 @@ import { memo, useContext, useState } from "react";
 import { Calendar, Check, ChevronRight, Hash, Text as TextIcon, X } from "lucide-react";
 import { VaultLinkContext } from "./VaultMarkdown";
 import { parseWikiInner } from "../../lib/vault/remarkWikiLink";
+import { modernPill } from "../ui/modernLook";
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2})?/;
 
@@ -30,7 +31,7 @@ function PropValue({ value }: { value: unknown }) {
         {value.map((v, i) => (
           <span
             key={i}
-            className="px-1.5 rounded-full text-meta border border-sol-border/40 bg-sol-bg-alt/60 text-sol-text-muted"
+            className={`px-1.5 rounded-full text-meta border border-sol-border/40 bg-sol-bg-alt/60 text-sol-text-muted ${modernPill()}`}
           >
             <PropValue value={v} />
           </span>

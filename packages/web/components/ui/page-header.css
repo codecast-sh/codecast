@@ -47,3 +47,11 @@
     padding-right: 24px;
   }
 }
+
+/* Where the page sits (components/nav/PlaceCrumbs) gives way first on a
+ * phone-width pane: the back control before it still names where it goes. */
+@container (max-width: 480px) {
+  [data-cc-page-head] [data-cc-place-crumbs] {
+    display: none;
+  }
+}

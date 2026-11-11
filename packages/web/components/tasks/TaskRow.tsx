@@ -34,6 +34,8 @@ import {
 import { taskPriority } from "../../lib/taskPriority";
 import { useTaskActiveSession } from "./taskActiveSession";
 import { withShortcut } from "../../shortcuts";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
+import { modernPill, modernPillShape } from "../ui/modernLook";
 
 // The task list row and the board card. The tasks page lays them out; every
 // write goes through the callbacks it passes (ItemRowState, onAssign), so a
@@ -77,6 +79,8 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
   /** Set on a floated subtask (parent filtered out of this view) for orientation. */
   parentChip?: { id: string; short_id: string; title: string } | null;
 }) {
+  // Modern adds its pill looks; Classic's class strings stay as they were.
+  const m = useIsModernStyle();
   const router = useRouter();
   const activeSession = useTaskActiveSession(task._id);
   // Resolve through the task's own team so a row shows that team's vocabulary
@@ -154,7 +158,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
       {parentChip && (
         <button
           onClick={(e) => { e.stopPropagation(); router.push(`/tasks/${parentChip.id}`); }}
-          className="flex items-center gap-1 text-meta px-1.5 py-0 rounded border border-sol-border/40 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 flex-shrink-0 font-mono cq-hide-compact transition-colors max-w-[10rem]"
+          className={`flex items-center gap-1 text-meta px-1.5 py-0 rounded border border-sol-border/40 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 flex-shrink-0 font-mono cq-hide-compact transition-colors max-w-[10rem]${m ? ` ${modernPill({}, "modern:font-mono modern:font-normal modern:hover:text-sol-cyan")}` : ""}`}
           title={`Subtask of ${parentChip.short_id}: ${parentChip.title}`}
         >
           <CornerDownRight className="w-3 h-3 flex-shrink-0" />
@@ -209,7 +213,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         <TaskCallChip callId={task.from_call} className="cq-hide-compact" />
       ) : taskOrigin(task) === "meeting" ? (
         <span
-          className="flex items-center gap-1 text-meta px-1.5 py-0 rounded bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 flex-shrink-0 cq-hide-compact"
+          className={`flex items-center gap-1 text-meta px-1.5 py-0 rounded bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 flex-shrink-0 cq-hide-compact${m ? ` ${modernPill({ tone: "magenta" })}` : ""}`}
           title="Captured from a meeting"
         >
           <Users className="w-3 h-3" />meeting
@@ -243,14 +247,14 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         <Link
           href={`/plans/${(task as any).plan._id}`}
           onClick={(e) => e.stopPropagation()}
-          className="text-meta px-1.5 py-0 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 flex-shrink-0 hover:bg-sol-cyan/20 transition-colors max-w-[120px] truncate cq-hide-compact"
+          className={`text-meta px-1.5 py-0 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 flex-shrink-0 hover:bg-sol-cyan/20 transition-colors max-w-[120px] truncate cq-hide-compact${m ? ` ${modernPill({ tone: "cyan", block: true }, "modern:hover:bg-sol-cyan/15")}` : ""}`}
           title={(task as any).plan.title}
         >
           {(task as any).plan.title}
         </Link>
       )}
       {task.source === "insight" && (
-        <span className="text-meta px-1.5 py-0 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 flex-shrink-0 cq-hide-compact">mined</span>
+        <span className={`text-meta px-1.5 py-0 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 flex-shrink-0 cq-hide-compact${m ? ` ${modernPill({ tone: "violet" })}` : ""}`}>mined</span>
       )}
       {task.execution_status && (
         <TaskStatusBadge status={task.execution_status} type="execution" className="flex-shrink-0 cq-hide-compact" />
@@ -338,6 +342,7 @@ export function KanbanCard({
   /** Opens the assignee picker; the board opens the store's palette. */
   onAssign?: () => void;
 }) {
+  const m = useIsModernStyle();
   const priority = taskPriority(task.priority, "none");
   const PriorityIcon = priority.icon;
   const assignee = task.assignee_info;
@@ -352,7 +357,7 @@ export function KanbanCard({
       onDragEnd={onDragEnd}
       className={`bg-white dark:bg-sol-bg-alt border border-sol-border/40 rounded-lg sm:rounded-xl p-3 cursor-grab shadow-sm hover:border-sol-yellow/50 hover:shadow-md transition-all select-none ${
         isDragging ? "opacity-40" : ""
-      }`}
+      }${m ? " modern:rounded-card modern:border-sol-border modern:bg-sol-card modern:shadow-none modern:hover:border-sol-text-dim/40 modern:hover:shadow-popover" : ""}`}
     >
       <div className="flex items-start justify-between gap-2 mb-2">
         <span className="flex items-center gap-1.5 min-w-0 text-meta font-mono text-sol-text-dim leading-none mt-0.5">
@@ -383,7 +388,7 @@ export function KanbanCard({
           })() : null}
         </div>
       </div>
-      <p className="text-[13px] text-sol-text leading-snug mb-3 line-clamp-3 font-medium">{task.title}</p>
+      <p className={`text-[13px] text-sol-text leading-snug mb-3 line-clamp-3 font-medium${m ? " modern:text-ui" : ""}`}>{task.title}</p>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           <PriorityIcon className={`w-3 h-3 flex-shrink-0 ${priority.color}`} />
@@ -397,7 +402,7 @@ export function KanbanCard({
                 onClick={(e) => { e.stopPropagation(); onFilterLabel(firstLabel); }}
                 title={`Filter by label: ${firstLabel}`}
                 aria-label={`Filter by label: ${firstLabel}`}
-                className={`inline-flex items-center gap-1 text-meta px-1.5 py-0.5 rounded-full border hover:brightness-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-cyan ${lc.bg} ${lc.border} ${lc.text}`}
+                className={`inline-flex items-center gap-1 text-meta px-1.5 py-0.5 rounded-full border hover:brightness-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-cyan ${lc.bg} ${lc.border} ${lc.text}${m ? ` ${modernPillShape()}` : ""}`}
               >
                 <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
                 {firstLabel}

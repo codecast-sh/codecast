@@ -18,6 +18,7 @@ import { useSessionQueryAutocomplete } from "../hooks/useSessionQuerySuggestions
 import { SearchField, SearchGlyph } from "./search/SearchField";
 import { SessionHit } from "./search/SessionHit";
 import { useRemoteSearch } from "../hooks/useRemoteSearch";
+import { modernButton } from "./ui/modernLook";
 
 export { parseSearchTerms, highlightMatch, getSnippet };
 
@@ -273,7 +274,7 @@ export function GlobalSearch() {
       {isOpen && query.length >= 2 && (
         <div
           style={{ top: panelTop }}
-          className="fixed left-1/2 -translate-x-1/2 w-[min(1200px,calc(100vw-2rem))] bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden z-[240]"
+          className="fixed left-1/2 -translate-x-1/2 w-[min(1200px,calc(100vw-2rem))] bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden z-[240] modern:rounded-card modern:bg-sol-card modern:shadow-popover"
         >
             {groupedResults.length === 0 && !searchData ? (
               searchIsSlow || searchError ? (
@@ -286,7 +287,7 @@ export function GlobalSearch() {
                   </p>
                   <button
                     onClick={goToFullSearch}
-                    className="text-xs text-sol-text-secondary hover:text-sol-text px-2.5 py-1 rounded-md border border-sol-border bg-sol-bg-alt hover:bg-sol-bg-highlight transition-colors"
+                    className={`text-xs text-sol-text-secondary hover:text-sol-text px-2.5 py-1 rounded-md border border-sol-border bg-sol-bg-alt hover:bg-sol-bg-highlight transition-colors ${modernButton({ variant: "outline", size: "sm" })}`}
                   >
                     Open full search to narrow by time or scope
                   </button>

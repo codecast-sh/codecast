@@ -1360,7 +1360,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       {isZenMode && !appWindow && <ZenCorner />}
       {appWindow && <AppWindowBar app={appWindow} />}
       {/* Header spans full width */}
-      <header data-cc-topbar ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] ${desktopClass} ${isZenMode || appWindow ? "hidden" : ""} relative`}>
+      <header data-cc-topbar ref={headerRef} className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] modern:border-sol-border ${desktopClass} ${isZenMode || appWindow ? "hidden" : ""} relative`}>
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && (
           <div data-cc-local-corner className="absolute top-0 left-0 w-0 h-0 border-t-[20px] border-r-[20px] border-t-emerald-500 border-r-transparent z-30" />
         )}
@@ -1393,7 +1393,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
               <div className="flex items-center gap-0.5">
                 <ShortcutTooltip label="Back" action="nav.back">
                   <TopbarButton
-                    onClick={(e) => { window.history.back(); tipActions.whisper('nav.back', e); }}
+                    onClick={(e) => { dispatchAction("nav.back"); tipActions.whisper('nav.back', e); }}
                     aria-label="Go back"
                   >
                     <ChevronLeft />

@@ -38,6 +38,7 @@ import "./proposals.css";
 import { byArea, filterCounts, findingCauses, findingWords, filterLines, LINE_FILTERS, lineHeat, openProposals, sourceSpeaker, usageOf, type LineFilter } from "../../lib/expectations/view";
 import { CitationLine } from "./CitationRef";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { modernMenuRow, modernPill } from "../ui/modernLook";
 
 const SOURCES_SHOWN = 1;
 
@@ -162,7 +163,7 @@ export function ExpectationsDocument({ projectId, variant = "page", adding, onAd
             <nav className="space-y-0.5" aria-label="Filter lines" data-expectations-filters>
               {LINE_FILTERS.map((f) => (
                 <button key={f} type="button" onClick={() => setFilter(f)} aria-pressed={filter === f}
-                  className={cn("flex w-full items-baseline justify-between rounded px-2 py-1 text-left text-[12px] transition-colors", filter === f ? "bg-sol-bg-alt text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt/60")}
+                  className={cn("flex w-full items-baseline justify-between rounded px-2 py-1 text-left text-[12px] transition-colors", filter === f ? "bg-sol-bg-alt text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt/60", modernMenuRow({ selected: filter === f }))}
                   data-expectations-filter={f}>
                   <span>{FILTER_LABEL[f]}</span>
                   <span className="tabular-nums text-meta text-sol-text-dim">{counts[f]}</span>
@@ -173,7 +174,7 @@ export function ExpectationsDocument({ projectId, variant = "page", adding, onAd
               <nav aria-label="Areas" className="hidden lg:block" data-expectations-areas>
                 <div className="mb-1 px-2 text-meta text-sol-text-dim">Areas</div>
                 {byArea(active).map(([area, ls]) => (
-                  <a key={area} href={`#area-${slug(area)}`} className="flex items-baseline justify-between rounded px-2 py-0.5 text-[12px] text-sol-text-muted hover:bg-sol-bg-alt/60 hover:text-sol-text">
+                  <a key={area} href={`#area-${slug(area)}`} className={`flex items-baseline justify-between rounded px-2 py-0.5 text-[12px] text-sol-text-muted hover:bg-sol-bg-alt/60 hover:text-sol-text ${modernMenuRow()}`}>
                     <span className="truncate">{area}</span>
                     <span className="ml-2 tabular-nums text-meta text-sol-text-dim">{ls.length}</span>
                   </a>
@@ -247,7 +248,7 @@ function Line({ e, projectId, row, areas, variant }: { e: Expectation; projectId
           )}
           {e.note && mode !== "edit" && (
             <div className="mt-1 flex items-baseline gap-1.5 text-[12px] text-sol-yellow" data-expectation-note>
-              <span className="shrink-0 rounded-sm bg-sol-yellow/15 px-1 text-meta font-medium">Open question</span>
+              <span className={`shrink-0 rounded-sm bg-sol-yellow/15 px-1 text-meta font-medium ${modernPill({ tone: "yellow" })}`}>Open question</span>
               <span className="min-w-0">{e.note}</span>
             </div>
           )}

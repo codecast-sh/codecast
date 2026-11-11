@@ -8,6 +8,8 @@
 import { Suspense, lazy, useState } from "react";
 import { Workflow } from "lucide-react";
 import { flowCommandTarget, stripAnsi } from "../../../lib/line/flowCommandOutput";
+import { useIsModernStyle } from "../../../hooks/useVisualStyle";
+import { pressable } from "../../ops/parts";
 
 const FlowRunCard = lazy(() => import("../../line/widgets/FlowFence").then((m) => ({ default: m.FlowRunCard })));
 const FlowCard = lazy(() => import("../../line/widgets/FlowFence").then((m) => ({ default: m.FlowCard })));
@@ -17,15 +19,18 @@ const Cold = () => <div className="my-2 h-24 max-w-[860px] rounded-xl border bor
 export function CastFlowBlock({ subcommand, args, rawCmd, output, isError }: { subcommand: string; args: string; rawCmd: string; output: string; isError: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const target = flowCommandTarget(subcommand, args, output, isError);
+  // Modern: the row anatomy (its parts named below), a real disclosure with its chevron.
+  const modern = useIsModernStyle();
+  const head = modern ? { ...pressable(() => setExpanded(!expanded)), "aria-expanded": expanded, "data-cc-row-head": "" } : { onClick: () => setExpanded(!expanded) };
   return (
-    <div className="my-0.5" data-cast-flow={subcommand}>
-      <div className="flex items-baseline gap-1.5 text-xs cursor-pointer group flex-wrap" onClick={() => setExpanded(!expanded)}>
-        <span className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-blue/90">
+    <div className="my-0.5" data-cast-flow={subcommand} data-cc-row={modern ? "flow" : undefined} data-cc-row-tone={modern && isError ? "error" : undefined}>
+      <div className="flex items-baseline gap-1.5 text-xs cursor-pointer group flex-wrap" {...head}>
+        <span data-cc-row-lead={modern ? "" : undefined} className="flex items-center gap-1 font-mono flex-shrink-0 text-sol-blue/90">
           <Workflow className="w-3 h-3 self-center" strokeWidth={2.2} />
-          <span className="group-hover:underline">flow{subcommand ? ` ${subcommand}` : ""}</span>
+          <span data-cc-row-verb={modern ? "" : undefined} className="group-hover:underline">flow{subcommand ? ` ${subcommand}` : ""}</span>
         </span>
-        {target.flow ? <span className="text-sol-text-muted truncate">{target.flow}{target.dryRun ? " · dry run" : ""}</span> : null}
-        {isError ? <span className="text-sol-red">failed</span> : null}
+        {target.flow ? <span data-cc-row-object={modern ? "" : undefined} className="text-sol-text-muted truncate">{target.flow}{target.dryRun ? " · dry run" : ""}</span> : null}
+        {isError ? <span data-cc-row-meta={modern ? "" : undefined} className="text-sol-red">failed</span> : null}
       </div>
       {target.runId ? (
         <Suspense fallback={<Cold />}><FlowRunCard runId={target.runId} /></Suspense>
@@ -37,7 +42,7 @@ export function CastFlowBlock({ subcommand, args, rawCmd, output, isError }: { s
         <pre className="mt-1 max-w-[860px] overflow-x-auto rounded-md bg-sol-bg-alt/50 p-2 text-meta text-sol-text-muted whitespace-pre-wrap">{stripAnsi(output).trim()}</pre>
       ) : null}
       {expanded ? (
-        <pre className="mt-1 max-w-[860px] overflow-x-auto rounded-md bg-sol-bg-alt/50 p-2 text-meta text-sol-text-muted whitespace-pre-wrap">{`$ ${rawCmd}\n${stripAnsi(output)}`}</pre>
+        <pre data-cc-row-detail={modern ? "" : undefined} className="mt-1 max-w-[860px] overflow-x-auto rounded-md bg-sol-bg-alt/50 p-2 text-meta text-sol-text-muted whitespace-pre-wrap">{`$ ${rawCmd}\n${stripAnsi(output)}`}</pre>
       ) : null}
     </div>
   );

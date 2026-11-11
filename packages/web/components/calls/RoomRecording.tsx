@@ -51,6 +51,7 @@ import {
 } from "./RecordingMark";
 import { STAGE_CTL, STAGE_CTL_IDLE } from "./stageHost";
 import { firstName } from "./speakers";
+import { modernButton } from "../ui/modernLook";
 
 // Recording a huddle, from inside it: the Record button on the stage's
 // control bar, the red mark on the stage's header and on the face row's card,
@@ -156,7 +157,7 @@ export function CallCardRecordingMark({ tell = false, inert = false }: { tell?: 
         <button
           type="button"
           onClick={() => setAsking(true)}
-          className="inline-flex items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-sol-red/10"
+          className={`inline-flex items-center gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-sol-red/10 modern:min-h-6 modern:rounded-control modern:px-1.5`}
           aria-label="This call is being recorded. Stop recording"
           data-card-action="recording"
         >
@@ -385,7 +386,7 @@ function RecordConfirm({
         <button
           type="button"
           onClick={onCancel}
-          className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 font-mono text-meta text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text"
+          className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 font-mono text-meta text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text ${modernButton({ variant: "ghost", size: "sm" }, "modern:font-sans")}`}
         >
           Cancel <KeyCap size="xs">Esc</KeyCap>
         </button>
@@ -582,7 +583,7 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
                       setShown(null);
                       void setRoomRecording(roomKey, true);
                     }}
-                    className="rounded-md bg-sol-red/15 px-2 py-0.5 font-mono text-meta text-sol-red transition-colors hover:bg-sol-red/25"
+                    className={`rounded-md bg-sol-red/15 px-2 py-0.5 font-mono text-meta text-sol-red transition-colors hover:bg-sol-red/25 ${modernButton({ variant: "soft", tone: "red", size: "xs" }, "modern:font-sans")}`}
                     title="Start recording this huddle again. Everyone in it is told"
                   >
                     Record again
@@ -624,7 +625,7 @@ export function RecordingNoticeBanner({ roomKey }: { roomKey: string | null }) {
                 <button
                   type="button"
                   onClick={() => setShown({ ...shown, mode: "confirm" })}
-                  className="rounded-md px-2 py-0.5 font-mono text-meta text-sol-text-muted transition-colors hover:bg-sol-red/10 hover:text-sol-red"
+                  className={`rounded-md px-2 py-0.5 font-mono text-meta text-sol-text-muted transition-colors hover:bg-sol-red/10 hover:text-sol-red ${modernButton({ variant: "ghost", size: "xs" }, "modern:font-sans modern:hover:text-sol-red modern:hover:bg-sol-red/10")}`}
                 >
                   {STOP_RECORDING_ASK.stop}
                 </button>

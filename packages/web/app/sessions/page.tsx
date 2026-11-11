@@ -29,6 +29,7 @@ import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { ModernSessionsRow } from "./ModernSessionRow";
 import { useCollectionRows } from "../../hooks/useCollectionRows";
 import { sessionStructuralSig } from "../../store/inboxStore";
+import { modernButton, modernField, modernLook, modernTab, modernTabList } from "../../components/ui/modernLook";
 
 const count = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
@@ -169,7 +170,7 @@ function SessionMetricsChart({ sessionId }: { sessionId: string }) {
   if (!metrics || metrics.length < 2) {
     return (
       <div className="px-4 py-4 text-center">
-        <span className="text-meta font-mono text-sol-text-dim">
+        <span className="text-meta font-mono text-sol-text-dim modern:font-sans">
           {metrics === undefined ? "Loading metrics..." : "Collecting metrics..."}
         </span>
       </div>
@@ -263,15 +264,15 @@ function AggregateOverview({ sessions }: { sessions: ClassifiedSession[] }) {
   const hasChart = aggregateMetrics && aggregateMetrics.length >= 2;
 
   return (
-    <div className="bg-sol-bg-alt/60 rounded-lg border border-sol-border/60 mb-4 overflow-hidden">
-      {/* Stats row */}
-      <div className="flex items-center gap-6 px-4 py-2.5 text-meta font-mono">
+    <div className="bg-sol-bg-alt/60 rounded-lg border border-sol-border/60 mb-4 overflow-hidden modern:rounded-card modern:border-sol-border modern:bg-sol-card">
+      {/* Stats row: the numbers mono, the words the interface's own */}
+      <div className="flex items-center gap-6 px-4 py-2.5 text-meta font-mono modern:font-sans">
         <span className="text-sol-text-muted">
-          <span className="text-sol-text-secondary text-sm">{totals.count}</span> sessions
+          <span className="text-sol-text-secondary text-sm modern:font-mono modern:text-ui modern:text-sol-text">{totals.count}</span> sessions
         </span>
         {totals.mem > 0 && (
           <span className="text-sol-text-muted">
-            <span className="text-sol-blue text-sm">{formatBytes(totals.mem)}</span> mem
+            <span className="text-sol-blue text-sm modern:font-mono modern:text-ui">{formatBytes(totals.mem)}</span> mem
           </span>
         )}
         {totals.cpu > 0 && (
@@ -279,12 +280,12 @@ function AggregateOverview({ sessions }: { sessions: ClassifiedSession[] }) {
             className="text-sol-text-muted"
             title="Sum of each live session's process-tree CPU%. 100% = one full core, so the total can exceed 100% across cores."
           >
-            <span className="text-sol-yellow text-sm">{totals.cpu.toFixed(1)}%</span> cpu
+            <span className="text-sol-yellow text-sm modern:font-mono modern:text-ui">{totals.cpu.toFixed(1)}%</span> cpu
           </span>
         )}
         {totals.procs > 0 && (
           <span className="text-sol-text-muted">
-            <span className="text-sol-text-secondary text-sm">{totals.procs}</span> procs
+            <span className="text-sol-text-secondary text-sm modern:font-mono modern:text-ui modern:text-sol-text">{totals.procs}</span> procs
           </span>
         )}
         {hasChart && (
@@ -634,7 +635,7 @@ export function SessionsView() {
 
         {/* Filters + sort */}
         <div className="flex flex-wrap items-center gap-2 mb-4">
-          <div className="flex flex-wrap rounded-md border border-sol-border/60 overflow-hidden">
+          <div className={`flex flex-wrap rounded-md border border-sol-border/60 overflow-hidden ${modernTabList}`}>
             {filterButtons.map(({ value, label, count }) => (
               <button
                 key={value}
@@ -643,19 +644,19 @@ export function SessionsView() {
                   filter === value
                     ? "bg-sol-bg-highlight text-sol-text"
                     : "bg-sol-bg-alt/40 text-sol-text-muted hover:text-sol-text-secondary"
-                }`}
+                } ${modernTab({ active: filter === value }, "modern:font-sans")}`}
               >
                 {label} <span className="text-sol-text-dim ml-1">{count}</span>
               </button>
             ))}
           </div>
 
-          <div className="ml-auto flex items-center gap-1.5 text-xs font-mono">
+          <div className="ml-auto flex items-center gap-1.5 text-xs font-mono modern:font-sans modern:text-meta">
             <span className="text-sol-text-dim">sort</span>
             <select
               value={sortKey}
               onChange={(e) => setSortKey(e.target.value as SortKey)}
-              className="bg-sol-bg-alt/60 border border-sol-border/60 rounded-md px-2 py-1.5 text-sol-text-secondary hover:text-sol-text focus:outline-none focus:border-sol-border cursor-pointer"
+              className={`bg-sol-bg-alt/60 border border-sol-border/60 rounded-md px-2 py-1.5 text-sol-text-secondary hover:text-sol-text focus:outline-none focus:border-sol-border cursor-pointer ${modernLook(modernField, "modern:h-control-sm modern:py-0 modern:text-ui")}`}
             >
               {SORT_OPTIONS.map((o) => (
                 <option key={o.value} value={o.value}>{o.label}</option>
@@ -663,8 +664,8 @@ export function SessionsView() {
             </select>
             <button
               onClick={() => setSortDir((d) => (d === "asc" ? "desc" : "asc"))}
-              className="px-2 py-1.5 bg-sol-bg-alt/60 border border-sol-border/60 rounded-md text-sol-text-muted hover:text-sol-text hover:border-sol-border transition-colors"
-              title={sortDir === "asc" ? "Ascending — oldest / smallest first" : "Descending — newest / largest first"}
+              className={`px-2 py-1.5 bg-sol-bg-alt/60 border border-sol-border/60 rounded-md text-sol-text-muted hover:text-sol-text hover:border-sol-border transition-colors ${modernButton({ variant: "outline", size: "icon-sm" })}`}
+              title={sortDir === "asc" ? "Ascending — oldest / smallest first" : "Descending — newest / largest first"} aria-label={sortDir === "asc" ? "Sort ascending" : "Sort descending"}
             >
               {sortDir === "asc" ? "↑" : "↓"}
             </button>
@@ -674,8 +675,8 @@ export function SessionsView() {
         {/* Triage filter — the agent's relationship to you (orthogonal to the
             process-liveness filter above). */}
         <div className="flex flex-wrap items-center gap-2 mb-4 -mt-1">
-          <span className="text-mark uppercase tracking-wider text-sol-text-dim font-mono w-12 shrink-0">state</span>
-          <div className="flex flex-wrap rounded-md border border-sol-border/60 overflow-hidden">
+          <span className="text-mark uppercase tracking-wider text-sol-text-dim font-mono w-12 shrink-0 modern:w-auto modern:font-sans modern:text-meta modern:normal-case modern:tracking-normal">state</span>
+          <div className={`flex flex-wrap rounded-md border border-sol-border/60 overflow-hidden ${modernTabList}`}>
             {([
               { value: "all", label: "All", count: counts.total },
               { value: "needs_input", label: "Needs you", count: triageCounts.needs_input },
@@ -690,7 +691,7 @@ export function SessionsView() {
                   triageFilter === value
                     ? "bg-sol-bg-highlight text-sol-text"
                     : "bg-sol-bg-alt/40 text-sol-text-muted hover:text-sol-text-secondary"
-                }`}
+                } ${modernTab({ active: triageFilter === value }, "modern:font-sans")}`}
               >
                 {label} <span className="text-sol-text-dim ml-1">{count}</span>
               </button>
@@ -703,7 +704,7 @@ export function SessionsView() {
 
         {/* Table */}
         {filtered.length === 0 ? (
-          <div className="bg-sol-bg-alt/40 rounded-lg border border-sol-border/60 p-12 text-center">
+          <div className="bg-sol-bg-alt/40 rounded-lg border border-sol-border/60 p-12 text-center modern:rounded-card modern:border-sol-border modern:bg-sol-card">
             <div className="text-sol-text-dim text-sm">
               {counts.total === 0 ? "No active sessions" : "No sessions match these filters"}
             </div>

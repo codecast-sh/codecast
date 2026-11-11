@@ -145,7 +145,9 @@ export type TriggerRowVariant =
   // page-only verbs (edit, duplicate, delete).
   | "page";
 
-const VERB_BTN = "p-1 rounded transition-[color,background-color,transform] duration-100 active:scale-90";
+// Modern: a 24px icon button with the control radius and the one focus ring;
+// its colours stay the verb's own.
+const VERB_BTN = "p-1 rounded transition-[color,background-color,transform] duration-100 active:scale-90 modern:inline-flex modern:size-6 modern:items-center modern:justify-center modern:rounded-control modern:p-0 modern:active:scale-100 modern:focus-visible:outline modern:focus-visible:outline-2 modern:focus-visible:outline-offset-1 modern:focus-visible:outline-[color:var(--focus-ring)]";
 
 // A trigger verb: the store's triggerAction signature, so a caller can supply
 // its own (the marketing hero plays verbs on fixture rows without a store).

@@ -5,6 +5,7 @@
 import Link from "next/link";
 import { MessageSquare } from "lucide-react";
 import { useDecisionThreadUnread } from "../../hooks/useDecisionThread";
+import { modernPill } from "../ui/modernLook";
 
 export function DecisionThreadUnread({ decisionId, href }: { decisionId: string; href?: string }) {
   const unread = useDecisionThreadUnread(decisionId);
@@ -12,6 +13,6 @@ export function DecisionThreadUnread({ decisionId, href }: { decisionId: string;
   const body = <><MessageSquare className="w-3 h-3" aria-hidden />{unread} new</>;
   const title = `${unread} new ${unread === 1 ? "comment" : "comments"}`;
   return href
-    ? <Link href={`${href}#discuss`} title={title} className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-cyan/40 text-sol-cyan hover:bg-sol-cyan/10" data-decision-thread-unread-chip>{body}</Link>
+    ? <Link href={`${href}#discuss`} title={title} className={`flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-cyan/40 text-sol-cyan hover:bg-sol-cyan/10 ${modernPill({ tone: "cyan" })}`} data-decision-thread-unread-chip>{body}</Link>
     : <span title={title} className="flex items-center gap-0.5 tabular-nums text-sol-cyan" data-decision-thread-unread-chip>{body}</span>;
 }

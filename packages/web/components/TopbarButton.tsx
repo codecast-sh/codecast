@@ -27,6 +27,10 @@ export const TopbarButton = forwardRef<
         desktopOnly ? "hidden md:flex" : "flex",
         "relative h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/60 [&>svg]:h-[18px] [&>svg]:w-[18px] [&>svg]:[stroke-width:1.75]",
         active ? "bg-sol-cyan/10 text-sol-cyan" : "text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text",
+        // Modern: the icon button at the small control height, the control
+        // radius and the one focus ring.
+        "modern:size-control-sm modern:rounded-control modern:focus-visible:ring-0 modern:focus-visible:[outline-style:solid] modern:focus-visible:outline-2 modern:focus-visible:outline-offset-1 modern:focus-visible:outline-[color:var(--focus-ring)]",
+        !active && "modern:hover:bg-sol-text/[0.06]",
         className,
       )}
     />
@@ -55,6 +59,7 @@ export const TopbarChip = forwardRef<
       className={cn(
         "flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-meta font-medium tabular-nums select-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/60",
         tinted ? "hover:brightness-110" : "text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text",
+        "modern:rounded-control modern:focus-visible:ring-0 modern:focus-visible:[outline-style:solid] modern:focus-visible:outline-2 modern:focus-visible:outline-offset-1 modern:focus-visible:outline-[color:var(--focus-ring)]",
         className,
       )}
       style={tinted ? { background: `color-mix(in srgb, ${tone} 14%, transparent)`, color: tone, ...style } : style}

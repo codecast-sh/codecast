@@ -6,6 +6,7 @@ import { useState } from "react";
 import { AlertTriangle, ChevronRight } from "lucide-react";
 import { cn } from "../../lib/utils";
 import type { CauseDoubt } from "../../lib/line/lineTrace";
+import { modernButton } from "../ui/modernLook";
 
 export function DoubtChip({ doubt, className }: { doubt: CauseDoubt; className?: string }) {
   const [open, setOpen] = useState(false);
@@ -20,7 +21,7 @@ export function DoubtChip({ doubt, className }: { doubt: CauseDoubt; className?:
           setOpen((o) => !o);
         }}
         aria-expanded={open}
-        className="inline-flex items-center gap-1.5 rounded-md border border-sol-yellow/45 bg-sol-yellow/10 px-2 py-0.5 text-[12px] text-sol-yellow hover:bg-sol-yellow/15 transition-colors"
+        className={`inline-flex items-center gap-1.5 rounded-md border border-sol-yellow/45 bg-sol-yellow/10 px-2 py-0.5 text-[12px] text-sol-yellow hover:bg-sol-yellow/15 transition-colors ${modernButton({ variant: "soft", tone: "yellow", size: "xs" })}`}
       >
         <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
         {doubt.words}

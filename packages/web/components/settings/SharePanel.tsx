@@ -11,6 +11,7 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { formatShortDate } from "../../lib/utils";
 import { formatDateRange, formatSessionCount, type ProjectCounts } from "../../lib/team/shareImpact";
 import { currentMembershipVisibility, teamVisibilityOption, type TeamSharingFacts } from "../../lib/teamVisibility";
+import { modernButton, modernChip } from "../ui/modernLook";
 
 export type SharePanelTeam = TeamSharingFacts & {
   _id: Id<"teams">;
@@ -67,7 +68,7 @@ export function ShareTrigger({ name, current, open, onClick }: {
           : current.kind === "lock"
             ? "border-sol-green/60 bg-sol-green/10 text-sol-text"
             : "border-sol-border bg-sol-bg text-sol-text-muted hover:bg-sol-bg-highlight/40 hover:text-sol-text"
-      } ${open ? "ring-1 ring-sol-cyan/50" : ""}`}
+      } ${open ? "ring-1 ring-sol-cyan/50" : ""} ${modernButton({ variant: "outline", size: "md" }, `modern:justify-between${shared ? " modern:border-sol-cyan/50 modern:bg-sol-cyan/[0.06]" : current.kind === "lock" ? " modern:border-sol-green/50 modern:bg-sol-green/[0.06]" : ""}`)}`}
     >
       <span className="flex items-center gap-2">
         {current.kind === "lock" ? <Lock className="h-4 w-4 text-sol-green" /> : current.kind === "team" ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
@@ -177,7 +178,7 @@ export function SharePanel({ name, paths, isRepository = false, local, syncsOnSh
       onClick={() => choose(value)}
       className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs transition-colors disabled:opacity-40 ${
         pick === value ? "border-sol-cyan bg-sol-cyan/15 text-sol-text" : "border-sol-border text-sol-text-muted hover:text-sol-text"
-      }`}
+      } ${modernChip({ active: pick === value })}`}
     >
       {label}
     </button>

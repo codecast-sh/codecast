@@ -7,6 +7,9 @@ import { SyncProgressBadge } from "./SyncProgressBadge";
 import { PageHeader } from "./ui/page-header";
 import { activeTabOf, tabSelectionSummary } from "./listTabSelection";
 import type { ListTab } from "./GenericListView";
+import { modernButton, modernLook, modernMenuRow, modernPopover, modernTab, modernTabList } from "./ui/modernLook";
+
+const M_TRIGGER = modernButton({ variant: "outline", size: "sm" });
 
 // GenericListView's header. In the Modern style, on a page of its own (Tasks,
 // Docs, Decisions), it is the shared page header: the page's name, the status
@@ -60,7 +63,7 @@ function TabDropdown({
     <div ref={ref} className="relative flex-shrink-0">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 h-7 px-2 rounded-md bg-sol-bg-alt border border-sol-border/40 text-xs text-sol-text hover:border-sol-border transition-colors"
+        className={`flex items-center gap-1.5 h-7 px-2 rounded-md bg-sol-bg-alt border border-sol-border/40 text-xs text-sol-text hover:border-sol-border transition-colors ${M_TRIGGER}`}
         title={summary.label}
       >
         {summary.icons.length > 0 && (
@@ -75,7 +78,7 @@ function TabDropdown({
         <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0 cq-caret" />
       </button>
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-52 max-h-[min(70vh,28rem)] overflow-y-auto bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1">
+        <div className={`absolute top-full left-0 mt-1 w-52 max-h-[min(70vh,28rem)] overflow-y-auto bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1 ${modernLook(modernPopover, "modern:p-1")}`}>
           {tabs.map((t) => {
             const TIcon = t.icon;
             const isActive = active?.key === t.key;
@@ -86,7 +89,7 @@ function TabDropdown({
                 title={t.title ?? t.label}
                 className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors ${
                   isActive ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
-                }`}
+                } ${modernMenuRow({ selected: isActive })}`}
               >
                 {TIcon && <TIcon className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />}
                 <span className="flex-1 text-left whitespace-nowrap">{t.label}</span>
@@ -110,7 +113,7 @@ function ListTabs({ tabs, activeTab, onChange }: { tabs: ListTab[]; activeTab: s
   const activeKey = activeTabOf(tabs, activeTab)?.key ?? null;
   return (
     <>
-      <div data-list-tabs className="cq-tabs-pills flex items-center gap-0.5 p-0.5 rounded-lg bg-sol-bg-alt/40 border border-sol-border/30 flex-wrap">
+      <div data-list-tabs className={`cq-tabs-pills flex items-center gap-0.5 p-0.5 rounded-lg bg-sol-bg-alt/40 border border-sol-border/30 flex-wrap ${modernTabList}`}>
         {tabs.map((tab) => {
           const isActive = activeKey === tab.key;
           return (
@@ -122,7 +125,7 @@ function ListTabs({ tabs, activeTab, onChange }: { tabs: ListTab[]; activeTab: s
                 isActive
                   ? "bg-sol-bg-highlight text-sol-text shadow-sm"
                   : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60"
-              }`}
+              } ${modernTab({ active: isActive })}`}
             >
               {tab.label}
               {tab.count != null && tab.count > 0 && <span className="text-meta tabular-nums opacity-60">{tab.count}</span>}

@@ -189,7 +189,7 @@ packages/web/app/inbox/QueuePageClient.tsx 900
 packages/web/app/meet/[token]/page.tsx 900
 packages/web/app/sessions/page.tsx 950
 packages/web/app/settings/sync/page.tsx 1050
-packages/web/app/tasks/[id]/page.tsx 1000
+packages/web/app/tasks/[id]/page.tsx 850
 packages/web/app/tasks/page.tsx 1500
 packages/web/app/triggers/page.tsx 1250
 packages/web/components/ActivityFeed.tsx 1000

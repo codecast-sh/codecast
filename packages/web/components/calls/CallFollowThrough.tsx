@@ -23,6 +23,7 @@ import type { WorkspaceKey } from "../../lib/workspaceScope";
 import { buildFollowThrough, FOLLOW_STAGES, type FollowCall, type FollowItem, type FollowStage } from "../../lib/calls/followThrough";
 import { firstName } from "./speakers";
 import { makeCallTask, useOpenTask } from "./CallTasks";
+import { modernPill } from "../ui/modernLook";
 
 const WINDOW_MS = 14 * 24 * 3600_000;
 
@@ -149,7 +150,7 @@ function CallBlock({ fc, filter }: { fc: FollowCall; filter: FollowStage | null 
         <span className="min-w-0 truncate text-meta text-sol-text-dim">{people}</span>
         <span className="flex-1" />
         {call.summary_status === "failed" && (
-          <span className="shrink-0 rounded bg-sol-red/10 px-1.5 py-0.5 text-meta text-sol-red">no summary</span>
+          <span className={`shrink-0 rounded bg-sol-red/10 px-1.5 py-0.5 text-meta text-sol-red ${modernPill({ tone: "red" })}`}>no summary</span>
         )}
         {fc.sweepDocs.length > 0 && <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-meta">{fc.sweepDocs.map((d) => (
           <EntityIdPill key={d._id} type="doc" id={String(d._id)} compact fallback={<FileText className="h-3 w-3" />} />
@@ -211,7 +212,7 @@ export function CallFollowThrough({ calls, fallback }: { calls: any[]; fallback:
             onClick={() => setFilter(filter === s ? null : s)}
             className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-meta transition-colors disabled:opacity-40 ${
               filter === s ? "border-current" : "border-sol-border/30 hover:bg-sol-bg-alt"
-            }`}
+            } modern:h-control-sm modern:rounded-control modern:py-0 modern:font-medium`}
             style={{ color: filter === s || totals[s] > 0 ? STAGE[s].color : undefined }}
           >
             <span className="text-[13px] font-semibold tabular-nums">{totals[s]}</span>

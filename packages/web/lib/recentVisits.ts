@@ -7,6 +7,7 @@
 import { pathLabel } from "./pathLabel";
 import { staleNavTitle } from "./navRegistry";
 import { isModernStyle } from "./visualStyle";
+import { placeTitle } from "./placeTitle";
 import { channelDisplayName } from "./chatViews";
 import { dmOtherIds } from "@codecast/shared/chat";
 import { cleanTitle } from "./conversationProcessor";
@@ -157,8 +158,10 @@ export function resolveVisit(
   if (featurePageRedirect(path, workspaceFeatureEnabled(state.teams || [], state.clientState?.ui?.active_team_id, "line"))) return null;
   const obj = resolvePageObject(state, path);
   // A label stored under the other interface style's name for the page reads
-  // this style's name (lib/navRegistry staleNavTitle).
-  const title = obj.title ?? (v.label != null && !staleNavTitle(path, v.label, isModernStyle()) ? v.label : pathLabel(path));
+  // this style's name (lib/navRegistry staleNavTitle). Modern names every
+  // object page by its object, as its tab, crumbs and back control do
+  // (lib/placeTitle).
+  const title = obj.title ?? (isModernStyle() ? placeTitle(state, path) : null) ?? (v.label != null && !staleNavTitle(path, v.label, isModernStyle()) ? v.label : pathLabel(path));
   return { key: v.key, kind: v.kind, ts: v.ts, title, objectType: obj.objectType, entity: obj.entity, path };
 }
 

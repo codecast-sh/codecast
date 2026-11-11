@@ -30,7 +30,7 @@ import { CallVideoStretchChip } from "../../calls/CallVideoStretchChip";
 import { useInboxStore, useTrackedStore } from "../../../store/inboxStore";
 import { agentStatusAt } from "../../../lib/liveness";
 import { DecisionCompactCard } from "../../decisions/DecisionCompactCard";
-import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight, RefreshCw, Cloud, Info } from "lucide-react";
+import { MessageSquare, Users, Hash, AtSign, ChevronDown, ChevronRight, Clock, CornerDownRight, Workflow, Zap, Radar, Bot, PhoneCall, ArrowUpRight, RefreshCw, Cloud, Info, CircleSlash } from "lucide-react";
 import { pendingCancelRef, sessionMessageQueueLabel } from "../../../lib/pendingBanner";
 import { cancelPendingSend } from "../../../lib/cancelPendingSend";
 import { HeldTerminalScreen } from "../HeldTerminalScreen";
@@ -283,40 +283,40 @@ export function SkillExpansionBlock({ content, timestamp, cmdName, collapsed }: 
 export function FoldedPromptBlock({ label, preview, content, timestamp, collapsed }: { label: string; preview?: string; content: string; timestamp: number; collapsed?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const icon = (size: string) => (
-    <svg className={`${size} text-sol-cyan/70 shrink-0`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+    <svg data-cc-row-icon className={`${size} text-sol-cyan/70 shrink-0`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
       <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
     </svg>
   );
 
   if (collapsed) {
     return (
-      <div className="px-3 py-1.5 flex items-center gap-2 text-xs">
+      <div className="px-3 py-1.5 flex items-center gap-2 text-xs" data-cc-row="prompt" data-cc-row-head>
         {icon("w-3 h-3")}
-        <span className="font-mono text-sol-cyan/80 font-medium">{label}</span>
-        <span className="text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        <span data-cc-row-object className="font-mono text-sol-cyan/80 font-medium">{label}</span>
+        <span data-cc-row-meta className="text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
     );
   }
 
   return (
-    <div className="mb-2">
+    <div className="mb-2" data-cc-row="prompt">
       <button
         onClick={() => setExpanded(e => !e)}
         className="group flex items-center gap-2 px-3 py-2 rounded-md bg-sol-bg-alt/40 border border-sol-border/30 hover:border-sol-cyan/30 transition-colors w-full text-left"
-        aria-expanded={expanded}
+        aria-expanded={expanded} data-cc-row-head
       >
         {icon("w-3.5 h-3.5")}
-        <span className="font-mono text-xs text-sol-cyan/80 font-medium shrink-0">{label}</span>
+        <span data-cc-row-object className="font-mono text-xs text-sol-cyan/80 font-medium shrink-0">{label}</span>
         {preview && !expanded && (
-          <span className="text-meta text-sol-text-dim truncate">{preview}</span>
+          <span data-cc-row-text className="text-meta text-sol-text-dim truncate">{preview}</span>
         )}
-        <span className="ml-auto text-sol-text-dim text-meta shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
-        <svg className={`w-3 h-3 text-sol-text-dim transition-transform ${expanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <span data-cc-row-meta className="ml-auto text-sol-text-dim text-meta shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        <svg className={`w-3 h-3 text-sol-text-dim transition-transform modern:hidden ${expanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
         </svg>
       </button>
       {expanded && (
-        <div className="mt-1 rounded-md bg-sol-bg-alt/25 border border-sol-border/20 p-3 text-xs text-sol-text-muted overflow-y-auto leading-relaxed prose prose-invert prose-sm max-w-none">
+        <div data-cc-row-detail className="mt-1 rounded-md bg-sol-bg-alt/25 border border-sol-border/20 p-3 modern:px-4 text-xs text-sol-text-muted overflow-y-auto leading-relaxed prose prose-invert prose-sm max-w-none">
           <ReactMarkdown
             remarkPlugins={entityRemarkPlugins}
             rehypePlugins={MESSAGE_MD_REHYPE}
@@ -334,13 +334,13 @@ export function FoldedPromptBlock({ label, preview, content, timestamp, collapse
 // start clipped behind an Expand.
 export function WorkflowTaskBlock({ body, timestamp }: { body: string; timestamp: number }) {
   return (
-    <div className="mb-3 rounded border-l-2 border-sol-cyan/60 bg-sol-cyan/5">
-      <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-        <Workflow className="w-3.5 h-3.5 text-sol-cyan/70 shrink-0" />
-        <span className="text-mark font-medium tracking-wide uppercase text-sol-cyan/70 shrink-0">Workflow task</span>
-        <span className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+    <div className="mb-3 rounded border-l-2 border-sol-cyan/60 bg-sol-cyan/5" data-cc-row="brief">
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1" data-cc-row-head>
+        <Workflow data-cc-row-icon className="w-3.5 h-3.5 text-sol-cyan/70 shrink-0" />
+        <span data-cc-row-verb className="text-mark font-medium tracking-wide uppercase text-sol-cyan/70 shrink-0">Workflow task</span>
+        <span data-cc-row-meta className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
-      <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
+      <CollapsibleBody className="px-3 pb-2 modern:ml-6 modern:mt-0.5 modern:mb-2 modern:rounded-card modern:border modern:border-sol-border modern:bg-[var(--cc-m-tint)] modern:px-4 modern:py-3" toggleClassName="mt-1">
         <div className="text-sm text-sol-text prose prose-invert prose-sm max-w-none">
           <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MD_COMPONENTS_NO_IMG}>{body}</ReactMarkdown>
         </div>
@@ -357,10 +357,10 @@ export function InterruptStatusLine({ label = "user interrupted", tone = "sky" }
     : "flex-1 h-px bg-gradient-to-r from-transparent via-sol-border to-transparent";
   const textClass = tone === "amber" ? "text-xs text-sol-yellow font-medium" : "text-xs text-sol-text-dim font-medium";
   return (
-    <div className="my-6 flex items-center gap-3">
-      <div className={lineClass} />
-      <span className={textClass}>{label}</span>
-      <div className={lineClass} />
+    <div className="my-6 flex items-center gap-3" data-cc-row="divider" data-cc-row-head data-cc-row-tone={tone === "amber" ? "warn" : undefined}>
+      <div data-cc-row-rule className={lineClass} /><CircleSlash data-cc-row-icon aria-hidden className="hidden modern:block w-4 h-4 shrink-0" />
+      <span data-cc-row-verb className={textClass}>{label}</span>
+      <div data-cc-row-rule className={lineClass} />
     </div>
   );
 }
@@ -397,11 +397,10 @@ export function NudgeLine({ messageId, text, count, timestamp, userName, avatarU
   );
 }
 
-// One captioned rule for a machine move the thread records in place: an
-// agent or machine switch, or a session moving between its role and the
-// person. Clicking discloses the notice text the agent was given; `body` is
-// a line the reader must see whole (the role's reason), rendered as markdown
-// under the rule without a click. `lead` draws before the caption (a face).
+// One captioned rule for a machine move the thread records in place: an agent
+// or machine switch, or a session moving between its role and the person
+// (Modern: a row). Clicking discloses the notice the agent was given; `body` is
+// a line to see whole (the role's reason), markdown under it; `lead` a face first.
 function SwitchDivider({
   caption, fromLabel, content, extra, timestamp, lead, body, testId, markdown,
 }: {
@@ -420,28 +419,29 @@ function SwitchDivider({
   const details = [content.trim(), extra?.trim()].filter(Boolean).join("\n\n");
   const hasDetails = details.includes("\n");
   return (
-    <div className="my-5" data-switch-divider={testId}>
+    <div className="my-5" data-switch-divider={testId} data-cc-row="divider">
       <button
         type="button"
         onClick={() => hasDetails && setOpen((o) => !o)}
         className={`w-full ${hasDetails ? "cursor-pointer group" : "cursor-default"}`}
         title={`${formatFullTimestamp(timestamp)}${hasDetails ? " — click for details" : ""}`}
+        data-cc-row-head aria-expanded={hasDetails ? open : undefined}
       >
         <TimelineRule color="var(--sol-violet)" label={caption}>
-          <span className="flex items-center gap-1.5 text-meta text-sol-text-dim group-hover:text-sol-text-muted transition-colors">
+          <span data-cc-row-lead className="flex items-center gap-1.5 text-meta text-sol-text-dim group-hover:text-sol-text-muted transition-colors">
             {lead ?? (
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <svg data-cc-row-icon className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4" />
               </svg>
             )}
-            {caption}
-            {fromLabel && <span className="text-sol-text-dim/70">was {fromLabel}</span>}
-            <span className="text-sol-text-dim/60">· {formatRelativeTime(timestamp)}</span>
+            <span data-cc-row-verb className="contents">{caption}</span>
+            {fromLabel && <span data-cc-row-text className="text-sol-text-dim/70">was {fromLabel}</span>}
+            <span data-cc-row-meta className="text-sol-text-dim/60"><span className="modern:hidden">· </span>{formatRelativeTime(timestamp)}</span>
           </span>
         </TimelineRule>
       </button>
       {body && (
-        <div data-switch-divider-body className="mt-2 mx-auto max-w-2xl px-4 py-3 rounded-md border border-sol-violet/35 bg-sol-violet/[0.07] text-[13px] text-sol-text leading-relaxed">
+        <div data-switch-divider-body data-cc-row-sub className="mt-2 mx-auto max-w-2xl px-4 py-3 rounded-md border border-sol-violet/35 bg-sol-violet/[0.07] text-[13px] text-sol-text leading-relaxed">
           <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>{body}</ReactMarkdown>
         </div>
       )}
@@ -840,10 +840,10 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
     ? "text-sol-violet"
     : "text-sol-cyan";
   return (
-    <div data-cc-session-msg className={`mb-2 mx-1 rounded border-l-2 ${accent}`}>
-      <div className="flex items-center flex-wrap gap-x-2 gap-y-1 px-3 pt-2 pb-1">
-        <HeaderIcon className={`w-3.5 h-3.5 shrink-0 ${iconText}`} />
-        <span className={`text-mark font-medium tracking-wide uppercase shrink-0 ${labelText}`}>{isTeammate ? "From teammate" : isAgentReport ? "Report from" : "Message from"}</span>
+    <div data-cc-session-msg className={`mb-2 mx-1 rounded border-l-2 ${accent}`} data-cc-row="message" data-cc-row-tone={isPending ? "warn" : undefined}>
+      <div className="flex items-center flex-wrap gap-x-2 gap-y-1 px-3 pt-2 pb-1" data-cc-row-head>
+        <HeaderIcon data-cc-row-icon className={`w-3.5 h-3.5 shrink-0 ${iconText}`} />
+        <span data-cc-row-verb className={`text-mark font-medium tracking-wide uppercase shrink-0 ${labelText}`}>{isTeammate ? "From teammate" : isAgentReport ? "Report from" : "Message from"}</span>
         {namedSender ? (
           // A teammate id or a subagent name isn't a session id, so it can't be an
           // EntityIdPill — but when the sender is resolvable (team-lead → this
@@ -853,19 +853,19 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
             <button
               onClick={() => { void jumpToSendingMessage(); }}
               className={`px-1.5 py-0.5 rounded border text-meta font-mono shrink-0 cursor-pointer hover:underline underline-offset-2 ${badgeColor}`}
-              title="Open the sender's session at the message that sent this"
+              title="Open the sender's session at the message that sent this" data-cc-row-object
             >
               {from}
             </button>
           ) : (
-            <span className={`px-1.5 py-0.5 rounded border text-meta font-mono shrink-0 ${badgeColor}`}>{from}</span>
+            <span data-cc-row-object className={`px-1.5 py-0.5 rounded border text-meta font-mono shrink-0 ${badgeColor}`}>{from}</span>
           )
         ) : from && from !== "unknown" ? (
           <EntityIdPill shortId={from} />
         ) : name ? (
-          <span className="text-xs font-medium text-sol-cyan/90">{name}</span>
+          <span data-cc-row-text className="text-xs font-medium text-sol-cyan/90">{name}</span>
         ) : (
-          <span className="text-xs text-sol-text-muted">another session</span>
+          <span data-cc-row-text className="text-xs text-sol-text-muted">another session</span>
         )}
         {/* The sender's identity says WHO wrote this; this says WHERE. Naming a
             session alone lands a reader at its tail, which is almost never the
@@ -877,12 +877,12 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
             className={`inline-flex items-center gap-0.5 text-meta font-medium shrink-0 underline underline-offset-2 decoration-dotted hover:decoration-solid ${linkText}`}
             title="Open the sender's session at the message that sent this"
           >
-            <ArrowUpRight className="w-3 h-3" />
-            Open the sending message
+            <ArrowUpRight className="w-3 h-3 modern:w-4 modern:h-4" />
+            <span className="modern:sr-only">Open the sending message</span>
           </button>
         )}
         {isTeammate && summary && (
-          <span className="text-mark uppercase tracking-wider font-medium text-sol-text-dim/50 truncate">{summary}</span>
+          <span data-cc-row-tag className="text-mark uppercase tracking-wider font-medium text-sol-text-dim/50 truncate">{summary}</span>
         )}
         {queueLabel && (pendingScreen ? (
           <button
@@ -918,7 +918,7 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
             it has waited, not where it belongs, and saying so is what stops
             the row reading as history that jumped out of order. */}
         {timestamp != null && timestamp > 0 && (
-          <span className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{isPending ? `waiting ${relativeTime(timestamp)}` : relativeTime(timestamp)}</span>
+          <span data-cc-row-meta className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{isPending ? `waiting ${relativeTime(timestamp)}` : relativeTime(timestamp)}</span>
         )}
       </div>
       {screenOpen && pendingScreen && (
@@ -926,8 +926,8 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
       )}
       {/* A message from another session is someone else's context, not this
           thread's — it starts clipped so a long handoff doesn't bury the reply. */}
-      <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
-        <div className={`text-sm text-sol-text prose prose-invert prose-sm max-w-none ${isPending ? "opacity-70" : ""}`}>
+      <CollapsibleBody className="px-3 pb-2 modern:ml-6 modern:mt-0.5 modern:mb-2 modern:rounded-card modern:border modern:border-sol-border modern:bg-[var(--cc-m-tint)] modern:px-4 modern:py-3" toggleClassName="mt-1">
+        <div data-cc-prose className={`text-sm text-sol-text prose prose-invert prose-sm max-w-none ${isPending ? "opacity-70" : ""}`}>
           {/* The header just named the sender, so its mentions in the body are
               repeats and render as the short name. */}
           <EstablishedRefsProvider ids={[namedSender ? null : from]}>
@@ -969,23 +969,23 @@ export function HuddleSummaryBlock({ huddle, timestamp }: { huddle: HuddleSummar
   // twice.
   const body = parseHuddleDigestContent(huddle.body)?.body ?? huddle.body;
   return (
-    <div className="mb-2 mx-1 rounded border-l-2 border-sol-green/60 bg-sol-green/5">
-      <div className="flex items-center gap-2 px-3 pt-2 pb-1 flex-wrap">
-        <PhoneCall className="w-3.5 h-3.5 shrink-0 text-sol-green/70" />
-        <span className="text-mark font-medium tracking-wide uppercase shrink-0 text-sol-green/70">Huddle</span>
-        <span className="text-xs font-medium text-sol-text truncate">{huddle.title}</span>
-        <span className="text-meta text-sol-text-dim truncate">
+    <div className="mb-2 mx-1 rounded border-l-2 border-sol-green/60 bg-sol-green/5" data-cc-row="huddle">
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1 flex-wrap" data-cc-row-head>
+        <PhoneCall data-cc-row-icon className="w-3.5 h-3.5 shrink-0 text-sol-green/70" />
+        <span data-cc-row-verb className="text-mark font-medium tracking-wide uppercase shrink-0 text-sol-green/70">Huddle</span>
+        <span data-cc-row-text className="text-xs font-medium text-sol-text truncate">{huddle.title}</span>
+        <span data-cc-row-tag className="text-meta text-sol-text-dim truncate">
           {huddle.minutes > 0 ? `${huddle.minutes} min` : ""}
           {huddle.minutes > 0 && huddle.speakers.length > 0 ? " · " : ""}
           {huddle.speakers.join(", ")}
         </span>
         {huddle.video && <CallVideoStretchChip stretches={huddle.video} callRef={huddle.transcriptId} />}
         {timestamp != null && timestamp > 0 && (
-          <span className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+          <span data-cc-row-meta className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         )}
       </div>
       {body && (
-        <CollapsibleBody className="px-3" toggleClassName="mt-1">
+        <CollapsibleBody className="px-3 modern:ml-6 modern:mt-0.5 modern:mb-2 modern:rounded-card modern:border modern:border-sol-border modern:bg-[var(--cc-m-tint)] modern:px-4 modern:py-3" toggleClassName="mt-1">
           <div className="text-sm text-sol-text prose prose-invert prose-sm max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
             <ReactMarkdown remarkPlugins={entityRemarkPlugins} rehypePlugins={MESSAGE_MD_REHYPE}
               components={MESSAGE_MD_COMPONENTS}
@@ -1019,20 +1019,20 @@ export function ChatWakeBlock({ wake, timestamp }: { wake: ChatWakePrompt; times
   // which is always a reply, and fall back to the root.
   const href = chatHref(wake.channelId, wake.placeholderId ?? wake.threadRootId);
   return (
-    <div className="mb-2 mx-1 rounded border-l-2 border-sol-magenta/60 bg-sol-magenta/5">
-      <div className="flex items-center gap-2 px-3 pt-2 pb-1 flex-wrap">
-        <MessageSquare className="w-3.5 h-3.5 shrink-0 text-sol-magenta/70" />
-        <span className="text-mark font-medium tracking-wide uppercase shrink-0 text-sol-magenta/70">Team chat</span>
+    <div className="mb-2 mx-1 rounded border-l-2 border-sol-magenta/60 bg-sol-magenta/5" data-cc-row="chat">
+      <div className="flex items-center gap-2 px-3 pt-2 pb-1 flex-wrap" data-cc-row-head>
+        <MessageSquare data-cc-row-icon className="w-3.5 h-3.5 shrink-0 text-sol-magenta/70" />
+        <span data-cc-row-verb className="text-mark font-medium tracking-wide uppercase shrink-0 text-sol-magenta/70">Team chat</span>
         <ChatChannelPill name={wake.channelName} href={href} direct={wake.direct} />
-        <span className="text-xs text-sol-text-muted truncate">
+        <span data-cc-row-text className="text-xs text-sol-text-muted truncate">
           <span className="text-sol-text font-medium">{wake.askerName}</span>
           {` ${chatWakeAction(wake)}`}
         </span>
         {timestamp != null && timestamp > 0 && (
-          <span className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+          <span data-cc-row-meta className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         )}
       </div>
-      <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
+      <CollapsibleBody className="px-3 pb-2 modern:ml-6 modern:mt-0.5 modern:mb-2 modern:rounded-card modern:border modern:border-sol-border modern:bg-[var(--cc-m-tint)] modern:px-4 modern:py-3" toggleClassName="mt-1">
         <div className="space-y-1.5">
           {wake.context.length > 0 && (
             <div className="space-y-1.5 pb-1.5 mb-1.5 border-b border-sol-magenta/15">
@@ -1440,8 +1440,8 @@ export function WorkflowEventBlock({ content, workflowRun, onGateChoice }: {
       return <GateDecisionBlock decisionId={event.decision_id} shortId={event.decision_short_id} prompt={event.prompt} resolved={isResolved} />;
     }
     return (
-      <div className="my-3 rounded-lg border border-sol-magenta/40 bg-sol-magenta/8 overflow-hidden">
-        <div className="px-3 py-2 border-b border-sol-magenta/20 flex items-center gap-2">
+      <div className="my-3 rounded-lg border border-sol-magenta/40 bg-sol-magenta/8 overflow-hidden modern:rounded-card modern:border-sol-border modern:bg-sol-card" data-cc-gate={isResolved ? "resolved" : "open"}>
+        <div className="px-3 py-2 border-b border-sol-magenta/20 flex items-center gap-2 modern:border-b-0 modern:px-4 modern:pt-3 modern:pb-0">
           <svg className="w-3.5 h-3.5 text-sol-magenta flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
@@ -1451,15 +1451,15 @@ export function WorkflowEventBlock({ content, workflowRun, onGateChoice }: {
             : <span className="ml-auto text-meta text-sol-magenta/70">waiting…</span>
           }
         </div>
-        <div className="px-3 py-2.5">
-          <p className="text-sm text-sol-text">{event.prompt}</p>
+        <div className="px-3 py-2.5 modern:px-4 modern:pb-3">
+          <p className="text-sm text-sol-text modern:text-read modern:font-semibold">{event.prompt}</p>
           {!isResolved && choices && choices.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 mt-2">
+            <div className="flex flex-wrap gap-1.5 mt-2 modern:gap-2 modern:mt-3">
               {choices.map(choice => (
                 <button
                   key={choice.key}
                   onClick={() => onGateChoice?.(choice.key)}
-                  className="px-2 py-0.5 text-xs font-medium text-sol-text border border-sol-border/30 rounded hover:bg-sol-bg-highlight hover:border-sol-magenta/40 transition-colors disabled:opacity-40"
+                  className="px-2 py-0.5 text-xs font-medium text-sol-text border border-sol-border/30 rounded hover:bg-sol-bg-highlight hover:border-sol-magenta/40 transition-colors disabled:opacity-40 modern:h-control-md modern:px-3 modern:text-ui modern:rounded-control modern:border-sol-border modern:bg-sol-card"
                 >
                   <span className="font-mono text-sol-magenta mr-1">[{choice.key}]</span>
                   {choice.label.replace(/^\[.\]\s*/, "")}

@@ -18,6 +18,7 @@ import { ModSurfaceView } from "./ModSurface";
 import { FieldEditor, FieldValue, StatusBadge } from "./objectFields";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { CommandDisclosure } from "../secrets/parts";
+import { modernChip } from "../ui/modernLook";
 
 export function ObjectPage({ id }: { id: string }) {
   useModRows();
@@ -90,7 +91,7 @@ export function ObjectPage({ id }: { id: string }) {
               <button
                 key={s}
                 onClick={() => !on && update(row._id, { status: s })}
-                className="rounded-full border px-2.5 py-0.5 text-[12px] transition-colors"
+                className={`rounded-full border px-2.5 py-0.5 text-[12px] transition-colors ${modernChip({ active: on })}`}
                 style={on ? { color: t, borderColor: t, background: `color-mix(in srgb, ${t} 14%, transparent)` } : { color: "var(--sol-text-muted)", borderColor: "var(--sol-border)" }}
               >
                 {s.replace(/_/g, " ")}

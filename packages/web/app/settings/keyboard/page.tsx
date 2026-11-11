@@ -26,6 +26,7 @@ import {
   type KeyConflict,
 } from "@codecast/shared/contracts/keyBindings";
 import { cn } from "../../../lib/utils";
+import { modernButton, modernChip } from "../../../components/ui/modernLook";
 
 /** Which chord slot is listening: one of an action's chords, or a new one. */
 type Recording = { action: ShortcutAction; slot: number | "add" };
@@ -182,7 +183,7 @@ export default function KeyboardSettingsPage() {
               onClick={() => { setFindingKeys((v) => !v); setKeyFilter(null); }}
               aria-pressed={findingKeys}
               aria-label="Find by keys"
-              className={cn("rounded p-1 transition-colors", findingKeys ? "bg-sol-cyan/15 text-sol-cyan" : "text-sol-text-dim hover:text-sol-text")}
+              className={cn("rounded p-1 transition-colors", findingKeys ? "bg-sol-cyan/15 text-sol-cyan" : "text-sol-text-dim hover:text-sol-text", modernButton({ variant: findingKeys ? "soft" : "ghost", size: "icon-xs" }))}
             >
               <Keyboard className="h-3.5 w-3.5" />
             </button>
@@ -195,6 +196,7 @@ export default function KeyboardSettingsPage() {
           className={cn(
             "flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-xs tabular-nums transition-colors disabled:opacity-40",
             changedOnly ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-cyan" : "border-sol-border/80 text-sol-text-muted hover:text-sol-text",
+            modernChip({ active: changedOnly }),
           )}
         >
           <span className={cn("h-1.5 w-1.5 rounded-full", changed.size ? "bg-sol-cyan" : "bg-sol-text-dim")} />
@@ -202,14 +204,14 @@ export default function KeyboardSettingsPage() {
         </button>
         {changed.size > 0 && (confirmReset ? (
           <span className="flex h-8 items-center gap-1 text-xs">
-            <button onClick={() => { commit([]); setConfirmReset(false); setChangedOnly(false); }} className="rounded-lg bg-sol-red/15 px-2.5 py-1.5 text-sol-red hover:bg-sol-red/25">
+            <button onClick={() => { commit([]); setConfirmReset(false); setChangedOnly(false); }} className={`rounded-lg bg-sol-red/15 px-2.5 py-1.5 text-sol-red hover:bg-sol-red/25 ${modernButton({ variant: "soft", tone: "red", size: "sm" })}`}>
               Reset {changed.size}
             </button>
-            <button onClick={() => setConfirmReset(false)} className="rounded-lg px-2 py-1.5 text-sol-text-muted hover:text-sol-text">Keep</button>
+            <button onClick={() => setConfirmReset(false)} className={`rounded-lg px-2 py-1.5 text-sol-text-muted hover:text-sol-text ${modernButton({ variant: "ghost", size: "sm" })}`}>Keep</button>
           </span>
         ) : (
           <ShortcutTooltip label="Reset all to defaults">
-            <button onClick={() => setConfirmReset(true)} aria-label="Reset all to defaults" className="flex h-8 w-8 items-center justify-center rounded-lg border border-sol-border/80 text-sol-text-dim hover:text-sol-text">
+            <button onClick={() => setConfirmReset(true)} aria-label="Reset all to defaults" className={`flex h-8 w-8 items-center justify-center rounded-lg border border-sol-border/80 text-sol-text-dim hover:text-sol-text ${modernButton({ variant: "outline", size: "icon-sm" })}`}>
               <RotateCcw className="h-3.5 w-3.5" />
             </button>
           </ShortcutTooltip>
@@ -285,7 +287,7 @@ export default function KeyboardSettingsPage() {
                               onClick={() => { setPending(null); setNotice(null); setRecording({ action, slot: "add" }); }}
                               aria-label="Add a shortcut"
                               className={cn(
-                                "flex h-6 items-center justify-center rounded-md border border-dashed border-sol-border text-sol-text-dim transition-colors hover:border-sol-cyan hover:text-sol-cyan",
+                                "flex h-6 items-center justify-center rounded-md border border-dashed border-sol-border text-sol-text-dim transition-colors hover:border-sol-cyan hover:text-sol-cyan modern:rounded-control",
                                 chords.length ? "w-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100" : "px-2 text-xs",
                               )}
                             >
@@ -318,13 +320,13 @@ export default function KeyboardSettingsPage() {
                       is {pend.conflicts.map((c) => c.description).join(", ")}
                     </span>
                     <span className="ml-auto flex items-center gap-1">
-                      <button onClick={() => place(action, pend.slot, pend.chord, pend.conflicts.map((c) => c.action))} className="rounded-md bg-sol-cyan/15 px-2 py-1 text-sol-cyan hover:bg-sol-cyan/25">
+                      <button onClick={() => place(action, pend.slot, pend.chord, pend.conflicts.map((c) => c.action))} className={`rounded-md bg-sol-cyan/15 px-2 py-1 text-sol-cyan hover:bg-sol-cyan/25 ${modernButton({ variant: "primary", size: "xs" })}`}>
                         Move it here
                       </button>
-                      <button onClick={() => place(action, pend.slot, pend.chord)} className="rounded-md px-2 py-1 text-sol-text-muted hover:bg-sol-bg-highlight/60 hover:text-sol-text">
+                      <button onClick={() => place(action, pend.slot, pend.chord)} className={`rounded-md px-2 py-1 text-sol-text-muted hover:bg-sol-bg-highlight/60 hover:text-sol-text ${modernButton({ variant: "ghost", size: "xs" })}`}>
                         Keep both
                       </button>
-                      <button onClick={() => setPending(null)} className="rounded-md px-2 py-1 text-sol-text-muted hover:bg-sol-bg-highlight/60 hover:text-sol-text">
+                      <button onClick={() => setPending(null)} className={`rounded-md px-2 py-1 text-sol-text-muted hover:bg-sol-bg-highlight/60 hover:text-sol-text ${modernButton({ variant: "ghost", size: "xs" })}`}>
                         Cancel
                       </button>
                     </span>
@@ -355,7 +357,7 @@ function Listening({ onCancel }: { onCancel: () => void }) {
     <button
       autoFocus
       onBlur={onCancel}
-      className="flex h-7 items-center gap-1.5 rounded-md border border-sol-cyan bg-sol-cyan/10 px-2 text-xs text-sol-cyan ring-2 ring-sol-cyan/20 outline-none"
+      className="flex h-7 items-center gap-1.5 rounded-md border border-sol-cyan bg-sol-cyan/10 px-2 text-xs text-sol-cyan ring-2 ring-sol-cyan/20 outline-none modern:h-control-sm modern:rounded-control modern:text-meta modern:font-medium"
     >
       <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sol-cyan" />
       Press keys

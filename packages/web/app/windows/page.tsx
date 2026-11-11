@@ -9,6 +9,7 @@ import { cleanTitle } from "@/lib/conversationProcessor";
 import { Plus, MousePointerClick } from "lucide-react";
 import { useIsModernStyle } from "@/hooks/useVisualStyle";
 import { ModernWindowRow } from "./ModernWindowRow";
+import { modernButton } from "../../components/ui/modernLook";
 
 export default function WindowsPage() {
   return (
@@ -137,13 +138,13 @@ function EmptyState({
         <div className="w-full max-w-lg space-y-3">
           <button
             onClick={onOpenAll}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-sol-cyan/30 bg-sol-cyan/8 text-sol-cyan hover:bg-sol-cyan/15 transition-colors text-sm font-medium"
+            className={`w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-sol-cyan/30 bg-sol-cyan/8 text-sol-cyan hover:bg-sol-cyan/15 transition-colors text-sm font-medium ${modernButton({ variant: "primary", size: "lg" })}`}
           >
             <Plus className="w-4 h-4" />
             {sessions.length === 1 ? "Open it" : `Open the ${Math.min(OPEN_ALL_CAP, sessions.length)} newest`}
           </button>
 
-          <div className="max-h-[300px] overflow-y-auto space-y-1 rounded-lg border border-sol-border/20 p-2">
+          <div className="max-h-[300px] overflow-y-auto space-y-1 rounded-lg border border-sol-border/20 p-2 modern:rounded-card modern:border-sol-border modern:bg-sol-card modern:p-1">
             {sessions.slice(0, 20).map(sess => {
               if (modern) return <ModernWindowRow key={sess._id} session={sess} now={Date.now()} onOpen={onOpenSession} />;
               const idle = isSessionEffectivelyIdle(sess);

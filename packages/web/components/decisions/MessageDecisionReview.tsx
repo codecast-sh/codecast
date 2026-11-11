@@ -15,6 +15,7 @@ import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { DecisionCompactCard } from "./DecisionCompactCard";
 import { Button } from "../ui/button";
+import { modernButton } from "../ui/modernLook";
 
 // A message that names several open decisions gets one review under it: a
 // bar with the count, which opens a run through them one card at a time in
@@ -161,9 +162,9 @@ function Review({ refs }: { refs: string[] }) {
                 {pending(d) ? <span className="w-3.5 h-3.5 shrink-0 rounded-full border border-sol-yellow" /> : <Check className="w-3.5 h-3.5 shrink-0 text-sol-green" />}
                 <Link href={decisionHref(d)} className="min-w-0 flex-1 truncate text-sol-text-muted hover:text-sol-text">{d.question}</Link>
                 {pending(d) ? (
-                  <button onClick={() => revisit(i)} className="shrink-0 rounded border border-sol-yellow/60 px-2 py-0.5 text-meta text-sol-yellow hover:bg-sol-yellow/10">Answer</button>
+                  <button onClick={() => revisit(i)} className={`shrink-0 rounded border border-sol-yellow/60 px-2 py-0.5 text-meta text-sol-yellow hover:bg-sol-yellow/10 ${modernButton({ variant: "soft", tone: "yellow", size: "xs" })}`}>Answer</button>
                 ) : (
-                  <span className="shrink-0 max-w-[14rem] truncate text-[12px] text-sol-green">{d.status === "answered" ? decisionAnswerLabel(d, d) : d.status}</span>
+                  <span className="shrink-0 max-w-[14rem] truncate text-[12px] text-sol-green modern:text-meta">{d.status === "answered" ? decisionAnswerLabel(d, d) : d.status}</span>
                 )}
               </li>
             ))}

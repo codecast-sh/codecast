@@ -81,6 +81,7 @@ import {
   CirclePlay,
   Phone,
 } from "lucide-react";
+import { modernButton, modernDialog, modernScrim } from "../../components/ui/modernLook";
 
 // The Huddles pill: every task pulled from a call, grouped by its call. It is
 // a source and a grouping rather than a status, so it has its own tab key.
@@ -153,9 +154,9 @@ function TaskCombineDialog({ source, target, onClose }: {
   };
 
   return (
-    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/40" onClick={onClose}>
-      <div className="w-[28rem] max-w-[90vw] rounded-lg border border-sol-border bg-sol-bg shadow-xl p-4" onClick={(e) => e.stopPropagation()}>
-        <div className="text-sm font-medium text-sol-text mb-3">Combine tasks</div>
+    <div className={`fixed inset-0 z-[300] flex items-center justify-center bg-black/40 ${modernScrim}`} onClick={onClose}>
+      <div className={`w-[28rem] max-w-[90vw] rounded-lg border border-sol-border bg-sol-bg shadow-xl p-4 ${modernDialog({}, "modern:p-5")}`} onClick={(e) => e.stopPropagation()}>
+        <div className="text-sm font-medium text-sol-text mb-3 modern:text-body modern:font-semibold">Combine tasks</div>
         <div className="space-y-1.5 mb-4">
           <TaskMiniCard task={source} />
           <div className="flex items-center gap-1.5 pl-2 text-mark text-sol-text-dim uppercase tracking-wide">
@@ -167,7 +168,7 @@ function TaskCombineDialog({ source, target, onClose }: {
           <button
             autoFocus
             onClick={asSubtask}
-            className="w-full flex items-start gap-2.5 rounded-md border border-sol-cyan/40 bg-sol-cyan/10 hover:bg-sol-cyan/20 px-3 py-2 text-left transition-colors"
+            className={`w-full flex items-start gap-2.5 rounded-md border border-sol-cyan/40 bg-sol-cyan/10 hover:bg-sol-cyan/20 px-3 py-2 text-left transition-colors ${modernButton({ variant: "outline", size: null }, "modern:border-sol-cyan/50 modern:bg-sol-cyan/[0.06] modern:hover:bg-sol-cyan/10")}`}
           >
             <CornerDownRight className="w-3.5 h-3.5 text-sol-cyan mt-0.5 flex-shrink-0" />
             <span className="min-w-0">
@@ -179,7 +180,7 @@ function TaskCombineDialog({ source, target, onClose }: {
           </button>
           <button
             onClick={asDuplicate}
-            className="w-full flex items-start gap-2.5 rounded-md border border-sol-border/40 hover:border-sol-border hover:bg-sol-bg-alt px-3 py-2 text-left transition-colors"
+            className={`w-full flex items-start gap-2.5 rounded-md border border-sol-border/40 hover:border-sol-border hover:bg-sol-bg-alt px-3 py-2 text-left transition-colors ${modernButton({ variant: "outline", size: null })}`}
           >
             <Copy className="w-3.5 h-3.5 text-sol-text-muted mt-0.5 flex-shrink-0" />
             <span className="min-w-0">
@@ -193,7 +194,7 @@ function TaskCombineDialog({ source, target, onClose }: {
         <div className="flex justify-end mt-3">
           <button
             onClick={onClose}
-            className="h-7 px-2.5 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text transition-colors"
+            className={`h-7 px-2.5 text-xs rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text transition-colors ${modernButton({ variant: "outline", size: "sm" })}`}
           >
             Cancel
           </button>

@@ -11,6 +11,7 @@ import { stageRenderLayout } from "../lib/stage";
 import { useNarrowStage } from "../hooks/useNarrowStage";
 import { useStageShortcuts } from "../hooks/useStageShortcuts";
 import { startVisitRecorder } from "../lib/visitRecorder";
+import { startNavTrail } from "../lib/navTrailRecorder";
 import { borrowsTabShell } from "../lib/desktop";
 import { StageDropLayer } from "./stage/StageDropLayer";
 import { StagePickLayer } from "./stage/StagePickLayer";
@@ -96,6 +97,8 @@ export function TabContent() {
   // What this shell shows feeds recents. A window borrowing the tab shell
   // (a detached tab, an embedded pane) shows no tab of its own.
   useMountEffect(() => (borrowsTabShell() ? undefined : startVisitRecorder()));
+  // And the way back (lib/navTrail): Modern's back control walks it.
+  useMountEffect(() => (borrowsTabShell() ? undefined : startNavTrail()));
 
   if (s.tabs.length === 0) return null;
   return <TabStage tabs={s.tabs} storeActiveTabId={s.activeTabId} />;

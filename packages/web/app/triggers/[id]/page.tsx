@@ -66,6 +66,7 @@ import {
   XCircle,
   Zap,
 } from "lucide-react";
+import { modernButton, modernPill } from "../../../components/ui/modernLook";
 
 const api = _api as any;
 
@@ -75,33 +76,33 @@ function StatusChip({ task, now }: { task: TaskRow; now: number }) {
   switch (task.status) {
     case "running":
       return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-green/40 bg-sol-green/10 text-sol-green text-meta font-medium">
+        <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-green/40 bg-sol-green/10 text-sol-green text-meta font-medium ${modernPill({ tone: "green" })}`}>
           <span className="w-1.5 h-1.5 rounded-full bg-sol-green animate-pulse" />
           running
         </span>
       );
     case "scheduled":
       return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-orange/40 bg-sol-orange/10 text-sol-orange text-meta font-medium tabular-nums">
+        <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-orange/40 bg-sol-orange/10 text-sol-orange text-meta font-medium tabular-nums ${modernPill({ tone: "orange" })}`}>
           <span className="w-1.5 h-1.5 rounded-full bg-sol-orange" />
           {taskStateLabel(task, now)}
         </span>
       );
     case "paused":
       return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-border bg-sol-bg-alt/60 text-sol-text-dim text-meta font-medium">
+        <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-border bg-sol-bg-alt/60 text-sol-text-dim text-meta font-medium ${modernPill({ tone: "neutral" })}`}>
           <Pause className="w-3 h-3" /> paused
         </span>
       );
     case "failed":
       return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-red/40 bg-sol-red/10 text-sol-red text-meta font-medium">
+        <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-red/40 bg-sol-red/10 text-sol-red text-meta font-medium ${modernPill({ tone: "red" })}`}>
           <XCircle className="w-3 h-3" /> failed
         </span>
       );
     default:
       return (
-        <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-border bg-sol-bg-alt/60 text-sol-text-dim text-meta font-medium">
+        <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full border border-sol-border bg-sol-bg-alt/60 text-sol-text-dim text-meta font-medium ${modernPill({ tone: "neutral" })}`}>
           <Check className="w-3 h-3" /> done
         </span>
       );
@@ -221,7 +222,7 @@ export default function TriggerDetailPage() {
               </p>
               <Link
                 href="/triggers"
-                className="mt-4 inline-block px-3 py-1 rounded border border-sol-border text-xs text-sol-text-muted hover:bg-sol-bg-alt transition-colors no-underline"
+                className={`mt-4 inline-block px-3 py-1 rounded border border-sol-border text-xs text-sol-text-muted hover:bg-sol-bg-alt transition-colors no-underline ${modernButton({ variant: "outline", size: "sm" }, "modern:inline-flex modern:items-center")}`}
               >
                 All triggers
               </Link>
@@ -296,7 +297,7 @@ export default function TriggerDetailPage() {
                     <ShortcutTooltip label={idCopied ? "Copied" : "Copy id"}>
                       <button
                         onClick={copyId}
-                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-border/50 font-mono text-meta text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
+                        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-border/50 font-mono text-meta text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors ${modernPill({}, "modern:h-6 modern:font-mono modern:font-normal modern:hover:bg-sol-text/10 modern:hover:text-sol-text")}`}
                       >
                         {t.short_id ?? "id"}
                         {idCopied ? (

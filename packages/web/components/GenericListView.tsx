@@ -36,6 +36,13 @@ import {
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useTeamFeature } from "../lib/teamFeatures";
 import { ListViewHeader } from "./ListViewHeader";
+import { modernButton, modernChip, modernField, modernLook, modernMenuLabel, modernMenuRow, modernPopover } from "./ui/modernLook";
+
+// The Modern looks the toolbar's hand-built controls wear (ui/modernLook.ts).
+const M_OUTLINE_SM = modernButton({ variant: "outline", size: "sm" });
+const M_ICON_SM = modernButton({ variant: "outline", size: "icon-sm" });
+const M_GHOST_XS = modernButton({ variant: "ghost", size: "xs" });
+const M_MENU = `${modernLook(modernPopover, "modern:p-1")}`;
 
 export interface ListTab {
   key: string;
@@ -71,7 +78,7 @@ function DisplayOptionRow({
       onClick={onClick}
       className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs transition-colors ${
         selected ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt"
-      }`}
+      } ${modernMenuRow({ selected })}`}
     >
       <span className="flex-1 text-left whitespace-nowrap">{label}</span>
       {selected && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
@@ -145,7 +152,7 @@ function DisplayMenu({
     <div ref={ref} className="relative flex-shrink-0">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-sol-border/40 text-xs text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
+        className={`flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-sol-border/40 text-xs text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors ${M_OUTLINE_SM}`}
         title="Display options"
       >
         <SlidersHorizontal className="w-3 h-3 flex-shrink-0" />
@@ -153,11 +160,11 @@ function DisplayMenu({
         <ChevronDown className="w-3 h-3 opacity-60 flex-shrink-0 cq-caret" />
       </button>
       {open && (
-        <div className="absolute top-full right-0 mt-1 w-56 max-h-[min(70vh,28rem)] overflow-y-auto bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] p-2 space-y-3">
+        <div className={`absolute top-full right-0 mt-1 w-56 max-h-[min(70vh,28rem)] overflow-y-auto bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] p-2 space-y-3 ${modernPopover}`}>
           {extra && <div className="flex flex-col gap-2">{extra}</div>}
           {hasGrouping && (
             <div>
-              <div className="text-mark uppercase tracking-wider text-sol-text-dim px-1 mb-1">Grouping</div>
+              <div className={`text-mark uppercase tracking-wider text-sol-text-dim px-1 mb-1 ${modernMenuLabel}`}>Grouping</div>
               <div className="space-y-0.5">
                 {groupOptions!.map((o) => (
                   <DisplayOptionRow
@@ -176,7 +183,7 @@ function DisplayMenu({
               otherwise. */}
           {subGroupOptions && subGroupOptions.length > 0 && onSubGroupChange && groupBy && groupBy !== "none" && (
             <div>
-              <div className="text-mark uppercase tracking-wider text-sol-text-dim px-1 mb-1">Then by</div>
+              <div className={`text-mark uppercase tracking-wider text-sol-text-dim px-1 mb-1 ${modernMenuLabel}`}>Then by</div>
               <div className="space-y-0.5">
                 {subGroupOptions.map((o) => (
                   <DisplayOptionRow
@@ -191,11 +198,11 @@ function DisplayMenu({
           )}
           <div>
             <div className="flex items-center justify-between px-1 mb-1">
-              <span className="text-mark uppercase tracking-wider text-sol-text-dim">Sorting</span>
+              <span className={`text-mark uppercase tracking-wider text-sol-text-dim ${modernMenuLabel}`}>Sorting</span>
               {sortDir && onSortDirChange && (
                 <button
                   onClick={onSortDirChange}
-                  className="flex items-center gap-1 h-5 px-1.5 rounded text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+                  className={`flex items-center gap-1 h-5 px-1.5 rounded text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors ${M_GHOST_XS}`}
                   title={sortDir === "asc" ? "Ascending — click for descending" : "Descending — click for ascending"}
                 >
                   <DirIcon className="w-3 h-3 flex-shrink-0" />
@@ -217,7 +224,7 @@ function DisplayMenu({
           {onCopyLink && (
             <button
               onClick={() => { onCopyLink(); setOpen(false); }}
-              className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text transition-colors border-t border-sol-border/30 pt-2"
+              className={`w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text transition-colors border-t border-sol-border/30 pt-2 ${modernMenuRow()}`}
             >
               <Link2 className="w-3 h-3 flex-shrink-0" />
               <span className="flex-1 text-left whitespace-nowrap">Copy link to this view</span>
@@ -300,7 +307,7 @@ function AddFilterMenu({
             open || active
               ? "border-sol-cyan/40 text-sol-cyan bg-sol-cyan/5"
               : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
-          }`}
+          } ${modernChip({ active: open || active })}`}
           title="Filter"
         >
           <ListFilter className="w-3 h-3 flex-shrink-0" />
@@ -310,7 +317,7 @@ function AddFilterMenu({
       ) : (
         <button
           onClick={toggle}
-          className="flex items-center gap-1 text-xs h-7 px-2 rounded-md border border-dashed border-sol-border/50 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
+          className={`flex items-center gap-1 text-xs h-7 px-2 rounded-md border border-dashed border-sol-border/50 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors ${modernChip()}`}
           title="Add filter"
         >
           <Plus className="w-3 h-3" />
@@ -318,7 +325,7 @@ function AddFilterMenu({
         </button>
       )}
       {open && (
-        <div className={`absolute top-full ${variant === "header" ? "right-0" : "left-0"} mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1 max-h-72 overflow-y-auto`}>
+        <div className={`absolute top-full ${variant === "header" ? "right-0" : "left-0"} mt-1 w-48 bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[250] py-1 max-h-72 overflow-y-auto ${M_MENU}`}>
           {!cat ? (
             available.length === 0 ? (
               <div className="px-3 py-1.5 text-xs text-sol-text-dim">All filters added</div>
@@ -327,7 +334,7 @@ function AddFilterMenu({
                 <button
                   key={d.key}
                   onClick={() => setCatKey(d.key)}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-sol-text-muted hover:bg-sol-bg-alt transition-colors"
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-sol-text-muted hover:bg-sol-bg-alt transition-colors ${modernMenuRow()}`}
                 >
                   <span className="flex-shrink-0 flex items-center">{d.icon}</span>
                   <span className="flex-1 text-left">{d.label}</span>
@@ -339,7 +346,7 @@ function AddFilterMenu({
             <>
               <button
                 onClick={() => setCatKey(null)}
-                className="w-full flex items-center gap-1.5 px-3 py-1.5 text-meta font-medium text-sol-text-dim hover:text-sol-text border-b border-sol-border/30 mb-1 transition-colors"
+                className={`w-full flex items-center gap-1.5 px-3 py-1.5 text-meta font-medium text-sol-text-dim hover:text-sol-text border-b border-sol-border/30 mb-1 transition-colors ${modernMenuRow({}, "modern:rounded-b-none modern:hover:bg-transparent")}`}
               >
                 <ChevronLeft className="w-3 h-3" /> {cat.label}
               </button>
@@ -1089,7 +1096,7 @@ export function GenericListView<T>({
               }}
               placeholder="Search..."
               autoFocus
-              className="text-xs w-40 h-7 px-2.5 rounded-md bg-sol-bg-alt border border-sol-cyan/40 text-sol-text placeholder:text-sol-text-dim focus:outline-none"
+              className={`text-xs w-40 h-7 px-2.5 rounded-md bg-sol-bg-alt border border-sol-cyan/40 text-sol-text placeholder:text-sol-text-dim focus:outline-none ${modernLook(modernField, "modern:h-control-sm modern:text-ui")}`}
             />
           )}
           {getSearchText && (
@@ -1102,7 +1109,7 @@ export function GenericListView<T>({
                 showSearch
                   ? "border-sol-cyan/40 text-sol-cyan bg-sol-cyan/5"
                   : "border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
-              }`}
+              } ${showSearch ? modernLook(M_ICON_SM, "modern:border-sol-cyan/40 modern:text-sol-cyan") : M_ICON_SM}`}
               title="Search"
               aria-label="Search"
             >
@@ -1127,7 +1134,7 @@ export function GenericListView<T>({
           />
           <button
             onClick={() => openPalette("root")}
-            className="cq-header-collapse flex items-center gap-1.5 text-xs h-7 px-2.5 rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors"
+            className={`cq-header-collapse flex items-center gap-1.5 text-xs h-7 px-2.5 rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors ${M_OUTLINE_SM}`}
             title="Command palette"
           >
             {paletteKeys ? paletteKeys.map((k, i) => <KeyCap key={i} size="xs">{k}</KeyCap>) : <Command className="w-3 h-3" />}
@@ -1135,7 +1142,7 @@ export function GenericListView<T>({
           {onCreate && (
             <button
               onClick={onCreate}
-              className="flex items-center justify-center w-7 h-7 rounded-full border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors flex-shrink-0"
+              className={`flex items-center justify-center w-7 h-7 rounded-full border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors flex-shrink-0 ${M_ICON_SM}`}
               title="Create new"
               aria-label="Create new"
             >
@@ -1174,7 +1181,7 @@ export function GenericListView<T>({
               <button
                 onClick={copyViewLink}
                 title="Copy link to this view"
-                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors"
+                className={`flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors ${M_GHOST_XS}`}
               >
                 <Link2 className="w-3 h-3 flex-shrink-0" />
                 <span className="cq-header-collapse">Link</span>
@@ -1184,7 +1191,7 @@ export function GenericListView<T>({
               <button
                 onClick={() => openForwardToChat({ url: shareUrl(), label: "view" })}
                 title="Send this view to chat"
-                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors"
+                className={`flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors ${M_GHOST_XS}`}
               >
                 <Forward className="w-3 h-3 flex-shrink-0" />
                 <span className="cq-header-collapse">Send</span>
@@ -1201,7 +1208,7 @@ export function GenericListView<T>({
                   <button
                     onClick={filters.dirtyView.onUpdate}
                     title={`Save these filters into "${filters.dirtyView.name}"`}
-                    className="flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-cyan hover:bg-sol-cyan/10 transition-colors"
+                    className={`flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-cyan hover:bg-sol-cyan/10 transition-colors ${modernButton({ variant: "soft", tone: "cyan", size: "xs" })}`}
                   >
                     <Check className="w-3 h-3 flex-shrink-0" />
                     <span className="cq-header-collapse">Update view</span>
@@ -1210,7 +1217,7 @@ export function GenericListView<T>({
                 <button
                   onClick={filters.dirtyView.onDiscard}
                   title={`Go back to "${filters.dirtyView.name}" as saved`}
-                  className="flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+                  className={`flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors ${M_GHOST_XS}`}
                 >
                   {/* A revert arrow, NOT an X: the labels collapse to icons in a
                       narrow pane, and Clear-filters beside it is already an X.
@@ -1225,7 +1232,7 @@ export function GenericListView<T>({
               <button
                 onClick={() => { setSavingView(true); setSaveViewName(""); }}
                 title={filters.dirtyView ? "Save these filters as a new view" : "Save current view as a shortcut"}
-                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors"
+                className={`flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-text-dim hover:text-sol-cyan hover:bg-sol-cyan/5 transition-colors ${M_GHOST_XS}`}
               >
                 {filters.dirtyView
                   ? <BookmarkPlus className="w-3 h-3 flex-shrink-0" />
@@ -1251,22 +1258,22 @@ export function GenericListView<T>({
                   value={saveViewName}
                   onChange={(e) => setSaveViewName(e.target.value)}
                   placeholder="View name..."
-                  className="text-meta px-2 py-0.5 rounded bg-sol-bg border border-sol-border/60 text-sol-text outline-none focus:border-sol-cyan w-28"
+                  className={`text-meta px-2 py-0.5 rounded bg-sol-bg border border-sol-border/60 text-sol-text outline-none focus:border-sol-cyan w-28 ${modernLook(modernField, "modern:h-6")}`}
                   onKeyDown={(e) => { if (e.key === "Escape") setSavingView(false); }}
                 />
                 <button
                   type="submit"
                   disabled={!saveViewName.trim()}
-                  className="text-meta text-sol-cyan hover:text-sol-cyan/80 disabled:opacity-30 disabled:cursor-default flex items-center gap-0.5"
-                  title="Save"
+                  className={`text-meta text-sol-cyan hover:text-sol-cyan/80 disabled:opacity-30 disabled:cursor-default flex items-center gap-0.5 ${modernButton({ variant: "soft", tone: "cyan", size: "icon-xs" })}`}
+                  title="Save" aria-label="Save view"
                 >
                   <Check className="w-3 h-3" />
                 </button>
                 <button
                   type="button"
                   onClick={() => setSavingView(false)}
-                  className="text-meta text-sol-text-dim hover:text-sol-text"
-                  title="Cancel"
+                  className={`text-meta text-sol-text-dim hover:text-sol-text ${modernButton({ variant: "ghost", size: "icon-xs" })}`}
+                  title="Cancel" aria-label="Cancel"
                 >
                   <X className="w-3 h-3" />
                 </button>
@@ -1276,7 +1283,7 @@ export function GenericListView<T>({
               <button
                 onClick={filters.onClear}
                 title="Clear filters"
-                className="flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+                className={`flex items-center gap-1 h-6 px-1.5 rounded-md text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors ${M_GHOST_XS}`}
               >
                 <X className="w-3 h-3 flex-shrink-0" />
                 <span className="cq-header-collapse">Clear</span>

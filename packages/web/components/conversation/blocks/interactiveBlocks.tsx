@@ -23,6 +23,9 @@ import type { ImageData, ToolCall, ToolResult } from "../types";
 import { useImageSrc } from "../../../hooks/useImageSrc";
 import { useIsModernStyle } from "../../../hooks/useVisualStyle";
 import { ModernImage } from "./ModernImage";
+import { ModernMonitorRow, ModernThinking } from "./ModernEventRows";
+import { ModernPlanMode } from "./ModernPlanMode";
+import { ModernAskUserQuestion } from "./ModernAskUserQuestion";
 
 // Live status badge + latest event for a Monitor or background-Bash block,
 // derived from the conversation's message window (monitorRowsFor — one
@@ -47,6 +50,7 @@ export function MonitorBlock({ tool, conversationId }: { tool: ToolCall; convers
   let input: { command?: string; description?: string; timeout_ms?: number; persistent?: boolean } = {};
   try { input = JSON.parse(tool.input); } catch {}
   const [showCommand, setShowCommand] = useState(false);
+  const modern = useIsModernStyle();
   // This watch's own row, not the conversation's message array: the scan is
   // shared and memoized per array, and a row of plain fields compared
   // shallowly re-renders the card only when its own watch changed, never on
@@ -87,6 +91,8 @@ export function MonitorBlock({ tool, conversationId }: { tool: ToolCall; convers
   const watching = status === "watching";
   const commandFirstLine = (input.command || "").split("\n").find((l) => l.trim()) || "";
   const Icon = isBackground ? Terminal : Radar;
+  // Modern: one row, the status a word (never a pulse), the command behind the chevron.
+  if (modern) return <ModernMonitorRow background={isBackground} description={input.description} command={input.command} status={badge.label} tone={failed ? "error" : watching ? "live" : "quiet"} events={row?.eventCount ?? 0} lastEvent={row?.lastEvent} lastEventAt={row?.lastEventAt} persistent={input.persistent} title={input.timeout_ms !== undefined ? `Timeout: ${fmtDuration(input.timeout_ms)}` : undefined} />;
 
   return (
     <div data-cc-monitor-card className={`my-1 rounded border-l-2 ${watching ? "border-sol-blue/60 bg-sol-blue/5" : "border-sol-border/60 bg-sol-bg-alt/30"}`}>
@@ -148,6 +154,7 @@ export function PlanModeBlock({ tool, result, conversationId, messageId, onSendM
   const isExit = tool.name === "ExitPlanMode" || tool.name === "exit_plan_mode";
   const isWaitingForApproval = isExit && !result && !!onSendMessage;
   const [sent, setSent] = useState(false);
+  const modern = useIsModernStyle();
 
   // The plan markdown the agent submitted. Rendered as an annotatable document
   // while it's awaiting approval so the user can quote/comment specific sections
@@ -169,6 +176,8 @@ export function PlanModeBlock({ tool, result, conversationId, messageId, onSendM
     setSent(true);
     onSendMessage!(JSON.stringify({ __cc_poll: true, keys: ["4"], text: formatPlanFeedback(batch), display: "Requested changes" }));
   };
+  const start = (keep: boolean) => { setSent(true); onSendMessage!(JSON.stringify({ __cc_poll: true, keys: [keep ? "3" : "1"], display: keep ? "Start (keep context)" : "Start (clear context)" })); };
+  if (modern) return <ModernPlanMode enter={isEnter} plan={plan} result={result} waiting={isWaitingForApproval && !sent} sent={sent} reviewKey={canReview ? reviewKey : undefined} conversationId={conversationId} pendingCount={pendingCount} onStart={start} onRequestChanges={requestChanges} />;
 
   return (
     <div className="my-0.5">
@@ -269,6 +278,8 @@ function AskUserQuestionCard({ tool, result, onSendMessage, parsedInput, deadlin
   const [selections, setSelections] = useState<Record<number, Array<{ key: string; label: string; text?: string }>>>(() => _askUserSentState.get(tool.id) ?? {});
   const [otherOpen, setOtherOpen] = useState<Record<number, boolean>>({});
   const [otherTexts, setOtherTexts] = useState<Record<number, string>>({});
+  const modern = useIsModernStyle();
+  if (modern) return <ModernAskUserQuestion tool={tool} result={result} onSendMessage={onSendMessage} parsedInput={parsedInput} deadline={deadline} />;
 
   const questions = (parsedInput.questions || []).map((q) => ({
     ...q,
@@ -576,6 +587,8 @@ function AskUserQuestionCard({ tool, result, onSendMessage, parsedInput, deadlin
 // click to expand.
 export function ThinkingBlock({ content }: { content: string }) {
   const [expanded, setExpanded] = useState(false);
+  const modern = useIsModernStyle();
+  if (modern) return <ModernThinking content={content} />;
   const lines = content.split("\n");
   const isLong = lines.length > 2 || content.length > 200;
   const preview = isLong && !expanded ? lines.slice(0, 2).join("\n") : content;

@@ -9,6 +9,7 @@ import { admitKnock } from "../../lib/calls/callManager";
 import { firstName } from "./speakers";
 import { GuestTag } from "./GuestTag";
 import { admitGuest, denyGuest } from "../../lib/calls/guestDoorActions";
+import { modernButton } from "../ui/modernLook";
 
 /** Whose link brought a guest, as the door says it. */
 function linkOf(k: RoomKnock): string {
@@ -127,7 +128,7 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
                     guest
                       ? "bg-sol-yellow/20 text-sol-yellow hover:bg-sol-yellow/30"
                       : "bg-sol-violet/20 text-sol-violet hover:bg-sol-violet/30"
-                  }`}
+                  } ${modernButton({ variant: "soft", tone: guest ? "yellow" : "violet", size: "xs" })}`}
                   aria-label={`Admit ${name}`}
                 >
                   Admit
@@ -143,7 +144,7 @@ export function RoomKnocks({ roomKey }: { roomKey: string }) {
                 </span>
                 <button
                   onClick={() => void denyGuest(k.guest_id!, true, toast.error)}
-                  className="shrink-0 rounded px-1.5 py-0.5 transition-colors hover:bg-sol-red/10 hover:text-sol-red"
+                  className={`shrink-0 rounded px-1.5 py-0.5 transition-colors hover:bg-sol-red/10 hover:text-sol-red ${modernButton({ variant: "ghost", size: "xs" }, "modern:hover:text-sol-red modern:hover:bg-sol-red/10")}`}
                   title="Turn them away and turn the link off, so nobody new can use it"
                 >
                   Deny and turn off link

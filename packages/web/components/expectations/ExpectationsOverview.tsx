@@ -14,6 +14,7 @@ import { shortDay } from "../../lib/line/runReport";
 import { cn } from "../../lib/utils";
 import { EXPECTATIONS_ABOUT, expectationsHref, sortOverview } from "../../lib/expectations/view";
 import { PageFrame, PageHeader } from "../ui/page-header";
+import { modernButton } from "../ui/modernLook";
 
 const ref = (r: ExpectationsOverviewRow) => r.project.short_id || r.project.id;
 
@@ -96,7 +97,7 @@ export function ExpectationsOverview() {
                 <h2 className="mb-2 text-[12.5px] font-semibold text-sol-text">No expectations yet</h2>
                 <div className="flex flex-wrap gap-2">
                   {without.map((r) => (
-                    <Link key={r._id} href={expectationsHref(ref(r))} className="group inline-flex items-center gap-1.5 rounded-md border border-sol-border/40 px-2.5 py-1 text-[12px] text-sol-text-muted hover:border-sol-blue/40 hover:text-sol-text" data-expectations-start={ref(r)}>
+                    <Link key={r._id} href={expectationsHref(ref(r))} className={`group inline-flex items-center gap-1.5 rounded-md border border-sol-border/40 px-2.5 py-1 text-[12px] text-sol-text-muted hover:border-sol-blue/40 hover:text-sol-text ${modernButton({ variant: "outline", size: "sm" })}`} data-expectations-start={ref(r)}>
                       {r.project.title}
                       <span className="text-sol-text-dim group-hover:text-sol-blue">Start</span>
                     </Link>

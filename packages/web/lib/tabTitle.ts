@@ -13,6 +13,7 @@ import { filterByWorkspace, inWorkspace, type WorkspaceKey } from "./workspaceSc
 import { dmOtherIds } from "@codecast/shared/chat";
 import { currentPagePath } from "./renamedPages";
 import { orgRefOfPath } from "../components/org/company/sheetStack";
+import { modernRecordTitle } from "./modernRecordTitle";
 
 // Tab title derivation, kept out of TabBar.tsx so that module exports only
 // components: a helper export next to a component breaks React Fast Refresh
@@ -73,7 +74,10 @@ export type TabRecords = { tasks?: Record<string, any>; projects?: Record<string
  *  per tick. */
 export function recordTabTitle(path: string, records: TabRecords | undefined): string | null {
   if (!records) return null;
-  const [, kind, ref, sub] = currentPagePath(path.split("#")[0]).split("?")[0].split("/");
+  // Modern names a doc, plan, trigger, call or task by its own title (lib/modernRecordTitle).
+  const modern = isModernStyle() ? modernRecordTitle(path, records as Record<string, unknown>) : null;
+  if (modern) return modern;
+  const [, kind, ref, sub]= currentPagePath(path.split("#")[0]).split("?")[0].split("/");
   if (!ref) return null;
   if (kind === "tasks") return records.tasks?.[ref]?.title || null;
   if (kind === "projects") return (records.projects?.[ref] ?? findEntityInStore(records, "project", ref))?.title || null;

@@ -44,6 +44,7 @@ import { planLivenessState } from "../../lib/liveness";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { PageHeader } from "../../components/ui/page-header";
 import { Button } from "../../components/ui/button";
+import { modernButton, modernTab, modernTabList } from "../../components/ui/modernLook";
 
 type PlanStatus = "draft" | "active" | "paused" | "done" | "abandoned";
 
@@ -158,12 +159,12 @@ function SidebarPlanItem({
  *  included. `small`: the desktop list's own head (Classic and Minimal). */
 function PlanSourceToggle({ planSource, setPlanSource, small }: { planSource: string; setPlanSource: (v: string) => void; small?: boolean }) {
   return (
-    <div className="flex items-center rounded-md border border-sol-border/40 overflow-hidden">
+    <div className={`flex items-center rounded-md border border-sol-border/40 overflow-hidden ${modernTabList}`}>
       <button
         onClick={() => setPlanSource("human")}
         aria-pressed={planSource === "human"}
         aria-label="My plans"
-        className={`${small ? "px-1.5" : "px-2"} py-1 transition-colors ${planSource === "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
+        className={`${small ? "px-1.5" : "px-2"} py-1 transition-colors ${planSource === "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"} ${modernTab({ active: planSource === "human" }, "modern:px-2")}`}
         title="My plans"
       >
         <User className={small ? "w-3 h-3" : "w-3.5 h-3.5"} />
@@ -171,7 +172,7 @@ function PlanSourceToggle({ planSource, setPlanSource, small }: { planSource: st
       <button
         onClick={() => setPlanSource("all")}
         aria-pressed={planSource !== "human"}
-        className={`${small ? "px-1.5" : "px-2"} py-1 ${small ? "text-meta" : "text-xs"} transition-colors border-l border-sol-border/40 ${planSource !== "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
+        className={`${small ? "px-1.5" : "px-2"} py-1 ${small ? "text-meta" : "text-xs"} transition-colors border-l border-sol-border/40 ${planSource !== "human" ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"} ${modernTab({ active: planSource !== "human" })}`}
         title="All plans"
       >
         All
@@ -373,24 +374,24 @@ export default function PlansPage() {
                     <PlanSourceToggle planSource={planSource} setPlanSource={setPlanSource} small />
                     <button
                       onClick={copyViewLink}
-                      className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
-                      title="Copy link to this view"
+                      className={`p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors ${modernButton({ variant: "ghost", size: "icon-sm" })}`}
+                      title="Copy link to this view" aria-label="Copy link to this view"
                     >
                       <Link2 className="w-3.5 h-3.5" />
                     </button>
                     {chatOn && (
                       <button
                         onClick={sendView}
-                        className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
-                        title="Send this view to chat"
+                        className={`p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors ${modernButton({ variant: "ghost", size: "icon-sm" })}`}
+                        title="Send this view to chat" aria-label="Send this view to chat"
                       >
                         <Forward className="w-3.5 h-3.5" />
                       </button>
                     )}
                     <button
                       onClick={toggleCreate}
-                      className="p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
-                      title="New Plan"
+                      className={`p-1 rounded-md text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors ${modernButton({ variant: "ghost", size: "icon-sm" })}`}
+                      title="New Plan" aria-label="New plan"
                     >
                       <Plus className="w-3.5 h-3.5" />
                     </button>

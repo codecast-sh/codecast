@@ -734,3 +734,15 @@ button.iss-contrib-title { font: inherit; padding: 0; background: none; border: 
 .iss-fix-legend .iss-nobody-ring { width: 10px; height: 10px; }
 /* The State strip's dates thin to every other one where seven no longer fit side by side. */
 @media (max-width: 560px) { .iss-chart-x > span[data-alt="true"] { display: none; } }
+
+/* ── Modern (.modern-style on <html>): the search is the text field, the
+   lane tabs the segmented tray (components/ui/modernLook.ts). ── */
+.modern-style .iss-search { height: var(--control-sm); border-radius: var(--radius-control); border-color: var(--sol-border); background-color: var(--sol-card); }
+.modern-style .iss-search:hover { border-color: color-mix(in srgb, var(--sol-text-dim) 50%, var(--sol-border)); }
+.modern-style .iss-search:focus-within { border-color: var(--sol-border); outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.modern-style .iss-search input { font-size: var(--fs-ui); }
+.modern-style .iss-lane-tabs { gap: 2px; padding: 2px; border-bottom: 0; border-radius: var(--radius-control); background-color: color-mix(in srgb, var(--sol-text) 6%, transparent); width: fit-content; max-width: 100%; }
+.modern-style .iss-lane-tabs button { height: 28px; padding: 0 10px; margin-bottom: 0; border-bottom: 0; border-radius: 4px; font-size: var(--fs-ui); font-weight: 500; }
+.modern-style .iss-lane-tabs button[data-on="true"] { background-color: var(--sol-card); color: var(--sol-text); box-shadow: 0 0 0 1px var(--sol-border); }
+.modern-style .iss-lane-tabs button[data-lane="all"] { margin-left: 0; }
+.modern-style .iss-lane-tabs button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }

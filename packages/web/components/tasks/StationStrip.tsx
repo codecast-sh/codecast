@@ -29,6 +29,7 @@ import {
   stationOrder,
   type LineTask,
 } from "../../lib/taskLine";
+import { modernPill } from "../ui/modernLook";
 
 // The task page as the line (docs/architecture/the-line.md L3, L5, L10): the
 // team's statuses in order as a strip, the current one highlighted, a held
@@ -122,7 +123,7 @@ export function StationStrip({ task, embedded, aside }: { task: TaskItem & LineT
                 {isCur && held && (
                   <Link
                     href={decisionHref(held)}
-                    className="ml-1 inline-flex items-center gap-1 px-1.5 py-px rounded border border-sol-yellow/40 text-meta text-sol-yellow hover:bg-sol-yellow/10"
+                    className={`ml-1 inline-flex items-center gap-1 px-1.5 py-px rounded border border-sol-yellow/40 text-meta text-sol-yellow hover:bg-sol-yellow/10 ${modernPill({ tone: "yellow" })}`}
                     title={`Held here by ${held.short_id ?? "a decision"}: ${held.question}`}
                     data-held-by={held.short_id ?? held._id}
                   >

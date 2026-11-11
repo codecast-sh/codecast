@@ -40,6 +40,8 @@ import { DecisionProposalOrigin } from "./org/ProposalAuthorPill";
 import { RoleFace } from "./org/RoleFace";
 import { useIsHostedConversation } from "../hooks/useConversationAgentType";
 import { LANE_COPY } from "./simple/lane";
+import { useIsModernStyle } from "../hooks/useVisualStyle";
+import { ModernDecisionDock } from "./conversation/ModernDecisionDock";
 // The decision card lives INSIDE the conversation — it is how a session asks
 // its human something, so it renders wherever the session renders (inbox,
 // queue, a deep link). It has two sizes:
@@ -114,6 +116,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
   // no dismiss (setting it aside would leave the assistant stuck) and no
   // agent in the wording.
   const hosted = useIsHostedConversation(item.conversationId);
+  const modern = useIsModernStyle();
 
   const [size, setSize] = useState<Size>(() => {
     const continuing = settledFromSheet?.conversationId === item.conversationId && Date.now() - settledFromSheet.at < CONTINUE_MS;
@@ -747,6 +750,12 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
   // question itself is the pill's tooltip and one click away. The thread is
   // the main event, so the fold spends one thin row and nothing more.
   const foldTitle = [askingRole ? [`@${askingRole.handle} asks`, question].filter(Boolean).join(": ") : question || "Waiting on you", defaultLabel ? `proceeding with ${defaultLabel}` : null].filter(Boolean).join(" — ");
+  // Modern docks the ask itself (ModernDecisionDock): the question and its options as Buttons, Open for the sheet.
+  if (modern) return (
+    <div ref={rootRef} tabIndex={-1} data-session-decision={item.conversationId} className="decision-card decision-fold relative z-20 shrink-0 conv-col mx-auto w-full px-2 sm:px-3 md:px-4 outline-none" onWheel={(e) => { if (e.deltaY > 0 && stepper) grow(); }}>
+      <ModernDecisionDock question={question} kicker={askingRole ? `@${askingRole.handle} asks` : stepper ? (session?.title || "Session") : undefined} aside={place ? `${place.position} of ${place.total}` : defaultLabel ? `proceeding with ${defaultLabel}` : undefined} options={hosted ? options.map((o) => ({ ...o, label: approvalButtonLabel(o.label) })) : options} recommended={item.defaultOption ?? (hosted ? undefined : options[0]?.index)} held={(i) => !!held(i)} onAnswer={answer} onAnswerText={isPermissionCard || isInfraDialog || richControls ? undefined : answerFreeText} onOpen={grow} answerable={!isPermissionCard && !isInfraDialog && !richControls} />
+    </div>
+  );
   return (
     <div
       ref={rootRef}

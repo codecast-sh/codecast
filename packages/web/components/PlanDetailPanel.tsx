@@ -40,7 +40,6 @@ import {
   Search,
   RotateCw,
   Play,
-  X,
 } from "lucide-react";
 import { taskPriority } from "../lib/taskPriority";
 import Markdown from "react-markdown";
@@ -52,14 +51,14 @@ import { PlanGraphView } from "./PlanGraphView";
 import { PlanOriginSession } from "./PlanOriginSession";
 import { TaskBlockedMark } from "./tasks/TaskBlockedMark";
 import { LivePulseDot } from "./SessionActivityLine";
-import { ShareControl } from "./ShareControl";
+import { PlanPanelBar, PlanPanelTitleRow } from "./PlanPanelHead";
+import { useIsModernStyle } from "../hooks/useVisualStyle";
 import { usePlanActiveSessions, usePlanStoreTasks } from "./work/planWakeRows";
 import { useTaskHref } from "../lib/taskHrefContext";
 import { SwitchReview } from "./consequential/ConsequentialSwitch";
 import { useRunCost } from "./consequential/useRunCost";
 import { workflowAgentSteps, workflowRunLedger, workflowSteps } from "./work/startLedgers";
 import { useWorkflow } from "../hooks/useSyncWorkflows";
-import { policyTeamOf } from "@codecast/shared/contracts";
 
 const api = _api as any;
 
@@ -1029,6 +1028,7 @@ export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Whe
   const teamMembers = useInboxStore((s) => s.teamMembers);
   const currentUser = useInboxStore((s) => s.currentUser);
   const [activeTab, setActiveTab] = useState<PlanTab>("overview");
+  const modern = useIsModernStyle();
 
   // Local-first first paint: while webGet's joins are in flight, the synced
   // plan row plus the live task collection already carry the header, goal,
@@ -1089,7 +1089,7 @@ export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Whe
     );
   }
   const status = STATUS_CONFIG[plan.status] || STATUS_CONFIG.draft;
-  const StatusIcon = status.icon;
+  const head = { plan, status, storeShareToken, closeHref };
 
   const hasTasks = (liveTasks || []).length > 0;
   const hasActiveSessions = (plan.sessions || []).some((s: any) => s.is_active);
@@ -1098,32 +1098,10 @@ export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Whe
     // The panel is drawn into a fixed-height, clipped stage (DetailSplitLayout),
     // so it owns its scroller.
     <div className="h-full overflow-y-auto">
+    {modern && <PlanPanelBar {...head} />}
     <div className="max-w-3xl mx-auto px-6 py-6">
       <div className="mb-6">
-        <div className="flex items-center gap-2.5 mb-2">
-          <StatusIcon className={`w-5 h-5 flex-shrink-0 ${status.color}`} />
-          <h1 className="min-w-0 break-words text-xl font-semibold text-sol-text">{plan.title}</h1>
-          <Badge variant="outline" className={`flex-shrink-0 text-meta px-1.5 py-0 ${status.color} border-current/30`}>
-            {status.label}
-          </Badge>
-          <div className="ml-auto flex items-center gap-1 flex-shrink-0">
-            <ShareControl
-              label="plan"
-              path={`/plans/${plan.short_id}`}
-              publicShare={{ kind: "plan", id: plan._id, token: storeShareToken !== undefined ? storeShareToken : plan.share_token, team: policyTeamOf("plans", plan) }}
-            />
-            {closeHref && (
-              <Link
-                href={closeHref}
-                aria-label="Close"
-                title="Close"
-                className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </Link>
-            )}
-          </div>
-        </div>
+        {!modern && <PlanPanelTitleRow {...head} />}
         <div className="flex items-center gap-3 text-xs text-sol-text-dim flex-wrap">
           {plan.author?.image && (
             <AvatarImg src={plan.author.image} className="w-4 h-4 rounded-full" alt="" />

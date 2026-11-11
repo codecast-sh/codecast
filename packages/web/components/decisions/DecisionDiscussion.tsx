@@ -17,6 +17,8 @@ import { askDecisionSession, decisionThreadComments, markDecisionThreadRead, new
 import { isThreadResolved, type CommentThread as ThreadModel } from "../../lib/commentThread";
 import { cn } from "../../lib/utils";
 import { toast } from "sonner";
+import { modernButton } from "../ui/modernLook";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
 
 const refusedToast = (why: string | null) => { if (why) toast.error(why); };
 
@@ -130,8 +132,10 @@ export function DecisionDiscussion({ decisionId, compact = false, className, ope
 
 /** Talking the decision over with its session, as plain as the answer buttons. */
 function AskButton({ name, title, onClick }: { name: string; title?: string; onClick: () => void }) {
+  // Modern adds the button look; Classic's class string stays as it was.
+  const m = useIsModernStyle();
   return (
-    <button type="button" onClick={onClick} title={title} className="inline-flex items-center gap-1.5 rounded-md border border-sol-cyan/40 px-2 py-0.5 text-[12.5px] text-sol-cyan hover:bg-sol-cyan/10 transition-colors" data-decision-ask>
+    <button type="button" onClick={onClick} title={title} className={`inline-flex items-center gap-1.5 rounded-md border border-sol-cyan/40 px-2 py-0.5 text-[12.5px] text-sol-cyan hover:bg-sol-cyan/10 transition-colors${m ? ` ${modernButton({ variant: "soft", tone: "cyan", size: "sm" })}` : ""}`} data-decision-ask>
       <MessageSquare className="h-3.5 w-3.5" />Discuss with {name}
     </button>
   );

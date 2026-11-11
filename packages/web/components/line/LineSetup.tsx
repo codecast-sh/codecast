@@ -6,6 +6,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
+import { modernButton } from "../ui/modernLook";
 
 const WHAT_IT_DOES = "A flow listens to a project's sources, like its error tracker and its evals, and groups what they report into problems. For each one it proves the problem, builds and checks a fix, and brings it to you to ship, revise or drop. After a ship it watches for the problem to come back.";
 
@@ -21,7 +22,7 @@ export function LineSetup({ title, heading, profiled = false, href, children }: 
           : WHAT_IT_DOES}
       </p>
       {children ?? (href && (
-        <Link href={href} className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-sol-cyan/50 text-[12.5px] font-medium text-sol-cyan hover:bg-sol-cyan/10 transition-colors" data-line-setup-action>
+        <Link href={href} className={`mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-sol-cyan/50 text-[12.5px] font-medium text-sol-cyan hover:bg-sol-cyan/10 transition-colors ${modernButton({ variant: "primary", size: "md" })}`} data-line-setup-action>
           {profiled ? "Open flow settings" : "Set up a flow"}
           <ArrowRight className="w-3.5 h-3.5" />
         </Link>

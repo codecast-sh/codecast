@@ -21,6 +21,7 @@ import { sessionPanePath, startPaneDrag } from "../../lib/stage";
 import { compactAge, threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } from "../../lib/threadState";
 import { getProjectName, useInboxStore } from "../../store/inboxStore";
 import { LivePulseDot } from "../SessionActivityLine";
+import { modernPill } from "../ui/modernLook";
 
 export type TaskLinkedSession = {
   _id: string;
@@ -169,7 +170,7 @@ export function TaskSessionRow({
               titleClassName={prominent || live ? "font-medium" : undefined}
             />
             {origin && (
-              <span className="flex-shrink-0 text-meta font-medium px-1 py-px rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/25">
+              <span className={`flex-shrink-0 text-meta font-medium px-1 py-px rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/25 ${modernPill({ tone: "violet" })}`}>
                 from
               </span>
             )}
@@ -263,7 +264,7 @@ export function TaskSessionList({
         <div className="text-xs font-medium text-sol-text-dim">{heading}</div>
         <span className="text-meta font-mono text-sol-text-muted">{rows.length}</span>
         {liveCount > 0 && (
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-sol-green/15 text-sol-green text-meta">
+          <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-sol-green/15 text-sol-green text-meta ${modernPill({ tone: "green" })}`}>
             <LivePulseDot className="w-1.5 h-1.5" />
             {liveCount} live
           </span>

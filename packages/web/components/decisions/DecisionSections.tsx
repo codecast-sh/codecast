@@ -13,6 +13,7 @@ import { PublishedPageEmbed } from "../PublishedPageEmbed";
 import { AskingSession, CategoryNote, HolderLine } from "./DecisionParties";
 import { DecisionProposalOrigin } from "../org/ProposalAuthorPill";
 import { proposalRefInContext } from "../org/staffingModel";
+import { modernPill } from "../ui/modernLook";
 
 // A decision reads the same wherever it is answered: the queue's sheet
 // (SessionDecisionCard) and the decision page (DecisionDocument) both draw
@@ -51,7 +52,7 @@ export function DecisionFacts({ decision, detail, className = "mt-4", ladder }: 
             <>
               <dt>task</dt>
               <dd>
-                <Link href={taskHref(String(detail.task?.short_id ?? decision.task_id))} className="inline-flex items-center gap-1 max-w-full min-w-0 align-bottom px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10 [overflow-wrap:normal]">
+                <Link href={taskHref(String(detail.task?.short_id ?? decision.task_id))} className={`inline-flex items-center gap-1 max-w-full min-w-0 align-bottom px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10 [overflow-wrap:normal] ${modernPill({ tone: "violet" }, "modern:max-w-full")}`}>
                   <span className={`whitespace-nowrap shrink-0${detail.task?.short_id ? " modern:font-mono" : ""}`}>{detail.task?.short_id ?? "task"}</span><span className="text-sol-text truncate min-w-0 max-w-[20rem]">{detail.task?.title}</span>
                 </Link>
                 {decision.station && <span className="text-sol-text-dim"> asked while the task was <span className="text-sol-text">{decision.station.replace(/_/g, " ")}</span></span>}

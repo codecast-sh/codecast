@@ -37,6 +37,7 @@ import { toast } from "sonner";
 import { SwitchReview } from "../../components/consequential/ConsequentialSwitch";
 import { useRunCost } from "../../components/consequential/useRunCost";
 import { workflowAgentSteps, workflowRunLedger, workflowSteps } from "../../components/work/startLedgers";
+import { modernButton, modernField, modernLook, modernPill, modernPopover } from "../../components/ui/modernLook";
 
 const api = _api as any;
 
@@ -131,10 +132,10 @@ function NodeDetail({ node, onClose }: { node: WFNode; onClose: () => void }) {
             {node.type}
           </span>
           {node.goal_gate && (
-            <span className="text-xs px-1.5 py-0.5 rounded bg-sol-yellow/15 text-sol-yellow font-mono">goal-gate</span>
+            <span className={`text-xs px-1.5 py-0.5 rounded bg-sol-yellow/15 text-sol-yellow font-mono ${modernPill({ tone: "yellow" }, "modern:font-mono modern:font-normal")}`}>goal-gate</span>
           )}
         </div>
-        <button onClick={onClose} aria-label="Close" title="Close" className="p-1 -m-1 text-sol-text-dim hover:text-sol-text transition-colors">
+        <button onClick={onClose} aria-label="Close" title="Close" className={`p-1 -m-1 text-sol-text-dim hover:text-sol-text transition-colors ${modernButton({ variant: "ghost", size: "icon-xs" })}`}>
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
@@ -215,35 +216,35 @@ function RunDialog({ workflow, onClose }: { workflow: Workflow; onClose: () => v
   };
 
   return (
-    <div className="absolute top-12 right-4 z-20 w-80 max-w-[calc(100%-2rem)] bg-sol-bg-alt border border-sol-border/40 rounded-xl shadow-2xl overflow-hidden">
+    <div className={`absolute top-12 right-4 z-20 w-80 max-w-[calc(100%-2rem)] bg-sol-bg-alt border border-sol-border/40 rounded-xl shadow-2xl overflow-hidden ${modernPopover}`}>
       <div className="px-4 py-3 border-b border-sol-border/30">
-        <span className="text-xs font-semibold text-sol-text uppercase tracking-wider">Run Workflow</span>
+        <span className="text-xs font-semibold text-sol-text uppercase tracking-wider modern:text-body modern:normal-case modern:tracking-normal">Run Workflow</span>
       </div>
       <div className="p-4 space-y-3">
         <div>
-          <label className="text-mark text-sol-text-dim uppercase tracking-wider block mb-1">Project path</label>
+          <label className="text-mark text-sol-text-dim uppercase tracking-wider block mb-1 modern:text-meta modern:font-medium modern:normal-case modern:tracking-normal">Project path</label>
           <input
             type="text"
             value={projectPath}
             onChange={e => setProjectPath(e.target.value)}
             placeholder="/Users/you/src/myproject"
-            className="w-full px-3 py-1.5 text-xs bg-sol-bg border border-sol-border/30 rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:border-sol-cyan/50 font-mono"
+            className={`w-full px-3 py-1.5 text-xs bg-sol-bg border border-sol-border/30 rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:border-sol-cyan/50 font-mono ${modernLook(modernField, "modern:h-control-sm modern:py-0 modern:font-mono modern:text-meta")}`}
           />
         </div>
         <div>
-          <label className="text-mark text-sol-text-dim uppercase tracking-wider block mb-1">Goal override (optional)</label>
+          <label className="text-mark text-sol-text-dim uppercase tracking-wider block mb-1 modern:text-meta modern:font-medium modern:normal-case modern:tracking-normal">Goal override (optional)</label>
           <input
             type="text"
             value={goalOverride}
             onChange={e => setGoalOverride(e.target.value)}
             placeholder="Override the workflow goal..."
-            className="w-full px-3 py-1.5 text-xs bg-sol-bg border border-sol-border/30 rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:border-sol-cyan/50"
+            className={`w-full px-3 py-1.5 text-xs bg-sol-bg border border-sol-border/30 rounded-lg text-sol-text placeholder-sol-text-dim focus:outline-none focus:border-sol-cyan/50 ${modernLook(modernField, "modern:h-control-sm modern:py-0 modern:text-ui")}`}
           />
         </div>
         <div className="flex gap-2">
           <button
             onClick={onClose}
-            className="flex-1 px-3 py-1.5 text-xs text-sol-text-muted border border-sol-border/30 rounded-lg hover:bg-sol-bg-highlight transition-colors"
+            className={`flex-1 px-3 py-1.5 text-xs text-sol-text-muted border border-sol-border/30 rounded-lg hover:bg-sol-bg-highlight transition-colors ${modernButton({ variant: "outline", size: "sm" })}`}
           >
             Cancel
           </button>
@@ -357,7 +358,7 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
             <button
               key={choice.key}
               onClick={() => handleChoice(choice.key)}
-              className="shrink-0 px-1.5 py-0.5 text-meta font-mono font-medium text-sol-magenta border border-sol-magenta/30 rounded hover:bg-sol-magenta/10 transition-colors disabled:opacity-40"
+              className={`shrink-0 px-1.5 py-0.5 text-meta font-mono font-medium text-sol-magenta border border-sol-magenta/30 rounded hover:bg-sol-magenta/10 transition-colors disabled:opacity-40 ${modernButton({ variant: "soft", tone: "magenta", size: "xs" }, "modern:font-mono")}`}
             >
               [{choice.key}] {choice.label.replace(/^\[.\]\s*/, "")}
             </button>
@@ -575,7 +576,7 @@ function WorkflowsContent({ tabs }: { tabs?: ReactNode }) {
                 <span className="font-mono">{selected.slug}</span>
                 <button
                   onClick={() => setShowRunDialog(v => !v)}
-                  className="flex items-center gap-1 px-2 py-1 text-meta font-medium text-sol-cyan border border-sol-cyan/30 rounded-md hover:bg-sol-cyan/10 transition-colors"
+                  className={`flex items-center gap-1 px-2 py-1 text-meta font-medium text-sol-cyan border border-sol-cyan/30 rounded-md hover:bg-sol-cyan/10 transition-colors ${modernButton({ variant: "primary", size: "sm" })}`}
                 >
                   <Play className="w-3 h-3" />
                   Run
@@ -673,7 +674,7 @@ function RunRow({ run, now, onOpen, forks }: { run: LineRun; now: number; onOpen
               <span style={{ fontFamily: "var(--font-mono)" }}>{run._id.slice(-8)}</span>
             )}
             {run.gate_decision_short_id && (
-              <Link href={`/decisions/${run.gate_decision_short_id}`} onClick={(e) => e.stopPropagation()} data-run-gate className="inline-flex items-center gap-1 shrink-0 px-1.5 h-[16px] rounded-md hover:underline" style={{ background: gateOpen ? "color-mix(in srgb, var(--sol-magenta) 14%, transparent)" : "color-mix(in srgb, var(--sol-border) 30%, transparent)", color: gateOpen ? "var(--sol-magenta)" : "var(--sol-text-dim)" }}>
+              <Link href={`/decisions/${run.gate_decision_short_id}`} onClick={(e) => e.stopPropagation()} data-run-gate className={`inline-flex items-center gap-1 shrink-0 px-1.5 h-[16px] rounded-md hover:underline modern:h-5 modern:rounded-control modern:font-medium modern:font-mono`} style={{ background: gateOpen ? "color-mix(in srgb, var(--sol-magenta) 14%, transparent)" : "color-mix(in srgb, var(--sol-border) 30%, transparent)", color: gateOpen ? "var(--sol-magenta)" : "var(--sol-text-dim)" }}>
                 <MessageCircleQuestionMark className="w-3 h-3" /> gate · {run.gate_decision_short_id}
               </Link>
             )}

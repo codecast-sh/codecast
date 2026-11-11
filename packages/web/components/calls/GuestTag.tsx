@@ -1,6 +1,7 @@
 import { participantMark, PARTICIPANT_MARKS } from "@codecast/shared/contracts";
 import { firstName } from "./speakers";
 import { useStageHost } from "./stageHost";
+import { modernPill } from "../ui/modernLook";
 
 // The mark a guest wears wherever the room shows people: a face, a tile's
 // name chip, a door knock, a line in the thread. A guest is somebody from
@@ -15,7 +16,7 @@ export function GuestTag({ className = "", title = PARTICIPANT_MARKS.guest.title
   return (
     <span
       title={title}
-      className={`inline-flex shrink-0 items-center rounded-[4px] bg-sol-yellow/15 px-1 py-px font-mono text-meta font-medium leading-none tracking-wide text-sol-yellow ring-1 ring-inset ring-sol-yellow/25 ${className}`}
+      className={`inline-flex shrink-0 items-center rounded-[4px] bg-sol-yellow/15 px-1 py-px font-mono text-meta font-medium leading-none tracking-wide text-sol-yellow ring-1 ring-inset ring-sol-yellow/25 ${className} ${modernPill({ tone: "yellow" }, "modern:h-[18px] modern:ring-0 modern:font-sans")}`}
     >
       {PARTICIPANT_MARKS.guest.word}
     </span>
@@ -30,7 +31,7 @@ export function AgentTag({ className = "", title = PARTICIPANT_MARKS.agent.title
   return (
     <span
       title={title}
-      className={`inline-flex shrink-0 items-center rounded-[4px] bg-sol-violet/15 px-1 py-px font-mono text-meta font-medium leading-none tracking-wide text-sol-violet ring-1 ring-inset ring-sol-violet/25 ${className}`}
+      className={`inline-flex shrink-0 items-center rounded-[4px] bg-sol-violet/15 px-1 py-px font-mono text-meta font-medium leading-none tracking-wide text-sol-violet ring-1 ring-inset ring-sol-violet/25 ${className} ${modernPill({ tone: "violet" }, "modern:h-[18px] modern:ring-0 modern:font-sans")}`}
     >
       {PARTICIPANT_MARKS.agent.word}
     </span>

@@ -34,6 +34,7 @@ import { toast } from "sonner";
 import { DocDates } from "../../../components/DocDates";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { modernPill, modernToneOf } from "../../../components/ui/modernLook";
 
 function DocTypeSelector({
   value,
@@ -312,7 +313,7 @@ function DocDetailContent() {
                     </span>
                     <Badge
                       variant="outline"
-                      className="text-meta px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto"
+                      className={`text-meta px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto ${modernPill({ tone: "cyan" })}`}
                     >
                       {(doc as any).active_plan.status}
                     </Badge>
@@ -344,7 +345,7 @@ function DocDetailContent() {
                           </span>
                           <Badge
                             variant="outline"
-                            className={`text-meta px-1.5 py-0 ${status.color} border-current/30`}
+                            className={`text-meta px-1.5 py-0 ${status.color} border-current/30 ${modernPill({ tone: modernToneOf(status.color) })}`}
                           >
                             {status.label}
                           </Badge>

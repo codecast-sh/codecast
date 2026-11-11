@@ -85,6 +85,7 @@ import { UnreadCount } from "./UnreadCount";
 import { AgentReplyPeek } from "./AgentReplyPeek";
 import { onCallThreadRequest, takeCallThreadRequest } from "../../lib/calls/callStage";
 import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
+import { modernButton, modernPill } from "../ui/modernLook";
 
 /** How long a speaker holds the floor before a follower's app moves to them. */
 const STAGE_FOLLOW_SETTLE_MS = 1500;
@@ -108,7 +109,7 @@ function CallErrorNotice({ error, fix }: { error: string; fix: AppPermissionKind
       {fix && readiness && action && (
         <button
           onClick={() => requestOsPermission(fix, readiness).then(refresh)}
-          className="shrink-0 rounded-full bg-sol-orange/20 px-2 py-0.5 font-medium transition-colors hover:bg-sol-orange/30"
+          className={`shrink-0 rounded-full bg-sol-orange/20 px-2 py-0.5 font-medium transition-colors hover:bg-sol-orange/30 ${modernButton({ variant: "soft", tone: "orange", size: "xs" })}`}
         >
           {action}
         </button>
@@ -442,7 +443,7 @@ export function CallStage({
               (the green of the thread's transcribing dot). */}
           {transcribing && wordsPublic && (
             <span
-              className="ml-1 flex shrink-0 items-center gap-1 rounded-full bg-sol-green/10 px-1.5 py-px font-mono text-meta text-sol-green"
+              className={`ml-1 flex shrink-0 items-center gap-1 rounded-full bg-sol-green/10 px-1.5 py-px font-mono text-meta text-sol-green ${modernPill({ tone: "green" }, "modern:font-mono modern:font-normal")}`}
               title={TRANSCRIPT_SHARED_WORDS}
               aria-label={TRANSCRIPT_SHARED_WORDS}
               role="img"

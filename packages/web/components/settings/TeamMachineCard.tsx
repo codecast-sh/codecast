@@ -35,7 +35,7 @@ export function TeamMachineCard({ m, showTeam }: { m: TeamMachine; showTeam?: bo
         </span>
       </div>
       {mine?.device_id && mine.login_flow?.status === "pending" && mine.login_flow.url && !mine.claude_signed_in && (
-        <div className="mx-4 mb-2 rounded-md bg-amber-500/[0.08] px-3 py-2 text-[12px] sm:mx-5" data-team-machine-signin="pending">
+        <div className="mx-4 mb-2 rounded-md bg-amber-500/[0.08] px-3 py-2 text-[12px] sm:mx-5 modern:rounded-control modern:bg-sol-amber/[0.08] modern:text-meta" data-team-machine-signin="pending">
           <span className="font-medium text-sol-text">Sign in to Claude on {m.name}</span>
           <LoginCodePaste deviceId={mine.device_id} flow={mine.login_flow} defaultOpen />
         </div>
@@ -164,7 +164,7 @@ function ClaudeSignIn({ deviceId, member }: { deviceId: string; member: TeamMach
   const flow = member.login_flow;
   // The page and the code box get their own row under the header (TeamMachineCard).
   if (flow?.status === "pending" && flow.url) {
-    return <span className="flex items-center gap-1.5 text-[12px] text-sol-text-muted"><Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500" />Signing in</span>;
+    return <span className="flex items-center gap-1.5 text-[12px] text-sol-text-muted"><Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500 modern:text-sol-amber" />Signing in</span>;
   }
   const start = async () => {
     setStarting(true);
@@ -221,7 +221,7 @@ function memberState(r: TeamMachineMember): { label: string; tone: string } {
     case "failed": return { label: "Join failed", tone: "text-sol-red" };
     case "removing": return { label: "Leaving", tone: "text-sol-text-dim" };
     case "offline": return { label: "Offline", tone: "text-sol-text-dim" };
-    case "sign-in": return { label: "Needs Claude", tone: "text-amber-500" };
+    case "sign-in": return { label: "Needs Claude", tone: "text-amber-500 modern:text-sol-amber" };
     default: return { label: "Ready", tone: "text-sol-green" };
   }
 }

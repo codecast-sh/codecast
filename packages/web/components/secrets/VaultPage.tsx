@@ -35,6 +35,7 @@ import { Button } from "../ui/button";
 import { HEALTH, envPairLabel, filterSecrets, formatIn, isStub, secretHealth, whereUsed, type Scope } from "./vaultModel";
 import { useSampleVault } from "./sampleVault";
 import { VaultSource } from "./VaultSource";
+import { modernChip, modernTab } from "../ui/modernLook";
 
 type Fit = "narrow" | "medium" | "wide";
 const fitFor = (width: number): Fit => (width < 720 ? "narrow" : width < 1120 ? "medium" : "wide");
@@ -95,7 +96,7 @@ function ScopeFilter({ value, onChange, counts }: { value: Scope; onChange: (s: 
           role="radio"
           aria-checked={value === o.id}
           onClick={() => onChange(o.id)}
-          className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded px-2 py-0.5 transition-colors ${value === o.id ? "bg-sol-bg-alt text-sol-text shadow-[inset_0_0_0_1px_var(--sol-border)]" : "text-sol-text-muted hover:text-sol-text"}`}
+          className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded px-2 py-0.5 transition-colors ${value === o.id ? "bg-sol-bg-alt text-sol-text shadow-[inset_0_0_0_1px_var(--sol-border)]" : "text-sol-text-muted hover:text-sol-text"} ${modernTab({ active: value === o.id })}`}
         >
           {o.label}
           <span className="tabular-nums text-sol-text-dim">{counts[o.id]}</span>
@@ -113,7 +114,7 @@ function AttentionFilter({ on, count, onChange }: { on: boolean; count: number; 
       type="button"
       aria-pressed={on}
       onClick={() => onChange(!on)}
-      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-[3px] text-[12px] transition-colors ${on ? "border-sol-orange/60 bg-sol-orange/10 text-sol-text" : "border-sol-border/60 text-sol-text-muted hover:text-sol-text"}`}
+      className={`inline-flex items-center gap-1.5 whitespace-nowrap rounded-md border px-2 py-[3px] text-[12px] transition-colors ${on ? "border-sol-orange/60 bg-sol-orange/10 text-sol-text" : "border-sol-border/60 text-sol-text-muted hover:text-sol-text"} ${modernChip({ active: on })}`}
       data-vault-attention={on ? "on" : "off"}
     >
       <span className="size-1.5 rounded-full bg-sol-orange" />

@@ -20,7 +20,17 @@
 //   data-cc-row-list         a checklist under the row (todos)
 //   data-cc-row-card         a card answered in place under the row
 //   data-cc-row-foot         the row's own links under it
+//   data-cc-row-actions      the row's own fix on its line (Retry, Send again), before the result
 //   data-cc-row-tone         "error" (red, the result says what failed) or "warn"
+//   data-cc-block            content a person reads: the header row over a tinted
+//                            panel (ModernQuietBlock: a plan, a structured result)
+//   data-cc-divider          a captioned rule (TimelineRule); Modern drops its lines
+//   data-cc-path             a path cut in the middle (PathText): the name stays
+//
+// Further families since: a folded run of tool calls (group, ModernReceipt),
+// thinking and watches (ModernEventRows), failures (error, ModernApiErrorRow,
+// the undelivered row), dividers, created entities, chat sends and flows. What
+// asks the person (ModernAsk) is the one card, never a row.
 //
 // The look lives in app/globals.css under .modern-style ("MODERN · ROWS"):
 // one line, a chevron drawn from aria-expanded, rows tight with no card
@@ -45,6 +55,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { RowKind } from "../../../lib/modernRow";
+
+export { PathText } from "./PathText";
 
 const ICONS: Record<RowKind, LucideIcon> = {
   read: FileText,

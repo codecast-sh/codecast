@@ -2,6 +2,7 @@ import { useState } from "react";
 import { setCallVideoShared } from "../../hooks/useRoomRecording";
 import { Switch } from "../ui/switch";
 import { firstName } from "./speakers";
+import { modernButton } from "../ui/modernLook";
 
 // Whether a call's public link shows its video too. Off unless somebody turns
 // it on for this very link (shared/contracts callRecordings shareIncludesVideo): a link
@@ -68,14 +69,14 @@ export function ShareVideoSwitch({
               setAsking(false);
               setCallVideoShared(call, true);
             }}
-            className="rounded-md bg-sol-cyan/15 px-2.5 py-1 font-medium text-sol-cyan transition-colors hover:bg-sol-cyan/25"
+            className={`rounded-md bg-sol-cyan/15 px-2.5 py-1 font-medium text-sol-cyan transition-colors hover:bg-sol-cyan/25 ${modernButton({ variant: "soft", tone: "cyan", size: "sm" })}`}
           >
             Share the video
           </button>
           <button
             type="button"
             onClick={() => setAsking(false)}
-            className="rounded-md px-2.5 py-1 text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text"
+            className={`rounded-md px-2.5 py-1 text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text ${modernButton({ variant: "ghost", size: "sm" })}`}
           >
             Cancel
           </button>

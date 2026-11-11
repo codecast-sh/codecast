@@ -306,3 +306,11 @@
 
 /* Modern (.modern-style): the chip and menu are words; the time tip keeps mono. */
 .modern-style :is(.call-controls-chip, .call-controls-menu) { font-family: var(--font-ui, system-ui, sans-serif); }
+
+/* ── Modern (.modern-style on <html>): the player's chip, menu and rows take
+   the control and card radii and the menu row's height; the glass over the
+   video stays. ── */
+.modern-style .call-controls-chip { border-radius: var(--radius-control); font-weight: 500; }
+.modern-style .call-controls-menu { border-radius: var(--radius-card); }
+.modern-style .call-controls-menu-item { min-height: var(--control-sm); border-radius: var(--radius-control); font-size: var(--fs-ui); }
+.modern-style .call-controls-tip { border-radius: var(--radius-control); }

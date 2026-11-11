@@ -87,3 +87,10 @@
   .mxp-now-value { font-size: 42px; }
   .mxp-hero { gap: 14px 28px; }
 }
+
+/* ── Modern (.modern-style on <html>): the series chips are the filter chip
+   (components/ui/modernLook.ts modernChip). ── */
+.modern-style .mxp-chip { border-radius: var(--radius-control); border-color: var(--sol-border); background-color: var(--sol-card); font-weight: 500; }
+.modern-style .mxp-chip:hover { border-color: color-mix(in srgb, var(--sol-text-dim) 50%, var(--sol-border)); background-color: var(--sol-bg-alt); }
+.modern-style .mxp-chip[data-on] { border-color: color-mix(in srgb, var(--sol-class-cyan) 40%, transparent); background-color: color-mix(in srgb, var(--sol-class-cyan) 10%, transparent); color: var(--sol-class-cyan); }
+.modern-style .mxp-chip:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }

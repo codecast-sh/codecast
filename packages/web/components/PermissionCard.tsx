@@ -11,6 +11,8 @@ import { useInboxStore } from "../store/inboxStore";
 import { formatToolName } from "@codecast/shared/render";
 import { permissionSourceTags, removalCountLabel, type PermissionRemoval } from "@codecast/shared/render/permissionCardStyle";
 import { keptPatterns, permissionRuleLabel, type PermissionRuleRequest } from "@codecast/shared/contracts/permissionRules";
+import { useIsModernStyle } from "../hooks/useVisualStyle";
+import { ModernPermissionStack } from "./conversation/ModernPermissionStack";
 
 /**
  * The tool a permission asks for. Formatted (an MCP id like
@@ -82,7 +84,7 @@ export type PermissionViewItem<PId extends string = string> = {
 
 /** What the call is for and what it would delete: the two things a person
  *  needs to answer it, above the raw command. */
-function PermissionContext({ permission }: { permission: Pick<PermissionViewItem, "intent" | "removals"> }) {
+export function PermissionContext({ permission }: { permission: Pick<PermissionViewItem, "intent" | "removals"> }) {
   const removals = permission.removals ?? [];
   if (!permission.intent && removals.length === 0) return null;
   return (
@@ -104,7 +106,7 @@ function PermissionContext({ permission }: { permission: Pick<PermissionViewItem
 }
 
 /** Who is asking, beside the tool name (permissionSourceTags). */
-function PermissionSourceTag({ permission, className = "text-meta" }: {
+export function PermissionSourceTag({ permission, className = "text-meta" }: {
   permission: Pick<PermissionViewItem, "subagent_type" | "subagent_conversation_id" | "safety_check">;
   className?: string;
 }) {
@@ -391,8 +393,11 @@ export function PermissionStackView<PId extends string>({
   const [allowReview, setAllowReview] = useState(false);
   const [denying, setDenying] = useState(false);
   const alwaysAllow = onAlwaysAllow as ((id: string) => void) | undefined;
+  const modern = useIsModernStyle();
 
   if (pending.length === 0) return null;
+  // Modern: the loud ask card with 32px answers (CONV-20); the keys and the writes stay PermissionStack's.
+  if (modern) return <ModernPermissionStack pending={pending} inflight={inflight} onApprove={onApprove} onDeny={onDeny} onAlwaysAllow={onAlwaysAllow} onApproveAll={onApproveAll} onDenyAll={onDenyAll} onAllowAll={onAllowAll} />;
   const allowAllReview = allowReview && onAllowAll && (
     <SwitchReview ledger={allowAllLedger({ pending: pending.length })} onClose={() => setAllowReview(false)} onConfirm={() => { setAllowReview(false); onAllowAll(); }} />
   );

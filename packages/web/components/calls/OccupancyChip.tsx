@@ -104,7 +104,7 @@ export function OccupancyChip({
         inThisRoom
           ? "border-sol-violet/50 bg-sol-violet/20 text-sol-violet hover:bg-sol-violet/25"
           : "border-sol-violet/30 bg-sol-violet/10 text-sol-violet hover:bg-sol-violet/20"
-      } ${className}`}
+      } ${className} modern:h-6 modern:rounded-control modern:py-0`}
       title={
         inThisRoom
           ? "Show the huddle window"
@@ -169,7 +169,7 @@ export function HuddleButton({
         e.stopPropagation();
         requestHuddleStart({ roomKey, toUserIds: ring, anchorTitle, ringChannel: isChannel, channelMemberCount, hint });
       }}
-      className={`flex items-center gap-1 rounded-full border text-sol-text-dim transition-colors hover:border-sol-violet/40 hover:text-sol-violet disabled:opacity-50 ${compact ? "border-sol-border/40 px-1.5 py-1 text-meta font-medium" : "border-sol-border px-2 py-0.5 text-xs"} ${className}`}
+      className={`flex items-center gap-1 rounded-full border text-sol-text-dim transition-colors hover:border-sol-violet/40 hover:text-sol-violet disabled:opacity-50 ${compact ? "border-sol-border/40 px-1.5 py-1 text-meta font-medium" : "border-sol-border px-2 py-0.5 text-xs"} ${className} modern:h-6 modern:rounded-control modern:py-0`}
       title={label}
       aria-label={label}
     >
@@ -216,7 +216,7 @@ function GuestsWaitingAtDoor({ roomKey, ring, anchorTitle, channelMemberCount, h
         e.stopPropagation();
         requestHuddleStart({ roomKey, toUserIds: ring, anchorTitle, ringChannel: parseRoomKey(roomKey)?.kind === "channel", channelMemberCount, hint });
       }}
-      className={`relative flex items-center gap-1 rounded-full border border-sol-yellow/40 text-sol-yellow transition-colors hover:bg-sol-yellow/10 ${compact ? "px-1.5 py-1 text-meta font-medium" : "px-2 py-0.5 text-xs"}`}
+      className={`relative flex items-center gap-1 rounded-full border border-sol-yellow/40 text-sol-yellow transition-colors hover:bg-sol-yellow/10 ${compact ? "px-1.5 py-1 text-meta font-medium" : "px-2 py-0.5 text-xs"} modern:h-6 modern:rounded-control modern:py-0`}
       title={line}
       aria-label={line}
     >

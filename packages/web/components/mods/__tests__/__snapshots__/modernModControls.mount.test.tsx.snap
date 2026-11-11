@@ -1,0 +1,101 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`Mods in Modern Classic draws the classes it drew before the Modern looks 1`] = `
+"div mx-auto w-full max-w-5xl px-6 py-6
+header mb-5 flex items-center gap-3
+h1 text-[22px] font-semibold tracking-tight text-sol-text
+div ml-auto
+div min-w-0
+div flex items-center gap-1
+button inline-flex items-center gap-1 rounded px-1 py-0.5 text-meta text-sol-text-dim hover:text-sol-text
+svg lucide lucide-chevron-right transition-transform duration-[120ms] ease-out
+button inline-flex h-6 shrink-0 items-center justify-center rounded text-meta transition-[color,background-color,transform] duration-150 active:scale-[0.94] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 px-1.5 text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text
+span grid [&>*]:col-start-1 [&>*]:row-start-1
+svg lucide lucide-copy transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] opacity-100 scale-100
+svg lucide lucide-check transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] opacity-0 scale-75
+svg lucide lucide-x transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] opacity-0 scale-75
+span 
+section grid gap-3 md:grid-cols-2
+article group rounded-xl border border-sol-border bg-sol-card transition-colors hover:border-[color-mix(in_srgb,var(--sol-violet)_40%,var(--sol-border))]
+div flex items-start gap-3 px-4 pt-4
+span flex size-9 shrink-0 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--sol-violet)_13%,transparent)] text-sol-violet
+svg lucide lucide-blocks
+div min-w-0 flex-1
+div flex items-center gap-2
+button truncate text-left text-[14px] font-semibold text-sol-text enabled:hover:underline underline-offset-2
+span inline-flex items-center gap-1 text-meta
+span size-1.5 rounded-full
+div mt-0.5 font-mono text-meta text-sol-text-dim
+button relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/50 focus-visible:ring-offset-1 focus-visible:ring-offset-sol-bg bg-sol-cyan cursor-pointer
+span inline-block h-3.5 w-3.5 transform rounded-full bg-sol-bg transition-transform translate-x-[19px]
+div flex flex-wrap gap-1.5 px-4 pt-3
+span inline-flex items-center gap-1 rounded-md border border-sol-border px-1.5 py-[1px] text-meta text-sol-text-muted
+svg lucide lucide-box
+div mt-3 flex items-center gap-3 border-t border-sol-border px-4 py-2
+button text-[12px] text-sol-text-muted hover:text-sol-text
+div mx-auto w-full max-w-6xl px-6 py-6
+header mb-5 flex items-center gap-3
+span flex size-9 items-center justify-center rounded-lg bg-[color-mix(in_srgb,var(--sol-violet)_13%,transparent)] text-sol-violet
+svg lucide lucide-box
+h1 text-[20px] font-semibold tracking-tight text-sol-text
+div text-[12px] text-sol-text-dim
+button hover:underline
+div ml-auto flex items-center gap-1 rounded-lg border border-sol-border p-0.5
+button rounded-md px-2.5 py-1 text-[12px] capitalize bg-[color-mix(in_srgb,var(--sol-text)_8%,transparent)] text-sol-text
+button rounded-md px-2.5 py-1 text-[12px] capitalize text-sol-text-muted hover:text-sol-text
+form mb-4
+input w-full rounded-lg border border-sol-border bg-sol-card px-3 py-2 text-[13.5px] text-sol-text outline-none focus:border-sol-violet
+div -mx-6 overflow-x-auto px-6
+div grid gap-3
+section min-h-[200px] rounded-xl border border-sol-border bg-sol-bg-alt/40 p-2
+header mb-2 flex items-center gap-2 px-1.5 pt-1
+span inline-flex items-center gap-1 rounded-full px-2 py-[1px] text-meta font-medium whitespace-nowrap
+span size-1.5 rounded-full
+span text-meta tabular-nums text-sol-text-dim
+div flex flex-col gap-1.5
+button min-w-0 rounded-lg border border-sol-border bg-sol-card px-2.5 py-2 text-left transition-colors hover:border-[color-mix(in_srgb,var(--sol-violet)_45%,var(--sol-border))]
+div font-mono text-meta text-sol-text-dim
+div break-words text-[13px] text-sol-text
+section min-h-[200px] rounded-xl border border-sol-border bg-sol-bg-alt/40 p-2
+header mb-2 flex items-center gap-2 px-1.5 pt-1
+span inline-flex items-center gap-1 rounded-full px-2 py-[1px] text-meta font-medium whitespace-nowrap
+span size-1.5 rounded-full
+span text-meta tabular-nums text-sol-text-dim
+div flex flex-col gap-1.5
+section min-h-[200px] rounded-xl border border-sol-border bg-sol-bg-alt/40 p-2
+header mb-2 flex items-center gap-2 px-1.5 pt-1
+span inline-flex items-center gap-1 rounded-full px-2 py-[1px] text-meta font-medium whitespace-nowrap
+span size-1.5 rounded-full
+span text-meta tabular-nums text-sol-text-dim
+div flex flex-col gap-1.5
+div mx-auto w-full max-w-4xl px-6 py-6
+nav mb-3 flex items-center gap-1.5 text-[12px] text-sol-text-dim
+svg lucide lucide-box text-sol-violet
+button hover:text-sol-text
+span font-mono
+span ml-auto
+span inline-flex
+button p-1 rounded hover:bg-sol-bg-alt transition-colors text-sol-text-dim hover:text-sol-text-secondary
+svg w-3.5 h-3.5
+input w-full bg-transparent text-[24px] font-semibold tracking-tight text-sol-text outline-none
+div mt-3 flex flex-wrap gap-1.5
+button rounded-full border px-2.5 py-0.5 text-[12px] transition-colors
+button rounded-full border px-2.5 py-0.5 text-[12px] transition-colors
+button rounded-full border px-2.5 py-0.5 text-[12px] transition-colors
+section mt-5
+div mb-1.5 flex items-center text-mark uppercase tracking-wide text-sol-text-dim
+button ml-auto normal-case tracking-normal text-[12px] text-sol-text-muted hover:text-sol-text
+button text-[13px] text-sol-text-dim hover:text-sol-text-muted
+div mt-8 flex items-center gap-3 border-t border-sol-border pt-3 text-[12px] text-sol-text-dim
+div min-w-0
+div flex items-center gap-1
+button inline-flex items-center gap-1 rounded px-1 py-0.5 text-meta text-sol-text-dim hover:text-sol-text
+svg lucide lucide-chevron-right transition-transform duration-[120ms] ease-out
+button inline-flex h-6 shrink-0 items-center justify-center rounded text-meta transition-[color,background-color,transform] duration-150 active:scale-[0.94] disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100 px-1.5 text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text
+span grid [&>*]:col-start-1 [&>*]:row-start-1
+svg lucide lucide-copy transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] opacity-100 scale-100
+svg lucide lucide-check transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] opacity-0 scale-75
+svg lucide lucide-x transition-[opacity,transform] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] opacity-0 scale-75
+span 
+button ml-auto hover:text-sol-red"
+`;

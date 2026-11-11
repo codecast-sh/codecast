@@ -16,6 +16,7 @@ import { isRecentlyShipped } from "../../lib/newSnippets";
 import { deepDiveForSnippet, featureHref } from "../../app/(marketing)/features/catalog";
 import { FeatureVignette } from "./FeatureVignette";
 import { featureIcon, featureTone } from "./featureLook";
+import { modernPill } from "../ui/modernLook";
 
 export const STABLE_NAME = "Stable context";
 
@@ -153,6 +154,6 @@ function DetailRow({ label, mono, children }: { label: string; mono?: boolean; c
 
 export function NewPill() {
   return (
-    <span className="rounded-full border border-sol-cyan/30 bg-sol-cyan/10 px-1.5 py-px text-meta text-sol-cyan">New</span>
+    <span className={`rounded-full border border-sol-cyan/30 bg-sol-cyan/10 px-1.5 py-px text-meta text-sol-cyan ${modernPill({ tone: "cyan" })}`}>New</span>
   );
 }

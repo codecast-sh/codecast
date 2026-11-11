@@ -45,6 +45,7 @@ import { useMachineAccountSwitch } from "../../../hooks/useMachineAccountSwitch"
 import { machineSwitchBlock, profileIsCurrentLogin, profileIsFleetAccount } from "../../../lib/machineAccountSwitch";
 import { AccountPoolPill } from "../../../components/settings/AccountPoolPill";
 import { useAccountPool, useSyncAccountPool } from "../../../hooks/useSyncAccountPool";
+import { modernButton, modernPill } from "../../../components/ui/modernLook";
 
 type DeviceAccounts = {
   device_id: string;
@@ -124,7 +125,7 @@ function CopyableCommand({ cmd }: { cmd: string }) {
           setTimeout(() => setCopied(false), 1500);
         });
       }}
-      className="inline-flex items-center gap-1.5 rounded bg-sol-bg-alt px-2 py-1 font-mono text-meta text-sol-text hover:bg-sol-bg-alt/70 transition-colors"
+      className={`inline-flex items-center gap-1.5 rounded bg-sol-bg-alt px-2 py-1 font-mono text-meta text-sol-text hover:bg-sol-bg-alt/70 transition-colors ${modernButton({ variant: "secondary", size: "sm" }, "modern:font-mono modern:font-normal")}`}
       title="Copy command"
     >
       {cmd}
@@ -210,7 +211,7 @@ function SessionAccountsStatus({ device }: { device: DeviceAccounts }) {
           {ready.length} of {total} saved account{total === 1 ? "" : "s"} can carry sessions.
         </span>
         {needSignIn.length > 0 && (
-          <span className="text-amber-500">
+          <span className="text-amber-500 modern:text-sol-amber">
             {needSignIn.length === 1
               ? `${needSignIn[0].email ?? needSignIn[0].name} needs you to sign in again.`
               : `${needSignIn.length} accounts need you to sign in again.`}
@@ -314,7 +315,7 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
       actions={
         <>
           {device.is_remote && (
-            <span className="px-1.5 py-0.5 rounded text-meta bg-sol-violet/10 text-sol-violet">
+            <span className={`px-1.5 py-0.5 rounded text-meta bg-sol-violet/10 text-sol-violet ${modernPill({ tone: "violet" })}`}>
               remote — mirrors the primary's account
             </span>
           )}

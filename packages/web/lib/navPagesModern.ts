@@ -18,11 +18,14 @@ const PALETTE_FEATURES: Partial<Record<NavGate, TeamFeatureKey>> = { chat: "chat
 
 /** What Modern changes about a page's row, or the whole row for a page the
  *  classic palette does not list. */
-const MODERN: Partial<Record<NavId, Partial<Pick<NavPage, "keywords" | "aliases" | "secondary" | "action">>>> = {
+const MODERN: Partial<Record<NavId, Partial<Pick<NavPage, "keywords" | "aliases" | "secondary" | "action"> & { path: string }>>> = {
   inbox: { keywords: "idle queue waiting needs you sessions" },
   // "routines" names the workflow graphs (Routines), not this page.
   triggers: { keywords: "triggers schedules cron automation recurring followup reminders" },
   workflows: { keywords: "workflows dynamic runs agents orchestration" },
+  // Modern's /workflows is the whole Workflows page (Routines, Runs, Dynamic),
+  // so the Routines row opens its tab there rather than the older address.
+  routines: { path: "/workflows?tab=routines" },
   // A row of the rail, so listed before anyone types.
   flows: { secondary: false },
   windows: { keywords: "windows window manager arrange tile desktop", secondary: true },
@@ -30,6 +33,12 @@ const MODERN: Partial<Record<NavId, Partial<Pick<NavPage, "keywords" | "aliases"
   agentConfig: { keywords: "agent config configuration claude md settings hooks permissions", secondary: true },
   feed: { keywords: "message feed messages stream everything said", secondary: true },
 };
+
+/** Where a registry row's palette entry goes in Modern: its page, or the
+ *  place Modern moved it to (Routines is a tab of /workflows). */
+export function modernPalettePath(row: Pick<NavRow, "id" | "path">): string {
+  return MODERN[row.id]?.path ?? row.path;
+}
 
 function pathOf(page: NavPage): string {
   return typeof page.path === "string" ? page.path : page.path();
@@ -63,7 +72,7 @@ export function buildModernNavPages(classic: ReadonlyArray<NavPage>): NavPage[] 
     const aliases = [...new Set([...(over.aliases ?? base?.aliases ?? []), ...(row.classicLabel ? [row.classicLabel] : []), ...(base && base.label !== row.label ? [base.label] : []), ...(row.formerLabels ?? [])])];
     const page: NavPage = {
       label: row.label,
-      path: row.path,
+      path: modernPalettePath(row),
       icon: base?.icon ?? "grid",
       navIcon: row.icon,
       keywords: over.keywords ?? base?.keywords ?? row.label.toLowerCase(),

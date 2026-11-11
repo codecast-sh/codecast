@@ -9,6 +9,7 @@ import { ModernNavView, RegistryNavSection } from "./ModernNav";
 import { MoreDrillList } from "./MoreNav";
 import { NAV_REGISTRY, staleNavTitle } from "../../lib/navRegistry";
 import { NAV_PAGES, pagePath, palettePages } from "../../lib/navPages";
+import { modernPalettePath } from "../../lib/navPagesModern";
 import { pathLabel } from "../../lib/pathLabel";
 import { tabTitle } from "../../lib/tabTitle";
 
@@ -55,7 +56,7 @@ test("in Modern every registry row has one name: in the rail, in the palette and
   const pages = palettePages(() => true, true, true);
   for (const row of NAV_REGISTRY) {
     if (row.group !== "palette") expect(`${row.id}: ${railName(row.path)}`).toBe(`${row.id}: ${row.label}`);
-    const page = pages.find((p) => pagePath(p.page) === row.path);
+    const page = pages.find((p) => pagePath(p.page) === modernPalettePath(row));
     expect(`${row.id}: ${page?.label}`).toBe(`${row.id}: ${row.label}`);
     expect(`${row.id}: ${inStyle(true, () => pathLabel(row.path))}`).toBe(`${row.id}: ${row.label}`);
   }
@@ -63,14 +64,15 @@ test("in Modern every registry row has one name: in the rail, in the palette and
 
 test("Modern's palette lists the registry's pages in the rail's order, and finds them by their classic names", () => {
   const pages = palettePages(() => true, true, true).map((p) => p.page);
-  const registryPaths = NAV_REGISTRY.map((r) => r.path);
+  const registryPaths = NAV_REGISTRY.map(modernPalettePath);
   expect(pages.map(pagePath).filter((p) => registryPaths.includes(p))).toEqual(registryPaths);
   const byLabel = (label: string) => pages.find((p) => p.label === label);
   expect(byLabel("Activity")?.aliases).toEqual(expect.arrayContaining(["Feed", "Dashboard"]));
   expect(byLabel("Notes")?.aliases).toContain("Files");
-  // Workflows is the page at /workflows; /routines keeps a row of its own.
+  // Workflows is the page at /workflows, and Routines is its first tab there
+  // (Modern's /workflows draws the whole page; /routines stays Classic's).
   expect(byLabel("Workflows") && pagePath(byLabel("Workflows")!)).toBe("/workflows");
-  expect(byLabel("Routines") && pagePath(byLabel("Routines")!)).toBe("/routines");
+  expect(byLabel("Routines") && pagePath(byLabel("Routines")!)).toBe("/workflows?tab=routines");
 });
 
 test("Classic and Minimal keep today's names and list", () => {

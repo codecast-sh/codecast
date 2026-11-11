@@ -3,6 +3,7 @@ import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supportMailto } from "../../lib/siteLinks";
 import type { SupportWords } from "../simple/lane";
+import { modernChip, modernPill, type ModernTone } from "../ui/modernLook";
 
 /** The settings design kit. Every settings panel renders through these four
  *  shapes, so density, typography and spacing are decided once:
@@ -54,7 +55,7 @@ export function SettingsSection({ title, icon: Icon, description, actions, padde
       {(title || actions) && <div className="mb-2 flex items-center justify-between gap-4 px-1">
         <div className="flex items-center gap-2 min-w-0">
           {Icon && title && <Icon data-cc-settings-icon className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" />}
-          {title && <h3 data-cc-settings-title className="truncate text-xs font-semibold uppercase tracking-[0.14em] text-sol-text-muted">{title}</h3>}
+          {title && <h3 data-cc-settings-title className="truncate text-xs font-semibold uppercase tracking-[0.14em] text-sol-text-muted modern:text-ui modern:normal-case modern:tracking-normal modern:text-sol-text">{title}</h3>}
         </div>
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </div>}
@@ -64,6 +65,8 @@ export function SettingsSection({ title, icon: Icon, description, actions, padde
       <div
         className={cn(
           "rounded-xl border border-sol-border/80 bg-sol-bg-alt/30",
+          // Modern: the white card on the hairline, rows divided by it.
+          "modern:rounded-card modern:border-sol-border modern:bg-sol-card modern:divide-sol-border/70",
           overflowVisible ? "" : "overflow-hidden",
           padded ? "p-4 sm:p-5" : "divide-y divide-sol-border/40",
         )}
@@ -134,6 +137,7 @@ export function SettingsLinkRow({ label, description, icon: Icon, value, onClick
       className={cn(
         "group flex w-full items-center justify-between gap-6 px-4 py-3 text-left transition-colors sm:px-5",
         "hover:bg-sol-bg-highlight/40 focus-visible:bg-sol-bg-highlight/40 focus-visible:outline-none",
+        "modern:min-h-control-lg modern:hover:bg-sol-bg-alt modern:focus-visible:bg-sol-bg-alt",
         className,
       )}
     >
@@ -195,7 +199,7 @@ export function SettingsCallout({
         ? "bg-sol-yellow/10 text-sol-text"
         : "bg-sol-bg-highlight/40 text-sol-text-muted";
   return (
-    <div className={cn("rounded-md px-3 py-2 text-xs leading-relaxed", tint, className)}>
+    <div className={cn("rounded-md px-3 py-2 text-xs leading-relaxed modern:rounded-control modern:text-meta", tint, className)}>
       {children}
     </div>
   );
@@ -254,6 +258,11 @@ export function SettingsOptionGroup({
                 : "border-sol-border bg-sol-bg-alt text-sol-text-muted hover:border-sol-text-muted",
               active && !isCard && "text-sol-cyan",
               active && isCard && "text-sol-text",
+              // Modern: pills are the filter chip; cards the white face on the
+              // hairline, the chosen one edged in the accent.
+              isCard
+                ? cn("modern:rounded-control modern:shadow-none", active ? "modern:border-sol-cyan modern:bg-sol-cyan/[0.06]" : "modern:border-sol-border modern:bg-sol-card modern:hover:border-sol-text-dim/50")
+                : modernChip({ active }),
             )}
           >
             {isCard ? (
@@ -273,6 +282,9 @@ export function SettingsOptionGroup({
 }
 
 export type SettingsBadgeTone = "neutral" | "muted" | "cyan" | "green" | "yellow" | "red" | "violet";
+
+// Modern: the Badge's soft tint (ui/modernLook.ts) in the same tone.
+const BADGE_MODERN: Record<SettingsBadgeTone, ModernTone> = { neutral: "neutral", muted: "neutral", cyan: "cyan", green: "green", yellow: "yellow", red: "red", violet: "violet" };
 
 const BADGE_TONE: Record<SettingsBadgeTone, string> = {
   neutral: "bg-sol-bg-alt text-sol-text-dim",
@@ -297,7 +309,7 @@ export function SettingsBadge({
   "className" | "children"
 >) {
   return (
-    <span className={cn("inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-meta", BADGE_TONE[tone], className)} {...rest}>
+    <span className={cn("inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-meta", BADGE_TONE[tone], modernPill({ tone: BADGE_MODERN[tone] }), className)} {...rest}>
       {children}
     </span>
   );

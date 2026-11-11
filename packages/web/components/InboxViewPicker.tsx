@@ -3,6 +3,7 @@ import { CalendarPlus, Check, ChevronDown, FolderKanban, History, List, Network,
 import type { InboxViewMode } from "../store/inboxStore";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuTrigger } from "./ui/dropdown-menu";
+import { modernButton } from "./ui/modernLook";
 
 type ViewOption = { key: InboxViewMode; label: string; icon: typeof List };
 
@@ -29,7 +30,7 @@ const PickerButton = forwardRef<HTMLButtonElement, PickerButtonProps>(function P
       type="button"
       data-inbox-view-picker
       aria-label={`Grouped by ${option.label.toLowerCase()}`}
-      className="flex flex-shrink-0 items-center gap-1 h-[22px] px-1.5 rounded-[5px] text-meta font-medium text-sol-text-secondary hover:text-sol-text hover:bg-sol-text/[0.06] data-[state=open]:bg-sol-text/[0.06] transition-colors"
+      className={`flex flex-shrink-0 items-center gap-1 h-[22px] px-1.5 rounded-[5px] text-meta font-medium text-sol-text-secondary hover:text-sol-text hover:bg-sol-text/[0.06] data-[state=open]:bg-sol-text/[0.06] transition-colors ${modernButton({ variant: "ghost", size: "xs" }, "modern:text-sol-text modern:data-[state=open]:bg-sol-text/[0.06]")}`}
       {...rest}
     >
       <Icon className="w-3 h-3 shrink-0" />

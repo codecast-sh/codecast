@@ -13,7 +13,8 @@ const ROOT = join(import.meta.dir, "..", "..");
 type Page = string[] | { none: string };
 
 const ENTITY_PAGES: Record<EntityType, Page> = {
-  task: ["app/tasks/[id]/page.tsx"],
+  // The task page draws its header (both styles) in its sibling TaskHead.tsx.
+  task: ["app/tasks/[id]/TaskHead.tsx"],
   plan: ["app/plans/[id]/page.tsx"],
   session: ["app/inbox/QueuePageClient.tsx", "components/GlobalSessionPanel.tsx", "app/conversation/[id]/diff/page.tsx"],
   doc: ["app/docs/[id]/page.tsx"],

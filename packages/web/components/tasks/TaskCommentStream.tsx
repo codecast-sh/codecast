@@ -21,6 +21,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { EarlierButton } from "../threads/readerFold";
 import { useReaderFold } from "../../hooks/useReaderFold";
 import { objectHref } from "../../lib/entityLinks";
+import { modernButton, modernPill } from "../ui/modernLook";
 const api = _api as any;
 
 // A task's comment stream: the comment rows and the composer that posts to
@@ -156,7 +157,7 @@ export function TaskCommentItem({
             <span className="cc-cmt-name">{name}</span>
           )}
           {comment.comment_type && comment.comment_type !== "note" && (
-            <Badge variant="outline" className="text-meta px-1 py-0 leading-4">{comment.comment_type}</Badge>
+            <Badge variant="outline" className={`text-meta px-1 py-0 leading-4 ${modernPill()}`}>{comment.comment_type}</Badge>
           )}
           {comment.external && <CommentProvenance external={comment.external} />}
           {!noTime && <TimeAgo ts={comment.created_at} className="cc-cmt-time" />}
@@ -292,7 +293,7 @@ export function TaskCommentComposer({
             setCommentOpen(true);
             setTimeout(() => commentRef.current?.focus(), 0);
           }}
-          className="flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-lg border border-sol-border text-sol-text-muted bg-sol-bg-alt/50 hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
+          className={`flex items-center gap-2 text-xs font-medium px-3 py-1.5 rounded-lg border border-sol-border text-sol-text-muted bg-sol-bg-alt/50 hover:text-sol-text hover:bg-sol-bg-alt transition-colors ${modernButton({ variant: "outline", size: "sm" })}`}
         >
           <MessageSquare className="w-3.5 h-3.5" />
           Add comment

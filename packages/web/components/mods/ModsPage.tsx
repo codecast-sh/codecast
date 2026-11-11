@@ -18,6 +18,7 @@ import { FeatureUpsell } from "../agentFeatures/FeatureUpsell";
 import { CommandDisclosure } from "../secrets/parts";
 import { PageFrame, PageHeader } from "../ui/page-header";
 import { ConsequentialSwitch, type SwitchLedger, type SwitchRow } from "../consequential/ConsequentialSwitch";
+import { modernButton } from "../ui/modernLook";
 
 function Chip({ icon, children }: { icon: string; children: React.ReactNode }) {
   return (
@@ -94,7 +95,7 @@ function InstallButton({ row }: { row: ModRow }) {
           onClick={press}
           aria-haspopup={on ? undefined : "dialog"}
           title={state === "review" ? "Its author changed what it may read, write or fetch" : undefined}
-          className={`shrink-0 rounded-md border px-2.5 py-1 text-[12px] transition-colors ${state === "installed" ? "border-sol-border text-sol-text-muted hover:text-sol-text" : state === "review" ? "border-sol-yellow text-sol-yellow" : "border-sol-violet bg-[color-mix(in_srgb,var(--sol-violet)_12%,transparent)] text-sol-violet"}`}
+          className={`shrink-0 rounded-md border px-2.5 py-1 text-[12px] transition-colors ${state === "installed" ? "border-sol-border text-sol-text-muted hover:text-sol-text" : state === "review" ? "border-sol-yellow text-sol-yellow" : "border-sol-violet bg-[color-mix(in_srgb,var(--sol-violet)_12%,transparent)] text-sol-violet"} ${modernButton({ variant: state === "installed" ? "outline" : "soft", tone: state === "review" ? "yellow" : "violet", size: "sm" })}`}
         >
           {state === "installed" ? "Installed" : state === "review" ? "Grants changed: review…" : "Install…"}
         </button>
@@ -197,7 +198,7 @@ function SecretRow({ modId, name, description, origins, at }: { modId: string; n
           // A cleared key cannot be shown again, so clearing asks once, in place.
           <span className="inline-flex shrink-0 items-center gap-1.5 text-meta" role="group" aria-label={`Clear ${name}?`}>
             <span className="text-sol-text">Clear key?</span>
-            <button type="button" onClick={() => { setClearing(false); void save(""); }} disabled={busy} className="rounded px-1 py-0.5 text-sol-red hover:bg-sol-red/10">Clear</button>
+            <button type="button" onClick={() => { setClearing(false); void save(""); }} disabled={busy} className={`rounded px-1 py-0.5 text-sol-red hover:bg-sol-red/10 ${modernButton({ variant: "ghost", size: "xs" }, "modern:text-sol-red modern:hover:text-sol-red modern:hover:bg-sol-red/10")}`}>Clear</button>
             <button type="button" onClick={() => setClearing(false)} autoFocus className="rounded px-1 py-0.5 text-sol-text-muted hover:text-sol-text">Keep</button>
           </span>
         ) : at && !editing ? (
@@ -217,7 +218,7 @@ function SecretRow({ modId, name, description, origins, at }: { modId: string; n
             placeholder={`Paste ${name}`}
             className="min-w-0 flex-1 rounded-md border border-sol-border bg-sol-bg px-2 py-1 font-mono text-[12px] text-sol-text outline-none focus:border-sol-violet"
           />
-          <button type="submit" disabled={busy || !value.trim()} className="rounded-md border border-sol-violet px-2 py-1 text-[12px] text-sol-violet disabled:opacity-40">{busy ? "Saving" : "Save"}</button>
+          <button type="submit" disabled={busy || !value.trim()} className={`rounded-md border border-sol-violet px-2 py-1 text-[12px] text-sol-violet disabled:opacity-40 ${modernButton({ variant: "soft", tone: "violet", size: "sm" })}`}>{busy ? "Saving" : "Save"}</button>
           {editing ? <button type="button" onClick={() => { setEditing(false); setValue(""); }} className="text-[12px] text-sol-text-muted hover:text-sol-text">Cancel</button> : null}
         </form>
       ) : null}

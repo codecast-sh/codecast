@@ -21,6 +21,7 @@ import type { OffloadCandidate, OffloadDestination, OffloadPlan, OffloadRehearsa
 import { bringsByDefault, rehearsalPending, type MoveRehearsal } from "@codecast/shared/contracts/moveRehearsal";
 import { SPREAD_CEILING, assignDestinations, holdPlan, loadShareOf, loadShift, sliceForPercent } from "../../lib/resourceOffload";
 import { Button } from "../ui/button";
+import { modernChip } from "../ui/modernLook";
 
 const movable = (r: OffloadCandidate["perDestination"][string] | undefined) => r?.readiness === "ready" || r?.readiness === "preflight_required";
 
@@ -184,6 +185,7 @@ function RehearsalLine({ rehearsal, bring, onBring, disabled }: { rehearsal?: Of
             className={cn(
               "inline-flex max-w-[14rem] items-center gap-1 rounded-full border px-2 py-0.5 tabular-nums transition-colors disabled:cursor-not-allowed disabled:opacity-40",
               on ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-text" : "border-sol-orange/50 text-sol-orange",
+              modernChip({ active: on }),
             )}
           >
             {on ? <Check className="h-3 w-3 shrink-0 text-sol-cyan" /> : null}
@@ -253,6 +255,7 @@ function StayingRow({ s, title, disabled, onBackground }: { s: StayingSession; t
         className={cn(
           "inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-meta transition-colors disabled:cursor-not-allowed disabled:opacity-40",
           s.background ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-text" : "border-sol-border/40 text-sol-text-muted hover:text-sol-text",
+          modernChip({ active: s.background }),
         )}
       >
         {applied && <Check className="h-3 w-3 text-sol-cyan" />}Background
@@ -292,6 +295,7 @@ function CandidateDetail({ c, session, plan, destinationId, onDestination }: {
                 className={cn(
                   "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-meta disabled:cursor-not-allowed disabled:opacity-40",
                   picked ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-text" : "border-sol-border/40 hover:text-sol-text",
+                  modernChip({ active: picked }),
                 )}
               >
                 {destIcon(d)}{d.name}

@@ -68,6 +68,7 @@ import {
   type MigrationCandidate,
   type MigrationRowStatus,
 } from "../../../lib/migrationPlan";
+import { modernButton } from "../../../components/ui/modernLook";
 
 const api = _api as any;
 
@@ -102,8 +103,8 @@ const AGENT_DOT: Record<string, string> = {
   compacting: "bg-sol-green animate-pulse",
   permission_blocked: "bg-sol-yellow",
   waiting: "bg-sol-blue",
-  idle: "bg-gray-500",
-  hibernated: "bg-gray-600",
+  idle: "bg-gray-500 modern:bg-sol-text-dim",
+  hibernated: "bg-gray-600 modern:bg-sol-text-dim/60",
 };
 
 // ── Destination picker ───────────────────────────────────────────────────────
@@ -120,6 +121,8 @@ function DestinationCard({ d, selected, count, onPick }: { d: Device; selected: 
       className={cn(
         "flex min-w-0 flex-col gap-1 rounded-lg border px-3 py-2.5 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50",
         selected ? "border-sol-cyan bg-sol-cyan/10" : "border-sol-border bg-sol-bg-alt hover:border-sol-text-muted",
+        "modern:rounded-control",
+        selected ? "modern:border-sol-cyan modern:bg-sol-cyan/[0.06]" : "modern:border-sol-border modern:bg-sol-card modern:hover:border-sol-text-dim/50",
       )}
     >
       <div className="flex items-center gap-2 min-w-0">
@@ -164,7 +167,7 @@ function CandidateRow({
     >
       <Box className={cn("h-4 w-4 shrink-0", checked ? "text-sol-cyan" : "text-sol-text-dim")} />
       <span
-        className={cn("h-1.5 w-1.5 shrink-0 rounded-full", AGENT_DOT[agentStatus ?? ""] ?? "bg-gray-600")}
+        className={cn("h-1.5 w-1.5 shrink-0 rounded-full", AGENT_DOT[agentStatus ?? ""] ?? "bg-gray-600 modern:bg-sol-text-dim/60")}
         title={agentStatus ? `agent ${agentStatus.replace(/_/g, " ")}` : "not live"}
       />
       <span className="min-w-0 flex-1">
@@ -262,7 +265,7 @@ function BatchCard({ b, devices, now, expandedDefault }: { b: Batch; devices: Ma
         )}
         {!running && b.failed > 0 && (b.resource_offload ? (
           // A resource move retries through a fresh review: hosts, ownership and pressure are checked again.
-          <Link href="/resources" className="inline-flex h-7 items-center gap-1 rounded border border-sol-border/50 px-2 text-xs text-sol-text hover:bg-sol-bg-highlight" title="Resource moves are retried from Resources, where they are checked again">
+          <Link href="/resources" className={`inline-flex h-7 items-center gap-1 rounded border border-sol-border/50 px-2 text-xs text-sol-text hover:bg-sol-bg-highlight ${modernButton({ variant: "outline", size: "sm" })}`} title="Resource moves are retried from Resources, where they are checked again">
             <RotateCcw className="h-3 w-3" /> Review in Resources
           </Link>
         ) : (

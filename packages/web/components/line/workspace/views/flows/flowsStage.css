@@ -155,3 +155,10 @@ a.fs-hot-s:hover { border-color: var(--lw-rule); color: var(--lw-ink); }
 .fs-full[data-drawer] > .fs-map { right: var(--lw-drawer-w); }
 :root[data-flows-full] .lw-body > .lw-drawer { visibility: hidden; }
 .fs-view { margin-right: 4px; }
+
+/* ── Modern (.modern-style on <html>): the rail's filters are the segmented
+   tray (components/ui/modernLook.ts modernTab), the counts in their tones. ── */
+.modern-style .fs-rail-f { margin: 0 10px 8px; padding: 2px; border-radius: var(--radius-control); background-color: color-mix(in srgb, var(--sol-text) 6%, transparent); width: fit-content; max-width: calc(100% - 20px); }
+.modern-style .fs-rail-f button { align-items: center; height: 24px; padding: 0 8px; border: 0; border-radius: 4px; font-size: var(--fs-meta); font-weight: 500; }
+.modern-style .fs-rail-f button[aria-selected="true"] { background-color: var(--sol-card); color: var(--sol-text); box-shadow: 0 0 0 1px var(--sol-border); }
+.modern-style .fs-rail-f button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }

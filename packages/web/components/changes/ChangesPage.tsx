@@ -55,6 +55,7 @@ import { buildTimeline, dayZoom, groupWeeks, weekFolds, weekTop, type TimelineDa
 import { escapeStep, focusedCommitHref, keepsOwnEnter, useChangesKeys } from "./useChangesKeys";
 import { EMPTY_URL, changesHref, clearFilters, hasFilters, useChangesUrlState, type Zoom } from "./useChangesUrlState";
 import { useMountEffect } from "../../hooks/useMountEffect";
+import { modernButton } from "../ui/modernLook";
 
 const releaseName = (r: { surface: string; version?: string; sha: string }) => `${r.surface} ${r.version ?? r.sha.slice(0, 7)}`;
 
@@ -86,7 +87,7 @@ function SmallChanges({ stories, openKey }: { stories: readonly Story[]; openKey
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="rounded px-3 py-1 font-mono text-meta text-sol-text-dim hover:bg-sol-bg-alt/60 hover:text-sol-text/80"
+        className={`rounded px-3 py-1 font-mono text-meta text-sol-text-dim hover:bg-sol-bg-alt/60 hover:text-sol-text/80 ${modernButton({ variant: "ghost", size: "sm" }, "modern:font-sans")}`}
       >
         {open ? "hide" : "+"} {plural(stories.length, "small change")}
       </button>
@@ -114,7 +115,7 @@ function ZoomIn({ onClick, children }: { onClick: () => void; children: React.Re
     <button
       type="button"
       onClick={onClick}
-      className="mt-3 rounded px-2 py-1 -ml-2 font-mono text-meta text-sol-text-dim hover:bg-sol-bg-alt/60 hover:text-sol-text"
+      className={`mt-3 rounded px-2 py-1 -ml-2 font-mono text-meta text-sol-text-dim hover:bg-sol-bg-alt/60 hover:text-sol-text ${modernButton({ variant: "ghost", size: "sm" }, "modern:font-sans")}`}
     >
       {children}
     </button>
@@ -527,7 +528,7 @@ export function ChangesPage() {
                 <button
                   type="button"
                   onClick={() => setChunks((c) => Math.min(MAX_CHUNKS, c + 1))}
-                  className="rounded px-3 py-1 font-mono text-meta text-sol-text-dim hover:bg-sol-bg-alt/60 hover:text-sol-text/80"
+                  className={`rounded px-3 py-1 font-mono text-meta text-sol-text-dim hover:bg-sol-bg-alt/60 hover:text-sol-text/80 ${modernButton({ variant: "ghost", size: "sm" }, "modern:font-sans")}`}
                 >
                   earlier
                 </button>

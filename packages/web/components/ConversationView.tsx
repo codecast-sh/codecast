@@ -78,6 +78,7 @@ import { AnchorHeaderPill } from "./anchor/AnchorHeaderPill";
 import { SessionCallPill } from "./calls/SessionCallPill";
 import { useSqueezeToFit } from "../hooks/useSqueezeToFit";
 import { useIsModernStyle } from "../hooks/useVisualStyle";
+import { BackControl } from "./nav/BackControl";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent } from "./ui/dropdown-menu";
 import { ConversationHeaderBar, ConversationHeaderTitle } from "./conversation/ConversationHeaderBar";
 import { HEADER_CHIP } from "../lib/headerChip";
@@ -4106,8 +4107,10 @@ const ConversationViewInner = (
         className={`${embedded ? "sticky top-0 z-20 bg-sol-bg-alt" : ""} ${!embedded ? deskClass : ""} ${isImageLightboxActive ? "invisible" : ""} ${hideHeader ? "hidden" : ""}`}
         lead={<>
             {/* The inbox's way back from a conversation to its home (the
-                board or the feed of your sessions). */}
-            {onBack && (
+                board or the feed of your sessions). Modern names where it goes:
+                the trail's last step, else the inbox (components/nav/BackControl). */}
+            {onBack && modernStyle && <BackControl className="max-w-[12rem]" />}
+            {onBack && !modernStyle && (
               <button type="button" onClick={onBack} aria-label="Back to all sessions" title="All sessions" data-cc-conv-back className="-ml-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-sol-text-dim hover:bg-sol-bg-highlight hover:text-sol-text">
                 <ChevronLeft className="h-4 w-4" aria-hidden />
               </button>

@@ -10,7 +10,7 @@ import { WorkflowRunNodes } from "../../components/WorkflowRunNodes";
 import { wfStatusMeta, wfFmtTokens } from "../../lib/workflowRun";
 import { AppLoader } from "../../components/AppLoader";
 import { ExternalLink, Workflow } from "lucide-react";
-import type { ReactNode } from "react";
+import { lazy, type ReactNode } from "react";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { PageFrame, PageHeader } from "../../components/ui/page-header";
@@ -98,7 +98,16 @@ export function WorkflowsDashboardContent({ tabs }: { tabs?: ReactNode }) {
   );
 }
 
+// Modern's /workflows is the whole Workflows page (Routines, Runs, Dynamic,
+// its tabs in the header), the page the rail's Workflows row promises.
+// Classic keeps this address for the dynamic runs alone.
+const WorkflowsPage = lazy(() => import("./page"));
+
 export default function WorkflowsDashboard() {
+  return useIsModernStyle() ? <WorkflowsPage /> : <ClassicWorkflowsDashboard />;
+}
+
+function ClassicWorkflowsDashboard() {
   return (
     <AuthGuard>
       <DashboardLayout>

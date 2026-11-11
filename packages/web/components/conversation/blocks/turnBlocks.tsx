@@ -64,6 +64,8 @@ import { requestRewind } from "../../../lib/rewindFiles";
 import { AskUserQuestionBlock, ImageBlock, MonitorBlock, PlanModeBlock, ThinkingBlock } from "./interactiveBlocks";
 import { useImageSrc } from "../../../hooks/useImageSrc";
 import { FooterIconButton, FullscreenIcon, UserIcon } from "./shared";
+import { ModernReceiptWords } from "./ModernReceipt";
+import { useIsModernStyle } from "../../../hooks/useVisualStyle";
 import { CastBrowserRowContext, HostedAskingContext, HostedCardShownContext } from "../../../lib/conversationBlockContexts";
 import { useConversationIdentityRow } from "../../../hooks/useLiveIdentityRow";
 import { AgentSpeaker } from "../../identity/AgentSpeaker";
@@ -828,11 +830,11 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
 }
 export const UserPrompt = memo(UserPromptImpl);
 
-/** Under the person's message in a clean thread, while the agent works on its reply. Static: transcript rows run no animation. */
+/** Under the person's message in a clean thread, while the agent works on its reply (Modern: the Working mark and word). Static: transcript rows run no animation. */
 export function AgentWorkingBubble() {
   return (
-    <div data-cc-working className="flex items-center gap-1 pl-8 mb-3 -mt-1" aria-label="Working on a reply">
-      {[0, 1, 2].map((i) => <span key={i} className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/60" />)}
+    <div data-cc-working className="flex items-center gap-1 pl-8 mb-3 -mt-1 modern:gap-2" aria-label="Working on a reply">
+      {[0, 1, 2].map((i) => <span key={i} className="w-1.5 h-1.5 rounded-full bg-sol-text-dim/60 modern:hidden" />)}<span data-cc-working-mark className="hidden modern:block w-2 h-2 shrink-0 rounded-full bg-sol-green" /><span className="hidden modern:inline text-meta text-sol-text-muted">Working</span>
     </div>
   );
 }
@@ -1050,7 +1052,9 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
   // A hosted conversation opens onto its steps in the assistant's words, each
   // with the tool behind it.
   const hostedSteps = isHostedAgentType(agentType);
-  const { summary, counted, created, madeLine, sources, screenshots, browserTabs, droveCastBrowser } = useMemo(() => {
+  // Modern draws the receipt as a row (ModernReceiptWords); a hosted receipt keeps its plain words.
+  const modernRow = useIsModernStyle() && !hostedSteps;
+  const { summary, counted, actions, created, madeLine, sources, screenshots, browserTabs, droveCastBrowser } = useMemo(() => {
     const actions: { name: string; input: string }[] = [];
     const shots: { id: string; image: ImageData }[] = [];
     // The browser tabs the folded tools drove, one per distinct tab in the
@@ -1078,7 +1082,7 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
       // One step that made one thing reads as one line (HostedMadeLine).
       madeLine: hosted && hosted.steps === 1 && hosted.created.length === 1 ? madeLineParts(hosted.summary) : null,
       sources: hosted?.sources ?? [],
-      counted,
+      counted, actions,
       screenshots: shots,
       browserTabs: [...tabs.values()],
       droveCastBrowser,
@@ -1086,22 +1090,17 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
   }, [entries, images, globalImageMap, resultFor, carriedBrowserRows, agentType, hostedAsking, hostedCardShown]);
   const header = (
     <div
-      data-cc-tool-receipt
+      data-cc-tool-receipt data-cc-row-head={modernRow ? "" : undefined}
       role="button"
       tabIndex={0}
       aria-expanded={expanded}
       onClick={onToggle}
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onToggle(); } }}
-      // One box in both states — same padding, same border width, the outline
-      // starting on the text column's own left edge — so only colour changes
-      // when it opens and the click target never moves or resizes. The open
-      // state carries a transparent border to hold that geometry.
-      //
-      // Closed, the dashed outline says "something is folded here" without
-      // claiming the weight of a real block: no fill and muted text, so the
-      // receipt reads under the reply it sits below rather than beside it,
-      // and is still readable (it is the only way into the turn's tools).
-      // The pointer brightens it.
+      // One box in both states (same padding, same border width, a transparent
+      // border when open), so only colour changes and the target never moves.
+      // Closed, the dashed outline says "something is folded here" without the
+      // weight of a block: no fill, muted text, under the reply it sits below;
+      // still readable, as the only way into the turn's tools.
       // A hosted receipt stays one line on a phone: the chevron keeps its
       // place and a long step ends in an ellipsis rather than wrapping.
       className={`flex items-center ${hostedSteps ? "flex-nowrap" : "flex-wrap"} gap-x-1.5 gap-y-1 max-w-full w-fit cursor-pointer rounded-md border px-2 py-1 text-meta transition ${
@@ -1111,8 +1110,8 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
       }`}
       title={expanded ? "Hide tool activity" : "Show tool activity"}
     >
-      <ChevronRight className={`w-3 h-3 shrink-0 opacity-60 transition-transform ${expanded ? "rotate-90 text-sol-cyan opacity-100" : ""}`} />
-      <span className="min-w-0 truncate tracking-tight">{expanded ? counted : summary}</span>
+      {modernRow ? <ModernReceiptWords calls={actions} counted={counted} resultFor={resultFor} /> : <ChevronRight className={`w-3 h-3 shrink-0 opacity-60 transition-transform ${expanded ? "rotate-90 text-sol-cyan opacity-100" : ""}`} />}
+      {!modernRow && <span className="min-w-0 truncate tracking-tight">{expanded ? counted : summary}</span>}
       {!expanded && browserTabs.map((tab) => <BrowserTabPill key={`${tab.kind}:${tab.tabId}`} tab={tab} />)}
       {!expanded && droveCastBrowser && conversationId && <BrowserWatchButton conversationId={conversationId} />}
       {!expanded && screenshots.map(({ id, image }) => <CondensedImageThumb key={id} image={image} />)}
@@ -1139,15 +1138,15 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
   const sourceLine = sources.length > 0 ? <HostedSources sources={sources} className={notes.length ? "mt-1.5" : "mt-1.5 mb-3"} /> : null;
   if (!expanded) return (
     <>
-      <div className={`not-prose mt-2 flex flex-wrap items-center gap-2 ${hostedSteps && !notes.length && !sourceLine ? "mb-3" : ""}`}>{header}{made}</div>
+      <div data-cc-row={modernRow ? "group" : undefined} className={`not-prose mt-2 flex flex-wrap items-center gap-2 ${hostedSteps && !notes.length && !sourceLine ? "mb-3" : ""}`}>{header}{made}</div>
       {sourceLine}
       {noteCards}
     </>
   );
   return (
-    <div className="not-prose mt-1 border-l-2 border-sol-cyan/50 pl-2">
+    <div data-cc-row={modernRow ? "group" : undefined} className="not-prose mt-1 border-l-2 border-sol-cyan/50 pl-2">
       {header}
-      <div className="pt-0.5 pb-1">
+      <div data-cc-row-list={modernRow ? "" : undefined} className="pt-0.5 pb-1">
         {hostedSteps ? (
           <ul data-cc-hosted-steps className="space-y-1 py-1">
             {entries.flatMap((entry) => entry.tools.map((tc) => (
@@ -1457,7 +1456,7 @@ function AssistantBlockImpl({
     : shouldShowHeader ? "-top-2" : "-top-7";
 
   return (
-    <div data-cc-message="assistant" id={`msg-${messageId}`} data-cc-bubble={bubble ? "" : undefined} className={`group relative scroll-mt-20 ${bubble ? "mb-2" : onlyToolCalls ? "mb-0.5" : condensed ? "mb-2.5" : "mb-6"} transition-[background-color,box-shadow,border-color] ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)} title={!shouldShowHeader ? relativeTime(timestamp) : undefined}>
+    <div data-cc-message="assistant" id={`msg-${messageId}`} data-cc-bubble={bubble ? "" : undefined} data-cc-tools-only={onlyToolCalls ? "" : undefined} className={`group relative scroll-mt-20 ${bubble ? "mb-2" : onlyToolCalls ? "mb-0.5" : condensed ? "mb-2.5" : "mb-6"} transition-[background-color,box-shadow,border-color] ${isHighlighted ? "ring-2 ring-sol-yellow shadow-lg rounded-lg p-2 -m-2 message-highlight" : ""} ${shareSelectionMode ? "cursor-pointer" : ""} ${isSelectedForShare ? "bg-sol-cyan/10 rounded-lg p-2 -m-2 border-2 border-sol-cyan ring-2 ring-sol-cyan/30" : ""}`} onClick={shareSelectionMode ? (() => onToggleShareSelection?.(messageId)) : undefined} onContextMenu={shareSelectionMode ? undefined : (e) => ctxMenu.open(e, undefined)} title={!shouldShowHeader ? relativeTime(timestamp) : undefined}>
       <ContextMenu state={ctxMenu}>
         {() => (
           <>

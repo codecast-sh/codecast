@@ -16,6 +16,7 @@ import { vaultIndex, useVaultIndexVersion } from "../../lib/vault/indexHost";
 import { buildVaultGraph, localSubgraph, type VaultGraph } from "../../lib/vault/graphBuilder";
 import { LinkGraphCanvas, hashedTone, matchWithNeighbors, type LinkGraph } from "../graph/LinkGraphCanvas";
 import { keysOwnedElsewhere } from "../../shortcuts/keyOwnership";
+import { modernButton } from "../ui/modernLook";
 
 /** Hops the local graph reaches. Obsidian's default depth, and the point past
  *  which "neighborhood" stops meaning anything in a densely linked vault. */
@@ -194,7 +195,7 @@ export function VaultGraphView({ activePath, onNavigate, onClose }: VaultGraphVi
         <button
           type="button"
           onClick={() => setLayoutNonce((n) => n + 1)}
-          className="flex items-center justify-center gap-1.5 px-2 py-1 rounded-md border border-sol-border text-sol-text-muted hover:text-sol-text hover:border-sol-cyan transition-colors"
+          className={`flex items-center justify-center gap-1.5 px-2 py-1 rounded-md border border-sol-border text-sol-text-muted hover:text-sol-text hover:border-sol-cyan transition-colors ${modernButton({ variant: "outline", size: "sm" })}`}
         >
           <RotateCcw className="w-3 h-3" />
           Re-run layout

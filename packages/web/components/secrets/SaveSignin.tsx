@@ -32,6 +32,7 @@ import { buttonVariants } from "../ui/button";
 import { shareSigninLedger } from "../../lib/secretLedgers";
 import { vaultFailure } from "./vaultModel";
 import { useSampleVault, type SampleVault } from "./sampleVault";
+import { modernButton } from "../ui/modernLook";
 
 type Team = { id: string; name: string } | null;
 type Saved = { short_id: string; name: string; host: string; cookies: number; action: "created" | "rotated" | "filled"; account_hint?: string };
@@ -199,7 +200,7 @@ export function ChromeButton({ ways: w }: { ways: SigninWaysState }) {
           href={`https://${w.host}`}
           target="_blank"
           rel="noreferrer"
-          className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-sol-border px-3 text-[12.5px] text-sol-text hover:border-sol-text-dim"
+          className={`inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-sol-border px-3 text-[12.5px] text-sol-text hover:border-sol-text-dim ${modernButton({ variant: "outline", size: "md" })}`}
           data-vault-signin-open
         >
           Open <span className="modern:font-mono">{w.host}</span> <ExternalLink size={12} className="text-sol-text-dim" />
@@ -315,7 +316,7 @@ export function SaveSigninDialog({ scope, rows, onClose, onSaved }: { scope: Vau
           </div>
         </div>
         <footer className="flex items-center justify-between gap-2 border-t border-sol-border/60 bg-sol-bg-alt/40 px-5 py-3">
-          <button type="button" onClick={onClose} className="inline-flex h-8 shrink-0 items-center gap-2 rounded-md border border-sol-border px-3 text-[12.5px] text-sol-text-muted hover:text-sol-text">
+          <button type="button" onClick={onClose} className={`inline-flex h-8 shrink-0 items-center gap-2 rounded-md border border-sol-border px-3 text-[12.5px] text-sol-text-muted hover:text-sol-text ${modernButton({ variant: "outline", size: "md" })}`}>
             Cancel <span className="hidden sm:inline-flex"><KeyCap size="xs">esc</KeyCap></span>
           </button>
           <ChromeButton ways={ways} />

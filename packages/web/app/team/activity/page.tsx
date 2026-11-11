@@ -10,6 +10,8 @@ import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { useIsModernStyle } from "../../../hooks/useVisualStyle";
+import { ModernActivityPage } from "../../../components/activity/ModernActivityPage";
 // The single activity feed (the former /dashboard folded in here). It's driven
 // entirely by the URL so the sidebar/command-palette/team-avatar links and tab
 // routing all share one source of truth:
@@ -38,6 +40,10 @@ export default function TeamActivityPage() {
     void markTeamSeen({});
     return () => { void markTeamSeen({}); };
   }, [mode, teamId, markTeamSeen]);
+
+  // Modern draws its own page (components/activity); the rest of this file is Classic and Minimal.
+  const modern = useIsModernStyle();
+  if (modern) return <DashboardLayout><ModernActivityPage tab="activity" /></DashboardLayout>;
 
   // A skeleton only for a genuinely cold cache: nobody known and no team.
   if (!user && !teamId) {

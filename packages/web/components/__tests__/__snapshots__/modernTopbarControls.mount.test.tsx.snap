@@ -1,0 +1,29 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`the top bar in Modern Classic draws the classes it drew before the Modern looks 1`] = `
+"div px-2 sm:px-3 py-1 sm:py-1.5 flex items-center gap-1.5 sm:gap-3
+div flex items-center gap-0.5 flex-shrink-0
+button flex relative h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/60 [&>svg]:h-[18px] [&>svg]:w-[18px] [&>svg]:[stroke-width:1.75] text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text
+div hidden sm:flex items-center gap-2 flex-shrink-0 min-w-0
+div hidden sm:flex flex-1 items-center justify-center gap-2 min-w-min
+div relative w-full min-w-0 transition-[max-width] duration-300 [transition-timing-function:cubic-bezier(0.32,0.72,0,1)] max-w-[230px]
+div absolute inset-y-0 left-0 pl-2.5 flex items-center pointer-events-none
+svg w-3.5 h-3.5 transition-colors duration-200 text-sol-text-dim
+input h-7 w-full pl-8 py-0 bg-sol-bg-alt border rounded-full text-[13px] text-sol-text placeholder:text-sol-text-dim truncate cursor-pointer focus:cursor-text focus:outline-none transition-[border-color,box-shadow,padding] duration-200 pr-12 border-transparent hover:bg-sol-bg-highlight
+div absolute inset-y-0 right-0 pr-2.5 items-center pointer-events-none transition-opacity duration-150 flex opacity-100
+span ml-auto flex items-center gap-[2px]
+kbd inline-flex items-center justify-center min-w-[18px] h-[18px] px-[4px] text-mark leading-none text-sol-text-dim bg-sol-bg-alt border border-sol-border/50 rounded-[4px] shadow-[0_1px_0_rgba(0,0,0,0.12),inset_0_1px_0_rgba(255,255,255,0.04)]
+kbd inline-flex items-center justify-center min-w-[18px] h-[18px] px-[4px] text-mark leading-none text-sol-text-dim bg-sol-bg-alt border border-sol-border/50 rounded-[4px] shadow-[0_1px_0_rgba(0,0,0,0.12),inset_0_1px_0_rgba(255,255,255,0.04)]
+button group flex h-7 shrink-0 items-center gap-1.5 rounded-full bg-sol-bg-alt pl-2.5 pr-2 text-[13px] text-sol-text transition-colors hover:bg-sol-bg-highlight focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/60 data-[state=open]:bg-sol-bg-highlight
+svg lucide lucide-square-pen h-3.5 w-3.5 text-sol-cyan
+svg lucide lucide-chevron-down h-3 w-3 text-sol-text-dim transition-transform duration-150 group-data-[state=open]:rotate-180
+div ml-auto flex items-center gap-1.5 sm:gap-3 flex-shrink-0
+div hidden md:has-[*]:flex h-7 shrink-0 items-center gap-0.5 after:ml-2.5 after:h-4 after:w-px after:bg-sol-border after:content-['']
+button flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-meta font-medium tabular-nums select-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/60 text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text
+button flex h-6 shrink-0 items-center gap-1.5 rounded-md px-2 text-meta font-medium tabular-nums select-none transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/60 hover:brightness-110
+div flex items-center gap-0.5
+button flex relative h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/60 [&>svg]:h-[18px] [&>svg]:w-[18px] [&>svg]:[stroke-width:1.75] bg-sol-cyan/10 text-sol-cyan
+div hidden md:block h-4 w-px shrink-0 bg-sol-border
+div flex items-center gap-0.5
+button flex relative h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/60 [&>svg]:h-[18px] [&>svg]:w-[18px] [&>svg]:[stroke-width:1.75] text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text"
+`;

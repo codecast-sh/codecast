@@ -32,6 +32,7 @@ import { AgentToolSetupPanel } from "../conversation/blocks/AgentToolSetupCard";
 import { useAgentToolSetup } from "../../lib/useAgentToolSetup";
 import { featureLock, useDevicePolicy } from "../../lib/managedPolicy";
 import { featureOnLedger } from "./useFeatureOffer";
+import { modernMenuRow } from "../ui/modernLook";
 
 /**
  * /agent-features: what codecast can teach your agents. The web twin of
@@ -187,7 +188,7 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
                 key={g.id}
                 type="button"
                 onClick={() => document.getElementById(`af-${g.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}
-                className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] text-sol-text-secondary transition-colors hover:bg-sol-bg-highlight/50 hover:text-sol-text"
+                className={`flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-[13px] text-sol-text-secondary transition-colors hover:bg-sol-bg-highlight/50 hover:text-sol-text ${modernMenuRow({}, "modern:text-sol-text")}`}
               >
                 <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${TONE[g.id].dot}`} />
                 <span className="flex-1">{g.name}</span>

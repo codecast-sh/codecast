@@ -16,6 +16,7 @@ import { declineLedger } from "../../lib/secretLedgers";
 import { useFileDrop } from "../../hooks/useFileDrop";
 import { SigninRequestFill } from "./SaveSignin";
 import { EMPTY_DRAFT, checkedPayload, classifyPaste, type ValueDraft } from "./vaultModel";
+import { modernButton } from "../ui/modernLook";
 
 const KEEP = "Keep current";
 
@@ -103,7 +104,7 @@ function FileFields({ draft, set, onPaste, autoFocus }: { draft: ValueDraft; set
     <div className="flex min-w-0 flex-col gap-1.5">
       <div className="flex min-w-0 items-center gap-1.5">
         <input value={draft.filename} onChange={(e) => set({ filename: e.target.value })} placeholder="Filename (optional), like service-account.json" spellCheck={false} className={FIELD_MONO} />
-        <button type="button" onClick={() => picker.current?.click()} className="h-8 shrink-0 rounded-md border border-sol-border px-2.5 text-[12px] text-sol-text-muted hover:text-sol-text" data-vault-file-choose>
+        <button type="button" onClick={() => picker.current?.click()} className={`h-8 shrink-0 rounded-md border border-sol-border px-2.5 text-[12px] text-sol-text-muted hover:text-sol-text ${modernButton({ variant: "outline", size: "md" })}`} data-vault-file-choose>
           Choose file
         </button>
         <input

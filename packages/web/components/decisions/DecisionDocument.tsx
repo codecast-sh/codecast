@@ -26,6 +26,7 @@ import { ShareControl } from "../ShareControl";
 import { decisionWaitLabel, waitsOnViewer } from "../../lib/decisionLinks";
 import { DecisionAnswerPanel, restatesCard, useDecisionAnswering, useDecisionPage } from "./DecisionAnswering";
 import "./decisions.css";
+import { modernButton } from "../ui/modernLook";
 
 // The decision document page (docs/architecture/decisions-as-documents.md
 // D4). Reads the store: the live row from sessionDecisions (optimistic
@@ -129,7 +130,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           <button
             type="button"
             onClick={() => void jumpToAsk()}
-            className="inline-flex items-center gap-1.5 rounded-md border border-sol-blue/50 px-2.5 py-1 text-[12.5px] text-sol-blue hover:bg-sol-blue/10 transition-colors"
+            className={`inline-flex items-center gap-1.5 rounded-md border border-sol-blue/50 px-2.5 py-1 text-[12.5px] text-sol-blue hover:bg-sol-blue/10 transition-colors ${modernButton({ variant: "soft", tone: "blue", size: "sm" })}`}
             data-decision-open-thread
           >
             <MessagesSquare className="w-3.5 h-3.5" />Talk to the session
@@ -137,7 +138,7 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           <button
             type="button"
             onClick={() => { setDiscussOpen(true); requestAnimationFrame(() => document.getElementById("discuss")?.scrollIntoView({ block: "nearest", behavior: "smooth" })); }}
-            className="inline-flex items-center gap-1.5 rounded-md border border-sol-border px-2.5 py-1 text-[12.5px] text-sol-text hover:border-sol-cyan/60 hover:text-sol-cyan transition-colors"
+            className={`inline-flex items-center gap-1.5 rounded-md border border-sol-border px-2.5 py-1 text-[12.5px] text-sol-text hover:border-sol-cyan/60 hover:text-sol-cyan transition-colors ${modernButton({ variant: "outline", size: "sm" })}`}
             data-decision-discuss-button
           >
             <MessageSquare className="w-3.5 h-3.5" />Comment for the team{discussion.rows.length > 0 && <span className="text-sol-text-dim">{discussion.rows.length}</span>}

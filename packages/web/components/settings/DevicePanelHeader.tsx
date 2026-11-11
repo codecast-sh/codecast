@@ -8,6 +8,7 @@ import {
   type Device,
 } from "../DeviceBadge";
 import { ManagedDevicePill } from "./ManagedDevicePill";
+import { modernChip } from "../ui/modernLook";
 
 /**
  * The shared head of a device-scoped settings surface: optional pills to pick
@@ -49,7 +50,7 @@ export function DevicePanelHeader({
                   active
                     ? "border-sol-cyan bg-sol-cyan/10 text-sol-text"
                     : "border-sol-border bg-sol-bg-alt text-sol-text-muted hover:border-sol-text-muted"
-                }`}
+                } ${modernChip({ active }, "modern:gap-2")}`}
               >
                 <DeviceDot online={d.online} />
                 <span className="font-medium">{deviceDisplayName(d)}</span>

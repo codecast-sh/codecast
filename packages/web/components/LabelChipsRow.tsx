@@ -492,7 +492,7 @@ export function LabelChipsRow({
           }
         }}
         style={chipShift(index)}
-        className={`group flex-shrink-0 px-2 py-0.5 rounded-full text-meta flex items-center gap-1 ${
+        className={`group flex-shrink-0 px-2 py-0.5 rounded-full text-meta flex items-center gap-1 modern:h-6 modern:rounded-control modern:py-0 ${
           hiddenKeys.has(key) && key !== peekKey ? "invisible pointer-events-none" : ""
         } ${draggingLabelId === bucket._id ? "opacity-30" : ""} ${
           dragOverBucketId === bucket._id
@@ -581,7 +581,7 @@ export function LabelChipsRow({
             }}
             onBlur={() => { setCreatingLabel(false); setNewLabelName(""); }}
             placeholder="new label…"
-            className="flex-shrink-0 w-24 px-2 py-0.5 rounded-full text-meta bg-sol-bg border border-sol-cyan/50 text-sol-text placeholder:text-sol-text-dim/60 outline-none"
+            className="flex-shrink-0 w-24 px-2 py-0.5 rounded-full text-meta bg-sol-bg border border-sol-cyan/50 text-sol-text placeholder:text-sol-text-dim/60 outline-none modern:h-6 modern:rounded-control modern:bg-sol-card modern:py-0"
           />
         ) : (
           <button
@@ -590,7 +590,7 @@ export function LabelChipsRow({
             title="New label"
             aria-label="New label"
             style={rowHint ? { transform: `translateX(${REORDER_GAP}px)`, transition: "transform 150ms ease" } : { transition: "transform 150ms ease" }}
-            className={`flex-shrink-0 p-1 rounded-full text-sol-text-dim/50 hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors ${hiddenKeys.has("create") ? "invisible pointer-events-none" : ""}`}
+            className={`flex-shrink-0 p-1 rounded-full text-sol-text-dim/50 hover:text-sol-cyan hover:bg-sol-cyan/10 transition-colors modern:inline-flex modern:size-6 modern:items-center modern:justify-center modern:rounded-control modern:p-0 modern:text-sol-text-dim ${hiddenKeys.has("create") ? "invisible pointer-events-none" : ""}`}
           >
             <Plus className="w-2.5 h-2.5" />
           </button>
@@ -611,7 +611,7 @@ export function LabelChipsRow({
               onClick={(e) => clickProjectChip(name, projectPathByName[name] || null, e.altKey, e.shiftKey)}
               onContextMenu={(e) => ctxMenu.open(e, { kind: "project", name })}
               style={rowHint ? { transform: `translateX(${REORDER_GAP}px)`, transition: "transform 150ms ease" } : { transition: "transform 150ms ease" }}
-              className={`flex-shrink-0 px-2 py-0.5 rounded-full text-meta flex items-center gap-1 ${
+              className={`flex-shrink-0 px-2 py-0.5 rounded-full text-meta flex items-center gap-1 modern:h-6 modern:rounded-control modern:py-0 ${
                 hiddenKeys.has(key) && key !== peekKey ? "invisible pointer-events-none" : ""
               } ${
                 active
@@ -659,7 +659,7 @@ export function LabelChipsRow({
             // Pins share the shell: a long name caps, and at widths too narrow
             // for every name the pins shrink to dot + count (tooltip carries the
             // name) so the +N pill after them always stays reachable.
-            className={`group min-w-0 max-w-[8rem] px-2 py-0.5 rounded-full text-meta flex items-center gap-1 font-medium ${bc.bg} ${bc.text}`}
+            className={`group min-w-0 max-w-[8rem] px-2 py-0.5 rounded-full text-meta flex items-center gap-1 font-medium modern:h-6 modern:rounded-control modern:py-0 ${bc.bg} ${bc.text}`}
           >
             <span className={`w-1.5 flex-shrink-0 ${excluded ? "h-[2px] rounded-full bg-current" : `h-1.5 rounded-[2px] ${bc.dot}`}`} />
             <span className={`truncate ${excluded ? "opacity-75" : ""}`}>{bucket.name}</span>
@@ -685,7 +685,7 @@ export function LabelChipsRow({
             onClick={(e) => clickProjectChip(name, projectPathByName[name] || null, e.altKey, e.shiftKey)}
             onContextMenu={(e) => ctxMenu.open(e, { kind: "project", name })}
             title={filterChipTitle(label, excluded, projectFilters.length === 1)}
-            className={`min-w-0 max-w-[8rem] px-2 py-0.5 rounded-full text-meta flex items-center gap-1 font-medium ${pc.bg} ${pc.text}`}
+            className={`min-w-0 max-w-[8rem] px-2 py-0.5 rounded-full text-meta flex items-center gap-1 font-medium modern:h-6 modern:rounded-control modern:py-0 ${pc.bg} ${pc.text}`}
           >
             <span className={`w-1.5 flex-shrink-0 ${excluded ? "h-[2px] rounded-full bg-current" : `h-1.5 rounded-full ${pc.dot}`}`} />
             <span className={`truncate ${excluded ? "opacity-75" : ""}`}>{label}</span>
@@ -719,7 +719,7 @@ export function LabelChipsRow({
           // the pill still paints and still takes clicks. flex-shrink-0 is what
           // holds its width while the shell (flex-1 min-w-0) gives way first —
           // squeezing the panel hides every chip but never this pill.
-          className="flex-shrink-0 px-1.5 py-0.5 rounded-full text-meta tabular-nums transition-colors border border-sol-border/50 bg-sol-bg/70 text-sol-text-dim hover:text-sol-text hover:border-sol-border"
+          className="flex-shrink-0 px-1.5 py-0.5 rounded-full text-meta tabular-nums transition-colors border border-sol-border/50 bg-sol-bg/70 text-sol-text-dim hover:text-sol-text hover:border-sol-border modern:h-6 modern:rounded-control modern:px-2 modern:py-0 modern:border-sol-border modern:bg-sol-card modern:hover:bg-sol-bg-alt"
         >
           +{hiddenCount + zeroHiddenCount}
         </button>
@@ -730,9 +730,9 @@ export function LabelChipsRow({
           ref={popoverRef}
           {...OWNS_MODIFIER_CLICK}
           style={{ top: popoverPos.top, bottom: popoverPos.bottom, left: popoverPos.left, maxHeight: popoverPos.maxHeight }}
-          className="fixed z-[9999] w-64 overflow-y-auto rounded-lg border border-sol-border/70 bg-sol-bg shadow-2xl shadow-black/30 py-1"
+          className="fixed z-[9999] w-64 overflow-y-auto rounded-lg border border-sol-border/70 bg-sol-bg shadow-2xl shadow-black/30 py-1 modern:rounded-card modern:border-sol-border modern:bg-sol-card modern:shadow-popover"
         >
-          <div className="px-3 pt-1.5 pb-1 text-mark font-semibold uppercase tracking-widest text-sol-text-dim/70 flex items-center gap-1.5">
+          <div className="px-3 pt-1.5 pb-1 text-mark font-semibold uppercase tracking-widest text-sol-text-dim/70 flex items-center gap-1.5 modern:text-meta modern:font-medium modern:normal-case modern:tracking-normal modern:text-sol-text-dim">
             <Tag className="w-2.5 h-2.5" /> Labels
           </div>
           {visibleBuckets.length === 0 && (
@@ -802,7 +802,7 @@ export function LabelChipsRow({
                     }
                   }}
                   style={popRowShift(i)}
-                  className={`group flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer ${
+                  className={`group flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer modern:mx-1 modern:min-h-control-sm modern:rounded-control modern:px-2 modern:py-1 modern:text-ui ${
                     draggingLabelId === bucket._id ? "opacity-30" : ""
                   } ${
                     dragOverBucketId === bucket._id
@@ -864,14 +864,14 @@ export function LabelChipsRow({
                 if (e.key === "Enter") commitNewLabel();
               }}
               placeholder="+ new label…"
-              className="w-full px-2 py-1 rounded-md text-meta bg-sol-bg-alt/50 border border-sol-border/40 text-sol-text placeholder:text-sol-text-dim/60 outline-none focus:border-sol-cyan/50"
+              className="w-full px-2 py-1 rounded-md text-meta bg-sol-bg-alt/50 border border-sol-border/40 text-sol-text placeholder:text-sol-text-dim/60 outline-none focus:border-sol-cyan/50 modern:h-control-sm modern:rounded-control modern:border-sol-border modern:bg-sol-card modern:py-0 modern:text-ui"
             />
           </div>
           {[["Projects", workProjects], ["Folders", folders]].map(([heading, rows]) => (rows as Array<[string, number]>).length > 0 && (
             <div key={heading as string}>
               {/* Projects are Codecast projects (the sessions working in
                   them, store/workProjects); a folder is where a session ran. */}
-              <div className="mt-0.5 border-t border-sol-border/40 px-3 pt-2 pb-1 text-mark font-semibold uppercase tracking-widest text-sol-text-dim/70">
+              <div className="mt-0.5 border-t border-sol-border/40 px-3 pt-2 pb-1 text-mark font-semibold uppercase tracking-widest text-sol-text-dim/70 modern:text-meta modern:font-medium modern:normal-case modern:tracking-normal modern:text-sol-text-dim">
                 {heading as string}
               </div>
               {(rows as Array<[string, number]>).map(([name, count]) => {
@@ -891,7 +891,7 @@ export function LabelChipsRow({
                       ctxMenu.open(e, { kind: "project", name });
                       setPopoverOpen(false);
                     }}
-                    className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors ${
+                    className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors modern:mx-1 modern:min-h-control-sm modern:rounded-control modern:px-2 modern:py-1 modern:text-ui ${
                       active ? "bg-sol-cyan/10 text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt/60"
                     }`}
                     title={excluded ? "Hidden — click to clear" : active ? "Filtering — click to clear" : "Click to filter — right-click for more"}

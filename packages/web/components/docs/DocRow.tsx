@@ -6,6 +6,8 @@ import { DocDates } from "../DocDates";
 import { docOrigin, docTypeLabel } from "@codecast/shared/docs";
 import { docTypeStyle } from "../../lib/docTypeStyle";
 import { getLabelColor } from "../../lib/labelColors";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
+import { modernPill, modernPillShape } from "../ui/modernLook";
 
 export function DocRow({ doc, onStar, timeKey = "updated_at" }: {
   doc: DocItem;
@@ -19,6 +21,8 @@ export function DocRow({ doc, onStar, timeKey = "updated_at" }: {
    *  rather than the store passes its own. */
   onStar?: (doc: DocItem, starred: boolean) => void;
 }) {
+  // Modern adds its looks; Classic's class strings stay as they were.
+  const m = useIsModernStyle();
   const cfg = docTypeStyle(doc.doc_type);
   const title = (doc as any).display_title || doc.title || "Untitled";
   return (
@@ -29,7 +33,7 @@ export function DocRow({ doc, onStar, timeKey = "updated_at" }: {
           stays quiet; always shown once set. */}
       <button
         onClick={(e) => { e.stopPropagation(); if (onStar) onStar(doc, !doc.pinned); else useInboxStore.getState().pinDoc(doc._id, !doc.pinned); }}
-        className={`flex-shrink-0 p-0.5 -m-0.5 rounded transition-colors ${doc.pinned ? "text-sol-yellow" : "text-sol-text-dim/50 opacity-0 group-hover:opacity-100 hover:text-sol-yellow"}`}
+        className={`flex-shrink-0 p-0.5 -m-0.5 rounded transition-colors ${doc.pinned ? "text-sol-yellow" : "text-sol-text-dim/50 opacity-0 group-hover:opacity-100 hover:text-sol-yellow"}${m ? " modern:-m-1.5 modern:rounded-control modern:p-1.5 modern:hover:bg-sol-text/[0.06]" : ""}`}
         title={doc.pinned ? "Unstar" : "Star (keeps it on your shelf)"}
         aria-label={doc.pinned ? "Unstar document" : "Star document"}
       >
@@ -43,7 +47,7 @@ export function DocRow({ doc, onStar, timeKey = "updated_at" }: {
         <Link
           href={`/plans/${doc.plan_short_id}`}
           onClick={(e) => e.stopPropagation()}
-          className="text-meta px-1.5 py-0.5 rounded border border-sol-border/30 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/30 transition-colors flex-shrink-0 cq-hide-compact"
+          className={`text-meta px-1.5 py-0.5 rounded border border-sol-border/30 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/30 transition-colors flex-shrink-0 cq-hide-compact${m ? ` ${modernPill({}, "modern:font-mono modern:font-normal modern:hover:text-sol-cyan")}` : ""}`}
         >
           {doc.plan_short_id}
         </Link>
@@ -53,7 +57,7 @@ export function DocRow({ doc, onStar, timeKey = "updated_at" }: {
           {doc.labels.slice(0, 2).map((l) => {
             const lc = getLabelColor(l);
             return (
-              <span key={l} className={`inline-flex items-center gap-1 text-meta px-1.5 py-0 rounded-full border whitespace-nowrap ${lc.bg} ${lc.border} ${lc.text}`}>
+              <span key={l} className={`inline-flex items-center gap-1 text-meta px-1.5 py-0 rounded-full border whitespace-nowrap ${lc.bg} ${lc.border} ${lc.text}${m ? ` ${modernPillShape()}` : ""}`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
                 {l}
               </span>

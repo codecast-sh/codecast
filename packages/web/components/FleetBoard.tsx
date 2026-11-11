@@ -35,9 +35,11 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { LivePulseDot } from "./SessionActivityLine";
 import { useIsModernStyle } from "../hooks/useVisualStyle";
+import { isModernStyle } from "../lib/visualStyle";
 import { ModernFleetBody } from "./fleet/ModernFleetBoard";
 import { hostedStopOf } from "../lib/hostedNotice";
 import { isHostedAgentType } from "@codecast/shared/contracts";
+import { modernDialog, modernScrim } from "./ui/modernLook";
 // The fleet board: the inbox home surface when clientState.ui.inbox_home is
 // "board" (the default). Every visible session as a dense two-line tile,
 // grouped into NEEDS YOU / RUNNING / FINISHED bands — supervision by scanning,
@@ -247,7 +249,7 @@ function BandSection({
         <button
           type="button"
           onClick={() => setShowAll(true)}
-          className="mt-2 px-1 text-meta font-medium text-sol-text-dim hover:text-sol-text"
+          className="mt-2 px-1 text-meta font-medium text-sol-text-dim hover:text-sol-text modern:h-6 modern:rounded-control modern:px-2 modern:hover:bg-sol-text/[0.06]"
         >
           Show all {rows.length}
         </button>
@@ -348,8 +350,8 @@ function FleetDrillIn() {
     // surface itself, presented as an overlay — not a dialog that owns the
     // keyboard against it. Escape/backdrop dismissal is handled above.
     <div className="absolute inset-0 z-30 flex" role="dialog" aria-modal="false">
-      <div className="absolute inset-0 bg-sol-bg/80" onClick={handleClose} />
-      <div className="relative m-auto flex h-[94%] w-[min(1100px,96%)] flex-col overflow-hidden rounded-lg border border-sol-border bg-sol-bg shadow-2xl">
+      <div className={`absolute inset-0 bg-sol-bg/80 ${modernScrim}`} onClick={handleClose} />
+      <div className={`relative m-auto flex h-[94%] w-[min(1100px,96%)] flex-col overflow-hidden rounded-lg border border-sol-border bg-sol-bg shadow-2xl ${modernDialog({ scroll: false })}`}>
         <ErrorBoundary name="FleetDrillIn" level="panel">
           <InboxConversation
             key={getSessionRenderKey(session) || id}
@@ -407,7 +409,17 @@ export function FleetBoard() {
   );
 
   const handleOpen = useCallback((id: string) => {
-    useInboxStore.getState().wsShow("secondary", { kind: "conversation", ref: id }, { presentation: "overlay" });
+    const store = useInboxStore.getState();
+    // Modern opens a tile where a session opens from everywhere else (the
+    // rail, the palette, a link): the inbox's own session page, with its
+    // header's way back to this board and the triage keys on it. Classic
+    // keeps the drill-in overlay.
+    if (isModernStyle()) {
+      store.navigateToSession(id);
+      if (store.showMySessions) store.setShowMySessions(false);
+      return;
+    }
+    store.wsShow("secondary", { kind: "conversation", ref: id }, { presentation: "overlay" });
   }, []);
 
   // Right-click triage on a tile: the same shared session menu every list row

@@ -8,11 +8,13 @@
 // The look lives in modernRail.css under [data-modern-rail], so Simple view's
 // and Minimal's [data-sv-nav] rules keep to the classic rail.
 
-import { lazy, memo, Suspense, type ReactNode, type Ref } from "react";
+import { lazy, memo, Suspense, useRef, type ReactNode, type Ref } from "react";
 import { PhoneCall, Plus } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useCallsAvailable, useTeamFeature, useWorkspaceFeature, useWorkspaceFeatureState } from "../../lib/teamFeatures";
-import { FOLDERS_HEADING, navActiveId, type NavGates } from "../../lib/navRegistry";
+import { FOLDERS_HEADING, type NavGates } from "../../lib/navRegistry";
+import { placeSection, RAIL_MORE_EVENT } from "../../lib/navPlace";
+import { useMountEffect } from "../../hooks/useMountEffect";
 import { sortedWorkbenches } from "../../lib/workbenchSwitch";
 import { useNeedsInputCount } from "../../hooks/useNeedsInputCount";
 import { useOwnedDecisionCount } from "../../hooks/useDecisionRows";
@@ -150,7 +152,9 @@ export function ModernSidebar({
   /** A solo account's short rail (lib/railFocus.ts). */
   focus: { offered: boolean; focused: boolean };
 }) {
-  const activeId = navActiveId(pathname);
+  // Every page lights its section, an object page reached by link included
+  // (a session lights Inbox, a teammate Org): lib/navPlace.
+  const activeId = placeSection(pathname);
   const isChat = pathname === "/chat" || !!pathname?.startsWith("/chat/");
   const isTasks = pathname === "/tasks" || !!pathname?.startsWith("/tasks/");
   const isDocs = activeId === "docs";
@@ -183,6 +187,15 @@ export function ModernSidebar({
   const chatDrills = drillOn && chatOn && !chatAway && !peek;
   const tasksDrill = drillOn && !workAway && taskViewItems.length > 0;
   const drill = useRailLevel<"chat" | "tasks" | "more">(isChat ? "chat" : isTasks ? "tasks" : null, { chat: chatDrills, tasks: tasksDrill, more: drillOn });
+  // The "More" crumb above a page that lives there opens this level
+  // (components/nav/PlaceCrumbs).
+  const openMore = useRef(() => {});
+  openMore.current = () => drill.open("more");
+  useMountEffect(() => {
+    const onMore = () => openMore.current();
+    window.addEventListener(RAIL_MORE_EVENT, onMore);
+    return () => window.removeEventListener(RAIL_MORE_EVENT, onMore);
+  });
 
   const sectionOpen = (key: string, fallback: boolean) => viewSectionOverride[key] ?? fallback;
   const toggleSection = (key: string, fallback: boolean) => setViewSectionOverride((o) => ({ ...o, [key]: !(o[key] ?? fallback) }));

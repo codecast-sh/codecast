@@ -3,6 +3,8 @@
 import { flowName } from "@codecast/shared/contracts/flowPool";
 import { useMemo, useState } from "react";
 import { ShareControl } from "../../../../components/ShareControl";
+import { PageHeader } from "../../../../components/ui/page-header";
+import { PlaceCrumbs } from "../../../../components/nav/PlaceCrumbs";
 import { policyTeamOf } from "@codecast/shared/contracts";
 import Link from "next/link";
 import { useParams } from "next/navigation";
@@ -33,6 +35,7 @@ import {
 import { useTitlebarHead } from "../../../../hooks/useTitlebarHead";
 import { KeyCap } from "../../../../components/KeyCap";
 import { isMac } from "../../../../shortcuts/registry";
+import { modernButton, modernField, modernLook } from "../../../../components/ui/modernLook";
 
 interface WorkflowRun {
   _id: string;
@@ -177,39 +180,62 @@ function RunDetailContent({ runId }: { runId: string }) {
   const lineHere = projectId ? (patch: LineSelectionPatch) => lineWorkspaceHref(project?.short_id ?? projectId, { graph: graphKeyOf(run as GraphRun), ...patch }) : null;
   const hostHref = run.primary_conversation_id ? `/conversation/${run.primary_conversation_id}` : run.primary_session_id ? `/conversation/${run.primary_session_id}` : null;
 
+  // The run's name, state, facts and share, drawn by whichever header is up.
+  const runTitle = run.task_title ?? task?.title ?? flowName({ label: workflow?.label ?? run.workflow_label, name: workflow?.name ?? run.workflow_name });
+  const statusChip = (
+    line ? null : (
+      <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${st.color} ${st.bg}`}>
+        <StatusIcon className={`w-3 h-3 ${run.status === "running" ? "animate-spin" : ""}`} />
+        {run.status}
+      </span>
+    )
+  );
+  const subtitle = (
+    <p className="text-xs text-sol-text-dim mt-0.5 truncate" data-run-subtitle>
+      {line ? `Flow run${projectTitle ? ` on ${projectTitle}` : ""}` : run.task_title || task?.title ? `Run of ${flowName({ label: workflow?.label ?? run.workflow_label, name: workflow?.name ?? run.workflow_name }, "a workflow")}` : "Workflow run"}
+      {run.goal_override && !run.task_title ? `: ${run.goal_override}` : ""}
+      {counts && counts.sessions > 0 && <span> · {counts.sessions} {counts.sessions === 1 ? "session" : "sessions"}</span>}
+      {!line && run.total_tokens ? <span title="Tokens across the run's sessions"> · {wfFmtTokens(run.total_tokens)} tok</span> : null}
+      {!card && (agentMin != null && !isActive
+        ? <span title="Agent time summed over the run's sessions"> · {agentMin} agent min</span>
+        : <span title="Wall time, start to end"> · {duration}</span>)}
+      {!card && cost && (cost.billed_usd > 0 || cost.list_usd > 0) && <span title="Money the run billed; its subscription sessions at API list price, an equivalent never billed"> · {costUsd(cost.billed_usd)} billed · {costUsd(cost.list_usd)} at list price</span>}
+    </p>
+  );
+  const share = <ShareControl label="workflow run" path={`/workflows/runs/${run._id}`} publicShare={{ kind: "run", id: run._id, token: (run as any).share_token, team: policyTeamOf("workflow_runs", run) }} />;
+  const backHref = line ? (lineHere ? lineHere({ run: run._id, case: run.task_id ?? null }) : "/flows") : "/workflows";
+
   return (
     <div className="flex flex-col h-full overflow-hidden bg-sol-bg">
-      <div ref={titlebarRef} className="flex items-center gap-3 px-5 py-3 border-b border-sol-border/20 bg-sol-bg-alt flex-shrink-0">
-        <Link href={line ? (lineHere ? lineHere({ run: run._id, case: run.task_id ?? null }) : "/flows") : "/workflows"} className="text-sol-text-dim hover:text-sol-text transition-colors" title={line ? "Back to flows" : "Back to workflows"}>
-          <ChevronLeft className="w-4 h-4" />
-        </Link>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm font-semibold text-sol-text truncate">
-              {run.task_title ?? task?.title ?? flowName({ label: workflow?.label ?? run.workflow_label, name: workflow?.name ?? run.workflow_name })}
-            </span>
-            {/* A line run's state is the outcome sentence below; another workflow keeps the engine's word. */}
-            {line ? null : (
-              <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${st.color} ${st.bg}`}>
-                <StatusIcon className={`w-3 h-3 ${run.status === "running" ? "animate-spin" : ""}`} />
-                {run.status}
-              </span>
-            )}
+      <PageHeader
+        legacy={
+          <div ref={titlebarRef} className="flex items-center gap-3 px-5 py-3 border-b border-sol-border/20 bg-sol-bg-alt flex-shrink-0">
+            <Link href={line ? (lineHere ? lineHere({ run: run._id, case: run.task_id ?? null }) : "/flows") : "/workflows"} className="text-sol-text-dim hover:text-sol-text transition-colors" title={line ? "Back to flows" : "Back to workflows"}>
+              <ChevronLeft className="w-4 h-4" />
+            </Link>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-sm font-semibold text-sol-text truncate">
+                  {runTitle}
+                </span>
+                {/* A line run's state is the outcome sentence below; another workflow keeps the engine's word. */}
+                {statusChip}
+              </div>
+              {/* What ran, and how long and what it cost unless the card below says so. */}
+              {subtitle}
+            </div>
+            {share}
           </div>
-          {/* What ran, and how long and what it cost unless the card below says so. */}
-          <p className="text-xs text-sol-text-dim mt-0.5 truncate" data-run-subtitle>
-            {line ? `Flow run${projectTitle ? ` on ${projectTitle}` : ""}` : run.task_title || task?.title ? `Run of ${flowName({ label: workflow?.label ?? run.workflow_label, name: workflow?.name ?? run.workflow_name }, "a workflow")}` : "Workflow run"}
-            {run.goal_override && !run.task_title ? `: ${run.goal_override}` : ""}
-            {counts && counts.sessions > 0 && <span> · {counts.sessions} {counts.sessions === 1 ? "session" : "sessions"}</span>}
-            {!line && run.total_tokens ? <span title="Tokens across the run's sessions"> · {wfFmtTokens(run.total_tokens)} tok</span> : null}
-            {!card && (agentMin != null && !isActive
-              ? <span title="Agent time summed over the run's sessions"> · {agentMin} agent min</span>
-              : <span title="Wall time, start to end"> · {duration}</span>)}
-            {!card && cost && (cost.billed_usd > 0 || cost.list_usd > 0) && <span title="Money the run billed; its subscription sessions at API list price, an equivalent never billed"> · {costUsd(cost.billed_usd)} billed · {costUsd(cost.list_usd)} at list price</span>}
-          </p>
-        </div>
-        <ShareControl label="workflow run" path={`/workflows/runs/${run._id}`} publicShare={{ kind: "run", id: run._id, token: (run as any).share_token, team: policyTeamOf("workflow_runs", run) }} />
-      </div>
+        }
+        title={runTitle}
+        status={statusChip}
+        // A flow's run sits under Flows; any other under Workflows (lib/navPlace).
+        crumbs={line ? <PlaceCrumbs crumbs={[{ label: "Flows", href: "/flows" }]} trailing={false} /> : undefined}
+        backFallback={{ label: line ? "Flows" : "Workflows", href: backHref }}
+        share={share}
+      >
+        <div className="min-w-0 text-meta text-sol-text-dim">{subtitle}</div>
+      </PageHeader>
 
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-[60rem] mx-auto px-5 py-5 space-y-7">
@@ -263,7 +289,7 @@ function RunDetailContent({ runId }: { runId: string }) {
                       <button
                         key={choice.key}
                         onClick={() => handleGateResponse(choice.key)}
-                        className="px-3 py-1.5 text-xs font-medium text-sol-text border border-sol-border/30 rounded-lg hover:bg-sol-bg-highlight hover:border-sol-magenta/40 transition-colors disabled:opacity-50"
+                        className={`px-3 py-1.5 text-xs font-medium text-sol-text border border-sol-border/30 rounded-lg hover:bg-sol-bg-highlight hover:border-sol-magenta/40 transition-colors disabled:opacity-50 ${modernButton({ variant: "outline", size: "sm" })}`}
                       >
                         <span className="font-mono text-sol-magenta mr-1">[{choice.key}]</span>
                         {choice.label.replace(/^\[.\]\s*/, "")}
@@ -278,12 +304,12 @@ function RunDetailContent({ runId }: { runId: string }) {
                     onKeyDown={e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); handleGateResponse(gateText); } }}
                     placeholder="Type your response…"
                     rows={3}
-                    className="flex-1 px-3 py-2 text-sm bg-sol-bg border border-sol-border/40 rounded-lg text-sol-text placeholder-sol-text-dim/50 focus:outline-none focus:border-sol-magenta/50 resize-none disabled:opacity-50"
+                    className={`flex-1 px-3 py-2 text-sm bg-sol-bg border border-sol-border/40 rounded-lg text-sol-text placeholder-sol-text-dim/50 focus:outline-none focus:border-sol-magenta/50 resize-none disabled:opacity-50 ${modernLook(modernField, "modern:text-body")}`}
                   />
                   <button
                     onClick={() => handleGateResponse(gateText)}
                     disabled={!gateText.trim()}
-                    className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-sol-magenta border border-sol-magenta/30 rounded-lg hover:bg-sol-magenta/10 transition-colors disabled:opacity-40 whitespace-nowrap"
+                    className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-sol-magenta border border-sol-magenta/30 rounded-lg hover:bg-sol-magenta/10 transition-colors disabled:opacity-40 whitespace-nowrap ${modernButton({ variant: "soft", tone: "magenta", size: "md" })}`}
                   >
                     Send
                     <span className="inline-flex gap-0.5 opacity-80">

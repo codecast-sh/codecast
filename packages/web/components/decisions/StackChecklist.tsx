@@ -14,6 +14,7 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useTabActive } from "../../hooks/usePagePresence";
 import { hasOpenModal } from "../../shortcuts";
 import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
+import { modernButton } from "../ui/modernLook";
 
 // A stack as a checklist (D5): the members in the stack's order, one of them
 // current. Keys 1 to 9 answer the current member (its card claims them),
@@ -88,7 +89,7 @@ export function StackChecklist({ stack, editable = false, keys = false }: { stac
           </>
         )}
         {defaults.length > 0 && (
-          <button onClick={answerAllDefaults} className="px-2 py-0.5 rounded border border-sol-blue/40 text-sol-blue hover:bg-sol-blue hover:text-sol-bg transition-colors">
+          <button onClick={answerAllDefaults} className={`px-2 py-0.5 rounded border border-sol-blue/40 text-sol-blue hover:bg-sol-blue hover:text-sol-bg transition-colors ${modernButton({ variant: "soft", tone: "blue", size: "xs" })}`}>
             answer all {defaults.length} default{defaults.length === 1 ? "" : "s"}
           </button>
         )}

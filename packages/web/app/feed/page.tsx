@@ -4,6 +4,8 @@ import { DashboardLayout } from "../../components/DashboardLayout";
 import { MessageFeed } from "../../components/MessageFeed";
 import { PageFrame, PageHeader } from "../../components/ui/page-header";
 import { SegmentedToggle } from "../../components/SegmentedToggle";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
+import { ModernActivityPage } from "../../components/activity/ModernActivityPage";
 
 const FILTERS = [
   { key: "my", label: "My Messages" },
@@ -12,6 +14,9 @@ const FILTERS = [
 
 export default function FeedPage() {
   const [filter, setFilter] = useState<"my" | "team">("my");
+  // Modern: the message feed is the Messages tab of the Activity page.
+  const modern = useIsModernStyle();
+  if (modern) return <AuthGuard><DashboardLayout><ModernActivityPage tab="messages" /></DashboardLayout></AuthGuard>;
 
   // Classic and Minimal: the page's own title row and line.
   const legacy = (

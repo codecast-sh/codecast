@@ -34,6 +34,8 @@ import { MessageMarkdown } from "./markdown";
 import type { ConversationDensity, ParsedApiError } from "./types";
 import { DENSITY_OPTIONS } from "../../lib/conversationDensity";
 import { Button } from "../ui/button";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
+import { ModernApiErrorRow } from "./ModernApiErrorRow";
 
 // The density dropdown's option list. Guests (unauthenticated share-link
 // viewers) get the local render densities only — the AI retellings need an
@@ -163,10 +165,10 @@ export function TimelineRule({
 }) {
   const line = `flex-1 h-px${faint ? " opacity-40" : ""}`;
   return (
-    <div className={`flex items-center gap-3 select-none ${className}`} aria-label={label}>
-      <div className={line} style={{ background: `linear-gradient(to right, transparent, ${color})` }} />
+    <div className={`flex items-center gap-3 select-none ${className}`} aria-label={label} data-cc-divider data-cc-row-lead>
+      <div data-cc-row-rule className={line} style={{ background: `linear-gradient(to right, transparent, ${color})` }} />
       {children}
-      <div className={line} style={{ background: `linear-gradient(to left, transparent, ${color})` }} />
+      <div data-cc-row-rule className={line} style={{ background: `linear-gradient(to left, transparent, ${color})` }} />
     </div>
   );
 }
@@ -302,16 +304,15 @@ export function ApiErrorCard({ error, agentType, conversationId, messageUuid, ti
   const cloudCard = useCloudAgentSetupCard(conversationId, messageUuid, error.message);
   // A credential card is history once the machine has the credential, whatever the session did since.
   const live = useApiErrorLive(conversationId) && !cloudCard?.resolved;
-  // A usage-limit park has its own card: fixed shape in every density, the
-  // reset counted down in the viewer's clock, and the owner machine's
-  // recovery flags read into a "what happens next" line.
+  const modern = useIsModernStyle();
+  // A usage-limit park has its own card in every density and style: the reset
+  // in the viewer's clock, the owner machine's recovery flags as "what next".
   if (error.isLimit) {
     return <LimitParkCard message={error.message} timestamp={timestamp} conversationId={conversationId} live={live} compact={compact} />;
   }
   const isServerError = !error.isAuth && !error.isLimit && !error.isConnection && !error.isThrottle && (error.statusCode ?? 0) >= 500;
 
-  // Tone: amber (or red for a provider 5xx) while the block is in force;
-  // muted once the session moved past it, so a stale banner reads as history.
+  // Tone: amber (or red for a 5xx) while in force; muted once the session moved past it.
   const tone = !live
     ? { border: "border-sol-border/40 bg-sol-bg-alt/30", fg: "text-sol-text-muted", badge: "border-sol-border/40 bg-sol-bg-alt/50 text-sol-text-muted", icon: "bg-sol-bg-alt text-sol-text-muted" }
     : isServerError
@@ -418,6 +419,8 @@ export function ApiErrorCard({ error, agentType, conversationId, messageUuid, ti
     );
   }
 
+  // Modern: one row in the Error colour with its fix as a button; the hint opens under it.
+  if (modern) return <ModernApiErrorRow heading={heading} error={error} live={live} timestamp={timestamp} conversationId={conversationId} signIn={error.isAuth && cloudCard?.kind !== "credential" ? remedy.command : undefined} detail={cloudSetup || (hint && !error.isContext) ? <>{cloudSetup && <CloudAgentSetupText spec={cloudSetup.spec} message={error.message} />}{error.isContext ? null : hint}</> : undefined} />;
   return (
     <div className={`rounded-lg border ${tone.border} ${compact ? "px-2.5 py-2" : "px-3 py-2.5"}`}>
       <div className="flex items-center gap-2 flex-wrap">
@@ -877,15 +880,12 @@ export const ConversationTaskStatsMenuItem = memo(function ConversationTaskStats
 });
 
 // The composer-footer "working" status line. A working turn can go quiet for
-// minutes — one long generation, or a long-running tool whose result hasn't
-// landed yet — and a static "Working" reads as frozen. Past a short grace, surface
-// a live-ticking elapsed clock (and the tool in flight, if any) so a long turn
-// visibly reads as progressing. startedAt = last rendered message timestamp (how
-// long the view has been static); phrase = what the loaded timeline says is in
-// flight ("editing chat.ts"), the fallback when the row's server side activity
-// stamp (the same phrase, written at ingest and shown on the inbox card) is
-// absent or stale. Owns its own 1s ticker so only this tiny node re-renders each
-// second, not the whole composer; the activity dep is per row, text plus stamp.
+// minutes, and a static "Working" reads as frozen: past a short grace it shows a
+// ticking elapsed clock and the tool in flight. startedAt = last rendered message
+// timestamp; phrase = what the loaded timeline says is in flight ("editing
+// chat.ts"), the fallback when the row's activity stamp (written at ingest, shown
+// on the inbox card) is absent or stale. Its own 1s ticker re-renders only this
+// node, not the composer; the activity dep is per row, text plus stamp.
 export function WorkingStatusLine({ startedAt, phrase, conversationId, stopHint }: { startedAt?: number; phrase?: string; conversationId: string; stopHint?: boolean }) {
   const [now, setNow] = useState(() => Date.now());
   useMountEffect(() => {
@@ -911,9 +911,9 @@ export function WorkingStatusLineView({ startedAt, now, label, stopHint, labelNo
   const showElapsed = shouldShowElapsed(startedAt, now);
   return (
     <span className="flex items-center gap-1.5 min-w-0">
-      <LivePulseDot className="w-2 h-2" />
+      <LivePulseDot className="w-2 h-2 modern:animate-none" />
       Working
-      {showElapsed && <span className="text-sol-text-dim tabular-nums">· {formatElapsedClock(elapsedMs)}</span>}
+      {showElapsed && <span className="text-sol-text-dim tabular-nums modern:text-meta">· {formatElapsedClock(elapsedMs)}</span>}
       {stopHint && <span data-stop-hint className="inline-flex shrink-0 items-center gap-1 text-sol-text-dim/60">· <KeyCap size="xs">Esc</KeyCap> stop</span>}
       {(showElapsed || labelNow) && label && <span className="text-sol-text-dim truncate" title={label}>· {label}</span>}
     </span>

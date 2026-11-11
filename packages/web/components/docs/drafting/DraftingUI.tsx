@@ -38,6 +38,7 @@ import {
   type Range,
 } from "../../editor/DraftingExtension";
 import type { Drafting } from "./useDrafting";
+import { modernButton, modernMenuRow } from "../../ui/modernLook";
 
 // The doc page's drafting surfaces, after Jason Fried's Write_On: a quiet
 // toggle that turns on the affordances, the alternatives panel on the left,
@@ -169,7 +170,7 @@ function LabMenu({ d }: { d: Drafting }) {
         <button
           className={`draft-lab-button px-2 py-[3px] mx-0.5 text-meta tracking-[0.14em] rounded-md border border-dashed transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
             running ? "draft-accent" : "text-sol-text-dim hover:text-sol-text"
-          }`}
+          } ${modernButton({ variant: "outline", size: "xs" }, "modern:border-dashed")}`}
           title={d.labBlock ?? "The Lab: marks and trims that never rewrite your words"}
           disabled={!!d.labBlock}
         >
@@ -222,7 +223,7 @@ function LabItem({ children, onClick, disabled }: { children: React.ReactNode; o
     <button
       disabled={disabled}
       onClick={onClick}
-      className="w-full flex items-center gap-2 text-left text-[13px] px-2.5 py-1.5 rounded-lg text-sol-text-secondary hover:bg-sol-cyan/10 hover:text-sol-text disabled:opacity-40 transition-colors"
+      className={`w-full flex items-center gap-2 text-left text-[13px] px-2.5 py-1.5 rounded-lg text-sol-text-secondary hover:bg-sol-cyan/10 hover:text-sol-text disabled:opacity-40 transition-colors ${modernMenuRow({}, "modern:text-sol-text")}`}
     >
       {children}
     </button>
@@ -236,7 +237,7 @@ function TrimButton({ label, sub, active, disabled, onClick }: { label: string; 
       onClick={onClick}
       className={`flex flex-col items-center justify-center rounded-lg px-1 py-1.5 border text-meta leading-tight transition-colors disabled:opacity-40 ${
         active ? "draft-trim--on" : "border-sol-border/40 text-sol-text-muted hover:text-sol-text hover:border-sol-border"
-      }`}
+      } modern:min-h-control-md modern:rounded-control`}
     >
       <span>{label}</span>
       <span className="text-meta text-sol-text-dim h-4">{sub}</span>

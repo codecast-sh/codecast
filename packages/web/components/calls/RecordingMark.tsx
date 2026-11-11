@@ -10,6 +10,7 @@ import { formatCallTime } from "@codecast/shared/entities";
 import { KeyCap } from "../KeyCap";
 import { RECORDING_SHARED_WORDS, STOP_RECORDING_ASK } from "../../lib/calls/roomRecordingEnd";
 import "./recorder.css";
+import { modernButton, modernPill } from "../ui/modernLook";
 
 // THE RED MARK: a huddle is being recorded. One look on every call surface
 // (the stage's header, the face row's card, a live room in the sidebar, the
@@ -91,7 +92,7 @@ export function RecordingMark({
   if (saving) {
     return (
       <span
-        className={`inline-flex shrink-0 items-center gap-1.5 rounded-md bg-sol-bg-alt/60 px-2 py-1 font-mono text-meta font-medium text-sol-text-muted ring-1 ring-inset ring-sol-border/40 ${className}`}
+        className={`inline-flex shrink-0 items-center gap-1.5 rounded-md bg-sol-bg-alt/60 px-2 py-1 font-mono text-meta font-medium text-sol-text-muted ring-1 ring-inset ring-sol-border/40 ${className} ${modernPill({}, "modern:h-6 modern:ring-0 modern:font-mono")}`}
         title={title}
         aria-label={title}
         role="img"
@@ -103,7 +104,7 @@ export function RecordingMark({
   }
   return (
     <span
-      className={`inline-flex shrink-0 items-center gap-1.5 rounded-md bg-sol-red/[0.12] px-2 py-1 font-mono text-meta font-medium text-sol-red ring-1 ring-inset ring-sol-red/25 ${className}`}
+      className={`inline-flex shrink-0 items-center gap-1.5 rounded-md bg-sol-red/[0.12] px-2 py-1 font-mono text-meta font-medium text-sol-red ring-1 ring-inset ring-sol-red/25 ${className} ${modernPill({ tone: "red" }, "modern:h-6 modern:ring-0 modern:font-mono")}`}
       title={title}
       aria-label={title}
       role="img"
@@ -167,7 +168,7 @@ export function StopRecordingQuestion({
       onClick={onKeep}
       className={`flex shrink-0 items-center gap-1.5 rounded-md font-mono text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text ${
         dense ? "px-1.5 py-0.5 text-meta" : "px-2.5 py-1.5 text-meta"
-      }`}
+      } ${modernButton({ variant: "ghost", size: dense ? "xs" : "sm" }, "modern:font-sans")}`}
     >
       {dense ? "Keep" : STOP_RECORDING_ASK.keep}
       {!dense && escKeeps && <KeyCap size="xs">Esc</KeyCap>}

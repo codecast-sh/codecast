@@ -57,6 +57,7 @@ import { Button } from "../../components/ui/button";
 import { SwitchReview } from "../../components/consequential/ConsequentialSwitch";
 import { useRunCost } from "../../components/consequential/useRunCost";
 import { newTriggerLedger } from "../../components/work/startLedgers";
+import { modernButton, modernChip, modernField, modernLook, modernToneOf } from "../../components/ui/modernLook";
 const api = _api as any;
 
 // ── Time helpers (parseDuration is a parity port of `cast trigger add --in/--every`) ──
@@ -418,7 +419,7 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
 
       <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2 pt-3 pb-1">
         <div className="ml-auto flex items-center gap-3 whitespace-nowrap">
-          <button onClick={onClose} className="text-xs text-sol-text-dim hover:text-sol-text transition-colors">
+          <button onClick={onClose} className={`text-xs text-sol-text-dim hover:text-sol-text transition-colors ${modernButton({ variant: "ghost", size: "sm" })}`}>
             Cancel
           </button>
           <Button
@@ -475,7 +476,7 @@ function Section({ title, count, subtitle, children, defaultOpen = true }: {
       <button
         data-cc-list-section
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 text-mark font-medium uppercase tracking-widest text-sol-text-dim hover:text-sol-text-muted transition-colors mb-2 select-none w-full"
+        className="flex items-center gap-1.5 text-mark font-medium uppercase tracking-widest text-sol-text-dim hover:text-sol-text-muted transition-colors mb-2 select-none w-full modern:text-meta modern:font-semibold modern:normal-case modern:tracking-normal"
       >
         {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
         {title}
@@ -543,7 +544,7 @@ function OverviewLine({ stats, now, filters, update }: {
   const toggle = (on: boolean, accent: string) =>
     `inline-flex items-center gap-1 rounded px-1 -mx-1 transition-colors ${
       on ? `${accent} bg-sol-bg-highlight` : "hover:text-sol-text"
-    }`;
+    } ${modernButton({ variant: on ? "soft" : "ghost", tone: modernToneOf(accent), size: "xs" }, "modern:mx-0 modern:px-1.5 modern:font-normal")}`;
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-sol-text-muted">
       <span><span className={num}>{stats.active}</span> active</span>
@@ -621,7 +622,7 @@ function AttentionBanner({ tasks }: { tasks: any[] }) {
               key={t._id}
               onClick={() => openRun(t)}
               aria-label={`Open failed run: ${taskDisplayTitle(t)}`}
-              className="group max-w-full truncate text-left rounded -mx-1 px-1 py-0.5 text-sol-text-dim hover:bg-sol-red/10 hover:text-sol-text transition-colors cursor-pointer"
+              className="group max-w-full truncate text-left rounded -mx-1 px-1 py-0.5 text-sol-text-dim hover:bg-sol-red/10 hover:text-sol-text transition-colors cursor-pointer modern:min-h-6 modern:rounded-control modern:px-1.5"
             >
               <span className="text-sol-text-muted group-hover:text-sol-text underline decoration-dotted decoration-sol-text-dim/50 underline-offset-2">
                 {taskDisplayTitle(t)}
@@ -670,8 +671,8 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
   const active = filtersActive(filters);
   return (
     <div className="sticky top-0 z-20 mb-2 bg-sol-bg/85 backdrop-blur border-b border-sol-border/40">
-      <div className="relative border-b border-sol-border/40 focus-within:border-sol-cyan/70 transition-colors">
-        <Search className="absolute left-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-sol-text-dim pointer-events-none" />
+      <div className="relative border-b border-sol-border/40 focus-within:border-sol-cyan/70 transition-colors modern:my-2 modern:border-b-0">
+        <Search className="absolute left-0 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-sol-text-dim pointer-events-none modern:left-2.5" />
         <input
           id="trigger-search"
           value={filters.search}
@@ -683,14 +684,14 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
             }
           }}
           placeholder="Search title, prompt, last result…"
-          className="w-full bg-transparent pl-6 pr-6 py-2.5 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none"
+          className={`w-full bg-transparent pl-6 pr-6 py-2.5 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none ${modernLook(modernField, "modern:h-control-md modern:border modern:pl-8 modern:pr-8 modern:py-0 modern:text-ui")}`}
         />
         {filters.search && (
           <ShortcutTooltip label="Clear search">
             <button
               onClick={() => update({ search: "" })}
               aria-label="Clear search"
-              className="absolute right-0 top-1/2 -translate-y-1/2 text-sol-text-dim hover:text-sol-text"
+              className={`absolute right-0 top-1/2 -translate-y-1/2 text-sol-text-dim hover:text-sol-text ${modernButton({ variant: "ghost", size: "icon-xs" }, "modern:right-1")}`}
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -706,7 +707,7 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
               aria-pressed={filters.type === key}
               className={`inline-flex items-center gap-1 py-1 font-medium transition-colors ${
                 filters.type === key ? on : "text-sol-text-dim hover:text-sol-text"
-              }`}
+              } ${modernChip({ active: filters.type === key })}`}
             >
               <Icon className="w-3 h-3" />
               {label}
@@ -970,7 +971,7 @@ function HistoryBody({ tasks, now, grouping, form, setForm, deepLinkId }: {
               failuresOnly
                 ? "text-sol-red bg-sol-red/15"
                 : "bg-sol-bg-alt text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight"
-            }`}
+            } ${modernButton({ variant: failuresOnly ? "soft" : "secondary", tone: "red", size: "xs" })}`}
           >
             <AlertTriangle className="w-3 h-3" /> failures only
           </button>
@@ -1019,7 +1020,7 @@ function FilteredEmpty({ onClear }: { onClear: () => void }) {
       <p className="text-sm text-sol-text-muted">No triggers match these filters</p>
       <button
         onClick={onClear}
-        className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-sol-bg-alt text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight transition-colors"
+        className={`inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-sol-bg-alt text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight transition-colors ${modernButton({ variant: "outline", size: "sm" })}`}
       >
         Clear filters
       </button>

@@ -14,10 +14,14 @@ import { useTeamFeature } from "../../../lib/teamFeatures";
 import { FooterIconButton, FullscreenIcon } from "./shared";
 import { copyMessageLink, formatRelativeTime, forwardMessageToChat } from "../../../lib/conversationFormat";
 import { ReactMarkdown } from "../markdown";
+import { useIsModernStyle } from "../../../hooks/useVisualStyle";
+import { ModernPlanBlock } from "./ModernPlanBlock";
 
 const PLAN_MAX_HEIGHT = 1800;
 
-function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; timestamp: number; collapsed?: boolean; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void }) {
+type PlanBlockProps = { content: string; timestamp: number; collapsed?: boolean; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void };
+
+function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationId, onOpenComments, onStartShareSelection }: PlanBlockProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -170,4 +174,8 @@ function PlanBlockImpl({ content, timestamp, collapsed, messageId, conversationI
     </div>
   );
 }
-export const PlanBlock = memo(PlanBlockImpl);
+// Modern reads a plan as a quiet block (ModernPlanBlock); Classic and Minimal keep the card above.
+export const PlanBlock = memo(function PlanBlock(props: PlanBlockProps) {
+  const modern = useIsModernStyle();
+  return modern ? <ModernPlanBlock {...props} /> : <PlanBlockImpl {...props} />;
+});

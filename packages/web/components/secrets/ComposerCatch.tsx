@@ -17,6 +17,7 @@ import { defaultWhere } from "../../lib/secretLook";
 import { Button } from "../ui/button";
 import { useCreate } from "../../hooks/useCreateSecret";
 import { nameIssue, namesIn, saveRemaining, withVaultReferences } from "./vaultModel";
+import { modernButton } from "../ui/modernLook";
 
 export function ComposerCatch({
   text,
@@ -102,7 +103,7 @@ export function ComposerCatch({
         <ScopePicker scope={scope} value={where} onChange={setWhere} />
         <div className="ml-auto flex items-center gap-1.5">
           {/* The one choice that puts the value in the transcript for good: quiet, and red when pointed at. */}
-          <button type="button" onClick={() => onSend(text)} disabled={saving} className="inline-flex h-7 items-center rounded-md px-2 text-sol-text-dim hover:bg-sol-red/10 hover:text-sol-red disabled:opacity-50" data-composer-catch-as-is>
+          <button type="button" onClick={() => onSend(text)} disabled={saving} className={`inline-flex h-7 items-center rounded-md px-2 text-sol-text-dim hover:bg-sol-red/10 hover:text-sol-red disabled:opacity-50 ${modernButton({ variant: "ghost", size: "sm" })}`} data-composer-catch-as-is>
             Send as is
           </button>
           <button type="button" onClick={onCancel} className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-sol-text-muted hover:text-sol-text">

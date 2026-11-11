@@ -24,6 +24,7 @@ import { buildBreadcrumbs, type BreadcrumbLookups } from "../lib/breadcrumbs";
 import { tabStageLayout } from "../lib/stage";
 import { projectDotClass } from "../lib/projectColors";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
+import { useIsModernStyle } from "../hooks/useVisualStyle";
 
 /** A short id's row key, learned on the first hit. These selectors run on
  *  every store notification, and a short-id route ("ct-4102", the form agent
@@ -57,7 +58,14 @@ function routeParts(pathname: string) {
 }
 
 // Memo: prop-less, it reads its own route and rows, so a shell render skips it.
+// Modern draws no strip: every page that had one carries its place as crumbs
+// in its own header (components/ui/page-header), and the chat room names
+// itself in its head, so the strip would say it twice.
 export const BreadcrumbBar = memo(function BreadcrumbBar() {
+  return useIsModernStyle() ? null : <ClassicBreadcrumbBar />;
+});
+
+function ClassicBreadcrumbBar() {
   const pathname = usePathname() ?? "";
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const { head, first, second } = routeParts(pathname);
@@ -133,4 +141,4 @@ export const BreadcrumbBar = memo(function BreadcrumbBar() {
       <Breadcrumbs items={items} className="min-w-0" />
     </div>
   );
-});
+}

@@ -39,6 +39,7 @@ import { TeamWorkspaceAgent } from "../../../components/settings/TeamWorkspaceAg
 import { SwitchReview } from "../../../components/consequential/ConsequentialSwitch";
 import { destroyTeamLedger, regulatedTeam } from "../../../components/consequential/deletionLedgers";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
+import { modernPill } from "../../../components/ui/modernLook";
 
 export default function TeamPage() {
   const router = useRouter();
@@ -465,7 +466,7 @@ export default function TeamPage() {
                     member.role === "admin"
                       ? "bg-sol-cyan/10 text-sol-cyan"
                       : "bg-sol-bg-highlight/20 text-sol-text-muted"
-                  }`}>
+                  } ${modernPill({ tone: member.role === "admin" ? "cyan" : "neutral" })}`}>
                     {member.role}
                   </span>
                 )}

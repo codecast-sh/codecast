@@ -19,6 +19,9 @@ import { formatFullTimestamp, useRelativeTime } from "../../../lib/conversationF
 import { vaultShortIdIn } from "../../castCommand";
 import { RequestHead } from "../../secrets/parts";
 import { DeclineRequest, ValueEditor } from "../../secrets/ValueForm";
+import { useIsModernStyle } from "../../../hooks/useVisualStyle";
+import { Button, buttonVariants } from "../../ui/button";
+import { ModernAskCard } from "../ModernAsk";
 
 const asKind = (k: string | undefined): SecretKind => ((SECRET_KINDS as readonly string[]).includes(k ?? "") ? (k as SecretKind) : "key");
 
@@ -35,6 +38,7 @@ export function VaultRequestCard({ name, kind, why, output, isError }: { name: s
     : scoped.find((r) => r.name === name && r.status === "requested") ?? scoped.find((r) => r.name === name);
   const href = entityRoute("secret", row?.short_id || shortId || name) ?? "/vault";
   const [declined, setDeclined] = useState(false);
+  const modern = useIsModernStyle();
 
   if (declined) return <GoneLine name={row?.name ?? name} state="Declined" />;
   if (shortId && !row && loaded) return <GoneLine name={name} state="Gone from Vault" />;
@@ -43,6 +47,28 @@ export function VaultRequestCard({ name, kind, why, output, isError }: { name: s
   const k = row?.kind ?? asKind(kind);
   const reason = row?.request_why ?? why;
   const failed = isError && !row;
+  // Modern: the loud card every ask is (ModernAsk), the value field and Decline as its answers.
+  if (modern) return (
+    <ModernAskCard
+      edge={failed ? "error" : "needs_you"}
+      kicker={<span className="truncate">Vault · {k}</span>}
+      question={<>A value for <Link href={href} className="font-mono hover:underline underline-offset-2">{row?.name ?? name}</Link></>}
+      detail={reason}
+      data-vault-request-card={name}
+      data-vault-request-state={failed ? "failed" : "open"}
+    >
+      {failed ? (
+        <pre className="whitespace-pre-wrap font-mono text-meta text-sol-red">{stripAnsiCodes(output).trim() || "The request failed"}</pre>
+      ) : !row ? (
+        <Button asChild size="md" variant="outline"><Link href={href}><Lock aria-hidden />Open in Vault</Link></Button>
+      ) : (
+        <div className="flex min-w-0 items-start gap-2">
+          <div className="min-w-0 flex-1"><ValueEditor row={row} mode="fulfill" /></div>
+          <DeclineRequest row={row} onDeclined={() => setDeclined(true)} className={buttonVariants({ variant: "outline", size: "md", className: "shrink-0" })} />
+        </div>
+      )}
+    </ModernAskCard>
+  );
   return (
     <div className="my-2 rounded-md border border-[color-mix(in_srgb,var(--sol-magenta)_35%,var(--sol-border))] bg-sol-bg px-3 py-2.5" data-vault-request-card={name} data-vault-request-state={failed ? "failed" : "open"}>
       {/* The same head line as the Vault's card; before the row syncs, a tag stands where the asker goes. */}
@@ -87,10 +113,10 @@ function ReadyLine({ row, href }: { row: SecretMeta; href: string }) {
 /** A request whose row is gone (declined here, or removed anywhere): the line names it without a link. */
 function GoneLine({ name, state }: { name: string; state: "Declined" | "Gone from Vault" }) {
   return (
-    <div className="my-1 flex min-w-0 items-center gap-1.5 text-xs text-sol-text-dim" data-vault-request-card={name} data-vault-request-state={state === "Declined" ? "declined" : "gone"}>
-      <X className="h-3.5 w-3.5 shrink-0" />
-      <span className="truncate font-mono text-sol-text">{name}</span>
-      <span className="shrink-0">{state}</span>
+    <div className="my-1 flex min-w-0 items-center gap-1.5 text-xs text-sol-text-dim" data-vault-request-card={name} data-vault-request-state={state === "Declined" ? "declined" : "gone"} data-cc-row="vault" data-cc-row-head>
+      <X data-cc-row-icon className="h-3.5 w-3.5 shrink-0" />
+      <span data-cc-row-object className="truncate font-mono text-sol-text">{name}</span>
+      <span data-cc-row-tag className="shrink-0">{state}</span>
     </div>
   );
 }
@@ -104,12 +130,12 @@ export function VaultReadyLine({ vault, timestamp }: { vault: VaultReadyMessage;
 function Ready({ name, href, by, at, title, ...rest }: { name: string; href: string; by?: string; at: number; title?: string } & Record<`data-${string}`, unknown>) {
   const relative = useRelativeTime();
   return (
-    <div className="my-1 flex min-w-0 items-center gap-1.5 text-xs text-sol-text-dim" title={title} {...rest}>
-      <Check className="h-3.5 w-3.5 shrink-0 text-sol-green" />
-      <Link href={href} className="truncate font-mono text-sol-text hover:underline underline-offset-2">{name}</Link>
-      <span className="shrink-0 text-sol-green/80">Ready</span>
-      {by ? <span className="truncate">· filled by {by}</span> : null}
-      <span className="shrink-0 tabular-nums" title={formatFullTimestamp(at)}>· {relative(at)}</span>
+    <div className="my-1 flex min-w-0 items-center gap-1.5 text-xs text-sol-text-dim" title={title} {...rest} data-cc-row="vault" data-cc-row-head>
+      <Check data-cc-row-icon className="h-3.5 w-3.5 shrink-0 text-sol-green" />
+      <Link data-cc-row-object href={href} className="truncate font-mono text-sol-text hover:underline underline-offset-2">{name}</Link>
+      <span data-cc-row-tag className="shrink-0 text-sol-green/80">Ready</span>
+      {by ? <span data-cc-row-text className="truncate">· filled by {by}</span> : null}
+      <span data-cc-row-meta className="shrink-0 tabular-nums" title={formatFullTimestamp(at)}><span className="modern:hidden">· </span>{relative(at)}</span>
     </div>
   );
 }

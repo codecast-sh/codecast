@@ -365,3 +365,22 @@ button.mx-noline:hover span + span { display: inline; }
 /* An erroring watch's last value is old: dimmed with its change, its age beside it. */
 .mx-card[data-health="error"] .mx-value, .mx-card[data-health="error"] .mx-delta { opacity: 0.5; }
 .mx-value-age { font-size: var(--fs-meta); color: var(--sol-text-dim); font-variant-numeric: tabular-nums; }
+
+/* ── Modern (.modern-style on <html>): the tray, the fields, the icon button
+   and the chip are the primitives' (components/ui/modernLook.ts). ── */
+.modern-style .mx-seg { gap: 2px; padding: 2px; border: 0; border-radius: var(--radius-control); background-color: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.modern-style .mx-seg button { border-radius: 4px; font-weight: 500; }
+.modern-style .mx-seg button + button { border-left: 0; }
+.modern-style .mx-seg button[aria-pressed="true"] { background-color: var(--sol-card); color: var(--sol-text); box-shadow: 0 0 0 1px var(--sol-border); }
+.modern-style .mx-select,
+.modern-style .mx-search,
+.modern-style .mx-input { height: var(--control-sm); border-radius: var(--radius-control); border-color: var(--sol-border); background-color: var(--sol-card); font-size: var(--fs-ui); }
+.modern-style .mx-input:focus,
+.modern-style .mx-search:focus,
+.modern-style .mx-select:focus { border-color: var(--sol-border); outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.modern-style .mx-input[aria-invalid="true"] { border-color: color-mix(in srgb, var(--sol-class-red) 70%, transparent); }
+.modern-style .mx-icon-btn { width: 24px; height: 24px; border-radius: var(--radius-control); border-color: var(--sol-border); background-color: var(--sol-card); }
+.modern-style .mx-icon-btn svg { width: 14px; height: 14px; }
+.modern-style .mx-chip { height: 24px; border-radius: var(--radius-control); border-color: var(--sol-border); background-color: var(--sol-card); }
+.modern-style .mx-seg button:focus-visible,
+.modern-style .mx-icon-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }

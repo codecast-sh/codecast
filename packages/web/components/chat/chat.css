@@ -4073,3 +4073,26 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
 
 /* Modern (.modern-style): words in the interface sans. */
 .modern-style :is(.ch-listen-handle, .ch-community-bar) { font-family: var(--font-ui, system-ui, sans-serif); }
+
+/* ── Modern (.modern-style on <html>): chat's controls are the app's
+   primitives (components/ui/modernLook.ts), drawn from the same tokens: the
+   control radius, the 24px floor for anything pressable, the menu row, the
+   tooltip card, the filter chip and the segmented tray. ── */
+.modern-style .ch-tool { width: 24px; height: 24px; border-radius: var(--radius-control); }
+.modern-style .ch-round-btn { min-height: 24px; padding: 0 8px; border-radius: var(--radius-control); font-weight: 500; }
+.modern-style .ch-round-chip { min-height: 24px; padding: 0 8px; border-radius: var(--radius-control); }
+.modern-style .ch-menu-item { min-height: var(--control-sm); padding: 4px 8px; border-radius: var(--radius-control); font-size: var(--fs-ui); color: var(--sol-text); }
+.modern-style .ch-menu-item:hover { background-color: color-mix(in srgb, var(--sol-class-cyan) 10%, transparent); }
+.modern-style .ch-rail-tip,
+.modern-style .ch-reaction-tip { border-radius: var(--radius-control); border-color: var(--sol-border); background-color: var(--sol-card); box-shadow: var(--shadow-popover); font-size: var(--fs-meta); }
+.modern-style .ch-nm-chip { border-radius: var(--radius-control); }
+.modern-style .ch-search-chip { min-height: 24px; padding: 0 8px; border-radius: var(--radius-control); border-color: var(--sol-border); font-weight: 500; }
+.modern-style .ch-search-chip.ch-search-chip-on { color: var(--sol-class-cyan); border-color: color-mix(in srgb, var(--sol-class-cyan) 40%, transparent); background-color: color-mix(in srgb, var(--sol-class-cyan) 10%, transparent); }
+.modern-style .ch-slack-seg { gap: 2px; padding: 2px; border: 0; border-radius: var(--radius-control); background-color: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.modern-style .ch-slack-seg-item { height: 24px; border-right: 0; border-radius: 4px; font-weight: 500; }
+.modern-style .ch-slack-seg-item.ch-slack-seg-on { background-color: var(--sol-card); color: var(--sol-text); box-shadow: 0 0 0 1px var(--sol-border); }
+.modern-style .ch-tool:focus-visible,
+.modern-style .ch-round-btn:focus-visible,
+.modern-style .ch-menu-item:focus-visible,
+.modern-style .ch-search-chip:focus-visible,
+.modern-style .ch-slack-seg-item:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }

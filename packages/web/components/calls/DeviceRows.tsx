@@ -12,6 +12,7 @@ import { DEVICE_RANK_KEY, type DeviceKind } from "../../lib/calls/deviceRank";
 import { useInboxStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useEventListener } from "../../hooks/useEventListener";
+import { modernButton } from "../ui/modernLook";
 
 type Kind = DeviceKind;
 type Lists = Record<Kind, MediaDeviceInfo[]>;
@@ -70,7 +71,7 @@ function NameMyDevices({ lists, refresh }: { lists: Lists; refresh: () => Promis
       <button
         type="button"
         onClick={() => void grantDeviceNames().then(refresh)}
-        className="shrink-0 rounded-md border border-sol-border px-2 py-1 text-xs text-sol-text hover:border-sol-text-muted"
+        className={`shrink-0 rounded-md border border-sol-border px-2 py-1 text-xs text-sol-text hover:border-sol-text-muted ${modernButton({ variant: "outline", size: "sm" })}`}
       >
         Name my devices
       </button>

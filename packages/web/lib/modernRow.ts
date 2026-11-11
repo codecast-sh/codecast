@@ -4,6 +4,7 @@
 
 import {
   BROWSER_BATCH_TOOL,
+  formatToolName,
   isEditTool,
   isGlobTool,
   isGrepTool,
@@ -11,7 +12,11 @@ import {
   isShellTool,
   isTodoTool,
   isWriteTool,
+  shellLead,
+  toolResultHint,
+  toolSummary,
 } from "@codecast/shared/render";
+import { splitPath } from "./middleTruncate";
 
 export type RowKind =
   | "read"
@@ -91,4 +96,52 @@ export function modernToolHead({
       ? resultSummary.replace(/^\((.*)\)$/, "$1").replace(/^\+(\d+) -(\d+)$/, "+$1 −$2")
       : null;
   return { kind, verb, meta, failed };
+}
+
+type GroupCall = { name: string; input: string };
+type GroupResult = { content: string; is_error?: boolean } | undefined;
+
+/** One call's subject in a folded run: a command by its program, a path by its file name. */
+function groupSubject(call: GroupCall, kind: RowKind): string {
+  const summary = toolSummary(call).replace(/\s+/g, " ").trim();
+  if (kind === "shell") return shellLead(summary) || summary;
+  if (kind === "read" || kind === "edit" || kind === "write") return splitPath(summary).base;
+  return summary;
+}
+
+/**
+ * A folded run of tool calls (the condensed feed's receipt) as one Modern row.
+ * One call reads as its own row would: the verb, the whole object (a command
+ * or a path, `path` says which) and its result at the right. Several read as
+ * the counts by kind ("ran 3 commands · read 2 files", from `counted`) with
+ * their subjects in mono; the quiet count at the right is how many failed, or
+ * how many calls a mixed run holds. `kind` is the shared glyph, "group" when
+ * the run mixes kinds.
+ */
+export function modernGroupHead(
+  calls: readonly GroupCall[],
+  counted: string,
+  resultOf: (call: GroupCall) => GroupResult,
+): { kind: RowKind | "group"; verb: string; object: string; path: boolean; meta: string | null; failed: number } {
+  if (calls.length === 1) {
+    const call = calls[0];
+    const result = resultOf(call);
+    const head = modernToolHead({ name: call.name, displayName: formatToolName(call.name) || call.name, result, resultSummary: toolResultHint(call, result) });
+    const object = toolSummary(call).replace(/\s+/g, " ").trim();
+    const path = head.kind === "read" || head.kind === "edit" || head.kind === "write";
+    return { kind: head.kind, verb: head.verb, object, path: path && !!object, meta: head.meta, failed: head.failed ? 1 : 0 };
+  }
+  const kinds = new Set<RowKind>();
+  const subjects: string[] = [];
+  let failed = 0;
+  for (const call of calls) {
+    const kind = toolRowKind(call.name);
+    kinds.add(kind);
+    if (resultOf(call)?.is_error) failed++;
+    const subject = groupSubject(call, kind);
+    if (subject && !subjects.includes(subject)) subjects.push(subject);
+  }
+  const kind = kinds.size === 1 ? [...kinds][0] : "group";
+  const meta = failed > 0 ? `${failed} failed` : kind === "group" ? `${calls.length} calls` : null;
+  return { kind, verb: counted, object: subjects.join(" · "), path: false, meta, failed };
 }

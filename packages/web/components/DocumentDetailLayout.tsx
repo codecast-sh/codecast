@@ -27,6 +27,8 @@ import { AlternativesPanel, DraftingControls, OverflowPanel, TrimBar, useDraftin
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useTabActive } from "../hooks/usePagePresence";
 import { useFollowScroll } from "../hooks/useFollowSurface";
+import { useNavClose } from "../hooks/useNavTrail";
+import { PageHeader } from "./ui/page-header";
 // Module-level so MessageReview's memo holds (a fresh inline arrow would defeat
 // it). Renders the doc's markdown as a flat run of blocks — each a direct child
 // of MessageReview's measurement container, so every block is hover-quotable.
@@ -102,6 +104,8 @@ export function DocumentDetailLayout({
 }: DocumentDetailLayoutProps) {
   const router = useRouter();
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
+  // Modern's ✕ goes back the way the person came (hooks/useNavTrail).
+  const navClose = useNavClose(backHref);
   // Edit mode is the default: the doc opens as the live collaborative editor
   // (rich pills, dates, checkboxes in place). Review mode is the opt-in
   // toggle — the body re-renders as quotable blocks (hover any block to
@@ -164,68 +168,98 @@ export function DocumentDetailLayout({
       .catch(() => toast.error("Failed to copy"));
   };
 
+  // The controls both headers carry: Classic's one row and Modern's page header.
+  const copyButton = (
+      <button
+        onClick={handleCopyMarkdown}
+        className="p-1.5 rounded-md text-xs flex items-center gap-1 text-sol-text-dim hover:text-sol-text transition-colors"
+        title="Copy as Markdown"
+      >
+        {copied ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <Copy className="w-3.5 h-3.5" />}
+      </button>
+  );
+  const reviewButton = (
+      initialEditable && (
+        // Editing is the default state, so the button offers the opt-in:
+        // Review renders the body as quotable blocks to annotate and send
+        // to the agent. While reviewing it flips to an accent-filled state
+        // so the departure from the default is unmistakable.
+        <button
+          onClick={() => setIsEditing(!isEditing)}
+          className={`px-2 py-1 mx-0.5 rounded-md text-xs font-medium flex items-center gap-1.5 border transition-colors ${
+            isEditing
+              ? "text-sol-text-muted border-sol-border/40 hover:text-sol-text hover:border-sol-border hover:bg-sol-bg-alt/60"
+              : "bg-sol-cyan/15 text-sol-cyan border-sol-cyan/40 hover:bg-sol-cyan/25"
+          }`}
+          title={isEditing ? "Review mode — quote blocks to the agent" : "Back to editing"}
+        >
+          {isEditing ? <MessageSquareQuote className="w-3.5 h-3.5" /> : <Edit3 className="w-3.5 h-3.5" />}
+          <span>{isEditing ? "Review" : "Edit"}</span>
+          <MenuKeyCaps action="doc.toggleEdit" className="contents" />
+        </button>
+      )
+  );
+  const infoButton = (
+      metaContent && (
+        <button
+          onClick={() => setShowMeta(!showMeta)}
+          className="p-1.5 rounded-md text-sol-text-dim hover:text-sol-text transition-colors"
+          title="Info"
+        >
+          <MoreHorizontal className="w-3.5 h-3.5" />
+        </button>
+      )
+  );
+
   return (
     <div className="flex flex-col h-full">
-      {/* One fixed-height row. When it runs out of width (a narrow split pane)
-          the left cluster (back, type, star, watch, dates) gives way and clips;
-          the actions on the right (Share, close, Info) never shrink, so they
-          stay on screen. */}
-      <div ref={titlebarRef} data-page-head className="cc-panel__head justify-between">
-        <div className="flex items-center gap-3 min-w-0 overflow-hidden">
-          {!embedded && (
-            <Link
-              href={backHref}
-              className="text-sol-text-dim hover:text-sol-cyan transition-colors"
-            >
-              <ArrowLeft className="w-4 h-4" />
-            </Link>
-          )}
-          {topBarLeft}
-        </div>
-        <div className="flex items-center gap-1 ml-auto flex-shrink-0">
-          <button
-            onClick={handleCopyMarkdown}
-            className="p-1.5 rounded-md text-xs flex items-center gap-1 text-sol-text-dim hover:text-sol-text transition-colors"
-            title="Copy as Markdown"
-          >
-            {copied ? <Check className="w-3.5 h-3.5 text-sol-green" /> : <Copy className="w-3.5 h-3.5" />}
-          </button>
-          {initialEditable && (
-            // Editing is the default state, so the button offers the opt-in:
-            // Review renders the body as quotable blocks to annotate and send
-            // to the agent. While reviewing it flips to an accent-filled state
-            // so the departure from the default is unmistakable.
-            <button
-              onClick={() => setIsEditing(!isEditing)}
-              className={`px-2 py-1 mx-0.5 rounded-md text-xs font-medium flex items-center gap-1.5 border transition-colors ${
-                isEditing
-                  ? "text-sol-text-muted border-sol-border/40 hover:text-sol-text hover:border-sol-border hover:bg-sol-bg-alt/60"
-                  : "bg-sol-cyan/15 text-sol-cyan border-sol-cyan/40 hover:bg-sol-cyan/25"
-              }`}
-              title={isEditing ? "Review mode — quote blocks to the agent" : "Back to editing"}
-            >
-              {isEditing ? <MessageSquareQuote className="w-3.5 h-3.5" /> : <Edit3 className="w-3.5 h-3.5" />}
-              <span>{isEditing ? "Review" : "Edit"}</span>
-              <MenuKeyCaps action="doc.toggleEdit" className="contents" />
-            </button>
-          )}
+      <PageHeader
+        legacy={
+          // One fixed-height row. When it runs out of width (a narrow split pane)
+          // the left cluster (back, type, star, watch, dates) gives way and clips;
+          // the actions on the right (Share, close, Info) never shrink, so they
+          // stay on screen.
+          <div ref={titlebarRef} data-page-head className="cc-panel__head justify-between">
+            <div className="flex items-center gap-3 min-w-0 overflow-hidden">
+              {!embedded && (
+                <Link
+                  href={backHref}
+                  className="text-sol-text-dim hover:text-sol-cyan transition-colors"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                </Link>
+              )}
+              {topBarLeft}
+            </div>
+            <div className="flex items-center gap-1 ml-auto flex-shrink-0">
+              {copyButton}
+              {reviewButton}
+              {draftingOn && <DraftingControls d={draft} overflowEnabled={overflowEnabled} />}
+              {topBarRight}
+              {/* Shared controls in the detail's own header. Closing here is a
+                  navigation, so the slot's default hide is overridden — the
+                  affordance stays identical either way. */}
+              {!embedded && <SlotActions slot="primary" onClose={() => router.push(backHref)} />}
+              {infoButton}
+            </div>
+          </div>
+        }
+        // Inside a reveal band the band's strip names and shares it (globals.css).
+        data-page-head
+        title={shownTitle}
+        // A doc drawn inside another page (a role's brief) leaves the way out to it.
+        back={embedded ? false : undefined}
+        crumbs={embedded ? null : undefined}
+        status={topBarLeft}
+        actions={<>
+          {copyButton}
+          {reviewButton}
           {draftingOn && <DraftingControls d={draft} overflowEnabled={overflowEnabled} />}
           {topBarRight}
-          {/* Shared controls in the detail's own header. Closing here is a
-              navigation, so the slot's default hide is overridden — the
-              affordance stays identical either way. */}
-          {!embedded && <SlotActions slot="primary" onClose={() => router.push(backHref)} />}
-          {metaContent && (
-            <button
-              onClick={() => setShowMeta(!showMeta)}
-              className="p-1.5 rounded-md text-sol-text-dim hover:text-sol-text transition-colors"
-              title="Info"
-            >
-              <MoreHorizontal className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
-      </div>
+          {infoButton}
+        </>}
+        share={!embedded ? <SlotActions slot="primary" onClose={navClose} /> : null}
+      />
 
       {showMeta && metaContent && (
         <div className="px-4 sm:px-10 py-3 border-b border-sol-border/10 flex-shrink-0 max-w-5xl mx-auto w-full">

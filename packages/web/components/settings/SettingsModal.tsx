@@ -38,6 +38,7 @@ import MigratePanel from "../../app/settings/migrate/page";
 import DesktopPanel from "../../app/settings/desktop/page";
 import AppsPanel from "../../app/settings/apps/page";
 import PlanPanel from "../../app/settings/plan/page";
+import { modernButton, modernDialog, modernField, modernLook, modernMenuLabel, modernScrim } from "../ui/modernLook";
 
 const PANELS: Record<PanelId, React.ComponentType> = {
   "general": ProfilePanel,
@@ -251,7 +252,7 @@ export function SettingsModal() {
   return (
     <div
       ref={backdropRef}
-      className="fixed inset-0 z-[150] flex items-center justify-center p-3 sm:p-6 bg-black/40 backdrop-blur-[2px]"
+      className={`fixed inset-0 z-[150] flex items-center justify-center p-3 sm:p-6 bg-black/40 backdrop-blur-[2px] ${modernScrim}`}
       onMouseDown={(e) => { if (e.target === backdropRef.current) close(); }}
       role="dialog"
       aria-modal="true"
@@ -261,15 +262,15 @@ export function SettingsModal() {
         ref={panelRef}
         tabIndex={-1}
         onKeyDown={trapFocus}
-        className="w-full max-w-[1080px] h-[min(880px,94dvh)] bg-sol-bg border border-sol-border rounded-xl shadow-2xl flex overflow-hidden animate-fadeSlideIn outline-none"
+        className={`w-full max-w-[1080px] h-[min(880px,94dvh)] bg-sol-bg border border-sol-border rounded-xl shadow-2xl flex overflow-hidden animate-fadeSlideIn outline-none ${modernDialog({ scroll: false })}`}
       >
-        <nav className={`${phoneNav ? "flex w-full" : "hidden"} sm:flex sm:w-56 shrink-0 border-r border-sol-border bg-sol-bg-alt/40 flex-col`}>
+        <nav className={`${phoneNav ? "flex w-full" : "hidden"} sm:flex sm:w-56 shrink-0 border-r border-sol-border bg-sol-bg-alt/40 flex-col modern:bg-sol-bg-alt`}>
           <div className="px-3 pt-3.5 pb-2">
             <div className="flex items-center justify-between gap-2 px-1.5 pb-2.5">
               <span className="text-sm font-semibold text-sol-text">Settings</span>
               <button
                 onClick={close}
-                className="sm:hidden shrink-0 p-1.5 -my-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/40"
+                className={`sm:hidden shrink-0 p-1.5 -my-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/40 ${modernButton({ variant: "ghost", size: "icon-sm" })}`}
                 aria-label="Close settings"
               >
                 <X className="w-[18px] h-[18px]" />
@@ -294,14 +295,14 @@ export function SettingsModal() {
                 }}
                 placeholder="Search settings"
                 aria-label="Search settings sections"
-                className="w-full rounded-md border border-sol-border/70 bg-sol-bg py-1.5 pl-7 pr-2 text-xs text-sol-text placeholder:text-sol-text-dim focus:border-sol-cyan/50 focus:outline-none"
+                className={`w-full rounded-md border border-sol-border/70 bg-sol-bg py-1.5 pl-7 pr-2 text-xs text-sol-text placeholder:text-sol-text-dim focus:border-sol-cyan/50 focus:outline-none ${modernLook(modernField, "modern:h-control-sm modern:py-0 modern:text-ui")}`}
               />
             </div>
           </div>
           <div className="scrollbar-auto flex-1 overflow-y-auto px-2 pt-0.5 pb-3">
             {visibleGroups.map((group) => (
               <div key={group.label} className="mb-1">
-                <div className="px-3 pt-2.5 pb-1 text-mark font-medium uppercase tracking-wider text-sol-text-dim">
+                <div className={`px-3 pt-2.5 pb-1 text-mark font-medium uppercase tracking-wider text-sol-text-dim ${modernLook(modernMenuLabel, "modern:px-3")}`}>
                   {group.label}
                 </div>
                 {group.sections.map((d) => {
@@ -317,7 +318,7 @@ export function SettingsModal() {
                         isActive
                           ? "bg-sol-cyan/15 text-sol-cyan font-medium"
                           : "text-sol-text-secondary hover:text-sol-text hover:bg-sol-bg-highlight/50"
-                      }`}
+                      } modern:min-h-control-sm modern:rounded-control modern:py-1 modern:text-ui modern:focus-visible:ring-0 modern:focus-visible:outline modern:focus-visible:outline-2 modern:focus-visible:outline-offset-1 modern:focus-visible:outline-[color:var(--focus-ring)] ${isActive ? "modern:bg-sol-cyan/10" : "modern:hover:bg-sol-text/[0.06]"}`}
                     >
                       <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? "" : "text-sol-text-dim"}`} />
                       <span className="truncate">{d.label}</span>
@@ -339,21 +340,21 @@ export function SettingsModal() {
           <header className="flex items-center justify-between gap-4 pl-2 sm:pl-6 pr-3 py-3 border-b border-sol-border">
             <button
               onClick={() => setPhoneNav(true)}
-              className="sm:hidden shrink-0 -mr-2 p-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/40"
+              className={`sm:hidden shrink-0 -mr-2 p-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/40 ${modernButton({ variant: "ghost", size: "icon-sm" })}`}
               aria-label="All settings"
               title="All settings"
             >
               <ChevronLeft className="w-[18px] h-[18px]" />
             </button>
             <div className="min-w-0 flex-1">
-              <h2 data-cc-sheet-title className="text-base font-semibold text-sol-text leading-tight">{active.label}</h2>
+              <h2 data-cc-sheet-title className="text-base font-semibold text-sol-text leading-tight modern:text-title">{active.label}</h2>
               <p className="truncate text-xs text-sol-text-muted">
                 {active.desc}
               </p>
             </div>
             <button
               onClick={close}
-              className="shrink-0 p-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/40"
+              className={`shrink-0 p-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-cyan/40 ${modernButton({ variant: "ghost", size: "icon-sm" })}`}
               aria-label="Close settings"
             >
               <X className="w-[18px] h-[18px]" />

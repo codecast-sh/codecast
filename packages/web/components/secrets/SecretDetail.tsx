@@ -26,6 +26,7 @@ import { ShareControl } from "../ShareControl";
 import { DeclineRequest, ValueEditor } from "./ValueForm";
 import { askFirstOffLedger, deleteLedger, restoreLedger, rotateLedger, type LedgerTeam } from "../../lib/secretLedgers";
 import { EVENT_TONE, EVENT_VERB, HEALTH, envVars, formatIn, isStub, nameIssue, namesIn, isStaged, secretHealth, splitList, withPendingAskFirst } from "./vaultModel";
+import { modernButton } from "../ui/modernLook";
 
 const FOOTER_ACT = "h-7 rounded-md px-2.5 text-[12px] text-sol-text-dim hover:bg-sol-red/10 hover:text-sol-red";
 
@@ -270,7 +271,7 @@ function Versions({ row, team }: { row: SecretMeta; team: LedgerTeam }) {
                     <Saving />
                   ) : (
                     // One swap at a time: a second press while one is saving would undo the first.
-                    <button type="button" onClick={() => (setError(null), setRestoring(v))} disabled={saving} className="h-6 shrink-0 rounded-md border border-sol-border px-2 text-meta text-sol-text-muted hover:text-sol-text disabled:cursor-default disabled:opacity-40 disabled:hover:text-sol-text-muted" data-vault-restore>
+                    <button type="button" onClick={() => (setError(null), setRestoring(v))} disabled={saving} className={`h-6 shrink-0 rounded-md border border-sol-border px-2 text-meta text-sol-text-muted hover:text-sol-text disabled:cursor-default disabled:opacity-40 disabled:hover:text-sol-text-muted ${modernButton({ variant: "outline", size: "xs" })}`} data-vault-restore>
                       Restore
                     </button>
                   )}
@@ -382,7 +383,7 @@ function Fields({ row, replace }: { row: SecretMeta; replace?: Replace }) {
           label="Expires"
           actions={
             recapture ? (
-              <button type="button" onClick={replace.start} disabled={replace.saving} className={`h-7 whitespace-nowrap rounded-md border px-2.5 text-[12px] disabled:opacity-50 ${expired ? "border-sol-red/50 text-sol-red hover:bg-sol-red/10" : "border-sol-orange/50 text-sol-orange hover:bg-sol-orange/10"}`} data-vault-recapture>
+              <button type="button" onClick={replace.start} disabled={replace.saving} className={`h-7 whitespace-nowrap rounded-md border px-2.5 text-[12px] disabled:opacity-50 ${expired ? "border-sol-red/50 text-sol-red hover:bg-sol-red/10" : "border-sol-orange/50 text-sol-orange hover:bg-sol-orange/10"} ${modernButton({ variant: "soft", tone: expired ? "red" : "orange", size: "sm" })}`} data-vault-recapture>
                 Capture again
               </button>
             ) : undefined

@@ -18,6 +18,7 @@ import { KeyCap } from "../KeyCap";
 import { groupClass, itemClass, paletteClass, paletteInputClass } from "../paletteStyles";
 import { answerDecisions, assignDecisions, dismissDecisions, escalateDecisions, passDecisions, sharedAnswers, unassignDecisions } from "../../lib/decisions/decisionBulk";
 import { isOpen, type DecisionOwner } from "../../lib/decisions/decisionRows";
+import { modernButton, modernScrim } from "../ui/modernLook";
 
 type Step = "root" | "assign" | "answer" | "pass" | "pass_note" | "escalate";
 const STEPS = new Set<string>(["root", "assign", "answer", "pass", "escalate"]);
@@ -87,7 +88,7 @@ export function DecisionPalette({ targets, mode, standalone, onClose }: { target
               {escalateTo.length ? escalateTo.map((p) => <span key={p.key} className="flex items-center gap-1 truncate"><span className="w-4 h-4 flex items-center justify-center">{p.face}</span>{p.label}</span>) : "Nobody to escalate to"}
             </span>
           )}
-          <button type="submit" disabled={!note.trim() || (step === "escalate" && escalateTo.length === 0)} className="flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-sol-cyan/40 text-sol-cyan disabled:opacity-40">
+          <button type="submit" disabled={!note.trim() || (step === "escalate" && escalateTo.length === 0)} className={`flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-sol-cyan/40 text-sol-cyan disabled:opacity-40 ${modernButton({ variant: "primary", size: "sm" })}`}>
             {step === "escalate" ? "Escalate" : "Pass"} {counted(rows.length)}<KeyCap size="xs">↵</KeyCap>
           </button>
         </div>
@@ -154,7 +155,7 @@ export function DecisionPalette({ targets, mode, standalone, onClose }: { target
   if (standalone) return content;
   return (
     <div role="dialog" aria-modal="true" aria-label="Decision actions" className="fixed inset-0 z-[9999]">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-[2px]" onClick={onClose} />
+      <div className={`absolute inset-0 bg-black/60 backdrop-blur-[2px] ${modernScrim}`} onClick={onClose} />
       <div className="absolute inset-0 flex items-start justify-center pt-[min(20vh,160px)]">{content}</div>
     </div>
   );

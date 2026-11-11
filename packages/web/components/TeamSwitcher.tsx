@@ -61,7 +61,7 @@ export const TeamSwitcherButton = forwardRef<
       data-cc-team-trigger={variant}
       className={rail
         ? "flex w-full items-center gap-3 px-4 py-2 text-sm text-left transition-colors hover:bg-sol-bg-alt/70 data-[state=open]:bg-sol-bg-alt/70"
-        : "flex h-7 items-center gap-1.5 pl-1 pr-1.5 rounded-md text-sm transition-colors hover:bg-sol-bg-alt data-[state=open]:bg-sol-bg-alt"}
+        : "flex h-7 items-center gap-1.5 pl-1 pr-1.5 rounded-md text-sm transition-colors hover:bg-sol-bg-alt data-[state=open]:bg-sol-bg-alt modern:h-control-sm modern:rounded-control modern:text-ui modern:font-medium modern:hover:bg-sol-text/[0.06] modern:data-[state=open]:bg-sol-text/[0.06]"}
     >
       {crest}
       <span data-cc-team-label className={`text-sol-text font-semibold truncate ${rail ? "flex-1" : "max-w-[120px]"}`}>{label}</span>

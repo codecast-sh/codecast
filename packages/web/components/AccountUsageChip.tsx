@@ -423,7 +423,7 @@ export function AccountUsageChip() {
             is a state, and this is a question waiting on the person. */}
         {awaitingApproval && !sw.switching && (
           <span
-            className="shrink-0 rounded bg-sol-yellow/15 px-1 text-meta font-semibold text-sol-yellow"
+            className="shrink-0 rounded bg-sol-yellow/15 px-1 text-meta font-semibold text-sol-yellow modern:rounded-control modern:bg-sol-yellow/10 modern:px-1.5 modern:font-medium"
             title={describeDecision(state?.last_decision) ?? "An account switch is waiting for your approval"}
           >
             switch?

@@ -9,6 +9,7 @@ import Link from "next/link";
 import { Phone } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useCallList } from "../../hooks/useSyncCalls";
+import { modernPill } from "../ui/modernLook";
 
 /** Keeps the call list live, so call chips and Call group headers name their
  *  call even on a cold cache. Mount it once per page, never per chip. */
@@ -25,7 +26,7 @@ export function TaskCallChip({ callId, size = "row", className = "" }: { callId:
     <Link
       href={`/calls/${shortId ?? callId}`}
       onClick={(e) => e.stopPropagation()}
-      className={`flex items-center gap-1 text-meta px-1.5 ${size === "head" ? "py-0.5" : "py-0"} rounded bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 hover:bg-sol-magenta/20 transition-colors flex-shrink-0 font-mono ${className}`}
+      className={`flex items-center gap-1 text-meta px-1.5 ${size === "head" ? "py-0.5" : "py-0"} rounded bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 hover:bg-sol-magenta/20 transition-colors flex-shrink-0 font-mono ${className} ${modernPill({ tone: "magenta" }, "modern:font-mono modern:font-normal modern:hover:bg-sol-magenta/15")}`}
       title={title ? `From the call "${title}"` : "From a call"}
     >
       <Phone className="w-3 h-3" />

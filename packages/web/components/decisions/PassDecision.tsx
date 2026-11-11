@@ -9,6 +9,7 @@ import { useTeamRosterIdentity } from "../../hooks/useTeamRoster";
 import { useRolesAndPeopleOptions } from "../../hooks/useRolesAndPeopleOptions";
 import { FilterOptionList } from "../FilterDropdown";
 import { KeyCap } from "../KeyboardShortcutsHelp";
+import { modernButton } from "../ui/modernLook";
 
 type Step = { kind: "pick" } | { kind: "note"; to: { kind: "user" | "role"; id: string; label: string } } | { kind: "escalate" };
 
@@ -111,8 +112,8 @@ export function PassDecision({ decisionId, open, onOpenChange, onPassed, keys = 
                 className="w-full resize-none rounded border border-sol-border bg-sol-bg-alt px-2 py-1.5 text-[12px] text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-blue"
               />
               <div className="flex items-center justify-end gap-2 text-meta">
-                <button type="button" onClick={() => (escalating ? setOpen(false) : setStep({ kind: "pick" }))} className="text-sol-text-dim hover:text-sol-text">{escalating ? "Cancel" : "Back"}</button>
-                <button type="submit" disabled={!canSend} className={`flex items-center gap-1.5 px-2 py-1 rounded border ${escalating ? "border-sol-orange/40 text-sol-orange" : "border-sol-blue/40 text-sol-blue"} disabled:opacity-40`}>
+                <button type="button" onClick={() => (escalating ? setOpen(false) : setStep({ kind: "pick" }))} className={`text-sol-text-dim hover:text-sol-text ${modernButton({ variant: "ghost", size: "sm" })}`}>{escalating ? "Cancel" : "Back"}</button>
+                <button type="submit" disabled={!canSend} className={`flex items-center gap-1.5 px-2 py-1 rounded border ${escalating ? "border-sol-orange/40 text-sol-orange" : "border-sol-blue/40 text-sol-blue"} disabled:opacity-40 ${modernButton({ variant: "soft", tone: escalating ? "orange" : "blue", size: "sm" })}`}>
                   {escalating ? "Escalate" : "Pass"}<KeyCap size="xs">↵</KeyCap>
                 </button>
               </div>

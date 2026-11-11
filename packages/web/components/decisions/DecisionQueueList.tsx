@@ -28,6 +28,7 @@ import { cardOutcome, settledAgo } from "./ChangeCardView";
 
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { FeatureUpsell } from "../agentFeatures/FeatureUpsell";
+import { modernButton } from "../ui/modernLook";
 const api = _api as any;
 
 // Every open ask the viewer holds. An advisory one parks nothing, so it lifts
@@ -122,12 +123,12 @@ export function DecisionQueueList() {
           {(mine > 0 || onDefault > 0 || withLead > 0 || terminal.length > 0) && <span className="text-[12px] text-sol-text-dim">{mine} waiting on you{onDefault ? ` · ${onDefault} going ahead` : ""}{withLead ? ` · ${withLead} with a lead` : ""}{terminal.length ? ` · ${terminal.length} in a terminal` : ""}</span>}
           <div className="ml-auto flex items-center gap-2 text-meta">
             {pending.length > 0 && (
-              <Link href="/decisions?mode=step" className="flex items-center gap-1.5 px-2 py-1 rounded border border-sol-border text-sol-text-muted hover:text-sol-text transition-colors">
+              <Link href="/decisions?mode=step" className={`flex items-center gap-1.5 px-2 py-1 rounded border border-sol-border text-sol-text-muted hover:text-sol-text transition-colors ${modernButton({ variant: "outline", size: "sm" })}`}>
                 <ListChecks className="w-3.5 h-3.5" />one at a time
               </Link>
             )}
             {pending.length > 1 && (
-              <button onClick={() => { setSelecting((v) => !v); setSelected(new Set()); }} className={`flex items-center gap-1.5 px-2 py-1 rounded border transition-colors ${selecting ? "border-sol-violet text-sol-violet" : "border-sol-border text-sol-text-muted hover:text-sol-text"}`}>
+              <button onClick={() => { setSelecting((v) => !v); setSelected(new Set()); }} className={`flex items-center gap-1.5 px-2 py-1 rounded border transition-colors ${selecting ? "border-sol-violet text-sol-violet" : "border-sol-border text-sol-text-muted hover:text-sol-text"} ${modernButton({ variant: selecting ? "soft" : "outline", tone: "violet", size: "sm" })}`}>
                 <Layers className="w-3.5 h-3.5" />{selecting ? "cancel" : "group into a stack"}
               </button>
             )}
@@ -147,10 +148,10 @@ export function DecisionQueueList() {
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Stack title, e.g. Launch checklist"
-              className="flex-1 min-w-[10rem] bg-sol-card border border-sol-border rounded px-2 py-1 text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-violet/50"
+              className="flex-1 min-w-[10rem] bg-sol-card border border-sol-border rounded px-2 py-1 text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-violet/50 modern:h-control-sm modern:rounded-control modern:py-0 modern:text-ui"
               onKeyDown={(e) => { if (e.key === "Enter") void groupIntoStack(); }}
             />
-            <button onClick={groupIntoStack} disabled={!title.trim() || selected.size < STACK_GROUP_MIN} className="px-2.5 py-1 rounded border border-sol-violet/50 text-sol-violet hover:bg-sol-violet hover:text-sol-bg transition-colors disabled:opacity-40">
+            <button onClick={groupIntoStack} disabled={!title.trim() || selected.size < STACK_GROUP_MIN} className={`px-2.5 py-1 rounded border border-sol-violet/50 text-sol-violet hover:bg-sol-violet hover:text-sol-bg transition-colors disabled:opacity-40 ${modernButton({ variant: "soft", tone: "violet", size: "sm" })}`}>
               create the stack
             </button>
           </div>

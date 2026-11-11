@@ -26,6 +26,8 @@ import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { hasCanvasFence } from "../HtmlSnippet";
 import { stripMarkdown } from "../../lib/notificationText";
 import "./decisions.css";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
+import { modernButton, modernPill } from "../ui/modernLook";
 
 // The compact card: the queue's row, the task page's row. Question, who is
 // asking, the binding chips, and single-kind answers inline; every other
@@ -149,6 +151,8 @@ export function DecisionCompactCardView({
   /** A line card the cursor is not on: the cause and the proof row, no answers. */
   folded?: boolean;
 }) {
+  // Modern adds its pill looks; Classic's class strings stay as they were.
+  const m = useIsModernStyle();
   const taskHref = useTaskHref();
   const kind = decision.kind ?? "single";
   const pending = decision.status === "pending";
@@ -222,36 +226,36 @@ export function DecisionCompactCardView({
             { key: "chips", plain: true, className: "flex-wrap items-center gap-2 min-w-0", node: (
               <>
                 <DecisionThreadUnread decisionId={decision._id} href={decisionHref(decision)} />
-                {!decision.blocking && <span className="px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue">advisory</span>}
-                {askedOf && <span className="px-1.5 py-0.5 rounded border border-sol-border text-sol-text-muted" title={`Asked of ${askedOf}. Your answer counts, and they are told you answered.`} data-decision-asked-of>for {askedOf}</span>}
+                {!decision.blocking && <span className={`px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue${m ? ` ${modernPill({ tone: "blue" })}` : ""}`}>advisory</span>}
+                {askedOf && <span className={`px-1.5 py-0.5 rounded border border-sol-border text-sol-text-muted${m ? ` ${modernPill({ tone: "neutral" })}` : ""}`} title={`Asked of ${askedOf}. Your answer counts, and they are told you answered.`} data-decision-asked-of>for {askedOf}</span>}
                 {/* The category decides who may answer, and only a real one says
                     anything: "unknown" is the absence of a proposal, so it earns no
                     chip here. The document page spells out what it means. */}
                 {!line && decision.category && decision.category !== "unknown" && (
-                  <span className={`px-1.5 py-0.5 rounded border ${isHumanOnlyCategory(decision.category) ? "border-sol-red/30 text-sol-red" : "border-sol-border text-sol-text-dim"}`} title={isHumanOnlyCategory(decision.category) ? "Always answered by a person, never a role" : "A role can earn the right to answer these"}>
+                  <span className={`px-1.5 py-0.5 rounded border ${isHumanOnlyCategory(decision.category) ? "border-sol-red/30 text-sol-red" : "border-sol-border text-sol-text-dim"}${m ? ` ${modernPill({ tone: isHumanOnlyCategory(decision.category) ? "red" : "neutral" })}` : ""}`} title={isHumanOnlyCategory(decision.category) ? "Always answered by a person, never a role" : "A role can earn the right to answer these"}>
                     {decision.category}
                   </span>
                 )}
                 {/* S15: a staffing proposal's pointer card names who wrote the proposal */}
                 <DecisionProposalOrigin contextMd={decision.context_md} />
                 {showTask && (task || decision.task_id) && (
-                  <Link href={taskHref(String(task?.short_id ?? decision.task_id))} className="px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10">
+                  <Link href={taskHref(String(task?.short_id ?? decision.task_id))} className={`px-1.5 py-0.5 rounded border border-sol-violet/30 text-sol-violet hover:bg-sol-violet/10${m ? ` ${modernPill({ tone: "violet" })}` : ""}`}>
                     {task?.short_id ? <span className="modern:font-mono">{task.short_id}</span> : "task"}{decision.station ? ` · ${decision.station}` : ""}
                   </Link>
                 )}
                 {stack && (
-                  <Link href={`/decisions/stacks/${stack.short_id ?? stack._id}`} className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-cyan/30 text-sol-cyan hover:bg-sol-cyan/10">
+                  <Link href={`/decisions/stacks/${stack.short_id ?? stack._id}`} className={`flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-cyan/30 text-sol-cyan hover:bg-sol-cyan/10${m ? ` ${modernPill({ tone: "cyan" })}` : ""}`}>
                     <Layers className="w-3 h-3" />{stack.title}
                   </Link>
                 )}
                 {!line && decision.workflow_run_id && <GateRunChip runId={decision.workflow_run_id} nodeId={decision.gate_node_id} />}
                 {pageCount > 0 && (
-                  <Link href={decisionHref(decision)} className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim hover:text-sol-text" title="The options carry pages to compare">
+                  <Link href={decisionHref(decision)} className={`flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim hover:text-sol-text${m ? ` ${modernPill({ tone: "neutral" })}` : ""}`} title="The options carry pages to compare">
                     <LayoutTemplate className="w-3 h-3" />{pageCount} page{pageCount === 1 ? "" : "s"}
                   </Link>
                 )}
                 {decision.holder?.kind === "role" && (
-                  <span className="flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-green/30 text-sol-green"><ShieldCheck className="w-3 h-3" />with a lead</span>
+                  <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-green/30 text-sol-green${m ? ` ${modernPill({ tone: "green" })}` : ""}`}><ShieldCheck className="w-3 h-3" />with a lead</span>
                 )}
               </>
             ) },
@@ -334,7 +338,7 @@ export function DecisionCompactCardView({
           {kind === "single" ? (
             <DecisionAnswerControls decision={decision} onAnswer={onAnswer} onDismiss={onDismiss} keys={keys} size="compact" recommendation={rec} />
           ) : (
-            <Link href={decisionHref(decision)} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-sol-yellow/40 text-[12px] text-sol-text hover:bg-sol-yellow hover:text-sol-bg transition-colors">
+            <Link href={decisionHref(decision)} className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-sol-yellow/40 text-[12px] text-sol-text hover:bg-sol-yellow hover:text-sol-bg transition-colors${m ? ` ${modernButton({ variant: "outline", size: "sm" })}` : ""}`}>
               {kind === "multi" ? "Pick several" : kind === "rank" ? "Rank the options" : "Fill in the form"}<ArrowUpRight className="w-3 h-3" />
             </Link>
           )}
@@ -357,13 +361,14 @@ const runChipSig = (r: any) => (r ? `${r.workflow_name ?? ""}|${r.current_node_i
 export function GateRunChip({ runId, nodeId, className = "" }: { runId: string; nodeId?: string; className?: string }) {
   useSyncWorkflowRun(runId);
   const s = useTrackedStore([(st) => runChipSig((st as any).workflowRuns?.[runId])]);
+  const m = useIsModernStyle();
   const run = (s as any).workflowRuns?.[runId];
   const label = gateRunLabel(run, nodeId);
   return (
     <Link
       href={runHref(runId)}
       data-gate-run={runId}
-      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-green/30 text-sol-green hover:bg-sol-green/10 max-w-[18rem] min-w-0 ${className}`}
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-sol-green/30 text-sol-green hover:bg-sol-green/10 max-w-[18rem] min-w-0 ${className}${m ? ` ${modernPill({ tone: "green" })}` : ""}`}
       title={label.known ? `Gate on ${label.workflow}${label.node ? ` at ${label.node}` : ""}` : "A gate on a workflow run"}
     >
       <Workflow className="w-3 h-3 shrink-0" />

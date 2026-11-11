@@ -20,6 +20,7 @@ import { AreaDot, Tip } from "./StoryParts";
 import { useAreaColors } from "./storyContext";
 import { KeyHint } from "./useChangesKeys";
 import { hasFilters, toggleArea, type ChangesUrl, type SetChangesUrl, type Zoom } from "./useChangesUrlState";
+import { modernButton, modernChip } from "../ui/modernLook";
 
 export type FilterOptions = {
   areas: string[];
@@ -58,7 +59,7 @@ function Chip({ active, onClick, children, color }: { active: boolean; onClick: 
       aria-pressed={active}
       className={`inline-flex h-[22px] items-center gap-1.5 rounded-full border px-2 font-mono text-meta transition-colors ${
         active ? "border-sol-border/70 text-sol-text" : "border-sol-border/25 text-sol-text/60 hover:border-sol-border/50 hover:text-sol-text"
-      }`}
+      } ${modernChip({ active }, "modern:font-sans")}`}
       style={active && color ? { background: color } : undefined}
     >
       {children}
@@ -155,7 +156,7 @@ function Toggle({ open, onClick, children, buttonRef }: { open: boolean; onClick
       aria-expanded={open}
       className={`inline-flex h-[24px] items-center gap-1.5 rounded-md border px-2 font-mono text-meta transition-colors ${
         open ? "border-sol-border/60 text-sol-text" : "border-sol-border/30 text-sol-text-muted hover:text-sol-text"
-      }`}
+      } ${modernButton({ variant: "outline", size: "sm" }, "modern:font-sans")}`}
     >
       {children}
     </button>

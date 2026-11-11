@@ -54,6 +54,7 @@ import { TrialStopActs, approachFailed, useStationReport } from "./TrialStopActs
 import { TrialHeldLink } from "./TrialHeldLink";
 import { Button } from "../ui/button";
 import { ShareControl } from "../ShareControl";
+import { modernButton, modernMenuRow, modernPill, modernTab } from "../ui/modernLook";
 
 type Filter = "waiting" | "tooling" | "held" | "running" | "empty" | "failed" | "stopped" | "answered" | "closed" | "all" | "superseded";
 
@@ -297,7 +298,7 @@ function TrialReview({ askedProject, from, spaces, scope, onPick, onNoTrial }: {
                       role="tab"
                       aria-selected={filter === f}
                       onClick={() => { setFilter(f); openCard(null); }}
-                      className={cn("rounded px-2 py-1 text-[12px] tabular-nums transition-colors", filter === f ? "bg-sol-bg-alt text-sol-text" : "text-sol-text-dim hover:text-sol-text")}
+                      className={cn("rounded px-2 py-1 text-[12px] tabular-nums transition-colors", filter === f ? "bg-sol-bg-alt text-sol-text" : "text-sol-text-dim hover:text-sol-text", modernTab({ active: filter === f }, "modern:h-6 modern:px-2"))}
                       data-trial-filter={f}
                     >
                       {f === "failed" || f === "stopped" ? `${FILTER_LABEL[f]} runs` : FILTER_LABEL[f]} <span className={cn("ml-0.5", f === "waiting" && counts.waiting ? "text-sol-yellow" : f === "failed" && counts.failed ? "text-sol-red" : f === "stopped" && counts.stopped ? "text-sol-orange" : f === "running" && counts.running ? "text-sol-blue" : "opacity-60")}>{counts[f]}</span>
@@ -338,7 +339,7 @@ function TrialReview({ askedProject, from, spaces, scope, onPick, onNoTrial }: {
                   <ul className="pb-1.5 pl-8 pr-3" data-trial-earlier>
                     {earlier.map((x) => (
                       <li key={x._id}>
-                        <button type="button" onClick={() => openCard(x)} className={cn("flex w-full items-center gap-1.5 rounded px-1.5 py-0.5 text-left text-meta text-sol-text-dim hover:bg-sol-bg-alt/30 hover:text-sol-text", selected?._id === x._id && "bg-sol-bg-alt/60 text-sol-text")} data-trial-card={x.short_id}>
+                        <button type="button" onClick={() => openCard(x)} className={cn("flex w-full items-center gap-1.5 rounded px-1.5 py-0.5 text-left text-meta text-sol-text-dim hover:bg-sol-bg-alt/30 hover:text-sol-text", selected?._id === x._id && "bg-sol-bg-alt/60 text-sol-text", modernMenuRow({ selected: selected?._id === x._id }))} data-trial-card={x.short_id}>
                           <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", STATE_TONE[x.status])} />
                           <span className="shrink-0 font-mono">{x.short_id}</span>
                           <span className="shrink-0">{x.kind === "card" ? "Change" : "Proposal"}</span>
@@ -383,7 +384,7 @@ function DropAll({ cards }: { cards: TrialCardRow[] }) {
       <button
         type="button"
         onClick={() => { for (const d of drops) trialAnswer(d.c._id, d.key, "No current evidence"); }}
-        className="shrink-0 rounded-md px-2.5 py-1 font-medium text-sol-red ring-1 ring-sol-red/40 transition-colors hover:bg-sol-red/10"
+        className={`shrink-0 rounded-md px-2.5 py-1 font-medium text-sol-red ring-1 ring-sol-red/40 transition-colors hover:bg-sol-red/10 ${modernButton({ variant: "danger", size: "sm" }, "modern:ring-0")}`}
       >Drop all {drops.length}</button>
     </div>
   );
@@ -475,7 +476,7 @@ function FailedRunPane({ run: r, week, runLimit, cards, now, onOpenCard }: { run
         <ul className="mt-6 divide-y divide-sol-border/30 border-y border-sol-border/30 text-[12px]">
           {cards.map((c) => (
             <li key={c._id} className="flex items-center gap-2 py-2">
-              <span className={cn("rounded px-1 text-meta", c.kind === "card" ? "bg-sol-blue/15 text-sol-blue" : "bg-sol-violet/15 text-sol-violet")}>{c.kind === "card" ? "Change" : "Proposal"}</span>
+              <span className={cn("rounded px-1 text-meta", c.kind === "card" ? "bg-sol-blue/15 text-sol-blue" : "bg-sol-violet/15 text-sol-violet", modernPill({ tone: c.kind === "card" ? "blue" : "violet" }))}>{c.kind === "card" ? "Change" : "Proposal"}</span>
               <button type="button" onClick={() => onOpenCard(c._id)} className="min-w-0 flex-1 truncate text-left text-sol-text hover:underline">{c.card?.headline || c.question}</button>
               {c.answer && <span className={answerTone(c)}>{c.answer.label} <span className="text-sol-text-dim">{answererWords(c)}</span></span>}
               <span className="tabular-nums text-sol-text-dim">{formatTimeAgo(c.created_at, now)}</span>

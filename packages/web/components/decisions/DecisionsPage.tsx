@@ -24,6 +24,7 @@ import { useDecisionRows } from "../../hooks/useDecisionRows";
 import { useSyncTeamDecisions, useSyncTeamLineDecisions } from "../../hooks/useSyncSessionDecisions";
 import { isFlowDecision } from "../../lib/decisions/decisionRows";
 import type { SessionDecisionItem } from "../../store/inboxStore";
+import { modernButton } from "../ui/modernLook";
 
 const routeOf = (d: SessionDecisionItem) => `/decisions/${d.short_id ?? d._id}`;
 
@@ -69,7 +70,7 @@ export function DecisionsList({ activeId }: { activeId?: string }) {
   ) : undefined;
   const step = state.view.tab === "mine" ? (
     <button type="button" onClick={() => router.push("/decisions?mode=step")} data-decision-step
-      className="flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-sol-border/40 text-xs text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors">
+      className={`flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-sol-border/40 text-xs text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors ${modernButton({ variant: "outline", size: "sm" })}`}>
       <StepForward className="w-3 h-3" /><span className="cq-header-collapse">One at a time</span>
     </button>
   ) : undefined;
@@ -86,7 +87,7 @@ export function DecisionsList({ activeId }: { activeId?: string }) {
       headerExtra={<>
         {state.view.tab === "team" ? <TeamAreaControls workspace={rows.workspaceKey} /> : step}
         <a href={GUIDE_URL} target="_blank" rel="noreferrer" aria-label="Decisions guide" data-decisions-guide
-          className="flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-sol-border/40 text-xs text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors no-underline">
+          className={`flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-sol-border/40 text-xs text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors no-underline ${modernButton({ variant: "outline", size: "sm" })}`}>
           <BookOpen className="w-3 h-3" /><span className="cq-header-collapse">Guide</span>
         </a>
       </>}

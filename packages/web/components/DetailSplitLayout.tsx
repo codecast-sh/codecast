@@ -7,6 +7,8 @@ import { useTabActive } from "../hooks/usePagePresence";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
+import { useIsModernStyle } from "../hooks/useVisualStyle";
+import { ModernDetailSplit } from "./nav/ModernDetailSplit";
 // List, then detail — each taking the full stage:
 //   click/enter → the detail covers the list
 //   Esc / ✕     → back to the list
@@ -15,13 +17,24 @@ import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 // component's job any more: it is the stage's split layout, entered by a
 // drag (components/stage), the same gesture for every surface.
 // Selection stays URL-driven: /docs/<id> deep-links straight into the detail.
-export function DetailSplitLayout({
+//
+// Modern draws the list beside its open item when the pane is wide enough,
+// and closes along the trail (components/nav/ModernDetailSplit).
+export function DetailSplitLayout(props: {
+  list: ReactNode;
+  /** List-root route that close (✕ / Esc) navigates back to. */
+  closeHref: string;
+  children?: ReactNode;
+}) {
+  return useIsModernStyle() ? <ModernDetailSplit {...props} /> : <ClassicDetailSplit {...props} />;
+}
+
+function ClassicDetailSplit({
   list,
   closeHref,
   children,
 }: {
   list: ReactNode;
-  /** List-root route that close (✕ / Esc) navigates back to. */
   closeHref: string;
   children?: ReactNode;
 }) {

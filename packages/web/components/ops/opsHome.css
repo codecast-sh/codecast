@@ -502,3 +502,9 @@ a.ops-fresh:hover span { text-decoration: underline; }
 .sov-variant:hover { background: color-mix(in srgb, var(--sol-text) 4%, transparent); color: var(--sol-text); }
 /* A count of nothing is not a press. */
 .ops-home-count[aria-disabled="true"]:hover { border-color: var(--sol-border); }
+
+/* ── Modern (.modern-style on <html>): the area's menus and popovers are the
+   floating surface every menu wears (components/ui/styles.ts modernFloating). ── */
+.modern-style .ops-filter-pop.ops-filter-pop,
+.modern-style .ops-home-menu.ops-home-menu { background-color: var(--sol-card); border-color: var(--sol-border); border-radius: var(--radius-card); box-shadow: var(--shadow-popover); }
+.modern-style .ops-home-menu [role="menuitem"] { font-size: var(--fs-ui); }
