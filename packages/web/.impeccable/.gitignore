@@ -1,0 +1,8 @@
+# Working files: the detector cache, the direction-roll sketches and answers,
+# review screenshots and the local rig's seed ids.
+hook.cache.json
+mocks/
+questions/
+review/*.png
+review/final/
+review/.seed.json

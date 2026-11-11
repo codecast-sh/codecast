@@ -1,0 +1,692 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-07T23:19:54+00:00",
+  "title": "Design System: codecast",
+  "extensions": {
+    "colorMeta": {
+      "accent": {
+        "role": "primary",
+        "displayName": "Workspace Indigo",
+        "canonical": "#5e6ad2",
+        "tonalRamp": [
+          "#1b1e45",
+          "#272c66",
+          "#353c8a",
+          "#4650ae",
+          "#5e6ad2",
+          "#7c86e8",
+          "#a8aff0",
+          "#dcdffa"
+        ]
+      },
+      "accent-dark": {
+        "role": "primary",
+        "displayName": "Workspace Indigo, dark",
+        "canonical": "#7c86e8",
+        "tonalRamp": [
+          "#1b1e45",
+          "#272c66",
+          "#353c8a",
+          "#4650ae",
+          "#5e6ad2",
+          "#7c86e8",
+          "#a8aff0",
+          "#dcdffa"
+        ]
+      },
+      "link-dark": {
+        "role": "primary",
+        "displayName": "Link Indigo, dark",
+        "canonical": "#8f98f0",
+        "tonalRamp": [
+          "#1b1e45",
+          "#272c66",
+          "#353c8a",
+          "#4650ae",
+          "#5e6ad2",
+          "#7c86e8",
+          "#a8aff0",
+          "#dcdffa"
+        ]
+      },
+      "page": {
+        "role": "neutral",
+        "displayName": "Paper White",
+        "canonical": "#ffffff",
+        "tonalRamp": [
+          "#18181b",
+          "#27272a",
+          "#3f3f46",
+          "#6b6b74",
+          "#a1a1aa",
+          "#d4d4d8",
+          "#e4e4e7",
+          "#f7f7f8"
+        ]
+      },
+      "sidebar": {
+        "role": "neutral",
+        "displayName": "Sidebar Grey",
+        "canonical": "#f7f7f8",
+        "tonalRamp": [
+          "#18181b",
+          "#27272a",
+          "#3f3f46",
+          "#6b6b74",
+          "#a1a1aa",
+          "#d4d4d8",
+          "#e4e4e7",
+          "#f7f7f8"
+        ]
+      },
+      "highlight": {
+        "role": "neutral",
+        "displayName": "Highlight Grey",
+        "canonical": "#efeff1",
+        "tonalRamp": [
+          "#18181b",
+          "#27272a",
+          "#3f3f46",
+          "#6b6b74",
+          "#a1a1aa",
+          "#d4d4d8",
+          "#e4e4e7",
+          "#f7f7f8"
+        ]
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "#e4e4e7",
+        "tonalRamp": [
+          "#18181b",
+          "#27272a",
+          "#3f3f46",
+          "#6b6b74",
+          "#a1a1aa",
+          "#d4d4d8",
+          "#e4e4e7",
+          "#f7f7f8"
+        ]
+      },
+      "panel-rule": {
+        "role": "neutral",
+        "displayName": "Panel Rule",
+        "canonical": "#ececef",
+        "tonalRamp": [
+          "#18181b",
+          "#27272a",
+          "#3f3f46",
+          "#6b6b74",
+          "#a1a1aa",
+          "#d4d4d8",
+          "#e4e4e7",
+          "#f7f7f8"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#18181b",
+        "tonalRamp": [
+          "#18181b",
+          "#27272a",
+          "#3f3f46",
+          "#6b6b74",
+          "#a1a1aa",
+          "#d4d4d8",
+          "#e4e4e7",
+          "#f7f7f8"
+        ]
+      },
+      "ink-secondary": {
+        "role": "neutral",
+        "displayName": "Secondary Ink",
+        "canonical": "#3f3f46",
+        "tonalRamp": [
+          "#18181b",
+          "#27272a",
+          "#3f3f46",
+          "#6b6b74",
+          "#a1a1aa",
+          "#d4d4d8",
+          "#e4e4e7",
+          "#f7f7f8"
+        ]
+      },
+      "ink-muted": {
+        "role": "neutral",
+        "displayName": "Muted Ink",
+        "canonical": "#6b6b74",
+        "tonalRamp": [
+          "#18181b",
+          "#27272a",
+          "#3f3f46",
+          "#6b6b74",
+          "#a1a1aa",
+          "#d4d4d8",
+          "#e4e4e7",
+          "#f7f7f8"
+        ]
+      },
+      "ink-dim": {
+        "role": "neutral",
+        "displayName": "Dim Ink",
+        "canonical": "#75757e",
+        "tonalRamp": [
+          "#18181b",
+          "#27272a",
+          "#3f3f46",
+          "#6b6b74",
+          "#a1a1aa",
+          "#d4d4d8",
+          "#e4e4e7",
+          "#f7f7f8"
+        ]
+      },
+      "ink-faint": {
+        "role": "neutral",
+        "displayName": "Faint Ink",
+        "canonical": "#a1a1aa",
+        "tonalRamp": [
+          "#18181b",
+          "#27272a",
+          "#3f3f46",
+          "#6b6b74",
+          "#a1a1aa",
+          "#d4d4d8",
+          "#e4e4e7",
+          "#f7f7f8"
+        ]
+      },
+      "page-dark": {
+        "role": "neutral",
+        "displayName": "Graphite Ground",
+        "canonical": "#0f0f11",
+        "tonalRamp": [
+          "#0f0f11",
+          "#141417",
+          "#17171a",
+          "#1f1f24",
+          "#2a2a30",
+          "#63636b",
+          "#a1a1aa",
+          "#ededef"
+        ]
+      },
+      "sidebar-dark": {
+        "role": "neutral",
+        "displayName": "Sidebar Graphite",
+        "canonical": "#141417",
+        "tonalRamp": [
+          "#0f0f11",
+          "#141417",
+          "#17171a",
+          "#1f1f24",
+          "#2a2a30",
+          "#63636b",
+          "#a1a1aa",
+          "#ededef"
+        ]
+      },
+      "panel-dark": {
+        "role": "neutral",
+        "displayName": "Panel Graphite",
+        "canonical": "#17171a",
+        "tonalRamp": [
+          "#0f0f11",
+          "#141417",
+          "#17171a",
+          "#1f1f24",
+          "#2a2a30",
+          "#63636b",
+          "#a1a1aa",
+          "#ededef"
+        ]
+      },
+      "highlight-dark": {
+        "role": "neutral",
+        "displayName": "Highlight Graphite",
+        "canonical": "#1f1f24",
+        "tonalRamp": [
+          "#0f0f11",
+          "#141417",
+          "#17171a",
+          "#1f1f24",
+          "#2a2a30",
+          "#63636b",
+          "#a1a1aa",
+          "#ededef"
+        ]
+      },
+      "hairline-dark": {
+        "role": "neutral",
+        "displayName": "Hairline, dark",
+        "canonical": "#2a2a30",
+        "tonalRamp": [
+          "#0f0f11",
+          "#141417",
+          "#17171a",
+          "#1f1f24",
+          "#2a2a30",
+          "#63636b",
+          "#a1a1aa",
+          "#ededef"
+        ]
+      },
+      "panel-rule-dark": {
+        "role": "neutral",
+        "displayName": "Panel Rule, dark",
+        "canonical": "#222227",
+        "tonalRamp": [
+          "#0f0f11",
+          "#141417",
+          "#17171a",
+          "#1f1f24",
+          "#2a2a30",
+          "#63636b",
+          "#a1a1aa",
+          "#ededef"
+        ]
+      },
+      "ink-dark": {
+        "role": "neutral",
+        "displayName": "Ink, dark",
+        "canonical": "#ededef",
+        "tonalRamp": [
+          "#0f0f11",
+          "#141417",
+          "#17171a",
+          "#1f1f24",
+          "#2a2a30",
+          "#63636b",
+          "#a1a1aa",
+          "#ededef"
+        ]
+      },
+      "ink-secondary-dark": {
+        "role": "neutral",
+        "displayName": "Secondary Ink, dark",
+        "canonical": "#d4d4d8",
+        "tonalRamp": [
+          "#0f0f11",
+          "#141417",
+          "#17171a",
+          "#1f1f24",
+          "#2a2a30",
+          "#63636b",
+          "#a1a1aa",
+          "#ededef"
+        ]
+      },
+      "ink-muted-dark": {
+        "role": "neutral",
+        "displayName": "Muted Ink, dark",
+        "canonical": "#a1a1aa",
+        "tonalRamp": [
+          "#0f0f11",
+          "#141417",
+          "#17171a",
+          "#1f1f24",
+          "#2a2a30",
+          "#63636b",
+          "#a1a1aa",
+          "#ededef"
+        ]
+      },
+      "ink-dim-dark": {
+        "role": "neutral",
+        "displayName": "Dim Ink, dark",
+        "canonical": "#8b8b94",
+        "tonalRamp": [
+          "#0f0f11",
+          "#141417",
+          "#17171a",
+          "#1f1f24",
+          "#2a2a30",
+          "#63636b",
+          "#a1a1aa",
+          "#ededef"
+        ]
+      },
+      "state-red": {
+        "role": "state",
+        "displayName": "Fault Red",
+        "canonical": "#d93d42",
+        "tonalRamp": [
+          "#3f1213",
+          "#6b1c1e",
+          "#9c2a2d",
+          "#d93d42",
+          "#ef5f63",
+          "#f48c8f",
+          "#f8b9bb",
+          "#fde8e8"
+        ]
+      },
+      "state-red-dark": {
+        "role": "state",
+        "displayName": "Fault Red, dark",
+        "canonical": "#ef5f63",
+        "tonalRamp": [
+          "#3f1213",
+          "#6b1c1e",
+          "#9c2a2d",
+          "#d93d42",
+          "#ef5f63",
+          "#f48c8f",
+          "#f8b9bb",
+          "#fde8e8"
+        ]
+      },
+      "state-amber": {
+        "role": "state",
+        "displayName": "Caution Amber",
+        "canonical": "#b2620e",
+        "tonalRamp": [
+          "#3a2104",
+          "#5f3607",
+          "#8a4e0b",
+          "#b2620e",
+          "#e3a24a",
+          "#ecbd7c",
+          "#f4d8ae",
+          "#fbf0e0"
+        ]
+      },
+      "state-amber-dark": {
+        "role": "state",
+        "displayName": "Caution Amber, dark",
+        "canonical": "#e3a24a",
+        "tonalRamp": [
+          "#3a2104",
+          "#5f3607",
+          "#8a4e0b",
+          "#b2620e",
+          "#e3a24a",
+          "#ecbd7c",
+          "#f4d8ae",
+          "#fbf0e0"
+        ]
+      },
+      "state-green": {
+        "role": "state",
+        "displayName": "Done Green",
+        "canonical": "#2f8a57",
+        "tonalRamp": [
+          "#0f2c1c",
+          "#174a2f",
+          "#22683f",
+          "#2f8a57",
+          "#4cb782",
+          "#7fcda3",
+          "#b4e2c7",
+          "#e6f6ec"
+        ]
+      },
+      "state-green-dark": {
+        "role": "state",
+        "displayName": "Done Green, dark",
+        "canonical": "#4cb782",
+        "tonalRamp": [
+          "#0f2c1c",
+          "#174a2f",
+          "#22683f",
+          "#2f8a57",
+          "#4cb782",
+          "#7fcda3",
+          "#b4e2c7",
+          "#e6f6ec"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Page title",
+        "purpose": "The page title, with a 13px dim tagline on its baseline and controls at the right."
+      },
+      "title": {
+        "displayName": "Conversation title",
+        "purpose": "The title in the 44px conversation header."
+      },
+      "body": {
+        "displayName": "Read",
+        "purpose": "Prose, bubbles and the composer (--t-read)."
+      },
+      "row-title": {
+        "displayName": "Row title",
+        "purpose": "First line of a three-line list row."
+      },
+      "ui": {
+        "displayName": "UI",
+        "purpose": "Nav rows, tabs, search, row summaries, banner text (--t-ui)."
+      },
+      "meta": {
+        "displayName": "Meta",
+        "purpose": "State, summary and context lines, section heads, ages (--t-sub)."
+      },
+      "label": {
+        "displayName": "Mark",
+        "purpose": "Chips, times, counts, status pills; sentence case, no tracking (--t-mark)."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Code and short IDs only."
+      }
+    },
+    "shadows": [
+      {
+        "name": "button-face",
+        "value": "inset 0 1px 0 rgb(255 255 255 / 0.16), inset 0 0 0 1px rgb(0 0 0 / 0.1), 0 1px 2px rgb(0 0 0 / 0.14), 0 3px 8px -4px rgb(0 0 0 / 0.22)",
+        "purpose": "Filled buttons only: top light, inner hairline, short soft shadow."
+      },
+      {
+        "name": "button-face-pressed",
+        "value": "inset 0 1px 2px rgb(0 0 0 / 0.2), inset 0 0 0 1px rgb(0 0 0 / 0.12)",
+        "purpose": "Filled button while pressed."
+      },
+      {
+        "name": "focus-ring",
+        "value": "outline: 2px solid hsl(234 56% 60% / 0.6); outline-offset: 2px",
+        "purpose": "Keyboard focus on buttons and rows."
+      }
+    ],
+    "motion": [
+      {
+        "name": "hover",
+        "value": "150ms ease-out",
+        "purpose": "Hover and pressed fills on rows, buttons and banner actions."
+      },
+      {
+        "name": "panel",
+        "value": "160ms cubic-bezier(0.23, 1, 0.32, 1)",
+        "purpose": "Panel open/close (--cc-panel-motion)."
+      },
+      {
+        "name": "press",
+        "value": "80ms",
+        "purpose": "Half-pixel button press."
+      },
+      {
+        "name": "entry",
+        "value": "none",
+        "purpose": "Nothing animates on entry."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "sm",
+        "value": "640px"
+      },
+      {
+        "name": "md",
+        "value": "768px"
+      },
+      {
+        "name": "lg",
+        "value": "1024px"
+      }
+    ],
+    "layout": {
+      "sidebarWidth": "15% of the window (about 216px at 1440px), resizable",
+      "panelHead": "44px",
+      "tabStrip": "36px",
+      "contentInset": "16px",
+      "pagePadding": "16px 20px",
+      "pageAlign": "left"
+    }
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one filled action in a view; every tinted face renders as this.",
+      "html": "<button class=\"ds-btn-primary\">Start session</button>",
+      "css": ".ds-btn-primary{font-family:-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Inter, Roboto, sans-serif;font-size:13px;font-weight:500;height:36px;padding:0 16px;border:0;border-radius:4px;color:#fff;background-color:#5e6ad2;background-image:linear-gradient(to bottom,rgb(255 255 255 / .09),rgb(255 255 255 / 0) 60%);box-shadow:inset 0 1px 0 rgb(255 255 255 / 0.16), inset 0 0 0 1px rgb(0 0 0 / 0.1), 0 1px 2px rgb(0 0 0 / 0.14), 0 3px 8px -4px rgb(0 0 0 / 0.22);transition:background-color 150ms,box-shadow 150ms,transform 80ms;cursor:pointer}.ds-btn-primary:hover{background-color:color-mix(in oklab,#5e6ad2 88%,#fff)}.ds-btn-primary:active{transform:translateY(.5px);background-image:none;box-shadow:inset 0 1px 2px rgb(0 0 0 / 0.2), inset 0 0 0 1px rgb(0 0 0 / 0.12)}.ds-btn-primary:focus-visible{outline:2px solid rgb(94 106 210 / .6);outline-offset:2px}"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Quiet action beside the primary.",
+      "html": "<button class=\"ds-btn-secondary\">Options</button>",
+      "css": ".ds-btn-secondary{font-family:-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Inter, Roboto, sans-serif;font-size:13px;font-weight:500;height:36px;padding:0 16px;border:0;border-radius:4px;color:#18181b;background:#efeff1;box-shadow:inset 0 0 0 1px rgb(24 24 27 / .09);transition:background-color 150ms;cursor:pointer}.ds-btn-secondary:hover{background:#e4e4e7}.ds-btn-secondary:focus-visible{outline:2px solid rgb(94 106 210 / .6);outline-offset:2px}"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost-hover",
+      "description": "Toolbar and inline actions; bare until hovered.",
+      "html": "<button class=\"ds-btn-ghost\">Filter</button>",
+      "css": ".ds-btn-ghost{font-family:-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Inter, Roboto, sans-serif;font-size:12px;height:28px;padding:0 8px;border:0;border-radius:4px;color:#75757e;background:transparent;transition:background-color 150ms,color 150ms;cursor:pointer}.ds-btn-ghost:hover{background:#efeff1;color:#18181b}.ds-btn-ghost:focus-visible{outline:2px solid rgb(94 106 210 / .6);outline-offset:2px}"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Hairline field, transparent ground, indigo focus ring.",
+      "html": "<input class=\"ds-input\" placeholder=\"Search sessions\" />",
+      "css": ".ds-input{font-family:-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Inter, Roboto, sans-serif;font-size:13px;height:36px;width:260px;padding:4px 12px;border:1px solid #e4e4e7;border-radius:4px;background:transparent;color:#18181b;transition:box-shadow 150ms}.ds-input::placeholder{color:#6b6b74}.ds-input:focus-visible{outline:none;box-shadow:0 0 0 1px #5e6ad2}"
+    },
+    {
+      "name": "Sidebar Navigation",
+      "kind": "nav",
+      "refersTo": "nav-row",
+      "description": "Six daily rows plus More; the current row is a grey fill alone.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-row ds-nav-active\" href=\"#\"><svg width=\"17\" height=\"17\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.7\"><path d=\"M22 12h-6l-2 3h-4l-2-3H2\"/><path d=\"M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z\"/></svg>Inbox</a><a class=\"ds-nav-row\" href=\"#\">Decisions</a><a class=\"ds-nav-row\" href=\"#\">Chat</a><a class=\"ds-nav-row\" href=\"#\">Tasks</a><a class=\"ds-nav-row\" href=\"#\">Docs</a><a class=\"ds-nav-row\" href=\"#\">Calls</a><a class=\"ds-nav-row ds-nav-more\" href=\"#\">More</a></nav>",
+      "css": ".ds-nav{width:216px;padding:8px;background:#f7f7f8;border-right:1px solid #ececef;font-family:-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Inter, Roboto, sans-serif;display:flex;flex-direction:column}.ds-nav-row{display:flex;align-items:center;gap:10px;min-height:30px;padding:5px 10px;margin:0 4px;border-radius:8px;color:#18181b;font-size:13px;line-height:20px;text-decoration:none}.ds-nav-row:hover{background:color-mix(in srgb,#18181b 4%,transparent)}.ds-nav-active{background:#efeff1}.ds-nav-more{color:#75757e}.ds-nav-row:focus-visible{outline:2px solid rgb(94 106 210 / .6);outline-offset:-2px}"
+    },
+    {
+      "name": "Session Row",
+      "kind": "custom",
+      "refersTo": "list-row",
+      "description": "Three-line list row: title; state or summary; ID · agent · project · model · msgs; age right.",
+      "html": "<div class=\"ds-row\"><div><div class=\"ds-row-title\">Routing gap rollout fix</div><div class=\"ds-row-line ds-needs\">Waiting on you: approve the migration</div><div class=\"ds-row-ctx\"><span class=\"ds-id\">wx77f28</span> · claude · littlebird · opus · 2 msgs</div></div><div class=\"ds-row-age\">1h</div></div>",
+      "css": ".ds-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:0 16px;padding:8px 12px;border-radius:6px;font-family:-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Inter, Roboto, sans-serif;transition:background-color 150ms;width:560px}.ds-row:hover{background:#efeff1}.ds-row-title{font-size:14px;font-weight:500;line-height:20px;color:#18181b}.ds-row-line{font-size:13px;line-height:20px;color:#6b6b74}.ds-needs{color:#5e6ad2}.ds-row-ctx,.ds-row-age{font-size:12px;line-height:20px;color:#75757e;font-variant-numeric:tabular-nums}"
+    },
+    {
+      "name": "Section Head",
+      "kind": "custom",
+      "refersTo": "section-head",
+      "description": "Quiet sentence-case group caption with a count; indigo count only for needs you.",
+      "html": "<div class=\"ds-sec\">Needs you <span class=\"ds-sec-n\">2</span></div>",
+      "css": ".ds-sec{font-family:-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Inter, Roboto, sans-serif;font-size:12px;font-weight:500;line-height:16px;padding:10px 16px 6px 22px;color:#6b6b74;background:#fff;border-bottom:1px solid #ececef;width:320px}.ds-sec-n{margin-left:6px;color:#5e6ad2;font-variant-numeric:tabular-nums}"
+    },
+    {
+      "name": "Banner Strip",
+      "kind": "custom",
+      "refersTo": "banner",
+      "description": "The one strip under the top bar: muted text, one secondary action, dismiss.",
+      "html": "<div class=\"ds-banner\"><span>Install the CLI to start syncing your Claude Code sessions</span><span class=\"ds-banner-end\"><button class=\"ds-banner-btn\">Setup</button><button class=\"ds-banner-x\" aria-label=\"Dismiss\">×</button></span></div>",
+      "css": ".ds-banner{display:flex;align-items:center;justify-content:space-between;min-height:36px;padding:0 16px;background:#fff;border-bottom:1px solid #ececef;font-family:-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Inter, Roboto, sans-serif;font-size:13px;color:#6b6b74;width:640px}.ds-banner-end{display:flex;gap:10px;align-items:center}.ds-banner-btn{height:26px;padding:0 10px;border:1px solid #e4e4e7;border-radius:6px;background:#fff;color:#18181b;font-size:12px;font-weight:500;transition:background-color 150ms ease-out;cursor:pointer}.ds-banner-btn:hover{background:#efeff1}.ds-banner-btn:focus-visible{outline:2px solid rgb(94 106 210 / .6);outline-offset:2px}.ds-banner-x{border:0;background:transparent;color:#75757e;font-size:14px;cursor:pointer}"
+    },
+    {
+      "name": "Page Header",
+      "kind": "custom",
+      "refersTo": "panel-head",
+      "description": "18px semibold title, 13px dim tagline on the same baseline, controls right.",
+      "html": "<div class=\"ds-ph\"><div class=\"ds-ph-l\"><h1>Inbox</h1><span>0 need you · 0 working · 7 done</span></div><div class=\"ds-seg\"><button class=\"on\">Board</button><button>Feed</button></div></div>",
+      "css": ".ds-ph{display:flex;justify-content:space-between;align-items:center;gap:12px;font-family:-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI', Inter, Roboto, sans-serif;width:720px;padding:16px 20px}.ds-ph-l{display:flex;align-items:baseline;gap:12px}.ds-ph h1{margin:0;font-size:18px;font-weight:600;color:#18181b}.ds-ph-l span{font-size:13px;color:#75757e}.ds-seg{display:flex;border:1px solid #e4e4e7;border-radius:6px;padding:2px}.ds-seg button{border:0;background:transparent;font:inherit;font-size:13px;color:#6b6b74;padding:4px 10px;border-radius:4px;cursor:pointer}.ds-seg button.on{background:#efeff1;color:#18181b}.ds-seg button:focus-visible{outline:2px solid rgb(94 106 210 / .6)}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Quiet Desk",
+    "overview": "Codecast is a workspace people keep open all day beside their terminals, so it is built to the category standard set by Linear, Slack and Superhuman, played straight. Every signed-in page uses one style in light and dark: neutral greys, one indigo accent, the platform's own UI sans, hairline rules and flat surfaces. Colour is spent only on what changes what the person does next: the primary action, what waits on them, unread, focus, and real state (failed, warning, done).\n\nDensity is high and even. Lists are rows, not cards; each row has three lines (title, the state or summary, a dim context line of ID, agent, project, model and message count) with the age at the right edge in tabular figures. Text sits on a four-step scale (15 / 13 / 12 / 11) with page titles at 18. Labels are sentence case everywhere, and the system picks one way to do each thing instead of offering options: one style, six daily nav rows plus More, one banner at a time, one Filter menu, one quiet line under the new-session prompt, workers folded under the agent that spawned them.\n\nThe system rejects the incumbent mono, badge-dense, twenty-item-nav dashboard and any themed costume: no tinted section bands, no per-feature colour, no tracked all-caps labels, no thick coloured stripes, no chip rows.",
+    "keyCharacteristics": [
+      "Neutral greys with one indigo accent; red, amber and green only for real state.",
+      "Platform UI sans; mono only for code and short IDs; sentence case throughout.",
+      "Four text sizes (15 / 13 / 12 / 11) plus an 18px page title; weights 400, 500, 600.",
+      "Flat at rest: hairline rules separate surfaces, including menus and dialogs.",
+      "Three-line list rows, 44px panel heads, 16px content inset, left-aligned pages.",
+      "Opinionated defaults: one of everything, with the rest under More or ⌘K."
+    ],
+    "rules": [
+      {
+        "name": "The One Accent Rule",
+        "body": "Indigo is the only hue that is not a state. If a colour on screen is not indigo, red, amber or green-for-state, it is grey.",
+        "section": "colors"
+      },
+      {
+        "name": "The Waiting-On-You Rule",
+        "body": "Indigo marks the primary action, focus, unread and what waits on the person. Group heads, project names, pins and kinds read in ink, never in colour.",
+        "section": "colors"
+      },
+      {
+        "name": "The No Bands Rule",
+        "body": "No tinted section bands and no per-feature colour. A group head is a muted caption on the page ground with a hairline under it.",
+        "section": "colors"
+      },
+      {
+        "name": "The Sentence Case Rule",
+        "body": "Every label, heading, button and group head is sentence case. Tracked all-caps micro labels are removed globally; a short code typed in caps (an ID, a key name) keeps its own case.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Family Rule",
+        "body": "One sans family for everything a person reads. Mono appears only where the text is code or an identifier.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Rule",
+        "body": "Ages, counts and message totals set in tabular figures so columns of numbers hold still.",
+        "section": "typography"
+      },
+      {
+        "name": "The One Line Rule",
+        "body": "Every panel head is 44px and every content edge is 16px in, so heads and content align across panes.",
+        "section": "layout"
+      },
+      {
+        "name": "The One Banner Rule",
+        "body": "Only the first strip in priority order shows; the rest wait until it is dismissed or acted on.",
+        "section": "layout"
+      },
+      {
+        "name": "The Hairline Rule",
+        "body": "Anything that floats is set apart by a hairline, never a shadow.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do spend indigo only on the primary action, focus, unread and what waits on the person.",
+      "Do keep red, amber and green for real state: failed, warning, done or live.",
+      "Do set every label in sentence case, in the platform UI sans, on the 15 / 13 / 12 / 11 scale with 18px page titles.",
+      "Do use mono only for code and short IDs.",
+      "Do build lists from three-line rows with the age right-aligned in tabular figures.",
+      "Do separate surfaces with tone and hairlines; set floating layers apart with a hairline.",
+      "Do give each thing one way: one Filter menu, one banner, one primary button per view, new pages under More.",
+      "Do nest spawned workers under their parent with one \"N workers · 1 needs you\" line."
+    ],
+    "donts": [
+      "Don't tint section heads, bands or whole features; group heads read in muted ink.",
+      "Don't use tracked all-caps micro labels or eyebrows above titles.",
+      "Don't draw a coloured left stripe wider than 1px on a row, card or callout.",
+      "Don't fill buttons in feature colours; every filled action is the indigo primary, or red when destructive.",
+      "Don't add chip rows, badge counts or pills where a dim number or one menu will do.",
+      "Don't stack banners; a second strip waits for the first.",
+      "Don't put a shadow on a panel, row or popover at rest.",
+      "Don't add a top-level nav row for a new feature; it belongs under More."
+    ]
+  }
+}
