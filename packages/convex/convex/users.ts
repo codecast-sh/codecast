@@ -168,7 +168,6 @@ export const getCurrentUserProbe = query({
   },
 });
 
-
 // internal: was a public query that returned the ENTIRE users table (including
 // every email) to any caller — the id/email directory an attacker needed to
 // target the other unauthenticated mutations. Only a dev test script referenced
