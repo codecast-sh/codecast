@@ -409,6 +409,9 @@ export const create = mutation({
     project_id: v.optional(v.string()),
     conversation_id: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),
+    // The CLI's --personal / --team: an explicit choice wins over the session's team and the directory mapping.
+    workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
+    team_id: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -416,7 +419,9 @@ export const create = mutation({
 
     let conversation_id: Id<"conversations"> | undefined;
     let conversationTeamId: Id<"teams"> | undefined;
-    if (args.conversation_id) {
+    // A linked conversation decides the doc's access (computeWorkspaceKey), so
+    // an explicit workspace leaves the creating session unlinked.
+    if (args.conversation_id && !args.workspace) {
       // Unresolvable session ref = create the doc without the link, never
       // reject the create (see resolveSessionConversation).
       const conv = await resolveSessionConversation(ctx, auth.userId, args.conversation_id);
@@ -429,6 +434,7 @@ export const create = mutation({
     const db = await createDataContext(ctx, {
       userId: auth.userId,
       project_path: args.project_path,
+      ...(args.workspace ? { workspace: args.workspace, team_id: args.team_id } : {}),
       ...(conversationTeamId ? { workspace: "team" as const, team_id: conversationTeamId } : {}),
     });
     const now = Date.now();
@@ -2243,7 +2249,7 @@ export async function createDocAs(ctx: MutationCtx, userId: Id<"users">, args: O
   // The row rides back with the receipt so the client seeds its store before
   // navigating: the doc page paints from the store, never waiting on the
   // list feed to echo the create.
-  return { id, row: await ctx.db.get(id) };
+  return { id, row: await ctx.db.get(id as Id<"docs">) };
 }
 
 /** Move a doc to a new parent (or to root if parent_id is null) and update sort_order */
