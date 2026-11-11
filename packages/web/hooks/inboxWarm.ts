@@ -1,18 +1,20 @@
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { useInboxStore, isConvexId, ensureHydrated, visualOrderViewSig } from "../store/inboxStore";
+import { useInboxStore, isConvexId, ensureHydrated, visualOrderViewSig, inboxMemberRows, sessionRowFromConversation, type InboxSession } from "../store/inboxStore";
 import { whenInputQuiet } from "../lib/inputQuiet";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { isHostedAgentType } from "@codecast/shared/contracts";
 
 // Background warming of inbox conversations so opening one is instant.
 //
-// The warm order is WHAT THE USER IS LOOKING AT: the store's rendered order
-// (visualOrder → placeInboxRows → the view mode, scope, show-old fold and chip
-// filters), not the server's live payload. The live window is ~200 rows in
+// The warm order starts with WHAT THE USER IS LOOKING AT: the store's rendered
+// order (visualOrder → placeInboxRows → the view mode, scope, show-old fold and
+// chip filters), not the server's live payload. The live window is ~200 rows in
 // most-actionable-first order; the flat "All"/"recent" views, the show-old fold,
 // a project chip and team scope all draw from the wider local cache, so a loop
-// over the payload never touched the rows those views actually show.
+// over the payload never touched the rows those views actually show. After the
+// rendered rows come the inbox rows the render hides (warmOrder), so every
+// inbox session is warm whatever the view.
 //
 // Depth is tiered by on-screen rank. The rows at the top of the list get the
 // same 200-row page the open path fetches on a cold open (and are deepened to
@@ -45,13 +47,17 @@ export const MAX_COLD_WARM_PER_PASS = 60;
 export const MAX_DEEPEN_PER_PASS = 10;
 
 export type WarmAction =
+  | { kind: "row"; id: string }
   | { kind: "cold"; id: string; rows: number; serverCount: number }
   | { kind: "deepen"; id: string; rows: number }
   | { kind: "delta"; id: string; after: number; serverCount: number };
 
 export type WarmRow = {
   id: string;
-  serverCount: number;
+  /** message_count from the store row; null when the row itself must be
+   *  fetched first (a role's standing session the store lacks, or holds
+   *  without is_anchor). */
+  serverCount: number | null;
   storedCount: number;
   hasMoreAbove: boolean;
   /** Newest cached message timestamp (stored rows > 0). */
@@ -76,6 +82,12 @@ export function planWarm(rows: WarmRow[]): WarmAction[] {
   rows.forEach((row, rank) => {
     if (row.inFlight || row.serverCount === 0) return;
     const depth = warmDepthForRank(rank);
+    // No usable store row: fetch the row (a click would wait on it before
+    // painting anything); the pass after it lands warms the messages.
+    if (row.serverCount === null) {
+      actions.push({ kind: "row", id: row.id });
+      return;
+    }
     if (row.storedCount === 0) {
       if (cold >= MAX_COLD_WARM_PER_PASS) return;
       cold++;
@@ -143,6 +155,9 @@ const inFlight = new Set<string>();
 // grows past this. Without it the delta branch re-fires an empty getNewMessages
 // every pass for any conversation holding a partial window.
 const syncedCount = new Map<string, number>();
+// Row fetches tried this page life (runRow), whatever came back: a row the
+// server withholds, or sends without is_anchor, is not asked for every pass.
+const rowTried = new Set<string>();
 
 /** One-shot older page. History walks must not subscribe: a live query on a
  *  long session re-runs on every conversation heartbeat and OCC-retries
@@ -248,6 +263,17 @@ function runCold(convex: ConvexClient, action: Extract<WarmAction, { kind: "cold
     .finally(() => inFlight.delete(id));
 }
 
+function runRow(convex: ConvexClient, id: string) {
+  inFlight.add(id);
+  rowTried.add(id);
+  convex.query(api.conversations.getConversation, { conversation_id: id as Id<"conversations">, limit: 1 })
+    .then((data: any) => {
+      if (data) useInboxStore.getState().seedSession(sessionRowFromConversation(id, data));
+    })
+    .catch((err: unknown) => { console.warn("[inboxWarm] row warm failed", { id, err }); })
+    .finally(() => inFlight.delete(id));
+}
+
 function runDelta(convex: ConvexClient, action: Extract<WarmAction, { kind: "delta" }>) {
   const { id, serverCount } = action;
   inFlight.add(id);
@@ -264,11 +290,45 @@ function runDeepen(convex: ConvexClient, action: Extract<WarmAction, { kind: "de
     .finally(() => inFlight.delete(action.id));
 }
 
-/** Snapshot the rendered list into planner rows. */
+/**
+ * Every row a click, a jump or a reveal can land on, in warm priority: the
+ * rendered list first, then the rest of the inbox in both scopes, then every
+ * role's standing session. A collapsed section, a chip, the favorites shelf or
+ * the other scope hides rows from the render without taking them out of the
+ * inbox, and a role's standing session files behind its role card or on the
+ * org page; opening any of them must find a warm row. Rows behind the show-old
+ * fold stay out: they outnumber the in-memory cap.
+ */
+export function warmOrder(st: ReturnType<typeof useInboxStore.getState>): { id: string; session?: InboxSession; needsRow?: boolean }[] {
+  const order: { id: string; session?: InboxSession; needsRow?: boolean }[] = [];
+  const byId = new Map<string, (typeof order)[number]>();
+  const add = (id: string, session?: InboxSession, needsRow?: boolean) => {
+    const held = byId.get(id);
+    if (held) {
+      if (needsRow) held.needsRow = true;
+      return;
+    }
+    const entry = { id, session, needsRow };
+    byId.set(id, entry);
+    order.push(entry);
+  };
+  for (const s of st.visualOrder()) add(String(s._id), s);
+  for (const s of inboxMemberRows(st, st.currentSessionId ?? null)) add(String(s._id), s);
+  // A role's standing session needs its row, and the row needs is_anchor:
+  // placement files a standing session hidden by it, so a copy seeded without
+  // it (before seeds carried it) shows as an active card until refetched.
+  for (const role of st.orgTree?.roles ?? []) {
+    const id = role.standing?.conversation_id && String(role.standing.conversation_id);
+    if (id) add(id, st.sessions[id], !st.sessions[id]?.is_anchor);
+  }
+  for (const s of Object.values(st.sessions)) if (s.standing_role_id) add(String(s._id), s, !s.is_anchor);
+  return order;
+}
+
+/** Snapshot the inbox into planner rows, in warm priority. */
 export function warmRowsFromState(st: ReturnType<typeof useInboxStore.getState>): WarmRow[] {
   const rows: WarmRow[] = [];
-  for (const session of st.visualOrder()) {
-    const id = String(session._id);
+  for (const { id, session, needsRow } of warmOrder(st)) {
     if (!isConvexId(id)) continue;
     const msgs = st.messages[id];
     const storedCount = msgs?.length ?? 0;
@@ -276,11 +336,13 @@ export function warmRowsFromState(st: ReturnType<typeof useInboxStore.getState>)
       id,
       // The base list omits message_count (fast_fields_in_overlay); the store
       // row is where the overlay has merged the exact value.
-      serverCount: st.sessions[id]?.message_count ?? session.message_count ?? 0,
+      // A row fetch is tried once (rowTried), then the row's own count rules,
+      // whatever came back.
+      serverCount: needsRow && !rowTried.has(id) ? null : st.sessions[id]?.message_count ?? session?.message_count ?? 0,
       storedCount,
       hasMoreAbove: st.pagination[id]?.hasMoreAbove ?? false,
       newestTs: storedCount > 0 ? msgs[storedCount - 1].timestamp : null,
-      rereadFrom: rereadAnchor(msgs, st.sessions[id]?.agent_type ?? (session as any).agent_type),
+      rereadFrom: rereadAnchor(msgs, st.sessions[id]?.agent_type ?? (session as any)?.agent_type),
       syncedCount: syncedCount.get(id),
       inFlight: inFlight.has(id),
     });
@@ -307,7 +369,8 @@ export function warmVisibleSessions(convex: ConvexClient): void {
   const plan = planWarm(rows);
   lastPass = { at: Date.now(), planned: plan.length, kinds: plan.map((a) => a.kind) };
   for (const action of plan) {
-    if (action.kind === "cold") runCold(convex, action);
+    if (action.kind === "row") runRow(convex, action.id);
+    else if (action.kind === "cold") runCold(convex, action);
     else if (action.kind === "deepen") runDeepen(convex, action);
     else runDelta(convex, action);
   }
@@ -318,10 +381,10 @@ export const WARM_COALESCE_MS = 750;
 /** A pass waits for a pause in typing, but never longer than this. */
 const WARM_MAX_DEFER_MS = 3_000;
 
-type WarmInputs = Pick<ReturnType<typeof useInboxStore.getState>, "sessions" | "messages" | "pagination" | "liveInboxIds" | "teamInboxIds">;
+type WarmInputs = Pick<ReturnType<typeof useInboxStore.getState>, "sessions" | "messages" | "pagination" | "liveInboxIds" | "teamInboxIds" | "orgTree">;
 const warmInputsChanged = (a: WarmInputs, b: WarmInputs) =>
   a.sessions !== b.sessions || a.messages !== b.messages || a.pagination !== b.pagination
-  || a.liveInboxIds !== b.liveInboxIds || a.teamInboxIds !== b.teamInboxIds;
+  || a.liveInboxIds !== b.liveInboxIds || a.teamInboxIds !== b.teamInboxIds || a.orgTree !== b.orgTree;
 
 /**
  * Keep the rendered rows warm in THIS window for as long as it lives. The pass

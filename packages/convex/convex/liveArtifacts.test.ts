@@ -3,10 +3,10 @@
 // server's order, the agent's writes carry its session identity and cursor,
 // drafts save and discard, history restores, and access follows the doc's
 // workspace.
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, setSystemTime, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { allModules } from "./testModules.testkit";
 import { hashToken } from "./apiTokens";
@@ -161,6 +161,101 @@ describe("live artifacts", () => {
     const before = versions!.versions[1].rev;
     await as(rosa).action(api.liveArtifacts.restore, { doc_id: doc, rev: before });
     expect((await state(t, doc)).el_b).toEqual({ kind: "sticky", x: 5 });
+  });
+
+  test("a restore too big for one transaction lands in chunks and clears its marker", async () => {
+    const { t, doc, rosa, as } = await setup();
+    const { rev } = await as(rosa).mutation(api.liveArtifacts.checkpoint, { doc_id: doc, label: "Empty" });
+    // 1600 stickies: over the one-transaction restore limit (1500 ops).
+    for (let b = 0; b < 4; b++) {
+      const ops = Array.from({ length: 400 }, (_, i) => ({ k: `el_${b}_${i}`, put: { kind: "sticky", x: i } }));
+      await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops });
+    }
+    await t.finishAllScheduledFunctions(() => {});
+    const r = await as(rosa).action(api.liveArtifacts.restore, { doc_id: doc, rev });
+    expect(r.changed).toBe(1600);
+    expect(Object.values(await state(t, doc)).every((s) => s === "deleted")).toBe(true);
+    const page = await as(rosa).query(api.liveArtifacts.elementsSince, { doc_id: doc, since: r.rev });
+    expect(page!.restoring).toBeNull();
+  });
+
+  test("a chunked restore that stopped partway shows on the tail until finished", async () => {
+    const { t, doc, rosa, as } = await setup();
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_a", put: { kind: "sticky", x: 0 } }] });
+    const { rev } = await as(rosa).mutation(api.liveArtifacts.checkpoint, { doc_id: doc });
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_b", put: { kind: "sticky", x: 1 } }, { k: "el_c", put: { kind: "sticky", x: 2 } }] });
+    await t.finishAllScheduledFunctions(() => {});
+    const head = (await as(rosa).query(api.liveArtifacts.elementsSince, { doc_id: doc, since: 0 }))!.head;
+    // The first of two chunks lands, then the action dies.
+    await t.mutation(internal.liveArtifacts.applyRestore, {
+      doc_id: doc, rev, ops: [{ k: "el_b", del: true }], expect_head: head, first: true, last: false, chunked: true,
+      caller: { userId: rosa, actor: `u:${rosa}`, name: "Rosa", kind: "person" },
+    });
+    const stuck = await as(rosa).query(api.liveArtifacts.elementsSince, { doc_id: doc, since: 0 });
+    expect(stuck!.restoring).toMatchObject({ to: rev, from: head, by_name: "Rosa" });
+    // Finishing it is the same restore again; the marker goes and no second "Before restore" is written.
+    await as(rosa).action(api.liveArtifacts.restore, { doc_id: doc, rev });
+    expect(await state(t, doc)).toEqual({ el_a: { kind: "sticky", x: 0 }, el_b: "deleted", el_c: "deleted" });
+    expect((await as(rosa).query(api.liveArtifacts.elementsSince, { doc_id: doc, since: 0 }))!.restoring).toBeNull();
+    await t.finishAllScheduledFunctions(() => {});
+    const labels = (await as(rosa).query(api.liveArtifacts.versions, { doc_id: doc }))!.versions.map((v: any) => v.label);
+    expect(labels.filter((l: string) => l === "Before restore")).toHaveLength(1);
+  });
+
+  test("comments notify who they name, the thread, and the owner; an agent's reply answers an ask", async () => {
+    const { t, doc, rosa, dev, as, agent, conv } = await setup();
+    const bell = async (user: Id<"users">) =>
+      (await t.run((ctx: any) => ctx.db.query("notifications").collect())).filter((n: any) => String(n.recipient_user_id) === String(user)).map((n: any) => `${n.type}: ${n.message}`);
+
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_1", put: { kind: "comment", text: "@dev can you check the dates?" } }] });
+    expect(await bell(dev)).toEqual(['mention: Rosa mentioned you on the board "Launch timeline"']);
+
+    // A new thread nobody is named in reaches the owner.
+    await as(dev).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_2", put: { kind: "comment", text: "Looks right" } }] });
+    expect(await bell(rosa)).toEqual(['doc_commented: Dev commented on the board "Launch timeline"']);
+
+    // Naming a session hands it the comment as an ask and records where it went.
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_3", put: { kind: "comment", text: "@[Lay out the timeline jx7agnt] add the launch day" } }] });
+    const sent = await t.run((ctx: any) => ctx.db.query("pending_messages").collect());
+    expect(sent.some((m: any) => String(m.conversation_id) === String(conv) && m.content.includes("cm_3") && m.content.includes("add the launch day"))).toBe(true);
+    expect((await state(t, doc, "comments")).cm_3).toMatchObject({ sent_to: String(conv) });
+
+    // The agent's reply reaches the asker and marks the ask answered.
+    await t.mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_4", put: { kind: "comment", text: "Added Day 0", parent: "cm_3" } }], ...agent });
+    expect(await bell(rosa)).toContain('comment_reply: Lay out the timeline replied on the board "Launch timeline"');
+    expect((await state(t, doc, "comments")).cm_3).toMatchObject({ answered_by_name: "Lay out the timeline" });
+  });
+
+  test("create from a team session: --personal keeps it the creator's, no flag follows the session", async () => {
+    const { t, dev, team } = await setup();
+    const token = presentToken("dev_clisecret");
+    const base = { api_token: token, title: "Forecast", content: "", doc_type: "sheet", conversation_id: "sess-agent-1" };
+    const personal = await t.mutation(api.docs.create, { ...base, workspace: "personal" });
+    const followed = await t.mutation(api.docs.create, base);
+    const explicit = await t.mutation(api.docs.create, { ...base, workspace: "team", team_id: team });
+    const ws = async (id: any) => (await t.run((ctx: any) => ctx.db.get(id))).workspace;
+    expect(await ws(personal.id)).toBe(`user:${dev}`);
+    expect(await ws(followed.id)).toBe(`team:${team}`);
+    expect(await ws(explicit.id)).toBe(`team:${team}`);
+  });
+
+  test("steady editing leaves an autosave every ten minutes; a quiet spell leaves 'Before edits'", async () => {
+    const { t, doc, rosa, as } = await setup();
+    const start = Date.now();
+    try {
+      for (let i = 0; i <= 3; i++) {
+        setSystemTime(new Date(start + i * 4 * 60_000));
+        await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: `el_${i}`, put: { kind: "sticky", x: i } }] });
+      }
+      let labels = (await as(rosa).query(api.liveArtifacts.versions, { doc_id: doc }))!.versions.map((v: any) => v.label);
+      expect(labels).toEqual(["Autosave"]);
+      setSystemTime(new Date(start + 30 * 60_000));
+      await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_z", put: { kind: "sticky", x: 9 } }] });
+      labels = (await as(rosa).query(api.liveArtifacts.versions, { doc_id: doc }))!.versions.map((v: any) => v.label);
+      expect(labels).toEqual(["Before edits", "Autosave"]);
+    } finally {
+      setSystemTime();
+    }
   });
 
   test("comments carry their writer's identity, whatever the client claims", async () => {

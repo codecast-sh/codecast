@@ -26,7 +26,7 @@ export const LIVE_SYNC_COLLECTIONS = {
   liveHeads: {
     persistence: { kind: "collection", key: "liveHeads" },
     hydration: { phase: "deferred" },
-    sync: { isDelta: true, deepFields: ["draft"] },
+    sync: { isDelta: true, deepFields: ["draft", "restoring"] },
   },
   // Who is in an artifact now, keyed "<doc>|<actor>". Not persisted: a cached
   // cursor is a lie the moment the page reloads. No `feeds` entry: its one

@@ -41,10 +41,17 @@ export const liveArtifactTables = {
     doc_id: v.id("docs"),
     rev: v.number(),
     last_write_at: v.number(),
+    // When the newest version was taken: steady editing autosaves from it.
+    last_version_at: v.optional(v.number()),
     draft: v.optional(v.object({ by: v.string(), by_name: v.string(), at: v.number(), label: v.optional(v.string()) })),
     // Elements the open draft holds (capped so it can always close in one transaction).
     draft_count: v.optional(v.number()),
     draft_bytes: v.optional(v.number()),
+    // A restore too big for one transaction, while its chunks are landing:
+    // set by the first chunk, cleared by the last. Left behind only if the
+    // restore stopped partway; the page offers to finish (restore to `to`)
+    // or undo it (restore to `from`).
+    restoring: v.optional(v.object({ to: v.number(), from: v.number(), by: v.string(), by_name: v.string(), at: v.number() })),
   }).index("by_doc", ["doc_id"]),
 
   // The op log: every written batch, in order. History folds it.

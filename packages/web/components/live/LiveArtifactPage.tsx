@@ -3,7 +3,8 @@
 // sessions), Ask agent, comments, history, the draft bar, Share, and every
 // cursor. The product's view (components/live/registry.ts) fills the body and
 // says where positions are on screen.
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Suspense, useCallback, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { History, MessageSquare, Redo2, Undo2, X } from "lucide-react";
 import { artifactSpec, type ArtifactElement, type ArtifactPosition, type ArtifactType } from "@codecast/shared/artifacts";
@@ -18,11 +19,15 @@ import { isMac } from "../../shortcuts/registry";
 import { docTypeStyle } from "../../lib/docTypeStyle";
 import { DocTypeMark } from "../docs/DocTypeMark";
 import "./live.css";
-import { useLiveArtifact, useLiveElements, useLivePresence } from "./useLiveArtifact";
+import { useLiveArtifact, useLiveElements, useLivePresence, useLiveRestoring, useLiveUnsettled } from "./useLiveArtifact";
+import { useWsConnected } from "../../hooks/useWsConnected";
 import { LiveCursors } from "./LiveCursors";
-import { AskAgentControl, AskClaimProvider, AskConfirmHost, useAskClaims } from "./AskAgentControl";
+import { AskAgentControl, AskConfirmHost } from "./AskAgentControl";
+import { AskClaimProvider, useAskClaims } from "./askAgent";
 import { CommentsPanel, HistoryPanel } from "./LiveSidePanels";
 import { LIVE_VIEWS, MINIMAL_VIEWS, type ScreenPoint } from "./registry";
+import { Button } from "../ui/button";
+import { toast } from "sonner";
 
 type PanelKind = "comments" | "history" | "product" | null;
 const EMPTY: ArtifactElement[] = [];
@@ -63,10 +68,17 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
   const askClaims = useAskClaims();
 
   const [selection, setSelectionState] = useState<string[]>(() => (params.get("el") ? [params.get("el")!] : []));
-  const [panel, setPanelKind] = useState<PanelKind>(() => (params.get("v") ? "history" : null));
+  const [panel, setPanelKind] = useState<PanelKind>(() => (params.get("v") ? "history" : params.get("c") ? "comments" : null));
   const [productPanel, setProductPanel] = useState<ReactNode | null>(null);
   const [toolbar, setToolbar] = useState<ReactNode>(null);
-  const [focusComment, setFocusComment] = useState<string | null>(null);
+  // ?c=<thread> (a notification, a copied comment link) opens that thread.
+  const [focusComment, setFocusComment] = useState<string | null>(() => params.get("c"));
+  const linkedComment = params.get("c");
+  useWatchEffect(() => {
+    if (!linkedComment) return;
+    setFocusComment(linkedComment);
+    setPanelKind("comments");
+  }, [linkedComment]);
   // The product's position mapping. Held outside React state: a pan republishes
   // it several times a second, and only the cursor layer redraws for it.
   const screenMap = useRef(createScreenMap()).current;
@@ -76,7 +88,7 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
   const [snapshot, setSnapshot] = useState<ArtifactElement[] | undefined>(undefined);
   const [snapshotFailed, setSnapshotFailed] = useState(false);
   const [snapshotTry, setSnapshotTry] = useState(0);
-  useEffect(() => {
+  useWatchEffect(() => {
     let alive = true;
     setSnapshot(undefined);
     setSnapshotFailed(false);
@@ -114,7 +126,7 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
   }, [elements, selection]);
 
   // ⌘Z / ⇧⌘Z when focus is not in a text field.
-  useEffect(() => {
+  useWatchEffect(() => {
     // An open version is read only: nothing to undo into, and Esc goes back to the current state.
     if (openRev !== null) {
       const onEsc = (e: KeyboardEvent) => {
@@ -186,6 +198,7 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
         <DocTypeMark type={doc.doc_type} size={15} title={spec.label} />
         <TitleInput docId={doc._id} title={doc.title} placeholder={`Untitled ${spec.label.toLowerCase()}`} readOnly={openRev !== null} />
         <span data-live-type-label className={`text-meta shrink-0 ${typeStyle.color}`}>{spec.label}</span>
+        {openRev === null && <SyncState docId={doc._id} />}
         <span className="flex-1" />
         {faces.length > 0 && <span data-live-facepile className="shrink-0"><PresenceFacepile present={faces} size={22} max={5} /></span>}
         {toolbar}
@@ -207,9 +220,10 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
           <button type="button" title={`Undo (${mod}Z)`} disabled={!live.canUndo} onClick={live.undo} className="p-1 rounded text-sol-text-muted hover:text-sol-text disabled:opacity-30"><Undo2 className="w-3.5 h-3.5" /></button>
           <button type="button" title={`Redo (${mod}⇧Z)`} disabled={!live.canRedo} onClick={live.redo} className="p-1 rounded text-sol-text-muted hover:text-sol-text disabled:opacity-30"><Redo2 className="w-3.5 h-3.5" /></button>
           <button type="button" data-live-draft-discard onClick={live.draft.discard} className="inline-flex items-center gap-1 h-6 px-2 rounded text-xs text-sol-text-muted hover:text-sol-red hover:bg-sol-red/10"><X className="w-3 h-3" /> Discard</button>
-          <button type="button" data-live-draft-save onClick={live.draft.save} className="h-6 px-2.5 rounded text-xs font-medium bg-sol-violet text-sol-bg hover:opacity-90">Save</button>
+          <Button type="button" variant="violet" size="xs" data-live-draft-save onClick={live.draft.save} className="h-6">Save</Button>
         </div>
       )}
+      {openRev === null && <RestoreStoppedBar live={live} />}
       {openRev !== null && (
         <div className="flex items-center gap-2 px-3 h-9 border-b border-sol-blue/30 bg-sol-blue/10 shrink-0" data-live-version-bar>
           <span className="text-xs font-medium text-sol-blue">Version r{openRev}</span>
@@ -236,10 +250,10 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
           {openRev === null && <CursorLayer others={others} screenMap={screenMap} />}
         </div>
         {panel && (
-          <aside className="w-[300px] shrink-0 border-l border-sol-border/40 bg-sol-bg min-h-0">
+          <aside className="live-panel w-[300px] shrink-0 border-l border-sol-border/40 bg-sol-bg min-h-0" data-live-panel={panel}>
             {panel === "comments" && (
               <CommentsPanel
-                doc={doc}
+                doc={doc as any}
                 live={live}
                 selection={selection}
                 selectedElements={selected}
@@ -259,7 +273,7 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
 
 function TitleInput({ docId, title, placeholder, readOnly }: { docId: string; title: string; placeholder: string; readOnly?: boolean }) {
   const [value, setValue] = useState(title);
-  useEffect(() => setValue(title), [title]);
+  useWatchEffect(() => setValue(title), [title]);
   const commit = () => {
     const next = value.trim();
     if (next && next !== title) (useInboxStore.getState() as any).updateDoc(docId, { title: next });
@@ -274,7 +288,16 @@ function TitleInput({ docId, title, placeholder, readOnly }: { docId: string; ti
       aria-label="Title"
       onChange={(e) => setValue(e.target.value)}
       onBlur={commit}
-      onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") { setValue(title); (e.target as HTMLInputElement).blur(); } }}
+      onFocus={(e) => e.currentTarget.select()}
+      onKeyDown={(e) => {
+        // Enter and Esc end the edit and go no further: a list or page behind the title must not act on them.
+        if (e.key !== "Enter" && e.key !== "Escape") return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.key === "Escape") setValue(title);
+        else commit();
+        (e.target as HTMLInputElement).blur();
+      }}
       className="min-w-[10ch] max-w-[40%] shrink-0 bg-transparent text-sm font-semibold text-sol-text placeholder:text-sol-text-dim outline-none rounded px-1 -mx-1 hover:bg-sol-bg-alt focus:bg-sol-bg-alt"
       style={{ width: `${Math.max(8, (value || placeholder).length + 1)}ch` }}
     />
@@ -292,8 +315,54 @@ function IconToggle({ on, title, onClick, badge, children }: { on: boolean; titl
     >
       {children}
       {!!badge && (
-        <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] px-0.5 rounded-full bg-sol-blue text-[9px] leading-[14px] text-sol-bg font-semibold text-center">{badge}</span>
+        <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-[14px] px-0.5 rounded-full bg-sol-blue text-mark leading-[14px] text-sol-bg font-semibold text-center">{badge}</span>
       )}
     </button>
+  );
+}
+
+/** Whether this tab's edits have reached the server: Saving, Saved, or Offline with how many wait. */
+function SyncState({ docId }: { docId: string }) {
+  const online = useWsConnected();
+  const waiting = useLiveUnsettled(docId);
+  const state = !online ? "offline" : waiting > 0 ? "saving" : "saved";
+  const label = state === "offline" ? (waiting > 0 ? `Offline · ${waiting} waiting` : "Offline") : state === "saving" ? "Saving…" : "Saved";
+  return (
+    <span
+      data-live-sync={state}
+      className={`text-meta shrink-0 tabular-nums ${state === "offline" ? "text-sol-red" : "text-sol-text-dim"}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+/** A restore too big for one transaction stopped partway: finish it or put the artifact back. */
+function RestoreStoppedBar({ live }: { live: ReturnType<typeof useLiveArtifact> }) {
+  const restoring = useLiveRestoring(live.docId);
+  const [busy, setBusy] = useState<"finish" | "undo" | null>(null);
+  if (!restoring) return null;
+  const run = async (kind: "finish" | "undo") => {
+    setBusy(kind);
+    try {
+      await live.history.restore(kind === "finish" ? restoring.to : restoring.from);
+    } catch (e: any) {
+      toast.error(e?.data ?? e?.message ?? "The restore did not finish");
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div className="flex items-center gap-2 px-3 h-9 border-b border-sol-red/30 bg-sol-red/10 shrink-0" data-live-restore-stopped>
+      <span className="text-xs font-medium text-sol-red">Restore to r{restoring.to} stopped partway</span>
+      <span className="text-meta text-sol-text-muted truncate">{restoring.by_name}</span>
+      <span className="flex-1" />
+      <button type="button" disabled={!!busy} onClick={() => run("undo")} className="h-6 px-2 rounded text-xs text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt disabled:opacity-50">
+        {busy === "undo" ? "Undoing…" : `Back to r${restoring.from}`}
+      </button>
+      <Button type="button" variant="destructive" size="xs" disabled={!!busy} onClick={() => run("finish")} className="h-6">
+        {busy === "finish" ? "Finishing…" : "Finish restore"}
+      </Button>
+    </div>
   );
 }

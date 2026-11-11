@@ -16,7 +16,8 @@
 //
 // Undo is a stack of inverse ops per tab. An undo is an ordinary write, so it
 // syncs and converges like any edit.
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useAction, useMutation } from "convex/react";
 import { nanoid } from "nanoid";
 import { toast } from "sonner";
@@ -107,6 +108,11 @@ export function docRows(docId: string): DocRows {
 
 function useDocRows(docId: string): DocRows {
   return useInboxStore((s: any) => rowsByDoc(s.liveElements).get(docId) ?? EMPTY_ROWS);
+}
+
+/** A chunked restore that stopped partway (see liveArtifacts.restore), or null. */
+export function useLiveRestoring(docId: string): { to: number; from: number; by_name: string; at: number } | null {
+  return useInboxStore((s: any) => s.liveHeads?.[docId]?.restoring ?? null);
 }
 
 /** The doc's pending draft, or null. */
@@ -284,6 +290,25 @@ function rebuildQueuedOverlay(docId: string) {
   publishOverlay(docId);
 }
 
+// Writes the server has not answered yet, per doc: what the page's save
+// state reads. A write counts from its send until the server answers it,
+// however long that takes (offline, a stalled socket).
+const unsettled = new Map<string, number>();
+const unsettledListeners = new Set<() => void>();
+function countUnsettled(docId: string, delta: number) {
+  unsettled.set(docId, Math.max(0, (unsettled.get(docId) ?? 0) + delta));
+  for (const fn of unsettledListeners) fn();
+}
+
+/** How many of this tab's writes to the doc the server has not answered yet. */
+export function useLiveUnsettled(docId: string): number {
+  return useSyncExternalStore(
+    useCallback((fn) => { unsettledListeners.add(fn); return () => { unsettledListeners.delete(fn); }; }, []),
+    () => (unsettled.get(docId) ?? 0) + (sendQueues.get(docId)?.pending.length ?? 0),
+    () => 0,
+  );
+}
+
 function dispatchNow(docId: string, layer: LiveLayer, ops: ArtifactOp[]) {
   const q = sendQueues.get(docId)!;
   q.inflight = true;
@@ -293,9 +318,12 @@ function dispatchNow(docId: string, layer: LiveLayer, ops: ArtifactOp[]) {
     const pending = store.applyLiveOps(docId, layer, batch, nanoid(10));
     const before = Date.now();
     const rowIds = batch.map((op) => liveRowId(docId, layer, op.k));
-    return Promise.resolve(pending).then((res: any) => {
-      if (res && typeof res.rev === "number") settleAfter(docId, res.rev, rowIds, before);
-    });
+    countUnsettled(docId, 1);
+    return Promise.resolve(pending)
+      .then((res: any) => {
+        if (res && typeof res.rev === "number") settleAfter(docId, res.rev, rowIds, before);
+      })
+      .finally(() => countUnsettled(docId, -1));
   });
   const stall = new Promise((r) => setTimeout(r, SEND_STALL_MS));
   void Promise.race([Promise.allSettled(sends), stall]).then(() => {
@@ -326,6 +354,7 @@ export function sendLiveOps(docId: string, layer: LiveLayer, ops: ArtifactOp[]) 
   }
   q.pending.push({ layer, ops });
   rebuildQueuedOverlay(docId);
+  countUnsettled(docId, 0);
 }
 
 // ── The handle ──────────────────────────────────────────────────────────────
@@ -486,7 +515,7 @@ export function useLiveArtifact(docId: string): LiveHandle {
     const wait = Math.max(0, PRESENCE_MS - (Date.now() - p.sentAt));
     p.timer = setTimeout(sendPresence, wait);
   }, [sendPresence]);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!docId) return;
     sendPresence();
     const beat = setInterval(sendPresence, PRESENCE_BEAT_MS);
@@ -502,7 +531,7 @@ export function useLiveArtifact(docId: string): LiveHandle {
   // the closed one's edits.
   const draftAt = draft?.at ?? null;
   const lastDraftAt = useRef(draftAt);
-  useEffect(() => {
+  useWatchEffect(() => {
     if (lastDraftAt.current !== null && lastDraftAt.current !== draftAt) {
       undoRef.current = undoRef.current.filter((e) => e.layer !== "draft");
       redoRef.current = redoRef.current.filter((e) => e.layer !== "draft");
@@ -512,7 +541,7 @@ export function useLiveArtifact(docId: string): LiveHandle {
   }, [draftAt]);
 
   // Flush an open gesture when the page goes away.
-  useEffect(() => () => flushGesture(true), [flushGesture]);
+  useWatchEffect(() => () => flushGesture(true), [flushGesture]);
 
   const comment = useCallback<LiveHandle["comment"]>((c) => {
     const key = `cm_${nanoid(10)}`;

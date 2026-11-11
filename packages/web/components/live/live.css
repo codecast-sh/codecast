@@ -8,3 +8,10 @@
 @container (max-width: 560px) {
   .live-head [data-live-facepile] { display: none; }
 }
+
+/* A side panel in a narrow pane covers the body below the header instead of
+   squeezing the canvas to a strip; the header's toggle closes it. */
+[data-live-page] { container: live-page / inline-size; position: relative; }
+@container live-page (max-width: 640px) {
+  .live-panel { position: absolute; top: 2.75rem; right: 0; bottom: 0; left: 0; width: auto; z-index: 30; border-left: 0; }
+}

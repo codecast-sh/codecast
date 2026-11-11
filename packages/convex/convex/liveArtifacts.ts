@@ -18,6 +18,7 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { requireLiveDoc, resolveCaller, upsertPresence, userName, vCaller, type Caller } from "./lib/liveArtifactAccess";
 import { liveArtifactValidators } from "./liveArtifactsSchema";
+import { notifyLiveComments, type NewComment } from "./liveComments";
 import {
   applyOp,
   artifactSpec,
@@ -42,6 +43,8 @@ type Layer = ArtifactLayer | "comments";
 const PAGE_ROWS = 500;
 /** A write after this much quiet checkpoints the state it rested in. */
 const QUIET_CHECKPOINT_MS = 5 * 60_000;
+/** Steady editing checkpoints this often, so a long session still leaves history. */
+const AUTOSAVE_MS = 10 * 60_000;
 /** Rows a draft save or discard handles in one transaction. */
 const DRAFT_ROWS_MAX = 1500;
 /** Bytes the open draft may hold: a save reads them and writes them twice, under the 16 MiB transaction budget. */
@@ -97,6 +100,11 @@ function wireDraft(head: Doc<"live_heads"> | null) {
   return head?.draft ? { by: head.draft.by, by_name: head.draft.by_name, at: head.draft.at, label: head.draft.label } : null;
 }
 
+/** A chunked restore that has not finished: where it was going, and the state it started from. */
+function wireRestoring(head: Doc<"live_heads"> | null) {
+  return head?.restoring ?? null;
+}
+
 /**
  * Element rows written after `since`, oldest first, with the doc's head. The
  * first load (since 0) and the live tail are the same read; a client keeps
@@ -125,6 +133,7 @@ export const elementsSince = query({
       doc_type: doc.doc_type,
       head: head?.rev ?? 0,
       draft: wireDraft(head),
+      restoring: wireRestoring(head),
       rows: page.map(wireRow),
       more,
       next: page.length ? page[page.length - 1].rev : args.since,
@@ -170,6 +179,8 @@ async function insertVersion(
     return existing._id;
   }
   const id = await ctx.db.insert("live_versions", { doc_id: docId, rev, reason, label, by: caller.actor, by_name: caller.name, at: Date.now() });
+  const head = await headOf(ctx, docId);
+  if (head) await ctx.db.patch(head._id, { last_version_at: Date.now() });
   await ctx.scheduler.runAfter(0, internal.liveArtifacts.snapshotVersion, { version_id: id });
   return id;
 }
@@ -212,9 +223,11 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
   if (layer === "draft" && !head!.draft) {
     await ctx.db.patch(head!._id, { draft: { by: caller.actor, by_name: caller.name, at: now } });
   }
-  // A write after a quiet spell checkpoints the state the artifact rested in.
-  if (layer === "main" && head!.rev > 0 && now - head!.last_write_at > QUIET_CHECKPOINT_MS) {
-    await insertVersion(ctx, doc._id, head!.rev, "auto", "Before edits", caller);
+  // A write after a quiet spell checkpoints the state the artifact rested in;
+  // steady editing checkpoints every AUTOSAVE_MS of it.
+  if (layer === "main" && head!.rev > 0) {
+    if (now - head!.last_write_at > QUIET_CHECKPOINT_MS) await insertVersion(ctx, doc._id, head!.rev, "auto", "Before edits", caller);
+    else if (now - (head!.last_version_at ?? head!._creationTime) > AUTOSAVE_MS) await insertVersion(ctx, doc._id, head!.rev, "auto", "Autosave", caller);
   }
 
   const revFrom = head!.rev;
@@ -222,6 +235,7 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
   let draftCount = layer === "draft" ? (head!.draft_count ?? 0) : 0;
   let draftBytes = layer === "draft" ? (head!.draft_bytes ?? 0) : 0;
   const written: ArtifactOp[] = [];
+  const createdComments: NewComment[] = [];
   for (const op of ops) {
     const { row, state } = await stateOf(ctx, doc._id, layer, op.k);
     let prev = state;
@@ -245,6 +259,9 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
     if (row) await ctx.db.patch(row._id, fields);
     else await ctx.db.insert("live_elements", { doc_id: doc._id, layer, key: op.k, ...fields });
     written.push(op);
+    if (layer === "comments" && "put" in op && !state && typeof next.fields.text === "string") {
+      createdComments.push({ key: op.k, text: next.fields.text, parent: next.fields.parent as string | undefined, sent_to: next.fields.sent_to as string | undefined });
+    }
   }
   if (written.length === 0) return { rev: revFrom, keys: [] };
   // The log holds the batch in records under the document size limit; op i
@@ -266,6 +283,9 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
   }
   await ctx.db.patch(head!._id, { rev, last_write_at: now, ...(layer === "draft" ? { draft_count: draftCount, draft_bytes: Math.max(0, draftBytes) } : {}) });
   if (layer !== "comments") await ctx.db.patch(doc._id, { updated_at: now });
+  // Mentions, replies and asks: the follow-up stamps are `set`s, so they create no comments of their own.
+  const followUps = await notifyLiveComments(ctx, doc, caller, createdComments);
+  if (followUps.length) rev = (await applyBatchCore(ctx, { doc, layer: "comments", ops: followUps, caller, unbounded: true })).rev;
   return { rev, keys: written.map((o) => o.k) };
 }
 
@@ -552,62 +572,111 @@ export const stateAt = action({
 
 /**
  * Put the artifact back to how it was at `rev`. The current state is
- * checkpointed first, then the difference is written as ordinary batches of
- * at most RESTORE_CHUNK ops: the restore syncs to every open page and can
- * itself be restored away. The diff is computed against the head it read; if
- * a write lands before the first batch, the restore starts over.
+ * checkpointed first ("Before restore"), then the difference is written as
+ * ordinary batches: the restore syncs to every open page and can itself be
+ * restored away. The diff is computed against the head it read; if a write
+ * lands before the first batch, the restore starts over.
+ *
+ * A restore that fits one transaction (RESTORE_ATOMIC_OPS) is one mutation:
+ * it lands whole or not at all. A bigger one runs in chunks under a marker on
+ * the head (`restoring`), which every open page shows. If a chunk fails, the
+ * action puts the artifact back to the "Before restore" state; if even that
+ * cannot finish (or the action dies), the marker stays and the page offers to
+ * finish the restore or undo it, both of which are this same action.
  */
 export const restore = action({
   args: { doc_id: v.id("docs"), rev: v.number(), ...vCaller },
   handler: async (ctx, args): Promise<{ changed: number; rev: number }> => {
-    const caller: { userId: Id<"users">; actor: string; name: string; kind: "person" | "agent" } = await ctx.runQuery(internal.liveArtifacts.callerForAction, {
+    const caller: RestoreCaller = await ctx.runQuery(internal.liveArtifacts.callerForAction, {
       doc_id: args.doc_id, api_token: args.api_token, session_id: args.session_id,
     });
-    for (let attempt = 0; attempt < 4; attempt++) {
-      const head: number = await ctx.runQuery(internal.liveArtifacts.headRev, { doc_id: args.doc_id });
-      if (args.rev > head) throw new ConvexError(`r${args.rev} is past the artifact's head (r${head})`);
-      const target = await stateAtRev(ctx, args.doc_id, args.rev);
-      const current = new Map<string, ElementState>();
-      let afterKey = "";
-      for (;;) {
-        const { rows: page, more } = await ctx.runQuery(internal.liveArtifacts.mainPage, { doc_id: args.doc_id, after_key: afterKey });
-        for (const r of page) if (!r.deleted) current.set(r.key, { kind: r.kind, fields: r.fields ?? {} });
-        if (!more || page.length === 0) break;
-        afterKey = page[page.length - 1].key;
-      }
-      const ops = diffStates(current, target);
-      const chunks = ops.length ? chunkOps(ops, RESTORE_CHUNK) : [[]];
-      let last = { rev: head };
-      let ok = true;
-      for (let i = 0; i < chunks.length; i++) {
-        // Every batch expects the head the previous one left: a write in between
-        // starts the restore over, re-diffed against what is there now.
-        const r: { rev: number } | null = await ctx.runMutation(internal.liveArtifacts.applyRestore, {
-          doc_id: args.doc_id, rev: args.rev, ops: chunks[i], caller, expect_head: last.rev, first: i === 0, last: i === chunks.length - 1,
-        });
-        if (!r) { ok = false; break; }
-        last = r;
-      }
-      if (ok) return { changed: ops.length, rev: last.rev };
+    const r = await restoreTo(ctx, args.doc_id, args.rev, caller, `Restored to r${args.rev}`);
+    if (r.ok) return { changed: r.changed, rev: r.rev };
+    // A chunk failed partway: put back what was there before the restore began.
+    if (r.before !== undefined) {
+      const back = await restoreTo(ctx, args.doc_id, r.before, caller, `Restore to r${args.rev} undone`).catch(() => null);
+      if (back?.ok) throw new ConvexError(`The restore to r${args.rev} failed partway and was undone; nothing changed`);
     }
-    throw new ConvexError("The artifact kept changing during the restore; try again");
+    throw new ConvexError(`The restore to r${args.rev} stopped partway; finish or undo it from History`);
   },
 });
+
+type RestoreCaller = { userId: Id<"users">; actor: string; name: string; kind: "person" | "agent" };
+type RestoreOutcome = { ok: true; changed: number; rev: number } | { ok: false; before?: number };
+
+/** Ops one restore transaction may write and still land whole. */
+const RESTORE_ATOMIC_OPS = DRAFT_ROWS_MAX;
+const RESTORE_ATOMIC_BYTES = DRAFT_BYTES_MAX;
+
+async function readMain(ctx: any, docId: Id<"docs">): Promise<Map<string, ElementState>> {
+  const current = new Map<string, ElementState>();
+  let afterKey = "";
+  for (;;) {
+    const { rows: page, more } = await ctx.runQuery(internal.liveArtifacts.mainPage, { doc_id: docId, after_key: afterKey });
+    for (const r of page) if (!r.deleted) current.set(r.key, { kind: r.kind, fields: r.fields ?? {} });
+    if (!more || page.length === 0) break;
+    afterKey = page[page.length - 1].key;
+  }
+  return current;
+}
+
+/** The restore loop, shared by a restore and the undo of a failed one. */
+async function restoreTo(ctx: any, docId: Id<"docs">, rev: number, caller: RestoreCaller, label: string): Promise<RestoreOutcome> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const head: number = await ctx.runQuery(internal.liveArtifacts.headRev, { doc_id: docId });
+    if (rev > head) throw new ConvexError(`r${rev} is past the artifact's head (r${head})`);
+    const target = await stateAtRev(ctx, docId, rev);
+    const ops = diffStates(await readMain(ctx, docId), target);
+    const atomic = chunkOps(ops, RESTORE_ATOMIC_OPS, RESTORE_ATOMIC_BYTES).length <= 1;
+    const chunks = ops.length === 0 ? [[]] : atomic ? [ops] : chunkOps(ops, RESTORE_CHUNK);
+    let last = { rev: head };
+    let started = false;
+    let raced = false;
+    for (let i = 0; i < chunks.length; i++) {
+      // Every batch expects the head the previous one left: a write before the
+      // first starts the restore over, re-diffed against what is there now.
+      let r: { rev: number } | null;
+      try {
+        r = await ctx.runMutation(internal.liveArtifacts.applyRestore, {
+          doc_id: docId, rev, label, ops: chunks[i], caller, expect_head: last.rev, first: i === 0, last: i === chunks.length - 1, chunked: chunks.length > 1,
+        });
+      } catch (e) {
+        if (!started) throw e;
+        return { ok: false, before: head };
+      }
+      if (!r) {
+        // A write landed mid-way through a chunked restore: re-diff and go on from where it is.
+        raced = true;
+        break;
+      }
+      started = true;
+      last = r;
+    }
+    if (!raced) return { ok: true, changed: ops.length, rev: last.rev };
+  }
+  throw new ConvexError("The artifact kept changing during the restore; try again");
+}
 
 export const headRev = internalQuery({
   args: { doc_id: v.id("docs") },
   handler: async (ctx, args): Promise<number> => (await headOf(ctx, args.doc_id))?.rev ?? 0,
 });
 
-/** One restore batch. The first carries the head it diffed against and returns null if a write landed since. */
+/**
+ * One restore batch. Returns null if a write landed since the caller read the
+ * head. The first batch checkpoints "Before restore" and, for a chunked
+ * restore, marks the head as restoring; the last clears it.
+ */
 export const applyRestore = internalMutation({
   args: {
     doc_id: v.id("docs"),
     rev: v.number(),
+    label: v.optional(v.string()),
     ops: v.array(v.any()),
     expect_head: v.number(),
     first: v.boolean(),
     last: v.boolean(),
+    chunked: v.optional(v.boolean()),
     caller: v.object({ userId: v.id("users"), actor: v.string(), name: v.string(), kind: v.union(v.literal("person"), v.literal("agent")) }),
   },
   handler: async (ctx, args): Promise<{ rev: number } | null> => {
@@ -615,9 +684,17 @@ export const applyRestore = internalMutation({
     const head = await headOf(ctx, doc._id);
     const caller: Caller = { ...args.caller };
     if ((head?.rev ?? 0) !== args.expect_head) return null;
-    if (args.first && head && head.rev > 0) await insertVersion(ctx, doc._id, head.rev, "manual", "Before restore", caller);
+    // Finishing or undoing a restore that stopped partway already has its "Before restore".
+    if (args.first && head && head.rev > 0 && !head.restoring) await insertVersion(ctx, doc._id, head.rev, "manual", "Before restore", caller);
+    if (args.first && args.chunked && head) {
+      await ctx.db.patch(head._id, { restoring: head.restoring ?? { to: args.rev, from: head.rev, by: caller.actor, by_name: caller.name, at: Date.now() } });
+    }
     const result = args.ops.length ? await applyBatchCore(ctx, { doc, layer: "main", ops: args.ops as ArtifactOp[], caller, unbounded: true }) : { rev: head?.rev ?? 0 };
-    if (args.last) await insertVersion(ctx, doc._id, result.rev, "restore", `Restored to r${args.rev}`, caller);
+    if (args.last) {
+      await insertVersion(ctx, doc._id, result.rev, "restore", args.label ?? `Restored to r${args.rev}`, caller);
+      const after = await headOf(ctx, doc._id);
+      if (after?.restoring) await ctx.db.patch(after._id, { restoring: undefined });
+    }
     return { rev: result.rev };
   },
 });

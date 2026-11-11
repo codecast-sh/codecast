@@ -3,7 +3,8 @@
 // components/live/useLiveArtifact.ts mounts them and every reader paints from
 // the store. Also the write acknowledgement path: once the feed has read past
 // a write's revision, the write's field locks go and the server's rows stand.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
+import { useWatchEffect } from "./useWatchEffect";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { liveRowId } from "../store/liveArtifactsSlice";
@@ -72,7 +73,7 @@ export function applyElementsPayload(payload: any): number {
   }
   if (live.length) store.syncTable("liveElements", live);
   if (dead.length) store.dropRows("liveElements", dead);
-  store.syncTable("liveHeads", [{ _id: payload.doc_id, head: payload.head, draft: payload.draft ?? null, title: payload.title, doc_type: payload.doc_type }]);
+  store.syncTable("liveHeads", [{ _id: payload.doc_id, head: payload.head, draft: payload.draft ?? null, restoring: payload.restoring ?? null, title: payload.title, doc_type: payload.doc_type }]);
   const next = payload.next ?? 0;
   if (!payload.more) appliedRev.set(payload.doc_id, Math.max(appliedRev.get(payload.doc_id) ?? 0, payload.head ?? next));
   runSettles();
@@ -88,7 +89,7 @@ function useElementsFeed(docId: string): { ready: boolean } {
   const authSettled = useServerAuthSettled();
   const [since, setSince] = useState(0);
   const [ready, setReady] = useState(false);
-  useEffect(() => {
+  useWatchEffect(() => {
     setSince(0);
     setReady(false);
   }, [docId]);
