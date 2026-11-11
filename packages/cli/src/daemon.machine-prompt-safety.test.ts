@@ -1177,23 +1177,47 @@ describe("machine prompt delivery safety", () => {
       expect(f.deps.conversationDeliveryActive.has("conv")).toBe(true);
     });
 
-    test("a message the pane took the capped number of times is cancelled and said in the session", async () => {
+    const exhausted = async (submitted: boolean, recovered = false) => {
       const f = fixture();
       f.state.menu = null;
-      f.hooks.prepare = async () => { throw new TmuxDeliveryExhaustedError("update", 3, false); };
+      f.hooks.prepare = async () => { throw new TmuxDeliveryExhaustedError("update", 3, submitted); };
       const cancelled: string[] = [];
+      const refused: string[] = [];
       const rows: any[] = [];
       f.deps.syncService.cancelPendingMessage = async (id: string) => { cancelled.push(id); };
+      f.deps.syncService.reportPaneRefused = async (id: string) => { refused.push(id); return { recovered }; };
       f.deps.syncService.addMessage = async (row: any) => { rows.push(row); return "row-1"; };
       await f.scan([{ _id: "update", content: "continue" }]);
+      await new Promise((resolve) => setImmediate(resolve));
       expect(f.bodies).toEqual([]);
-      expect(cancelled).toEqual(["update"]);
-      expect(rows).toHaveLength(1);
-      expect(rows[0]).toMatchObject({ conversationId: "conv", role: "system", subtype: "delivery_failed" });
-      expect(parseDeliveryFailedNotice(rows[0].content)).toEqual({ writes: 3, submitted: false, message: "continue", complete: true });
-      expect(rows[0].content).toStartWith("This message never reached the agent");
       expect(f.events.filter((e: string) => /^(retry|hold):/.test(e))).toEqual([]);
       expect(f.deps.messagesInFlight.size).toBe(0);
+      return { cancelled, refused, rows };
+    };
+
+    test("a submitted message the pane took the capped number of times is cancelled and said in the session", async () => {
+      const { cancelled, refused, rows } = await exhausted(true);
+      expect(cancelled).toEqual(["update"]);
+      expect(refused).toEqual([]);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ conversationId: "conv", role: "system", subtype: "delivery_failed" });
+      expect(parseDeliveryFailedNotice(rows[0].content)).toEqual({ writes: 3, submitted: true, message: "continue", complete: true });
+    });
+
+    test("a message the pane never showed is reported as refused, and said in the session when nothing recovers it", async () => {
+      const { cancelled, refused, rows } = await exhausted(false);
+      expect(cancelled).toEqual([]);
+      expect(refused).toEqual(["update"]);
+      expect(rows).toHaveLength(1);
+      expect(parseDeliveryFailedNotice(rows[0].content)).toEqual({ writes: 3, submitted: false, message: "continue", complete: true });
+      expect(rows[0].content).toStartWith("This message never reached the agent");
+    });
+
+    test("a refused message the server recovers (restart and resend) posts no failure", async () => {
+      const { cancelled, refused, rows } = await exhausted(false, true);
+      expect(cancelled).toEqual([]);
+      expect(refused).toEqual(["update"]);
+      expect(rows).toEqual([]);
     });
   });
 });

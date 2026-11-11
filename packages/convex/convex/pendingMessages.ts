@@ -32,6 +32,7 @@ import {
   legacyConversationAcceptsDaemonWork,
 } from "./executionBindings";
 import { requestRemoteWake } from "./cloud";
+import { clearPaneRefused } from "./lib/paneRefusal";
 import { restoreNestingParent } from "./inboxFilters";
 import { hostedInputWaits } from "./assistant/input";
 import { isConversationSafetyBlocked, type ConversationSafetyState } from "./conversationSafety";
@@ -165,7 +166,7 @@ async function rependPendingMessage(
   return true;
 }
 
-async function patchPendingMessageStatus(
+export async function patchPendingMessageStatus(
   ctx: { db: any },
   message: { _id: Id<"pending_messages">; conversation_id: Id<"conversations">; status: string; delivery_disposition_reason?: string },
   patch: { status: PendingStatus; delivered_at?: number; paste_verified_at?: number }
@@ -175,6 +176,7 @@ async function patchPendingMessageStatus(
   // Leaving the unconfirmed state (a late echo, a cancel) drops the reason with it.
   const leavesUnconfirmed = isUnconfirmedRow(message) && patch.status !== "failed";
   await ctx.db.patch(message._id, leavesUnconfirmed ? { ...patch, delivery_disposition_reason: undefined } : patch);
+  if (patch.status === "delivered") await clearPaneRefused(ctx, message.conversation_id);
   if (patch.status === "delivered" || patch.status === "cancelled") {
     await clearHasPendingIfQuiet(ctx, message.conversation_id);
   }
@@ -330,7 +332,7 @@ async function daemonCanMutateConversation(
 // and writes its status). For a self-send they're the same user; for a team send they differ.
 // Every non-delivery mutation funnels through this so a teammate's daemon and the original sender
 // can both act, but no unrelated user can.
-async function senderOrOwnerCanAct(
+export async function senderOrOwnerCanAct(
   ctx: { db: any },
   message: { conversation_id: Id<"conversations">; from_user_id: Id<"users">; owner_user_id?: Id<"users"> },
   authUserId: Id<"users">
@@ -2005,7 +2007,8 @@ export const STUCK_SEND_NOTIFY_DEADLINE_MS = 3 * 60_000;
 
 // busy: live and mid-turn. stuck: live and idle, yet the message is still not in.
 // terminal: the daemon holds it because the session runs in a terminal it can't type into.
-export type TargetReach = "busy" | "stuck" | "offline" | "gone" | "unconfirmed" | "terminal";
+// refused: its terminal never showed the message after every write, so it was dropped.
+export type TargetReach = "busy" | "stuck" | "offline" | "gone" | "unconfirmed" | "terminal" | "refused";
 export type StuckSendNotify = { kind: "skip" } | { kind: "notify"; reach: TargetReach };
 
 // Pure decision: should the sending session be told its message is stuck? Fires at most once
@@ -2059,7 +2062,7 @@ export function stuckSendReach(
 
 // Deliver a delay receipt back into the sender's own session and mark the original so we don't
 // notify again. Only a target that no longer exists cancels the original.
-async function notifyStuckSend(
+export async function notifyStuckSend(
   ctx: { db: any },
   msg: any,
   reach: TargetReach
@@ -2084,6 +2087,8 @@ async function notifyStuckSend(
     ? `Your message to session ${targetLabel} hasn't been delivered yet — it has no live daemon right now (its machine may be asleep or offline). It stays queued and is delivered when that daemon comes back; no action needed unless it is urgent.\n\n> ${preview}`
     : reach === "terminal"
     ? `Your message to session ${targetLabel} is held: that session ${msg.delivery_disposition_reason}. Its machine is up and keeps the message queued. It goes in once that terminal can be scripted, or once the agent there exits and codecast resumes the session in its own tmux.\n\n> ${preview}`
+    : reach === "refused"
+    ? `Your message to session ${targetLabel} never reached it: its terminal did not take the message after repeated tries, so it was dropped. That session needs a restart or a move to a healthier machine; send the message again after.\n\n> ${preview}`
     : reach === "unconfirmed"
     ? `Your message to session ${targetLabel} was typed into it, but its arrival was never confirmed. It may have landed: read that session before sending it again.\n\n> ${preview}`
     : reach === "stuck"
