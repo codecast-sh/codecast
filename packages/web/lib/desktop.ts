@@ -851,6 +851,16 @@ export function voiceHostElsewhere(): boolean {
   return !isVoiceHost() && windowRole.voiceWindow;
 }
 
+/** The one window that sounds what happens in the room you are in (a line in
+ *  its thread, an agent's answer): the voice host, which is seated in every
+ *  call and never closes, else the notification leader. Not the leader alone:
+ *  the shell makes the FOCUSED window leader, so clicking into the call
+ *  window to read its thread would hand the sound to a window that never
+ *  heard the line, and the main window would stand down. */
+export function isRoomAnnouncer(): boolean {
+  return hasVoiceHost() ? isVoiceHost() : isNotificationLeader();
+}
+
 /** The host says it is up: from here rooms arrive as commands. */
 export function declareVoiceHost(): void {
   bridge("voiceHostReady")?.();

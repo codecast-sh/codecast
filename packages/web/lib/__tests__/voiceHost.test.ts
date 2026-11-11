@@ -3,6 +3,7 @@ import {
   getDesktopWindowRole,
   hasVoiceHost,
   installWindowRoleTracker,
+  isRoomAnnouncer,
   isVoiceHost,
   sendVoiceCommand,
   voiceHostElsewhere,
@@ -129,6 +130,31 @@ describe("the bridge: who is the host, and whether one exists", () => {
     expect(s.commands).toEqual([["startBurst", ["c", "dm:a:b"]]]);
     (globalThis as any).window = {};
     expect(await sendVoiceCommand("startBurst", ["c", "dm:a:b"])).toBe(false);
+  });
+});
+
+describe("who sounds the room: the host, whichever window has focus", () => {
+  // The shell makes the focused window leader. Clicking into the call window
+  // to read its thread made it leader, the main window stood down, and the
+  // call window never played the agent's chime: nobody did.
+  it("the host sounds the room even when another window leads", () => {
+    const s = shell({ host: true });
+    s.role({ ...ROLE, leader: false, voiceWindow: true });
+    expect(isRoomAnnouncer()).toBe(true);
+  });
+
+  it("a window beside the host stays quiet even as leader", () => {
+    const s = shell();
+    s.role({ ...ROLE, leader: true, voiceWindow: true });
+    expect(isRoomAnnouncer()).toBe(false);
+  });
+
+  it("with no host, the leader sounds it", () => {
+    const s = shell();
+    s.role({ ...ROLE, leader: true });
+    expect(isRoomAnnouncer()).toBe(true);
+    s.role({ ...ROLE, leader: false });
+    expect(isRoomAnnouncer()).toBe(false);
   });
 });
 
