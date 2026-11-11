@@ -58,7 +58,13 @@ export async function performLearning(ctx: Ctx, userId: Id<"users">, args: { tea
 }
 
 /** A team's admin, or the owner of a personal workspace, turns learning on or off for the whole workspace. */
-export async function performSetLearning(ctx: Ctx, userId: Id<"users">, args: { team_id?: Id<"teams">; enabled: boolean }) {
+export async function performSetLearning(ctx: Ctx, userId: Id<"users">, args: { team_id?: Id<"teams">; enabled: boolean; from_session?: string }) {
+  // A person's choice: an agent session asks with a permission card, whose Yes
+  // runs the same command as the person (outside the session, so no from_session).
+  if (args.from_session) {
+    const set = args.enabled ? "on" : "off";
+    throw new Error(`Turning learning ${set} is a person's choice: ask with cast decide "Turn template learning ${set} for this workspace?" --run "cast org template learning ${set}" and end your turn`);
+  }
   if (args.team_id) await requireTeamAdmin(ctx as any, userId, args.team_id);
   const workspace = await callerWorkspace(ctx, userId, args.team_id);
   const row = await optInRow(ctx, workspace);
@@ -328,7 +334,7 @@ export const learning = query({
 });
 export const setLearning = mutation({
   args: { api_token: v.optional(v.string()), from_session: v.optional(v.string()), team_id: v.optional(v.id("teams")), enabled: v.boolean() },
-  handler: async (ctx, { api_token, from_session: _from, ...args }): Promise<any> => performSetLearning(ctx, await requireCaller(ctx, api_token), args),
+  handler: async (ctx, { api_token, ...args }): Promise<any> => performSetLearning(ctx, await requireCaller(ctx, api_token), args),
 });
 export const learnStatusOf = query({
   args: { api_token: v.optional(v.string()), template_id: v.string() },

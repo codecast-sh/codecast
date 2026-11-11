@@ -80,6 +80,12 @@ describe("the opt-in", () => {
     expect(await db.query("org_template_learning").collect()).toHaveLength(1);
     await expect(performLearning(ctx(db), ME, { team_id: ACME })).rejects.toThrow(/team membership required/);
   });
+  test("an agent session cannot set it: it is told to ask with a permission card", async () => {
+    const db = fixtures();
+    await expect(performSetLearning(ctx(db), DANA, { team_id: ACME, enabled: true, from_session: "sess-1" })).rejects.toThrow(/--run "cast org template learning on"/);
+    expect(await learningEnabled(ctx(db) as any, WS)).toBe(false);
+  });
+
   test("a personal workspace is its owner's to opt in", async () => {
     const db = fixtures();
     expect(await performSetLearning(ctx(db), MATE, { enabled: true })).toMatchObject({ workspace: `user:${MATE}`, enabled: true, can_change: true });

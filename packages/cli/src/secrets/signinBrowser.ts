@@ -167,7 +167,7 @@ async function captureJar(conn: BrowserConn, sites: string[], saved: Storage = {
 export function agentBrowserSignInStep(host: string, remote: boolean = isRemoteDevice()): string {
   return remote
     ? `run cast browser sync ${host} to carry the laptop's login onto this host, then run this again`
-    : `agents here drive the human's own Chrome, which already holds their login, so your own browsing needs no saved sign-in. Saving it to the vault is the human's step: ask them to press Save sign-in on the Vault page (or run cast vault save-signin ${host} --from-chrome in their own terminal)`;
+    : `agents here drive the human's own Chrome, which already holds their login, so your own browsing needs no saved sign-in. Saving it to the vault is the human's step: ask them to press Save sign-in on the Vault page`;
 }
 
 /** The site's sign-in as the agent browser on this machine holds it. */

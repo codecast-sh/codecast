@@ -83,7 +83,7 @@ export function registerOrgTemplateCommands(program: Command, deps: OrgInitDeps)
   template.command("lesson-status <id...>").description("The publisher's verdict on lessons: accepted into a draft, declined, or released in a version")
     .option("--accept", "Folded into the next release").option("--decline", "Not acted on").option("--released-in <version>", "Shipped in this stable version").option("--json", "Machine-readable output")
     .action(async (ids: string[], options: any) => output(await (await import("./orgTemplateRun.js")).setLessonStatus(deps, ids, options)));
-  template.command("learning [on|off]").description(`${LEARNING_OPT_IN_LABEL}: show the workspace's choice, or set it (a team admin, from their own terminal; an agent session is refused). ${LEARNING_OPT_IN_SENTENCE}`)
+  template.command("learning [on|off]").description(`${LEARNING_OPT_IN_LABEL}: show the workspace's choice, or set it (a team admin's choice: an agent session is refused and asks with cast decide --run). ${LEARNING_OPT_IN_SENTENCE}`)
     .option("--team <name|id>", "Team workspace").option("--personal", "Personal workspace").option("--session <id>", "Calling session (default: current)").option("--json", "Machine-readable output")
     .action(async (set: string | undefined, options: any) => {
       if (set !== undefined && set !== "on" && set !== "off") throw new Error("Give on or off, or nothing to read the current choice");
