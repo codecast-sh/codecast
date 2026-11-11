@@ -38,7 +38,7 @@ import { pageUsesData } from "@codecast/shared/contracts/pageData";
 import { servePageData, type ValidatedQuery } from "./pageData";
 import { HYPERFRAMES_RUNTIME, pageHasHyperframesRuntime, pageIsMotion, pageServingOrigin, pageUsesPlayer } from "@codecast/shared/contracts";
 import { injectPageTheme } from "@codecast/shared/render";
-import { sha256Hex, passwordHash, kTokenFor, eTokenFor, mTokenFor } from "./lib/artifactGates";
+import { sha256Hex, passwordHash, kTokenFor, eTokenFor } from "./lib/artifactGates";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -568,6 +568,11 @@ export const publish = httpAction(async (ctx, request) => {
       const refusal = teamGateRefusal(gate.team_name, (accessSet ?? {}) as { edit_mode?: string });
       if (refusal) return json({ error: refusal }, 403);
       accessSet = { ...(accessSet ?? {}), team_gate: gate.team_id };
+    } else if (dataSet) {
+      // Live data from a team that turned public sharing off never goes on an
+      // open page, whatever device publishes it (a team-gated page is not open).
+      const refusal = await ctx.runQuery(internal.managedDevices.publishRefusal, { api_token, workspace: dataSet.workspace });
+      if (refusal) return json({ error: refusal }, 403);
     }
 
     // Unchanged fast path — common under --watch: no blob stores at all.
@@ -1123,8 +1128,14 @@ export const serve = httpAction(async (ctx, request) => {
   // page through the app (/pages/auth), which hands them its m token. The gate
   // page names the team and nothing of the page, whose title may itself be
   // regulated data.
-  const mToken = artifact.team_gate ? await mTokenFor(artifact) : null;
-  if (artifact.team_gate && (!mToken || q.get("m") !== mToken)) {
+  // The presented member token, kept only when it opens the page today: a
+  // genuine token whose holder is still the owner or a member of the gate team.
+  const presentedM = q.get("m");
+  const mToken = artifact.team_gate && presentedM
+    && (await ctx.runQuery(internal.artifacts.teamGateAdmits, { artifact_id: artifact._id, m: presentedM }))
+    ? presentedM
+    : null;
+  if (artifact.team_gate && !mToken) {
     if (q.get("meta") === "1") return json({ error: "Locked" }, 403);
     if (q.get("thumb") === "1" || tail) return notFound("Not found");
     return htmlResponse(teamGatePage({ slug, teamName: artifact.team_gate_name, shareUrl }), 403, CACHE_PROTECTED);
@@ -1140,16 +1151,24 @@ export const serve = httpAction(async (ctx, request) => {
   }
   if (artifact.email_gate && artifact.owner_key) {
     const eToken = await eTokenFor(artifact.owner_key, slug);
-    // The email wall is a capture step, not secrecy: meta stays open, thumb
-    // stays hidden (no visual leak in unfurls).
-    if (q.get("e") !== eToken && q.get("meta") !== "1") {
+    // The email wall is a capture step, not secrecy: the page's own meta JSON
+    // stays open, thumb stays hidden (no visual leak in unfurls). The meta
+    // exception covers the page URL only: a sub-path (_data, an asset) with
+    // ?meta=1 is still behind the wall.
+    if (q.get("e") !== eToken && (q.get("meta") !== "1" || tail)) {
       if (q.get("thumb") === "1") return notFound("Not found");
       return htmlResponse(emailGatePage({ slug, title: artifact.title, apiBase, shareUrl }), 200, CACHE_PROTECTED);
     }
   }
 
   // --- <page>/_data[/<id>] — the page's live query results, behind the same gates ---
-  if (tail === "_data" || tail.startsWith("_data/")) return await servePageData(ctx, artifact._id, tail.slice("_data".length));
+  if (tail === "_data" || tail.startsWith("_data/")) {
+    // Re-checked on every read, so a team that turns public sharing off later
+    // stops its data serving (and refreshing) on pages already out there.
+    const refusal: string | null = artifact.team_gate ? null : await ctx.runQuery(internal.artifacts.pageDataRefusal, { artifact_id: artifact._id });
+    if (refusal) return json({ error: refusal }, 403);
+    return await servePageData(ctx, artifact._id, tail.slice("_data".length));
+  }
 
   // --- ?meta=1 — version/state JSON for the in-page bar (never cached) ---
   if (q.get("meta") === "1") {
