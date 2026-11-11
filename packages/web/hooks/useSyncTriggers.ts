@@ -2,6 +2,7 @@
 // (DashboardSyncEffects); every surface reads store.agentTasks through the
 // readers below.
 import { useCallback, useMemo } from "react";
+import { useConvex, type ConvexReactClient } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { ARMED_STATUSES, foreignTriggerConvIds, mergeTriggerRosters, type TaskRow } from "../components/triggerTasks";
@@ -12,18 +13,59 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 
 const api = _api as any;
 
-// What the trigger feeder asks for. Web takes the complete set; the phone
-// narrows it once at startup (setTriggerFeedArgs) to the armed triggers and a
-// short tail of finished ones, the only rows its surfaces show. Every caller
-// shares these args, so a platform still holds one subscription.
-let feedArgs: { recent_finished?: number } = {};
+// What the trigger feeder asks for: the armed triggers and a short tail of
+// finished ones. Every run of a recurring trigger changes its row, and a
+// subscription to the complete set re-sent all of it each time (2,568 rows,
+// 9.4 MB, about once a minute on a busy account). On web the finished history
+// stays in the store: this feed is a delta, an armed row it stops returning
+// is checked by id (verifyMissingArmed), and the triggers page refreshes the
+// whole set while open (useSyncTriggerHistory). The phone narrows the same way but keeps no
+// history (setTriggerFeedArgs), so its answer is a plain snapshot. Every
+// caller shares these args, so a platform still holds one subscription.
+const RECENT_FINISHED = 50;
+let feed: { args: { recent_finished?: number }; keepHistory: boolean } = { args: { recent_finished: RECENT_FINISHED }, keepHistory: true };
 export function setTriggerFeedArgs(args: { recent_finished?: number }): void {
-  feedArgs = args;
+  feed = { args, keepHistory: false };
 }
 
-/** Feeder: the viewer's trigger set for this platform (snapshot sync — see registry). */
+// An armed trigger missing from the answer either finished outside the recent
+// tail (the tail is newest by creation, not by finish) or is gone. One fetch
+// says which: a finished row is kept as history, a gone one leaves the store.
+const verifying = new Set<string>();
+export function verifyMissingArmed(convex: ConvexReactClient, rows: any[]): void {
+  const sent = new Set(rows.map((r) => String(r._id)));
+  const cached = (useInboxStore.getState() as any).agentTasks as Record<string, any>;
+  for (const id in cached) {
+    if (sent.has(id) || verifying.has(id) || !isConvexId(id) || !ARMED_STATUSES.has(cached[id]?.status)) continue;
+    verifying.add(id);
+    convex.query(api.agentTasks.webGet, { id })
+      .then((row: any) => {
+        const store = useInboxStore.getState();
+        if (row) store.syncRecord("agentTasks", id, row);
+        else store.dropRows("agentTasks", [id]);
+      })
+      .catch(() => {})
+      .finally(() => verifying.delete(id));
+  }
+}
+
+/** Feeder: the viewer's armed triggers and recent finished ones (see above). */
 export function useSyncTriggers(enabled = true) {
-  return useSyncCollection("agentTasks", api.agentTasks.webList, enabled ? feedArgs : "skip");
+  const convex = useConvex();
+  const keepHistory = useMemo(() => ({
+    syncOpts: { isDelta: true },
+    select: (rows: any[]) => {
+      if (Array.isArray(rows)) verifyMissingArmed(convex, rows);
+      return rows;
+    },
+  }), [convex]);
+  return useSyncCollection("agentTasks", api.agentTasks.webList, enabled ? feed.args : "skip", feed.keepHistory ? keepHistory : undefined);
+}
+
+/** Feeder: the viewer's complete trigger set, finished history included, as a
+ *  snapshot. Mounted by the surfaces that list history (the triggers page). */
+export function useSyncTriggerHistory(enabled = true) {
+  return useSyncCollection("agentTasks", api.agentTasks.webList, enabled ? {} : "skip");
 }
 
 // The fields trigger surfaces render; a change to anything else on the row
