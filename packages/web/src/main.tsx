@@ -6,6 +6,7 @@ import "../app/globals.css";
 // rather than waiting for boot's chunk (components/simple/laneLook).
 import "@platform/design/fonts";
 import { startRouteModule } from "./earlyRoutes";
+import { holdTextareaTextNodes } from "../lib/holdTextareaTextNode";
 
 /**
  * The app entry is deliberately almost empty. Everything real lives in
@@ -23,6 +24,9 @@ import { startRouteModule } from "./earlyRoutes";
  * globals.css and the bundled faces stay imported here so the stylesheet
  * remains a plain <link> in the built HTML, fetched in parallel on every load.
  */
+// Before any box mounts, on the app and on share pages alike.
+holdTextareaTextNodes();
+
 bootAfterHandoffGate(() => {
   // Share pages boot standalone: they hydrate server-rendered markup and never
   // need the store, the inbox, or auth. Everything else is the app.

@@ -12,7 +12,6 @@ import { newConversationAgentType } from "../lib/defaultAgent";
 import { startHostedConversation } from "../lib/startHostedConversation";
 import { fromConvexAgentType, isHostedAgentType, type AgentClientId } from "@codecast/shared/contracts";
 import { AskHeldLine, useHostedAskGate } from "./simple/useHostedAskGate";
-import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
 
 type AgentKey = AgentClientId;
 const escapeContext = (value: string) =>
@@ -62,7 +61,7 @@ export function ContextChatInput({
 }: ContextChatInputProps) {
   const [message, setMessage] = useState("");
   const [isFocused, setIsFocused] = useState(false);
-  const textareaRef = useHeldTextareaRef();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   // The conversation on screen's agent carries over; the default
   // (lib/defaultAgent) fills in.
   const currentAgent = useInboxStore((s) => newConversationAgentType(s, s.currentConversation.agentType));

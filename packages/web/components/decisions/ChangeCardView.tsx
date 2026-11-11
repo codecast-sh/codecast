@@ -26,7 +26,7 @@ import {
 } from "@codecast/shared/contracts/changeCard";
 import { useInboxStore, type DecisionAnswerInput, type DecisionDetailItem, type SessionDecisionItem } from "../../store/inboxStore";
 import { KeyCap } from "../KeyboardShortcutsHelp";
-import { useDecisionDraft } from "../../hooks/useDecisionDraft";
+import { useDecisionDraft, useDecisionDraftText } from "../../hooks/useDecisionDraft";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { hasOpenModal } from "../../shortcuts";
 import { formatTimeAgo } from "../../lib/messageNavigator";
@@ -982,9 +982,8 @@ export function ChangeCardAnswer({
   // or a page change never loses a half-written Revise.
   const [draft, patchDraft] = useDecisionDraft<{ note: string; noteOpen: boolean }>(decision._id);
   const noteOpen = !!draft.noteOpen;
-  const note = draft.note ?? "";
+  const [note, setNote] = useDecisionDraftText(decision._id, "note");
   const setNoteOpen = useCallback((open: boolean) => patchDraft({ noteOpen: open }), [patchDraft]);
-  const setNote = useCallback((text: string) => patchDraft({ note: text }), [patchDraft]);
   const [error, setError] = useState(false);
   const noteRef = useRef<HTMLTextAreaElement>(null);
   const line = size === "line";

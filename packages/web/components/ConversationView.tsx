@@ -172,7 +172,7 @@ import { VaultReadyLine } from "./conversation/blocks/VaultRequestCard";
 import { AgentSwitchDivider, BashCommandBlock, ContextRecoveryDivider, ChatWakeBlock, CommandMessageBlock, SlashCommandChip, CompactionSummaryBlock, EscalationDivider, FoldedPromptBlock, HuddleSummaryBlock, InterruptStatusLine, MachineMoveDivider, NudgeLine, ReviveDivider, ScheduledTaskBlock, SessionMessageBlock, SkillExpansionBlock, SystemBlock, TaskNotificationLine, TeammateEventsBlock, WorkflowEventBlock, WorkflowTaskBlock } from "./conversation/blocks/systemBlocks";
 import { CompactTurnCard } from "./conversation/blocks/compactTurnCard";
 import { AgentWorkingBubble, AssistantBlock, CompactCollapsedTurn, ForkSeedMark, GitDiffPanel, StoryTimelineView, ThreadSummaryView, UserPrompt } from "./conversation/blocks/turnBlocks";
-import { cleanKeepsSystemRow } from "../lib/cleanThread";
+import { cleanChatOf, cleanKeepsSystemRow } from "../lib/cleanThread";
 import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES } from "../lib/conversationTurnDefaults";
 import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, stickyCommand, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
 import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversationFormat";
@@ -290,9 +290,12 @@ function recordVirtHeight(key: string, size: number) {
 // that adds a hook here keeps the fiber and crashes on the shifted hook slot
 // ("Should have a queue"). The dev sizing happens inside the body instead.
 const ConversationViewInner = (
-  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, targetNonce, isJumpingToTarget, onTargetSettled, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent, onSendOverride, composerNode, leadNode, leadPinned, stickyPrompt = true, initialDensity, foldWorkingTurns = false, openAtTop = false, composerPlaceholder, hostsCommentRail = true, hideHeaderTitle }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
+  function ConversationView({ conversation, commits = [], pullRequests = [], backHref, backLabel = "Back", headerExtra, headerLeft, headerEnd, hasMoreAbove, hasMoreBelow, isLoadingOlder, isLoadingNewer, onLoadOlder, onLoadNewer, onJumpToStart, onJumpToEnd, onJumpToTimestamp, highlightQuery: propHighlightQuery, onClearHighlight: propClearHighlight, embedded, showMessageInput = true, targetMessageId, targetNonce, isJumpingToTarget, onTargetSettled, isOwner = true, guest = false, onSendAndAdvance, onSendAndDismiss, autoFocusInput, fallbackStickyContent: rawFallbackStickyContent, onBack, subHeaderContent, hideHeader, onSubmitWithIntent, onSendOverride, composerNode, leadNode, leadPinned, stickyPrompt = true, initialDensity, foldWorkingTurns: foldAsked = false, openAtTop = false, composerPlaceholder, hostsCommentRail = true, hideHeaderTitle }: ConversationViewProps, ref: ForwardedRef<ConversationViewHandle>) {
   devRenderCount("ConversationView2");
   const renderStart = performance.now();
+  // Clean mode is the seat's own setting (anchors.clean_chat): the page asks
+  // for it, and the agent's switch says whether its thread reads that way.
+  const foldWorkingTurns = useInboxStore((st) => foldAsked && cleanChatOf((st as any).anchors, conversation?._id));
   const fallbackStickyContent = useMemo(() => stickyPromptContent(rawFallbackStickyContent), [rawFallbackStickyContent]);
   const containerRef = useRef<HTMLDivElement>(null);
   const [userScrolled, _setUserScrolled] = useState(false);
@@ -3437,6 +3440,23 @@ const ConversationViewInner = (
     }
     return null;
   };
+  // What the agent said back to a row: the last assistant text before the next
+  // row that starts a turn. Undefined while nothing follows yet, null when the
+  // turn ended without a word.
+  const replyAfter = (index: number): string | null | undefined => {
+    let reply: string | null | undefined;
+    for (let i = index + 1; i < timeline.length; i++) {
+      const item = timeline[i];
+      if (item?.type !== "message") continue;
+      const m = item.data as Message;
+      if (m.role === "user") {
+        if (userMsgKindMap.get(m._id)?.kind === "tool_results_only") continue;
+        return reply ?? null;
+      }
+      if (m.role === "assistant" && m.content?.trim()) reply = m.content.trim();
+    }
+    return reply;
+  };
   // The person's own words before a row: what a hosted notice's Try again sends.
   const lastPersonWords = (index: number): string | undefined => {
     for (let i = index - 1; i >= 0; i--) {
@@ -3715,7 +3735,7 @@ const ConversationViewInner = (
         case 'task_notification':
           return <TaskNotificationLine key={msg._id} content={msg.content!} timestamp={msg.timestamp} agentNameToChildMap={agentNameToChildMap} />;
         case 'scheduled_task':
-          return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} hosted={isHostedAgentType(conversation?.agent_type)} />;
+          return <ScheduledTaskBlock key={msg._id} content={msg.content!} timestamp={msg.timestamp} hosted={isHostedAgentType(conversation?.agent_type)} reply={replyAfter(index)} />;
         case 'goal_round': {
           const line = goalFrameLine(kind.frame);
           return <FoldedPromptBlock key={msg._id} label={line.label} preview={line.detail} content={goalMessageBody(msg.content!)} timestamp={msg.timestamp} />;

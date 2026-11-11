@@ -8,12 +8,11 @@
 // Guests have no account, so nothing here goes through the store's dispatch
 // (it needs a signed-in user): the guest's own rows come straight from
 // guestState, and a send shows as "sending" until that query has it.
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Check, Loader2, Send, X } from "lucide-react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
-import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import type { ConversationData } from "./conversation/types";
 
@@ -52,7 +51,7 @@ export function GuestSuggestComposer({ conversation, shareToken }: { conversatio
   const [sending, setSending] = useState<Suggestion[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const textareaRef = useHeldTextareaRef();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   useWatchEffect(() => {
     const el = textareaRef.current;
     if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; }

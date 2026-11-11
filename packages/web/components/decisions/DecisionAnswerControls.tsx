@@ -7,7 +7,7 @@ import type { SessionDecisionItem, DecisionAnswerInput } from "../../store/inbox
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { DecisionOptionList, TypeAnswerButton } from "./DecisionOptionList";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { useDecisionDraft } from "../../hooks/useDecisionDraft";
+import { useDecisionDraft, useDecisionDraftText } from "../../hooks/useDecisionDraft";
 import { chosenOptions } from "../../lib/decisionLinks";
 import { ANSWER_WORDS, answerView, buildDecisionAnswer, moveInOrder, togglePicked, type AnswerDraft } from "../../lib/decisionAnswer";
 import { ChangeCardAnswer, answerKeyAllowed, cardAnswerIndexes } from "./ChangeCardView";
@@ -63,7 +63,7 @@ function GenericAnswerControls({
   // changes, and a choice must never fold away with it.
   const [draft, patchDraft] = useDecisionDraft<AnswerDraft>(decision._id);
   const otherOpen = !!draft.otherOpen;
-  const otherText = draft.otherText ?? "";
+  const [otherText, setOtherText] = useDecisionDraftText(decision._id, "otherText");
   const setOtherOpen = useCallback((open: boolean) => patchDraft({ otherOpen: open }), [patchDraft]);
   const otherRef = useRef<HTMLTextAreaElement>(null);
   const view = useMemo(() => answerView(decision, draft), [decision, draft]);
@@ -261,7 +261,7 @@ function GenericAnswerControls({
           <textarea
             ref={otherRef}
             value={otherText}
-            onChange={(e) => patchDraft({ otherText: e.target.value })}
+            onChange={(e) => setOtherText(e.target.value)}
             rows={3}
             placeholder="Answer in your own words — this goes to the agent as a message."
             className="w-full bg-sol-card border border-sol-border rounded px-2 py-1.5 text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-blue/50"

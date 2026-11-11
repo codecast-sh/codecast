@@ -162,6 +162,7 @@ export {
   type InboxOverlayDeps,
 } from "./inboxOverlays";
 export { monotonicNow } from "./syncActivity";
+import { cancelDraftWrite } from "../lib/pendingDraftWrites";
 import { decisionDraftKey, pendingDecisionConvIds, sessionHasOpenQuestion, type QuestionResolutions } from "../lib/decisionQueue";
 import type { LocalMirror, MergeBackStatus, OpenTaskReport, SessionActivity, SubagentCaps, SubagentSlot } from "@codecast/shared/contracts";
 import { cascadeFromAnswer, permissionRuleKey } from "@codecast/shared/contracts/permissionRules";
@@ -6287,6 +6288,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setTeamMachines: (rows: import("../lib/teamMachines").TeamMachine[]) => void;
   /** Join a team machine: the row shows you joining at once; the admin daemon does the rest. */
   joinTeamMachine: (hostId: string, opts?: { linux_user?: string }) => void;
+  /** A standing agent's clean chat: its thread reads as a chat, and it is re-sent its opening to talk that way (anchors.setCleanChat). */
+  setAnchorCleanChat: (anchorId: string, on: boolean) => void;
   /** Take a member off a team machine (yourself, or anyone when you manage it). */
   removeTeamMachineMember: (memberId: string) => void;
   renameTeamMachine: (hostId: string, name: string) => void;
@@ -7450,14 +7453,21 @@ const STORE_SYNC_OPTS: Record<string, SyncOpts> = {
     // overlay applier routes them into sessionsProjection instead.
     stripFields: SESSIONS_STRIP_FIELDS,
     transform(draft, table, incoming) {
+      // Every push carries the whole live window (~800 rows), and a read
+      // through the draft allocates a child draft per row that the commit then
+      // walks: reading conversations and messages that way made a push that
+      // changed nothing cost hundreds of ms. Decide on the plain base state and
+      // touch the draft only for the rows that change.
+      const base = (isDraft(draft) ? original(draft) : draft) as typeof draft;
       for (const s of incoming as any[]) {
-        if (!draft.conversations[s._id]) draft.conversations[s._id] = { _id: s._id };
+        if (!base.conversations[s._id] && !draft.conversations[s._id]) draft.conversations[s._id] = { _id: s._id };
+        if (!base.pendingMessages[s._id]?.length) continue;
         reconcilePendingSendForSession(
           draft.pendingMessages,
           s._id,
           (table[s._id] as InboxSession | undefined) ?? s,
           draft.currentSessionId,
-          draft.messages[s._id],
+          base.messages[s._id],
           draft,
         );
       }
@@ -9602,6 +9612,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   teamMachines: [],
   setTeamMachines: sync(function (this: Draft, rows: import("../lib/teamMachines").TeamMachine[]) {
     this.teamMachines = rows;
+  }),
+  setAnchorCleanChat: action(function (this: Draft, anchorId: string, on: boolean) {
+    const row = (this as any).anchors?.[anchorId];
+    if (row) row.clean_chat = on;
   }),
   joinTeamMachine: action(function (this: Draft, hostId: string, _opts?: { linux_user?: string }) {
     const host = this.teamMachines.find((h) => h._id === hostId);
@@ -15303,6 +15317,8 @@ function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionA
   // Pending, or an advisory answer a person is changing (advisoryAnswerOpen):
   // the agent went ahead on its default, so a new pick is one more message.
   if (!row || (row.status !== "pending" && ("dismiss" in answer || !advisoryAnswerOpen(row)))) return;
+  // A typed answer still waiting for its pause must not write the draft back.
+  cancelDraftWrite(decisionDraftKey(decisionId));
   dropDraft(draft, decisionDraftKey(decisionId));
   const now = Date.now();
   if ("dismiss" in answer) {

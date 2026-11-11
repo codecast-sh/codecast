@@ -9,6 +9,7 @@
 // which beside a long transcript cost tens of ms per key).
 // A failure names the budget that broke; look at what the keystroke reaches.
 import { dom, w, restoreGlobals } from "./fixtures/composeDom";
+import { holdTextareaTextNodes } from "../../lib/holdTextareaTextNode";
 import { afterAll, beforeAll, expect, mock, test } from "bun:test";
 
 mock.module("sonner", () => {
@@ -33,6 +34,9 @@ afterAll(() => {
   closeDomWindow(dom);
   restoreGlobals();
 });
+
+// The app installs this at boot (src/main.tsx); the budget holds the composer as the app runs it.
+holdTextareaTextNodes(w);
 
 const CONV_ID = "jx70000000000000000000000typebud"; // 32 chars => isConvexId
 const SESSIONS = 7000;

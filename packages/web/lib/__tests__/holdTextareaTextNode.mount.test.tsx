@@ -4,7 +4,8 @@ import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 
-// A controlled textarea held by useHeldTextareaRef: a change of value reaches
+// Every controlled textarea, once holdTextareaTextNodes is installed (at boot,
+// src/main.tsx): a change of value reaches
 // the box without touching the DOM tree, and every value React sets, typed or
 // from props, is still what the box shows.
 const dom = new JSDOM("<!doctype html><html><body></body></html>");
@@ -16,20 +17,20 @@ const restoreGlobals = replaceGlobals({
   IS_REACT_ACT_ENVIRONMENT: true,
 });
 const { createRoot } = await import("react-dom/client");
-const { useHeldTextareaRef } = await import("../holdTextareaTextNode");
+const { holdTextareaTextNodes } = await import("../holdTextareaTextNode");
+holdTextareaTextNodes(dom.window as any);
 
 afterAll(() => {
   closeDomWindow(dom);
   restoreGlobals();
 });
 
-test("a held controlled textarea shows every value without changing the DOM tree", async () => {
+test("a controlled textarea shows every value without changing the DOM tree", async () => {
   let setText: (t: string) => void = () => {};
   function Box() {
     const [text, set] = useState("restored draft");
     setText = set;
-    const ref = useHeldTextareaRef();
-    return <textarea ref={ref} value={text} onChange={(e) => set(e.target.value)} />;
+    return <textarea value={text} onChange={(e) => set(e.target.value)} />;
   }
   const container = dom.window.document.createElement("div");
   dom.window.document.body.appendChild(container);
@@ -55,4 +56,19 @@ test("a held controlled textarea shows every value without changing the DOM tree
   mo.disconnect();
   expect(records).toEqual([]);
   await act(async () => root.unmount());
+});
+
+test("the app entry installs the hold before anything mounts", async () => {
+  const src = await Bun.file(new URL("../../src/main.tsx", import.meta.url)).text();
+  expect(src.indexOf("holdTextareaTextNodes();")).toBeGreaterThan(-1);
+  expect(src.indexOf("holdTextareaTextNodes();")).toBeLessThan(src.indexOf("bootAfterHandoffGate("));
+});
+
+test("an uncontrolled box still takes a new default", async () => {
+  const ta = dom.window.document.createElement("textarea");
+  ta.defaultValue = "first";
+  expect(ta.value).toBe("first");
+  ta.defaultValue = "second";
+  expect(ta.value).toBe("second");
+  expect(ta.textContent).toBe("second");
 });

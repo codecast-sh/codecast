@@ -216,7 +216,6 @@ import { Button } from "./ui/button";
 
 const api = _api as any;
 import { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "@codecast/shared/contracts";
-import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
 import { hoverFocus } from "../shortcuts/focusSource";
 import { SwitchReview } from "./consequential/ConsequentialSwitch";
 import { permanentDeleteLedger, regulatedTeam, SESSION_REACHES } from "./consequential/deletionLedgers";
@@ -480,7 +479,7 @@ export function ActionSubmenu({
   const bulkMove = useBulkMoveSessions();
   const [selectedAgentKey, setSelectedAgentKey] = useState<string | null>(null);
   const [agentMessage, setAgentMessage] = useState(DEFAULT_AGENT_RUN_MESSAGE);
-  const messageRef = useHeldTextareaRef();
+  const messageRef = useRef<HTMLTextAreaElement>(null);
 
   // Rename is the other two-step mode: once a layout is picked the SAME search
   // input becomes the name field, so the row list collapses to one create-shaped

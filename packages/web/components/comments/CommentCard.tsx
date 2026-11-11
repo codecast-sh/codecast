@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useState, type ReactNode } from "react";
+import { memo, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { Reply, Pencil, Trash2, Loader2, RotateCcw, CheckCircle2 } from "lucide-react";
 import { relTimeShort } from "../../lib/utils";
 import {
@@ -13,7 +13,6 @@ import { CommentAvatar } from "./CommentAvatar";
 import { CommentMarkdown } from "./CommentMarkdown";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useConversationSpeaker } from "../../hooks/useLiveIdentityRow";
-import { useHeldTextareaRef } from "../../lib/holdTextareaTextNode";
 
 // One comment: avatar, name and time, the body. Reply, edit and delete float
 // over the card's corner on hover, so a quiet thread is only its words. Delete
@@ -64,7 +63,7 @@ function CommentCardImpl({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(comment.content);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const taRef = useHeldTextareaRef();
+  const taRef = useRef<HTMLTextAreaElement>(null);
 
   const agent = isAgentComment(comment);
   const mine = isOwnComment(comment, currentUserId);

@@ -37,3 +37,7 @@ export function flushDraftWrite(id: string | null | undefined): void {
   pending.delete(id);
   entry.write();
 }
+
+export function hasPendingDraftWrite(id: string): boolean {
+  return pending.has(id);
+}

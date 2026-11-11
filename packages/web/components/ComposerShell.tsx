@@ -1,8 +1,7 @@
-import { forwardRef, useCallback, type FormEventHandler, type ReactElement, type ReactNode, type Ref, type TextareaHTMLAttributes } from "react";
+import { forwardRef, type FormEventHandler, type ReactElement, type ReactNode, type Ref, type TextareaHTMLAttributes } from "react";
 import { ListEnd } from "lucide-react";
 import { ComposerFade } from "./ComposerFade";
 import { composerColumn, FIELD_SIZING_STYLE } from "./composerLayout";
-import { holdTextareaTextNode } from "../lib/holdTextareaTextNode";
 
 /**
  * The composer as markup: the sticky frame, the status line, and the bordered
@@ -167,15 +166,9 @@ export function ComposerFoot({ start, end }: { start?: ReactNode; end: ReactNode
  */
 export const ComposerTextarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement> & { dim?: boolean }>(
   function ComposerTextarea({ dim = false, ...props }, ref) {
-    // A keystroke changes the box's value and nothing in the DOM tree.
-    const setRef = useCallback((el: HTMLTextAreaElement | null) => {
-      holdTextareaTextNode(el);
-      if (typeof ref === "function") ref(el);
-      else if (ref) ref.current = el;
-    }, [ref]);
     return (
       <textarea
-        ref={setRef}
+        ref={ref}
         {...props}
         rows={1}
         style={FIELD_SIZING_STYLE}

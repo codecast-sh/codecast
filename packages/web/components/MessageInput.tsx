@@ -76,7 +76,6 @@ import { SLASH_QUERY_RE, SLASH_TRIGGER_RE, matchSlashSkills } from "../lib/sessi
 import { parseSideQuestion, withSideQuestionCommand } from "../lib/builtinCommands";
 import { useSharedDraft } from "../hooks/useSharedDraft";
 import { SharedCarets } from "./SharedCarets";
-import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
 import { useFileSearch } from "../lib/fsBrowse";
 import { findSecrets, type FoundSecret } from "@codecast/shared/contracts/secretShapes";
 import { ComposerCatch } from "./secrets/ComposerCatch";
@@ -157,7 +156,7 @@ const EMPTY_QUEUE: string[] = [];
 const ForkReplyInput = memo(function ForkReplyInput({ userName, userAvatar, onForkReply, autoFocusInput }: { userName: string; userAvatar?: string | null; onForkReply: (content: string) => void; autoFocusInput?: boolean }) {
   const [message, setMessage] = useState("");
   const [isForking, setIsForking] = useState(false);
-  const textareaRef = useHeldTextareaRef();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   useMountEffect(() => { if (autoFocusInput && textareaRef.current && !hasOpenModal(textareaRef.current)) textareaRef.current.focus(); });
   useWatchEffect(() => {
     if (textareaRef.current) {

@@ -33,7 +33,6 @@ import { useSharedDraft, useSharedDraftStatus, inSharedDraft, typingEditors } fr
 import { SharedCarets } from "./SharedCarets";
 import { ConversationChat } from "./conversation/ConversationChat";
 import { useConversationChatPeople } from "../hooks/useConversationChatPeople";
-import { useHeldTextareaRef } from "../lib/holdTextareaTextNode";
 import { roleAuthorOf } from "../lib/sessionIdentity";
 import { useLiveIdentityRow } from "../hooks/useLiveIdentityRow";
 import { useGuestSuggestions } from "../hooks/useGuestSuggestions";
@@ -263,7 +262,7 @@ export const CollabComposer = memo(function CollabComposer({
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [sentHint, setSentHint] = useState<string | null>(null);
-  const textareaRef = useHeldTextareaRef();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useMountEffect(() => { if (autoFocusInput) textareaRef.current?.focus(); });
   // Quotes and margin replies from the thread reach this box the way they
