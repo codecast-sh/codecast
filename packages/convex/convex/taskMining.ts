@@ -9,6 +9,7 @@ import { inboxVisibilityFields } from "./inboxProjection";
 import { liveConversationIdSet } from "./lib/liveSessions";
 import { docRelatesToTask } from "@codecast/shared/tasks";
 import { graphNeighbors } from "./lib/taskGraph";
+import { TASKS_PER_CONVERSATION_LIMIT } from "./tasks";
 
 function normalizeTitle(title: string): string[] {
   return title
@@ -112,15 +113,16 @@ export const webGetDocDetail = query({
 
     // Tasks the same session filed for this doc: the reverse of the task
     // page's related docs, so the two views agree (docRelatesToTask).
+    // Read through the session's own index, bounded like the task page: the
+    // owner's whole task list timed out and ran out of memory on big accounts.
     let relatedTasks: any[] = [];
     if (doc.conversation_id) {
-      const allTasks = await ctx.db
+      const filed = await ctx.db
         .query("tasks")
-        .withIndex("by_user_id", (q) => q.eq("user_id", doc.user_id))
-        .collect();
-      relatedTasks = allTasks.filter(
-        (t) => t.created_from_conversation === doc.conversation_id && docRelatesToTask(doc, t)
-      );
+        .withIndex("by_created_from_conversation", (q) =>
+          q.eq("created_from_conversation", doc.conversation_id))
+        .take(TASKS_PER_CONVERSATION_LIMIT);
+      relatedTasks = filed.filter((t) => t.user_id === doc.user_id && docRelatesToTask(doc, t));
     }
 
     // Find other sessions that reference the same themes, scoped to the doc's

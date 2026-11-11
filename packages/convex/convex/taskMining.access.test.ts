@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { webGetTaskDetail } from "./taskMining";
+import { webGetDocDetail, webGetTaskDetail } from "./taskMining";
 
 function context(taskOwner: string, task: Record<string, unknown> = {}, conversation: Record<string, unknown> = {}, member = false) {
   return {
@@ -103,4 +103,15 @@ test("the detail ships the tasks its graph names in its own workspace, and none 
   // missing (not found, never blocking); a self-link is skipped.
   expect(result.graph_tasks.map((t: any) => t.short_id).sort()).toEqual(["ct-2", "ct-4"]);
   expect(result.graph_missing).toEqual(["ct-404"]);
+});
+
+test("doc detail lists only its owner's tasks filed from the doc's session", async () => {
+  const ctx = context("viewer");
+  await ctx.db.patch("doc1", { user_id: "viewer", workspace: "user:viewer" });
+  await ctx.db.patch("conv1", { user_id: "viewer" });
+  await ctx.db.insert("tasks", { _id: "filed", short_id: "ct-10", user_id: "viewer", workspace: "user:viewer", created_from_conversation: "conv1" });
+  await ctx.db.insert("tasks", { _id: "elsewhere", short_id: "ct-11", user_id: "viewer", workspace: "user:viewer", created_from_conversation: "conv2" });
+  await ctx.db.insert("tasks", { _id: "foreign", short_id: "ct-12", user_id: "other", workspace: "user:other", created_from_conversation: "conv1" });
+  const result = await (webGetDocDetail as any)._handler(ctx, { id: "doc1" });
+  expect(result.related_tasks.map((t: any) => t._id)).toEqual(["filed"]);
 });
