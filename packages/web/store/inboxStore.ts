@@ -1164,6 +1164,14 @@ export type SessionSummary = {
   user_id?: string;
   author_name?: string | null;
   author_avatar?: string | null;
+  /** Set on a standing session (an anchor's or a role's): placement files it
+   *  hidden, so a seeded copy must keep it or it shows as an active card. The
+   *  raw conversation (getConversation) carries anchor_id, the inbox
+   *  payloads is_anchor. */
+  is_anchor?: boolean;
+  anchor_id?: string | null;
+  standing_role_id?: string | null;
+  org_role_id?: string | null;
   inbox_dismissed_at?: number | null;
   inbox_stashed_at?: number | null;
   inbox_snoozed_until?: number | null;
@@ -1182,6 +1190,9 @@ const SUMMARY_PASSTHROUGH_KEYS = [
   "user_id",
   "author_name",
   "author_avatar",
+  "is_anchor",
+  "standing_role_id",
+  "org_role_id",
 ] as const;
 
 export const TRIAGE_STAMP_KEYS = [
@@ -1224,7 +1235,16 @@ export function sessionRowFromSummary(summary: SessionSummary): InboxSession {
   // The buckets read the enriched twin, so derive it the way the server does —
   // but only when the stamp was actually delivered.
   if (summary.inbox_pinned_at !== undefined) row.is_pinned = !!summary.inbox_pinned_at;
+  if (summary.is_anchor === undefined && summary.anchor_id !== undefined) row.is_anchor = !!summary.anchor_id;
   return row;
+}
+
+/** The inbox row for a conversation the store does not hold, from
+ *  api.conversations.getConversation: what a deep link injects and what the
+ *  warm loop seeds ahead of a click. Carries the author so a teammate's
+ *  session shows whose it is. */
+export function sessionRowFromConversation(id: string, data: any): InboxSession {
+  return sessionRowFromSummary({ ...data, _id: id, author_name: data.user?.name ?? null });
 }
 
 export type CurrentConversationContext = {
@@ -5290,6 +5310,26 @@ export function visualOrderViewSig(state: {
     state.activeProjectFilter ?? "", state.activeBucketFilter ?? "", !!state.chipFilterExclude,
     terms(state.extraBucketFilters), terms(state.extraProjectFilters), !!state.showFavorites, state.teamInboxIds?.size ?? 0,
   ].join("|");
+}
+
+// Every top-level inbox row above the show-old fold, in both scopes, whatever
+// the view hides (a collapsed section, a chip, the favorites shelf, the other
+// scope). Placed rows only: `sorted` also carries every subagent and role
+// worker riding a parent, about 1,000 on a busy account. The warm loop keeps
+// these in memory so revealing any of them opens warm.
+export function inboxMemberRows(state: PlaceInboxState, focusedId: string | null): InboxSession[] {
+  const out: InboxSession[] = [];
+  const seen = new Set<string>();
+  for (const scope of ["mine", "team"] as const) {
+    const { sorted, placements } = placeInboxRows(state, { focusedId, scope });
+    for (const s of sorted) {
+      const p = placements.get(s._id);
+      if (!p || p.below_fold || seen.has(s._id)) continue;
+      seen.add(s._id);
+      out.push(s);
+    }
+  }
+  return out;
 }
 
 export function computeVisualOrder(state: {

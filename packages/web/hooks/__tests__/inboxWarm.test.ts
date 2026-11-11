@@ -75,6 +75,11 @@ describe("planWarm", () => {
   it("skips rows in flight and rows with no messages yet", () => {
     expect(planWarm([row("x", { inFlight: true }), row("y", { serverCount: 0 })])).toEqual([]);
   });
+
+  it("fetches the store row first for a session the store does not hold", () => {
+    expect(planWarm([row("r", { serverCount: null })])).toEqual([{ kind: "row", id: "r" }]);
+    expect(planWarm([row("r", { serverCount: null, storedCount: 5, newestTs: 9 })])).toEqual([{ kind: "row", id: "r" }]);
+  });
 });
 
 describe("rereadAnchor", () => {
@@ -117,6 +122,64 @@ describe("readForward heals a stale row in the middle of a hosted turn", () => {
     expect(healed.length).toBe(4);
     expect(healed[1].content).toBe(full.content);
     expect((healed[1] as any).tool_calls?.[0]?.name).toBe("write_doc");
+  });
+});
+
+describe("warmRowsFromState", () => {
+  // A collapsed section (or a chip, the favorites shelf, the other scope)
+  // hides a row from the render but not from the inbox. Expanding it, or a
+  // jump that reveals it, must open a warm row.
+  it("covers inbox rows the render hides", async () => {
+    const { warmRowsFromState } = await import("../inboxWarm");
+    const id = "jx7ccccccccccccccccccccccccccccc";
+    useInboxStore.setState({
+      sessions: {
+        [id]: { _id: id, session_id: "s", agent_type: "claude_code", message_count: 3, is_idle: true, has_pending: false, last_user_message: "hi", started_at: Date.now(), updated_at: Date.now(), title: "T" } as any,
+      },
+      messages: {}, pagination: {},
+      clientState: { ui: { inbox_view_mode: "recent" } } as any,
+      collapsedSections: { all: true },
+    });
+    try {
+      const st = useInboxStore.getState();
+      expect(st.visualOrder()).toEqual([]);
+      expect(warmRowsFromState(st).map((r) => r.id)).toEqual([id]);
+    } finally {
+      useInboxStore.setState({ sessions: {}, messages: {}, pagination: {}, clientState: {} as any, collapsedSections: {} });
+    }
+  });
+
+  // A role's standing session files behind its role card (or only on the org
+  // page) and may have no row in the store at all.
+  it("covers every role's standing session", async () => {
+    const { warmRowsFromState } = await import("../inboxWarm");
+    const fromTree = "jx7ddddddddddddddddddddddddddddd";
+    const fromRow = "jx7eeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    useInboxStore.setState({
+      sessions: {
+        [fromRow]: { _id: fromRow, session_id: "s", agent_type: "claude_code", message_count: 7, standing_role_id: "role2", is_anchor: true, inbox_dismissed_at: Date.now(), started_at: Date.now(), updated_at: Date.now(), title: "Role" } as any,
+      },
+      messages: {}, pagination: {},
+      orgTree: { roles: [{ _id: "role1", standing: { conversation_id: fromTree } }], people: [], anchors: [] } as any,
+      clientState: {} as any,
+    });
+    try {
+      const rows = warmRowsFromState(useInboxStore.getState());
+      expect(rows.find((r) => r.id === fromTree)?.serverCount).toBeNull();
+      expect(rows.find((r) => r.id === fromRow)?.serverCount).toBe(7);
+
+      // A copy seeded without is_anchor files as an active card: refetch it.
+      useInboxStore.setState({
+        sessions: { ...useInboxStore.getState().sessions, [fromTree]: { _id: fromTree, session_id: "s", agent_type: "claude_code", message_count: 4, started_at: Date.now(), updated_at: Date.now(), title: "Lead" } as any },
+      });
+      expect(warmRowsFromState(useInboxStore.getState()).find((r) => r.id === fromTree)?.serverCount).toBeNull();
+      useInboxStore.setState({
+        sessions: { ...useInboxStore.getState().sessions, [fromTree]: { ...useInboxStore.getState().sessions[fromTree], is_anchor: true } as any },
+      });
+      expect(warmRowsFromState(useInboxStore.getState()).find((r) => r.id === fromTree)?.serverCount).toBe(4);
+    } finally {
+      useInboxStore.setState({ sessions: {}, messages: {}, pagination: {}, clientState: {} as any, orgTree: null as any });
+    }
   });
 });
 

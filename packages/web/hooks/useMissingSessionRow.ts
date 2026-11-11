@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "./useQueryNoThrow";
-import { isConvexId, sessionRowFromSummary, type InboxSession } from "../store/inboxStore";
+import { isConvexId, sessionRowFromConversation, type InboxSession } from "../store/inboxStore";
 
 /**
  * A session the store does not hold (a teammate's, or one outside the inbox
@@ -32,14 +32,9 @@ export function useMissingSessionLookup(id: string | null): { row: InboxSession 
     if (!valid) return null;
     if (data === undefined && !error) return undefined;
     if (data == null) return null;
-    // sessionRowFromSummary carries the triage stamps through, so a stashed or
-    // dismissed target seeds hidden instead of flashing in as an active card.
-    return sessionRowFromSummary({
-      ...data,
-      _id: id,
-      // Carry the author so a teammate's session shows whose it is.
-      author_name: data.user?.name ?? null,
-    });
+    // The row carries the triage stamps through, so a stashed or dismissed
+    // target seeds hidden instead of flashing in as an active card.
+    return sessionRowFromConversation(id, data);
   }, [id, valid, data, error]);
   return { row, failed: valid && !!error };
 }

@@ -73,6 +73,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/inboxStore.ts:INBOX_FACT_FIELD_SET": CONSTANT,
   "store/inboxStore.ts:SYNC_ACTIVITY_FIELDS": CONSTANT,
   "store/inboxStore.ts:EMPTY_PENDING_SEND_IDS": CONSTANT,
+  "store/liveArtifactsSlice.ts:ROW_META": CONSTANT,
   "store/inboxStore.ts:PER_DEVICE_UI_KEYS": CONSTANT,
   "store/inboxStore.ts:HELD_IN_NEW": CONSTANT,
 
@@ -192,6 +193,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "hooks/inboxWarm.ts:lastPass": NO_WARM,
   "hooks/inboxWarm.ts:inFlight": NO_WARM,
   "hooks/inboxWarm.ts:syncedCount": NO_WARM,
+  "hooks/inboxWarm.ts:rowTried": NO_WARM,
   "hooks/inboxWarm.ts:loopRefs": NO_WARM,
   "hooks/inboxWarm.ts:stopLoop": NO_WARM,
   "hooks/useStorageImageUrl.ts:urlCache": IMAGE_URLS,

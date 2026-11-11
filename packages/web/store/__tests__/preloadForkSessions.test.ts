@@ -3,6 +3,7 @@ import {
   useInboxStore,
   isSessionHidden,
   sessionRowFromSummary,
+  sessionRowFromConversation,
   type ForkChild,
 } from "../inboxStore";
 import { placeSections } from "./placeTestHarness";
@@ -47,6 +48,20 @@ describe("sessionRowFromSummary", () => {
     expect(stamped.inbox_stashed_at).toBe(123);
     expect(stamped.inbox_dismissed_at).toBe(null);
     expect("inbox_killed_at" in stamped).toBe(false);
+  });
+
+  // A standing session (an anchor's or a role's) files hidden by its
+  // is_anchor. A seed that drops it puts the role's thread in the inbox as an
+  // active card (the warm loop seeds every role's standing session).
+  it("keeps a standing session's anchor so the seed stays out of the inbox", () => {
+    const seeded = sessionRowFromConversation(FORK_ID, {
+      title: "Market Growth lead", message_count: 9, is_idle: true, anchor_id: "a1",
+      updated_at: Date.now(), started_at: Date.now() - 1000,
+    });
+    expect(seeded.is_anchor).toBe(true);
+    const cat = placeSections({ [FORK_ID]: seeded }, new Set());
+    const shown = [...cat.questions, ...cat.pinned, ...cat.newSessions, ...cat.needsInput, ...cat.done, ...cat.dormant, ...cat.working];
+    expect(shown.map((s) => s._id)).not.toContain(FORK_ID);
   });
 
   it("derives is_pinned only when the pin stamp was delivered", () => {
