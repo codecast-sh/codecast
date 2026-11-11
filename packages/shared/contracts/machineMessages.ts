@@ -86,8 +86,31 @@ export function stripInjectionNoise(text: string): string {
     .replace(WIRE_TAG_JUNK_PREFIX, "");
 }
 
-const WIRE_TAG_JUNK_PREFIX =
-  /^[^<\s]{1,2}(?=<(?:session-message|agent-message|user-message|task-comment|decision-discussion|line-chat|teammate-message|scheduled-task|session-escalation)[\s>])/;
+// The wire tags a delivered turn opens with.
+const WIRE_TAGS = ["session-message", "agent-message", "user-message", "task-comment", "decision-discussion", "line-chat", "teammate-message", "scheduled-task", "session-escalation"];
+
+const WIRE_TAG_JUNK_PREFIX = new RegExp(`^[^<\\s]{1,2}(?=<(?:${WIRE_TAGS.join("|")})[\\s>])`);
+
+// Every tag an agent reads as framing that says who is speaking: the wire
+// tags, the proposal and reminder frames, and the nonce fence around foreign
+// text. A body someone else wrote must never open or close one of these, or it
+// could end its own wrapper and continue as a trigger, a reminder or another
+// sender. The writer turns their "<" into "&lt;" (which a markdown reader
+// shows as "<" anyway) and the parser turns it back, so the words read the
+// same everywhere and only the real wrapper carries the tag.
+const FRAME_TAGS = `${[...WIRE_TAGS, "proposal-message", "system-reminder", "task-reminder"].join("|")}|untrusted-[0-9a-f]+`;
+const FRAME_TAG_RE = new RegExp(`<(/?)(${FRAME_TAGS})(?=[\\s>/]|$)`, "gi");
+const NEUTRALIZED_FRAME_TAG_RE = new RegExp(`&lt;(/?)(${FRAME_TAGS})(?=[\\s>/]|$)`, "gi");
+
+/** A foreign body made safe to place inside a frame: it can no longer open or close one. */
+export function neutralizeFrameTags(body: string): string {
+  return body.replace(FRAME_TAG_RE, "&lt;$1$2");
+}
+
+/** The body as its author wrote it, for display. */
+export function restoreFrameTags(body: string): string {
+  return body.replace(NEUTRALIZED_FRAME_TAG_RE, "<$1$2");
+}
 
 // A user-role row that carries tool results is the harness answering the agent's
 // tool calls, never something a person typed (typed input always lands as its own
@@ -163,10 +186,13 @@ export function isAgentContextMessage(rawContent: string | null | undefined): bo
 // sender with no session of its own; `subagent` marks a launch that may make
 // a parent relationship (cli agentPromptOrigin). Readers tolerate either
 // attribute (ConversationView classifyUserMessage / SessionMessageBlock).
+//
+// The body is another session's text, so it cannot carry a frame tag of its
+// own (neutralizeFrameTags): the wrapper ends only at its real close.
 export function formatSessionMessage(from: string, body: string, opts: { name?: string; subagent?: boolean } = {}): string {
-  const nameAttr = opts.name ? ` name="${opts.name.replace(/"/g, "'")}"` : "";
+  const nameAttr = opts.name ? ` name="${neutralizeFrameTags(opts.name.replace(/"/g, "'").replace(/[\r\n]+/g, " "))}"` : "";
   const subagentAttr = opts.subagent ? ' subagent="true"' : "";
-  return `<session-message from="${from}"${nameAttr}${subagentAttr}>\n${body}\n</session-message>`;
+  return `<session-message from="${from}"${nameAttr}${subagentAttr}>\n${neutralizeFrameTags(body)}\n</session-message>`;
 }
 
 // Lightweight detection that a user message is actually an inbound
@@ -202,8 +228,11 @@ export function isAgentMessage(rawContent: string | null | undefined): boolean {
 //   <user-message from="Ashot Petrosian">
 //   the body
 //   </user-message>
+//
+// The body is the sender's own text, so it cannot carry a frame tag of its
+// own (neutralizeFrameTags): the wrapper ends only at its real close.
 export function formatUserMessage(fromName: string, body: string): string {
-  return `<user-message from="${fromName.replace(/"/g, "'")}">\n${body}\n</user-message>`;
+  return `<user-message from="${neutralizeFrameTags(fromName.replace(/"/g, "'").replace(/[\r\n]+/g, " "))}">\n${neutralizeFrameTags(body)}\n</user-message>`;
 }
 
 export function isUserMessage(rawContent: string | null | undefined): boolean {
@@ -219,7 +248,7 @@ export function parseUserMessage(rawContent: string | null | undefined): { from:
   const text = stripInjectionNoise(rawContent);
   const m = text.match(/^<user-message\s+from="([^"]*)"[^>]*>([\s\S]*?)(?:<\/user-message>\s*$|$)/);
   if (!m) return null;
-  return { from: m[1].trim(), body: m[2].trim() };
+  return { from: restoreFrameTags(m[1].trim()), body: restoreFrameTags(m[2].trim()) };
 }
 
 // A person's message sent from the org page's staffing pane into the thread

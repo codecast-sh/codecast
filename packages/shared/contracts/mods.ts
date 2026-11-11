@@ -10,6 +10,7 @@
 // codecast draws them with its own components.
 
 import { themeErrors, type ModTheme } from "./theme";
+import { internalHostRefusal } from "./internalHost";
 
 /** Bumped when the host and the SDK baked into a mod stop understanding each other. */
 export const MOD_PROTOCOL = 1;
@@ -217,6 +218,11 @@ export function validateManifest(raw: unknown): ManifestCheck {
       for (const key of Object.keys(o)) if (!["name", "description", "origins", "header"].includes(key)) errors.push(`secrets: "${name}" has an unknown key "${key}"`);
       if (!isList(o.origins) || !o.origins.length || !o.origins.every((x) => typeof x === "string" && ORIGIN_RE.test(x))) errors.push(`secrets: "${name}".origins must list the origins it may be sent to, like ["https://api.example.com"]`);
       else if (!o.origins.every((x) => fetchAllows(perms?.fetch, x as string))) errors.push(`secrets: "${name}" goes to an origin permissions.fetch does not list`);
+      else for (const origin of o.origins as string[]) {
+        // A secret is attached on codecast's servers, so its origins must be on the public internet.
+        const refused = internalHostRefusal(origin);
+        if (refused) errors.push(`secrets: "${name}" goes to ${origin}, which codecast's servers do not call (${refused})`);
+      }
       if (o.header !== undefined && (typeof o.header !== "string" || !/^[A-Za-z][A-Za-z0-9-]{0,63}$/.test(o.header))) errors.push(`secrets: "${name}".header must be a header name, like X-Api-Key`);
     }
   }

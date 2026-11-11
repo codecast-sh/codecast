@@ -405,7 +405,11 @@ async function loadConversationSearchScope(
 
   const effectiveTeamIds = args.mineOnly
     ? []
-    : args.activeTeamId ? [args.activeTeamId] : userTeamIds;
+    // A named team narrows the scope only when the caller belongs to it; a
+    // team id the caller is not a member of scopes to nothing.
+    : args.activeTeamId
+      ? userTeamIds.filter(id => id === args.activeTeamId)
+      : userTeamIds;
 
   const allTeamUsers: Doc<"users">[] = [];
   for (const teamId of effectiveTeamIds) {
@@ -1004,8 +1008,57 @@ export function conversationForAccess<T extends Record<string, any>>(
   access: AccessLevel,
 ): T {
   if (access === "owner" || access === "team") return conversation;
-  const { stable_context: _stableContext, ...publicConversation } = conversation;
+  const publicConversation: Record<string, any> = { ...conversation };
+  for (const key of SHARE_HIDDEN_CONVERSATION_FIELDS) delete publicConversation[key];
+  if (typeof publicConversation.git_remote_url === "string") {
+    publicConversation.git_remote_url = stripUrlCredentials(publicConversation.git_remote_url);
+  }
   return publicConversation as T;
+}
+
+/**
+ * Conversation fields a share-link viewer never gets: the owner's machine,
+ * accounts, team, unsent draft, launch flags and host paths. The read-only
+ * share view draws none of them; they only describe the owner's setup.
+ */
+const SHARE_HIDDEN_CONVERSATION_FIELDS = [
+  "stable_context",
+  "team_id",
+  "owner_device_id",
+  "subagent_slot_device",
+  "cc_account",
+  "cc_account_auto",
+  "codex_account",
+  "cli_flags",
+  "draft_message",
+  "fork_daemon_args",
+  "local_mirror",
+  "migration",
+  "cloud_placement_token",
+  "cloud_seed",
+  "cloud_checkout_path",
+  "worktree_path",
+  "needs_input_notified_key",
+  "hand_wake_notified_key",
+  "title_embedding",
+] as const;
+
+/** A remote URL without its user:password@ part (an https remote can carry a token). */
+function stripUrlCredentials(url: string): string {
+  return url.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, "$1");
+}
+
+/** The session author as the viewer may see them. A share-link viewer gets the
+ *  name the UI would draw (name, else the email's local part) and the avatar,
+ *  never the email itself. */
+export function conversationAuthorForAccess(
+  user: { name?: string | null; email?: string | null; image?: string | null; github_avatar_url?: string | null } | null,
+  access: AccessLevel,
+) {
+  if (!user) return null;
+  const avatar_url = user.image || user.github_avatar_url || null;
+  if (access === "owner" || access === "team") return { name: user.name, email: user.email, avatar_url };
+  return { name: user.name || user.email?.split("@")[0], avatar_url };
 }
 
 function matchChildByPrompt(
@@ -1903,7 +1956,7 @@ export const getConversation = query({
       ...conversationForAccess(conversation, accessLevel),
       title,
       messages: sortedMessages,
-      user: user ? { name: user.name, email: user.email } : null,
+      user: conversationAuthorForAccess(user, accessLevel),
       has_more_above: hasMore,
       oldest_timestamp: oldestTimestamp,
       active_plan,
@@ -2373,10 +2426,16 @@ export const getConversationWithMeta = query({
       const originalConv = await ctx.db.get(conversation.forked_from);
       if (originalConv) {
         const originalUser = await ctx.db.get(originalConv.user_id);
+        // The parent's share link is the parent owner's grant: hand it only to
+        // a viewer who can already open the parent, so a fork never spreads it
+        // further and rotating it still revokes past holders.
+        const parentAccess = originalConv.share_token
+          ? await checkConversationAccess(ctx, authUserId, originalConv)
+          : "denied";
         forkedFromDetails = {
           conversation_id: originalConv._id,
           title: originalConv.title,
-          share_token: originalConv.share_token,
+          share_token: parentAccess === "denied" ? undefined : originalConv.share_token,
           username: originalUser?.name || originalUser?.email?.split("@")[0] || "Unknown",
           // Triage state for the client-side parent preload (same contract as
           // mapForkDetails): a stashed/dismissed parent must seed as such, not
@@ -2469,7 +2528,7 @@ export const getConversationWithMeta = query({
       access_level: access,
       title,
       effective_team_visibility,
-      user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
+      user: conversationAuthorForAccess(user, access),
       child_conversations: childConversations,
       child_by_parent_uuid_entries: Object.entries(childByParentUuid),
       agent_name_entries: agentNameEntries,
@@ -2699,7 +2758,13 @@ export const listConversations = query({
     const includeMessagePreviews = args.include_message_previews ?? false;
     const cursorTimestamp = args.cursor ? parseInt(args.cursor, 10) : null;
 
-    const effectiveTeamId = args.filter === "team" ? (args.activeTeamId || user.active_team_id) : undefined;
+    const requestedTeamId = args.filter === "team" ? (args.activeTeamId || user.active_team_id) : undefined;
+    const effectiveTeamId = requestedTeamId
+      ? (await resolveInboxTeamScope(ctx, userId, requestedTeamId)) ?? undefined
+      : undefined;
+    if (args.filter === "team" && !effectiveTeamId) {
+      return { conversations: [], nextCursor: null };
+    }
 
     const teamUsers = args.filter === "team" && effectiveTeamId
       ? await ctx.db
@@ -3468,7 +3533,7 @@ export const getConversationPublic = query({
         ...conversationForAccess(conversation, accessLevel),
         title,
         messages: sortedMessages,
-        user: user ? { name: user.name, email: user.email, avatar_url: user.image || user.github_avatar_url || null } : null,
+        user: conversationAuthorForAccess(user, accessLevel),
         has_more_above: hasMore,
         oldest_timestamp: oldestTimestamp,
         fork_count: conversation.fork_count,
@@ -7637,7 +7702,10 @@ export const getTeamUnreadCount = query({
       return 0;
     }
 
-    const effectiveTeamId = args.teamId || user.active_team_id;
+    const requestedTeamId = args.teamId || user.active_team_id;
+    const effectiveTeamId = requestedTeamId
+      ? await resolveInboxTeamScope(ctx, userId, requestedTeamId)
+      : null;
     if (!effectiveTeamId) {
       return 0;
     }

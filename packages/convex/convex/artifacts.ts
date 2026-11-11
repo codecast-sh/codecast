@@ -36,8 +36,8 @@ import { isTeamMember, isVisibilityShareable } from "./privacy";
 import { computeWorkspaceKey, resolveWorkspaceKey, type WorkspaceKey } from "./lib/accessKeys";
 import { pageThreadParticipants, touchThread } from "./threadReads";
 import { evidencePatch, resolveEvidenceBinding } from "./taskEvidence";
-import { eTokenFor, gateFailure, isExpired, isGated, kTokenFor, mTokenFor, teamGateMessage } from "./lib/artifactGates";
-import { regulatedTeamFor } from "./lib/teamPolicyGuard";
+import { eTokenFor, gateFailure, isExpired, isGated, kTokenFor, mTokenFor, mTokenHolder, teamGateMessage } from "./lib/artifactGates";
+import { regulatedTeamFor, teamPolicyRefusal } from "./lib/teamPolicyGuard";
 import { isRegulatedTeam } from "./lib/accessLog";
 import { purgeRow } from "./lib/purgeTree";
 import { artifactPlan } from "./lib/deletionPlans";
@@ -300,7 +300,7 @@ export const bySlug = internalQuery({
     // Roles derive the way "Send all" reads them; the team read happens only
     // when a non-owner account commented.
     const teammates = open.some((c) => c.author_user_id && c.author_user_id !== artifact.user_id)
-      ? await teammatesWhoCanSee(ctx, artifact.user_id)
+      ? await teammatesWhoCanSee(ctx, artifact)
       : new Set<string>();
     // Session TITLE for the bar chip — a short id means nothing to viewers.
     // Its one- or two-word name is what the conversation embed's chip shows.
@@ -542,7 +542,7 @@ export const ownerPanel = internalQuery({
       .query("artifact_versions")
       .withIndex("by_artifact", (q) => q.eq("artifact_id", artifact._id))
       .collect();
-    const teammates = await teammatesWhoCanSee(ctx, artifact.user_id);
+    const teammates = await teammatesWhoCanSee(ctx, artifact);
     return {
       artifact_id: artifact._id,
       slug: artifact.slug,
@@ -1061,7 +1061,7 @@ export const recordView = mutation({
       .withIndex("by_slug", (q) => q.eq("slug", args.slug))
       .first();
     if (!artifact) return { ok: false };
-    if (await gateFailure(artifact, { k: args.k, e: args.e, m: args.m })) return { ok: false };
+    if (await gateFailure(artifact, { k: args.k, e: args.e, m: args.m }, (h) => teamGateAdmitsHolder(ctx, artifact, h))) return { ok: false };
     // A regulated team's page: one audit entry per reader per open (lib/accessLog),
     // ahead of the view budget: repeats collapse there, so an over-budget open is still recorded.
     const reader = await resolveCommentIdentity(ctx, artifact._id, args.identity_token);
@@ -1318,7 +1318,7 @@ export const commenterContext = internalQuery({
     if (!artifact) return null;
     const identity = await resolveCommentIdentity(ctx, artifact._id, args.token);
     if (!identity) return null;
-    const teammates = await teammatesWhoCanSee(ctx, artifact.user_id);
+    const teammates = await teammatesWhoCanSee(ctx, artifact);
     const isOwner = identity.user._id === artifact.user_id;
     const steer: SteerRole | null = isOwner ? "owner" : teammates.has(identity.user._id.toString()) ? "teammate" : null;
     const roster: Array<{ name: string; username: string | null; avatar: string | null }> = [];
@@ -1388,7 +1388,7 @@ async function emitCommentNotifications(
     notified.add(recipient.toString());
   };
   if (o.actor) {
-    const teammates = await teammatesWhoCanSee(ctx, artifact.user_id);
+    const teammates = await teammatesWhoCanSee(ctx, artifact);
     const actorInTeam = actorId === artifact.user_id.toString() || teammates.has(actorId!);
     if (actorInTeam) {
       const mentions = new Set(
@@ -1484,14 +1484,14 @@ export const submitComments = mutation({
     const role: SteerRole | undefined =
       isOwner || identity?.user._id === artifact.user_id
         ? "owner"
-        : identity && (await teammatesWhoCanSee(ctx, artifact.user_id)).has(identity.user._id.toString())
+        : identity && (await teammatesWhoCanSee(ctx, artifact)).has(identity.user._id.toString())
           ? "teammate"
           : undefined;
     // A team gate admits the owner and that team's members, never every
     // teammate the owner has elsewhere.
     const behindWall = role === "owner"
       || (role === "teammate" && (!artifact.team_gate || (await isTeamMember(ctx, identity!.user._id, artifact.team_gate))));
-    const blocked = await gateFailure(artifact, { k: args.k, e: args.e, m: args.m });
+    const blocked = await gateFailure(artifact, { k: args.k, e: args.e, m: args.m }, (h) => teamGateAdmitsHolder(ctx, artifact, h));
     if (blocked && !behindWall) return { error: blocked };
     if (args.client_id) {
       const dupe = await ctx.db
@@ -1643,7 +1643,7 @@ export const deliverPendingComments = mutation({
       .query("artifact_comments")
       .withIndex("by_artifact", (q) => q.eq("artifact_id", artifact._id))
       .collect();
-    const teammates = await teammatesWhoCanSee(ctx, artifact.user_id);
+    const teammates = await teammatesWhoCanSee(ctx, artifact);
     const pending = rows
       .filter((c) => c.status === "open" && !c.delivered && sendableRole(c, artifact.user_id, teammates))
       .sort((a, b) => a.created_at - b.created_at)
@@ -1775,7 +1775,7 @@ export const attachFromCLI = mutation({
     if (!auth) return { error: "Unauthorized" };
     const artifact = await ctx.db.query("artifacts").withIndex("by_slug", (q) => q.eq("slug", args.slug)).first();
     if (!artifact) return { error: `No page with slug ${args.slug}` };
-    if (artifact.user_id !== auth.userId && !(await teammatesWhoCanSee(ctx, artifact.user_id)).has(auth.userId.toString())) {
+    if (artifact.user_id !== auth.userId && !(await teammatesWhoCanSee(ctx, artifact)).has(auth.userId.toString())) {
       return { error: `No page with slug ${args.slug}` };
     }
     const resolved = await resolveEvidenceBinding(ctx, auth.userId, { task: args.task, station: args.station });
@@ -1820,26 +1820,62 @@ async function deletePage(ctx: MutationCtx, userId: Id<"users">, artifact: Doc<"
 // has opted out of team surfaces — their artifacts stay out of teammates'
 // galleries, and team editing can't reach them either.
 
-/** Teammates who may see `ownerId`'s artifacts — i.e. users sharing a team in
- * which the OWNER has not opted out. Excludes the owner. */
-async function teammatesWhoCanSee(ctx: { db: QueryCtx["db"] }, ownerId: Id<"users">): Promise<Set<string>> {
-  const memberships = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_id", (q) => q.eq("user_id", ownerId))
-    .collect();
+/** Teammates who may see and act on `artifact` as teammates: the members of
+ * the team that is the page's own workspace (pageWorkspace), provided the
+ * OWNER has not opted out of team surfaces there. The same rule listForWeb
+ * applies to the gallery, so a teammate's rights reach exactly the pages they
+ * can see there: a page in the owner's personal space, or in another team the
+ * owner belongs to, has no teammates here. Excludes the owner. */
+async function teammatesWhoCanSee(ctx: { db: QueryCtx["db"] }, artifact: Doc<"artifacts">): Promise<Set<string>> {
   const seen = new Set<string>();
-  for (const m of memberships) {
-    if (!isVisibilityShareable(m.visibility || "summary")) continue;
-    const teamMembers = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_team_id", (q) => q.eq("team_id", m.team_id))
-      .collect();
-    for (const tm of teamMembers) {
-      if (tm.user_id !== ownerId) seen.add(tm.user_id.toString());
-    }
+  const workspace = await pageWorkspace(ctx, artifact, new Map());
+  if (!workspace.startsWith("team:")) return seen;
+  const teamId = workspace.slice("team:".length) as Id<"teams">;
+  const ownerMembership = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_team", (q) => q.eq("user_id", artifact.user_id).eq("team_id", teamId))
+    .first();
+  if (!ownerMembership || !isVisibilityShareable(ownerMembership.visibility || "summary")) return seen;
+  const teamMembers = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
+    .collect();
+  for (const tm of teamMembers) {
+    if (tm.user_id !== artifact.user_id) seen.add(tm.user_id.toString());
   }
   return seen;
 }
+
+/** Whether a team-gated page's member token admits whoever presents it: it
+ * must be a genuine token for this page, and the person it was handed to must
+ * still be the owner or a member of the gate team today. */
+export async function teamGateAdmitsHolder(ctx: { db: QueryCtx["db"] }, artifact: Doc<"artifacts">, holder: string): Promise<boolean> {
+  if (!artifact.team_gate) return false;
+  const userId = ctx.db.normalizeId("users", holder);
+  if (!userId) return false;
+  return userId === artifact.user_id || (await isTeamMember(ctx, userId, artifact.team_gate));
+}
+
+/** For the serve route: why this page's live data may not be served on an
+ * open page now (its data workspace's team turned public sharing off), or null. */
+export const pageDataRefusal = internalQuery({
+  args: { artifact_id: v.id("artifacts") },
+  handler: async (ctx, args): Promise<string | null> => {
+    const row = await ctx.db.query("page_queries").withIndex("by_artifact", (q) => q.eq("artifact_id", args.artifact_id)).first();
+    return row ? await teamPolicyRefusal(ctx, { workspace: row.workspace }, "public_sharing_disabled") : null;
+  },
+});
+
+/** For the serve route: whether `m` opens this team-gated page right now. */
+export const teamGateAdmits = internalQuery({
+  args: { artifact_id: v.id("artifacts"), m: v.string() },
+  handler: async (ctx, args): Promise<boolean> => {
+    const artifact = await ctx.db.get(args.artifact_id);
+    if (!artifact?.team_gate) return false;
+    const holder = await mTokenHolder(artifact, args.m);
+    return !!holder && (await teamGateAdmitsHolder(ctx, artifact, holder));
+  },
+});
 
 /** Owners whose artifacts `viewerId` may see: teammates who have not opted out
  * of the team they share with the viewer. */
@@ -1986,7 +2022,7 @@ export const teamEditAuth = internalQuery({
     if (!artifact) return null;
     if (artifact.user_id !== args.editor_user_id) {
       if (artifact.edit_mode !== "team") return null;
-      const allowed = await teammatesWhoCanSee(ctx, artifact.user_id);
+      const allowed = await teammatesWhoCanSee(ctx, artifact);
       if (!allowed.has(args.editor_user_id.toString())) return null;
       if (artifact.team_gate && !(await isTeamMember(ctx, args.editor_user_id, artifact.team_gate))) return null;
     }
@@ -2043,7 +2079,7 @@ async function unlockKeys(
   return {
     k: artifact.password_hash ? await kTokenFor(artifact.password_hash, artifact.slug) : null,
     e: artifact.email_gate && artifact.owner_key ? await eTokenFor(artifact.owner_key, artifact.slug) : null,
-    m: await mTokenFor(artifact),
+    m: await mTokenFor(artifact, userId),
   };
 }
 

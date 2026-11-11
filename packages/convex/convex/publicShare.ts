@@ -13,6 +13,8 @@ import { v } from "convex/values";
 import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { policyWorkspaceOf, requireTeamPolicyAllows } from "./lib/teamPolicyGuard";
 import { internalQuery, query } from "./functions";
+import { httpAction } from "./_generated/server";
+import { internal } from "./_generated/api";
 import type { Doc, Id, TableNames } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { canAccessDoc, canAccessInitiative, canAccessPlan, canAccessProject, canAccessTask, isSameWorkspace, workspaceForResource } from "./lib/access";
@@ -239,7 +241,9 @@ export const getSharedCall = query({
       participants: (t.participants ?? []).map((p) => ({ id: keyOf(p.id), name: p.name })),
       summary: t.summary ?? null,
       action_items: t.action_items ?? [],
-      recording_url: t.recording_storage_id ? await ctx.storage.getUrl(t.recording_storage_id) : null,
+      // Through the link-checked audio route, never a storage URL: a storage
+      // URL is permanent, so it would outlive the link being turned off.
+      recording_url: t.recording_storage_id ? sharedCallAudioUrl(t.share_token!) : null,
       // The huddle's video, when it was recorded AND whoever shares the link
       // chose to include it: the room as people saw it, one entry per press
       // of Record, each with its time 0 on the wall clock (offset into a
@@ -257,6 +261,60 @@ export const getSharedCall = query({
       })),
     };
   },
+});
+
+/** Where a shared call's audio is served: under /cli/, the prefix the proxy
+ *  in front of prod forwards to HTTP actions (see SHARED_CALL_VIDEO_PATH). */
+export const SHARED_CALL_AUDIO_PATH = "/cli/share/call/audio";
+
+function sharedCallAudioUrl(token: string): string {
+  const site = (process.env.CONVEX_SITE_URL ?? "").replace(/\/$/, "");
+  return `${site}${SHARED_CALL_AUDIO_PATH}?token=${encodeURIComponent(token)}`;
+}
+
+/** The storage URL behind a shared call's audio, for the audio route only:
+ *  null unless the link is live now and the call's team is not retired. */
+export const sharedCallAudioSource = internalQuery({
+  args: { share_token: v.string() },
+  handler: async (ctx, args): Promise<string | null> => {
+    const t = await byShareToken(ctx, "transcripts", args.share_token);
+    if (!t?.recording_storage_id || (await callTeamRetired(ctx, t))) return null;
+    return await ctx.storage.getUrl(t.recording_storage_id);
+  },
+});
+
+/** Largest byte span one audio response carries: an HTTP action's response
+ *  stops at about 20 MB. A player reads a longer file as several ranges. */
+export const SHARED_AUDIO_CHUNK_BYTES = 8 * 1024 * 1024;
+
+/** The Range header to ask storage for: the player's own range, its end
+ *  clamped so one response stays under the action's size limit. A request
+ *  with no range (or one we cannot read) starts at byte 0. */
+export function clampAudioRange(header: string | null, chunk = SHARED_AUDIO_CHUNK_BYTES): string {
+  const m = header?.match(/^bytes=(\d+)-(\d*)$/);
+  const start = m ? Number(m[1]) : 0;
+  const askedEnd = m && m[2] ? Number(m[2]) : Infinity;
+  return `bytes=${start}-${Math.min(askedEnd, start + chunk - 1)}`;
+}
+
+/** A publicly shared call's audio. Every request (each range a player asks
+ *  for) re-checks the link, then streams that range from storage, so turning
+ *  the link off stops the audio at the next request and no storage URL ever
+ *  reaches the page. */
+export const sharedCallAudio = httpAction(async (ctx, request) => {
+  const token = new URL(request.url).searchParams.get("token") ?? "";
+  const notFound = () => new Response("Not found", { status: 404, headers: { "Cache-Control": "no-store" } });
+  if (!token) return notFound();
+  const src: string | null = await ctx.runQuery(internal.publicShare.sharedCallAudioSource, { share_token: token });
+  if (!src) return notFound();
+  const upstream = await fetch(src, { headers: { Range: clampAudioRange(request.headers.get("range")) } });
+  if (!upstream.ok) return notFound();
+  const headers = new Headers({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "Accept-Ranges": "bytes" });
+  for (const h of ["Content-Type", "Content-Length", "Content-Range"]) {
+    const val = upstream.headers.get(h);
+    if (val) headers.set(h, val);
+  }
+  return new Response(upstream.body, { status: upstream.status, headers });
 });
 
 /** The object behind a shared call's video, for the shared call video

@@ -5,7 +5,10 @@ import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
 import { getAuthUserId } from "@convex-dev/auth/server";
-import { isTeamAdmin } from "./privacy";
+import { isTeamAdmin, isTeamMember, shareATeam } from "./privacy";
+import { isTeamMachineFor } from "./sessionLaunch";
+import { runnerDeviceOf } from "./lib/runnerDevice";
+import { syncPrimaryOwnerCache } from "./sessionOwners";
 import {
   nextMembershipVisibility,
   type TeamVisibilityLevel,
@@ -44,6 +47,9 @@ import {
   teamMembersViewKey,
   unauthenticatedView,
 } from "./smallViewContracts";
+
+// How long a team invite code lives from the moment it is generated.
+const INVITE_CODE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function generateInviteCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -271,7 +277,6 @@ export const createTeam = mutation({
     const identity = validateTeamCreateArgs(args);
     const inviteCode = generateInviteCode();
     const now = Date.now();
-    const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
     const creator = args.discoverable ? await ctx.db.get(authUserId) : null;
     const domain = creator ? workDomain(creator.email) : null;
     const discoverable_domain = creator && domain && (await emailProven(ctx, creator)) ? domain : undefined;
@@ -279,7 +284,7 @@ export const createTeam = mutation({
       ...identity,
       created_at: now,
       invite_code: inviteCode,
-      invite_code_expires_at: now + sevenDaysInMs,
+      invite_code_expires_at: now + INVITE_CODE_TTL_MS,
       client_key: args.client_key,
       // A new team starts with every feature that is ready on (chat, calls,
       // org, flows, ship); its admins turn off what they don't want.
@@ -385,6 +390,53 @@ export const addMemberByOperator = internalMutation({
   },
 });
 
+function inviteRowFor(ctx: { db: any }, teamId: Id<"teams">, email: string): Promise<any | null> {
+  return ctx.db
+    .query("team_invites")
+    .withIndex("by_team_email", (q: any) => q.eq("team_id", teamId).eq("email", email))
+    .first();
+}
+
+// An admin removal is recorded on the person's invite row for the team
+// (team_invites, keyed by email), so the link they still hold does not let them
+// straight back in. Everyone else's link keeps working: it refuses only a code
+// generated before the removal, and only until an admin invites them again
+// (a fresh invite email, or a new code).
+async function recordAdminRemoval(
+  ctx: { db: any },
+  team: { _id: Id<"teams">; invite_code?: string },
+  email: string | undefined,
+  adminId: Id<"users">,
+): Promise<void> {
+  const key = email?.trim().toLowerCase();
+  if (!key) return;
+  const now = Date.now();
+  const row = await inviteRowFor(ctx, team._id, key);
+  if (row) {
+    await ctx.db.patch(row._id, { removed_at: now, ...(row.accepted_at ? {} : { accepted_at: now }) });
+    return;
+  }
+  // accepted_at keeps this row from holding a seat as a pending invite.
+  await ctx.db.insert("team_invites", {
+    team_id: team._id, email: key, invite_code: team.invite_code ?? "", invited_by: adminId,
+    created_at: now, accepted_at: now, removed_at: now,
+  });
+}
+
+async function removedSinceCodeIssued(
+  ctx: { db: any },
+  team: { _id: Id<"teams">; invite_code_expires_at?: number },
+  email: string | undefined,
+): Promise<boolean> {
+  const key = email?.trim().toLowerCase();
+  if (!key) return false;
+  const row = await inviteRowFor(ctx, team._id, key);
+  if (!row?.removed_at) return false;
+  if (row.created_at > row.removed_at) return false; // invited again since
+  const issuedAt = team.invite_code_expires_at ? team.invite_code_expires_at - INVITE_CODE_TTL_MS : 0;
+  return issuedAt <= row.removed_at;
+}
+
 export const joinTeam = mutation({
   args: {
     invite_code: v.string(),
@@ -405,6 +457,10 @@ export const joinTeam = mutation({
       throw new Error("Invalid invite code");
     }
     if (team.invite_code_expires_at && Date.now() > team.invite_code_expires_at) {
+      throw new Error("Invite code expired");
+    }
+    const joiner = await ctx.db.get(authUserId);
+    if (await removedSinceCodeIssued(ctx, team, joiner?.email)) {
       throw new Error("Invite code expired");
     }
     await addTeamMember(ctx, authUserId, team, "Joined via invite code");
@@ -683,9 +739,93 @@ export const getTeamMembersV2 = query({
   },
 });
 
+// An owner row on a session another account runs steers that account's
+// daemon, and it was granted inside one team: starting the session on a
+// teammate's shared machine (the machine's device_shares team), a team agent
+// box (the bot's team), or a handoff or claim, which needs the session's own
+// team (sessionOwnership.resolveOwnerRef). The row holds while that grant
+// still does. Another team the two people happen to share grants nothing
+// here: it would not let them start a session on that machine either.
+async function ownerGrantHolds(ctx: { db: any }, userId: Id<"users">, conv: any): Promise<boolean> {
+  const runner = await ctx.db.get(conv.user_id);
+  if (!runner) return false;
+  if (runner.is_bot) return !runner.team_id || (await isTeamMember(ctx, userId, runner.team_id));
+  if (conv.team_id && (await isTeamMember(ctx, userId, conv.team_id))) return true;
+  const device = await runnerDeviceOf(ctx, conv);
+  return !!device && (await isTeamMachineFor(ctx, userId, device));
+}
+
+// Whether `teamId` is one a grant on this session could have come through.
+async function grantRunsThrough(ctx: { db: any }, conv: any, teamId: Id<"teams">): Promise<boolean> {
+  const runner = await ctx.db.get(conv.user_id);
+  if (runner?.is_bot) return String(runner.team_id ?? "") === String(teamId);
+  if (String(conv.team_id ?? "") === String(teamId)) return true;
+  if (!conv.owner_device_id) return false;
+  const shares = await ctx.db.query("device_shares")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", conv.user_id).eq("device_id", conv.owner_device_id))
+    .collect();
+  return shares.some((sh: any) => String(sh.team_id) === String(teamId));
+}
+
+async function dropOwnerRow(ctx: { db: any }, row: any): Promise<void> {
+  await ctx.db.delete(row._id);
+  await syncPrimaryOwnerCache(ctx, row.conversation_id);
+}
+
+// When a membership ends, drop the person's owner rows on sessions others run
+// whose grant came through that team and no longer holds.
+async function releaseStrandedSessionOwnership(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">): Promise<void> {
+  const rows = await ctx.db
+    .query("session_owners")
+    .withIndex("by_user", (q: any) => q.eq("user_id", userId))
+    .collect();
+  for (const row of rows) {
+    const conv = await ctx.db.get(row.conversation_id);
+    if (!conv || String(conv.user_id) === String(userId)) continue;
+    if (!(await grantRunsThrough(ctx, conv, teamId))) continue;
+    if (await ownerGrantHolds(ctx, userId, conv)) continue;
+    await dropOwnerRow(ctx, row);
+  }
+}
+
+// One-off cleanup, run once after the deploy that added the release above:
+// owner rows left by removals made before it. Which team a past removal was
+// from is not recorded, so a row goes only when its grant is gone AND that is
+// knowable: a team box, a session with a team, a machine shared with teams,
+// or two people who share no team at all. A row on a private, team-less
+// session of someone the owner still shares a team with is left alone.
+//   npx convex run teams:sweepStaleSessionOwners '{"dryRun": true}'
+export const sweepStaleSessionOwners = internalMutation({
+  args: { cursor: v.optional(v.union(v.string(), v.null())), dryRun: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query("session_owners").paginate({ numItems: 200, cursor: args.cursor ?? null });
+    let dropped = 0;
+    for (const row of page.page) {
+      const conv: any = await ctx.db.get(row.conversation_id);
+      if (!conv || String(conv.user_id) === String(row.user_id)) continue;
+      if (await ownerGrantHolds(ctx, row.user_id, conv)) continue;
+      const runner: any = await ctx.db.get(conv.user_id);
+      const knowable = !runner || runner.is_bot || !!conv.team_id
+        || (!!conv.owner_device_id && !!(await ctx.db.query("device_shares")
+          .withIndex("by_user_device", (q: any) => q.eq("user_id", conv.user_id).eq("device_id", conv.owner_device_id))
+          .first()))
+        || !(await shareATeam(ctx, row.user_id, conv.user_id));
+      if (!knowable) continue;
+      dropped++;
+      console.log(`[sweepStaleSessionOwners] ${args.dryRun ? "would drop" : "dropping"} owner ${row.user_id} on ${row.conversation_id}`);
+      if (!args.dryRun) await dropOwnerRow(ctx, row);
+    }
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.teams.sweepStaleSessionOwners, { cursor: page.continueCursor, dryRun: args.dryRun });
+    }
+    return { scanned: page.page.length, dropped, done: page.isDone };
+  },
+});
+
 // End one user's membership in one team, and everything that rides on it:
 // the roster row, chat state (reads, follows, room seats, queued pushes), the
 // directory mappings that would keep stamping new conversations with the team,
+// owner rows on sessions others run whose grant came through this team,
 // and the user's own pointers when they name this team. The fallback pointer is
 // the user's oldest remaining team (never index order), else no team. Every
 // path that ends a membership goes through here: admin removal, self leave,
@@ -716,6 +856,7 @@ export async function endMembership(
     .collect();
   for (const dm of mappings) await ctx.db.delete(dm._id);
   await withdrawMember(ctx, userId, teamId);
+  await releaseStrandedSessionOwnership(ctx, userId, teamId);
 
   const user = await ctx.db.get(userId);
   if (!user) return;
@@ -927,6 +1068,9 @@ export const removeMember = mutation({
     const memberUser = await ctx.db.get(args.member_user_id);
     const team = await ctx.db.get(teamId);
     await endMembership(ctx, args.member_user_id, teamId, authUserId);
+    if (team && authUserId !== args.member_user_id) {
+      await recordAdminRemoval(ctx, team, memberUser?.email, authUserId);
+    }
     const memberName = memberUser?.name || memberUser?.email || "A member";
     await ctx.scheduler.runAfter(0, internal.teamActivity.recordTeamActivity, {
       team_id: teamId,
@@ -980,10 +1124,9 @@ export const inviteToTeam = mutation({
       throw new Error("Only admins can generate invite codes");
     }
     const newCode = generateInviteCode();
-    const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
     await ctx.db.patch(args.team_id, {
       invite_code: newCode,
-      invite_code_expires_at: Date.now() + sevenDaysInMs,
+      invite_code_expires_at: Date.now() + INVITE_CODE_TTL_MS,
     });
     return newCode;
   },
@@ -1068,10 +1211,9 @@ export const regenerateInviteCode = mutation({
       throw new Error("Only admins can regenerate invite codes");
     }
     const newCode = generateInviteCode();
-    const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
     await ctx.db.patch(args.team_id, {
       invite_code: newCode,
-      invite_code_expires_at: Date.now() + sevenDaysInMs,
+      invite_code_expires_at: Date.now() + INVITE_CODE_TTL_MS,
     });
     return newCode;
   },
@@ -1229,7 +1371,8 @@ export const syncGithubOrg = action({
     if (!isAdmin) {
       throw new Error("Only admins can sync GitHub organizations");
     }
-    if (!requestingUser.github_access_token) {
+    const githubToken: string | null = await ctx.runQuery(internal.users.githubTokenForCaller, {});
+    if (!githubToken) {
       throw new Error("GitHub account not connected");
     }
 
@@ -1241,7 +1384,7 @@ export const syncGithubOrg = action({
         `https://api.github.com/orgs/${args.org_name}/members?per_page=100&page=${page}`,
         {
           headers: {
-            Authorization: `Bearer ${requestingUser.github_access_token}`,
+            Authorization: `Bearer ${githubToken}`,
             Accept: "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
           },
@@ -1266,7 +1409,7 @@ export const syncGithubOrg = action({
         `https://api.github.com/orgs/${args.org_name}/memberships/${member.login}`,
         {
           headers: {
-            Authorization: `Bearer ${requestingUser.github_access_token}`,
+            Authorization: `Bearer ${githubToken}`,
             Accept: "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
           },

@@ -6,6 +6,7 @@ import { canReadConnector, secretFor, type ModManifest } from "@codecast/shared/
 import { appCall } from "./sources/app";
 import { reachesMod } from "./modLocal";
 import { decryptModSecret } from "./modSecrets";
+import { guardedFetch } from "./lib/guardedFetch";
 
 /**
  * The requests a mod's UI makes that cannot run in the viewer's browser: a
@@ -72,7 +73,8 @@ export const call = action({
     headers[header] = allowed.secret.header ? value : `Bearer ${value}`;
     try {
       // Redirects come back as they are: following one could carry the key to an origin it was never declared for.
-      const res = await fetch(String(url), { method: init?.method ?? "GET", headers, body: init?.body, redirect: "manual", signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+      // The guard refuses a host inside codecast's network, by name or by what the name resolves to, before the key leaves.
+      const res = await guardedFetch(String(url), { method: init?.method ?? "GET", headers, body: init?.body, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       const text = await res.text();
       if (text.length > MAX_RESPONSE) return { ok: false, status: res.status, error: `the response is over ${MAX_RESPONSE / 1_000_000} MB` };
       const contentType = res.headers.get("content-type");

@@ -2206,7 +2206,11 @@ ${topRow(`${o.title} — edit`, o.shareUrl, "← Back")}
       s=s.replace(/\`([^\`]+)\`/g,"<code>$1</code>");
       s=s.replace(/\\*\\*([^*]+)\\*\\*/g,"<strong>$1</strong>");
       s=s.replace(/(^|[^*])\\*([^*]+)\\*/g,"$1<em>$2</em>");
-      s=s.replace(/!?\\[([^\\]]*)\\]\\(([^)]+)\\)/g,'<a href="$2">$1</a>');
+      // Only web, mail and relative links: this document holds the #o/#ed
+      // key, and a javascript: link in an editor's source would run here.
+      s=s.replace(/!?\\[([^\\]]*)\\]\\(([^)]+)\\)/g,function(m,t,u){
+        var bare=u.replace(/[\\x00-\\x20]/g,"");
+        return /^[a-z][a-z0-9+.-]*:/i.test(bare)&&!/^(https?|mailto):/i.test(bare)?t:'<a href="'+u+'">'+t+'</a>';});
       return s;
     };
     var lines=src.split(/\\r?\\n/);

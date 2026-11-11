@@ -11,7 +11,7 @@ import { createStackCore } from "./decisionStacks";
 import { projectLeadRole } from "./lib/orgAccess";
 import { CARD_GATE_NODE_ID, costParts, lineRunOutcome, mergeLeft, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
-import { canAccessTask, canAccessPlan, computeWorkspaceKey, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
+import { canAccessTask, canAccessPlan, computeWorkspaceKey, requireAccessiblePlan, requireAccessibleTask, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 import { patchTask } from "./lib/taskWrite";
 import { repairedClosedAt, repairedLineStatus, statusHistory } from "./lib/lineCauseRepair";
 import { moveTaskStatus } from "./tasks";
@@ -486,17 +486,21 @@ export const create = mutation({
 
     const workflow = await ctx.db.get(args.workflow_id);
     if (!workflow || workflow.user_id !== userId) throw new Error("Not found");
-    const refusal = await liveRunRefusal(ctx, args.task_id ? await ctx.db.get(args.task_id) : null);
+    // A run binds and moves its task and plan, so the caller must be able to read them.
+    const task = args.task_id ? await requireAccessibleTask(ctx, userId, args.task_id) : null;
+    const plan = args.plan_id ? await requireAccessiblePlan(ctx, userId, args.plan_id) : null;
+    const refusal = await liveRunRefusal(ctx, task);
     if (refusal) throw new Error(refusal);
 
     const now = Date.now();
     // the-line.md L8: the run lives where its task or plan lives, else where
-    // its primary session will (the existing one, or the directory rule).
+    // its primary session will (the caller's existing one, or the directory rule).
+    const existingConv = args.existing_conversation_id ? await ctx.db.get(args.existing_conversation_id) : null;
     const scope = await runScope(ctx, userId, {
-      task: args.task_id ? await ctx.db.get(args.task_id) : null,
-      plan: args.plan_id ? await ctx.db.get(args.plan_id) : null,
-      conversation: args.existing_conversation_id
-        ? await ctx.db.get(args.existing_conversation_id)
+      task,
+      plan,
+      conversation: existingConv && existingConv.user_id === userId
+        ? existingConv
         : await resolveCreationPrivacy(ctx, userId, args.project_path),
     });
     const runId = await ctx.db.insert("workflow_runs", {
@@ -513,10 +517,7 @@ export const create = mutation({
       updated_at: now,
     });
 
-    if (args.task_id) {
-      const bound = await ctx.db.get(args.task_id);
-      if (bound) await moveTaskStatus(ctx, bound, "in_progress", { actorUserId: userId, now, extra: { workflow_run_id: runId } });
-    }
+    if (task) await moveTaskStatus(ctx, task, "in_progress", { actorUserId: userId, now, extra: { workflow_run_id: runId } });
 
     if (args.plan_id) {
       await ctx.db.patch(args.plan_id, {
@@ -789,18 +790,30 @@ export const createFromCli = mutation({
     const userId = result.userId;
 
     const now = Date.now();
+    // Short ids are sequential, so a task or plan the caller cannot read is
+    // refused as missing: a run binds it, moves its status and files under its workspace.
     const taskRow: any = args.task_id
       ? await ctx.db.query("tasks").withIndex("by_short_id", q => q.eq("short_id", args.task_id!)).first()
       : null;
-    const spawner = args.spawner_session
-      ? await findConversationByAnyRef(ctx, args.spawner_session, userId)
-      : await projectLeadSession(ctx, taskRow);
+    if (args.task_id && (!taskRow || !(await canAccessTask(ctx, userId, taskRow)))) throw new Error(`Task ${args.task_id} not found`);
     const planRow: any = args.plan_id
       ? await ctx.db.query("plans").withIndex("by_short_id", q => q.eq("short_id", args.plan_id!)).first()
       : null;
+    if (args.plan_id && (!planRow || !(await canAccessPlan(ctx, userId, planRow)))) throw new Error(`Plan ${args.plan_id} not found`);
+    const spawner = args.spawner_session
+      ? await findConversationByAnyRef(ctx, args.spawner_session, userId)
+      : await projectLeadSession(ctx, taskRow);
 
-    // Resolve workflow_id — either passed directly or look up by name
+    // Resolve workflow_id — either passed directly (the caller's own, or one
+    // its workspace's library holds) or look up by name
     let workflowDocId: any = args.workflow_id ? (args.workflow_id as any) : undefined;
+    if (workflowDocId) {
+      const namedId = ctx.db.normalizeId("workflows", workflowDocId);
+      const named: any = namedId ? await ctx.db.get(namedId) : null;
+      if (!named || (String(named.user_id) !== String(userId) && !(await workspaceGrantsAccess(ctx, userId, named.workspace)))) {
+        throw new Error("Workflow not found");
+      }
+    }
     let workflowName = args.workflow_name;
     // A line run the daemon executes takes the problem's line version
     // (workflows.lineRouteFor); a run in the calling process runs the graph

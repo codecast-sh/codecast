@@ -3198,33 +3198,9 @@ function installedBundlePath() {
   return bundle.endsWith(".app") ? bundle : null;
 }
 
-function cmpVersions(a, b) {
-  const pa = String(a).split(".").map(Number);
-  const pb = String(b).split(".").map(Number);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const na = pa[i] || 0, nb = pb[i] || 0;
-    if (na > nb) return 1;
-    if (na < nb) return -1;
-  }
-  return 0;
-}
-
-// Parse only the fields we need from latest-mac.yml (no YAML dependency).
-function parseFeed(text) {
-  const version = text.match(/^version:\s*(.+)$/m)?.[1]?.trim();
-  let zip, sha512;
-  const lines = text.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const m = lines[i].match(/url:\s*(\S+-mac\.zip)\s*$/);
-    if (m) {
-      zip = m[1].trim();
-      const sm = lines[i + 1]?.match(/sha512:\s*(\S+)\s*$/);
-      if (sm) sha512 = sm[1].trim();
-      break;
-    }
-  }
-  return { version, zip, sha512 };
-}
+// Which feed entries and bundles the updater accepts (zip name, version
+// floor, bundle version equal to the feed's) lives in updatePolicy.js.
+const { cmpVersions, parseFeed, plistVersion, bundleRefusal } = require("./updatePolicy");
 
 // Network layer (redirect-following GET, feed fetch, resumable download with
 // inactivity timeouts and abort support) lives in updaterNet.js — pure Node,
@@ -3347,6 +3323,9 @@ async function runDesktopUpdateCheck(opts) {
     const newApp = path.join(extractDir, "Codecast.app");
     if (!fs.existsSync(newApp)) throw new Error("Codecast.app missing from archive");
     if (!(await verifyBundleSignature(newApp))) throw new Error("signature/team verification failed");
+    const plist = await execFileP("/usr/bin/plutil", ["-convert", "xml1", "-o", "-", path.join(newApp, "Contents", "Info.plist")]);
+    const refusal = bundleRefusal({ feedVersion: version, bundleVersion: plist.ok ? plistVersion(plist.stdout) : null, runningVersion: app.getVersion(), force: opts.force });
+    if (refusal) throw new Error(refusal);
 
     // Pre-stage a sibling copy on the SAME volume as the running bundle so the
     // post-quit swap is just two atomic renames (minimal downtime, no half-state).

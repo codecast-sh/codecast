@@ -190,15 +190,44 @@ echo SHARED-HOST-OK`;
 
 /**
  * Create a person's Linux user, as root (through the provisioning user's
- * sudo). Idempotent: an existing user is kept, and their ssh keys are
+ * sudo). Idempotent: an existing user of theirs is kept (accountStep), and their ssh keys are
  * re-read on every run, so re-running is how keys refresh. Keys come from
  * github.com/<login>.keys, the `pubkey` given (a laptop joining from the CLI),
  * and their own ~/.ssh/authorized_keys.local. `lenientKeys`: a GitHub account
  * with no keys is not an error (a join from the web, where ssh is optional).
  * No sudo for them: their daemon starts through the path unit.
  */
-export function addUserRootScript(user: string, github?: string, opts: { pubkey?: string; lenientKeys?: boolean } = {}): string {
+/** Root-owned record of which codecast account each Linux user on a shared host was made for. Removal keeps it. */
+export const MEMBER_OWNERS_DIR = "/etc/codecast/members";
+
+/**
+ * The account step of a join. With `owner` (a codecast user id, from a team
+ * join), an account that already exists is adopted only when it was made for
+ * that same person: the root-owned record under MEMBER_OWNERS_DIR says so, or,
+ * for a join from before the record existed, their own signed-in config does.
+ * A removed member's kept home or an account the admin made by hand belongs to
+ * someone else, and an administrator account is never handed out. Without
+ * `owner` (the admin's own --add-user) the admin's choice stands.
+ */
+function accountStep(user: string, owner?: string): string {
+  const create = `sudo adduser --disabled-password --gecos '' --shell /bin/bash ${user} >/dev/null`;
+  if (owner === undefined) return `if ! id -u ${user} >/dev/null 2>&1; then ${create}; fi`;
+  const record = `${MEMBER_OWNERS_DIR}/${user}`;
+  return `if id -u ${user} >/dev/null 2>&1; then
+  owner=$(sudo cat ${record} 2>/dev/null || true)
+  if [ -z "$owner" ] && sudo grep -Eq '"user_id"[[:space:]]*:[[:space:]]*"${owner}"' /home/${user}/.codecast/config.json 2>/dev/null; then owner=${owner}; fi
+  [ "$owner" = ${owner} ] || { echo "the Linux user ${user} on this machine belongs to someone else" >&2; exit 1; }
+  case " $(id -nG ${user}) " in *" sudo "*|*" admin "*|*" wheel "*|*" root "*) echo "the Linux user ${user} on this machine is an administrator" >&2; exit 1;; esac
+else
+  ${create}
+fi
+sudo install -d -m 755 -o root -g root ${MEMBER_OWNERS_DIR}
+printf '%s\n' ${owner} | sudo tee ${record} >/dev/null`;
+}
+
+export function addUserRootScript(user: string, github?: string, opts: { pubkey?: string; lenientKeys?: boolean; owner?: string } = {}): string {
   if (!isLinuxUserName(user)) throw new Error(`not a Linux user name: ${user}`);
+  if (opts.owner !== undefined && !/^[a-z0-9]{1,64}$/.test(opts.owner)) throw new Error(`not a codecast user id: ${opts.owner}`);
   if (github !== undefined && !isGitHubLogin(github)) throw new Error(`not a GitHub login: ${github}`);
   if (opts.pubkey !== undefined && !/^[A-Za-z0-9@.+/= _-]{20,800}$/.test(opts.pubkey)) throw new Error("not an ssh public key");
   const fetchKeys = github
@@ -216,7 +245,7 @@ echo "keys=$(printf '%s\\n' "$keys" | grep -c . || true)"`
     : `echo keys=unchanged`;
   return `set -euo pipefail
 [ -e ${SHARED_HOST_MARKER} ] || { echo "not a shared host: provision it with --shared first" >&2; exit 1; }
-if ! id -u ${user} >/dev/null 2>&1; then sudo adduser --disabled-password --gecos '' --shell /bin/bash ${user} >/dev/null; fi
+${accountStep(user, opts.owner)}
 [ "$(getent passwd ${user} | cut -d: -f6)" = /home/${user} ] || { echo "${user}'s home is not /home/${user}" >&2; exit 1; }
 sudo usermod -U -e '' ${user} 2>/dev/null || true
 sudo install -d -m 700 -o ${user} -g ${user} /home/${user}/.codecast

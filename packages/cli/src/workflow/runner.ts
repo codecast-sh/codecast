@@ -1,3 +1,4 @@
+import { foreignTaskSource } from "@codecast/shared/tasks";
 import { CONTINUE_BANNER_KINDS, FOREIGN_TEXT_CAPS, capForeignText, escapeForeignControlChars, inlineForeignText, fromConvexAgentType, toConvexAgentType, resolveAgentLaunch, type AgentDefinitionSpec } from "@codecast/shared/contracts";
 import { splitReviewNote } from "./reviewNote";
 import { definitionLaunchFlags } from "../agentLaunch.js";
@@ -21,7 +22,7 @@ import { deviceId } from "../remote/device.js";
 import { LineProfileError, lineProfileVars, loadLineProfile } from "../lineProfile.js";
 import { deadEndReason, profileFailure, quotedTitle, taskStopCard } from "./runFailure.js";
 import { claimRun, clearVisits, readCheckpoint, resumePoint, runnerStamp, withOptionWords, writeCheckpoint, type ResumePoint, type ResumeRow } from "./runResume.js";
-import { buildNodePrompt, expandPromptVars, presentsDecision, resolveModel, stationBrief } from "./nodePrompt";
+import { buildNodePrompt, expandAgentPrompt, expandPromptVars, presentsDecision, resolveModel, stationBrief } from "./nodePrompt";
 import * as fs from "fs";
 import * as path from "path";
 import * as readline from "readline";
@@ -97,8 +98,8 @@ export function callNodeBody(node: WorkflowNode, graph: WorkflowGraph, context: 
   return {
     model: resolveModel(node, graph) || CHEAP_MODEL,
     max_tokens: node.max_tokens ?? CALL_NODE_DEFAULTS.max_tokens,
-    ...(node.system ? { system: expandPromptVars(node.system, graph, context) } : {}),
-    prompt: expandPromptVars(node.prompt ?? "", graph, context),
+    ...(node.system ? { system: expandAgentPrompt(node.system, graph, context) } : {}),
+    prompt: expandAgentPrompt(node.prompt ?? "", graph, context),
     output: node.output ?? CALL_NODE_DEFAULTS.output,
     label: node.label,
     project_path: cwd,
@@ -439,7 +440,7 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
     context["station_dead"] = node.id;
     return "failure";
   }
-  const brief = expandPromptVars(node.prompt ?? "", graph, context).trim();
+  const brief = expandAgentPrompt(node.prompt ?? "", graph, context).trim();
   const sent = await cliCall(options, "/cli/messages/send", { to: subject.conversationId, ...(options.runSession ? { from: options.runSession } : {}), body: brief, wake: true });
   if (!sent) {
     context["last_error"] = `Could not send ${node.label} to session ${subject.shortId}.${found}`;
@@ -1191,7 +1192,7 @@ async function waitForEnter(label: string): Promise<void> {
 
 // ─── Prompt building ──────────────────────────────────────
 
-export { answersGate, buildNodePrompt, expandPromptVars, PRESENTER_BASE, presentsDecision, stationBrief } from "./nodePrompt";
+export { answersGate, buildNodePrompt, expandAgentPrompt, expandPromptVars, PRESENTER_BASE, presentsDecision, stationBrief } from "./nodePrompt";
 
 // ─── Main runner ──────────────────────────────────────────
 
@@ -1284,6 +1285,9 @@ async function loadTaskContext(options: RunOptions, context: Record<string, stri
   // and the `# Context` list, so it is escaped and capped as it enters
   // the context rather than at each of those sites (ct-49593).
   context["task_title"] = inlineForeignText(task.title);
+  // Where the task's prose came from, named in the fence an agent reads it in
+  // (nodePrompt agentFacingContext): "task ct-N · imported from github acme/api#412".
+  context["task_source"] = foreignTaskSource(task);
   context["task_description"] = capForeignText(
     escapeForeignControlChars(task.description || ""),
     FOREIGN_TEXT_CAPS.descriptionChars,
