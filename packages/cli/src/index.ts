@@ -22130,7 +22130,7 @@ workflow
       }
       let timeoutMs = 9 * 60_000;
       try { if (options.timeout) timeoutMs = parseSharedDuration(options.timeout); } catch (e) { console.error(`Error: ${(e as Error).message}`); process.exit(1); }
-      const { runWaitVerdict } = await import("./workflow/runsWait.js");
+      const { runWaitVerdict, runWaitPollMs } = await import("./workflow/runsWait.js");
       const { formatRunsTable } = await import("./taskShow.js");
       const start = runs[0];
       const deadline = Date.now() + timeoutMs;
@@ -22141,7 +22141,7 @@ workflow
           if (!verdict.done) console.error(`Still waiting after ${options.timeout ?? "9m"}`);
           process.exit(verdict.done ? (verdict.met ? 0 : 1) : 2);
         }
-        await new Promise((r) => setTimeout(r, Math.min(15_000, Math.max(0, deadline - Date.now()))));
+        await new Promise((r) => setTimeout(r, Math.min(runWaitPollMs(Date.now() - (deadline - timeoutMs)), Math.max(0, deadline - Date.now()))));
         // Without the --status filter: the run must stay visible once it leaves that status.
         const { status: _status, ...pollBody } = body;
         const next = await fetchRuns({ getCliEndpoint, detectCurrentSessionId }, { ...pollBody, limit: 5 }).catch(() => null);

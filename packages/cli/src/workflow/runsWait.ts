@@ -31,3 +31,16 @@ export function runWaitVerdict(start: WaitRow, now: WaitRow, target: string | tr
   if (at(now, target)) return { done: true, met: true };
   return { done: FINISHED.has(now.status), met: false };
 }
+
+/**
+ * How long to sleep before the next poll, by how long the wait has run. A
+ * move is likeliest in its first minutes, so polls start every 15 s and
+ * stretch to a minute: a batch dispatcher holding ~100 waits of up to 45 min
+ * polled 24k times an hour at a flat 15 s and helped saturate prod on
+ * 2026-11-10.
+ */
+export function runWaitPollMs(elapsedMs: number): number {
+  if (elapsedMs < 2 * 60_000) return 15_000;
+  if (elapsedMs < 10 * 60_000) return 30_000;
+  return 60_000;
+}

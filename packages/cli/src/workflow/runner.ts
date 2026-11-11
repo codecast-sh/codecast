@@ -586,7 +586,6 @@ async function waitOnStation(
 
   const timeout = handTimeoutMs(node, options);
   const startMs = Date.now();
-  const pollInterval = options.pollIntervalMs ?? 10_000;
   // The runner it took over from was waiting on a live hand, so a reattached
   // hand that reads not live has gone dark (below), not answered.
   let wasLive = reattach;
@@ -618,7 +617,7 @@ async function waitOnStation(
   // The node's clock leaves out time the hand spends parked on its task's wait or a usage limit (parkedClock.ts).
   const clock = new ParkedClock(startMs);
   while (clock.elapsed() < timeout) {
-    await new Promise(r => setTimeout(r, pollInterval));
+    await new Promise(r => setTimeout(r, handPollIntervalMs(Date.now() - startMs, options.pollIntervalMs)));
     clock.beginPoll();
     if (answersByHandoff && await handedOff(options)) {
       console.log(`  ${c.green}✓ handed off${c.reset}`);
@@ -1631,6 +1630,18 @@ async function continueFreshIfStale(graph: WorkflowGraph, options: RunOptions, n
   if (runnerStamp(graph) === options.loadedStamp) return;
   console.log(`${c.dim}  ${node.label} answered; the graph or the runner changed since this runner started: continuing in a fresh runner${c.reset}`);
   await options.continueFresh();
+}
+
+// A hand's first minutes are when it fails to start or answers at once, so the
+// station reads its session every 10 s then; a hand that has worked longer is
+// read every 30 s. Each read is a backend call, and 200 line runs read every
+// 10 s for an hour were prod's largest single cost on 2026-11-10 (51k an hour).
+export const HAND_POLL_FAST_MS = 10_000;
+export const HAND_POLL_SLOW_MS = 30_000;
+export const HAND_POLL_FAST_WINDOW_MS = 3 * 60_000;
+export function handPollIntervalMs(workedMs: number, override?: number): number {
+  if (override !== undefined) return override;
+  return workedMs < HAND_POLL_FAST_WINDOW_MS ? HAND_POLL_FAST_MS : HAND_POLL_SLOW_MS;
 }
 
 // An answer that comes while the person is still at the card is picked up at

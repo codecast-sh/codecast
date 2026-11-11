@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { runWaitVerdict } from "./runsWait";
+import { runWaitPollMs, runWaitVerdict } from "./runsWait";
 
 // Agents looped `cast workflow runs --task ct-N` with sleeps (85 iterations in
 // one session) to see a run move.
@@ -21,5 +21,19 @@ describe("runWaitVerdict", () => {
     expect(runWaitVerdict(at("running", "plan"), at("running", "verify"), "verify")).toEqual({ done: true, met: true });
     expect(runWaitVerdict(at("running", "plan"), { status: "running", current_node_id: "n3", current_node_label: "review" }, "review")).toEqual({ done: true, met: true });
     expect(runWaitVerdict(at("running", "plan"), at("failed", "plan"), "verify")).toEqual({ done: true, met: false });
+  });
+});
+
+describe("runWaitPollMs", () => {
+  test("polls fast at first, then backs off to a minute for long waits", () => {
+    expect(runWaitPollMs(0)).toBe(15_000);
+    expect(runWaitPollMs(5 * 60_000)).toBe(30_000);
+    expect(runWaitPollMs(30 * 60_000)).toBe(60_000);
+  });
+
+  test("a 45-minute wait polls about 60 times, not 180", () => {
+    let polls = 0;
+    for (let t = 0; t < 45 * 60_000; t += runWaitPollMs(t)) polls++;
+    expect(polls).toBeLessThan(70);
   });
 });
