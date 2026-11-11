@@ -138,6 +138,7 @@ import {
   fleetStoreReady,
   maintainFleetStore,
   switchFleetTo,
+  fleetStoreDir,
   saveProfile,
   getAccountsHeartbeatPayloadAsync,
   autoSaveActiveProfile,
@@ -402,7 +403,7 @@ import { AwakeIdleClock, captureProcessSnapshot, collectSessionResources, decode
 import { collectMachineResources, processesStartedOutside, readHostPressure } from "./systemResources.js";
 import { setBackgroundSessions, setGovernorBackground } from "./backgroundPriority.js";
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
-import { terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
+import { followsCredentialStore, terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import { resumeEffortFlagFromFile, resumeModelFlagFromFile } from "./resumeCommand.js";
 import { CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isIdleResumeOptionRow, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
 import {
@@ -8181,6 +8182,7 @@ async function executeRemoteCommand(
         }
         try {
           let switched: string | null = null;
+          let fleetMoved = false;
           if (profile) {
             try {
               // On the fleet store the store is rewritten and running
@@ -8190,6 +8192,7 @@ async function executeRemoteCommand(
               // restarts below then carry the pins the server corrected.
               const switchResult = await switchFleetTo(profile);
               switched = switchResult.to;
+              fleetMoved = switchResult.mode === "fleet";
               log(
                 switchResult.mode === "fleet"
                   ? `[ACCOUNTS] Fleet store moved to "${profile}"${switchResult.toEmail ? ` (${switchResult.toEmail})` : ""}${switchResult.from ? ` from "${switchResult.from}"` : ""}; running sessions follow without a restart`
@@ -8213,6 +8216,23 @@ async function executeRemoteCommand(
               // Don't tear anything down if the swap itself failed.
               error = `Account switch failed: ${err instanceof Error ? err.message : String(err)}`;
               break;
+            }
+          }
+
+          // The server counts every session on a fleet machine as a follower,
+          // but a `claude` started by hand reads the keychain, not the store,
+          // and would resume on the exhausted account forever. Restart those.
+          if (fleetMoved && followIds.length > 0) {
+            const reverse = buildReverseConversationCache(readConversationCache());
+            const storeDir = fleetStoreDir();
+            for (const convId of [...followIds]) {
+              const sessionId = reverse[convId];
+              const proc = sessionId ? await findSessionProcess(sessionId, "claude") : null;
+              if (!proc || followsCredentialStore(proc.pid, storeDir) !== false) continue;
+              followIds.splice(followIds.indexOf(convId), 1);
+              conversationIds.push(convId);
+              sessionIds[convId] = sessionId;
+              log(`[ACCOUNTS] ${shortId(sessionId)} (pid ${proc.pid}) is not on the fleet store; restarting it instead of following`);
             }
           }
 
