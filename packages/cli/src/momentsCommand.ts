@@ -14,7 +14,7 @@ import { Option, type Command } from "commander";
 import { fmt } from "./colors.js";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { JUDGES_DIR, MOMENTS_DIR, fileVersion, judgeHere, noteHostRoot, shadowDir, tickMoments } from "./momentsHost.js";
-import { MOMENT_KIND, durationWords, parseExtractorHeader } from "@codecast/shared/contracts/moments";
+import { MOMENT_KIND, durationWords, parseExtractorHeader, publishedFor } from "@codecast/shared/contracts/moments";
 import { parseJudgeSpec } from "@codecast/shared/contracts/judges";
 import { AGENT_LIMITS, type AgentJudgeSpec } from "@codecast/shared/contracts/agentJudges";
 import { createHash } from "node:crypto";
@@ -78,8 +78,11 @@ async function agentPart(root: string, rel: string, spec: AgentJudgeSpec, proble
 }
 
 /** What a checkout holds: every extractor with its header, every judge parsed, each at its file's version. */
-export async function readPublishSet(root: string): Promise<PublishSet> {
+/** The extractors and judges a publish carries; to `source`, only the files publishedFor picks (each file's `source:` header). */
+export async function readPublishSet(root: string, source?: string): Promise<PublishSet> {
   const set: PublishSet = { extractors: [], judges: [], problems: [], files: [] };
+  // Each extractor and judge, with the source its header names, the files it carries and what is wrong with it.
+  const named: Array<{ source?: string; extractor?: PublishSet["extractors"][number]; judge?: PublishSet["judges"][number]; files: PublishSet["files"]; problems: string[] }> = [];
   const list = (dir: string, ext: string) => (fs.existsSync(path.join(root, dir)) ? fs.readdirSync(path.join(root, dir)).filter((f) => f.endsWith(ext)).sort() : []);
   for (const file of list(MOMENTS_DIR, ".ts")) {
     const kind = file.slice(0, -3);
@@ -87,19 +90,25 @@ export async function readPublishSet(root: string): Promise<PublishSet> {
     if (!MOMENT_KIND.test(kind)) { set.problems.push(`${MOMENTS_DIR}/${file}: the file name is the moment kind (lowercase letters, digits, - and _)`); continue; }
     const rel = `${MOMENTS_DIR}/${file}`;
     const header = parseExtractorHeader(fs.readFileSync(path.join(root, rel), "utf8"));
-    set.problems.push(...header.problems.map((p) => `${rel}: ${p}`));
-    set.extractors.push({ kind, path: rel, version: await fileVersion(path.join(root, rel)), quiet_ms: header.quiet_ms, timeout_ms: header.timeout_ms });
-    set.files.push({ path: rel, version: set.extractors.at(-1)!.version });
+    const extractor = { kind, path: rel, version: await fileVersion(path.join(root, rel)), quiet_ms: header.quiet_ms, timeout_ms: header.timeout_ms };
+    named.push({ ...(header.source ? { source: header.source } : {}), extractor, files: [{ path: rel, version: extractor.version }], problems: header.problems.map((p) => `${rel}: ${p}`) });
   }
   for (const file of list(JUDGES_DIR, ".md")) {
     const rel = `${JUDGES_DIR}/${file}`;
     const spec = parseJudgeSpec(file.slice(0, -3), fs.readFileSync(path.join(root, rel), "utf8"));
     if ("error" in spec) { set.problems.push(`${rel}: ${spec.error}`); continue; }
     const own = await fileVersion(path.join(root, rel));
-    const extra = spec.agent ? await agentPart(root, rel, spec.agent, set.problems) : null;
+    const problems: string[] = [];
+    const extra = spec.agent ? await agentPart(root, rel, spec.agent, problems) : null;
     const version = extra?.versions.length ? createHash("sha1").update([own, ...extra.versions].join(" ")).digest("hex") : own;
-    set.files.push({ path: rel, version: own }, ...(extra?.files ?? []));
-    set.judges.push({ name: spec.name, path: rel, version, moment: spec.moment, model: spec.model, max_tokens: spec.max_tokens, projects: spec.projects, ...(spec.parts ? { parts: spec.parts } : {}), mode: spec.mode, prompt: spec.prompt, ...(extra ? { agent: extra.agent } : {}) });
+    const judge = { name: spec.name, path: rel, version, moment: spec.moment, model: spec.model, max_tokens: spec.max_tokens, projects: spec.projects, ...(spec.parts ? { parts: spec.parts } : {}), mode: spec.mode, prompt: spec.prompt, ...(extra ? { agent: extra.agent } : {}) };
+    named.push({ ...(spec.source ? { source: spec.source } : {}), judge, files: [{ path: rel, version: own }, ...(extra?.files ?? [])], problems });
+  }
+  for (const n of source ? publishedFor(named, source) : named) {
+    if (n.extractor) set.extractors.push(n.extractor);
+    if (n.judge) set.judges.push(n.judge);
+    set.files.push(...n.files);
+    set.problems.push(...n.problems);
   }
   return set;
 }
@@ -123,7 +132,7 @@ export function registerMomentsCommands(line: Command, deps: PublishDeps): void 
     .option("--json", "Machine-readable output")
     .action(async (options: { source: string; dryRun?: boolean; json?: boolean }) => {
       const root = await repoRoot(process.env.CODECAST_CWD || process.cwd());
-      const set = await readPublishSet(root);
+      const set = await readPublishSet(root, options.source);
       if (options.dryRun) {
         if (options.json) console.log(JSON.stringify({ root, ...set }, null, 2));
         else {
