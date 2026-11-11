@@ -262,7 +262,7 @@ export async function upsertMainCommits(ctx: any, args: { repository: string; te
         continue;
       }
       const conv = await conversationFromSessionTrailer(ctx, c.message, { teamId: args.team_id, current: undefined });
-      const links = await resolveTaskLinksFromText(ctx, c.message, args.branch);
+      const links = await resolveTaskLinksFromText(ctx, { teamId: args.team_id }, c.message, args.branch);
       await ctx.db.insert("commits", {
         sha: c.sha,
         message: c.message,
