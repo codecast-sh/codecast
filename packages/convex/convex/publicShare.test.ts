@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { CALL_LINK_REFUSED_WORDS, channelRoomKey } from "@codecast/shared/contracts";
 import schema from "./schema";
-import { claimShareToken, getSharedCall, getSharedProject, writeObjectShareLink } from "./publicShare";
+import { claimShareToken, clampAudioRange, getSharedCall, getSharedProject, sharedCallAudioSource, SHARED_CALL_AUDIO_PATH, writeObjectShareLink } from "./publicShare";
 
 const UUID_A = "1a221088-1fc3-48c8-a814-71119676adf0";
 const UUID_B = "4c7c324f-3077-486a-a63c-65f188d18a0c";
@@ -197,6 +197,26 @@ describe("getSharedCall", () => {
   test("an unknown token is null", async () => {
     const { db } = fakeDb([]);
     expect(await (getSharedCall as any)._handler({ db }, { share_token: UUID_B })).toBeNull();
+  });
+  // F50: the audio goes through the link-checked route, never a storage URL,
+  // and the route's lookup stops answering the moment the link is turned off.
+  test("a recording is served through the link-checked route, and dies with the link", async () => {
+    const call = { _id: "c1", share_token: UUID_A, room_key: "rec:abc", status: "ended", started_at: 1, participants: [], recording_storage_id: "st1" };
+    const { db } = fakeDb([call]);
+    const ctx = { db, storage: { getUrl: async (id: string) => `https://convex.example/api/storage/${id}` } };
+    const out = await (getSharedCall as any)._handler(ctx, { share_token: UUID_A });
+    expect(out.recording_url).toContain(`${SHARED_CALL_AUDIO_PATH}?token=${UUID_A}`);
+    expect(JSON.stringify(out)).not.toContain("/api/storage/");
+    expect(await (sharedCallAudioSource as any)._handler(ctx, { share_token: UUID_A })).toBe("https://convex.example/api/storage/st1");
+    await db.patch("c1", { share_token: undefined });
+    expect(await (sharedCallAudioSource as any)._handler(ctx, { share_token: UUID_A })).toBeNull();
+  });
+
+  test("an audio range is clamped to one response's size", () => {
+    expect(clampAudioRange(null, 100)).toBe("bytes=0-99");
+    expect(clampAudioRange("bytes=50-", 100)).toBe("bytes=50-149");
+    expect(clampAudioRange("bytes=10-20", 100)).toBe("bytes=10-20");
+    expect(clampAudioRange("garbage", 100)).toBe("bytes=0-99");
   });
 });
 

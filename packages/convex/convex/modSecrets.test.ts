@@ -23,11 +23,19 @@ const modules = {
 
 const realFetch = globalThis.fetch;
 let sent: { url: string; headers: Record<string, string> }[] = [];
+const dns: Record<string, string[]> = { "api.union.test": ["93.184.216.34"] };
 let previousKey: string | undefined;
 beforeAll(() => {
   previousKey = process.env[KEY_ENV];
   process.env[KEY_ENV] = "test-deployment-key-0123456789abcdef";
   globalThis.fetch = (async (url: any, init: any) => {
+    // The server fetch resolves the host over DNS-over-HTTPS before the key leaves.
+    const doh = /^https:\/\/(cloudflare-dns\.com|dns\.google)\//.test(String(url)) ? new URL(String(url)) : null;
+    if (doh) {
+      const type = doh.searchParams.get("type") === "A" ? 1 : 28;
+      const addrs = (dns[doh.searchParams.get("name") ?? ""] ?? []).filter((a) => (type === 1) === !a.includes(":"));
+      return new Response(JSON.stringify({ Status: 0, Answer: addrs.map((data) => ({ type, data, TTL: 0 })) }));
+    }
     sent.push({ url: String(url), headers: { ...(init?.headers ?? {}) } });
     return new Response(JSON.stringify({ hello: "union" }), { status: 200, headers: { "content-type": "application/json" } });
   }) as any;
@@ -100,6 +108,15 @@ test("a teammate's fetch carries the key to its origin and nowhere else", async 
 
   expect(await fetchAs(ben, "https://evil.test/x", { secret: "UNION_KEY" })).toMatchObject({ ok: false, error: expect.stringMatching(/sent only to/) });
   expect(await fetchAs(cat, "https://api.union.test/refs", { secret: "UNION_KEY" })).toMatchObject({ ok: false, error: expect.stringMatching(/not one you run/) });
+  expect(sent.length).toBe(1);
+
+  // A declared origin whose name now points inside the network: refused before the key leaves.
+  dns["api.union.test"] = ["169.254.169.254"];
+  try {
+    expect(await fetchAs(ben, "https://api.union.test/refs", { secret: "UNION_KEY" })).toMatchObject({ ok: false, error: expect.stringMatching(/not reachable from codecast's servers/) });
+  } finally {
+    dns["api.union.test"] = ["93.184.216.34"];
+  }
   expect(sent.length).toBe(1);
 });
 

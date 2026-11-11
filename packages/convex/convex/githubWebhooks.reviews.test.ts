@@ -88,6 +88,7 @@ const reviewPayload = (state: string, body?: string) => ({
     html_url: "https://github.com/r/77",
     submitted_at: "2026-09-03T10:00:00Z",
     user: { login: "samvit", avatar_url: "https://a/s" },
+    author_association: "COLLABORATOR",
   },
 });
 
@@ -104,6 +105,7 @@ describe("pull_request_review", () => {
       state: "changes_requested",
       body: "needs a test",
       commit_sha: HEAD,
+      author_association: "COLLABORATOR",
     });
 
     const pr = ctx.db._tables.pull_requests[0];
@@ -118,6 +120,8 @@ describe("pull_request_review", () => {
     expect(ctx._scheduled.some((s: any) => s.args?.event_type === "pr_review")).toBe(true);
     expect(ctx._scheduled.some((s: any) => s.args?.event_type === "pr_changes_requested")).toBe(true);
     expect(ctx.db._tables.agent_tasks[0].prompt).toContain("samvit requested changes");
+    // F56: the shepherd reads the body fenced with the author's standing.
+    expect(ctx.db._tables.agent_tasks[0].prompt).toContain('source="GitHub review (changes_requested) by @samvit (author_association COLLABORATOR)"');
   });
 
   test("an approval fires its own trigger and folds to approved", async () => {
@@ -174,6 +178,7 @@ const commentPayload = (over: Record<string, any> = {}) => ({
     created_at: "2026-09-03T10:00:00Z",
     updated_at: "2026-09-03T10:00:00Z",
     user: { login: "samvit", avatar_url: "https://a/s" },
+    author_association: "NONE",
     ...over,
   },
 });
@@ -195,6 +200,7 @@ describe("pull_request_review_comment", () => {
       author_kind: "github",
       author_github_username: "samvit",
       author_avatar_url: "https://a/s",
+      author_association: "NONE",
       conversation_id: CONV,
       codecast_origin: false,
     });
@@ -205,6 +211,7 @@ describe("pull_request_review_comment", () => {
     expect(event.comment_id).toBe(comment._id);
 
     expect(ctx.db._tables.agent_tasks[0].prompt).toContain("samvit on src/foo.ts:42");
+    expect(ctx.db._tables.agent_tasks[0].prompt).toContain('source="GitHub review comment by @samvit (author_association NONE) on src/foo.ts:42"');
   });
 
   test("the echo of a note codecast submitted in a review is adopted, not stored twice", async () => {
@@ -250,7 +257,7 @@ const pushPayload = (over: Record<string, any> = {}) => ({
   commits: [
     {
       id: "1111111111111111111111111111111111111111",
-      message: "fix: link commits to sessions (ct-48301)",
+      message: "fix: link commits to sessions (ct-48301, ct-9)",
       timestamp: "2026-09-03T10:00:00Z",
       author: { name: "Ashot", email: "a@x", username: "ashot" },
       added: ["a.ts"],
@@ -264,7 +271,11 @@ const pushPayload = (over: Record<string, any> = {}) => ({
 describe("push", () => {
   test("stores the commit with its team, branch, task links and session", async () => {
     const ctx = context(pushPayload(), undefined, "push", {
-      tasks: [{ _id: "task_a", short_id: "ct-48301", plan_id: "plan_x", project_id: "proj_x", title: "Linking" }],
+      tasks: [
+        { _id: "task_a", short_id: "ct-48301", team_id: TEAM, workspace: `team:${TEAM}`, plan_id: "plan_x", project_id: "proj_x", title: "Linking" },
+        // Another tenant's task named in the same branch: never linked (F9).
+        { _id: "task_foreign", short_id: "ct-9", team_id: "team_other", workspace: "team:team_other", title: "Secret" },
+      ],
       file_changes: [{ _id: "fc_1", conversation_id: CONV, commit_hash: "1111111", change_type: "commit", file_path: "a.ts", new_content: "", timestamp: 1, change_key: "k", message_id: "m", seq: 1 }],
     });
     const result = await (processPushEvent as any)._handler(ctx, { event_id: "event_1" });
@@ -293,7 +304,7 @@ describe("push", () => {
     expect(push.plan_ids).toEqual(["plan_x"]);
 
     const commitEvent = ctx.db._tables.external_events.find((e: any) => e.kind === "commit");
-    expect(commitEvent.title).toBe("fix: link commits to sessions (ct-48301)");
+    expect(commitEvent.title).toBe("fix: link commits to sessions (ct-48301, ct-9)");
     expect(commitEvent.plan_ids).toEqual(["plan_x"]);
     expect(commitEvent.project_ids).toEqual(["proj_x"]);
     expect(commitEvent.conversation_id).toBe(CONV);

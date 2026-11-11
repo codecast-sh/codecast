@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { LAB_RUNS_PER_MINUTE, admitRun } from "./docLab";
+import { LAB_RUNS_PER_MINUTE, admitRun, labPromptWithinLimits } from "./docLab";
+import { MODEL_CALL_LIMITS } from "@codecast/shared/contracts/modelCall";
 
 // The web Lab sends a doc's text to a model under the vendor gate of the doc
 // the caller names: the caller must be able to read that doc, and the model
@@ -48,5 +49,17 @@ describe("docLab.admitRun", () => {
     const ctx = ctxAs(ANA);
     for (let i = 0; i < LAB_RUNS_PER_MINUTE; i++) await admit(ctx, "doc_mine");
     await expect(admit(ctx, "doc_mine")).rejects.toThrow(/Rate limit/);
+  });
+});
+
+describe("docLab input size (F72)", () => {
+  test("a draft past the server model call cap is refused before anything is sent", () => {
+    const huge = "word ".repeat(MODEL_CALL_LIMITS.prompt_chars / 5 + 1);
+    expect(() => labPromptWithinLimits({ tool: "typos" }, huge)).toThrow(/reads up to/);
+    expect(() => labPromptWithinLimits({ tool: "alternatives", target: "x", context: huge }, "")).toThrow(/reads up to/);
+  });
+
+  test("an ordinary draft passes", () => {
+    expect(labPromptWithinLimits({ tool: "typos" }, "A short draft with a tpyo.").prompt).toContain("tpyo");
   });
 });

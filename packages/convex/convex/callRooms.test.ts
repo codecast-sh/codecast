@@ -372,9 +372,33 @@ describe("authorizeRoom session", () => {
   });
 
   test("owner may huddle about their own session", async () => {
-    const ctx = fakeCtx({ conversations: [conv({ is_private: true })] });
+    const ctx = fakeCtx({
+      conversations: [conv({ is_private: true })],
+      team_memberships: [membership("owner")],
+    });
     const res = await authorizeRoom(ctx, "owner" as any, "session:cv1");
     expect(res.ok).toBe(true);
+  });
+
+  // F87/F88: team_id is routing. An owner who is not on the conversation's
+  // team (a client-chosen foreign team_id, or removed since) gets no room
+  // there, and so no call reads through the room either.
+  test("owner off the conversation's team is refused", async () => {
+    const ctx = fakeCtx({
+      conversations: [conv()],
+      team_memberships: [membership("mate")],
+    });
+    const res = await authorizeRoom(ctx, "owner" as any, "session:cv1");
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain("not a team member");
+    const { canReadCall } = await import("./transcripts");
+    const call = { _id: "t1", team_id: TEAM, room_key: "session:cv1", status: "ended", participants: [] } as any;
+    expect(await canReadCall(ctx, "owner" as any, call)).toBe(false);
+    const member = fakeCtx({
+      conversations: [conv()],
+      team_memberships: [membership("owner"), membership("mate")],
+    });
+    expect(await canReadCall(member, "owner" as any, call)).toBe(true);
   });
 
   test("teammate allowed only when the conversation is team-visible", async () => {
@@ -405,7 +429,7 @@ describe("authorizeRoom session", () => {
     expect((await authorizeRoom(ctx, "owner" as any, "session:none")).ok).toBe(false);
     expect(
       (await authorizeRoom(ctx, "owner" as any, "session:cv1")).ok,
-    ).toBe(true);
+    ).toBe(false);
   });
 });
 

@@ -141,7 +141,7 @@ export const recordLocal = mutation({
         const row = await ctx.db.get(commitId);
         if (row && !row.conversation_id) await ctx.db.patch(commitId, { conversation_id: conversationId });
       }
-      const links = e.commit ? await resolveTaskLinksFromText(ctx, e.commit.message, branch) : { task_ids: [], plan_ids: [], project_ids: [] };
+      const links = e.commit ? await resolveTaskLinksFromText(ctx, { userId, teamId }, e.commit.message, branch) : { task_ids: [], plan_ids: [], project_ids: [] };
       await recordExternalEvent(ctx, {
         source: "git",
         team_id: teamId,

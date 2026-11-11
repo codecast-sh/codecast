@@ -13,7 +13,11 @@
 // with no Convex imports, so the adapters, replays and tokenConnectors can all
 // load it without a cycle.
 
-export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
+import { internalHostRefusal, type FetchLike } from "./guardedFetch";
+
+export type { FetchLike };
+/** The literal-host check every server fetch shares (lib/guardedFetch); token calls go to a host a person pasted. */
+export { internalHostRefusal };
 
 export const TOKEN_HTTP_TIMEOUT_MS = 15_000;
 /** The cap when a caller names none: no vendor answer this feature reads is near it. */
@@ -54,87 +58,6 @@ export async function readBodyCapped(res: Response, max: number): Promise<Uint8A
     at += p.length;
   }
   return out;
-}
-
-// ── Hosts inside our own network ──
-
-function ipv4Parts(host: string): number[] | null {
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
-  if (!m) return null;
-  const parts = m.slice(1).map(Number);
-  return parts.every((n) => n <= 255) ? parts : null;
-}
-
-function privateIpv4([a, b]: number[]): boolean {
-  return (
-    a === 0 ||
-    a === 10 ||
-    a === 127 ||
-    (a === 100 && b >= 64 && b <= 127) ||
-    (a === 169 && b === 254) ||
-    (a === 172 && b >= 16 && b <= 31) ||
-    (a === 192 && b === 168)
-  );
-}
-
-function privateIpv6(host: string): boolean {
-  const h = host.toLowerCase();
-  if (h === "::" || h === "::1") return true;
-  // fc00::/7 unique local, fe80::/10 link local.
-  if (/^f[cd][0-9a-f]{0,2}:/.test(h) || /^fe[89ab][0-9a-f]?:/.test(h)) return true;
-  // An IPv4 address mapped into IPv6, dotted or as two hex groups.
-  const dotted = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(h);
-  if (dotted) {
-    const p = ipv4Parts(dotted[1]);
-    return !p || privateIpv4(p);
-  }
-  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
-  if (hex) {
-    const hi = parseInt(hex[1], 16);
-    return privateIpv4([hi >> 8, hi & 0xff]);
-  }
-  return false;
-}
-
-/** The deployment's own hosts, from the env Convex sets. */
-function ownHosts(): string[] {
-  const out = ["convex.codecast.sh"];
-  for (const name of ["CONVEX_SITE_URL", "CONVEX_CLOUD_URL", "CONVEX_CLOUD_ORIGIN"]) {
-    try {
-      const raw = process.env[name];
-      if (raw) out.push(new URL(raw).hostname.toLowerCase());
-    } catch {
-      // Not a URL; nothing to add.
-    }
-  }
-  return out;
-}
-
-/**
- * Why a URL's host is refused as one inside our own network, or null when it
- * may be called. The literal host is checked here; Convex actions cannot
- * resolve DNS, so a public name that resolves to a private address is out of
- * reach of this check (the TLS requirement on every call still applies).
- */
-export function internalHostRefusal(raw: string): string | null {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return "not a URL";
-  }
-  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "").replace(/\.$/, "");
-  if (!host) return "no host";
-  if (host === "localhost" || host.endsWith(".localhost") || host.endsWith(".internal") || host.endsWith(".local")) {
-    return `${host} is a local host`;
-  }
-  const v4 = ipv4Parts(host);
-  if (v4 && privateIpv4(v4)) return `${host} is a private address`;
-  if (host.includes(":") && privateIpv6(host)) return `${host} is a private address`;
-  // Bare numeric forms (2130706433, 0x7f.1) that URL parsing did not fold into a dotted quad.
-  if (/^(0x[0-9a-f]+|\d+)$/i.test(host)) return `${host} is a numeric address`;
-  if (ownHosts().some((own) => host === own || host.endsWith(`.${own}`))) return `${host} is codecast's own host`;
-  return null;
 }
 
 // ── The call ──

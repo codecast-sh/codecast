@@ -35,6 +35,7 @@ describe("generated scripts", () => {
     ["shared host setup", sharedHostSetupScript()],
     ["add user (root, github)", addUserRootScript("cam", "cameron417")],
     ["add user (root, no github)", addUserRootScript("cam")],
+    ["add user (root, team join)", addUserRootScript("cam", "cameron417", { lenientKeys: true, owner: "jh7abc123" })],
     ["add user (self)", addUserSelfScript({ claude: "2.1.301", codex: "0.150.0" })],
     ["enable daemon", enableUserDaemonScript("cam")],
     ["owner daemon unit (shared)", daemonUnitScript({ shared: true })],
@@ -281,6 +282,59 @@ describe("joining and leaving", () => {
     expect(s).toContain("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabc ashot@laptop");
     expect(parses(s)).toBe("");
     expect(() => addUserRootScript("ashot", undefined, { pubkey: "x'; rm -rf /" })).toThrow("not an ssh public key");
+  });
+
+  // F28: a join adopts an existing Linux account only when it was made for
+  // the same codecast account; a removed member's kept home, a hand-made
+  // account or an administrator is someone else's.
+  describe("an existing account on a team join", () => {
+    const run = (opts: { exists: boolean; record?: string; config?: string; groups?: string }) => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "join-owner-"));
+      const members = path.join(dir, "members");
+      const home = path.join(dir, "home");
+      fs.mkdirSync(path.join(home, "cam", ".codecast"), { recursive: true });
+      if (opts.record) { fs.mkdirSync(members, { recursive: true }); fs.writeFileSync(path.join(members, "cam"), opts.record + "\n"); }
+      if (opts.config) fs.writeFileSync(path.join(home, "cam", ".codecast", "config.json"), opts.config);
+      const marker = path.join(dir, "shared");
+      fs.writeFileSync(marker, "");
+      const script = addUserRootScript("cam", undefined, { owner: "jhme" })
+        .replaceAll("/etc/codecast/members", members)
+        .replaceAll("/home/", home + "/")
+        .replaceAll(SHARED_HOST_MARKER, marker);
+      const shims = `sudo() { case "$1" in adduser|usermod|install) echo "$*" >> ${dir}/ran; return 0;; *) "$@";; esac; }
+id() { case "$1" in -u) ${opts.exists ? "return 0" : "return 1"};; -nG) echo "${opts.groups ?? "cam"}";; esac; }
+getent() { echo "cam:x:1001:1001::${home}/cam:/bin/bash"; }
+`;
+      const res = spawnSync("bash", ["-c", shims + script.replace("set -euo pipefail", "set -euo pipefail\nmkdir -p " + members)], { encoding: "utf-8" });
+      const record = fs.existsSync(path.join(members, "cam")) ? fs.readFileSync(path.join(members, "cam"), "utf-8").trim() : null;
+      const ran = fs.existsSync(path.join(dir, "ran")) ? fs.readFileSync(path.join(dir, "ran"), "utf-8") : "";
+      return { ok: res.stdout.includes("ADD-USER-ROOT-OK"), stderr: res.stderr, record, ran };
+    };
+
+    test("a new account is created and recorded as this member's", () => {
+      const r = run({ exists: false });
+      expect(r.ok).toBe(true);
+      expect(r.ran).toContain("adduser");
+      expect(r.record).toBe("jhme");
+    });
+    test("their own account, by record or by their own sign-in, is kept", () => {
+      expect(run({ exists: true, record: "jhme" }).ok).toBe(true);
+      const legacy = run({ exists: true, config: '{ "user_id": "jhme", "auth_token": "x" }' });
+      expect(legacy.ok).toBe(true);
+      expect(legacy.record).toBe("jhme");
+    });
+    test("someone else's account is refused and not unlocked", () => {
+      for (const r of [run({ exists: true, record: "jhother" }), run({ exists: true }), run({ exists: true, config: '{"user_id":"jhother"}' })]) {
+        expect(r.ok).toBe(false);
+        expect(r.stderr).toContain("belongs to someone else");
+        expect(r.ran).not.toContain("usermod");
+      }
+    });
+    test("an administrator account is refused even when recorded", () => {
+      const r = run({ exists: true, record: "jhme", groups: "cam sudo" });
+      expect(r.ok).toBe(false);
+      expect(r.stderr).toContain("administrator");
+    });
   });
 
   test("a removal stops and disables their daemon and locks the login, and keeps their home", () => {

@@ -36,29 +36,51 @@ describe("extractTaskShortIds", () => {
 });
 
 describe("resolveTaskLinks", () => {
+  const TEAM = "teams_acme";
+  const OTHER_TEAM = "teams_other";
   const db = () =>
     makeFakeDb({
+      users: [{ _id: "users_me" }, { _id: "users_victim" }],
+      teams: [{ _id: TEAM }, { _id: OTHER_TEAM }],
+      team_memberships: [{ _id: "m1", user_id: "users_victim", team_id: OTHER_TEAM }],
       tasks: [
-        { _id: "task_a", short_id: "ct-1", plan_id: "plan_x", project_id: "proj_x" },
-        { _id: "task_b", short_id: "ct-2", plan_id: "plan_x" },
+        { _id: "task_a", short_id: "ct-1", user_id: "users_me", team_id: TEAM, workspace: `team:${TEAM}`, plan_id: "plan_x", project_id: "proj_x" },
+        { _id: "task_b", short_id: "ct-2", user_id: "users_me", team_id: TEAM, workspace: `team:${TEAM}`, plan_id: "plan_x" },
+        // Private to its owner inside the team: only the owner's activity links it.
+        { _id: "task_mine", short_id: "ct-3", user_id: "users_me", team_id: TEAM, workspace: "user:users_me" },
+        // Another tenant's task, by a guessable short id (F9).
+        { _id: "task_foreign", short_id: "ct-4", user_id: "users_victim", team_id: OTHER_TEAM, workspace: `team:${OTHER_TEAM}` },
+        { _id: "task_personal", short_id: "ct-5", user_id: "users_victim", workspace: "user:users_victim" },
       ],
     });
+  const scope = { teamId: TEAM as any };
 
   test("resolves ids to rows and gathers their plans and projects once each", async () => {
-    const links = await resolveTaskLinks({ db: db() }, ["ct-1", "ct-2"]);
+    const links = await resolveTaskLinks({ db: db() }, ["ct-1", "ct-2"], scope);
     expect(links.task_ids).toEqual(["task_a", "task_b"] as any);
     expect(links.plan_ids).toEqual(["plan_x"] as any);
     expect(links.project_ids).toEqual(["proj_x"] as any);
   });
 
   test("a stale id in a commit message is skipped, not an error", async () => {
-    const links = await resolveTaskLinks({ db: db() }, ["ct-999", "ct-1"]);
+    const links = await resolveTaskLinks({ db: db() }, ["ct-999", "ct-1"], scope);
     expect(links.task_ids).toEqual(["task_a"] as any);
   });
 
   test("reads several pieces of git text at once", async () => {
-    const links = await resolveTaskLinksFromText({ db: db() }, "closes ct-1", null, "ct-2-branch");
+    const links = await resolveTaskLinksFromText({ db: db() }, scope, "closes ct-1", null, "ct-2-branch");
     expect(links.task_ids).toEqual(["task_a", "task_b"] as any);
+  });
+
+  test("never links another workspace's task, whatever the text names (F9)", async () => {
+    const links = await resolveTaskLinksFromText({ db: db() }, { userId: "users_me" as any, teamId: TEAM as any }, "ct-1 ct-4 ct-5");
+    expect(links.task_ids).toEqual(["task_a"] as any);
+    expect((await resolveTaskLinks({ db: db() }, ["ct-4"], {})).task_ids).toEqual([]);
+  });
+
+  test("a task private to its owner links only through the owner's own activity", async () => {
+    expect((await resolveTaskLinks({ db: db() }, ["ct-3"], scope)).task_ids).toEqual([]);
+    expect((await resolveTaskLinks({ db: db() }, ["ct-3"], { userId: "users_me" as any, teamId: TEAM as any })).task_ids).toEqual(["task_mine"] as any);
   });
 });
 

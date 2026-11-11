@@ -4,7 +4,7 @@
 // uses, back to back, so the agent reads one instruction that names every
 // author instead of two turns that may contradict each other, and the
 // transcript draws each part under its author.
-import { formatUserMessage, parseUserMessage, stripInjectionNoise } from "./machineMessages";
+import { formatUserMessage, parseUserMessage, restoreFrameTags, stripInjectionNoise } from "./machineMessages";
 
 export type JointPart = { from: string; body: string };
 
@@ -24,7 +24,7 @@ export function parseJointMessage(raw: string | null | undefined): JointPart[] |
   const parts: JointPart[] = [];
   let rest = text;
   for (const m of text.matchAll(PART_RE)) {
-    parts.push({ from: m[1].trim(), body: m[2].trim() });
+    parts.push({ from: restoreFrameTags(m[1].trim()), body: restoreFrameTags(m[2].trim()) });
     rest = rest.replace(m[0], "");
   }
   if (parts.length < 2 || rest.trim()) return null;

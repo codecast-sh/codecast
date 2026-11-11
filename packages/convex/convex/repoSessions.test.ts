@@ -2,7 +2,7 @@
 // around it. The rule itself — pinned AND tokened — belongs to privacy.ts;
 // this pins what each side of it looks like once it reaches a public page.
 import { describe, expect, test } from "bun:test";
-import { anonymousSessionTitle, isSessionOnRepoNow, pathInRepository, publicSessionRef, sessionInRepository } from "./repoSessions";
+import { anonymousSessionTitle, isSessionOnRepoNow, pathInRepository, privateSessionKey, publicSessionRef, sessionInRepository } from "./repoSessions";
 
 const SEP_20_2026 = Date.UTC(2026, 8, 20, 15, 0, 0);
 const NOW = Date.UTC(2026, 8, 21, 12, 0, 0);
@@ -47,7 +47,7 @@ describe("publicSessionRef", () => {
   test("a session that is not public is reduced to who and when, and carries no token or short id", () => {
     const ref = publicSessionRef(conv({ share_token: "tok" }), owner, NOW);
     expect(ref).toEqual({
-      conversation_id: "c1",
+      conversation_id: privateSessionKey("c1"),
       title: "Ashot's session on Sep 20",
       public: false,
       author_name: owner.name,
@@ -55,6 +55,15 @@ describe("publicSessionRef", () => {
     });
     // A pin with no token is not public either: both halves are required.
     expect(publicSessionRef(conv({ profile_pinned_at: NOW }), owner, NOW).public).toBe(false);
+  });
+
+  test("a private session is keyed by an opaque stand-in, never its id", () => {
+    const ref = publicSessionRef(conv({}), owner, NOW);
+    expect(ref.conversation_id).not.toContain("c1");
+    expect(ref.conversation_id).toMatch(/^private-[0-9a-f]{16}$/);
+    // Stable, so the page still groups one session's lines and commits.
+    expect(publicSessionRef(conv({}), owner, NOW).conversation_id).toBe(ref.conversation_id);
+    expect(privateSessionKey("c2")).not.toBe(privateSessionKey("c1"));
   });
 });
 

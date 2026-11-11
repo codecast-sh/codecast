@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
-import { macosMeetsMinimum, shouldApplyWhileRunning, shouldAttemptDesktopUpdate, stagingPaths, swapInBundle, waitForAppSwap, wantsReinstall } from "./desktopUpdate";
+import { archiveRefusal, macosMeetsMinimum, shouldApplyWhileRunning, shouldAttemptDesktopUpdate, stagingPaths, swapInBundle, waitForAppSwap, wantsReinstall } from "./desktopUpdate";
 
 // Gate at the very top of checkForDesktopUpdate. The dev-mode skip exists so a
 // developer's source checkout (cast/daemon under `bun src/…`) doesn't auto-swap
@@ -81,6 +81,26 @@ describe("macosMeetsMinimum", () => {
 // A forced run reinstalls a current app only when the caller meant a fresh
 // copy. The web's below-floor gate broadcasts one forced command to every
 // daemon of the user, so a Mac that is already current must be left alone.
+describe("archiveRefusal", () => {
+  it("installs a newer archive that matches the feed", () => {
+    expect(archiveRefusal("1.1.129", "1.1.129", "1.1.128")).toBeNull();
+  });
+
+  it("reinstalls or repairs the installed version", () => {
+    expect(archiveRefusal("1.1.128", "1.1.128", "1.1.128")).toBeNull();
+    expect(archiveRefusal("1.1.100", "1.1.100", null)).toBeNull();
+  });
+
+  it("never walks the app back to an older signed build, forced or damaged", () => {
+    expect(archiveRefusal("1.1.100", "1.1.100", "1.1.128")).toContain("not newer");
+  });
+
+  it("refuses an archive that is not the version the feed announced", () => {
+    expect(archiveRefusal("1.1.129", "1.1.100", "1.1.128")).toContain("feed announced");
+    expect(archiveRefusal("1.1.129", null, "1.1.128")).toContain("no readable version");
+  });
+});
+
 describe("wantsReinstall", () => {
   it("cast desktop-update --force reinstalls", () => {
     expect(wantsReinstall({ force: true })).toBe(true);

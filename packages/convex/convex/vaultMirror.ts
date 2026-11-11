@@ -17,11 +17,14 @@
 // directory_team_mappings, and nothing reads it yet.
 
 import { v } from "convex/values";
-import { query, mutation } from "./functions";
+import { query, mutation, internalMutation } from "./functions";
+import { httpAction } from "./_generated/server";
+import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { requireUser, requireUserOrToken, notFound } from "./lib/auth";
 import {
+  VAULT_MIRROR_MAX_BODY_BYTES,
   VAULT_MIRROR_MAX_LINKS,
   VAULT_MIRROR_MAX_STAMP_BATCH,
   VAULT_MIRROR_MAX_TAGS,
@@ -119,8 +122,72 @@ export function clampMirrorNote<T extends { tags: string[]; links: string[] }>(n
   };
 }
 
+// ── Body uploads ────────────────────────────────────────────────────────────
+// A body reaches storage through VAULT_BODY_UPLOAD_PATH, never a bare storage
+// upload URL, so the server knows who uploaded each blob: the upload records it
+// in artifact_uploads under the ticket's user (the same proof bundle uploads
+// carry, swept after a day if nothing claims it). cliUpsertNotes takes a body
+// only with that proof and claims it, so a row can never point at a blob some
+// other account stored, and dropBody can never delete one.
+
+export const VAULT_BODY_UPLOAD_PATH = "/cli/vault/upload";
+const UPLOAD_TICKET_TTL_MS = 10 * 60_000;
+// The daemon gates bodies at VAULT_MIRROR_MAX_BODY_BYTES; the slack covers a
+// file that grew between its size check and its read.
+const MAX_BODY_UPLOAD_BYTES = VAULT_MIRROR_MAX_BODY_BYTES * 2;
+
+/** An upload URL for one note body (POST /cli/vault/upload-url). The daemon
+ *  POSTs the bytes to it and reads back `{ storageId }`. */
+export const cliBodyUploadUrl = mutation({
+  args: { api_token: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<string> => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const token = crypto.randomUUID();
+    await ctx.db.insert("vault_upload_tickets", { token, user_id: userId, expires_at: Date.now() + UPLOAD_TICKET_TTL_MS });
+    const site = (process.env.CONVEX_SITE_URL ?? "").replace(/\/$/, "");
+    return `${site}${VAULT_BODY_UPLOAD_PATH}?ticket=${token}`;
+  },
+});
+
+/** Spend a ticket: its user, or null when it is unknown or expired. Also clears
+ *  a few expired tickets, so abandoned uploads do not pile up. */
+export const consumeUploadTicket = internalMutation({
+  args: { token: v.string() },
+  handler: async (ctx, args): Promise<Id<"users"> | null> => {
+    const now = Date.now();
+    const row = await ctx.db.query("vault_upload_tickets").withIndex("by_token", (q: any) => q.eq("token", args.token)).first();
+    if (row) await ctx.db.delete(row._id);
+    const stale = await ctx.db.query("vault_upload_tickets").withIndex("by_expires_at", (q: any) => q.lt("expires_at", now)).take(20);
+    for (const s of stale) await ctx.db.delete(s._id);
+    return row && row.expires_at > now ? row.user_id : null;
+  },
+});
+
+export const uploadBody = httpAction(async (ctx, request) => {
+  const out = (body: unknown, status = 200) =>
+    new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  const token = new URL(request.url).searchParams.get("ticket") ?? "";
+  const userId: Id<"users"> | null = token ? await ctx.runMutation(internal.vaultMirror.consumeUploadTicket, { token }) : null;
+  if (!userId) return out({ error: "Unauthorized" }, 401);
+  const body = await request.blob();
+  if (body.size > MAX_BODY_UPLOAD_BYTES) return out({ error: "Body too large" }, 413);
+  const storageId = await ctx.storage.store(new Blob([body], { type: request.headers.get("content-type") || "text/markdown" }));
+  await ctx.runMutation(internal.artifacts.recordUpload, { user_id: userId, storage_id: storageId });
+  return out({ storageId });
+});
+
+/** Claim an uploaded body for a row: true when `userId` uploaded it and nobody
+ *  claimed it yet. Claiming removes the upload record, so the sweep spares the
+ *  blob and no second row can claim it. */
+async function claimBody(ctx: MutationCtx, userId: Id<"users">, storageId: Id<"_storage">): Promise<boolean> {
+  const row = await ctx.db.query("artifact_uploads").withIndex("by_storage_id", (q: any) => q.eq("storage_id", storageId)).first();
+  if (!row || row.user_id !== userId) return false;
+  await ctx.db.delete(row._id);
+  return true;
+}
+
 /** Drop a body blob, tolerating an id that storage no longer has. One row owns
- *  one blob (the artifacts invariant), so this is always safe: no other row can
+ *  one blob (claimBody enforces it), so this is always safe: no other row can
  *  be pointing at it. */
 async function dropBody(ctx: MutationCtx, storageId?: Id<"_storage">): Promise<void> {
   if (!storageId) return;
@@ -270,7 +337,13 @@ export const cliUpsertNotes = mutation({
 
     for (const raw of args.notes) {
       const note = clampMirrorNote(raw as IncomingNote);
-      const existing = await findNote(ctx, userId, args.vault_id, args.device_id, note.path);
+      const existingRow = await findNote(ctx, userId, args.vault_id, args.device_id, note.path);
+      // A new body id counts only with proof the caller uploaded it; without
+      // it the note lands as metadata-only, as a failed upload would.
+      if (note.body_storage_id && note.body_storage_id !== existingRow?.body_storage_id && !(await claimBody(ctx, userId, note.body_storage_id))) {
+        delete note.body_storage_id;
+      }
+      const existing = existingRow;
       if (!mirrorRowNeedsWrite(existing, note, args.scan_id)) continue;
 
       // The row owns its blob. When the content changed, the old body is dead

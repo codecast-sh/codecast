@@ -16,7 +16,9 @@ const call = (fn: any, c: any, args: any) => (fn as any)._handler(c, args);
 function ctxWith(tables: Record<string, any[]>, opts: { userId?: string } = {}) {
   const scheduled: { delay: number; name: string; args: any }[] = [];
   return {
-    db: makeFakeDb(tables),
+    // The session room's owner is on its team: owning a session opens its room
+    // only while that holds (callRooms.authorizeRoomMembership).
+    db: makeFakeDb({ team_memberships: [{ _id: "tm-ua", user_id: "ua", team_id: "team1", role: "member" }], ...tables }),
     auth: {
       async getUserIdentity() {
         return opts.userId ? { subject: `${opts.userId}|session` } : null;

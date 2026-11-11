@@ -1,6 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { claimDeviceAccount, performClaimDeviceAccount, registerDevice } from "./devices";
+import { claimDeviceAccount, LEGACY_DEVICE_CLAIM_SUNSET_MS, performClaimDeviceAccount, registerDevice } from "./devices";
 import { hashToken } from "./apiTokens";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 
@@ -123,11 +123,15 @@ describe("performClaimDeviceAccount", () => {
 describe("device functions speak for a machine: token only, bound device only", () => {
   const BOUND = "tok-bound-mini";
   const ELSEWHERE = "tok-bound-laptop";
+  const PREV_TOKEN = "tok-prev-mini";
+  const PREV_ELSEWHERE = "tok-prev-laptop";
   async function ctxWithTokens(authUser: string | null = null) {
     const db = fixtures();
     db._tables.api_tokens = [
       { _id: "at1", user_id: NEXT, token_hash: await hashToken(BOUND), device_id: "mini", last_used_at: NOW },
       { _id: "at2", user_id: NEXT, token_hash: await hashToken(ELSEWHERE), device_id: "laptop", last_used_at: NOW },
+      { _id: "at3", user_id: PREV, token_hash: await hashToken(PREV_TOKEN), device_id: "mini", last_used_at: NOW },
+      { _id: "at4", user_id: PREV, token_hash: await hashToken(PREV_ELSEWHERE), device_id: "laptop", last_used_at: NOW },
     ];
     db._tables.devices.find((d: any) => d._id === "d-next").last_seen = Date.now();
     return { db, auth: { getUserIdentity: async () => (authUser ? { subject: `${authUser}|session` } : null) } } as any;
@@ -149,9 +153,49 @@ describe("device functions speak for a machine: token only, bound device only", 
     await expect((registerDevice as any)._handler(ctx, { api_token: `${ELSEWHERE}.laptop`, device_id: "mini", label: "x", platform: "darwin" })).rejects.toThrow("different machine");
   });
 
+  // F31: a teammate who learned the device id and minted a token bound to it
+  // still holds nothing of the previous account's, so nothing moves.
+  let clock: any;
+  afterEach(() => clock?.mockRestore());
+  const at = (ms: number) => { clock?.mockRestore(); clock = spyOn(Date, "now").mockReturnValue(ms); };
+
+  test("until the sunset, a daemon that predates the proof still claims (and is logged)", async () => {
+    const ctx = await ctxWithTokens();
+    at(LEGACY_DEVICE_CLAIM_SUNSET_MS - 1);
+    ctx.db._tables.devices.find((d: any) => d._id === "d-next").last_seen = Date.now();
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const claimed = await (claimDeviceAccount as any)._handler(ctx, { api_token: `${BOUND}.mini`, previous_user_id: PREV, device_id: "mini" });
+    expect(claimed).toEqual({ moved: 1, more: false });
+    expect(warn.mock.calls.some((c: any[]) => String(c[0]).includes("legacy claim"))).toBe(true);
+    warn.mockRestore();
+  });
+
+  test("a presented token must check out even before the sunset", async () => {
+    const ctx = await ctxWithTokens();
+    at(LEGACY_DEVICE_CLAIM_SUNSET_MS - 1);
+    ctx.db._tables.devices.find((d: any) => d._id === "d-next").last_seen = Date.now();
+    const forged = await (claimDeviceAccount as any)._handler(ctx, { api_token: `${BOUND}.mini`, previous_user_id: PREV, device_id: "mini", previous_api_token: `${BOUND}.mini` });
+    expect(forged.needs_proof).toBe(true);
+    expect(conv(ctx.db).user_id).toBe(PREV);
+  });
+
+  test("after the sunset, a claim without the previous account's own token moves nothing", async () => {
+    const ctx = await ctxWithTokens();
+    at(LEGACY_DEVICE_CLAIM_SUNSET_MS);
+    ctx.db._tables.devices.find((d: any) => d._id === "d-next").last_seen = Date.now();
+    const bare = await (claimDeviceAccount as any)._handler(ctx, { api_token: `${BOUND}.mini`, previous_user_id: PREV, device_id: "mini" });
+    expect(bare.error).toMatch(/no proof/);
+    expect(bare.needs_proof).toBe(true);
+    const own = await (claimDeviceAccount as any)._handler(ctx, { api_token: `${BOUND}.mini`, previous_user_id: PREV, device_id: "mini", previous_api_token: `${BOUND}.mini` });
+    expect(own.error).toMatch(/no proof/);
+    const otherMachine = await (claimDeviceAccount as any)._handler(ctx, { api_token: `${BOUND}.mini`, previous_user_id: PREV, device_id: "mini", previous_api_token: `${PREV_ELSEWHERE}.laptop` });
+    expect(otherMachine.error).toMatch(/no proof/);
+    expect(conv(ctx.db).user_id).toBe(PREV);
+  });
+
   test("the machine's own token claims and registers", async () => {
     const ctx = await ctxWithTokens();
-    const claimed = await (claimDeviceAccount as any)._handler(ctx, { api_token: `${BOUND}.mini`, previous_user_id: PREV, device_id: "mini" });
+    const claimed = await (claimDeviceAccount as any)._handler(ctx, { api_token: `${BOUND}.mini`, previous_user_id: PREV, device_id: "mini", previous_api_token: `${PREV_TOKEN}.mini` });
     expect(claimed).toEqual({ moved: 1, more: false });
     expect(await (registerDevice as any)._handler(ctx, { api_token: `${BOUND}.mini`, device_id: "mini", label: "Mini", platform: "darwin" })).toEqual({ device_id: "mini", created: false });
   });

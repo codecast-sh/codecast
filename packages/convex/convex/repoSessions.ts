@@ -76,12 +76,31 @@ export function publicSessionRef(
     };
   }
   return {
-    conversation_id: conv._id,
+    // The page needs a stable key to group a session's lines and commits, not
+    // the session's id: a private session's id would let a stranger name it.
+    conversation_id: privateSessionKey(conv._id) as Id<"conversations">,
     title: anonymousSessionTitle(owner.name, conv.started_at, now),
     public: false,
     author_name: owner.name,
     author_image: owner.image,
   };
+}
+
+/**
+ * An opaque, stable stand-in for a private session's id on the public page:
+ * the same session always maps to the same key, and the key does not give the
+ * id back. Two 32-bit FNV-1a passes, enough to keep a page's sessions apart.
+ */
+export function privateSessionKey(id: string): string {
+  const fnv = (seed: number) => {
+    let h = seed >>> 0;
+    for (let i = 0; i < id.length; i++) {
+      h ^= id.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h.toString(16).padStart(8, "0");
+  };
+  return `private-${fnv(0x811c9dc5)}${fnv(0x9747b28c)}`;
 }
 
 async function ownerOf(ctx: { db: any }, userId: Id<"users">, owners: OwnerCache): Promise<OwnerInfo> {
