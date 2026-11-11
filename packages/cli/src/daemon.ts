@@ -94,7 +94,7 @@ import {
 import { readInputIdleMs } from "./inputIdle.js";
 import { checkoutOfMoveClone, copyAgentAuthToRemoteAsync, copyCredentialToRemoteAsync, copyProviderKeysToRemoteAsync, currentBranch, listScalewayHosts, readPushableCredentialAsync, remoteHome, shq, type RemoteHost } from "./remote/session-move.js";
 import { AGENT_AUTH_WATCH_FILES, agentAuthHostKey, agentAuthWatchDirs, assertNoLaptopPaths, bundleHash, collectAgentAuthBundle, describeBundle, laptopHome, planAgentAuthPush, primeGhToken } from "./remote/agentAuth.js";
-import { hostForDevice, reachableRemoteHost, reachableRemoteHosts, readHosts, sshReachable, toRemoteHost, type CloudHost } from "./browser/cloudHost.js";
+import { dialRemoteHost, hostForDevice, noteDialFailure, reachableRemoteHost, reachableRemoteHosts, readHosts, sshReachable, toRemoteHost, type CloudHost } from "./browser/cloudHost.js";
 import {
   AGENT_BRIDGE_REFUSED_EXIT, AGENT_BRIDGE_TICK_MS, HOST_AGENT_SOCK, agentBridgeArgs, hostAgentSocket, hostAgentSocketEnv,
   bridgeAddressStale, shouldRunBridge,
@@ -4228,7 +4228,8 @@ async function liveSyncJobs(): Promise<import("./cloud/liveSyncJobs.js").LiveSyn
   liveSyncJobsInstance = new LiveSyncJobs({
     report: async (conversationId, report) => { await syncServiceRef?.reportLocalMirror(conversationId, deviceId(), report); },
     activity: async (ids) => (syncServiceRef ? syncServiceRef.localMirrorActivity(ids) : []),
-    hostFor: (hostDeviceId) => { const h = hostForDevice(hostDeviceId); return h?.address ? toRemoteHost(h) : null; },
+    hostFor: (hostDeviceId) => { const h = hostForDevice(hostDeviceId); return h?.address ? dialRemoteHost(h) : null; },
+    hostFailed: (hostDeviceId) => { const h = hostForDevice(hostDeviceId); if (h?.address) noteDialFailure(h); },
     scopeFor: (spec) => readSyncScope(spec.local_root),
     log,
     jobsFile: path.join(defaultConfigDir(), "live-syncs.json"),

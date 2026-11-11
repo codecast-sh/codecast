@@ -4,6 +4,9 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { copyText } from "../lib/copyText";
 import { attachCopy, type SessionMachine } from "../components/tmuxAttach";
+import { useInboxStore } from "../store/inboxStore";
+import { localDeviceIdOf } from "./useLocalDeviceId";
+import type { Device } from "../components/DeviceBadge";
 
 /**
  * The machine a pane lives on, and the copy gesture for it. One hook so every
@@ -19,7 +22,12 @@ export function useAttachCopy(tmuxSession: string | null | undefined, conversati
     api.devices.getConversationMachine,
     tmuxSession && conversationKey ? { conversation_id: conversationKey as any } : "skip",
   ).data as SessionMachine | null | undefined;
-  const copy = tmuxSession ? attachCopy(tmuxSession, machine) : null;
+  // A pane on this window's own machine attaches locally; another of yours on a tailnet is reached by its MagicDNS name.
+  const tailnetName = useInboxStore((s) =>
+    machine?.is_mine && machine.device_id !== localDeviceIdOf(s)
+      ? ((s.machineRoster as Device[]).find((d) => d.device_id === machine.device_id)?.tailnet?.name ?? null)
+      : null);
+  const copy = tmuxSession ? attachCopy(tmuxSession, machine && { ...machine, tailnet_name: tailnetName }) : null;
   const command = copy?.command ?? null;
   const message = copy?.message ?? "";
   const copyAttach = useCallback(() => {

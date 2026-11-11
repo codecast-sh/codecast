@@ -6343,6 +6343,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** Open one of your machines to exactly these teams (empty = private).
    *  Settings > Machines; the server home is device_shares. */
   setDeviceShares: (deviceId: string, teamIds: string[]) => void;
+  /** Settings > Machines' "Accept direct links" (peer-transport.md); the server home is devices.direct_links_off. */
+  setDeviceDirectLinks: (deviceId: string, enabled: boolean) => void;
   /** Put one of the viewer's accounts in exactly these teams' pools (empty
    *  takes it back): Settings > Claude Accounts' pool pill. Server home is
    *  account_shares; the accountPool snapshot reconciles the draft. */
@@ -9714,6 +9716,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   setDeviceShares: action(function (this: Draft, deviceId: string, teamIds: string[]) {
     const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
     if (row) row.shared_team_ids = [...teamIds].sort();
+  }),
+  setDeviceDirectLinks: action(function (this: Draft, deviceId: string, enabled: boolean) {
+    const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
+    if (row) row.direct_links_off = enabled ? undefined : true;
   }),
   setAccountShares: action(function (this: Draft, deviceId: string, email: string, teamIds: string[]) {
     const pool = this.accountPool as Record<string, any>;

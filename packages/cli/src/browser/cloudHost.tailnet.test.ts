@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { reachableRemoteHosts, toRemoteHost, writeHosts, type CloudHost } from "./cloudHost";
+import { dialRemoteHost, noteDialFailure, reachableRemoteHosts, toRemoteHost, writeHosts, type CloudHost } from "./cloudHost";
 import { localTailnetAsync, readHostTailnet } from "../cloud/tailnet";
 import { resolveCarryHost } from "../cloud/browserSync";
 import { readProjectRegistrations } from "../cloud/mirror/projectRefresh";
@@ -213,5 +213,24 @@ describe("localTailnetAsync — the daemon's non-blocking read", () => {
     expect(await localTailnetAsync()).toBeNull();
     fakeTailscale({ script: "exit 1" });
     expect(await localTailnetAsync()).toBeNull();
+  });
+});
+
+describe("a caller that dials every few seconds and cannot probe each time", () => {
+  test("after a failed tailnet dial it uses public for a while, then tries the tailnet again", () => {
+    const h = { ...onTailnet, id: "i-shun", tailnet: { ...onTailnet.tailnet!, ip: "100.101.102.200" } } as CloudHost;
+    fakeTailscale({ status: status("Running", { ip: "100.101.102.200" }) });
+    const t0 = 5_000_000;
+    expect(dialRemoteHost(h, t0).address).toBe("100.101.102.200");
+    noteDialFailure(h, t0);
+    expect(dialRemoteHost(h, t0 + 60_000).address).toBe(PUBLIC);
+    expect(toRemoteHost(h).address).toBe("100.101.102.200");
+    expect(dialRemoteHost(h, t0 + 5 * 60_000 + 1).address).toBe("100.101.102.200");
+  });
+  test("a failure while dialing public shuns nothing", () => {
+    const h = { ...onTailnet, id: "i-pub", tailnet: { ...onTailnet.tailnet!, ip: "100.101.102.201" } } as CloudHost;
+    noteDialFailure(h, 1);
+    fakeTailscale({ status: status("Running", { ip: "100.101.102.201" }) });
+    expect(dialRemoteHost(h, 2).address).toBe("100.101.102.201");
   });
 });
