@@ -61,6 +61,8 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   toggleCollapsedSection: LAYOUT,
   updateClientLayout: LAYOUT,
   dismissBrowserPaneOffer: LAYOUT,
+  cancelPeerTransfer: never("transfer: a cancelled fetch is not resumed by undo; Try again starts it again"),
+  dismissPeerTransfer: never("transfer: the row of a finished fetch; the next fetch draws its own"),
 
   // View state
   setActiveBucketFilter: VIEW_STATE,
@@ -233,6 +235,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setCloudSharedCheckout: SETTINGS,
   setDefaultModel: SETTINGS,
   setDeviceShares: SETTINGS,
+  setDeviceDirectLinks: SETTINGS,
   setAccountShares: SETTINGS,
   joinTeamMachine: never("machine: a join creates a Linux user on a shared box; leaving is its own explicit control"),
   removeTeamMachineMember: never("machine: a removal stops someone's daemon on a shared box; they join again to come back"),

@@ -1,3 +1,4 @@
+import { peerLinkRowsByDevice } from "./lib/peerLinkRows";
 import { mutation, query, internalQuery } from "./functions";
 import { selfUpdateBlocked } from "./lib/deviceUpdate";
 import { v } from "convex/values";
@@ -1211,6 +1212,7 @@ export const listDevices = query({
     const sharedTeams = (deviceId: string) =>
       shares.filter((sh: any) => sh.device_id === deviceId).map((sh: any) => sh.team_id.toString()).sort();
     const management = await deviceManagementFor(ctx, userId, rows.map((d: any) => d.device_id));
+    const peerLinksFrom = await peerLinkRowsByDevice(ctx, userId, rows.map((d: any) => d.device_id));
     return rows
       .map((d: any) => ({
         device_id: d.device_id,
@@ -1290,10 +1292,10 @@ export const listDevices = query({
         pending_sync_messages: d.pending_sync_messages ?? undefined,
         pending_sync_conversations: d.pending_sync_conversations ?? undefined,
         sync_no_progress_ms: d.sync_no_progress_ms ?? undefined,
-        // Owner-only, like ssh_host: where the machine sits on a tailnet and
-        // whether it accepts direct links (peer-transport.md).
+        // Owner-only, like ssh_host (peer-transport.md).
         tailnet: d.tailnet ?? undefined,
         direct_links_off: d.direct_links_off ?? undefined,
+        peer_links: peerLinksFrom(d.device_id),
         online: now - d.last_seen < DEVICE_ONLINE_MS,
       }))
       .sort((a: any, b: any) => b.last_seen - a.last_seen);
@@ -1611,16 +1613,6 @@ export const setDeviceSshHost = mutation({
     }
     await ctx.db.patch(device._id, { ssh_host: cleaned ?? undefined });
     return { ssh_host: cleaned };
-  },
-});
-
-/** Settings → Machines "Accept direct links": off keeps folderSync from asking this machine for a direct grant. */
-export const setDeviceDirectLinks = mutation({
-  args: { api_token: v.optional(v.string()), device_id: v.string(), enabled: v.boolean() },
-  handler: async (ctx, args) => {
-    const { device } = await requireOwnDevice(ctx, args.api_token, args.device_id);
-    await ctx.db.patch(device._id, { direct_links_off: args.enabled ? undefined : true });
-    return { direct_links_off: !args.enabled };
   },
 });
 
