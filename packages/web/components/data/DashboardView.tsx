@@ -14,14 +14,15 @@ import { useLiveElements } from "../live/useLiveArtifact";
 import { pickAskTarget, sendAsk, useAskDraft, useClaimAsk } from "../live/askAgent";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useInboxStore } from "../../store/inboxStore";
-import { useDashboardFeed, useDataResults, useRerun } from "../../hooks/useDashboardData";
+import { resultFor, useDashboardFeed, useDataResults, useRerun, type DataResult } from "../../hooks/useDashboardData";
 import { CheckMark, type BlockEnv } from "./blocks";
 import { blockCheck } from "./blockCheck";
 import { DashboardGrid, FormatBody } from "./DashboardGrid";
 import { DashboardToolbar, type Freshness, type PanelKind } from "./DashboardToolbar";
 import { CheckPanel, PanelShell, type CheckPoint } from "./CheckPanel";
 import { DashboardFilters } from "./DashboardFilters";
-import { useDashboardScope } from "../../hooks/useDashboardScope";
+import { filterWords, useDashboardScope } from "../../hooks/useDashboardScope";
+import { canvasBlob, pdfFromCanvas, renderPng } from "./exportDashboard";
 import { SourcesPanel } from "./SourcesPanel";
 import { BlockEditor } from "./BlockEditor";
 import { DesignPanel } from "./DesignPanel";
@@ -31,7 +32,7 @@ type Panel = { kind: PanelKind; key?: string; point?: CheckPoint } | null;
 
 const isTyping = (t: EventTarget | null) => t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
 
-export default function DashboardView({ doc, live, selection, setSelection, mode, snapshot, toScreen, setToolbar, setPanel }: LiveViewProps) {
+export default function DashboardView({ doc, live, selection, setSelection, mode, snapshot, toScreen, setToolbar, setPanel, setExports, setTypeLabel }: LiveViewProps) {
   const docId = doc._id;
   const liveEls = useLiveElements(docId);
   const elements = snapshot ?? liveEls;
@@ -54,7 +55,8 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
   const openPoint = useCallback((key: string, x: string, series?: string) => setPanelState({ kind: "check", key, point: { x, ...(series !== undefined ? { series } : {}) } }), []);
   const filter = useDashboardScope(now);
   const scope = layout.format === "dashboard" ? filter.scope : undefined;
-  const env: BlockEnv = useMemo(() => ({ results, blocks: byKey, now, scope, onCheck: openCheck, onPoint: openPoint, ...(canEdit ? { onBind: bind } : {}) }), [results, byKey, now, scope, openCheck, openPoint, canEdit, bind]);
+  const slotOf = useMemo(() => seriesSlots(blocks, results), [blocks, results]);
+  const env: BlockEnv = useMemo(() => ({ results, blocks: byKey, now, scope, slotOf, onCheck: openCheck, onPoint: openPoint, ...(canEdit ? { onBind: bind } : {}) }), [results, byKey, now, scope, slotOf, openCheck, openPoint, canEdit, bind]);
 
   // ── writes ──
   const select = useCallback(
@@ -103,11 +105,11 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
     let refreshing = false;
     for (const k of queries.keys()) {
       const r = results.get(k);
-      if (r?.refreshing) refreshing = true;
+      if (r?.refreshing || (r?.lease_until ?? 0) > now) refreshing = true;
       if (r?.refreshed_at) oldest = oldest ? Math.min(oldest, r.refreshed_at) : r.refreshed_at;
     }
     return { oldest, refreshing, queries: queries.size };
-  }, [queries, results]);
+  }, [queries, results, now]);
   const checks = useMemo(() => blocks.map((b) => ({ b, check: blockCheck(b, env) })).filter((x) => x.check), [blocks, env]);
   const counts = useMemo(() => {
     const c: Partial<Record<dashboard.CheckState, number>> = {};
@@ -119,12 +121,17 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
   }, [queries, rerun, docId]);
 
   // ── the top bar ──
+  const schedule = dashboard.readSchedule(byKey.get(dashboard.LAYOUT_KEY));
+  const setSchedule = useCallback(
+    (s: dashboard.Schedule | null) => write([byKey.has(dashboard.LAYOUT_KEY) ? { k: dashboard.LAYOUT_KEY, set: { refresh: s } } : { k: dashboard.LAYOUT_KEY, put: { kind: "layout", ...(s ? { refresh: s } : {}) } }]),
+    [byKey, write],
+  );
   const togglePanel = useCallback((kind: PanelKind) => setPanelState((p) => (p?.kind === kind ? null : { kind })), []);
   useWatchEffect(() => {
     setToolbar(
-      <DashboardToolbar now={now} freshness={freshness} counts={counts} edit={edit} canEdit={canEdit && layout.format === "dashboard"} panel={panel?.kind ?? null} onMode={setEditing} onPanel={togglePanel} onRefresh={refreshAll} />,
+      <DashboardToolbar now={now} freshness={freshness} counts={counts} edit={edit} canEdit={canEdit && layout.format === "dashboard"} panel={panel?.kind ?? null} onMode={setEditing} onPanel={togglePanel} onRefresh={refreshAll} schedule={schedule} onSchedule={canEdit ? setSchedule : undefined} />,
     );
-  }, [setToolbar, now, freshness, counts, edit, canEdit, layout.format, panel?.kind, togglePanel, refreshAll]);
+  }, [setToolbar, now, freshness, counts, edit, canEdit, layout.format, panel?.kind, togglePanel, refreshAll, schedule, setSchedule]);
   useWatchEffect(() => () => setToolbar(null), [setToolbar]);
 
   // ── the drawer ──
@@ -143,6 +150,34 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
 
   // ── cursors: where a block is on screen ──
   const root = useRef<HTMLDivElement>(null);
+
+  // ── the shell's header and download menu ──
+  const titleRef = useRef(doc.title);
+  titleRef.current = doc.title;
+  useWatchEffect(() => {
+    setTypeLabel(layout.format === "scrolly" ? "Scrollyteller" : layout.format === "short" ? "Visual short" : null);
+    // A story is read by scrolling or playing; the downloadable picture is the dashboard itself.
+    if (layout.format !== "dashboard") return setExports(null);
+    const page = () => {
+      const el = root.current?.firstElementChild as HTMLElement | null;
+      if (!el) throw new Error("The dashboard is not on screen");
+      // The picture says when it was taken and which filters it shows, since it stops updating the moment it is saved.
+      const filters = filterWords(window.location.search);
+      const when = new Date().toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+      return renderPng(el, { title: titleRef.current, note: [`As of ${when}`, ...filters].join(" · ") });
+    };
+    setExports([
+      { format: "png", label: "PNG image", run: async () => canvasBlob(await page(), "image/png") },
+      { format: "pdf", label: "PDF", run: async () => pdfFromCanvas(await page()) },
+    ]);
+  }, [layout.format, setExports, setTypeLabel]);
+  useWatchEffect(
+    () => () => {
+      setExports(null);
+      setTypeLabel(null);
+    },
+    [setExports, setTypeLabel],
+  );
   useWatchEffect(() => {
     const el = root.current;
     if (!el) return;
@@ -221,7 +256,7 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
   return (
     <div ref={root} className="data-wrap h-full overflow-y-auto overflow-x-hidden bg-sol-bg outline-none" tabIndex={-1} onKeyDown={onKeyDown} onClick={(e) => e.target === e.currentTarget && select(null)} data-dashboard={docId}>
       <FormatBody title={doc.title} layout={layout} elements={elements} env={env} onBackground={() => select(null)}>
-        {blocks.length ? <DashboardFilters dims={dims} value={filter.value} set={filter.set} clear={filter.clear} /> : null}
+        {blocks.length ? <DashboardFilters dims={dims} value={filter.value} values={filter.values} set={filter.set} clear={filter.clear} /> : null}
         {blocks.length ? (
           <DashboardGrid
             blocks={blocks}
@@ -244,6 +279,25 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
   );
 }
 
+/**
+ * One color slot per split value across the whole dashboard, given in reading
+ * order: the first chart's people take the first colors, and a person seen
+ * again in a later chart keeps theirs. Value columns ("opened", "merged")
+ * are not people; they keep the palette's order.
+ */
+function seriesSlots(blocks: readonly ArtifactElement[], results: Map<string, DataResult>): (name: string) => number | undefined {
+  // Sorted by name, so a person's color never depends on which query answered first.
+  const names = new Set<string>();
+  for (const b of blocks) {
+    if (b.kind !== "chart" || typeof b.series !== "string") continue;
+    const r = resultFor(results, b);
+    const i = r ? r.columns.indexOf(b.series) : -1;
+    if (r && i >= 0) for (const row of r.rows) if (row[i] !== null && row[i] !== undefined) names.add(String(row[i]));
+  }
+  const slots = new Map([...names].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })).map((n, i) => [n, i]));
+  return (name) => slots.get(name);
+}
+
 const ADD: Array<{ kind: dashboard.BlockKind; label: string; icon: typeof Hash }> = [
   { kind: "kpi", label: "KPI", icon: Hash },
   { kind: "chart", label: "Chart", icon: BarChart3 },
@@ -254,7 +308,7 @@ const ADD: Array<{ kind: dashboard.BlockKind; label: string; icon: typeof Hash }
 
 function AddRow({ onAdd, onSources }: { onAdd: (k: dashboard.BlockKind) => void; onSources: () => void }) {
   return (
-    <div className="mt-4 flex flex-wrap items-center gap-1.5 rounded-xl border border-dashed border-sol-border/60 px-3 py-2.5" data-add-row>
+    <div className="mt-4 flex flex-wrap items-center gap-1.5 rounded-xl border border-dashed border-sol-border/60 px-3 py-2.5" data-add-row data-export-skip>
       <Plus className="w-4 h-4 text-sol-text-dim mr-1" />
       {ADD.map(({ kind, label, icon: Icon }) => (
         <button key={kind} type="button" onClick={() => onAdd(kind)} className="inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md text-xs text-sol-text-secondary hover:text-sol-text hover:bg-sol-bg-alt">
@@ -319,7 +373,7 @@ function ChecksPanel({ checks, onOpen, onClose }: { checks: Array<{ b: ArtifactE
             <CheckMark check={check!} onClick={() => onOpen(b.key)} size={14} />
             <span className="min-w-0 flex-1">
               <span className="block text-sm text-sol-text truncate">{String(b.title || b.kind)}</span>
-              <span className="block text-meta text-sol-text-dim truncate">{check!.state === "verified" ? check!.detail : check!.detail ?? check!.label}</span>
+              <span className="block text-meta text-sol-text-dim line-clamp-2 break-words" title={check!.detail ?? check!.label}>{check!.state === "verified" ? check!.detail : check!.detail ?? check!.label}</span>
             </span>
           </button>
         ))}

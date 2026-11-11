@@ -2,13 +2,18 @@
 // folds to two columns and then one as the window narrows. In edit mode a
 // block shows its handle (drag to reorder), width, edit and remove controls;
 // a block an agent or another person just wrote flashes in place.
-import { memo, useState } from "react";
-import { GripVertical, Pencil, Trash2 } from "lucide-react";
+import { memo, useMemo, useRef, useState } from "react";
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { Download, GripVertical, Pencil, Trash2 } from "lucide-react";
 import { dashboard, type ArtifactElement } from "@codecast/shared/artifacts";
 import type { ReactNode } from "react";
 import { ScrollyStory, VisualShort } from "./stories";
-import { ChartBody, CheckMark, KpiBody, TableBody, TextBody, LiveText, type BlockEnv } from "./blocks";
+import { AlertMark, ChartBody, CheckMark, KpiBody, TableBody, TextBody, LiveText, type BlockEnv } from "./blocks";
 import { blockCheck } from "./blockCheck";
+import { resultFor } from "../../hooks/useDashboardData";
+import { filterWords } from "../../hooks/useDashboardScope";
+import { blockRows, downloadChartPng, downloadCsv, fileName, hasChart } from "./exportBlock";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 
 const SPAN_LABEL: Record<number, string> = { 3: "¼", 4: "⅓", 6: "½", 8: "⅔", 12: "1" };
 
@@ -34,6 +39,22 @@ function isEmptyBlock(b: ArtifactElement): boolean {
 
 export function DashboardGrid({ blocks: all, env, edit, selected, me, onSelect, onEdit, onRemove, onSpan, onMove }: GridProps) {
   const blocks = edit ? all : all.filter((b) => !isEmptyBlock(b));
+  // The grid's own width picks the layout (a side panel open, a pane, a phone), not the window's.
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [width, setWidth] = useState<dashboard.GridWidth>("wide");
+  useMountEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((e) => {
+      const w = e[0]?.contentRect.width ?? 1200;
+      setWidth(w > 860 ? "wide" : w > 480 ? "medium" : "narrow");
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  });
+  const spanSig = blocks.map((b) => dashboard.blockSpan(b)).join(",");
+  const kpiSig = blocks.map((b) => (b.kind === "kpi" ? 1 : 0)).join("");
+  const drawn = useMemo(() => dashboard.packSpans(spanSig.split(",").filter(Boolean).map(Number), width, [...kpiSig].map((c) => c === "1")), [spanSig, kpiSig, width]);
   const [drag, setDrag] = useState<{ key: string; over?: string; after?: boolean } | null>(null);
   const indexOf = (k: string) => blocks.findIndex((b) => b.key === k);
   const drop = () => {
@@ -44,11 +65,12 @@ export function DashboardGrid({ blocks: all, env, edit, selected, me, onSelect, 
     setDrag(null);
   };
   return (
-    <div className="data-grid" role="list" onDragEnd={() => setDrag(null)}>
-      {blocks.map((b) => (
+    <div ref={gridRef} className="data-grid" role="list" onDragEnd={() => setDrag(null)}>
+      {blocks.map((b, i) => (
         <Cell
           key={b.key}
           b={b}
+          drawn={drawn[i] ?? 12}
           env={env}
           edit={edit}
           selected={selected === b.key}
@@ -71,6 +93,8 @@ export function DashboardGrid({ blocks: all, env, edit, selected, me, onSelect, 
 
 type CellProps = {
   b: ArtifactElement;
+  /** Columns the block is drawn across: its span as the width allows, stretched to close its row. */
+  drawn: number;
   env: BlockEnv;
   edit: boolean;
   selected: boolean;
@@ -87,7 +111,7 @@ type CellProps = {
   onDrop: () => void;
 };
 
-const Cell = memo(function Cell({ b, env, edit, selected, fresh, dropSide, dragging, onSelect, onEdit, onRemove, onSpan, onDragStart, onDragOver, onDrop }: CellProps) {
+const Cell = memo(function Cell({ b, drawn, env, edit, selected, fresh, dropSide, dragging, onSelect, onEdit, onRemove, onSpan, onDragStart, onDragOver, onDrop }: CellProps) {
   const span = dashboard.blockSpan(b);
   const check = blockCheck(b, env);
   const plain = b.kind === "section" || b.kind === "text";
@@ -98,6 +122,7 @@ const Cell = memo(function Cell({ b, env, edit, selected, fresh, dropSide, dragg
       data-block={b.key}
       data-kind={b.kind}
       data-span={span}
+      style={{ gridColumn: `span ${drawn}` }}
       tabIndex={edit ? 0 : -1}
       draggable={edit}
       onDragStart={(e) => {
@@ -110,7 +135,7 @@ const Cell = memo(function Cell({ b, env, edit, selected, fresh, dropSide, dragg
         e.preventDefault();
         const r = e.currentTarget.getBoundingClientRect();
         // Full-width blocks stack, so above/below decides; narrower ones sit side by side, so left/right does.
-        onDragOver(span === 12 ? e.clientY > r.top + r.height / 2 : e.clientX > r.left + r.width / 2);
+        onDragOver(drawn === 12 ? e.clientY > r.top + r.height / 2 : e.clientX > r.left + r.width / 2);
       }}
       onDrop={(e) => {
         e.preventDefault();
@@ -129,7 +154,7 @@ const Cell = memo(function Cell({ b, env, edit, selected, fresh, dropSide, dragg
       ].join(" ")}
     >
       {fresh ? <span key={String(b.rev)} className="data-flash" aria-hidden /> : null}
-      {dropSide ? <span className={`data-drop data-drop-${span === 12 ? (dropSide === "after" ? "below" : "above") : dropSide}`} /> : null}
+      {dropSide ? <span className={`data-drop data-drop-${drawn === 12 ? (dropSide === "after" ? "below" : "above") : dropSide}`} /> : null}
 
       {b.kind === "section" ? (
         <div className="pt-4 pb-1">
@@ -152,16 +177,20 @@ const Cell = memo(function Cell({ b, env, edit, selected, fresh, dropSide, dragg
               <div className={`truncate ${b.kind === "kpi" ? "text-[13px] text-sol-text-muted" : "text-sm font-semibold text-sol-text"}`}>{String(b.title || (edit ? "Untitled" : ""))}</div>
               {b.kind !== "kpi" && b.caption ? <div className="text-meta text-sol-text-muted truncate">{String(b.caption)}</div> : null}
             </div>
+            <WhereTag b={b} />
+            <UnfilteredTag b={b} env={env} />
+            {b.kind === "kpi" ? <AlertMark b={b} env={env} /> : null}
+            {dashboard.blockQuery(b) ? <BlockExport b={b} env={env} /> : null}
             {check ? <CheckMark check={check} onClick={() => env.onCheck?.(b.key)} /> : null}
           </div>
           {b.kind === "kpi" ? <KpiBody b={b} env={env} /> : null}
-          {b.kind === "chart" ? <div className="mt-2"><ChartBody b={b} env={env} height={Number(b.height) || (span >= 8 ? 260 : 220)} /></div> : null}
+          {b.kind === "chart" ? <div className="mt-2"><ChartBody b={b} env={env} height={Number(b.height) || (drawn >= 8 ? 260 : 220)} /></div> : null}
           {b.kind === "table" ? <div className="mt-2"><TableBody b={b} env={env} /></div> : null}
         </>
       )}
 
       {edit ? (
-        <div className={`data-chrome absolute -top-3 right-3 z-10 flex items-center gap-px rounded-md border border-sol-border/60 bg-sol-bg shadow-sm ${selected ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"}`}>
+        <div data-export-skip className={`data-chrome absolute -top-3 right-3 z-10 flex items-center gap-px rounded-md border border-sol-border/60 bg-sol-bg shadow-sm ${selected ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"}`}>
           <span className="p-1 text-sol-text-dim cursor-grab active:cursor-grabbing" title="Drag to move" aria-hidden>
             <GripVertical className="w-3.5 h-3.5" />
           </span>
@@ -179,6 +208,69 @@ const Cell = memo(function Cell({ b, env, edit, selected, fresh, dropSide, dragg
     </div>
   );
 });
+
+/** The dashboard filters this block's source cannot apply, named: "All dates", "All people". */
+/** A block's own row filter, said on the card: a chart of one person must never pass for the total. */
+function WhereTag({ b }: { b: ArtifactElement }) {
+  const clauses = dashboard.whereClauses(b.where as dashboard.Where | undefined);
+  if (!clauses.length) return null;
+  const OPS: Record<string, string> = { eq: "is ", ne: "is not ", in: "is ", nin: "is not ", gt: "> ", gte: "≥ ", lt: "< ", lte: "≤ ", contains: "has " };
+  const value = (v: unknown) => (Array.isArray(v) ? v.join(" or ") : String(v));
+  const words = clauses.map((c) => `${OPS[c.op] ?? ""}${value(c.value)}`);
+  const short = clauses.length === 1 && (clauses[0].op === "eq" || clauses[0].op === "in") ? `${value(clauses[0].value)} only` : `${clauses.length} filter${clauses.length === 1 ? "" : "s"}`;
+  return (
+    <span className="shrink-0 max-w-[45%] h-5 px-1.5 rounded bg-sol-blue/10 text-meta leading-5 text-sol-text-secondary truncate" title={`Only rows where ${clauses.map((c, i) => `${c.column} ${words[i]}`).join(" and ")}`} data-where-tag>
+      {short}
+    </span>
+  );
+}
+
+function UnfilteredTag({ b, env }: { b: ArtifactElement; env: BlockEnv }) {
+  if (!env.scope || !dashboard.blockQuery(b)) return null;
+  const missing = dashboard.scopeMissing(resultFor(env.results, b), env.scope);
+  if (!missing.length) return null;
+  const word = (c: string) => (c === "day" || c === "date" ? "dates" : c === "person" ? "people" : `${c}s`);
+  return (
+    <span className="shrink-0 h-5 px-1.5 rounded bg-sol-bg-alt text-meta leading-5 text-sol-text-dim whitespace-nowrap" title={`This source has no ${missing.join(" or ")} column, so the filter on it doesn't apply here`} data-unfiltered={missing.join(",")}>
+      All {missing.map(word).join(", ")}
+    </span>
+  );
+}
+
+/** Take a block's data out: its rows as CSV, a chart as a PNG. Shown on hover, like the rest of a block's chrome. */
+function BlockExport({ b, env }: { b: ArtifactElement; env: BlockEnv }) {
+  const [open, setOpen] = useState(false);
+  const csv = () => {
+    const data = blockRows(b, resultFor(env.results, b), env.scope);
+    if (data) downloadCsv(fileName(b.title, "csv"), data.columns, data.rows);
+    setOpen(false);
+  };
+  const png = () => {
+    const when = new Date().toLocaleString("en-US", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
+    downloadChartPng(b.key, fileName(b.title, "png"), { title: String(b.title || "Chart"), caption: [b.caption ? String(b.caption) : null, ...filterWords(window.location.search), `As of ${when}`].filter(Boolean).join(" · ") });
+    setOpen(false);
+  };
+  const item = "w-full flex items-center h-7 px-2 rounded text-left text-xs text-sol-text hover:bg-sol-bg-alt";
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button type="button" onClick={(e) => e.stopPropagation()} aria-label="Download" title="Download" className={`inline-flex items-center justify-center w-7 h-7 -m-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt shrink-0 ${open ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`} data-block-export>
+          <Download className="w-3.5 h-3.5" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-40 p-1" onClick={(e) => e.stopPropagation()}>
+        <button type="button" onClick={csv} className={item}>
+          Rows as CSV
+        </button>
+        {b.kind === "chart" && hasChart(b.key) ? (
+          <button type="button" onClick={png} className={item}>
+            Chart as PNG
+          </button>
+        ) : null}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 /** The dashboard's own heading: its title and a live one-line summary. */
 export function DashboardHeading({ title, summary, env, byline }: { title?: string; summary?: string; env: BlockEnv; byline?: ReactNode }) {

@@ -26,6 +26,7 @@ import { runReader, normalizeRow, dueAt } from "./pageData";
 import { requireAccessibleDoc } from "./lib/access";
 import { workspaceGrantsAccess } from "./lib/accessKeys";
 import { readLiveElements } from "./liveArtifacts";
+import { emitNotification } from "./notificationRouter";
 
 type DataResult = dashboard.DataResult;
 const { queryKey, DATA_SOURCES, isDataSource, checkBlock, evaluateKpi, evaluateChart, evaluateTable, orderedBlocks, compareRerun, formatValue, parseFlags } = dashboard;
@@ -74,6 +75,8 @@ async function validated(ctx: any, scope: ReaderScope, q: dashboard.DataQuery): 
 export async function wantCore(ctx: any, userId: Id<"users">, doc: Doc<"docs">, queries: dashboard.DataQuery[], now: number): Promise<string[]> {
   const workspace = workspaceOf(doc);
   const rows: Doc<"data_queries">[] = await ctx.db.query("data_queries").withIndex("by_doc_qkey", (q: any) => q.eq("doc_id", doc._id)).collect();
+  // The saved dashboard's schedule and KPI alerts, mirrored onto its rows so the cron and the alert check need not open it.
+  const plan = watchPlan((await readLiveElements(ctx, doc._id, "main")) as ArtifactElement[]);
   const byKey = new Map(rows.map((r) => [r.qkey, r]));
   // Blocks that share a query share its reads; the shortest interval any of them asks for wins.
   const wanted = new Map<string, dashboard.DataQuery>();
@@ -97,13 +100,14 @@ export async function wantCore(ctx: any, userId: Id<"users">, doc: Doc<"docs">, 
       const fields = {
         doc_id: doc._id, qkey, source: q.source, args_json: checked.args_json, query_text: checked.query_text,
         owner_user_id: owner, workspace, refresh_ms: cadence.get(qkey) ?? checked.refresh_ms, wanted_at: now,
+        ...watchFields(plan, qkey, row, now),
         ...(checked.error ? { error: checked.error, attempted_at: now, invalid: true } : {}),
       };
       const id: Id<"data_queries"> = row ? (await ctx.db.replace(row._id, { ...fields, created_at: row.created_at }), row._id) : await ctx.db.insert("data_queries", { ...fields, created_at: now });
       row = (await ctx.db.get(id))!;
       if (checked.error) continue;
-    } else if (now - row.wanted_at > WANT_STAMP_MS || row.refresh_ms !== cadence.get(qkey)) {
-      await ctx.db.patch(row._id, { wanted_at: now, refresh_ms: cadence.get(qkey)! });
+    } else if (now - row.wanted_at > WANT_STAMP_MS || row.refresh_ms !== cadence.get(qkey) || watchChanged(plan, qkey, row)) {
+      await ctx.db.patch(row._id, { wanted_at: now, refresh_ms: cadence.get(qkey)!, ...watchFields(plan, qkey, row, now) });
       row = (await ctx.db.get(row._id))!;
     }
     if (!row || row.invalid || dueAt(row) > now || (row.lease_until && row.lease_until > now)) continue;
@@ -111,8 +115,115 @@ export async function wantCore(ctx: any, userId: Id<"users">, doc: Doc<"docs">, 
     await ctx.scheduler.runAfter(0, internal.dataQueries.refresh, { id: row._id });
     leased.push(qkey);
   }
-  for (const r of rows) if (!wanted.has(r.qkey) && now - r.wanted_at > FORGET_AFTER_MS) await ctx.db.delete(r._id);
+  for (const r of rows) if (!wanted.has(r.qkey) && !plan.qkeys.has(r.qkey) && now - r.wanted_at > FORGET_AFTER_MS) await ctx.db.delete(r._id);
   return leased;
+}
+
+// ── schedules and alerts ──
+
+type WatchPlan = { scheduled_ms?: number; alertKeys: Map<string, string[]>; qkeys: Set<string> };
+
+/** What a saved dashboard asks of the server while closed: its schedule, and which KPIs on which queries carry alerts. */
+function watchPlan(elements: ArtifactElement[]): WatchPlan {
+  const layout = elements.find((e) => e.key === dashboard.LAYOUT_KEY);
+  const schedule = dashboard.readSchedule(layout);
+  const blocks = dashboard.orderedBlocks(elements);
+  const alertKeys = new Map<string, string[]>();
+  for (const b of blocks) {
+    const q = b.kind === "kpi" && dashboard.readAlert(b) ? dashboard.blockQuery(b) : null;
+    if (!q) continue;
+    const k = queryKey(q);
+    alertKeys.set(k, [...(alertKeys.get(k) ?? []), b.key]);
+  }
+  return { ...(schedule ? { scheduled_ms: dashboard.SCHEDULES[schedule] } : {}), alertKeys, qkeys: new Set(dashboard.dashboardQueries(blocks).keys()) };
+}
+
+function watchFields(plan: WatchPlan, qkey: string, row: Doc<"data_queries"> | undefined, now: number) {
+  const keys = plan.alertKeys.get(qkey);
+  const scheduled = plan.scheduled_ms;
+  return {
+    scheduled_ms: scheduled,
+    // A new or changed schedule starts counting from now; an unchanged one keeps its place.
+    next_scheduled_at: scheduled ? (row?.scheduled_ms === scheduled && row.next_scheduled_at ? row.next_scheduled_at : now + scheduled) : undefined,
+    alert_keys: keys,
+    alert_state: keys && row?.alert_state ? Object.fromEntries(Object.entries(row.alert_state).filter(([k]) => keys.includes(k))) : undefined,
+  };
+}
+
+function watchChanged(plan: WatchPlan, qkey: string, row: Doc<"data_queries">): boolean {
+  const keys = plan.alertKeys.get(qkey) ?? [];
+  return row.scheduled_ms !== plan.scheduled_ms || (row.alert_keys ?? []).join(",") !== keys.join(",");
+}
+
+const SCHEDULE_BATCH = 25;
+
+/**
+ * The cron's pass: every scheduled row that is due is read again, whether or
+ * not anyone has the dashboard open. Each due dashboard is re-read first, so
+ * a schedule turned off (or a block removed) while nobody looked stops here.
+ */
+export const runSchedules = internalMutation({
+  args: {},
+  handler: async (ctx): Promise<{ ran: number }> => {
+    const now = Date.now();
+    const due = await ctx.db.query("data_queries").withIndex("by_next_scheduled", (q) => q.gte("next_scheduled_at", 1).lte("next_scheduled_at", now)).take(SCHEDULE_BATCH);
+    const plans = new Map<string, WatchPlan | null>();
+    let ran = 0;
+    for (const row of due) {
+      const docKey = String(row.doc_id);
+      if (!plans.has(docKey)) {
+        const doc = await ctx.db.get(row.doc_id);
+        plans.set(docKey, doc && !doc.archived_at ? watchPlan((await readLiveElements(ctx, doc._id, "main")) as ArtifactElement[]) : null);
+      }
+      const plan = plans.get(docKey)!;
+      if (!plan || !plan.qkeys.has(row.qkey)) {
+        await ctx.db.delete(row._id);
+        continue;
+      }
+      await ctx.db.patch(row._id, watchFields(plan, row.qkey, row, now));
+      if (!plan.scheduled_ms) continue;
+      await ctx.db.patch(row._id, { next_scheduled_at: now + plan.scheduled_ms });
+      if (row.invalid || (row.lease_until && row.lease_until > now)) continue;
+      await ctx.db.patch(row._id, { lease_until: now + PAGE_DATA_LIMITS.lease_ms });
+      await ctx.scheduler.runAfter(0, internal.dataQueries.refresh, { id: row._id });
+      ran++;
+    }
+    return { ran };
+  },
+});
+
+/** After a fresh answer: each KPI alert on it that changed sides tells the person who set it (the dashboard's owner when nobody did). */
+async function checkAlerts(ctx: any, row: Doc<"data_queries">): Promise<void> {
+  if (!row.alert_keys?.length) return;
+  const doc: Doc<"docs"> | null = await ctx.db.get(row.doc_id);
+  if (!doc || doc.archived_at) return;
+  const elements = (await readLiveElements(ctx, doc._id, "main")) as ArtifactElement[];
+  const result = toResult(row, Date.now());
+  const states: Record<string, string> = { ...(row.alert_state ?? {}) };
+  for (const key of row.alert_keys) {
+    const block = elements.find((e) => e.key === key);
+    if (!block) continue;
+    const s = dashboard.alertState(block, result);
+    if (!s) continue;
+    const before = states[key] ?? "ok";
+    states[key] = s.state;
+    // A crossing, a jump from one side to the other, or a recovery is news; staying on a side is not.
+    if (s.state === before) continue;
+    const alert = dashboard.readAlert(block)!;
+    const setter = alert.by ? ctx.db.normalizeId("users", alert.by) : null;
+    const to: Id<"users"> = setter && (await workspaceGrantsAccess(ctx, setter, workspaceOf(doc))) ? setter : doc.user_id;
+    await emitNotification(ctx, {
+      event_type: "metric_alert",
+      entity_type: "doc",
+      entity_id: String(doc._id),
+      link: `/docs/${doc._id}?el=${encodeURIComponent(key)}`,
+      message: dashboard.alertLine(block, s, doc.title || "a dashboard"),
+      actor_name: doc.title || "Dashboard",
+      recipient_ids: [to],
+      push_subtitle: doc.title || "Dashboard",
+    } as any);
+  }
+  await ctx.db.patch(row._id, { alert_state: states });
 }
 
 function toResult(row: Doc<"data_queries">, now: number): DataResult & { _id: Id<"data_queries">; doc_id: Id<"docs"> } {
@@ -144,7 +255,8 @@ function toResult(row: Doc<"data_queries">, now: number): DataResult & { _id: Id
     workspace: row.workspace,
     ...(row.error ? { error: row.error } : {}),
     ...(row.truncated ? { truncated: true } : {}),
-    ...(row.lease_until && row.lease_until > now ? { refreshing: true } : {}),
+    // When a read is running, as a time: a query is not re-run as the clock moves, so the page judges "still running" with its own clock.
+    ...(row.lease_until ? { lease_until: row.lease_until } : {}),
   };
 }
 
@@ -246,6 +358,7 @@ export const storeResult = internalMutation({
     if ((row.run_started ?? 0) > args.started) return false;
     if (args.result_json !== undefined) {
       await ctx.db.patch(args.id, { result_json: args.result_json, truncated: args.truncated, refreshed_at: args.at, attempted_at: args.at, error: undefined, lease_until: undefined, run_started: args.started });
+      await checkAlerts(ctx, (await ctx.db.get(args.id))!);
     } else {
       await ctx.db.patch(args.id, { error: args.error, attempted_at: args.at, lease_until: undefined, run_started: args.started });
     }

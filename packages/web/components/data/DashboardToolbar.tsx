@@ -2,7 +2,8 @@
 // (click to read everything again now), how many of its numbers are
 // verified (click for the list), the view/edit switch, Design and Data
 // sources.
-import { Database, MousePointer2, Palette, Pencil, RefreshCw } from "lucide-react";
+import { Clock, Database, MousePointer2, Palette, Pencil, RefreshCw } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { dashboard } from "@codecast/shared/artifacts";
 import { CheckMark } from "./blocks";
 
@@ -20,6 +21,8 @@ export function DashboardToolbar({
   onMode,
   onPanel,
   onRefresh,
+  schedule,
+  onSchedule,
 }: {
   now: number;
   freshness: Freshness;
@@ -30,18 +33,20 @@ export function DashboardToolbar({
   onMode: (edit: boolean) => void;
   onPanel: (k: PanelKind) => void;
   onRefresh: () => void;
+  /** The layout's refresh schedule; reads go on while nobody has the page open. */
+  schedule: dashboard.Schedule | null;
+  /** Absent for viewers who cannot edit. */
+  onSchedule?: (s: dashboard.Schedule | null) => void;
 }) {
   const total = Object.values(counts).reduce((a, n) => a + (n ?? 0), 0);
   const worst: dashboard.CheckState | null = counts.broken ? "broken" : counts.stale || counts.partial ? "stale" : counts.loading || counts.refreshing ? "refreshing" : counts.typed ? "typed" : total ? "verified" : null;
   const label = !freshness.queries
     ? "No data yet"
-    : freshness.refreshing
-      ? "Refreshing"
-      : freshness.oldest
-        ? now - freshness.oldest < 45_000
-          ? "Updated now"
-          : dashboard.ago(now - freshness.oldest)
-        : "Reading";
+    : freshness.oldest
+      ? now - freshness.oldest < 45_000
+        ? "Updated now"
+        : dashboard.ago(now - freshness.oldest)
+      : "Reading";
   const summary = worst
     ? worst === "verified"
       ? `All ${counts.verified} numbers verified`
@@ -49,14 +54,38 @@ export function DashboardToolbar({
     : "";
   return (
     <div className="flex items-center gap-1.5" data-data-toolbar>
-      <button type="button" onClick={onRefresh} disabled={!freshness.queries} title={freshness.oldest ? `Updated ${dashboard.ago(now - freshness.oldest)}. Read every source again now` : "Read every source again now"} className="hidden sm:inline-flex items-center gap-1.5 h-7 px-2 rounded-md whitespace-nowrap text-meta text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt disabled:hover:bg-transparent" data-freshness>
-        <RefreshCw className={`w-3 h-3 ${freshness.refreshing ? "animate-spin" : ""}`} />
-        {label}
-      </button>
+      <Popover>
+        <PopoverTrigger asChild>
+          <button type="button" disabled={!freshness.queries} title={freshness.oldest ? `Updated ${dashboard.ago(now - freshness.oldest)}` : undefined} className="hidden sm:inline-flex items-center gap-1.5 h-7 px-2 rounded-md whitespace-nowrap text-meta text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt disabled:hover:bg-transparent" data-freshness>
+            {schedule ? <Clock className="w-3 h-3" /> : <RefreshCw className={`w-3 h-3 ${freshness.refreshing ? "animate-spin" : ""}`} />}
+            <span className="hidden 2xl:inline">{label}</span>
+          </button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="w-60 p-2 space-y-2">
+          <button type="button" onClick={onRefresh} className="w-full flex items-center gap-2 h-8 px-2 rounded-md text-xs text-sol-text hover:bg-sol-bg-alt" data-refresh-now>
+            <RefreshCw className={`w-3.5 h-3.5 ${freshness.refreshing ? "animate-spin" : ""}`} /> Read every source now
+          </button>
+          {onSchedule ? (
+            <div className="px-2 pb-1 space-y-1.5">
+              <div className="text-meta text-sol-text-dim">Also while closed</div>
+              <div className="inline-flex w-full rounded-md bg-sol-bg-alt p-0.5" role="radiogroup" aria-label="Refresh while closed">
+                {(["off", "hourly", "daily"] as const).map((v) => {
+                  const on = (schedule ?? "off") === v;
+                  return (
+                    <button key={v} type="button" role="radio" aria-checked={on} onClick={() => onSchedule(v === "off" ? null : v)} className={`flex-1 h-6 rounded text-xs capitalize ${on ? "bg-sol-bg text-sol-text shadow-sm" : "text-sol-text-dim hover:text-sol-text"}`} data-schedule={v}>
+                      {v}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+        </PopoverContent>
+      </Popover>
       {worst ? (
         <span className={`inline-flex items-center gap-1 h-7 px-1.5 rounded-md ${panel === "checks" ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-alt"}`} title={summary} data-checks-summary={worst}>
           <CheckMark check={{ state: worst, label: summary }} onClick={() => onPanel("checks")} size={15} />
-          <button type="button" onClick={() => onPanel("checks")} className="text-meta tabular-nums text-sol-text-muted hover:text-sol-text whitespace-nowrap">
+          <button type="button" onClick={() => onPanel("checks")} className="hidden 2xl:inline text-meta tabular-nums text-sol-text-muted hover:text-sol-text whitespace-nowrap">
             {worstLabel(worst, counts)}
           </button>
         </span>
@@ -86,7 +115,7 @@ function BarButton({ on, onClick, title, label, icon: Icon }: { on: boolean; onC
   return (
     <button type="button" onClick={onClick} title={title} aria-pressed={on} className={`inline-flex items-center justify-center gap-1.5 h-7 min-w-7 px-1.5 rounded-md text-meta transition-colors ${on ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt"}`}>
       <Icon className="w-4 h-4" />
-      <span className="hidden md:inline">{label}</span>
+      <span className="hidden 2xl:inline">{label}</span>
     </button>
   );
 }

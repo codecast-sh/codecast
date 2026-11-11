@@ -20,7 +20,7 @@ export type SourceRow = { _id: string; doc_id: string; group: string; source: st
 
 const HEARTBEAT_MS = 60_000;
 
-const resultSig = (r: DataResult) => `${r.qkey}|${r.refreshed_at}|${r.error ?? ""}|${r.refreshing ? 1 : 0}|${r.truncated ? 1 : 0}`;
+const resultSig = (r: DataResult) => `${r.qkey}|${r.refreshed_at}|${r.error ?? ""}|${r.refreshing ? 1 : 0}|${r.lease_until ?? 0}|${r.truncated ? 1 : 0}`;
 
 /** Mount the results feed for a doc (once per page) and keep its queries fresh. */
 export function useDashboardFeed(docId: string, blocks: readonly ArtifactElement[], opts: { shareToken?: string; canWant: boolean }) {

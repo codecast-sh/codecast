@@ -4,6 +4,7 @@
 import { ArgsEditor } from "./ArgsEditor";
 import { LiveTextField } from "./LiveTextField";
 import { WhereBuilder } from "./WhereBuilder";
+import { useInboxStore } from "../../store/inboxStore";
 import { useCommittedDraft } from "../../hooks/useCommittedDraft";
 import { Trash2 } from "lucide-react";
 import { dashboard, type ArtifactElement, type ArtifactOp, type Json } from "@codecast/shared/artifacts";
@@ -41,7 +42,7 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
       }
     >
       {block.kind !== "text" ? <TextField label="Title" value={block.title} onCommit={(v) => set({ title: v || null })} /> : null}
-      {block.kind === "text" ? <LiveTextField label="Text" value={block.text} kpis={kpis} multiline onCommit={(v) => set({ text: v })} /> : <TextField label="Caption" value={block.caption} onCommit={(v) => set({ caption: v || null })} />}
+      {block.kind === "text" ? <LiveTextField label="Text" value={block.text} kpis={kpis} multiline holdKey={`${docId}:${block.key}:text`} onCommit={(v) => set({ text: v })} /> : <TextField label="Caption" value={block.caption} onCommit={(v) => set({ caption: v || null })} />}
 
       {block.kind === "kpi" || block.kind === "chart" || block.kind === "table" ? (
         <>
@@ -50,15 +51,14 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
             <>
               <Row>
                 <Select label="Value" value={block.agg ?? (block.field ? "sum" : "count")} options={dashboard.KPI_AGGS} onChange={(v) => set({ agg: v })} />
-                <Select label="of" value={block.field} options={columns} empty="–" onChange={(v) => set({ field: v || null })} />
+                <Select label="of" value={block.field} options={columns} empty="–" onChange={(v) => set({ field: v || null, ...(v ? { format: formatFor(v) } : {}) })} />
               </Row>
               {block.agg === "top" ? <Select label="Named by" value={block.label} options={columns} empty="auto" onChange={(v) => set({ label: v || null })} /> : null}
-              <Row>
-                <Select label="Format" value={block.format ?? "number"} options={FORMATS} onChange={(v) => set({ format: v })} />
-                <Select label="Compare to" value={block.compare} options={["halves", "prev", ...columns]} labels={{ halves: "earlier half", prev: "previous row" }} empty="none" onChange={(v) => set({ compare: v || null })} />
-              </Row>
+              <Select label="Format" value={block.format ?? "number"} options={FORMATS} onChange={(v) => set({ format: v })} />
+              <Select label="Compare to" value={block.compare} options={["halves", "prev", ...columns]} labels={{ halves: "the window's earlier half", prev: "the previous row" }} empty="nothing" onChange={(v) => set({ compare: v || null })} />
               {block.compare ? <Select label="Good when" value={block.good} options={["up", "down"]} empty="neutral" onChange={(v) => set({ good: v || null })} /> : null}
               {!q ? <TextField label="Typed value (not verified)" value={block.value === undefined ? undefined : String(block.value)} onCommit={(v) => set({ value: v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : v })} /> : null}
+              {q ? <AlertFields block={block} onSet={(alert) => set({ alert })} /> : null}
             </>
           ) : null}
           {block.kind === "chart" ? (
@@ -66,9 +66,9 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
               <Select label="Chart" value={block.chart ?? "line"} options={dashboard.CHART_TYPES} labels={{ hbar: "ranked bars", stacked: "stacked bars" }} onChange={(v) => set({ chart: v })} />
               <Row>
                 <Select label="X" value={block.x} options={labels.length ? labels : columns} empty="first" onChange={(v) => set({ x: v || null })} />
-                <Select label="Split by" value={block.series} options={labels.filter((c) => c !== (block.x ?? columns[0]))} empty="none" onChange={(v) => set({ series: v || null, ...(v && String(block.y ?? "").includes(",") ? { y: String(block.y).split(",")[0] } : {}) })} />
+                <Select label="Series" value={block.series} options={labels.filter((c) => c !== (block.x ?? columns[0]))} empty="none" onChange={(v) => set({ series: v || null, ...(v && String(block.y ?? "").includes(",") ? { y: String(block.y).split(",")[0] } : {}) })} />
               </Row>
-              <SeriesPicker value={block.y} options={numeric} single={!!block.series} onChange={(v) => set({ y: v })} />
+              <SeriesPicker value={block.y} options={numeric} single={!!block.series} onChange={(v) => set({ y: v, ...(v ? { format: formatFor(v.split(",")[0]) } : {}) })} />
               <Row>
                 <Select label="Format" value={block.format ?? "number"} options={FORMATS} onChange={(v) => set({ format: v })} />
               </Row>
@@ -96,9 +96,9 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
       <Select label="Width" value={String(dashboard.blockSpan(block))} options={dashboard.SPANS.map(String)} labels={{ "3": "quarter", "4": "third", "6": "half", "8": "two thirds", "12": "full" }} onChange={(v) => set({ span: Number(v) })} />
 
       <Field label="In a story">
-        <LiveTextField label="Story title" value={block.say_title} kpis={kpis} onCommit={(v) => set({ say_title: v || null })} />
+        <LiveTextField label="Story title" value={block.say_title} kpis={kpis} holdKey={`${docId}:${block.key}:say_title`} onCommit={(v) => set({ say_title: v || null })} />
         <div className="h-2" />
-        <LiveTextField label="Story line" value={block.say} kpis={kpis} multiline onCommit={(v) => set({ say: v || null })} />
+        <LiveTextField label="Story line" value={block.say} kpis={kpis} multiline holdKey={`${docId}:${block.key}:say`} onCommit={(v) => set({ say: v || null })} />
         <label className="mt-2 flex items-center gap-2 text-sm text-sol-text-secondary">
           <input type="checkbox" checked={block.in_story !== false} onChange={(e) => set({ in_story: e.target.checked ? null : false })} className="accent-[var(--sol-blue)]" />
           Show in stories
@@ -192,7 +192,8 @@ function QueryField({ docId, block, onCommit, problem }: { docId: string; block:
 /** The value columns a chart draws: any number of them, or one when the chart splits by a column. Auto picks the numeric ones. */
 function SeriesPicker({ value, options, single, onChange }: { value: unknown; options: string[]; single: boolean; onChange: (v: string | null) => void }) {
   const chosen = typeof value === "string" && value ? value.split(",").map((s) => s.trim()).filter(Boolean) : [];
-  const all = [...new Set([...chosen, ...options])];
+  // Chips stay where they are when picked; a chosen column the source no longer has goes last.
+  const all = [...options, ...chosen.filter((c) => !options.includes(c))];
   const toggle = (c: string) => {
     const next = single ? (chosen[0] === c ? [] : [c]) : chosen.includes(c) ? chosen.filter((x) => x !== c) : [...chosen, c];
     onChange(next.length ? next.join(",") : null);
@@ -212,4 +213,36 @@ function SeriesPicker({ value, options, single, onChange }: { value: unknown; op
       </div>
     </div>
   );
+}
+
+/** Notify me when this number goes above or below a line. Empty both to stop. The alert fires whenever the number is read: while the page is open, or on the dashboard's schedule. */
+function AlertFields({ block, onSet }: { block: ArtifactElement; onSet: (alert: Json) => void }) {
+  const me = useInboxStore((s: any) => (s.currentUser?._id ? String(s.currentUser._id) : undefined));
+  const alert = dashboard.readAlert(block);
+  const write = (side: "above" | "below", v: string) => {
+    const n = v.trim() === "" ? undefined : Number(v.replace(/[$,\s]/g, ""));
+    if (n !== undefined && !Number.isFinite(n)) return;
+    const next = { ...(alert ?? {}), [side]: n };
+    const above = next.above;
+    const below = next.below;
+    onSet(above === undefined && below === undefined ? null : { ...(above !== undefined ? { above } : {}), ...(below !== undefined ? { below } : {}), ...(me ? { by: me } : {}) });
+  };
+  const num = (v: string) => (v.trim() === "" || Number.isFinite(Number(v.replace(/[$,\s]/g, ""))) ? null : "A number");
+  return (
+    <Field label="Alert me when it goes">
+      <Row>
+        <TextField label="Above" value={alert?.above} placeholder="–" validate={num} onCommit={(v) => write("above", v)} />
+        <TextField label="Below" value={alert?.below} placeholder="–" validate={num} onCommit={(v) => write("below", v)} />
+      </Row>
+    </Field>
+  );
+}
+
+/** The format a newly picked column reads in: money as money, token counts compact, ratios as percents. The person can change it after. */
+function formatFor(column: string): string {
+  const c = column.toLowerCase();
+  if (/spend|cost|usd|price|revenue|amount|dollars/.test(c)) return "usd";
+  if (/rate|ratio|pct|percent|share/.test(c)) return "percent";
+  if (/tokens|bytes|events|views/.test(c)) return "compact";
+  return "number";
 }
