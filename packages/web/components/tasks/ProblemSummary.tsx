@@ -153,6 +153,8 @@ export function ProblemSummary({ task }: { task: ProblemTask }) {
   const open = task.status === "open" || task.status === "backlog";
   const untouched = open && !liveRun && !trialCard && !queueCard;
   const a = admit.admission;
+  // A shipped problem opens what shipped: the run's card, else the run's report.
+  const shippedRun = where.end === "shipped" && latest ? latest : null;
   const control: { href?: string; onClick?: () => void; label: string; primary: boolean } | null = trialCard
     ? { href: `/trial?card=${trialCard.short_id}`, label: trialCard.evidence && evidenceGone(trialCard.evidence) ? "Drop the fix" : "Review the fix", primary: true }
     : queueCard
@@ -165,6 +167,8 @@ export function ProblemSummary({ task }: { task: ProblemTask }) {
           ? { href: `/projects/${task.project_id}`, label: a.role ? "Open the project" : "Assign an owner", primary: false }
           : untouched && a?.role && !a.on
             ? { onClick: () => { useInboxStore.getState().startLineCause(task._id).catch((e: unknown) => toast.error(e instanceof Error ? e.message : String(e))); }, label: "Start a fix", primary: false }
+            : shippedRun
+              ? { href: shippedRun.gate_decision_short_id ? `/decisions/${shippedRun.gate_decision_short_id}` : `/workflows/runs/${shippedRun._id}`, label: "See the change", primary: false }
             : null;
   // The fix waiting here, read the way /trial reads it (cardAsRead): its recommendation and what holds it back say its state.
   const read = trialCard ? cardAsRead(trialCard) : undefined;

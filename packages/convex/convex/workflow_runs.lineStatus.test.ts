@@ -73,9 +73,31 @@ describe("a run's end (LE16)", () => {
     const shipped = notes.filter((n) => n.type === "change_shipped");
     expect(shipped.map((n) => String(n.recipient_user_id)).sort()).toEqual([String(ids.owner), String(ids.mate)].sort());
     expect(shipped[0].message).toContain("shipped the change for ct-1");
+    // With no card, the notice opens the run's report.
+    expect(shipped[0].link).toBe(`/workflows/runs/${ids.runId}`);
     // A second report of the same end changes nothing and says nothing again.
     await finish();
     expect((await read()).notes.filter((n) => n.type === "change_shipped")).toHaveLength(2);
+  });
+
+  test("the ship notice names the change by its card's headline and opens that card", async () => {
+    const { t, ids, end, finish, read } = await setup({ status: "in_progress" });
+    const out = await t.mutation(api.workflow_runs.pauseAtGate, {
+      api_token: TOKEN, run_id: ids.runId, node_id: "decide", prompt: "Ship this change?",
+      choices: [{ key: "S", label: "[S] Ship", target: "ship" }, { key: "D", label: "[D] Drop", target: "drop" }],
+    });
+    // A whole card passes its contract and is stored on the decision; stand one in by its headline.
+    await t.run(async (ctx) => {
+      const decision = (await ctx.db.query("session_decisions").first())!;
+      await ctx.db.patch(decision._id, { card: { headline: "Follow-ups lead with the question" } } as any);
+      await ctx.db.patch(ids.runId, { status: "running" } as any);
+    });
+    await end(lineNodes("decide", "ship", "watch"));
+    await finish();
+    const shipped = (await read()).notes.filter((n) => n.type === "change_shipped");
+    expect(shipped).toHaveLength(1);
+    expect(shipped[0].message).toContain("shipped Follow-ups lead with the question (ct-1)");
+    expect(shipped[0].link).toBe(`/decisions/${out.decision_short_id}`);
   });
 
   test("a ship whose merge station left the merge to a person: the approved fix waits in review, with no watch and no ship notice", async () => {
