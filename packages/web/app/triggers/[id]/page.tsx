@@ -28,7 +28,7 @@ import { ShortcutTooltip } from "../../../components/KeyboardShortcutsHelp";
 import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useInboxStore } from "../../../store/inboxStore";
-import { useTriggers } from "../../../hooks/useSyncTriggers";
+import { useTriggers, useSyncTriggerHistory } from "../../../hooks/useSyncTriggers";
 import { TriggerRunList, useTriggerRuns } from "../../../components/TriggerRunHistory";
 import { TriggerPromptView } from "../../../components/TriggerPromptView";
 import { entityQueryArgs } from "../../../lib/entityDisplay";
@@ -165,6 +165,8 @@ export default function TriggerDetailPage() {
   // The viewer's own roster, from the store — first paint and the optimistic
   // side of every verb click.
   const { tasks: ownTasks } = useTriggers();
+  // The app-wide feed carries armed triggers and a recent tail; this page shows finished history too.
+  useSyncTriggerHistory();
   const storeRow = useMemo(() => {
     if (!id) return undefined;
     const lower = id.toLowerCase();

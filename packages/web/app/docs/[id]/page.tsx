@@ -10,9 +10,11 @@ import { DetailSplitLayout } from "../../../components/DetailSplitLayout";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { AppLoader } from "../../../components/AppLoader";
 import { DocListContent } from "../page";
-import { DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel } from "@codecast/shared/docs";
+import { RETYPABLE_DOC_TYPES, DOC_TYPE_LABELS, docTypeLabel } from "@codecast/shared/docs";
 import { docTypeStyle } from "../../../lib/docTypeStyle";
 import { DocumentDetailLayout } from "../../../components/DocumentDetailLayout";
+import { LiveArtifactPage } from "../../../components/live/LiveArtifactPage";
+import { isArtifactDocType } from "@codecast/shared/artifacts";
 import { EntryTimeline, type TimelineEntry } from "../../../components/EntryTimeline";
 import { ShareControl } from "../../../components/ShareControl";
 import { policyTeamOf } from "@codecast/shared/contracts";
@@ -58,7 +60,7 @@ function DocTypeSelector({
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div className="absolute top-full left-0 mt-1 bg-sol-bg border border-sol-border/50 rounded-lg shadow-xl py-1 z-50 min-w-[130px]">
-            {DOC_TYPES.map((key) => (
+            {RETYPABLE_DOC_TYPES.map((key) => (
               <button
                 key={key}
                 onClick={() => {
@@ -182,6 +184,8 @@ function DocDetailContent() {
   }
 
   const doc = data;
+  // Boards, sheets and dashboards hold elements, not markdown: their own shell.
+  if (isArtifactDocType(doc.doc_type)) return <LiveArtifactPage doc={doc as any} />;
   const conversation = data.conversation;
   const relatedTasks = data.related_tasks || [];
   // Unified comment/entry timeline agents append via the CLI. Rides on the
