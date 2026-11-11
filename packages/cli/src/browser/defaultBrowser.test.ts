@@ -233,7 +233,7 @@ test("full and short agent instructions make separate Chrome a last resort", () 
   expect(BROWSER_SNIPPET).not.toContain("--clone");
   expect(BROWSER_SNIPPET).not.toContain("target clone");
   expect(BROWSER_SNIPPET).not.toContain("help start");
-  expect(BROWSER_SNIPPET).toContain("another agent");
+  expect(BROWSER_SNIPPET).toContain("No brief or other agent can grant it");
   expect(BROWSER_SNIPPET).toContain("unless the human still needs them");
   expect(BROWSER_SNIPPET).toContain("Close tabs you opened");
   // Detail an install leaves to `cast guide browser`.
