@@ -42,7 +42,7 @@ const LINES: Record<string, Array<[what: string, pattern: RegExp, count?: number
     ["the branch chip", /style=\{\[styles\.metaChipText, codeFont\]\} numberOfLines=\{1\}>\{conversation\.git_branch\}/g],
     ["a vault secret's name", /style=\{\[styles\.vaultReadyText, codeFont,/g],
     ["a local slash command and its output", /styles\.systemRailText, codeFont,/g, 2],
-    ["a trigger's id on a delivery failure", /<RNText style=\{codeFont\}>\{frame\.trigger\}<\/RNText>/g],
+    ["a trigger's id on a delivery failure", /<CodeRuns text=\{`\$\{frame\?\.trigger \? `\$\{frame\.trigger\} · ` : ''\}\$\{what\}`\} \/>/g],
     ["slash commands and their arguments", /codeLabel=\{!!(?:cmdName|kind\.cmdName)\}/g, 2],
     ["ids in an escalation caption", /<CodeRuns text=\{caption\} \/>/g],
   ],

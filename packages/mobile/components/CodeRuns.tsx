@@ -8,9 +8,13 @@ import { useActiveLook } from '@/constants/Theme';
 import { codeFont } from '@/constants/fonts';
 import { splitCodeRuns } from '@codecast/shared/render/codeRuns';
 
+// A nested run keeps its line's colour: the Text wrapper sets the default
+// text colour on every Text unless the style says otherwise.
+const CODE_RUN = [codeFont, { color: undefined }];
+
 export function CodeRuns({ text }: { text: string }) {
   const look = useActiveLook();
   const runs = useMemo(() => (look === 'modern' ? splitCodeRuns(text) : null), [look, text]);
   if (!runs || !runs.some((r) => r.code)) return <>{text}</>;
-  return <>{runs.map((r, i) => (r.code ? <RNText key={i} style={codeFont}>{r.text}</RNText> : r.text))}</>;
+  return <>{runs.map((r, i) => (r.code ? <RNText key={i} style={CODE_RUN}>{r.text}</RNText> : r.text))}</>;
 }

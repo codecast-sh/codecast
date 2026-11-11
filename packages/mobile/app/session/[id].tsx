@@ -1889,7 +1889,7 @@ function DeliveryFailedRail({ notice, conversationId, timestamp }: { notice: Ret
       <Feather name="alert-triangle" size={12} color={color} />
       <RNView style={{ flex: 1, minWidth: 0 }}>
         <RNText style={[styles.systemRailKicker, { color }]}>Not delivered · {notice.writes} writes · {cause}</RNText>
-        <RNText style={styles.systemRailText} numberOfLines={1}>{frame?.trigger ? <RNText style={codeFont}>{frame.trigger}</RNText> : null}{frame?.trigger ? ' · ' : ''}{what}</RNText>
+        <RNText style={styles.systemRailText} numberOfLines={1}><CodeRuns text={`${frame?.trigger ? `${frame.trigger} · ` : ''}${what}`} /></RNText>
       </RNView>
       {action ? (
         <Pressable disabled={done} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); action.run(); setDone(true); }} hitSlop={8}>
