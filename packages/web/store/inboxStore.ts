@@ -5934,6 +5934,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setWeeklyCardEnabled: (enabled: boolean) => void;
   setWeeklyCardOptions: (cardId: string, opts: { show_projects?: boolean; show_tokens?: boolean }) => void;
   dismissBrowserPaneOffer: (id: string, at: number) => void;
+  cancelPeerTransfer: (id: string) => void;
   setTeamVisibility: (id: string, visibility: "summary" | "full" | null) => void;
   /** My level for a whole team. `mode` matters only when the level goes up:
    *  "going_forward" pins sessions started before now at the level they had. */
@@ -6343,6 +6344,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** Open one of your machines to exactly these teams (empty = private).
    *  Settings > Machines; the server home is device_shares. */
   setDeviceShares: (deviceId: string, teamIds: string[]) => void;
+  /** Settings > Machines' "Accept direct links" (peer-transport.md); the server home is devices.direct_links_off. */
+  setDeviceDirectLinks: (deviceId: string, enabled: boolean) => void;
   /** Put one of the viewer's accounts in exactly these teams' pools (empty
    *  takes it back): Settings > Claude Accounts' pool pill. Server home is
    *  account_shares; the accountPool snapshot reconciles the draft. */
@@ -9715,6 +9718,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
     if (row) row.shared_team_ids = [...teamIds].sort();
   }),
+  setDeviceDirectLinks: action(function (this: Draft, deviceId: string, enabled: boolean) {
+    const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
+    if (row) row.direct_links_off = enabled ? undefined : true;
+  }),
   setAccountShares: action(function (this: Draft, deviceId: string, email: string, teamIds: string[]) {
     const pool = this.accountPool as Record<string, any>;
     const key = email.toLowerCase();
@@ -11009,6 +11016,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // patches local state. `at` is passed in rather than read here so the value
   // the server stores is the one the draft already holds — the field lock
   // retires on an exact echo.
+  // The folder-transfer strip's Cancel paints at once; the
+  // cancelPeerTransfer side effect stamps the row the daemon reads back.
+  cancelPeerTransfer: action(function (this: Draft, id: string) {
+    const pt = (this.conversations[id] as any)?.peer_transfer;
+    if (pt && pt.phase !== "failed" && !pt.cancel_requested_at) pt.cancel_requested_at = Date.now();
+  }),
   dismissBrowserPaneOffer: action(function (this: Draft, id: string, at: number) {
     const apply = (c: any) => {
       if (!c?.browser_pane_offer || c.browser_pane_offer.opened_at) return;
