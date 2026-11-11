@@ -65,7 +65,9 @@ The codecast CLI runs locally; commands need to reach the remote Mac. Options:
 2. **Tailscale** mesh for zero-config private network. Requires Tailscale auth on both sides.
 3. **Scaleway bastion** for security-isolated networks.
 
-**Decision: Plain SSH.** Scaleway gives the host a public IPv6 and (for some tiers) IPv4. We use SSH with a per-user keypair generated at first host provisioning, stored at `~/.codecast/scaleway/<host-id>/id_ed25519`. Tailscale can be a layered option later.
+**Decision: Plain SSH.** Scaleway gives the host a public IPv6 and (for some tiers) IPv4. We use SSH with a per-user keypair generated at first host provisioning, stored at `~/.codecast/scaleway/<host-id>/id_ed25519`.
+
+Tailscale is now layered on top, never required (`docs/architecture/peer-transport.md`). A cloud host's tailnet node is learned over SSH, and the laptop dials its tailnet IP while its own `tailscale status` shows that node online (`cloud/tailnet.ts`), falling back to the public address when the tailnet does not carry the connection; live sync remembers such a failure for a few minutes rather than probing every tick. Between two of one owner's machines on the same Tailscale user, session folders move directly over a single-use grant, with the Convex relay as fallback. The Scaleway Macs are still dialed on their public address only.
 
 For exec into a tart VM specifically: SSH lands on the host, then `ssh -J host vm-internal-ip` or `tart ssh vm-name -- cmd`. The tart CLI handles the inner SSH transparently.
 
