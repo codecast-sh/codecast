@@ -3341,9 +3341,37 @@ export default defineSchema({
     // (managedDevices.ts). Set when the enrollment completes, cleared when an
     // admin revokes it. The heartbeat and the policy guard read it here.
     enrolled_team_id: v.optional(v.id("teams")),
+    // This machine's place on a running tailnet, heartbeat-reported only when
+    // it changes (docs/architecture/peer-transport.md). Projected to the owner only.
+    tailnet: v.optional(v.object({
+      ip: v.string(),
+      name: v.string(),
+      tailnet: v.optional(v.string()),
+      ts_user_id: v.optional(v.string()),
+      bindable: v.optional(v.boolean()),
+    })),
+    // "Accept direct links" off: folderSync never asks this machine for a direct grant.
+    direct_links_off: v.optional(v.boolean()),
+    // When this machine asked for folders (folderSync rate limit), inside the window only.
+    folder_export_at: v.optional(v.array(v.number())),
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_device", ["user_id", "device_id"]),
+
+  // The last transfer outcome per ordered pair of one owner's machines
+  // (peerLinks.ts): from = the source that served, to = the requester.
+  peer_links: defineTable({
+    user_id: v.id("users"),
+    from_device_id: v.string(),
+    to_device_id: v.string(),
+    last_direct_ok_at: v.optional(v.number()),
+    last_direct_failure: v.optional(v.object({ at: v.number(), reason: v.string() })),
+    last_relay_ok_at: v.optional(v.number()),
+    last_bytes: v.optional(v.number()),
+    updated_at: v.number(),
+  })
+    .index("by_user", ["user_id"])
+    .index("by_user_pair", ["user_id", "from_device_id", "to_device_id"]),
 
   // Every change codecast made to a device's agent harness (CLAUDE.md, hooks,
   // ~/.claude/settings.json), as the daemon's harness.ts recorded it: what,

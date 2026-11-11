@@ -295,6 +295,7 @@ import { subagentPromptParent } from "./agentPromptOrigin.js";
 import { declaredSpawnParent } from "./spawnParents.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { SECRET_PAYLOAD_MAX } from "@codecast/shared/contracts/secrets";
+import { localTailnetAsync, selfTailnet } from "./cloud/tailnet.js";
 import { RUN_TIMEOUT_MS } from "@codecast/shared/contracts/commandRun";
 import { personEnv } from "./sessionIdentity.js";
 import { RetryQueue, flushRetryQueueForShutdown, isSessionRefusal, isStaleConversationError, type RetryOperation } from "./retryQueue.js";
@@ -715,8 +716,17 @@ async function fetchFolderFromPeers(conversationId: string, recorded: string): P
     }
     log(`[FOLDER] ${recorded} isn't here; asking your other machines for it`);
     const r = await syncFolderFromPeer(dest, {
-      request: () => svc.requestFolderExport(conversationId, deviceId(), recorded),
+      request: (opts) => svc.requestFolderExport(conversationId, deviceId(), recorded, opts),
       outcomes: (ids) => svc.folderExportOutcomes(ids),
+      direct: async () => {
+        const self = selfTailnet(await localTailnetAsync());
+        return self ? { self: { ip: self.ip, name: self.name } } : null;
+      },
+      onAttempt: (a) => {
+        if (!a.device_id) return;
+        svc.recordPeerLink({ from_device_id: a.device_id, to_device_id: deviceId(), mode: a.mode, ok: a.ok, reason: a.reason, bytes: a.bytes })
+          .catch((e) => log(`[FOLDER] peer link not recorded: ${e instanceof Error ? e.message : String(e)}`));
+      },
       download: async (storageId) => {
         const url = await svc.getImageUrl(storageId);
         if (!url) return null;
@@ -5618,6 +5628,7 @@ async function claimDeviceAccountIfNeeded(): Promise<void> {
   }
 }
 
+let heartbeatTailnet: ReturnType<typeof import("@codecast/shared/contracts/peerTransport").heartbeatTailnetField> | undefined;
 async function sendHeartbeat(): Promise<void> {
   if (hasActiveCloudWork(lastSentAgentStatus.values(), appServerTurnProgress.size,
     [...lastSentAgentStatus.keys()].map((sessionId) => subagentActiveAgoMs(sessionId)))) touchHostActivity();
@@ -5663,6 +5674,12 @@ async function sendHeartbeat(): Promise<void> {
 
   try {
     const deviceHostname = await stableHostnameAsync();
+    // A slow tailscaled never holds the beat: past the wait this beat says
+    // nothing about the tailnet and the call fills the cache for the next one.
+    const { heartbeatTailnetField, reportedPeerTailnet } = await import("@codecast/shared/contracts/peerTransport");
+    heartbeatTailnet ??= heartbeatTailnetField();
+    const tailnet = await heartbeatTailnet(localTailnetAsync().then((status) => reportedPeerTailnet(selfTailnet(status), status,
+      Object.values(os.networkInterfaces()).flatMap((list) => (list ?? []).map((a) => a.address)))), 500);
     const siteUrl = config.convex_url.replace(".cloud", ".site");
     // The body is built BEFORE the request timer starts. Its fields await
     // subprocesses and file reads (ioreg, account files, sync backlog), and
@@ -5750,6 +5767,8 @@ async function sendHeartbeat(): Promise<void> {
         model_inventory: modelInventory,
         capability_state: capabilityPayload,
         capability_contents: capabilityContents,
+        // This machine's place on its tailnet (peer-transport.md); null when it is on none.
+        tailnet,
         ...await syncHealthFields(),
     });
     // Bound the request: an untimed fetch here can hang indefinitely (observed
@@ -7019,9 +7038,11 @@ async function executeRemoteCommand(
           home: process.env.HOME || require("os").homedir(),
           upload: (bytes) => svc.uploadBytes(bytes, FOLDER_BUNDLE_MEDIA_TYPE, "Folder", 5 * 60_000),
           log,
+          onGrantDone: (g) => log(`[FOLDER] direct link for ${parsed.path} closed: ${g.reason} (${g.bytes} bytes)`),
         });
         result = JSON.stringify(out);
-        log(`[FOLDER] export_folder ${parsed.path}: ${out.ok ? `sent ${out.files} files` : out.reason}`);
+        const how = out.ok ? ("direct" in out ? `granted a direct link on ${out.direct.ip}:${out.direct.port}` : "sent through the relay") : out.reason;
+        log(`[FOLDER] export_folder ${parsed.path}: ${how}${"direct_skipped" in out && out.direct_skipped ? ` (direct skipped: ${out.direct_skipped})` : ""}`);
         break;
       }
       case "cap_publish": {

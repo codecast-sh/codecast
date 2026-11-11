@@ -18,7 +18,7 @@
  * joining or leaving the tailnet.
  */
 
-import { spawnSync } from "../proc.js";
+import { execFile, spawnSync } from "../proc.js";
 import * as fs from "node:fs";
 
 export interface TailnetRecord {
@@ -29,8 +29,14 @@ export interface TailnetRecord {
   checkedAt: number;
 }
 
-interface Node { DNSName?: string; TailscaleIPs?: string[]; Online?: boolean }
-export interface TailnetStatus { BackendState?: string; Self?: Node; Peer?: Record<string, Node> }
+export interface TailnetNode { DNSName?: string; TailscaleIPs?: string[]; Online?: boolean; UserID?: number; ShareeNode?: boolean; Tags?: string[] }
+export interface TailnetStatus {
+  BackendState?: string;
+  Self?: TailnetNode;
+  Peer?: Record<string, TailnetNode>;
+  MagicDNSSuffix?: string;
+  CurrentTailnet?: { Name?: string; MagicDNSSuffix?: string } | null;
+}
 
 const MAC_APP_BIN = "/Applications/Tailscale.app/Contents/MacOS/Tailscale";
 const STATUS_TIMEOUT_MS = 2_000;
@@ -73,6 +79,47 @@ export function localTailnet(): TailnetStatus | null {
   if (status?.BackendState !== "Running") status = null;
   cache = { key, at: Date.now(), status };
   return status;
+}
+
+/**
+ * localTailnet without blocking the event loop: the daemon's request paths
+ * (a grant decision, a pull) must never spawnSync. Shares the same cache, and
+ * concurrent callers share one spawn.
+ */
+let inflight: { key: string; promise: Promise<TailnetStatus | null> } | undefined;
+export function localTailnetAsync(): Promise<TailnetStatus | null> {
+  const key = `${process.env.CODECAST_TAILSCALE_BIN ?? ""}|${process.env.PATH ?? ""}`;
+  if (cache && cache.key === key && Date.now() - cache.at < CACHE_MS) return Promise.resolve(cache.status);
+  if (inflight?.key === key) return inflight.promise;
+  const promise = readTailnetAsync(key).finally(() => { if (inflight?.promise === promise) inflight = undefined; });
+  inflight = { key, promise };
+  return promise;
+}
+
+async function readTailnetAsync(key: string): Promise<TailnetStatus | null> {
+  let status: TailnetStatus | null = null;
+  for (const bin of candidates()) {
+    const r = await new Promise<{ code: string | number | null; stdout: string }>((resolve) => {
+      execFile(bin, ["status", "--json"], { encoding: "utf-8", timeout: STATUS_TIMEOUT_MS, env: process.env, maxBuffer: 64 * 1024 * 1024 }, (err: any, stdout: any) => {
+        resolve({ code: err ? (err.code ?? 1) : 0, stdout: String(stdout ?? "") });
+      });
+    });
+    if (r.code === "ENOENT") continue;
+    if (r.code === 0) status = parseTailnetStatus(r.stdout);
+    break;
+  }
+  if (status?.BackendState !== "Running") status = null;
+  cache = { key, at: Date.now(), status };
+  return status;
+}
+
+/** This machine's own tailnet identity, or null when it is not on a running tailnet. */
+export function selfTailnet(status: TailnetStatus | null): { ip: string; name: string; tailnet: string | null } | null {
+  if (status?.BackendState !== "Running") return null;
+  const ip = status.Self?.TailscaleIPs?.find((a) => /^\d+\.\d+\.\d+\.\d+$/.test(a));
+  const name = status.Self?.DNSName;
+  if (!ip || !name) return null;
+  return { ip, name, tailnet: status.CurrentTailnet?.MagicDNSSuffix || status.MagicDNSSuffix || null };
 }
 
 /** The recorded IP, if this tailnet shows that exact node online there; else null. */

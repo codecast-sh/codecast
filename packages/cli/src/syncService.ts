@@ -461,16 +461,26 @@ export class SyncService {
     });
   }
 
-  async requestFolderExport(conversationId: string, deviceId: string, folder: string): Promise<{ command_ids: string[]; labels: Record<string, string> }> {
+  async requestFolderExport(
+    conversationId: string,
+    deviceId: string,
+    folder: string,
+    opts: { tailnet?: { ip: string; name: string }; token_hash?: string; relay_only?: boolean; only_device_id?: string } = {},
+  ): Promise<{ command_ids: string[]; labels: Record<string, string> }> {
     return await this.mutate("folderSync:requestFolderExport", {
       api_token: this.apiToken,
       device_id: deviceId,
       conversation_id: conversationId,
       path: folder,
+      ...opts,
     });
   }
 
-  async folderExportOutcomes(commandIds: string[]): Promise<Array<{ command_id: string; executed_at: number | null; result: string | null; error: string | null; label: string | null }>> {
+  async recordPeerLink(link: { from_device_id: string; to_device_id: string; mode: "direct" | "relay"; ok: boolean; reason?: string; bytes?: number }): Promise<void> {
+    await this.mutate("peerLinks:recordPeerLink", { api_token: this.apiToken, ...link });
+  }
+
+  async folderExportOutcomes(commandIds: string[]): Promise<Array<{ command_id: string; executed_at: number | null; result: string | null; error: string | null; label: string | null; device_id?: string | null }>> {
     return await this.client.query("folderSync:folderExportOutcomes" as any, { api_token: this.apiToken, command_ids: commandIds });
   }
 
