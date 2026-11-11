@@ -90,6 +90,7 @@ const Landing = lazy(() => import("@/app/(marketing)/page"));
 const About = lazy(() => import("@/app/(marketing)/about/page"));
 const Features = lazy(() => import("@/app/(marketing)/features/page"));
 const FeatureDeepDive = lazy(() => import("@/app/(marketing)/features/FeatureDeepDivePage"));
+const AgentSetup = lazy(() => import("@/app/(marketing)/setup/SetupPage"));
 const Documentation = lazy(() => import("@/app/(marketing)/documentation/page"));
 const DocumentationGuide = lazy(() => import("@/app/(marketing)/documentation/guides/GuidePage"));
 const Privacy = lazy(() => import("@/app/(marketing)/privacy/page"));
@@ -303,6 +304,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "about", component: cast(About), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "features", component: cast(Features), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "features/:slug", component: cast(FeatureDeepDive), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "setup/:tool", component: cast(AgentSetup), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "documentation", component: cast(Documentation), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "documentation/:slug", component: cast(DocumentationGuide), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "privacy", component: cast(Privacy), layout: "marketing", guestOk: true, guestKind: "public" },

@@ -30,6 +30,31 @@ export function validateResourceSnapshot(snapshot: MachineResourceSnapshot, now:
 // goes stale at RESOURCE_STALE_MS (2 minutes).
 export const RESOURCE_REPORT_MIN_MS = 60_000;
 
+/** How old a kept process list may be before a report without one shows usage as unknown. */
+export const PROCESS_LIST_CARRY_MS = 5 * 60_000;
+
+/**
+ * A machine under heavy load misses the daemon's process capture budget on
+ * about every other sample (97% CPU on 2026-11-11). Without a list every
+ * session's usage reads unknown, which blanks the Resources page and the move
+ * review exactly when someone opens them to free the machine. So a report
+ * without a list keeps the previous one while it is recent, stamped with when
+ * it was captured.
+ */
+export function withCarriedProcesses(snapshot: MachineResourceSnapshot, previous: MachineResourceSnapshot | undefined): MachineResourceSnapshot {
+  if (snapshot.sample.processCount !== undefined || previous?.sample.processCount === undefined) return snapshot;
+  const capturedAt = previous.processesAt ?? previous.sample.at;
+  if (snapshot.sample.at - capturedAt > PROCESS_LIST_CARRY_MS) return snapshot;
+  const seconds = Math.round((snapshot.sample.at - capturedAt) / 1000);
+  return {
+    ...snapshot,
+    sample: { ...snapshot.sample, processCount: previous.sample.processCount },
+    processes: previous.processes, groups: previous.groups, omittedProcessCount: previous.omittedProcessCount,
+    processesAt: capturedAt,
+    limitations: [`Process list is from ${seconds}s before this sample; the latest capture timed out.`, ...snapshot.limitations.filter(l => !l.startsWith("Process capture failed"))].slice(0, 12),
+  };
+}
+
 export async function storeResourceSnapshot(ctx: MutationCtx, userId: Id<"users">, snapshot: MachineResourceSnapshot, now = Date.now()) {
   validateResourceSnapshot(snapshot, now);
   const device = await ctx.db.query("devices").withIndex("by_user_device", q => q.eq("user_id", userId).eq("device_id", snapshot.deviceId)).unique();
@@ -38,7 +63,7 @@ export async function storeResourceSnapshot(ctx: MutationCtx, userId: Id<"users"
   const background_sessions = existing?.background_sessions ?? [];
   if (existing && (snapshot.sample.at <= existing.snapshot.sample.at || now - existing.received_at < RESOURCE_REPORT_MIN_MS)) return { accepted: false, background_sessions };
   const history = [...(existing?.history ?? []).filter(p => now - p.at <= 2 * 3600_000), snapshot.sample].slice(-RESOURCE_HISTORY_LIMIT);
-  const data = { user_id: userId, device_id: snapshot.deviceId, received_at: now, snapshot, history };
+  const data = { user_id: userId, device_id: snapshot.deviceId, received_at: now, snapshot: withCarriedProcesses(snapshot, existing?.snapshot), history };
   const incident = device.is_remote ? null : sustainedResourcePressure(history, now);
   const alert = overloadAlertDue(incident, existing?.overload_alert, now);
   const stamp = alert ? { overload_alert: { since: alert.since, level: alert.level, at: now } } : {};

@@ -28,6 +28,8 @@ import {
   Lightbulb,
 } from "lucide-react";
 import { DocRow } from "../../components/docs/DocRow";
+import { NewDocMenu } from "../../components/docs/NewDocMenu";
+import { useArtifactContentSearch } from "../../hooks/useArtifactContentSearch";
 import { DocTypeMark } from "../../components/docs/DocTypeMark";
 import { isArtifactDocType } from "@codecast/shared/artifacts";
 import { createLiveArtifact, type WorkspaceStamp } from "../../lib/createLiveArtifact";
@@ -326,9 +328,11 @@ export function DocListContent() {
 
   // The row's time is the one the list is sorted by, so the times read in
   // order down the list.
+  // Boards, sheets and dashboards are found by the words inside them too.
+  const contentHits = useArtifactContentSearch();
   const renderDocRow = useCallback((doc: DocItem, state: ItemRowState) => (
-    <DocRow doc={doc} state={state} timeKey={sort === "created" ? "created_at" : "updated_at"} />
-  ), [sort]);
+    <DocRow doc={doc} state={state} timeKey={sort === "created" ? "created_at" : "updated_at"} match={contentHits.snippets.get(doc._id)} />
+  ), [sort, contentHits.snippets]);
 
   return (
     <GenericListView<DocItem>
@@ -413,8 +417,12 @@ export function DocListContent() {
       getItemRoute={(d) => `/docs/${d._id}`}
       getSearchText={(d) => docSearchText(d as any)}
       searchAllItems={searchScopeDocs}
+      onSearchChange={contentHits.setQuery}
+      alsoMatches={contentHits.matches}
       emptyIcon={<FileText className="w-8 h-8 opacity-30" />}
       emptyMessage="No documents found"
+      // With no type tab picked, + asks what to make; a type tab makes that type.
+      createMenu={docType ? undefined : (trigger) => <NewDocMenu>{trigger}</NewDocMenu>}
       onCreate={async () => {
         // Stamp the active workspace so the new doc lives where it was created
         // (a doc made in a team space belongs to that team).

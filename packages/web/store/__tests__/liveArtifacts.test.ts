@@ -21,6 +21,23 @@ describe("live artifact store", () => {
   });
   afterEach(() => s()._clearDispatch(owner));
 
+  it("marks the cache complete only when its rows number what the server holds", () => {
+    const B = { ...row({ x: 1 }, 2), key: "el_b" };
+    // Two rows on the server, both arrived: the cache is whole through r2.
+    applyElementsPayload({ ...payload([row({ x: 0 }, 1), B], 2), total: 2 });
+    expect(s().liveHeads[DOC].complete).toBe(2);
+    // A tail that says the doc holds a row this cache never saw: not whole.
+    applyElementsPayload({ ...payload([row({ x: 3 }, 4)], 4), total: 3 });
+    expect(s().liveHeads[DOC].complete).toBeNull();
+    // A row this tab made that the server has not stamped never counts toward the proof.
+    s().applyLiveOps(DOC, "main", [{ k: "el_new", put: { kind: "sticky", x: 9 } }]);
+    applyElementsPayload({ ...payload([row({ x: 3 }, 5)], 5), total: 3 });
+    expect(s().liveHeads[DOC].complete).toBeNull();
+    // An unknown total proves nothing.
+    applyElementsPayload({ ...payload([row({ x: 4 }, 6)], 6), total: null });
+    expect(s().liveHeads[DOC].complete).toBeNull();
+  });
+
   it("paints an edit at once and holds it against a stale push", () => {
     applyElementsPayload(payload([row({ x: 0 }, 1)], 1));
     s().applyLiveOps(DOC, "main", [{ k: "el_a", set: { x: 100 } }]);

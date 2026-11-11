@@ -112,7 +112,7 @@ async function settleRunTask(ctx: Ctx & { runMutation?: any }, run: any, runStat
   }
   const end = lineRunOutcome(run);
   await moveTaskStatus(ctx, task, next, { actorUserId: run.user_id, now, ...(next === "done" && end ? { closedAt: end.at } : {}), ...(unwatch ? { extra: unwatch } : {}) });
-  if (next === "done" && end?.kind === "shipped") await noticeChangeShipped(ctx, task, task.watch_until);
+  if (next === "done" && end?.kind === "shipped") await noticeChangeShipped(ctx, task, run, task.watch_until);
 }
 
 // ── the-line.md L4: a gate is a decision ─────────────────────────────────────

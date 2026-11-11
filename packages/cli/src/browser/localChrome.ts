@@ -60,12 +60,26 @@ export function listBrowserProcessesAsync(): Promise<BrowserProcess[]> {
   if (cached && (cached.settledAt === null || Date.now() - cached.settledAt < SHARED_LISTING_MS)) return cached.promise;
   const entry: { promise: Promise<BrowserProcess[]>; settledAt: number | null } = { promise: Promise.resolve([]), settledAt: null };
   entry.promise = execFileAsync("ps", PS_ARGS, { encoding: "utf-8", timeout: 30_000, maxBuffer: 32 * 1024 * 1024 })
-    .then(({ stdout }) => parseBrowserProcesses(stdout), () => [])
+    .then(({ stdout }) => (lastListing = parseBrowserProcesses(stdout)), () => [])
     .finally(() => {
       entry.settledAt = Date.now();
     });
   sharedListing = entry;
   return entry.promise;
+}
+
+let lastListing: BrowserProcess[] | null = null;
+
+/**
+ * The last listing that came back, at once, while a newer one is taken for
+ * the next caller; only the first call of a process waits. For a caller a
+ * person is waiting on: which Chromes run with a debugging port changes
+ * rarely, and a browser started since the last listing is seen one click
+ * later, where waiting for `ps` held every click for a closed tab.
+ */
+export function lastBrowserProcesses(): Promise<BrowserProcess[]> {
+  const fresh = listBrowserProcessesAsync();
+  return lastListing ? Promise.resolve(lastListing) : fresh;
 }
 
 function parseBrowserProcesses(ps: string): BrowserProcess[] {

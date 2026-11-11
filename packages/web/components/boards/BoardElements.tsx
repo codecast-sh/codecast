@@ -7,8 +7,7 @@ import {
   connectorGeometry,
   elementBox,
   smoothPath,
-  stickyFontSize,
-  stickyIconHeight,
+  stickyLayout,
   unflatten,
   type Box,
 } from "@codecast/shared/artifacts/board";
@@ -101,8 +100,7 @@ const StickyView = memo(function StickyView({ el, editing, onEditInput, onEditDo
   const text = typeof el.text === "string" ? el.text : "";
   const [draft, setDraft] = useState(text);
   const shown = editing ? draft : text;
-  const iconH = stickyIconHeight(icon, !!art, b.w, b.h);
-  const size = stickyFontSize(shown || " ", b.w, b.h - (iconH ? iconH + 6 : 0), 17, 11);
+  const { iconH, size } = stickyLayout(shown, b.w, b.h, icon, !!art);
   return (
     <div data-key={el.key} className="board-el board-sticky" style={boxStyle(el, { background: stickyFill(el.color) })}>
       {art ? (
