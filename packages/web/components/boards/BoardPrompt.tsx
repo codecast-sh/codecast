@@ -6,14 +6,12 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { ArrowUp, Bot } from "lucide-react";
 import type { ArtifactElement } from "@codecast/shared/artifacts";
-import { pickAskTarget, sendAsk, useAskDraft, type AskDoc } from "../live/AskAgentControl";
+import { pickAskTarget, sendAsk, useAskDraft, type AskDoc } from "../live/askAgent";
+import { BOARD_ASK_SLOT } from "./boardModel";
 import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
 
 export type PromptMode = "comment" | "ask" | "describe";
-
-/** The board's Ask draft (toolbar Ask and Describe a change share it). */
-export const BOARD_ASK_SLOT = "board-ask";
 
 export function BoardPrompt({ mode, at, doc, selected, initials, onComment, onClose, onSent }: {
   mode: PromptMode;

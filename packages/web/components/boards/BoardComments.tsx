@@ -1,39 +1,12 @@
 // Comment pins on the canvas and the thread a pin opens. Pins live in the
 // world layer (they move with what they point at); the thread opens in
 // screen space beside its pin.
-import { memo, useMemo, useState } from "react";
+import { memo, useState } from "react";
 import { Bot, Check } from "lucide-react";
-import { elementBox } from "@codecast/shared/artifacts/board";
 import type { ArtifactElement } from "@codecast/shared/artifacts";
 import { relativeTime } from "../../lib/entityDisplay";
 import type { BoardEl } from "./boardTypes";
-
-export function initialsOf(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  return ((parts[0]?.[0] ?? "?") + (parts[1]?.[0] ?? "")).toUpperCase();
-}
-
-/** Where a comment pin sits in world space: its point, else its anchor's top-right. */
-export function pinPoint(c: ArtifactElement, byKey: Map<string, BoardEl>): { x: number; y: number } | null {
-  const p = c.point as any;
-  if (p && typeof p.x === "number" && typeof p.y === "number") return p;
-  const a = typeof c.anchor === "string" ? byKey.get(c.anchor) : undefined;
-  if (!a) return null;
-  const b = elementBox(a);
-  return { x: b.x + b.w - 8, y: b.y - 8 };
-}
-
-export type Thread = { root: ArtifactElement; replies: ArtifactElement[] };
-
-export function useThreads(comments: ArtifactElement[]): Thread[] {
-  return useMemo(() => {
-    const replies = new Map<string, ArtifactElement[]>();
-    for (const c of comments) if (typeof c.parent === "string") replies.set(c.parent, [...(replies.get(c.parent) ?? []), c]);
-    return comments
-      .filter((c) => !c.parent && !c.resolved)
-      .map((root) => ({ root, replies: (replies.get(root.key) ?? []).sort((a, b) => Number(a.created_at ?? 0) - Number(b.created_at ?? 0)) }));
-  }, [comments]);
-}
+import { initialsOf, pinPoint, type Thread } from "./commentThreads";
 
 export const CommentPins = memo(function CommentPins({ threads, byKey, open, onOpen }: {
   threads: Thread[];

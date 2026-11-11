@@ -7,7 +7,7 @@ import { textOnColor, type ArtifactPosition, type ArtifactPresence } from "@code
 import { CursorArrow } from "../presence/CursorArrow";
 import type { ScreenPoint } from "./registry";
 
-export function presenceLabel(p: ArtifactPresence): string {
+function presenceLabel(p: ArtifactPresence): string {
   return p.kind === "agent" ? `✳ ${p.name}` : p.name;
 }
 

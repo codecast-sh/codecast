@@ -1,7 +1,9 @@
 // The foundation's proof board: stickies on a dotted canvas. Drag, add,
 // edit and delete go through the live handle (preview + commit for gestures).
 // The Boards product (ct-91884) replaces this view in components/live/registry.ts.
-import { memo, useEffect, useRef, useState } from "react";
+import { memo, useRef, useState } from "react";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { useEventListener } from "../../../hooks/useEventListener";
 import { newElementKey, type ArtifactElement } from "@codecast/shared/artifacts";
 import { useLiveElements } from "../useLiveArtifact";
 import type { LiveViewProps } from "../registry";
@@ -19,7 +21,7 @@ export default function MinimalBoardView({ doc, live, selection, setSelection, m
   const [scroll, setScroll] = useState({ x: 0, y: 0 });
   const editable = mode === "edit";
 
-  useEffect(() => {
+  useWatchEffect(() => {
     toScreen((pos) => {
       if (pos.point) return { x: pos.point.x - scroll.x, y: pos.point.y - scroll.y };
       const el = pos.key ? byKey.current.get(pos.key) : undefined;
@@ -35,19 +37,14 @@ export default function MinimalBoardView({ doc, live, selection, setSelection, m
     return { x: Math.round(e.clientX - r.left + scroll.x), y: Math.round(e.clientY - r.top + scroll.y) };
   };
 
-  useEffect(() => {
-    if (!editable) return;
-    const onKey = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement;
-      if (/^(INPUT|TEXTAREA)$/.test(t.tagName)) return;
-      if ((e.key === "Delete" || e.key === "Backspace") && selection.length) {
-        live.apply(selection.map((k) => ({ k, del: true })));
-        setSelection([]);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [editable, selection, live, setSelection]);
+  useEventListener("keydown", (e) => {
+    const t = e.target as HTMLElement;
+    if (/^(INPUT|TEXTAREA)$/.test(t.tagName)) return;
+    if ((e.key === "Delete" || e.key === "Backspace") && selection.length) {
+      live.apply(selection.map((k) => ({ k, del: true })));
+      setSelection([]);
+    }
+  }, editable ? window : null);
 
   return (
     <div

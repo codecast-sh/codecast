@@ -1,6 +1,7 @@
 // The foundation's proof sheet: one tab of raw cell inputs (no evaluation).
 // The Sheets product (ct-91885) replaces this view in components/live/registry.ts.
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { sheet, type ArtifactElement } from "@codecast/shared/artifacts";
 import { useLiveElements } from "../useLiveArtifact";
 import type { LiveViewProps } from "../registry";
@@ -23,7 +24,7 @@ export default function MinimalSheetView({ doc, live, selection, setSelection, m
   const editable = mode === "edit";
   const active = selection[0] && sheet.parseCellKey(selection[0]) ? selection[0] : null;
 
-  useEffect(() => {
+  useWatchEffect(() => {
     const rect = (col: number, row: number) => ({ x: HW + (col - 1) * CW - scroll.x, y: HH + (row - 1) * RH - scroll.y });
     toScreen((pos) => {
       const ref = pos.range ?? pos.cell ?? (pos.key?.startsWith("c:") ? pos.key.slice(2) : undefined);

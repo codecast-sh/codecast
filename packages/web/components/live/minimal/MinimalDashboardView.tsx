@@ -1,6 +1,7 @@
 // The foundation's proof dashboard: ordered KPI and text blocks. The Data
 // product (ct-91886) replaces this view in components/live/registry.ts.
-import { useEffect, useMemo, useRef } from "react";
+import { useMemo, useRef } from "react";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { newElementKey } from "@codecast/shared/artifacts";
 import { useLiveElements } from "../useLiveArtifact";
 import type { LiveViewProps } from "../registry";
@@ -11,7 +12,7 @@ export default function MinimalDashboardView({ doc, live, selection, setSelectio
   const box = useRef<HTMLDivElement>(null);
   const editable = mode === "edit";
 
-  useEffect(() => {
+  useWatchEffect(() => {
     toScreen((pos) => {
       const key = pos.block ?? pos.key;
       const node = key ? box.current?.querySelector<HTMLElement>(`[data-live-el="${CSS.escape(key)}"]`) : null;
@@ -22,7 +23,7 @@ export default function MinimalDashboardView({ doc, live, selection, setSelectio
     });
   }, [toScreen, blocks]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!editable) { setToolbar(null); return; }
     const next = () => (blocks.length ? Math.max(...blocks.map((b) => Number(b.order ?? 0))) + 1 : 1);
     setToolbar(
