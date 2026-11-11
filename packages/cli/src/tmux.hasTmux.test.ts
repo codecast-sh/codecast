@@ -1,8 +1,6 @@
-// hasTmux caches "not installed" for a minute so a tmuxless machine does not
-// pay a 2s execSync on every heartbeat. That cache must hold only a real
-// absence: `tmux -V` took 2979ms once under load (daemon.log 2026-08-31),
-// and a timeout cached as absence through the boot window refuses every
-// resume and WebSocket hello for a minute while the fleet reconnects.
+// hasTmux answers from the PATH, never by spawning tmux. Dozens of daemon
+// paths ask it on the event loop, and under load a synchronous `tmux -V` held
+// the loop for up to 146s a call (890s in one stretch, daemon.log 2026-11-10).
 //
 // tmux.ts reads PATH when it loads, so each scenario runs in a child bun
 // with a stub `tmux` first on PATH.
@@ -47,21 +45,12 @@ console.log(JSON.stringify({ first, second, firstMs: t1 - t0, secondMs: t2 - t1 
   }
 }
 
-describe("hasTmux negative cache", () => {
-  test("a timeout is not cached: the next call asks again and gets the real answer", () => {
-    // The stub stalls once (past the 2s timeout), then answers at once.
-    const r = probe(`if [ ! -e "$0.once" ]; then touch "$0.once"; sleep 4; fi\necho tmux 3.4`);
-    expect(r.first).toBe(false);
-    expect(r.firstMs).toBeGreaterThanOrEqual(1500);
+describe("hasTmux", () => {
+  test("finds tmux on PATH without running it, however slow it would be", () => {
+    const r = probe("sleep 30");
+    expect(r.first).toBe(true);
     expect(r.second).toBe(true);
-    expect(r.spawns).toBe(2);
-  }, 30_000);
-
-  test("a real absence is cached: one spawn, the second call answers from the cache", () => {
-    const r = probe("exit 1");
-    expect(r.first).toBe(false);
-    expect(r.second).toBe(false);
-    expect(r.spawns).toBe(1);
-    expect(r.secondMs).toBeLessThan(50);
+    expect(r.spawns).toBe(0);
+    expect(r.firstMs).toBeLessThan(500);
   }, 30_000);
 });

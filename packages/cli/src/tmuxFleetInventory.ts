@@ -83,7 +83,10 @@ export class FleetInventory {
     this.commands.set(key, { cmd, askedAt: now });
     const state: Server = this.servers.get(server) ?? { generation: 0, at: -Infinity, answers: new Map() };
     this.servers.set(server, state);
-    let answer = now - state.at < this.ttlMs ? state.answers.get(key) : undefined;
+    while (state.pass && (state.pass.generation !== state.generation || !state.pass.keys.has(key))) {
+      await state.pass.done;
+    }
+    let answer = this.now() - state.at < this.ttlMs ? state.answers.get(key) : undefined;
     if (!answer) {
       const pass = state.pass && state.pass.generation === state.generation && state.pass.keys.has(key) ? state.pass : this.startPass(server, state, exec);
       answer = (await pass.done).get(key)!;

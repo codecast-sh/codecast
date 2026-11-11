@@ -56,6 +56,26 @@ describe("FleetInventory", () => {
     expect(s.calls.length).toBe(1);
   });
 
+  test("new formats queue behind a slow pass instead of spawning overlapping clients", async () => {
+    const inv = new FleetInventory(clock().now);
+    const s = fakeServer({ "#{session_name}": ["cc-a"], "#{pane_pid}": ["11"] });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let starts = 0;
+    const slow = async (argv: string[]) => {
+      starts++;
+      await gate;
+      return s.exec(argv);
+    };
+    const first = inv.read("srv", A, slow);
+    const second = inv.read("srv", B, slow);
+    const third = inv.read("srv", A, slow);
+    expect(starts).toBe(1);
+    release();
+    expect(await Promise.all([first, second, third])).toEqual(["cc-a\n", "11\n", "cc-a\n"]);
+    expect(starts).toBe(2);
+  });
+
   test("a write drops the answers, and a read after it never joins a pass started before it", async () => {
     const c = clock();
     const inv = new FleetInventory(c.now);

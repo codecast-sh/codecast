@@ -1,4 +1,4 @@
-import { execSync, execFileSync, spawnSync, execFileAsync, TOOL_PATH, installCommandFor, installHintFor } from "./proc.js";
+import { execFileSync, spawnSync, execFileAsync, TOOL_PATH, whichBin, installCommandFor, installHintFor } from "./proc.js";
 import { snapshotProcessTable, snapshotProcessTableAsync, tmuxServerRows, type ProcRow } from "./processTable.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -11,13 +11,12 @@ import { fleetInventory } from "./tmuxFleetInventory.js";
 const ENRICHED_PATH = TOOL_PATH;
 
 let _hasTmux: boolean | null = null;
+// Installed means a tmux executable on the tool PATH, found by walking the PATH
+// rather than spawning `tmux -V`: dozens of daemon paths ask, and under load a
+// synchronous spawn held the event loop for up to 146s a call (890s in one
+// stretch on 2026-11-10, every caller re-spawning after the last timed out).
 // A negative answer is re-checked, so an install after boot is noticed; a
-// positive one is final. Without the negative cache a tmuxless machine paid
-// a 2s execSync on every heartbeat, command poll and /term/sessions request.
-// Only a real absence (ENOENT, a non zero exit) is cached: `tmux -V` took
-// 2979ms once under load (daemon.log 2026-08-31), and caching that timeout
-// as "not installed" through the boot window would refuse every resume and
-// WebSocket hello for a minute while the fleet reconnects.
+// positive one is final.
 let _hasTmuxCheckedAt = 0;
 const HAS_TMUX_RECHECK_MS = 60_000;
 
@@ -606,14 +605,7 @@ export function hasTmux(): boolean {
   if (_hasTmux === true) return true;
   if (_hasTmux === false && Date.now() - _hasTmuxCheckedAt < HAS_TMUX_RECHECK_MS) return false;
   _hasTmuxCheckedAt = Date.now();
-  try {
-    execSync("tmux -V", { stdio: "ignore", timeout: 2000, env: { ...process.env, PATH: ENRICHED_PATH } });
-    _hasTmux = true;
-  } catch (err) {
-    const e = err as { killed?: boolean; signal?: string | null };
-    if (e.killed || e.signal) return false; // a timeout kill says nothing about the install
-    _hasTmux = false;
-  }
+  _hasTmux = whichBin("tmux", ENRICHED_PATH) !== null;
   return _hasTmux;
 }
 
