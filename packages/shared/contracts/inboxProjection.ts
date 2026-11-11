@@ -352,6 +352,8 @@ export interface InboxPlacementInput extends WorkStateInput {
   pinned: boolean;
   /** The row is an anchor (a standing agent member); hidden unless hard blocked. */
   isAnchor: boolean;
+  /** A person started the latest turn (conversations.last_turn_origin). */
+  personTurn?: boolean;
   /** Own open ask or permission prompt, a pending `cast decide`, or a child's open ask. */
   asking: boolean;
 }
@@ -409,10 +411,11 @@ export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
   else if (input.stashed) bucket = "stashed";
   else if (input.snoozed) bucket = "snoozed";
   else if (input.snoozeDue && !input.killed) bucket = "needs_input";
-  // A standing session is hidden until it needs a person: hard blocked, or
-  // asking (a `cast decide` in its own thread is how a lead raises a choice,
-  // org-staffing.md S28).
-  else if (input.isAnchor && !isHardBlocked(input) && !input.asking) bucket = "hidden";
+  // A standing session is hidden while it runs its own machine-driven turns,
+  // and surfaces when it needs a person: hard blocked, asking (a `cast decide`
+  // in its own thread is how a lead raises a choice, org-staffing.md S28), or
+  // answering a turn a person started, whose reply is theirs to read.
+  else if (input.isAnchor && !isHardBlocked(input) && !input.asking && !input.personTurn) bucket = "hidden";
   // A killed row is triaged: its prompt or pending decide has nobody to answer
   // it, so it never files as a question (the replica's asking derivation and
   // the web decision queue already skip killed rows; the two-replica
@@ -1236,6 +1239,8 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   /** Legacy dormant-only stamp; userRestOf still honors it. */
   inbox_dormant_at?: number | null;
   anchor_id?: unknown;
+  /** conversations.last_turn_origin: who started the latest turn. */
+  last_turn_origin?: "person" | "machine" | null;
   armed_trigger_kind?: string | null;
   /** conversations.agent_type: a hosted conversation's routine never parks it. */
   agent_type?: string | null;
@@ -1564,6 +1569,7 @@ export function placeProjectableRow(
     stashed: !!row.inbox_stashed_at,
     pinned: !!row.inbox_pinned_at,
     isAnchor: !!row.anchor_id,
+    personTurn: row.last_turn_origin === "person",
     asking,
   });
 }

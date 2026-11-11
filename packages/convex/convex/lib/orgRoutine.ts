@@ -53,7 +53,7 @@ export function roleRoutineFor(role: { handle: string; name: string }): { title:
 export const ROLE_NEEDS_INPUT_TITLE = "A session under you needs input";
 export const ROLE_NEEDS_INPUT_PROMPT = [
   `A session that reports to you is waiting and cannot continue on its own. Read what it needs with \`cast read <its id>\`, and answer it with \`cast send\` when the answer is yours to give. When it posted a decision, read it with \`cast decide show <its id>\` and answer it if you hold the grant or it is the change card of a line run in your area, whose Ship, Revise or Drop is yours to give once the card's page and evidence show the fix is right. Otherwise hand it up to its people on the same card: \`cast decide recommend\` with the option you favour, or \`cast decide pass\` when you favour none, each with a \`--note\` of one or two plain sentences giving the person what you know that the card does not say. The card already carries the question and its context: never retell them, and name nothing by an id, a file or a rule number. A decision you leave alone reaches them after five minutes without your word.`,
-  `When something else needs a person, raise it here in your own thread. \`cast brief\` lists every session waiting under you.`,
+  `When something else needs a person, raise it with \`cast decide\` from your own thread. Your thread stays out of their inbox until it asks, so a question written there in prose reaches no one. \`cast brief\` lists every session waiting under you.`,
 ].join("\n");
 
 // A role hears on the machine its standing session runs on. A machine that

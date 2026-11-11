@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { isUserMessageNoise, sendText, stripMessageTags, typedWords } from "./userSend";
-import { AGENT_SETUP_CONTINUE_MESSAGE, HUDDLE_FEED_DISREGARD, huddleFeedBriefing, transcriptChunkHeader } from "@codecast/shared/contracts";
+import { isUserMessageNoise, sendText, stripMessageTags, turnOrigin, typedWords } from "./userSend";
+import { AGENT_SETUP_CONTINUE_MESSAGE, HUDDLE_FEED_DISREGARD, formatDecisionAnswer, formatScheduledTask, formatSessionMessage, formatUserMessage, huddleFeedBriefing, transcriptChunkHeader } from "@codecast/shared/contracts";
 import { addToFlowsMessage, runThroughMessage } from "../../../web/lib/line/flowMessages";
 
 // The profile feed's Typed view and the Sends counter both run on this
@@ -102,5 +102,24 @@ describe("pressed, not typed", () => {
   test("a tagged decision answer counts its own words; the untagged legacy line does not", () => {
     expect(typedWords('Decision: no, wait for Sam\n<cast-decision id="k97x" question="Ship it?"/>')).toBe(4);
     expect(typedWords("Decision: Ship now")).toBeNull();
+  });
+});
+
+describe("turnOrigin", () => {
+  const conv = { user_id: "u1" } as any;
+  test("a person's own words open a person's turn", () => {
+    expect(turnOrigin(conv, { role: "user", content: "no they don't" })).toBe("person");
+    expect(turnOrigin(conv, { role: "user", content: formatUserMessage("Ashot Petrosian", "ship it"), queued: "person" })).toBe("person");
+    expect(turnOrigin(conv, { role: "user", content: formatDecisionAnswer({ id: "sd-1", question: "Own database?", answer: "No" }) })).toBe("person");
+  });
+  test("machine deliveries and program sends open a machine turn", () => {
+    expect(turnOrigin(conv, { role: "user", content: formatSessionMessage("jx7c6zk", "done") })).toBe("machine");
+    expect(turnOrigin(conv, { role: "user", content: "continue the plan", queued: "program" })).toBe("machine");
+    const wake = formatScheduledTask({ title: "A session under you needs input", task_id: "rx1", trigger: "tr-2574", event: "session_needs_input", body: "Read what it needs." } as any);
+    expect(turnOrigin(conv, { role: "user", content: wake })).toBe("machine");
+  });
+  test("tool results and assistant rows open no turn", () => {
+    expect(turnOrigin(conv, { role: "user", content: "", tool_results: [{}] })).toBeNull();
+    expect(turnOrigin(conv, { role: "assistant", content: "hi" })).toBeNull();
   });
 });

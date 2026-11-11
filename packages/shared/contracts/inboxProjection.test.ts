@@ -217,6 +217,21 @@ describe("placeInboxRow — bucket precedence", () => {
     expect(placeInboxRow(input({ isAnchor: true, agentStatus: "stopped", messageCount: 0 })).bucket).toBe("hidden");
   });
 
+  test("an anchor answering a turn a person started files like any session", () => {
+    // The eval lead answered a person and pinned itself dormant: the reply is
+    // theirs to read, so it leaves hidden and files by its work state.
+    expect(placeInboxRow(input({ isAnchor: true, personTurn: true, agentStatus: "dormant" })).bucket).toBe("dormant");
+    expect(placeInboxRow(input({ isAnchor: true, personTurn: true })).bucket).not.toBe("hidden");
+    // Its own machine-driven turns stay hidden.
+    expect(placeInboxRow(input({ isAnchor: true, personTurn: false, agentStatus: "dormant" })).bucket).toBe("hidden");
+  });
+
+  test("placement reads the turn origin off the row", () => {
+    const base = { _id: "a", updated_at: 1, message_count: 5, is_idle: true, agent_status: "dormant", anchor_id: "an1" };
+    expect(placeProjectableRow({ ...base, last_turn_origin: "person" }, false, 2).bucket).toBe("dormant");
+    expect(placeProjectableRow({ ...base, last_turn_origin: "machine" }, false, 2).bucket).toBe("hidden");
+  });
+
   test("asking outranks pinned, pinned outranks the work buckets", () => {
     expect(placeInboxRow(input({ asking: true, pinned: true })).bucket).toBe("questions");
     const pinned = placeInboxRow(input({ pinned: true }));

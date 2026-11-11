@@ -97,7 +97,8 @@ import {
   matchDirectoryMapping,
 } from "./privacy";
 import { effectiveMembershipVisibility } from "./teamVisibility";
-import { activeTeamMembershipFor, canAccessConversation, patchConversationVisibility } from "./lib/access";
+import { activeTeamMembershipFor, canAccessConversation } from "./lib/access";
+import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { isStaff } from "./lib/staff";
 import { batchScanConversations, paginateTeamFeed } from "./feedPagination";
 import { mergeUserMessageFeed, type FeedCandidate } from "./messageFeed";
@@ -8794,6 +8795,7 @@ async function enrichInboxSessionRow(
     acting_user_id: (conv as any).acting_user_id ?? null,
     is_anchor: !!(conv as any).anchor_id,
     anchor_id: (conv as any).anchor_id ?? null,
+    last_turn_origin: conv.last_turn_origin ?? null,
     author_name: acting ? acting.name : undefined,
     author_avatar: acting ? acting.avatar : undefined,
     // Carried through so the client can filter the same session cache into the
