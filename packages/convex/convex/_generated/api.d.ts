@@ -181,6 +181,7 @@ import type * as flowLibrary from "../flowLibrary.js";
 import type * as flowMap from "../flowMap.js";
 import type * as flowMapSchema from "../flowMapSchema.js";
 import type * as flowVersions from "../flowVersions.js";
+import type * as folderSync from "../folderSync.js";
 import type * as follow from "../follow.js";
 import type * as forkCopy from "../forkCopy.js";
 import type * as functions from "../functions.js";
@@ -877,6 +878,7 @@ declare const fullApi: ApiFromModules<{
   flowMap: typeof flowMap;
   flowMapSchema: typeof flowMapSchema;
   flowVersions: typeof flowVersions;
+  folderSync: typeof folderSync;
   follow: typeof follow;
   forkCopy: typeof forkCopy;
   functions: typeof functions;
