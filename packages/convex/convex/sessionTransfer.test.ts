@@ -56,14 +56,29 @@ describe("requestSessionExport", () => {
 
   test("names the conversation's own session and its newest synced message", async () => {
     const { t, owner, conv, as, argsOf } = await setup();
+    const [older, newer] = [crypto.randomUUID(), crypto.randomUUID()];
     await t.run(async (ctx) => {
-      for (const [timestamp, message_uuid] of [[1, "u-old"], [2, "u-new"], [3, undefined]] as const) {
+      for (const [timestamp, message_uuid] of [[1, older], [2, newer], [3, undefined]] as const) {
         await ctx.db.insert("messages", { conversation_id: conv, role: "user", content: "hi", timestamp, ...(message_uuid ? { message_uuid } : {}) } as any);
       }
     });
     const asked = await as(owner).mutation(api.sessionTransfer.requestSessionExport, { device_id: "here", conversation_id: conv });
-    expect(await argsOf(asked.command_ids[0])).toMatchObject({ last_uuid: "u-new" });
+    expect(await argsOf(asked.command_ids[0])).toMatchObject({ last_uuid: newer });
     await expect(as(owner).mutation(api.sessionTransfer.requestSessionExport, { device_id: "here", conversation_id: conv, session_id: crypto.randomUUID() } as any)).rejects.toThrow();
+  });
+
+  test("the newest message a transcript can hold, never a server-minted divider", async () => {
+    const { t, owner, conv, as, argsOf } = await setup();
+    const u = crypto.randomUUID();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("messages", { conversation_id: conv, role: "assistant", content: "done", timestamp: 1, message_uuid: u } as any);
+      for (const [timestamp, subtype] of [[2, "agent_switch"], [3, "machine_switch"]] as const) {
+        await ctx.db.insert("messages", { conversation_id: conv, role: "user", content: "moved", subtype, timestamp, message_uuid: crypto.randomUUID() } as any);
+      }
+      await ctx.db.insert("messages", { conversation_id: conv, role: "assistant", content: "x", timestamp: 4, message_uuid: "stopped:turn1" } as any);
+    });
+    const asked = await as(owner).mutation(api.sessionTransfer.requestSessionExport, { device_id: "here", conversation_id: conv });
+    expect(await argsOf(asked.command_ids[0])).toMatchObject({ last_uuid: u });
   });
 
   test("refuses a conversation whose session id is not a UUID", async () => {
