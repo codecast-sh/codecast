@@ -38,6 +38,17 @@ export function isWriteConflict(err: unknown): boolean {
   const text = err instanceof Error ? err.message : String(err);
   return /OptimisticConcurrencyControlFailure|changed while this mutation was being run/.test(text);
 }
+/**
+ * The connection dropped before an answer came back (a laptop's wifi blinking,
+ * a socket reset mid-request). Whether the write landed is unknown, so only an
+ * idempotent call may be sent again.
+ */
+export function isTransientNetworkError(err: unknown): boolean {
+  const e = err as { code?: string; cause?: { code?: string }; message?: string } | null;
+  const code = e?.cause?.code ?? e?.code;
+  if (code && /^(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENETUNREACH|EHOSTUNREACH|ENOTFOUND|EAI_AGAIN|ConnectionClosed|ConnectionRefused)$/.test(code)) return true;
+  return /ECONNRESET|socket connection was closed unexpectedly|fetch failed|network (?:error|connection was lost)/i.test(e?.message ?? String(err));
+}
 const WRITE_CONFLICT_RETRIES = 5;
 const backoffMs = (attempt: number) => 400 * (attempt + 1);
 

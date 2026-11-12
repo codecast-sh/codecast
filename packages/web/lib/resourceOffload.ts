@@ -1,7 +1,7 @@
 import { sustainedResourcePressure, evaluateOffloadRequirements, type HostReadiness, type CloudHostReport, type ResourcePoint } from "@codecast/shared/contracts";
 import { freshness, memoryUsed } from "../components/resources/resourceModel";
 import type { OffloadPlan, OffloadCandidate, OffloadRehearsal, ResourceMachine, ResourceSession } from "../components/resources/types";
-import type { MoveRehearsal } from "@codecast/shared/contracts/moveRehearsal";
+import { REHEARSAL_RUNNER_DEADLINE_MS, type MoveRehearsal } from "@codecast/shared/contracts/moveRehearsal";
 import { eligibilityFor, type MigrationCandidate, type MigrationDevice } from "./migrationPlan";
 
 export type OffloadDeviceEvidence = MigrationDevice & { platform?: string; host_readiness?: HostReadiness; cloud_host?: CloudHostReport };
@@ -45,19 +45,22 @@ export function buildOffloadPlan(input: OffloadPlanInput): OffloadPlan | null {
   // stranding the move exactly when the machine is overloaded.
   const listed = source.snapshot!.sample.processCount !== undefined;
   for (const session of sessions.filter(s => s.deviceId === source.deviceId)) {
-    const migration = candidates.find(c => c._id === session.conversationId);
+    // The candidate feed is a heavy query that can fail or lag, leaving an old
+    // cached list; a live session it does not name still moves on what the
+    // fleet row says, and the server's preflight decides.
+    const migration = candidates.find(c => c._id === session.conversationId) ?? fleetCandidate(session);
     const processes = source.snapshot!.processes.filter(p => p.sessionId === session.sessionId);
     const shared = source.snapshot!.processes.some(p => p.sharedSessionIds?.includes(session.sessionId));
     // Short labels: the review groups sessions under them with a count.
     const reason = session.pinned ? "Pinned"
       : input.blockedSessions?.[session.sessionId]
       ?? (session.state === "dead" || session.state === "hibernated" ? "Not running"
-      : !migration ? "Not movable"
+      : !migration ? "No conversation"
       : !["claude", "claude_code", "claude-code", ""].includes((migration.agent_type ?? "").toLowerCase()) ? "Not Claude Code"
       : shared ? "Shares a process"
       : listed && processes.length === 0 ? "No process found"
       : null);
-    if (reason || !migration) { plan.notOffered.push({ sessionId: session.sessionId, reason: reason ?? "Not movable" }); continue; }
+    if (reason || !migration) { plan.notOffered.push({ sessionId: session.sessionId, reason: reason ?? "No conversation" }); continue; }
     const rss = processes.reduce((n, p) => n + p.rss, 0);
     const cpu = processes.reduce((n, p) => n + p.cpu, 0);
     const macRequired = processes.some(p => p.kind === "simulator" || /xcodebuild|simctl|codesign/i.test(p.name));
@@ -92,6 +95,13 @@ export function buildOffloadPlan(input: OffloadPlanInput): OffloadPlan | null {
   plan.candidates.sort((a, b) => Number(a.disruption === "mid_turn") - Number(b.disruption === "mid_turn") || (b.relief.cpu ?? 0) - (a.relief.cpu ?? 0) || (b.relief.rssHigh ?? 0) - (a.relief.rssHigh ?? 0));
   plan.staying = stayingSessions(plan, source, sessions.filter(s => s.deviceId === source.deviceId));
   return plan;
+}
+
+function fleetCandidate(s: ResourceSession): MigrationCandidate | undefined {
+  if (!s.conversationId) return undefined;
+  return { _id: s.conversationId, short_id: s.shortId ?? null, title: s.title, owner_device_id: s.deviceId ?? null, agent_type: s.agentType ?? null,
+    project_path: s.projectPath ?? null, worktree_name: null, worktree_branch: null, updated_at: s.lastActiveAt ?? 0, has_pending_messages: false,
+    migration: null, cloud_placement: null, inbox_stashed_at: null, inbox_dismissed_at: null, held_reason: null };
 }
 
 /** A session using at least this much of one core is doing work worth naming when it cannot move. */
@@ -260,7 +270,7 @@ export type RehearsalRow = { _id: string; session_id: string; destination_id: st
  * What it found would fail the transfer blocks that destination; the rest
  * rides on the destination for the review to show and the person to weigh.
  */
-export function applyRehearsals(plan: OffloadPlan, rows: RehearsalRow[]): OffloadPlan {
+export function applyRehearsals(plan: OffloadPlan, rows: RehearsalRow[], now: number): OffloadPlan {
   if (!rows.length) return plan;
   const newest = new Map<string, RehearsalRow>();
   for (const r of rows) {
@@ -277,7 +287,9 @@ export function applyRehearsals(plan: OffloadPlan, rows: RehearsalRow[]): Offloa
         if (!r) continue;
         changed = true;
         const rehearsal: OffloadRehearsal = r.status === "done" && r.result ? { status: "done", result: r.result }
-          : r.status === "pending" ? { status: "pending" } : { status: "failed", error: r.error ?? "The rehearsal did not finish" };
+          // The feed's own deadline is computed when the query last ran, and nothing re-runs it as time passes.
+          : r.status === "pending" && now - r.created_at <= REHEARSAL_RUNNER_DEADLINE_MS ? { status: "pending" }
+          : { status: "failed", error: r.status === "pending" ? "The machine holding the session did not answer" : r.error ?? "The rehearsal did not finish" };
         const blockers = rehearsal.status === "done" ? [...new Set([...was.blockers, ...rehearsal.result.blockers])] : was.blockers;
         perDestination[dest] = { ...was, rehearsal, blockers, readiness: blockers.length ? "blocked" : was.readiness };
       }
