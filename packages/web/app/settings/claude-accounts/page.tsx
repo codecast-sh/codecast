@@ -44,6 +44,7 @@ import { RecoveryModeSelect, RecoveryDecisionNote } from "../../../components/Re
 import { useMachineAccountSwitch } from "../../../hooks/useMachineAccountSwitch";
 import { machineSwitchBlock, profileIsCurrentLogin, profileIsFleetAccount } from "../../../lib/machineAccountSwitch";
 import { AccountPoolPill } from "../../../components/settings/AccountPoolPill";
+import { AccountMachinesControl } from "../../../components/settings/AccountMachinesControl";
 import { useAccountPool, useSyncAccountPool } from "../../../hooks/useSyncAccountPool";
 import { modernButton, modernPill } from "../../../components/ui/modernLook";
 
@@ -477,6 +478,9 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
                     />
                     <SetupTokenBadge profile={p} now={now} />
                     <MintTokenButton device={device} profile={p} />
+                    {p.email && profileHasSetupToken(p, now) && (
+                      <AccountMachinesControl deviceId={device.device_id} email={p.email} />
+                    )}
                     {!device.is_remote && p.email && profileHasSetupToken(p, now) && (
                       <AccountPoolPill deviceId={device.device_id} email={p.email} />
                     )}

@@ -74,7 +74,7 @@ import { SessionActionsSheet, type SessionRow, type SessionTile } from '@/compon
 import { ModelSwitcherChip } from '@/components/ModelSwitcherChip';
 import { ApprovalCard, ApprovalPending, ApprovalSettled } from '@/components/hosted/ApprovalCard';
 import { DecisionCard } from '@/components/decisions/DecisionCard';
-import { PermissionRecordLine } from '@/components/decisions/PermissionRecord';
+import { PermissionAnswerLine } from '@/components/decisions/PermissionRecord';
 import { permissionRecord } from '@codecast/shared/contracts/commandRun';
 import { useRunningPermission } from '@codecast/web/hooks/useRunningPermission';
 import { ProposalBatchContext } from '@/components/org/ProposalCard';
@@ -4432,7 +4432,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     // answer lands once the step is over, so its record is final.
     if (kind?.kind === 'decision_answer' && !hosted) {
       const record = permissionRecord(kind.decision, (useInboxStore.getState().sessionDecisions as Record<string, any>)[kind.decision.id ?? '']?.run);
-      if (record) return <PermissionRecordLine {...record} />;
+      if (record) return <PermissionAnswerLine decisionId={kind.decision.id} {...record} />;
     }
 
     // A person's direct send (<user-message from="Name">) is that person's
@@ -5029,7 +5029,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         {!hosted && pendingDecisions[0]?.decisionId ? (
           <DecisionCard key={pendingDecisions[0].decisionId} decisionRef={pendingDecisions[0].decisionId} docked />
         ) : !hosted && runningPermission ? (
-          <RNView style={{ marginHorizontal: 12 }}><PermissionRecordLine question={runningPermission.question} outcome="running" /></RNView>
+          <RNView style={{ marginHorizontal: 12 }}><PermissionAnswerLine decisionId={runningPermission.id} question={runningPermission.question} outcome="running" /></RNView>
         ) : null}
         <RNView style={styles.composerLayer}>
           <MessageInput
