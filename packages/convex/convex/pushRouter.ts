@@ -32,7 +32,7 @@ import {
   type MachineDevice,
   type PresenceRow,
 } from "./presencePolicy";
-import { canAccessConversation, workspaceGrantsAccess, workspaceKey } from "./lib/access";
+import { canAccessConversation, viewingAccessStamp, workspaceGrantsAccess, workspaceKey } from "./lib/access";
 import type { Id } from "./_generated/dataModel";
 import { PUSH_TYPE_LABELS } from "./lib/pushPrivacy";
 
@@ -577,18 +577,21 @@ export const reportPresence = mutation({
 async function viewingFieldsPatch(
   ctx: { db: any },
   userId: Id<"users">,
-  existing: { viewing_conversation_id?: Id<"conversations"> } | null,
+  existing: { viewing_conversation_id?: Id<"conversations">; viewing_access?: unknown } | null,
   reported: Id<"conversations"> | undefined,
   now: number,
-): Promise<{ viewing_conversation_id?: Id<"conversations">; viewing_since?: number }> {
+): Promise<{ viewing_conversation_id?: Id<"conversations">; viewing_since?: number; viewing_access?: ReturnType<typeof viewingAccessStamp> }> {
   const current = existing?.viewing_conversation_id;
-  if (reported === current) return {};
+  // A row written before viewing_access existed gets its copy on the next
+  // report; the roster shows no viewed id until it has one.
+  if (reported === current && (!current || existing?.viewing_access)) return {};
   if (reported) {
     const conversation = await ctx.db.get(reported);
     if (conversation && (await canAccessConversation(ctx as any, userId, conversation))) {
-      return { viewing_conversation_id: reported, viewing_since: now };
+      const access = viewingAccessStamp(conversation);
+      return reported === current ? { viewing_access: access } : { viewing_conversation_id: reported, viewing_since: now, viewing_access: access };
     }
   }
   if (current === undefined) return {};
-  return { viewing_conversation_id: undefined, viewing_since: undefined };
+  return { viewing_conversation_id: undefined, viewing_since: undefined, viewing_access: undefined };
 }
