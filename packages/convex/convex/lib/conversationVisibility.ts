@@ -63,7 +63,29 @@ export async function patchConversationVisibility(
     detail: { before: pick(conversation), after: pick(after) },
   });
   await invalidateForConversation(ctx, after);
+  await refreshViewingAccess(ctx, after);
   // A decision's team is routing (lib/decisionTeam.ts): it follows the conversation to its new team.
   if ("team_id" in updates && String(updates.team_id ?? "") !== String(conversation.team_id ?? "")) await restampDecisionTeams(ctx, conversation._id);
   return recomputeWorkspaceForConversation(ctx, after);
+}
+
+// Presence rows naming this conversation carry a copy of its access fields
+// (viewingAccessStamp); a visibility move rewrites them in the same mutation,
+// so the roster's gate never runs on a stale copy.
+async function refreshViewingAccess(
+  ctx: AccessCtx,
+  conv: { _id: Id<"conversations">; team_id?: Id<"teams">; is_private?: boolean; team_visibility?: string },
+): Promise<void> {
+  const rows = await ctx.db
+    .query("user_presence")
+    .withIndex("by_viewing_conversation", (q: any) => q.eq("viewing_conversation_id", conv._id))
+    .collect();
+  const moved: Record<string, any> = {};
+  if ("team_id" in conv) moved.team_id = conv.team_id;
+  if ("is_private" in conv) moved.is_private = conv.is_private !== false;
+  if ("team_visibility" in conv) moved.team_visibility = conv.team_visibility;
+  for (const row of rows) {
+    if (!row.viewing_access) continue;
+    await ctx.db.patch(row._id, { viewing_access: { ...row.viewing_access, ...moved } });
+  }
 }

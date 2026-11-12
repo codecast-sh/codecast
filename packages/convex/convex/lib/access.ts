@@ -149,6 +149,26 @@ export async function requireTeamMembership(
   return membership;
 }
 
+/** The fields canAccessConversation reads off a conversation, as a viewer's
+ *  presence row stores them (user_presence.viewing_access). Owners are not
+ *  copied: the access rule reads session_owners live, and owner_user_id is
+ *  only ever a cache of that set. */
+export function viewingAccessStamp(conv: {
+  user_id: Id<"users">;
+  team_id?: Id<"teams">;
+  is_private?: boolean;
+  team_visibility?: string;
+  started_at?: number;
+}) {
+  return {
+    user_id: conv.user_id,
+    team_id: conv.team_id,
+    is_private: conv.is_private !== false,
+    team_visibility: conv.team_visibility,
+    started_at: conv.started_at,
+  };
+}
+
 /**
  * The team a user is working in right now: the team they are looking at
  * (`active_team_id`), else their home team, counted only with a live

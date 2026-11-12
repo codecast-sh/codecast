@@ -529,11 +529,15 @@ export const getTeamMembers = query({
         // themselves: the id of a private session is itself a fact about it,
         // so it goes through the same access rule every reader of the session
         // does. Access reads never touch team_id (CLAUDE.md, workspace rules).
+        // Gated on the presence row's copy of the conversation's access
+        // fields (viewing_access), never the conversation itself: reading it
+        // re-ran this roster for every subscriber at the viewed session's
+        // streaming rate (ct-92571). Owners are still read live.
         let viewingConversationId: Id<"conversations"> | undefined;
-        if (surfaceAlive && presenceRow.viewing_conversation_id) {
-          const viewed = await ctx.db.get(presenceRow.viewing_conversation_id);
-          if (viewed && (await canAccessConversation(ctx, authUserId, viewed))) {
-            viewingConversationId = viewed._id;
+        const viewingId = presenceRow?.viewing_conversation_id;
+        if (surfaceAlive && viewingId && presenceRow.viewing_access) {
+          if (await canAccessConversation(ctx, authUserId, { _id: viewingId, ...presenceRow.viewing_access })) {
+            viewingConversationId = viewingId;
           }
         }
         const devices =

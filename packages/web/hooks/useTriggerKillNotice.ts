@@ -1,7 +1,6 @@
-import { useCallback, useRef } from "react";
-import { useQueryNoThrow } from "./useQueryNoThrow";
-import { api } from "@codecast/convex/convex/_generated/api";
+import { useCallback } from "react";
 import { toast } from "sonner";
+import { useSyncTriggers } from "./useSyncTriggers";
 import { animatedHideSessions } from "../store/undoActions";
 import { useInboxStore } from "../store/inboxStore";
 import {
@@ -17,19 +16,15 @@ import {
 // so — this hook is the one place that says it, shared by every kill/restore
 // surface: the sidebar card buttons, the command palette, the keyboard chords,
 // and the stashed-bucket "Kill all".
-//
-// The webList subscription is deduped by Convex with the panel/badge/strip
-// subscriptions, so mounting this hook anywhere costs no extra server load.
+
 export function useTriggerKillNotice() {
-  // No-throw: this subscription only ENRICHES the kill (it names the triggers
-  // a kill cancels). It mounts app-wide — the global chords, and the triage
-  // bar on every inbox view — so a webList server failure crashing the
-  // subscriber would take the whole stage down (it did, 2026-08-31: a webList
-  // timeout under load unmounted the app into the top-level boundary). The
-  // kill itself never needs it; without data the notices just stay silent.
-  const tasks = useQueryNoThrow(api.agentTasks.webList, {}).data as TaskRow[] | undefined;
-  const tasksRef = useRef(tasks);
-  tasksRef.current = tasks;
+  // The triggers a kill cancels and a restore re-arms are read off the store
+  // at the moment of the click, fed by the shared trigger feeder (armed rows
+  // plus a recent tail; useSyncTriggers). This hook mounts app-wide, and it
+  // used to hold its own subscription to the complete trigger history:
+  // thousands of rows per account, 1.5 GB read in 191 s of prod on
+  // 2026-11-12 (ct-92571).
+  useSyncTriggers();
 
   // Toast the cancellation with a "Keep trigger" escape hatch (re-arm WITHOUT
   // restoring the session). The undo of the kill itself needs no client hook:
@@ -67,7 +62,7 @@ export function useTriggerKillNotice() {
   // collapses out, the kill is one undo, and the notice is one aggregate.
   const killManyWithNotice = useCallback((ids: string[]) => {
     if (!ids.length) return;
-    const armed = new Map(ids.map((id) => [id, armedInjectTasksFor(tasksRef.current, id)]));
+    const armed = new Map(ids.map((id) => [id, armedInjectTasksFor(storeTasks(), id)]));
     void animatedHideSessions(ids, "kill").then((killed) => noticeCanceled(killed.flatMap((id) => armed.get(id) ?? [])));
   }, [noticeCanceled]);
   // Kill one session, saying what triggers died with it.
@@ -78,7 +73,7 @@ export function useTriggerKillNotice() {
   // makes the side effect visible (a once-trigger whose time has passed
   // re-arms a minute out — silently reviving it would be a nasty surprise).
   const restoreWithNotice = useCallback((id: string) => {
-    const revived = killCanceledTasksFor(tasksRef.current, id);
+    const revived = killCanceledTasksFor(storeTasks(), id);
     useInboxStore.getState().restoreSession(id);
     if (revived.length) {
       toast.success(
@@ -90,4 +85,8 @@ export function useTriggerKillNotice() {
   }, []);
 
   return { killWithNotice, killManyWithNotice, restoreWithNotice };
+}
+
+function storeTasks(): TaskRow[] {
+  return Object.values((useInboxStore.getState() as any).agentTasks ?? {}) as TaskRow[];
 }

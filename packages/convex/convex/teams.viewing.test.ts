@@ -3,6 +3,8 @@ import { makeFakeDb } from "./testDb";
 import { getTeamMembers } from "./teams";
 import { reportPresence } from "./pushRouter";
 import { PRESENCE_BUCKET_MS, PRESENCE_FRESH_MS } from "./presenceState";
+import { viewingAccessStamp } from "./lib/access";
+import { patchConversationVisibility } from "./lib/conversationVisibility";
 
 // Who is viewing what, as the roster tells it. The stored id is a fact about
 // the viewed session, so it reaches only callers who could open that session
@@ -70,7 +72,14 @@ function presence(user: string, viewing: string | undefined, lastSeenAgo = 0) {
     updated_at: NOW - lastSeenAgo,
     viewing_conversation_id: viewing,
     viewing_since: viewing ? NOW - 5 * 60_000 - 1234 : undefined,
+    viewing_access: viewing ? stampOf(viewing) : undefined,
   };
+}
+
+// The copy reportPresence writes beside the id.
+function stampOf(id: string) {
+  const conv = tables().conversations.find((c) => c._id === id);
+  return conv ? viewingAccessStamp(conv as any) : undefined;
 }
 
 describe("getTeamMembers viewing_conversation_id", () => {
@@ -163,5 +172,40 @@ describe("reportPresence viewing fields", () => {
     await handler(reportPresence)(ctx, { focused: true, idle_ms: 0 });
     const [patched] = ctx.db._patched;
     expect(Object.keys(patched.patch).sort()).toEqual(["last_input_at", "last_seen", "updated_at"]);
+  });
+});
+
+describe("the roster gates the viewed id on the presence row's access copy (ct-92571)", () => {
+  test("the roster reads no conversation, so a streaming session never re-runs it", async () => {
+    const rows = tables();
+    rows.user_presence.push(presence(ANN, SHARED));
+    const ctx = ctxFor(rows, CY);
+    const gets: string[] = [];
+    const orig = ctx.db.get.bind(ctx.db);
+    ctx.db.get = (id: any) => { gets.push(String(id)); return orig(id); };
+    const members = await handler(getTeamMembers)(ctx, { team_id: T1 });
+    expect(members.find((m: any) => m._id === ANN).viewing_conversation_id).toBe(SHARED);
+    expect(gets.filter((id) => id.startsWith("conv-"))).toEqual([]);
+  });
+
+  test("a row written before the copy existed names nothing until the next report fills it in", async () => {
+    const rows = tables();
+    rows.user_presence.push({ ...presence(ANN, SHARED), viewing_access: undefined, viewing_since: 1000 });
+    expect((await rosterRow(rows, CY, ANN)).viewing_conversation_id).toBeUndefined();
+    await handler(reportPresence)(ctxFor(rows, ANN), { focused: true, idle_ms: 0, viewing_conversation_id: SHARED });
+    expect(rows.user_presence[0].viewing_access).toEqual(stampOf(SHARED));
+    expect(rows.user_presence[0].viewing_since).toBe(1000);
+    expect((await rosterRow(rows, CY, ANN)).viewing_conversation_id).toBe(SHARED);
+  });
+
+  test("making the viewed session private hides the id at once, through the visibility chokepoint", async () => {
+    const rows = tables();
+    rows.user_presence.push(presence(ANN, SHARED));
+    const db = makeFakeDb(rows as any);
+    const conv = await db.get(SHARED as any);
+    await patchConversationVisibility({ db } as any, conv, { is_private: true });
+    expect(rows.user_presence[0].viewing_access.is_private).toBe(true);
+    expect((await rosterRow(rows, CY, ANN)).viewing_conversation_id).toBeUndefined();
+    expect((await rosterRow(rows, BOB, ANN)).viewing_conversation_id).toBe(SHARED);
   });
 });
