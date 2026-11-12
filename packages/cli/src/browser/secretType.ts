@@ -372,19 +372,100 @@ async function crossFrames(conn: CdpClient, sessionId: string): Promise<SecretTy
   return docs;
 }
 
+interface DomNode {
+  nodeId: number;
+  nodeName: string;
+  frameId?: string;
+  children?: DomNode[];
+  shadowRoots?: DomNode[];
+  contentDocument?: DomNode;
+}
+
+/** One document's matches for a selector: the session it lives in and its first matching node. */
+export interface SelectorHit {
+  sessionId: string;
+  nodeId: number;
+  /** The document's URL (a frame's, or the top page's). */
+  url: string;
+  top: boolean;
+}
+
+/**
+ * Which match a selector focuses: the top document's when it has one (what
+ * `document.querySelector` always meant), else the one frame that has a match.
+ * Matches in several frames, or none while some frame could not be read, are
+ * refused rather than guessed at.
+ */
+export function pickSelectorHit(target: string, hits: SelectorHit[], unreachable: string[]): SelectorHit {
+  const top = hits.find((h) => h.top);
+  if (top) return top;
+  if (hits.length === 1) return hits[0];
+  const host = (u: string) => webOrigin(u) ?? (u || "blank");
+  if (hits.length > 1) {
+    throw new SecretTypeRefusal(
+      `${target} matches in ${hits.length} frames (${hits.map((h) => host(h.url)).join(", ")}), so nothing is typed`,
+      "Point it at one field: its ref from `cast browser snapshot`",
+    );
+  }
+  if (unreachable.length) {
+    throw new SecretTypeRefusal(
+      `nothing on the page matches ${target}, and ${unreachable.length} cross-origin frame${unreachable.length > 1 ? "s" : ""} (${unreachable.map(host).join(", ")}) could not be searched`,
+      "The Codecast Chrome extension is too old to reach cross-origin frames: `cast browser extension status` says which version is connected; update it, then try again",
+    );
+  }
+  throw new SecretTypeRefusal(`nothing on the page matches ${target}`);
+}
+
+/**
+ * Where `selector` matches in every document of the tab: the top page and its
+ * same-process frames through the tab's session, each cross-origin frame
+ * through its own child session (oopif.ts). Browser-side DOM queries, which a
+ * page cannot patch. `unreachable` names the frames whose document no session
+ * holds (an extension too old for child sessions).
+ */
+export async function findSelector(conn: CdpClient, sessionId: string, selector: string): Promise<{ hits: SelectorHit[]; unreachable: string[] }> {
+  const children = await childFrames({ conn, sessionId, targetId: "" }).catch(() => []);
+  const tree = await treeOf(conn, sessionId);
+  const urls = new Map(flatten(tree).map((f) => [f.id, browserUrl(f)]));
+  const hits: SelectorHit[] = [];
+  const remote: string[] = [];
+  const search = async (sid: string, topUrl: string, isTop: boolean) => {
+    const { root } = await conn.send<{ root: DomNode }>("DOM.getDocument", { depth: -1, pierce: true }, sid);
+    const docs: Array<{ node: DomNode; url: string; top: boolean }> = [{ node: root, url: topUrl, top: isTop }];
+    const walk = (n: DomNode) => {
+      if (n.contentDocument) {
+        docs.push({ node: n.contentDocument, url: (n.frameId && urls.get(n.frameId)) || "", top: false });
+        walk(n.contentDocument);
+      } else if ((n.nodeName === "IFRAME" || n.nodeName === "FRAME") && n.frameId) remote.push(n.frameId);
+      for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c);
+    };
+    walk(root);
+    for (const d of docs) {
+      const { nodeId } = await conn.send<{ nodeId: number }>("DOM.querySelector", { nodeId: d.node.nodeId, selector }, sid).catch(() => ({ nodeId: 0 }));
+      if (nodeId) hits.push({ sessionId: sid, nodeId, url: d.url, top: d.top });
+    }
+  };
+  await search(sessionId, browserUrl(tree.frame), true);
+  for (const c of children) await search(c.sessionId, urls.get(c.targetId) ?? c.url, false).catch(() => {});
+  const reached = new Set(children.map((c) => c.targetId));
+  return { hits, unreachable: remote.filter((id) => !reached.has(id)).map((id) => urls.get(id) ?? "") };
+}
+
 /**
  * SecretTypePage over a CDP session on the tab. `focus` is the caller's
  * (the engine resolves a ref; a CSS selector is focused here when it passes
- * none). The probe and the select run in an isolated world of the top frame,
- * or of the cross-origin frame that holds focus.
+ * none, in whichever document of the tab it matches: findSelector). The probe
+ * and the select run in an isolated world of the top frame, or of the
+ * cross-origin frame that holds focus.
  */
 export function cdpSecretPage(conn: CdpClient, sessionId: string, target: string, focus?: () => Promise<void>): SecretTypePage {
   const run = frameWorld(conn, sessionId, async () => (await treeOf(conn, sessionId)).frame);
   return {
     topUrl: async () => browserUrl((await treeOf(conn, sessionId)).frame),
     focus: focus ?? (async () => {
-      const ok = await run(`(() => { const el = document.querySelector(${JSON.stringify(target)}); if (!el) return false; el.focus(); return true; })()`);
-      if (!ok) throw new SecretTypeRefusal(`nothing on the page matches ${target}`);
+      const { hits, unreachable } = await findSelector(conn, sessionId, target);
+      const hit = pickSelectorHit(target, hits, unreachable);
+      await conn.send("DOM.focus", { nodeId: hit.nodeId }, hit.sessionId);
     }),
     probe: async () => (await run(FOCUS_PROBE)) as FocusProbe,
     selectAll: async () => void (await run(SELECT_FOCUSED)),
