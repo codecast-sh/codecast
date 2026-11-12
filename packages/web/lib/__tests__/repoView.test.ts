@@ -201,6 +201,7 @@ describe("small formats", () => {
     expect(formatSize(2048)).toBe("2.0 KB");
     expect(formatSize(200 * 1024)).toBe("200 KB");
     expect(formatSize(3 * 1024 * 1024)).toBe("3.0 MB");
+    expect(formatSize(1240 * 1024 * 1024)).toBe("1.2 GB");
     expect(formatSize(undefined)).toBe("");
   });
 

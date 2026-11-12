@@ -288,6 +288,16 @@ export const DAEMON_COMMANDS = [
   // files, path }, or { ok: false, missing?, reason }. args: { path,
   // conversation_id }. Old daemons: "Unknown command".
   "export_folder",
+  // A session moved to another of the owner's machines that has no transcript
+  // for it. That machine asks the owner's other online ones
+  // (sessionTransfer.requestSessionExport). args: { conversation_id,
+  // session_id, last_uuid?, requester, direct? }, all named by the server. A
+  // source looks up <session_id>.jsonl (a UUID, never a path) under its Claude
+  // projects dirs and refuses a copy lacking last_uuid as stale. It answers
+  // like export_folder plus { session_id, cwd, home }, or { ok: false,
+  // missing?, reason }. Old daemons: "Unknown command" (the requester
+  // regenerates the transcript from the export).
+  "export_session",
 ] as const;
 
 /** How long a command waits for its daemon: one not picked up by then is

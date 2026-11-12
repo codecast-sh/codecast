@@ -395,8 +395,10 @@ describe("command groups stay off the boot graph", () => {
     // watch relay's contracts/browserStream.ts (+4.7), tasks/planState.ts
     // (+2.9), castInvocation.ts (+2.1) and writeBudgetBackoff.ts (+2), less
     // formatter.ts's cast decisions and patterns formatters, which moved
-    // behind the dynamic import in formatKnowledge.ts.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4652);
+    // behind the dynamic import in formatKnowledge.ts. 4654 with Tailscale direct
+    // links: syncService.ts (+1.3, the folder, transcript, transfer and peer-link
+    // calls) and daemonCommands.ts (+0.6, export_folder and export_session).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4654);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -578,8 +580,10 @@ describe("command groups stay off the boot graph", () => {
     // relay loop, types only from watchServer.ts) with contracts/browserStream.ts,
     // writeBudgetBackoff.ts, stepTimer.ts (a 17-line timing helper), and
     // fastPath.ts, which stableContext.ts now reads. 590 with stableContextHooks.ts,
-    // the same max-lines split as on index.ts's graph.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(590);
+    // the same max-lines split as on index.ts's graph. 591 after folderFetchGate.ts,
+    // the import-free retry gate split out of folderSync.ts so the folder fetch
+    // itself stays a lazy import.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(591);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

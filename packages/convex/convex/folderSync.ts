@@ -39,19 +39,12 @@ export function conversationFolders(conv: { project_path?: string; git_root?: st
     .map(trimSlash);
 }
 
-export const FOLDER_EXPORT_REUSE_MS = 2 * 60_000;
 export const FOLDER_EXPORT_RATE_WINDOW_MS = 10 * 60_000;
 export const FOLDER_EXPORT_RATE_LIMIT = 20;
 
 const TOKEN_HASH = /^[0-9a-f]{64}$/;
 
-/** This user's export_folder rows still waiting, created inside the reuse window. */
-async function liveExports(ctx: { db: any }, userId: Id<"users">, now: number) {
-  return (await ctx.db
-    .query("daemon_commands")
-    .withIndex("by_user_pending", (q: any) => q.eq("user_id", userId).eq("executed_at", undefined).gt("_creationTime", now - FOLDER_EXPORT_REUSE_MS))
-    .collect()).filter((c: any) => c.command === "export_folder");
-}
+export type PeerExportCommand = "export_folder" | "export_session";
 
 export const requestFolderExport = mutation({
   args: {
@@ -69,113 +62,154 @@ export const requestFolderExport = mutation({
     only_device_id: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ command_ids: string[]; labels: Record<string, string> }> => {
-    const userId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!userId) throw new Error("Authentication required");
-    const conv = await ctx.db.get(args.conversation_id);
-    if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
     const path = trimSlash(args.path);
-    if (!conversationFolders(conv).includes(path)) throw new Error("path is not this conversation's folder");
-    if (args.token_hash !== undefined && !TOKEN_HASH.test(args.token_hash)) throw new Error("token_hash must be 64 lowercase hex characters");
-    if (args.tailnet && !normalizePeerTailnet(args.tailnet)) throw new Error("tailnet must be an IPv4 address and a node name");
-    const now = Date.now();
-    const devices = (await ctx.db
-      .query("devices")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-      .collect()) as Array<PeerDevice & { _id: Id<"devices">; direct_links_off?: boolean; folder_export_at?: number[] }>;
-    const requester = devices.find((d) => d.device_id === args.device_id);
-    if (!requester) throw new Error("device_id is not one of your machines");
-    const candidates = args.only_device_id ? devices.filter((d) => d.device_id === args.only_device_id) : devices;
-    const peers = pickFolderPeers(candidates, args.device_id, now);
-    if (args.only_device_id && peers.length === 0) throw new Error("that machine is not one of your online machines");
-
-    const grant = args.tailnet && args.token_hash && args.relay_only !== true && requester.direct_links_off !== true
-      ? { requester: { ip: args.tailnet.ip, name: args.tailnet.name }, token_hash: args.token_hash }
-      : undefined;
-    const argsFor = (peer: { direct_links_off?: boolean }) => JSON.stringify({
-      path,
-      conversation_id: args.conversation_id,
-      requester: args.device_id,
-      ...(grant && peer.direct_links_off !== true ? { direct: grant } : {}),
+    return await requestPeerExport(ctx, args, "export_folder", (conv) => {
+      if (!conversationFolders(conv).includes(path)) throw new Error("path is not this conversation's folder");
+      return { path };
     });
-    const live = await liveExports(ctx, userId, now);
-    const plan = peers.map((peer) => {
-      const cmdArgs = argsFor(peer);
-      return { peer, cmdArgs, reuse: live.find((c: any) => c.target_device_id === peer.device_id && c.args === cmdArgs) };
-    });
-
-    const since = now - FOLDER_EXPORT_RATE_WINDOW_MS;
-    const inWindow = (d: { folder_export_at?: number[] }) => (d.folder_export_at ?? []).filter((t) => t > since);
-    const recent = devices.reduce((n, d) => n + inWindow(d).length, 0);
-    const inserts = plan.filter((p) => !p.reuse).length;
-    if (recent + inserts > FOLDER_EXPORT_RATE_LIMIT) {
-      throw new Error(`too many folder requests: at most ${FOLDER_EXPORT_RATE_LIMIT} every ${FOLDER_EXPORT_RATE_WINDOW_MS / 60_000} minutes`);
-    }
-    if (inserts > 0) {
-      await ctx.db.patch(requester._id, { folder_export_at: [...inWindow(requester), ...Array(inserts).fill(now)] });
-    }
-
-    const command_ids: string[] = [];
-    const labels: Record<string, string> = {};
-    for (const { peer, cmdArgs, reuse } of plan) {
-      const id = reuse?._id ?? await ctx.db.insert("daemon_commands", {
-        user_id: userId,
-        command: "export_folder" as const,
-        args: cmdArgs,
-        created_at: now,
-        target_device_id: peer.device_id,
-      });
-      command_ids.push(id);
-      labels[id] = peer.label ?? peer.device_id.slice(0, 8);
-    }
-    return { command_ids, labels };
   },
 });
 
-async function ownExportCommand(ctx: { db: any }, userId: Id<"users">, id: Id<"daemon_commands">) {
+export interface PeerExportArgs {
+  api_token?: string;
+  device_id: string;
+  conversation_id: Id<"conversations">;
+  tailnet?: { ip: string; name: string };
+  token_hash?: string;
+  relay_only?: boolean;
+  only_device_id?: string;
+}
+
+/** Ask the owner's other online machines to run `command` for one of the
+ *  owner's conversations: the auth, peer choice, direct gating and the shared
+ *  rate limit every peer export goes through. Every request gets rows of its
+ *  own, so one requester discarding never abandons or deletes another's.
+ *  `payload` checks the conversation and names what to export beyond the
+ *  conversation itself. */
+export async function requestPeerExport(
+  ctx: { db: any },
+  args: PeerExportArgs,
+  command: PeerExportCommand,
+  payload: (conv: any) => Record<string, unknown> | Promise<Record<string, unknown>>,
+): Promise<{ command_ids: string[]; labels: Record<string, string> }> {
+  const userId = await getAuthenticatedUserId(ctx, args.api_token);
+  if (!userId) throw new Error("Authentication required");
+  const conv = await ctx.db.get(args.conversation_id);
+  if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
+  const extra = await payload(conv);
+  if (args.token_hash !== undefined && !TOKEN_HASH.test(args.token_hash)) throw new Error("token_hash must be 64 lowercase hex characters");
+  if (args.tailnet && !normalizePeerTailnet(args.tailnet)) throw new Error("tailnet must be an IPv4 address and a node name");
+  const now = Date.now();
+  const devices = (await ctx.db
+    .query("devices")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .collect()) as Array<PeerDevice & { _id: Id<"devices">; direct_links_off?: boolean; folder_export_at?: number[] }>;
+  const requester = devices.find((d) => d.device_id === args.device_id);
+  if (!requester) throw new Error("device_id is not one of your machines");
+  const candidates = args.only_device_id ? devices.filter((d) => d.device_id === args.only_device_id) : devices;
+  const peers = pickFolderPeers(candidates, args.device_id, now);
+  if (args.only_device_id && peers.length === 0) throw new Error("that machine is not one of your online machines");
+
+  const grant = args.tailnet && args.token_hash && args.relay_only !== true && requester.direct_links_off !== true
+    ? { requester: { ip: args.tailnet.ip, name: args.tailnet.name }, token_hash: args.token_hash }
+    : undefined;
+  const argsFor = (peer: { direct_links_off?: boolean }) => JSON.stringify({
+    ...extra,
+    conversation_id: args.conversation_id,
+    requester: args.device_id,
+    ...(grant && peer.direct_links_off !== true ? { direct: grant } : {}),
+  });
+  const since = now - FOLDER_EXPORT_RATE_WINDOW_MS;
+  const inWindow = (d: { folder_export_at?: number[] }) => (d.folder_export_at ?? []).filter((t) => t > since);
+  const recent = devices.reduce((n, d) => n + inWindow(d).length, 0);
+  if (peers.length > 0) {
+    if (recent + 1 > FOLDER_EXPORT_RATE_LIMIT) {
+      throw new Error(`too many ${command === "export_folder" ? "folder" : "transcript"} requests: at most ${FOLDER_EXPORT_RATE_LIMIT} every ${FOLDER_EXPORT_RATE_WINDOW_MS / 60_000} minutes`);
+    }
+    await ctx.db.patch(requester._id, { folder_export_at: [...inWindow(requester), now] });
+  }
+
+  const command_ids: string[] = [];
+  const labels: Record<string, string> = {};
+  for (const peer of peers) {
+    const id = await ctx.db.insert("daemon_commands", {
+      user_id: userId,
+      command,
+      args: argsFor(peer),
+      created_at: now,
+      target_device_id: peer.device_id,
+    });
+    command_ids.push(id);
+    labels[id] = peer.label ?? peer.device_id.slice(0, 8);
+  }
+  return { command_ids, labels };
+}
+
+async function ownExportCommand(ctx: { db: any }, userId: Id<"users">, id: Id<"daemon_commands">, command: PeerExportCommand) {
   const cmd = await ctx.db.get(id);
-  if (!cmd || cmd.user_id.toString() !== userId.toString() || cmd.command !== "export_folder") return null;
+  if (!cmd || cmd.user_id.toString() !== userId.toString() || cmd.command !== command) return null;
   return cmd;
 }
 
 export const folderExportOutcomes = query({
   args: { api_token: v.optional(v.string()), command_ids: v.array(v.id("daemon_commands")) },
-  handler: async (ctx, args) => {
-    const userId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!userId) return [];
-    const devices = await ctx.db
-      .query("devices")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-      .collect();
-    const labelOf = new Map(devices.map((d: any) => [d.device_id, d.label ?? null]));
-    const out = [];
-    for (const id of args.command_ids.slice(0, FOLDER_EXPORT_PEER_CAP)) {
-      const cmd = await ownExportCommand(ctx, userId, id);
-      if (!cmd) continue;
-      out.push({
-        command_id: id as string,
-        executed_at: cmd.executed_at ?? null,
-        result: cmd.result ?? null,
-        error: cmd.error ?? null,
-        label: (cmd.target_device_id && labelOf.get(cmd.target_device_id)) ?? null,
-        device_id: cmd.target_device_id ?? null,
-      });
-    }
-    return out;
-  },
+  handler: (ctx, args) => peerExportOutcomes(ctx, args, "export_folder"),
 });
+
+/** The answers to the caller's own `command` rows, with the answering machine's label. */
+export async function peerExportOutcomes(ctx: { db: any }, args: { api_token?: string; command_ids: Id<"daemon_commands">[] }, command: PeerExportCommand) {
+  const userId = await getAuthenticatedUserId(ctx, args.api_token);
+  if (!userId) return [];
+  const devices = await ctx.db
+    .query("devices")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .collect();
+  const labelOf = new Map(devices.map((d: any) => [d.device_id, d.label ?? null]));
+  const out = [];
+  for (const id of args.command_ids.slice(0, FOLDER_EXPORT_PEER_CAP)) {
+    const cmd = await ownExportCommand(ctx, userId, id, command);
+    if (!cmd) continue;
+    out.push({
+      command_id: id as string,
+      executed_at: cmd.executed_at ?? null,
+      result: cmd.result ?? null,
+      error: cmd.error ?? null,
+      label: (cmd.target_device_id && labelOf.get(cmd.target_device_id)) ?? null,
+      device_id: cmd.target_device_id ?? null,
+    });
+  }
+  return out;
+}
 
 /** Delete an export's archive from storage once the requester has it (or gave up on it). */
 export const discardFolderBundle = mutation({
   args: { api_token: v.optional(v.string()), command_id: v.id("daemon_commands") },
-  handler: async (ctx, args) => {
-    const userId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!userId) throw new Error("Authentication required");
-    const cmd = await ownExportCommand(ctx, userId, args.command_id);
-    if (!cmd?.result) return { discarded: false };
-    let storageId: string | undefined;
-    try { storageId = JSON.parse(cmd.result)?.storage_id; } catch {}
-    if (!storageId) return { discarded: false };
-    await ctx.storage.delete(storageId as Id<"_storage">).catch(() => {});
-    return { discarded: true };
-  },
+  handler: (ctx, args) => discardPeerBundle(ctx, args, "export_folder"),
 });
+
+export async function discardPeerBundle(ctx: { db: any; storage: any }, args: { api_token?: string; command_id: Id<"daemon_commands"> }, command: PeerExportCommand) {
+  const userId = await getAuthenticatedUserId(ctx, args.api_token);
+  if (!userId) throw new Error("Authentication required");
+  const cmd = await ownExportCommand(ctx, userId, args.command_id, command);
+  if (cmd && cmd.executed_at === undefined) {
+    await ctx.db.patch(cmd._id, { executed_at: Date.now(), error: "abandoned" });
+    return { discarded: false };
+  }
+  if (!cmd?.result) return { discarded: false };
+  let storageId: string | undefined;
+  try { storageId = JSON.parse(cmd.result)?.storage_id; } catch {}
+  if (!storageId) return { discarded: false };
+  await ctx.storage.delete(storageId as Id<"_storage">).catch(() => {});
+  return { discarded: true };
+}
+
+/** An export answer that arrives after its requester discarded the request
+ *  (or after another answer settled it) is not recorded: its archive is
+ *  deleted and the row stays as it was. True when the report was handled here. */
+export async function dropLateExportAnswer(ctx: { storage: any }, command: { command: string; executed_at?: number }, result: string | undefined): Promise<boolean> {
+  if ((command.command !== "export_folder" && command.command !== "export_session") || command.executed_at === undefined) return false;
+  let storageId: unknown;
+  try { storageId = result ? JSON.parse(result)?.storage_id : undefined; } catch {}
+  if (typeof storageId === "string" && storageId) await ctx.storage.delete(storageId as Id<"_storage">).catch(() => {});
+  return true;
+}

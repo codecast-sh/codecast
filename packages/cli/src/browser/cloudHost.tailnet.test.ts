@@ -12,7 +12,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { reachableRemoteHosts, toRemoteHost, writeHosts, type CloudHost } from "./cloudHost";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { dialRemoteHost, noteDialError, noteDialFailure, probedRemoteHost, reachableRemoteHosts, resetDialFailuresForTests, toRemoteHost, writeHosts, type CloudHost } from "./cloudHost";
 import { localTailnetAsync, readHostTailnet } from "../cloud/tailnet";
 import { resolveCarryHost } from "../cloud/browserSync";
 import { readProjectRegistrations } from "../cloud/mirror/projectRefresh";
@@ -34,6 +36,7 @@ beforeEach(() => {
   // the machine running the suite must not decide these cases.
   process.env.CODECAST_TAILSCALE_BIN = path.join(dir, "no-such-tailscale");
   process.env.PATH = `/usr/bin:/bin`;
+  resetDialFailuresForTests();
 });
 
 afterEach(() => {
@@ -214,4 +217,58 @@ describe("localTailnetAsync — the daemon's non-blocking read", () => {
     fakeTailscale({ script: "exit 1" });
     expect(await localTailnetAsync()).toBeNull();
   });
+});
+
+describe("a caller that dials every few seconds and cannot probe each time", () => {
+  test("after a failed tailnet dial it uses public for a while, then tries the tailnet again", () => {
+    fakeTailscale({ status: status("Running") });
+    const t0 = 5_000_000;
+    expect(dialRemoteHost(onTailnet, t0).address).toBe(TAILNET);
+    expect(noteDialFailure(onTailnet, t0)).toBe(true);
+    expect(dialRemoteHost(onTailnet, t0 + 60_000).address).toBe(PUBLIC);
+    expect(toRemoteHost(onTailnet).address).toBe(TAILNET);
+    expect(dialRemoteHost(onTailnet, t0 + 5 * 60_000 + 1).address).toBe(TAILNET);
+  });
+  test("a failure while dialing public shuns nothing", () => {
+    expect(noteDialFailure(onTailnet, 1)).toBe(false);
+    fakeTailscale({ status: status("Running") });
+    expect(dialRemoteHost(onTailnet, 2).address).toBe(TAILNET);
+  });
+  test("only an ssh connect failure moves the dial; a git or script error does not", () => {
+    fakeTailscale({ status: status("Running") });
+    expect(noteDialError(onTailnet, new Error("on the host: fatal: not a git repository"), 1)).toBe(false);
+    expect(dialRemoteHost(onTailnet, 2).address).toBe(TAILNET);
+    expect(noteDialError(onTailnet, new Error(`on the host: ssh: connect to host ${TAILNET} port 22: Operation timed out`), 3)).toBe(true);
+    expect(dialRemoteHost(onTailnet, 4).address).toBe(PUBLIC);
+    expect(noteDialError(onTailnet, new Error(`on the host: ssh: connect to host ${PUBLIC} port 22: Operation timed out`), 5)).toBe(false);
+    expect(noteDialError(null, new Error("ssh: connect to host x port 22: No route to host"))).toBe(false);
+  });
+  test("a one-shot command probes once and takes public when the tailnet drops traffic", async () => {
+    fakeTailscale({ status: status("Running") });
+    const probed: string[] = [];
+    expect((await probedRemoteHost(onTailnet, async (h) => { probed.push(h.address); return h.address === PUBLIC; })).address).toBe(PUBLIC);
+    expect(probed).toEqual([TAILNET, PUBLIC]);
+  });
+  test("ensureUp falling back from the tailnet leaves later dials in that process on public", async () => {
+    fakeTailscale({ status: status("Running") });
+    const home = path.join(dir, "home");
+    const localBin = path.join(home, ".local", "bin");
+    fs.mkdirSync(localBin, { recursive: true });
+    fs.writeFileSync(path.join(localBin, "aws"), `#!/bin/sh
+case "$*" in
+  *describe-instances*) echo '{"Reservations":[{"Instances":[{"State":{"Name":"running"},"PublicIpAddress":"${PUBLIC}"}]}]}';;
+  *) echo '{}';;
+esac
+`, { mode: 0o755 });
+    fs.writeFileSync(path.join(localBin, "ssh"), `#!/bin/sh\ncase "$*" in *${TAILNET}*) exit 255;; esac\nexit 0\n`, { mode: 0o755 });
+    writeHosts([onTailnet]);
+    const { stdout } = await promisify(execFile)(process.execPath, ["-e", `
+      import { dialRemoteHost, ensureUp } from ${JSON.stringify(path.resolve(import.meta.dir, "cloudHost.ts"))};
+      const h = ${JSON.stringify(onTailnet)};
+      const before = dialRemoteHost(h).address;
+      await ensureUp(h);
+      console.log(JSON.stringify([before, dialRemoteHost(h).address]));
+    `], { env: { ...process.env, HOME: home, PATH: `${localBin}:${process.env.PATH}` }, timeout: 30_000 });
+    expect(JSON.parse(stdout.trim().split("\n").pop()!)).toEqual([TAILNET, PUBLIC]);
+  }, 40_000);
 });

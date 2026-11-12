@@ -18,6 +18,7 @@ import { useAttachCopy } from "../hooks/useAttachCopy";
  * server. So what the copy button offers depends on where the pane lives:
  *
  *   your machine, ssh_host set   → ssh <host> -t "tmux attach -t '<pane>'"
+ *   another of yours on a tailnet → ssh <MagicDNS name> -t "tmux attach ..."
  *   your machine, no ssh_host    → tmux attach -t '<pane>'   (+ a nudge to set one)
  *   someone else's machine       → the machine's name, not copyable at all
  *
@@ -89,7 +90,7 @@ export function TmuxAttachPill({
   // means asking its owner's daemon.
   const copyLabel = foreign
     ? `Runs on ${machineName} — someone else's machine, so there's nothing here to copy or watch.`
-    : attach && machine?.ssh_host
+    : attach?.startsWith("ssh ")
       ? `Copy ${attach}`
       : attach && machine
         ? `Copy ${attach} — valid in a shell on ${machineName}; set an SSH host for it in Settings → Devices to get a remote-ready command`

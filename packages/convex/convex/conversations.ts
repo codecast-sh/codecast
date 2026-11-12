@@ -1009,7 +1009,12 @@ export function conversationForAccess<T extends Record<string, any>>(
   conversation: T,
   access: AccessLevel,
 ): T {
-  if (access === "owner" || access === "team") return conversation;
+  if (access === "owner") return conversation;
+  if (access === "team") {
+    if (!("peer_transfer" in conversation)) return conversation;
+    const { peer_transfer: _ownerOnly, ...teamConversation } = conversation;
+    return teamConversation as T;
+  }
   const publicConversation: Record<string, any> = { ...conversation };
   for (const key of SHARE_HIDDEN_CONVERSATION_FIELDS) delete publicConversation[key];
   if (typeof publicConversation.git_remote_url === "string") {
@@ -1043,6 +1048,7 @@ const SHARE_HIDDEN_CONVERSATION_FIELDS = [
   "needs_input_notified_key",
   "hand_wake_notified_key",
   "title_embedding",
+  "peer_transfer",
 ] as const;
 
 /** A remote URL without its user:password@ part (an https remote can carry a token). */
@@ -2524,6 +2530,7 @@ export const getConversationWithMeta = query({
       git_ahead: (conversationLight as any).git_ahead ?? null,
       git_behind: (conversationLight as any).git_behind ?? null,
       git_dirty: (conversationLight as any).git_dirty ?? null,
+      peer_transfer: isOwner ? (conversationLight as any).peer_transfer ?? null : null,
       is_own: !!isOwner,
       // A share-link viewer reads but may not fork or steer: forkFromMessage
       // admits owners and team members only, so the web hides those actions.

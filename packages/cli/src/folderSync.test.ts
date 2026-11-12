@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { PassThrough, Readable } from "node:stream";
 import { gzipSync } from "node:zlib";
 import {
@@ -11,15 +12,20 @@ import {
   refusedFolder,
   localFolderFor,
   packFolder,
+  peerTransferReporter,
   planFolderExport,
+  progressThrottle,
   syncFolderFromPeer,
   unpackFolder,
   unpackFolderStream,
   type ExportFolderResult,
   type PeerAttempt,
   type PeerOutcome,
+  type PeerProgress,
   type PeerRequestOpts,
+  type PeerTransferReport,
 } from "./folderSync";
+import { folderFetchGate } from "./folderFetchGate";
 import type { TailnetStatus } from "./cloud/tailnet";
 import { closeAllGrants, liveGrantCount, type GrantOutcome } from "./peer/grant";
 import { pollUntil } from "./test-helpers/pollUntil";
@@ -110,6 +116,55 @@ describe("pack and unpack", () => {
     expect(fs.readdirSync(path.dirname(dest))).toEqual(["repo"]);
   });
 
+  test("a folder inside a checkout carries what git would, never .git or a tracked secret", async () => {
+    const src = path.join(root, "repo");
+    write("repo/top.txt");
+    write("repo/.gitignore", "pkg/dist/\n*.log\n");
+    write("repo/pkg/src/a.ts", "a");
+    write("repo/pkg/.env", "SECRET=1");
+    write("repo/pkg/dist/out.js");
+    write("repo/pkg/debug.log");
+    execFileSync("git", ["init", "-q", src]);
+    execFileSync("git", ["-C", src, "add", "-f", "top.txt", ".gitignore", "pkg/src/a.ts", "pkg/.env"]);
+    execFileSync("git", ["-C", src, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"]);
+    write("repo/pkg/new.ts", "new work");
+    const sub = await planFolderExport(path.join(src, "pkg"));
+    if (!sub.ok) throw new Error(sub.reason);
+    expect(sub.entries.sort()).toEqual(["new.ts", "src/a.ts"]);
+    expect(sub.files).toBe(2);
+    const whole = await planFolderExport(src);
+    if (!whole.ok) throw new Error(whole.reason);
+    expect(whole.entries).toContain(".git");
+    expect(whole.entries).not.toContain("pkg/.env");
+    expect(whole.entries).not.toContain("pkg/dist/out.js");
+  });
+
+  test("a folder an enclosing repo ignores is packed as a plain folder", async () => {
+    const src = path.join(root, "dots");
+    write("dots/.gitignore", "sessions/\n");
+    write("dots/sessions/abc/tool.txt", "result");
+    execFileSync("git", ["init", "-q", src]);
+    const plan = await planFolderExport(path.join(src, "sessions", "abc"));
+    if (!plan.ok) throw new Error(plan.reason);
+    expect(plan.entries).toEqual(["tool.txt"]);
+  });
+
+  test("a project under a dotfiles home repo leaves its caches behind", async () => {
+    const home = path.join(root, "dotfiles-home");
+    write("dotfiles-home/.zshrc");
+    write("dotfiles-home/proj/index.ts", "x");
+    write("dotfiles-home/proj/node_modules/x/i.js");
+    write("dotfiles-home/proj/.venv/bin/python");
+    write("dotfiles-home/proj/app/__pycache__/m.pyc");
+    execFileSync("git", ["init", "-q", home]);
+    execFileSync("git", ["-C", home, "config", "status.showUntrackedFiles", "no"]);
+    execFileSync("git", ["-C", home, "add", ".zshrc"]);
+    execFileSync("git", ["-C", home, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"]);
+    const plan = await planFolderExport(path.join(home, "proj"));
+    if (!plan.ok) throw new Error(plan.reason);
+    expect(plan.entries).toEqual(["index.ts"]);
+  });
+
   test("unpack never replaces a folder that appeared meanwhile", async () => {
     write("src/a.txt", "theirs");
     const plan = await planFolderExport(path.join(root, "src"));
@@ -121,6 +176,32 @@ describe("pack and unpack", () => {
 });
 
 describe("refusedFolder", () => {
+  test("a symlink into a private folder is refused, wherever the link sits", () => {
+    const home = path.join(root, "home");
+    fs.mkdirSync(path.join(home, ".aws"), { recursive: true });
+    fs.mkdirSync(path.join(home, ".config"), { recursive: true });
+    fs.mkdirSync(path.join(home, "src", "ok"), { recursive: true });
+    fs.symlinkSync(path.join(home, ".aws"), path.join(home, "proj"));
+    fs.symlinkSync(path.join(home, ".config"), path.join(home, "cfg"));
+    fs.symlinkSync("/etc", path.join(home, "etc"));
+    expect(refusedFolder(path.join(home, "proj"), home)).toContain("private");
+    expect(refusedFolder(path.join(home, "cfg", "new", "dest"), home)).toContain("private");
+    expect(refusedFolder(path.join(home, "etc"), home)).toContain("outside");
+    expect(refusedFolder(path.join(home, "src", "ok"), home)).toBeNull();
+    expect(refusedFolder(path.join(home, "src", "new"), home)).toBeNull();
+  });
+
+  test("an ordinary folder under a symlinked home is allowed, named either way", () => {
+    const real = fs.realpathSync(root);
+    const linked = path.join(real, "linked-home");
+    fs.mkdirSync(path.join(real, "real-home", "src", "family"), { recursive: true });
+    fs.symlinkSync(path.join(real, "real-home"), linked);
+    expect(refusedFolder(path.join(linked, "src", "family"), linked)).toBeNull();
+    expect(refusedFolder(path.join(real, "real-home", "src", "family"), linked)).toBeNull();
+    expect(refusedFolder(path.join(linked, "src", "later"), linked)).toBeNull();
+    if (real !== root) expect(refusedFolder(path.join(root, "real-home", "src", "family"), root)).toBeNull();
+  });
+
   test("only ordinary folders inside home", () => {
     expect(refusedFolder("/Users/a/src/family", "/Users/a")).toBeNull();
     expect(refusedFolder("/Users/a", "/Users/a")).not.toBeNull();
@@ -478,7 +559,25 @@ describe("direct links", () => {
       expect(r).toMatchObject({ ok: true, mode: "relay" });
       expect(f.requests).toHaveLength(1);
       expect((f.results()[0] as { direct_skipped?: string }).direct_skipped).toStartWith(why);
+      expect(f.attempts.map((a) => [a.mode, a.ok])).toEqual([["direct", false], ["relay", true]]);
+      expect(f.attempts[0].reason).toStartWith(why);
     }
+  });
+
+  test("a skip for size, or one the request never offered direct for, records no direct failure", async () => {
+    write("family/notes.md", "hello");
+    const f = fleet(path.join(root, "family"), { firewall: true });
+    const tooLarge = (o: PeerRequestOpts = {}) => f.deps.request(o).then((asked) => {
+      const row = f.rows.at(-1)!;
+      row.result = JSON.stringify({ ...JSON.parse(row.result!), direct_skipped: "too_large: over the direct cap" });
+      return asked;
+    });
+    expect(await syncFolderFromPeer(path.join(root, "a", "family"), { ...f.deps, request: tooLarge })).toMatchObject({ ok: true, mode: "relay" });
+    expect(f.attempts.map((a) => [a.mode, a.ok])).toEqual([["relay", true]]);
+    const g = fleet(path.join(root, "family"), { firewall: true });
+    const offered = (o: PeerRequestOpts = {}) => g.deps.request({ ...o, tailnet: DST, token_hash: "a".repeat(64) });
+    expect(await syncFolderFromPeer(path.join(root, "b", "family"), { ...g.deps, direct: async () => null, request: offered })).toMatchObject({ ok: true, mode: "relay" });
+    expect(g.attempts.map((a) => [a.mode, a.ok])).toEqual([["relay", true]]);
   });
 
   test("a Convex that refuses the new request fields still gets the folder through the relay", async () => {
@@ -527,5 +626,143 @@ describe("direct links", () => {
     );
     expect(relayOnly).toMatchObject({ ok: true, storage_id: "s" });
     expect(liveGrantCount()).toBe(0);
+  });
+
+  test("a cancel before anything is asked sends no request", async () => {
+    write("family/notes.md", "hello");
+    const f = fleet(path.join(root, "family"));
+    const dest = path.join(root, "here", "family");
+    const r = await syncFolderFromPeer(dest, { ...f.deps, cancelled: () => true });
+    expect(r).toEqual({ ok: false, reason: "cancelled" });
+    expect(f.requests).toEqual([]);
+    expect(fs.existsSync(dest)).toBe(false);
+  });
+
+  test("a cancel during a direct pull aborts it, leaves nothing at dest and never falls back", async () => {
+    fs.mkdirSync(path.join(root, "big"));
+    fs.writeFileSync(path.join(root, "big/blob.bin"), randomBytes(8 * 1024 * 1024));
+    const f = fleet(path.join(root, "big"));
+    const dest = path.join(root, "here", "big");
+    let cancel = false;
+    const r = await syncFolderFromPeer(dest, {
+      ...f.deps,
+      onProgress: (p) => { f.phases.push(p.phase); if (p.phase === "receiving") cancel = true; },
+      cancelled: () => cancel,
+    });
+    expect(r).toEqual({ ok: false, reason: "cancelled" });
+    expect(f.requests).toHaveLength(1);
+    expect(f.attempts).toEqual([]);
+    expect(fs.existsSync(dest)).toBe(false);
+    expect(fs.readdirSync(path.join(root, "here"))).toEqual([]);
+  });
+
+  test("a cancel during a relay download aborts it and unpacks nothing", async () => {
+    write("family/notes.md", "hello");
+    const f = fleet(path.join(root, "family"));
+    const dest = path.join(root, "here", "family");
+    let cancel = false;
+    let aborted = false;
+    const r = await syncFolderFromPeer(dest, {
+      ...f.deps,
+      direct: async () => null,
+      cancelled: () => cancel,
+      download: (_id: string, signal?: AbortSignal) => new Promise<Uint8Array | null>((_resolve, reject) => {
+        cancel = true;
+        signal?.addEventListener("abort", () => { aborted = true; reject(new Error("aborted")); });
+      }),
+    });
+    expect(r).toEqual({ ok: false, reason: "cancelled" });
+    expect(aborted).toBe(true);
+    expect(f.attempts).toEqual([]);
+    expect(fs.existsSync(dest)).toBe(false);
+  });
+});
+
+describe("peerTransferReporter", () => {
+  const gate = () => {
+    const calls: { r: PeerTransferReport; done: (v: { cancel: boolean }) => void }[] = [];
+    const send = (r: PeerTransferReport) => new Promise<{ cancel: boolean }>((done) => calls.push({ r, done }));
+    return { calls, send };
+  };
+
+  test("sends one at a time, keeps only the newest while one is in flight, and never drops the end", async () => {
+    const g = gate();
+    const rep = peerTransferReporter(g.send, { heartbeatMs: 60_000 });
+    rep.report({ phase: "asking" });
+    rep.report({ phase: "receiving", bytes: 1 });
+    rep.report({ phase: "receiving", bytes: 2 });
+    rep.report({ phase: "failed", reason: "no answer" });
+    rep.report({ phase: "receiving", bytes: 3 });
+    expect(g.calls.map((c) => c.r.phase)).toEqual(["asking"]);
+    g.calls[0].done({ cancel: false });
+    await pollUntil(() => g.calls.length === 2, "second report");
+    expect(g.calls[1].r).toEqual({ phase: "failed", reason: "no answer" });
+    g.calls[1].done({ cancel: false });
+    await rep.settled();
+    expect(g.calls).toHaveLength(2);
+  });
+
+  test("a report's answer turns cancelled on, and a failing send does not stop the next", async () => {
+    let n = 0;
+    const rep = peerTransferReporter(async () => {
+      if (++n === 1) throw new Error("offline");
+      return { cancel: true };
+    }, { heartbeatMs: 60_000 });
+    rep.report({ phase: "asking" });
+    await rep.settled();
+    expect(rep.cancelled()).toBe(false);
+    rep.report({ phase: "receiving", mode: "relay" });
+    await rep.settled();
+    expect(rep.cancelled()).toBe(true);
+  });
+
+  test("repeats the last report while nothing new comes, and stops once the transfer ends", async () => {
+    const sent: PeerTransferReport[] = [];
+    const rep = peerTransferReporter(async (r) => { sent.push(r); return { cancel: false }; }, { heartbeatMs: 20 });
+    rep.report({ phase: "receiving", mode: "relay", total: 10 });
+    await pollUntil(() => sent.length >= 3, "heartbeats");
+    expect(new Set(sent.map((r) => r.phase))).toEqual(new Set(["receiving"]));
+    rep.report({ phase: "done" });
+    await rep.settled();
+    const after = sent.length;
+    await new Promise((r) => setTimeout(r, 80));
+    expect(sent.length).toBe(after);
+    expect(sent.at(-1)).toEqual({ phase: "done" });
+  });
+});
+
+describe("progressThrottle", () => {
+  test("a new phase goes at once, repeats of a phase at most every five seconds", () => {
+    let t = 0;
+    const sent: string[] = [];
+    const progress = progressThrottle((p: PeerProgress) => sent.push(`${p.phase}:${p.bytes ?? ""}`), () => t);
+    progress({ phase: "asking" });
+    progress({ phase: "receiving", bytes: 1 });
+    for (const ms of [1_000, 2_000, 4_999]) { t = ms; progress({ phase: "receiving", bytes: ms }); }
+    t = 5_000;
+    progress({ phase: "receiving", bytes: 5_000 });
+    t = 5_001;
+    progress({ phase: "unpacking" });
+    expect(sent).toEqual(["asking:", "receiving:1", "receiving:5000", "unpacking:"]);
+  });
+});
+
+describe("folderFetchGate", () => {
+  test("a failure blocks the automatic path for the window; a restart forgets only that conversation", () => {
+    let t = 1000;
+    const g = folderFetchGate(60_000, () => t);
+    g.fail("c1\0/a", "you cancelled the transfer");
+    g.fail("c2\0/a", "no answer");
+    expect(g.blocked("c1\0/a")).toBe("you cancelled the transfer");
+    t += 30_000;
+    expect(g.blocked("c1\0/a")).toBe("you cancelled the transfer");
+    g.forgetConversation("c1");
+    expect(g.blocked("c1\0/a")).toBeUndefined();
+    expect(g.blocked("c2\0/a")).toBe("no answer");
+    t += 31_000;
+    expect(g.blocked("c2\0/a")).toBeUndefined();
+    expect(g.reason("c2\0/a")).toBe("no answer");
+    g.clear("c2\0/a");
+    expect(g.reason("c2\0/a")).toBeUndefined();
   });
 });

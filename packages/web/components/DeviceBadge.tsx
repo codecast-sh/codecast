@@ -110,6 +110,10 @@ export type Device = {
   cloud_autoscale?: import("@codecast/shared/contracts").CloudAutoscale;
   /** What keeps this machine from reading a cloud agent provider (its heartbeat): it is not connected to that one. */
   cloud_agent_blocks?: import("@codecast/shared/contracts").CloudAgentSetupBlock[];
+  tailnet?: import("@codecast/shared/contracts/peerTransport").PeerTailnet;
+  direct_links_off?: boolean;
+  /** Outcomes with this machine as the source. */
+  peer_links?: Array<import("@codecast/shared/contracts/peerTransport").PeerLinkOutcome & { to_device_id: string; last_relay_ok_at?: number }>;
   online: boolean;
 };
 

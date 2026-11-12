@@ -201,6 +201,33 @@ describe("a grant on loopback", () => {
     expect((await g.done).reason).toBe("idle_timeout");
   });
 
+  test("an already aborted signal rejects as cancelled before a byte arrives", async () => {
+    const { secret, hash } = newGrantSecret();
+    const g = await openGrant({ bindIp: LOOP, allowFrom: LOOP, tokenHash: hash, serve: producer([Buffer.from("x")]).serve, connectTimeoutMs: 100 });
+    const abort = new AbortController();
+    abort.abort();
+    let sinkRan = false;
+    await expect(pullGrantInto({ ip: LOOP, port: g.port, secret, maxBytes: 1e6, signal: abort.signal, sink: async () => { sinkRan = true; } })).rejects.toThrow("cancelled");
+    expect(sinkRan).toBe(false);
+    g.close();
+  });
+
+  test("an abort mid-stream rejects as cancelled, errors the sink and closes the grant", async () => {
+    const { secret, hash } = newGrantSecret();
+    const src = producer([Buffer.from("first")], { stall: true });
+    const g = await openGrant({ bindIp: LOOP, allowFrom: LOOP, tokenHash: hash, serve: src.serve });
+    const abort = new AbortController();
+    let sinkError: unknown = null;
+    await expect(pullGrantInto({
+      ip: LOOP, port: g.port, secret, maxBytes: 1e6, signal: abort.signal,
+      onBytes: () => abort.abort(),
+      sink: async (b) => { try { await collect(b); } catch (e) { sinkError = e; throw e; } },
+    })).rejects.toThrow("cancelled");
+    expect(String(sinkError)).toContain("cancelled");
+    expect((await g.done).reason).toBe("reader_closed");
+    expect(src.killed).toBe(true);
+  });
+
   test("nothing listening: the pull rejects", async () => {
     const g = await openGrant({ bindIp: LOOP, allowFrom: LOOP, tokenHash: newGrantSecret().hash, serve: producer([]).serve });
     g.close();

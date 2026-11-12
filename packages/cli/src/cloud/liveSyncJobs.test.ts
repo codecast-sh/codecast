@@ -23,7 +23,7 @@ beforeEach(() => {
 });
 afterEach(() => { fs.rmSync(dir, { recursive: true, force: true }); });
 
-function harness() {
+function harness(extra: Partial<ConstructorParameters<typeof LiveSyncJobs>[0]> = {}) {
   const reports: MirrorReport[] = [];
   let clock = 1_000_000;
   let hostCalls = 0;
@@ -43,6 +43,7 @@ function harness() {
       fetch: async () => { git(local, "fetch", "-q", host, "+refs/codecast/sync/conv1:refs/codecast/sync/conv1"); },
       send: async (sha) => { git(local, "push", "-q", "--force", host, `${sha}:refs/codecast/sync/conv1-laptop`); },
     }),
+    ...extra,
   });
   return { jobs, reports, activity, host, hooks, advance: (ms: number) => { clock += ms; }, hostCalls: () => hostCalls };
 }
@@ -214,5 +215,29 @@ test("an older daemon's job file, specs only, still resumes", async () => {
   await h.jobs.resumeAll();
   await h.jobs.pass();
   expect(h.reports.map((r) => r.status)).toEqual(["starting", "live"]);
+  await h.jobs.stop("conv1");
+});
+
+test("a tailnet dial that fails is retried at once on the next address, and shows no error", async () => {
+  const failed: string[] = [];
+  const h = harness({ hostFailed: (id) => { failed.push(id); return failed.length === 1; } });
+  await h.jobs.handleCommand({ ...spec(), enable: true });
+  let dials = 0;
+  h.hooks.beforeSnapshot = async () => { if (++dials === 1) throw new Error("on the host: ssh: connect to host 100.101.102.103 port 22: Operation timed out"); };
+  await h.jobs.pass();
+  expect(failed).toEqual(["host-dev"]);
+  expect(dials).toBe(2);
+  expect(h.reports.some((r) => r.status === "error")).toBe(false);
+  await h.jobs.stop("conv1");
+});
+
+test("a failure the daemon cannot route around shows the error and backs off", async () => {
+  const failed: string[] = [];
+  const h = harness({ hostFailed: (id) => { failed.push(id); return false; } });
+  await h.jobs.handleCommand({ ...spec(), enable: true });
+  h.hooks.beforeSnapshot = async () => { throw new Error("on the host: fatal: not a git repository"); };
+  await h.jobs.pass();
+  expect(failed).toEqual(["host-dev"]);
+  expect(h.reports.at(-1)).toMatchObject({ status: "error" });
   await h.jobs.stop("conv1");
 });

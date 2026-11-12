@@ -26,7 +26,7 @@ import type { Command } from "commander";
 import { fmt, icons } from "../colors.js";
 import { formatAgeShort } from "../publishCommand.js";
 import {
-  ensureUp, hostState, inspectHost, patchHost, readHosts, stopHost, toRemoteHost, upsertHost, writeHosts,
+  dialRemoteHost, ensureUp, hostState, inspectHost, patchHost, probedRemoteHost, readHosts, stopHost, toRemoteHost, upsertHost, writeHosts,
   type CloudHost, type HostState,
 } from "../browser/cloudHost.js";
 import { AGENT_BRIDGE_MIN_WATCHDOG } from "../cloud/agentBridge.js";
@@ -655,6 +655,9 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
   // The host with its address as of RIGHT NOW: a booted instance gets a new
   // one, and the registry's copy is only trustworthy until it next sleeps.
   const current: CloudHost = { ...host, address: address ?? undefined };
+  // One probe picks the address every SSH call below uses: a tailnet that
+  // shows the node online but drops its traffic must not fail each of them.
+  const remote = live && address ? await probedRemoteHost(current) : null;
 
   // The device id: from the registry when we already know it, else learned
   // over SSH — which only works while the box is up.
@@ -665,7 +668,7 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
     else {
       const learned = await guard(async () => {
         const { learnHostDeviceId } = await import("../cloud/prepare.js");
-        return learnHostDeviceId(current, toRemoteHost(current));
+        return learnHostDeviceId(current, remote ?? toRemoteHost(current));
       });
       deviceId = learned.value ?? null;
       if (!deviceId) deviceNote = learned.error ? `unknown (${learned.error})` : "no codecast daemon answered";
@@ -704,12 +707,12 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
   let worktreesNote: string | undefined;
   let danglingSeeds: Array<{ repo: string; name: string }> = [];
   if (live && address) {
-    const listed = await guard(() => readRemoteWorktrees(toRemoteHost(current)));
+    const listed = await guard(() => readRemoteWorktrees(remote!));
     if (listed.error) worktreesNote = `unknown (${listed.error})`;
     worktrees = markOrphanWorktrees(listed.value ?? [], sessions);
     // Seed refs left behind by a failed acquire or a worktree removed by
     // hand: nothing frees them but `git update-ref -d`, so they are listed.
-    const seeds = await guard(() => parseDanglingSeeds(ssh(toRemoteHost(current), REMOTE_DANGLING_SEEDS_SCRIPT, 60_000, { quiet: true })));
+    const seeds = await guard(() => parseDanglingSeeds(ssh(remote!, REMOTE_DANGLING_SEEDS_SCRIPT, 60_000, { quiet: true })));
     danglingSeeds = seeds.value ?? [];
   } else {
     // Asleep, so the host cannot be asked. Its sessions still remember which
@@ -731,12 +734,12 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
   if (live && address) {
     // The mirror stamp comes back verified against the disk (mirror/push.ts).
     const { readRemoteMirrorStamp } = await import("../cloud/mirror/push.js");
-    const stamp = await guard(async () => parseHostMirrorStamp(JSON.stringify(await readRemoteMirrorStamp(toRemoteHost(current), 5_000, undefined, undefined, true))));
+    const stamp = await guard(async () => parseHostMirrorStamp(JSON.stringify(await readRemoteMirrorStamp(remote!, 5_000, undefined, undefined, true))));
     if (stamp.error) mirrorNote = stamp.error;
     else mirror = stamp.value ?? null;
     // A short cap: a hung sshd must not stall the whole listing. One ssh for
     // both stamps, split on a marker line.
-    const stamps = await guard(() => ssh(toRemoteHost(current), "cat ~/.codecast/host-tools.json 2>/dev/null; echo; echo __CAST_MCP__; cat ~/.codecast/host-mcp-overrides.json 2>/dev/null; echo; echo __CAST_SETUP__; cat ~/.codecast/host-setup.json 2>/dev/null", 5_000, { quiet: true }));
+    const stamps = await guard(() => ssh(remote!, "cat ~/.codecast/host-tools.json 2>/dev/null; echo; echo __CAST_MCP__; cat ~/.codecast/host-mcp-overrides.json 2>/dev/null; echo; echo __CAST_SETUP__; cat ~/.codecast/host-setup.json 2>/dev/null", 5_000, { quiet: true }));
     if (stamps.error) toolsNote = stamps.error;
     else {
       const [toolsAndMcp, setupOut] = (stamps.value ?? "").split("__CAST_SETUP__\n");
@@ -748,7 +751,7 @@ async function collectHostReport(host: CloudHost, convex: Convex, convexError?: 
         const spec = resolveHostSpec({ repoRoot: root });
         let applied: { hash: string; at: string } | null = null;
         try { applied = JSON.parse((setupOut ?? "").trim() || "null"); } catch { /* none */ }
-        return { applied, want: hostSpecHash(spec, root ? remoteRepoPath(toRemoteHost(current), root) : undefined), declared: spec.packages.length + spec.services.length + spec.run.length > 0 };
+        return { applied, want: hostSpecHash(spec, root ? remoteRepoPath(remote!, root) : undefined), declared: spec.packages.length + spec.services.length + spec.run.length > 0 };
       }).then((r) => r.value);
       tools = parseHostToolsStamp(toolsOut ?? "");
       // The MCP manifest rides beside the tools stamp: the summary line names the pinned servers.
@@ -1098,7 +1101,7 @@ export function buildHostsCommand(parent: Command): Command {
         const { addUserToHost } = await import("../browser/provisionLinux.js");
         const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
         try {
-          const r = addUserToHost(toRemoteHost(up), o.addUser, { github: o.github, address: up.address ?? h.address ?? h.id }, (m) => console.log(fmt.muted(`  ${m}`)));
+          const r = addUserToHost(dialRemoteHost(up), o.addUser, { github: o.github, address: up.address ?? h.address ?? h.id }, (m) => console.log(fmt.muted(`  ${m}`)));
           console.log(`${OK} ${o.addUser} added to ${h.id}`);
           console.log(`  ssh keys: ${r.keys}`);
           console.log(`  agents:   ${r.agents}`);
@@ -1119,7 +1122,7 @@ export function buildHostsCommand(parent: Command): Command {
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
       // Shared stays shared, even provisioned from a laptop that never knew: the host keeps the record.
       const shared = o.shared === true || h.shared === true ||
-        (up.platform !== "darwin" && up.provider !== "scaleway-mac" && remoteExec(toRemoteHost(up), `test -e ${SHARED_HOST_MARKER} && echo shared || true`, 30_000).trim() === "shared");
+        (up.platform !== "darwin" && up.provider !== "scaleway-mac" && remoteExec(dialRemoteHost(up), `test -e ${SHARED_HOST_MARKER} && echo shared || true`, 30_000).trim() === "shared");
       const idle = parseInt(o.idle ?? (shared ? "0" : "20"), 10);
       // The idle watchdog sees only the host's own login, so it would power off under everyone else.
       if (shared && idle !== 0) die("A shared host never auto-stops: its idle watchdog cannot see the other people's sessions", "drop --idle, or pass --idle 0");
@@ -1127,7 +1130,7 @@ export function buildHostsCommand(parent: Command): Command {
         if (o.base) {
           if (up.platform !== "darwin") die("the base image is a Mac image");
           const { buildMacBase } = await import("./provisionMac.js");
-          const { login, desktop } = await buildMacBase(toRemoteHost(up), (m) => console.log(fmt.muted(`  ${m}`)));
+          const { login, desktop } = await buildMacBase(dialRemoteHost(up), (m) => console.log(fmt.muted(`  ${m}`)));
           patchHost(up.id, { user: login.user });
           await settleMacDesktop(up, login, desktop);
           console.log(fmt.muted(`  once both grants are on: cast hosts image ${up.id} --base`));
@@ -1135,7 +1138,7 @@ export function buildHostsCommand(parent: Command): Command {
         }
         if (up.platform === "darwin" || up.provider === "scaleway-mac") {
           const { provisionMacHost } = await import("./provisionMac.js");
-          let remote = toRemoteHost(up);
+          let remote = dialRemoteHost(up);
           if (o.serviceUser) {
             const { provisionMacLogin } = await import("./macLogin.js");
             console.log(fmt.muted(`  preparing separate login ${o.serviceUser}…`));
@@ -1155,7 +1158,7 @@ export function buildHostsCommand(parent: Command): Command {
         // version when that lands: a later step that fails (the daemon restart
         // is refused while sessions are live) must not leave `cast hosts reach`
         // and forward-agent asking for a provision that already happened.
-        const report = await provisionLinuxHost(toRemoteHost(up), {
+        const report = await provisionLinuxHost(dialRemoteHost(up), {
           idleStopMinutes: idle, skipDaemon: !o.daemon, gitIdentity: o.gitIdentity, shared,
           // A shared host's browser runs as its own login, and any user on the box can reach its debugging port.
           onBaseInstalled: () => { patchHost(up.id, { idleStopMinutes: idle, watchdogVersion: IDLE_WATCHDOG_VERSION, ...(shared ? { shared: true, browserSync: false } : {}) }); },
@@ -1175,7 +1178,7 @@ export function buildHostsCommand(parent: Command): Command {
         if (shared && o.team) {
           console.log(fmt.muted("  registering it as a team machine…"));
           const args = ["hosts", "team", "register", "--team", o.team, "--name", o.name ?? h.id, ...(up.address ? ["--address", up.address] : [])];
-          const reg = remoteExec(toRemoteHost(up), `PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH" cast ${args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ")} 2>&1`, 180_000);
+          const reg = remoteExec(dialRemoteHost(up), `PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH" cast ${args.map((a) => `'${a.replace(/'/g, "'\\''")}'`).join(" ")} 2>&1`, 180_000);
           console.log(reg.trim().split("\n").map((l) => `  ${l}`).join("\n"));
         } else if (shared) {
           console.log(fmt.muted(`\n  shared host: your logins are on your user (${up.user}), its only sudoer; nobody else's go there`));
@@ -1198,7 +1201,7 @@ export function buildHostsCommand(parent: Command): Command {
       const { hostCastPlatform, updateHostCast } = await import("./updateHost.js");
       console.log(`updating ${h.id} (${h.region})…`);
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
-      const remote = toRemoteHost(up);
+      const remote = dialRemoteHost(up);
       const platform = hostCastPlatform(up);
       try {
         const { version, restart } = updateHostCast(remote, platform, { restart: o.restart, force: o.force, source: o.fromCheckout ? "checkout" : "release" }, (m) => console.log(fmt.muted(`  ${m}`)));
@@ -1228,7 +1231,7 @@ export function buildHostsCommand(parent: Command): Command {
         const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
         console.log(`${OK} ${up.id} is awake at ${fmt.highlight(up.address ?? "(no address)")}`);
         const { learnHostDeviceId, readyHostHome, remoteRepoPath } = await import("../cloud/prepare.js");
-        const hostDevice = await learnHostDeviceId(up, toRemoteHost(up));
+        const hostDevice = await learnHostDeviceId(up, dialRemoteHost(up));
         console.log(
           hostDevice
             ? `  device: ${fmt.muted(hostDevice)}`
@@ -1238,8 +1241,8 @@ export function buildHostsCommand(parent: Command): Command {
         // from here refreshes them without the daemon (which never sees this
         // path). Skipped on a box with no daemon: nothing to log in to yet.
         const localGitRoot = cwdGitRoot();
-        const home = await readyHostHome(toRemoteHost(up), {
-          cloudId: up.id, localGitRoot, repoPath: localGitRoot ? remoteRepoPath(toRemoteHost(up), localGitRoot) : undefined,
+        const home = await readyHostHome(dialRemoteHost(up), {
+          cloudId: up.id, localGitRoot, repoPath: localGitRoot ? remoteRepoPath(dialRemoteHost(up), localGitRoot) : undefined,
           onProgress: (m) => console.log(fmt.muted(`  ${m}`)), skipLogins: !hostDevice,
         });
         for (const l of loginsReportLines(home.logins)) console.log(`  ${l}`);
@@ -1260,7 +1263,7 @@ export function buildHostsCommand(parent: Command): Command {
       try {
         const { learnHostDeviceId, pushAgentLoginsNow } = await import("../cloud/prepare.js");
         const up = await ensureUp(h, say);
-        const remote = toRemoteHost(up);
+        const remote = dialRemoteHost(up);
         await learnHostDeviceId(up, remote);
         const r = pushAgentLoginsNow(remote, { localGitRoot: cwdGitRoot(), onProgress: say });
         if (o.json) { console.log(JSON.stringify({ host: up.id, ...r }, null, 2)); return; }
@@ -1281,7 +1284,7 @@ export function buildHostsCommand(parent: Command): Command {
       try {
         const { toolsForPrepare } = await import("../cloud/prepare.js");
         const up = await ensureUp(h, say);
-        const report = toolsForPrepare(toRemoteHost(up), say, { localGitRoot: cwdGitRoot(), install: !o.check });
+        const report = toolsForPrepare(dialRemoteHost(up), say, { localGitRoot: cwdGitRoot(), install: !o.check });
         if (!report) die("the host did not answer the tools check");
         if (o.json) { console.log(JSON.stringify({ host: up.id, ...report }, null, 2)); return; }
         const bad = report.missing.length > 0 || report.unsupported.length > 0;
@@ -1352,7 +1355,7 @@ export function buildHostsCommand(parent: Command): Command {
           if (root.some((v: { Encrypted?: boolean }) => v.Encrypted)) die("this host's disk is encrypted, and AWS cannot make an image of it public; build the base on an unencrypted root volume");
           const { baseImageName, createBaseImageArgs, macBaseScrubScript } = await import("./image.js");
           const { shq } = await import("../remote/session-move.js");
-          const scrub = remoteExec(toRemoteHost(h), `bash -c ${shq(macBaseScrubScript())}`, 120_000);
+          const scrub = remoteExec(await probedRemoteHost(h), `bash -c ${shq(macBaseScrubScript())}`, 120_000);
           if (!scrub.includes("MAC-BASE-SCRUBBED")) die(`scrub did not finish: ${scrub.slice(-400)}`);
           const name = baseImageName(platform);
           const out = aws(opts, createBaseImageArgs(h.id, platform, name));
@@ -1367,7 +1370,7 @@ export function buildHostsCommand(parent: Command): Command {
         const state = aws(opts, ["ec2", "describe-instances", "--instance-ids", h.id]).Reservations?.[0]?.Instances?.[0]?.State?.Name;
         if (state !== "stopped") {
           try {
-            remoteExec(toRemoteHost(h), "sync", 120_000);
+            remoteExec(await probedRemoteHost(h), "sync", 120_000);
           } catch (err) {
             die(`could not flush the host's disk before the snapshot (${(err as Error).message}); stop it with cast hosts sleep and capture it stopped`);
           }
@@ -1393,7 +1396,7 @@ export function buildHostsCommand(parent: Command): Command {
         const { runHostSetup, describeHostSetup } = await import("../cloud/hostSetup.js");
         const { remoteRepoPath } = await import("../remote/session-move.js");
         const up = await ensureUp(h, say);
-        const host = toRemoteHost(up);
+        const host = dialRemoteHost(up);
         // Outside a repo (the daemon runs this for the app), the host's registered laptop checkout names the repo.
         const { readProjectRegistrations } = await import("../cloud/mirror/projectRefresh.js");
         const root = cwdGitRoot() ?? readProjectRegistrations(host).filter((p) => !p.retired).sort((a, b) => a.targetRoot.length - b.targetRoot.length)[0]?.sourceRoot;
@@ -1439,7 +1442,7 @@ export function buildHostsCommand(parent: Command): Command {
         const { ensureHostGitReady } = await import("../cloud/hostGit.js");
         const { learnHostDeviceId, remoteRepoPath } = await import("../cloud/prepare.js");
         const up = await ensureUp(h, say);
-        const remote = toRemoteHost(up);
+        const remote = dialRemoteHost(up);
         await learnHostDeviceId(up, remote);
         const probe = () => ensureHostGitReady(remote, {
           localGitRoot,
@@ -1562,10 +1565,11 @@ export function buildHostsCommand(parent: Command): Command {
         die("the home mirror is off", "`cast config cloud_mirror_enabled true` to turn it on");
       }
       const previewHost = id ? pick(id, "no host registered") : readHosts().find((r) => r.provider === "aws");
-      const previewHome = previewHost ? remoteHome(toRemoteHost(previewHost)) : "/home/ubuntu";
+      const previewRemote = previewHost ? await probedRemoteHost(previewHost) : null;
+      const previewHome = previewRemote ? remoteHome(previewRemote) : "/home/ubuntu";
       let preview;
       try {
-        preview = await buildHomeMirror({ config, hostHome: previewHome, takeOver: o.takeOver, projects: previewHost ? readProjectRegistrations(toRemoteHost(previewHost), undefined, previewHost.id) : [] });
+        preview = await buildHomeMirror({ config, hostHome: previewHome, takeOver: o.takeOver, projects: previewHost && previewRemote ? readProjectRegistrations(previewRemote, undefined, previewHost.id) : [] });
       } catch (err) {
         die((err as Error).message);
       }
@@ -1600,7 +1604,7 @@ export function buildHostsCommand(parent: Command): Command {
       if (id) {
         const h = pick(id, "no host registered");
         const up = await ensureUp(h, say);
-        const r = await mirrorHomeToHost(toRemoteHost(up), { onProgress: say, force: true, takeOver: o.takeOver, config }).catch((err) => ({ pushed: false, reason: (err as Error).message, changed: 0, skipped: undefined, result: undefined, hash: undefined }));
+        const r = await mirrorHomeToHost(dialRemoteHost(up), { onProgress: say, force: true, takeOver: o.takeOver, config }).catch((err) => ({ pushed: false, reason: (err as Error).message, changed: 0, skipped: undefined, result: undefined, hash: undefined }));
         results.push({ host: up.id, outcome: describeOutcome(r), ok: r.pushed || r.skipped === "in step" });
       } else {
         const reachable = await reachableRemoteHosts(listScalewayHosts());
@@ -1626,7 +1630,7 @@ export function buildHostsCommand(parent: Command): Command {
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
       const { ensureViewTunnel } = await import("../browser/liveView.js");
       try {
-        const v = await ensureViewTunnel(toRemoteHost(up));
+        const v = await ensureViewTunnel(dialRemoteHost(up));
         console.log(`${OK} live view is up${v.tunnelPid ? ` (tunnel pid ${v.tunnelPid})` : " (reusing the existing tunnel)"}`);
         console.log(`  VLC:     ${fmt.highlight(v.rtsp)}`);
         console.log(`  browser: ${fmt.highlight(v.hls)}`);
@@ -1655,7 +1659,7 @@ export function buildHostsCommand(parent: Command): Command {
       const { ensureVncTunnel, closeHostTunnel, TUNNEL_IDLE_SECONDS } = await import("../browser/liveView.js");
       if (o.stop) {
         if (!h.address) die(`${h.id} has no address; it is asleep, so no tunnel is open`);
-        console.log(closeHostTunnel(toRemoteHost(h), "vnc") ? `${OK} VNC tunnel closed` : fmt.muted("no VNC tunnel was open"));
+        console.log(closeHostTunnel(await probedRemoteHost(h), "vnc") ? `${OK} VNC tunnel closed` : fmt.muted("no VNC tunnel was open"));
         return;
       }
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
@@ -1676,7 +1680,7 @@ export function buildHostsCommand(parent: Command): Command {
         return;
       }
       try {
-        const v = await ensureVncTunnel(toRemoteHost(up));
+        const v = await ensureVncTunnel(dialRemoteHost(up));
         console.log(`${OK} VNC is up${v.tunnelPid ? ` (tunnel pid ${v.tunnelPid})` : " (reusing the existing tunnel)"}`);
         openLink(v.url);
         console.log(fmt.muted(`  the tunnel closes ${TUNNEL_IDLE_SECONDS / 60} minutes after the last viewer leaves, so the host can still sleep (--stop closes it now)`));
@@ -1693,7 +1697,7 @@ export function buildHostsCommand(parent: Command): Command {
       const up = await ensureUp(h, (m) => console.log(fmt.muted(`  ${m}`)));
       const { machineShot } = await import("../browser/liveView.js");
       try {
-        console.log(machineShot(toRemoteHost(up)));
+        console.log(machineShot(dialRemoteHost(up)));
       } catch (err) {
         die((err as Error).message);
       }

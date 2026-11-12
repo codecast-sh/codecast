@@ -23,6 +23,7 @@ import { ManagedDevicePill } from "../../../components/settings/ManagedDevicePil
 import { useSharedWithLabel } from "../../../hooks/useDeviceSharing";
 import { CloudHostPanel } from "../../../components/settings/CloudHostPanel";
 import { TeamMachineCard } from "../../../components/settings/TeamMachineCard";
+import { MachineTailnet } from "../../../components/settings/MachineTailnet";
 import { useSyncTeamMachines } from "../../../hooks/useSyncTeamMachines";
 
 type RepoPlane = NonNullable<Device["git_plane"]>[number];
@@ -381,6 +382,7 @@ function DeviceRow({ d }: { d: Device }) {
         <div className="min-w-0 flex-1">
           <DevicePanelHeader selected={d} note="seen" />
           <DeviceShareControl d={d} />
+          <MachineTailnet device={d} />
           <DeviceDetails d={d} />
           <div className="mt-3 flex justify-end empty:hidden">
             <RemoveMachineButton d={d} />

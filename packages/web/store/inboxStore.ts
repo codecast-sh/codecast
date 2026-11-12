@@ -6028,6 +6028,12 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setWeeklyCardEnabled: (enabled: boolean) => void;
   setWeeklyCardOptions: (cardId: string, opts: { show_projects?: boolean; show_tokens?: boolean }) => void;
   dismissBrowserPaneOffer: (id: string, at: number) => void;
+  /** The folder transfers this window asked to cancel (conversation id ->
+   *  the transfer's started_at), shown as cancelling until the row's own
+   *  cancel_requested_at arrives; daemon reports keep replacing the row. */
+  peerTransferCancels: Record<string, number>;
+  cancelPeerTransfer: (id: string, startedAt: number) => void;
+  dismissPeerTransfer: (id: string, startedAt: number) => void;
   setTeamVisibility: (id: string, visibility: "summary" | "full" | null) => void;
   /** My level for a whole team. `mode` matters only when the level goes up:
    *  "going_forward" pins sessions started before now at the level they had. */
@@ -6437,6 +6443,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** Open one of your machines to exactly these teams (empty = private).
    *  Settings > Machines; the server home is device_shares. */
   setDeviceShares: (deviceId: string, teamIds: string[]) => void;
+  /** Settings > Machines' "Accept direct links" (peer-transport.md); the server home is devices.direct_links_off. */
+  setDeviceDirectLinks: (deviceId: string, enabled: boolean) => void;
   /** Put one of the viewer's accounts in exactly these teams' pools (empty
    *  takes it back): Settings > Claude Accounts' pool pill. Server home is
    *  account_shares; the accountPool snapshot reconciles the draft. */
@@ -9524,6 +9532,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   pendingMessages: {},
   pagination: {},
   conversations: {},
+  peerTransferCancels: {},
   userMessages: {},
   feedConversations: {},
   feedHasMore: {},
@@ -9818,6 +9827,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
   setDeviceShares: action(function (this: Draft, deviceId: string, teamIds: string[]) {
     const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
     if (row) row.shared_team_ids = [...teamIds].sort();
+  }),
+  setDeviceDirectLinks: action(function (this: Draft, deviceId: string, enabled: boolean) {
+    const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
+    if (row) row.direct_links_off = enabled ? undefined : true;
   }),
   setAccountShares: action(function (this: Draft, deviceId: string, email: string, teamIds: string[]) {
     const pool = this.accountPool as Record<string, any>;
@@ -11104,6 +11117,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (!this.conversations[id]) this.conversations[id] = { _id: id } as any;
     (this.conversations[id] as any).is_favorite = next;
     this.favorites = withFavoriteMembership(this.favorites as any[], id, next, this.conversations[id]);
+  }),
+
+  // The folder-transfer strip's Cancel paints at once; the
+  // cancelPeerTransfer side effect stamps the row the daemon reads back.
+  cancelPeerTransfer: action(function (this: Draft, id: string, startedAt: number) {
+    this.peerTransferCancels[id] = startedAt;
+  }),
+  // A failed or stalled transfer's row goes; the dismissPeerTransfer side
+  // effect clears it only if no newer transfer replaced it.
+  dismissPeerTransfer: action(function (this: Draft, id: string, startedAt: number) {
+    const conv = this.conversations[id] as any;
+    if (conv?.peer_transfer?.started_at === startedAt) conv.peer_transfer = null;
   }),
 
   // The reader opened or dismissed an agent's pane offer. Same split as

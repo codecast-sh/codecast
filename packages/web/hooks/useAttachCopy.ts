@@ -3,7 +3,10 @@ import { toast } from "sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { copyText } from "../lib/copyText";
-import { attachCopy, type SessionMachine } from "../components/tmuxAttach";
+import { attachCopy, tailnetSshHost, type SessionMachine } from "../components/tmuxAttach";
+import { useInboxStore } from "../store/inboxStore";
+import { localDeviceIdOf } from "./useLocalDeviceId";
+import type { Device } from "../components/DeviceBadge";
 
 /**
  * The machine a pane lives on, and the copy gesture for it. One hook so every
@@ -19,7 +22,17 @@ export function useAttachCopy(tmuxSession: string | null | undefined, conversati
     api.devices.getConversationMachine,
     tmuxSession && conversationKey ? { conversation_id: conversationKey as any } : "skip",
   ).data as SessionMachine | null | undefined;
-  const copy = tmuxSession ? attachCopy(tmuxSession, machine) : null;
+  // Another of yours on a tailnet is reached by its MagicDNS name. Only once
+  // this window knows its own machine: until then the pane may be right here,
+  // where the local attach works and an ssh to itself may not.
+  const tailnetName = useInboxStore((s) => {
+    const local = localDeviceIdOf(s);
+    if (!machine?.is_mine || !local || machine.device_id === local) return null;
+    const roster = s.machineRoster as Device[];
+    const name = roster.find((d) => d.device_id === machine.device_id)?.tailnet?.name;
+    return tailnetSshHost(name, roster.find((d) => d.device_id === local)?.tailnet?.tailnet);
+  });
+  const copy = tmuxSession ? attachCopy(tmuxSession, machine && { ...machine, tailnet_name: tailnetName }) : null;
   const command = copy?.command ?? null;
   const message = copy?.message ?? "";
   const copyAttach = useCallback(() => {

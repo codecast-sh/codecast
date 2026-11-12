@@ -59,6 +59,8 @@ export interface LiveSyncJobsDeps {
   report: (conversationId: string, report: MirrorReport) => Promise<void>;
   activity: (conversationIds: string[]) => Promise<MirrorActivity[]>;
   hostFor: (hostDeviceId: string) => RemoteHost | null;
+  /** A tick against that host threw: true when hostFor now answers another address worth trying at once. */
+  hostFailed?: (hostDeviceId: string, err: unknown) => boolean;
   log: (line: string) => void;
   jobsFile: string;
   /** The person's always/never patterns for this repo. */
@@ -317,7 +319,7 @@ export class LiveSyncJobs {
     return { dir: job.dir, mode: job.spec.mode ?? "two_way", status: job.status, conflicts: job.state.conflicts ?? [], hostSkipped: job.hostSkipped, laptopSkipped: job.laptopSkipped, lastLandedAt: job.lastLandedAt, spec: job.spec };
   }
 
-  private async tick(job: Job, now: number): Promise<TickResult | null> {
+  private async tick(job: Job, now: number, redialed = false): Promise<TickResult | null> {
     const host = this.hostSide(job);
     if (!host) { await this.setStatus(job, "error", { error: "this laptop does not manage that cloud host (cast hosts ls)" }); job.nextTickAt = now + MIRROR_ERROR_BACKOFF_MS; return null; }
     try {
@@ -343,6 +345,7 @@ export class LiveSyncJobs {
       }
       return r;
     } catch (err) {
+      if (!redialed && this.deps.hostFailed?.(job.spec.host_device_id, err)) return this.tick(job, now, true);
       const msg = (err instanceof Error ? err.message : String(err)).split("\n")[0]!.slice(0, 300);
       job.nextTickAt = now + MIRROR_ERROR_BACKOFF_MS;
       if (job.error !== msg) this.deps.log(`[MIRROR] ${job.spec.conversation_id.slice(0, 7)}: ${msg}`);

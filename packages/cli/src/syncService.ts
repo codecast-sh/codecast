@@ -488,12 +488,43 @@ export class SyncService {
     await this.mutate("peerLinks:recordPeerLink", { api_token: this.apiToken, ...link });
   }
 
+  async reportPeerTransfer(
+    conversationId: string,
+    deviceId: string,
+    startedAt: number,
+    report: { phase: "asking" | "receiving" | "unpacking" | "done" | "failed"; from?: string; mode?: "direct" | "relay"; bytes?: number; total?: number; reason?: string },
+  ): Promise<{ cancel: boolean }> {
+    return await this.mutate("peerTransfers:reportPeerTransfer", {
+      api_token: this.apiToken,
+      device_id: deviceId,
+      conversation_id: conversationId,
+      started_at: startedAt,
+      ...report,
+    });
+  }
+
   async folderExportOutcomes(commandIds: string[]): Promise<Array<{ command_id: string; executed_at: number | null; result: string | null; error: string | null; label: string | null; device_id?: string | null }>> {
     return await this.client.query("folderSync:folderExportOutcomes" as any, { api_token: this.apiToken, command_ids: commandIds });
   }
 
   async discardFolderBundle(commandId: string): Promise<void> {
     await this.mutate("folderSync:discardFolderBundle", { api_token: this.apiToken, command_id: commandId });
+  }
+
+  async requestSessionExport(
+    conversationId: string,
+    deviceId: string,
+    opts: { tailnet?: { ip: string; name: string }; token_hash?: string; relay_only?: boolean; only_device_id?: string } = {},
+  ): Promise<{ command_ids: string[]; labels: Record<string, string> }> {
+    return await this.mutate("sessionTransfer:requestSessionExport", { api_token: this.apiToken, device_id: deviceId, conversation_id: conversationId, ...opts });
+  }
+
+  async sessionExportOutcomes(commandIds: string[]): Promise<Array<{ command_id: string; executed_at: number | null; result: string | null; error: string | null; label: string | null; device_id?: string | null }>> {
+    return await this.client.query("sessionTransfer:sessionExportOutcomes" as any, { api_token: this.apiToken, command_ids: commandIds });
+  }
+
+  async discardSessionBundle(commandId: string): Promise<void> {
+    await this.mutate("sessionTransfer:discardSessionBundle", { api_token: this.apiToken, command_id: commandId });
   }
 
   /**

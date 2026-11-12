@@ -298,7 +298,7 @@ describe("daemon restart gating", () => {
     // never join it without a reviewed edit to this list.
     const detached = /const DETACHED_COMMANDS: ReadonlySet<string> = new Set\((\[[^\]]*\])\);/.exec(daemon);
     expect(detached, "DETACHED_COMMANDS is one Set literal").not.toBeNull();
-    expect(JSON.parse(detached![1])).toEqual(["cloud_agent_action", "switch_claude_backend", "export_folder"]);
+    expect(JSON.parse(detached![1])).toEqual(["cloud_agent_action", "switch_claude_backend", "export_folder", "export_session"]);
     // And the old per-path loops are gone: one call site, inside the batch.
     expect(daemon.split(/(?<!function )executeRemoteCommand\(/).length - 1).toBe(1);
   });

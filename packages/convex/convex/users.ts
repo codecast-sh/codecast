@@ -47,6 +47,7 @@ import { startAccountDeletion } from "./accountDelete";
 import { readLocalViewRevision } from "./localFirstCommands";
 import { daemonLastSeenStale } from "./lib/daemonLiveness";
 import { linkTeamHostBeat } from "./teamHosts";
+import { dropLateExportAnswer } from "./folderSync";
 import { scheduleSwitchAhead } from "./lib/hostRecovery";
 import {
   CURRENT_USER_GRANT_KEY,
@@ -948,7 +949,7 @@ export const reportCommandResult = mutation({
     if (!command || command.user_id !== auth.userId) {
       return { error: "Command not found" };
     }
-
+    if (await dropLateExportAnswer(ctx, command, args.result)) return { success: true };
     await ctx.db.patch(args.command_id, {
       executed_at: Date.now(),
       result: args.result,

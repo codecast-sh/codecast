@@ -9,6 +9,7 @@ import { mutation, query } from "./functions";
 import { v } from "convex/values";
 import { getAuthenticatedUserId } from "./permissions";
 import { ownDevice } from "./devices";
+import type { Id } from "./_generated/dataModel";
 
 export const PEER_LINK_REASON_MAX = 200;
 
@@ -67,9 +68,13 @@ export const setDeviceDirectLinks = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication required");
-    const device = await ownDevice(ctx, userId, args.device_id);
-    if (!device) throw new Error("Unknown device");
-    await ctx.db.patch(device._id, { direct_links_off: args.enabled ? undefined : true });
-    return { direct_links_off: !args.enabled };
+    return performSetDeviceDirectLinks(ctx, userId, args.device_id, args.enabled);
   },
 });
+
+export async function performSetDeviceDirectLinks(ctx: any, userId: Id<"users">, deviceId: string, enabled: boolean) {
+  const device = await ownDevice(ctx, userId, deviceId);
+  if (!device) throw new Error("Unknown device");
+  await ctx.db.patch(device._id, { direct_links_off: enabled ? undefined : true });
+  return { direct_links_off: !enabled };
+}

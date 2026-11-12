@@ -38,8 +38,11 @@ Rejected:
    recorded folder (`project_path`, `git_root` or `worktree_path`); any other
    path is refused. Convex puts `direct: { requester, token_hash }` into the
    `export_folder` args only when the requester sent a tailnet and the source
-   device has not turned direct links off. One live request per
-   (conversation, path); a per-user rate limit.
+   device has not turned direct links off. Every request gets command rows
+   of its own, even one identical to a live request, so one requester
+   discarding never abandons or deletes another's answer. A per-user rate
+   limit counts requests, one unit each however many machines a request
+   asks.
 3. **Decide (source).** The source grants only when all hold, else it answers
    through the relay in the same command:
    - its tailscaled is `Running` and its own tailnet IPv4 is on a local
@@ -61,18 +64,27 @@ Rejected:
    (same UserID, online, at that ip/name), dials with a 5 s connect timeout
    and a 30 s idle timeout, and pipes the body into a hardened extract.
 6. **Fallback.** Any direct failure re-requests from the same machine with
-   `relay_only: true` (the relay cap still applies). The outcome of every
-   attempt is recorded per machine pair (`peer_links`), which is what the UI
-   shows.
+   `relay_only: true` (the relay cap still applies). A source that skipped
+   the grant (firewall, userspace networking, grant failure; not size)
+   answers through the relay with `direct_skipped`, which the requester
+   records as a failed direct attempt. The outcome of every attempt is
+   recorded per machine pair (`peer_links`), which is what the UI shows.
+7. **Abandon.** The requester discards every request when it finishes. A
+   request no machine has answered yet is stamped executed (`abandoned`) so
+   no daemon runs it, and an answer that arrives after that has its archive
+   deleted and is not recorded.
 
 Extraction (both paths) goes to a staging folder beside the destination with
-`--no-same-owner --no-same-permissions`; then hardlinks, devices, fifos and
+`--no-same-owner --no-same-permissions` (tar itself refuses hardlinks whose
+target lies outside the extract folder); then devices, fifos, sockets and
 symlinks whose target leaves the folder are removed, `.git/hooks` is emptied
 and `.git/config` loses `core.fsmonitor`, `core.hooksPath`, `core.sshCommand`,
-`*.helper`, `include*` keys; then it is renamed into place. A destination must
-be inside `$HOME`, not in a dot-folder at the top of home, not under
-`~/Library`. The source refuses the same places and never packs files that
-look like keys or credentials (`.env*`, `id_*`, `*.pem`, `*.key`, `*.p12`,
+`*.helper`, `include*` keys; then it is renamed into place. A destination,
+after resolving symlinks, must be inside `$HOME`, not in a dot-folder at the
+top of home and not under `~/Library`; the path as named must also not be home
+itself, a top-level dot-folder or under `~/Library`. The source refuses
+the same places and never packs files that look like keys or credentials,
+tracked in git or not (`.env*`, `id_*`, `*.pem`, `*.key`, `*.p12`,
 `.netrc`, `.npmrc`, `.pypirc`, `credentials*`).
 
 ## Payloads
@@ -80,7 +92,15 @@ look like keys or credentials (`.env*`, `id_*`, `*.pem`, `*.key`, `*.p12`,
 | Payload | Command | Direct body | Relay fallback |
 |---|---|---|---|
 | Session folder | `export_folder` | streamed `tar.gz` of the include list, up to 2 GB | storage archive (300 MB) |
-| Session transcript (new) | `export_session` | streamed `tar.gz` of the session's transcript file and session folder, resolved from the conversation's session id only | the same archive through storage; regeneration from the Convex export only when no source is online |
+| Session transcript | `export_session` | streamed `tar.gz` of the Claude Code `<id>.jsonl` and its `<id>/` folder, named by the server from the conversation's `session_id` (no path in the request; UUID ids only; symlinks refused); a copy missing the conversation's newest synced message uuid is refused as stale | the same archive through storage; regeneration from the Convex export when no machine answers with it within 45 s, the requester does not own the conversation, or the agent is not Claude Code |
+
+The requester files the transcript under the slug of its own resume cwd and
+rewrites the source's home, cwd and project folder in it (and in every
+`.jsonl` under the session folder) the way `cast move` does
+(`relocateTranscript`). It stages beside the projects dir, never inside the
+watched tree, maps the session to the conversation before the file lands,
+and never replaces a transcript already there. An answer naming another
+session is refused before anything is pulled.
 
 Later: terminal and browser-watch tunnels between laptops, `git fetch` of wip
 refs from a peer, a confirm for folders over 2 GB.
@@ -97,7 +117,11 @@ refs from a peer, a confirm for folders over 2 GB.
   the source bindable, and the last recorded transfer outcome (`peer_links`).
 - While a folder or transcript moves, the conversation shows a progress row
   (asking / packing on X / receiving N of M / unpacking, Direct or Relay) with
-  Cancel, where the restart status already appears.
+  Cancel, where the restart status already appears. The row
+  (`conversations.peer_transfer`) is projected only to the owner, since a
+  failure reason can name tailnet addresses and local paths. Cancel and
+  "done" act only on the transfer they name by `started_at`, so a newer
+  transfer is never cancelled or cleared by an older one.
 
 ## Code map
 
@@ -109,3 +133,7 @@ refs from a peer, a confirm for folders over 2 GB.
   so hot paths never `spawnSync`; `selfTailnet(status)`, `peerOnline(status, record)`.
 - `packages/cli/src/folderSync.ts` — direct-first, relay fallback.
 - `packages/convex/convex/folderSync.ts` — passes requester tailnet through.
+- `packages/cli/src/sessionTransfer.ts` — `export_session` on both sides, on
+  the folder machinery (`servePlan`, `syncFolderFromPeer` with `receive`).
+- `packages/convex/convex/sessionTransfer.ts` — the request, outcomes and
+  discard for it, sharing `requestPeerExport` and the folder rate limit.

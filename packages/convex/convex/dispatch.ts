@@ -22,6 +22,7 @@ import type { ThreadKind } from "./threadReads";
 import { ConvexError, v } from "convex/values";
 import { resolveSpawnDefinition } from "./spawn";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import { performSetDeviceDirectLinks } from "./peerLinks";
 import { enqueueStartSession, performRemoveDevices, performSetDeviceShares, performSetDeviceSnippet, performRequestDeviceUpdate, performSetProviderKey } from "./devices";
 import { performJoinTeamHost, performRemoveTeamHostMember, performRenameTeamHost, performUnregisterTeamHost } from "./teamHosts";
 import { performSetAccountShares } from "./accountPool";
@@ -46,6 +47,7 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType
 } from "@codecast/shared/contracts";
 import { applyHideTransition, hideBudgetLeft } from "./cleanup";
 import { stampBrowserPaneOfferHandled, writeShareLink } from "./conversations";
+import { performCancelPeerTransfer, performDismissPeerTransfer } from "./peerTransfers";
 import { writeObjectShareLink } from "./publicShare";
 import { setWeeklyCardEnabledFor, setWeeklyCardOptionsFor } from "./weeklyCards";
 import { deleteSessionAsOwner } from "./sessionDelete";
@@ -1346,6 +1348,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // on the roster draft; device_shares is the server home of that fact.
   setDeviceShares: async (ctx, userId, [deviceId, teamIds]: [string, string[]]) =>
     performSetDeviceShares(ctx as any, userId, deviceId, teamIds),
+  // Settings > Machines' "Accept direct links": the web flips the roster row's
+  // direct_links_off; the device row is what folderSync reads.
+  setDeviceDirectLinks: async (ctx, userId, [deviceId, enabled]: [string, boolean]) =>
+    performSetDeviceDirectLinks(ctx as any, userId, deviceId, enabled),
   // Settings > Claude Accounts' pool pill: the web writes the account's team
   // set on the accountPool draft; account_shares is the server home.
   setAccountShares: async (ctx, userId, [deviceId, email, teamIds]: [string, string, string[]]) =>
@@ -1390,6 +1396,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // stampBrowserPaneOfferHandled).
   dismissBrowserPaneOffer: async (ctx, userId, [convId, at]: [string, number]) => {
     await stampBrowserPaneOfferHandled(ctx, userId, convId as Id<"conversations">, at);
+  },
+  // The folder-transfer strip's Cancel: the web marks the row cancelling; the
+  // owner's daemon reads the stamp back on its next progress report.
+  cancelPeerTransfer: async (ctx, userId, [convId, startedAt]: [string, number]) => {
+    await performCancelPeerTransfer(ctx, userId, convId as Id<"conversations">, startedAt);
+  },
+  dismissPeerTransfer: async (ctx, userId, [convId, startedAt]: [string, number]) => {
+    await performDismissPeerTransfer(ctx, userId, convId as Id<"conversations">, startedAt);
   },
 
   // The inbox hide gestures. For the runner and the owner set the patches above

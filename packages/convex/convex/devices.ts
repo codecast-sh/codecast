@@ -1,3 +1,4 @@
+import { peerLinkRowsByDevice } from "./lib/peerLinkRows";
 import { mutation, query, internalQuery } from "./functions";
 import { selfUpdateBlocked } from "./lib/deviceUpdate";
 import { v } from "convex/values";
@@ -1181,6 +1182,7 @@ export const listDevices = query({
     const sharedTeams = (deviceId: string) =>
       shares.filter((sh: any) => sh.device_id === deviceId).map((sh: any) => sh.team_id.toString()).sort();
     const management = await deviceManagementFor(ctx, userId, rows.map((d: any) => d.device_id));
+    const peerLinksFrom = await peerLinkRowsByDevice(ctx, userId, rows.map((d: any) => d.device_id));
     return rows
       .map((d: any) => ({
         device_id: d.device_id,
@@ -1263,6 +1265,7 @@ export const listDevices = query({
         // Owner-only, like ssh_host (peer-transport.md).
         tailnet: d.tailnet ?? undefined,
         direct_links_off: d.direct_links_off ?? undefined,
+        peer_links: peerLinksFrom(d.device_id),
         online: now - d.last_seen < DEVICE_ONLINE_MS,
       }))
       .sort((a: any, b: any) => b.last_seen - a.last_seen);
