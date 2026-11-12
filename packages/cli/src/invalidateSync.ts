@@ -26,6 +26,9 @@ export interface BackoffOptions {
   // rethrowing the last error so the caller can decide what to do. Undefined =
   // retry indefinitely (legacy behavior).
   maxRetries?: number;
+  // A failure this says retrying cannot fix (the same input rejected the same
+  // way) ends the burst at once instead of spending the rest of maxRetries.
+  retryable?: (e: unknown) => boolean;
 }
 
 export function createBackoff(opts?: BackoffOptions): BackoffFunc {
@@ -44,7 +47,7 @@ export function createBackoff(opts?: BackoffOptions): BackoffFunc {
         // Stop hammering a command that never recovers (a deleted transcript, or any
         // permanently-failing sync) — it used to loop ~2/sec forever. Callers re-arm
         // on the next event, so giving up here is a bounded backoff, not a dead end.
-        if (maxRetries !== undefined && failures >= maxRetries) {
+        if (maxRetries !== undefined && failures >= maxRetries || opts?.retryable?.(e) === false) {
           throw e;
         }
         const waitForRequest = exponentialBackoffDelay(
@@ -75,6 +78,8 @@ export interface InvalidateSyncOptions {
   // Called once when the retry budget is exhausted, with the last error. Lets the
   // caller log the give-up on its own channel.
   onGiveUp?: (error: unknown) => void;
+  // Ends the burst on the first failure it rejects (see BackoffOptions.retryable).
+  retryable?: (error: unknown) => boolean;
 }
 
 // A persistently-failing sync (e.g. a bug, an un-retryable server rejection) used to
@@ -106,6 +111,7 @@ export class InvalidateSync {
         console.warn(e);
       },
       maxRetries: options.maxRetries ?? DEFAULT_MAX_RETRIES,
+      retryable: options.retryable,
     });
   }
 

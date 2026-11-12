@@ -22,7 +22,7 @@ import { typedMenuReply, typedPollAnswer } from "./typedPollAnswer.js";
 import { closeOwnCommandPanel, mayOpenPanel, paneDialogQuestion, rememberCommandPanel } from "./commandPanel.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_CLIENTS, INGEST_WINDOW_ROWS, type IngestJob } from "./workers/ingestTypes.js";
-import { TranscriptRetryOwner, type TranscriptRetrySource } from "./workers/ingestRetryOwner.js";
+import { TranscriptRetryOwner, transcriptFailureLog, type TranscriptRetrySource } from "./workers/ingestRetryOwner.js";
 import { ingestRetainedWeight } from "./workers/ingestTransport.js";
 import { awaitDeliveryEcho, computeIngestSyncDelta, provenSyncedPrefix, samePersistedFile, transcriptSignatureWatermark, ingestIdentity, ingestMessageTitle, ingestRecord, ingestSource, readTranscriptIngest, retryOnIngestCapacity, sameIngestFile, serializeTranscript, validateTranscriptIngest } from "./workers/ingestClient.js";
 import { checkTranscriptDeadline, outsideTranscriptDeadline } from "./workers/ingestDeadline.js";
@@ -3356,6 +3356,7 @@ function log(message: string, level: LogLevel = "info", metadata?: RemoteLog["me
   });
 }
 
+const logTranscriptFailure = transcriptFailureLog(line => log(line));
 function logError(message: string, error?: Error, sessionId?: string): void {
   const errMsg = error ? `${message}: ${error.message}` : message;
   log(errMsg, "error", {
@@ -12894,7 +12895,7 @@ async function processSessionFilePass(
     }
     const errMsg = err instanceof Error ? err.message : String(err);
     const stack = err instanceof Error && err.stack ? `\n${err.stack}` : "";
-    log(`processSessionFile failed for ${sessionId.slice(0, 8)} at position=${lastPosition}: ${errMsg}${stack}`);
+    logTranscriptFailure(`processSessionFile failed for ${sessionId.slice(0, 8)} at position=${lastPosition}`, `${errMsg}${stack}`);
     noteTranscriptFailure(sessionId, errMsg);
     throw err;
   }
@@ -13243,7 +13244,7 @@ async function processCursorTranscriptFilePass(
     ));
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    log(`Error processing Cursor transcript file ${filePath}: ${errMsg}`);
+    logTranscriptFailure(`Error processing Cursor transcript file ${filePath}`, errMsg);
     throw err;
   }
 }
@@ -13586,7 +13587,7 @@ async function processCodexSessionPass(
     ));
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    log(`Error processing Codex session file ${filePath}: ${errMsg}`);
+    logTranscriptFailure(`Error processing Codex session file ${filePath}`, errMsg);
     throw err;
   }
 }
@@ -13739,7 +13740,7 @@ async function processGeminiSessionPass(
     updateStateCallback();
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    log(`Error processing Gemini session file ${filePath}: ${errMsg}`);
+    logTranscriptFailure(`Error processing Gemini session file ${filePath}`, errMsg);
     throw err;
   }
 }
@@ -14001,7 +14002,7 @@ async function processOpencodeSessionPass(
     updateStateCallback();
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    log(`Error processing opencode session ${sessionId}: ${errMsg}`);
+    logTranscriptFailure(`Error processing opencode session ${sessionId}`, errMsg);
     throw err;
   }
 }
@@ -14450,7 +14451,7 @@ async function processTranscriptDeltaSessionPass(
     updateStateCallback();
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    log(`Error processing ${client} session file ${filePath}: ${errMsg}`);
+    logTranscriptFailure(`Error processing ${client} session file ${filePath}`, errMsg);
     throw err;
   }
 }

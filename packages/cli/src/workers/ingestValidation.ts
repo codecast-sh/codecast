@@ -10,9 +10,16 @@ const messageFields = Object.keys({
   stopReason: true, model: true, usage: true, apiMessageId: true,
 } satisfies Record<keyof ParsedMessage, true>);
 
+// A result that fails this schema fails it again on the same bytes: a parser and
+// validator that disagree about a shape (Codex 0.167's thread_spawn.agent_role,
+// 2026-11-11) are a code bug, not a transient fault. Recognized by message
+// because a worker's error crosses the host as text.
+const SCHEMA_REJECTION = 'invalid ingest result schema';
+export const isIngestSchemaRejection = (error: unknown): boolean => error instanceof Error && error.message === SCHEMA_REJECTION;
+
 const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v) && [Object.prototype,null].includes(Object.getPrototypeOf(v));
 function requireValue(valid: unknown): asserts valid {
-  if (!valid) throw new Error('invalid ingest result schema');
+  if (!valid) throw new Error(SCHEMA_REJECTION);
 }
 function fields(value: unknown, allowed: string[]): asserts value is Record<string, any> {
   requireValue(object(value));

@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import {InvalidateSync, type InvalidateSyncOptions} from '../invalidateSync.js';
 import {retryOnIngestCapacity} from './ingestClient.js';
+import {isIngestSchemaRejection} from './ingestValidation.js';
 export type TranscriptRetrySource = {client:string;file:string;sessionId:string};
 type State = {key:string;source:TranscriptRetrySource;due:number;stopped:boolean;running:boolean;revision:object};
 type Registry = {map:Map<string,InvalidateSync>;iterator:MapIterator<[string,InvalidateSync]>};
@@ -44,10 +45,16 @@ export class TranscriptRetryOwner {
         await retryOnIngestCapacity(async()=>{if(!this.stopped&&!state.stopped)await run();});
         if(state.revision===revision)state.due=0;
       }finally{state.running=false;}
-    },{...options,onGiveUp:error=>{
-      if(this.options.retryable(error))arm();
-      options.onGiveUp?.(error);
-    }});
+    },{...options,
+      // A rejected result comes back the same on the same bytes, so it ends the
+      // burst at once and waits for the file to change (the next watcher event)
+      // instead of retrying 50 times and re-arming every 30s: on 2026-11-11 that
+      // logged 161,719 errors for 254 Codex rollouts.
+      retryable:error=>!isIngestSchemaRejection(error),
+      onGiveUp:error=>{
+        if(this.options.retryable(error)&&!isIngestSchemaRejection(error))arm();
+        options.onGiveUp?.(error);
+      }});
     this.states.set(sync,state);
     const stop=sync.stop.bind(sync);
     sync.stop=()=>{
@@ -105,4 +112,18 @@ export class TranscriptRetryOwner {
     for(const {map} of this.registries)for(const sync of map.values())sync.stop();
     this.registries=[];
   }
+}
+
+// One log line per file and reason per window: a transcript that keeps failing
+// the same way logs once, then once a window with how many lines it held back.
+export function transcriptFailureLog(log:(line:string)=>void,windowMs=600_000,now:()=>number=Date.now):(subject:string,reason:string)=>void {
+  const seen=new Map<string,{at:number;held:number}>();
+  return (subject,reason)=>{
+    const key=`${subject}\n${reason}`,at=now(),last=seen.get(key);
+    if(last&&at-last.at<windowMs){last.held++;return;}
+    seen.delete(key);
+    for(const [k,v] of seen)if(seen.size>=1024&&(at-v.at>=windowMs||seen.size>=2048))seen.delete(k);
+    seen.set(key,{at,held:0});
+    log(`${subject}: ${reason}${last?.held?` (${last.held} more since ${new Date(last.at).toISOString()})`:''}`);
+  };
 }
