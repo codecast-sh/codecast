@@ -248,6 +248,13 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
         return;
       }
       console.log(spec.describe(artifactView(spec.type, a.title, elements)));
+      // Open comments, so an agent knows to look (cast <cli> comments lists them).
+      const openRoots = (await readComments(deps, id).catch(() => [])).filter((c: any) => !c.parent && !c.resolved);
+      if (openRoots.length) {
+        const places = threadPlaces(spec, a.title, a.elements, openRoots);
+        const where = openRoots.slice(0, 6).map((r: any) => (places.get(r.key) === null ? "deleted" : placeLabel(places.get(r.key)) ?? "unpinned"));
+        console.log(`\ncomments: ${openRoots.length} open (${where.join(", ")}${openRoots.length > 6 ? ", …" : ""}); \`cast ${cli} comments ${id}\``);
+      }
       if (a.draft) console.log(fmt.muted(`\n(a draft by ${a.draft.by_name} is open; this shows it laid over the ${noun}. --main for the saved state)`));
     }));
 
@@ -388,20 +395,21 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
       const id = parseDocRef(ref);
       const rows = await readComments(deps, id);
       if (options.json) {
-        console.log(JSON.stringify(rows, null, 2));
+        // Each thread with where it is now (`place`, a key) and whether its element was deleted.
+        const roots = rows.filter((c: any) => !c.parent);
+        const a = roots.length ? await readOwn(id) : null;
+        const places = a ? threadPlaces(spec, a.title, a.elements, roots) : new Map<string, string | null>();
+        console.log(JSON.stringify(rows.map((c: any) => (c.parent ? c : { ...c, place: places.get(c.key) ?? null, deleted: places.get(c.key) === null })), null, 2));
         return;
       }
       const roots = rows.filter((c: any) => !c.parent && (options.all || !c.resolved));
       if (roots.length === 0) console.log(fmt.muted("No comments"));
       // Where each thread is now (it may have moved with its element, or lost it), not where it was made.
-      let places: Map<string, string | null> | undefined;
-      if (spec.commentPlaces && roots.length) {
-        const a = await readOwn(id);
-        places = spec.commentPlaces(artifactView(spec.type, a.title, a.elements), roots.map((r: any) => ({ key: r.key, anchor: r.anchor })));
-      }
+      const a = roots.length ? await readOwn(id) : null;
+      const places = a ? threadPlaces(spec, a.title, a.elements, roots) : new Map<string, string | null>();
       for (const root of roots as any[]) {
-        const place = places?.has(root.key) ? places.get(root.key) : root.anchor;
-        const where = place === null ? " (its element was deleted)" : place ? ` on ${String(place).replace(/^c:/, "")}` : "";
+        const place = places.get(root.key);
+        const where = place === null ? " (its element was deleted)" : place ? ` on ${placeLabel(place)}` : "";
         console.log(`${root.key}${where}${root.resolved ? " (resolved)" : ""}  ${root.author_name ?? ""}: ${root.text}`);
         for (const r of rows.filter((c: any) => c.parent === root.key) as any[]) console.log(`  ${r.key}  ${r.author_name ?? ""}: ${r.text}`);
       }
@@ -468,6 +476,16 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
       }));
   }
 }
+
+/** Where each thread sits now (the product's commentPlaces), or its anchor when the product does not say. Null: its element is gone. */
+function threadPlaces(spec: ArtifactSpec, title: string, elements: ArtifactElement[], roots: any[]): Map<string, string | null> {
+  const out = new Map<string, string | null>();
+  const places = spec.commentPlaces?.(artifactView(spec.type, title, elements), roots.map((r) => ({ key: r.key, anchor: r.anchor })));
+  for (const r of roots) out.set(r.key, places?.has(r.key) ? places.get(r.key)! : r.anchor ?? undefined);
+  return out;
+}
+
+const placeLabel = (p: string | null | undefined) => (p ? String(p).replace(/^c:/, "") : p);
 
 export function registerBoardCommand(program: Command, deps: LiveDeps): void {
   registerGroup(program, deps, "board");
