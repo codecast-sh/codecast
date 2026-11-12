@@ -258,7 +258,14 @@ export function useLiveVersions(docId: string): LiveVersion[] {
   const rows = useInboxStore((s: any) => s.liveVersions);
   return useMemo(() => {
     const out: LiveVersion[] = [];
-    for (const id in rows ?? {}) if (rows[id]?.doc_id === docId) out.push(rows[id]);
+    const real = new Set<number>();
+    for (const id in rows ?? {}) if (rows[id]?.doc_id === docId && !rows[id].stub) real.add(rows[id].rev);
+    // A stub (a version just saved here) stands until the server's row for its revision arrives.
+    for (const id in rows ?? {}) {
+      const r = rows[id];
+      if (r?.doc_id !== docId || (r.stub && real.has(r.rev))) continue;
+      out.push(r);
+    }
     return out.sort((a, b) => b.rev - a.rev || b.at - a.at);
   }, [rows, docId]);
 }
