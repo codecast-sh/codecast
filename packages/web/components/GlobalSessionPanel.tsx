@@ -80,6 +80,11 @@ import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { Button } from "./ui/button";
 import { ListHeadNewSession } from "./inbox/NewSessionButton";
+import { PlanGroupFacts, PlanGroupMark, RestingPlans } from "./inbox/PlanGroupParts";
+import type { PlanItem } from "../store/inboxStore";
+import { useSyncPlansWithArgs } from "../hooks/useSyncPlans";
+import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
+import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
 
 // The login flow's device-row state, as listAccountProfiles reports it.
 type LoginFlowState = {
@@ -98,6 +103,12 @@ type LoginFlowState = {
 // email. The device row's cc_login_flow field is the whole state channel:
 // pending renders the waiting spinner, confirmed announces the revive the
 // server already kicked off, rejected says why and brings the button back.
+// The plan fields the "By plan" lens reads: its state, title and progress, and
+// the hour it was last touched (the resting cutoff).
+const planLensSig = (p: PlanItem) =>
+  `${p.status}|${p.title}|${p.progress?.done ?? ""}/${p.progress?.total ?? ""}|${Math.floor((p.updated_at ?? 0) / 3600_000)}`;
+const allPlansSig = makeCollectionSig(planLensSig);
+
 export function SignInCta({
   device,
   authSessionIds,
@@ -1774,6 +1785,8 @@ function SessionListPanelImpl({
     // What the project, goal and reports lenses group by (a signature: the
     // task collection churns far more than the few facts a lens reads).
     s => orgLensWakeSig(s),
+    // Every plan a "By plan" group may name, from any workspace: only while the lens is up.
+    s => (resolveInboxViewMode(s.clientState.ui) === "plan" ? allPlansSig(s.plans) : ""),
   ]);
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
   const router = useRouter();
@@ -2444,10 +2457,15 @@ function SessionListPanelImpl({
   // plan of one; sessions with no plan fall to project groups. This lens is the
   // ONLY place the inbox groups by plan — the status view keeps every session in
   // its status bucket.
+  // The plan rows the lens reads (progress, status) come from the store; the
+  // feeder runs only while the lens is up.
+  const planWsArgs = useWorkspaceArgs();
+  useSyncPlansWithArgs(viewMode === "plan" ? planWsArgs : "skip");
+  const workspacePlans = useWorkspaceCollection<PlanItem>("plans", planLensSig);
   const planView = useMemo(() => {
     if (viewMode !== "plan") return null;
-    return groupSessionsByPlan(lensRows);
-  }, [viewMode, lensRows]);
+    return groupSessionsByPlan(lensRows, { plans: s.plans, placements: placed.placements, sessions: s.sessions, restingFrom: workspacePlans, now: coarseNow });
+  }, [viewMode, lensRows, workspacePlans, placed, coarseNow, s.plans]);
   // Offer the "By plan" option only when a plan is actually in play, mirroring how
   // "By label" appears only with buckets.
   const hasPlanSessions = useMemo(() => activeSessions.some((x) => !!x.active_plan), [activeSessions]);
@@ -2948,6 +2966,8 @@ function SessionListPanelImpl({
       // work-state tallies.
       icon?: React.ReactNode;
       states?: Partial<Record<ReturnType<typeof sessionWorkState>, number>>;
+      // A group's own facts after its count (the plan lens's owner, wait, tasks).
+      facts?: React.ReactNode;
       // A status section: it always shows its first SECTION_CARD_FLOOR cards,
       // even when the sections above it spent the global budget.
       floor?: boolean;
@@ -3002,6 +3022,7 @@ function SessionListPanelImpl({
           action={opts?.headerAction}
           icon={opts?.icon}
           states={opts?.states}
+          facts={opts?.facts}
         />
         {!collapsed && (() => {
           const sectionCap = sectionLimits[key] ?? SECTION_RENDER_CAP;
@@ -3369,11 +3390,24 @@ function SessionListPanelImpl({
         </>
         ) : viewMode === "plan" && planView ? (
         <>
-        {planView.planGroups.map(({ key, label, items }) => (
-          <div key={key}>
-            {renderSection(label, items, "text-teal-400", undefined, undefined, { key: `plan_${key}`, monoLabel: true })}
+        {planView.planGroups.map((group) => (
+          <div key={group.key}>
+            {renderSection(group.label, group.items, "text-teal-400", undefined, undefined, {
+              key: `plan_${group.key}`,
+              monoLabel: true,
+              icon: <PlanGroupMark group={group} />,
+              facts: <PlanGroupFacts group={group} now={coarseNow} />,
+            })}
           </div>
         ))}
+        {/* Plans with open work that no session here is on: folded until opened. */}
+        <RestingPlans
+          plans={planView.restingPlans}
+          collapsed={!s.collapsedSections.plan_resting_open}
+          onToggle={() => s.toggleCollapsedSection("plan_resting_open")}
+          onOpen={(plan) => router.push(`/plans/${plan._id}`)}
+          now={coarseNow}
+        />
         {/* Sessions with no plan group by project — same fallback tier the label
             view uses for unlabeled sessions. */}
         {planView.projectGroups.map(({ name, items }) => (

@@ -609,7 +609,9 @@ describe("groupSessionsByPlan", () => {
       session("np1", { git_root: "/x/web" }),
       session("np2", { git_root: "/x/api" }),
     ];
-    const { planGroups, projectGroups } = groupSessionsByPlan(items);
+    // Every plan in the same state, so size orders them.
+    const placements = new Map(items.map((x) => [x._id, { bucket: "working" as const, work_state: "working" as const }]));
+    const { planGroups, projectGroups } = groupSessionsByPlan(items, { placements });
 
     // pl-1 has 2 members → leads; the two singletons follow, tie broken by label.
     expect(planGroups.map((g) => g.key)).toEqual(["pl-1", "pl-2", "pl-3"]);
@@ -622,6 +624,69 @@ describe("groupSessionsByPlan", () => {
     expect(planGroups[0].items.map((s) => s._id)).toEqual(["a2", "a1"]);
     // Planless sessions fall to project groups.
     expect(projectGroups.map((g) => g.name)).toEqual(["web", "api"]);
+  });
+
+  it("orders plans by where they stand: waiting on a person first, the oldest wait leading", () => {
+    const NOW = 100 * 24 * 3600_000;
+    const items = [
+      session("mov", { updated_at: NOW, active_plan: plan("pl-m", "Moving") }),
+      session("park", { updated_at: NOW - 48 * 3600_000, active_plan: plan("pl-p", "Parked") }),
+      session("askNew", { updated_at: NOW - 3600_000, active_plan: plan("pl-a", "Asks new") }),
+      session("askOld", { updated_at: NOW - 54 * 24 * 3600_000, active_plan: plan("pl-o", "Asks old") }),
+    ];
+    const placements = new Map<string, { bucket: any; work_state: any }>([
+      ["mov", { bucket: "working", work_state: "working" }],
+      ["park", { bucket: "dormant", work_state: "dormant" }],
+      ["askNew", { bucket: "needs_input", work_state: "needs_input" }],
+      // An open `cast decide` files under questions: it waits on a person too.
+      ["askOld", { bucket: "questions", work_state: "dormant" }],
+    ]);
+    const { planGroups } = groupSessionsByPlan(items, { placements, now: NOW });
+    expect(planGroups.map((g) => [g.key, g.standing.state])).toEqual([
+      ["pl-o", "needs_you"], ["pl-a", "needs_you"], ["pl-m", "moving"], ["pl-p", "parked"],
+    ]);
+  });
+
+  it("opens each plan with its longest thread", () => {
+    const items = [
+      session("worker", { updated_at: 20, message_count: 30, active_plan: plan("pl-1", "Alpha") }),
+      session("lead", { updated_at: 10, message_count: 5000, active_plan: plan("pl-1", "Alpha") }),
+    ];
+    expect(groupSessionsByPlan(items).planGroups[0].items.map((s) => s._id)).toEqual(["lead", "worker"]);
+  });
+
+  it("reads every cached session on a plan, and leads with a hidden or stashed driver", () => {
+    const NOW = 100 * 24 * 3600_000;
+    const p = plan("pl-619", "Eval suite");
+    // The eval lead: a role's standing session the inbox hides, working now.
+    const lead = session("lead", { updated_at: NOW, message_count: 9000, standing_role_id: "r1", role: { _id: "r1", name: "Eval Suite lead" } as any, active_plan: p });
+    // A stashed thread whose turn ended on a question nobody was asked.
+    const stashed = session("stashed", { updated_at: NOW, inbox_stashed_at: NOW, active_plan: plan("pl-1008", "Ads") });
+    const placements = new Map<string, { bucket: any; work_state: any }>([
+      ["lead", { bucket: "hidden", work_state: "working" }],
+      ["stashed", { bucket: "stashed", work_state: "needs_input" }],
+    ]);
+    const { planGroups } = groupSessionsByPlan([], { placements, sessions: { lead, stashed }, now: NOW });
+    expect(planGroups.map((g) => [g.key, g.standing.state, g.items[0]._id, g.role?.name ?? null])).toEqual([
+      ["pl-1008", "moving", "stashed", null],
+      ["pl-619", "moving", "lead", "Eval Suite lead"],
+    ]);
+  });
+
+  it("lists plans with open work and nobody on them", () => {
+    const NOW = 100 * 24 * 3600_000;
+    const row = (id: string, extra: object) => ({ _id: id, short_id: id, title: id, status: "draft", updated_at: NOW - 5 * 24 * 3600_000, ...extra }) as any;
+    const plans = {
+      grouped: row("grouped", { progress: { done: 1, total: 3 } }),
+      stalled: row("stalled", { progress: { done: 1, total: 3 } }),
+      finished: row("finished", { progress: { done: 3, total: 3 } }),
+      empty: row("empty", { progress: { done: 0, total: 0 } }),
+      today: row("today", { progress: { done: 1, total: 3 }, updated_at: NOW - 3600_000 }),
+      closed: row("closed", { progress: { done: 1, total: 3 }, status: "abandoned" }),
+    };
+    const items = [session("s", { active_plan: { _id: "grouped", short_id: "grouped", title: "grouped", status: "draft" } })];
+    const { restingPlans } = groupSessionsByPlan(items, { plans, now: NOW });
+    expect(restingPlans.map((r) => [r.plan._id, r.state]).sort()).toEqual([["finished", "finished"], ["stalled", "stalled"]]);
   });
 
   it("dedupes repeated sessions across input segments", () => {

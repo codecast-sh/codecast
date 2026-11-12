@@ -28,6 +28,7 @@
 //     a different axis; it stays on that page as process facts, not a status.
 
 import { DEAD_AGENT_STATUSES, deriveLiveAt, isExitAfterDone, type WorkState } from "@codecast/shared/contracts";
+import type { PlanState } from "@codecast/shared/tasks";
 import { agentStatusAt, liveFactsOf } from "./liveness";
 import { apiErrorBadge } from "./apiErrorBadge";
 import { sessionStartupState } from "./sessionLifecycle";
@@ -63,6 +64,17 @@ export const SESSION_STATUS: Record<SessionStatus, SessionStatusMeta> = {
   idle: { word: "Idle", text: "text-sol-text-dim", color: "var(--sol-text-dim)", mark: "ring", meaning: "Nothing running, nothing asked" },
   stashed: { word: "Stashed", text: "text-sol-text-dim", color: "var(--sol-text-dim)", mark: "aside", meaning: "Set aside; the agent may still run" },
   killed: { word: "Killed", text: "text-sol-text-dim", color: "var(--sol-text-dim)", mark: "cross", meaning: "Stopped and filed away" },
+};
+
+/** A plan's derived state (shared derivePlanState) in the session vocabulary:
+ *  the mark its group header wears and the word beside it. */
+export const PLAN_STATE_STATUS: Record<PlanState, { status: SessionStatus; word: string }> = {
+  needs_you: { status: "needs_you", word: "Needs you" },
+  moving: { status: "working", word: "Moving" },
+  parked: { status: "dormant", word: "Parked" },
+  finished: { status: "done", word: "Finished" },
+  stalled: { status: "idle", word: "Stalled" },
+  closed: { status: "idle", word: "Closed" },
 };
 
 /** Where a surface that groups by status draws a row: the inbox rail's

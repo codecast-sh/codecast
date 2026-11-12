@@ -24,6 +24,7 @@ export * from "./frontier";
 export * from "./planSteps";
 export * from "./planVerdicts";
 export * from "./resume";
+export * from "./planState";
 
 // ---------------------------------------------------------------------------
 // Origin

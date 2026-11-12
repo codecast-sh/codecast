@@ -25,6 +25,7 @@ export function SectionHeader({
   inRow = false,
   icon,
   states,
+  facts,
 }: {
   label: string;
   count: number;
@@ -49,16 +50,18 @@ export function SectionHeader({
   icon?: ReactNode;
   /** Work-state tallies over the group's rows, nested ones included. */
   states?: Partial<Record<WorkState, number>>;
+  /** A group's own facts after its count (a plan's owner, wait, tasks). */
+  facts?: ReactNode;
 }) {
   // Modern draws one quiet header for every section (ModernSectionHeader).
   const modern = useIsModernStyle();
   if (modern && !inRow) {
-    return <ModernSectionHeader label={label} count={count} color={color} sectionKey={sectionKey} collapsed={collapsed} monoLabel={monoLabel} landedColor={landedColor} onToggle={onToggle} action={action} icon={icon} states={states} />;
+    return <ModernSectionHeader label={label} count={count} color={color} sectionKey={sectionKey} collapsed={collapsed} monoLabel={monoLabel} landedColor={landedColor} onToggle={onToggle} action={action} icon={icon} states={states} facts={facts} />;
   }
   if (action) {
     return (
       <div data-sv-sec-row className={`sticky top-0 z-10 flex items-center bg-sol-bg ${color}`}>
-        <SectionHeader label={label} count={count} color={color} sectionKey={sectionKey} collapsed={collapsed} monoLabel={monoLabel} landedColor={landedColor} onToggle={onToggle} inRow icon={icon} states={states} />
+        <SectionHeader label={label} count={count} color={color} sectionKey={sectionKey} collapsed={collapsed} monoLabel={monoLabel} landedColor={landedColor} onToggle={onToggle} inRow icon={icon} states={states} facts={facts} />
         <span className="shrink-0 pr-3 border-b border-sol-border/30 self-stretch flex items-center" data-sv-sec-action>{action}</span>
       </div>
     );
@@ -78,6 +81,7 @@ export function SectionHeader({
           {icon}
           <span className="truncate font-mono">{label}</span>
           <span className="opacity-70 shrink-0">({count})</span>
+          {facts}
         </span>
       ) : (
         <span className={`text-mark font-semibold uppercase tracking-wider ${color}`}>

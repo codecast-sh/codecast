@@ -26,6 +26,7 @@ export function ModernSectionHeader({
   action,
   icon,
   states,
+  facts,
 }: {
   label: string;
   count: number;
@@ -38,6 +39,7 @@ export function ModernSectionHeader({
   action?: ReactNode;
   icon?: ReactNode;
   states?: Partial<Record<WorkState, number>>;
+  facts?: ReactNode;
 }) {
   const status = SECTION_HEADER_STATUS[sectionKey];
   // A section that is not a state (a label, a project, Pinned) keeps its own
@@ -51,6 +53,7 @@ export function ModernSectionHeader({
         {label}
       </span>
       <span className="shrink-0 text-mark tabular-nums text-sol-text-dim">{count}</span>
+      {facts}
       {states && TALLY.map(([k, s]) => (states[k] ?? 0) > 0 && (
         <span key={k} title={`${states[k]} ${k === "needs_input" ? "need you" : "working"}`} className="flex shrink-0 items-center gap-1 text-mark tabular-nums text-sol-text-dim">
           <SessionStatusMark status={s} size={8} />

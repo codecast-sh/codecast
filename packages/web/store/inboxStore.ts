@@ -15,6 +15,7 @@ import { crawlScopesClearedBy, crawlWatermarkScope } from "../hooks/syncMetaKeys
 import type { SharedObjectKind } from "@codecast/shared/entities";
 import type { CodeAnchorText } from "@codecast/shared/comments";
 import type { GraphRefStatus, TaskWait } from "@codecast/shared/tasks";
+import { derivePlanState, PLAN_MOVING_MS, PLAN_STATE_RANK, type PlanMember, type PlanStanding } from "@codecast/shared/tasks";
 import { addWaitDraft, removeBlockerEdge, removeBlocksEdge, removeWaitDraft, rollbackWaitDraft, setBlockerEdge, setRelatedEdge, type TaskWaitInput } from "./taskGraphDraft";
 import { carryRingStubs, dropSettledRings } from "../lib/calls/ringStubs";
 import { carryNodeSessions } from "../lib/workflowRun";
@@ -4775,27 +4776,117 @@ export function groupSessionsForLabelView(
 }
 
 // "By plan" lens: the sibling of groupSessionsForLabelView, keyed on the
-// session's plan instead of a manual label. EVERY plan gets its own section —
-// even a plan of one — because this view's whole job is to show a plan's
+// session's plan instead of a manual label. EVERY plan gets its own section,
+// even a plan of one, because this view's whole job is to show a plan's
 // sessions together. This lens is the ONLY place the inbox groups by plan; the
 // status view keeps every session in its status bucket. Sessions with no plan
 // fall to project groups, exactly as unlabeled sessions do in the label view.
-// Plans sort by size then label so the busiest run leads.
+//
+// Each plan carries where it stands (shared derivePlanState), read over EVERY
+// cached session bound to it, not only the ones the inbox lists: a plan's lead
+// is often a role's standing session (hidden until it needs a person) or a
+// thread someone stashed. A dismissed or killed session is off the plan. An
+// ask counts only from a row the inbox would surface; a stashed row or a role's
+// own machine turn has asked nobody, so it reads as a settled turn.
+//
+// A plan gets a group when the inbox lists one of its sessions, or when it is
+// waiting on a person, moving or parked without one; the group opens with the
+// plan's longest thread, fetched from the cache when the inbox sets it aside
+// (the reports lens does the same for a role's standing session). Groups sort
+// by state: waiting on a person first, the oldest wait leading, then moving,
+// then parked. Plans the store holds with open work and no group come back as
+// `restingPlans`, stalled or finished. The panel, keyboard order and mobile
+// all call this, so they agree.
+export type PlanGroup = {
+  key: string;
+  label: string;
+  items: InboxSession[];
+  standing: PlanStanding;
+  plan: PlanItem | null;
+  /** The role the lead thread works under, as the row carries it (any workspace). */
+  role: SessionRoleSnapshot | null;
+};
+export type RestingPlan = { plan: PlanItem; state: "stalled" | "finished" };
+
+// Placements that keep a row out of the person's view: what such a row
+// "needs" asks nobody.
+const QUIET_BUCKETS: ReadonlySet<InboxBucket> = new Set<InboxBucket>(["hidden", "stashed", "snoozed", "dismissed"]);
+const SURFACED_PLAN_STATES: ReadonlySet<PlanStanding["state"]> = new Set(["needs_you", "moving", "parked"]);
+
 export function groupSessionsByPlan(
   items: InboxSession[],
+  opts: {
+    plans?: Record<string, PlanItem>;
+    placements?: ReadonlyMap<string, { bucket: InboxBucket; work_state: WorkState }>;
+    /** The whole session cache, for bound sessions the inbox does not list. */
+    sessions?: Record<string, InboxSession>;
+    /** The plans the resting list draws from (the active workspace's); every plan by default. */
+    restingFrom?: readonly PlanItem[];
+    now?: number;
+  } = {},
 ): {
-  planGroups: Array<{ key: string; label: string; items: InboxSession[] }>;
+  planGroups: PlanGroup[];
   projectGroups: Array<{ name: string; items: InboxSession[] }>;
+  restingPlans: RestingPlan[];
 } {
-  const { primaryGroups, projectGroups } = groupSessionsBy(
+  const now = opts.now ?? Date.now();
+  const plans = opts.plans ?? {};
+  const memberOf = (sess: InboxSession): PlanMember => {
+    const placed = opts.placements?.get(sess._id);
+    // An open `cast decide` files the row under questions: that waits on a person too.
+    let work_state: WorkState = placed?.bucket === "questions" ? "needs_input" : placed?.work_state ?? sessionWorkState(sess, now);
+    const quiet = placed ? QUIET_BUCKETS.has(placed.bucket) : !!(sess.inbox_stashed_at || sess.is_anchor || sess.standing_role_id);
+    if (work_state === "needs_input" && quiet) work_state = "done";
+    return { id: sess._id, work_state, at: inboxSortTimeOfRow(sess, work_state, inboxEpoch(now)).at };
+  };
+  const { primaryGroups: listed, projectGroups } = groupSessionsBy(
     items,
     (sess) => sess.active_plan?.short_id ?? null,
-    // All members of a plan share its label; derive it once from the first.
-    (byPlan) => Array.from(byPlan.entries())
-      .map(([key, list]) => ({ key, label: orchestrationGroupLabelOf(list[0])!, items: list.sort(byPinThenActivity) }))
-      .sort((a, b) => b.items.length - a.items.length || a.label.localeCompare(b.label)),
+    (byPlan) => Array.from(byPlan.entries()),
   );
-  return { planGroups: primaryGroups, projectGroups };
+  const listedByPlan = new Map(listed);
+  const boundByPlan = new Map<string, InboxSession[]>();
+  for (const sess of Object.values(opts.sessions ?? {})) {
+    const key = sess.active_plan?.short_id;
+    if (!key || sess.inbox_dismissed_at || sess.inbox_killed_at) continue;
+    if (!boundByPlan.has(key)) boundByPlan.set(key, []);
+    boundByPlan.get(key)!.push(sess);
+  }
+  const planGroups: PlanGroup[] = [];
+  for (const key of new Set([...listedByPlan.keys(), ...boundByPlan.keys()])) {
+    const shown = listedByPlan.get(key) ?? [];
+    const members = new Map([...(boundByPlan.get(key) ?? []), ...shown].map((x) => [x._id, x]));
+    const any = shown[0] ?? members.values().next().value!;
+    const plan = plans[any.active_plan!._id] ?? null;
+    const standing = derivePlanState(plan, [...members.values()].map(memberOf), now);
+    if (!shown.length && !SURFACED_PLAN_STATES.has(standing.state)) continue;
+    const sorted = [...members.values()].sort(byPinThenActivity);
+    const lead = sorted.reduce((a, b) => ((b.message_count ?? 0) > (a.message_count ?? 0) ? b : a));
+    planGroups.push({
+      key,
+      label: orchestrationGroupLabelOf(any)!,
+      items: [lead, ...shown.filter((x) => x !== lead).sort(byPinThenActivity)],
+      standing,
+      plan,
+      role: lead.role ?? null,
+    });
+  }
+  planGroups.sort((a, b) =>
+    PLAN_STATE_RANK[a.standing.state] - PLAN_STATE_RANK[b.standing.state]
+    || (a.standing.askedAt ?? 0) - (b.standing.askedAt ?? 0)
+    || b.items.length - a.items.length
+    || a.label.localeCompare(b.label));
+  const grouped = new Set(planGroups.map((g) => g.items[0].active_plan!._id));
+  const restingPlans: RestingPlan[] = [];
+  for (const plan of opts.restingFrom ?? Object.values(plans)) {
+    if (grouped.has(plan._id) || !plan.progress?.total) continue;
+    // A plan someone touched today may have sessions this inbox does not show.
+    if (now - (plan.updated_at ?? 0) < PLAN_MOVING_MS) continue;
+    const { state } = derivePlanState(plan, [], now);
+    if (state === "stalled" || state === "finished") restingPlans.push({ plan, state });
+  }
+  restingPlans.sort((a, b) => (b.plan.updated_at ?? 0) - (a.plan.updated_at ?? 0));
+  return { planGroups, projectGroups, restingPlans };
 }
 
 export { ORG_LENS_MODES, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, sessionProjectId, type OrgLensGroup, type OrgLensMode, type OrgLensSources } from "./orgLens";
@@ -5436,7 +5527,7 @@ export function computeVisualOrder(state: {
     ];
   }
   if (mode === "plan") {
-    const { planGroups, projectGroups } = groupSessionsByPlan(base);
+    const { planGroups, projectGroups } = groupSessionsByPlan(base, { plans: state.plans as Record<string, PlanItem> | undefined, placements: placed.placements, sessions: state.sessions });
     return [
       ...planGroups.flatMap((g) => (collapsed[`plan_${g.key}`] ? [] : g.items)),
       ...projectGroups.flatMap((g) => (collapsed[`planproj_${g.name}`] ? [] : g.items)),
