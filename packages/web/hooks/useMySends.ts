@@ -1,15 +1,19 @@
 // What the viewer typed into sessions, newest first: the Messages feed's data.
 //
 // The rows live in `mySends` (store/clientSyncRegistry), persisted, and the
-// feed paints from them on the first frame. Hydration keeps the newest rows
-// only (COLLECTION_RETENTION), so the held rows are always one contiguous run
-// from the top of history, and every fetch keeps it that way:
+// feed paints from them on the first frame. The cache is meant to be one
+// contiguous run from the top of history (hydration keeps the newest rows,
+// COLLECTION_RETENTION), filled by:
 //   - a live tail of the last few hours (small read set: only the sessions
 //     typed into lately);
-//   - a catch-up walk from the top that stops as soon as a page reaches a row
-//     that was already held, which closes the gap since the last visit;
-//   - older pages, always from below the oldest held row, on scroll and in
-//     idle time up to the cache cap.
+//   - a walk from the top on each visit, which stops at the first page that
+//     reaches a row held before it, closing the gap since the last visit;
+//   - older pages from below the oldest held row, on scroll and in idle time
+//     up to the cache cap.
+// The log can also grow in the MIDDLE (a backfill writes history the cache
+// already walked past), which no top-down walk would notice. So once a day
+// the walk goes all the way down instead (a sweep), and every page drops the
+// held rows of its time range that the server no longer returns.
 // Search results never enter mySends (a match below the held window would
 // break the run); they sit in mySendSearch.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -18,7 +22,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import type { MySendRow } from "@codecast/convex/convex/userSends";
 import { useInboxStore } from "../store/inboxStore";
 import { MAX_CACHED_MY_SENDS } from "../store/cacheRetention";
-import { useSyncCollection } from "./useSyncCollection";
+import { applyCollectionFeed, useSyncCollection } from "./useSyncCollection";
 import { useServerAuthSettled } from "./useServerAuthSettled";
 
 export type { MySendRow };
@@ -30,6 +34,13 @@ const COLD_FIRST = 1200;
 const IDLE_GAP_MS = 400;
 // The oldest timestamp history has, once a walk reached it this visit.
 const END_KEY = "mySends:end";
+// When a walk last went all the way down (persisted feed meta).
+const SWEPT_KEY = "mySends:sweptAt";
+const SWEEP_EVERY_MS = 24 * 3600_000;
+
+const heldRows = () => Object.values(((useInboxStore.getState() as any).mySends ?? {}) as Record<string, MySendRow>);
+const oldestHeld = () => heldRows().reduce((min, r) => Math.min(min, r.timestamp), Infinity);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const byNewest = (a: MySendRow, b: MySendRow) => b.timestamp - a.timestamp;
 const selectRows = (data: { rows: MySendRow[] } | undefined) => data?.rows;
@@ -61,9 +72,13 @@ export function useMySends(): {
   const busy = useRef(false);
   const caughtUp = useRef(false);
 
+  // One page below `before`, applied as the truth for the time range it
+  // covers: a held row in that range the answer lacks is gone.
   const fetchPage = useCallback(async (before: number | undefined) => {
     const page = await convex.query(api.userSends.mine, { ...(before !== undefined ? { before } : {}), limit: PAGE });
-    useInboxStore.getState().syncTable("mySends", page.rows);
+    const top = before ?? Infinity;
+    const floor = page.nextBefore ?? -Infinity;
+    applyCollectionFeed("mySends", page.rows, undefined, undefined, (r: MySendRow) => r.timestamp < top && r.timestamp >= floor);
     if (page.nextBefore === null) {
       const last = page.rows[page.rows.length - 1]?.timestamp ?? before ?? 0;
       useInboxStore.getState().setFeedCursor(END_KEY, String(last));
@@ -73,12 +88,9 @@ export function useMySends(): {
 
   const loadOlder = useCallback(() => {
     if (busy.current || !caughtUp.current) return;
-    const st = useInboxStore.getState();
-    const held = Object.values(((st as any).mySends ?? {}) as Record<string, MySendRow>);
-    if (!held.length) return;
-    const from = Math.min(...held.map((r) => r.timestamp));
-    const endTs = st.feedCursors[END_KEY];
-    if (endTs != null && from <= Number(endTs)) return;
+    const from = oldestHeld();
+    const endTs = useInboxStore.getState().feedCursors[END_KEY];
+    if (!Number.isFinite(from) || (endTs != null && from <= Number(endTs))) return;
     busy.current = true;
     setLoadingOlder(true);
     fetchPage(from)
@@ -86,21 +98,19 @@ export function useMySends(): {
       .finally(() => { busy.current = false; setLoadingOlder(false); });
   }, [fetchPage]);
 
-  // Catch up from the top until a page reaches a row held before the walk
-  // began, then fill older history in idle time up to the cache cap.
   useEffect(() => {
     if (!authSettled) return;
     // History can grow below a known end (the log is backfilled), so each
     // visit re-confirms it with one page when the walk gets there.
     useInboxStore.getState().setFeedCursor(END_KEY, null);
     let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const heldIds = () => new Set(Object.keys(((useInboxStore.getState() as any).mySends ?? {})));
     const run = async () => {
       // Deferred hydration lands a tick after boot; let it, so the walk
       // knows what is already held.
-      await new Promise((r) => setTimeout(r, 50));
-      const before0 = heldIds();
+      await sleep(50);
+      const st = useInboxStore.getState();
+      const heldBefore = new Set(heldRows().map((r) => r._id));
+      const sweep = !(Number(st.feedCursors[SWEPT_KEY] ?? 0) > Date.now() - SWEEP_EVERY_MS);
       busy.current = true;
       try {
         let before: number | undefined;
@@ -109,46 +119,50 @@ export function useMySends(): {
           if (cancelled) return;
           const page = await fetchPage(before);
           walked += page.rows.length;
-          const connected = page.rows.some((r) => before0.has(r._id));
-          if (connected || page.nextBefore === null) break;
-          if (before0.size === 0 && walked >= COLD_FIRST) break;
+          if (page.nextBefore === null) break;
+          if (walked >= MAX_CACHED_MY_SENDS) {
+            // A sweep that reached the cap: what lies below is not known to
+            // be whole, so it goes (the run stays contiguous).
+            if (sweep) {
+              const below = heldRows().filter((r) => r.timestamp < page.nextBefore!).map((r) => r._id);
+              if (below.length) useInboxStore.getState().dropRows("mySends", below);
+            }
+            break;
+          }
+          if (!sweep && page.rows.some((r) => heldBefore.has(r._id))) break;
+          if (!sweep && heldBefore.size === 0 && walked >= COLD_FIRST) break;
           before = page.nextBefore;
+          // The first screen comes at once; the rest of a sweep is paced.
+          if (walked >= COLD_FIRST) await sleep(IDLE_GAP_MS);
         }
+        if (sweep) useInboxStore.getState().setFeedCursor(SWEPT_KEY, String(Date.now()));
       } catch {
         return;
       } finally {
         busy.current = false;
       }
       caughtUp.current = true;
-      const idle = () => {
-        if (cancelled) return;
-        const n = Object.keys(((useInboxStore.getState() as any).mySends ?? {})).length;
-        const st = useInboxStore.getState();
-        if (n >= MAX_CACHED_MY_SENDS || (st.feedCursors[END_KEY] != null && !hasMoreNow())) return;
-        if (busy.current) { timer = setTimeout(idle, IDLE_GAP_MS); return; }
+      // Fill older history in idle time, up to the cache cap.
+      while (!cancelled) {
+        await sleep(IDLE_GAP_MS);
+        if (cancelled || heldRows().length >= MAX_CACHED_MY_SENDS || !hasMoreNow()) return;
+        if (busy.current) continue;
         busy.current = true;
-        const held = Object.values(((st as any).mySends ?? {}) as Record<string, MySendRow>);
-        const from = held.length ? Math.min(...held.map((r) => r.timestamp)) : undefined;
-        fetchPage(from)
-          .then(() => { timer = setTimeout(idle, IDLE_GAP_MS); })
-          .catch(() => {})
-          .finally(() => { busy.current = false; });
-      };
-      timer = setTimeout(idle, IDLE_GAP_MS);
+        try { await fetchPage(oldestHeld()); } catch { return; } finally { busy.current = false; }
+      }
     };
     void run();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+    return () => { cancelled = true; };
   }, [authSettled, fetchPage]);
 
   return { rows, ready: rows.length > 0 || tail.ready, hasMore, loadingOlder, loadOlder };
 }
 
 function hasMoreNow(): boolean {
-  const st = useInboxStore.getState();
-  const end = st.feedCursors[END_KEY];
+  const end = useInboxStore.getState().feedCursors[END_KEY];
   if (end == null) return true;
-  const held = Object.values(((st as any).mySends ?? {}) as Record<string, MySendRow>);
-  return held.length > 0 && Math.min(...held.map((r) => r.timestamp)) > Number(end);
+  const oldest = oldestHeld();
+  return Number.isFinite(oldest) && oldest > Number(end);
 }
 
 /** Server matches for a search over everything the viewer typed. */

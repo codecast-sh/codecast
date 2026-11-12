@@ -5,6 +5,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { recordSendFor } from "./lib/userSend";
 import { createTeamFeedFilter } from "./privacy";
 import { dayBounds } from "./lib/teamDay";
+import { isTestArtifactPath } from "@codecast/shared/contracts";
 
 export const record = internalMutation({
   args: {
@@ -136,7 +137,8 @@ async function toMyRows(ctx: { db: any }, sends: Doc<"user_sends">[]): Promise<M
     const key = String(send.conversation_id);
     if (!conversations.has(key)) conversations.set(key, await ctx.db.get(send.conversation_id));
     const c = conversations.get(key);
-    if (!c) continue;
+    // A test suite's session logged before its path was known as one.
+    if (!c || isTestArtifactPath(c.project_path ?? "")) continue;
     const project = c.git_root || c.project_path;
     rows.push({
       _id: `ms:${send.message_id}`,

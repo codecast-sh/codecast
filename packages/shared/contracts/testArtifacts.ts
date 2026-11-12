@@ -14,10 +14,13 @@ export const TEST_SCRATCH_DIRNAME = "codecasttestscratch";
 // path, where every "-" reads as a "/". isTestArtifactPath normalizes both
 // spellings to one before matching, so a marker is recognized whichever form
 // of the path a caller happens to hold.
+// The fork delivery suite (tests/fork, 2026-03) created its sessions through
+// the API under /tmp/fork-test-<ms>; its rows still sit in accounts.
 const TEST_PATH_MARKERS = [
   TEST_SCRATCH_DIRNAME,
   "codecast-test-cwd-",
   "codecast-fake-claude-",
+  "-tmp-fork-test-",
 ];
 
 /**

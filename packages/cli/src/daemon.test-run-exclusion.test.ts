@@ -30,6 +30,7 @@ const scratchProject = path.join(
 );
 const harnessProject = path.join(os.tmpdir(), "codecast-test-cwd-yy3bYH");
 const shimProject = path.join(os.tmpdir(), "codecast-fake-claude-abc123");
+const forkSuiteProject = "/tmp/fork-test-1774762211996";
 
 // How the daemon spells a project dir under ~/.claude/projects: every "/" and
 // "." of the cwd becomes "-".
@@ -39,7 +40,7 @@ const decodeProjectDir = (dirName: string) => dirName.replace(/-/g, "/");
 
 describe("test-run sync exclusion", () => {
   test("every marker is recognized in every spelling of the path", () => {
-    for (const project of [scratchProject, harnessProject, shimProject]) {
+    for (const project of [scratchProject, harnessProject, shimProject, forkSuiteProject]) {
       // Exact recorded-cwd resolution.
       expect(isTestArtifactPath(project)).toBe(true);
       // The encoded dir name under ~/.claude/projects.
@@ -49,6 +50,7 @@ describe("test-run sync exclusion", () => {
     }
     // Real projects are untouched.
     expect(isTestArtifactPath("/Users/ashot/src/codecast")).toBe(false);
+    expect(isTestArtifactPath("/Users/ashot/src/fork-test-ideas")).toBe(false);
     expect(isTestArtifactPath("")).toBe(false);
   });
 
