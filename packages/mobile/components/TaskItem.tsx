@@ -3,6 +3,7 @@ import { probeRender, PERF_PROBE } from '@/lib/perfProbe';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
+import { codeFont } from "@/constants/fonts";
 import type { TaskItem as TaskItemType } from "@codecast/web/store/inboxStore";
 import { formatRelativeTime } from "./SessionItem";
 import { showActionSheet } from "@/lib/popups";
@@ -99,7 +100,7 @@ export function TaskItemRow({
             // Floated subtask: parent filtered out of this view, so name it.
             <RNView style={styles.parentChip}>
               <FontAwesome name="level-up" size={8} color={Theme.textMuted0} style={{ marginRight: 3 }} />
-              <RNText style={styles.subtaskCount}>{parentChip.short_id}</RNText>
+              <RNText style={[styles.subtaskCount, codeFont]}>{parentChip.short_id}</RNText>
             </RNView>
           )}
           {progress && progress.total > 0 && (
@@ -118,7 +119,7 @@ export function TaskItemRow({
       </RNView>
 
       <RNView style={styles.metaLine}>
-        <RNText style={styles.shortId}>{task.short_id}</RNText>
+        <RNText style={[styles.shortId, codeFont]}>{task.short_id}</RNText>
 
         {task.plan && (
           <>
@@ -171,7 +172,7 @@ export function showTaskActions(
   ]);
 }
 
-const styles = themedStyles((Theme) => StyleSheet.create({
+const styles = themedStyles((Theme, look) => StyleSheet.create({
   row: {
     paddingHorizontal: Spacing.lg,
     paddingVertical: 10,
@@ -239,6 +240,9 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     marginLeft: 24,
+    // Under Modern labels sit at the 11pt floor for capitals, so a row of
+    // them can outrun the screen; it wraps rather than running off the edge.
+    ...(look === "modern" && { flexWrap: "wrap" as const, rowGap: 3 }),
   },
   shortId: {
     fontSize: 11,

@@ -9,6 +9,7 @@ import { openLink } from '@/lib/links';
 // recognise and normalise the same thing.
 import { URL_SOURCE, urlPattern, trimUrlTail, shortenUrl } from '@/lib/linkRoutes';
 import { Theme, themedStyles } from '@/constants/Theme';
+import { codeFont } from '@/constants/fonts';
 import { ansiSpans } from '@codecast/web/lib/ansi';
 
 // Links and highlighted code, shared by the markdown renderer, diffs and the
@@ -106,7 +107,7 @@ function highlightSyntax(code: string): CodeSpan[] {
 export function HighlightedCodeText({ content, style }: { content: string; style: any }) {
   const parts = useMemo(() => highlightSyntax(content), [content]);
   return (
-    <RNText style={style} selectable>
+    <RNText style={[codeFont, style]} selectable>
       {parts.map((p, i) => {
         if (p.link) {
           // A URL printed by a command — `cast publish`, a PR link, a dev
@@ -140,7 +141,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
 export function AnsiText({ text, style }: { text: string; style: any }) {
   const spans = useMemo(() => ansiSpans(text), [text]);
   return (
-    <RNText style={style} selectable>
+    <RNText style={[codeFont, style]} selectable>
       {spans.map((sp, i) => {
         const body = linkifyPlainText(sp.text, `a${i}`);
         return sp.color || sp.bold

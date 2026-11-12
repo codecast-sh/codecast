@@ -40,6 +40,7 @@ export const ENGINE = "../../platform/packages/engine/src/";
 /** "<path under packages/web>:<binding>" to its class. */
 export const WINDOW_SLOTS: Record<string, SlotClass> = {
   // store/inboxStore.ts
+  "store/inboxStore.ts:FOLLOWED_UI_KEYS": { shared: "the ui keys a client only reads; the phone names them once at boot, a browser names none, so every sim window holds the same empty set" },
   "store/inboxStore.ts:_heldOverlayFacts": "window",
   "store/inboxStore.ts:recentlyRequestedPendingMessages": "window",
   "store/inboxStore.ts:resolvedSessionPreparations": "window",

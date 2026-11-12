@@ -21,7 +21,7 @@ import { useColorScheme } from '@/components/useColorScheme';
 import { Mono, markLateFacesLoaded, uiFace, useFacesVersion, useLateFacesLoaded } from '@/constants/fonts';
 import { resolveMobileLook } from '@/lib/mobileLook';
 import { ensureModernFaces } from '@/lib/modernFaces';
-import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { followServerUiKey, useInboxStore } from '@codecast/web/store/inboxStore';
 import { convex, CONVEX_URL } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
@@ -100,6 +100,10 @@ export const unstable_settings = {
 };
 
 SplashScreen.preventAutoHideAsync();
+
+// The phone never writes the web's Modern switch, only reads it, so the
+// server's value wins here and the phone follows the web (lib/mobileLook).
+followServerUiKey('modern_style');
 
 function RootLayout() {
   // Already loading since index.ts (lib/bootFonts).

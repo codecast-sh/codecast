@@ -7331,6 +7331,16 @@ export type SyncOpts = {
 // other client, said OFF). Unstamped keys (legacy bags) keep exact local_wins
 // per-key semantics: a local value beats the server echo (no flicker on a
 // just-made write), a key only the server has flows in.
+// Per-device keys this client reads but never writes. A per-device key is
+// local-wins once a client holds it, so a client that only follows another
+// device's choice would keep the first value it saw forever; for a key named
+// here the server's value wins instead. The phone follows the web's Modern
+// switch this way (packages/mobile/lib/mobileLook.ts). A browser names none.
+const FOLLOWED_UI_KEYS = new Set<string>();
+export function followServerUiKey(key: string): void {
+  FOLLOWED_UI_KEYS.add(key);
+}
+
 export function mergeStampedBagLww(local: any, server: any, initialized: boolean): any {
   if (!initialized || local == null) return server;
   if (server == null) return local;
@@ -7340,7 +7350,7 @@ export function mergeStampedBagLww(local: any, server: any, initialized: boolean
     if (k.endsWith(":ts")) continue;
     const lts = typeof local[`${k}:ts`] === "number" ? local[`${k}:ts`] : 0;
     const sts = typeof server[`${k}:ts`] === "number" ? server[`${k}:ts`] : 0;
-    const src = sts > lts ? server : lts > sts ? local : k in local ? local : server;
+    const src = FOLLOWED_UI_KEYS.has(k) && k in server ? server : sts > lts ? server : lts > sts ? local : k in local ? local : server;
     if (src[k] !== undefined) out[k] = src[k];
     const ts = src === server ? sts : lts;
     if (ts) out[`${k}:ts`] = ts;

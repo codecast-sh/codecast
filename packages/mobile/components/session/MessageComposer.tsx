@@ -11,6 +11,7 @@ import Feather from '@expo/vector-icons/Feather';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { CHROME_FONT_CAP, chipText, themedStyles, useTheme } from '@/constants/Theme';
+import { TYPE_SCALE } from '@codecast/shared/render/typeScale';
 import { MOBILE_SESSION_STYLE as S } from '@codecast/shared/render/mobileSessionStyle';
 import { mixColor } from '@/lib/solColor';
 import { GestureHandlerRootView, NativePressable } from '@/lib/gestureHandler';
@@ -342,7 +343,7 @@ export function MessageComposer({
   );
 }
 
-const styles = themedStyles((Theme) => StyleSheet.create({
+const styles = themedStyles((Theme, look) => StyleSheet.create({
   errorBanner: {
     backgroundColor: Theme.red,
     flexDirection: 'row',
@@ -488,8 +489,8 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     paddingHorizontal: 10,
     paddingTop: 6,
     color: Theme.text,
-    fontSize: 16,
-    lineHeight: 24,
+    fontSize: look === 'modern' ? TYPE_SCALE.read.size : 16,
+    lineHeight: look === 'modern' ? TYPE_SCALE.read.lineHeight : 24,
     textAlignVertical: 'top',
   },
   sendButton: {

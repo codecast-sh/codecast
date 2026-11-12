@@ -9,6 +9,8 @@ import { Pressable, StyleSheet, View as RNView } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { Text as RNText } from '@/components/Themed';
 import { CHROME_FONT_CAP, useTheme } from '@/constants/Theme';
+import { codeFont } from '@/constants/fonts';
+import { CodeRuns } from '@/components/CodeRuns';
 import { useWorkflowRun } from '@codecast/web/hooks/useSyncWorkflows';
 import { useNamedFlow, useRunFlow, type FlowLibraryState } from '@codecast/web/hooks/useFlowObject';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
@@ -56,7 +58,7 @@ function ShipBody({ flow, run }: { flow: AppFlow; run: RunRow }) {
     <RNView style={[styles.card, { borderColor: Theme.border, backgroundColor: Theme.bgAlt }]}>
       <RNView style={styles.head}>
         <RNText style={[styles.name, { color: Theme.text }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{flow.label}</RNText>
-        {run.task_short_id ? <RNText style={[styles.task, { color: Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{run.task_short_id}</RNText> : null}
+        {run.task_short_id ? <RNText style={[styles.task, codeFont, { color: Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{run.task_short_id}</RNText> : null}
       </RNView>
       <RNView style={styles.steps}>
         {journey.stages.map((s) => (
@@ -91,7 +93,7 @@ function NowLine({ now }: { now: JourneyNow }) {
   return (
     <RNView style={{ paddingHorizontal: 12, paddingBottom: 10, gap: 2 }}>
       <RNText style={[styles.state, { color }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{head}</RNText>
-      {body ? <RNText style={[styles.why, { color: Theme.text, paddingHorizontal: 0, paddingBottom: 0 }]} numberOfLines={4} maxFontSizeMultiplier={CHROME_FONT_CAP}>{body}</RNText> : null}
+      {body ? <RNText style={[styles.why, { color: Theme.text, paddingHorizontal: 0, paddingBottom: 0 }]} numberOfLines={4} maxFontSizeMultiplier={CHROME_FONT_CAP}><CodeRuns text={body} /></RNText> : null}
     </RNView>
   );
 }
@@ -145,7 +147,7 @@ function FlowBody({ flow, run, library }: { flow: AppFlow; run: RunRow | null; l
         {flow.base ? <RNText style={[styles.task, { color: Theme.textMuted }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>on {flow.base}</RNText> : null}
         <RNView style={{ flex: 1 }} />
         {state ? <RNText style={[styles.state, { color: tone[state.tone] }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{state.words}</RNText> : null}
-        {run?.task_short_id ? <RNText style={[styles.task, { color: Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{run.task_short_id}</RNText> : null}
+        {run?.task_short_id ? <RNText style={[styles.task, codeFont, { color: Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{run.task_short_id}</RNText> : null}
         <LibraryAction library={library} />
       </RNView>
       <RNView style={styles.steps}>

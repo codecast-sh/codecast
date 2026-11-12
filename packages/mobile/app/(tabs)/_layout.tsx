@@ -5,6 +5,7 @@ import { TabBarIcon, useTabSignals } from '@/components/nav/TabBarIcon';
 import { InboxDrawer } from '@/components/inbox/InboxDrawer';
 import { setInboxDrawerOpen, useInboxDrawerOpen } from '@/lib/inboxDrawer';
 import { TAB_BAR_HEIGHT, useAppearanceKey, useTheme } from '@/constants/Theme';
+import { TYPE_SCALE } from '@codecast/shared/render/typeScale';
 import { Mono, useMonoFace } from '@/constants/fonts';
 import {
   MOBILE_HEADER_STYLE,
@@ -41,6 +42,9 @@ export default function TabLayout() {
         },
         tabBarLabelStyle: {
           ...MOBILE_TAB_LABEL_STYLE,
+          // Modern holds words to the type scale's 12pt floor; React
+          // Navigation draws the label, so the Text resolver never sees it.
+          ...(appearance.startsWith('modern') ? { fontSize: TYPE_SCALE.meta.size } : null),
           fontFamily: labelFace,
         },
         headerStyle: {

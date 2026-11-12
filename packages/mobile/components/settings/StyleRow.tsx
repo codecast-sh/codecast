@@ -9,10 +9,9 @@ import { showActionSheet } from '@/lib/popups';
 import { mobileLookSource, resolveMobileLook } from '@/lib/mobileLook';
 import { NavRow } from './SettingsUI';
 
-/** Hidden until Modern sets code-like text in mono again (the Modern-on-mobile
- *  plan's Wave 2): until then Modern sets paths and commands in sans. The
- *  look follows the web's switch without this row. */
-export const STYLE_ROW_SHOWN = false;
+/** Shown since Modern sets code-like text in mono (the Modern-on-mobile
+ *  plan's Wave 2). Kept as a switch so the row can be pulled in one line. */
+export const STYLE_ROW_SHOWN = true;
 
 const CHOICES = [
   { key: 'web', label: 'Same as web', value: null },

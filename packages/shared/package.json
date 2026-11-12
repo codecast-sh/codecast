@@ -131,6 +131,8 @@
     "./render/mobileTabsStyle": "./render/mobileTabsStyle.ts",
     "./render/mobileSessionStyle": "./render/mobileSessionStyle.ts",
     "./render/codecastMark": "./render/codecastMark.ts",
+    "./render/typeScale": "./render/typeScale.ts",
+    "./render/codeRuns": "./render/codeRuns.ts",
     "./tasks": "./tasks/index.ts",
     "./docs": "./docs/index.ts",
     "./docs/drafting": "./docs/drafting.ts",

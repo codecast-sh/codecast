@@ -729,6 +729,7 @@ export const mdStyles = themedStyles((Theme) => StyleSheet.create({
     color: Theme.text,
   },
   refPath: {
+    fontFamily: 'JetBrainsMono-Regular',
     fontSize: 11,
     color: Theme.textDim,
   },

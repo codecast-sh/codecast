@@ -2,6 +2,7 @@ import { StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import FontAwesome from "@expo/vector-icons/FontAwesome";
 import { Theme, Spacing, themedStyles, useTheme } from "@/constants/Theme";
+import { codeFont } from '@/constants/fonts';
 import type { PlanItem as PlanItemType } from "@codecast/web/store/inboxStore";
 import { formatRelativeTime } from "./SessionItem";
 
@@ -46,7 +47,7 @@ export function PlanItemRow({
       )}
 
       <RNView style={styles.metaLine}>
-        <RNText style={styles.shortId}>{plan.short_id}</RNText>
+        <RNText style={[styles.shortId, codeFont]}>{plan.short_id}</RNText>
 
         {progress && progress.total > 0 && (
           <>

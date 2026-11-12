@@ -9,6 +9,7 @@ import Feather from '@expo/vector-icons/Feather';
 import { Text as RNText } from '@/components/Themed';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
 import { useTheme } from '@/constants/Theme';
+import { codeFont } from '@/constants/fonts';
 import { structuredResultModel, type StructuredField, type StructuredRecord, type StructuredSection, type StructuredTone } from '@codecast/shared/render';
 
 type ThemeT = ReturnType<typeof useTheme>;
@@ -149,7 +150,7 @@ const styles = StyleSheet.create({
   rowHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   fields: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 12, rowGap: 2 },
   field: { fontSize: 11 },
-  mono: { fontSize: 11 },
+  mono: { ...codeFont, fontSize: 11 },
   pill: { borderWidth: 1, borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 },
   pillText: { fontSize: 10, fontWeight: '600', letterSpacing: 0.4 },
 });

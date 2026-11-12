@@ -56,3 +56,29 @@ test("nested text inherits the group its parent names, under Modern only", async
   expect(monoStyle({ fontWeight: "700" }, true, "classic", Sans).fontFamily).toBe(Mono.bold);
   expect(monoStyle({}, true, "classic").fontFamily).toBe(Mono.regular);
 });
+
+test("under Modern no word sits under 12, and capitals sit at 11 at least", async () => {
+  const { isCapsText, codeFont } = await import("./fonts");
+  expect(monoStyle({ fontSize: 9 }, true, "modern").fontSize).toBe(12);
+  expect(monoStyle({ fontSize: 10, lineHeight: 14 }, true, "modern")).toMatchObject({ fontSize: 12, lineHeight: 17 });
+  expect(monoStyle({ fontSize: 11.5 }, true, "modern").fontSize).toBe(12);
+  expect(monoStyle({ fontSize: 9, textTransform: "uppercase" }, true, "modern").fontSize).toBe(11);
+  expect(monoStyle({ fontSize: 9 }, true, "modern", undefined, true).fontSize).toBe(11);
+  expect(monoStyle({ fontSize: 13 }, true, "modern").fontSize).toBe(13);
+  // Code keeps its mono face as it rises.
+  expect(monoStyle([codeFont, { fontSize: 10 }], true, "modern")).toMatchObject({ fontFamily: Mono.regular, fontSize: 12 });
+  // Classic sizes are untouched.
+  expect(monoStyle({ fontSize: 9 }, true, "classic").fontSize).toBe(9);
+  expect(monoStyle([codeFont, { fontSize: 10 }], true, "classic")).toEqual(monoStyle({ fontSize: 10 }, true, "classic"));
+  // A family outside the groups (an icon font) is left alone.
+  expect(monoStyle({ fontFamily: "FontAwesome", fontSize: 9 }, true, "modern").fontSize).toBe(9);
+  // Capitals: a run whose words are capitals.
+  expect(isCapsText("410 GONE")).toBe(true);
+  expect(isCapsText(["PLAN", " ", 2])).toBe(true);
+  expect(isCapsText("Plan")).toBe(false);
+  expect(isCapsText("3")).toBe(false);
+  expect(isCapsText("A")).toBe(false);
+  expect(isCapsText("9:01\u202fAM")).toBe(false);
+  expect(isCapsText("OK")).toBe(false);
+  expect(isCapsText(undefined)).toBe(false);
+});

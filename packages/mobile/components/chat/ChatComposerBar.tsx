@@ -9,6 +9,7 @@ import { useConvex } from 'convex/react';
 import { useTypingReporter } from '@codecast/web/hooks/useChatTyping';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
+import { TYPE_SCALE } from '@codecast/shared/render/typeScale';
 import { MentionStrip, type MentionCandidate } from './MentionStrip';
 import {
   chooseAndPickImages, startUpload, forgetUpload, sendableAttachments,
@@ -228,7 +229,7 @@ export function ChatComposerBar({
   );
 }
 
-const styles = themedStyles((Theme) => StyleSheet.create({
+const styles = themedStyles((Theme, look) => StyleSheet.create({
   editBanner: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -299,7 +300,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     borderRadius: 9,
     paddingHorizontal: 10,
     paddingVertical: 8,
-    fontSize: 13.5,
+    fontSize: look === 'modern' ? TYPE_SCALE.body.size : 13.5,
     color: Theme.text,
     backgroundColor: Theme.bgAlt + '55',
   },
