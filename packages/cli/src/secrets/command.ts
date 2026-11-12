@@ -531,12 +531,12 @@ function registerRequestVerbs(vault: Command, deps: PublishDeps): void {
 
   helpText(
     vault.command("save-signin"),
-    "Save a site's sign-in from your own Chrome here (--from-chrome, a person's terminal only) or a cloud host's browser; cast browser open then starts every agent signed in",
+    "Save a site's sign-in from your own Chrome here (--from-chrome; from an agent it posts a Yes card that saves it as the person's) or a cloud host's browser; cast browser open then starts every agent signed in",
     ". Saving again replaces it; an open request's name is filled\n\nExample: cast vault save-signin vercel.com",
   )
     .argument("<site>", "Host or URL, like vercel.com")
     .option("--name <name>", "Name it (default: <site>-signin)")
-    .option("--from-chrome", "Read the sign-in out of your own Chrome on this machine; a person's terminal only, refused under any agent")
+    .option("--from-chrome", "Read the sign-in out of your own Chrome on this machine; run by an agent, it posts a Yes card in the conversation instead and Yes saves it as the person's")
     .option("--check", "With --from-chrome: count the site's cookies there and store nothing")
     .option(...WRITE_TEAM_OPTION)
     .option("--personal", "Only you can use it")
@@ -741,7 +741,16 @@ function requestAction(deps: PublishDeps) {
 
 function saveSigninAction(deps: PublishDeps) {
   return async (site: string, o: { name?: string; fromChrome?: boolean; check?: boolean; team?: string; personal?: boolean; json?: boolean }) => {
-    const { checkChromeSignin, saveSignin, SigninRefused } = await import("./signinCommand.js");
+    const { checkChromeSignin, saveSignin, SigninRefused, chromeReadIsAgents, chromeSigninAsk } = await import("./signinCommand.js");
+    if (o.fromChrome && !o.check && chromeReadIsAgents()) {
+      const { askPersonToRun } = await import("../decideCommand.js");
+      const id = await askPersonToRun(deps, chromeSigninAsk(site, o));
+      if (id) {
+        if (o.json) console.log(JSON.stringify({ ok: false, asked: id }));
+        else console.log(`Asked your person in this conversation (${id}): Yes saves ${site} from their Chrome as theirs. Do not paste a command for them: end your turn dormant naming ${id}; the answer wakes you with the result.`);
+        process.exit(3);
+      }
+    }
     try {
       if (o.check) {
         if (!o.fromChrome) throw new SigninRefused("--check reads your own Chrome: pass --from-chrome too");

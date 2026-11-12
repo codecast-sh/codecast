@@ -199,7 +199,7 @@ describe("the host's view of its link", () => {
     expect(switchNotice(host, file)).toBe("browser: the laptop is not reachable over its link; using this host's own Chrome");
     expect(switchNotice(host, file)).toBeNull();
     // A revoke after a fallback is news: once.
-    expect(switchNotice(revokedVerdict("mbp", "i-1"), file)).toBe("browser: mbp refused this host's key (revoked there); `cast browser extension link --host i-1` on mbp lets this host use its Chrome again; using this host's own Chrome");
+    expect(switchNotice(revokedVerdict("mbp", "i-1"), file)).toBe("browser: mbp refused this host's key (revoked there). To let this host use that Chrome again, ask your person with a Yes card: cast decide 'Let this cloud host use the Chrome on your laptop again?' --run 'cast browser extension link --host i-1' --on laptop; using this host's own Chrome");
     expect(switchNotice(revokedVerdict("mbp", "i-1"), file)).toBeNull();
     expect(lastLinkedLaptop(file)).toBe("mbp");
     expect(lastLinkedLaptop(path.join(path.dirname(file), "none.json"))).toBeNull();

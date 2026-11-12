@@ -204,7 +204,7 @@ export function captureFromChrome(host: string): Captured {
   if (read.reason) {
     return {
       error: /Keychain/.test(read.reason)
-        ? "Chrome's cookies are locked behind the login Keychain on this Mac: run cast vault save-signin " + host + " --from-chrome once in a terminal there and click Always Allow"
+        ? "Chrome's cookies are locked behind the login Keychain on this Mac: save again and click Always Allow when the Mac asks for Keychain access"
         : `Chrome's cookies could not be read: ${read.reason}`,
     };
   }

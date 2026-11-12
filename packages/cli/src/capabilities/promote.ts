@@ -23,7 +23,7 @@ export function registerCapPromote(cap: Command, _deps: PublishDeps): void {
       const { selfExecInfo } = await import("../selfExec.js");
       const { subscriptionModelCall } = await import("../subscriptionCall.js");
       if (!opts.scan && !process.stdin.isTTY) {
-        console.error("cast cap promote asks about each line; run it in a terminal, or pass --scan to list the proposals.");
+        console.error("cast cap promote asks about each line at a terminal. From a session, pass --scan to list the proposals and ask your person about them with cast decide.");
         process.exit(2);
       }
       const cwd = path.resolve(opts.repo ?? (process.env.CODECAST_CWD || process.cwd()));

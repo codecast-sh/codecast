@@ -18,6 +18,7 @@ import * as path from "node:path";
 import { browserHome } from "../profile.js";
 import { bridgeProof, randomNonce, secretMatches } from "./protocol.js";
 import { hashHostToken } from "./hostClients.js";
+import { RUN_ON_LAPTOP, askToRun } from "@codecast/shared/contracts/commandRun";
 import { bridgeStatus, type BridgeHostStatus, type ProvenBridge } from "./host.js";
 
 export const LAPTOP_LINK_FILE = "laptop-link.json";
@@ -72,7 +73,7 @@ export const revokedVerdict = (laptop: string, hostId: string): LinkVerdict => (
   mode: "host",
   laptop,
   revoked: true,
-  reason: `${laptop} refused this host's key (revoked there); \`cast browser extension link --host ${hostId}\` on ${laptop} lets this host use its Chrome again`,
+  reason: `${laptop} refused this host's key (revoked there). To let this host use that Chrome again, ask your person with a Yes card: ${askToRun("Let this cloud host use the Chrome on your laptop again?", `cast browser extension link --host ${hostId}`, RUN_ON_LAPTOP)}`,
 });
 
 /** The whole probe's budget: a dead laptop costs a session this much per command, no more. */

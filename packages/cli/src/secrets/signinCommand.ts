@@ -12,6 +12,8 @@
 // say whose cookies it holds.
 
 import * as path from "node:path";
+import { RUN_ON_LAPTOP, askToRun } from "@codecast/shared/contracts/commandRun";
+import { shellArg } from "@codecast/shared/contracts/shellWords";
 import { apiPost, type PublishDeps } from "../castApi.js";
 import { OWN_LOGIN_REASON } from "../browser/credentials.js";
 import { refuseNavigation } from "../browser/siteGuard.js";
@@ -20,6 +22,7 @@ import { readDaemonPid } from "../daemonPid.js";
 import { SESSION_ENV_KEYS } from "../processEnv.js";
 import { findAgentAncestor } from "../processTable.js";
 import { sessionIdFromEnv } from "../sessionIdentity.js";
+import { isRemoteDevice } from "../remote/device.js";
 import { keepsOwnLogin, signinName, signinSite, siteProblem, validatePayload, type SecretMeta, type SigninPayload } from "@codecast/shared/contracts/secrets";
 import { captureFromAgentBrowser, captureFromChrome, type Captured } from "./signinBrowser.js";
 import { captureSigninArgv, coversHost, parseCaptureSigninArgs, rememberJar, writeSigninMemory } from "./signin.js";
@@ -91,20 +94,34 @@ function runsUnderAgent(): boolean {
 }
 
 /**
- * Reading the person's own Chrome is the person's to start: from a terminal
- * of theirs, or from Save sign-in on the Vault page, which runs this through
- * the daemon with no session in its env (handleCaptureSigninCommand). An
- * agent is refused before the Keychain is touched: a session variable is the
- * fast answer, and the process tree the one an agent cannot clear.
+ * Reading the person's own Chrome is the person's to start: Save sign-in on
+ * the Vault page, or Yes on the card an agent's --from-chrome posts (both run
+ * this through the daemon with no session in its env). An agent never reads
+ * it itself: a session variable is the fast answer, and the process tree the
+ * one an agent cannot clear.
  */
-export function chromeReadRefusal(env: NodeJS.ProcessEnv = process.env, underAgent: () => boolean = runsUnderAgent): string | null {
-  return sessionIdFromEnv(env) || underAgent()
-    ? "Reading your own Chrome's cookies is for a person: press Save sign-in on the Vault page and pick this laptop, or run it in your own terminal."
-    : null;
+export function chromeReadIsAgents(env: NodeJS.ProcessEnv = process.env, underAgent: () => boolean = runsUnderAgent): boolean {
+  return !!sessionIdFromEnv(env) || underAgent();
+}
+
+/** The Yes card that saves `site` from the person's Chrome as their act: an agent's --from-chrome posts it rather than reading. */
+export function chromeSigninAsk(site: string, o: { name?: string; personal?: boolean; team?: string } = {}, remote: boolean = isRemoteDevice()): { question: string; command: string; on?: string } {
+  const flags = [o.name ? `--name ${shellArg(o.name)}` : "", o.personal ? "--personal" : o.team ? `--team ${shellArg(o.team)}` : ""].filter(Boolean).join(" ");
+  return {
+    question: `Save your ${site} sign-in from Chrome to the Vault${o.personal ? " for you" : " for the team"}, so agents start signed in? Click Always Allow if your Mac asks for Keychain access.`,
+    command: `cast vault save-signin ${shellArg(site)} --from-chrome${flags ? ` ${flags}` : ""}`,
+    ...(remote ? { on: RUN_ON_LAPTOP } : {}),
+  };
+}
+
+export function chromeReadRefusal(env: NodeJS.ProcessEnv = process.env, underAgent: () => boolean = runsUnderAgent, site = "<site>"): string | null {
+  if (!chromeReadIsAgents(env, underAgent)) return null;
+  const ask = chromeSigninAsk(site, {}, true);
+  return `Reading your person's own Chrome cookies is their act, not yours. Ask them with a Yes card, which runs it as theirs: ${askToRun(ask.question, ask.command, ask.on)}`;
 }
 
 function chromeHost(site: string): string {
-  const refused = chromeReadRefusal();
+  const refused = chromeReadRefusal(process.env, runsUnderAgent, site);
   if (refused) throw new SigninRefused(refused);
   return signinHost(site);
 }

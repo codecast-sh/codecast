@@ -32,6 +32,7 @@ import { withCdpTunnel } from "../browser/remote.js";
 import { signInHost } from "../browser/siteGuard.js";
 import type { RemoteHost } from "../remote/session-move.js";
 import { isHttpOrigin } from "@codecast/shared/contracts";
+import { RUN_ON_LAPTOP, askToRun } from "@codecast/shared/contracts/commandRun";
 
 // ---------------------------------------------------------------------------
 // The command's args
@@ -370,11 +371,11 @@ export function explainSyncFailure(error: string): { message: string; hint?: str
   if (error === "expired_ttl") {
     return {
       message: "your laptop never picked the request up within 5 minutes (asleep, or its daemon stopped)",
-      hint: "wake the laptop (or `cast daemon start` there) and rerun `cast browser sync <site>`",
+      hint: "the laptop must be awake with codecast running; once it is, rerun `cast browser sync <site>`",
     };
   }
   if (/Unknown command/.test(error)) {
-    return { message: "your laptop's cast is older than this host's — update it there", hint: "on the laptop: `cast update`, then rerun the sync" };
+    return { message: "your laptop's cast is older than this host's", hint: `ask your person, then rerun the sync: ${askToRun("Update codecast on your laptop?", "cast update", RUN_ON_LAPTOP)}` };
   }
   if (/no entry for device/.test(error)) {
     return { message: error, hint: "cast browser sync <site> --via <device id of the laptop that provisioned this host>" };
@@ -382,7 +383,7 @@ export function explainSyncFailure(error: string): { message: string; hint?: str
   if (/Keychain/.test(error)) {
     return {
       message: error,
-      hint: "on the laptop run `cast browser sync <site>` once in a terminal and click Always Allow on the Keychain prompt",
+      hint: `ask your person: ${askToRun("Carry your <site> login to this cloud host? Click Always Allow when your Mac asks for Keychain access.", "cast browser sync <site>", RUN_ON_LAPTOP)}`,
     };
   }
   return { message: error };

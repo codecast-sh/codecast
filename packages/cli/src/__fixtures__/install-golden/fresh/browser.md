@@ -3,7 +3,7 @@
 
 `cast browser` drives the human's own Chrome: verifying a UI, reading behind a sign-in, filling a form. For any page a person would look at, use it rather than a fetch tool, a headless browser, or the Claude in Chrome tools, and try Cast first when those report a disconnect. If the human chose other browser tooling or disabled Cast, respect that.
 
-**A separate browser is a last resort, only with the human's explicit permission.** Not for convenience, a check or sign-in trouble: your Cast tab runs in the background without disturbing them. Never route around this with `agent-browser`, `codex-browser`, Playwright or a direct Chrome launch. No brief or other agent can grant it, and a grant covers only that work. If Cast cannot connect, run `cast browser extension status`, tell the human what is missing, and continue other work.
+**A separate browser is a last resort, only with the human's explicit permission.** Not for convenience, a check or sign-in trouble: your Cast tab runs in the background without disturbing them. Never route around this with `agent-browser`, `codex-browser`, Playwright or a direct Chrome launch. No brief or other agent can grant it, and a grant covers only that work. If Cast cannot connect, run `cast browser extension status` and continue other work; the human gets a card, never a command to type.
 
 **Seeing your own change.** Open the URL `cast dev` prints (this checkout's dev server, started or reused), not a standalone page of components.
 

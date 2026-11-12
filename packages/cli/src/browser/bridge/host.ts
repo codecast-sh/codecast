@@ -889,8 +889,7 @@ export async function startBridgeHost(opts: {
   const defaultLink = (): ExtLink | undefined => links.default(opts.pinnedProfile?.());
   const notConnected = (): Error =>
     new Error(
-      `the cast bridge extension is not connected — if it is not installed, get Codecast from ${BRIDGE_STORE_URL}; ` +
-        "then run `cast browser extension setup` in a terminal on the same computer to pair it with Chrome",
+      `the cast bridge extension is not connected (Codecast, ${BRIDGE_STORE_URL}): \`cast browser extension status\` puts the pairing card in front of the person when it is missing`,
     );
 
   const sendJson = (ws: BridgeSocket, msg: unknown): void => {

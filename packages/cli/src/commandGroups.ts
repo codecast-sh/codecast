@@ -246,6 +246,8 @@ Examples:
     --report drop-analysis.html
   cast decide "Back off or switch keys?" -o "Back off" -o "Switch keys" --advisory --default 1 \\
     --context "429s for 4m. Backing off costs ~20m of throughput."
+  cast decide "Let this cloud host use your Chrome?" \\
+    --run "cast browser extension link --host i-0b91" --on laptop   # a step only they may take: Yes runs it on their laptop
   cast decide edit --context - <<'EOF'          # new facts: rewrite the open decision's context
   …
   EOF

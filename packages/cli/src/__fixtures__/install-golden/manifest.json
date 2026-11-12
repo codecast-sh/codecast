@@ -95,7 +95,7 @@
   "state": {
     "config": {
       "state_enabled": true,
-      "state_version": "7"
+      "state_version": "8"
     },
     "stdout": "* Thread State — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -125,7 +125,7 @@
   "browser": {
     "config": {
       "browser_enabled": true,
-      "browser_version": "17"
+      "browser_version": "18"
     },
     "stdout": "* Browser — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -143,7 +143,7 @@
   "computer": {
     "config": {
       "computer_enabled": true,
-      "computer_version": "1"
+      "computer_version": "2"
     },
     "stdout": "* Computer — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
@@ -170,7 +170,7 @@
   "decide": {
     "config": {
       "decide_enabled": true,
-      "decide_version": "4"
+      "decide_version": "5"
     },
     "stdout": "* Decision queue — installed in ~/.claude/CLAUDE.md\n",
     "wroteClaudeMd": true,
