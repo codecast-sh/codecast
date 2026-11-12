@@ -951,19 +951,6 @@ export default defineSchema({
       offered_at: v.number(),
       opened_at: v.optional(v.number()),
     })),
-    // The folder this session needs, live while the owner's machine fetches it
-    // from another of theirs (peerTransfers.ts); removed once it arrives.
-    peer_transfer: v.optional(v.object({
-      phase: v.union(v.literal("asking"), v.literal("receiving"), v.literal("unpacking"), v.literal("done"), v.literal("failed")),
-      from: v.optional(v.string()),
-      mode: v.optional(v.union(v.literal("direct"), v.literal("relay"))),
-      bytes: v.optional(v.number()),
-      total: v.optional(v.number()),
-      reason: v.optional(v.string()),
-      started_at: v.number(),
-      updated_at: v.number(),
-      cancel_requested_at: v.optional(v.number()),
-    })),
     // Dedupe for the needs-input push: "<message_count>:<kind>" of the last
     // waiting episode already notified (see notifications.checkNeedsInput).
     // Mirrors the web idle-sound's notified-keys map so one episode pushes
@@ -4919,7 +4906,20 @@ export default defineSchema({
     // and the id goes with it.
     viewing_conversation_id: v.optional(v.id("conversations")),
     viewing_since: v.optional(v.number()),
-  }).index("by_user", ["user_id"]),
+    // The viewed conversation's access fields, copied when the id is written
+    // and refreshed by patchConversationVisibility (the one writer of the
+    // mutable ones), so the roster gates the id without reading the
+    // conversation: a read there re-ran getTeamMembers for every subscriber
+    // at the viewed session's streaming rate (ct-92571).
+    viewing_access: v.optional(v.object({
+      user_id: v.id("users"),
+      team_id: v.optional(v.id("teams")),
+      is_private: v.boolean(),
+      team_visibility: v.optional(v.string()),
+      started_at: v.optional(v.number()),
+    })),
+  }).index("by_user", ["user_id"])
+    .index("by_viewing_conversation", ["viewing_conversation_id"]),
 
   // Mobile push staging (pushRouter.ts). Rows wait out a routing delay (short
   // away-debounce, or a longer hold while the desktop is active), then a
