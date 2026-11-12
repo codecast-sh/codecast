@@ -882,7 +882,7 @@ describe("planStuckSendNotify — pure decision", () => {
   });
 });
 
-describe("stale target — the send that would rebuild a whole context", () => {
+describe("idle and killed targets", () => {
   const HOUR = 60 * 60 * 1000;
   function staleWorld(bob: Record<string, unknown>, alice: Record<string, unknown> = {}) {
     const w = world({ now: Date.now() });
@@ -893,11 +893,17 @@ describe("stale target — the send that would rebuild a whole context", () => {
   const idle = { usage_totals: { input: 1, output: 1, cache_read: 1, cache_write: 1, updated_at: Date.now() - 3 * HOUR, context_tokens: 480_000 } };
   const fresh = { usage_totals: { input: 1, output: 1, cache_read: 1, cache_write: 1, updated_at: Date.now() - 5 * 60_000, context_tokens: 480_000 } };
 
-  test("holds a send into a session idle past the cache lifetime, naming the cost, and queues nothing", async () => {
+  test("delivers into a session idle past the cache lifetime: idling never holds a send", async () => {
     const { ctx, tables } = staleWorld(idle);
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "any update?", wake: false });
+    expect(tables.pending_messages).toHaveLength(1);
+  });
+
+  test("holds a send into a killed session, naming the cost, and queues nothing", async () => {
+    const { ctx, tables } = staleWorld({ ...idle, inbox_killed_at: Date.now() - HOUR });
     await expect(
       performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "any update?", wake: false }),
-    ).rejects.toThrow(/Not sent\. jxbob01 has not run for 3h.*480k tokens.*--wake.*cast read jxbob01/);
+    ).rejects.toThrow(/Not sent\. jxbob01 was killed.*480k tokens.*--wake.*cast read jxbob01/);
     expect(tables.pending_messages).toHaveLength(0);
   });
 

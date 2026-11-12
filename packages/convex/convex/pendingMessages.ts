@@ -2,7 +2,7 @@ import { UNCONFIRMED_DELIVERY_REASON } from "@codecast/shared/contracts";
 import { unreachableTerminalOf } from "@codecast/shared/contracts/deliveryHold";
 import { isWorkflowRunLog } from "./lib/runLog";
 import { clientRunAnswerRefusal } from "./lib/commandRuns";
-import { formatIdle, formatShare, formatTokens, wakeCost, wakeFieldsOf } from "./wakeCost";
+import { formatShare, formatTokens, wakeCost, wakeFieldsOf } from "./wakeCost";
 import { noteWriteCause } from "./lifecycleEvents";
 import type { RegisteredMutation } from "convex/server";
 import { mutation, query, internalMutation, internalQuery, internalAction } from "./functions";
@@ -986,27 +986,19 @@ export async function performSessionSend(
     }
   }
 
-  // Waking a stale session is the expensive send: past the prompt cache
-  // lifetime the recipient rebuilds its whole context before it reads a word,
-  // and a killed one is restarted for it. A session to session send says so
-  // and stops, unless the sender chose to wake it. Some recipients expect a wake
-  // however long they waited: a role's seat (it exists to be woken), the line
-  // between a session and the session that started it, either way, and one
-  // that declared itself dormant. A killed session is held too, except for
-  // the session that started it: a follow-up to your own worker restarts it,
-  // since directing it is what you started it for. A report to a killed
-  // parent stays held: someone retired that session. Only callers that ask
-  // for the check get it (wake: false); older CLIs and relays send as before.
+  // A killed session is not restarted by another session's send unless the
+  // sender started it: someone retired it, and the send says so and stops
+  // unless the sender passes --wake. A merely idle session always takes the
+  // message: refusing sends to sessions idle past their prompt cache parked
+  // 33 messages in files on one machine and left their work waiting
+  // (jx7eahf, 2026-11-12). Only callers that ask for the check get it
+  // (wake: false); older CLIs and relays send as before.
   if (args.wake === false && senderConversation && !args.raw && !args.direct && !roleTarget) {
     const cost = wakeCost({ ...target, ...wakeFieldsOf(target) }, Date.now());
-    const startedBy = (row: any, other: any) => [row.spawned_by_conversation_id, row.parent_conversation_id]
-      .some((id) => id != null && String(id) === String(other._id));
-    const sameLine = startedBy(senderConversation, target) || startedBy(target, senderConversation);
-    const roleSeat = !!(target.anchor_id || target.standing_role_id);
-    const ownWorker = startedBy(target, senderConversation);
-    const expectsWake = sameLine || roleSeat || target.thread_state_status === "dormant";
-    if ((cost.killed && !ownWorker) || (cost.cacheCold && !expectsWake)) {
-      throw new Error(staleSendMessage(target.short_id ?? String(target._id).slice(0, 7), cost));
+    const ownWorker = [target.spawned_by_conversation_id, target.parent_conversation_id]
+      .some((id) => id != null && String(id) === String(senderConversation._id));
+    if (cost.killed && !ownWorker) {
+      throw new Error(killedSendMessage(target.short_id ?? String(target._id).slice(0, 7), cost));
     }
   }
 
@@ -1077,7 +1069,7 @@ async function jointTurnVouched(ctx: { db: any }, conversationId: Id<"conversati
     || fresh.some((p: any) => p.user_name === part.from && (p.draft_text ?? "").trim() === part.body));
 }
 
-export function staleSendMessage(shortId: string, cost: ReturnType<typeof wakeCost>): string {
+export function killedSendMessage(shortId: string, cost: ReturnType<typeof wakeCost>): string {
   // The share says how heavy that context is without the reader having to know
   // which model the session runs: 480k means one thing on a 200k model and
   // another on a million.
@@ -1085,10 +1077,7 @@ export function staleSendMessage(shortId: string, cost: ReturnType<typeof wakeCo
   const size = cost.contextTokens
     ? ` (about ${formatTokens(cost.contextTokens)} tokens${share ? `, ${share} of its context window` : ""})`
     : "";
-  const why = cost.killed
-    ? `${shortId} was killed. Sending would restart it and load its whole context${size} before it reads your message.`
-    : `${shortId} has not run for ${formatIdle(cost.idleMs)}, so its prompt cache has expired. Your message would make it rebuild its whole context${size} before it reads a word.`;
-  return `Not sent. ${why} If it owns work this message changes, send again with --wake: that is what the rebuild is for. To ask what it did, read it instead: cast read ${shortId}, cast diff ${shortId}.`;
+  return `Not sent. ${shortId} was killed. Sending would restart it and load its whole context${size} before it reads your message. If it owns work this message changes, send again with --wake. To ask what it did, read it instead: cast read ${shortId}, cast diff ${shortId}.`;
 }
 
 // "@handle" → the standing session of the live role with that handle in the

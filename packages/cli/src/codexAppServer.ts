@@ -232,6 +232,7 @@ export interface CodexAppServerOptions {
   onApproval?: (threadId: string, approval: ApprovalRequest) => Promise<boolean>;
   codexBinary?: string;
   defaultPermissions?: () => Pick<ThreadStartParams, "sandbox" | "approvalPolicy">;
+  reviveDelayMs?: number;
 }
 
 interface PendingRequest {
@@ -249,6 +250,13 @@ interface TurnAccumulator {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const THREAD_START_TIMEOUT_MS = 60_000;
 const MAX_RESTART_DELAY_MS = 30_000;
+// A server that turned itself off (codex missing, or exiting at once) tries
+// again on this backoff. codex gets reinstalled while the daemon runs, and
+// without this every codex conversation stayed undeliverable until a daemon
+// restart: a worker's brief retried for two hours after the fix (jx73m29,
+// 2026-11-12).
+const REVIVE_MIN_MS = 60_000;
+const REVIVE_MAX_MS = 15 * 60_000;
 
 /** Codex caches the login identity when app-server starts. A later `codex
  * login` can replace auth.json while that process still holds the old account.
@@ -366,6 +374,9 @@ export class CodexAppServer extends EventEmitter {
   private authRefreshFailed = false;
   private authRestart: Promise<void> | null = null;
   private _binaryMissing = false;
+  private reviveTimer: ReturnType<typeof setTimeout> | null = null;
+  private reviveMinMs: number;
+  private reviveDelay: number;
   private log: (msg: string) => void;
   private onApproval?: (threadId: string, approval: ApprovalRequest) => Promise<boolean>;
   private codexBinary: string;
@@ -377,6 +388,8 @@ export class CodexAppServer extends EventEmitter {
     this.onApproval = opts.onApproval;
     this.codexBinary = opts.codexBinary || "codex";
     this.defaultPermissions = opts.defaultPermissions;
+    this.reviveMinMs = opts.reviveDelayMs ?? REVIVE_MIN_MS;
+    this.reviveDelay = this.reviveMinMs;
   }
 
   start(): void {
@@ -392,7 +405,30 @@ export class CodexAppServer extends EventEmitter {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
     }
+    this.clearRevive();
     this.killProcess();
+  }
+
+  private clearRevive(): void {
+    if (this.reviveTimer) clearTimeout(this.reviveTimer);
+    this.reviveTimer = null;
+  }
+
+  private disableSelf(reason: string): void {
+    this.stopped = true;
+    this.clearRevive();
+    const generation = this.stopGeneration;
+    this.log(`[codex-app-server] ${reason}, disabling; trying again in ${Math.round(this.reviveDelay / 1000)}s`);
+    this.reviveTimer = setTimeout(() => {
+      this.reviveTimer = null;
+      if (generation !== this.stopGeneration || this.process) return;
+      this._binaryMissing = false;
+      this.consecutiveQuickExits = 0;
+      this.restartDelay = 1000;
+      this.start();
+    }, this.reviveDelay);
+    this.reviveTimer.unref?.();
+    this.reviveDelay = Math.min(this.reviveDelay * 2, REVIVE_MAX_MS);
   }
 
   get running(): boolean {
@@ -713,8 +749,7 @@ export class CodexAppServer extends EventEmitter {
       this.log(`[codex-app-server] spawn failed: ${msg}`);
       if (isNotFound) {
         this._binaryMissing = true;
-        this.stopped = true;
-        this.log(`[codex-app-server] binary "${this.codexBinary}" not found in PATH, disabling`);
+        this.disableSelf(`binary "${this.codexBinary}" not found in PATH`);
         this.emit("binaryNotFound", this.codexBinary);
       } else {
         this.emit("error", err instanceof Error ? err : new Error(msg));
@@ -747,8 +782,7 @@ export class CodexAppServer extends EventEmitter {
       this.log(`[codex-app-server] process error: ${err.message}`);
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
         this._binaryMissing = true;
-        this.stopped = true;
-        this.log(`[codex-app-server] binary "${this.codexBinary}" not found in PATH, disabling`);
+        this.disableSelf(`binary "${this.codexBinary}" not found in PATH`);
         this.emit("binaryNotFound", this.codexBinary);
         this.cleanup();
         return;
@@ -764,8 +798,7 @@ export class CodexAppServer extends EventEmitter {
       if (uptime < CodexAppServer.QUICK_EXIT_THRESHOLD_MS) {
         this.consecutiveQuickExits++;
         if (this.consecutiveQuickExits >= CodexAppServer.MAX_CONSECUTIVE_QUICK_EXITS) {
-          this.log(`[codex-app-server] ${this.consecutiveQuickExits} consecutive quick exits (last uptime ${uptime}ms), disabling`);
-          this.stopped = true;
+          this.disableSelf(`${this.consecutiveQuickExits} consecutive quick exits (last uptime ${uptime}ms)`);
           this.cleanup();
           this.emit("closed");
           return;
@@ -786,6 +819,7 @@ export class CodexAppServer extends EventEmitter {
       // Only reset backoff after successful initialization
       this.restartDelay = 1000;
       this.consecutiveQuickExits = 0;
+      this.reviveDelay = this.reviveMinMs;
     }).catch((err) => {
       this.log(`[codex-app-server] initialize failed: ${err.message}`);
       this.emit("error", err);

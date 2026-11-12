@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { EventEmitter } from "node:events";
 import { CodexAppServer, CodexRequestRefused, approvalResultForMethod, codexAuthIdentity, threadForkTimeoutMsForBytes, threadItemToMessage, threadItemsToMessages } from "./codexAppServer.js";
 import { persistedPolicyFor } from "./codexTurnRecovery.js";
+import { pollUntil } from "./test-helpers/pollUntil.js";
 
 describe("CodexAppServer sandbox restatement", () => {
   // Codex 0.153+ recomputes a restrictive managed permission profile for any
@@ -631,5 +632,49 @@ describe("Codex per-turn model snapshots", () => {
     expect(finished[0][2]).toMatchObject([{ model: "gpt-6-astra", content: "First" }]);
     notify("turn/started", { turn: { id: "turn2" } });
     expect(started[1]).toEqual(["thread1", "turn2", "gpt-5.6-sol"]);
+  });
+});
+
+describe("CodexAppServer revives after disabling itself", () => {
+  // codex went missing (a half-written upgrade), the server disabled itself, and
+  // reinstalling codex changed nothing until a daemon restart: a worker's brief
+  // retried for two hours after the fix (jx73m29, 2026-11-12).
+  const FAKE_CODEX = `#!/usr/bin/env bun
+for await (const line of console) {
+  const msg = JSON.parse(line);
+  if (msg.method === "initialize") console.log(JSON.stringify({ id: msg.id, result: { userAgent: "fake-codex" } }));
+}
+`;
+
+  test("a reinstalled binary is picked up without a restart", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "codex-revive-"));
+    const binary = path.join(dir, "codex");
+    const logs: string[] = [];
+    const server = new CodexAppServer({ log: (m) => logs.push(m), codexBinary: binary, reviveDelayMs: 100 });
+    let ready = 0;
+    server.on("ready", () => ready++);
+    server.on("error", () => {});
+    try {
+      server.start();
+      await pollUntil(() => server.binaryMissing, "disabled on a missing binary");
+      expect(logs.some((l) => l.includes("disabling; trying again"))).toBe(true);
+
+      fs.writeFileSync(binary, FAKE_CODEX, { mode: 0o755 });
+      await pollUntil(() => server.running && ready === 1, "revived once codex is back", { ms: 10_000 });
+      expect(server.binaryMissing).toBe(false);
+    } finally {
+      server.stop();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("stop cancels a pending revive", async () => {
+    const server = new CodexAppServer({ log: () => {}, codexBinary: "/nonexistent/codex-revive-test", reviveDelayMs: 50 });
+    server.on("error", () => {});
+    server.start();
+    await pollUntil(() => server.binaryMissing, "disabled on a missing binary");
+    expect((server as any).reviveTimer).not.toBeNull();
+    server.stop();
+    expect((server as any).reviveTimer).toBeNull();
   });
 });

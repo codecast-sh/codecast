@@ -11,7 +11,7 @@ type SendIo = {
   hold?(target: string, body: string): string;
 };
 
-/** The server's refusal of a stale or killed target (pendingMessages.staleSendMessage). */
+/** The server's refusal of a killed target (pendingMessages.killedSendMessage). */
 const REFUSED = /^Not sent\./;
 
 export function registerSessionSendCommand(program: Command, io: SendIo): void {
@@ -26,15 +26,10 @@ export function registerSessionSendCommand(program: Command, io: SendIo): void {
       "few minutes stays queued, and your session is told why: the target is\n" +
       "offline, or idle while its machine fails to deliver. Waiting on a busy\n" +
       "session of your own is not reported; it takes the message when its turn ends.\n\n" +
-      "A session that was killed, or has not run for longer than its prompt\n" +
-      "cache lasts (one hour), is not woken by default: waking it rebuilds its\n" +
-      "whole context before it reads the message. The send stops and says what\n" +
-      "it would cost; pass --wake when it truly has to act. The refused message is\n" +
-      "kept in a file, and the refusal prints the one command that sends it.\n" +
-      "However long the target idled, a send goes through between a session and\n" +
-      "the one that started it (either way), to a role's standing session, and to\n" +
-      "a session that declared itself dormant. Of killed sessions, only your own\n" +
-      "workers are restarted for a send without --wake.\n\n" +
+      "A send to a killed session stops and says what restarting it would cost,\n" +
+      "unless it is your own worker; pass --wake when it truly has to act. The\n" +
+      "refused message is kept in a file, and the refusal prints the one command\n" +
+      "that sends it. Every other session takes the message, however long it idled.\n\n" +
       "Detached scripts must pass --from <your session id> if the calling\n" +
       "session cannot be detected. An unattributed message is not queued.\n\n" +
       "Examples:\n" +
@@ -49,7 +44,7 @@ export function registerSessionSendCommand(program: Command, io: SendIo): void {
     .argument("<session_id>", "Target session short ID (e.g. jx7c6zk)")
     .argument("<text>", stdinText("Message text"))
     .option("--from <id>", "Override sender session (required if current session cannot be detected)")
-    .option("--wake", "Deliver even when the target was killed or idle past its prompt cache lifetime")
+    .option("--wake", "Deliver even when the target was killed")
     .option("--raw", "Deliver the text exactly as typed, without the session-message wrapper, for the agent's own slash commands (/model opus, /effort high). Own sessions only.")
     .action(async (sessionId: string, text: string, options: SendOptions) => {
       const body = text ?? "";
