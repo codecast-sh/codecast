@@ -280,7 +280,24 @@ export const DAEMON_COMMANDS = [
   // files, path }, or { ok: false, missing?, reason }. args: { path,
   // conversation_id }. Old daemons: "Unknown command".
   "export_folder",
+  // A file link in a conversation that ran on this machine was opened from a
+  // browser on another one (Files page, remoteFiles.request). Read that one
+  // file and answer READ_FILE_RESULT JSON. args: { path }. The fence is
+  // cli/src/remoteFileRead.ts. Old daemons: "Unknown command".
+  "read_file",
 ] as const;
+
+/** Largest file `read_file` answers with; longer files come back cut here. */
+export const READ_FILE_MAX_BYTES = 512 * 1024;
+
+/** `read_file`'s answer. `exists: false` for a missing path; a refused one is the command's error. */
+export interface ReadFileResult {
+  exists: boolean;
+  content?: string;
+  size?: number;
+  mtime?: number;
+  truncated?: boolean;
+}
 
 /** How long a command waits for its daemon: one not picked up by then is
  *  closed with error "expired_ttl" and never runs. */

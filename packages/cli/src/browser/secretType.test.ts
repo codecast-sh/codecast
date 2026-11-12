@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import type { SecretMeta } from "@codecast/shared/contracts/secrets";
 import type { ReadSecret } from "../secrets/inject.js";
-import { fieldFor, originVerdict, typeSecret, valueFor, SecretTypeRefusal, type FocusProbe, type SecretTypeDeps } from "./secretType.js";
+import { fieldFor, findSelector, originVerdict, pickSelectorHit, typeSecret, valueFor, SecretTypeRefusal, type FocusProbe, type SecretTypeDeps } from "./secretType.js";
+import type { CdpClient } from "./cdp.js";
 
 const meta = (over: Partial<SecretMeta> = {}): SecretMeta =>
   ({ _id: "s1", short_id: "sc-1", name: "acme", kind: "login", status: "ready", workspace: "user:u", sites: ["login.acme.test"], created_by: "u", created_at: 0, updated_at: 0, ...over }) as SecretMeta;
@@ -159,6 +160,14 @@ describe("typeSecret", () => {
       const policy = { sources: [{ file: "x", key: "k", patterns: ["login.acme.test"] }], errors: [] };
       await expect(typeSecret("acme", {}, { ...deps(s.page), policy })).rejects.toThrow(/page https:\/\/shop.test is outside this session's site allowlist/);
     });
+    test("is refused when focus moves to another frame before the insert", async () => {
+      const s = shop(["https://login.acme.test/embed"]);
+      const ids = ["frame-a", "frame-b"];
+      const focusedFrame = s.page.focusedFrame;
+      const page = { ...s.page, focusedFrame: async () => ({ ...(await focusedFrame()), id: ids.shift() ?? "frame-b" }) };
+      await expect(typeSecret("acme", {}, deps(page))).rejects.toThrow(/focus left the frame/);
+      expect(s.typedInFrame).toEqual([]);
+    });
     test("a frame whose document holds no editable focus is refused", async () => {
       const s = shop(["https://login.acme.test/embed"], { frame: "top", editable: false, docOrigin: "https://login.acme.test" });
       await expect(typeSecret("acme", {}, deps(s.page))).rejects.toThrow(/not an editable text field/);
@@ -184,6 +193,65 @@ describe("typeSecret", () => {
     const f = fakePage(["https://login.acme.test/"], field);
     await expect(typeSecret("nope", {}, deps(f.page))).rejects.toThrow(/no secret named nope/);
     await expect(typeSecret("acme", {}, { ...deps(f.page), meta: async () => meta({ status: "requested" }) })).rejects.toThrow(/no value yet/);
+  });
+});
+
+describe("a CSS selector target", () => {
+  const hit = (over: Partial<Parameters<typeof pickSelectorHit>[1][number]> = {}) => ({ sessionId: "S", nodeId: 1, url: "https://shop.test/", top: false, ...over });
+  test("the top page's match wins, else the one frame with a match", () => {
+    expect(pickSelectorHit("#x", [hit({ nodeId: 2 }), hit({ top: true, nodeId: 3 })], []).nodeId).toBe(3);
+    expect(pickSelectorHit("#x", [hit({ url: "https://js.pay.test/card" })], ["https://other.test/"]).url).toBe("https://js.pay.test/card");
+  });
+  test("matches in several frames are refused, not guessed at", () => {
+    refused(() => pickSelectorHit("#x", [hit({ url: "https://a.test/" }), hit({ url: "https://b.test/" })], []), /matches in 2 frames \(https:\/\/a.test, https:\/\/b.test\)/);
+  });
+  test("no match names the frames it could not search", () => {
+    refused(() => pickSelectorHit("#x", [], []), /^nothing on the page matches #x$/);
+    refused(() => pickSelectorHit("#x", [], ["https://js.pay.test/v3/card"]), /1 cross-origin frame \(https:\/\/js.pay.test\) could not be searched/);
+  });
+
+  test("findSelector searches the top page, its same-process frames and each out-of-process frame's session", async () => {
+    // Top page: a same-process frame (F-SAME, with its document inline), an out-of-process one with a child session
+    // (F-OOP), and one no session holds (F-GONE, an extension too old for child sessions).
+    const docs: Record<string, any> = {
+      TAB: {
+        nodeId: 1, nodeName: "#document", children: [{ nodeId: 2, nodeName: "HTML", children: [
+          { nodeId: 3, nodeName: "IFRAME", frameId: "F-SAME", contentDocument: { nodeId: 10, nodeName: "#document" } },
+          { nodeId: 4, nodeName: "IFRAME", frameId: "F-OOP" },
+          { nodeId: 5, nodeName: "IFRAME", frameId: "F-GONE" },
+          { nodeId: 6, nodeName: "IFRAME", frameId: "F-UNNAMED", attributes: ["title", "src", "src", "https://js.pay.test/v3/inner"] },
+        ] }],
+      },
+      CHILD: { nodeId: 1, nodeName: "#document" },
+    };
+    const matches: Record<string, number> = { "CHILD:1": 7 };
+    const tree = { frame: { id: "TOP", url: "https://shop.test/" }, childFrames: [
+      { frame: { id: "F-SAME", url: "https://shop.test/inner" } },
+      { frame: { id: "F-OOP", url: "https://js.pay.test/card" } },
+      { frame: { id: "F-GONE", url: "https://gone.test/" } },
+    ] };
+    const sent: string[] = [];
+    const conn = {
+      on: () => {},
+      send: async (method: string, params: any = {}, sid?: string) => {
+        sent.push(`${sid}:${method}`);
+        if (method === "Target.setAutoAttach") {
+          if (sid === "TAB") queueMicrotask(() => listener?.({ method: "Target.attachedToTarget", sessionId: "TAB", params: { sessionId: "CHILD", targetInfo: { type: "iframe", targetId: "F-OOP", url: "https://js.pay.test/card" } } }));
+          return {};
+        }
+        if (method === "Page.getFrameTree") return { frameTree: sid === "TAB" ? tree : { frame: { id: "F-OOP", url: "https://js.pay.test/card" } } };
+        if (method === "DOM.getDocument") return { root: docs[sid!] };
+        if (method === "DOM.querySelector") return { nodeId: matches[`${sid}:${params.nodeId}`] ?? 0 };
+        return {};
+      },
+    };
+    let listener: ((ev: any) => void) | undefined;
+    conn.on = ((fn: (ev: any) => void) => void (listener = fn)) as any;
+    const { hits, unreachable } = await findSelector(conn as unknown as CdpClient, "TAB", 'input[name="cardnumber"]');
+    expect(hits).toEqual([{ sessionId: "CHILD", nodeId: 7, url: "https://js.pay.test/card", top: false }]);
+    expect(unreachable).toEqual(["https://gone.test/", "https://js.pay.test/v3/inner"]);
+    // Both of the tab's own documents were searched, the frame's through the tab's session.
+    expect(sent.filter((m) => m === "TAB:DOM.querySelector")).toHaveLength(2);
   });
 });
 

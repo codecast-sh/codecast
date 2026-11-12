@@ -808,7 +808,18 @@ export type PasskeyMeta = {
   name: string;
   created_at: number;
   last_used_at?: number;
+  /** A device key's credential id, so the app holding it knows it is set up; absent for a WebAuthn passkey. */
+  device_key?: string;
 };
+
+/**
+ * The bytes a device key signs for one challenge (convex/deviceKeys.ts): a
+ * fixed prefix and the purpose around the challenge's random value, so a
+ * signature means only this and the key signs nothing else.
+ */
+export function deviceKeyMessage(purpose: "register" | "presence", challenge: string): string {
+  return `codecast-device-key/v1\n${purpose}\n${challenge}`;
+}
 
 /** What the waiting client and the /confirm page read about one presence challenge. */
 export type PresenceChallengeState = {
