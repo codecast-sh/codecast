@@ -24,7 +24,8 @@ afterAll(() => {
   restoreGlobals();
 });
 
-const { PeerTransferStrip, PEER_TRANSFER_STALE_MS } = await import("../PeerTransferStrip");
+const { PeerTransferStrip } = await import("../PeerTransferStrip");
+const { PEER_TRANSFER_STALE_MS } = await import("../../../lib/peerTransfer");
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { flushSyncPublishes } = await import("../../../store/syncTransaction");
 

@@ -70,7 +70,10 @@ export async function pullGrantInto(opts: PullOpts & { sink: (body: NodeJS.Reada
         }
       });
       res.on("error", () => fail("truncated"));
-      res.on("close", () => {
+      // "end" fires only for a complete body; bun does not always follow it
+      // with "close", and waiting on "close" alone stalls a finished pull until
+      // its idle deadline.
+      const finished = () => {
         if (!res.complete) return fail("truncated");
         if (settled) return;
         settled = true;
@@ -78,7 +81,9 @@ export async function pullGrantInto(opts: PullOpts & { sink: (body: NodeJS.Reada
         opts.signal?.removeEventListener("abort", onAbort);
         body.end();
         resolve();
-      });
+      };
+      res.on("end", finished);
+      res.on("close", finished);
     });
   });
   const [t, s] = await Promise.allSettled([transfer, transfer.then(() => sinkRun, () => sinkRun)]);

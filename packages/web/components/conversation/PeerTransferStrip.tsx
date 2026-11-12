@@ -1,6 +1,7 @@
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
 import { useNowWhen } from "../../hooks/useCoarseNow";
 import { formatSize } from "../../lib/repoView";
+import { PEER_TRANSFER_STALE_MS } from "../../lib/peerTransfer";
 
 type PeerTransfer = {
   phase: "asking" | "receiving" | "unpacking" | "done" | "failed";
@@ -13,10 +14,6 @@ type PeerTransfer = {
   updated_at: number;
   cancel_requested_at?: number;
 };
-
-// The daemon repeats its last report every few seconds; a row this old has no
-// daemon behind it, and its Cancel would never be read.
-export const PEER_TRANSFER_STALE_MS = 30_000;
 
 // A session folder on its way from another of the owner's machines
 // (conversations.peer_transfer, written by the daemon about once a second).
@@ -49,7 +46,7 @@ export function PeerTransferStrip({ conversationId, onRetry }: { conversationId:
       <span className="shrink-0">{label}</span>
       {pt.phase === "failed" && pt.reason && <span className="min-w-0 truncate opacity-70" title={pt.reason}>{pt.reason}</span>}
       {!failed && pt.mode && (
-        <span className="shrink-0 rounded border border-sol-orange/40 px-1 text-[10px] uppercase tracking-wide opacity-80">{pt.mode === "direct" ? "Direct" : "Relay"}</span>
+        <span className="shrink-0 rounded border border-sol-orange/40 px-1 text-mark uppercase tracking-wide opacity-80">{pt.mode === "direct" ? "Direct" : "Relay"}</span>
       )}
       {showBar && (
         <span role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} className="flex-1 h-1.5 min-w-[60px] max-w-[160px] bg-sol-border/30 rounded-full overflow-hidden">

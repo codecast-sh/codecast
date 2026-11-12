@@ -167,7 +167,7 @@ describe("deliverMessage: mark-injected-before-send invariant", () => {
   });
 
   test("auto-resume delivery marks injected before launching the resume path", () => {
-    const resumeIdx = deliverBody.search(/await\s+autoResumeSession\(\s*sessionId\s*,\s*content\s*,/);
+    const resumeIdx = deliverBody.search(/(?:await\s+|=>\s*)autoResumeSession\(\s*sessionId\s*,\s*content\s*,/);
     expect(resumeIdx).toBeGreaterThanOrEqual(0);
     const window = deliverBody.slice(Math.max(0, resumeIdx - 700), resumeIdx);
     expect(window).toMatch(/markInjectedBestEffort\(\s*syncService\s*,\s*messageId\b/);

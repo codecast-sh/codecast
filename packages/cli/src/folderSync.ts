@@ -242,7 +242,9 @@ function extractInto(body: NodeJS.ReadableStream, dir: string, maxBytes: number,
     let gunzipEnded = false;
     const settle = () => {
       if (failed) return reject(failed);
-      if (tarCode === undefined || !gunzipEnded) return;
+      // tar's exit decides: GNU tar exits at the end-of-archive marker without
+      // draining its input, and gunzip, piped into a closed stdin, then never ends.
+      if (tarCode === undefined) return;
       if (tarCode === 0) resolve();
       else reject(new Error(`tar: ${lastErrorLine(stderr) || `exit ${tarCode}`}`));
     };
@@ -276,7 +278,10 @@ function extractInto(body: NodeJS.ReadableStream, dir: string, maxBytes: number,
     const exited = (code: number | null) => {
       if (tarCode !== undefined) return;
       tarCode = code;
-      if (!gunzipEnded) gunzip.resume();
+      if (!gunzipEnded) {
+        gunzip.unpipe(tar.stdin!);
+        gunzip.resume();
+      }
       settle();
     };
     tar.on("exit", exited);

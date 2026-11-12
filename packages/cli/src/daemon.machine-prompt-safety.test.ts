@@ -259,6 +259,9 @@ function fixture(transport = "tmux", cached = true) {
     waitForHandHost, deadClaims: new Map(), registryRegistrationFor: () => null, MACHINE_BOOTED_AT: 0,
     resetSessionDeliveryFailures: () => {}, materializedSessions: new Set(), postDeliveryHealthCheck: async () => {},
     autoResumeSession: (...args: unknown[]) => hooks.resume(...args), repairAndResumeSession: fail("repair"), materializeSession: fail("materialize"),
+    // The delivery path's resume-then-repair step (daemon.ts resumeOrRepair), minus its transfer-cancel bookkeeping.
+    resumeOrRepair: async (_session: string, resume: () => Promise<boolean>, repair: () => Promise<boolean>) =>
+      (await resume()) ? "resumed" : (await repair()) ? "repaired" : null,
     restoreSuspendedAgent: async () => false,
     prepareTmuxDelivery: async () => hooks.prepare(), TmuxDeliveryUncertainError, TmuxDeliveryExhaustedError,
     DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice,

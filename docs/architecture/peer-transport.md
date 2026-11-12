@@ -96,7 +96,7 @@ tracked in git or not (`.env*`, `id_*`, `*.pem`, `*.key`, `*.p12`,
 
 The requester files the transcript under the slug of its own resume cwd and
 rewrites the source's home, cwd and project folder in it (and in every
-`.jsonl` under the session folder) the way `cast move` does
+`.jsonl` under the session folder) the way `cast remote move` does
 (`relocateTranscript`). It stages beside the projects dir, never inside the
 watched tree, maps the session to the conversation before the file lands,
 and never replaces a transcript already there. An answer naming another
