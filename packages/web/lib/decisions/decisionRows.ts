@@ -44,6 +44,8 @@ export function decisionKindOf(d: Pick<Row, "card" | "workflow_run_id" | "gate_n
 
 /** Where it came from: the flow that asked it, else a session. */
 export const SESSION_SOURCE = "session";
+/** A Source filter value that matches a decision from any flow. */
+export const FLOW_SOURCE = "flows";
 export const decisionSourceOf = (d: Pick<Row, "source_flow" | "workflow_run_id">): string => d.source_flow ?? (d.workflow_run_id ? "A flow" : SESSION_SOURCE);
 
 export type DecisionTab = "mine" | "team" | "unassigned" | "escalated" | "answered";
@@ -145,7 +147,8 @@ export function passesFilters(d: Row, view: DecisionView, now: number, skip?: (t
     if (f === "blocking") { if ((view.blocking === "blocking") !== !!d.blocking) return false; continue; }
     if (f === "age") { const ms = DECISION_AGES.find((a) => a.key === view.age)?.ms ?? 0; if (now - d.created_at < ms) return false; continue; }
     const wanted = view[f].split(",");
-    if (!wanted.includes(axisValue(d, AXIS_OF_FILTER[f]))) return false;
+    const value = axisValue(d, AXIS_OF_FILTER[f]);
+    if (!wanted.includes(value) && !(f === "source" && value !== SESSION_SOURCE && wanted.includes(FLOW_SOURCE))) return false;
   }
   return true;
 }
@@ -157,6 +160,7 @@ export function filterCounts(rows: ReadonlyArray<Row>, view: DecisionView, me: s
     if (!inTab(d, view.tab, me) || !passesFilters(d, view, now, filter)) continue;
     const k = filter === "blocking" ? (d.blocking ? "blocking" : "advisory") : filter === "age" ? "" : axisValue(d, AXIS_OF_FILTER[filter]);
     out.set(k, (out.get(k) ?? 0) + 1);
+    if (filter === "source" && k !== SESSION_SOURCE) out.set(FLOW_SOURCE, (out.get(FLOW_SOURCE) ?? 0) + 1);
   }
   return out;
 }

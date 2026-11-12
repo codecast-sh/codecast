@@ -1175,8 +1175,8 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
       const abs = files.map((f) => path.resolve(f));
       for (const f of abs) if (!fs.existsSync(f)) die(`no such file: ${f}`);
       await act(o, async (page) => {
-        await uploadFiles(page, refOf(ref), abs);
-        console.log(`${OK} attached ${abs.length} file(s) to #e${refOf(ref)}`);
+        const via = await uploadFiles(page, refOf(ref), abs);
+        console.log(`${OK} attached ${abs.length} file(s) to #e${refOf(ref)}${via === "page" ? " (built in the page: Chrome refused them directly)" : ""}`);
         await emitAutoShot(page, o.shot);
       });
     });
