@@ -626,3 +626,51 @@ describe("fitReadPage around a linked message", () => {
     expect(fitReadPage(blocks, 24_000, "jx7abcd", 2)).toEqual({ texts: blocks.map((b) => b.text), cut: false });
   });
 });
+
+import { distinctIdPrefix, readRefFor } from "./formatter";
+
+// Short ids are the first 7 chars of a conversation id, so two conversations
+// can share one. A read that landed on one of them names the others with the
+// longer prefix that reaches each, and its own hints use the prefix that
+// reaches it, so following a hint never opens the other session.
+describe("formatReadResult with a shared short id", () => {
+  const base = {
+    conversation: {
+      id: "jx78gqjjkyk3ejtzcgmrbm810h8hs607",
+      title: "Mobile branch review",
+      project_path: "/Users/x/code/proj",
+      message_count: 8,
+      updated_at: new Date().toISOString(),
+    },
+    messages: [
+      { line: 2, role: "assistant", content: "", timestamp: new Date().toISOString(), tool_calls: [{ name: "StructuredOutput", input: JSON.stringify({ findings: [] }) }] },
+    ],
+  };
+
+  test("distinctIdPrefix stops at the first char no other id shares", () => {
+    expect(distinctIdPrefix("jx78gqjjkyk", ["jx78gqj0gey"])).toBe("jx78gqjj");
+    expect(distinctIdPrefix("jx78gqjjkyk", [])).toBe("jx78gqj");
+    expect(distinctIdPrefix("jx78gqjjkyk", ["jx78gqjjkzz"])).toBe("jx78gqjjky");
+    expect(readRefFor({ id: "jx78gqjjkyk" })).toBe("jx78gqj");
+  });
+
+  test("no note and plain short-id hints when nothing collides", () => {
+    const out = strip(formatReadResult(base));
+    expect(out).not.toContain("share the short id");
+    expect(out).toContain("cast read jx78gqj 2 --full");
+  });
+
+  test("names the other session and uses longer prefixes everywhere", () => {
+    const out = strip(formatReadResult({
+      ...base,
+      conversation: {
+        ...base.conversation,
+        same_short_id: [{ id: "jx78gqj0geycnazw7w0grcj4bx8hrj99", title: "Test PR 16123 on Mac", updated_at: new Date().toISOString() }],
+      },
+    }));
+    expect(out).toContain("2 sessions share the short id jx78gqj. This is jx78gqjj");
+    expect(out).toContain("cast read jx78gqj0   Test PR 16123 on Mac");
+    expect(out).toContain("cast read jx78gqjj 2 --full");
+    expect(out).toContain("   jx78gqjj | ");
+  });
+});

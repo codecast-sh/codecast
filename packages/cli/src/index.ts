@@ -8798,7 +8798,8 @@ program
         tail: tailN,
         grep,
       });
-      const id = String(result.conversation?.id ?? parsedId).slice(0, 7);
+      const { readRefFor } = await import("./formatter.js");
+      const id = result.conversation?.id ? readRefFor(result.conversation) : String(parsedId).slice(0, 7);
       const count: number = result.conversation?.message_count ?? 0;
 
       if (grep !== undefined && !result.grep) {

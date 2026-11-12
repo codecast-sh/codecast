@@ -18,7 +18,7 @@ import { cloudPlacementFor,
 import { enqueueCloudSpawn } from "./cloudPlacement";
 import { isConversationSafetyBlocked, safetyBlockPatch } from "./conversationSafety";
 import { onFreshApiErrorPark } from "./accountSwitch";
-import { findConversationBySessionReference, resolveConversationRefRanked, findConversationByAnyRefWhere, findConversationByAnyRef } from "./conversationSessionLookup";
+import { findConversationBySessionReference, resolveConversationRefRanked, findConversationByAnyRefWhere, findConversationByAnyRef, otherShortIdMatches } from "./conversationSessionLookup";
 import { applyHideTransition, cascadeHideToNestedChildren } from "./cleanup";
 import { paginationOptsValidator } from "convex/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
@@ -4903,6 +4903,45 @@ export async function streamMessageRows(
   return undefined;
 }
 
+/** The conversation among those sharing `ref`'s short id that holds
+ *  `messageId`, when the caller can read it; otherwise `resolved` unchanged. */
+async function conversationHoldingMessage(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  ref: string,
+  messageId: string,
+  resolved: Doc<"conversations">,
+): Promise<Doc<"conversations">> {
+  const id = ctx.db.normalizeId("messages", messageId);
+  const message = id ? await ctx.db.get(id) : null;
+  if (!message || message.conversation_id === resolved._id) return resolved;
+  const holder = (await otherShortIdMatches(ctx, ref, resolved)).find((c) => String(c._id) === String(message.conversation_id));
+  if (!holder || !(await canOwnerOrTeamAccess(ctx, userId, holder))) return resolved;
+  return holder as Doc<"conversations">;
+}
+
+/** The other conversations the caller can read that answer to the same short
+ *  id, so `cast read` can say the one it opened may not be the one they meant
+ *  and print the longer prefix that picks each. Absent when there are none. */
+async function sameShortIdPayload(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  ref: string,
+  conv: Doc<"conversations">,
+): Promise<{ same_short_id?: Array<{ id: string; title: string; updated_at: string }> }> {
+  const others = [];
+  for (const other of await otherShortIdMatches(ctx, ref, conv)) {
+    if (!(await canOwnerOrTeamAccess(ctx, userId, other))) continue;
+    others.push({
+      id: String(other._id),
+      title: other.title || (other.slug ? formatSlugAsTitle(other.slug) : null) || "New Session",
+      updated_at: new Date(other.updated_at).toISOString(),
+    });
+    if (others.length >= 5) break;
+  }
+  return others.length ? { same_short_id: others } : {};
+}
+
 /**
  * One scan step of a read: the ids of the non-empty messages after `after`,
  * oldest first, or newest first for a tail read. `cursor` is absent once the
@@ -4927,8 +4966,13 @@ export const scanConversationLines = internalQuery({
   handler: async (ctx, args) => {
     const access = await readableConversation(ctx, args.api_token, args.conversation_id);
     if ("error" in access) return { error: access.error };
-    const { conv } = access;
     const after = args.after;
+    // A short id with a message anchor (`cast read jx78gqj#<message>`, what
+    // `cast search` prints) means the conversation holding that message, even
+    // when a newer one shares the short id.
+    const conv = !after && args.around_message_id
+      ? await conversationHoldingMessage(ctx, access.user._id, args.conversation_id, args.around_message_id, access.conv)
+      : access.conv;
     const findTerms = args.grep !== undefined ? parseFindTerms(args.grep) : undefined;
 
     const ids: string[] = [];
@@ -4963,6 +5007,7 @@ export const scanConversationLines = internalQuery({
           project_path: conv.project_path || null,
           message_count: conv.message_count || 0,
           updated_at: new Date(conv.updated_at).toISOString(),
+          ...(await sameShortIdPayload(ctx, access.user._id, args.conversation_id, conv)),
         },
       }),
       ...(args.include_file_changes ? await foldChangesPayload(ctx, conv._id) : {}),

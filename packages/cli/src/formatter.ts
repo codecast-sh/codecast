@@ -205,6 +205,8 @@ interface ReadResult {
     /** False when the count is the stored row count (a scan that stopped early), not the numbered lines. */
     message_count_exact?: boolean;
     updated_at: string;
+    /** Other conversations the caller can read that share this short id (a collision), newest first. */
+    same_short_id?: Array<{ id: string; title: string; updated_at: string }>;
   };
   messages: ReadMessage[];
   target_line?: number;
@@ -290,6 +292,23 @@ function wrapLines(text: string, width: number): string[] {
 
 export function truncateId(id: string): string {
   return id.slice(0, 7);
+}
+
+/** The shortest prefix of `id`, at least a short id long, that no id in
+ *  `others` starts with: what to type to reach this conversation when its
+ *  short id is shared. The full id when no prefix separates them. */
+export function distinctIdPrefix(id: string, others: string[] = []): string {
+  for (let n = 7; n < id.length; n++) {
+    const prefix = id.slice(0, n);
+    if (!others.some((o) => o.startsWith(prefix))) return prefix;
+  }
+  return id;
+}
+
+/** The ref a read's hints print for its conversation: the short id, or a
+ *  longer prefix when other conversations share that short id. */
+export function readRefFor(conv: { id: string; same_short_id?: Array<{ id: string }> }): string {
+  return distinctIdPrefix(conv.id, (conv.same_short_id ?? []).map((o) => o.id));
 }
 
 function formatRole(role: string): string {
@@ -577,13 +596,22 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
   const padding = "─".repeat(Math.max(0, 60 - header.length));
   lines.push(header + padding);
 
+  const ref = readRefFor(conv);
   const meta = [
-    truncateId(conv.id),
+    ref,
     formatDate(conv.updated_at),
     `${conv.message_count} msgs`,
     truncatePath(conv.project_path),
   ].filter(Boolean).join(" | ");
   lines.push(`   ${meta}`);
+  const others = conv.same_short_id ?? [];
+  if (others.length > 0) {
+    const allIds = [conv.id, ...others.map((o) => o.id)];
+    lines.push(`   ${fmt.accent(`! ${others.length + 1} sessions share the short id ${truncateId(conv.id)}. This is ${ref}; to read the other${others.length === 1 ? "" : "s"}:`)}`);
+    for (const o of others) {
+      lines.push(`     cast read ${distinctIdPrefix(o.id, allIds.filter((x) => x !== o.id))}   ${o.title} (${formatDate(o.updated_at)})`);
+    }
+  }
 
   const targetLine = options.targetLine ?? result.target_line;
   if (targetLine !== undefined) {
@@ -614,7 +642,7 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
       const indentedContent = msg.content.split("\n").map((l) => "       " + l).join("\n");
       block.push(indentedContent);
     }
-    if (resultOnlyMatch) block.push(`       ${fmt.muted(`(in a tool result: cast read ${truncateId(conv.id)} ${msg.line} --full)`)}`);
+    if (resultOnlyMatch) block.push(`       ${fmt.muted(`(in a tool result: cast read ${ref} ${msg.line} --full)`)}`);
 
     if (hasToolCalls && msg.tool_calls) {
       if (options.full) {
@@ -639,7 +667,7 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
         // this collapsed line is all a non-full read shows of it — readers have
         // mistaken that for an empty result. Point at the exact command.
         if (calls.some((tc) => tc.name === "StructuredOutput")) {
-          block.push(`       ${fmt.muted(`↳ full payload: cast read ${truncateId(conv.id)} ${msg.line} --full`)}`);
+          block.push(`       ${fmt.muted(`↳ full payload: cast read ${ref} ${msg.line} --full`)}`);
         }
       }
     }
@@ -659,7 +687,7 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
     blocks.push({ line: msg.line, text: block.join("\n") + "\n" });
   }
 
-  const id = truncateId(conv.id);
+  const id = ref;
   const page = fitReadPage(blocks, options.maxChars, id, targetLine);
   lines.push(...page.texts);
   if (!page.cut) {

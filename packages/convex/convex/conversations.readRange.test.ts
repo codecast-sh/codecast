@@ -270,3 +270,96 @@ describe("the read steps against the real queries", () => {
     expect(await readConversationRange(steps, { api_token: "z".repeat(64), conversation_id })).toEqual({ error: "Unauthorized" });
   });
 });
+
+// A read runs as several scan and fetch steps, each resolving the conversation
+// again. The ref the caller typed can be a short id that several conversations
+// share, so every step after the first must name the conversation the first
+// one resolved, or a read could switch sessions halfway.
+describe("readConversationRange pins the conversation the first step resolved", () => {
+  test("later scan steps and every fetch step name the resolved id, not the typed ref", async () => {
+    const seen: string[] = [];
+    const steps = {
+      scan: async (a: any) => {
+        seen.push(`scan:${a.conversation_id}`);
+        if (!a.after) {
+          return { ids: ["m1"], cursor: { creation_time: 1, skip: 0 }, conversation: { id: "jx78gqj0full", title: "t", message_count: 2 } };
+        }
+        return { ids: ["m2"] };
+      },
+      fetch: async (a: any) => {
+        seen.push(`fetch:${a.conversation_id}`);
+        return { messages: a.ids.map((id: string, i: number) => ({ id, line: a.first_line + i })), consumed: a.ids.length };
+      },
+    };
+    const result = await readConversationRange(steps as any, { api_token: "t", conversation_id: "jx78gqj" });
+    expect(seen).toEqual(["scan:jx78gqj", "scan:jx78gqj0full", "fetch:jx78gqj0full"]);
+    expect(result.messages.map((m: any) => m.id)).toEqual(["m1", "m2"]);
+    expect(result.conversation.id).toBe("jx78gqj0full");
+  });
+});
+
+// Short ids are the first 7 chars of a conversation id and do collide. A bare
+// short id reads the caller's newest match and lists the others; a message
+// anchor from `cast search` reads the conversation that holds the message; a
+// longer prefix reads the one it names. Conversations the caller cannot read
+// are never listed.
+describe("a short id two conversations share, against the real queries", () => {
+  const modules = {
+    "./_generated/server.ts": () => import("./_generated/server"),
+    "./syncOutbox.ts": () => import("./syncOutbox"),
+    "./conversations.ts": () => import("./conversations"),
+  };
+  const token = "s".repeat(64);
+
+  async function seedCollision() {
+    const t = convexTest(schema, modules);
+    const ids = await t.run(async (ctx) => {
+      const user = await ctx.db.insert("users", { name: "Reader" } as any);
+      const stranger = await ctx.db.insert("users", { name: "Stranger" } as any);
+      await ctx.db.insert("api_tokens", { user_id: user, token_hash: await hashToken(token), name: "cli", created_at: Date.now(), last_used_at: Date.now() } as any);
+      const conv = (owner: any, title: string, updated_at: number) => ctx.db.insert("conversations", {
+        user_id: owner, agent_type: "claude_code", status: "active", started_at: updated_at, updated_at, message_count: 1, is_private: true, title,
+      } as any);
+      const older = await conv(user, "Test PR on Mac", 1);
+      const shortId = String(older).slice(0, 7);
+      await ctx.db.patch(older, { short_id: shortId } as any);
+      const newer = await conv(user, "Mobile branch review", 2);
+      await ctx.db.patch(newer, { short_id: shortId } as any);
+      const theirs = await conv(stranger, "Someone else's", 3);
+      await ctx.db.patch(theirs, { short_id: shortId } as any);
+      const olderMessage = await ctx.db.insert("messages", { conversation_id: older, role: "user", content: "in the older one", timestamp: 1 } as any);
+      await ctx.db.insert("messages", { conversation_id: newer, role: "user", content: "in the newer one", timestamp: 2 } as any);
+      return { older: String(older), newer: String(newer), shortId, olderMessage: String(olderMessage) };
+    });
+    const steps = {
+      scan: (a: any) => t.query(internal.conversations.scanConversationLines, a),
+      fetch: (a: any) => t.query(internal.conversations.readConversationLines, a),
+    };
+    return { steps, ...ids };
+  }
+
+  test("the bare short id reads the newest and lists the other one the caller can read", async () => {
+    const { steps, older, newer, shortId } = await seedCollision();
+    const result = await readConversationRange(steps, { api_token: token, conversation_id: shortId });
+    expect(result.conversation.id).toBe(newer);
+    expect(result.messages.map((m: any) => m.content)).toEqual(["in the newer one"]);
+    expect(result.conversation.same_short_id.map((o: any) => [o.id, o.title])).toEqual([[older, "Test PR on Mac"]]);
+  });
+
+  test("a message anchor reads the conversation that holds the message", async () => {
+    const { steps, older, newer, shortId, olderMessage } = await seedCollision();
+    const result = await readConversationRange(steps, { api_token: token, conversation_id: shortId, around_message_id: olderMessage, context: 3 });
+    expect(result.conversation.id).toBe(older);
+    expect(result.target_missing).toBeUndefined();
+    expect(result.messages.map((m: any) => m.content)).toEqual(["in the older one"]);
+    expect(result.conversation.same_short_id.map((o: any) => o.id)).toEqual([newer]);
+  });
+
+  test("a longer prefix reads the conversation it names, and lists nothing", async () => {
+    const { steps, older, newer } = await seedCollision();
+    const prefix = older.slice(0, older.split("").findIndex((ch, i) => i >= 7 && newer[i] !== ch) + 1);
+    const result = await readConversationRange(steps, { api_token: token, conversation_id: prefix });
+    expect(result.conversation.id).toBe(older);
+    expect(result.conversation.same_short_id).toBeUndefined();
+  });
+});

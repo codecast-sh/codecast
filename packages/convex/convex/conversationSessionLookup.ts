@@ -64,6 +64,11 @@ export const findConversationBySessionReference = async (
 // index scan ascends by creation time; return newest first — short ids
 // circulate for recent sessions, so when a short id collides the newest match
 // is the one the caller almost certainly means.
+//
+// A longer ref that is a prefix of some candidates' ids keeps only those: it is
+// how a caller picks one conversation out of a collision (`jx78gqj0` vs
+// `jx78gqjj`), and truncating it back to the short id would hand them the
+// newest match again. A longer ref that is a prefix of none still truncates.
 const shortIdCandidatesNewestFirst = async (
   ctx: LookupCtx,
   ref: string
@@ -72,7 +77,29 @@ const shortIdCandidatesNewestFirst = async (
     .query("conversations")
     .withIndex("by_short_id", (q: any) => q.eq("short_id", ref.slice(0, 7)))
     .take(16);
-  return [...candidates].reverse();
+  const newestFirst = [...candidates].reverse();
+  if (ref.length > 7) {
+    const narrowed = newestFirst.filter((c) => String(c._id).startsWith(ref));
+    if (narrowed.length > 0) return narrowed;
+  }
+  return newestFirst;
+};
+
+// The other conversations a ref could have meant: when `ref` named `chosen`
+// by a short id (or a prefix too short to single it out), the rest of the
+// conversations that prefix matches, newest first. Empty for a full id or a
+// session uuid. Callers filter by access before showing any of them.
+export const otherShortIdMatches = async (
+  ctx: LookupCtx,
+  ref: string,
+  chosen: LookupRecord
+): Promise<LookupRecord[]> => {
+  const trimmed = (ref ?? "").trim();
+  if (trimmed.length < 7 || String(chosen._id) === trimmed) return [];
+  const chosenShortId = chosen.short_id ?? String(chosen._id).slice(0, 7);
+  if (chosenShortId !== trimmed.slice(0, 7)) return [];
+  const candidates = await shortIdCandidatesNewestFirst(ctx, trimmed);
+  return candidates.filter((c) => String(c._id) !== String(chosen._id));
 };
 
 export const findConversationByAnyRefWhere = async (

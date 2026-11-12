@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { findConversationBySessionReference, findConversationByAnyRef, findConversationByAnyRefWhere, resolveConversationRefRanked } from "./conversationSessionLookup";
+import { findConversationBySessionReference, findConversationByAnyRef, findConversationByAnyRefWhere, otherShortIdMatches, resolveConversationRefRanked } from "./conversationSessionLookup";
 
 const createLookupCtx = ({
   conversationsBySessionId = {},
@@ -358,5 +358,32 @@ describe("resolveConversationRefRanked", () => {
       never
     );
     expect(result).toEqual(conv);
+  });
+});
+
+describe("shared short ids", () => {
+  // Two of the caller's own conversations whose ids share their first 7 chars.
+  const older = { _id: "jx78gqj0geycnazw", user_id: "user-1", short_id: "jx78gqj" };
+  const newer = { _id: "jx78gqjjkyk3ejtz", user_id: "user-1", short_id: "jx78gqj" };
+  const ctx = () => createLookupCtx({ conversationsByShortId: { jx78gqj: [older, newer] } });
+  const never = async () => false;
+
+  test("the bare short id still resolves to the newest", async () => {
+    expect(await resolveConversationRefRanked(ctx(), "jx78gqj", "user-1", never)).toEqual(newer);
+    expect(await findConversationByAnyRef(ctx(), "jx78gqj", "user-1")).toEqual(newer);
+  });
+
+  test("a longer prefix picks the conversation it names, not the newest", async () => {
+    expect(await resolveConversationRefRanked(ctx(), "jx78gqj0", "user-1", never)).toEqual(older);
+    expect(await findConversationByAnyRef(ctx(), "jx78gqj0g", "user-1")).toEqual(older);
+    expect(await resolveConversationRefRanked(ctx(), "jx78gqjj", "user-1", never)).toEqual(newer);
+  });
+
+  test("otherShortIdMatches names the rest for a short id, nothing for a distinct prefix or full id", async () => {
+    expect(await otherShortIdMatches(ctx(), "jx78gqj", newer)).toEqual([older]);
+    expect(await otherShortIdMatches(ctx(), "jx78gqj", older)).toEqual([newer]);
+    expect(await otherShortIdMatches(ctx(), "jx78gqj0", older)).toEqual([]);
+    expect(await otherShortIdMatches(ctx(), older._id, older)).toEqual([]);
+    expect(await otherShortIdMatches(ctx(), "c280d57c-uuid", older)).toEqual([]);
   });
 });

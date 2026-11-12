@@ -120,7 +120,9 @@ async function scanLines(
   for (;;) {
     const step = await steps.scan({
       api_token: args.api_token,
-      conversation_id: args.conversation_id,
+      // Every step after the first names the conversation the first one
+      // resolved, so a short id shared by several cannot switch mid-read.
+      conversation_id: head?.conversation?.id ?? args.conversation_id,
       after,
       newest_first: newestFirst || undefined,
       around_message_id: anchorIndex === undefined ? args.around_message_id : undefined,
@@ -158,6 +160,12 @@ async function fetchLines(steps: ReadSteps, args: ReadRangeArgs, ids: string[], 
   return { messages };
 }
 
+/** The read's args, naming the conversation the scan resolved rather than the ref the caller typed. */
+function pinnedTo(args: ReadRangeArgs, head: any): ReadRangeArgs {
+  const id = head?.conversation?.id;
+  return typeof id === "string" && id ? { ...args, conversation_id: id } : args;
+}
+
 /**
  * Read a range of a conversation in steps that each stay under a byte budget.
  *
@@ -178,7 +186,7 @@ export async function readConversationRange(steps: ReadSteps, args: ReadRangeArg
     if ("error" in scan) return scan.error;
     const ids = scan.ids.slice(0, n).reverse();
     const count = scan.complete ? scan.ids.length : Math.max(scan.ids.length, scan.head.conversation.message_count ?? 0);
-    const fetched = await fetchLines(steps, args, ids, scan.complete ? count - ids.length + 1 : -ids.length);
+    const fetched = await fetchLines(steps, pinnedTo(args, scan.head), ids, scan.complete ? count - ids.length + 1 : -ids.length);
     if ("error" in fetched) return fetched.error;
     return { conversation: { ...scan.head.conversation, message_count: count, message_count_exact: scan.complete }, messages: fetched.messages };
   }
@@ -194,7 +202,7 @@ export async function readConversationRange(steps: ReadSteps, args: ReadRangeArg
     if ("error" in scan) return scan.error;
     const hits = inRange(scan.matches);
     const shown = hits.slice(0, READ_GREP_MAX);
-    const fetched = await fetchLines(steps, args, shown.map((i) => scan.ids[i]), 0, shown.map((i) => i + 1));
+    const fetched = await fetchLines(steps, pinnedTo(args, scan.head), shown.map((i) => scan.ids[i]), 0, shown.map((i) => i + 1));
     if ("error" in fetched) return fetched.error;
     const count = scan.complete ? scan.ids.length : Math.max(scan.ids.length, scan.head.conversation.message_count ?? 0);
     return {
@@ -215,7 +223,7 @@ export async function readConversationRange(steps: ReadSteps, args: ReadRangeArg
   // The stored count includes empty rows; it stands in only when the scan stopped early.
   const count = complete ? ids.length : Math.max(ids.length, head.conversation.message_count ?? 0);
   const { startLine, lastLine } = readRange(count, args, targetLine);
-  const fetched = await fetchLines(steps, args, ids.slice(startLine - 1, Math.min(lastLine, ids.length)), startLine);
+  const fetched = await fetchLines(steps, pinnedTo(args, head), ids.slice(startLine - 1, Math.min(lastLine, ids.length)), startLine);
   if ("error" in fetched) return fetched.error;
 
   const { file_changes, file_changes_truncated } = head;
