@@ -105,6 +105,8 @@ import { join } from "node:path";
 // stable-context hook installers moved to stableContextHooks.ts, the live
 // artifact write path to lib/liveArtifactWrite.ts, sheet text parsing to
 // sheets/delimited.ts, and buckets.test.ts its filter-list tests out. PIN 252.
+// 2026-11-12: the fix forward of 444a3f30c (Modern design pass) moved the
+// pinned rail out of Sidebar.tsx into sidebar/PinnedRail.tsx. PIN 251.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");
@@ -121,7 +123,7 @@ function pinnedSize(source: string): number {
 }
 
 /** How many files are over the cap today. May only fall. */
-const PIN = 252;
+const PIN = 251;
 
 const result = checkRatchet({
   name: "max lines",

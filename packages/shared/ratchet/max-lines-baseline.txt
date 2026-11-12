@@ -207,7 +207,6 @@ packages/web/components/MessageInput.tsx
 packages/web/components/MessageReview.tsx 1050
 packages/web/components/PlanDetailPanel.tsx 1250
 packages/web/components/PublishedPageEmbed.tsx 950
-packages/web/components/Sidebar.tsx 950
 packages/web/components/TriggerContextPanel.tsx 900
 packages/web/components/calls/CallStage.tsx 1150
 packages/web/components/calls/RoomThread.tsx 1050
