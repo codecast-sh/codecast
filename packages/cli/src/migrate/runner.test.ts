@@ -424,6 +424,24 @@ describe("runBatch", () => {
     expect(String(w.calls.at(-1)?.[1])).toContain("2 done");
   });
 
+  test("a row whose failure report itself throws fails alone; the runner moves the rest", async () => {
+    const w = world({
+      batch: { concurrency: 1 },
+      rows: [row(), row({ migration_id: "m2", conversation_id: "c2", session_id: "s2", short_id: "bbbbbbb", position: 1 })],
+      begin: { m1: facts({ agent_status: "idle" }), m2: facts({ conversation_id: "c2", session_id: "s2", agent_status: "idle" }) },
+    });
+    const transfer = w.io.transferToCloud;
+    w.io.transferToCloud = async (f, o) => {
+      if (f.session_id !== "s2") throw new Error("lost connection");
+      return transfer(f, o);
+    };
+    let failCalls = 0;
+    w.io.fail = async () => { failCalls++; throw new Error("ECONNRESET: The socket connection was closed unexpectedly"); };
+    const outcomes = await runBatch(w.io);
+    expect(outcomes.map((o) => [o.migration_id, o.outcome])).toEqual([["m1", "failed"], ["m2", "done"]]);
+    expect(failCalls).toBe(2);
+  });
+
   test("no batch → throws", async () => {
     const w = world({});
     w.io.loadBatch = async () => null;
