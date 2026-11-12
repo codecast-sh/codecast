@@ -30,7 +30,7 @@ import { AUTO_CONTINUE_WINDOW_MS, fleetAccount, actedBlockedConversations, skipp
 import { contextShareOf, formatIdle, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
 import { withSafetyBlock } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
-import { fallbackProfiles, rankByHeadroom, peggedWindowLabel, USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
+import { fallbackProfiles, rankByHeadroom, exhaustedLabel, USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
 import { sessionLiveAt } from "../lib/liveness";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle } from "../lib/conversationProcessor";
@@ -411,7 +411,7 @@ function BlockedSessionsBanner({
           : p.login_expired_at && !(p.setup_token && p.setup_token.expires_at > now)
             ? "signed out"
             : isUsageExhausted(p.usage, now, parkedModels)
-              ? `${peggedWindowLabel(p.usage, now) ?? "limit"} full`
+              ? exhaustedLabel(p.usage, now)
               : null;
       if (why) unavailable.set(p.email, why);
     }
@@ -524,7 +524,7 @@ function BlockedSessionsBanner({
   // the account this picker ranks first is the one a person would point to on
   // the meters. A stale account never shows a confident green number here.
   const usageNote = (usage?: CcUsage): string => {
-    if (usage && isUsageExhausted(usage, now, parkedModels)) return ` — ${peggedWindowLabel(usage, now) ?? "limit"} full`;
+    if (usage && isUsageExhausted(usage, now, parkedModels)) return ` — ${exhaustedLabel(usage, now)}`;
     const s = usageStanding(usage, now);
     if (s.percent === null && !s.stale) return ""; // no data at all
     return ` — ${standingLabel(usage, now)}`;
