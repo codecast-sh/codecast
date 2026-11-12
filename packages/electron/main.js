@@ -148,6 +148,7 @@ const SHELL_ORIGINS = shellOrigins({ localDev: LOCAL_DEV_ALLOWED, baseUrl: BASE_
 const LOCAL_CERT_TRUSTED = LOCAL_DEV_ALLOWED || originOf(process.env.CODECAST_URL) === LOCAL_URL;
 
 const { DEFAULT_SHORTCUTS, mergeShortcuts, diffOverrides } = require("./shortcutSettings");
+const { createDeviceKey } = require("./deviceKey");
 
 let mainWindow = null;
 let paletteWindow = null;
@@ -1050,7 +1051,7 @@ shellIpc.handle("set-always-on-top", (e, on) => {
     // Only the wall wears the pin. Every other shape's float is its own.
     if (callWindowSize === "wall") {
       win.setAlwaysOnTop(pinned, "floating");
-      win.setVisibleOnAllWorkspaces(pinned, WORKSPACES_OPTS);
+      followPerson(win, pinned);
     }
     return pinned;
   }
@@ -1154,16 +1155,18 @@ const CALL_FLOAT_SEED = { width: 80, height: 80 };
 // The float's home the first time: the top right of the work area, out of
 // the way of most windows' content, indented enough to clear a menu bar.
 const CALL_FLOAT_INSET = 28;
-// Every floating window follows the person between desktops with these
-// options, and NEVER with `visibleOnFullScreen`. On macOS that flag makes
-// Electron call app.dock.hide() on every application — it turns the whole
-// process into a background helper (LSUIElement), which deactivates the app:
-// the main window lost focus and the dock icon vanished each time the faces
-// or the strip appeared over the work. What the flag buys is showing over
-// ANOTHER app's full-screen space, and that is not worth the app losing the
-// keyboard to its own overlay. `skipTransformProcessType` is the documented
-// way to keep the process what it is.
-const WORKSPACES_OPTS = { visibleOnFullScreen: false, skipTransformProcessType: true };
+// Every floating window follows the person between desktops, and into a
+// full-screen space: a Codecast window in full screen is a space of its own,
+// and a float that could not join it vanished behind the very window the
+// person was working in. `skipTransformProcessType` is what makes that safe.
+// Without it Electron answers `visibleOnFullScreen` with app.dock.hide(),
+// which turns the app into a background helper: the main window lost focus
+// and the dock icon vanished each time a float appeared. With it the flag
+// only marks the window full-screen auxiliary. Off means off for both, so an
+// ordinary window never carries the auxiliary bit.
+function followPerson(win, on) {
+  win.setVisibleOnAllWorkspaces(on, { visibleOnFullScreen: on, skipTransformProcessType: true });
+}
 
 let callWindow = null;
 let callPlaceTimer = null;
@@ -1346,7 +1349,7 @@ function setRingAttention(on) {
 function applyCallWindowSize(win, size, { reveal = true } = {}) {
   if (!win || win.isDestroyed()) return;
   win.setTitle(callWindowTitle(size));
-  const chrome = callWindowChrome(size, { pinned: wallPinned() });
+  const chrome = callWindowChrome(size, { pinned: wallPinned(), appActive: appActive() });
   if (size === "idle") {
     stopCallWindowDrag();
     win.setIgnoreMouseEvents(true, { forward: true });
@@ -1378,7 +1381,7 @@ function applyCallWindowSize(win, size, { reveal = true } = {}) {
   win.setResizable(chrome.resizable);
   win.setAlwaysOnTop(chrome.alwaysOnTop, chrome.level || "floating");
   // Follow the person between desktops.
-  win.setVisibleOnAllWorkspaces(chrome.visibleOnAllWorkspaces, WORKSPACES_OPTS);
+  followPerson(win, chrome.visibleOnAllWorkspaces);
   // `forward: true` is what keeps the renderer receiving mouse MOVES while it
   // ignores clicks — without it the window would go deaf the moment the pointer
   // left a circle and could never learn that it came back.
@@ -2116,8 +2119,24 @@ function flushWindowRole() {
 app.on("browser-window-focus", (_e, win) => {
   lastFocusedAt.set(win.id, Date.now());
   broadcastWindowRole();
+  keepStageOverApp();
 });
-app.on("browser-window-blur", () => broadcastWindowRole());
+// A blur fires before the focus of the window taking over, so whether the app
+// is still in front is read a tick later, never at the blur itself.
+app.on("browser-window-blur", () => {
+  broadcastWindowRole();
+  setTimeout(keepStageOverApp, 0);
+});
+
+function appActive() {
+  return BrowserWindow.getFocusedWindow() !== null;
+}
+
+function keepStageOverApp() {
+  if (callWindowSize !== "panel" || !callWindow || callWindow.isDestroyed()) return;
+  const chrome = callWindowChrome("panel", { appActive: appActive() });
+  callWindow.setAlwaysOnTop(chrome.alwaysOnTop, chrome.level || "floating");
+}
 
 shellIpc.on("report-window-state", (e, state) => {
   if (!state || typeof state !== "object") return;
@@ -2373,7 +2392,7 @@ function createMeetingOfferWindow() {
   // Over a fullscreen meeting app — which is exactly where the person is when
   // this card matters.
   win.setAlwaysOnTop(true, "screen-saver");
-  win.setVisibleOnAllWorkspaces(true, WORKSPACES_OPTS);
+  followPerson(win, true);
   win.loadURL(`${currentBaseUrl}/meeting-offer`);
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
@@ -2460,7 +2479,7 @@ function createShareCursorsWindow() {
   win.setContentProtection(true);
   win.setIgnoreMouseEvents(true);
   win.setAlwaysOnTop(true, "screen-saver");
-  win.setVisibleOnAllWorkspaces(true, WORKSPACES_OPTS);
+  followPerson(win, true);
   win.loadURL(`${currentBaseUrl}/share-cursors`);
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   return win;
@@ -2525,7 +2544,7 @@ function createCallRingWindow() {
   // Over a fullscreen app — which is exactly where somebody is when a ring
   // they cannot see arrives.
   win.setAlwaysOnTop(true, "screen-saver");
-  win.setVisibleOnAllWorkspaces(true, WORKSPACES_OPTS);
+  followPerson(win, true);
   win.loadURL(`${currentBaseUrl}/call-ring`);
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
@@ -2694,7 +2713,7 @@ function createAgentDockWindow() {
   agentDockWindow = win;
   pinWindowTitle(win, "Codecast Dock");
   win.setAlwaysOnTop(true, "floating");
-  win.setVisibleOnAllWorkspaces(true, WORKSPACES_OPTS);
+  followPerson(win, true);
   win.setIgnoreMouseEvents(true, { forward: true });
   win.loadURL(`${currentBaseUrl}/agent-dock`);
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -3440,6 +3459,14 @@ osPermissions.listenForClicks((payload) => {
 });
 shellIpc.handle("get-os-permissions", () => osPermissions.getAll());
 shellIpc.handle("request-os-permission", (_e, kind) => osPermissions.request(String(kind)));
+
+// Touch ID inside the app for the Vault's gated presses (deviceKey.js): a
+// Secure Enclave key signs the presence challenge, no browser in between.
+const deviceKey = createDeviceKey({ file: path.join(app.getPath("userData"), "device-key.json") });
+shellIpc.handle("device-key-status", () => deviceKey.status());
+shellIpc.handle("device-key-create", (_e, args) => deviceKey.create(args));
+shellIpc.handle("device-key-keep", (_e, id) => deviceKey.keep(id));
+shellIpc.handle("device-key-sign", (_e, args) => deviceKey.sign(args));
 
 // The two grants that belong to the codecast computer helper, not to this app
 // — see computerPermissions.js. They travel through the cast CLI, so nothing
