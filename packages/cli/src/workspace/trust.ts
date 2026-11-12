@@ -364,7 +364,7 @@ export function refusalMessage(
   lines.push("");
   lines.push(
     agentDriven
-      ? "This acquire is agent driven, so it cannot approve them. Ask a human to review the files above and run: cast ws trust"
+      ? "This acquire is agent driven, so it cannot approve them: its person approves them in codecast (an agent's acquire asks them there) or at a terminal with: cast ws trust"
       : "Review the files above, then approve them with: cast ws trust",
   );
   return lines.join("\n");
