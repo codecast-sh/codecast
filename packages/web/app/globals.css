@@ -8035,3 +8035,47 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
 .modern-style:not(.dark) .rp-issue:is([data-status="open"], [data-status="regressed"]) .ops-mono { color: color-mix(in srgb, var(--sol-red) 88%, #000); }
 .modern-style:not(.dark) .iss-lane[data-lane="new"] { color: color-mix(in srgb, var(--sol-red) 88%, #000); }
 .modern-style:not(.dark) .iss-lane[data-lane="escalating"] { color: color-mix(in srgb, var(--sol-orange) 86%, #000); }
+
+/* ---- MODERN · THE PINNED MESSAGE AND THE EDGE PILL --------------------------
+   The pinned copy of the message being answered is a reminder, not a second
+   bubble: one line (a small face, the name, the words), about 30px instead of
+   74. A longer message still clamps to that line and opens from its chevron;
+   opened, the words wrap under the same line. */
+.modern-style [data-cc-conversation] [data-sv-sticky] {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 52px 5px 12px;
+}
+.modern-style [data-cc-conversation] [data-sv-sticky-who] {
+  flex: none;
+  gap: 6px;
+  margin-bottom: 0;
+  min-height: 20px;
+}
+.modern-style [data-cc-conversation] [data-sv-sticky-who] > :is(img, div):first-child {
+  width: 18px;
+  height: 18px;
+}
+.modern-style [data-cc-conversation] [data-sv-sticky-body] {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+}
+.modern-style [data-cc-conversation] [data-sv-sticky] :is(.text-sm, .prose) {
+  line-height: 20px;
+}
+.modern-style [data-cc-conversation] [data-sv-sticky-body] .line-clamp-3 {
+  -webkit-line-clamp: 1;
+  white-space: normal;
+}
+.modern-style [data-cc-conversation] [data-sv-sticky-tools] {
+  top: 4px;
+  right: 6px;
+}
+/* "N earlier messages" floated over the transcript's first lines and said
+   only what the scroll position already says. It shows while a page of
+   earlier messages is loading, and not otherwise. */
+.modern-style [data-cc-edge="up"]:not([data-loading]) {
+  visibility: hidden;
+}

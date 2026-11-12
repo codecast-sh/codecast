@@ -242,7 +242,7 @@ export function EdgeMessagesIndicator({
 }) {
   const isUp = dir === "up";
   return (
-    <div data-cc-edge={dir} className={`sticky ${isUp ? "top-0" : "bottom-0"} z-10 flex justify-center py-1 sm:py-2 pointer-events-none`}>
+    <div data-cc-edge={dir} data-loading={loading ? "true" : undefined} className={`sticky ${isUp ? "top-0" : "bottom-0"} z-10 flex justify-center py-1 sm:py-2 pointer-events-none`}>
       <div className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-0.5 sm:py-1 rounded-full bg-sol-bg border border-sol-border text-sol-text-muted text-meta sm:text-xs shadow-sm pointer-events-auto">
         {loading ? (
           <Spinner className="w-3 h-3" />
