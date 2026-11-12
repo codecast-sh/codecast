@@ -15,6 +15,7 @@ import Feather from '@expo/vector-icons/Feather';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Text, TextInput } from '@/components/Themed';
 import { themedStyles, useTheme } from '@/constants/Theme';
+import { useRunPlace } from './PermissionRecord';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
 import { CollapsibleBody } from '@/components/CollapsibleBody';
 import { QueueChip, askingSessionLine } from '@/components/decisions/QueueMeta';
@@ -115,6 +116,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
           <View style={styles.permissionTile}><Feather name="shield" size={16} color={Theme.yellow} /></View>
           <Text style={[styles.question, { flex: 1, marginTop: 4 }]}>{row.question}</Text>
         </View>
+        <RunPlaceLine decisionId={String(row._id)} />
         <View style={[styles.compactRow, { paddingLeft: 44 }]}>
           {yes >= 0 ? (
             <Pressable accessibilityRole="button" accessibilityHint="Confirms with Touch ID" onPress={() => answer({ index: yes })} style={[styles.compact, styles.permissionYes]}>
@@ -280,3 +282,19 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   footerRight: { flexDirection: 'row', gap: 18 },
   footerText: { fontSize: 13, color: Theme.textMuted },
 }));
+
+/** Where Yes runs, when it is not the session's own machine (`--on laptop`): part of what Yes means, so above the buttons. */
+function RunPlaceLine({ decisionId }: { decisionId: string }) {
+  const Theme = useTheme();
+  const { machine } = useRunPlace(decisionId);
+  if (!machine) return null;
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingLeft: 44, marginTop: 4 }}>
+      <Feather name="monitor" size={12} color={Theme.textDim} />
+      <Text style={{ fontSize: 12, color: Theme.textDim }}>
+        Runs on <Text style={{ fontSize: 12, color: Theme.textMuted }}>{machine.name}</Text>
+        {machine.offline ? <Text style={{ fontSize: 12, color: Theme.yellow }}> · offline, runs when it is back</Text> : null}
+      </Text>
+    </View>
+  );
+}
