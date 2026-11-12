@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { hostGitCredential, hostGitInstallation } from "./cloud";
-import { getInstallationToken, mintRepositoryName } from "./githubApp";
+import { getInstallationToken, HOST_TOKEN_PERMISSIONS, mintRepositoryName } from "./githubApp";
 import { hashToken } from "./apiTokens";
 
 const USER = "users_1" as any;
@@ -276,6 +276,26 @@ describe("getInstallationToken — the one mint path, and its cache", () => {
       permissions: { contents: "write" },
     });
     expect(calls).toEqual(["cache-read"]);
+  });
+
+  test("a scoped mint asks for workflows and pull requests too, and falls back to contents alone on a 422", async () => {
+    const realFetch = globalThis.fetch;
+    const asked: any[] = [];
+    try {
+      globalThis.fetch = (async (_url: any, init: any) => {
+        const body = JSON.parse(init.body);
+        asked.push(body.permissions);
+        if (body.permissions.workflows) return { ok: false, status: 422, text: async () => "not granted" } as any;
+        return { ok: true, status: 201, json: async () => ({ token: "ghs_push", expires_at: new Date(Date.now() + 3600_000).toISOString(), permissions: { contents: "write", metadata: "read" } }) } as any;
+      }) as any;
+      const { ctx: c } = ctx(null);
+      const minted = await (getInstallationToken as any)._handler(c, { installation_id: 4242, repository: "codecast-sh/codecast" });
+      expect(asked).toEqual([HOST_TOKEN_PERMISSIONS, { contents: "write" }]);
+      expect(minted.token).toBe("ghs_push");
+      expect(minted.permissions.contents).toBe("write");
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   test("a token about to expire is not reused", async () => {
