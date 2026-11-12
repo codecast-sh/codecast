@@ -100,8 +100,8 @@ const HEAD = 64;
 export async function renderPng(root: HTMLElement, head: { title: string; note?: string }): Promise<HTMLCanvasElement> {
   await document.fonts?.ready;
   // What the picture leaves out (the filter bar, hover buttons, check marks) leaves no hole: it is taken out of the layout while the page is drawn, then put back.
-  clearChartHover();
-  const skipped = [...root.querySelectorAll<HTMLElement>("[data-export-skip]")];
+  const tips = clearChartHover();
+  const skipped = [...root.querySelectorAll<HTMLElement>("[data-export-skip]"), ...tips];
   const before = skipped.map((el) => el.style.display);
   skipped.forEach((el) => (el.style.display = "none"));
   try {
@@ -213,8 +213,14 @@ async function draw(root: HTMLElement, head: { title: string; note?: string }): 
     }
     ctx.restore();
   }
+  // Where a page may end without cutting through a block: the gap under each block, in canvas pixels.
+  const breaks = [...root.querySelectorAll<HTMLElement>("[data-block]")].map((el) => Math.round((el.getBoundingClientRect().bottom - origin.top + 6) * scale));
+  pageBreaks.set(canvas, [...new Set(breaks)].sort((a, b) => a - b));
   return canvas;
 }
+
+/** Where each drawn picture may be cut into pages: the gaps under its blocks. */
+const pageBreaks = new WeakMap<HTMLCanvasElement, number[]>();
 
 export function canvasBlob(canvas: HTMLCanvasElement, type: "image/png" | "image/jpeg", quality?: number): Promise<Blob> {
   return new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("The dashboard could not be drawn"))), type, quality));
@@ -237,12 +243,20 @@ export async function pdfFromCanvas(canvas: HTMLCanvasElement): Promise<Blob> {
   if (pages > 1 && tail < availH * 0.25) fit = Math.min(fit, (availH * (pages - 1)) / canvas.height);
   const sliceH = Math.floor(availH / fit);
   const slices: Array<{ jpeg: Uint8Array; w: number; h: number }> = [];
-  for (let y = 0; y < canvas.height; y += sliceH) {
-    const h = Math.min(sliceH, canvas.height - y);
+  // A page ends at the last gap between blocks that fits, so no chart is cut in half; a block taller than a page is cut where it must be.
+  const gaps = pageBreaks.get(canvas) ?? [];
+  for (let y = 0; y < canvas.height; ) {
+    const limit = y + sliceH;
+    const gap = limit >= canvas.height ? canvas.height : [...gaps].reverse().find((b) => b <= limit && b > y + sliceH * 0.4) ?? limit;
+    const h = Math.min(gap, canvas.height) - y;
+    const at = y;
+    y += h;
+    // A sliver left by rounding is not a page.
+    if (h < 4) continue;
     const c = document.createElement("canvas");
     c.width = canvas.width;
     c.height = h;
-    c.getContext("2d")!.drawImage(canvas, 0, y, canvas.width, h, 0, 0, canvas.width, h);
+    c.getContext("2d")!.drawImage(canvas, 0, at, canvas.width, h, 0, 0, canvas.width, h);
     slices.push({ jpeg: new Uint8Array(await (await canvasBlob(c, "image/jpeg", 0.92)).arrayBuffer()), w: canvas.width, h });
   }
   const enc = new TextEncoder();

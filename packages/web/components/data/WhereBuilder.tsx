@@ -2,7 +2,8 @@
 // the values offered from the rows the source returned. A condition still
 // being set up stays on screen without filtering anything until it has a
 // value; every complete one is stored as the block's `where`.
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
+import { useMountEffect } from "../../hooks/useMountEffect";
 import { Plus, X } from "lucide-react";
 import { dashboard, type Json } from "@codecast/shared/artifacts";
 import { useCommittedDraft } from "../../hooks/useCommittedDraft";
@@ -141,6 +142,13 @@ function ValueControl({ clause, options, onSet }: { clause: Clause; options: str
 /** A typed value that writes on blur or Enter, so typing stays cheap. */
 function CommittedValue({ value, type, numeric, placeholder, onCommit }: { value: string; type: "date" | "text"; numeric: boolean; placeholder: string; onCommit: (v: string) => void }) {
   const { draft, setDraft, onFocus, onBlur } = useCommittedDraft(value);
+  // Saved after a pause in typing as well as on blur, so a reload never drops a typed value.
+  const idle = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const commitRef = useRef(onCommit);
+  commitRef.current = onCommit;
+  useMountEffect(() => () => {
+    if (idle.current) clearTimeout(idle.current);
+  });
   return (
     <input
       aria-label="Value"
@@ -149,9 +157,12 @@ function CommittedValue({ value, type, numeric, placeholder, onCommit }: { value
       value={draft}
       placeholder={placeholder}
       onChange={(e) => {
-        setDraft(e.target.value);
+        const v = e.target.value;
+        setDraft(v);
         // A date picker commits on pick: there is no typing to keep cheap.
-        if (type === "date") onCommit(e.target.value);
+        if (type === "date") return onCommit(v);
+        if (idle.current) clearTimeout(idle.current);
+        idle.current = setTimeout(() => v !== value && commitRef.current(v), 900);
       }}
       onFocus={onFocus}
       onBlur={() => {

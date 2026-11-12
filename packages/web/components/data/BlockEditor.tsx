@@ -86,7 +86,7 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
           ) : null}
           {block.kind === "table" ? (
             <>
-              <Select label="One row per" value={block.group} options={labels} empty="source row" onChange={(v) => set({ group: v || null, columns: null, sort: v ? "-rows" : null })} />
+              <Select label="One row per" value={block.group} options={labels} empty="source row" onChange={(v) => set({ group: v || null, columns: null, sort: v ? `-${numeric[0] ?? "rows"}` : null })} />
               <TextField label="Columns" placeholder="all, or a,b,c" value={block.columns} onCommit={(v) => set({ columns: v || null })} />
               <Row>
                 <Select label="Sort" value={block.sort} options={tableCols.flatMap((c) => [`-${c}`, c])} labels={Object.fromEntries(tableCols.flatMap((c) => [[`-${c}`, `${c} ↓`], [c, `${c} ↑`]]))} empty="source order" onChange={(v) => set({ sort: v || null })} />

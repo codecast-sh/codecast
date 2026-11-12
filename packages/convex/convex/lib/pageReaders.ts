@@ -254,7 +254,8 @@ const sessions: ReaderDef = {
     if (typeof subagents !== "boolean") throw new ArgError(`"subagents" must be true or false`);
     return {
       args: { days: n, group_by: groupBy, subagents },
-      text: `sessions started per day over the last ${n} days${groupBy === "none" ? "" : `, by ${groupBy}`}${subagents ? ", subagents included" : ""}`,
+      // A team page counts the sessions the team can see; private sessions are left out (spend, by contrast, counts every session a member runs).
+      text: `sessions started per day over the last ${n} days${groupBy === "none" ? "" : `, by ${groupBy}`}${subagents ? ", subagents included" : ""}; a team page leaves out private sessions`,
     };
   }),
   // Reads session_starts (lib/sessionStarts.ts), one small row per session,

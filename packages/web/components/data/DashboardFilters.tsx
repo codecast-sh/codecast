@@ -32,6 +32,10 @@ function DateChip({ dim, spec, onSet }: { dim: dashboard.FilterDimension; spec: 
   const held = dim.days;
   const tooLong = (s: string) => !!held && /^\d+d$/.test(s) && Number(s.slice(0, -1)) > held;
   const over = tooLong(spec);
+  // A custom range reaching past the data says what it really covers: the chip names the held days, never days nothing shows.
+  const asked = spec.match(/^(\d{4}-\d\d-\d\d)?\.\.(\d{4}-\d\d-\d\d)?$/);
+  const clamped = asked && dim.first && dim.last ? `${asked[1] && asked[1] > dim.first ? asked[1] : dim.first}..${asked[2] && asked[2] < dim.last ? asked[2] : dim.last}` : null;
+  const cut = !!clamped && clamped !== spec;
   const m = spec.match(/^(\d{4}-\d\d-\d\d)?\.\.(\d{4}-\d\d-\d\d)?$/);
   const from = m?.[1] ?? "";
   const to = m?.[2] ?? "";
@@ -39,9 +43,9 @@ function DateChip({ dim, spec, onSet }: { dim: dashboard.FilterDimension; spec: 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button type="button" className={chipCls(!!spec)} data-filter-chip="date">
+        <button type="button" className={chipCls(!!spec)} title={cut || over ? `The sources hold ${held ?? "fewer"} days, from ${dim.first}` : undefined} data-filter-chip="date">
           <Calendar className="w-3.5 h-3.5 shrink-0" />
-          <span className="truncate">{spec ? (over ? `All ${held} days` : dateLabel(spec)) : "All dates"}</span>
+          <span className="truncate">{spec ? (over ? `All ${held} days` : cut ? `${dateLabel(clamped!)} (all held)` : dateLabel(spec)) : "All dates"}</span>
           <ChevronDown className="w-3 h-3 shrink-0 opacity-60" />
         </button>
       </PopoverTrigger>

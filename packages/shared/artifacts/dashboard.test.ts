@@ -667,3 +667,10 @@ describe("starter dashboards", () => {
     }
   });
 });
+
+describe("grouped tables under a filter that leaves nothing", () => {
+  test("keep their columns and read empty, not as an error", () => {
+    const ev = evaluateTable({ query: q, group: "person", sort: "-spend" }, spend, { person: { in: ["nobody"] } });
+    expect(ev.state === "ok" && [ev.columns, ev.rows]).toEqual([["person", "tokens", "spend", "rows"], []]);
+  });
+});

@@ -7,7 +7,8 @@ import type { DataResult } from "./dashboardData";
 export function groupRows(result: DataResult, rows: readonly number[], by: string): { result: DataResult; groups: number[][] } | { problem: string } {
   const gi = result.columns.indexOf(by);
   if (gi < 0) return { problem: `the source has no column "${by}" to group by (it has ${result.columns.join(", ") || "none"})` };
-  const numeric = result.columns.map((_, i) => i !== gi && rows.some((r) => typeof result.rows[r][i] === "number"));
+  // Which columns hold numbers is a fact about the source, not about the rows a filter left: an empty group keeps its columns.
+  const numeric = result.columns.map((_, i) => i !== gi && result.rows.some((r) => typeof r[i] === "number"));
   const order: string[] = [];
   const members = new Map<string, number[]>();
   for (const r of rows) {

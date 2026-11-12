@@ -124,10 +124,18 @@ export function downloadChartPng(key: string, name: string, head: { title?: stri
   return true;
 }
 
-/** Clear every chart's hover state (tooltip, highlight) so a picture never freezes one. */
-export function clearChartHover(): void {
+/**
+ * Clear every chart's hover state and return its tooltip elements, so a
+ * picture never freezes one. A hidden tooltip fades out over a few frames, so
+ * the caller takes these out of the layout outright for the picture.
+ */
+export function clearChartHover(): HTMLElement[] {
+  const tips: HTMLElement[] = [];
   for (const chart of charts.values()) {
     chart.dispatchAction({ type: "hideTip" });
     chart.dispatchAction({ type: "downplay" });
+    // ECharts draws its tooltip as a top-layer div inside the chart's box.
+    for (const el of chart.getDom().querySelectorAll<HTMLElement>("div")) if (el.style.zIndex === "9999999") tips.push(el);
   }
+  return tips;
 }
