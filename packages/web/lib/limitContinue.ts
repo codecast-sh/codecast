@@ -12,14 +12,31 @@ import { requestAccountSwitchCommand } from "./sessionCommands";
 
 export type LimitProfile = { name: string; email?: string; usage?: CcUsage; login_expired_at?: number; setup_token?: { stored_at: number; expires_at: number } };
 
-/** The account the session ran on (fleet), and the best other one to continue on. */
-export function limitContinueTarget(device: any, now: number, live: boolean): { fleetEmail?: string; active?: LimitProfile; best?: LimitProfile } {
+/** How a limit surface names an account: its email, the name the accounts
+ * panel heads each card with. The profile name ("pool-cameron") is secondary. */
+export function accountName(p: { name: string; email?: string } | undefined, fallback?: string | null): string | undefined {
+  return p?.email ?? p?.name ?? fallback ?? undefined;
+}
+
+/**
+ * The account the session ran on (its own token pin when it has one, else the
+ * fleet account), and the best other one to continue on. `models` are the
+ * session's models, so a model-scoped week (Fable) counts for a session that
+ * runs that model, as it does for the server's auto-switch.
+ */
+export function limitContinueTarget(
+  device: any,
+  now: number,
+  live: boolean,
+  opts: { pinned?: string | null; models?: readonly string[] } = {},
+): { fleetEmail?: string; active?: LimitProfile; best?: LimitProfile } {
   const profiles: LimitProfile[] = device?.profiles ?? [];
   const fleetEmail = fleetAccount(device, now).email;
-  const active = profiles.find((p) => p.email && p.email === fleetEmail);
+  const active = (opts.pinned ? profiles.find((p) => p.name === opts.pinned || p.email === opts.pinned) : undefined)
+    ?? profiles.find((p) => p.email && p.email === fleetEmail);
   // Only while the park is live: a settled session's old proposal is history.
   const proposal = live && device ? pendingProposal([device], now) : null;
-  const eligible = fallbackProfiles(profiles, fleetEmail, now);
+  const eligible = fallbackProfiles(profiles, active?.email ?? fleetEmail, now, opts.models).filter((p) => p.email !== fleetEmail);
   const proposed = proposal?.target_email ? eligible.find((p) => p.email === proposal.target_email) : undefined;
   return { fleetEmail, active, best: proposed ?? eligible[0] };
 }
