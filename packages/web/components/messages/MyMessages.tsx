@@ -367,8 +367,8 @@ export function MyMessages() {
     if (idx !== undefined) virtualizer.scrollToIndex(idx, { align: "auto" });
   }, [rows, rowIndexOfItem, virtualizer]);
 
+  // Attached only while this tab is the active pane: a hidden pane holds no listener.
   useEventListener("keydown", (e) => {
-    if (!paneActive) return;
     const target = e.target as HTMLElement;
     if (target === searchRef.current) {
       if (e.key === "ArrowDown" || (e.key === "Enter" && !selectedId)) { e.preventDefault(); searchRef.current?.blur(); move(e.key === "Enter" ? 0 : 1); return; }
@@ -392,7 +392,7 @@ export function MyMessages() {
       if (session) { e.preventDefault(); setSession(null); return; }
       if (q) { e.preventDefault(); setQ(""); }
     }
-  });
+  }, paneActive ? window : null);
 
   // A filter that hides the selection moves it to the first match.
   useWatchEffect(() => {

@@ -12,9 +12,9 @@ import {
   canAccessPlan,
   canAccessProject,
   recomputeWorkspaceForConversation,
-  patchConversationVisibility,
   linkedConversationId,
 } from "./access";
+import { patchConversationVisibility } from "./conversationVisibility";
 import { createDataContext, scopedFetch } from "../data";
 import { firstLinkedConversationStamp } from "./accessKeys";
 
