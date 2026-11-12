@@ -21,6 +21,8 @@ import {
   DECISION_SORTS, DECISION_SORT_LABEL, DECISION_TAB_LABEL, SESSION_SOURCE, type DecisionAxis, type DecisionTab,
 } from "../../lib/decisions/decisionRows";
 import { DecisionListRow, type DecisionRowCtx } from "./DecisionListRow";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { publishDecisionOrder } from "../../lib/decisions/decisionSet";
 
 const TAB_ICON: Record<DecisionTab, any> = { mine: UserRound, team: Inbox, unassigned: UserRound, escalated: ArrowUpRight, answered: Clock };
 const AXIS_ICON: Record<DecisionAxis, ReactNode> = {
@@ -56,9 +58,11 @@ export type DecisionListProps = {
   emptyMessage?: ReactNode;
   /** Draw narrow rows (the list beside a reader). */
   compact?: boolean;
+  /** Hand the rows' order to the decision page's ‹ › (lib/decisions/decisionSet). */
+  publishOrder?: boolean;
 };
 
-export function DecisionList({ title, page, state, rows, tabs = ["mine", "team", "unassigned", "escalated", "answered"], hideAxes = [], routeOf, renderPreview, activeItemId, savedViews, headerExtra, displayExtra, customContent, emptyMessage, compact }: DecisionListProps) {
+export function DecisionList({ title, page, state, rows, tabs = ["mine", "team", "unassigned", "escalated", "answered"], hideAxes = [], routeOf, renderPreview, activeItemId, savedViews, headerExtra, displayExtra, customContent, emptyMessage, compact, publishOrder }: DecisionListProps) {
   const { view, set, prefs, replace } = state;
   const now = useCoarseNow(60_000);
   const me = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
@@ -98,6 +102,11 @@ export function DecisionList({ title, page, state, rows, tabs = ["mine", "team",
     key: g.key, label: g.label, items: g.items,
     icon: g.axis === "owner" ? (g.value === "none" ? <UserRound className="w-3.5 h-3.5 text-sol-text-dim" /> : <span className="w-4 h-4 flex items-center justify-center">{owners.get(g.value)?.face}</span>) : undefined,
   })) ?? null, [arranged.groups, owners]);
+
+  const order = useMemo(() => (arranged.groups ? arranged.groups.flatMap((g) => g.items) : arranged.items).map((d) => d.short_id ?? d._id).join(","), [arranged]);
+  useWatchEffect(() => {
+    if (publishOrder) publishDecisionOrder(order ? order.split(",") : []);
+  }, [publishOrder, order]);
 
   const axes = DECISION_AXES.filter((a) => !hideAxes.includes(a));
   const grouped = useMemo(() => new Set([view.group, view.sub].filter((a): a is DecisionAxis => a !== "none")), [view.group, view.sub]);
