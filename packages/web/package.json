@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "NODE_OPTIONS=--max-old-space-size=8192 vite build && node ../../scripts/ci/verify-telemetry-key.mjs --target web && node scripts/precompress.mjs && node scripts/prerender.mjs && node scripts/indexnow.mjs",
+    "build": "NODE_OPTIONS=--max-old-space-size=8192 vite build && node ../../scripts/ci/verify-telemetry-key.mjs --target web && node scripts/precompress.mjs && node scripts/carry-assets.mjs && node scripts/prerender.mjs && node scripts/indexnow.mjs",
     "start": "bun run server/index.ts",
     "preview": "vite preview",
     "lint": "eslint .",
