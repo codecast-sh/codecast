@@ -977,7 +977,13 @@ export async function threadSummariesFor(
     // A silent placeholder (the anchor listening, or having chosen to stay
     // quiet) is not a reply: it must not count, show a face, or say "thinking".
     const live = replies.filter((r) => !r.deleted_at && !isSilentAgentRow(r));
-    if (live.length === 0) continue;
+    if (replies.length === 0) continue;
+    // Every reply went (a session's thinking row closed without an answer):
+    // say so, stamped newest, or a client keeps the summary it last had.
+    if (live.length === 0) {
+      out.push({ root_id: root._id, reply_count: 0, reply_capped: false, last_reply_at: replies[0].created_at, reply_user_ids: [], reply_faces: [] });
+      continue;
+    }
     const seen = new Set<string>();
     const faces: Id<"users">[] = [];
     const replyFaces: ThreadSummary["reply_faces"] = [];

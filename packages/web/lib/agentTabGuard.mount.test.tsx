@@ -103,7 +103,17 @@ describe("an Ask first decision card", () => {
     unmount();
   }, 30_000); // the first mount pays for loading the store under a loaded machine
 
-  test("in a person's tab, Approve carries a fingerprint and answers once Touch ID confirms it", async () => {
+  test("in a person's tab, without Touch ID on the secret, Approve answers at one press", async () => {
+    const answers: any[] = [];
+    const { container, unmount } = await mount(<DecisionAnswerControls decision={decision} onAnswer={(a) => answers.push(a)} size="compact" />);
+    const [approve] = rows(container);
+    expect(approve.querySelector("[data-gated]")).toBeNull();
+    await act(() => { approve.click(); });
+    expect(answers).toEqual([{ index: 0 }]);
+    unmount();
+  });
+
+  test("in a person's tab, with Touch ID on the secret, Approve carries a fingerprint and answers once Touch ID confirms it", async () => {
     // A passkey assertion against a fake Convex client (lib/passkeyPresence.mount.test.tsx covers the ceremony).
     const buf = (n: number) => new Uint8Array(n).buffer;
     const calls: string[] = [];
@@ -122,7 +132,7 @@ describe("an Ask first decision card", () => {
     const answers: any[] = [];
     const { container, unmount } = await mount(
       <ConvexProvider client={client as any}>
-        <DecisionAnswerControls decision={decision} onAnswer={(a) => answers.push(a)} size="compact" />
+        <DecisionAnswerControls decision={{ ...decision, touch_id: true }} onAnswer={(a) => answers.push(a)} size="compact" />
       </ConvexProvider>,
     );
     const [approve, deny] = rows(container);
