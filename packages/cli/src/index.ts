@@ -7199,7 +7199,8 @@ program
     // per-session message_count high-water mark (CLI-only; no cross-session backend yet).
     if (options.messages) {
       const fullContent = options.all || undefined;
-      const { formatStreamedMessage, formatReadResult } = await import("./formatter.js");
+      const { formatStreamedMessage } = await import("./formatter.js");
+      const { formatReadResult } = await import("./formatRead.js");
       const single = ids.length === 1;
       // Reactive subscriptions are cheap (server pushes only on change), so follow
       // ALL active sessions — the ceiling is just a sanity backstop, not a real limit.
@@ -8798,7 +8799,7 @@ program
         tail: tailN,
         grep,
       });
-      const { readRefFor } = await import("./formatter.js");
+      const { readRefFor } = await import("./formatRead.js");
       const id = result.conversation?.id ? readRefFor(result.conversation) : String(parsedId).slice(0, 7);
       const count: number = result.conversation?.message_count ?? 0;
 
@@ -8841,7 +8842,8 @@ program
         if (options.ack) await cliPost("/cli/session/ack", { conversation_id: parsedId });
         return;
       }
-      const { formatReadResult, READ_PAGE_CHARS } = await import("./formatter.js");
+      const { READ_PAGE_CHARS } = await import("./formatter.js");
+      const { formatReadResult } = await import("./formatRead.js");
       // A person at a terminal scrolls; an agent's shell tool cuts long output to a preview.
       const maxChars = process.stdout.isTTY ? undefined : READ_PAGE_CHARS;
       console.log(formatReadResult(result, { full: options.full, targetLine: result.target_line, maxChars, grep }));

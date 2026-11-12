@@ -317,7 +317,7 @@ describe("feedFilePath", () => {
   });
 });
 
-import { formatReadResult } from "./formatter";
+import { formatReadResult } from "./formatRead";
 
 // A StructuredOutput call's input IS the agent's deliverable, and a non-full
 // read collapses it to one summary line — which readers have mistaken for an
@@ -591,7 +591,7 @@ describe("cast search output", () => {
   });
 });
 
-import { fitReadPage } from "./formatter";
+import { fitReadPage } from "./formatRead";
 
 describe("fitReadPage around a linked message", () => {
   const block = (line: number, size: number) => ({ line, text: `${line}:` + "x".repeat(size) });
@@ -627,7 +627,7 @@ describe("fitReadPage around a linked message", () => {
   });
 });
 
-import { distinctIdPrefix, readRefFor } from "./formatter";
+import { distinctIdPrefix, readRefFor } from "./formatRead";
 
 // Short ids are the first 7 chars of a conversation id, so two conversations
 // can share one. A read that landed on one of them names the others with the

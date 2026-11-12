@@ -39,7 +39,7 @@ packages/cli/src/daemon.waiting-tasks.test.ts 900
 packages/cli/src/decideCommand.ts
 packages/cli/src/doctor.ts 950
 packages/cli/src/execution/coordinator.ts 1000
-packages/cli/src/formatter.ts 2400
+packages/cli/src/formatter.ts 2150
 packages/cli/src/hosts/cli.ts 1800
 packages/cli/src/index.ts
 packages/cli/src/jsonlGenerator.test.ts 900
