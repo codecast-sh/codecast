@@ -9,8 +9,9 @@
 // person's sign-in can spend that grant: the string lives only here.
 //
 // With no passkey yet, the same flow offers to set one up and continues. The
-// desktop app has no platform passkeys, so it opens the web origin's
-// /confirm page in the system browser and waits on the challenge instead.
+// desktop app has no platform passkeys: it confirms with its own Secure
+// Enclave key (lib/deviceKeyPresence) when it has one, and otherwise opens the
+// web origin's /confirm page in the system browser and waits on the challenge.
 // An agent's tab may not set one up (lib/agentTabGuard).
 
 import { approvesPersonsAct } from "@codecast/shared/contracts/commandRun";
@@ -22,10 +23,11 @@ import { startAuthentication, startRegistration } from "@simplewebauthn/browser"
 import { api } from "@codecast/convex/convex/_generated/api";
 import { NOT_CONFIRMED, isPresenceRequired, type PresenceAction, type PresenceGrant } from "@codecast/shared/contracts/secrets";
 import { isAgentDrivenTab } from "./desktopHandoff";
-import { isDesktopShell, openExternalUrl } from "./desktop";
+import { bridge, isDesktopShell, openExternalUrl } from "./desktop";
+import { UNAVAILABLE, confirmWithDeviceKey, ensureDeviceKey, type DeviceKeyDeps, type DeviceKeySigner } from "./deviceKeyPresence";
 import { PERSON_ONLY } from "./agentTabGuard";
 
-type Client = Pick<ConvexReactClient, "action" | "watchQuery">;
+type Client = Pick<ConvexReactClient, "action" | "query" | "watchQuery">;
 
 /** The page a desktop or phone opens to finish a challenge in a real browser. */
 export const confirmPath = (challengeId: string) => `/confirm?c=${encodeURIComponent(challengeId)}`;
@@ -104,7 +106,7 @@ function handOff(client: Client, challengeId: string, want: "granted" | "used", 
       else if (state.status !== "pending") settle(false, "The confirmation expired");
     };
     stop = watch.onUpdate(check);
-    toast("Confirm in your browser", {
+    toast("Confirm in your browser or on your phone", {
       id,
       duration: Infinity,
       // Opening again keeps the toast; Cancel or swiping it away stops waiting.
@@ -148,8 +150,59 @@ async function enroll(client: Client, handoff: boolean, prompt?: [title: string,
   return await finishRegistration(client, begun.challenge_id, begun.options);
 }
 
+/** Two choices in one toast: the action, the cancel, and a dismissal that answers cancel. */
+function choose<A extends string, B extends string>(title: string, yes: [A, string], no: [B, string]): Promise<A | B | "cancel"> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (v: A | B | "cancel") => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+    };
+    toast(title, {
+      duration: 60_000,
+      action: { label: yes[1], onClick: () => settle(yes[0]) },
+      cancel: { label: no[1], onClick: () => settle(no[0]) },
+      onDismiss: () => settle("cancel"),
+      onAutoClose: () => settle("cancel"),
+    });
+  });
+}
+
+/** The desktop app's own key (electron deviceKey.js) behind the shared device key flow. */
+function desktopKeyDeps(client: Client, signer: DeviceKeySigner): DeviceKeyDeps {
+  const origin = window.location.origin;
+  return {
+    signer,
+    appName: "Codecast app",
+    list: () => client.query(api.passkeys.list, {}),
+    begin: (action, target, from) => client.action(api.passkeys.presenceBegin, { action, target, origin, from }),
+    registrationBegin: (grant, from) => client.action(api.passkeys.registrationBegin, { origin, grant, from }),
+    register: (challenge_id, public_key, signature, name) => client.action(api.deviceKeys.register, { challenge_id, public_key, signature, name }),
+    confirm: (challenge_id, credential_id, signature) => client.action(api.deviceKeys.confirm, { challenge_id, credential_id, signature }),
+    confirmElsewhere: (action, target) => confirmByPasskey(client, action, target, true),
+    offerSetUp: () => choose("Set up Touch ID in this app", ["setup", "Set up"], ["elsewhere", "Use browser"]),
+    fail: (message) => void fail(message),
+  };
+}
+
+/** The desktop app's key, on builds that have one. */
+function desktopSigner(): DeviceKeySigner | undefined {
+  if (!isDesktopShell()) return undefined;
+  const [status, create, keep, sign] = [bridge("deviceKeyStatus"), bridge("deviceKeyCreate"), bridge("deviceKeyKeep"), bridge("deviceKeySign")];
+  return status && create && keep && sign ? { status, create, keep, sign } : undefined;
+}
+
 async function confirmOnce(client: Client, action: PresenceAction, target: string): Promise<PresenceGrant | null> {
-  const handoff = isDesktopShell();
+  const signer = desktopSigner();
+  if (signer) {
+    const viaKey = await confirmWithDeviceKey(action, target, desktopKeyDeps(client, signer));
+    if (viaKey !== UNAVAILABLE) return viaKey;
+  }
+  return await confirmByPasskey(client, action, target, isDesktopShell());
+}
+
+async function confirmByPasskey(client: Client, action: PresenceAction, target: string, handoff: boolean): Promise<PresenceGrant | null> {
   const begin = () => client.action(api.passkeys.presenceBegin, { action, target, origin: window.location.origin });
   let begun: any = await begin();
   if (begun?.needs_passkey) {
@@ -172,6 +225,16 @@ async function confirmOnce(client: Client, action: PresenceAction, target: strin
  */
 export async function addPasskey(client: Client, hasPasskeys: boolean): Promise<boolean> {
   const handoff = isDesktopShell();
+  // The desktop app's Add sets up its own Touch ID first; with that in place, Add makes a browser passkey.
+  const signer = desktopSigner();
+  if (signer) {
+    const deps = desktopKeyDeps(client, signer);
+    const status = await signer.status().catch(() => null);
+    const keys = status?.available ? await deps.list() : [];
+    if (status?.available && !keys.some((k) => k.device_key === status.credential_id)) {
+      return !!(await ensureDeviceKey(deps, false));
+    }
+  }
   if (!hasPasskeys) return await enroll(client, handoff);
   const grant = await confirmPresence(client, "add_passkey", "self");
   if (!grant) return false;

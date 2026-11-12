@@ -106,6 +106,18 @@ export function resolveLocalDestination(opts: {
   return opts.exists(localCwd) ? { localCwd } : { localCwd, createIn: root };
 }
 
+/**
+ * The connection dropped before an answer came back (a laptop's wifi blinking,
+ * a socket reset mid-request). Whether the write landed is unknown, so only an
+ * idempotent call may be sent again.
+ */
+function isTransientNetworkError(err: unknown): boolean {
+  const e = err as { code?: string; cause?: { code?: string }; message?: string } | null;
+  const code = e?.cause?.code ?? e?.code;
+  if (code && /^(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENETUNREACH|EHOSTUNREACH|ENOTFOUND|EAI_AGAIN|ConnectionClosed|ConnectionRefused)$/.test(code)) return true;
+  return /ECONNRESET|socket connection was closed unexpectedly|fetch failed|network (?:error|connection was lost)/i.test(e?.message ?? String(err));
+}
+
 export function createRunnerIo(batchId: string, opts: { out?: (line: string) => void } = {}): RunnerIo & { ready(): Promise<void> } {
   const out = opts.out ?? ((line: string) => process.stdout.write(`${line}\n`));
   const log = (line: string) => out(`[${stamp()}] ${line}`);
@@ -147,8 +159,9 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
       try {
         return await client.mutation(ref, args);
       } catch (err) {
-        if (attempt >= 5 || !isWriteConflict(err)) throw err;
-        await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+        const network = isTransientNetworkError(err);
+        if (attempt >= 5 || !(network || isWriteConflict(err))) throw err;
+        await new Promise((r) => setTimeout(r, (network ? 2_000 : 500) * 2 ** attempt));
       }
     }
   };

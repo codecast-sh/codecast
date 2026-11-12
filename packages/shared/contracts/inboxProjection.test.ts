@@ -195,6 +195,35 @@ describe("classifyWorkState — an exit after a declared done", () => {
   });
 });
 
+// A trigger-run session ends each turn with its process gone, and the
+// standing trigger resumes it on the next firing. Reading that exit as a death
+// filed every triggered session under Needs You as "Agent stopped".
+describe("classifyWorkState — an exit while a trigger or loop owns the wake", () => {
+  test("a stopped agent with a standing trigger or live loop files under dormant", () => {
+    for (const wake of [{ armedTriggerHome: true }, { armedLoopHome: true }]) {
+      for (const declaredStatus of [null, "working", "dormant"]) {
+        expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus, ...wake }))).toBe("dormant");
+        expect(isHardBlocked(input({ agentStatus: "stopped", declaredStatus, ...wake }))).toBe(false);
+      }
+    }
+  });
+
+  test("an anchor whose run exited stays hidden while its trigger is armed", () => {
+    expect(placeInboxRow(input({ isAnchor: true, agentStatus: "stopped", armedTriggerHome: true })).bucket).toBe("hidden");
+  });
+
+  test("a declared block, queued work or a hanging message still needs a human", () => {
+    expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus: "blocked", armedTriggerHome: true }))).toBe("needs_input");
+    expect(classifyWorkState(input({ agentStatus: "stopped", armedTriggerHome: true, hasPending: true }))).toBe("needs_input");
+    expect(classifyWorkState(input({ agentStatus: "stopped", armedTriggerHome: true, isUnresponsive: true }))).toBe("needs_input");
+    expect(isHardBlocked(input({ agentStatus: "stopped", declaredStatus: "blocked", armedTriggerHome: true }))).toBe(true);
+  });
+
+  test("a once trigger is not a standing wake", () => {
+    expect(classifyWorkState(input({ agentStatus: "stopped", declaredStatus: "dormant", armedOnceTriggerHome: true }))).toBe("needs_input");
+  });
+});
+
 describe("placeInboxRow — bucket precedence", () => {
   test("dismissed outranks everything, stashed next", () => {
     expect(placeInboxRow(input({ dismissed: true, stashed: true, asking: true, pinned: true })).bucket).toBe("dismissed");
@@ -715,9 +744,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 25", () => {
+  test("the caps are the single source and the version is 26", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(25);
+    expect(INBOX_PROJECTION_VERSION).toBe(26);
   });
 });
 
