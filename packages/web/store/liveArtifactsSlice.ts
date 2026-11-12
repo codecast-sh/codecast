@@ -51,6 +51,7 @@ export function applyOpsToRows(rows: Record<string, any>, docId: string, layer: 
 type LiveDraft = {
   liveElements: Record<string, any>;
   liveHeads: Record<string, any>;
+  liveVersions: Record<string, any>;
   currentUser?: { _id: string; name?: string } | null;
 };
 
@@ -131,7 +132,16 @@ export function createLiveArtifactsSlice(): LiveArtifactsSliceActions {
     }),
 
     // Nothing to paint: the version list fills from the server.
-    liveCheckpoint: action(function (this: LiveDraft, _docId: string, _label?: string) {}),
+    // The version shows in History at once: a stub at the current head, which the
+    // server's row for the same revision replaces in the reader (useLiveVersions).
+    liveCheckpoint: action(function (this: LiveDraft, docId: string, label?: string) {
+      const rev = Number(this.liveHeads[docId]?.head ?? 0);
+      const id = `stub:${docId}:${rev}`;
+      this.liveVersions[id] = {
+        _id: id, doc_id: docId, rev, label: label?.trim() || "Saved version", reason: "manual",
+        by: this.currentUser?._id ? `u:${this.currentUser._id}` : "", by_name: this.currentUser?.name ?? "You", at: Date.now(), stub: true,
+      };
+    }),
 
     liveSetEditAccess: action(function (this: LiveDraft, docId: string, edit: "team" | "owners", editors: string[]) {
       const head = this.liveHeads[docId] ?? (this.liveHeads[docId] = { _id: docId, head: 0 });
