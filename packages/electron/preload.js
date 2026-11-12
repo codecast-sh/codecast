@@ -87,6 +87,14 @@ contextBridge.exposeInMainWorld("__CODECAST_ELECTRON__", {
   getOsPermissions: () => ipcRenderer.invoke("get-os-permissions"),
   requestOsPermission: (kind) => ipcRenderer.invoke("request-os-permission", kind),
   openOsPermissionSettings: (kind) => ipcRenderer.invoke("open-os-permission-settings", kind),
+  // Touch ID in the app (deviceKey.js): status { available, credential_id,
+  // name }; create/sign take { challenge, reason } and answer the signature,
+  // an error, or { cancelled }; keep(credential_id) once the server stored a
+  // new key. Absent on older builds, which open /confirm in the browser.
+  deviceKeyStatus: () => ipcRenderer.invoke("device-key-status"),
+  deviceKeyCreate: (args) => ipcRenderer.invoke("device-key-create", args),
+  deviceKeyKeep: (id) => ipcRenderer.invoke("device-key-keep", id),
+  deviceKeySign: (args) => ipcRenderer.invoke("device-key-sign", args),
   // The two grants that belong to the codecast computer helper
   // (computerPermissions.js): { computerAccessibility, computerScreen }, same
   // vocabulary. Kept out of getOsPermissions because one read runs the CLI and
