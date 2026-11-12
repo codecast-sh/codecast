@@ -1250,7 +1250,12 @@ export async function startBridgeHost(opts: {
     return n;
   };
   const release = (tabId: number): void => {
-    if (holders(tabId) === 0) extRequest("detach", { tabId }, 10_000).catch(() => {});
+    if (holders(tabId) !== 0) return;
+    // The detach takes Chrome's child sessions with it and no event says so
+    // (onDetach skips a detach the extension asked for), so the tab's frames go
+    // now; the next attach reports the live ones afresh.
+    sendFrames(frames.dropTab(tabId));
+    extRequest("detach", { tabId }, 10_000).catch(() => {});
   };
 
   const targetInfo = (t: BridgeTab) => ({

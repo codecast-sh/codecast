@@ -1,13 +1,17 @@
-// The team's shared account pool (ct-73280). A person opens one of their
-// Claude accounts to a team the way device_shares opens a machine: one
-// account_shares row per account per team, written as a whole set by
-// setAccountShares, counted only while the contributor is on the team.
+// The account pool (ct-73280). Every Claude account one of a person's
+// machines holds with a setup-token reaches all of their machines by default,
+// cloud hosts included: a personal account_shares row (no team) written by
+// ensurePersonalShares. A person opens an account to a team the way
+// device_shares opens a machine: one row per account per team, written as a
+// whole set by setAccountShares, counted only while the contributor is on the
+// team. The owner's own machines draw through the account's oldest row
+// whatever its team (ownerPrimary), so they never hold two copies of it.
 //
 // The account's minted setup-token is the shared credential: a fixed one-year
 // bearer that never rotates, so any number of machines can hold it without
 // stranding a login. It never reaches the server in plain text. The holder
-// (the contributor's machine that keeps the token) seals a copy to each
-// teammate machine's provider_key_pubkey (account_pool_copies); that machine
+// (any of the contributor's machines that keeps the token, sealerFor) seals a
+// copy to each drawing machine's provider_key_pubkey (account_pool_copies); that machine
 // opens it and keeps the account as a `pool-…` profile, so the fleet store,
 // pins and auto-switch treat it as one more saved account. Usage has one
 // home, the holder's heartbeat; a copy carries none, and every read of a pool
@@ -30,6 +34,9 @@ type Share = Doc<"account_shares">;
 export const POOL_DEVICE_STALE_MS = 30 * 24 * 60 * 60 * 1000;
 /** The per-person split covers this many trailing days. */
 export const POOL_SPLIT_DAYS = 7;
+/** A holder unseen this long stops sealing; another of the owner's machines with the token takes over. */
+export const SEALER_STALE_MS = 3 * 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
 
 
 /** The profile name a pool copy takes on a teammate's machine. The daemon
@@ -44,25 +51,48 @@ export const LINE_POOL = "line";
 /** Every label a share may carry. */
 export const POOL_LABELS: readonly string[] = [LINE_POOL];
 
-/** May this machine hold a copy of the share at all? Every personal machine
- *  may; a cloud host only when the share is in the line pool and the host runs
- *  line work. A host otherwise runs the login its laptop pushes. */
-export function deviceMayHold(share: Pick<Share, "pools">, device: Pick<Doc<"devices">, "is_remote" | "line_slots">): boolean {
+/** May this machine hold a copy of the share at all? Every machine of the
+ *  owner's, cloud hosts included, through the account's primary row only
+ *  (ownerPrimary). A teammate's: every personal machine of a team share, and
+ *  a cloud host only when the share is in the line pool and the host runs
+ *  line work. A personal row reaches no one else. */
+export function deviceMayHold(
+  share: Pick<Share, "pools" | "team_id" | "user_id">,
+  device: Pick<Doc<"devices">, "is_remote" | "line_slots" | "user_id">,
+  ownerPrimary = true,
+): boolean {
+  if (String(device.user_id) === String(share.user_id)) return ownerPrimary;
+  if (!share.team_id) return false;
   if (!device.is_remote) return true;
   return !!share.pools?.includes(LINE_POOL) && !!device.line_slots?.length;
 }
 
-/** One account in one team's pool, as the web keys it before the server row exists. */
-export const poolShareKey = (email: string, teamId: string) => `${normalizeEmail(email)}|${teamId}`;
+/** One account in one pool, as the web keys it before the server row exists. */
+export const poolShareKey = (email: string, teamId?: string | null) => `${normalizeEmail(email)}|${teamId ?? "personal"}`;
 
-/** A share counts while its contributor is still on its team. */
+/** A team share counts while its contributor is still on its team; a personal one always. */
 export async function shareCounts(ctx: Ctx, share: Share): Promise<boolean> {
-  return isTeamMember(ctx, share.user_id, share.team_id);
+  return !share.team_id || isTeamMember(ctx, share.user_id, share.team_id);
 }
 
-/** May `userId`'s machines draw on this share? Both people on the team. */
+/** May `userId`'s machines draw on this share? The owner's always; a
+ *  teammate's while both people are on the team. */
 export async function mayDraw(ctx: Ctx, share: Share, userId: Id<"users">): Promise<boolean> {
+  if (String(userId) === String(share.user_id)) return true;
+  if (!share.team_id) return false;
   return (await shareCounts(ctx, share)) && (await isTeamMember(ctx, userId, share.team_id));
+}
+
+/** Is this the row the owner's own machines draw the account through? Its
+ *  oldest, so sharing to a second team, or a team row becoming the personal
+ *  one, never puts a second copy beside the first. */
+export async function ownerPrimary(ctx: Ctx, share: Share): Promise<boolean> {
+  const rows: Share[] = await ctx.db
+    .query("account_shares")
+    .withIndex("by_user_email", (q: any) => q.eq("user_id", share.user_id).eq("email", share.email))
+    .collect();
+  if (!rows.length) return true;
+  return rows.reduce((a, b) => (b._creationTime < a._creationTime ? b : a))._id === share._id;
 }
 
 /** The holder's own profile for the shared account, or undefined. */
@@ -80,34 +110,49 @@ async function shareById(ctx: Ctx, id: string): Promise<Share | null> {
   }
 }
 
-async function holderDevice(ctx: Ctx, share: Share): Promise<Doc<"devices"> | null> {
-  return ctx.db
-    .query("devices")
-    .withIndex("by_user_device", (q: any) => q.eq("user_id", share.user_id).eq("device_id", share.holder_device_id))
-    .first();
+async function ownerDevices(ctx: Ctx, userId: Id<"users">): Promise<Doc<"devices">[]> {
+  return ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
 }
 
 /**
- * The machines that should hold a copy of a share: every member's machine
- * that can receive a sealed secret and was seen recently. Not the holder, not
- * a machine that already keeps the account as its own login, and a cloud host
- * only when it may hold the share (deviceMayHold: a line-pool share on a host
- * that runs line work). Any other host runs the login its laptop pushes.
+ * The machine that seals a share's copies, and whose meter is the account's:
+ * the stored holder while it keeps a live setup-token and was seen lately,
+ * else the owner's machine with one that was seen most recently, else the
+ * stored holder (its copies stand; nobody can reseal). An account is never
+ * stranded on one laptop.
+ */
+export function sealerFor(share: Pick<Share, "email" | "holder_device_id">, devices: Doc<"devices">[], now: number): Doc<"devices"> | null {
+  const fresh = devices
+    .filter((d) => profileHasSetupToken(holderProfile(d, share.email), now) && now - (d.last_seen ?? 0) < SEALER_STALE_MS)
+    .sort((a, b) => (b.last_seen ?? 0) - (a.last_seen ?? 0));
+  return fresh.find((d) => d.device_id === share.holder_device_id) ?? fresh[0] ?? devices.find((d) => d.device_id === share.holder_device_id) ?? null;
+}
+
+async function holderDevice(ctx: Ctx, share: Share, now = Date.now()): Promise<Doc<"devices"> | null> {
+  return sealerFor(share, await ownerDevices(ctx, share.user_id), now);
+}
+
+/**
+ * The machines that should hold a copy of a share: every machine that may hold
+ * it (deviceMayHold: the owner's through the primary row, a teammate's while
+ * the share counts), can receive a sealed secret and was seen recently. Not a
+ * machine that keeps the account as its own login, the sealer included.
  */
 export async function eligibleTargets(ctx: Ctx, share: Share, now: number): Promise<Doc<"devices">[]> {
-  const members = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_team_id", (q: any) => q.eq("team_id", share.team_id))
-    .collect();
-  const out: Doc<"devices">[] = [];
-  for (const m of members) {
-    const devices: Doc<"devices">[] = await ctx.db
-      .query("devices")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", m.user_id))
+  const primary = await ownerPrimary(ctx, share);
+  const userIds = new Set<string>([String(share.user_id)]);
+  if (share.team_id && (await shareCounts(ctx, share))) {
+    const members = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_team_id", (q: any) => q.eq("team_id", share.team_id))
       .collect();
+    for (const m of members) userIds.add(String(m.user_id));
+  }
+  const out: Doc<"devices">[] = [];
+  for (const uid of userIds) {
+    const devices = await ownerDevices(ctx, uid as Id<"users">);
     for (const d of devices) {
-      if (d.device_id === share.holder_device_id && d.user_id === share.user_id) continue;
-      if (!deviceMayHold(share, d) || !d.provider_key_pubkey || now - (d.last_seen ?? 0) > POOL_DEVICE_STALE_MS) continue;
+      if (!deviceMayHold(share, d, primary) || !d.provider_key_pubkey || now - (d.last_seen ?? 0) > POOL_DEVICE_STALE_MS) continue;
       if (holderProfile(d, share.email)) continue;
       out.push(d);
     }
