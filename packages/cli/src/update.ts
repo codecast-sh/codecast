@@ -181,6 +181,8 @@ export function ensureCastAlias(): void {
   updater.ensureAlias();
 }
 
-export function showUpdateNotice(availableVersion: string): void {
+/** The "Run 'cast update'" notice, for a person at a terminal only: an agent's shell has no terminal, the daemon updates on its own, and an agent would only pass the command on to its person. */
+export function showUpdateNotice(availableVersion: string, terminal = !!process.stderr.isTTY): void {
+  if (!terminal) return;
   updater.showUpdateNotice(availableVersion);
 }
