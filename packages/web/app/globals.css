@@ -7943,17 +7943,30 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
 }
 /* Accent text on a tint of the same accent (a badge, a status chip) is deeper
    than the accent on the page, so it holds 4.5:1 against its own tint. The
-   dark theme's accents already pass, except red. */
-.modern-style:not(.dark) :is(.text-sol-red, .modern\:text-sol-red)[class*="bg-sol-red/"] { color: color-mix(in srgb, var(--sol-red) 86%, #000); }
-.modern-style:not(.dark) :is(.text-sol-orange, .modern\:text-sol-orange)[class*="bg-sol-orange/"] { color: color-mix(in srgb, var(--sol-orange) 86%, #000); }
-.modern-style:not(.dark) :is(.text-sol-amber, .modern\:text-sol-amber)[class*="bg-sol-amber/"] { color: color-mix(in srgb, var(--sol-amber) 86%, #000); }
-.modern-style:not(.dark) :is(.text-sol-yellow, .modern\:text-sol-yellow)[class*="bg-sol-yellow/"] { color: color-mix(in srgb, var(--sol-yellow) 86%, #000); }
-.modern-style:not(.dark) :is(.text-sol-green, .modern\:text-sol-green)[class*="bg-sol-green/"] { color: color-mix(in srgb, var(--sol-green) 86%, #000); }
-.modern-style:not(.dark) :is(.text-sol-cyan, .modern\:text-sol-cyan)[class*="bg-sol-cyan/"] { color: color-mix(in srgb, var(--sol-cyan) 86%, #000); }
-.modern-style:not(.dark) :is(.text-sol-blue, .modern\:text-sol-blue)[class*="bg-sol-blue/"] { color: color-mix(in srgb, var(--sol-blue) 88%, #000); }
-.modern-style:not(.dark) :is(.text-sol-violet, .modern\:text-sol-violet)[class*="bg-sol-violet/"] { color: color-mix(in srgb, var(--sol-violet) 92%, #000); }
-.modern-style:not(.dark) :is(.text-sol-magenta, .modern\:text-sol-magenta)[class*="bg-sol-magenta/"] { color: color-mix(in srgb, var(--sol-magenta) 88%, #000); }
-.modern-style.dark :is(.text-sol-red, .modern\:text-sol-red)[class*="bg-sol-red/"] { color: color-mix(in srgb, var(--sol-red) 86%, #fff); }
+   dark theme's accents already pass, except red. An element Modern paints its
+   own way (modern:text-sol-*, such as the composer's send button: page-colour
+   arrow on a solid accent) is not such a badge and is left alone; without
+   that, the send arrow turned dark blue on teal. */
+.modern-style:not(.dark) .text-sol-red[class*="bg-sol-red/"]:not([class*="modern:text-sol-"], [class*="modern:text-white"]),
+.modern-style:not(.dark) .modern\:text-sol-red[class*="bg-sol-red/"] { color: color-mix(in srgb, var(--sol-red) 86%, #000); }
+.modern-style:not(.dark) .text-sol-orange[class*="bg-sol-orange/"]:not([class*="modern:text-sol-"], [class*="modern:text-white"]),
+.modern-style:not(.dark) .modern\:text-sol-orange[class*="bg-sol-orange/"] { color: color-mix(in srgb, var(--sol-orange) 86%, #000); }
+.modern-style:not(.dark) .text-sol-amber[class*="bg-sol-amber/"]:not([class*="modern:text-sol-"], [class*="modern:text-white"]),
+.modern-style:not(.dark) .modern\:text-sol-amber[class*="bg-sol-amber/"] { color: color-mix(in srgb, var(--sol-amber) 86%, #000); }
+.modern-style:not(.dark) .text-sol-yellow[class*="bg-sol-yellow/"]:not([class*="modern:text-sol-"], [class*="modern:text-white"]),
+.modern-style:not(.dark) .modern\:text-sol-yellow[class*="bg-sol-yellow/"] { color: color-mix(in srgb, var(--sol-yellow) 86%, #000); }
+.modern-style:not(.dark) .text-sol-green[class*="bg-sol-green/"]:not([class*="modern:text-sol-"], [class*="modern:text-white"]),
+.modern-style:not(.dark) .modern\:text-sol-green[class*="bg-sol-green/"] { color: color-mix(in srgb, var(--sol-green) 86%, #000); }
+.modern-style:not(.dark) .text-sol-cyan[class*="bg-sol-cyan/"]:not([class*="modern:text-sol-"], [class*="modern:text-white"]),
+.modern-style:not(.dark) .modern\:text-sol-cyan[class*="bg-sol-cyan/"] { color: color-mix(in srgb, var(--sol-cyan) 86%, #000); }
+.modern-style:not(.dark) .text-sol-blue[class*="bg-sol-blue/"]:not([class*="modern:text-sol-"], [class*="modern:text-white"]),
+.modern-style:not(.dark) .modern\:text-sol-blue[class*="bg-sol-blue/"] { color: color-mix(in srgb, var(--sol-blue) 88%, #000); }
+.modern-style:not(.dark) .text-sol-violet[class*="bg-sol-violet/"]:not([class*="modern:text-sol-"], [class*="modern:text-white"]),
+.modern-style:not(.dark) .modern\:text-sol-violet[class*="bg-sol-violet/"] { color: color-mix(in srgb, var(--sol-violet) 92%, #000); }
+.modern-style:not(.dark) .text-sol-magenta[class*="bg-sol-magenta/"]:not([class*="modern:text-sol-"], [class*="modern:text-white"]),
+.modern-style:not(.dark) .modern\:text-sol-magenta[class*="bg-sol-magenta/"] { color: color-mix(in srgb, var(--sol-magenta) 88%, #000); }
+.modern-style.dark .text-sol-red[class*="bg-sol-red/"]:not([class*="modern:text-sol-"], [class*="modern:text-white"]),
+.modern-style.dark .modern\:text-sol-red[class*="bg-sol-red/"] { color: color-mix(in srgb, var(--sol-red) 86%, #fff); }
 /* Translucent text. Classic thins secondary text further with an alpha step
    (text-sol-text-dim/60 and the like); on Modern's near-white ground those
    land between 2:1 and 4:1. In Modern the dim token is the floor for anything
