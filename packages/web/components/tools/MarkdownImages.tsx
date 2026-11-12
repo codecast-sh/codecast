@@ -1,7 +1,7 @@
 import type { Components } from "react-markdown";
 import { useContext, useState, useCallback, Children } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { useImageGallery, useGalleryMessageId } from "../ImageGallery";
+import { useImageGallery, useGalleryMessageId, ImageLightbox } from "../ImageGallery";
 import { isVideoSrc } from "@codecast/shared/contracts/castPlayer";
 import { isRemoteImageSrc } from "../../lib/trustedImageOrigins";
 import { loadCastPlayer } from "../../lib/loadCastPlayer";
@@ -75,6 +75,7 @@ export function CollapsibleImage({
   const [errored, setErrored] = useState(false);
   // User opt-in for a remote image: nothing hits the network until the click.
   const [revealed, setRevealed] = useState(false);
+  const [lightbox, setLightbox] = useState(false);
   const gallery = useImageGallery();
   const messageId = useGalleryMessageId();
   const fallbackSize = useContext(MarkdownImageSize);
@@ -102,8 +103,9 @@ export function CollapsibleImage({
   return (
     <span
       className={`my-2 block cursor-pointer ${size === "small" ? "max-w-60" : portrait ? "w-fit max-w-full" : fullWidth ? "max-w-full" : "max-w-md"}`}
-      onClick={() => gallery?.open(src)}
+      onClick={() => (gallery ? gallery.open(src) : setLightbox(true))}
     >
+      {lightbox && <ImageLightbox src={src} onClose={() => setLightbox(false)} />}
       {/* Soft borders need explicit color-mix values: Tailwind's /opacity
           modifier is a silent no-op on the bare --sol-* var tokens. */}
       <span

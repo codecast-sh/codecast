@@ -99,7 +99,7 @@ import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { SessionDecisionCard } from "./SessionDecisionCard";
 import { PreloadPublishedPage } from "./PublishedPageEmbed";
 import { HostedApprovalCard, HostedApprovalPending, HostedApprovalSettled } from "./conversation/HostedApprovalCard";
-import { PermissionAnswer, PermissionAskCard, PermissionRecordLine } from "./conversation/PermissionAsk";
+import { PermissionAnswer, PermissionAskCard, RunningPermissionLine } from "./conversation/PermissionAsk";
 import { useRunningPermission } from "../hooks/useRunningPermission";
 import { DecisionStepperContext, usePendingDecisionItems } from "../hooks/useDecisionQueue";
 import { copyToClipboard, shareOrigin, inferHomeDir } from "../lib/utils";
@@ -3265,7 +3265,7 @@ const ConversationViewInner = (
   const hostedTailCard = !conversation || onSendOverride ? null
     : inlineApproval ? (runAsk ? <PermissionAskCard key={decisionItem!.key} item={decisionItem!} /> : <HostedApprovalCard key={decisionItem!.key} item={decisionItem!} keys />)
     // A Yes still running: one line holds the card's place until the result lands.
-    : runningPermission ? <PermissionRecordLine question={runningPermission.question} outcome="running" className="pt-4" />
+    : runningPermission ? <RunningPermissionLine id={runningPermission.id} question={runningPermission.question} />
     // The turn parked on an approval before its decision row arrived: hold
     // the card's place in one quiet line.
     : !decisionItem && hostedSettledAnswer ? <HostedApprovalSettled label={hostedSettledAnswer} />

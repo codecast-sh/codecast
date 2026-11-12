@@ -32,7 +32,10 @@ const expression = `(() => {
   // The records the flow and org rows draw from (runs, graph, session-flow row, a proposal, a decision), for this viewer's workspace.
   const viewer = String(s.currentUser?._id ?? "gallery-viewer");
   const team = s.clientState?.ui?.active_team_id;
-  const records = JSON.parse(${JSON.stringify(JSON.stringify(renderGalleryRecords(Date.now(), "__VIEWER__", "__WORKSPACE__")))}.split("__VIEWER__").join(viewer).split("__WORKSPACE__").join(team ? "team:" + team : "user:" + viewer).split("__CONVERSATION__").join(id));
+  // A laptop of the viewer's other than the one running this conversation, for the asks run with --on laptop.
+  const own = (s.sessions[id] || s.conversations[id] || {}).owner_device_id;
+  const laptop = (s.machineRoster || []).find((m) => !m.is_remote && m.device_id !== own) || (s.machineRoster || []).find((m) => m.device_id !== own);
+  const records = JSON.parse(${JSON.stringify(JSON.stringify(renderGalleryRecords(Date.now(), "__VIEWER__", "__WORKSPACE__")))}.split("__VIEWER__").join(viewer).split("__WORKSPACE__").join(team ? "team:" + team : "user:" + viewer).split("__CONVERSATION__").join(id).split("__LAPTOP__").join(laptop ? laptop.device_id : "gallery-laptop"));
   for (const [key, list] of Object.entries(records)) {
     if (rows.length) store.getState().syncTable(key, list, { isDelta: true });
     else store.setState((st) => ({ [key]: Object.fromEntries(Object.entries(st[key] || {}).filter(([k]) => !k.startsWith("gallery"))) }));

@@ -106,6 +106,9 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   24: "873f7c5eaedf6e64",
   // v25: a hibernated session files by the verdict it carries, not as dormant.
   25: "820dddba656a01dc",
+  // v26: a stopped agent with a standing trigger armed parks as dormant; a
+  // dormant claim with no wake behind it still files needs_input.
+  26: "d7b797b3e10aff9b",
 };
 
 type Expected = {
