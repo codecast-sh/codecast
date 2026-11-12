@@ -150,11 +150,12 @@ export function useResourceMonitor() {
     // can be days old (no surface feeds it while this page is closed), and
     // its live rows then age out of the heartbeat window, so a plan built
     // before the server answers names every running session "Not running".
-    if (!candidates || !managedReady) return [];
+    // Candidates only refine a fleet row (buildOffloadPlan), so they never gate.
+    if (!managedReady) return [];
     const out: OffloadPlan[] = [];
     for (const source of machines) {
       if (source.role !== "local") continue;
-      const plan = buildOffloadPlan({ source, machines, sessions, devices: devices as any, candidates, now });
+      const plan = buildOffloadPlan({ source, machines, sessions, devices: devices as any, candidates: candidates ?? [], now });
       if (plan) out.push(plan);
     }
     return out;
