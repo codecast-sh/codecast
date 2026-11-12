@@ -38,14 +38,16 @@ function platformKey() {
   return `${os}-${arch}`;
 }
 
-function install(mode: string, token = "", existingLogin = false, fault: ManifestFault = {}, paths: PathSetup = {}) {
+type ExistingConfig = "signed-in" | "expired" | "no-token";
+
+function install(mode: string, token = "", existing?: ExistingConfig, fault: ManifestFault = {}, paths: PathSetup = {}) {
   const home = mkdtempSync(join(tmpdir(), "cast installer "));
   homes.push(home);
   const bin = join(home, "bin");
   mkdirSync(bin);
-  if (existingLogin) {
+  if (existing) {
     mkdirSync(join(home, ".codecast"));
-    writeFileSync(join(home, ".codecast/config.json"), "{}");
+    writeFileSync(join(home, ".codecast/config.json"), JSON.stringify(existing === "no-token" ? { device_label: "laptop" } : { auth_token: "enc:x" }));
   }
   const resultPath = join(home, "result.json");
   const binary = join(home, "prompt");
@@ -53,6 +55,7 @@ function install(mode: string, token = "", existingLogin = false, fault: Manifes
 import { confirm } from ${JSON.stringify(import.meta.resolve("@inquirer/prompts"))};
 import { writeFileSync } from "node:fs";
 const result = { args: process.argv.slice(2), interactive: process.stdin.isTTY === true };
+if (result.args[0] === "auth" && result.args[1] === "status") process.exit(process.env.INSTALL_TEST_AUTH_STATUS === "signed-in" ? 0 : 1);
 if (result.args[0] !== "start" && result.interactive) {
   result.syncAll = await confirm({ message: "Sync all projects? (recommended)", default: true });
   result.memory = await confirm({ message: "Keep agent memory enabled?", default: true });
@@ -116,6 +119,7 @@ exit 1
     INSTALL_TEST_BINARY: binary,
     INSTALL_TEST_MANIFEST: manifestPath,
     INSTALL_TEST_RESULT: resultPath,
+    INSTALL_TEST_AUTH_STATUS: existing ?? "",
   };
   const options = join(home, "options.json");
   const report = join(home, "terminal.json");
@@ -162,26 +166,34 @@ describe.skipIf(process.platform === "win32" || !Bun.which("python3"))("installe
   }, 30_000);
 
   test("an existing login still starts the daemon", () => {
-    const result = install("headless", "", true);
+    const result = install("headless", "", "signed-in");
     expect(result.installed).toBe(true);
     expect(result.result).toEqual({ args: ["start"], interactive: false });
   }, 30_000);
 
+  for (const existing of ["no-token", "expired"] as const) {
+    test(`a config.json that is not a live sign-in (${existing}) still runs browser auth`, () => {
+      const result = install("direct", "", existing);
+      expect(result.output).not.toContain("Existing login found");
+      expect(result.result).toEqual({ args: ["auth"], interactive: true, syncAll: false, memory: true });
+    }, 30_000);
+  }
+
   test("a binary whose digest does not match the manifest is never installed", () => {
-    const result = install("headless", "fixture-token", false, { wrongDigest: true });
+    const result = install("headless", "fixture-token", undefined, { wrongDigest: true });
     expect(result.installed).toBe(false);
     expect(result.result).toBeNull();
     expect(result.output).toContain("does not match the release manifest");
   }, 30_000);
 
   test("a manifest that names a binary on another host is refused before download", () => {
-    const result = install("headless", "", false, { foreignUrl: true });
+    const result = install("headless", "", undefined, { foreignUrl: true });
     expect(result.installed).toBe(false);
     expect(result.output).toContain("outside https://dl.codecast.sh");
   }, 30_000);
 
   test("a Windows npm cast seen from WSL is named with its uninstall command, never deleted", () => {
-    const result = install("headless", "", false, {}, { windowsCast: "npm" });
+    const result = install("headless", "", undefined, {}, { windowsCast: "npm" });
     expect(result.installed).toBe(true);
     expect(result.windowsCastKept).toBe(true);
     expect(result.output).toContain("Windows has its own cast in");
@@ -190,20 +202,20 @@ describe.skipIf(process.platform === "win32" || !Bun.which("python3"))("installe
   }, 30_000);
 
   test("another Windows cast gets the warning without the npm command", () => {
-    const result = install("headless", "", false, {}, { windowsCast: "other" });
+    const result = install("headless", "", undefined, {}, { windowsCast: "other" });
     expect(result.windowsCastKept).toBe(true);
     expect(result.output).toContain("Windows has its own cast in");
     expect(result.output).not.toContain("npm uninstall");
   }, 30_000);
 
   test("a cast that no new shell reaches before ours is left alone", () => {
-    const result = install("headless", "", false, {}, { laterCast: true });
+    const result = install("headless", "", undefined, {}, { laterCast: true });
     expect(result.laterCastKept).toBe(true);
     expect(result.output).not.toContain("Removing stale install");
   }, 30_000);
 
   test("a manifest without this platform is refused", () => {
-    const result = install("headless", "", false, { missingPlatform: true });
+    const result = install("headless", "", undefined, { missingPlatform: true });
     expect(result.installed).toBe(false);
     expect(result.output).toContain("no binary for");
   }, 30_000);

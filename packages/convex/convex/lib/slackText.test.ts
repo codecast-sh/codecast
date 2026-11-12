@@ -141,6 +141,10 @@ describe("markdownToSlack", () => {
   test("entity ids become links", () => {
     expect(markdownToSlack("see ct-12 and ct-99", out)).toBe("see <https://codecast.sh/tasks/ct-12|ct-12> and ct-99");
   });
+  test("a named reference reads as its title, linked when the id has a page", () => {
+    expect(markdownToSlack("ask @[Manual Drive Cam Broker jx72x09] about @[Fix auth ct-12]", out))
+      .toBe("ask Manual Drive Cam Broker about <https://codecast.sh/tasks/ct-12|Fix auth>");
+  });
   test("code is protected and escaped", () => {
     expect(markdownToSlack("run `a && b` then\n```\n**not bold** <x>\n```", out))
       .toBe("run `a &amp;&amp; b` then\n```\n**not bold** &lt;x&gt;\n```");

@@ -77,6 +77,22 @@ export function isClaudeIdleResumeDialog(text: string): boolean {
   return /has been inactive for\b/i.test(text) && /^[^\S\n]*[❯›>]?[^\S\n]*(?:\d+[.)][^\S\n]*)?Start a new conversation\b/im.test(text);
 }
 
+// Claude Code's nudge dialogs, the ones whose footer offers "esc not now":
+//
+//   We recommend compacting earlier
+//     Want to autocompact at 400k tokens instead? …
+//       Autocompact at ‹ 400k › tokens
+//       Keep auto (1m tokens)
+//     ↑/↓ choose · ←/→ change size · enter confirm · esc not now
+//
+// Escape here is "not now": it changes no setting and leaves the composer
+// live. Its cursor is a color, not a glyph, so no menu rule claims it, and the
+// picker's "›" read as a composer: the pane classified idle, every message was
+// pasted into the dialog three times and given up on (jx7eahf, 2026-11-12).
+export function isClaudeNudgeDialog(text: string): boolean {
+  return /^[^\S\n]*\S[^\n]*·[^\S\n]*esc not now[^\S\n]*$/im.test(text);
+}
+
 // What a machine wake answers there. Resume keeps the session id codecast maps
 // and the history the wake was written against; the runner armed the wake.
 export const MACHINE_WAKE_IDLE_RESUME_CHOICE = "Resume";
@@ -148,6 +164,7 @@ export type TmuxLiveState =
   | "warning"       // dismissable banner — Enter to ack
   | "update_menu"   // agent's own "Update available" menu — Escape (Enter would RUN the update)
   | "limit_dialog"  // usage/spend limit dialog — Escape (its options are billing actions and a day-long wait)
+  | "nudge"         // Claude Code suggestion dialog ("esc not now") — Escape declines it, changing nothing
   | "cwd_picker"    // Codex resume "Choose working directory" picker — answered by answerResumeCwdPicker
   | "signed_out"    // the agent's own login splash — hold, press nothing; the machine must log in
   | "menu"          // a select dialog (parseSelectDialog) or a numbered dialog with its cursor on an option — only a card answer moves it; press nothing, hold delivery
@@ -259,6 +276,7 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // The limit dialog ends in "Esc to cancel" too; named first so its Escape is
   // a deliberate dismissal, not a Rewind cancel that happens to fit.
   if (limitDialogOnPane(region)) return "limit_dialog";
+  if (isClaudeNudgeDialog(region)) return "nudge";
   if (/Esc to cancel|❯\s*\(current\)/i.test(dialogText)) return "rewind";
   if (/What should Claude do instead\?/i.test(region)) return "interrupted";
   // Teammate panel: a lead session with in-process agents renders a chip list
@@ -336,7 +354,9 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // the pane waited hours behind that receipt. Only a card answer (a poll)
   // moves this cursor; everything else holds.
   if (numberedCursorRow) return "menu";
-  const promptVisible = region.includes("❯") || region.includes("›");
+  // A "‹ 400k ›" value picker is no composer.
+  const glyphs = region.replace(/‹[^›\n]*›/g, "");
+  const promptVisible = glyphs.includes("❯") || glyphs.includes("›");
   if (promptVisible) return "idle";
   if (/Press enter to continue|Update available|weekly limit|recorded with model|⚠/i.test(region)) return "warning";
   return "unknown";

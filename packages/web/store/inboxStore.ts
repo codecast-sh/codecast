@@ -4435,11 +4435,11 @@ export function visualOrderSessions(
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
-  // Same order the status view renders: questions, pinned, new, needs input,
+  // Same order the status view renders: pinned, questions, new, needs input,
   // done, working, dormant — the chokepoint's own sections, so the walk and
   // the render can never disagree.
   const sections: Array<[InboxSession[], string]> = [
-    [placed.questions, "questions"], [placed.pinned, "pinned"], [placed.newSessions, "new"],
+    [placed.pinned, "pinned"], [placed.questions, "questions"], [placed.newSessions, "new"],
     [placed.needsInput, "needs_input"], [placed.done, "done"],
     [placed.working, "working"], [placed.dormant, "dormant"],
   ];
@@ -6347,6 +6347,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
    *  takes it back): Settings > Claude Accounts' pool pill. Server home is
    *  account_shares; the accountPool snapshot reconciles the draft. */
   setAccountShares: (deviceId: string, email: string, teamIds: string[]) => void;
+  /** Narrow one of your accounts to some of your machines, or open it to all of them (null). */
+  setAccountDevices: (email: string, deviceIds: string[] | null) => void;
   setDeviceSnippet: (deviceId: string, change: DeviceSnippetChange) => Promise<unknown>;
   setProviderKey: (deviceId: string, change: ProviderKeyCommand) => Promise<{ command_id?: string } | undefined>;
   requestDeviceUpdate: (deviceId: string) => Promise<unknown>;
@@ -9715,11 +9717,18 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const row = this.machineRoster.find((d) => d.device_id === deviceId) as any;
     if (row) row.shared_team_ids = [...teamIds].sort();
   }),
+  setAccountDevices: action(function (this: Draft, email: string, deviceIds: string[] | null) {
+    const pool = this.accountPool as Record<string, any>;
+    const key = email.toLowerCase();
+    const row = Object.values(pool).find((r) => r.mine && r.email === key && !r.team_id);
+    if (row) row.device_ids = deviceIds ? [...new Set(deviceIds)].sort() : null;
+  }),
   setAccountShares: action(function (this: Draft, deviceId: string, email: string, teamIds: string[]) {
     const pool = this.accountPool as Record<string, any>;
     const key = email.toLowerCase();
     const wanted = new Set(teamIds);
-    const mine = Object.values(pool).filter((r) => r.mine && r.email === key);
+    // Team rows only: the personal row is setAccountDevices'.
+    const mine = Object.values(pool).filter((r) => r.mine && r.email === key && r.team_id);
     for (const r of mine) if (!wanted.has(String(r.team_id))) delete pool[r._id];
     const have = new Set(mine.map((r) => String(r.team_id)));
     for (const teamId of wanted) {
