@@ -18,6 +18,7 @@
   #tabs .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
   .row { display: flex; gap: 0.5rem; margin-top: 0.9rem; }
   .row button { flex: 1; padding: 0.4rem 0.6rem; font-size: 12px; }
+  .row button[hidden] { display: none; }
   /* This tab: who has it, and the one thing the human can do about it. */
   #tab { margin: 0 0 0.9rem; padding: 0.7rem 0.8rem; border: 1px solid var(--line); border-radius: 10px; background: var(--card); display: grid; gap: 0.5rem; }
   #tab[hidden] { display: none; }
@@ -62,7 +63,7 @@
     </div>
   </section>
   <div class="row">
-    <button id="reconnect" type="button">Reconnect</button>
+    <button id="reconnect" type="button" hidden>Reconnect</button>
     <button id="settings" type="button">Settings</button>
   </div>
   <script src="status.js"></script>
