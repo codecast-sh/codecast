@@ -39,21 +39,12 @@ export function conversationFolders(conv: { project_path?: string; git_root?: st
     .map(trimSlash);
 }
 
-export const FOLDER_EXPORT_REUSE_MS = 2 * 60_000;
 export const FOLDER_EXPORT_RATE_WINDOW_MS = 10 * 60_000;
 export const FOLDER_EXPORT_RATE_LIMIT = 20;
 
 const TOKEN_HASH = /^[0-9a-f]{64}$/;
 
 export type PeerExportCommand = "export_folder" | "export_session";
-
-/** This user's rows of `command` still waiting, created inside the reuse window. */
-async function liveExports(ctx: { db: any }, userId: Id<"users">, now: number, command: PeerExportCommand) {
-  return (await ctx.db
-    .query("daemon_commands")
-    .withIndex("by_user_pending", (q: any) => q.eq("user_id", userId).eq("executed_at", undefined).gt("_creationTime", now - FOLDER_EXPORT_REUSE_MS))
-    .collect()).filter((c: any) => c.command === command);
-}
 
 export const requestFolderExport = mutation({
   args: {
@@ -90,9 +81,11 @@ export interface PeerExportArgs {
 }
 
 /** Ask the owner's other online machines to run `command` for one of the
- *  owner's conversations: the auth, peer choice, direct gating, dedupe and the
- *  shared rate limit every peer export goes through. `payload` checks the
- *  conversation and names what to export beyond the conversation itself. */
+ *  owner's conversations: the auth, peer choice, direct gating and the shared
+ *  rate limit every peer export goes through. Every request gets rows of its
+ *  own, so one requester discarding never abandons or deletes another's.
+ *  `payload` checks the conversation and names what to export beyond the
+ *  conversation itself. */
 export async function requestPeerExport(
   ctx: { db: any },
   args: PeerExportArgs,
@@ -126,30 +119,23 @@ export async function requestPeerExport(
     requester: args.device_id,
     ...(grant && peer.direct_links_off !== true ? { direct: grant } : {}),
   });
-  const live = await liveExports(ctx, userId, now, command);
-  const plan = peers.map((peer) => {
-    const cmdArgs = argsFor(peer);
-    return { peer, cmdArgs, reuse: live.find((c: any) => c.target_device_id === peer.device_id && c.args === cmdArgs) };
-  });
-
   const since = now - FOLDER_EXPORT_RATE_WINDOW_MS;
   const inWindow = (d: { folder_export_at?: number[] }) => (d.folder_export_at ?? []).filter((t) => t > since);
   const recent = devices.reduce((n, d) => n + inWindow(d).length, 0);
-  const inserts = plan.filter((p) => !p.reuse).length;
-  if (recent + inserts > FOLDER_EXPORT_RATE_LIMIT) {
-    throw new Error(`too many ${command === "export_folder" ? "folder" : "transcript"} requests: at most ${FOLDER_EXPORT_RATE_LIMIT} every ${FOLDER_EXPORT_RATE_WINDOW_MS / 60_000} minutes`);
-  }
-  if (inserts > 0) {
-    await ctx.db.patch(requester._id, { folder_export_at: [...inWindow(requester), ...Array(inserts).fill(now)] });
+  if (peers.length > 0) {
+    if (recent + 1 > FOLDER_EXPORT_RATE_LIMIT) {
+      throw new Error(`too many ${command === "export_folder" ? "folder" : "transcript"} requests: at most ${FOLDER_EXPORT_RATE_LIMIT} every ${FOLDER_EXPORT_RATE_WINDOW_MS / 60_000} minutes`);
+    }
+    await ctx.db.patch(requester._id, { folder_export_at: [...inWindow(requester), now] });
   }
 
   const command_ids: string[] = [];
   const labels: Record<string, string> = {};
-  for (const { peer, cmdArgs, reuse } of plan) {
-    const id = reuse?._id ?? await ctx.db.insert("daemon_commands", {
+  for (const peer of peers) {
+    const id = await ctx.db.insert("daemon_commands", {
       user_id: userId,
       command,
-      args: cmdArgs,
+      args: argsFor(peer),
       created_at: now,
       target_device_id: peer.device_id,
     });
@@ -205,10 +191,25 @@ export async function discardPeerBundle(ctx: { db: any; storage: any }, args: { 
   const userId = await getAuthenticatedUserId(ctx, args.api_token);
   if (!userId) throw new Error("Authentication required");
   const cmd = await ownExportCommand(ctx, userId, args.command_id, command);
+  if (cmd && cmd.executed_at === undefined) {
+    await ctx.db.patch(cmd._id, { executed_at: Date.now(), error: "abandoned" });
+    return { discarded: false };
+  }
   if (!cmd?.result) return { discarded: false };
   let storageId: string | undefined;
   try { storageId = JSON.parse(cmd.result)?.storage_id; } catch {}
   if (!storageId) return { discarded: false };
   await ctx.storage.delete(storageId as Id<"_storage">).catch(() => {});
   return { discarded: true };
+}
+
+/** An export answer that arrives after its requester discarded the request
+ *  (or after another answer settled it) is not recorded: its archive is
+ *  deleted and the row stays as it was. True when the report was handled here. */
+export async function dropLateExportAnswer(ctx: { storage: any }, command: { command: string; executed_at?: number }, result: string | undefined): Promise<boolean> {
+  if ((command.command !== "export_folder" && command.command !== "export_session") || command.executed_at === undefined) return false;
+  let storageId: unknown;
+  try { storageId = result ? JSON.parse(result)?.storage_id : undefined; } catch {}
+  if (typeof storageId === "string" && storageId) await ctx.storage.delete(storageId as Id<"_storage">).catch(() => {});
+  return true;
 }
