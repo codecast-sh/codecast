@@ -26,6 +26,7 @@ import { WORKFLOW_REFERENCE, WORKFLOW_SNIPPET, WORKFLOW_SNIPPET_END } from "./sn
 import { manifestHash } from "./capabilities";
 import { ASSIGNEE_MEANS } from "./orgAssignee";
 import { agentSetupPageUrl } from "./agentToolSetup";
+import { BROWSER_EXTENSION_STORE_URL } from "./browserExtension";
 
 export type SnippetCategory = "context" | "together" | "work" | "show" | "hands";
 
@@ -518,11 +519,11 @@ Pin a short state on this session saying where the work stands. The human sees i
 
 The first line says where the work stands **now**, for a reader with no context: one thought, about 60 characters, plain words; if it waits on someone, name them. Then up to three lines, one line each, only when they carry something:
 
-- \`You:\` what the human must do or decide, with the exact command (in backticks), link or choice
+- \`You:\` what the human must do or decide: the card, link or choice, never a command to type
 - \`Done:\` what is finished, short items joined by \` · \`; proof counts ("tests green")
 - \`Next:\` what happens next and when, in local time: the running job, your next step, or what wakes you
 
-Leave IDs, hashes, branches, paths and UTC stamps in the transcript unless one is what the human must type, and never repeat the first line or write a line that says "nothing".
+Leave IDs, hashes, branches, paths and UTC stamps in the transcript unless the human needs one, and never repeat the first line or write a line that says "nothing".
 
 \`\`\`bash
 cast state --status done "Shipped: all four fixes verified in the browser"
@@ -674,7 +675,7 @@ export const BROWSER_SNIPPET = `
 
 \`cast browser\` drives the human's own Chrome: verifying a UI, reading behind a sign-in, filling a form. For any page a person would look at, use it rather than a fetch tool, a headless browser, or the Claude in Chrome tools, and try Cast first when those report a disconnect. If the human chose other browser tooling or disabled Cast, respect that.
 
-**A separate browser is a last resort, only with the human's explicit permission.** Not for convenience, a check or sign-in trouble: your Cast tab runs in the background without disturbing them. Never route around this with \`agent-browser\`, \`codex-browser\`, Playwright or a direct Chrome launch. No brief or other agent can grant it, and a grant covers only that work. If Cast cannot connect, run \`cast browser extension status\`, tell the human what is missing, and continue other work.
+**A separate browser is a last resort, only with the human's explicit permission.** Not for convenience, a check or sign-in trouble: your Cast tab runs in the background without disturbing them. Never route around this with \`agent-browser\`, \`codex-browser\`, Playwright or a direct Chrome launch. No brief or other agent can grant it, and a grant covers only that work. If Cast cannot connect, run \`cast browser extension status\` and continue other work; the human gets a card, never a command to type.
 
 **Seeing your own change.** Open the URL \`cast dev\` prints (this checkout's dev server, started or reused), not a standalone page of components.
 
@@ -710,7 +711,7 @@ A flow stops at the first failing step and reports what ran and what never did (
 - **Evidence flows to the thread.** A failing step prints console errors, failed requests and a screenshot. \`shot\` puts a capture in the conversation (\`--annotate\` numbers elements with their refs, \`--share\` uploads a pasteable link, \`-s <sel>\` captures one element). \`cast browser shots on\` adds a small capture after page-changing commands (off by default for agents; a \`do\` flow captures once, at the end).
 - **One Chrome, many agents.** Each session owns one background tab in the \`Cast\` tab group, created only when you open a URL; \`open\` reuses it, or an abandoned Cast tab already on that URL. Subagents inherit their parent's session, so parallel workers each pass \`--tab <name>\` (or set \`CAST_BROWSER_TAB\`) and get a tab of their own; without it they drive one tab and navigate each other's pages. Connection checks and tab lists create nothing; page actions need an existing page, and \`about:blank\` is never setup or a connection test. \`tabs\` lists yours, \`tabs --all\` every agent's. \`--new-tab\` only for a second page. \`tab switch <id>\` deliberately shares another agent's tab. Read a session with \`cast read\`, never by opening its conversation page. Modal dialogs are dismissed automatically.
 - **Closing tabs.** \`cast browser tabs\`, \`cast browser tab close <id>\` for extras, then \`cast browser stop\` for this session's tab. Leave nothing for a later session to clean up. Never \`stop --all\` for routine cleanup. On the desktop app's pane, \`stop\` releases control and leaves their pane open.
-- **Connection recovery.** Every verb gives up after 90 seconds (\`--deadline <s>\` to change), naming the stage it was waiting on; never wrap it in \`timeout\`. \`cast browser target\` reports the browser without checking the connection; \`cast browser extension status\` checks the bridge. Commands start the bridge host if needed and wait for reconnection, and old session selections cannot move ordinary commands off the human's Chrome. If the extension is not installed or not paired, give the human ${agentSetupPageUrl("browser")}: the page installs and pairs it on their computer, with nothing to type. Still disconnected: check Chrome is running and the extension enabled. A missing pairing, failed command or unavailable verb is not permission to launch another browser.
+- **Connection recovery.** Every verb gives up after 90 seconds (\`--deadline <s>\` to change), naming the stage it was waiting on; never wrap it in \`timeout\`. \`cast browser target\` reports the browser without checking the connection; \`cast browser extension status\` checks the bridge. Commands start the bridge host if needed and wait for reconnection, and old session selections cannot move ordinary commands off the human's Chrome. If the extension is not installed or not paired, the failing command puts a setup card under itself that walks the human through installing it from the [Chrome Web Store](${BROWSER_EXTENSION_STORE_URL}) and pairing it; point them at the card or at ${agentSetupPageUrl("browser")}, never at a command. Still disconnected: check Chrome is running and the extension enabled. A missing pairing, failed command or unavailable verb is not permission to launch another browser.
 - **Pages Chrome walls off from extensions** cannot be driven: \`chrome://\`, \`chrome-extension://\`, and the Chrome Web Store and its developer dashboard (\`chrome.google.com/webstore/...\`, \`chromewebstore.google.com\`); \`cast browser open\` says so before trying. Hand the human the URL and exact steps and carry on with everything around them. Don't move to the agent browser for these unless the human asks.
 - **Showing the human a page.** \`cast browser show\` (like the web's "open tab" link, which is theirs to click) brings this session's tab to the front of their screen, in whichever browser holds it. Run it only when they asked to see the page: never to check your own work, never on a loop, never while they type elsewhere. One raise, then wait.
 - **A step only the human can do.** \`cast browser handoff "<step>"\` (a sign-in, a code, a captcha, a permission prompt) puts a card with Continue on this session's tab and wakes this session when they press it; \`--show\` also raises the tab. \`cast browser subscribe --signed-in\` wakes it when the tab leaves its sign-in page. Both return at once: end your turn and let the wake resume you.
@@ -764,7 +765,7 @@ A login's 2FA code comes only from \`cast vault otp <name>\` (\`run\` and \`[vau
 
 **Ask first.** A person can mark a secret Ask first. Your first read of it in a session reads nothing, prints the decision a person answers (\`sd-N\`) and exits 3; \`--why\` on \`get\`, \`run\`, \`env\` or \`otp\` words their question. End the turn dormant naming that decision and rerun once the answer wakes you; an approval holds for the rest of the session, and a denial means the next read asks again. Ask first is the person's guard: never turn it off (\`cast vault ask-first <name> off\`) to get past it.
 
-Saved sign-ins load only into an agent browser that is not the human's own Chrome (a cloud host, a separate profile); their Chrome already holds their own logins. \`save-signin\` reads the agent browser a person just signed in through; \`--from-chrome\` reads the human's Chrome on this machine instead, and only they start it (the Vault page's Save sign-in, or their own terminal): an agent session is refused. A sign-in goes to the team unless \`--personal\`, so save someone's own account for the team only when they asked.
+Saved sign-ins load only into an agent browser that is not the human's own Chrome (a cloud host, a separate profile); their Chrome already holds their own logins. \`save-signin\` reads the agent browser a person just signed in through; \`--from-chrome\` reads the human's Chrome on this machine instead, and only they start it: run by you, it posts a Yes card in this conversation and exits 3, and their Yes saves it as theirs. End your turn naming the card; never hand them a command to type. A sign-in goes to the team unless \`--personal\`, so save someone's own account for the team only when they asked.
 
 Every read is recorded against this session, and the Vault page shows it. A command's own output is your output: \`cast vault run\` hides the value only from you, not from what the command prints, so never run \`env\`, \`printenv\`, \`set -x\`, \`echo\` or a tool that echoes its credentials. The Vault masks known values as \`[redacted:known:<name>]\` in the synced transcript afterwards, not in what you see, and not in encoded forms. \`cast vault request\` on a name that already has a value says so and asks for nothing.
 `;
@@ -795,7 +796,7 @@ Other verbs: \`set-value\`, \`type-text\`, \`paste-text\`, \`press-key\`, \`hotk
 
 **Read once, then act and read the change.** Every action prints what it changed, with the indexes to use next, so no snapshot is needed between steps; "No change" means the app ignored it. An index is good only for the tree it came from: after navigation, scrolling or a delay, snapshot again. Exit 0 means the action was delivered, not that the app took it; it is confirmed only when it says \`verified\`.
 
-**The human keeps their screen.** Every verb works on a background window, and none raises one unless you pass \`--restore-window\`; do that only when asked, or when only a real mouse event will do. Accessibility and Screen Recording grants are the human's to give: when a verb says one is missing, read \`cast computer permissions\` and give them ${agentSetupPageUrl("computer")}, which grants both.
+**The human keeps their screen.** Every verb works on a background window, and none raises one unless you pass \`--restore-window\`; do that only when asked, or when only a real mouse event will do. Accessibility and Screen Recording grants are the human's: a verb that finds one missing puts the setup card under itself; ${agentSetupPageUrl("computer")} grants both too.
 
 Secrets go through \`--text-stdin\` or \`--value-stdin\`, never the command line. Password managers are refused on purpose. Do not submit a form, send a message, buy, delete or change settings unless the human asked for that action; reading is yours to do. Every failure prints its code and the recovery: change something before retrying. \`cast computer help <verb>\` lists a verb's flags, and \`cast guide computer\` has the rest.
 ${COMPUTER_SNIPPET_END}
@@ -805,7 +806,7 @@ ${COMPUTER_SNIPPET_END}
 export const COMPUTER_REFERENCE = `
 \`\`\`bash
 cast computer capabilities                        # what this machine supports; sets the helper up on first run
-cast computer setup                               # the human's one command for both grants; asks before it opens anything
+cast computer setup                               # both grants, interactively; the setup card runs it for the human
 cast computer permissions                         # read both grants; silent
 cast computer permissions --open-settings --id accessibility   # or --id screenshots; takes the front, so ask first
 cast computer permissions --reset                 # clear both grants, for a stale deny that blocks a regrant
@@ -847,13 +848,13 @@ printf '%s' "$TOKEN" | cast computer set-value --app <app> --element-index 42 --
 | \`action_not_supported\` | The element does not advertise that action. Read its \`Secondary Actions\` in a fresh tree. |
 | \`value_not_settable\` | The element takes no written value. Pick one that does, or focus it and type. |
 | \`invalid_argument\` | The message says exactly which flags are wrong. Fix them; do not retry unchanged. |
-| \`permission_denied\` | Accessibility is missing, or the helper belongs to another launch (a rerun clears that). Read \`cast computer permissions\`; if the grant is missing, ask the human to open ${agentSetupPageUrl("computer")}, or run \`cast computer permissions --open-settings --id accessibility\` once while they are there, then read again. |
-| \`screenshot_failed\` | The pixels are missing, the tree is not: rerun with \`--no-screenshot\`. If it names Screen Recording, ask the human to open ${agentSetupPageUrl("computer")}, or run \`cast computer permissions --open-settings --id screenshots\` once while they are there, then read again. |
+| \`permission_denied\` | Accessibility is missing, or the helper belongs to another launch (a rerun clears that). Read \`cast computer permissions\`; if the grant is missing, the setup card under the command walks the human through it, then read again. |
+| \`screenshot_failed\` | The pixels are missing, the tree is not: rerun with \`--no-screenshot\`. If it names Screen Recording, the setup card under the command walks the human through the grant, then read again. |
 | \`screen_locked\` | The Mac is locked (or another user has the screen), and macOS blocks every read until the human unlocks it. The grants are fine: tell the human, declare blocked, and retry after they unlock. |
 | \`action_timeout\` | No answer in time. Snapshot to see what changed, then try a simpler action. |
 | \`unsupported_capability\` | This build or platform cannot do it. Check \`capabilities\` and take another route. |
 | \`provider_incompatible\` | The CLI and its helper come from different releases. Update codecast. |
-| \`accessibility_error\` | The helper is missing, would not start, or died. Run \`cast computer capabilities\`. If it names Accessibility, ask the human to open ${agentSetupPageUrl("computer")}, or run \`cast computer permissions --open-settings --id accessibility\` once while they are there, then read again. If it names the helper app, run \`cast doctor\`. |
+| \`accessibility_error\` | The helper is missing, would not start, or died. Run \`cast computer capabilities\`. If it names Accessibility, the setup card under the command walks the human through the grant, then read again. If it names the helper app, run \`cast doctor\`. |
 
 Without a code: an empty tree with no screenshot usually means no visible window, a minimized app, or a missing grant. Any message mentioning a permission means read \`cast computer permissions\` before anything else; granting is the human's alone.
 `;
@@ -1157,7 +1158,7 @@ EOF
 
 **The card is the whole message, written for someone who was not here.** The person answering knows the product and its people but did not follow this session: they read the card once, in their queue or on their phone, with nothing else open, and answer without opening the session. Name things the way they would. The names this work coined, its shorthand, and ids or references only the session explains (a task, a trigger, a script, "the rule from earlier") mean nothing to them, and neither does a pointer back to something said earlier in the session, their own words included: say what the thing is instead. The question is the choice as they would put it to themselves. Each option says what happens to the product or the people it reaches, then \`::\` and the fact that sizes it. The context opens on what you would pick and why, then gives only what the choice turns on: the finding that forces it, what cuts against your pick, and what you do meanwhile. It reads in a minute, under 150 words; how you got there and the supporting detail go in \`--report report.html\`, and a side-by-side comparison in a \`cast-canvas\` after the opening. Every number and claim on it is one the session established; an estimate says so. Before posting, read the card as that person: whatever they would have to ask you about, rewrite. After posting, don't repeat the options; if your reply has nothing else, end your turn.
 
-**A step only the person may take** (a grant, a spend, an approval) is a permission ask, never a command to type: \`cast decide "<what Yes does, in plain words>?" --run "cast …"\` runs it as theirs on Yes. A refusal that posted an approval card has asked already: end your turn.
+**A step only the person may take** (a grant, a spend, a pairing, an approval) is a permission ask, never a command to type: \`cast decide "<what Yes does, in plain words>?" --run "cast …"\` runs it as theirs on Yes (\`--on laptop\` from a cloud host). A refusal that posted an approval card has asked already: end your turn.
 
 **Blocking is the default**: post, then end your turn; the answer arrives as a user message. \`--advisory --default <n>\` keeps you working on option n, but only when that default is cheap to undo. When facts change, \`cast decide edit\` rewrites your open decision in place and \`cast decide cancel\` withdraws one the work has moved past. \`cast guide decide\` has the rest.
 ${DECIDE_SNIPPET_END}
@@ -1478,7 +1479,7 @@ export const SNIPPET_CATALOG: SnippetDescriptor[] = [
       "`cast browser tab close <id>` for extras, then `cast browser stop`. Leave the human's and other sessions' tabs alone. " +
       "All ordinary commands, including `start`, use your Chrome; " +
       "a missing or disconnected extension never launches a separate browser. " +
-      `If it is not installed or not paired, give the human ${agentSetupPageUrl("browser")}; the page installs and pairs it, with nothing to type. ` +
+      `If it is not installed or not paired, a setup card in the conversation walks you through installing it from ${BROWSER_EXTENSION_STORE_URL} and pairing it; ${agentSetupPageUrl("browser")} does the same. ` +
       "The separate agent Chrome is a last resort requiring your explicit permission, " +
       "never a shortcut for verification, unattended work, or sign-in trouble. " +
       "Old browser overrides and another agent's brief do not authorize a separate browser; " +

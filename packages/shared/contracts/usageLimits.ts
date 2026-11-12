@@ -152,9 +152,9 @@ export function peggedWindowLabel(usage: CcUsage | undefined | null, now: number
  * `now` — what a single summary meter should show. Rolled windows count as 0,
  * so a dormant account stops reading "100%" forever. Null when no usage data
  * exists. */
-export function worstUsagePercent(usage: CcUsage | undefined | null, now: number): number | null {
+export function worstUsagePercent(usage: CcUsage | undefined | null, now: number, models?: readonly string[]): number | null {
   if (!usage) return null;
-  const windows = limitWindows(usage);
+  const windows = limitWindows(usage, models);
   return windows.length ? Math.max(...windows.map((w) => livePercent(w, now))) : null;
 }
 
@@ -200,16 +200,16 @@ export function formatAgo(msAgo: number): string {
  *  headroom" hopped to accounts whose usage probe had been 401ing for hours
  *  (the new window may already be spent). Null = unknown, same standing as
  *  no usage data. */
-export function switchUsagePercent(usage: CcUsage | undefined | null, now: number): number | null {
+export function switchUsagePercent(usage: CcUsage | undefined | null, now: number, models?: readonly string[]): number | null {
   if (!usage) return null;
-  const windows = limitWindows(usage);
+  const windows = limitWindows(usage, models);
   if (!windows.length) return null;
   for (const w of windows) {
     if (isWindowRolled(w, now) && (w.resets_at == null || usage.fetched_at <= w.resets_at)) {
       return null;
     }
   }
-  return worstUsagePercent(usage, now);
+  return worstUsagePercent(usage, now, models);
 }
 
 /** One account's standing: the SINGLE source both the usage bars and the
@@ -228,18 +228,18 @@ export type UsageStanding = {
   stale: boolean;
 };
 
-export function usageStanding(usage: CcUsage | undefined | null, now: number): UsageStanding {
-  const percent = switchUsagePercent(usage, now);
-  return { percent, pegged: isUsageExhausted(usage, now), stale: percent === null && !!usage };
+export function usageStanding(usage: CcUsage | undefined | null, now: number, models?: readonly string[]): UsageStanding {
+  const percent = switchUsagePercent(usage, now, models);
+  return { percent, pegged: isUsageExhausted(usage, now, models), stale: percent === null && !!usage };
 }
 
 /** The short standing label shared by the header chip, the park card and the
  * switch banner so all three name an account identically: "at limit" when
  * pegged, "stale" when a rolled window is unmeasured, "no data" when nothing
  * was ever read, else "N% used". */
-export function standingLabel(usage: CcUsage | undefined | null, now: number): string {
+export function standingLabel(usage: CcUsage | undefined | null, now: number, models?: readonly string[]): string {
   if ((usage?.blocked_until ?? 0) > now) return "spend cap hit";
-  const s = usageStanding(usage, now);
+  const s = usageStanding(usage, now, models);
   if (s.pegged) return "at limit";
   if (s.percent === null) return s.stale ? "stale" : "no data";
   return `${Math.round(s.percent)}% used`;
@@ -251,16 +251,16 @@ export function standingLabel(usage: CcUsage | undefined | null, now: number): s
  * one. Eligible, just unproven. Stable for ties. Reads usageStanding, the
  * same standing the bars render, so the top pick is the one a person would
  * point to on the meters. */
-export function rankByHeadroom<P extends { usage?: CcUsage | null }>(profiles: readonly P[], now: number): P[] {
-  return [...profiles].sort((a, b) => headroomScore(a.usage, now) - headroomScore(b.usage, now));
+export function rankByHeadroom<P extends { usage?: CcUsage | null }>(profiles: readonly P[], now: number, models?: readonly string[]): P[] {
+  return [...profiles].sort((a, b) => headroomScore(a.usage, now, models) - headroomScore(b.usage, now, models));
 }
 
 /** The sort key behind rankByHeadroom, for callers that order something other
  * than a flat list of profiles (a panel that groups an email's accounts, say):
  * the worst live window's percent, and 101 when the current windows have not
  * been measured, so an unproven account ranks behind every known number. */
-export function headroomScore(usage: CcUsage | undefined | null, now: number): number {
-  return usageStanding(usage, now).percent ?? 101;
+export function headroomScore(usage: CcUsage | undefined | null, now: number, models?: readonly string[]): number {
+  return usageStanding(usage, now, models).percent ?? 101;
 }
 
 /** The other accounts a limit-parked session could fall back to: every saved
@@ -292,6 +292,7 @@ export function fallbackProfiles<
   return rankByHeadroom(
     profiles.filter((p) => p.email && p.email !== activeEmail && !p.reserved_for && reachable(p) && !isUsageExhausted(p.usage, now, models)),
     now,
+    models,
   );
 }
 
@@ -329,7 +330,7 @@ export function describeDecision(d: RecoveryDecision | undefined | null): string
   const cause = d.pegged_window
     ? `${d.pegged_window} hit its limit on ${d.from_email ?? "the active account"}`
     : `${d.from_email ?? "the active account"} could not continue`;
-  const target = d.target_name ?? d.target_email;
+  const target = d.target_email ?? d.target_name;
   const standing = d.target_percent != null ? ` (${Math.round(d.target_percent)}% used)` : "";
   switch (d.kind) {
     case "switch":
