@@ -1,9 +1,9 @@
 /**
- * The actions behind `cast accounts share | unshare | pool` (declared in
- * index.ts, loaded only when one runs): the team's shared account pool from
- * the shell. Each verb calls the server function the web's pool pill calls
- * (accountPool.setAccountShares), the same way `cast devices share` mirrors
- * Settings > Machines.
+ * The actions behind `cast accounts share | unshare | devices | pool`
+ * (declared in index.ts, loaded only when one runs): the account pool from the
+ * shell. Each verb calls the server function the web's control calls
+ * (accountPool.setAccountShares, setAccountDevices), the same way
+ * `cast devices share` mirrors Settings > Machines.
  */
 
 import { fmt } from "./colors.js";
@@ -29,7 +29,7 @@ async function ownProfile(name: string) {
 /** Current pool teams of one of the caller's accounts, with each share's pool labels. */
 const sharedTeams = async (b: any, email: string): Promise<Map<string, string[]>> =>
   new Map(((await b.client.query(b.api.accountPool.listPool, { api_token: b.token })) ?? [])
-    .filter((r: any) => r.mine && r.email === email.toLowerCase())
+    .filter((r: any) => r.mine && r.team_id && r.email === email.toLowerCase())
     .map((r: any) => [String(r.team_id), (r.pools ?? []) as string[]]));
 
 /** The label set for each named team after adding or removing `pool`. */
@@ -92,6 +92,18 @@ export async function unshareAccount(name: string, names: string[], o: { pool?: 
   console.log(`${fmt.success("ok")} ${p.email} ${next.length ? `stays in ${next.length} pool(s)` : "is out of every pool"}`);
 }
 
+/** Which of your machines run on one of your accounts: all of them (--all),
+ *  the named ones, or none named: only the machine that holds it. */
+export async function accountDevices(name: string, needles: string[], o: { all?: boolean }): Promise<void> {
+  const { backend, ownDevice } = await devicesKit();
+  const p = await ownProfile(name);
+  const b = await backend();
+  const ids = o.all ? null : await Promise.all(needles.map(async (n) => (await ownDevice(b, n)).device_id as string));
+  await b.client.mutation(b.api.accountPool.setAccountDevices, { api_token: b.token, email: p.email, device_ids: ids });
+  const where = ids === null ? "every machine of yours" : ids.length ? `${ids.length} machine(s) besides this one` : "this machine only";
+  console.log(`${fmt.success("ok")} ${p.email} runs on ${where}; machines taken off drop it within a minute`);
+}
+
 export async function printPool(o: { json?: boolean }): Promise<void> {
   const { backend } = await devicesKit();
   const b = await backend();
@@ -101,14 +113,15 @@ export async function printPool(o: { json?: boolean }): Promise<void> {
     return;
   }
   if (rows.length === 0) {
-    console.log(fmt.muted("No shared accounts. Share one: cast accounts share <profile>"));
+    console.log(fmt.muted("No pooled accounts. An account joins once a machine of yours holds it with a setup-token: cast accounts token <profile>"));
     return;
   }
   for (const r of rows) {
     const s = r.usage?.session?.percent;
     const w = r.usage?.weekly?.percent;
     const meter = s === undefined && w === undefined ? fmt.muted("no meter yet") : `session ${Math.round(s ?? 0)}% · week ${Math.round(w ?? 0)}%`;
-    const labels = (r.pools ?? []).map((l: string) => fmt.accent(`[${l}]`)).join(" ");
+    const reach = r.team_id ? "" : r.device_ids ? `[${r.device_ids.length ? `narrowed to ${r.device_ids.length} machine(s)` : "holder only"}]` : "[all your machines]";
+    const labels = [reach, ...(r.pools ?? []).map((l: string) => `[${l}]`)].filter(Boolean).map((l) => fmt.accent(l)).join(" ");
     console.log(`${fmt.accent(r.email)}${labels ? ` ${labels}` : ""}  ${fmt.muted(`from ${r.mine ? "you" : r.contributor_name}`)}  ${meter}  ${fmt.muted(`${r.machines} machine(s)`)}`);
     const total = r.split.reduce((a: number, x: any) => a + x.tokens, 0);
     for (const x of r.split) {
