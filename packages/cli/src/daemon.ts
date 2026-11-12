@@ -8498,7 +8498,10 @@ async function executeRemoteCommand(
           error = "Missing session_id";
           break;
         }
-        if (conversationId) folderFetchFailures.forgetConversation(conversationId);
+        if (conversationId) {
+          folderFetchFailures.forgetConversation(conversationId);
+          (await import("./sessionTransfer.js")).forgetSessionFetchFailures(conversationId);
+        }
         // A backend switch is moving this session and brings it back itself. A Restart, an agent
         // switch or a repair now would rebuild or rebind it under the switch.
         if (backendSwitchHeld(sessionId, conversationId)) {
@@ -23920,6 +23923,12 @@ export type ResumeOptions = {
    * credential read.
    */
   onProcessSpawned?: () => void;
+  /**
+   * Runs a transcript transfer without the account-switch hold, keeping the
+   * in-flight guard fresh on each progress report; "superseded" when another
+   * resume or a closed gate took over meanwhile.
+   */
+  duringTransfer?: <T>(run: (touch: () => void) => Promise<T>) => Promise<T | "superseded">;
 };
 
 // Convex side of the gate. Runs only on resurrection paths (rare), never per
@@ -25198,8 +25207,8 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
   }
   const existing = resumeInFlight.get(sessionId);
   if (existing) {
-    const age = Date.now() - (resumeInFlightStarted.get(sessionId) ?? 0);
-    if (age < RESUME_IN_FLIGHT_TIMEOUT_MS) {
+    const ageOf = () => Date.now() - (resumeInFlightStarted.get(sessionId) ?? 0);
+    for (let age = ageOf(); age < RESUME_IN_FLIGHT_TIMEOUT_MS && resumeInFlight.get(sessionId) === existing; age = ageOf()) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const result = await Promise.race([
@@ -25245,6 +25254,16 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
       onProcessSpawned: () => {
         releaseAccountResume?.();
         releaseAccountResume = undefined;
+      },
+      duringTransfer: async (run) => {
+        const held = !!releaseAccountResume;
+        releaseAccountResume?.();
+        releaseAccountResume = undefined;
+        const touch = () => { if (resumeInFlight.get(sessionId) === promise) resumeInFlightStarted.set(sessionId, Date.now()); };
+        const out = await run(touch);
+        if (held) releaseAccountResume = await accountLifecycleGate.acquireResume(agentTypeHint);
+        if (resumeInFlight.get(sessionId) !== promise || !(await canResume()) || resumeInFlight.get(sessionId) !== promise) return "superseded";
+        return out;
       },
     };
     const resumed = await (resumeInnerForTests ?? autoResumeSessionInner)(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint, resumeOpts);
@@ -25355,7 +25374,7 @@ function serializeSessionStatus(sessionId: string, write: () => Promise<boolean>
 export const hibernationConcurrencyForTests = {
   sendAgentStatus, serializeSessionStatus, sessionStatusQueues, sessionStatusWrites,
   pendingHibernationStamps, hibernationStampWrites, hibernationStampCleared,
-  pendingOpenTaskReports, resumeInFlight, resumeInFlightStarted, autoResumeSession,
+  pendingOpenTaskReports, resumeInFlight, resumeInFlightStarted, autoResumeSession, accountLifecycleGate,
   hibernationInFlight, hibernationEvidenceJobs, abandonedEvidenceJobs, subagentActivityByParent, tmuxTargetLocks,
   freshClaims: (pid: number, registryDir: string) => hookClaimsForPid(pid, { fresh: true, registryDir }),
   setResumeInner: (fn: typeof autoResumeSessionInner | null) => { resumeInnerForTests = fn; },
@@ -25696,8 +25715,9 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   if (!sessionFile && !forkFromSessionId && conversationId && (agentTypeHint ?? "claude") === "claude" && syncServiceRef) {
     const { fetchSessionForResume } = await import("./sessionTransfer.js");
     const home = process.env.HOME || os.homedir();
-    const fetched = await fetchSessionForResume({
-      svc: syncServiceRef,
+    const svc = syncServiceRef;
+    const fetchIt = (onReport?: () => void) => fetchSessionForResume({
+      svc,
       conversationId,
       sessionId,
       deviceId: deviceId(),
@@ -25706,7 +25726,13 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       localCwd: (recorded) => resolveResumeCwdOrRefuse({ recordedCwd: recorded, cwdOverride, conversationId }),
       bind: () => mapSessionToConversation(sessionId, conversationId),
       log: logDelivery,
+      onReport,
     });
+    const fetched = opts?.duringTransfer ? await opts.duringTransfer(fetchIt) : await fetchIt();
+    if (fetched === "cancelled" || fetched === "superseded") {
+      logDelivery(`Not resuming ${sessionId.slice(0, 8)}: ${fetched === "cancelled" ? "its transcript transfer was cancelled" : "another resume took over while its transcript moved"}`);
+      return false;
+    }
     if (fetched) sessionFile = { path: fetched.jsonl, agentType: "claude" };
   }
   if (mayReconstituteResumeTranscript(storeOwnedResumeType) && !sessionFile && (!isStoreOwnedResume || storeLacksSession) && conversationId && config?.auth_token && config?.convex_url) {

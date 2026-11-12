@@ -38,8 +38,10 @@ Rejected:
    recorded folder (`project_path`, `git_root` or `worktree_path`); any other
    path is refused. Convex puts `direct: { requester, token_hash }` into the
    `export_folder` args only when the requester sent a tailnet and the source
-   device has not turned direct links off. One live request per
-   (conversation, path); a per-user rate limit.
+   device has not turned direct links off. A live request is reused only
+   when it is identical (same requester, path and grant); a fresh grant
+   secret is a new request. A per-user rate limit counts requests, one unit
+   each however many machines a request asks.
 3. **Decide (source).** The source grants only when all hold, else it answers
    through the relay in the same command:
    - its tailscaled is `Running` and its own tailnet IPv4 is on a local
@@ -61,18 +63,26 @@ Rejected:
    (same UserID, online, at that ip/name), dials with a 5 s connect timeout
    and a 30 s idle timeout, and pipes the body into a hardened extract.
 6. **Fallback.** Any direct failure re-requests from the same machine with
-   `relay_only: true` (the relay cap still applies). The outcome of every
-   attempt is recorded per machine pair (`peer_links`), which is what the UI
-   shows.
+   `relay_only: true` (the relay cap still applies). A source that skipped
+   the grant (firewall, userspace networking, grant failure; not size)
+   answers through the relay with `direct_skipped`, which the requester
+   records as a failed direct attempt. The outcome of every attempt is
+   recorded per machine pair (`peer_links`), which is what the UI shows.
+7. **Abandon.** The requester discards every request when it finishes. A
+   request no machine has answered yet is stamped executed (`abandoned`) so
+   no daemon runs it, and an answer that arrives after that has its archive
+   deleted and is not recorded.
 
 Extraction (both paths) goes to a staging folder beside the destination with
-`--no-same-owner --no-same-permissions`; then hardlinks, devices, fifos and
+`--no-same-owner --no-same-permissions` (tar itself refuses hardlinks whose
+target lies outside the extract folder); then devices, fifos, sockets and
 symlinks whose target leaves the folder are removed, `.git/hooks` is emptied
 and `.git/config` loses `core.fsmonitor`, `core.hooksPath`, `core.sshCommand`,
 `*.helper`, `include*` keys; then it is renamed into place. A destination must
 be inside `$HOME`, not in a dot-folder at the top of home, not under
-`~/Library`. The source refuses the same places and never packs files that
-look like keys or credentials (`.env*`, `id_*`, `*.pem`, `*.key`, `*.p12`,
+`~/Library`, both as named and after resolving symlinks. The source refuses
+the same places and never packs files that look like keys or credentials,
+tracked in git or not (`.env*`, `id_*`, `*.pem`, `*.key`, `*.p12`,
 `.netrc`, `.npmrc`, `.pypirc`, `credentials*`).
 
 ## Payloads
@@ -105,7 +115,11 @@ refs from a peer, a confirm for folders over 2 GB.
   the source bindable, and the last recorded transfer outcome (`peer_links`).
 - While a folder or transcript moves, the conversation shows a progress row
   (asking / packing on X / receiving N of M / unpacking, Direct or Relay) with
-  Cancel, where the restart status already appears.
+  Cancel, where the restart status already appears. The row
+  (`conversations.peer_transfer`) is projected only to the owner, since a
+  failure reason can name tailnet addresses and local paths. Cancel and
+  "done" act only on the transfer they name by `started_at`, so a newer
+  transfer is never cancelled or cleared by an older one.
 
 ## Code map
 
