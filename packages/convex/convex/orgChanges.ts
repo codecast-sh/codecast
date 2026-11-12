@@ -8,7 +8,7 @@ import { checkConversationAccess } from "./privacy";
 import { personName, performReparentSession } from "./sessionOwnership";
 import { performReparentRole, performSetCaps, performSetTrust, performUpdateRole } from "./orgRoles";
 import { ownerSetOf, removeSessionOwnerRow, setSessionOwnerRows, syncPrimaryOwnerCache } from "./sessionOwners";
-import { patchTask } from "./agentTasks";
+import { patchTask } from "./lib/agentTaskRows";
 import { recalcPlanProgress } from "./tasks";
 import { setTaskStatus } from "./orgInit";
 import { outsideKeptArea, scopeIds } from "./lib/orgScope";

@@ -4,7 +4,7 @@ import { hashToken } from "@platform/auth/convex";
 import { internal } from "./_generated/api";
 import schema from "./schema";
 import { anyApi } from "convex/server";
-import { READ_PAGE_SIZE, READ_STEP_BYTES, READ_TAIL_MAX, readConversationRange, readRange } from "./conversations";
+import { READ_PAGE_SIZE, READ_STEP_BYTES, READ_TAIL_MAX, readConversationRange, readRange } from "./lib/conversationRead";
 
 // `cast read <id> 1:400` on a 79 message session returned the first 50 lines
 // and stopped; an explicit range now covers every line in it. And `cast read`,

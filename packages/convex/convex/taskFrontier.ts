@@ -13,7 +13,6 @@
 // an unrelated task write no longer invalidates a claim.
 
 import { v } from "convex/values";
-import type { GenericActionCtx } from "convex/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
@@ -33,7 +32,7 @@ const CLAIM_CANDIDATES = 10;
  *  can sit below any number that belong to someone else. */
 const WHOLE_FRONTIER = Number.MAX_SAFE_INTEGER;
 
-type ClaimResult = {
+export type ClaimResult = {
   task: { short_id: string; title: string; priority: string } | null;
   plan_id?: string;
   assigned_role?: { handle: string; name: string };
@@ -180,21 +179,3 @@ export const claimNextReady = internalMutation({
     return { task: null, skipped };
   },
 });
-
-/** `/cli/work/claim`: read the candidates, then claim one. */
-export async function claimFrontier(
-  ctx: Pick<GenericActionCtx<any>, "runQuery" | "runMutation">,
-  args: { api_token: string; conversation_id?: string; stale?: boolean } & Record<string, any>,
-): Promise<ClaimResult> {
-  const { candidates, more, stale_passed, others_passed } = await ctx.runQuery(internal.taskFrontier.claimCandidates, args as any);
-  const passed = { ...(stale_passed ? { stale_passed } : {}), ...(others_passed ? { others_passed } : {}) };
-  if (!candidates.length) return { task: null, skipped: [], more, ...passed };
-  const claim: ClaimResult = await ctx.runMutation(internal.taskFrontier.claimNextReady, {
-    api_token: args.api_token,
-    candidates,
-    ...(args.conversation_id ? { conversation_id: args.conversation_id } : {}),
-    ...(args.stale ? { stale: true } : {}),
-    ...(args.include_subtasks ? { include_subtasks: true } : {}),
-  });
-  return { ...claim, ...(!claim.task ? { ...(more ? { more } : {}), ...passed } : {}) };
-}

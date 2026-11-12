@@ -21,7 +21,7 @@ import type { ActionCtx } from "../functions";
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { invalidScope } from "../lib/auth";
-import { scopeArgs, scopeOf, sourceByRef, type ScopeArgs } from "../ingest";
+import { scopeArgs, scopeOf, sourceByRef, type ScopeArgs } from "../lib/ingestScope";
 import { gunzipCapped, REPLAY_CHUNK_MAX_INFLATED_BYTES } from "../lib/replayChunks";
 import { bindHogqlNow } from "../lib/hogqlNow";
 import { importVendorRecording, VendorCallError, type ImportOutcome, type VendorRecording } from "./vendorReplay";

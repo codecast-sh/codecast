@@ -36,7 +36,7 @@ import {
   workspaceForResource,
 } from "./lib/access";
 import { notFound } from "./lib/auth";
-import { claimShareToken } from "./publicShare";
+import { claimShareToken } from "./lib/shareToken";
 import { packSnapshotContent } from "./lib/docSnapshot";
 import { docTitleFromContent, docTypeChangeAllowed, draftTextNodes, renderDocMentionExcerpt, setTitleHeading, withTitleHeading } from "@codecast/shared/docs";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";

@@ -17,8 +17,8 @@ import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
 import { newGithubAppInstallNonce } from "@codecast/shared/contracts";
 import { sha256Hex } from "./lib/hash";
+import { installCallbackHandler } from "./lib/githubInstallCallback";
 import {
-  installCallbackHandler,
   createInstallIntent,
   consumeInstallIntent,
   storeInstallation,

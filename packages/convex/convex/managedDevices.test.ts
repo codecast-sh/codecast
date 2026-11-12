@@ -13,7 +13,8 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { allModules } from "./testModules.testkit";
 import { hashToken } from "./apiTokens";
-import { ENROLL_PATH, enrollHttp, profileIdentifier } from "./managedDevices";
+import { profileIdentifier } from "./managedDevices";
+import { ENROLL_PATH, enrollHttp } from "./lib/enrollHttp";
 import { regulatedTeamFor, teamPolicyRefusal } from "./lib/teamPolicyGuard";
 
 setDefaultTimeout(120_000);

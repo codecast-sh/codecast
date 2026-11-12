@@ -32,7 +32,7 @@ import { v } from "convex/values";
 import { action, internalAction, internalMutation, internalQuery, mutation, query } from "../functions";
 import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
-import { scopeArgs, scopeOf, sourceByRef, type ScopeArgs } from "../ingest";
+import { scopeArgs, scopeOf, sourceByRef, type ScopeArgs } from "../lib/ingestScope";
 import { patchSourceStats } from "../lib/sourceStats";
 import { connectionIdForSource, tokenFor, TOKEN_PROVIDERS, type FetchLike } from "../tokenConnectors";
 import { appHttp, signerOf } from "../lib/appHttp";

@@ -2,7 +2,7 @@ import { isHostedAgentType } from "@codecast/shared/contracts";
 import { DELIVERED_ECHO_ADOPTION_WINDOW_MS, findEchoedPendingMessage, imageEchoMatchesPending, injectedImageRefs, injectedImageStorageIds, pendingImageStorageIds, resolveEchoImages, verifiedEchoImages } from "./lib/echoMatch";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
 import { clipText } from "./lib/wellFormed";
-import { claimShareToken } from "./publicShare";
+import { claimShareToken } from "./lib/shareToken";
 import { policyWorkspaceOf, requireTeamPolicyAllows } from "./lib/teamPolicyGuard";
 import { mutation, query, internalMutation, type MutationCtx, type QueryCtx } from "./functions";
 import { addRoleTokens } from "./lib/orgCaps";
@@ -14,7 +14,6 @@ import {
   FILE_CHANGE_BODY_KEYS_LIMIT,
   readFileChangeBodies,
   readFileChangeIndex,
-  readFoldChanges,
   writeFileChange,
 } from "./fileChangeBodies";
 import { ConvexError, v } from "convex/values";
@@ -55,6 +54,8 @@ import { extractFileChanges, extractCommitHashFromContent, extractCommitBranchFr
 import { activityLine } from "@codecast/shared/render";
 import type { SessionActivity } from "@codecast/shared/contracts";
 import { attachmentViews, extractSessionImages, type SessionImageEntry } from "./sessionImages";
+import { trustedImageOrigin, latestImagePreviewUrl, listConversationFileChanges } from "./lib/messageReads";
+export { latestImagePreviewUrl, listConversationFileChanges };
 
 /** Bound demand-scoped coverage checks independently of transcript size. */
 export const MESSAGE_COVERAGE_COMMAND_ID_LIMIT = 64;
@@ -515,18 +516,6 @@ async function readableConversation(
   return conversation;
 }
 
-/**
- * The changes a fold of the whole conversation reads, with their text, under
- * a byte budget (fileChangeBodies.readFoldChanges). `cast diff` draws its tree
- * from this; the web reads the index and bodies separately below.
- */
-export async function listConversationFileChanges(
-  ctx: QueryCtx,
-  conversationId: Id<"conversations">,
-): Promise<{ changes: FileChange[]; truncated: boolean }> {
-  return readFoldChanges(ctx, conversationId);
-}
-
 /** The fold payload for web builds that predate the index/bodies split. */
 export const getConversationFileChanges = query({
   args: { conversation_id: v.id("conversations"), share_token: v.optional(v.string()) },
@@ -565,49 +554,6 @@ export const getFileChangeBodies = query({
     };
   },
 });
-
-// Newest displayable image in a message batch → the conversation's inbox
-// thumbnail (conversations.image_preview_url). Storage-backed images (pasted
-// attachments, tool screenshots) resolve via ctx.storage.getUrl; markdown
-// images embedded in prose (`cast image` output) count only when they point at
-// our own storage origin — mirroring the web's trusted-origin gate, so a
-// third-party URL an agent emits can never become a team-visible thumbnail.
-// Scans newest-first and returns the first hit; undefined when the batch
-// carries no image.
-const MD_IMAGE_URL_RE = /!\[[^\]]*\]\((https?:\/\/[^)\s]+?)(?:\s+"[^"]*")?\)/g;
-function trustedImageOrigin(): string | null {
-  const base = process.env.CONVEX_CLOUD_ORIGIN || process.env.CONVEX_CLOUD_URL || process.env.VITE_CONVEX_URL || "";
-  try { return base ? new URL(base).origin : null; } catch { return null; }
-}
-export async function latestImagePreviewUrl(
-  ctx: { storage: { getUrl: (id: any) => Promise<string | null> } },
-  msgs: Array<{ content?: string; images?: Array<{ storage_id?: string }> }>,
-): Promise<string | undefined> {
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    const m = msgs[i];
-    if (m.images) {
-      for (let j = m.images.length - 1; j >= 0; j--) {
-        const sid = m.images[j].storage_id;
-        if (!sid) continue;
-        const url = await ctx.storage.getUrl(sid as any);
-        if (url) return url;
-      }
-    }
-    if (m.content && m.content.includes("![")) {
-      const origin = trustedImageOrigin();
-      if (origin) {
-        let last: string | undefined;
-        for (const match of m.content.matchAll(MD_IMAGE_URL_RE)) {
-          try {
-            if (new URL(match[1]).origin === origin) last = match[1];
-          } catch {}
-        }
-        if (last) return last;
-      }
-    }
-  }
-  return undefined;
-}
 
 // --- Session image gallery -------------------------------------------------
 //
@@ -894,7 +840,6 @@ async function settleEchoesOn(
   }
   for (const row of echoed) await settleEchoedPending(ctx, row, message._id);
 }
-
 
 // Stamp what the session opened with (see titleGeneration.firstPromptOf),
 // once. Only on a young session: an old row with no stamp gets it from the
@@ -2606,7 +2551,6 @@ export const getSharedMessageMeta = query({
     };
   },
 });
-
 
 /**
  * Compatibility stub for cached web clients that still poll the transcript

@@ -39,7 +39,7 @@ import { answerLabel, normalizeVerdict, verdictOfRow, type Verdict } from "./lib
 import { noticeAreaOwner, routeByArea } from "./decisionRouting";
 import { settleAreasCard } from "./decisionAreas";
 export { syncDecisionInbox };
-import { artifactUrl } from "./artifacts";
+import { artifactUrl } from "./lib/artifactRules";
 import { humanStarterUser, listSessionOwnerIds } from "./sessionOwners";
 import { resolveAskedPeople } from "./lib/decisionAudience";
 import { learnFromCardGate } from "./lineLearn";

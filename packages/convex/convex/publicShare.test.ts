@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { CALL_LINK_REFUSED_WORDS, channelRoomKey } from "@codecast/shared/contracts";
 import schema from "./schema";
-import { claimShareToken, clampAudioRange, getSharedCall, getSharedProject, sharedCallAudioSource, SHARED_CALL_AUDIO_PATH, writeObjectShareLink } from "./publicShare";
+import { claimShareToken, getSharedCall, getSharedProject, sharedCallAudioSource, writeObjectShareLink } from "./publicShare";
+import { clampAudioRange, SHARED_CALL_AUDIO_PATH } from "./lib/sharedCallMedia";
 
 const UUID_A = "1a221088-1fc3-48c8-a814-71119676adf0";
 const UUID_B = "4c7c324f-3077-486a-a63c-65f188d18a0c";

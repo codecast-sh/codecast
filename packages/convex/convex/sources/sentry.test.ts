@@ -11,6 +11,7 @@ import { encryptConnectionSecret } from "../tokenConnectors";
 import * as tokenConnectorsModule from "../tokenConnectors";
 import * as ingestModule from "../ingest";
 import * as sentry from "./sentry";
+import { sentryWebhook, setEventGroupStatus } from "../lib/sentryHttp";
 import { fromRrweb, replayIssues } from "@codecast/shared/replay";
 import {
   SENTRY_POLL,
@@ -32,7 +33,6 @@ import {
   sentryOrgFromUrl,
   sentryStatus,
   sentryTarget,
-  sentryWebhook,
   setIssueStatus,
   takeWebhook,
   targetReads,
@@ -903,7 +903,7 @@ describe("status writes route to where the status lives", () => {
   test("a native group, or a mute, is set on the row", async () => {
     for (const [group, status] of [[native, "resolved"], [mirrored, "muted"]] as const) {
       const { ctx, calls } = ctxFor(group);
-      await sentry.setEventGroupStatus(ctx, { api_token: "t", group: group.short_id, status, resolved_in: "1.2.0" });
+      await setEventGroupStatus(ctx, { api_token: "t", group: group.short_id, status, resolved_in: "1.2.0" });
       expect(calls.map((c) => c[0])).toEqual(["ingest:getGroup", "ingest:setGroupStatus"]);
       expect(calls[1][1]).toMatchObject({ status, resolved_in: "1.2.0" });
     }
@@ -911,7 +911,7 @@ describe("status writes route to where the status lives", () => {
 
   test("a mirrored group is resolved, ignored or reopened in Sentry, and says --in was not used", async () => {
     const { ctx, calls } = ctxFor(mirrored);
-    const out = await sentry.setEventGroupStatus(ctx, { api_token: "t", group: "eg-2", status: "resolved", resolved_in: "1.2.0" });
+    const out = await setEventGroupStatus(ctx, { api_token: "t", group: "eg-2", status: "resolved", resolved_in: "1.2.0" });
     expect(calls.map((c) => c[0])).toEqual(["ingest:getGroup", "sources/sentry:setIssueStatus", "ingest:getGroup"]);
     expect(out.note).toContain("--in 1.2.0 was not used");
     expect(sentry.sentryStatusFor(mirrored, "open")).toBe("unresolved");

@@ -25,7 +25,7 @@
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { ipRateLimited, keyRateLimited } from "./lib/httpRateLimit";
-import { cacheKeyFor } from "./repos";
+import { cacheKeyFor } from "./lib/repoRefreshSpec";
 
 /** Both prefixes reach this handler; see the registration in http.ts. */
 export const PUBLIC_REPO_PREFIXES = ["/api/public/repo/", "/cli/public/repo/"];

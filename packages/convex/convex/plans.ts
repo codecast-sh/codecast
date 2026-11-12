@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { claimShareToken } from "./publicShare";
+import { claimShareToken } from "./lib/shareToken";
 import { charterPatch, planCharterArgs } from "./lib/orgCharter";
 import { resolveActor } from "./lib/actor";
 import { mutation, query } from "./functions";

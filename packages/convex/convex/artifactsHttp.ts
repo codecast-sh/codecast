@@ -12,13 +12,12 @@ import {
   MAX_ARTIFACT_MB,
   MAX_DOCUMENT_BYTES,
   MAX_DOCUMENT_MB,
-  newSlug,
-  newSecret,
   artifactUrl,
   lineDiff,
   accessSummary,
   teamGateRefusal,
-} from "./artifacts";
+} from "./lib/artifactRules";
+import { newSecret, newSlug } from "./lib/slug";
 import {
   brandArtifactHtml,
   passwordGatePage,

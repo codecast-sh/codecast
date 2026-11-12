@@ -192,7 +192,9 @@ function extractPatchCalls(src: string): string[] {
 }
 
 describe("every agent_tasks writer restamps the home (exhaustive)", () => {
-  const src = readFileSync(join(import.meta.dir, "agentTasks.ts"), "utf8");
+  // The writer is agentTasks.ts and the row helpers it shares with the
+  // conversation lifecycle (lib/agentTaskRows.ts, where patchTask lives).
+  const src = ["agentTasks.ts", "lib/agentTaskRows.ts"].map((f) => readFileSync(join(import.meta.dir, f), "utf8")).join("\n");
   const patchCalls = extractPatchCalls(src);
 
   test("the patchTask chokepoint exists and restamps", () => {

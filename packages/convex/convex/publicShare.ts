@@ -10,16 +10,14 @@
 // off clears the token, killing every copy; turning it back on takes a new
 // one, so an old link never comes back to life.
 import { v } from "convex/values";
-import { recordAuthorityEvent } from "./lib/authorityEvents";
-import { policyWorkspaceOf, requireTeamPolicyAllows } from "./lib/teamPolicyGuard";
+import { SHARE_TOKEN_SHAPE, writeShareToken, type ShareTable } from "./lib/shareToken";
 import { internalQuery, query } from "./functions";
-import { httpAction } from "./_generated/server";
+import { SHARED_CALL_AUDIO_PATH } from "./lib/sharedCallMedia";
 import { internal } from "./_generated/api";
 import type { Doc, Id, TableNames } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { canAccessDoc, canAccessInitiative, canAccessPlan, canAccessProject, canAccessTask, isSameWorkspace, workspaceForResource } from "./lib/access";
 import { canReadCall } from "./transcripts";
-import { callRecordingGetUrl } from "./lib/r2";
 import { sharedCallVideoKey, sharedCallVideos } from "./callRecordings";
 import { callTeamRetired, mayPublishCall, restampRunShare } from "./lib/callRecordingRuns";
 import { stampRoomWordsPublic } from "./callRooms";
@@ -33,16 +31,11 @@ import { CALL_LINK_REFUSED_WORDS, isRecRoomKey } from "@codecast/shared/contract
 import { publicName } from "./lib/displayNames";
 import { publicWeekCard, weeklyCardAllowed, type WeekCardStats } from "@codecast/shared/contracts/weeklyCard";
 
-export const SHARE_TOKEN_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+export { SHARE_TOKEN_SHAPE, type ShareTable };
 
-type ShareTable =
-  | "conversations" | "docs" | "plans" | "tasks" | "transcripts" | "projects" | "initiatives"
-  | "session_decisions" | "decision_stacks" | "agent_tasks" | "workflow_runs" | "weekly_cards";
-
-/** Point `row`'s share token at `token` (null clears it). A token already
- *  serving another row of the table is refused, so one link can never be
- *  re-aimed at a different object. `by` is the person who did it, for a
- *  call's thread (restampCallRuns). */
+/** Point `row`'s share token at `token` (null clears it), any table. A call's
+ *  link also restamps its running recordings and tells its room's thread who
+ *  did it (restampCallRuns); every other table is lib/shareToken's write. */
 export async function claimShareToken(
   ctx: Pick<MutationCtx, "db">,
   table: ShareTable,
@@ -53,39 +46,8 @@ export async function claimShareToken(
   // turned public sharing off is refused too (lib/teamPolicyGuard).
   apiToken?: string,
 ): Promise<void> {
-  // A call's link may also carry its video (callRecordings.setCallShareVideo).
-  // That choice belongs to the link it was made for: a link cleared or
-  // re-aimed drops it, so a link turned on again (even with the old token,
-  // which any free UUID may be) starts with the transcript alone and video is
-  // always a fresh choice.
-  const dropVideo = table === "transcripts" ? { share_video_token: undefined, share_video_through: undefined } : {};
-  const audit = async (kind: "share_link_minted" | "share_link_revoked", shareToken: string) => {
-    if (!by) throw new Error("A share link change needs the person who made it");
-    await recordAuthorityEvent(ctx, {
-      kind, actor_user_id: by, share_table: table, share_token: shareToken,
-      conversation: table === "conversations" ? (row as any) : null,
-      ...(table !== "conversations" && (row as any).team_id ? { team_id: (row as any).team_id } : {}),
-      detail: { before: { on: !!row.share_token }, after: { on: kind === "share_link_minted", table, row_id: row._id } },
-    });
-  };
-  if (token === null) {
-    if (row.share_token) {
-      await ctx.db.patch(row._id, { share_token: undefined, ...dropVideo } as any);
-      await audit("share_link_revoked", row.share_token);
-      await restampCallRuns(ctx, table, row, by && { by, event: "link_off" });
-    }
-    return;
-  }
-  if (row.share_token === token) return;
-  if (!SHARE_TOKEN_SHAPE.test(token)) throw new Error("Invalid share token");
-  await requireTeamPolicyAllows(ctx, { workspace: policyWorkspaceOf(table, row), apiToken }, "public_sharing_disabled");
-  const taken = await (ctx.db.query(table) as any)
-    .withIndex("by_share_token", (q: any) => q.eq("share_token", token))
-    .first();
-  if (taken) throw new Error("Invalid share token");
-  await ctx.db.patch(row._id, { share_token: token, ...dropVideo } as any);
-  await audit("share_link_minted", token);
-  await restampCallRuns(ctx, table, row, by && { by, event: "link_on" });
+  const change = await writeShareToken(ctx, table, row, token, by, apiToken);
+  if (change) await restampCallRuns(ctx, table, row, by && { by, event: change === "minted" ? "link_on" : "link_off" });
 }
 
 /** A call's running recordings carry whether their video goes out with the
@@ -264,10 +226,6 @@ export const getSharedCall = query({
   },
 });
 
-/** Where a shared call's audio is served: under /cli/, the prefix the proxy
- *  in front of prod forwards to HTTP actions (see SHARED_CALL_VIDEO_PATH). */
-export const SHARED_CALL_AUDIO_PATH = "/cli/share/call/audio";
-
 function sharedCallAudioUrl(token: string): string {
   const site = (process.env.CONVEX_SITE_URL ?? "").replace(/\/$/, "");
   return `${site}${SHARED_CALL_AUDIO_PATH}?token=${encodeURIComponent(token)}`;
@@ -284,40 +242,6 @@ export const sharedCallAudioSource = internalQuery({
   },
 });
 
-/** Largest byte span one audio response carries: an HTTP action's response
- *  stops at about 20 MB. A player reads a longer file as several ranges. */
-export const SHARED_AUDIO_CHUNK_BYTES = 8 * 1024 * 1024;
-
-/** The Range header to ask storage for: the player's own range, its end
- *  clamped so one response stays under the action's size limit. A request
- *  with no range (or one we cannot read) starts at byte 0. */
-export function clampAudioRange(header: string | null, chunk = SHARED_AUDIO_CHUNK_BYTES): string {
-  const m = header?.match(/^bytes=(\d+)-(\d*)$/);
-  const start = m ? Number(m[1]) : 0;
-  const askedEnd = m && m[2] ? Number(m[2]) : Infinity;
-  return `bytes=${start}-${Math.min(askedEnd, start + chunk - 1)}`;
-}
-
-/** A publicly shared call's audio. Every request (each range a player asks
- *  for) re-checks the link, then streams that range from storage, so turning
- *  the link off stops the audio at the next request and no storage URL ever
- *  reaches the page. */
-export const sharedCallAudio = httpAction(async (ctx, request) => {
-  const token = new URL(request.url).searchParams.get("token") ?? "";
-  const notFound = () => new Response("Not found", { status: 404, headers: { "Cache-Control": "no-store" } });
-  if (!token) return notFound();
-  const src: string | null = await ctx.runQuery(internal.publicShare.sharedCallAudioSource, { share_token: token });
-  if (!src) return notFound();
-  const upstream = await fetch(src, { headers: { Range: clampAudioRange(request.headers.get("range")) } });
-  if (!upstream.ok) return notFound();
-  const headers = new Headers({ "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "Accept-Ranges": "bytes" });
-  for (const h of ["Content-Type", "Content-Length", "Content-Range"]) {
-    const val = upstream.headers.get(h);
-    if (val) headers.set(h, val);
-  }
-  return new Response(upstream.body, { status: upstream.status, headers });
-});
-
 /** The object behind a shared call's video, for the shared call video
  *  redirect: null unless the link is live, its holder may see the video, and
  *  a finished room recording began at `at`. */
@@ -327,35 +251,6 @@ export const sharedCallVideoObject = internalQuery({
     const t = await byShareToken(ctx, "transcripts", args.share_token);
     return t ? await sharedCallVideoKey(ctx, t, args.at) : null;
   },
-});
-
-// A publicly shared call's video (callRecordings.sharedCallVideos): the share
-// page's <video> points here, and every request (each range a player asks
-// for) re-checks the link and the choice to include video, then redirects to
-// a URL into the private bucket. Turning the link off stops the video at the
-// next request; no URL into the bucket is ever written into the page.
-//
-// The URL is signed stable within SHARED_VIDEO_REDIRECT_WINDOW_MS (lib/r2
-// stableSigningWindow), so every redirect in a window carries the same
-// Location: a player that asks again while scrubbing lands on the object URL
-// it already holds, and its ranges come from R2 rather than through here.
-// It lives at most two windows, the ten minutes a fresh one had.
-//
-// Registered only under /cli/, the prefix the Caddy proxy in front of prod
-// forwards to HTTP actions today (infra/convex-host/Caddyfile): any other
-// path lands on the backend and 404s, so a second address here would be a
-// route that never answers.
-const SHARED_VIDEO_REDIRECT_WINDOW_MS = 5 * 60_000;
-export const sharedCallVideo = httpAction(async (ctx, request) => {
-  const u = new URL(request.url);
-  const token = u.searchParams.get("token") ?? "";
-  const at = Number(u.searchParams.get("at"));
-  const notFound = () => new Response("Not found", { status: 404, headers: { "Cache-Control": "no-store" } });
-  if (!token || !Number.isFinite(at)) return notFound();
-  const key = await ctx.runQuery(internal.publicShare.sharedCallVideoObject, { share_token: token, at });
-  const signed = key ? await callRecordingGetUrl(key, { stable: { at: Date.now(), windowMs: SHARED_VIDEO_REDIRECT_WINDOW_MS } }) : null;
-  if (!signed) return notFound();
-  return new Response(null, { status: 302, headers: { Location: signed.url, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
 });
 
 // A person's display name, never their id or address.

@@ -49,7 +49,7 @@ import { stampBrowserPaneOfferHandled, writeShareLink } from "./conversations";
 import { writeObjectShareLink } from "./publicShare";
 import { setWeeklyCardEnabledFor, setWeeklyCardOptionsFor } from "./weeklyCards";
 import { deleteSessionAsOwner } from "./sessionDelete";
-import { reactivateTasksCanceledOnKill } from "./agentTasks";
+import { reactivateTasksCanceledOnKill } from "./lib/agentTaskRows";
 import { canAccessDoc } from "./docs";
 import { requireArtifactEditor } from "./lib/liveArtifactAccess";
 import { applyAsWebUser } from "./liveArtifacts";

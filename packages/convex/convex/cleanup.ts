@@ -5,7 +5,7 @@ import { v } from "convex/values";
 import { isStaff } from "./lib/staff";
 import { internal } from "./_generated/api";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
-import { cancelTasksBoundToConversation } from "./agentTasks";
+import { cancelTasksBoundToConversation } from "./lib/agentTaskRows";
 import { cancelQueuedMessagesOnKill } from "./pendingMessages";
 import { subagentEnded } from "./subagentFleet";
 import { nestParentIdOf } from "./ccAccountsShared";
