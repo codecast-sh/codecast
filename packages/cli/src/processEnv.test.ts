@@ -134,6 +134,9 @@ describe("followsCredentialStore", () => {
   test("a session pinned to another profile's store does not follow", () => {
     expect(followsCredentialStore(1, fleet, () => ({ CLAUDE_SECURESTORAGE_CONFIG_DIR: "/Users/x/.codecast/cc-store/p1" }))).toBe(false);
   });
+  test("a session carrying an OAuth token runs on it, not on the store", () => {
+    expect(followsCredentialStore(1, fleet, () => parseProcArgs2(procargs(["claude"], [`CLAUDE_SECURESTORAGE_CONFIG_DIR=${fleet}`, "CLAUDE_CODE_OAUTH_TOKEN=t"])))).toBe(false);
+  });
   test("an unreadable environment is unknown", () => {
     expect(followsCredentialStore(1, fleet, () => null)).toBeUndefined();
   });

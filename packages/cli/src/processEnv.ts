@@ -12,7 +12,7 @@ import { noTerminal } from "./psTerminal.js";
 
 /** The variables that name the session a process works for (sessionIdFromEnv reads them). */
 export const SESSION_ENV_KEYS = ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODECAST_SESSION_ID", "CODECAST_MANAGED_SESSION"];
-const KEYS = [...SESSION_ENV_KEYS, "TMUX", "TERM_PROGRAM", "CLAUDE_SECURESTORAGE_CONFIG_DIR"];
+const KEYS = [...SESSION_ENV_KEYS, "TMUX", "TERM_PROGRAM", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN"];
 
 /** An environment that names no session: for what the daemon starts on its own behalf. */
 export function withoutSessionIds<T extends Record<string, string | undefined>>(env: T): T {
@@ -108,11 +108,13 @@ export function terminalProgramOf(pid: number, read: (pid: number) => Env | null
  * Whether a Claude Code process reads its login from the credential store at
  * `storeDir`. Only a process launched with that store follows a switch that
  * rewrites it; one started by hand reads the keychain and keeps the account it
- * had. Undefined when the environment cannot be read.
+ * had, and one carrying CLAUDE_CODE_OAUTH_TOKEN runs on that token whatever
+ * the store holds. Undefined when the environment cannot be read.
  */
 export function followsCredentialStore(pid: number, storeDir: string, read: (pid: number) => Env | null = readEnv): boolean | undefined {
   const env = read(pid);
   if (!env) return undefined;
+  if (env.CLAUDE_CODE_OAUTH_TOKEN) return false;
   return env.CLAUDE_SECURESTORAGE_CONFIG_DIR?.normalize("NFC") === storeDir.normalize("NFC");
 }
 

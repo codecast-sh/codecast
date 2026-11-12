@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { spawnSync } from "child_process";
 import {
   FLEET_GATE_ACCOUNT,
   FLEET_MIN_ACCESS_MS,
@@ -111,6 +112,16 @@ describe("fleet store (sandboxed $HOME)", () => {
     const pinned = launchAccountPrefix("tok");
     expect(pinned.account).toBe("tok");
     expect(pinned.prefix).not.toContain("cc-fleet.env");
+
+    // A token inherited from the tmux server or a shell rc outranks the store:
+    // the store launch drops it, and a pin still runs on its own token.
+    const launchedEnv = (prefix: string) =>
+      spawnSync("/bin/bash", ["-c", `${prefix}echo "tok=\${CLAUDE_CODE_OAUTH_TOKEN:-} store=\${CLAUDE_SECURESTORAGE_CONFIG_DIR:-}"`], {
+        env: { ...process.env, CLAUDE_SECURESTORAGE_CONFIG_DIR: "", CLAUDE_CODE_OAUTH_TOKEN: "inherited-spent-account" },
+        encoding: "utf-8",
+      }).stdout.trim();
+    expect(launchedEnv(fleet.prefix)).toBe(`tok= store=${fleetStoreDir()}`);
+    expect(launchedEnv(pinned.prefix)).toBe(`tok=${TOKEN} store=`);
 
     await putFleetOn("tok", now);
     expect(JSON.parse(fs.readFileSync(path.join(fleetStoreDir(), ".credentials.json"), "utf-8")).claudeAiOauth.accessToken).toBe(TOKEN);
