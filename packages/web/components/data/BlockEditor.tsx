@@ -30,6 +30,8 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
     if (block.kind !== "kpi" && block.kind !== "chart" && block.kind !== "table") return;
     const sample = fresh.rows.find((r) => r.some((v) => v !== null && v !== undefined));
     const fields = dashboard.suggestFields(block.kind, fresh.columns, sample);
+    const value = typeof fields.field === "string" ? fields.field : typeof fields.y === "string" ? fields.y : null;
+    if (value && !fields.format && formatFor(value) !== "number") fields.format = formatFor(value);
     if (Object.keys(fields).length) apply([{ k: block.key, set: fields }]);
   }, [fresh, block, apply]);
   if (!block) {
@@ -75,7 +77,10 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
               if (!newSource) return set({ query: query as unknown as Json });
               suggestFor.current = query?.source ?? null;
               const label = dashboard.DATA_SOURCES.find((d) => d.id === query?.source)?.label;
-              set({ query: query as unknown as Json, ...Object.fromEntries(SHAPING.map((f) => [f, null])), ...(!block.title && label ? { title: label } : {}) });
+              // A title that only named the old source follows the new one; a title someone wrote stays.
+              const was = dashboard.DATA_SOURCES.find((d) => d.id === dashboard.blockQuery({ query: block.query })?.source)?.label;
+              const named = !block.title || block.title === was;
+              set({ query: query as unknown as Json, ...Object.fromEntries(SHAPING.map((f) => [f, null])), ...(named && label ? { title: label } : {}) });
             }}
             problem={result?.error && !result.refreshed_at ? result.error : undefined} />
           {block.kind === "kpi" ? (
