@@ -31,7 +31,6 @@ import { agentSpawnPath } from "../agentSpawnPath.js";
 import { codexAccessExpired, decodeCodexAuth } from "../codexAuthDecode.js";
 import { remapHome } from "../cloud/mirror/transform.js";
 import type { RemoteHost } from "./session-move.js";
-import { TRUST_STORE_FILE } from "../workspace/trustPaths.js";
 
 // ---------------------------------------------------------------------------
 // Bundle shape (the ssh stdin payload; never Convex)
@@ -341,9 +340,6 @@ export const TOOL_AUTH_SOURCES: readonly AgentAuthSource[] = [
   { id: "netrc", localPath: homeFile(".netrc"), remotePath: "~/.netrc", gate: presentLogin },
   { id: "pgpass", localPath: homeFile(".pgpass"), remotePath: "~/.pgpass", gate: presentLogin },
   { id: "git-credentials", localPath: homeFile(".git-credentials"), remotePath: "~/.git-credentials", gate: presentLogin },
-  // Not a login: the setup code the person approved here, so a host runs the
-  // same code without asking again (workspace/trust.ts reviewRepoTrust).
-  { id: "workspace-trust", localPath: (h, e) => path.join(e.CODECAST_DIR || path.join(h, ".codecast"), TRUST_STORE_FILE), remotePath: "~/.codecast/workspace-trust.primary.json", gate: presentLogin },
 ];
 
 /**

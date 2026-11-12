@@ -13,9 +13,7 @@ import { readState } from "./contract.js";
 
 let repoRoot: string;
 let savedDir: string | undefined;
-// agentDriven: false because the trust gate refuses an untrusted setup command from an agent shell
-// (the runner may export CLAUDECODE); these tests need setup to run and fail, not be refused.
-const opts = { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true, agentDriven: false };
+const opts = { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true };
 const SEED_REF = "refs/codecast/cloud/w1";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();

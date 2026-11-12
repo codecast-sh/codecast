@@ -11,7 +11,6 @@ import { readHosts, writeHosts } from "../browser/cloudHost";
 import { shq, type RemoteHost } from "../remote/session-move";
 import { healWorkspace, releaseWorkspace } from "../workspace/lifecycle";
 import { readState } from "../workspace/contract";
-import { AGENT_CONTEXT_ENV_VARS, collectTrustTargets, recordTrust } from "../workspace/trust";
 
 let dir: string, origin: string, laptop: string, publisher: string, remote: string, host: RemoteHost, home: string;
 let savedEnv: NodeJS.ProcessEnv;
@@ -169,10 +168,6 @@ process.exit(r.status ?? 1);
   process.env.CLOUD_TEST_CAST_COMMAND = `${shq(process.execPath)} ${shq(path.resolve(import.meta.dir, "../main.ts"))}`;
   process.env.CODECAST_DIR = path.join(dir, "host-state");
   write(process.env.CODECAST_DIR, "config.json", JSON.stringify({ cloud_mirror_enabled: false }));
-  // The host's `cast ws acquire` runs the trust gate (workspace/trust.ts),
-  // which reads these to tell an agent from a person. Left alone, a run from
-  // an agent shell would refuse every acquire; afterEach restores them.
-  for (const v of AGENT_CONTEXT_ENV_VARS) delete process.env[v];
 });
 
 afterEach(() => {
@@ -232,7 +227,6 @@ SNAPSHOT = "${label}"
       write(laptop, "secrets/key", `${label}-secret\n`);
       expect(git(laptop, "diff", "--name-only")).toBe(".codecast/workspace.toml");
       refreshRemoteCheckout(host, laptop, remote);
-      recordTrust(remote, collectTrustTargets({ hooksRoot: remote, manifestRoot: laptop }));
       const ws = await acquireRemoteWorkspace(host, remote, `cloud-${label}`, laptop);
       acquired.push(ws);
       const state = readState(remote, ws.name)!;
@@ -296,7 +290,6 @@ await program.parseAsync(process.argv);
     write(laptop, ".claude/skills/b/SKILL.md", "untracked skill\n");
     write(laptop, ".claude/settings.local.json", JSON.stringify({ env: { ANTHROPIC_API_KEY: "sk-ant-secret", NOTES: `${home}/notes` } }));
     refreshRemoteCheckout(host, laptop, remote);
-    recordTrust(remote, collectTrustTargets({ hooksRoot: remote, manifestRoot: laptop }));
     const ws = await acquireRemoteWorkspace(host, remote, "cloud-agent", laptop);
     expect(fs.readFileSync(path.join(ws.path, "CLAUDE.md"), "utf8")).toBe("# tracked rules\n");
     expect(fs.readFileSync(path.join(ws.path, "CLAUDE.local.md"), "utf8")).toBe("# personal, gitignored\n");

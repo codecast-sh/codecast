@@ -4,15 +4,14 @@
 // marked with the fingerprint it confirms with. Once answered it shrinks to
 // one line in the same place, which follows the step (running, done, didn't
 // go through, not allowed) and stays in the transcript as the answer's
-// record. When the Yes approves content (a repo's setup commands), the card
-// shows that content as structure and the terminal line as a small fallback
-// at its foot (RunSubjectView); a step that failed keeps its output a click away.
+// record. The terminal line sits small at the card's foot while it waits
+// (RunFallbackLine); a step that failed keeps its output a click away.
 import { useState, type ReactNode } from "react";
 import { Fingerprint, Loader2, ShieldAlert, ShieldCheck, ShieldQuestion, ShieldX } from "lucide-react";
 import { permissionRecord, type PermissionOutcome } from "@codecast/shared/contracts/commandRun";
 import type { DecisionAnswerMessage } from "@codecast/shared/contracts";
 import { HostedApprovalBody } from "./HostedApprovalCard";
-import { RunFallbackLine, RunSubjectView } from "../decisions/RunSubject";
+import { RunFallbackLine } from "../decisions/RunFallbackLine";
 import { useDecisionAnswer } from "../../hooks/useDecisionAnswer";
 import { useOneAnswer } from "../../hooks/useOneAnswer";
 import { useInboxStore } from "../../store/inboxStore";
@@ -49,7 +48,7 @@ export function PermissionAskCard({ item }: { item: QueueItem }) {
       >
         <Tile className="mt-px bg-sol-amber/15 text-sol-amber"><ShieldQuestion /></Tile>
         <div className="min-w-0 flex-1 pt-[5px]">
-          <HostedApprovalBody question={question} options={options} onPick={pick} answered={answered} refused={refused} keys yesIcon={<Fingerprint />} subject={<RunSubjectView run={run} className="mt-3" />} />
+          <HostedApprovalBody question={question} options={options} onPick={pick} answered={answered} refused={refused} keys yesIcon={<Fingerprint />} />
           <RunFallbackLine run={run} className="mt-3" />
         </div>
       </div>

@@ -37,7 +37,7 @@ test("a post-checkout hook's background job does not hold any worktree add", asy
     git("update-ref", "refs/codecast/cloud/w1", base);
     const hook = path.join(root, ".git", "hooks", "post-checkout");
     fs.writeFileSync(hook, `#!/bin/sh\nsleep 30 &\necho $! >> ${JSON.stringify(pids)}\n`, { mode: 0o755 });
-    const opts = { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true, agentDriven: false };
+    const opts = { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true };
 
     // The async adds (seeded, then plain) wait for the command, not for the job.
     const seededStart = Date.now();

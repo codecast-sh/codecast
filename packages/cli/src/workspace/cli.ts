@@ -9,7 +9,7 @@
 import { execSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { Option, type Command } from "commander";
+import type { Command } from "commander";
 import {
   acquireRootCheckout,
   acquireWorkspace,
@@ -26,17 +26,6 @@ import { readVerifyCommand, runVerifyCommand } from "./verify.js";
 import { locateWorkspace, readState, recordWorkspaceSession } from "./contract.js";
 import { publishWorktrees } from "../worktreeMirror.js";
 import { sessionIdFromEnv } from "../sessionIdentity.js";
-import {
-  WorkspaceTrustError,
-  clearRepoTrust,
-  collectTrustTargets,
-  isAgentContext,
-  recordTrust,
-  refusalMessage,
-  reviewRepoTrust,
-} from "./trust.js";
-import { agentTrustLine, askTrustApproval, recordApprovedTrust } from "./trustApproval.js";
-import { APPROVED_RUN_ENV } from "@codecast/shared/contracts/commandRun";
 import { defaultRegistry } from "./backends/registry.js";
 import type { WorkspaceManifest } from "./types.js";
 import { commandGroup } from "../commandGroups.js";
@@ -123,7 +112,6 @@ export function registerWorkspaceCommand(program: Command): void {
     .option("--skip-hooks", "Skip before-create/after-create hooks")
     .option("--no-ports", "Allocate no ports for a worker that runs no dev server")
     .option("--skip-pool", "Bypass the warm pool and set up from scratch")
-    .option("--trust", "Approve this repo's hook scripts and setup commands as they are now")
     .option("--json", "Print the workspace as one JSON line (what `cast spawn --cloud` reads over SSH)")
     .action(
       async (
@@ -140,7 +128,6 @@ export function registerWorkspaceCommand(program: Command): void {
           skipHooks?: boolean;
           skipPool?: boolean;
           ports?: boolean;
-          trust?: boolean;
           json?: boolean;
         },
       ) => {
@@ -180,7 +167,6 @@ export function registerWorkspaceCommand(program: Command): void {
             skipHooks: opts.skipHooks,
             skipPool: opts.skipPool,
             noPorts: opts.ports === false,
-            trust: opts.trust,
           });
           const ws = r.workspace;
           const tag = r.created ? "created" : "attached";
@@ -206,7 +192,7 @@ export function registerWorkspaceCommand(program: Command): void {
             process.exit(2);
           }
         } catch (err) {
-          console.error(`acquire failed: ${await refusalForAgent(err)}`);
+          console.error(`acquire failed: ${(err as Error).message}`);
           process.exit(1);
         }
       },
@@ -244,7 +230,7 @@ export function registerWorkspaceCommand(program: Command): void {
           process.exit(2);
         }
       } catch (err) {
-        console.error(`root failed: ${await refusalForAgent(err)}`);
+        console.error(`root failed: ${(err as Error).message}`);
         process.exit(1);
       }
     });
@@ -329,7 +315,7 @@ export function registerWorkspaceCommand(program: Command): void {
         console.log(`healed: ${ws.name} → ${ws.state}`);
         if (ws.state !== "ready") process.exit(2);
       } catch (err) {
-        console.error(`heal failed: ${await refusalForAgent(err)}`);
+        console.error(`heal failed: ${(err as Error).message}`);
         process.exit(1);
       }
     });
@@ -347,71 +333,6 @@ export function registerWorkspaceCommand(program: Command): void {
     });
 
   registerPoolCommands(ws);
-
-  // -----------------------------------------------------------------------
-  // cast workspace trust [target...]
-  // -----------------------------------------------------------------------
-  ws.command("trust [target...]")
-    .description("Approve the hook scripts and setup commands acquire runs (no target = all)")
-    .option("--list", "Show what is approved and what changed, approving nothing")
-    .addOption(new Option("--dry-run", "same as --list").hideHelp())
-    .option("--revoke", "Forget every approval for this repo")
-    .action(async (targets: string[], opts: { list?: boolean; dryRun?: boolean; revoke?: boolean }) => {
-      if (opts.dryRun) opts.list = true;
-      const repoRoot = findRepoRoot();
-      const all = collectTrustTargets({ hooksRoot: repoRoot });
-      const approvedRun = process.env[APPROVED_RUN_ENV];
-      if (approvedRun && !opts.list && !opts.revoke) {
-        // A person's Yes on the approval card started this run: record what the card showed, nothing else.
-        try {
-          const { approved, unseen } = await recordApprovedTrust(repoRoot, approvedRun);
-          for (const id of approved) console.log(`approved: ${id}`);
-          if (unseen.length > 0) {
-            console.error(`not approved, it changed after the card was shown or was not on it: ${unseen.join(", ")}`);
-            process.exit(1);
-          }
-        } catch (err) {
-          console.error((err as Error).message);
-          process.exit(1);
-        }
-        return;
-      }
-      if (opts.revoke) {
-        clearRepoTrust(repoRoot);
-        console.log(`revoked every approval for ${repoRoot}`);
-        return;
-      }
-      if (all.length === 0) {
-        console.log("Nothing to approve: this repo has no hook scripts and no manifest commands.");
-        return;
-      }
-      const findings = reviewRepoTrust(repoRoot, all);
-      if (opts.list) {
-        for (const target of all) {
-          const finding = findings.find((f) => f.target.id === target.id);
-          const mark = !finding ? "✓ approved" : finding.verdict === "new" ? "· not approved" : "✗ changed";
-          console.log(`${mark}  ${target.id}`);
-        }
-        if (findings.length > 0) process.exit(2);
-        return;
-      }
-      if (isAgentContext()) {
-        // Approval is a person's: an agent asking for it posts the card.
-        if (findings.length === 0) {
-          console.log("Everything here is approved already.");
-          return;
-        }
-        console.error(refusalMessage(repoRoot, findings, true, agentTrustLine(await askTrustApproval(repoRoot, findings), repoRoot)));
-        process.exit(3);
-      }
-      const picked = targets.length === 0 ? all : all.filter((t) => targets.some((q) => t.id.includes(q)));
-      if (picked.length === 0) {
-        console.error(`no hook or manifest command matches [${targets.join(", ")}]. Try: cast ws trust --list`);
-        process.exit(1);
-      }
-      recordTrust(repoRoot, picked, all);
-      for (const target of picked) console.log(`approved: ${target.id}`);
-    });
 
   // -----------------------------------------------------------------------
   // cast workspace ls
@@ -651,11 +572,4 @@ function printPickup(p: ResolvedPickup): void {
   console.log(`  taken:   ${s.takenAt ? formatRelativeTime(s.takenAt) : "not recorded by this snapshot"}`);
   if (c.updatedAt) console.log(`  session: last active ${formatRelativeTime(c.updatedAt)}`);
   for (const w of s.warnings) console.error(`  warning: ${w}`);
-}
-
-/** An acquire's error as its caller prints it: an agent's trust refusal posts the approval card first and says so. */
-async function refusalForAgent(err: unknown): Promise<string> {
-  if (!(err instanceof WorkspaceTrustError) || !err.agentDriven || !err.repoRoot) return (err as Error).message;
-  const posted = await askTrustApproval(err.repoRoot, err.findings);
-  return refusalMessage(err.repoRoot, err.findings, true, agentTrustLine(posted, err.repoRoot));
 }

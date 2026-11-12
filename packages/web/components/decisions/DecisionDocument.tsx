@@ -12,7 +12,7 @@ import { DoubtChip } from "../line/DoubtChip";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { AppLoader } from "../AppLoader";
 import { DecisionAnswerControls } from "./DecisionAnswerControls";
-import { RunFallbackLine, RunSubjectView } from "./RunSubject";
+import { RunFallbackLine } from "./RunFallbackLine";
 import { DecisionOptionList } from "./DecisionOptionList";
 import { DecisionDiscussion } from "./DecisionDiscussion";
 import { DecisionBody, DecisionFacts, DecisionLadder, DecisionReport, LeadRecommendation } from "./DecisionSections";
@@ -191,8 +191,6 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
           </section>
         )}
 
-        {/* What a permission ask's Yes approves, exactly, before its answers. */}
-        <RunSubjectView run={decision.run} className="mt-6" />
         {!decision.card && <LeadRecommendation decision={decision} detail={detail} className="mt-8" />}
 
 

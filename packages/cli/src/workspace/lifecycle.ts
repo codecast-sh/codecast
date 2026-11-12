@@ -48,7 +48,6 @@ import { MANIFEST_REL_PATH, resolveManifest } from "./resolver.js";
 import { linkSharedDirectories, unlinkSharedDirectories } from "./share.js";
 import { runSetup } from "./setup.js";
 import { moveToTrash, sweepTrash } from "./trash.js";
-import { TEARDOWN_TARGET_ID, enforceWorkspaceTrust, untrustedTargetIds } from "./trust.js";
 import { withWorktreeAdd } from "./worktreeAdd.js";
 import type {
   AcquireOptions,
@@ -122,21 +121,6 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
     const ws = await backend.acquire(repoRoot, name, opts);
     return { workspace: ws, created: true };
   }
-
-  // Why above everything: each path below can execute code the repo carries —
-  // its hook scripts, its manifest commands — and that includes claiming a
-  // warm pool slot, which runs no setup of its own but hands over a worktree
-  // built from those same files. Checking here is what keeps a slot warmed
-  // before a hook changed from being handed out unchecked (ct-49543).
-  enforceWorkspaceTrust({
-    repoRoot,
-    hooksRoot: repoRoot,
-    manifestRoot: inputRoot ?? repoRoot,
-    hooks: !opts.skipHooks,
-    commands: !opts.skipSetup,
-    grant: opts.trust,
-    agentDriven: opts.agentDriven,
-  });
 
   const branch = opts.branch ?? previous?.branch ?? `${BRANCH_PREFIX}${name}`;
   if (opts.startPoint && !opts.branch) throw new Error("a start point needs an explicit branch name");
@@ -452,14 +436,8 @@ async function releaseWorkspaceUnlocked(repoRoot: string, name: string): Promise
     await stopChrome(state.chrome.pid, { timeoutMs: 3000 });
   }
 
-  // Best-effort teardown commands. They are manifest-authored code like the
-  // rest, so an unapproved change skips them — refusing the destroy instead
-  // would strand the worktree, and teardown already never blocks it (ct-49543).
-  const teardownChanged = untrustedTargetIds(repoRoot, {
-    hooksRoot: repoRoot,
-    hooks: false,
-  }).has(TEARDOWN_TARGET_ID);
-  if (state.manifest.teardown.run.length > 0 && !teardownChanged) {
+  // Best-effort teardown commands: a failure never blocks the destroy.
+  if (state.manifest.teardown.run.length > 0) {
     try {
       const env = buildWorkspaceEnv(state.manifest, state.ports);
       await runSetup(
@@ -532,14 +510,6 @@ async function healWorkspaceUnlocked(repoRoot: string, name: string): Promise<Wo
   if (!state) {
     throw new Error(`workspace '${name}' not found; nothing to heal`);
   }
-  // Heal re-runs the manifest's setup commands, so it needs the same approval
-  // acquire needed (ct-49543).
-  enforceWorkspaceTrust({
-    repoRoot,
-    hooksRoot: repoRoot,
-    manifestRoot: state.env.CODECAST_WORKSPACE_INPUT_ROOT ?? repoRoot,
-    hooks: false,
-  });
   state = refreshRootBranch(repoRoot, state, { persist: true });
   setState(repoRoot, name, "creating");
   if (!fs.existsSync(state.path) && state.startPoint && state.seedBase && name !== ROOT_WORKSPACE_NAME) {

@@ -75,42 +75,18 @@ Destroying a workspace removes these links first. A directory-only ignore rule
 worktree's symlink, so git reports the link as untracked and refuses to remove
 the worktree without `--force`.
 
-### Approval — what runs needs a person's yes
+### These commands run without asking
 
 `install`, `generate`, `migrate` and `[teardown] run` are shell commands from a
 file in the repo, and the scripts in `.codecast/hooks/` are the same thing in
-script form. A pull can change any of them, and the next acquire would run the
-new version with no prompt.
+script form. Every acquire, heal and warm-pool build runs them as the person
+who owns the machine, with no prompt, whether a person or an agent started it.
+Destroy runs `[teardown] run` the same way.
 
-So codecast records a sha256 of each hook script and each command list the
-first time a person acquires the workspace, and refuses every acquire after one
-of them changes. The refusal names the file and shows the lines that differ.
-Review the change, then approve it:
-
-```
-cast ws trust             # approve everything as it is on disk now
-cast ws trust --list      # what is approved, and what changed
-cast ws trust after-create   # approve one script or slot
-cast ws trust --revoke    # forget every approval for this repo
-```
-
-`cast ws acquire --trust` approves and acquires in one step.
-
-Two rules make the record worth keeping. An agent-driven acquire (the daemon
-creating a worktree for a session, the warm pool building a slot, any `cast`
-run inside an agent session) never approves anything by itself, and neither
-does `--trust` or `cast ws trust` run by an agent. Inside a session, the
-refusal posts an approval card in the conversation instead: it lists the
-folder and every hook and command list waiting, line by line, with Approve and
-Decline. Approve (confirmed with Touch ID) runs `cast ws trust` in that folder
-as the person and records exactly the lines the card showed; a line changed
-after the card was shown stays unapproved. The agent runs its acquire again
-when the answer arrives. And the record lives in
-`~/.codecast/workspace-trust.json`, never in the repo, so nothing in the repo
-can approve itself in the commit that changed it.
-
-Commands that come from detection rather than from this file need no approval:
-a `bun install` inferred from a lockfile is codecast's, not the repo's.
+That includes changes nobody here wrote. A pull, a teammate's push or a newly
+cloned repo can change a hook or a command list, and the next workspace runs
+the new version unread. Treat these files like any other code you run: review
+changes to `.codecast/` the way you review a change to a build script.
 
 ## `[ports.<name>]`
 

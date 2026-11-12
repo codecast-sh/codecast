@@ -11,7 +11,7 @@ import { queueTier, routeQueueKey, messagesSinceAsk, optionPageSlugs, findDecisi
 import { isOnThreadRoute } from "../lib/openSessionAtMessage";
 import { decisionHref } from "../lib/decisionLinks";
 import { DecisionAnswerControls } from "./decisions/DecisionAnswerControls";
-import { RunFallbackLine, RunSubjectView } from "./decisions/RunSubject";
+import { RunFallbackLine } from "./decisions/RunFallbackLine";
 import { DecisionOptionList, TypeAnswerButton } from "./decisions/DecisionOptionList";
 import { OptionPages } from "./decisions/OptionPages";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./decisions/ChangeCardView";
@@ -577,8 +577,6 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
           <OptionPages decision={decisionRow ?? { options: item.options, status: "pending" }} answerable={kind === "single"} onAnswer={answer} />
         </div>
       )}
-      {/* What a permission ask's Yes approves, exactly, above its answers. */}
-      <RunSubjectView run={decisionRow?.status === "pending" ? decisionRow.run : undefined} className="mb-3" />
       {isPermissionCard && (
         <div className="mb-3">
           <div className="text-mark uppercase tracking-wide text-sol-text-dim mb-1">waiting on your approval</div>

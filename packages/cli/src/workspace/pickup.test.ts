@@ -12,7 +12,7 @@ import { fetchPickupConversation, PickupError, pickupBranches, preparePickup } f
 // the tree up. The snapshot is made and pushed by the daemon's own functions.
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] }).trim();
-const opts = { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true, noPorts: true, agentDriven: false };
+const opts = { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true, noPorts: true };
 setDefaultTimeout(60_000); // real git clones; slow under load
 const CONV = "jx7pickupfixture0000000000000000";
 const REMOTE_URL = "git@github.com:acme/widgets.git";

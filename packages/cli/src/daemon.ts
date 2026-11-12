@@ -298,7 +298,7 @@ import { declaredSpawnParent } from "./spawnParents.js";
 import { redactSecrets, maskToken } from "./redact.js";
 import { SECRET_PAYLOAD_MAX } from "@codecast/shared/contracts/secrets";
 import { localTailnetAsync, selfTailnet } from "./cloud/tailnet.js";
-import { APPROVED_RUN_ENV, RUN_TIMEOUT_MS } from "@codecast/shared/contracts/commandRun";
+import { RUN_TIMEOUT_MS } from "@codecast/shared/contracts/commandRun";
 import { personEnv } from "./sessionIdentity.js";
 import { RetryQueue, flushRetryQueueForShutdown, isSessionRefusal, isStaleConversationError, type RetryOperation } from "./retryQueue.js";
 import { isPidAlive } from "./pidAlive.js";
@@ -6300,8 +6300,6 @@ async function runApprovedCast(decisionId: string, argv: string[], cwd: string |
   // A person's shell, so the CLI sends no from_session and the act is theirs.
   const env = personEnv();
   if (cwd) env.CODECAST_CWD = cwd;
-  // The command can read back what the person's Yes approved (sessionDecisions.approvedRun).
-  env[APPROVED_RUN_ENV] = decisionId;
   log(`[RUN] ${decisionId}: cast ${argv.join(" ").slice(0, 200)}`);
   const res = await runCastCommand(argv, { env, cwd, timeoutMs: RUN_TIMEOUT_MS, inheritEnv: false });
   const output = [res.stdout, res.stderr].filter((x) => x.trim()).join("\n");

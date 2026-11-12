@@ -1,12 +1,10 @@
 // A step only the person may take, asked as a permission (`cast decide --run`):
-// the card is the agent's plain question, answered Yes or Not now, with what a
-// Yes approves drawn as structure when the command records an approval of
-// content (RunSubject), and the terminal line as a small fallback at the
-// bottom. A person's Yes runs the `cast` command it carries on the session's
-// machine, outside the session, so it is the person's act; the output comes
-// back to the asking session as the answer. Shared by the CLI (parse on ask),
-// the server (validate, settle, deliver), the daemon (run) and the apps
-// (render, gate the Run press).
+// the card is the agent's plain question, answered Yes or Not now, with the
+// terminal line as a small fallback at the bottom. A person's Yes runs the
+// `cast` command it carries on the session's machine, outside the session, so
+// it is the person's act; the output comes back to the asking session as the
+// answer. Shared by the CLI (parse on ask), the server (validate, settle,
+// deliver), the daemon (run) and the apps (render, gate the Run press).
 
 import { approvesSecretRead } from "./secrets";
 import { shellArg, shellWords } from "./shellWords";
@@ -16,47 +14,6 @@ import { APPROVAL_ANSWERS } from "./approvalAnswers";
 export const RUN_OPTION = APPROVAL_ANSWERS.approve;
 export const SKIP_OPTION = APPROVAL_ANSWERS.decline;
 export const RUN_OPTIONS: ReadonlyArray<{ label: string }> = [{ label: RUN_OPTION }, { label: SKIP_OPTION }];
-
-/**
- * What a Yes approves, when the command records an approval of content (a
- * repo's setup commands, `cast ws trust`): the card shows it as structure, and
- * the command, run from the card, records only what this showed
- * (APPROVED_RUN_ENV). Built by the command that needs the approval, never typed
- * by an agent.
- */
-export interface RunSubject {
-  /** What the content is, in a few words: "Worktree setup". */
-  title: string;
-  /** The folder the command runs in and the content belongs to. */
-  folder: string;
-  /** Each piece being approved: its name, its exact lines, and why it is asked (new, or changed since a date). */
-  items: Array<{ label: string; lines: string[]; note?: string }>;
-}
-
-/** Set on a command run from a card: the decision whose Yes started it, so the command can read back what the person saw (sessionDecisions.approvedRun). */
-export const APPROVED_RUN_ENV = "CODECAST_APPROVED_RUN";
-
-const MAX_SUBJECT_ITEMS = 24;
-const MAX_SUBJECT_CHARS = 40_000;
-
-/** A run subject as sent on ask, or why it cannot be one. */
-export function parseRunSubject(raw: unknown): { subject: RunSubject } | { error: string } {
-  const r = raw as Partial<RunSubject> | null;
-  const str = (x: unknown) => typeof x === "string";
-  if (!r || !str(r.title) || !str(r.folder) || !r.folder!.startsWith("/") || !Array.isArray(r.items) || r.items.length === 0) {
-    return { error: "approves needs a title, an absolute folder and at least one item" };
-  }
-  if (r.items.length > MAX_SUBJECT_ITEMS) return { error: `approves holds at most ${MAX_SUBJECT_ITEMS} items` };
-  const items: RunSubject["items"] = [];
-  for (const it of r.items) {
-    if (!it || !str(it.label) || !Array.isArray(it.lines) || !it.lines.every(str) || (it.note !== undefined && !str(it.note))) {
-      return { error: "each approves item needs a label and its lines" };
-    }
-    items.push({ label: it.label, lines: [...it.lines], ...(it.note ? { note: it.note } : {}) });
-  }
-  if (JSON.stringify(items).length > MAX_SUBJECT_CHARS) return { error: `approves is at most ${MAX_SUBJECT_CHARS} characters` };
-  return { subject: { title: r.title!, folder: r.folder!, items } };
-}
 
 /** The line a person at a terminal types instead of pressing Yes: the command, in the folder it runs in. */
 export function fallbackLine(run: Pick<CommandRun, "argv" | "cwd">): string {
@@ -79,8 +36,6 @@ export interface CommandRun {
   output?: string;
   /** When the state last moved. */
   at?: number;
-  /** What a Yes approves, shown on the card (RunSubject). */
-  approves?: RunSubject;
 }
 
 const MAX_ARGS = 64;

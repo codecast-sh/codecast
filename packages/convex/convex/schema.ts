@@ -5170,8 +5170,8 @@ export default defineSchema({
       exit_code: v.optional(v.number()),
       output: v.optional(v.string()),
       at: v.optional(v.number()),
-      // What a Yes approves (commandRun.ts RunSubject): drawn on the card,
-      // and the only content the command may record (sessionDecisions.approvedRun).
+      // Written only by the removed workspace trust card; kept so rows that
+      // carry it still validate. Nothing reads it.
       approves: v.optional(v.object({
         title: v.string(),
         folder: v.string(),
