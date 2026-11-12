@@ -278,3 +278,16 @@ describe("clearing a commented cell", () => {
     expect(threadCell(buildModel(d.elements()), th)).toEqual({ tab: "Sheet1", col: 2, row: 2 });
   });
 });
+
+describe("copying a dropdown", () => {
+  test("paste brings the dropdown with its chips", async () => {
+    const { clipOf, pasteClipOps } = await import("./ops");
+    const d = doc(sheetSpec.seed!());
+    d.verb("write", ["A1"], "Open\nDone");
+    d.verb("validate", ["Sheet1!A1:A9", "list", "Open:green,Done:blue"]);
+    const m = buildModel(d.elements());
+    d.apply(pasteClipOps(m, "Sheet1", clipOf(m, "Sheet1", { c0: 1, r0: 1, c1: 1, r1: 2 }), { c0: 3, r0: 5, c1: 3, r1: 5 }));
+    const v = validationAt(buildModel(d.elements()), "Sheet1", 3, 6);
+    expect(v).toMatchObject({ rule: "list", options: [{ v: "Open", color: "green" }, { v: "Done", color: "blue" }] });
+  });
+});

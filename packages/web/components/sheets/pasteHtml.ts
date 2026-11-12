@@ -1,7 +1,7 @@
 // A table pasted from a web page or another spreadsheet (Google Sheets and
 // Excel put an HTML table on the clipboard): its cell text, and the bold,
 // italic, underline, colors, alignment and merges it carries.
-import type { CellStyle, ImportTable, Rect } from "./sheetCore";
+import { colLetters, type CellStyle, type ImportTable, type Rect } from "./sheetCore";
 import { snapColor } from "./importFile";
 
 /** A CSS color ("rgb(255, 242, 204)", "#fff2cc", "#fc0") as an ARGB hex, or undefined. */
@@ -17,8 +17,41 @@ function cssHex(css: string): string | undefined {
   return undefined;
 }
 
-/** The first table in clipboard HTML as a placeable table, or null when there is none. */
-export function htmlTable(html: string): Omit<ImportTable, "name"> | null {
+/**
+ * A formula Google Sheets puts on the clipboard (R1C1: =R[0]C[-1]*2, R2C3 for
+ * $C$2) in A1 form for the cell it lands on.
+ */
+export function r1c1ToA1(formula: string, col: number, row: number): string {
+  return formula
+    .split(/("(?:[^"]|"")*")/)
+    .map((part, i) =>
+      i % 2
+        ? part
+        : part.replace(/(?<![A-Za-z_.])R(\[-?\d+\]|\d+)?C(\[-?\d+\]|\d+)?(?![A-Za-z_(\d])/g, (_m, r: string | undefined, c: string | undefined) => {
+            // A bare R or C (R[-1]C) is this row or column.
+            const rel = (x: string | undefined) => x === undefined || x.startsWith("[");
+            const n = (x: string | undefined, base: number) => (x === undefined ? base : rel(x) ? base + Number(x.slice(1, -1)) : Number(x));
+            const cc = n(c, col), rr = n(r, row);
+            if (cc < 1 || rr < 1) return "#REF!";
+            return `${rel(c) ? "" : "$"}${colLetters(cc)}${rel(r) ? "" : "$"}${rr}`;
+          }),
+    )
+    .join("");
+}
+
+/** A cell's text with its line breaks (a <br> is a new line in the cell, as Google keeps it). */
+function cellText(td: HTMLTableCellElement): string {
+  const copy = td.cloneNode(true) as HTMLElement;
+  for (const br of copy.querySelectorAll("br")) br.replaceWith("\n");
+  return (copy.textContent ?? "").replace(/[^\S\n]+/g, " ").replace(/ *\n */g, "\n").trim();
+}
+
+/**
+ * The first table in clipboard HTML as a placeable table, or null when there
+ * is none. `at` is where it lands, so formulas a spreadsheet copied come in
+ * pointing at the same neighbours.
+ */
+export function htmlTable(html: string, at: { col: number; row: number } = { col: 1, row: 1 }): Omit<ImportTable, "name"> | null {
   if (!/<table[\s>]/i.test(html) || typeof DOMParser === "undefined") return null;
   const table = new DOMParser().parseFromString(html, "text/html").querySelector("table");
   if (!table) return null;
@@ -38,7 +71,8 @@ export function htmlTable(html: string): Omit<ImportTable, "name"> | null {
       while (grid.length < row) grid.push([]);
       const line = grid[row - 1];
       while (line.length < col - 1) line.push("");
-      line[col - 1] = (td.textContent ?? "").replace(/\u00a0/g, " ").trim();
+      const formula = td.getAttribute("data-sheets-formula");
+      line[col - 1] = formula?.startsWith("=") ? r1c1ToA1(formula, at.col + col - 1, at.row + row - 1) : cellText(td);
       // Inline styles on the cell or a single wrapper inside it, as spreadsheets write them.
       const inner = td.children.length === 1 ? (td.children[0] as HTMLElement) : null;
       const css = (prop: string) => td.style.getPropertyValue(prop) || inner?.style?.getPropertyValue(prop) || "";

@@ -26,3 +26,13 @@ describe("pasting a web table", () => {
     expect(htmlTable("just text")).toBeNull();
   });
 });
+
+describe("pasting from Google Sheets", () => {
+  test("formulas come in as A1 for where they land; line breaks stay", async () => {
+    const { htmlTable, r1c1ToA1 } = await import("./pasteHtml");
+    expect(r1c1ToA1("=R[0]C[-1]*2+SUM(R1C1:R[-1]C)", 3, 5)).toBe("=B5*2+SUM($A$1:C4)");
+    expect(r1c1ToA1('=ROUND(R[0]C[-2],2)&"R1C1"', 4, 2)).toBe('=ROUND(B2,2)&"R1C1"');
+    const t = htmlTable('<table><tr><td>5</td><td data-sheets-formula="=R[0]C[-1]*2">10</td><td>Line<br>two</td></tr></table>', { col: 2, row: 3 })!;
+    expect(t.grid[0]).toEqual(["5", "=B3*2", "Line\ntwo"]);
+  });
+});

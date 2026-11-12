@@ -98,3 +98,15 @@ describe("elapsed time codes", () => {
     expect(formatValue(1.5 / 24, { nf: "custom", code: "[mm]:ss" })).toBe("90:00");
   });
 });
+
+describe("lookup results read like their column", () => {
+  test("VLOOKUP and INDEX into a currency column show currency, as XLOOKUP does", async () => {
+    const { sheetSpec } = await import("../sheet");
+    const { doc } = await import("./sheetDoc.testkit");
+    const { buildModel, inheritedFormat } = await import("./model");
+    const d = doc(sheetSpec.seed!());
+    d.verb("write", ["A1"], "Name\tAmount\nAna\t$800\nBo\t$3,400.50");
+    const m = buildModel(d.elements());
+    for (const f of ['=VLOOKUP("Ana",A1:B3,2,FALSE)', "=INDEX(A1:B3,2,2)", '=XLOOKUP("Bo",A1:A3,B1:B3)']) expect([f, inheritedFormat(m, "Sheet1", f)?.nf]).toEqual([f, "currency"]);
+  });
+});

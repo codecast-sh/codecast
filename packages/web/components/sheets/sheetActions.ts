@@ -348,7 +348,7 @@ export function pasteSheetClipboard(e: React.ClipboardEvent, c: SheetCtx) {
         apply(inputOps(model, activeTabId, cells));
       } else {
         // A table from a web page or another spreadsheet keeps its look (bold, fills, merges); values-only takes the text.
-        const table = valuesOnly ? null : htmlTable(e.clipboardData.getData("text/html"));
+        const table = valuesOnly ? null : htmlTable(e.clipboardData.getData("text/html"), { col: rect.c0, row: rect.r0 });
         const placed = table && table.grid.length === grid.length ? table : { grid };
         apply(placeTableOps(model, activeTabId, rect.c0, rect.r0, placed));
         const w = Math.max(...placed.grid.map((r) => r.length));

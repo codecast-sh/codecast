@@ -508,6 +508,19 @@ export function inheritedFormat(model: SheetModel, tabId: string, input: string,
         // IF(cond, a, b) takes its branches' unit; lookups their return range.
         if (n.name === "IF" || n.name === "IFERROR" || n.name === "IFNA") return source(n.args[n.name === "IF" ? 1 : 0] ?? { t: "empty" });
         if (n.name === "XLOOKUP") return n.args[2] ? source(n.args[2]) : null;
+        // VLOOKUP/HLOOKUP/INDEX with a written column (row) number: that line of the table.
+        if (n.name === "VLOOKUP" || n.name === "HLOOKUP") {
+          const table = n.args[1], at = n.args[2];
+          if (table?.t !== "range" || at?.t !== "num") return null;
+          const i = at.v - 1;
+          return n.name === "VLOOKUP" ? { ...table, c0: table.c0 + i, c1: table.c0 + i } : { ...table, r0: table.r0 + i, r1: table.r0 + i };
+        }
+        if (n.name === "INDEX") {
+          const table = n.args[0];
+          if (table?.t !== "range") return null;
+          const c = n.args[2]?.t === "num" ? n.args[2].v : table.c0 === table.c1 ? 1 : null;
+          return c === null ? null : { ...table, c0: table.c0 + c - 1, c1: table.c0 + c - 1 };
+        }
         for (const a of n.args) {
           const s = source(a);
           if (s) return s;
@@ -523,8 +536,11 @@ export function inheritedFormat(model: SheetModel, tabId: string, input: string,
   if (src.t !== "ref" && src.t !== "range") return undefined;
   const tab = src.tab !== undefined ? tabByName(model, src.tab) : model.byId.get(tabId)?.meta;
   if (!tab) return undefined;
-  const col = src.t === "ref" ? src.col : src.c0, row = src.t === "ref" ? src.row : src.r0;
-  const el = model.byId.get(tab.id)?.cells.get(cellNum(col, row));
+  const col = src.t === "ref" ? src.col : src.c0;
+  // A range reads in the format of its first cell that has one (a header row above the numbers doesn't count).
+  const cells = model.byId.get(tab.id)?.cells;
+  const rows = src.t === "ref" ? [src.row] : Array.from({ length: Math.min(src.r1 - src.r0 + 1, 50) }, (_, i) => src.r0 + i);
+  const el = rows.map((r) => cells?.get(cellNum(col, r))).find((e) => e && ((e.nf && e.nf !== "plain" && e.nf !== "text") || (typeof e.input === "string" && (e.input.startsWith("=") || parseLiteral(e.input).implied))));
   if (!el) return undefined;
   if (el.nf && el.nf !== "plain" && el.nf !== "text" && el.nf !== "check") return { nf: el.nf, dp: el.dp, ...(el.cur ? { cur: el.cur } : {}), ...(el.code ? { code: el.code } : {}) };
   if (typeof el.input !== "string") return undefined;

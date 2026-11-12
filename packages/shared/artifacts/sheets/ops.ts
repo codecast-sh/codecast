@@ -66,7 +66,15 @@ export function gridOps(model: SheetModel, tabId: string, col: number, row: numb
 }
 
 /** What an internal copy carries: each cell's fields, and where it came from (so formulas shift). */
-export type SheetClip = { col: number; row: number; cells: Array<Array<CellFields | null>>; /** Source row of each clip row (a filtered copy skips rows). */ rows?: number[] };
+export type SheetClip = {
+  col: number;
+  row: number;
+  cells: Array<Array<CellFields | null>>;
+  /** Source row of each clip row (a filtered copy skips rows). */
+  rows?: number[];
+  /** Dropdowns and date pickers on the copied cells, relative to the clip's top-left (0-based). */
+  validations?: Array<{ rect: Rect; rule: "list" | "date"; options: Array<{ v: string; color?: string }>; strict: boolean }>;
+};
 
 /** `rows` limits the clip to those rows (a filtered range copies what is visible). */
 export function clipOf(model: SheetModel, tabId: string, rect: Rect, rows?: number[]): SheetClip {
@@ -80,7 +88,18 @@ export function clipOf(model: SheetModel, tabId: string, rect: Rect, rows?: numb
     }
     cells.push(line);
   }
-  return { col: rect.c0, row: rect.r0, cells, ...(rows ? { rows } : {}) };
+  // A copied dropdown or date column pastes as one, as in Google and Excel (a filtered copy, with gaps, carries values only).
+  const validations = rows
+    ? []
+    : model.validations
+        .filter((v) => v.tab === tabId && v.rect.c0 <= rect.c1 && v.rect.c1 >= rect.c0 && v.rect.r0 <= rect.r1 && v.rect.r1 >= rect.r0)
+        .map((v) => ({
+          rect: { c0: Math.max(v.rect.c0, rect.c0) - rect.c0, c1: Math.min(v.rect.c1, rect.c1) - rect.c0, r0: Math.max(v.rect.r0, rect.r0) - rect.r0, r1: Math.min(v.rect.r1, rect.r1) - rect.r0 },
+          rule: v.rule,
+          options: v.options.map((o) => ({ v: o.v, ...(o.color ? { color: o.color } : {}) })),
+          strict: v.strict,
+        }));
+  return { col: rect.c0, row: rect.r0, cells, ...(rows ? { rows } : {}), ...(validations.length ? { validations } : {}) };
 }
 
 /** Paste an internal clip at an origin: formulas shift by the offset; a target larger than the clip tiles it. */
@@ -106,6 +125,11 @@ export function pasteClipOps(model: SheetModel, tabId: string, clip: SheetClip, 
       }
       ops.push({ k, put: { kind: "cell", ...fields } });
     }
+  // Each tile of the paste gets the clip's dropdowns.
+  for (const v of clip.validations ?? [])
+    for (let r = 0; r < rows; r += h)
+      for (let c = 0; c < cols; c += w)
+        ops.push(...validationOps(model, tabId, { c0: target.c0 + c + v.rect.c0, c1: target.c0 + c + v.rect.c1, r0: target.r0 + r + v.rect.r0, r1: target.r0 + r + v.rect.r1 }, v.rule, v.options, v.strict));
   return ops;
 }
 
