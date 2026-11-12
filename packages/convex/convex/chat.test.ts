@@ -609,6 +609,19 @@ describe("unread state", () => {
     expect((await call(listChannels, bob, { team_id: TEAM })).unread_dm_messages).toEqual([]);
   });
 
+  test("reading everything covers a line stamped a few ms ahead of the clock", async () => {
+    const alice = context(ALICE);
+    const bob = as(alice, BOB);
+    const dm = await call(openDm, alice, { team_id: TEAM, member_ids: [BOB] });
+    const sent = await call(sendMessage, alice, { channel_id: dm.channel_id, content: "same millisecond" });
+    // The per-channel clock pushes a same-millisecond send past Date.now().
+    alice.db._tables.chat_messages.find((m: any) => String(m._id) === String(sent.message_id)).created_at = Date.now() + 5;
+    await call(markRead, bob, { channel_id: dm.channel_id });
+    const after = await call(listChannels, bob, { team_id: TEAM });
+    expect(after.unread_dm_messages).toEqual([]);
+    expect(after.rail.find((r: any) => String(r.channel_id) === String(dm.channel_id)).unread).toBe(0);
+  });
+
   test("a reply also sent to the channel ticks the channel; a plain reply does not", async () => {
     const ctx = context(BOB);
     const alice = as(ctx, ALICE);

@@ -2206,6 +2206,17 @@ export const markRead = mutation({
 
     const now = Date.now();
     let readAt = now;
+    if (!args.last_read_message_id) {
+      // "Everything up to now" includes a line sent this same millisecond,
+      // whose stamp the per-channel monotonic clock may have pushed a few ms
+      // past Date.now(); a mark at `now` would leave it unread for good.
+      const newest = await ctx.db
+        .query("chat_messages")
+        .withIndex("by_channel_created", (q: any) => q.eq("channel_id", channel._id))
+        .order("desc")
+        .first();
+      if (newest && newest.created_at > readAt) readAt = newest.created_at;
+    }
     if (args.last_read_message_id) {
       const marker = await ctx.db.get(args.last_read_message_id);
       // A message from another channel must not be able to move this mark.
