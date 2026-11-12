@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { normalizeRepository } from "./lib/gitRefs";
 import { mutation, query, internalMutation, internalAction, internalQuery, type MutationCtx } from "./functions";
 import { internal } from "./_generated/api";
@@ -235,6 +236,35 @@ async function latestRunConversation(ctx: TaskCtx, task: Doc<"agent_tasks">): Pr
   const latest = runs.sort((a, b) => b._creationTime - a._creationTime)[0];
   // Through the stamp, so the run nests under its owner like every other path.
   return latest ? stampRunConversation(ctx, task.user_id, task, latest.session_id) : null;
+}
+
+export function isUnansweredClaimRetry(
+  task: Pick<Doc<"agent_tasks">, "status" | "lease_holder" | "firing_claimed_at">,
+  daemonId: string,
+  now: number,
+): boolean {
+  return task.status === "running" && task.lease_holder === daemonId && task.firing_claimed_at !== undefined
+    && now - task.firing_claimed_at < LEASE_DURATION_MS;
+}
+
+/** How long a bound device may go without a heartbeat before the sweep stops waiting for it. */
+export const AWAY_DEVICE_WAIT_MS = 24 * 3_600_000;
+
+/** Whether the device a trigger is bound to is away now (no heartbeat within DEVICE_ONLINE_MS) but was seen within
+ *  AWAY_DEVICE_WAIT_MS. A trigger with no bound device, or a device gone longer, is judged as before. */
+export function isAwayDevice(lastSeen: number | undefined, now: number): boolean {
+  if (lastSeen === undefined) return false;
+  const quiet = now - lastSeen;
+  return quiet >= DEVICE_ONLINE_MS && quiet < AWAY_DEVICE_WAIT_MS;
+}
+
+async function boundDeviceAway(ctx: TaskCtx, task: Doc<"agent_tasks">, now: number): Promise<boolean> {
+  if (!task.created_device_id) return false;
+  const device = await ctx.db
+    .query("devices")
+    .withIndex("by_user_device", (q: any) => q.eq("user_id", task.user_id).eq("device_id", task.created_device_id))
+    .first();
+  return isAwayDevice(device?.last_seen, now);
 }
 
 /** The run the firing holding the lease started, or null. A run conversation from before this firing's claim belongs
@@ -1145,6 +1175,9 @@ export const claimTask = mutation({
 
     const task = await ctx.db.get(args.task_id);
     if (!task || task.user_id !== auth.userId) return null;
+    // The lease holder claiming again inside its first lease is retrying a claim whose answer it never got (a bad
+    // link): the claim landed, so hand it the firing it holds, unchanged (ct-92447).
+    if (isUnansweredClaimRetry(task, args.daemon_id, Date.now())) return { ...task };
     if (task.status !== "scheduled") return null;
     if (await cloudTriggerConversation(ctx, task)) return null;
     if (await roleTriggerHeld(ctx, task)) return null;
@@ -2792,6 +2825,10 @@ export const reclaimStaleTasks = internalMutation({
     let reclaimed = 0;
     for (const task of runningTasks) {
       if (task.lease_expires_at && task.lease_expires_at < now) {
+        // The device the trigger is bound to stopped beating (a laptop asleep, a machine offline): its daemon holds
+        // the run and renews the lease when it wakes, and nothing else may serve the trigger. Wait for it; a re-fire
+        // would duplicate the run on wake, and counting the lapse retired healthy triggers (ct-92447).
+        if (await boundDeviceAway(ctx, task, now)) continue;
         // A lease lapses when the daemon that held it stopped renewing, most
         // often because it restarted mid-run and lost the run's monitor. The
         // run itself may be over: its agent exited (stopped) or parked at a

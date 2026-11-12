@@ -380,11 +380,42 @@ describe("a lapsed lease on a spawn run", () => {
     expect(tables.agent_tasks[0].run_count).toBe(0);
   });
 
+  // ct-92447 (2026-11-12): MacBook-Pro-2 slept 669s mid-run; its daemon's lease lapsed, the sweep re-fired the run
+  // and counted it, and three sleeps retire a healthy trigger.
+  test("a lapse while the bound device is asleep waits for it: nothing re-fires, nothing counts", async () => {
+    const { ctx, tables } = await lapsed({ _creationTime: NOW - 60_000 }, "working");
+    Object.assign(tables.agent_tasks[0], { created_device_id: "laptop", firing_claimed_at: NOW - 6 * 60_000, retry_count: 2 });
+    tables.devices[0].last_seen = NOW - 11 * 60_000;
+    await reclaim(ctx);
+    expect(tables.agent_tasks[0]).toMatchObject({ status: "running", retry_count: 2, lease_holder: DAEMON });
+    expect(wakes(tables)).toHaveLength(0);
+  });
+
+  test("a bound device that is online, or gone for over a day, is judged as before", async () => {
+    for (const lastSeen of [NOW - 1000, NOW - 25 * 3_600_000]) {
+      const { ctx, tables } = await lapsed({ _creationTime: NOW - 60_000 }, "working");
+      Object.assign(tables.agent_tasks[0], { created_device_id: "laptop", firing_claimed_at: NOW - 6 * 60_000 });
+      tables.devices[0].last_seen = lastSeen;
+      await reclaim(ctx);
+      expect(tables.agent_tasks[0]).toMatchObject({ status: "scheduled", retry_count: 1 });
+    }
+  });
+
   test("a run this firing started is still judged by its own conversation", async () => {
     const { ctx, tables } = await lapsed({ _creationTime: NOW - 60_000 }, "working");
     tables.agent_tasks[0].firing_claimed_at = NOW - 6 * 60_000;
     await reclaim(ctx);
     expect(tables.agent_tasks[0]).toMatchObject({ status: "scheduled", retry_count: 1 });
+  });
+
+  test("a retried claim whose answer was lost gets the same firing; another daemon or a later one does not", async () => {
+    const { ctx, tables } = await world({ status: "scheduled", lease_holder: undefined, lease_expires_at: undefined });
+    const claim = (daemon_id: string) => (claimTask as any)._handler(ctx, { api_token: TOKEN, task_id: "agent_tasks_owned", daemon_id });
+    expect(await claim(DAEMON)).toMatchObject({ status: "running" });
+    expect(await claim(DAEMON)).toMatchObject({ status: "running", lease_holder: DAEMON });
+    expect(await claim("other-daemon")).toBeNull();
+    time.mockReturnValue(NOW + 5 * 60_000);
+    expect(await claim(DAEMON)).toBeNull();
   });
 
   test("the claim stamps when this firing began", async () => {
