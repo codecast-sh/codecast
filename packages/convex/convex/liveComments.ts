@@ -105,7 +105,10 @@ export async function notifyLiveComments(
           comment_key: rootKey,
         });
         await enqueuePendingMessage(ctx, conv, caller.userId, { content: brief, human: true });
-        if (!c.parent) followUps.push({ k: c.key, set: { sent_to: String(conv._id) } });
+        // The thread tracks the ask wherever it was made: a reply's ask stamps the root,
+        // and a new ask on an answered thread puts it back with the agent.
+        if (followUps.some((f) => f.k === rootKey)) continue;
+        followUps.push({ k: rootKey, set: c.parent ? { sent_to: String(conv._id), answered_at: null, answered_by: null, answered_by_name: null } : { sent_to: String(conv._id) } });
       }
     }
 

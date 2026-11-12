@@ -6,7 +6,9 @@
   .live-head [data-freshness] { display: none !important; }
 }
 @container (max-width: 640px) {
-  .live-head [data-live-sync] { display: none; }
+  /* Only the quiet states go; Offline, Not saved and Loading stay at any width. */
+  .live-head [data-live-sync="saved"],
+  .live-head [data-live-sync="saving"] { display: none; }
 }
 @container (max-width: 560px) {
   .live-head [data-live-facepile] { display: none; }

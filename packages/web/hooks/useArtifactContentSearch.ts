@@ -13,6 +13,8 @@ export function useArtifactContentSearch(): {
   snippets: Map<string, string>;
   /** Every hit, with where it lives, for a list that shows hits from outside its own workspace. */
   hits: Array<{ _id: string; title: string; doc_type: string; snippet: string; updated_at?: number; where: string }>;
+  /** The query being answered (trimmed, debounced). */
+  query: string;
 } {
   const [query, setQuery] = useState("");
   const q = useDebounce(query.trim(), 250);
@@ -24,5 +26,5 @@ export function useArtifactContentSearch(): {
   }, [data, q]);
   const matches = useCallback((doc: { _id: string }) => snippets.has(doc._id), [snippets]);
   const hits = useMemo(() => (q.length >= 2 ? ((data as any[] | undefined) ?? []) : []), [data, q]);
-  return { setQuery, matches, snippets, hits };
+  return { setQuery, matches, snippets, hits, query: q };
 }

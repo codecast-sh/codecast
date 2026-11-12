@@ -332,13 +332,17 @@ export function DocListContent() {
   const contentHits = useArtifactContentSearch();
   // A hit in another of the viewer's workspaces is found too, and says where it lives, rather than vanishing.
   const searchDocs = useMemo(() => {
-    if (!contentHits.hits.length) return searchScopeDocs;
     const have = new Set(searchScopeDocs.map((d) => d._id));
     const elsewhere = contentHits.hits
       .filter((h) => !have.has(h._id))
       .map((h) => ({ _id: h._id, title: h.title, doc_type: h.doc_type, source: "human", updated_at: h.updated_at ?? 0, created_at: h.updated_at ?? 0, where: h.where }) as unknown as DocItem);
-    return elsewhere.length ? [...searchScopeDocs, ...elsewhere] : searchScopeDocs;
-  }, [searchScopeDocs, contentHits.hits]);
+    const all = elsewhere.length ? [...searchScopeDocs, ...elsewhere] : searchScopeDocs;
+    // One ranked list wherever a doc lives: a title holding the words first, then the rest in list order.
+    const lq = contentHits.query.toLowerCase();
+    if (!lq) return all;
+    const titled = (d: DocItem) => (String(d.title ?? "").toLowerCase().includes(lq) ? 0 : 1);
+    return all.map((d, i) => [d, i] as const).sort((a, b) => titled(a[0]) - titled(b[0]) || a[1] - b[1]).map(([d]) => d);
+  }, [searchScopeDocs, contentHits.hits, contentHits.query]);
   const renderDocRow = useCallback((doc: DocItem, state: ItemRowState) => {
     const where = (doc as any).where as string | undefined;
     const match = contentHits.snippets.get(doc._id);

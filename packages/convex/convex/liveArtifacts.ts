@@ -396,7 +396,7 @@ export const askToEdit = mutation({
       entity_type: "doc",
       entity_id: String(doc._id),
       message: `${caller.name} asks to edit "${doc.title || "Untitled"}"`,
-      link: `/docs/${doc._id}`,
+      link: `/docs/${doc._id}?share=edit&add=${caller.userId}`,
       direct_recipient_id: doc.user_id,
     });
     return { asked: true };

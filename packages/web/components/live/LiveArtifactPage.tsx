@@ -121,8 +121,12 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
     setSnapshot(undefined);
     setSnapshotFailed(false);
     if (openRev === null || Number.isNaN(openRev)) return;
-    live.history.preview(openRev).then((els) => { if (alive) setSnapshot(els); }).catch(() => { if (alive) setSnapshotFailed(true); });
-    return () => { alive = false; };
+    // A version that has not arrived in 20s says so and offers Retry, rather than spinning.
+    const deadline = setTimeout(() => { if (alive) setSnapshotFailed(true); }, 20_000);
+    live.history.preview(openRev)
+      .then((els) => { if (alive) { clearTimeout(deadline); setSnapshot(els); setSnapshotFailed(false); } })
+      .catch(() => { if (alive) { clearTimeout(deadline); setSnapshotFailed(true); } });
+    return () => { alive = false; clearTimeout(deadline); };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the handle's preview is stable per doc
   }, [openRev, doc._id, snapshotTry]);
 
@@ -219,7 +223,9 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
   // Who may change it (the head's edit setting); until the feed says, assume they may.
   const canEdit = useInboxStore((s: any) => s.liveHeads?.[doc._id]?.can_edit !== false);
   const locked = useInboxStore((s: any) => s.liveHeads?.[doc._id]?.edit === "owners");
-  const mode = openRev !== null || archived || !canEdit ? "view" : "edit";
+  // Not read yet, and nothing cached: never "Saved" and editable over a canvas that only looks empty.
+  const cold = !live.ready && elements.length === 0;
+  const mode = openRev !== null || archived || !canEdit || cold ? "view" : "edit";
   const viewSnapshot = openRev !== null ? snapshot ?? EMPTY : undefined;
   const view = useMemo(
     () => (
@@ -248,7 +254,7 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
   // an open comment, a version, a selected element.
   const shareQuery = useMemo(() => {
     const q = new URLSearchParams(params.toString());
-    for (const k of ["c", "v", "el"]) q.delete(k);
+    for (const k of ["c", "v", "el", "share", "add"]) q.delete(k);
     return q.toString();
   }, [params]);
   const openVersion = useLiveVersions(doc._id).find((v) => v.rev === openRev);
@@ -271,8 +277,8 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
         <DocTypeMark type={doc.doc_type} size={15} title={spec.label} />
         <TitleInput docId={doc._id} title={doc.title} placeholder={`Untitled ${spec.label.toLowerCase()}`} readOnly={mode === "view"} />
         <span data-live-type-label className={`text-meta shrink-0 ${typeStyle.color}`}>{typeLabel ?? spec.label}</span>
-        {locked && <Lock data-live-locked aria-label="Only its owner and editors can edit" className="w-3 h-3 shrink-0 text-sol-text-dim" />}
-        {mode === "edit" && <SyncState docId={doc._id} />}
+        {locked && <span title="Only its owner and editors can edit" className="inline-flex shrink-0"><Lock data-live-locked aria-label="Only its owner and editors can edit" className="w-3 h-3 text-sol-text-dim" /></span>}
+        {(mode === "edit" || (cold && openRev === null)) && <SyncState docId={doc._id} loading={cold} />}
         {/* The product's controls take the room left between the title and the
             shell's own, and clip past it: the shell's buttons always stay reachable. */}
         <div data-live-toolbar className="flex-1 min-w-10 flex items-center justify-end gap-2 overflow-hidden">{toolbar}</div>
@@ -288,8 +294,11 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
         <FocusToggle docId={doc._id} />
         <ArtifactMenu doc={doc as any} copyOf={openRev !== null ? snapshot : undefined} shareQuery={shareQuery} canEdit={canEdit && !archived} ready={live.ready} exports={exports} fileImport={mode === "edit" ? fileImport : null} selection={selection} />
         <ShareControl
+          // An "asks to edit" notice lands here with the Share popover open on the request.
+          key={params.get("share") ?? ""}
+          defaultOpen={params.get("share") === "edit"}
           className="shrink-0"
-          access={<EditAccessSection doc={doc as any} />}
+          access={<EditAccessSection doc={doc as any} requested={params.get("share") === "edit" ? params.get("add") : null} onGranted={() => { setParam("share", null); }} />}
           linkExtra={shareQuery ? <span className="text-meta text-sol-text-dim" data-live-share-view>With this view</span> : undefined}
           label={spec.label.toLowerCase()} path={`/docs/${doc._id}${shareQuery ? `?${shareQuery}` : ""}`} publicShare={{ kind: "doc", id: doc._id, token: (doc as any).share_token, team: policyTeamOf("docs", doc as any) }} />
       </header>
@@ -358,7 +367,7 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
                 }
               }}
             >
-              <RotateCcw className="w-3 h-3" /> {restoring ? "Restoring…" : "Restore this version"}
+              <RotateCcw className="w-3 h-3" /> {restoring ? "Restoring…" : snapshot === undefined ? (snapshotFailed ? "Version didn't load" : "Loading version…") : "Restore this version"}
             </Button>
           ) : null}
         </div>
@@ -471,12 +480,12 @@ function IconToggle({ on, title, label, onClick, badge, children }: { on: boolea
 }
 
 /** Whether this tab's edits have reached the server: Saving, Saved, or Offline with how many wait. */
-function SyncState({ docId }: { docId: string }) {
+function SyncState({ docId, loading = false }: { docId: string; loading?: boolean }) {
   const online = useWsConnected();
   const waiting = useLiveUnsettled(docId);
   const refusal = useLiveRefusal(docId);
-  const state = !online ? "offline" : waiting > 0 ? "saving" : refusal ? "refused" : "saved";
-  const label = state === "offline" ? (waiting > 0 ? `Offline · ${waiting} waiting` : "Offline") : state === "saving" ? "Saving…" : state === "refused" ? "Not saved" : "Saved";
+  const state = !online ? "offline" : loading ? "loading" : waiting > 0 ? "saving" : refusal ? "refused" : "saved";
+  const label = state === "offline" ? (waiting > 0 ? `Offline · ${waiting} waiting` : "Offline") : state === "loading" ? "Loading…" : state === "saving" ? "Saving…" : state === "refused" ? "Not saved" : "Saved";
   return (
     <span
       data-live-sync={state}
@@ -638,9 +647,10 @@ function ArtifactMenu({ doc, copyOf, shareQuery, canEdit, ready, exports, fileIm
 /** A viewer's way in: the header says they are viewing and asks the owner to let them edit. */
 function AskToEdit({ doc, canEdit }: { doc: { _id: string; user_id?: string }; canEdit: boolean }) {
   const me = useInboxStore((s: any) => s.currentUser?._id as string | undefined);
-  // Asked once, remembered here, so a visit later does not ask again.
+  // Asked once, remembered here for a day, so a visit soon after does not ask again; access granted clears it.
   const askedKey = `live-asked-edit:${doc._id}`;
-  const [asked, setAsked] = useState(() => typeof localStorage !== "undefined" && localStorage.getItem(askedKey) === "1");
+  const [asked, setAsked] = useState(() => typeof localStorage !== "undefined" && Date.now() - Number(localStorage.getItem(askedKey) ?? 0) < 86_400_000);
+  useWatchEffect(() => { if (canEdit) localStorage.removeItem(askedKey); }, [canEdit, askedKey]);
   if (canEdit || !me || String(doc.user_id) === me) return null;
   return (
     <button
@@ -650,7 +660,7 @@ function AskToEdit({ doc, canEdit }: { doc: { _id: string; user_id?: string }; c
       disabled={asked}
       onClick={() => {
         setAsked(true);
-        void useInboxStore.getState().liveAskToEdit(doc._id).then(() => { localStorage.setItem(askedKey, "1"); toast.success("The owner was asked"); }).catch(() => { setAsked(false); toast.error("Could not ask the owner"); });
+        void useInboxStore.getState().liveAskToEdit(doc._id).then(() => { localStorage.setItem(askedKey, String(Date.now())); toast.success("The owner was asked"); }).catch(() => { setAsked(false); toast.error("Could not ask the owner"); });
       }}
       className="inline-flex items-center gap-1 h-6 px-1.5 rounded text-meta shrink-0 text-sol-text-muted bg-sol-bg-alt hover:text-sol-text disabled:opacity-60"
     >
@@ -669,7 +679,7 @@ const EDIT_CHOICES: SegmentedOption<"team" | "owners">[] = [
  * its link: the whole team, or its owner and the editors named. The workspace
  * decides who can see it; this decides who of them edits. Owner only.
  */
-function EditAccessSection({ doc }: { doc: { _id: string; user_id?: string; workspace?: string } }) {
+function EditAccessSection({ doc, requested, onGranted }: { doc: { _id: string; user_id?: string; workspace?: string }; requested?: string | null; onGranted?: () => void }) {
   const me = useInboxStore((s: any) => s.currentUser?._id as string | undefined);
   const edit = useInboxStore((s: any) => (s.liveHeads?.[doc._id]?.edit as "team" | "owners" | undefined) ?? "team");
   const editorsSig = useInboxStore((s: any) => (s.liveHeads?.[doc._id]?.editors ?? []).join(","));
@@ -684,9 +694,18 @@ function EditAccessSection({ doc }: { doc: { _id: string; user_id?: string; work
   const set = (next: "team" | "owners", list: string[]) => (useInboxStore.getState() as any).liveSetEditAccess(doc._id, next, list);
   const nameOf = (id: string) => roster.find((m) => m._id === id)?.name ?? "…";
   const addable = roster.filter((m) => !editors.includes(m._id));
+  const asker = requested && edit === "owners" ? addable.find((m) => m._id === requested) : undefined;
   return (
     <div className="space-y-2" data-live-edit-access={edit}>
       <span className="text-xs font-medium text-sol-text-muted">Who can edit</span>
+      {asker && (
+        <div className="flex items-center gap-2 h-8 px-2 rounded-md bg-sol-blue/10" data-live-edit-request={asker._id}>
+          <span className="text-xs text-sol-text truncate min-w-0 flex-1">{asker.name} asks to edit</span>
+          <button type="button" data-live-grant-edit onClick={() => { set("owners", [...editors, asker._id]); toast.success(`${asker.name} can edit now`); onGranted?.(); }} className="h-6 px-2 rounded text-xs font-medium bg-sol-blue text-sol-bg hover:opacity-90 shrink-0">
+            Let them edit
+          </button>
+        </div>
+      )}
       <SegmentedChoice
         label="Who can edit"
         options={EDIT_CHOICES.map((o) => (o.value === "team" && teamName ? { ...o, label: `All of ${teamName}` } : o))}

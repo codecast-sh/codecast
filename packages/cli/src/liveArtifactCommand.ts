@@ -409,7 +409,8 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
       const places = a ? threadPlaces(spec, a.title, a.elements, roots) : new Map<string, string | null>();
       for (const root of roots as any[]) {
         const place = places.get(root.key);
-        const where = place === null ? " (its element was deleted)" : place ? ` on ${placeLabel(place)}` : "";
+        const what = String(root.anchor ?? "").startsWith("c:") ? "cell" : "element";
+        const where = place === null ? ` (its ${what} was deleted)` : place ? ` on ${placeLabel(place)}` : "";
         console.log(`${root.key}${where}${root.resolved ? " (resolved)" : ""}  ${root.author_name ?? ""}: ${root.text}`);
         for (const r of rows.filter((c: any) => c.parent === root.key) as any[]) console.log(`  ${r.key}  ${r.author_name ?? ""}: ${r.text}`);
       }

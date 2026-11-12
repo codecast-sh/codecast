@@ -208,6 +208,7 @@ function Thread({ doc, live, me, root, replies, focused, readOnly, onFocus, onRe
   }, [focused]);
   const setRoot = (set: Record<string, any>) => live.apply([{ k: root.key, set }], { layer: "comments", undoable: false });
   const mine = (c: ArtifactElement) => !!me && c.author === `u:${me}`;
+  const meName = useInboxStore((s: any) => s.currentUser?.name as string | undefined);
   // The artifact's owner moderates: they may delete any comment, a whole thread included.
   const owner = !!me && String((doc as any).user_id ?? "") === me;
   const canDelete = (c: ArtifactElement) => owner || mine(c);
@@ -239,16 +240,17 @@ function Thread({ doc, live, me, root, replies, focused, readOnly, onFocus, onRe
     >
       <CommentLine docId={live.docId} c={root} anchor={anchor} canDelete={!readOnly && canDeleteThread} onDelete={() => remove(root)} onEdit={!readOnly && mine(root) ? (text) => edit(root, text) : undefined} />
       {root.sent_to ? <AskState root={root} /> : null}
-      {root.resolved && root.resolved_by_name ? (
-        <div className="mt-1 text-meta text-sol-text-dim" data-live-resolved-by>
-          Resolved by {String(root.resolved_by_name)}{root.resolved_at ? ` · ${formatRelative(Number(root.resolved_at))}` : ""}
-        </div>
-      ) : null}
+
       {replies.map((r) => (
         <div key={r.key} className="mt-2 pl-3 border-l border-sol-border/40">
           <CommentLine docId={live.docId} c={r} canDelete={!readOnly && canDelete(r)} onDelete={() => remove(r)} onEdit={!readOnly && mine(r) ? (text) => edit(r, text) : undefined} />
         </div>
       ))}
+      {root.resolved && root.resolved_by_name ? (
+        <div className="mt-1.5 text-meta text-sol-text-dim" data-live-resolved-by>
+          Resolved by {String(root.resolved_by_name)}{root.resolved_at ? ` · ${formatRelative(Number(root.resolved_at))}` : ""}
+        </div>
+      ) : null}
       {!readOnly && (
         <div className="mt-1.5 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
           <button
@@ -261,7 +263,8 @@ function Thread({ doc, live, me, root, replies, focused, readOnly, onFocus, onRe
                 toast.dismiss(toastId);
                 onReopened();
               } else {
-                setRoot({ resolved: true });
+                // Painted at once with the viewer as resolver; the server stamps the same.
+                setRoot({ resolved: true, resolved_by_name: meName ?? "You", resolved_at: Date.now() });
                 toast("Thread resolved", { id: toastId, action: { label: "Undo", onClick: () => setRoot({ resolved: null }) } });
               }
             }}
@@ -452,7 +455,7 @@ export function HistoryPanel({ live, openRev, onOpen, onClose, canEdit = true }:
         >
           <div className="text-xs text-sol-text font-medium">Current</div>
         </button>
-        {versions.length === 0 && <div className="px-3 py-6 text-center text-xs text-sol-text-dim">No versions yet</div>}
+        {versions.length === 0 && <div className="px-3 py-6 text-center text-xs text-sol-text-dim">{live.ready ? "No versions yet" : "Loading…"}</div>}
         {versions.map((v) => (
           <button
             type="button"

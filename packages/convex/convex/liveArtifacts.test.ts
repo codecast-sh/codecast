@@ -224,6 +224,15 @@ describe("live artifacts", () => {
     await t.mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_4", put: { kind: "comment", text: "Added Day 0", parent: "cm_3" } }], ...agent });
     expect(await bell(rosa)).toContain('comment_reply: Lay out the timeline replied on the board "Launch timeline"');
     expect((await state(t, doc, "comments")).cm_3).toMatchObject({ answered_by_name: "Lay out the timeline" });
+
+    // A new ask made in a reply puts the thread back with the agent, on its root.
+    await as(dev).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_5", put: { kind: "comment", text: "Plain thread" } }] });
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_6", put: { kind: "comment", text: "@[Lay out the timeline jx7agnt] take this one", parent: "cm_5" } }] });
+    const after = await state(t, doc, "comments");
+    expect(after.cm_5).toMatchObject({ sent_to: String(conv) });
+    expect(after.cm_6.sent_to).toBeUndefined();
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_7", put: { kind: "comment", text: "@[Lay out the timeline jx7agnt] one more", parent: "cm_3" } }] });
+    expect((await state(t, doc, "comments")).cm_3.answered_at).toBeUndefined();
   });
 
   test("create from a team session: --personal keeps it the creator's, no flag follows the session", async () => {
