@@ -1397,8 +1397,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   // The folder-transfer strip's Cancel: the web marks the row cancelling; the
   // owner's daemon reads the stamp back on its next progress report.
-  cancelPeerTransfer: async (ctx, userId, [convId]: [string]) => {
-    await performCancelPeerTransfer(ctx, userId, convId as Id<"conversations">);
+  cancelPeerTransfer: async (ctx, userId, [convId, startedAt]: [string, number]) => {
+    await performCancelPeerTransfer(ctx, userId, convId as Id<"conversations">, startedAt);
   },
   dismissPeerTransfer: async (ctx, userId, [convId, startedAt]: [string, number]) => {
     await performDismissPeerTransfer(ctx, userId, convId as Id<"conversations">, startedAt);
