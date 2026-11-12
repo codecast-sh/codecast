@@ -136,7 +136,7 @@ html.light .board-root {
 .board-li { display: flex; }
 /* Overview: the title alone, scaled up so it still reads at a glance. */
 .board-root[data-lod="far"] .board-sticky-text span { display: none; }
-.board-root[data-lod="far"] .board-sticky-text { font-size: min(calc(var(--fs) * 1.6), 26px) !important; line-height: 1.15; }
+.board-root[data-lod="far"] .board-sticky-text:not([data-long]) { font-size: min(calc(var(--fs) * 1.6), 26px) !important; line-height: 1.15; }
 .board-sticky-text span { color: color-mix(in srgb, var(--board-ink) 72%, transparent); }
 
 .board-text {

@@ -25,6 +25,7 @@ import {
   cloneOps,
   connectorGeometry,
   elbowObstacles,
+  frameAround,
   distributeBoxes,
   elementBounds,
   elementBox,
@@ -375,6 +376,17 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       case "edit":
         if (selection.length === 1) startEdit(selection[0]);
         return;
+      case "frame": {
+        // Wrap what is selected in a new frame, title ready to type, as FigJam's Frame selection does.
+        const inside = selectedEls.filter((e) => e.kind !== "connector").map(elementBounds);
+        const op = frameAround(inside, "Frame", bottomZ({ elements: allEls() }), 40);
+        if (!op) return;
+        live.apply([op]);
+        byKeyRef.current.set(op.k, { ...("put" in op ? (op.put as any) : {}), key: op.k, rev: 0 });
+        setSelection([op.k]);
+        startEdit(op.k);
+        return;
+      }
       case "open": {
         const node = cam.rootRef.current?.querySelector(`[data-key="${CSS.escape(selection[0])}"] a[href]`) as HTMLAnchorElement | null;
         node?.click();
@@ -424,6 +436,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       return true;
     },
     group: (off) => runBar({ type: off ? "ungroup" : "group" }),
+    frameSelection: () => { if (selectedEls.length) runBar({ type: "frame" }); },
     order: (where) => runBar({ type: "order", where }),
     nudge: (dx, dy) => live.apply(withFrameContents(selection, byKeyRef.current).map((k) => byKeyRef.current.get(k)!).filter(Boolean).flatMap((e) => {
       if (e.kind !== "connector") return [{ k: e.key, set: { x: (Number(e.x) || 0) + dx, y: (Number(e.y) || 0) + dy } }];

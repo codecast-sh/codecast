@@ -16,6 +16,7 @@ import {
   Bold,
   CornerDownRight,
   ExternalLink,
+  Frame,
   ImagePlus,
   Group,
   ListChecks,
@@ -48,6 +49,7 @@ export type BarAction =
   | { type: "plan" }
   | { type: "describe" }
   | { type: "edit" }
+  | { type: "frame" }
   | { type: "open" }
   | { type: "delete" };
 
@@ -189,6 +191,7 @@ export const BoardSelectionBar = memo(function BoardSelectionBar({ selected, at,
         <>
           <span className="board-bar-sep" />
           <Btn label="Align" active={menu === "align"} onClick={() => setMenu(menu === "align" ? null : "align")}><AlignStartVertical {...I} /></Btn>
+          {!kinds.has("frame") && <Btn label="Frame selection" accel="Alt+CmdOrCtrl+G" onClick={() => act({ type: "frame" })}><Frame {...I} /></Btn>}
           {grouped
             ? <Btn label="Ungroup" accel="Shift+CmdOrCtrl+G" onClick={() => act({ type: "ungroup" })}><Ungroup {...I} /></Btn>
             : <Btn label="Group" accel="CmdOrCtrl+G" onClick={() => act({ type: "group" })}><Group {...I} /></Btn>}

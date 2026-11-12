@@ -123,7 +123,8 @@ const StickyView = memo(function StickyView({ el, editing, onEditInput, onEditDo
           onNext={onEditNext}
         />
       ) : (
-        <div className="board-sticky-text" style={{ fontSize: size, ["--fs" as any]: `${size}px` }}>
+        // A long first line is not a title: the far-zoom view leaves it at its size rather than enlarging and cropping it.
+        <div className="board-sticky-text" data-long={shown.split("\n")[0].length > 28 || undefined} style={{ fontSize: size, ["--fs" as any]: `${size}px` }}>
           <RichText text={shown} titleFirst />
         </div>
       )}

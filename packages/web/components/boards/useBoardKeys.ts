@@ -17,6 +17,8 @@ export type KeyCommands = {
   selectAll(): void;
   clearSelection(): boolean;
   group(off: boolean): void;
+  /** Wrap the selection in a new frame (Cmd+Alt+G). */
+  frameSelection(): void;
   order(where: "front" | "back"): void;
   nudge(dx: number, dy: number): void;
   zoomBy(f: number): void;
@@ -95,6 +97,8 @@ export function useBoardKeys(cmds: KeyCommands, spaceHeld: React.MutableRefObjec
       if (mod && k === "c") { c.copy(false); return; }
       if (mod && k === "x") { c.copy(true); return; }
       if (mod && k === "d") { stop(); c.duplicate(); return; }
+      // Option changes the letter a key types on a Mac: match the key's place, not its character.
+      if (mod && e.altKey && e.code === "KeyG") { stop(); c.frameSelection(); return; }
       if (mod && k === "g") { stop(); c.group(e.shiftKey); return; }
       if (e.key === "Backspace" || e.key === "Delete") { stop(); c.deleteSelection(); return; }
       if (e.key === "]") { stop(); c.order("front"); return; }

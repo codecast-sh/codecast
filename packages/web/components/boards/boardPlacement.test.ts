@@ -17,4 +17,8 @@ describe("Tab places the next sticky", () => {
     expect(r.y).toBe(184);
     expect(r.growFrame).toEqual({ key: "f", h: 392 });
   });
+  test("on an open canvas the fifth in a row starts the next row", () => {
+    const row = [s("a", 0, 0), s("b", 224, 0), s("c", 448, 0), s("d", 672, 0)];
+    expect(nextStickySpot({ x: 672, y: 0, w: 200, h: 160 }, 160, 1, row)).toEqual({ x: 0, y: 184 });
+  });
 });
