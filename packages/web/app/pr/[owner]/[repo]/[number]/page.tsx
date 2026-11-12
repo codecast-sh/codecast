@@ -7,6 +7,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useRepoLocation } from "../../../../../components/repo/useRepoFamily";
 import { GitPullRequest } from "lucide-react";
+import { ImageGalleryProvider } from "../../../../../components/ImageGallery";
 import { RepoPageShell } from "../../../../../components/repo/RepoPageShell";
 import { FileDiffLayout, type DiffFile, type FileLineThreads } from "../../../../../components/FileDiffLayout";
 import { MenuKeyCaps } from "../../../../../components/KeyboardShortcutsHelp";
@@ -632,7 +633,9 @@ export default function PRPage() {
 
   return (
     <RepoPageShell repository={`${owner}/${repo}`}>
-      <PRContent repository={`${owner}/${repo}`} number={number} />
+      <ImageGalleryProvider key={`${owner}/${repo}#${number}`}>
+        <PRContent repository={`${owner}/${repo}`} number={number} />
+      </ImageGalleryProvider>
     </RepoPageShell>
   );
 }
