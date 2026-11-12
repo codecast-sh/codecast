@@ -50,7 +50,7 @@ import { BoardToolbar } from "./BoardToolbar";
 import { BoardSelectionBar, type BarAction } from "./BoardSelectionBar";
 import { BoardPrompt, type PromptMode } from "./BoardPrompt";
 import { CommentPins, CommentThreadPopover } from "./BoardComments";
-import { initialsOf, pinPoint, useThreads } from "./commentThreads";
+import { initialsOf, pinPoints, useThreads } from "./commentThreads";
 import { useBoardCamera } from "./useBoardCamera";
 import { useBoardGestures, withFrameContents } from "./useBoardGestures";
 import { useBoardKeys } from "./useBoardKeys";
@@ -360,6 +360,9 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       case "describe":
         openAsk("describe");
         return;
+      case "edit":
+        if (selection.length === 1) startEdit(selection[0]);
+        return;
       case "open": {
         const node = cam.rootRef.current?.querySelector(`[data-key="${CSS.escape(selection[0])}"] a[href]`) as HTMLAnchorElement | null;
         node?.click();
@@ -532,10 +535,11 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   }, [selectedEls]);
 
   const openThread = threads.find((t) => t.root.key === thread);
-  const threadAt = openThread ? (() => { const p = pinPoint(openThread.root, byKey); return p ? cam.toScreen(p) : null; })() : null;
+  const threadAt = openThread ? (() => { const p = pinPoints(threads, byKey).get(openThread.root.key); return p ? cam.toScreen(p) : null; })() : null;
   const zoomPct = Math.round(vcam.z * 100);
   const empty = live.ready && elements.length === 0 && !snapshot && !prompt;
-  const docRef = useMemo(() => ({ _id: doc._id, title: doc.title, doc_type: doc.doc_type, project_path: doc.project_path, git_root: doc.git_root }), [doc._id, doc.title, doc.doc_type, doc.project_path, doc.git_root]);
+  const teamId = (doc as typeof doc & { team_id?: string }).team_id;
+  const docRef = useMemo(() => ({ _id: doc._id, title: doc.title, doc_type: doc.doc_type, project_path: doc.project_path, git_root: doc.git_root, team_id: teamId }), [doc._id, doc.title, doc.doc_type, doc.project_path, doc.git_root, teamId]);
 
   return (
     <div
@@ -651,7 +655,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
           doc={docRef}
           selected={prompt.mode === "describe" ? selectedEls : prompt.anchor ? [byKey.get(prompt.anchor)!].filter(Boolean) : selectedEls}
           initials={initialsOf(String(me?.name ?? "You"))}
-          onComment={(text) => live.comment({ text, ...(prompt.anchor ? { anchor: prompt.anchor } : prompt.world ? { point: { x: Math.round(prompt.world.x), y: Math.round(prompt.world.y) } } : {}) })}
+          onComment={(text) => live.comment({ text, ...(prompt.anchor ? { anchor: prompt.anchor } : {}), ...(prompt.world ? { point: { x: Math.round(prompt.world.x), y: Math.round(prompt.world.y) } } : {}) })}
           onClose={() => setPrompt(null)}
           onSent={(sessionId, commentKey) => {
             if (sessionId && commentKey) live.apply([{ k: commentKey, set: { sent_to: sessionId } }], { layer: "comments", undoable: false });
@@ -681,6 +685,10 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
         readOnly={readOnly}
         locked={locked}
         setLocked={setLocked}
+        onImages={(files) => {
+          const at = viewCenter();
+          files.forEach((f, i) => void placeImage(live, convex as any, f, { x: at.x + i * 40, y: at.y + i * 40 }, allEls()));
+        }}
         compact={cam.viewport.w > 0 && cam.viewport.w < 600}
         askSlot={
           <ShortcutTooltip label="Ask agent" accel="A" side="top">

@@ -1,13 +1,12 @@
 // The bottom toolbar: the frame's tool set (select, hand, text, frame,
 // sticky, pen, shape, stamp, comment), a codecast object tool, and Ask
 // agent. Each tool shows its single-key shortcut as a KeyCap on hover.
-import { memo, useState } from "react";
+import { memo, useRef, useState } from "react";
 import {
   ArrowUpRight,
-  Circle,
-  Diamond,
   Hand,
   Hash,
+  Image as ImageIcon,
   Layers,
   MoreHorizontal,
   Lock,
@@ -21,14 +20,14 @@ import {
   Type,
 } from "lucide-react";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
-import { colorToken, STAMPS } from "./boardColors";
+import { colorToken } from "./boardColors";
+import { BoardArtPicker } from "./BoardArtPicker";
+import { SHAPE_CHOICES } from "./boardShapeChoices";
+import { BOARD_ART_URLS } from "./boardArtUrls";
+import { boardArtFor } from "@codecast/shared/artifacts/board";
 import type { BoardTool } from "./boardTypes";
 
-const SHAPES = [
-  { id: "rect", icon: Square, label: "Rectangle" },
-  { id: "ellipse", icon: Circle, label: "Ellipse" },
-  { id: "diamond", icon: Diamond, label: "Diamond" },
-] as const;
+const SHAPES = SHAPE_CHOICES;
 
 const PEN_COLORS = ["gray", "blue", "red", "green", "orange", "violet"] as const;
 
@@ -42,6 +41,8 @@ type Props = {
   penColor: string;
   setPenColor(c: string): void;
   askSlot?: React.ReactNode;
+  /** Images chosen from the Image button, to place at the middle of the view. */
+  onImages(files: File[]): void;
   /** A narrow pane: the less used tools fold into a More menu so the bar fits. */
   compact: boolean;
   /** The tool stays on after each placement instead of returning to Select. */
@@ -60,8 +61,16 @@ function ToolButton({ active, label, accel, onClick, children }: { active: boole
   );
 }
 
+/** The armed sticker on its tool button: a painted illustration or an emoji. */
+function StampFace({ stamp }: { stamp: string }) {
+  const art = boardArtFor(stamp);
+  if (art) return <img src={BOARD_ART_URLS[art]} alt="" draggable={false} style={{ width: 20, height: 20, objectFit: "contain" }} />;
+  return <span className="board-tool-emoji">{stamp}</span>;
+}
+
 export const BoardToolbar = memo(function BoardToolbar(p: Props) {
   const [open, setOpen] = useState<"shape" | "stamp" | "pen" | "more" | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
   const pick = (t: BoardTool, menu?: "shape" | "stamp" | "pen") => {
     p.setTool(t);
     setOpen(menu && p.tool === t ? (open === menu ? null : menu) : null);
@@ -70,6 +79,7 @@ export const BoardToolbar = memo(function BoardToolbar(p: Props) {
   if (p.readOnly) return null;
   return (
     <div className="board-toolbar" data-board-ui role="toolbar" aria-label="Board tools">
+      <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={(e) => { const files = [...(e.currentTarget.files ?? [])]; e.currentTarget.value = ""; if (files.length) p.onImages(files); }} />
       {open === "shape" && (
         <div className="board-tool-menu">
           {SHAPES.map((s) => (
@@ -86,11 +96,12 @@ export const BoardToolbar = memo(function BoardToolbar(p: Props) {
         <Pencil size={17} strokeWidth={1.75} />
         <span className="board-tool-dot" style={{ background: colorToken(p.penColor) }} />
       </ToolButton>
-      <ToolButton active={p.tool === "stamp"} label="Stamp" accel="E" onClick={() => { p.setTool("stamp"); setOpen("stamp"); }}>
-        {p.tool === "stamp" ? <span className="board-tool-emoji">{p.stamp}</span> : <Smile size={17} strokeWidth={1.75} />}
+      <ToolButton active={p.tool === "stamp"} label="Sticker" accel="E" onClick={() => { p.setTool("stamp"); setOpen("stamp"); }}>
+        {p.tool === "stamp" ? <StampFace stamp={p.stamp} /> : <Smile size={17} strokeWidth={1.75} />}
       </ToolButton>
       <ToolButton active={p.tool === "comment"} label="Comment" accel="C" onClick={() => pick("comment")}><MessageCircle size={17} strokeWidth={1.75} /></ToolButton>
       <ToolButton active={p.tool === "card"} label="Codecast object" accel="O" onClick={() => pick("card")}><Layers size={17} strokeWidth={1.75} /></ToolButton>
+      <ToolButton active={false} label="Image" onClick={() => { setOpen(null); fileRef.current?.click(); }}><ImageIcon size={17} strokeWidth={1.75} /></ToolButton>
       <ShortcutTooltip label={p.locked ? "Unlock tool" : "Keep tool on after each use"} accel="Q" side="top">
         <button type="button" className={`board-tool${p.locked ? " is-active" : ""}`} aria-label="Lock tool" aria-pressed={p.locked} onClick={() => p.setLocked(!p.locked)}>
           {p.locked ? <Lock size={15} strokeWidth={1.75} /> : <LockOpen size={15} strokeWidth={1.75} />}
@@ -100,9 +111,7 @@ export const BoardToolbar = memo(function BoardToolbar(p: Props) {
       )}
       {open === "stamp" && (
         <div className="board-tool-menu board-stamp-menu">
-          {STAMPS.map((s) => (
-            <button key={s} type="button" className={`board-stamp-pick${p.stamp === s ? " is-active" : ""}`} onClick={() => { p.setStamp(s); p.setTool("stamp"); setOpen(null); }}>{s}</button>
-          ))}
+          <BoardArtPicker value={p.stamp} onPick={(s) => { p.setStamp(s); p.setTool("stamp"); setOpen(null); }} />
         </div>
       )}
       {open === "pen" && (
@@ -132,11 +141,12 @@ export const BoardToolbar = memo(function BoardToolbar(p: Props) {
         <Pencil size={17} strokeWidth={1.75} />
         <span className="board-tool-dot" style={{ background: colorToken(p.penColor) }} />
       </ToolButton>
-      <ToolButton active={p.tool === "stamp"} label="Stamp" accel="E" onClick={() => { p.setTool("stamp"); setOpen(open === "stamp" ? null : "stamp"); }}>
-        {p.tool === "stamp" ? <span className="board-tool-emoji">{p.stamp}</span> : <Smile size={17} strokeWidth={1.75} />}
+      <ToolButton active={p.tool === "stamp"} label="Sticker" accel="E" onClick={() => { p.setTool("stamp"); setOpen(open === "stamp" ? null : "stamp"); }}>
+        {p.tool === "stamp" ? <StampFace stamp={p.stamp} /> : <Smile size={17} strokeWidth={1.75} />}
       </ToolButton>
       <ToolButton active={p.tool === "comment"} label="Comment" accel="C" onClick={() => pick("comment")}><MessageCircle size={17} strokeWidth={1.75} /></ToolButton>
       <ToolButton active={p.tool === "card"} label="Codecast object" accel="O" onClick={() => pick("card")}><Layers size={17} strokeWidth={1.75} /></ToolButton>
+      <ToolButton active={false} label="Image" onClick={() => { setOpen(null); fileRef.current?.click(); }}><ImageIcon size={17} strokeWidth={1.75} /></ToolButton>
           <span className="board-toolbar-sep" />
       <ShortcutTooltip label={p.locked ? "Unlock tool" : "Keep tool on after each use"} accel="Q" side="top">
         <button type="button" className={`board-tool${p.locked ? " is-active" : ""}`} aria-label="Lock tool" aria-pressed={p.locked} onClick={() => p.setLocked(!p.locked)}>

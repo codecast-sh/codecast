@@ -22,7 +22,7 @@ export const BOARD_DEFAULT_SIZE: Record<string, { w: number; h: number }> = {
 /** Sticky and shape colors, by name. The web maps each to a theme token. */
 export const BOARD_COLORS = ["yellow", "orange", "red", "pink", "violet", "blue", "cyan", "green", "gray"] as const;
 export type BoardColor = (typeof BOARD_COLORS)[number];
-export const BOARD_SHAPES = ["rect", "ellipse", "diamond", "pill"] as const;
+export const BOARD_SHAPES = ["rect", "ellipse", "diamond", "pill", "triangle", "hexagon", "cylinder", "star"] as const;
 export type BoardShape = (typeof BOARD_SHAPES)[number];
 
 function num(v: unknown, fallback: number): number {
@@ -628,4 +628,43 @@ export function stickyLayout(text: string, w: number, h: number, icon: unknown, 
     if (need > room(full)) iconH = Math.max(Math.round(full / 3), Math.min(full, h - 28 - 6 - need));
   }
   return { iconH, size: stickyFontSize(text || " ", w, h - (iconH ? iconH + 6 : 0), 17, floor) };
+}
+
+/**
+ * The outline of a drawn shape inside a w x h box, as an SVG path in the
+ * box's own coordinates (inset by half a stroke). Rect and pill draw as boxes
+ * and have none. The canvas and exports draw the same path.
+ */
+export function shapeOutline(shape: string, w: number, h: number): string | null {
+  const i = 1, W = w - i, H = h - i, cx = w / 2, cy = h / 2;
+  const n = (v: number) => Math.round(v * 10) / 10;
+  const poly = (pts: [number, number][]) => `M${pts.map(([x, y]) => `${n(x)},${n(y)}`).join(" L")} Z`;
+  switch (shape) {
+    case "ellipse": {
+      const rx = cx - i, ry = cy - i;
+      return `M${n(i)},${n(cy)} A${n(rx)},${n(ry)} 0 1 0 ${n(W)},${n(cy)} A${n(rx)},${n(ry)} 0 1 0 ${n(i)},${n(cy)} Z`;
+    }
+    case "diamond":
+      return poly([[cx, i], [W, cy], [cx, H], [i, cy]]);
+    case "triangle":
+      return poly([[cx, i], [W, H], [i, H]]);
+    case "hexagon":
+      return poly([[w * 0.25, i], [w * 0.75, i], [W, cy], [w * 0.75, H], [w * 0.25, H], [i, cy]]);
+    case "star": {
+      const pts: [number, number][] = [];
+      for (let k = 0; k < 10; k++) {
+        const a = -Math.PI / 2 + (k * Math.PI) / 5, r = k % 2 ? 0.42 : 1;
+        pts.push([cx + Math.cos(a) * (cx - i) * r, cy + 0.06 * h + Math.sin(a) * (cy - i) * r]);
+      }
+      return poly(pts);
+    }
+    case "cylinder": {
+      // A database drum: the body, then its top rim drawn as a full ellipse.
+      const rx = cx - i, ry = Math.min(h * 0.14, 18);
+      return `M${n(i)},${n(ry + i)} L${n(i)},${n(H - ry)} A${n(rx)},${n(ry)} 0 0 0 ${n(W)},${n(H - ry)} L${n(W)},${n(ry + i)} `
+        + `M${n(i)},${n(ry + i)} A${n(rx)},${n(ry)} 0 1 0 ${n(W)},${n(ry + i)} A${n(rx)},${n(ry)} 0 1 0 ${n(i)},${n(ry + i)} Z`;
+    }
+    default:
+      return null;
+  }
 }

@@ -221,10 +221,11 @@ html.light .board-root {
   position: absolute;
   transform: translate(-50%, -50%);
   background: var(--sol-bg);
-  color: var(--sol-text-muted);
-  font-size: 12px;
-  padding: 1px 6px;
-  border-radius: 4px;
+  color: var(--sol-text);
+  font-size: 15px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 5px;
   white-space: nowrap;
   pointer-events: auto;
 }
@@ -244,6 +245,23 @@ html.light .board-root {
   cursor: text;
 }
 .board-sticky .board-edit { text-align: center; field-sizing: content; max-height: 100%; }
+/* The rich editor reads like the sticky it edits: a title line over a softer body. */
+.board-rich-edit { white-space: pre-wrap; outline: none; min-height: 1.3em; }
+.board-bar-link {
+  width: 220px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 13px;
+  color: var(--sol-text);
+  background: var(--sol-bg);
+  border: 1px solid var(--sol-border);
+  border-radius: 6px;
+  outline: none;
+}
+.board-bar-link:focus { border-color: var(--board-sel); }
+.board-rich-edit a { color: var(--sol-blue); text-decoration: underline; text-underline-offset: 0.15em; }
+.board-sticky .board-rich-edit > div:first-child:not(:only-child) { font-weight: 650; }
+.board-sticky .board-rich-edit > div:not(:first-child) { color: color-mix(in srgb, var(--board-ink) 72%, transparent); }
 .board-text .board-edit { height: 100%; }
 .board-shape .board-edit { inset: 6px 12px; position: absolute; width: auto; text-align: center; align-content: center; }
 .board-frame-title .board-edit { field-sizing: content; min-width: 40px; }
@@ -412,7 +430,16 @@ html.light .board-root {
   box-shadow: var(--board-chrome-shadow);
   animation: board-pop 140ms cubic-bezier(0.2, 0.9, 0.3, 1.2);
 }
-.board-stamp-menu { display: grid; grid-template-columns: repeat(6, 32px); }
+.board-stamp-menu { display: block; padding: 6px; }
+/* The illustration picker: a search field over a scrolling grid of the painted set, then emoji. */
+.board-art-picker { display: flex; flex-direction: column; gap: 6px; width: 296px; }
+.board-art-picker .board-bar-link { width: 100%; box-sizing: border-box; }
+.board-art-grid { display: grid; grid-template-columns: repeat(7, 38px); gap: 2px; max-height: 232px; overflow-y: auto; overscroll-behavior: contain; }
+.board-art-cell { width: 38px; height: 38px; display: flex; align-items: center; justify-content: center; border-radius: 7px; font-size: 20px; }
+.board-art-cell img { width: 30px; height: 30px; object-fit: contain; }
+.board-art-cell:hover { background: var(--sol-bg-alt); }
+.board-art-cell.is-active { background: color-mix(in srgb, var(--board-sel) 16%, transparent); }
+.board-art-none { width: 18px; height: 18px; border: 1.5px dashed var(--sol-text-dim); border-radius: 50%; }
 .board-stamp-pick { width: 32px; height: 32px; border-radius: 7px; font-size: 18px; line-height: 1; }
 .board-stamp-pick:hover, .board-stamp-pick.is-active { background: var(--sol-bg-alt); }
 .board-swatch {

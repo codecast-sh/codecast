@@ -42,8 +42,8 @@ export const BoardMinimap = memo(function BoardMinimap({ elements, byKey, cam, t
   return (
     <div
       data-board-ui
-      // Bottom-right, clear of the toolbar, translucent: an overview, not a panel over the work.
-      style={{ position: "absolute", ...(top ? { top: 52 } : { bottom: 16 }), right: 12, zIndex: 20, padding: 3, background: "color-mix(in srgb, var(--sol-card) 82%, transparent)", backdropFilter: "blur(6px)", border: "1px solid var(--sol-border)", borderRadius: 9, boxShadow: "var(--board-chrome-shadow)" }}
+      // Bottom-right above the toolbar's row, translucent: an overview, not a panel over the work.
+      style={{ position: "absolute", ...(top ? { top: 52 } : { bottom: 72 }), right: 12, zIndex: 20, padding: 3, background: "color-mix(in srgb, var(--sol-card) 82%, transparent)", backdropFilter: "blur(6px)", border: "1px solid var(--sol-border)", borderRadius: 9, boxShadow: "var(--board-chrome-shadow)" }}
     >
       <svg
         width={W}

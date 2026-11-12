@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatKey, hasMarks, richLines, toggleList } from "./boardMarks";
+import { formatKey, hasMarks, markRuns, richLines, toggleList, wrapRuns } from "./boardMarks";
 
 const key = (k: string, shift = false) => ({ key: k, metaKey: true, ctrlKey: false, shiftKey: shift });
 
@@ -39,5 +39,21 @@ describe("list toggle", () => {
     const on = toggleList("Title\none\ntwo", 7, 12);
     expect(on.value).toBe("Title\n- one\n- two");
     expect(toggleList(on.value, on.start, on.end).value).toBe("Title\none\ntwo");
+  });
+});
+
+describe("styled runs for export", () => {
+  test("marks become runs; links keep their address", () => {
+    expect(markRuns("ship **now** see [docs](https://x.dev)")).toEqual([
+      { t: "ship " }, { t: "now", b: true }, { t: " see " }, { t: "docs", href: "https://x.dev" },
+    ]);
+  });
+  test("wrapping keeps each word's style and breaks at spaces", () => {
+    const lines = wrapRuns("**Launch** the new checklist today", 10, (s) => s.length);
+    expect(lines.map((l) => l.map((r) => r.t).join("").trim())).toEqual(["Launch the", "new", "checklist", "today"]);
+    expect(lines[0][0]).toEqual({ t: "Launch", b: true });
+  });
+  test("list lines get their mark", () => {
+    expect(wrapRuns("- one", 100, (s) => s.length)[0].map((r) => r.t).join("")).toBe("• one");
   });
 });

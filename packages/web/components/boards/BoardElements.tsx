@@ -6,6 +6,7 @@ import {
   boardArtFor,
   connectorGeometry,
   elementBox,
+  shapeOutline,
   smoothPath,
   stickyLayout,
   unflatten,
@@ -14,6 +15,7 @@ import {
 import { BOARD_ART_URLS } from "./boardArtUrls";
 import { formatKey } from "./boardMarks";
 import { RichText } from "./BoardRichText";
+import { RichEditor } from "./BoardRichEditor";
 import { EntityObjectCard } from "../EntityObjectCard";
 import { colorToken, stickyFill, tint } from "./boardColors";
 import type { BoardEl } from "./boardTypes";
@@ -109,7 +111,7 @@ const StickyView = memo(function StickyView({ el, editing, onEditInput, onEditDo
         <div className="board-sticky-icon" style={{ fontSize: iconH * 0.82, height: iconH }} aria-hidden>{icon}</div>
       ) : null}
       {editing ? (
-        <InlineEditor
+        <RichEditor
           value={text}
           className="board-sticky-text"
           style={{ fontSize: size }}
@@ -140,7 +142,7 @@ const TextView = memo(function TextView({ el, editing, onEditInput, onEditDone }
   const auto = typeof el.w !== "number" ? { width: "max-content", minWidth: elementBox(el).w, whiteSpace: "pre" as const } : {};
   return (
     <div data-key={el.key} className="board-el board-text" style={boxStyle(el, { ...style, ...auto })}>
-      {editing ? <InlineEditor value={text} className="board-text-edit" style={style} onInput={onEditInput} onDone={onEditDone} /> : text ? <RichText text={text} /> : <span className="board-placeholder">Text</span>}
+      {editing ? <RichEditor value={text} className="board-text-edit" style={style} onInput={onEditInput} onDone={onEditDone} /> : text ? <RichText text={text} /> : <span className="board-placeholder">Text</span>}
     </div>
   );
 });
@@ -156,6 +158,7 @@ function ShapeIcon({ icon, size }: { icon: unknown; size: number }) {
 const ShapeView = memo(function ShapeView({ el, editing, onEditInput, onEditDone }: ViewProps) {
   const b = elementBox(el);
   const shape = typeof el.shape === "string" ? el.shape : "rect";
+  const outline = shapeOutline(shape, b.w, b.h);
   const color = colorToken(el.color, "blue");
   const solid = el.solid === true;
   const fill = solid ? color : tint(el.color, 16);
@@ -165,19 +168,15 @@ const ShapeView = memo(function ShapeView({ el, editing, onEditInput, onEditDone
   const textStyle: React.CSSProperties = { fontSize, color: solid ? "var(--board-on-solid)" : "var(--sol-text)", fontWeight: shape === "pill" ? 650 : 500 };
   return (
     <div data-key={el.key} className="board-el board-shape" style={boxStyle(el)}>
-      {shape === "ellipse" || shape === "diamond" ? (
+      {outline ? (
         <svg className="board-shape-svg" width={b.w} height={b.h} viewBox={`0 0 ${b.w} ${b.h}`} aria-hidden>
-          {shape === "ellipse" ? (
-            <ellipse cx={b.w / 2} cy={b.h / 2} rx={b.w / 2 - 1} ry={b.h / 2 - 1} fill={fill} stroke={stroke} strokeWidth={1.5} />
-          ) : (
-            <polygon points={`${b.w / 2},1 ${b.w - 1},${b.h / 2} ${b.w / 2},${b.h - 1} 1,${b.h / 2}`} fill={fill} stroke={stroke} strokeWidth={1.5} strokeLinejoin="round" />
-          )}
+          <path d={outline} fill={fill} stroke={stroke} strokeWidth={1.5} strokeLinejoin="round" />
         </svg>
       ) : (
         <div className="board-shape-box" style={{ background: fill, border: `1.5px solid ${stroke}`, borderRadius: shape === "pill" ? b.h / 2 : 6 }} />
       )}
       {editing ? (
-        <InlineEditor value={text} className="board-shape-text" style={textStyle} onInput={onEditInput} onDone={onEditDone} />
+        <RichEditor value={text} className="board-shape-text" style={textStyle} onInput={onEditInput} onDone={onEditDone} />
       ) : (
         text && <div className="board-shape-text" style={{ ...textStyle, gap: "0.4em" }}><ShapeIcon icon={el.icon} size={fontSize * 1.6} /><div><RichText text={text} /></div></div>
       )}
@@ -250,9 +249,10 @@ const ImageView = memo(function ImageView({ el }: { el: BoardEl }) {
 
 const StampView = memo(function StampView({ el }: { el: BoardEl }) {
   const b = elementBox(el);
+  const art = boardArtFor(el.emoji);
   return (
     <div data-key={el.key} className="board-el board-stamp" style={boxStyle(el, { fontSize: b.w * 0.78 })}>
-      {typeof el.emoji === "string" ? el.emoji : "👍"}
+      {art ? <img src={BOARD_ART_URLS[art]} alt={art} draggable={false} style={{ width: "100%", height: "100%", objectFit: "contain" }} /> : typeof el.emoji === "string" ? el.emoji : "👍"}
     </div>
   );
 });

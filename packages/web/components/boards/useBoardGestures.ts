@@ -10,6 +10,7 @@ import {
   cloneOps,
   connectorGeometry,
   elbowObstacles,
+  isBoardArt,
   nearestAlong,
   contains,
   elementBounds,
@@ -279,6 +280,12 @@ export function useBoardGestures(d: GestureDeps) {
       dd.cam.stopGlide();
       return;
     }
+    // A selected frame drags by its body too (an unselected frame's body is canvas, for a marquee inside it).
+    const frameKey = (target.closest("[data-frame]") as HTMLElement | null)?.getAttribute("data-key");
+    if (frameKey && dd.selection.includes(frameKey) && !e.shiftKey) {
+      beginMove(p, dd.selection, e.altKey);
+      return;
+    }
     const base = e.shiftKey ? dd.selection : [];
     if (!e.shiftKey && dd.selection.length) dd.setSelection([]);
     // Index groups once per marquee, not once per hit per frame.
@@ -414,7 +421,11 @@ export function useBoardGestures(d: GestureDeps) {
     else if (tool === "text") op = { k, put: { kind: "text", x: Math.round(start.x), y: Math.round(start.y - 13), text: "", size: 20, z: nextZ(all()) } };
     else if (tool === "shape") op = { k, put: { kind: "shape", shape: dd.shapeKind, ...at(size.w, size.h), color: "gray", z: nextZ(all()) } };
     else if (tool === "frame") op = { k, put: { kind: "frame", ...at(size.w, size.h), title: "Frame", z: bottomZ(all()) } };
-    else op = { k, put: { kind: "stamp", x: Math.round(start.x - 24), y: Math.round(start.y - 24), size: 48, emoji: dd.stamp, z: nextZ(all()) } };
+    else {
+      // A painted illustration is a sticker worth seeing; an emoji stays a small reaction.
+      const sz = isBoardArt(dd.stamp) ? 120 : 48;
+      op = { k, put: { kind: "stamp", x: Math.round(start.x - sz / 2), y: Math.round(start.y - sz / 2), size: sz, emoji: dd.stamp, z: nextZ(all()) } };
+    }
     dd.live.apply([op]);
     dd.byKey.current.set(k, { ...(op.put as any), key: k, rev: 0 });
     if (tool !== "stamp") {

@@ -6,7 +6,7 @@ import { Bot, Check } from "lucide-react";
 import type { ArtifactElement } from "@codecast/shared/artifacts";
 import { relativeTime } from "../../lib/entityDisplay";
 import type { BoardEl } from "./boardTypes";
-import { initialsOf, pinPoint, type Thread } from "./commentThreads";
+import { initialsOf, pinPoints, type Thread } from "./commentThreads";
 
 export const CommentPins = memo(function CommentPins({ threads, byKey, open, onOpen }: {
   threads: Thread[];
@@ -14,10 +14,11 @@ export const CommentPins = memo(function CommentPins({ threads, byKey, open, onO
   open: string | null;
   onOpen(key: string): void;
 }) {
+  const at_ = pinPoints(threads, byKey);
   return (
     <>
       {threads.map(({ root, replies }) => {
-        const at = pinPoint(root, byKey);
+        const at = at_.get(root.key);
         if (!at) return null;
         return (
           <button

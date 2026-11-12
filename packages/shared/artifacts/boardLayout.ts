@@ -75,8 +75,12 @@ export function parseItem(line: string): BoardItem | null {
     fields.ref = rest.trim();
     if (!fields.ref) return null;
   } else if (kind === "stamp") {
-    fields.emoji = rest.trim() || "👍";
-    w = h = typeof fields.size === "number" ? fields.size : sizeW ?? sizeH ?? d.w;
+    const name = rest.trim().replace(/^:(.*):$/, "$1");
+    fields.emoji = name || "👍";
+    // A painted illustration is a sticker worth seeing; an emoji stays a small reaction.
+    const base = isBoardArt(name) ? 120 : d.w;
+    w = h = typeof fields.size === "number" ? fields.size : sizeW ?? sizeH ?? base;
+    if (isBoardArt(name) && typeof fields.size !== "number") fields.size = w;
     if (sizeW !== null || sizeH !== null) fields.size = w;
   } else if (kind === "image") {
     fields.src = rest.trim();

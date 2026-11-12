@@ -15,23 +15,24 @@ import {
   ArrowUpToLine,
   Bold,
   CornerDownRight,
-  Circle,
-  Diamond,
   ExternalLink,
+  ImagePlus,
   Group,
   ListChecks,
   Map as MapIcon,
   MoveRight,
   Spline,
-  Square,
   Trash2,
+  Type,
   Ungroup,
   Wand2,
   Minus,
   MoveHorizontal,
-  RectangleHorizontal,
 } from "lucide-react";
-import { BOARD_COLORS, type AlignMode } from "@codecast/shared/artifacts/board";
+import { BOARD_COLORS, boardArtFor, type AlignMode } from "@codecast/shared/artifacts/board";
+import { BoardArtPicker } from "./BoardArtPicker";
+import { SHAPE_CHOICES, shapeChoice } from "./boardShapeChoices";
+import { BOARD_ART_URLS } from "./boardArtUrls";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { colorToken } from "./boardColors";
 import type { BoardEl } from "./boardTypes";
@@ -46,6 +47,7 @@ export type BarAction =
   | { type: "tasks" }
   | { type: "plan" }
   | { type: "describe" }
+  | { type: "edit" }
   | { type: "open" }
   | { type: "delete" };
 
@@ -73,7 +75,7 @@ export const BoardSelectionBar = memo(function BoardSelectionBar({ selected, at,
   canMakeTasks: boolean;
   onAction(a: BarAction): void;
 }) {
-  const [menu, setMenu] = useState<"color" | "align" | null>(null);
+  const [menu, setMenu] = useState<"color" | "align" | "art" | "shape" | null>(null);
   const ref = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(0);
   useLayoutEffect(() => {
@@ -106,6 +108,23 @@ export const BoardSelectionBar = memo(function BoardSelectionBar({ selected, at,
           ))}
         </div>
       )}
+      {menu === "art" && (
+        <div className="board-bar-menu">
+          <BoardArtPicker
+            value={typeof first?.icon === "string" ? first.icon : undefined}
+            emoji={false}
+            onPick={(name) => act({ type: "set", fields: { icon: name }, kinds: ["sticky", "shape"] })}
+            onClear={() => act({ type: "set", fields: { icon: null }, kinds: ["sticky", "shape"] })}
+          />
+        </div>
+      )}
+      {menu === "shape" && (
+        <div className="board-bar-menu">
+          {SHAPE_CHOICES.map((s) => (
+            <Btn key={s.id} label={s.label} active={(first?.shape ?? "rect") === s.id} onClick={() => act({ type: "set", fields: { shape: s.id } })}><s.icon {...I} /></Btn>
+          ))}
+        </div>
+      )}
       {menu === "align" && (
         <div className="board-bar-menu">
           <Btn label="Align left" onClick={() => act({ type: "align", mode: "left" })}><AlignStartVertical {...I} /></Btn>
@@ -125,12 +144,14 @@ export const BoardSelectionBar = memo(function BoardSelectionBar({ selected, at,
           <span className="board-bar-swatch" style={{ background: colorToken(color) }} />
         </Btn>
       )}
+      {selected.every((e) => e.kind === "sticky" || e.kind === "shape") && (
+        <Btn label="Illustration" active={menu === "art"} onClick={() => setMenu(menu === "art" ? null : "art")}>
+          {(() => { const a = boardArtFor(first?.icon); return a ? <img src={BOARD_ART_URLS[a]} alt="" draggable={false} style={{ width: 18, height: 18, objectFit: "contain" }} /> : <ImagePlus {...I} />; })()}
+        </Btn>
+      )}
       {only("shape") && (
         <>
-          <Btn label="Rectangle" active={first.shape === "rect" || !first.shape} onClick={() => act({ type: "set", fields: { shape: "rect" } })}><Square {...I} /></Btn>
-          <Btn label="Ellipse" active={first.shape === "ellipse"} onClick={() => act({ type: "set", fields: { shape: "ellipse" } })}><Circle {...I} /></Btn>
-          <Btn label="Diamond" active={first.shape === "diamond"} onClick={() => act({ type: "set", fields: { shape: "diamond" } })}><Diamond {...I} /></Btn>
-          <Btn label="Pill" active={first.shape === "pill"} onClick={() => act({ type: "set", fields: { shape: "pill" } })}><RectangleHorizontal {...I} /></Btn>
+          {(() => { const S = shapeChoice(first.shape).icon; return <Btn label="Shape" active={menu === "shape"} onClick={() => setMenu(menu === "shape" ? null : "shape")}><S {...I} /></Btn>; })()}
           <Btn label="Filled" active={first.solid === true} onClick={() => act({ type: "set", fields: { solid: first.solid === true ? null : true } })}><span className="board-bar-fill" style={{ background: colorToken(color) }} /></Btn>
         </>
       )}
@@ -158,6 +179,7 @@ export const BoardSelectionBar = memo(function BoardSelectionBar({ selected, at,
           }}>
             {first.arrow === "both" ? <MoveHorizontal {...I} /> : first.arrow === "none" ? <Minus {...I} /> : <MoveRight {...I} />}
           </Btn>
+          {n === 1 && <Btn label={first.label ? "Edit label" : "Add label"} accel="Enter" onClick={() => act({ type: "edit" })}><Type {...I} /></Btn>}
           <Btn label="Dashed" active={first.dash === true} onClick={() => act({ type: "set", fields: { dash: first.dash === true ? null : true } })}><span className="board-bar-dash" /></Btn>
         </>
       )}
