@@ -139,6 +139,6 @@ export function useResourceActions(sessions: ResourceSession[], plans: OffloadPl
     onSetBackground: (deviceId, sessionId, background) => { useInboxStore.getState().setSessionBackground(deviceId, sessionId, background).catch(report("resources.background")); },
   };
 
-  const checkedPlans = useMemo(() => plans.map((p) => applyRehearsals(applyPreflight(p, preflight[p.deviceId], now), rehearsals)), [plans, preflight, now, rehearsals]);
+  const checkedPlans = useMemo(() => plans.map((p) => applyRehearsals(applyPreflight(p, preflight[p.deviceId], now), rehearsals, now)), [plans, preflight, now, rehearsals]);
   return { actions, plans: checkedPlans };
 }
