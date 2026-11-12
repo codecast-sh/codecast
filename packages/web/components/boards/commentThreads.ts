@@ -27,6 +27,15 @@ export function pinPoint(c: ArtifactElement, byKey: Map<string, BoardEl>): { x: 
   return { x: b.x + b.w - 8, y: b.y - 8 };
 }
 
+/** A comment dropped on an element's face (not at its corner): its pin sits over the element's words. */
+export function pinOnFace(c: ArtifactElement, byKey: Map<string, BoardEl>): boolean {
+  const a = typeof c.anchor === "string" ? byKey.get(c.anchor) : undefined;
+  const p = pinPoint(c, byKey);
+  if (!a || !p) return false;
+  const b = elementBox(a);
+  return p.x > b.x && p.x < b.x + b.w && p.y > b.y && p.y < b.y + b.h;
+}
+
 /** Every thread's pin, with pins that would land on one spot fanned out side by side so each stays visible. */
 export function pinPoints(threads: readonly { root: ArtifactElement }[], byKey: Map<string, BoardEl>): Map<string, { x: number; y: number }> {
   const out = new Map<string, { x: number; y: number }>();

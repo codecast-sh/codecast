@@ -6,7 +6,7 @@ import { Bot, Check } from "lucide-react";
 import type { ArtifactElement } from "@codecast/shared/artifacts";
 import { relativeTime } from "../../lib/entityDisplay";
 import type { BoardEl } from "./boardTypes";
-import { initialsOf, pinPoints, type Thread } from "./commentThreads";
+import { initialsOf, pinOnFace, pinPoints, type Thread } from "./commentThreads";
 
 export const CommentPins = memo(function CommentPins({ threads, byKey, open, onOpen }: {
   threads: Thread[];
@@ -25,7 +25,7 @@ export const CommentPins = memo(function CommentPins({ threads, byKey, open, onO
             key={root.key}
             type="button"
             data-board-ui
-            className={`board-pin${open === root.key ? " is-open" : ""}${root.sent_to ? " is-agent" : ""}`}
+            className={`board-pin${open === root.key ? " is-open" : ""}${root.sent_to ? " is-agent" : ""}${pinOnFace(root, byKey) ? " is-on-face" : ""}`}
             style={{ left: at.x, top: at.y }}
             onPointerDown={(e) => e.stopPropagation()}
             onClick={() => onOpen(root.key)}

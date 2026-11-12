@@ -337,6 +337,8 @@ html.light .board-root {
 
 /* ── Comment pins ──────────────────────────────────────────────────────── */
 
+/* A pin on an element's face stays small and see-through until hovered or open, so the words under it read. */
+.board-pin.is-on-face:not(.is-open):not(:hover) { opacity: 0.55; transform: translate(0, -100%) scale(calc(0.72 / var(--z))); }
 .board-pin {
   position: absolute;
   transform-origin: 0 100%;
