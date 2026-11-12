@@ -135,6 +135,7 @@ import {
 } from "./ccLiveGate.js";
 import {
   launchAccountPrefix,
+  ACCOUNT_LAUNCH_UNSET,
   adoptPushedCredential,
   FLEET_GATE_ACCOUNT,
   fleetStoreReady,
@@ -9330,6 +9331,24 @@ async function executeRemoteCommand(
           const content = fs.readFileSync(readTarget, "utf-8");
           result = JSON.stringify({ content, exists: true });
         }
+        break;
+      }
+      case "read_file": {
+        const { path: wanted } = commandArgs ? JSON.parse(commandArgs) : {};
+        if (!wanted || typeof wanted !== "string") {
+          error = "Missing path";
+          break;
+        }
+        const { readFileForWeb } = await import("./remoteFileRead.js");
+        let read = readFileForWeb(wanted, computeLocalProjectRoots());
+        if ("error" in read && read.error === "Path not allowed") {
+          invalidateLocalProjectRoots();
+          await refreshLocalProjectRoots();
+          read = readFileForWeb(wanted, computeLocalProjectRoots());
+        }
+        if ("error" in read) error = read.error;
+        else result = JSON.stringify(read.result);
+        log(`[REMOTE] read_file ${wanted}: ${"error" in read ? read.error : read.result.exists ? "sent" : "missing"}`);
         break;
       }
       case "config_write": {
@@ -25738,7 +25757,7 @@ export async function buildClaudeResumeCommand(a: {
   if (a.keychain) {
     // The active profile already runs on the keychain, so only another account is displaced.
     const displacedAccount = resumeAccount !== undefined && resumeAccount !== activeProfileName() ? resumeAccount : undefined;
-    return { resumeCmd, resumeAccountPrefix: "", resumeAccount: undefined, displacedAccount };
+    return { resumeCmd, resumeAccountPrefix: ACCOUNT_LAUNCH_UNSET, resumeAccount: undefined, displacedAccount };
   }
   return { resumeCmd, resumeAccountPrefix, resumeAccount };
 }
