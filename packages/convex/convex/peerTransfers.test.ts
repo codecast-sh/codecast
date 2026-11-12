@@ -10,6 +10,7 @@ import type { Id } from "./_generated/dataModel";
 import { allModules } from "./testModules.testkit";
 import { hashToken } from "./apiTokens";
 import { PEER_TRANSFER_TEXT_MAX } from "./peerTransfers";
+import { conversationForAccess } from "./conversations";
 
 setDefaultTimeout(120_000);
 
@@ -53,6 +54,16 @@ describe("reportPeerTransfer", () => {
     expect(await row()).toBeNull();
   });
 
+  test("done clears only its own transfer's row, or a failed one", async () => {
+    const { row, report } = await setup();
+    await report({ started_at: 2000, phase: "receiving" });
+    await report({ started_at: 1000, phase: "done" });
+    expect(await row()).toMatchObject({ phase: "receiving", started_at: 2000 });
+    await report({ started_at: 2000, phase: "failed", reason: "x" });
+    await report({ started_at: 1000, phase: "done" });
+    expect(await row()).toBeNull();
+  });
+
   test("another machine of the owner, another user, or an unknown device is refused", async () => {
     const { conv, other, t, row, report } = await setup();
     await expect(report({}, { device_id: "there" })).rejects.toThrow(/another machine runs/);
@@ -77,7 +88,7 @@ describe("cancelPeerTransfer", () => {
   test("a cancel reaches the daemon's next report of the same transfer, never a newer one", async () => {
     const { as, owner, conv, row, report } = await setup();
     await report({ phase: "receiving", bytes: 1, total: 10 });
-    await as(owner).mutation(api.peerTransfers.cancelPeerTransfer, { conversation_id: conv });
+    await as(owner).mutation(api.peerTransfers.cancelPeerTransfer, { conversation_id: conv, started_at: 1000 });
     expect((await row())?.cancel_requested_at).toBeGreaterThanOrEqual(1000);
     expect(await report({ phase: "receiving", bytes: 2, total: 10 })).toEqual({ cancel: true });
     expect(await report({ phase: "failed", reason: "cancelled" })).toEqual({ cancel: true });
@@ -85,10 +96,28 @@ describe("cancelPeerTransfer", () => {
     expect((await row())?.cancel_requested_at).toBeUndefined();
   });
 
+  test("a cancel aimed at an earlier transfer leaves the one now running alone", async () => {
+    const { as, owner, conv, row, report } = await setup();
+    await report({ started_at: 2000, phase: "receiving", bytes: 1, total: 10 });
+    await as(owner).mutation(api.peerTransfers.cancelPeerTransfer, { conversation_id: conv, started_at: 1000 });
+    expect((await row())?.cancel_requested_at).toBeUndefined();
+    expect(await report({ started_at: 2000, phase: "receiving", bytes: 2, total: 10 })).toEqual({ cancel: false });
+  });
+
+  test("the dispatch entry carries which transfer was on screen", async () => {
+    const { as, owner, conv, row, report } = await setup();
+    const cancel = (startedAt: number) => as(owner).mutation(api.dispatch.dispatch, { action: "cancelPeerTransfer", args: [conv, startedAt] });
+    await report({ started_at: 2000 });
+    await cancel(1000);
+    expect((await row())?.cancel_requested_at).toBeUndefined();
+    await cancel(2000);
+    expect((await row())?.cancel_requested_at).toBeGreaterThanOrEqual(2000);
+  });
+
   test("only the conversation's owner may cancel", async () => {
     const { as, other, conv, row, report } = await setup();
     await report({});
-    await expect(as(other).mutation(api.peerTransfers.cancelPeerTransfer, { conversation_id: conv })).rejects.toThrow(/not your conversation/);
+    await expect(as(other).mutation(api.peerTransfers.cancelPeerTransfer, { conversation_id: conv, started_at: 1000 })).rejects.toThrow(/not your conversation/);
     expect((await row())?.cancel_requested_at).toBeUndefined();
   });
 });
@@ -107,6 +136,30 @@ describe("dismissPeerTransfer", () => {
 });
 
 describe("getConversationWithMeta", () => {
+  test("a teammate who can open the conversation never sees the transfer row", async () => {
+    const { t, as, owner, other, conv, report } = await setup();
+    await t.run(async (ctx) => {
+      const team = await ctx.db.insert("teams", { name: "Co", created_at: 1 } as any);
+      for (const user of [owner, other]) await ctx.db.insert("team_memberships", { team_id: team, user_id: user, role: "member", visibility: "full", joined_at: 1 } as any);
+      await ctx.db.patch(owner, { team_id: team } as any);
+      await ctx.db.patch(other, { team_id: team, active_team_id: team } as any);
+      await ctx.db.patch(conv, { team_id: team, is_private: false, team_visibility: "full" } as any);
+    });
+    await report({ phase: "failed", reason: "100.64.0.7 (mbp.tail1.ts.net) refused /Users/ann/src/family" });
+    const mate = await as(other).query(api.conversations.getConversationWithMeta, { conversation_id: conv });
+    expect(mate?.access_level).toBe("team");
+    expect(mate).toHaveProperty("peer_transfer", null);
+    const mine = await as(owner).query(api.conversations.getConversationWithMeta, { conversation_id: conv });
+    expect(mine?.peer_transfer).toMatchObject({ phase: "failed" });
+  });
+
+  test("conversationForAccess drops the transfer row for team access and keeps it for the owner", () => {
+    const conversation = { _id: "c", title: "x", peer_transfer: { phase: "failed", reason: "100.64.0.7" } };
+    expect(conversationForAccess(conversation, "owner").peer_transfer).toEqual(conversation.peer_transfer);
+    expect(conversationForAccess(conversation, "team")).toEqual({ _id: "c", title: "x" } as any);
+    expect((conversationForAccess(conversation, "shared") as any).peer_transfer).toBeUndefined();
+  });
+
   test("sends a finished transfer as null, so a merging client drops the row", async () => {
     const { as, owner, conv, report } = await setup();
     const meta = () => as(owner).query(api.conversations.getConversationWithMeta, { conversation_id: conv, strip_volatile: true });
