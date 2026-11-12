@@ -46,6 +46,9 @@ export const liveArtifactTables = {
     // client compares its cache against before trusting it as a base for the
     // tail. Absent on heads that predate it until countLiveRows fills it in.
     rows: v.optional(v.number()),
+    // The sum of those rows' revisions: with `rows`, what a cached copy must
+    // match to stand as a base (a row held at an older value sums lower).
+    rev_sum: v.optional(v.number()),
     // Who may change the artifact (not who may see it: that is the doc's
     // workspace). "team" (the default): everyone who can open it. "owners":
     // its owner and the people in `editors`; everyone else views and comments.

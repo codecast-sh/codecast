@@ -6,16 +6,16 @@
   .live-head [data-freshness] { display: none !important; }
 }
 @container (max-width: 640px) {
-  .live-head [data-live-sync],
-  .live-head [data-live-edit-access-label] { display: none; }
+  .live-head [data-live-sync] { display: none; }
 }
 @container (max-width: 560px) {
   .live-head [data-live-facepile] { display: none; }
+  /* Ask keeps its icon; its words go (the button's title still names it). */
+  .live-head [data-live-ask] { font-size: 0; gap: 0; }
 }
-/* The narrowest pane keeps the title, Comments, History, "..." and Share. */
+/* The narrowest pane keeps the title, the product's folded menu, Comments, History, "..." and Share. */
 @container (max-width: 480px) {
-  .live-head [data-live-focus-toggle],
-  .live-head [data-live-toolbar] { display: none; }
+  .live-head [data-live-focus-toggle] { display: none; }
 }
 
 /* A side panel in a narrow pane covers the body below the header instead of

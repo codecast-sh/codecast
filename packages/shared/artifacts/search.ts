@@ -37,7 +37,8 @@ export function searchSnippet(text: string, query: string, width = 80): string {
     at = lower.indexOf(w);
     if (at >= 0) break;
   }
-  const line = (s: string) => s.replace(/\s+/g, " ").trim();
+  // A result line reads as words: markdown marks (emphasis, headings, quotes, links' brackets, code ticks) go.
+  const line = (s: string) => s.replace(/[*_#>`~]+|\[|\]\([^)]*\)|\]/g, "").replace(/\s+/g, " ").trim();
   if (at < 0) return line(text.slice(0, width));
   const start = Math.max(0, at - Math.floor(width / 3));
   return `${start > 0 ? "…" : ""}${line(text.slice(start, start + width))}${start + width < text.length ? "…" : ""}`;

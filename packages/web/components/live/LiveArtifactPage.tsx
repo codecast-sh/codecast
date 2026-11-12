@@ -18,10 +18,12 @@ import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
 import { docTypeStyle } from "../../lib/docTypeStyle";
 import { DocTypeMark } from "../docs/DocTypeMark";
+import { SegmentedChoice, type SegmentedOption } from "../TeamShareModePicker";
 import "./live.css";
 import { useLiveArtifact, useLiveVersions, useLiveDraftState, useLiveElements, useLivePresence, useLiveRefusal, useLiveRestoring, useLiveUnsettled } from "./useLiveArtifact";
 import { useWsConnected } from "../../hooks/useWsConnected";
 import { useShortcuts } from "../../shortcuts";
+import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { sharePageUrl } from "../../lib/utils";
 import { LiveCursors } from "./LiveCursors";
@@ -30,8 +32,9 @@ import { AskClaimProvider, useAskClaims } from "./askAgent";
 import { CommentsPanel, HistoryPanel } from "./LiveSidePanels";
 import { LIVE_VIEWS, MINIMAL_VIEWS, type LiveExport, type LiveImport, type ScreenPoint } from "./registry";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
+import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { duplicateLiveArtifact } from "../../lib/createLiveArtifact";
 import { Button } from "../ui/button";
@@ -134,7 +137,6 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
 
   const setSelection = useCallback((keys: string[]) => {
     setSelectionState(keys);
-    setCommentAsk(null);
     live.setPresence({ selection: keys, position: keys.length ? { key: keys[keys.length - 1] } : undefined });
   }, [live]);
 
@@ -155,6 +157,21 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
     const keys = new Set(selection);
     return elements.filter((e) => keys.has(e.key));
   }, [elements, selection]);
+
+  // A bare Esc on an artifact closes nothing: it dismisses what is open inside
+  // it (a menu, a selection, an edit), and with nothing to dismiss it stays put,
+  // on every type. Registered before the page's list split (a child's effects run
+  // first), so its Esc-to-close sees the key already handled.
+  useWatchEffect(() => {
+    if (openRev !== null) return;
+    const onEsc = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (keyBelongsElsewhere(e.target)) return;
+      e.preventDefault();
+    };
+    document.addEventListener("keydown", onEsc);
+    return () => document.removeEventListener("keydown", onEsc);
+  }, [openRev]);
 
   // ⌘Z / ⇧⌘Z when focus is not in a text field.
   useWatchEffect(() => {
@@ -202,6 +219,7 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
   const archived = !!(doc as any).archived_at;
   // Who may change it (the head's edit setting); until the feed says, assume they may.
   const canEdit = useInboxStore((s: any) => s.liveHeads?.[doc._id]?.can_edit !== false);
+  const locked = useInboxStore((s: any) => s.liveHeads?.[doc._id]?.edit === "owners");
   const mode = openRev !== null || archived || !canEdit ? "view" : "edit";
   const viewSnapshot = openRev !== null ? snapshot ?? EMPTY : undefined;
   const view = useMemo(
@@ -247,22 +265,27 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
         <DocTypeMark type={doc.doc_type} size={15} title={spec.label} />
         <TitleInput docId={doc._id} title={doc.title} placeholder={`Untitled ${spec.label.toLowerCase()}`} readOnly={mode === "view"} />
         <span data-live-type-label className={`text-meta shrink-0 ${typeStyle.color}`}>{typeLabel ?? spec.label}</span>
+        {locked && <Lock data-live-locked aria-label="Only its owner and editors can edit" className="w-3 h-3 shrink-0 text-sol-text-dim" />}
         {mode === "edit" && <SyncState docId={doc._id} />}
         {/* The product's controls take the room left between the title and the
             shell's own, and clip past it: the shell's buttons always stay reachable. */}
-        <div data-live-toolbar className="flex-1 min-w-0 flex items-center justify-end gap-2 overflow-hidden">{toolbar}</div>
+        <div data-live-toolbar className="flex-1 min-w-10 flex items-center justify-end gap-2 overflow-hidden">{toolbar}</div>
         {faces.length > 0 && <span data-live-facepile className="shrink-0"><PresenceFacepile present={faces} size={22} max={5} /></span>}
         {!askClaims.claimed && mode === "edit" && <span className="shrink-0"><AskAgentControl doc={doc} selected={selected} /></span>}
-        <IconToggle on={panel === "comments"} title="Comments" onClick={() => togglePanel("comments")} badge={commentCount}>
+        <IconToggle on={panel === "comments"} title="Comments" label={commentCount ? `Comments, ${commentCount} open` : "Comments"} onClick={() => togglePanel("comments")} badge={commentCount}>
           <MessageSquare className="w-4 h-4" />
         </IconToggle>
         <IconToggle on={panel === "history"} title="History" onClick={() => togglePanel("history")}>
           <History className="w-4 h-4" />
         </IconToggle>
-        <EditAccess doc={doc as any} canEdit={canEdit} />
-        <FocusToggle />
-        <ArtifactMenu doc={doc as any} canEdit={canEdit && !archived} ready={live.ready} exports={exports} fileImport={mode === "edit" ? fileImport : null} selection={selection} />
-        <ShareControl className="shrink-0" label={spec.label.toLowerCase()} path={`/docs/${doc._id}${shareQuery ? `?${shareQuery}` : ""}`} publicShare={{ kind: "doc", id: doc._id, token: (doc as any).share_token, team: policyTeamOf("docs", doc as any) }} />
+        <AskToEdit doc={doc as any} canEdit={canEdit} />
+        <FocusToggle docId={doc._id} />
+        <ArtifactMenu doc={doc as any} copyOf={openRev !== null ? snapshot : undefined} shareQuery={shareQuery} canEdit={canEdit && !archived} ready={live.ready} exports={exports} fileImport={mode === "edit" ? fileImport : null} selection={selection} />
+        <ShareControl
+          className="shrink-0"
+          access={<EditAccessSection doc={doc as any} />}
+          linkExtra={shareQuery ? <span className="text-meta text-sol-text-dim" data-live-share-view>With this view</span> : undefined}
+          label={spec.label.toLowerCase()} path={`/docs/${doc._id}${shareQuery ? `?${shareQuery}` : ""}`} publicShare={{ kind: "doc", id: doc._id, token: (doc as any).share_token, team: policyTeamOf("docs", doc as any) }} />
       </header>
 
       {live.draft.active && openRev === null && (
@@ -304,6 +327,7 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
       {openRev !== null && (
         <div className="flex items-center gap-2 px-3 h-9 border-b border-sol-blue/30 bg-sol-blue/10 shrink-0" data-live-version-bar>
           <span className="text-xs font-medium text-sol-blue truncate">{openVersion?.label ?? "Version"}</span>
+          {openVersion && <span className="text-meta text-sol-text-muted shrink-0 tabular-nums">{new Date(openVersion.at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span>}
           <span className="text-meta text-sol-text-muted shrink-0">read only</span>
           <span className="flex-1" />
           <button type="button" onClick={() => setParam("v", null)} className="h-6 px-2 rounded text-xs text-sol-text-muted hover:text-sol-text shrink-0">Back to current <KeyCap>Esc</KeyCap></button>
@@ -358,12 +382,20 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
                 live={live}
                 selection={commentAsk?.anchor ? [commentAsk.anchor] : selection}
                 composeTick={commentAsk?.tick}
+                // A comment opened for a cell stays on it while the person clicks around; posting lets go.
+                onPosted={() => setCommentAsk(null)}
                 selectedElements={selected}
                 focusKey={focusComment}
                 // A viewer still comments; an open version or an archived artifact takes none.
                 readOnly={openRev !== null || archived}
-                onFocus={(k, anchor) => { setFocusComment(k); setParam("c", k); if (anchor) setSelection([anchor]); }}
-                onClose={() => { setPanelKind(null); setParam("c", null); }}
+                canAsk={canEdit}
+                onFocus={(k, anchor) => {
+                  // An empty key leaves the thread: the panel goes back to a new comment.
+                  setFocusComment(k || null);
+                  setParam("c", k || null);
+                  if (anchor) setSelection([anchor]);
+                }}
+                onClose={() => { setPanelKind(null); setParam("c", null); setCommentAsk(null); }}
               />
             )}
             {panel === "history" && <HistoryPanel live={live} openRev={openRev} onOpen={(rev) => setParam("v", rev === null ? null : String(rev))} onClose={() => setPanelKind(null)} canEdit={canEdit && !archived} />}
@@ -408,17 +440,18 @@ function TitleInput({ docId, title, placeholder, readOnly }: { docId: string; ti
         if (e.key === "Escape") cancelled.current = true;
         (e.target as HTMLInputElement).blur();
       }}
-      className="min-w-[6ch] max-w-[40%] shrink bg-transparent text-sm font-semibold text-sol-text placeholder:text-sol-text-dim outline-none rounded px-1 -mx-1 hover:bg-sol-bg-alt focus:bg-sol-bg-alt"
+      className="min-w-[4ch] max-w-[40%] shrink truncate bg-transparent text-sm font-semibold text-sol-text placeholder:text-sol-text-dim outline-none rounded px-1 -mx-1 hover:bg-sol-bg-alt focus:bg-sol-bg-alt"
       style={{ width: `${Math.max(8, (value || placeholder).length + 1)}ch` }}
     />
   );
 }
 
-function IconToggle({ on, title, onClick, badge, children }: { on: boolean; title: string; onClick: () => void; badge?: number; children: ReactNode }) {
+function IconToggle({ on, title, label, onClick, badge, children }: { on: boolean; title: string; label?: string; onClick: () => void; badge?: number; children: ReactNode }) {
   return (
     <button
       type="button"
       title={title}
+      aria-label={label ?? title}
       aria-pressed={on}
       onClick={onClick}
       className={`relative inline-flex items-center justify-center w-7 h-7 shrink-0 rounded-md transition-colors ${on ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt"}`}
@@ -480,9 +513,11 @@ function RestoreStoppedBar({ live }: { live: ReturnType<typeof useLiveArtifact> 
 }
 
 /** The artifact's "..." menu: Duplicate, and every download the view offers. */
-function ArtifactMenu({ doc, canEdit, ready, exports, fileImport, selection }: { doc: { _id: string; title: string; doc_type: ArtifactType; team_id?: string; workspace?: string }; canEdit: boolean; ready: boolean; exports: LiveExport[] | null; fileImport: LiveImport | null; selection: string[] }) {
+function ArtifactMenu({ doc, copyOf, shareQuery, canEdit, ready, exports, fileImport, selection }: { doc: { _id: string; title: string; doc_type: ArtifactType; team_id?: string; workspace?: string }; copyOf?: ArtifactElement[]; shareQuery: string; canEdit: boolean; ready: boolean; exports: LiveExport[] | null; fileImport: LiveImport | null; selection: string[] }) {
   const router = useRouter();
   const [archiving, setArchiving] = useState(false);
+  const zen = useInboxStore((s: any) => s.clientState.ui?.zen_mode ?? false);
+  const { dispatchAction } = useShortcuts();
   const fileInput = useRef<HTMLInputElement>(null);
   const download = async (x: LiveExport, sel: string[]) => {
     const pending = toast.loading(`Preparing ${x.format.toUpperCase()}…`);
@@ -515,7 +550,7 @@ function ArtifactMenu({ doc, canEdit, ready, exports, fileImport, selection }: {
           data-live-duplicate
           disabled={!ready}
           onSelect={() => {
-            toast.promise(duplicateLiveArtifact(doc, (href) => router.push(href)).then((id) => { if (!id) throw new Error("no copy"); return id; }), {
+            toast.promise(duplicateLiveArtifact(doc, (href) => router.push(href), copyOf).then((id) => { if (!id) throw new Error("no copy"); return id; }), {
               loading: "Making a copy…",
               success: "Copy opened",
               error: "Could not make a copy",
@@ -524,9 +559,12 @@ function ArtifactMenu({ doc, canEdit, ready, exports, fileImport, selection }: {
         >
           <Copy className="w-3.5 h-3.5" /> Duplicate
         </DropdownMenuItem>
+        <DropdownMenuItem data-live-menu-zen onSelect={() => dispatchAction("ui.zenToggle")}>
+          {zen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />} {zen ? "Exit zen" : "Zen"}
+        </DropdownMenuItem>
         <DropdownMenuItem
           data-live-copy-link
-          onSelect={() => { void navigator.clipboard?.writeText(sharePageUrl(`/docs/${doc._id}`)).then(() => toast.success("Link copied")); }}
+          onSelect={() => { void navigator.clipboard?.writeText(sharePageUrl(`/docs/${doc._id}${shareQuery ? `?${shareQuery}` : ""}`)).then(() => toast.success("Link copied")); }}
         >
           <Link2 className="w-3.5 h-3.5" /> Copy link
         </DropdownMenuItem>
@@ -590,66 +628,90 @@ function ArtifactMenu({ doc, canEdit, ready, exports, fileImport, selection }: {
   );
 }
 
+/** A viewer's way in: the header says they are viewing and asks the owner to let them edit. */
+function AskToEdit({ doc, canEdit }: { doc: { _id: string; user_id?: string }; canEdit: boolean }) {
+  const me = useInboxStore((s: any) => s.currentUser?._id as string | undefined);
+  // Asked once, remembered here, so a visit later does not ask again.
+  const askedKey = `live-asked-edit:${doc._id}`;
+  const [asked, setAsked] = useState(() => typeof localStorage !== "undefined" && localStorage.getItem(askedKey) === "1");
+  const askToEdit = useMutation(api.liveArtifacts.askToEdit);
+  if (canEdit || !me || String(doc.user_id) === me) return null;
+  return (
+    <button
+      type="button"
+      data-live-ask-to-edit
+      title="Comments stay open to you"
+      disabled={asked}
+      onClick={() => {
+        setAsked(true);
+        void askToEdit({ doc_id: doc._id as any }).then(() => { localStorage.setItem(askedKey, "1"); toast.success("The owner was asked"); }).catch(() => { setAsked(false); toast.error("Could not ask the owner"); });
+      }}
+      className="inline-flex items-center gap-1 h-6 px-1.5 rounded text-meta shrink-0 text-sol-text-muted bg-sol-bg-alt hover:text-sol-text disabled:opacity-60"
+    >
+      <Lock className="w-3.5 h-3.5" /> {asked ? "Asked to edit" : "View only · Ask to edit"}
+    </button>
+  );
+}
+
+const EDIT_CHOICES: SegmentedOption<"team" | "owners">[] = [
+  { value: "team", label: "Whole team", selected: "bg-sol-bg text-sol-text", icon: "M15 19.128a9.38 9.38 0 002.625.372 9.337 9.337 0 004.121-.952 4.125 4.125 0 00-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 018.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0111.964-3.07M12 6.375a3.375 3.375 0 11-6.75 0 3.375 3.375 0 016.75 0zm8.25 2.25a2.625 2.625 0 11-5.25 0 2.625 2.625 0 015.25 0z" },
+  { value: "owners", label: "You and editors", selected: "bg-sol-bg text-sol-text", icon: "M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 002.25-2.25v-6.75a2.25 2.25 0 00-2.25-2.25H6.75a2.25 2.25 0 00-2.25 2.25v6.75a2.25 2.25 0 002.25 2.25z" },
+];
+
 /**
- * Who may change the artifact. Its owner picks: everyone who can open it, or
- * only the owner and the people named. Anyone else who cannot edit sees that
- * they are viewing; comments stay open to them.
+ * Who may change a team artifact, in the Share popover beside who may open
+ * its link: the whole team, or its owner and the editors named. The workspace
+ * decides who can see it; this decides who of them edits. Owner only.
  */
-function EditAccess({ doc, canEdit }: { doc: { _id: string; user_id?: string; workspace?: string }; canEdit: boolean }) {
+function EditAccessSection({ doc }: { doc: { _id: string; user_id?: string; workspace?: string } }) {
   const me = useInboxStore((s: any) => s.currentUser?._id as string | undefined);
   const edit = useInboxStore((s: any) => (s.liveHeads?.[doc._id]?.edit as "team" | "owners" | undefined) ?? "team");
   const editorsSig = useInboxStore((s: any) => (s.liveHeads?.[doc._id]?.editors ?? []).join(","));
   const editors: string[] = useMemo(() => (editorsSig ? String(editorsSig).split(",") : []), [editorsSig]);
   const owner = !!me && String(doc.user_id) === me;
-  const [menuOpen, setMenuOpen] = useState(false);
-  // The board's own team, asked when the menu opens: the team being viewed may be another one.
-  const { data: candidates } = useQueryNoThrow(api.liveArtifacts.editorCandidates, owner && menuOpen ? { doc_id: doc._id as any } : "skip");
+  const team = String(doc.workspace ?? "").startsWith("team:");
+  const teamName = useInboxStore((s: any) => (s.teams ?? []).find((t: any) => t && `team:${t._id}` === doc.workspace)?.name as string | undefined);
+  // The artifact's own team (the team being viewed may be another).
+  const { data: candidates } = useQueryNoThrow(api.liveArtifacts.editorCandidates, owner && team ? { doc_id: doc._id as any } : "skip");
+  if (!owner || !team) return null;
   const roster: Array<{ _id: string; name: string }> = (candidates as any[] | undefined) ?? [];
-  // A personal artifact opens for its owner alone: there is no one to let in or keep out.
-  if (String(doc.workspace ?? "").startsWith("user:")) return null;
-  if (!owner) {
-    return canEdit ? null : <span data-live-view-only className="text-meta shrink-0 px-1.5 h-6 inline-flex items-center rounded bg-sol-bg-alt text-sol-text-muted">View only</span>;
-  }
   const set = (next: "team" | "owners", list: string[]) => (useInboxStore.getState() as any).liveSetEditAccess(doc._id, next, list);
-  const nameOf = (id: string) => roster.find((m) => m._id === id)?.name ?? "Someone";
+  const nameOf = (id: string) => roster.find((m) => m._id === id)?.name ?? "…";
   const addable = roster.filter((m) => !editors.includes(m._id));
   return (
-    <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
-      <DropdownMenuTrigger asChild>
-        <button type="button" data-live-edit-access={edit} title={edit === "team" ? "Anyone can edit" : "Only you and editors edit"} className="inline-flex items-center gap-1 h-6 px-1.5 rounded text-meta shrink-0 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt">
-          {edit === "team" ? <Users className="w-3.5 h-3.5" /> : <Lock className="w-3.5 h-3.5" />}
-          <span data-live-edit-access-label>{edit === "team" ? "Anyone can edit" : editors.length ? `You + ${editors.length} edit` : "Only you edit"}</span>
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" data-owns-keys="" className="min-w-[240px]">
-        <DropdownMenuItem onSelect={() => set("team", editors)} data-live-edit-team>
-          <Users className="w-3.5 h-3.5" /> <span className="flex-1">Anyone who can open it edits</span>{edit === "team" && <Check className="w-3.5 h-3.5" />}
-        </DropdownMenuItem>
-        <DropdownMenuItem onSelect={() => set("owners", editors)} data-live-edit-owners>
-          <Lock className="w-3.5 h-3.5" /> <span className="flex-1">Only you and editors</span>{edit === "owners" && <Check className="w-3.5 h-3.5" />}
-        </DropdownMenuItem>
-        {edit === "owners" && (
-          <>
-            <DropdownMenuSeparator />
-            {editors.map((id) => (
-              <DropdownMenuItem key={id} onSelect={(e) => { e.preventDefault(); set("owners", editors.filter((x) => x !== id)); }} data-live-editor={id}>
-                <span className="flex-1 truncate">{nameOf(id)}</span><X className="w-3.5 h-3.5 text-sol-text-dim" />
-              </DropdownMenuItem>
-            ))}
-            {addable.length > 0 && (
-              <DropdownMenuSub>
-                <DropdownMenuSubTrigger><Plus className="w-3.5 h-3.5" /> Add editor</DropdownMenuSubTrigger>
-                <DropdownMenuSubContent data-owns-keys="" className="max-h-[320px] overflow-y-auto">
-                  {addable.map((m) => (
-                    <DropdownMenuItem key={m._id} onSelect={() => set("owners", [...editors, m._id])}>{m.name}</DropdownMenuItem>
-                  ))}
-                </DropdownMenuSubContent>
-              </DropdownMenuSub>
-            )}
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <div className="space-y-2" data-live-edit-access={edit}>
+      <span className="text-xs font-medium text-sol-text-muted">Who can edit</span>
+      <SegmentedChoice
+        label="Who can edit"
+        options={EDIT_CHOICES.map((o) => (o.value === "team" && teamName ? { ...o, label: `All of ${teamName}` } : o))}
+        value={edit}
+        onPick={(v) => set(v, editors)}
+      />
+      {edit === "owners" && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {editors.map((id) => (
+            <span key={id} data-live-editor={id} className="inline-flex items-center gap-1 h-6 pl-2 pr-1 rounded-full bg-sol-bg-alt text-xs text-sol-text">
+              {nameOf(id)}
+              <button type="button" aria-label={`Remove ${nameOf(id)}`} onClick={() => set("owners", editors.filter((x) => x !== id))} className="p-0.5 rounded-full text-sol-text-dim hover:text-sol-text">
+                <X className="w-3 h-3" />
+              </button>
+            </span>
+          ))}
+          {addable.length > 0 && (
+            <select
+              aria-label="Add an editor"
+              data-live-add-editor
+              value=""
+              onChange={(e) => { if (e.target.value) set("owners", [...editors, e.target.value]); }}
+              className="h-6 rounded-full bg-sol-bg-alt border border-sol-border/50 px-2 text-xs text-sol-text-muted outline-none"
+            >
+              <option value="">Add editor…</option>
+              {addable.map((m) => <option key={m._id} value={m._id}>{m.name}</option>)}
+            </select>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -658,7 +720,7 @@ function EditAccess({ doc, canEdit }: { doc: { _id: string; user_id?: string; wo
  * sidebar folded away, remembered per person), and while an artifact is open
  * in it the list column beside the open doc folds away too.
  */
-function FocusToggle() {
+function FocusToggle({ docId }: { docId: string }) {
   const zen = useInboxStore((s: any) => s.clientState.ui?.zen_mode ?? false);
   const { dispatchAction } = useShortcuts();
   useWatchEffect(() => {
@@ -666,14 +728,29 @@ function FocusToggle() {
     document.documentElement.dataset.liveFocus = "";
     return () => { delete document.documentElement.dataset.liveFocus; };
   }, [zen]);
+  // Focus turned on here is the artifact's: leaving it gives the app its chrome back.
+  // Zen the person had on already stays on.
+  const turnedOnHere = useRef(false);
+  const dispatchRef = useRef(dispatchAction);
+  dispatchRef.current = dispatchAction;
+  useWatchEffect(() => () => {
+    if (!turnedOnHere.current) return;
+    // Only when the person left the artifact: a reload or a hot update unmounts the page without going anywhere.
+    setTimeout(() => {
+      if (window.location.pathname.startsWith(`/docs/${docId}`)) return;
+      if ((useInboxStore.getState() as any).clientState.ui?.zen_mode) dispatchRef.current("ui.zenToggle");
+    }, 0);
+  }, [docId]);
+  // In zen the corner holds the one way out; "..." has it too.
+  if (zen) return null;
   return (
     <button
       type="button"
       data-live-focus-toggle={zen ? "on" : "off"}
       aria-pressed={zen}
-      title={zen ? "Exit focus" : "Focus"}
-      aria-label={zen ? "Exit focus" : "Focus"}
-      onClick={() => dispatchAction("ui.zenToggle")}
+      title={zen ? "Exit zen" : "Zen: give the canvas the window"}
+      aria-label={zen ? "Exit zen" : "Enter zen"}
+      onClick={() => { turnedOnHere.current = !zen; dispatchAction("ui.zenToggle"); }}
       className={`inline-flex items-center justify-center w-7 h-7 rounded-md shrink-0 transition-colors ${zen ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt"}`}
     >
       {zen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}

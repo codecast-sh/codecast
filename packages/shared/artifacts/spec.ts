@@ -61,6 +61,24 @@ export type ArtifactSpec = {
   presenceFor?(view: ArtifactView, keys: string[]): ArtifactPosition | undefined;
   /** Elements a new artifact starts with. */
   seed?(): ArtifactOp[];
+  /**
+   * The element key a person's reference names, for a comment pinned to it
+   * (a sheet's "Tab!A1" or "A1" to its cell key). Undefined when it names
+   * nothing. Without it, a reference must be an element key that exists.
+   */
+  anchorFor?(view: ArtifactView, ref: string): string | undefined;
+  /**
+   * Main-layer ops that tie a new comment thread to the element it is on, so
+   * the thread rides the element through moves (a sheet stamps the cell).
+   * Applied with the thread's first comment.
+   */
+  pinComment?(view: ArtifactView, anchor: string, threadKey: string): ArtifactOp[];
+  /**
+   * Where each thread sits now: the element key carrying it, or null when its
+   * element is gone (the thread shows as detached). A thread left out falls
+   * back to its anchor.
+   */
+  commentPlaces?(view: ArtifactView, threads: ReadonlyArray<{ key: string; anchor?: unknown }>): Map<string, string | null>;
   /** Product verbs beyond the shared ones (create, read, apply, history, ...). */
   verbs?: Record<string, ArtifactVerb>;
   /**

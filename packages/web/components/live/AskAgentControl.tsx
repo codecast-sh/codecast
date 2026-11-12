@@ -82,7 +82,7 @@ export function AskAgentControl({
 
   return (
     <div className="relative" ref={boxRef}>
-      <button type="button" data-live-ask onClick={() => setOpen((o) => !o)} className={ASK_BUTTON_CLASS}>
+      <button type="button" data-live-ask title={typeof label === "string" ? label : "Ask agent"} onClick={() => setOpen((o) => !o)} className={ASK_BUTTON_CLASS}>
         <Bot className="w-3.5 h-3.5" />
         {label}
       </button>

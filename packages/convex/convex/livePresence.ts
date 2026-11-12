@@ -24,9 +24,9 @@ export const setPresence = mutation({
     const caller = await resolveCaller(ctx, args);
     await requireLiveDoc(ctx, caller.userId, args.doc_id);
     const actor = caller.kind === "agent" ? caller.actor : `${caller.actor}:${(args.tab ?? "cli").slice(0, 24)}`;
-    await upsertPresence(ctx, args.doc_id, caller, actor, args);
-    // An artifact written before search existed is indexed the first time someone opens it.
-    if (!args.position && !args.selection) await ensureLiveSearch(ctx, args.doc_id);
+    const arrived = await upsertPresence(ctx, args.doc_id, caller, actor, args);
+    // Someone just opened it: index it if search has no fresh copy (written before search, renamed, moved).
+    if (arrived) await ensureLiveSearch(ctx, args.doc_id);
     return null;
   },
 });

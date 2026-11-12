@@ -18,7 +18,7 @@ import { resolveMentions, resolveSessionMentions } from "./lib/mentionResolve";
 import { canSendProductMessage, enqueuePendingMessage } from "./pendingMessages";
 import { siteUrl } from "./lib/siteUrl";
 import { artifactSpec, askAgentBrief, type ArtifactOp, type ArtifactType } from "@codecast/shared/artifacts";
-import type { Caller } from "./lib/liveArtifactAccess";
+import { mayEditLive, type Caller } from "./lib/liveArtifactAccess";
 
 export type NewComment = { key: string; text: string; parent?: string; sent_to?: string };
 
@@ -53,6 +53,8 @@ export async function notifyLiveComments(
   const noun = artifactSpec(type).label.toLowerCase();
   const title = doc.title || `Untitled ${noun}`;
   const all = created.some((c) => c.parent) ? await commentRows(ctx, doc._id) : [];
+  const head = await ctx.db.query("live_heads").withIndex("by_doc", (q: any) => q.eq("doc_id", doc._id)).first();
+  const mayEdit = mayEditLive(doc, head, caller.userId);
   const byKey = new Map(all.map((r) => [r.key, r]));
 
   for (const c of created) {
@@ -91,7 +93,8 @@ export async function notifyLiveComments(
 
     // A person naming a session hands it the comment as an ask. A session
     // naming another stays prose: agents do not start each other from comments.
-    if (caller.kind === "person" && !c.sent_to) {
+    // Only someone who may edit the artifact: the agent works with their rights, and a viewer's agent could change nothing.
+    if (caller.kind === "person" && !c.sent_to && mayEdit) {
       const sessions = await resolveSessionMentions(ctx, c.text, (conv) => canSendProductMessage(ctx, caller.userId, conv));
       for (const conv of sessions.slice(0, 3)) {
         named = true;

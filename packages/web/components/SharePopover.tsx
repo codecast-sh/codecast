@@ -39,6 +39,8 @@ interface SharePopoverProps {
   /** False for a viewer who cannot change how this is shared: the popover
    *  then offers only the page link and send to chat. */
   canManage?: boolean;
+  /** An object's own access section (who can edit it), drawn first in the popover. */
+  access?: React.ReactNode;
   /** What else the public link carries, decided per object (a call's video),
    *  shown under link access for whoever manages it. */
   linkExtra?: React.ReactNode;
@@ -105,6 +107,7 @@ export function SharePopover({
   sharedVia,
   canManage = true,
   linkExtra,
+  access,
   openRefusal,
   defaultOpen = false,
 }: SharePopoverProps) {
@@ -192,6 +195,7 @@ export function SharePopover({
         </div>
 
         <div className="px-3.5 pb-3.5 pt-2 space-y-3.5 [&>*+*]:border-t [&>*+*]:border-sol-border/60 [&>*+*]:pt-3.5">
+          {access}
           {canManage && hasTeam && (
             <TeamShareModePicker
               mode={currentMode}

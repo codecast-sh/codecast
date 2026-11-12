@@ -27,6 +27,7 @@ export function ShareControl({
   publicShare,
   className,
   linkExtra,
+  access,
   defaultOpen,
 }: {
   /** What the object is, for the popover title and the chat picker ("task"). */
@@ -40,6 +41,8 @@ export function ShareControl({
   className?: string;
   /** What else the public link carries (SharePopover linkExtra). */
   linkExtra?: React.ReactNode;
+  /** The object's own access section (SharePopover access): who can edit it. */
+  access?: React.ReactNode;
   /** Open the popover on mount (SharePopover defaultOpen). */
   defaultOpen?: boolean;
 }) {
@@ -64,6 +67,7 @@ export function ShareControl({
       }}
       onRevokeShareLink={async () => setObjectShareLink(publicShare!.kind, publicShare!.id, null)}
       linkExtra={linkExtra}
+      access={access}
       openRefusal={publicShare?.openRefusal ?? policyRefusal}
       defaultOpen={defaultOpen}
     />

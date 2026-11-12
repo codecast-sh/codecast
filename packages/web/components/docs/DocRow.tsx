@@ -80,7 +80,7 @@ export function DocRow({ doc, onStar, timeKey = "updated_at", match }: {
         </div>
       )}
       <span className="text-meta text-sol-text-dim flex-shrink-0 tabular-nums cq-hide-minimal">{docTypeLabel(doc.doc_type)}</span>
-      <DocDates doc={doc} className="text-xs text-sol-text-dim flex-shrink-0 cq-hide-minimal" />
+      <DocDates doc={doc} timeKey={timeKey} className="text-xs text-sol-text-dim flex-shrink-0 cq-hide-minimal" />
     </>
   );
 }

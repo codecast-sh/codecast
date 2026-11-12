@@ -83,6 +83,11 @@ async function headOf(ctx: any, docId: Id<"docs">): Promise<Doc<"live_heads"> | 
   return await ctx.db.query("live_heads").withIndex("by_doc", (q: any) => q.eq("doc_id", docId)).first();
 }
 
+/** Whether the head keeps the counts a cached copy is checked against. */
+function tracked(head: Doc<"live_heads"> | null): boolean {
+  return !!head && head.rows !== undefined && head.rows >= 0 && head.rev_sum !== undefined;
+}
+
 async function requireLiveEdit(ctx: any, doc: Doc<"docs">, userId: Id<"users">) {
   await requireArtifactEditor(ctx, doc, userId);
 }
@@ -146,7 +151,8 @@ export const elementsSince = query({
       editors: (head?.editors ?? []).map(String),
       can_edit: mayEditLive(doc, head, caller.userId),
       // How many element rows a complete copy of the doc holds; null when unknown.
-      total: head?.rows !== undefined && head.rows >= 0 ? head.rows : null,
+      total: tracked(head) ? head!.rows : null,
+      rev_sum: tracked(head) ? head!.rev_sum : null,
       rows: page.map(wireRow),
       more,
       next: page.length ? page[page.length - 1].rev : args.since,
@@ -182,13 +188,16 @@ async function insertVersion(
   reason: Doc<"live_versions">["reason"],
   label: string,
   caller: Pick<Caller, "actor" | "name">,
+  /** A name the person typed: it wins over whatever label the version at this point has. */
+  named = false,
 ): Promise<Id<"live_versions"> | null> {
   const existing = await ctx.db
     .query("live_versions")
     .withIndex("by_doc_rev", (q: any) => q.eq("doc_id", docId).eq("rev", rev))
     .first();
   if (existing) {
-    if (reason !== "auto" && existing.reason === "auto") await ctx.db.patch(existing._id, { reason, label });
+    // A person naming the current version names the one already at this point, whatever made it.
+    if (named || (reason !== "auto" && existing.reason === "auto")) await ctx.db.patch(existing._id, { reason: existing.reason === "auto" ? reason : existing.reason, label });
     return existing._id;
   }
   const id = await ctx.db.insert("live_versions", { doc_id: docId, rev, reason, label, by: caller.actor, by_name: caller.name, at: Date.now() });
@@ -243,7 +252,11 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
   // stamped on create, and no later edit may change it.
   const ops = coalesceOps(input.ops).map((op): ArtifactOp => {
     if (layer !== "comments") return op;
-    if ("put" in op) return { k: op.k, put: { ...op.put, author: caller.actor, author_name: caller.name } };
+    if ("put" in op) {
+      // "Answered" is the server's to say: a client's own put never carries it.
+      const { answered_at: _at, answered_by: _by, answered_by_name: _byName, ...put } = op.put as Record<string, any>;
+      return { k: op.k, put: { ...(input.internal ? op.put : put), kind: op.put.kind, author: caller.actor, author_name: caller.name } };
+    }
     if ("set" in op) {
       const { author: _a, author_name: _n, ...rest } = op.set;
       return { k: op.k, set: rest };
@@ -262,7 +275,7 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
     throw new ConvexError(VIEW_ONLY_MESSAGE);
   }
   if (!head) {
-    const id = await ctx.db.insert("live_heads", { doc_id: doc._id, rev: 0, last_write_at: now, rows: 0 });
+    const id = await ctx.db.insert("live_heads", { doc_id: doc._id, rev: 0, last_write_at: now, rows: 0, rev_sum: 0 });
     head = (await ctx.db.get(id))!;
   }
   if (layer === "draft" && !head!.draft) {
@@ -282,6 +295,7 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
   const written: ArtifactOp[] = [];
   const createdComments: NewComment[] = [];
   let addedRows = 0;
+  let revDelta = 0;
   for (const op of ops) {
     const { row, state } = await stateOf(ctx, doc._id, layer, op.k);
     let prev = state;
@@ -309,6 +323,7 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
     if (row) await ctx.db.patch(row._id, fields);
     else await ctx.db.insert("live_elements", { doc_id: doc._id, layer, key: op.k, ...fields });
     if (!row || row.dead) addedRows += 1;
+    revDelta += rev - (row && !row.dead ? row.rev : 0);
     written.push(op);
     if (layer === "comments" && "put" in op && !state && typeof next.fields.text === "string") {
       createdComments.push({ key: op.k, text: next.fields.text, parent: next.fields.parent as string | undefined, sent_to: next.fields.sent_to as string | undefined });
@@ -335,10 +350,10 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
   await ctx.db.patch(head!._id, {
     rev,
     last_write_at: now,
-    ...(head!.rows !== undefined && head!.rows >= 0 ? { rows: head!.rows + addedRows } : {}),
+    ...(tracked(head) ? { rows: head!.rows! + addedRows, rev_sum: head!.rev_sum! + revDelta } : {}),
     ...(layer === "draft" ? { draft_count: draftCount, draft_bytes: Math.max(0, draftBytes) } : {}),
   });
-  if (head!.rows === undefined) await ctx.scheduler.runAfter(0, internal.liveArtifacts.countLiveRows, { doc_id: doc._id });
+  if (!tracked(head) && head!.rows !== -1) await ctx.scheduler.runAfter(0, internal.liveArtifacts.countLiveRows, { doc_id: doc._id });
   if (layer !== "comments") await ctx.db.patch(doc._id, { updated_at: now });
   if (layer === "main") await scheduleLiveSearch(ctx, head!, doc._id);
   // Mentions, replies and asks: the follow-up stamps are `set`s, so they create no comments of their own.
@@ -412,7 +427,11 @@ async function retireDraft(ctx: any, docId: Id<"docs">, rows: Doc<"live_elements
     rev += 1;
     await ctx.db.patch(r._id, { dead: true, rev, at: now });
   }
-  await ctx.db.patch(head._id, { rev, draft: undefined, draft_count: 0, draft_bytes: 0, ...(head.rows !== undefined && head.rows >= 0 ? { rows: Math.max(0, head.rows - rows.length) } : {}) });
+  const retiredRevs = rows.reduce((n, r) => n + r.rev, 0);
+  await ctx.db.patch(head._id, {
+    rev, draft: undefined, draft_count: 0, draft_bytes: 0,
+    ...(tracked(head) ? { rows: Math.max(0, head.rows! - rows.length), rev_sum: head.rev_sum! - retiredRevs } : {}),
+  });
 }
 
 /** Rows countLiveRows counts in one transaction; a bigger doc keeps no count (-1) and every open reads it whole. */
@@ -426,11 +445,12 @@ export const countLiveRows = internalMutation({
   args: { doc_id: v.id("docs") },
   handler: async (ctx, args) => {
     const head = await headOf(ctx, args.doc_id);
-    if (!head || head.rows !== undefined) return;
+    if (!head || tracked(head) || head.rows === -1) return;
     const rows = await ctx.db.query("live_elements").withIndex("by_doc_rev", (q: any) => q.eq("doc_id", args.doc_id)).take(COUNT_ROWS_MAX + 1);
     // -1: too big to count; its writes stop asking and every open reads it whole.
     if (rows.length > COUNT_ROWS_MAX) return void (await ctx.db.patch(head._id, { rows: -1 }));
-    await ctx.db.patch(head._id, { rows: rows.filter((r) => !r.dead).length });
+    const live = rows.filter((r) => !r.dead);
+    await ctx.db.patch(head._id, { rows: live.length, rev_sum: live.reduce((n, r) => n + r.rev, 0) });
   },
 });
 
@@ -442,7 +462,7 @@ export const draftStart = mutation({
     await requireLiveEdit(ctx, doc, caller.userId);
     let head = await headOf(ctx, doc._id);
     const draft = { by: caller.actor, by_name: caller.name, at: Date.now(), label: args.label?.slice(0, 120) };
-    if (!head) await ctx.db.insert("live_heads", { doc_id: doc._id, rev: 0, last_write_at: Date.now(), draft, rows: 0 });
+    if (!head) await ctx.db.insert("live_heads", { doc_id: doc._id, rev: 0, last_write_at: Date.now(), draft, rows: 0, rev_sum: 0 });
     else if (!head.draft) await ctx.db.patch(head._id, { draft });
     head = await headOf(ctx, doc._id);
     return wireDraft(head);
@@ -521,7 +541,7 @@ export const checkpoint = mutation({
     await requireLiveEdit(ctx, doc, caller.userId);
     const head = await headOf(ctx, doc._id);
     const rev = head?.rev ?? 0;
-    await insertVersion(ctx, doc._id, rev, "manual", (args.label || "Saved version").slice(0, 120), caller);
+    await insertVersion(ctx, doc._id, rev, "manual", (args.label || "Saved version").slice(0, 120), caller, !!args.label?.trim());
     return { rev };
   },
 });
@@ -536,7 +556,10 @@ export const setEditAccess = mutation({
   handler: async (ctx, args) => {
     const caller = await resolveCaller(ctx, {});
     const doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
-    if (String(doc.user_id) !== String(caller.userId)) throw new ConvexError("Only the artifact's owner can change who edits it");
+    // Its owner sets it, or an admin of its team (so a board is never locked for good when its owner leaves).
+    if (String(doc.user_id) !== String(caller.userId) && !(await isTeamAdminOf(ctx, doc, caller.userId))) {
+      throw new ConvexError("Only the artifact's owner or a team admin can change who edits it");
+    }
     const editors: Id<"users">[] = [];
     for (const id of [...new Set((args.editors ?? []).map(String))].slice(0, 50)) {
       const uid = id as Id<"users">;
@@ -546,7 +569,7 @@ export const setEditAccess = mutation({
     }
     let head = await headOf(ctx, doc._id);
     if (!head) {
-      const id = await ctx.db.insert("live_heads", { doc_id: doc._id, rev: 0, last_write_at: Date.now(), rows: 0 });
+      const id = await ctx.db.insert("live_heads", { doc_id: doc._id, rev: 0, last_write_at: Date.now(), rows: 0, rev_sum: 0 });
       head = (await ctx.db.get(id))!;
     }
     // Every open page's feed reads the head, so it learns at once.
@@ -584,6 +607,33 @@ export const editorCandidates = query({
       out.push({ _id: String(u._id), name: userName(u), ...(u.image ? { image: u.image } : {}) });
     }
     return out.sort((a, b) => a.name.localeCompare(b.name));
+  },
+});
+
+async function isTeamAdminOf(ctx: any, doc: Doc<"docs">, userId: Id<"users">): Promise<boolean> {
+  const ws = String(doc.workspace ?? "");
+  if (!ws.startsWith("team:")) return false;
+  const m = await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", ws.slice(5))).first();
+  return m?.role === "admin";
+}
+
+/** A viewer asks the owner to let them edit: a notification to the owner that opens the artifact. */
+export const askToEdit = mutation({
+  args: { doc_id: v.id("docs") },
+  handler: async (ctx, args) => {
+    const caller = await resolveCaller(ctx, {});
+    const doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
+    if (mayEditLive(doc, await headOf(ctx, doc._id), caller.userId)) return { asked: false };
+    await ctx.runMutation(internal.notificationRouter.emit, {
+      event_type: "mention",
+      actor_user_id: caller.userId,
+      entity_type: "doc",
+      entity_id: String(doc._id),
+      message: `${caller.name} asks to edit "${doc.title || "Untitled"}"`,
+      link: `/docs/${doc._id}`,
+      direct_recipient_id: doc.user_id,
+    });
+    return { asked: true };
   },
 });
 
@@ -801,9 +851,8 @@ async function restoreTo(ctx: any, docId: Id<"docs">, rev: number, caller: Resto
 /** How History names a restore: after the version restored, by its name, else by when it was taken. */
 async function restoredLabel(ctx: any, docId: Id<"docs">, rev: number): Promise<string> {
   const v = await ctx.db.query("live_versions").withIndex("by_doc_rev", (q: any) => q.eq("doc_id", docId).eq("rev", rev)).first();
-  if (!v) return "Restored an earlier version";
-  const auto = v.reason === "auto" || v.label === "Saved version";
-  return auto ? `Restored the version from ${new Date(v.at).toISOString().slice(0, 16).replace("T", " ")} UTC` : `Restored "${v.label}"`;
+  // The restored version's own name; History shows when it was taken beside it, in the reader's time.
+  return v ? `Restored "${v.label}"` : "Restored an earlier version";
 }
 
 export const headRev = internalQuery({

@@ -261,7 +261,12 @@ describe("live artifacts", () => {
   test("the head counts the rows a complete copy holds, through deletes, drafts and old heads", async () => {
     const { t, doc, rosa, as } = await setup();
     const total = async () => (await as(rosa).query(api.liveArtifacts.elementsSince, { doc_id: doc, since: 0 }))!.total;
-    const stored = async () => (await t.run((ctx: any) => ctx.db.query("live_elements").withIndex("by_doc_rev", (q: any) => q.eq("doc_id", doc)).collect())).filter((r: any) => !r.dead).length;
+    const live = async () => (await t.run((ctx: any) => ctx.db.query("live_elements").withIndex("by_doc_rev", (q: any) => q.eq("doc_id", doc)).collect())).filter((r: any) => !r.dead);
+    const stored = async () => (await live()).length;
+    const sumOk = async () => {
+      const page = (await as(rosa).query(api.liveArtifacts.elementsSince, { doc_id: doc, since: 0 }))!;
+      expect(page.rev_sum).toBe((await live()).reduce((n: number, r: any) => n + r.rev, 0));
+    };
     await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_a", put: { kind: "sticky", x: 0 } }, { k: "el_b", put: { kind: "sticky", x: 1 } }] });
     expect(await total()).toBe(2);
     // A delete leaves a tombstone row: still counted.
@@ -275,6 +280,7 @@ describe("live artifacts", () => {
     await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "draft", ops: [{ k: "el_a", set: { x: 6 } }] });
     expect(await total()).toBe(3);
     expect(await total()).toBe(await stored());
+    await sumOk();
 
     // A head from before the count: unknown until its next write counts it.
     await t.run(async (ctx: any) => {
@@ -286,6 +292,7 @@ describe("live artifacts", () => {
     await new Promise((r) => setTimeout(r, 20));
     await t.finishAllScheduledFunctions(() => {});
     expect(await total()).toBe(await stored());
+    await sumOk();
   });
 
   test("search finds an artifact by the words inside it, only in the viewer's workspaces", async () => {
@@ -303,6 +310,8 @@ describe("live artifacts", () => {
     expect(await find(rosa, "SUM")).toEqual([]);
     const [hit] = await as(rosa).query(api.liveSearch.search, { query: "ship" });
     expect(hit.snippet).toContain("Ship on Friday");
+    // Each hit says where it lives.
+    expect((await as(rosa).query(api.liveSearch.search, { query: "friday" })).map((h: any) => h.where).sort()).toEqual(["Personal", "Pies"]);
   });
 
   test("a comment's words are its author's; thread state is anyone's; your own agent's reply reaches you", async () => {
@@ -325,7 +334,7 @@ describe("live artifacts", () => {
   test("the owner can limit editing: others view and comment, named editors still edit", async () => {
     const { t, doc, rosa, dev, as, agent } = await setup();
     await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_a", put: { kind: "sticky", x: 0 } }] });
-    await expect(as(dev).mutation(api.liveArtifacts.setEditAccess, { doc_id: doc, edit: "owners" })).rejects.toThrow(/Only the artifact's owner/);
+    await expect(as(dev).mutation(api.liveArtifacts.setEditAccess, { doc_id: doc, edit: "owners" })).rejects.toThrow(/owner or a team admin/);
     await as(rosa).mutation(api.liveArtifacts.setEditAccess, { doc_id: doc, edit: "owners" });
     expect((await as(dev).query(api.liveArtifacts.elementsSince, { doc_id: doc, since: 0 }))!.can_edit).toBe(false);
     expect((await as(rosa).query(api.liveArtifacts.elementsSince, { doc_id: doc, since: 0 }))!.can_edit).toBe(true);
@@ -335,6 +344,13 @@ describe("live artifacts", () => {
     await expect(as(dev).mutation(api.liveArtifacts.draftStart, { doc_id: doc })).rejects.toThrow(/view and comment/);
     // The doc row is the artifact too: no renaming it either.
     await expect(as(dev).mutation(api.docs.webUpdate, { id: doc, title: "Renamed by a viewer" })).rejects.toThrow(/view and comment/);
+    // A viewer can ask the owner to let them edit; the owner hears it.
+    await as(dev).mutation(api.liveArtifacts.askToEdit, { doc_id: doc });
+    const rosaBell = (await t.run((ctx: any) => ctx.db.query("notifications").collect())).filter((n: any) => String(n.recipient_user_id) === String(rosa));
+    expect(rosaBell.some((n: any) => /asks to edit/.test(n.message))).toBe(true);
+    // A client's own new comment cannot claim it was answered.
+    await as(dev).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_fake", put: { kind: "comment", text: "hi", answered_at: 1, answered_by_name: "Agent" } }] });
+    expect((await state(t, doc, "comments")).cm_fake.answered_by_name).toBeUndefined();
     // Comments stay open, but an ask's stamps are the server's.
     await as(dev).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_v", put: { kind: "comment", text: "Looks good" } }] });
     await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_o", put: { kind: "comment", text: "Owner's ask" } }] });
@@ -347,6 +363,16 @@ describe("live artifacts", () => {
     await as(rosa).mutation(api.liveArtifacts.setEditAccess, { doc_id: doc, edit: "owners", editors: [dev] });
     await as(dev).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_a", set: { x: 9 } }] });
     expect((await state(t, doc)).el_a).toMatchObject({ x: 9 });
+  });
+
+  test("naming the current version names the one already at that point", async () => {
+    const { t, doc, rosa, as } = await setup();
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_a", put: { kind: "sticky", x: 0 } }] });
+    await as(rosa).mutation(api.liveArtifacts.checkpoint, { doc_id: doc });
+    await as(rosa).mutation(api.liveArtifacts.checkpoint, { doc_id: doc, label: "Baseline" });
+    await t.finishAllScheduledFunctions(() => {});
+    const labels = (await as(rosa).query(api.liveArtifacts.versions, { doc_id: doc }))!.versions.map((v: any) => v.label);
+    expect(labels).toEqual(["Baseline"]);
   });
 
   test("comments carry their writer's identity, whatever the client claims", async () => {

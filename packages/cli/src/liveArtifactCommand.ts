@@ -359,9 +359,22 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
       const id = parseDocRef(ref);
       const k = `cm_${Math.random().toString(36).slice(2, 12)}`;
       const fields: Record<string, any> = { text: words.join(" "), created_at: Date.now() };
+      let pin: ArtifactOp[] = [];
+      let pinView: ReturnType<typeof artifactView> | null = null;
       if (key.startsWith("cm_")) fields.parent = key;
-      else fields.anchor = key;
+      else {
+        // Pin it to an element that exists: the product reads a person's reference (a sheet's Tab!A1), else it is a key.
+        const a = await readOwn(id);
+        const view = artifactView(spec.type, a.title, a.elements);
+        const anchor = spec.anchorFor?.(view, key) ?? (view.get(key) ? key : undefined);
+        if (!anchor) throw new Error(`${key} names nothing in this ${noun}; pass an element key${spec.anchorFor ? " or a reference like Tab!A1" : ""} (\`cast ${cli} read\` lists them)`);
+        fields.anchor = anchor;
+        // The thread rides its element from the start (a sheet stamps the cell), so a sort or insert before anyone opens the page carries it along.
+        pin = spec.pinComment?.(view, anchor, k) ?? [];
+        pinView = view;
+      }
       await apiPost(deps, "/cli/live/apply", { doc_id: id, layer: "comments", ops: [{ k, put: { kind: "comment", ...fields } }], ...session(deps) });
+      if (pin.length && pinView) await writeOps(deps, spec, id, pinView.title, pin, { elements: pinView.elements });
       console.log(`${fmt.success("ok")} ${k}`);
     }));
 
@@ -380,8 +393,16 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
       }
       const roots = rows.filter((c: any) => !c.parent && (options.all || !c.resolved));
       if (roots.length === 0) console.log(fmt.muted("No comments"));
+      // Where each thread is now (it may have moved with its element, or lost it), not where it was made.
+      let places: Map<string, string | null> | undefined;
+      if (spec.commentPlaces && roots.length) {
+        const a = await readOwn(id);
+        places = spec.commentPlaces(artifactView(spec.type, a.title, a.elements), roots.map((r: any) => ({ key: r.key, anchor: r.anchor })));
+      }
       for (const root of roots as any[]) {
-        console.log(`${root.key}${root.anchor ? ` on ${root.anchor}` : ""}${root.resolved ? " (resolved)" : ""}  ${root.author_name ?? ""}: ${root.text}`);
+        const place = places?.has(root.key) ? places.get(root.key) : root.anchor;
+        const where = place === null ? " (its element was deleted)" : place ? ` on ${String(place).replace(/^c:/, "")}` : "";
+        console.log(`${root.key}${where}${root.resolved ? " (resolved)" : ""}  ${root.author_name ?? ""}: ${root.text}`);
         for (const r of rows.filter((c: any) => c.parent === root.key) as any[]) console.log(`  ${r.key}  ${r.author_name ?? ""}: ${r.text}`);
       }
     }));

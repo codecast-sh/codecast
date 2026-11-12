@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "../inboxStore";
 import { liveRowId } from "../liveArtifactsSlice";
-import { applyElementsPayload, sendLiveOps, settleAfter } from "../../components/live/useLiveArtifact";
+import { applyElementsPayload, sendLiveOps, settleAfter, whenLiveSent } from "../../components/live/useLiveArtifact";
 
 // Live artifact elements are localFirst: an edit paints from the action draft
 // and its field locks hold until the echo. These pin the two ways the locks
@@ -24,18 +24,47 @@ describe("live artifact store", () => {
   it("marks the cache complete only when its rows number what the server holds", () => {
     const B = { ...row({ x: 1 }, 2), key: "el_b" };
     // Two rows on the server, both arrived: the cache is whole through r2.
-    applyElementsPayload({ ...payload([row({ x: 0 }, 1), B], 2), total: 2 });
+    applyElementsPayload({ ...payload([row({ x: 0 }, 1), B], 2), total: 2, rev_sum: 3 });
     expect(s().liveHeads[DOC].complete).toBe(2);
     // A tail that says the doc holds a row this cache never saw: not whole.
-    applyElementsPayload({ ...payload([row({ x: 3 }, 4)], 4), total: 3 });
+    applyElementsPayload({ ...payload([row({ x: 3 }, 4)], 4), total: 3, rev_sum: 9 });
     expect(s().liveHeads[DOC].complete).toBeNull();
     // A row this tab made that the server has not stamped never counts toward the proof.
     s().applyLiveOps(DOC, "main", [{ k: "el_new", put: { kind: "sticky", x: 9 } }]);
-    applyElementsPayload({ ...payload([row({ x: 3 }, 5)], 5), total: 3 });
+    applyElementsPayload({ ...payload([row({ x: 3 }, 5)], 5), total: 3, rev_sum: 10 });
+    expect(s().liveHeads[DOC].complete).toBeNull();
+    // Same count, but a row held at an older revision: the sum gives it away.
+    applyElementsPayload({ ...payload([row({ x: 7 }, 6)], 6), total: 2, rev_sum: 99 });
     expect(s().liveHeads[DOC].complete).toBeNull();
     // An unknown total proves nothing.
     applyElementsPayload({ ...payload([row({ x: 4 }, 6)], 6), total: null });
     expect(s().liveHeads[DOC].complete).toBeNull();
+  });
+
+  it("a draft close waits for the draft writes queued ahead of it", async () => {
+    // The first send is held at the server; a second queues behind it.
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    s()._setDispatch(async (action: string) => { if (action === "applyLiveOps") await held; return { rev: 2, keys: ["el_a"] }; }, { owner });
+    sendLiveOps(DOC, "draft", [{ k: "el_a", put: { kind: "sticky", x: 1 } }]);
+    sendLiveOps(DOC, "draft", [{ k: "el_a", set: { x: 2 } }]);
+    let closed = false;
+    const close = whenLiveSent(DOC).then(() => { closed = true; });
+    await new Promise((r) => setTimeout(r, 120));
+    expect(closed).toBe(false);
+    release();
+    await close;
+    expect(closed).toBe(true);
+  });
+
+  it("a draft close that cannot wait for its queued writes does not happen", async () => {
+    // A send that never lands: the wait gives up, and says so, rather than letting the close go first.
+    // Its own doc: the send it leaves hanging must not hold up another test's queue.
+    const STUCK = "k17stuckaaaaaaaaaaaaaaaaaaaaaaaa";
+    s()._setDispatch((action: string) => (action === "applyLiveOps" ? new Promise(() => {}) : Promise.resolve(null)), { owner });
+    sendLiveOps(STUCK, "draft", [{ k: "el_b", put: { kind: "sticky", x: 1 } }]);
+    sendLiveOps(STUCK, "draft", [{ k: "el_b", set: { x: 2 } }]);
+    await expect(whenLiveSent(STUCK, 100)).rejects.toThrow(/still sending/);
   });
 
   it("paints an edit at once and holds it against a stale push", () => {

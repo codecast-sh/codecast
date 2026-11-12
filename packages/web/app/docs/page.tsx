@@ -330,9 +330,20 @@ export function DocListContent() {
   // order down the list.
   // Boards, sheets and dashboards are found by the words inside them too.
   const contentHits = useArtifactContentSearch();
-  const renderDocRow = useCallback((doc: DocItem, state: ItemRowState) => (
-    <DocRow doc={doc} state={state} timeKey={sort === "created" ? "created_at" : "updated_at"} match={contentHits.snippets.get(doc._id)} />
-  ), [sort, contentHits.snippets]);
+  // A hit in another of the viewer's workspaces is found too, and says where it lives, rather than vanishing.
+  const searchDocs = useMemo(() => {
+    if (!contentHits.hits.length) return searchScopeDocs;
+    const have = new Set(searchScopeDocs.map((d) => d._id));
+    const elsewhere = contentHits.hits
+      .filter((h) => !have.has(h._id))
+      .map((h) => ({ _id: h._id, title: h.title, doc_type: h.doc_type, updated_at: h.updated_at ?? 0, created_at: h.updated_at ?? 0, where: h.where }) as unknown as DocItem);
+    return elsewhere.length ? [...searchScopeDocs, ...elsewhere] : searchScopeDocs;
+  }, [searchScopeDocs, contentHits.hits]);
+  const renderDocRow = useCallback((doc: DocItem, state: ItemRowState) => {
+    const where = (doc as any).where as string | undefined;
+    const match = contentHits.snippets.get(doc._id);
+    return <DocRow doc={doc} state={state} timeKey={sort === "created" ? "created_at" : "updated_at"} match={where ? `In ${where} · ${match ?? ""}` : match} />;
+  }, [sort, contentHits.snippets]);
 
   return (
     <GenericListView<DocItem>
@@ -416,7 +427,7 @@ export function DocListContent() {
       getItemId={(d) => d._id}
       getItemRoute={(d) => `/docs/${d._id}`}
       getSearchText={(d) => docSearchText(d as any)}
-      searchAllItems={searchScopeDocs}
+      searchAllItems={searchDocs}
       onSearchChange={contentHits.setQuery}
       alsoMatches={contentHits.matches}
       emptyIcon={<FileText className="w-8 h-8 opacity-30" />}

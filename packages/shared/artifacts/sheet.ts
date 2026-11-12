@@ -3,6 +3,7 @@
 // formats and op generators live in ./sheets; this file is the product spec:
 // the compact A1 view an agent reads, the CLI verbs it writes with, and the
 // range read API dashboards bind to.
+import { sheetCommentHooks } from "./sheets/comments";
 import type { ArtifactElement, ArtifactOp, ArtifactPosition, Json } from "./core";
 import { foldOps, fromElement, toElement } from "./core";
 import type { ArtifactSpec, ArtifactView, VerbResult } from "./spec";
@@ -637,6 +638,18 @@ export const sheetSpec: ArtifactSpec = {
   describe: describeSheet,
   presenceFor: (_view, keys) => rangeOf(keys),
   seed: () => [{ k: tabKey(DEFAULT_TAB), put: { kind: "tab", name: DEFAULT_TAB, order: 0 } }],
+  // "Tab!A1" (a tab's name or id) or "A1" (the first tab) names that cell, empty or not; a range names its top-left cell.
+  pinComment: (view, anchor, threadKey) => sheetCommentHooks.pinComment(view.elements, anchor, threadKey),
+  commentPlaces: (view, threads) => sheetCommentHooks.commentPlaces(view.elements, threads),
+  anchorFor(view, ref) {
+    const key = ref.trim();
+    if (key.startsWith("c:") && parseKey(key)?.type === "cell") return key;
+    const q = parseQualifiedRange(key);
+    if (!q) return undefined;
+    const model = buildModel(view.elements);
+    const tab = q.tab === undefined ? model.tabs[0] : tabByName(model, q.tab);
+    return tab ? cellKey(tab.id, a1(q.rect.c0, q.rect.r0)) : undefined;
+  },
   verbs,
   remote: {
     refresh: { summary: "Fill a live query tab now (it refreshes itself while someone has the sheet open)", usage: "refresh <doc> <tab name>", needsDoc: true, action: "sheetQueries:cliRefresh" },

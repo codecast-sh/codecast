@@ -49,7 +49,19 @@ const PRESENCE_BEAT_MS = 10_000;
 const UNDO_MAX = 200;
 
 /** One tab's id, so one person in two tabs is two cursors and never sees their own. */
-export const LIVE_TAB_ID = nanoid(8);
+export const LIVE_TAB_ID = tabId();
+/** One id per browser tab, kept across reloads (sessionStorage), so a reload is the same cursor, not a second one. */
+function tabId(): string {
+  try {
+    const held = sessionStorage.getItem("live-tab-id");
+    if (held) return held;
+    const id = nanoid(8);
+    sessionStorage.setItem("live-tab-id", id);
+    return id;
+  } catch {
+    return nanoid(8);
+  }
+}
 
 // ── Store readers ───────────────────────────────────────────────────────────
 
@@ -408,6 +420,30 @@ function drainQueue(docId: string) {
   rebuildQueuedOverlay(docId);
 }
 
+/**
+ * Resolves once every write this tab queued for the doc has gone out, and
+ * rejects if they are still waiting after `limitMs` (offline, a stalled
+ * socket). A draft closes behind them: a draft edit still queued when the
+ * close went first would reopen the draft it was part of, so a close that
+ * cannot wait does not happen.
+ */
+export function whenLiveSent(docId: string, limitMs = 30_000): Promise<void> {
+  const idle = () => {
+    const q = sendQueues.get(docId);
+    return !q || (!q.inflight && q.pending.length === 0);
+  };
+  if (idle()) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const started = Date.now();
+    const tick = () => {
+      if (idle()) resolve();
+      else if (Date.now() - started > limitMs) reject(new Error("edits still sending"));
+      else setTimeout(tick, 50);
+    };
+    tick();
+  });
+}
+
 /** Send a batch for a doc, in order behind any send still in flight. */
 export function sendLiveOps(docId: string, layer: LiveLayer, ops: ArtifactOp[]) {
   if (ops.length === 0) return;
@@ -636,21 +672,33 @@ export function useLiveArtifact(docId: string): LiveHandle {
         flushGesture(true);
         undoRef.current = undoRef.current.filter((e) => e.layer !== "draft");
         redoRef.current = redoRef.current.filter((e) => e.layer !== "draft");
+        const draftAt = draftRef.current?.at;
+        void whenLiveSent(docId).catch(() => {
+          toast.error("Edits are still sending, so the draft was not saved; save again once they land");
+          return "waiting" as const;
+        }).then((waited) => {
+        if (waited === "waiting") return;
         const rowIds = [...docRows(docId).draft.keys()].map((k) => liveRowId(docId, "main", k));
-        const pending = (useInboxStore.getState() as any).liveDraft(docId, "save", draftRef.current?.at);
+        const pending = (useInboxStore.getState() as any).liveDraft(docId, "save", draftAt);
         const before = Date.now();
-        Promise.resolve(pending)
+        return Promise.resolve(pending)
           .then((res: any) => {
             if (res?.stale) toast.error("The draft changed before it was saved; review it and save again");
             else if (res && typeof res.rev === "number") settleAfter(docId, res.rev, rowIds, before);
           })
           .catch(() => {});
+        });
       },
       discard: () => {
         flushGesture(true);
         undoRef.current = undoRef.current.filter((e) => e.layer !== "draft");
         redoRef.current = redoRef.current.filter((e) => e.layer !== "draft");
-        Promise.resolve((useInboxStore.getState() as any).liveDraft(docId, "discard", draftRef.current?.at))
+        const draftAt = draftRef.current?.at;
+        void whenLiveSent(docId)
+          .then(
+            () => (useInboxStore.getState() as any).liveDraft(docId, "discard", draftAt),
+            () => { toast.error("Edits are still sending, so the draft was kept; discard again once they land"); },
+          )
           .then((res: any) => { if (res?.stale) toast.error("The draft changed before it was discarded; look again"); })
           .catch(() => {});
       },

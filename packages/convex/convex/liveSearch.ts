@@ -73,8 +73,14 @@ export const search = query({
     const limit = Math.min(args.limit ?? 8, 20);
     const memberships = await ctx.db.query("team_memberships").withIndex("by_user_id", (x: any) => x.eq("user_id", userId)).take(50);
     const keys = [`user:${userId}`, ...memberships.map((m: any) => `team:${m.team_id}`)];
-    const out: Array<{ _id: string; title: string; doc_type: string; snippet: string; updated_at?: number }> = [];
+    // Every workspace the viewer belongs to, each hit saying where it lives; most recently changed first across them.
+    const out: Array<{ _id: string; title: string; doc_type: string; snippet: string; updated_at?: number; where: string }> = [];
     const seen = new Set<string>();
+    const teamNames = new Map<string, string>();
+    for (const m of memberships) {
+      const t = await ctx.db.get(m.team_id);
+      if (t) teamNames.set(`team:${m.team_id}`, (t as any).name ?? "Team");
+    }
     for (const key of keys) {
       const hits = await ctx.db
         .query("live_search")
@@ -86,10 +92,9 @@ export const search = query({
         const doc = await ctx.db.get(h.doc_id);
         if (!doc || doc.archived_at || !isArtifactDocType(doc.doc_type)) continue;
         if (!(await canAccessDoc(ctx, userId, doc))) continue;
-        out.push({ _id: String(doc._id), title: doc.title, doc_type: doc.doc_type, snippet: searchSnippet(h.text.slice(h.text.indexOf("\n") + 1), q), updated_at: doc.updated_at });
-        if (out.length >= limit) return out;
+        out.push({ _id: String(doc._id), title: doc.title, doc_type: doc.doc_type, snippet: searchSnippet(h.text.slice(h.text.indexOf("\n") + 1), q), updated_at: doc.updated_at, where: teamNames.get(key) ?? "Personal" });
       }
     }
-    return out;
+    return out.sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0)).slice(0, limit);
   },
 });
