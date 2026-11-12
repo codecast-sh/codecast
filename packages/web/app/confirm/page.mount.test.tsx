@@ -92,6 +92,18 @@ describe("/confirm", () => {
     await m.unmount();
   });
 
+  test("the ceremony starts by itself once the tab has focus, once, and names the asking device", async () => {
+    challenge = { ...PENDING, from: "MacBook-Pro-2" };
+    const m = await mount();
+    expect(ceremonies).toEqual([]);
+    expect(m.container.querySelector("[data-confirm-sub]")!.textContent).toBe(`${PENDING.label} · from MacBook-Pro-2`);
+    await act(async () => void window.dispatchEvent(new window.Event("focus")));
+    await act(async () => void window.dispatchEvent(new window.Event("focus")));
+    expect(ceremonies).toEqual(["get"]);
+    expect(actions.map((a) => a.name)).toEqual(["passkeys:presenceFinish"]);
+    await m.unmount();
+  });
+
   test("an enrollment challenge creates the passkey and stores it", async () => {
     challenge = { ...PENDING, purpose: "register", action: undefined, label: undefined, options: { challenge: "Y2g", rp: { id: "codecast.sh", name: "Codecast" }, user: { id: "dQ", name: "a", displayName: "a" }, pubKeyCredParams: [{ type: "public-key", alg: -7 }] } };
     const m = await mount();

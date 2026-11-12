@@ -86,6 +86,12 @@ const CASES: Case[] = [
   { name: "work the classifier calls delivered", row: row({ agent_status: "idle", settle_verdict: "done" }), status: "done", bucket: "done", board: "finished" },
   { name: "work the agent declared done", row: row({ agent_status: null, ...STATE("Shipped the retry fix", "done") }), status: "done", bucket: "done", board: "finished" },
   { name: "a run that exited after declaring done", row: row({ agent_status: "stopped", ...STATE("Shipped", "done") }), status: "done", bucket: "done", board: "finished" },
+  // A run a trigger resumes ends with its process gone: the trigger owns the
+  // next move, so the exit is a park, not a death.
+  { name: "a run that exited with a standing trigger armed", row: row({ agent_status: "stopped", armed_trigger_kind: "standing", ...STATE("Waits on the nightly run", "dormant") }), status: "dormant", bucket: "dormant", board: "finished" },
+  // A dormant claim nothing will wake: the person's move, not a failure.
+  { name: "a run that exited after parking on no wake", row: row({ agent_status: "stopped", ...STATE("Waits on a wake", "dormant") }), status: "needs_you", bucket: "needs_input", board: "finished" },
+  { name: "queued work on a run that parked and exited", row: row({ agent_status: "stopped", has_pending: true, ...STATE("Waits on a wake", "dormant") }), status: "error", bucket: "needs_input", board: "needsYou" },
   { name: "filed as done by the person", row: row({ agent_status: "idle", user_rest: "done" }), status: "done", bucket: "done", board: "finished" },
   // INBOX-1: parked was a dim header in the rail, blue in the lenses and
   // FINISHED on the board. Dormant, blue-grey.
