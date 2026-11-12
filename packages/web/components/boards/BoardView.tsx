@@ -62,6 +62,8 @@ import { BoardEditBar } from "./BoardEditBar";
 import { BOARD_ART_URLS } from "./boardArtUrls";
 
 const MINIMAP_KEY = "board-minimap";
+/** Below this pane width the overview would cover the board itself, so it is not offered. */
+const MINIMAP_MIN_W = 600;
 
 const NOOP = () => {};
 const NOOP_EDIT = { editing: false, onEditInput: NOOP, onEditDone: NOOP };
@@ -94,8 +96,15 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   const [thread, setThread] = useState<string | null>(null);
   const [pressing, setPressing] = useState(false);
   const editBaseH = useRef<number | null>(null);
+  // What the board's own chrome covers at its edges: the zoom bar above, the toolbar below, the overview at the right.
+  const chromeInsets = () => {
+    const w = cam.rootRef.current?.clientWidth ?? 0;
+    return { top: 52, bottom: 76, right: minimapRef.current && w >= MINIMAP_MIN_W ? 196 : 0 };
+  };
   const [locked, setLocked] = useState(false);
   const [minimap, setMinimapState] = useState(() => { try { return localStorage.getItem(MINIMAP_KEY) === "1"; } catch { return false; } });
+  const minimapRef = useRef(minimap);
+  minimapRef.current = minimap;
   const setMinimap = (on: boolean) => { setMinimapState(on); try { localStorage.setItem(MINIMAP_KEY, on ? "1" : "0"); } catch { /* private mode */ } };
   const spaceHeld = useRef(false);
   const lastPointer = useRef<Pt | null>(null);
@@ -112,6 +121,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   // opening, the window narrowing) frames the content again.
   const fitted = useRef(cam.hadSaved.current);
   const autoCam = useRef<{ x: number; y: number; z: number } | null>(null);
+  const lastFit = useRef<{ w: number; h: number; ready: boolean } | null>(null);
   useWatchEffect(() => {
     if (!cam.viewport.w) return;
     if (!live.ready && elements.length === 0) return;
@@ -129,9 +139,14 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     const c = cam.cam.current;
     const untouched = autoCam.current && c.x === autoCam.current.x && c.y === autoCam.current.y && c.z === autoCam.current.z;
     if (fitted.current && !untouched) return;
+    // Once the board has loaded, a new element is someone's edit, not more of the board arriving:
+    // the view stays put (only a pane resize frames it again).
+    const last = lastFit.current;
+    if (fitted.current && last && last.ready && last.w === cam.viewport.w && last.h === cam.viewport.h) return;
     fitted.current = true;
-    cam.fit(fitBox(elements, byKey), { instant: true, minReadable: true });
+    cam.fit(fitBox(elements, byKey), { instant: true, minReadable: true, insets: chromeInsets() });
     autoCam.current = { ...cam.cam.current };
+    lastFit.current = { w: cam.viewport.w, h: cam.viewport.h, ready: live.ready };
   }, [cam.viewport.w, cam.viewport.h, live.ready, elements.length]);
 
   const screenOf = useCallback((pos: ArtifactPosition & { key?: string }) => {
@@ -377,7 +392,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     live.apply(ops);
     const placed = ops.flatMap((o) => ("put" in o ? [{ ...(o.put as any), key: o.k, rev: 0 } as BoardEl] : []));
     const m = new Map(placed.map((e) => [e.key, e]));
-    cam.fit(fitBox(placed, m), { maxZ: 1 });
+    cam.fit(fitBox(placed, m), { maxZ: 1, insets: chromeInsets() });
   };
   /** Bring an element into view at the current zoom when it is off screen (Tab walking). */
   const reveal = (el: BoardEl) => {
@@ -393,7 +408,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   };
   const fitTo = (selectionOnly: boolean) => {
     const els = selectionOnly && selectedEls.length ? selectedEls : elements;
-    cam.fit(fitBox(els, byKey), { maxZ: selectionOnly ? 2 : 1 });
+    cam.fit(fitBox(els, byKey), { maxZ: selectionOnly ? 2 : 1, insets: chromeInsets() });
   };
 
   const keysActive = useBoardKeys({
@@ -634,12 +649,12 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
         <ShortcutTooltip label="Zoom to selection" accel="Shift+2" side="bottom">
           <button type="button" className="board-bar-btn" aria-label="Zoom to selection" disabled={selectedEls.length === 0} style={selectedEls.length ? undefined : { opacity: 0.35 }} onClick={() => fitTo(true)}><ScanSearch size={14} strokeWidth={1.75} /></button>
         </ShortcutTooltip>
-        <ShortcutTooltip label={minimap ? "Hide overview" : "Overview"} side="bottom">
+        {cam.viewport.w >= MINIMAP_MIN_W && <ShortcutTooltip label={minimap ? "Hide overview" : "Overview"} side="bottom">
           <button type="button" className={`board-bar-btn${minimap ? " is-active" : ""}`} aria-label="Overview" aria-pressed={minimap} onClick={() => setMinimap(!minimap)}><MapIcon size={14} strokeWidth={1.75} /></button>
-        </ShortcutTooltip>
+        </ShortcutTooltip>}
       </div>
 
-      {minimap && elements.length > 0 && <BoardMinimap elements={elements} byKey={byKey} cam={cam} top={cam.viewport.w < 820} />}
+      {minimap && elements.length > 0 && cam.viewport.w >= MINIMAP_MIN_W && <BoardMinimap elements={elements} byKey={byKey} cam={cam} top={cam.viewport.w < 820} />}
       {editAt && <BoardEditBar at={editAt} />}
       <div aria-live="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)" }}>{announce}</div>
 

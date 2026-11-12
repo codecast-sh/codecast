@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resizedBox, resizeOps, rotatedResizeBox, hitKey, withGroup } from "./useBoardGestures";
+import { resizedBox, resizeOps, rotatedResizeBox, hitKey, withFrameContents, withGroup } from "./useBoardGestures";
 import { fitCam, zoomAround } from "./useBoardCamera";
 import type { BoardEl } from "./boardTypes";
 
@@ -97,5 +97,25 @@ describe("rotatedResizeBox", () => {
     expect(after.x).toBeCloseTo(before.x, 6);
     expect(after.y).toBeCloseTo(before.y, 6);
     expect(nb.w).toBeGreaterThan(b.w);
+  });
+});
+
+describe("a frame carries its arrows", () => {
+  const els = [
+    el("f", "frame", { x: 0, y: 0, w: 600, h: 400 }),
+    el("a", "shape", { x: 40, y: 40, w: 100, h: 60 }),
+    el("b", "shape", { x: 300, y: 40, w: 100, h: 60 }),
+    el("out", "shape", { x: 900, y: 40, w: 100, h: 60 }),
+    el("ab", "connector", { from: "a", to: "b" }),
+    el("aFree", "connector", { from: "a", x2: 250, y2: 300 }),
+    el("free", "connector", { x1: 20, y1: 20, x2: 500, y2: 380 }),
+    el("aOut", "connector", { from: "a", to: "out" }),
+    el("freeOut", "connector", { x1: 20, y1: 20, x2: 900, y2: 300 }),
+  ];
+  const byKey = new Map(els.map((e) => [e.key, e]));
+  test("arrows whose ends are all inside move; ones reaching outside stay", () => {
+    const moved = new Set(withFrameContents(["f"], byKey));
+    for (const k of ["a", "b", "ab", "aFree", "free"]) expect(moved.has(k)).toBe(true);
+    for (const k of ["out", "aOut", "freeOut"]) expect(moved.has(k)).toBe(false);
   });
 });

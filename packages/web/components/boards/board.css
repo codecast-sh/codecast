@@ -277,6 +277,8 @@ html.light .board-root {
   border-radius: calc(2px / var(--z));
 }
 .board-sel-item { border: calc(1px / var(--z)) solid color-mix(in srgb, var(--board-sel) 55%, transparent); }
+.board-end { r: calc(4.5px / var(--z)); fill: var(--sol-bg); stroke: var(--board-sel); stroke-width: calc(1.5px / var(--z)); }
+.board-end.is-attached { fill: var(--board-sel); }
 .board-sel-path { fill: none; stroke: var(--board-sel); stroke-width: calc(5px / var(--z)); stroke-opacity: 0.35; stroke-linecap: round; }
 .board-handle {
   width: calc(9px / var(--z));

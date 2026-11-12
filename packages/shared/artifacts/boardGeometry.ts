@@ -668,3 +668,9 @@ export function shapeOutline(shape: string, w: number, h: number): string | null
       return null;
   }
 }
+
+/** A shape's word size: about a sticky's, scaled a little with the box, never small. */
+export function shapeFontSize(shape: string, h: number): number {
+  if (shape === "pill") return Math.min(16, Math.max(12, h * 0.46));
+  return Math.round(Math.min(22, Math.max(15, h / 4.5)));
+}

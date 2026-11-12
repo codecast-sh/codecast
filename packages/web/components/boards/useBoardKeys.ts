@@ -3,7 +3,7 @@
 // into any field (inline edit, a prompt, the shell's inputs) are left alone.
 import { useRef } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
+import { claimKeys, keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 import { TOOL_KEYS } from "./boardModel";
 import type { BoardTool } from "./boardTypes";
 
@@ -49,11 +49,13 @@ export function useBoardKeys(cmds: KeyCommands, spaceHeld: React.MutableRefObjec
       const root = rootRef.current;
       active.current = !!root && root.contains(e.target as Node);
     };
+    // Set when the board takes the key; the claim then stops it before any app shortcut sees it.
+    let claimed = false;
     const onKey = (e: KeyboardEvent) => {
       // The page's own Escape goes back to the list; on a board, a stray Escape (after a popover closed, a press in the header) must not.
       if (e.key === "Escape" && !active.current && !e.defaultPrevented && !keyBelongsElsewhere(e.target)) {
         const root = rootRef.current;
-        if (root?.isConnected && !overlayOpen()) { e.preventDefault(); e.stopImmediatePropagation(); ref.current.clearSelection(); return; }
+        if (root?.isConnected && !overlayOpen()) { e.preventDefault(); claimed = true; ref.current.clearSelection(); return; }
       }
       if (!active.current || keyBelongsElsewhere(e.target) || e.defaultPrevented) return;
       // Only when the board is on screen and no dialog sits over it.
@@ -62,8 +64,8 @@ export function useBoardKeys(cmds: KeyCommands, spaceHeld: React.MutableRefObjec
       const c = ref.current;
       const mod = e.metaKey || e.ctrlKey;
       const k = e.key.toLowerCase();
-      // Capture phase + stopImmediatePropagation: a board key never also reaches the app's global shortcuts.
-      const stop = () => { e.preventDefault(); e.stopImmediatePropagation(); };
+      // stop() marks the key claimed: it never also reaches the app's global shortcuts.
+      const stop = () => { e.preventDefault(); claimed = true; };
       if (e.key === " " && !e.repeat) {
         spaceHeld.current = true;
         root.dataset.space = "1";
@@ -116,11 +118,13 @@ export function useBoardKeys(cmds: KeyCommands, spaceHeld: React.MutableRefObjec
       }
     };
     window.addEventListener("pointerdown", onPress, { capture: true });
-    window.addEventListener("keydown", onKey, { capture: true });
+    // Claimed in the app's first key listener: a tool key (C, S, T...) acts on the board, never
+    // reaching an app shortcut registered earlier (C would make a new note and leave the board).
+    const release = claimKeys((e) => { claimed = false; onKey(e); return claimed; });
     window.addEventListener("keyup", onUp);
     return () => {
       window.removeEventListener("pointerdown", onPress, { capture: true });
-      window.removeEventListener("keydown", onKey, { capture: true });
+      release();
       window.removeEventListener("keyup", onUp);
     };
   }, []);

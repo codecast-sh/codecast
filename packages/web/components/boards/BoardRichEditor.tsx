@@ -52,7 +52,7 @@ export function RichEditor({ value, className, style, onInput, onDone, onNext }:
   };
   const format = (f: FormatCommand) => {
     if (f === "link") {
-      if (!document.getSelection()?.isCollapsed) window.dispatchEvent(new Event(LINK_REQUEST));
+      window.dispatchEvent(new Event(LINK_REQUEST));
       return;
     }
     applyFormat(f);

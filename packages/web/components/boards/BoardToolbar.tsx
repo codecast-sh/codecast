@@ -22,6 +22,7 @@ import {
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { colorToken } from "./boardColors";
 import { BoardArtPicker } from "./BoardArtPicker";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { SHAPE_CHOICES } from "./boardShapeChoices";
 import { BOARD_ART_URLS } from "./boardArtUrls";
 import { boardArtFor } from "@codecast/shared/artifacts/board";
@@ -71,6 +72,8 @@ function StampFace({ stamp }: { stamp: string }) {
 export const BoardToolbar = memo(function BoardToolbar(p: Props) {
   const [open, setOpen] = useState<"shape" | "stamp" | "pen" | "more" | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  // Arming the sticker tool from the keyboard (E) opens its picker too: a sticker is chosen, then placed.
+  useWatchEffect(() => { if (p.tool === "stamp") setOpen("stamp"); }, [p.tool]);
   const pick = (t: BoardTool, menu?: "shape" | "stamp" | "pen") => {
     p.setTool(t);
     setOpen(menu && p.tool === t ? (open === menu ? null : menu) : null);

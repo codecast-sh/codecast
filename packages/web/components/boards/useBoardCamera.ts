@@ -149,11 +149,14 @@ export function useBoardCamera(docId: string) {
     glide(zoomAround(cam.current, factor, center));
   }, [glide]);
 
-  const fit = useCallback((box: Box | null, opts?: { instant?: boolean; maxZ?: number; minReadable?: boolean }) => {
+  const fit = useCallback((box: Box | null, opts?: { instant?: boolean; maxZ?: number; minReadable?: boolean; insets?: { top?: number; right?: number; bottom?: number; left?: number } }) => {
     const root = rootRef.current;
     if (!root) return;
-    const W = root.clientWidth, H = root.clientHeight;
+    // The board's own chrome (toolbar, zoom bar, overview) covers its edges: frame the content in what is left.
+    const ins = { top: 0, right: 0, bottom: 0, left: 0, ...opts?.insets };
+    const W = Math.max(120, root.clientWidth - ins.left - ins.right), H = Math.max(120, root.clientHeight - ins.top - ins.bottom);
     let target = box ? fitCam(box, W, H, fitMargin(W, H), opts?.maxZ ?? 1) : { x: W / 2, y: H / 2, z: 1 };
+    target = { ...target, x: target.x + ins.left, y: target.y + ins.top };
     // A narrow pane (a phone, a split) would fit a big board at an unreadable size: open at half size on its top-left instead.
     if (box && opts?.minReadable && W < 700 && target.z < READABLE_Z) {
       const m = fitMargin(W, H);

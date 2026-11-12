@@ -10,6 +10,7 @@ import {
   elbowObstacles,
   elementBounds,
   elementBox,
+  shapeFontSize,
   shapeOutline,
   smoothPath,
   stickyLayout,
@@ -159,7 +160,7 @@ export async function boardSvg({ elements, byKey, root, only }: ExportInput): Pr
           ? `<path transform="translate(${b.x} ${b.y})" d="${outline}" fill="${fill}" stroke="${stroke}" stroke-width="1.5" stroke-linejoin="round"/>`
           : `<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="${shape === "pill" ? b.h / 2 : 6}" fill="${fill}" stroke="${stroke}" stroke-width="1.5"/>`;
         const t = typeof e.text === "string" ? e.text : "";
-        const size = shape === "pill" ? Math.min(15, b.h * 0.46) : Math.min(18, Math.max(11, b.h / 6));
+        const size = shapeFontSize(shape, b.h);
         const ls = t ? lines(t, size, b.w - 24) : [];
         const ty = b.y + (b.h - ls.length * size * 1.3) / 2;
         // An illustration sits left of the words, the pair centered, as the canvas draws it.

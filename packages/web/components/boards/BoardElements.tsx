@@ -6,6 +6,7 @@ import {
   boardArtFor,
   connectorGeometry,
   elementBox,
+  shapeFontSize,
   shapeOutline,
   smoothPath,
   stickyLayout,
@@ -35,7 +36,7 @@ type ViewProps = { el: BoardEl } & EditProps;
  * An uncontrolled textarea for in-place editing: React never rewrites its
  * text node, so a keystroke costs one preview write and nothing else.
  */
-function InlineEditor({ value, className, style, onInput, onDone, onNext, selectAll }: {
+function InlineEditor({ value, className, style, onInput, onDone, onNext, selectAll, singleLine }: {
   value: string;
   className: string;
   style?: React.CSSProperties;
@@ -43,6 +44,8 @@ function InlineEditor({ value, className, style, onInput, onDone, onNext, select
   onDone(): void;
   onNext?(dir: 1 | -1): void;
   selectAll?: boolean;
+  /** A title or label: Enter commits it rather than starting a new line. */
+  singleLine?: boolean;
 }) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
   useLayoutEffect(() => {
@@ -80,7 +83,7 @@ function InlineEditor({ value, className, style, onInput, onDone, onNext, select
           onNext(e.shiftKey ? -1 : 1);
           return;
         }
-        if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey))) {
+        if (e.key === "Escape" || (e.key === "Enter" && (e.metaKey || e.ctrlKey || (singleLine && !e.shiftKey)))) {
           e.preventDefault();
           onDone();
         }
@@ -164,7 +167,7 @@ const ShapeView = memo(function ShapeView({ el, editing, onEditInput, onEditDone
   const fill = solid ? color : tint(el.color, 16);
   const stroke = solid ? "transparent" : color;
   const text = typeof el.text === "string" ? el.text : "";
-  const fontSize = shape === "pill" ? Math.min(15, b.h * 0.46) : Math.min(18, Math.max(11, b.h / 6));
+  const fontSize = shapeFontSize(shape, b.h);
   const textStyle: React.CSSProperties = { fontSize, color: solid ? "var(--board-on-solid)" : "var(--sol-text)", fontWeight: shape === "pill" ? 650 : 500 };
   return (
     <div data-key={el.key} className="board-el board-shape" style={boxStyle(el)}>
@@ -189,7 +192,7 @@ const FrameView = memo(function FrameView({ el, editing, onEditInput, onEditDone
   return (
     <div data-key={el.key} data-frame className="board-el board-frame" style={boxStyle(el, { background: tint(el.color ?? "gray", 7), borderColor: tint(el.color ?? "gray", 34) })}>
       <div className="board-frame-title" data-part="frame-title" style={{ color: el.color ? colorToken(el.color) : "var(--sol-text-muted)" }}>
-        {editing ? <InlineEditor value={title} className="board-frame-title-edit" onInput={onEditInput} onDone={onEditDone} selectAll /> : title || "Frame"}
+        {editing ? <InlineEditor value={title} className="board-frame-title-edit" onInput={onEditInput} onDone={onEditDone} selectAll singleLine /> : title || "Frame"}
       </div>
     </div>
   );
@@ -231,7 +234,7 @@ export const ConnectorView = memo(function ConnectorView({ el, from, to, obstacl
       </svg>
       {(label || editing) && (
         <div className="board-connector-label" style={{ left: g.mid.x, top: g.mid.y }}>
-          {editing ? <InlineEditor value={label} className="board-connector-label-edit" onInput={onEditInput} onDone={onEditDone} /> : label}
+          {editing ? <InlineEditor value={label} className="board-connector-label-edit" onInput={onEditInput} onDone={onEditDone} singleLine /> : label}
         </div>
       )}
     </div>

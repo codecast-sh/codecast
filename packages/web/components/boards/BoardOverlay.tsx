@@ -75,9 +75,13 @@ export const BoardOverlay = memo(function BoardOverlay({ selection, byKey, gestu
       {single?.kind === "connector" && (() => {
         const geo = connectorGeometry(single, (k) => byKey.get(k));
         if (!geo) return null;
+        // Each end shows whether it holds on to something (filled) or is loose (hollow).
+        const attachedA = typeof single.from === "string", attachedB = typeof single.to === "string";
         return (
           <svg className="board-overlay-svg" width={1} height={1}>
             <path d={geo.d} className="board-sel-path" />
+            <circle cx={geo.a.x} cy={geo.a.y} className={`board-end${attachedA ? " is-attached" : ""}`} />
+            <circle cx={geo.b.x} cy={geo.b.y} className={`board-end${attachedB ? " is-attached" : ""}`} />
           </svg>
         );
       })()}

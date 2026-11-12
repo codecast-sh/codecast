@@ -91,13 +91,22 @@ export function hitKey(target: EventTarget | null): string | null {
  */
 export function withFrameContents(keys: readonly string[], byKey: Map<string, BoardEl>): string[] {
   const set = new Set(keys);
+  const frames: Box[] = [];
   for (const k of keys) {
     const el = byKey.get(k);
     if (el?.kind !== "frame") continue;
     const fb = elementBox(el);
+    frames.push(fb);
     for (const o of byKey.values()) if (o.kind !== "connector" && o.kind !== "frame" && contains(fb, elementBounds(o))) set.add(o.key);
   }
-  for (const o of byKey.values()) if (o.kind === "connector" && set.has(String(o.from)) && set.has(String(o.to))) set.add(o.key);
+  // An arrow comes along when each end is either attached to something that moves or a loose end inside a moving frame.
+  const inFrame = (x: unknown, y: unknown) => typeof x === "number" && typeof y === "number" && frames.some((f) => x >= f.x && x <= f.x + f.w && y >= f.y && y <= f.y + f.h);
+  for (const o of byKey.values()) {
+    if (o.kind !== "connector") continue;
+    const a = typeof o.from === "string" ? set.has(o.from) : inFrame(o.x1, o.y1);
+    const b = typeof o.to === "string" ? set.has(o.to) : inFrame(o.x2, o.y2);
+    if (a && b) set.add(o.key);
+  }
   return [...set];
 }
 

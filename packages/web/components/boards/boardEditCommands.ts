@@ -21,13 +21,25 @@ function caretBlock(editor: HTMLElement): HTMLElement | null {
   return n && n.nodeType === 1 ? (n as HTMLElement) : null;
 }
 
-/** Bullet the caret's line, or take the bullet off. */
+/**
+ * Bullet every line the selection touches, or take the bullets off when all
+ * of them already have one (the List button and its toggle).
+ */
 function toggleBullet(editor: HTMLElement) {
-  const block = caretBlock(editor);
-  const first = block ? firstText(block) : null;
-  if (first && first.textContent?.startsWith("• ")) first.textContent = first.textContent.slice(2);
-  else if (block) block.insertBefore(document.createTextNode("• "), block.firstChild);
-  else document.execCommand("insertText", false, "• ");
+  const sel = document.getSelection();
+  const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+  let blocks = Array.from(editor.childNodes).filter((n) => range?.intersectsNode(n)) as Node[];
+  if (!blocks.length) { const b = caretBlock(editor); if (b) blocks = [b]; }
+  if (!blocks.length) { document.execCommand("insertText", false, "• "); return; }
+  const firsts = blocks.map((b) => ({ b, t: firstText(b) }));
+  const allOn = firsts.every(({ t }) => t?.textContent?.startsWith("• "));
+  for (const { b, t } of firsts) {
+    if (allOn) t!.textContent = t!.textContent!.slice(2);
+    else if (!t?.textContent?.startsWith("• ")) {
+      if (t && b.nodeType === 3) t.textContent = `• ${t.textContent}`;
+      else b.insertBefore(document.createTextNode("• "), b.firstChild);
+    }
+  }
   editor.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
@@ -57,7 +69,11 @@ export function applyFormat(cmd: FormatCommand, href?: string): "done" | "need-l
   if (cmd === "list") { toggleBullet(ed); return "done"; }
   if (cmd === "link") {
     if (!href) return "need-link";
-    document.execCommand("createLink", false, href);
+    // With words selected they become the link; with none, the address goes in as its own link.
+    if (document.getSelection()?.isCollapsed) {
+      const shown = href.replace(/^https?:\/\//, "").replace(/\/$/, "");
+      document.execCommand("insertHTML", false, `<a href="${href.replace(/"/g, "&quot;")}">${shown.replace(/</g, "&lt;")}</a>&nbsp;`);
+    } else document.execCommand("createLink", false, href);
     return "done";
   }
   document.execCommand(cmd === "bold" ? "bold" : cmd === "italic" ? "italic" : "strikeThrough");
