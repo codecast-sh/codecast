@@ -19,6 +19,7 @@ import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice, parseDeliveryFaile
 import { typedMenuReply, typedPollAnswer } from "./typedPollAnswer";
 import { closeOwnCommandPanel, mayOpenPanel, paneDialogQuestion, rememberCommandPanel } from "./commandPanel";
 import { redactSecrets } from "./redact";
+import { stepTimer } from "./stepTimer";
 import { setKnownValuesForTest } from "./knownValueRedaction";
 import { CloudAgentHoldError, CloudAgentUnsentError } from "./cloudAgents/types";
 import { SwapHeldError } from "./herdTake";
@@ -174,7 +175,7 @@ function fixture(transport = "tmux", cached = true) {
     holdConversationForPrompt, promptHoldRemainingMs, releasePromptHold, typedPollAnswer, typedMenuReply, isForcedPastDialog, setForcedPastDialog,
     closeOwnCommandPanel, mayOpenPanel, paneDialogQuestion, rememberCommandPanel,
     clientAcceptsBracketedPaste, deliverTextIntoPane, deliveryTimeoutMsFor, pasteAndSubmitText, prepareInjectedContent, stripComposerChrome, typedNewlineKey, PASTE_START, PASTE_END,
-    tmuxExec, execAsync, redactSecrets,
+    tmuxExec, execAsync, redactSecrets, stepTimer,
     // The delivery catch also holds a cloud agent's message; a hold re-drives the scan.
     // No cloud agent owns this fixture's conversation, so every one goes to the pane.
     CloudAgentHoldError, CloudAgentUnsentError, SwapHeldError, TerminalHoldError, BackendSwitchHoldError, backendSwitchHeld: () => false, pollPendingNow: () => {},

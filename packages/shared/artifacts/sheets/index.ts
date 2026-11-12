@@ -8,6 +8,7 @@ export * from "./functions";
 export * from "./engine";
 export * from "./model";
 export * from "./ops";
+export * from "./importOps";
 export * from "./delimited";
 export * from "./rewrite";
 export * from "./catalog";

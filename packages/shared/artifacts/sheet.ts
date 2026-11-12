@@ -26,9 +26,9 @@ import {
   styleOps,
   tabPatchOps,
   fitWidthOps,
-  importTablesOps,
   type StylePatch,
 } from "./sheets/ops";
+import { importTablesOps } from "./sheets/importOps";
 import { parseTable, parseTsv } from "./sheets/delimited";
 import { COND_RULES, condOps, condTakesValue, enforceValidation, hideOps, mergeOps, unmergeOps, validationOps } from "./sheets/ruleOps";
 import { DEFAULT_TAB, a1, colIndex as colIdx, colLetters as colLtrs, parseA1 as parseA1Ref, parseKey, parseQualifiedRange, quoteTabName, rectA1, tabKey, type Rect } from "./sheets/refs";

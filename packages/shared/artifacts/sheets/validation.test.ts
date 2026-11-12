@@ -46,7 +46,7 @@ describe("parseTable", () => {
   });
 });
 
-import { importTablesOps } from "./ops";
+import { importTablesOps } from "./importOps";
 describe("importTablesOps", () => {
   test("each table becomes a new tab with a unique name and fitted columns", () => {
     const d = doc(sheetSpec.seed!());
