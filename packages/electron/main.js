@@ -1050,7 +1050,7 @@ shellIpc.handle("set-always-on-top", (e, on) => {
     // Only the wall wears the pin. Every other shape's float is its own.
     if (callWindowSize === "wall") {
       win.setAlwaysOnTop(pinned, "floating");
-      win.setVisibleOnAllWorkspaces(pinned, WORKSPACES_OPTS);
+      followPerson(win, pinned);
     }
     return pinned;
   }
@@ -1154,16 +1154,18 @@ const CALL_FLOAT_SEED = { width: 80, height: 80 };
 // The float's home the first time: the top right of the work area, out of
 // the way of most windows' content, indented enough to clear a menu bar.
 const CALL_FLOAT_INSET = 28;
-// Every floating window follows the person between desktops with these
-// options, and NEVER with `visibleOnFullScreen`. On macOS that flag makes
-// Electron call app.dock.hide() on every application — it turns the whole
-// process into a background helper (LSUIElement), which deactivates the app:
-// the main window lost focus and the dock icon vanished each time the faces
-// or the strip appeared over the work. What the flag buys is showing over
-// ANOTHER app's full-screen space, and that is not worth the app losing the
-// keyboard to its own overlay. `skipTransformProcessType` is the documented
-// way to keep the process what it is.
-const WORKSPACES_OPTS = { visibleOnFullScreen: false, skipTransformProcessType: true };
+// Every floating window follows the person between desktops, and into a
+// full-screen space: a Codecast window in full screen is a space of its own,
+// and a float that could not join it vanished behind the very window the
+// person was working in. `skipTransformProcessType` is what makes that safe.
+// Without it Electron answers `visibleOnFullScreen` with app.dock.hide(),
+// which turns the app into a background helper: the main window lost focus
+// and the dock icon vanished each time a float appeared. With it the flag
+// only marks the window full-screen auxiliary. Off means off for both, so an
+// ordinary window never carries the auxiliary bit.
+function followPerson(win, on) {
+  win.setVisibleOnAllWorkspaces(on, { visibleOnFullScreen: on, skipTransformProcessType: true });
+}
 
 let callWindow = null;
 let callPlaceTimer = null;
@@ -1378,7 +1380,7 @@ function applyCallWindowSize(win, size, { reveal = true } = {}) {
   win.setResizable(chrome.resizable);
   win.setAlwaysOnTop(chrome.alwaysOnTop, chrome.level || "floating");
   // Follow the person between desktops.
-  win.setVisibleOnAllWorkspaces(chrome.visibleOnAllWorkspaces, WORKSPACES_OPTS);
+  followPerson(win, chrome.visibleOnAllWorkspaces);
   // `forward: true` is what keeps the renderer receiving mouse MOVES while it
   // ignores clicks — without it the window would go deaf the moment the pointer
   // left a circle and could never learn that it came back.
@@ -2373,7 +2375,7 @@ function createMeetingOfferWindow() {
   // Over a fullscreen meeting app — which is exactly where the person is when
   // this card matters.
   win.setAlwaysOnTop(true, "screen-saver");
-  win.setVisibleOnAllWorkspaces(true, WORKSPACES_OPTS);
+  followPerson(win, true);
   win.loadURL(`${currentBaseUrl}/meeting-offer`);
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
@@ -2460,7 +2462,7 @@ function createShareCursorsWindow() {
   win.setContentProtection(true);
   win.setIgnoreMouseEvents(true);
   win.setAlwaysOnTop(true, "screen-saver");
-  win.setVisibleOnAllWorkspaces(true, WORKSPACES_OPTS);
+  followPerson(win, true);
   win.loadURL(`${currentBaseUrl}/share-cursors`);
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   return win;
@@ -2525,7 +2527,7 @@ function createCallRingWindow() {
   // Over a fullscreen app — which is exactly where somebody is when a ring
   // they cannot see arrives.
   win.setAlwaysOnTop(true, "screen-saver");
-  win.setVisibleOnAllWorkspaces(true, WORKSPACES_OPTS);
+  followPerson(win, true);
   win.loadURL(`${currentBaseUrl}/call-ring`);
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
@@ -2694,7 +2696,7 @@ function createAgentDockWindow() {
   agentDockWindow = win;
   pinWindowTitle(win, "Codecast Dock");
   win.setAlwaysOnTop(true, "floating");
-  win.setVisibleOnAllWorkspaces(true, WORKSPACES_OPTS);
+  followPerson(win, true);
   win.setIgnoreMouseEvents(true, { forward: true });
   win.loadURL(`${currentBaseUrl}/agent-dock`);
   win.webContents.setWindowOpenHandler(({ url }) => {

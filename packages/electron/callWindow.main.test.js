@@ -55,7 +55,7 @@ test("the float sits over the work, lets the mouse through and cannot be dragged
   rig.handlers.get("set-call-window-size")(sender, "float");
   assert.deepEqual(win.last("setAlwaysOnTop"), [true, "status"]);
   assert.deepEqual(win.last("setIgnoreMouseEvents"), [true, { forward: true }]);
-  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: false, skipTransformProcessType: true }]);
+  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: true, skipTransformProcessType: true }]);
   assert.equal(win.isResizable(), false);
 });
 
@@ -679,4 +679,11 @@ test("the float asked for again while visible stays where it is and takes no foc
   rig.handlers.get("set-call-window-size")(sender, "float");
   assert.equal(win.did("showInactive").length + win.did("show").length, before);
   assert.equal(win.did("focus").length, focused);
+});
+
+test("floats join a full-screen Codecast window, and only through the helper that keeps the dock", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "main.js"), "utf8");
+  const calls = src.match(/\.setVisibleOnAllWorkspaces\(/g) || [];
+  assert.equal(calls.length, 1);
+  assert.match(src, /function followPerson\(win, on\) \{\n  win\.setVisibleOnAllWorkspaces\(on, \{ visibleOnFullScreen: on, skipTransformProcessType: true \}\);/);
 });
