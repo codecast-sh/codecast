@@ -135,6 +135,7 @@ import {
 } from "./ccLiveGate.js";
 import {
   launchAccountPrefix,
+  ACCOUNT_LAUNCH_UNSET,
   adoptPushedCredential,
   FLEET_GATE_ACCOUNT,
   fleetStoreReady,
@@ -25738,7 +25739,7 @@ export async function buildClaudeResumeCommand(a: {
   if (a.keychain) {
     // The active profile already runs on the keychain, so only another account is displaced.
     const displacedAccount = resumeAccount !== undefined && resumeAccount !== activeProfileName() ? resumeAccount : undefined;
-    return { resumeCmd, resumeAccountPrefix: "", resumeAccount: undefined, displacedAccount };
+    return { resumeCmd, resumeAccountPrefix: ACCOUNT_LAUNCH_UNSET, resumeAccount: undefined, displacedAccount };
   }
   return { resumeCmd, resumeAccountPrefix, resumeAccount };
 }

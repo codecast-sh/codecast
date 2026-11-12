@@ -137,6 +137,9 @@ describe("followsCredentialStore", () => {
   test("a session carrying an OAuth token runs on it, not on the store", () => {
     expect(followsCredentialStore(1, fleet, () => parseProcArgs2(procargs(["claude"], [`CLAUDE_SECURESTORAGE_CONFIG_DIR=${fleet}`, "CLAUDE_CODE_OAUTH_TOKEN=t"])))).toBe(false);
   });
+  test("a session carrying a shell API key bills it, not the store", () => {
+    expect(followsCredentialStore(1, fleet, () => parseProcArgs2(procargs(["claude"], [`CLAUDE_SECURESTORAGE_CONFIG_DIR=${fleet}`, "ANTHROPIC_API_KEY=sk-ant-api03-x"])))).toBe(false);
+  });
   test("an unreadable environment is unknown", () => {
     expect(followsCredentialStore(1, fleet, () => null)).toBeUndefined();
   });

@@ -12,7 +12,14 @@ import { noTerminal } from "./psTerminal.js";
 
 /** The variables that name the session a process works for (sessionIdFromEnv reads them). */
 export const SESSION_ENV_KEYS = ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODECAST_SESSION_ID", "CODECAST_MANAGED_SESSION"];
-const KEYS = [...SESSION_ENV_KEYS, "TMUX", "TERM_PROGRAM", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN"];
+/** Credentials Claude Code takes from the environment ahead of its credential
+ *  store. One inherited from a tmux server's global env, a daemon unit's
+ *  EnvironmentFile or a shell rc pins every launch to that account, so a switch
+ *  that moves the store moves nothing: on 2026-11-12 a cloud host's sessions
+ *  stayed on one spent org through every switch, first by a dotfile's
+ *  ANTHROPIC_API_KEY, then by a claude.env CLAUDE_CODE_OAUTH_TOKEN. */
+export const STORE_OUTRANKING_ENV = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"] as const;
+const KEYS = [...SESSION_ENV_KEYS, "TMUX", "TERM_PROGRAM", "CLAUDE_SECURESTORAGE_CONFIG_DIR", ...STORE_OUTRANKING_ENV];
 
 /** An environment that names no session: for what the daemon starts on its own behalf. */
 export function withoutSessionIds<T extends Record<string, string | undefined>>(env: T): T {
@@ -108,13 +115,13 @@ export function terminalProgramOf(pid: number, read: (pid: number) => Env | null
  * Whether a Claude Code process reads its login from the credential store at
  * `storeDir`. Only a process launched with that store follows a switch that
  * rewrites it; one started by hand reads the keychain and keeps the account it
- * had, and one carrying CLAUDE_CODE_OAUTH_TOKEN runs on that token whatever
+ * had, and one carrying a STORE_OUTRANKING_ENV credential runs on it whatever
  * the store holds. Undefined when the environment cannot be read.
  */
 export function followsCredentialStore(pid: number, storeDir: string, read: (pid: number) => Env | null = readEnv): boolean | undefined {
   const env = read(pid);
   if (!env) return undefined;
-  if (env.CLAUDE_CODE_OAUTH_TOKEN) return false;
+  if (STORE_OUTRANKING_ENV.some((k) => env[k])) return false;
   return env.CLAUDE_SECURESTORAGE_CONFIG_DIR?.normalize("NFC") === storeDir.normalize("NFC");
 }
 

@@ -19,6 +19,7 @@
 //     their token in memory, so blocked sessions must be killed + resumed to
 //     adopt the new account (the daemon's switch_account command does this).
 
+import { STORE_OUTRANKING_ENV } from "./processEnv.js";
 import { execFileSync, execFileAsync, keychainReadAsync } from "./proc.js";
 import { createHash, randomUUID } from "crypto";
 import * as fs from "fs";
@@ -1797,17 +1798,23 @@ export function describeFleetWrite(state: FleetState): string {
  *  Not a valid profile name, so it can never collide with one. */
 export const FLEET_GATE_ACCOUNT = "+fleet";
 
-/** Credentials Claude Code takes from the environment ahead of its credential
- *  store. One inherited from a tmux server's global env or a shell rc pins every
- *  launch to that account, so a switch that moves the store moves nothing: on
- *  2026-11-12 a host's tmux carried another tool's token and auto-switch
- *  restarted a session onto three fresh accounts that all ran on the spent one. */
-export const STORE_OUTRANKING_ENV = ["CLAUDE_CODE_OAUTH_TOKEN"] as const;
+export { STORE_OUTRANKING_ENV };
+
+/** Dropping them, ahead of any launch codecast puts on a chosen account. A
+ *  token profile's own file is sourced after this and sets its token again. */
+export const ACCOUNT_LAUNCH_UNSET = `unset ${STORE_OUTRANKING_ENV.join(" ")}; `;
+
+/** Claude bills ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY ahead of every
+ *  subscription login, so a key a shell profile exports (a dotfile mirrored to
+ *  a cloud host, 2026-11-12) moves every session onto that key's org and its
+ *  spend cap. A keychain launch on a machine that keeps saved profiles drops
+ *  them; a machine with none may run claude on a key on purpose. */
+export const SUBSCRIPTION_KEY_UNSET = "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; ";
 
 /** Source a credential-store launch file, dropping any credential the shell
  *  inherited that would outrank the store. */
 export function storeLaunchPrefix(file: string): string {
-  return `unset ${STORE_OUTRANKING_ENV.join(" ")}; ${sourceFilePrefix(file)}`;
+  return `${ACCOUNT_LAUNCH_UNSET}${sourceFilePrefix(file)}`;
 }
 
 /** The launch prefix for a Claude session, and the account the live gate
@@ -1822,7 +1829,8 @@ export function launchAccountPrefix(pin: string | undefined, warn?: (msg: string
   }
   const account = pin ?? launchProfileName();
   const prefix = accountSourcePrefix(account, warn);
-  return { prefix, account: prefix ? account : undefined };
+  if (prefix) return { prefix, account };
+  return { prefix: Object.keys(readProfileIndex().profiles).length ? SUBSCRIPTION_KEY_UNSET : "", account: undefined };
 }
 
 /** `argv` run under the unpinned launch account (launchAccountPrefix), for a
@@ -2056,11 +2064,11 @@ export function accountSourcePrefix(name: string | undefined, warn?: (msg: strin
   if (readProfileIndex().profiles[name]?.pool_share_id) return "";
   const nameExport = `export CODECAST_CC_ACCOUNT=${name}; `;
   const token = accountTokenInfo(name);
-  if (token && token.expires_at > Date.now()) return `${sourceFilePrefix(token.file)}${nameExport}`;
+  if (token && token.expires_at > Date.now()) return `${ACCOUNT_LAUNCH_UNSET}${sourceFilePrefix(token.file)}${nameExport}`;
   if (token) {
     warn?.(`cc_account "${name}" setup-token is past its one-year lifetime — mint a new one from Settings, or remove it: cast accounts token ${name} --rm`);
   }
-  if (activeProfileName() === name) return nameExport;
+  if (activeProfileName() === name) return `${ACCOUNT_LAUNCH_UNSET}${nameExport}`;
   const info = accountLaunchInfo(name);
   if (!info) {
     warn?.(`cc_account "${name}" requested but its saved login has no launch credential (sign into it again from Settings) — launching on the keychain login`);

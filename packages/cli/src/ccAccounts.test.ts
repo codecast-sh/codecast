@@ -59,6 +59,7 @@ import {
   parseRateLimitFingerprint,
   sameAccountFingerprint,
   attributeFingerprint,
+  ACCOUNT_LAUNCH_UNSET,
 } from "./ccAccounts.js";
 import { createMtimeGatedCache } from "./mtimeGatedCache.js";
 import { refreshUsageSnapshots } from "./ccUsagePoll.js";
@@ -1757,11 +1758,11 @@ describe("per-profile credential stores (sandboxed $HOME, file store)", () => {
     expect(info.file).toBe(launch);
     expect(info.expires_at).toBeGreaterThan(Date.now() + 300 * 24 * 3600_000);
     // "work" IS the machine's login: a session pinned to it runs on the keychain.
-    expect(accountSourcePrefix("work")).toBe("export CODECAST_CC_ACCOUNT=work; ");
+    expect(accountSourcePrefix("work")).toBe(`${ACCOUNT_LAUNCH_UNSET}export CODECAST_CC_ACCOUNT=work; `);
     // Once another account is the login, "work" is dormant and its store carries the session.
     login("at-other", "u-other", "other@x.com");
     saveProfile("other");
-    expect(accountSourcePrefix("work")).toBe(`unset CLAUDE_CODE_OAUTH_TOKEN; . ${launch} 2>/dev/null || true; export CODECAST_CC_ACCOUNT=work; `);
+    expect(accountSourcePrefix("work")).toBe(`${ACCOUNT_LAUNCH_UNSET}. ${launch} 2>/dev/null || true; export CODECAST_CC_ACCOUNT=work; `);
     expect(accountSourcePrefix("work")).not.toContain("at-work");
     expect(accountSourcePrefix(undefined)).toBe("");
   });
@@ -2073,7 +2074,7 @@ describe("minted setup-token file (isolated CODECAST_DIR)", () => {
     // The account NAME rides along so the statusLine hook can attribute the
     // session's live usage; the token stays inside the sourced file.
     expect(accountSourcePrefix("union", (m) => warnings.push(m))).toBe(
-      `. ${file} 2>/dev/null || true; export CODECAST_CC_ACCOUNT=union; `,
+      `${ACCOUNT_LAUNCH_UNSET}. ${file} 2>/dev/null || true; export CODECAST_CC_ACCOUNT=union; `,
     );
     expect(warnings).toHaveLength(1);
     expect(accountSourcePrefix("union")).not.toContain("sk-ant");

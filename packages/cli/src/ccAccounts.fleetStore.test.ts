@@ -14,6 +14,8 @@ import {
   fleetStoreDir,
   invalidateAccountsCache,
   launchAccountPrefix,
+  SUBSCRIPTION_KEY_UNSET,
+  ACCOUNT_LAUNCH_UNSET,
   launchProfileName,
   putFleetOn,
   readFleetState,
@@ -108,8 +110,18 @@ describe("fleet store (sandboxed $HOME)", () => {
     expect(fleet.prefix).toContain("cc-fleet.env");
     expect(fs.readFileSync(path.join(home, ".codecast", "cc-fleet.env"), "utf-8")).toContain(fleetStoreDir());
 
+    const shell = Bun.spawnSync(["/bin/bash", "-c", `${fleet.prefix}echo "key=\${ANTHROPIC_API_KEY-none} auth=\${ANTHROPIC_AUTH_TOKEN-none} oauth=\${CLAUDE_CODE_OAUTH_TOKEN-none}"`], {
+      env: { ...process.env, ANTHROPIC_API_KEY: "sk-ant-api03-stray", ANTHROPIC_AUTH_TOKEN: "stray", CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-stray" },
+    });
+    expect(shell.stdout.toString().trim()).toBe("key=none auth=none oauth=none");
+
     // A person's pin still sources that profile.
     const pinned = launchAccountPrefix("tok");
+    expect(pinned.prefix.startsWith(ACCOUNT_LAUNCH_UNSET)).toBe(true);
+    const pinnedShell = Bun.spawnSync(["/bin/bash", "-c", `${pinned.prefix}echo "\${CLAUDE_CODE_OAUTH_TOKEN-none}"`], {
+      env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-stray" },
+    });
+    expect(pinnedShell.stdout.toString().trim()).toBe(TOKEN);
     expect(pinned.account).toBe("tok");
     expect(pinned.prefix).not.toContain("cc-fleet.env");
 
@@ -134,7 +146,7 @@ describe("fleet store (sandboxed $HOME)", () => {
     expect(fs.existsSync(path.join(home, ".codecast", "cc-launch.json"))).toBe(true);
     expect(launchProfileName(now)).toBeUndefined();
     expect(fs.existsSync(path.join(home, ".codecast", "cc-launch.json"))).toBe(false);
-    expect(launchAccountPrefix(undefined)).toEqual({ prefix: "", account: undefined });
+    expect(launchAccountPrefix(undefined)).toEqual({ prefix: SUBSCRIPTION_KEY_UNSET, account: undefined });
   });
 
   describe("a cloud host drawing on the pool", () => {
@@ -188,7 +200,7 @@ describe("fleet store (sandboxed $HOME)", () => {
       expect(await removePoolProfile("pool-a", now)).toContain("emptied the fleet store");
       expect(fleetStoreEnabled()).toBe(false);
       expect(launchProfileName(now)).toBeUndefined();
-      expect(launchAccountPrefix(undefined)).toEqual({ prefix: "", account: undefined });
+      expect(launchAccountPrefix(undefined)).toEqual({ prefix: SUBSCRIPTION_KEY_UNSET, account: undefined });
     });
 
     it("moves to the next copy when one is taken back", async () => {
