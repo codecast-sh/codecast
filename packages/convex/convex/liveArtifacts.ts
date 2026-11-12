@@ -397,8 +397,7 @@ export async function applyAsWebUser(ctx: any, userId: Id<"users">, docId: strin
 async function draftRows(ctx: any, docId: Id<"docs">): Promise<Doc<"live_elements">[]> {
   const rows = await ctx.db
     .query("live_elements")
-    .withIndex("by_doc_layer_key", (q: any) => q.eq("doc_id", docId).eq("layer", "draft"))
-    .filter((q: any) => q.neq(q.field("dead"), true))
+    .withIndex("by_doc_layer_dead_key", (q: any) => q.eq("doc_id", docId).eq("layer", "draft").eq("dead", undefined))
     .take(DRAFT_ROWS_MAX + 1);
   if (rows.length > DRAFT_ROWS_MAX) throw new ConvexError(`A draft holds at most ${DRAFT_ROWS_MAX} changed elements`);
   return rows;

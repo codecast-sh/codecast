@@ -34,6 +34,7 @@ export const liveArtifactTables = {
     dead: v.optional(v.boolean()),
   })
     .index("by_doc_layer_key", ["doc_id", "layer", "key"])
+    .index("by_doc_layer_dead_key", ["doc_id", "layer", "dead", "key"])
     .index("by_doc_rev", ["doc_id", "rev"]),
 
   // Per doc: the revision counter, the one pending draft, checkpoint timing.

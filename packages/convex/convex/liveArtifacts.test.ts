@@ -454,4 +454,48 @@ describe("live artifacts", () => {
     expect(Object.keys(await state(t, doc))).toEqual(["el_one"]);
     expect(Object.keys(await state(t, doc, "draft"))).toEqual(["el_two"]);
   });
+  test("retired draft rows are excluded by the active index", async () => {
+    const { t, doc, rosa, as } = await setup();
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 1600; i++) await ctx.db.insert("live_elements", {
+        doc_id: doc, layer: "draft", key: `old_${i}`, kind: "sticky", fields: {},
+        rev: i + 1, by: `u:${rosa}`, at: 1, dead: true,
+      });
+    });
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "draft", ops: [{ k: "fresh", put: { kind: "sticky", x: 1 } }] });
+    const active = await t.run((ctx) => ctx.db.query("live_elements").withIndex("by_doc_layer_dead_key", (q) => q.eq("doc_id", doc).eq("layer", "draft").eq("dead", undefined)).collect());
+    expect(active.map((r) => r.key)).toEqual(["fresh"]);
+    expect(await as(rosa).mutation(api.liveArtifacts.draftDiscard, { doc_id: doc })).toMatchObject({ discarded: 1 });
+    await t.finishAllScheduledFunctions(() => {});
+  });
+
+  test("UTF-8 log records stay bounded and history pages continue without gaps", async () => {
+    const { t, doc, rosa, as } = await setup();
+    const text = "汉".repeat(9000);
+    for (let batch = 0; batch < 3; batch++) {
+      await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: Array.from({ length: 70 }, (_, i) => ({ k: `wide_${batch}_${i}`, put: { kind: "sticky", text } })) });
+    }
+    const logs = await t.run((ctx) => ctx.db.query("live_batches").withIndex("by_doc_rev", (q) => q.eq("doc_id", doc)).collect());
+    for (const log of logs) expect(new TextEncoder().encode(JSON.stringify(log)).length).toBeLessThan(1024 * 1024);
+    const first = await t.query(internal.liveArtifacts.batchesPage, { doc_id: doc, after: 0 });
+    expect(first.more).toBe(true);
+    const next = await t.query(internal.liveArtifacts.batchesPage, { doc_id: doc, after: first.rows.at(-1)!.rev_to });
+    expect([...first.rows, ...next.rows].flatMap((r) => r.ops)).toHaveLength(210);
+    expect((await as(rosa).action(api.liveArtifacts.stateAt, { doc_id: doc, rev: 210 })).length).toBe(210);
+    await t.finishAllScheduledFunctions(() => {});
+  });
+
+  test("a later restore chunk rejects an intervening writer", async () => {
+    const { t, doc, rosa, as } = await setup();
+    const caller = { userId: rosa, actor: `u:${rosa}`, name: "Rosa", kind: "person" as const };
+    const first = await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "a", put: { kind: "sticky", x: 1 } }] });
+    const chunk = await t.mutation(internal.liveArtifacts.applyRestore, { doc_id: doc, rev: 0, ops: [{ k: "a", del: true }], caller, expect_head: first.rev, first: true, last: false, chunked: true });
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "new", put: { kind: "sticky", x: 2 } }] });
+    expect(await t.mutation(internal.liveArtifacts.applyRestore, { doc_id: doc, rev: 0, ops: [], caller, expect_head: chunk!.rev, first: false, last: true })).toBeNull();
+    await as(rosa).action(api.liveArtifacts.restore, { doc_id: doc, rev: 0 });
+    expect((await as(rosa).query(api.liveArtifacts.elementsSince, { doc_id: doc, since: 0 }))!.restoring).toBeNull();
+    expect(await state(t, doc)).toEqual({ a: "deleted", new: "deleted" });
+    await t.finishAllScheduledFunctions(() => {});
+  });
+
 });
