@@ -15,7 +15,6 @@ export interface PullOpts {
   connectTimeoutMs?: number;
   idleTimeoutMs?: number;
   onBytes?: (n: number) => void;
-  signal?: AbortSignal;
 }
 
 /** Pull the grant into `sink`; resolves with the bytes received once both the transfer and the sink succeed. */
@@ -33,7 +32,6 @@ export async function pullGrantInto(opts: PullOpts & { sink: (body: NodeJS.Reada
       settled = true;
       clearTimeout(connect);
       clearTimeout(idle);
-      opts.signal?.removeEventListener("abort", onAbort);
       const err = new Error(why);
       req.destroy(err);
       body.destroy(err);
@@ -45,9 +43,6 @@ export async function pullGrantInto(opts: PullOpts & { sink: (body: NodeJS.Reada
     };
     const req = http.get({ host: opts.ip, port: opts.port, path: `/grant/${opts.secret}`, agent: false, headers: { Connection: "close" } });
     const connect = setTimeout(() => fail("connect_timeout"), opts.connectTimeoutMs ?? 5_000);
-    const onAbort = () => fail("cancelled");
-    if (opts.signal?.aborted) onAbort();
-    else opts.signal?.addEventListener("abort", onAbort);
     req.on("error", (e) => fail(e.message));
     req.on("response", (res) => {
       clearTimeout(connect);
@@ -75,7 +70,6 @@ export async function pullGrantInto(opts: PullOpts & { sink: (body: NodeJS.Reada
         if (settled) return;
         settled = true;
         clearTimeout(idle);
-        opts.signal?.removeEventListener("abort", onAbort);
         body.end();
         resolve();
       });

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
@@ -11,10 +11,6 @@ import { acceptGrantSocket, closeAllGrants, liveGrantCount, MAX_LIVE_GRANTS, new
 import { pullGrantInto } from "./pull";
 import { unpackFolderStream } from "../folderSync";
 import { pollUntil } from "../test-helpers/pollUntil";
-
-// Nearly every test here spawns git or tar, or serves a real socket; under
-// `bun test --parallel` on a loaded runner the 5 s default is not enough.
-setDefaultTimeout(30_000);
 
 const LOOP = "127.0.0.1";
 const PEER = { ip: "100.64.0.2", name: "mini.tail1234.ts.net." };
@@ -72,14 +68,14 @@ describe("firewallBlocksIncoming", () => {
     return p;
   };
   test("block all enabled", async () => {
-    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "darwin", bin: bin("Firewall has block all state set to enabled.") })).toBe(true);
-    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "darwin", bin: bin("Block all ENABLED!") })).toBe(true);
+    expect(await firewallBlocksIncoming({ platform: "darwin", bin: bin("Firewall has block all state set to enabled.") })).toBe(true);
+    expect(await firewallBlocksIncoming({ platform: "darwin", bin: bin("Block all ENABLED!") })).toBe(true);
   });
   test("disabled, broken, missing, or not macOS", async () => {
-    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "darwin", bin: bin("Firewall has block all state set to disabled.") })).toBe(false);
-    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "darwin", bin: bin("enabled", 1) })).toBe(false);
-    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "darwin", bin: path.join(dir, "missing") })).toBe(false);
-    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "linux", bin: bin("enabled") })).toBe(false);
+    expect(await firewallBlocksIncoming({ platform: "darwin", bin: bin("Firewall has block all state set to disabled.") })).toBe(false);
+    expect(await firewallBlocksIncoming({ platform: "darwin", bin: bin("enabled", 1) })).toBe(false);
+    expect(await firewallBlocksIncoming({ platform: "darwin", bin: path.join(dir, "missing") })).toBe(false);
+    expect(await firewallBlocksIncoming({ platform: "linux", bin: bin("enabled") })).toBe(false);
   });
 });
 
@@ -199,33 +195,6 @@ describe("a grant on loopback", () => {
     const g = await openGrant({ bindIp: LOOP, allowFrom: LOOP, tokenHash: hash, serve: producer([Buffer.from("a")], { stall: true }).serve, idleTimeoutMs: 80 });
     await expect(pullGrantInto({ ip: LOOP, port: g.port, secret, maxBytes: 1e6, sink: async (b) => { await collect(b); } })).rejects.toThrow();
     expect((await g.done).reason).toBe("idle_timeout");
-  });
-
-  test("an already aborted signal rejects as cancelled before a byte arrives", async () => {
-    const { secret, hash } = newGrantSecret();
-    const g = await openGrant({ bindIp: LOOP, allowFrom: LOOP, tokenHash: hash, serve: producer([Buffer.from("x")]).serve, connectTimeoutMs: 100 });
-    const abort = new AbortController();
-    abort.abort();
-    let sinkRan = false;
-    await expect(pullGrantInto({ ip: LOOP, port: g.port, secret, maxBytes: 1e6, signal: abort.signal, sink: async () => { sinkRan = true; } })).rejects.toThrow("cancelled");
-    expect(sinkRan).toBe(false);
-    g.close();
-  });
-
-  test("an abort mid-stream rejects as cancelled, errors the sink and closes the grant", async () => {
-    const { secret, hash } = newGrantSecret();
-    const src = producer([Buffer.from("first")], { stall: true });
-    const g = await openGrant({ bindIp: LOOP, allowFrom: LOOP, tokenHash: hash, serve: src.serve });
-    const abort = new AbortController();
-    let sinkError: unknown = null;
-    await expect(pullGrantInto({
-      ip: LOOP, port: g.port, secret, maxBytes: 1e6, signal: abort.signal,
-      onBytes: () => abort.abort(),
-      sink: async (b) => { try { await collect(b); } catch (e) { sinkError = e; throw e; } },
-    })).rejects.toThrow("cancelled");
-    expect(String(sinkError)).toContain("cancelled");
-    expect((await g.done).reason).toBe("reader_closed");
-    expect(src.killed).toBe(true);
   });
 
   test("nothing listening: the pull rejects", async () => {
