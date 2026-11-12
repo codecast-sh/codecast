@@ -205,6 +205,8 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // move + reconcile keep the row's bucket honest (same path as web).
   const killSessions = useInboxStore((s) => s.killSessions);
   const collapsedSections = useInboxStore((s) => s.collapsedSections);
+  // The plan rows the "By plan" lens orders by: only while that lens is up.
+  const planRows = useInboxStore((s) => (resolveInboxViewMode(s.clientState.ui) === "plan" ? s.plans : null));
   const toggleCollapsedSection = useInboxStore((s) => s.toggleCollapsedSection);
   const activeProjectFilter = useInboxStore((s) => s.activeProjectFilter);
   const setActiveProjectFilter = useInboxStore((s) => s.setActiveProjectFilter);
@@ -530,7 +532,8 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         for (const { name, items } of projectGroups)
           sections.push(renderSection(name, items, name === "other" ? Theme.textMuted0 : labelHexColor(name), `bucketproj_${name}`));
       } else {
-        const { planGroups, projectGroups } = groupSessionsByPlan(active);
+        const st = useInboxStore.getState();
+        const { planGroups, projectGroups } = groupSessionsByPlan(active, { plans: planRows ?? undefined, placements: placed.placements, sessions: st.sessions, now: coarseNow });
         for (const { key, label, items } of planGroups)
           sections.push(renderSection(label, items, "#2dd4bf", `plan_${key}`));
         for (const { name, items } of projectGroups)
@@ -556,7 +559,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     sections.push(renderSection('Dormant', statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, placed.counts.dormant)));
     return sections.filter(Boolean);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, rowBudget]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, rowBudget, planRows, placed]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
