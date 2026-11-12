@@ -76,6 +76,12 @@ async function pairFromFragment() {
     if (tab?.id !== undefined) await chrome.tabs.remove(tab.id).catch(() => {});
     return false;
   }
+  if (frag.has("pair")) {
+    history.replaceState(null, "", location.pathname);
+    $("pair-by-hand").open = true;
+    $("token").focus();
+    return false;
+  }
   const code = normalizePairingCode(frag.get("code") || "");
   const token = code || (frag.get("token") || "").trim();
   if (!token) return false;

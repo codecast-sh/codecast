@@ -165,6 +165,16 @@ export function AgentToolSetupPanel({
     );
   }
 
+  // Until the machine answers, nothing is known: steps drawn as undone would read as "set this up" on a machine that is already set up.
+  if (setup.checking && !compact) {
+    return (
+      <div data-cc-agent-setup className={`${className} flex items-center gap-2 border-l-2 border-sol-cyan/50 pl-2.5 py-1 text-[12px] text-sol-text-dim`}>
+        <Loader2 className="w-3 h-3 animate-spin" />
+        <span>Checking {tool === "browser" ? "the Chrome extension" : "macOS permissions"}{machineName ? ` on ${machineName}` : ""}…</span>
+      </div>
+    );
+  }
+
   const steps = tool === "browser"
     ? browserSteps(status as (AgentToolSetupStatus & { tool: "browser" }) | undefined, () => void setup.start())
     : computerSteps(status as (AgentToolSetupStatus & { tool: "computer" }) | undefined, () => void setup.start());

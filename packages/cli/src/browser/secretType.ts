@@ -17,10 +17,13 @@
  * found from an isolated world, whose DOM prototypes the page cannot patch.
  * The origin checked is that of the document holding the field. For a field
  * inside a cross-origin iframe (a payment or sign-in frame) it is the frame's
- * own: the frame holding focus is found by probing each cross-origin frame in
- * a world of its own (an out-of-process one through its child session,
- * oopif.ts), and the value goes in only when the secret's Sites name that
- * frame's origin; the top page must still be inside the session allowlist.
+ * own: the frame holding focus is found by following the focused frame element
+ * down from the top (its frame id from the DOM agent), each cross-origin frame
+ * probed in a world of its own (an out-of-process one through its child
+ * session, oopif.ts), and the value goes in only when the secret's Sites name
+ * that frame's origin; the top page must still be inside the session
+ * allowlist. A CSS selector target is looked up in every document of the tab,
+ * frames included (findSelector).
  * Any change of the top page's origin or the field's between the first check
  * and the insert (a redirect, or a page that navigated when the field took
  * focus) is refused. The checks run again right before the value is inserted.
@@ -198,6 +201,8 @@ export const SELECT_FOCUSED = `(() => {
 
 /** A document type-secret can probe and type into: the top page, or the cross-origin frame holding focus. */
 export interface SecretTypeDoc {
+  /** Which frame this is, the same between two lookups of it. */
+  id?: string;
   /** The document's URL, from the browser's frame tree ("" once it is gone). */
   url(): Promise<string>;
   probe(): Promise<FocusProbe>;
@@ -264,7 +269,9 @@ export async function typeSecret(name: string, opts: { field?: SecretTypeField; 
   if (webOrigin(lastField) !== origin) throw new SecretTypeRefusal(`the field's frame moved from ${origin} to ${webOrigin(lastField) ?? (lastField || "nowhere")} before the value went in, so nothing is typed`);
   originVerdict(secret, lastField, d.policy);
   // Focus must still sit inside that frame, seen from the top as well as from the frame.
-  if (frame && (await d.page.probe()).frame !== "cross") throw new SecretTypeRefusal("focus left the frame before the value went in, so nothing is typed");
+  if (frame && ((await d.page.probe()).frame !== "cross" || (await d.page.focusedFrame?.())?.id !== frame.id)) {
+    throw new SecretTypeRefusal("focus left the frame before the value went in, so nothing is typed");
+  }
   checkFocus(await target.probe(), origin);
   if (!opts.append) await target.selectAll();
   await target.insertText(text);
@@ -312,7 +319,7 @@ const flatten = (t: FrameTree): FrameNode[] => [t.frame, ...(t.childFrames ?? []
  */
 function frameWorld(conn: CdpClient, sessionId: string, frame: () => Promise<FrameNode | undefined>) {
   let world: { frameId: string; contextId: number } | null = null;
-  const run = async (expression: string, retried = false): Promise<any> => {
+  const run = async (expression: string, retried = false, object = false): Promise<any> => {
     const f = await frame();
     if (!f) throw new SecretTypeRefusal("the field's frame is gone from the page, so nothing is typed");
     if (!world || world.frameId !== f.id) {
@@ -320,7 +327,7 @@ function frameWorld(conn: CdpClient, sessionId: string, frame: () => Promise<Fra
       world = { frameId: f.id, contextId: executionContextId };
     }
     const ev = async () => conn.send<{ result: { value?: unknown }; exceptionDetails?: { text?: string } }>(
-      "Runtime.evaluate", { expression, contextId: world!.contextId, returnByValue: true }, sessionId,
+      "Runtime.evaluate", { expression, contextId: world!.contextId, returnByValue: !object }, sessionId,
     );
     let res;
     try {
@@ -329,33 +336,66 @@ function frameWorld(conn: CdpClient, sessionId: string, frame: () => Promise<Fra
       // The context went with a navigation: make a fresh world, once.
       world = null;
       if (retried) throw err;
-      return run(expression, true);
+      return run(expression, true, object);
     }
     if (res.exceptionDetails) throw new Error(res.exceptionDetails.text || "the page probe failed");
-    return res.result.value;
+    return object ? res.result : res.result.value;
   };
   return run;
 }
 
-/** The focus probe, plus whether this document is where the browser's focus is. */
-const FRAME_FOCUS = `(() => document.hasFocus() ? ${FOCUS_PROBE} : { frame: "top", editable: false })()`;
+/** The frame element focus passes through out of this document's reach (a cross-origin iframe), or null. */
+const FOCUS_OWNER = `(() => {
+  let el = document.activeElement;
+  while (el && (el.tagName === "IFRAME" || el.tagName === "FRAME")) {
+    let inner = null;
+    try { inner = el.contentDocument; } catch (e) {}
+    if (!inner) return el;
+    el = inner.activeElement;
+  }
+  return null;
+})()`;
+
+type World = ReturnType<typeof frameWorld>;
+
+/**
+ * The id of the cross-origin frame focus passes into from this document, read
+ * the way the browser records it: the focused frame element, and its frame id
+ * from the DOM agent. Not document.hasFocus(), which Chrome leaves false in an
+ * out-of-process frame focused by DOM.focus until the first input reaches it.
+ */
+async function focusOwner(conn: CdpClient, sessionId: string, run: World): Promise<string | null> {
+  const obj = (await run(FOCUS_OWNER, false, true)) as { objectId?: string } | undefined;
+  if (!obj?.objectId) return null;
+  const { node } = await conn.send<{ node: { frameId?: string } }>("DOM.describeNode", { objectId: obj.objectId }, sessionId);
+  return node.frameId ?? null;
+}
+
+interface FrameDoc extends SecretTypeDoc {
+  id: string;
+  frameId: string;
+  focusOwner(): Promise<string | null>;
+}
 
 /**
  * Every cross-origin frame of the tab, each with a world of its own: frames in
  * the tab's renderer through the tab's session, out-of-process ones through
  * their child sessions (oopif.ts).
  */
-async function crossFrames(conn: CdpClient, sessionId: string): Promise<SecretTypeDoc[]> {
-  const docs: SecretTypeDoc[] = [];
+async function crossFrames(conn: CdpClient, sessionId: string): Promise<FrameDoc[]> {
+  const docs: FrameDoc[] = [];
   const add = (sid: string, frameId: string) => {
     const frame = async () => flatten(await treeOf(conn, sid)).find((f) => f.id === frameId);
     const run = frameWorld(conn, sid, frame);
     docs.push({
+      id: `${sid}|${frameId}`,
+      frameId,
+      focusOwner: () => focusOwner(conn, sid, run),
       url: async () => {
         const f = await frame().catch(() => undefined);
         return f ? browserUrl(f) : "";
       },
-      probe: async () => (await run(FRAME_FOCUS)) as FocusProbe,
+      probe: async () => (await run(FOCUS_PROBE)) as FocusProbe,
       selectAll: async () => void (await run(SELECT_FOCUSED)),
       insertText: async (text) => void (await conn.send("Input.insertText", { text }, sid)),
     });
@@ -372,31 +412,121 @@ async function crossFrames(conn: CdpClient, sessionId: string): Promise<SecretTy
   return docs;
 }
 
+interface DomNode {
+  nodeId: number;
+  nodeName: string;
+  frameId?: string;
+  attributes?: string[];
+  children?: DomNode[];
+  shadowRoots?: DomNode[];
+  contentDocument?: DomNode;
+}
+
+/** One document's matches for a selector: the session it lives in and its first matching node. */
+export interface SelectorHit {
+  sessionId: string;
+  nodeId: number;
+  /** The document's URL (a frame's, or the top page's). */
+  url: string;
+  top: boolean;
+}
+
+/**
+ * Which match a selector focuses: the top document's when it has one (what
+ * `document.querySelector` always meant), else the one frame that has a match.
+ * Matches in several frames, or none while some frame could not be read, are
+ * refused rather than guessed at.
+ */
+export function pickSelectorHit(target: string, hits: SelectorHit[], unreachable: string[]): SelectorHit {
+  const top = hits.find((h) => h.top);
+  if (top) return top;
+  if (hits.length === 1) return hits[0];
+  const host = (u: string) => webOrigin(u) ?? (u || "blank");
+  if (hits.length > 1) {
+    throw new SecretTypeRefusal(
+      `${target} matches in ${hits.length} frames (${hits.map((h) => host(h.url)).join(", ")}), so nothing is typed`,
+      "Point it at one field: its ref from `cast browser snapshot`",
+    );
+  }
+  if (unreachable.length) {
+    throw new SecretTypeRefusal(
+      `nothing on the page matches ${target}, and ${unreachable.length} cross-origin frame${unreachable.length > 1 ? "s" : ""} (${unreachable.map(host).join(", ")}) could not be searched`,
+      "The Codecast Chrome extension is too old to reach cross-origin frames: `cast browser extension status` says which version is connected; update it, then try again",
+    );
+  }
+  throw new SecretTypeRefusal(`nothing on the page matches ${target}`);
+}
+
+/**
+ * Where `selector` matches in every document of the tab: the top page and its
+ * same-process frames through the tab's session, each cross-origin frame
+ * through its own child session (oopif.ts). Browser-side DOM queries, which a
+ * page cannot patch. `unreachable` names the frames whose document no session
+ * holds (an extension too old for child sessions).
+ */
+export async function findSelector(conn: CdpClient, sessionId: string, selector: string): Promise<{ hits: SelectorHit[]; unreachable: string[] }> {
+  const children = await childFrames({ conn, sessionId, targetId: "" }).catch(() => []);
+  const tree = await treeOf(conn, sessionId);
+  const urls = new Map(flatten(tree).map((f) => [f.id, browserUrl(f)]));
+  const hits: SelectorHit[] = [];
+  const remote: Array<{ frameId: string; src: string }> = [];
+  const search = async (sid: string, topUrl: string, isTop: boolean) => {
+    const { root } = await conn.send<{ root: DomNode }>("DOM.getDocument", { depth: -1, pierce: true }, sid);
+    const docs: Array<{ node: DomNode; url: string; top: boolean }> = [{ node: root, url: topUrl, top: isTop }];
+    const walk = (n: DomNode) => {
+      if (n.contentDocument) {
+        docs.push({ node: n.contentDocument, url: (n.frameId && urls.get(n.frameId)) || "", top: false });
+        walk(n.contentDocument);
+      } else if ((n.nodeName === "IFRAME" || n.nodeName === "FRAME") && n.frameId) {
+        const a = n.attributes ?? [];
+        const i = a.findIndex((v, k) => k % 2 === 0 && v === "src");
+        remote.push({ frameId: n.frameId, src: i >= 0 ? a[i + 1] ?? "" : "" });
+      }
+      for (const c of [...(n.children ?? []), ...(n.shadowRoots ?? [])]) walk(c);
+    };
+    walk(root);
+    for (const d of docs) {
+      const { nodeId } = await conn.send<{ nodeId: number }>("DOM.querySelector", { nodeId: d.node.nodeId, selector }, sid).catch(() => ({ nodeId: 0 }));
+      if (nodeId) hits.push({ sessionId: sid, nodeId, url: d.url, top: d.top });
+    }
+  };
+  await search(sessionId, browserUrl(tree.frame), true);
+  for (const c of children) await search(c.sessionId, urls.get(c.targetId) ?? c.url, false).catch(() => {});
+  const reached = new Set(children.map((c) => c.targetId));
+  return { hits, unreachable: remote.filter((r) => !reached.has(r.frameId)).map((r) => urls.get(r.frameId) || r.src) };
+}
+
 /**
  * SecretTypePage over a CDP session on the tab. `focus` is the caller's
  * (the engine resolves a ref; a CSS selector is focused here when it passes
- * none). The probe and the select run in an isolated world of the top frame,
- * or of the cross-origin frame that holds focus.
+ * none, in whichever document of the tab it matches: findSelector). The probe
+ * and the select run in an isolated world of the top frame, or of the
+ * cross-origin frame that holds focus.
  */
 export function cdpSecretPage(conn: CdpClient, sessionId: string, target: string, focus?: () => Promise<void>): SecretTypePage {
   const run = frameWorld(conn, sessionId, async () => (await treeOf(conn, sessionId)).frame);
   return {
     topUrl: async () => browserUrl((await treeOf(conn, sessionId)).frame),
     focus: focus ?? (async () => {
-      const ok = await run(`(() => { const el = document.querySelector(${JSON.stringify(target)}); if (!el) return false; el.focus(); return true; })()`);
-      if (!ok) throw new SecretTypeRefusal(`nothing on the page matches ${target}`);
+      const { hits, unreachable } = await findSelector(conn, sessionId, target);
+      const hit = pickSelectorHit(target, hits, unreachable);
+      await conn.send("DOM.focus", { nodeId: hit.nodeId }, hit.sessionId);
     }),
     probe: async () => (await run(FOCUS_PROBE)) as FocusProbe,
     selectAll: async () => void (await run(SELECT_FOCUSED)),
     insertText: async (text) => void (await conn.send("Input.insertText", { text }, sessionId)),
     focusedFrame: async () => {
-      const held: SecretTypeDoc[] = [];
-      for (const doc of await crossFrames(conn, sessionId)) {
-        const p = await doc.probe().catch(() => null);
-        if (p && p.frame !== "cross" && p.editable) held.push(doc);
+      // Follow focus down from the top, one cross-origin frame at a time, to the document holding the field.
+      const docs = await crossFrames(conn, sessionId);
+      let owner = await focusOwner(conn, sessionId, run).catch(() => null);
+      for (let hops = 0; owner && hops < 8; hops++) {
+        const doc = docs.find((d) => d.frameId === owner);
+        const p = doc && (await doc.probe().catch(() => null));
+        if (!doc || !p) return null;
+        if (p.frame !== "cross") return p.editable ? doc : null;
+        owner = await doc.focusOwner().catch(() => null);
       }
-      // One document has focus; two claiming it is a page playing games.
-      return held.length === 1 ? held[0] : null;
+      return null;
     },
   };
 }
