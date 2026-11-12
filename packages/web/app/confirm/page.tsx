@@ -4,7 +4,12 @@
 // challenge id names the person and only their passkey verifies. The app that
 // opened it is watching the same challenge and goes on by itself once it is
 // granted. An agent's tab may not run it.
-import { useState } from "react";
+//
+// It starts the ceremony as soon as the challenge loads in a focused tab (or
+// when the tab first gains focus), so the person meets the system prompt, not
+// a button; a browser that wants a press first refuses quietly and the button
+// stays.
+import { useEffect, useRef, useState } from "react";
 import { useConvex } from "convex/react";
 import { useSearchParams } from "next/navigation";
 import { Check, Clock, Fingerprint, Loader2, Lock } from "lucide-react";
@@ -45,7 +50,7 @@ export default function ConfirmPage() {
     if (!pending || busy || held) return;
     setBusy(true);
     try {
-      await (register ? finishRegistration : finishPresence)(client, id, pending.options);
+      await (register ? finishRegistration(client, id, pending.options, pending.from) : finishPresence(client, id, pending.options));
     } finally {
       setBusy(false);
     }
@@ -53,6 +58,20 @@ export default function ConfirmPage() {
   useEventListener("keydown", (e: KeyboardEvent) => {
     if (e.key === "Enter") void run();
   });
+  const started = useRef(false);
+  const ready = !!pending && !held;
+  useEffect(() => {
+    if (!ready || started.current) return;
+    const go = () => {
+      if (started.current) return;
+      started.current = true;
+      void run();
+    };
+    if (document.hasFocus()) go();
+    else window.addEventListener("focus", go, { once: true });
+    return () => window.removeEventListener("focus", go);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
 
   if (id && state === undefined && !error) return <Frame icon={<Loader2 className="h-5 w-5 animate-spin motion-reduce:animate-none" />} title="Loading" />;
   if (!state) return <Frame icon={<Fingerprint className="h-5 w-5" />} title="Nothing to confirm" sub="Start again from Codecast" />;
@@ -63,7 +82,7 @@ export default function ConfirmPage() {
 
   const title = register ? "Set up Touch ID" : `Confirm to ${PRESENCE_PHRASE[pending.action!]}`;
   return (
-    <Frame icon={<Fingerprint className="h-5 w-5 text-sol-cyan" />} title={title} sub={pending.label}>
+    <Frame icon={<Fingerprint className="h-5 w-5 text-sol-cyan" />} title={title} sub={[pending.label, pending.from && `from ${pending.from}`].filter(Boolean).join(" · ")}>
       <Button
         type="button"
         variant="yellow"

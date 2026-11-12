@@ -24,6 +24,10 @@ export const passkeyTables = {
     // Stamped on first passkeys enrolled from 2026-10-24 to 2026-11-04;
     // nothing reads it. Kept so those rows still validate.
     probation_until: v.optional(v.number()),
+    // A device key (deviceKeys.ts): a P-256 key the desktop app keeps in the
+    // Secure Enclave or the phone keeps behind Face ID, signing challenges
+    // directly instead of through WebAuthn. public_key is its raw point.
+    kind: v.optional(v.literal("device_key")),
   })
     .index("by_user", ["user_id"])
     .index("by_credential", ["credential_id"]),
@@ -48,7 +52,11 @@ export const passkeyTables = {
     status: v.union(v.literal("pending"), v.literal("granted"), v.literal("used")),
     grant_hash: v.optional(v.string()),
     authorized_by: v.optional(v.id("passkey_challenges")),
+    // The device that asked ("MacBook-Pro-2"), shown where another of the person's devices confirms it.
+    from: v.optional(v.string()),
     created_at: v.number(),
     expires_at: v.number(),
-  }).index("by_expires", ["expires_at"]),
+  })
+    .index("by_expires", ["expires_at"])
+    .index("by_user_status", ["user_id", "status"]),
 };
