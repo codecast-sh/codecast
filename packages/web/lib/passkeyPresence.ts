@@ -9,8 +9,9 @@
 // person's sign-in can spend that grant: the string lives only here.
 //
 // With no passkey yet, the same flow offers to set one up and continues. The
-// desktop app has no platform passkeys, so it opens the web origin's
-// /confirm page in the system browser and waits on the challenge instead.
+// desktop app has no platform passkeys: it confirms with its own Secure
+// Enclave key (lib/deviceKeyPresence) when it has one, and otherwise opens the
+// web origin's /confirm page in the system browser and waits on the challenge.
 // An agent's tab may not set one up (lib/agentTabGuard).
 
 import { approvesPersonsAct } from "@codecast/shared/contracts/commandRun";
@@ -22,17 +23,18 @@ import { startAuthentication, startRegistration } from "@simplewebauthn/browser"
 import { api } from "@codecast/convex/convex/_generated/api";
 import { NOT_CONFIRMED, isPresenceRequired, type PresenceAction, type PresenceGrant } from "@codecast/shared/contracts/secrets";
 import { isAgentDrivenTab } from "./desktopHandoff";
-import { isDesktopShell, openExternalUrl } from "./desktop";
+import { bridge, isDesktopShell, openExternalUrl } from "./desktop";
+import { UNAVAILABLE, confirmWithDeviceKey, ensureDeviceKey, type DeviceKeyDeps, type DeviceKeySigner } from "./deviceKeyPresence";
 import { PERSON_ONLY } from "./agentTabGuard";
 
-type Client = Pick<ConvexReactClient, "action" | "watchQuery">;
+type Client = Pick<ConvexReactClient, "action" | "mutation" | "query" | "watchQuery">;
 
 /** The page a desktop or phone opens to finish a challenge in a real browser. */
 export const confirmPath = (challengeId: string) => `/confirm?c=${encodeURIComponent(challengeId)}`;
 
-/** What a new passkey is called until its owner renames it: the device it was made on. */
-export function deviceName(ua = typeof navigator === "undefined" ? "" : navigator.userAgent): string {
-  const device = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android" : /Mac OS X|Macintosh/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "";
+/** What a new passkey is called until its owner renames it: the browser and the device it was made on, by name when the asking app said it. */
+export function deviceName(ua = typeof navigator === "undefined" ? "" : navigator.userAgent, machine?: string): string {
+  const device = machine ? machine : /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android" : /Mac OS X|Macintosh/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "";
   const browser = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "";
   return [browser, device].filter(Boolean).join(" on ") || "Passkey";
 }
@@ -55,7 +57,7 @@ export async function runCeremony<T>(start: () => Promise<T>): Promise<T | null>
 }
 
 /** A short system prompt with one button, which is also the user gesture the next ceremony needs. */
-function ask(title: string, label: string): Promise<boolean> {
+function ask(title: string, label: string, duration = 60_000): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false;
     const settle = (ok: boolean) => {
@@ -64,7 +66,7 @@ function ask(title: string, label: string): Promise<boolean> {
       resolve(ok);
     };
     toast(title, {
-      duration: 60_000,
+      duration,
       action: { label, onClick: () => settle(true) },
       cancel: { label: "Cancel", onClick: () => settle(false) },
       onDismiss: () => settle(false),
@@ -73,10 +75,16 @@ function ask(title: string, label: string): Promise<boolean> {
   });
 }
 
-/** Open /confirm in the system browser and wait until the challenge reaches `want`, the person cancels, or it expires. */
-function handOff(client: Client, challengeId: string, want: "granted" | "used", expiresAt: number): Promise<boolean> {
+/**
+ * Wait until the challenge reaches `want`, the person cancels, or it expires.
+ * `browser` opens /confirm in the system browser first (the desktop app); a
+ * presence challenge is also sent to the person's phone, whose Face ID can
+ * answer it (passkeys.askPhone).
+ */
+function handOff(client: Client, challengeId: string, want: "granted" | "used", expiresAt: number, browser = true): Promise<boolean> {
   const url = `${window.location.origin}${confirmPath(challengeId)}`;
-  openExternalUrl(url);
+  if (browser) openExternalUrl(url);
+  if (want === "granted") void client.mutation(api.passkeys.askPhone, { challenge_id: challengeId }).catch(() => {});
   return new Promise((resolve) => {
     const id = `presence:${challengeId}`;
     const watch = client.watchQuery(api.passkeys.challenge, { challenge_id: challengeId });
@@ -104,17 +112,19 @@ function handOff(client: Client, challengeId: string, want: "granted" | "used", 
       else if (state.status !== "pending") settle(false, "The confirmation expired");
     };
     stop = watch.onUpdate(check);
-    toast("Confirm in your browser", {
+    toast(browser ? "Confirm in your browser or on your phone" : "Confirm on your phone", {
       id,
       duration: Infinity,
       // Opening again keeps the toast; Cancel or swiping it away stops waiting.
-      action: {
-        label: "Open again",
-        onClick: (e) => {
-          e.preventDefault();
-          openExternalUrl(url);
-        },
-      },
+      action: browser
+        ? {
+            label: "Open again",
+            onClick: (e) => {
+              e.preventDefault();
+              openExternalUrl(url);
+            },
+          }
+        : undefined,
       cancel: { label: "Cancel", onClick: () => settle(false) },
       onDismiss: () => settle(false),
     });
@@ -123,17 +133,17 @@ function handOff(client: Client, challengeId: string, want: "granted" | "used", 
 }
 
 /** Create a passkey for a pending enrollment challenge and store it: true once stored. The /confirm page runs it too. */
-export async function finishRegistration(client: Pick<Client, "action">, challengeId: string, options: any): Promise<boolean> {
+export async function finishRegistration(client: Pick<Client, "action">, challengeId: string, options: any, from?: string): Promise<boolean> {
   const response = await runCeremony(() => startRegistration({ optionsJSON: options }));
   if (!response) return false;
-  const done = await client.action(api.passkeys.registrationFinish, { challenge_id: challengeId, response, name: deviceName() });
+  const done = await client.action(api.passkeys.registrationFinish, { challenge_id: challengeId, response, name: deviceName(undefined, from) });
   return "error" in done ? fail(done.error) : true;
 }
 
-/** Assert a passkey for a pending presence challenge: true once the server granted it. The /confirm page runs it too. */
-export async function finishPresence(client: Pick<Client, "action">, challengeId: string, options: any): Promise<boolean> {
+/** Assert a passkey for a pending presence challenge: true once the server granted it, false when it refused (said), null when no passkey answered (cancelled, or none on this computer). The /confirm page runs it too. */
+export async function finishPresence(client: Pick<Client, "action">, challengeId: string, options: any): Promise<boolean | null> {
   const response = await runCeremony(() => startAuthentication({ optionsJSON: options }));
-  if (!response) return false;
+  if (!response) return null;
   const done = await client.action(api.passkeys.presenceFinish, { challenge_id: challengeId, response });
   return "error" in done ? fail(done.error) : true;
 }
@@ -142,15 +152,68 @@ export async function finishPresence(client: Pick<Client, "action">, challengeId
 async function enroll(client: Client, handoff: boolean, prompt?: [title: string, label: string], grant?: PresenceGrant): Promise<boolean> {
   if (isAgentDrivenTab()) return fail(PERSON_ONLY.enroll);
   if (prompt && !(await ask(...prompt))) return false;
-  const begun: any = await client.action(api.passkeys.registrationBegin, { origin: window.location.origin, grant });
+  const from = handoff ? (await desktopSigner()?.status().catch(() => null))?.name : undefined;
+  const begun: any = await client.action(api.passkeys.registrationBegin, { origin: window.location.origin, grant, from });
   if (begun?.error) return fail(begun.error);
   if (handoff) return await handOff(client, begun.challenge_id, "used", begun.expires_at);
   return await finishRegistration(client, begun.challenge_id, begun.options);
 }
 
+/** Two choices in one toast: the action, the cancel, and a dismissal that answers cancel. */
+function choose<A extends string, B extends string>(title: string, yes: [A, string], no: [B, string]): Promise<A | B | "cancel"> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (v: A | B | "cancel") => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+    };
+    toast(title, {
+      duration: 60_000,
+      action: { label: yes[1], onClick: () => settle(yes[0]) },
+      cancel: { label: no[1], onClick: () => settle(no[0]) },
+      onDismiss: () => settle("cancel"),
+      onAutoClose: () => settle("cancel"),
+    });
+  });
+}
+
+/** The desktop app's own key (electron deviceKey.js) behind the shared device key flow. */
+function desktopKeyDeps(client: Client, signer: DeviceKeySigner): DeviceKeyDeps {
+  const origin = window.location.origin;
+  return {
+    signer,
+    appName: "Codecast app",
+    list: () => client.query(api.passkeys.list, {}),
+    begin: (action, target, from) => client.action(api.passkeys.presenceBegin, { action, target, origin, from }),
+    registrationBegin: (grant, from) => client.action(api.passkeys.registrationBegin, { origin, grant, from }),
+    register: (challenge_id, public_key, signature, name) => client.action(api.deviceKeys.register, { challenge_id, public_key, signature, name }),
+    confirm: (challenge_id, credential_id, signature) => client.action(api.deviceKeys.confirm, { challenge_id, credential_id, signature }),
+    confirmElsewhere: (action, target) => confirmByPasskey(client, action, target, true),
+    offerSetUp: () => choose("Set up Touch ID in this app", ["setup", "Set up"], ["elsewhere", "Use browser"]),
+    fail: (message) => void fail(message),
+  };
+}
+
+/** The desktop app's key, on builds that have one. */
+function desktopSigner(): DeviceKeySigner | undefined {
+  if (!isDesktopShell()) return undefined;
+  const [status, create, keep, sign] = [bridge("deviceKeyStatus"), bridge("deviceKeyCreate"), bridge("deviceKeyKeep"), bridge("deviceKeySign")];
+  return status && create && keep && sign ? { status, create, keep, sign } : undefined;
+}
+
 async function confirmOnce(client: Client, action: PresenceAction, target: string): Promise<PresenceGrant | null> {
-  const handoff = isDesktopShell();
-  const begin = () => client.action(api.passkeys.presenceBegin, { action, target, origin: window.location.origin });
+  const signer = desktopSigner();
+  if (signer) {
+    const viaKey = await confirmWithDeviceKey(action, target, desktopKeyDeps(client, signer));
+    if (viaKey !== UNAVAILABLE) return viaKey;
+  }
+  return await confirmByPasskey(client, action, target, isDesktopShell());
+}
+
+async function confirmByPasskey(client: Client, action: PresenceAction, target: string, handoff: boolean): Promise<PresenceGrant | null> {
+  const from = handoff ? (await desktopSigner()?.status().catch(() => null))?.name : undefined;
+  const begin = () => client.action(api.passkeys.presenceBegin, { action, target, origin: window.location.origin, from });
   let begun: any = await begin();
   if (begun?.needs_passkey) {
     if (!(await enroll(client, handoff, ["Set up Touch ID to confirm this", "Set up Touch ID"]))) return null;
@@ -162,8 +225,13 @@ async function confirmOnce(client: Client, action: PresenceAction, target: strin
     fail(begun.error);
     return null;
   }
-  const granted = handoff ? await handOff(client, begun.challenge_id, "granted", begun.expires_at) : await finishPresence(client, begun.challenge_id, begun.options);
-  return granted ? begun.grant : null;
+  if (handoff) return (await handOff(client, begun.challenge_id, "granted", begun.expires_at)) ? begun.grant : null;
+  const finished = await finishPresence(client, begun.challenge_id, begun.options);
+  if (finished !== null) return finished ? begun.grant : null;
+  // No passkey on this computer (the browser offered a QR code and the person closed it): the phone can answer the same challenge.
+  // Short, since a person who cancelled on purpose is waiting on this to end the press.
+  if (!(await ask("No passkey on this computer?", "Use phone", 10_000))) return null;
+  return (await handOff(client, begun.challenge_id, "granted", begun.expires_at, false)) ? begun.grant : null;
 }
 
 /**
@@ -172,6 +240,16 @@ async function confirmOnce(client: Client, action: PresenceAction, target: strin
  */
 export async function addPasskey(client: Client, hasPasskeys: boolean): Promise<boolean> {
   const handoff = isDesktopShell();
+  // The desktop app's Add sets up its own Touch ID first; with that in place, Add makes a browser passkey.
+  const signer = desktopSigner();
+  if (signer) {
+    const deps = desktopKeyDeps(client, signer);
+    const status = await signer.status().catch(() => null);
+    const keys = status?.available ? await deps.list() : [];
+    if (status?.available && !keys.some((k) => k.device_key === status.credential_id)) {
+      return !!(await ensureDeviceKey(deps, false));
+    }
+  }
   if (!hasPasskeys) return await enroll(client, handoff);
   const grant = await confirmPresence(client, "add_passkey", "self");
   if (!grant) return false;

@@ -873,35 +873,40 @@ export const remove = mutation({
   },
 });
 
-/**
- * Ask first on or off. On, an agent's read from a session needs a person's
- * approval for that session (cliRead files the decision); a person's own
- * reveal on the web takes Touch ID instead (reveal). Anyone may turn it on, a
- * token included; turning it off takes a person signed in to the app, since an
- * api token is what the gated agent itself holds, and an ask_first_off grant
- * (passkeys.ts), since an agent may be driving that app, spent with the
- * `grant` string the person's confirmation handed their client. The web's
- * dispatch side effect calls this.
- */
+async function turnOffAskFirst(ctx: any, row: SecretRow, actor?: Id<"users">) {
+  if (!row.ask_first) return;
+  await ctx.db.patch(row._id, { ask_first: false, ...(actor ? metaStamp(row, actor) : {}) });
+  await recordSecretEvent(ctx, row, "ask_first_off", actor ? { actor } : {});
+  await clearApprovals(ctx, row, "all", `${row.name} is no longer Ask first: read it again`);
+  await bumpRedaction(ctx, row.workspace);
+}
+
+/** Ask first is retired: turning it on is refused, and off needs no Touch ID. */
 export const setAskFirst = mutation({
   args: { api_token: v.optional(v.string()), ref: v.string(), ask_first: v.boolean(), grant: v.optional(v.string()) },
   handler: async (ctx, args) => {
-    const userId = args.ask_first ? await requireCaller(ctx, args.api_token) : await getAuthUserId(ctx);
-    if (!userId) return { error: "Only a person turns Ask first off: switch it off in the secret's panel on the Vault page" };
+    if (args.ask_first) return { error: "Ask first is turned off" };
+    const userId = await requireCaller(ctx, args.api_token);
     const row = await findSecret(ctx, userId, args.ref);
     if ("error" in row) return row;
-    if (!!row.ask_first !== args.ask_first) {
-      // The person's own browser may be driven by an agent, so off takes a passkey too.
-      const refusal = args.ask_first ? null : await consumePresence(ctx, userId, "ask_first_off", String(row._id), args.grant);
-      if (refusal) return { error: refusal };
-      await ctx.db.patch(row._id, { ask_first: args.ask_first, ...metaStamp(row, userId) });
-      await recordSecretEvent(ctx, row, args.ask_first ? "ask_first_on" : "ask_first_off", { actor: userId });
-      // Switched either way, earlier approvals end: re-armed, every session asks afresh.
-      await clearApprovals(ctx, row, "all", args.ask_first ? `${row.name} was set to Ask first again: read it again to ask afresh` : `${row.name} is no longer Ask first: read it again`);
-      // The daemon feed holds an Ask first value only for users it reached (redactionRows), so the switch changes what it holds.
-      await bumpRedaction(ctx, row.workspace);
+    await turnOffAskFirst(ctx, row, userId);
+    return { id: String(row._id), short_id: row.short_id, name: row.name, ask_first: false };
+  },
+});
+
+/** Clears Ask first from every secret: `npx convex run secrets:clearAskFirst`. */
+export const clearAskFirst = internalMutation({
+  args: { cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const page = await ctx.db.query("secrets").paginate({ cursor: args.cursor ?? null, numItems: 500 });
+    let cleared = 0;
+    for (const row of page.page) {
+      if (!row.ask_first) continue;
+      await turnOffAskFirst(ctx, row);
+      cleared++;
     }
-    return { id: String(row._id), short_id: row.short_id, name: row.name, ask_first: args.ask_first };
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.secrets.clearAskFirst, { cursor: page.continueCursor });
+    return { cleared, done: page.isDone };
   },
 });
 
@@ -1213,6 +1218,7 @@ async function askFirstGate(
       options: [{ label: APPROVE_FOR_SESSION }, { label: DENY }],
       context_md,
       category: "access",
+      vault: true,
       blocking: true,
     });
     if (asked?.error) return { error: `Could not ask for ${row.name}: ${asked.error}` };

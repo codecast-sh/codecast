@@ -7,7 +7,7 @@ import { captureError } from "../lib/analytics";
 import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
 import type { CloudPlacementProgress, RewindFilesOp, RewindStagedMark } from "@codecast/shared/contracts";
 import type { RoleIcon } from "@codecast/shared/contracts/roleIcon";
-import { cleanSecretEdit, type SecretMeta, type SecretMetaEdit } from "@codecast/shared/contracts/secrets";
+import { approvesSecretRead, cleanSecretEdit, type SecretMeta, type SecretMetaEdit } from "@codecast/shared/contracts/secrets";
 import { withoutSecrets } from "@codecast/shared/contracts/secretShapes";
 import { followersSig, sameViewAnchor, type FollowerRow, type ViewAnchor } from "../lib/follow";
 import { settingsDataKey } from "../lib/settingsData";
@@ -4516,11 +4516,11 @@ export function visualOrderSessions(
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
-  // Same order the status view renders: questions, pinned, new, needs input,
+  // Same order the status view renders: pinned, questions, new, needs input,
   // done, working, dormant — the chokepoint's own sections, so the walk and
   // the render can never disagree.
   const sections: Array<[InboxSession[], string]> = [
-    [placed.questions, "questions"], [placed.pinned, "pinned"], [placed.newSessions, "new"],
+    [placed.pinned, "pinned"], [placed.questions, "questions"], [placed.newSessions, "new"],
     [placed.needsInput, "needs_input"], [placed.done, "done"],
     [placed.working, "working"], [placed.dormant, "dormant"],
   ];
@@ -15700,12 +15700,27 @@ function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionA
   // its run consumes the answer as the open gate, or, when the run is past
   // it, the server sends the same message (settleClientResolution).
   if (content && !row.workflow_run_id && !runs) {
-    queueMicrotask(() => {
+    const deliver = () => {
       const s = useInboxStore.getState();
       const clientId = s.addOptimisticMessage(convId, content);
       s.sendMessage(convId, content, undefined, clientId);
-    });
+    };
+    // An Approve on an Ask first read reaches the agent only once the server
+    // took it: a refused one (no Touch ID, a spent grant) must not tell the
+    // agent it was approved. The dispatch binding releases it (releaseHeldAnswer).
+    if (approvesSecretRead(row, row.answer_index ?? -1)) heldAnswerDeliveries.set(decisionId, deliver);
+    else queueMicrotask(deliver);
   }
+}
+
+const heldAnswerDeliveries = new Map<string, () => void>();
+
+/** The answerDecision dispatch for `decisionId` settled: deliver its held answer when it landed, drop it when it was refused for good. */
+export function releaseHeldAnswer(decisionId: unknown, landed: boolean): void {
+  if (typeof decisionId !== "string") return;
+  const deliver = heldAnswerDeliveries.get(decisionId);
+  heldAnswerDeliveries.delete(decisionId);
+  if (landed) deliver?.();
 }
 
 /** Whom an escalation reaches, from the roster a client holds: the manager on the org tree, the members on the team roster. */
