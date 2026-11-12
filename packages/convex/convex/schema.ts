@@ -4919,7 +4919,20 @@ export default defineSchema({
     // and the id goes with it.
     viewing_conversation_id: v.optional(v.id("conversations")),
     viewing_since: v.optional(v.number()),
-  }).index("by_user", ["user_id"]),
+    // The viewed conversation's access fields, copied when the id is written
+    // and refreshed by patchConversationVisibility (the one writer of the
+    // mutable ones), so the roster gates the id without reading the
+    // conversation: a read there re-ran getTeamMembers for every subscriber
+    // at the viewed session's streaming rate (ct-92571).
+    viewing_access: v.optional(v.object({
+      user_id: v.id("users"),
+      team_id: v.optional(v.id("teams")),
+      is_private: v.boolean(),
+      team_visibility: v.optional(v.string()),
+      started_at: v.optional(v.number()),
+    })),
+  }).index("by_user", ["user_id"])
+    .index("by_viewing_conversation", ["viewing_conversation_id"]),
 
   // Mobile push staging (pushRouter.ts). Rows wait out a routing delay (short
   // away-debounce, or a longer hold while the desktop is active), then a
