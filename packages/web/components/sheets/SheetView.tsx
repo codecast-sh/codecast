@@ -8,7 +8,7 @@ import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExterna
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { Radio } from "lucide-react";
-import type { ArtifactPresence, Json } from "@codecast/shared/artifacts";
+import type { ArtifactOp, ArtifactPresence, Json } from "@codecast/shared/artifacts";
 import { a1, sortOps, valueMeetsRule, addTabOps, duplicateTabOps, moveTabOps, moveTabToOps, LiveSheet, enforceValidation, replaceOps, expandToMerges, mergeAt, cellNum, deleteTabOps, formatValue, inputOps, isFormula, parseQualifiedRange, quoteTabName, rectA1, renameTabOps, styleOf, tabPatchOps, toTsv, fitWidthOps, inheritedFormat, uniqueTabName, type CellStyle, type Rect, type TabData, type QuerySource } from "./sheetCore";
 import type { LiveViewProps } from "../live/registry";
 import { useLiveElements, useLivePresence } from "../live/useLiveArtifact";
@@ -23,7 +23,8 @@ import { ROW_HEADER_W, COL_HEADER_H, BOTTOM_ROOM, cellViewportRect, type GridHit
 import { CellEditor, FormulaBar, SelectionSummary, TabStrip, type EditorPlacement } from "./SheetChrome";
 import { FormatBar, type FormatAction } from "./FormatBar";
 import { SHEET_ASK_SLOT } from "./askSlot";
-import { useQueryTabRefresh } from "./useQueryTabRefresh";
+import { useSheetFilter } from "./useSheetFilter";
+import { useProjectTitleFor, useQueryTabRefresh } from "./useQueryTabRefresh";
 import { useAgentFlash, useUnseenTabs } from "./tabActivity";
 import { QueryBar } from "./QueryBar";
 import { useSheetExtras } from "./useSheetExtras";
@@ -89,7 +90,11 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
   const readOnly = readOnlyDoc || queryTab || loading;
 
   // ── Filter: hidden rows ───────────────────────────────────────────────────
-  const filter = tab.meta.filter;
+  // What handlers need, read live so they stay stable (S), plus the handlers and refs for sheetKeys/sheetPointer/sheetActions (ctx); both filled each render below.
+  const S = useRef<SheetState>(null!);
+  const ctx = useRef<SheetCtx>(null!);
+  // The tab's shared filter, or this person's own view of it (useSheetFilter).
+  const { filter, personal: personalFilter, setFilter } = useSheetFilter(doc._id, activeTabId, tab.meta.filter, useCallback(() => S.current.model, []), useCallback((ops: ArtifactOp[]) => ctx.current.apply(ops), []));
   const hiddenRows = useMemo(() => {
     // Rows hidden by hand and rows the filter hides are both out of view (copy, sums and find skip them).
     const hidden = new Set<number>(tab.hiddenRows);
@@ -157,10 +162,7 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
   const [scrollTick, setScrollTick] = useState(0);
 
   // Everything handlers need, read live so they stay stable.
-  const S = useRef<SheetState>({ model, wb, tab, activeTabId, sel, rect, cols, rows, frozenRows, frozenCols, readOnly, readOnlyDoc, hiddenRows });
-  S.current = { model, wb, tab, activeTabId, sel, rect, cols, rows, frozenRows, frozenCols, readOnly, readOnlyDoc, hiddenRows };
-  // The same, plus the handlers and refs, for the event handlers in sheetKeys/sheetPointer/sheetActions.
-  const ctx = useRef<SheetCtx>(null!);
+  S.current = { model, wb, tab, activeTabId, sel, rect, cols, rows, frozenRows, frozenCols, readOnly, readOnlyDoc, hiddenRows, filter };
 
   // Every write from the view: strict dropdown and date cells refuse what they don't accept, whatever the path (typing, paste, fill).
   const apply = useCallback((ops: Parameters<typeof live.apply>[0]) => {
@@ -544,9 +546,9 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
     return () => { setExports(null); setImport(null); };
   }, [setToolbar, setExports, setImport, importFiles]);
 
-  const projectName = doc.project_path?.split("/").filter(Boolean).pop();
+  const projectName = useProjectTitleFor(doc.project_path);
 
-  ctx.current = { S, edit, pointRef, caretRef, scrollerRef, sinkRef, pasteValuesRef, dragRef, live, docId: doc._id, cancelEdit, commitEdit, commitToSelection, move, beginEdit, apply, onFormat, select, setSel, setCopyRect, setFillPreview, setFindOpen, openPicker, tabRunRef, openCellComment, openRules };
+  ctx.current = { S, edit, pointRef, caretRef, scrollerRef, sinkRef, pasteValuesRef, dragRef, live, docId: doc._id, cancelEdit, commitEdit, commitToSelection, move, beginEdit, apply, onFormat, select, setSel, setCopyRect, setFillPreview, setFindOpen, openPicker, tabRunRef, openCellComment, openRules, setFilter };
 
   return (
     <div
@@ -662,7 +664,7 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
           onCaret={(c) => { caretRef.current = c; }}
         />
         <SheetExtrasView x={x} placement={placement} editing={!!editState} readOnly={readOnly} edit={edit} select={select} apply={apply} sinkRef={sinkRef} live={live} />
-        <FormatBar filtered={!!tab.meta.filter} sample={typeof activeInfo?.value === "number" ? activeInfo.value : undefined} merged={model.merges.some((m) => m.tab === activeTabId && m.rect.c0 <= rect.c1 && m.rect.c1 >= rect.c0 && m.rect.r0 <= rect.r1 && m.rect.r1 >= rect.r0)} docId={doc._id} style={activeStyle} onAction={onFormat} readOnly={readOnlyDoc || loading} selectionLabel={refLabel} tabName={tab.meta.name} autoAsk={tab.rows === 0 && !queryTab} onAsk={onAsk} />
+        <FormatBar filtered={!!filter} sample={typeof activeInfo?.value === "number" ? activeInfo.value : undefined} merged={model.merges.some((m) => m.tab === activeTabId && m.rect.c0 <= rect.c1 && m.rect.c1 >= rect.c0 && m.rect.r0 <= rect.r1 && m.rect.r1 >= rect.r0)} docId={doc._id} style={activeStyle} onAction={onFormat} readOnly={readOnlyDoc || loading} selectionLabel={refLabel} tabName={tab.meta.name} autoAsk={tab.rows === 0 && !queryTab} onAsk={onAsk} />
       </div>
       <TabStrip
         tabs={model.tabs}
@@ -729,7 +731,7 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
               }}
             />
           ) : (
-            <CellMenu filtered={!!tab.meta.filter} hiddenLines={{ cols: !!tab.hiddenCols?.size, rows: !!tab.hiddenRows?.size }} frozen={!!(tab.meta.frozenRows || tab.meta.frozenCols)} kind={m.kind} readOnly={readOnly} onFormat={onFormat} validation={activeValidation?.rule} onValidate={onValidate} onClipboard={onClipboard} onComment={() => openCellComment()} onHide={(axis, hide) => hideSelection(axis, hide, ctx.current)} onClear={() => apply(clearVisible(model, activeTabId, rect, hiddenRows))} onCopyHint={() => {
+            <CellMenu filtered={!!filter} hiddenLines={{ cols: !!tab.hiddenCols?.size, rows: !!tab.hiddenRows?.size }} frozen={!!(tab.meta.frozenRows || tab.meta.frozenCols)} kind={m.kind} readOnly={readOnly} onFormat={onFormat} validation={activeValidation?.rule} onValidate={onValidate} onClipboard={onClipboard} onComment={() => openCellComment()} onHide={(axis, hide) => hideSelection(axis, hide, ctx.current)} onClear={() => apply(clearVisible(model, activeTabId, rect, hiddenRows))} onCopyHint={() => {
               const { rect: r, tab: t } = S.current;
               const lines = visibleRowsOf(r, hiddenRows, t.rows).map((row) => {
                 const out: string[] = [];
@@ -751,16 +753,16 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
             values={columnValues(wb, tab, p.col, filter?.row ?? 1, filter ? filterEnd(tab, filter) : tab.rows)}
             hidden={filter?.hidden?.[String(p.col)] ?? []}
             when={filter?.when?.[String(p.col)]}
-            onApply={(hidden, when) => {
-              const f = S.current.tab.meta.filter;
+            personal={personalFilter}
+            onApply={(hidden, when, scope) => {
+              const f = S.current.filter;
               if (!f) return;
               const { [String(p.col)]: _drop, ...others } = f.when ?? {};
-              apply(tabPatchOps(S.current.model, activeTabId, { filter: { ...f, hidden: { ...f.hidden, [String(p.col)]: hidden }, when: when ? { ...others, [String(p.col)]: when } : others } as any }));
+              setFilter({ ...f, hidden: { ...f.hidden, [String(p.col)]: hidden }, when: when ? { ...others, [String(p.col)]: when } : others }, scope);
               filterPop.close();
             }}
             onSort={(desc) => {
-              const { model: m, wb: w, tab: t } = S.current;
-              const f = t.meta.filter;
+              const { model: m, wb: w, tab: t, filter: f } = S.current;
               if (!f) return;
               apply(sortOps(m, w, activeTabId, { c0: f.c0, c1: f.c1, r0: f.row + 1, r1: filterEnd(t, f) }, p.col, desc));
               filterPop.close();

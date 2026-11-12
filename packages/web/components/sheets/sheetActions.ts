@@ -5,12 +5,13 @@ import { createElement } from "react";
 import { toast } from "sonner";
 import { PasteHint } from "./SheetMenus";
 import { htmlTable } from "./pasteHtml";
-import { Workbook, mergeAt, mergeOps, unmergeOps, condOps, hideOps, parseFormula, validateInput, validationAt, a1, borderOps, cellNum, clearOps, clipOf, formatValue, gridOps, inputOps, moveOps, isFormula, tokenize, newElementKey, normRect, parseQualifiedRange, parseTsv, pasteClipOps, rectA1, sortOps, structuralOps, styleOf, styleOps, tabPatchOps, toTsv, inheritedFormat, shiftFormula, placeTableOps, compareScalars, type Scalar, type CellNumberFormat, type PaletteColor, type Rect, type SheetClip, type SheetModel, type TabData, type QuerySource } from "./sheetCore";
+import { Workbook, mergeAt, mergeOps, unmergeOps, condOps, hideOps, parseFormula, validateInput, validationAt, a1, borderOps, cellNum, clearOps, clipOf, formatValue, gridOps, inputOps, moveOps, isFormula, tokenize, newElementKey, normRect, parseQualifiedRange, parseTsv, pasteClipOps, rectA1, sortOps, structuralOps, styleOf, styleOps, tabPatchOps, toTsv, inheritedFormat, shiftFormula, placeTableOps, compareScalars, type Scalar, type CellNumberFormat, type TabFilter, type PaletteColor, type Rect, type SheetClip, type SheetModel, type TabData, type QuerySource } from "./sheetCore";
 import { finishInput, type EditStore } from "./editStore";
 import type { AxisLayout } from "./layout";
 import type { FormatAction } from "./FormatBar";
 import type { MutableRefObject, Dispatch, SetStateAction } from "react";
 import type { LiveHandle } from "../live/useLiveArtifact";
+import type { SetFilter } from "./useSheetFilter";
 import type { ArtifactOp } from "@codecast/shared/artifacts";
 
 export const DEF_COL_W = 104;
@@ -175,7 +176,7 @@ export function refsKeyOf(text: string | undefined): string {
 
 export function formatSelection(a: FormatAction, c: SheetCtx) {
   const { S, live, apply } = c;
-  const filter = c.S.current.tab.meta.filter;
+  const filter = c.S.current.filter;
     const { model, activeTabId, rect, wb, sel, tab } = S.current;
     if (S.current.readOnlyDoc) return;
     // On a live query tab the server owns the contents; formats, filters and freezing still apply.
@@ -251,12 +252,12 @@ export function formatSelection(a: FormatAction, c: SheetCtx) {
         break;
       }
       case "filter": {
-        if (tab.meta.filter) {
-          apply(tabPatchOps(model, activeTabId, { filter: null }));
+        if (filter) {
+          c.setFilter(null);
           break;
         }
         const region = rect.r0 === rect.r1 && rect.c0 === rect.c1 ? dataRegion(tab, rect.c0, rect.r0) : rect;
-        apply(tabPatchOps(model, activeTabId, { filter: { row: region.r0, c0: region.c0, c1: region.c1, hidden: {} } as any }));
+        c.setFilter({ row: region.r0, c0: region.c0, c1: region.c1, hidden: {} }, "shared");
         break;
       }
       case "freeze": {
@@ -491,6 +492,8 @@ export type SheetState = {
   readOnly: boolean;
   readOnlyDoc: boolean;
   hiddenRows: Set<number>;
+  /** The filter this person sees: the tab's, or their own (useSheetFilter). */
+  filter?: TabFilter;
 };
 
 type Cell = { col: number; row: number };
@@ -527,6 +530,8 @@ export type SheetCtx = {
   openCellComment: () => void;
   /** Open the conditional color rules panel. */
   openRules: () => void;
+  /** Set or clear the filter this person sees (their own view while they have one, else the tab's). */
+  setFilter: SetFilter;
 };
 
 /**

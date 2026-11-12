@@ -305,7 +305,7 @@ export function TabStrip({
   useWatchEffect(() => {
     if (!renameRequest) return;
     const t = tabs.find((x) => x.id === renameRequest);
-    if (t && !t.query) {
+    if (t) {
       setDraft(t.name);
       setRenaming(t.id);
     }

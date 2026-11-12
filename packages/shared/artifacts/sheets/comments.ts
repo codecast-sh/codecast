@@ -4,7 +4,7 @@
 // wherever its cell goes, so sorts, inserts, moves and their undo carry it, and
 // a pinned thread no cell carries had its cell deleted: it sits nowhere.
 import type { ArtifactOp } from "../core";
-import { cellKey, parseKey } from "./refs";
+import { cellKey, parseKey, tabKey } from "./refs";
 import { buildModel, cellNum, type CellEl, type SheetModel } from "./model";
 import { tabPatchOps } from "./ops";
 
@@ -18,10 +18,19 @@ export function cellThreads(el: CellEl | undefined): string[] {
 export function pinCommentOps(model: SheetModel, threads: ReadonlyArray<{ key: string; anchor?: unknown }>): ArtifactOp[] {
   const cells = new Map<string, { el?: CellEl; list: string[]; tab: string; col: number; row: number }>();
   const pins = new Map<string, Set<string>>();
+  const carried = threads.length ? carriedThreads(model) : new Map();
   for (const th of threads) {
     const k = typeof th.anchor === "string" ? parseKey(th.anchor) : null;
     const t = k?.type === "cell" ? model.byId.get(k.tab) : undefined;
     if (k?.type !== "cell" || !t || t.meta.pinned?.includes(th.key)) continue;
+    // A thread a cell already carries (stamped before tabs listed their pins) is only listed, never stamped twice.
+    const held = carried.get(th.key);
+    if (held) {
+      const pinned = pins.get(held.tab) ?? new Set(model.byId.get(held.tab)?.meta.pinned ?? []);
+      pinned.add(th.key);
+      pins.set(held.tab, pinned);
+      continue;
+    }
     const key = cellKey(k.tab, k.col, k.row);
     const at = cells.get(key) ?? { el: t.cells.get(cellNum(k.col, k.row)), list: cellThreads(t.cells.get(cellNum(k.col, k.row))), tab: k.tab, col: k.col, row: k.row };
     if (!at.list.includes(th.key)) at.list = [...at.list, th.key];
@@ -36,7 +45,13 @@ export function pinCommentOps(model: SheetModel, threads: ReadonlyArray<{ key: s
     if (cellThreads(c.el).length === c.list.length) continue;
     ops.push(c.el ? { k: key, set: { cm } } : { k: key, put: { kind: "cell", cm } });
   }
-  for (const [tab, keys] of pins) ops.push(...tabPatchOps(model, tab, { pinned: [...keys] }));
+  // Only the pinned list changes: a field write, so a page whose copy of the tab is stale can't undo someone's filter or freeze.
+  // A tab that exists only implicitly (no element yet) gets its element written whole.
+  for (const [tab, keys] of pins) {
+    const meta = model.byId.get(tab)?.meta;
+    if (meta && meta.order !== Number.MAX_SAFE_INTEGER) ops.push({ k: tabKey(tab), set: { pinned: [...keys] } });
+    else ops.push(...tabPatchOps(model, tab, { pinned: [...keys] }));
+  }
   return ops;
 }
 

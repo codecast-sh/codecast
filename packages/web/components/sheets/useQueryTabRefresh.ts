@@ -7,6 +7,7 @@ import { useMutation } from "convex/react";
 import { makeFunctionReference } from "convex/server";
 import type { TabMeta } from "@codecast/shared/artifacts/sheets";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 
 const refreshRef = makeFunctionReference<"mutation", { doc_id: string; tab: string }, { rows?: number; changed?: number; skipped?: boolean }>("sheetQueries:refresh");
 const STALE_MS = 60_000;
@@ -46,4 +47,17 @@ export function useQueryTabRefresh(docId: string, meta: TabMeta, readOnly: boole
   }, [isQuery, readOnly, meta.id, docId, querySig]);
 
   return { refreshing, refresh, lastError };
+}
+
+/**
+ * The workspace project a sheet's folder belongs to, by its title (what a
+ * query names a project by): the project whose path is the sheet's folder or
+ * holds it. Undefined when none does, so a new live tab starts on all projects.
+ */
+export function useProjectTitleFor(path: string | undefined): string | undefined {
+  const projects = useWorkspaceCollection<{ title?: string; project_path?: string; status?: string }>("projects", (p) => `${p.title}|${p.project_path}|${p.status}`);
+  if (!path) return undefined;
+  const hits = projects.filter((p) => p.title && p.project_path && p.status !== "archived" && (path === p.project_path || path.startsWith(`${p.project_path}/`)));
+  // The deepest folder wins: a project for a package beats one for the whole repo.
+  return hits.sort((a, b) => b.project_path!.length - a.project_path!.length)[0]?.title;
 }

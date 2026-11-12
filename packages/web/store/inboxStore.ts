@@ -1823,6 +1823,9 @@ export type AnchorPanelTarget = { kind: "anchor"; id: string } | { kind: "sessio
 
 export type ClientUI = {
   theme?: "light" | "dark";
+  // Personal sheet filters, by "<docId>:<tabId>" (components/sheets/useSheetFilter):
+  // a person's own view of a tab's rows, hidden from nobody else.
+  sheet_filters?: Record<string, unknown>;
   // The person's own keyboard bindings over the defaults
   // (@codecast/shared/contracts/keyBindings). Stamped: follows them to every
   // device, and `cast shortcuts` writes the same key from any session.

@@ -1,7 +1,7 @@
 // The sheet's menus and small panels: tab and cell menus, the filter panel,
 // the filter buttons and the find bar.
 import { useMemo, useState } from "react";
-import { CalendarDays, Check, ChevronRight, ClipboardPaste, Copy, Eye, EyeOff, MessageSquare, Filter as FilterIcon, ListChecks, Scissors, X } from "lucide-react";
+import { CalendarDays, Check, ChevronRight, ClipboardPaste, Copy, Eye, EyeOff, MessageSquare, Filter as FilterIcon, ListChecks, Scissors, User, Users, X } from "lucide-react";
 import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
 import { a1, COND_RULE_NAMES, condPlaceholder, condTakesValue, type CondRule, type SheetModel, type TabData } from "./sheetCore";
@@ -146,13 +146,16 @@ export function PasteHint() {
 /** Conditions a filter can keep rows by: the rules that look at a value alone. */
 const FILTER_RULES: CondRule[] = ["gt", "lt", "between", "eq", "ne", "contains", "empty", "filled", "before", "after"];
 
-export function FilterPanel({ values, hidden, when, onApply, onSort }: {
+export function FilterPanel({ values, hidden, when, personal, onApply, onSort }: {
   values: Array<{ text: string; count: number }>;
   hidden: string[];
   when?: { rule: CondRule; value?: string | number };
-  onApply: (hidden: string[], when: { rule: CondRule; value?: string | number } | null) => void;
+  /** The filter shown is this person's own view rather than the tab's. */
+  personal: boolean;
+  onApply: (hidden: string[], when: { rule: CondRule; value?: string | number } | null, scope: "shared" | "mine") => void;
   onSort: (desc: boolean) => void;
 }) {
+  const [scope, setScope] = useState<"shared" | "mine">(personal ? "mine" : "shared");
   const [off, setOff] = useState(() => new Set(hidden));
   const [q, setQ] = useState("");
   const [rule, setRule] = useState<CondRule | "">(when?.rule ?? "");
@@ -161,7 +164,7 @@ export function FilterPanel({ values, hidden, when, onApply, onSort }: {
   const apply = () => {
     const v = value.trim();
     const n = Number(v);
-    onApply([...off], rule && (!condTakesValue(rule) || v) ? { rule, ...(condTakesValue(rule) ? { value: v !== "" && Number.isFinite(n) && rule !== "contains" && rule !== "eq" && rule !== "ne" ? n : v } : {}) } : null);
+    onApply([...off], rule && (!condTakesValue(rule) || v) ? { rule, ...(condTakesValue(rule) ? { value: v !== "" && Number.isFinite(n) && rule !== "contains" && rule !== "eq" && rule !== "ne" ? n : v } : {}) } : null, scope);
   };
   return (
     <div className="sheet-filter-panel" data-sheet-filter-panel>
@@ -200,6 +203,14 @@ export function FilterPanel({ values, hidden, when, onApply, onSort }: {
             </button>
           );
         })}
+      </div>
+      <div className="sheet-filter-scope" role="radiogroup" aria-label="Who sees this filter">
+        {(["shared", "mine"] as const).map((x) => (
+          <button key={x} type="button" role="radio" aria-checked={scope === x} className={scope === x ? "is-on" : ""} onClick={() => setScope(x)}>
+            {x === "shared" ? <Users className="w-3.5 h-3.5" /> : <User className="w-3.5 h-3.5" />}
+            {x === "shared" ? "Everyone" : "Only me"}
+          </button>
+        ))}
       </div>
       <button type="button" className="sheet-filter-ok" onClick={apply}>Apply</button>
     </div>

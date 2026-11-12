@@ -573,3 +573,6 @@ button.sheet-query-chip.is-menu:hover { background: color-mix(in srgb, var(--sol
 .sheet-find-count { min-width: 40px; text-align: right; color: var(--sol-text-dim); font-size: 11px; font-variant-numeric: tabular-nums; }
 .sheet-find button { display: inline-flex; padding: 4px; border-radius: 6px; color: var(--sol-text-muted); }
 .sheet-find button:hover { background: var(--sol-bg-alt); color: var(--sol-text); }
+.sheet-filter-scope { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: var(--sol-bg-alt); }
+.sheet-filter-scope button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 24px; border-radius: 5px; font-size: 12px; color: var(--sol-text-muted); }
+.sheet-filter-scope button.is-on { background: var(--sol-card, var(--sol-bg)); color: var(--sol-text); box-shadow: 0 0 0 1px color-mix(in srgb, var(--sol-border) 60%, transparent); }
