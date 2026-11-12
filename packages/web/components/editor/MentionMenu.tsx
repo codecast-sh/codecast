@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef } from "react";
 import type { MentionItem } from "../../lib/mentionItem";
 import { groupMentionItems } from "../../lib/mentionRanking";
 import { KeyCap } from "../KeyboardShortcutsHelp";
+import { isMac } from "../../shortcuts";
 import { MentionDetail, MentionSuggestion } from "./MentionSuggestion";
 
 type MenuItem = Omit<MentionItem, "id"> & { id?: string; description?: string };
@@ -13,12 +14,14 @@ type MenuItem = Omit<MentionItem, "id"> & { id?: string; description?: string };
 // `items` must already be in orderMentionItems order, so a selected index
 // names the same row here as in the caller's key handler.
 export function MentionMenu({
-  items, selectedIndex, onHover, onPick, query, loading, contextTitle, heading, className, style,
+  items, selectedIndex, onHover, onPick, onAskReply, query, loading, contextTitle, heading, className, style,
 }: {
   items: MenuItem[];
   selectedIndex: number;
   onHover: (index: number) => void;
   onPick: (index: number) => void;
+  /** Chat: insert the session as an address, so the line asks it to reply. */
+  onAskReply?: (index: number) => void;
   query?: string;
   /** A server search is still out: the list may grow. */
   loading?: boolean;
@@ -43,6 +46,7 @@ export function MentionMenu({
     ? [{ key: "all", title: heading, items }]
     : groupMentionItems(items, contextTitle);
   const selected = items[selectedIndex];
+  const canAskReply = !!onAskReply && selected?.type === "session" && !!selected.shortId;
   let index = 0;
 
   return (
@@ -88,8 +92,24 @@ export function MentionMenu({
       )}
       <div className="border-t border-sol-border/40 px-3 h-7 flex items-center gap-3 text-meta text-sol-text-dim">
         <span className="flex items-center gap-1"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap> move</span>
-        <span className="flex items-center gap-1"><KeyCap size="xs">↵</KeyCap> insert</span>
-        <span className="flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> close</span>
+        {canAskReply ? (
+          <>
+            <span className="flex items-center gap-1"><KeyCap size="xs">↵</KeyCap> mention</span>
+            <button
+              type="button"
+              data-ask-reply
+              onMouseDown={(e) => { e.preventDefault(); onAskReply!(selectedIndex); }}
+              className="-mx-1 px-1 h-5 rounded flex items-center gap-1 text-sol-cyan hover:bg-sol-cyan/10"
+            >
+              <KeyCap size="xs">{isMac ? "⇧" : "Shift"}</KeyCap><KeyCap size="xs">↵</KeyCap> ask to reply
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="flex items-center gap-1"><KeyCap size="xs">↵</KeyCap> insert</span>
+            <span className="flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> close</span>
+          </>
+        )}
         <span className="ml-auto flex items-center gap-1.5" role="status">
           {loading ? (
             <>

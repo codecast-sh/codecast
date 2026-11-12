@@ -2,14 +2,13 @@ import { useState, type ComponentType } from "react";
 import Link from "next/link";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { copyToClipboard } from "../lib/utils";
 import { track } from "../lib/analytics";
-import { useWatchEffect } from "../hooks/useWatchEffect";
 import { cliJustConnected, markCliConnected } from "../lib/cliConnected";
 import { bridge, type DaemonSetupState } from "../lib/desktop";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { MessageSquare, TerminalSquare } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
+import { ConnectMachine } from "./ConnectMachine";
 import { useIsModernStyle } from "../hooks/useVisualStyle";
 import { Button } from "./ui/button";
 import { EmptyState as ModernEmptyState } from "./ui/empty-state";
@@ -140,103 +139,21 @@ const setupButtonClass = (accent?: boolean) =>
   accent ? "tf-primary text-sm font-medium rounded-xl" : "bg-sol-yellow/20 hover:bg-sol-yellow/30 text-sol-yellow text-sm font-medium rounded-xl border border-sol-yellow/30 transition-colors";
 
 function SetupTokenCommand({ onStart, accent, auto }: { onStart?: () => void; accent?: boolean; auto?: boolean }) {
-  const [copied, setCopied] = useState(false);
-  const [setupToken, setSetupToken] = useState<string | null>(null);
-  const [tokenExpiry, setTokenExpiry] = useState<number | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
-
-  const createSetupToken = useMutation(api.apiTokens.createSetupToken);
-
-  const handleCopy = async (text: string) => {
-    await copyToClipboard(text);
-    track("install_command_copied", { location: "onboarding_empty_state", platform: "unix", with_token: true });
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const generateSetupToken = async () => {
-    onStart?.();
-    setIsGenerating(true);
-    try {
-      const result = await createSetupToken({});
-      setSetupToken(result.token);
-      setTokenExpiry(result.expiresAt);
-    } finally {
-      setIsGenerating(false);
-    }
-  };
-  // On a screen whose whole job is this install (the setup flow), the command
-  // is ready on arrival instead of behind a button.
-  useMountEffect(() => {
-    if (auto) void generateSetupToken();
-  });
-
-  const [now, setNow] = useState(Date.now());
-  useWatchEffect(() => {
-    if (!tokenExpiry) return;
-    const remaining = tokenExpiry - Date.now();
-    if (remaining <= 0) return;
-    const timer = setTimeout(() => setNow(Date.now()), remaining + 100);
-    return () => clearTimeout(timer);
-  }, [tokenExpiry]);
-  const isTokenExpired = tokenExpiry ? now > tokenExpiry : false;
-  const hasValidToken = setupToken && !isTokenExpired;
-  const installCommand = hasValidToken
-    ? `curl -fsSL codecast.sh/install | sh -s -- ${setupToken}`
-    : null;
-
-  if (!hasValidToken) {
+  const [shown, setShown] = useState(!!auto);
+  if (!shown) {
     return (
       <button
-        onClick={generateSetupToken}
-        disabled={isGenerating}
-        className={`w-full px-4 py-3 ${setupButtonClass(accent)} disabled:opacity-50 flex items-center justify-center gap-2`}
+        onClick={() => {
+          onStart?.();
+          setShown(true);
+        }}
+        className={`w-full px-4 py-3 ${setupButtonClass(accent)}`}
       >
-        {isGenerating ? (
-          <>
-            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-            Generating...
-          </>
-        ) : (
-          "Generate install command"
-        )}
+        Show install command
       </button>
     );
   }
-
-  return (
-    <div className="space-y-2">
-      <div className="rounded-xl overflow-hidden border border-sol-border/80">
-        <div className="flex items-center justify-between gap-3 bg-sol-bg-inset px-4 py-3">
-          <code className="text-sol-text text-sm font-mono truncate">
-            <span className="text-sol-text-dim select-none">$ </span>
-            curl -fsSL codecast.sh/install | sh -s -- <span className="text-sol-green">{setupToken?.slice(0, 8)}...</span>
-          </code>
-          <button
-            onClick={() => handleCopy(installCommand!)}
-            className="p-1.5 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight rounded-md transition-colors shrink-0"
-            title="Copy to clipboard"
-          >
-            {copied ? (
-              <svg className="w-4 h-4 text-sol-green" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-              </svg>
-            ) : (
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-              </svg>
-            )}
-          </button>
-        </div>
-      </div>
-      <p className="text-xs text-sol-text-dim text-center">
-        Token expires in 60 minutes
-      </p>
-    </div>
-  );
+  return <ConnectMachine location="onboarding_empty_state" />;
 }
 
 const SETUP_ERRORS = ["invalid_token", "unsupported_platform", "installer_failed"] as const;
@@ -262,7 +179,7 @@ export function SetupThisMachine({ onConnected, onStart, accent, auto }: { onCon
             Setup did not finish from here. Paste this in a terminal instead:
           </p>
         )}
-        <SetupTokenCommand onStart={phase === "failed" ? undefined : onStart} accent={accent} auto={auto && phase !== "failed"} />
+        <SetupTokenCommand onStart={phase === "failed" ? undefined : onStart} accent={accent} auto={auto || phase === "failed"} />
       </>
     );
   }
