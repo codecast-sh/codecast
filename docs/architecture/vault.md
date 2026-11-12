@@ -110,6 +110,7 @@ One row per secret in `secrets`:
 | `status` | `ready` or `requested` (a request with no value yet) |
 | `fingerprint` | first 4 and last 4 of a key, so a person can tell which one is stored without revealing it |
 | `ask_first` | an agent's read needs a person's approval, once per session (see Ask first) |
+| `touch_id` | revealing it, approving an Ask first read of it and turning either guard off take a passkey (see Touch ID); independent of `ask_first` |
 | `has_otp`, `version_count` | stored when the value is written, so metadata never decrypts: whether a login holds a 2FA seed, and how many previous values `secret_versions` keeps |
 | `value_updated_at` | when the value last changed (create, rotate, fill, refresh, restore): the version a sign-in's write-back names, always past the one it replaces, so two writes in one millisecond still differ. `updated_at` also moves on a metadata edit and is for display |
 | bookkeeping | `created_by`, `updated_by`, `updated_at`, `rotated_at`, `last_used_at`, `last_used_by_session`, `use_count`, `short_id` (`sec-N`); a request's first asker in `requested_by` and `requested_from_conversation`, every later asking session in `also_requested_from` |
@@ -425,11 +426,20 @@ notified or blamed by them.
 
 Signed in is not enough for the presses that open a guarded secret, because
 an agent can drive the person's own signed-in Chrome (`cast browser`) and the
-server cannot tell its clicks from theirs. Revealing an Ask first secret,
-approving an Ask first decision and switching Ask first off each take a
-passkey assertion (Touch ID, Face ID or a security key), which a script cannot
-produce; so do removing a passkey and adding a second one (decision sd-1359).
-Deny and dismiss stay one press, and switching Ask first on needs nothing.
+server cannot tell its clicks from theirs. A passkey assertion (Touch ID, Face
+ID or a security key) is what a script cannot produce, so a secret can carry
+Touch ID as its own switch (`touch_id`, `secrets.setTouchId`), separate from
+Ask first: Ask first says who must approve an agent's read, Touch ID says how
+a person's press proves it is theirs. With Touch ID on, revealing the value,
+approving an Ask first decision for it and switching either guard off each
+take an assertion; with it off, those are one press (an agent-driven tab still
+holds them, `lib/agentTabGuard`). Removing a passkey and adding a second one
+always take one (decision sd-1359). Deny and dismiss stay one press, and
+switching either guard on needs nothing. Secrets made before the split have
+Touch ID off. The decision an Ask first read files carries `touch_id` while
+its secret has it on (`askFirstGate`, kept in step by `setTouchId`), which is
+how every client knows whether its Approve asks (`approveNeedsPresence` in
+`shared/contracts/commandRun.ts`).
 
 - `passkeys` (`convex/passkeysSchema.ts`): one WebAuthn credential per row,
   the person's own with no workspace: public key, signature counter,
@@ -461,9 +471,10 @@ Deny and dismiss stay one press, and switching Ask first on needs nothing.
   patch's gate and writes to no row). The string is in no query, no
   challenge and no `/confirm` URL, so an agent holding the person's session
   token can watch the challenge turn granted but cannot spend it.
-- The gates (`lib/presence.ts`): `secrets.reveal` of an Ask first secret
-  (`recordReads`, before the reveal is recorded), `setAskFirst` off (so the
-  web's dispatch side effect too), an Approve through `resolve` or the
+- The gates (`lib/presence.ts`): `secrets.reveal` of a Touch ID secret
+  (`recordReads`, before the reveal is recorded), `setAskFirst` off on a
+  Touch ID secret and `setTouchId` off (so the web's dispatch side effects
+  too), an Approve of a Touch ID secret's read through `resolve` or the
   dispatch rail (`secretApprovalRefusal` checks, `settleSecretApproval` uses
   it up), `passkeys.remove`, and an enrollment when a passkey exists, which
   spends its add_passkey grant when it begins (`openChallenge`, recorded as
@@ -503,6 +514,38 @@ Deny and dismiss stay one press, and switching Ask first on needs nothing.
   challenge. Settings > Accounts lists passkeys (rename, Remove with Touch ID,
   or one press for a grant-less one, Add, and how long a new one waits). A
   cancelled confirm answers `NOT_CONFIRMED` and sends nothing.
+- Device keys (`convex/deviceKeys.ts`): the desktop app and the phone confirm
+  without a browser. Each holds a P-256 key that signs only after the system
+  prompt: the Mac's in its Secure Enclave (`electron/native/deviceKey.swift`,
+  CryptoKit's encrypted blob in the app's data folder, `.userPresence`), the
+  phone's in its keychain behind biometry (`mobile/lib/deviceKey.ts`,
+  expo-secure-store `requireAuthentication`, made from expo-crypto's random
+  bytes, so a binary without expo-crypto keeps the browser path). A device key
+  is a `passkeys` row of kind `device_key` (public key, credential id = its
+  SHA-256), kept out of every WebAuthn option list. It signs
+  `deviceKeyMessage(purpose, challenge)` (`shared/contracts/secrets.ts`); the
+  Electron main process builds those bytes itself, so the page names only the
+  challenge and the prompt's words. `deviceKeys.register` verifies a signature
+  over the register challenge (setting up takes the finger too) and stores it
+  through `storePasskey`, so a second credential spends an add_passkey grant
+  as any passkey does; `deviceKeys.confirm` verifies one over a presence
+  challenge and grants it through `grantPresence`. Both need the challenge's
+  own person signed in. The shared client flow is `web/lib/deviceKeyPresence`:
+  a key the server knows signs at once; with no credential at all it sets up
+  at once; with a passkey elsewhere it offers to set up here, which spends one
+  confirmation the old way, once.
+- Another device can answer. `presenceBegin` records the asking device
+  (`from`, shown on /confirm and the phone). `passkeys.waiting` lists the
+  person's pending presence challenges, and the phone shows the newest one
+  another device opened (`mobile/components/PresenceRequests`) for Face ID.
+  `passkeys.askPhone` pushes one to the phone, once per challenge: the desktop
+  handoff sends it on its own, /confirm has Send to my phone, and the web
+  offers Use phone when its own ceremony did not finish (a computer with no
+  passkey shows a QR code). The grant string never leaves the asker.
+- /confirm starts the ceremony on load in a focused tab, or on the tab's
+  first focus; a browser that wants a press refuses quietly and the button
+  stays. A passkey made there for the desktop app is named for the machine
+  that asked ("Chrome on MacBook-Pro-2").
 
 ## Previous values
 
