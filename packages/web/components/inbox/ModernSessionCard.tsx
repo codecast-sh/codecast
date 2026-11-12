@@ -254,8 +254,8 @@ export function ModernSessionCardView({
   chips.push(<ModernCommentsChip key="comments" session={session} viewerId={viewerId} onOpenComments={onOpenComments} />);
 
   const lead = nested ? (
-    <svg className={`w-3.5 h-3.5 ${subRow === "trigger" ? "text-sol-amber" : "text-sol-violet"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.4} role="img" aria-label={subRow === "trigger" ? "Trigger session" : roleAbove ? `Reports to @${roleAbove.handle}` : "Subagent"}>
-      <title>{subRow === "trigger" ? "Session driven by the trigger above" : roleAbove ? `Reports to @${roleAbove.handle}` : `Subagent · ${agentWord}`}</title>
+    <svg className={`w-3.5 h-3.5 ${subRow === "trigger" ? "text-sol-amber" : "text-sol-violet"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.4} role="img" aria-label={subRow === "trigger" ? "Trigger session" : roleAbove ? `Reports to @${roleAbove.handle}` : subRow === "worker" ? "Worker" : "Subagent"}>
+      <title>{subRow === "trigger" ? "Session driven by the trigger above" : roleAbove ? `Reports to @${roleAbove.handle}` : subRow === "worker" ? `Worker spawned by the session above · ${agentWord}` : `Subagent · ${agentWord}`}</title>
       {SUB_ARROW}
     </svg>
   ) : isPersonified ? (

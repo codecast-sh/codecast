@@ -1884,6 +1884,8 @@ describe("kill/stash cascade takes the whole nested group", () => {
       [TEAMMATE]: mk(TEAMMATE, { spawned_by_conversation_id: LEAD, agent_team_name: "session-team", agent_name: "review-worker" }),
       // cast-spawn lineage: spawned_by WITHOUT a team name stays first-class
       // (nestParentIdOf's agent_team_name gate) — the cascade must not take it.
+      // The web list folds it under the lead for display only
+      // (inboxStore.isSpawnedWorker); kills keep the shared rule.
       [SPAWN_NO_TEAM]: mk(SPAWN_NO_TEAM, { spawned_by_conversation_id: LEAD }),
       [SPAWN_TEAM_LEAD]: mk(SPAWN_TEAM_LEAD, { spawned_by_conversation_id: LEAD, agent_team_name: "own-team", agent_name: "team-lead" }),
       [FORK]: mk(FORK, { forked_from: LEAD }),
