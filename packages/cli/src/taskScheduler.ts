@@ -24,7 +24,10 @@ const execAsync = (cmd: string, opts?: Record<string, any>) => _execAsync(cmd, {
 
 const POLL_INTERVAL_MS = 30_000;
 const HEARTBEAT_INTERVAL_MS = 60_000;
-const MAX_CONCURRENCY = 2;
+/** Fresh agents one poll may start, so a burst of due runs is paced 30s apart. It never counts runs already going: a
+ *  cap on live runs let two long ones (a 4h paced X-reply run plus a 45 min one) hold every trigger on the machine,
+ *  prechecks and inject runs included, for hours (ct-92447, 2026-11-11). Load is the governor's call (startableDue). */
+const MAX_SPAWNS_PER_POLL = 2;
 /** While the machine is "over", a due run waits for room, but no longer than this: the level holds as long as any
  *  session is confined, so a Mac running hundreds of sessions can stay "over" all day (44 triggers up to 12 hours
  *  late, the Union line's slot governor among them, 2026-10-26). */
@@ -286,6 +289,8 @@ export class TaskScheduler {
   private running = new Map<string, RunningTask>();
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
+  /** A poll waits on prechecks and claims, so it can outlast the interval; the next tick skips rather than racing it. */
+  private polling = false;
   private skipLogged = new Set<string>();
   private runsFile: string;
   private adoptable: TrackedRun[];
@@ -344,8 +349,8 @@ export class TaskScheduler {
   }
 
   private async poll(): Promise<void> {
-    if (this.stopped) return;
-    if (this.running.size >= MAX_CONCURRENCY) return;
+    if (this.stopped || this.polling) return;
+    this.polling = true;
 
     try {
       // Over-fetch so ineligible tasks (wrong machine) can't shadow eligible
@@ -355,12 +360,16 @@ export class TaskScheduler {
 
       // At "over" due runs stay due, up to TRIGGER_STARVE_MS (startableDue).
       const eligible = dueTasks.filter((t) => !this.running.has(t._id) && this.canServeTask(t));
+      let spawned = 0;
       for (const task of startableDue(eligible, governor.admit("trigger"), Date.now())) {
-        if (this.running.size >= MAX_CONCURRENCY) break;
-        await this.executeTask(task);
+        // An inject run only enqueues a turn; it needs no room. A spawn past this poll's budget stays due for the next.
+        if (!task.originating_conversation_id && spawned >= MAX_SPAWNS_PER_POLL) continue;
+        if (await this.executeTask(task)) spawned++;
       }
     } catch (err) {
       this.log(`Poll error: ${err instanceof Error ? err.message : String(err)}`, "warn");
+    } finally {
+      this.polling = false;
     }
   }
 
@@ -404,11 +413,12 @@ export class TaskScheduler {
     return eligible;
   }
 
-  private async executeTask(task: any): Promise<void> {
+  /** Returns true when it started a fresh agent. */
+  private async executeTask(task: any): Promise<boolean> {
     const claimed = await this.syncService.claimTask(task._id, this.daemonId);
     if (!claimed) {
       this.log(`Failed to claim task ${task._id} (already claimed?)`);
-      return;
+      return false;
     }
 
     this.log(`Claimed task "${task.title}" (${task._id})`);
@@ -417,7 +427,7 @@ export class TaskScheduler {
     // clears it unless the firing continues a woken one); the polled copy may
     // hold an older run's. This firing's gate may set a new one.
     task.precheck_message = claimed?.precheck_message;
-    if (await this.precheckRefusedRun(task, claimed)) return;
+    if (await this.precheckRefusedRun(task, claimed)) return false;
 
     // --context current path: inject the prompt into the originating conversation
     // instead of spawning a fresh agent. The daemon's pending_messages subscription
@@ -467,7 +477,7 @@ export class TaskScheduler {
         this.log(`Failed to inject into conversation for task "${task.title}": ${msg}`, "error");
         await this.syncService.failTaskRun(task._id, this.daemonId, `Injection failed: ${msg}`);
       }
-      return;
+      return false;
     }
 
     // The claimed row is current: an event that fired between the poll and
@@ -480,7 +490,7 @@ export class TaskScheduler {
     if (task.project_path && !fs.existsSync(task.project_path)) {
       this.log(`project_path ${task.project_path} missing at spawn time for task "${task.title}"`, "error");
       await this.syncService.failTaskRun(task._id, this.daemonId, `project_path not found on this device: ${task.project_path}`);
-      return;
+      return false;
     }
     const cwd = task.project_path || process.env.HOME || "/tmp";
     const shortId = task._id.toString().slice(-6);
@@ -513,7 +523,7 @@ export class TaskScheduler {
     if (!hasTmux()) {
       this.log(`tmux not installed, cannot run task "${task.title}"`, "error");
       await this.syncService.failTaskRun(task._id, this.daemonId, "tmux is not installed");
-      return;
+      return false;
     }
 
     // Spawn through the shared delivery primitive: it re-validates the cwd (the
@@ -545,7 +555,7 @@ export class TaskScheduler {
     if (!spawn.ok) {
       this.log(`Failed to spawn tmux for task "${task.title}": ${spawn.reason}`, "error");
       await this.syncService.failTaskRun(task._id, this.daemonId, `Failed to spawn tmux session: ${spawn.reason}`);
-      return;
+      return false;
     }
     this.log(`Spawned tmux session ${tmuxSession} for task "${task.title}"`);
 
@@ -556,6 +566,7 @@ export class TaskScheduler {
       maxRuntimeMs: task.max_runtime_ms || 10 * 60 * 1000,
       runSessionUuid,
     });
+    return true;
   }
 
   private track(run: TrackedRun): void {

@@ -725,3 +725,57 @@ describe("due runs while the machine is over (startableDue)", () => {
     expect(startableDue([due[0]], false, now)).toEqual([]);
   });
 });
+
+describe("runs already going never hold due triggers (ct-92447)", () => {
+  // 2026-11-11: a 4h paced X-reply run and a 45 min run held both slots of a fixed live-run cap, so from 22:16 UTC the
+  // poll returned before reading the queue: monitors' prechecks never ran, one-shots never fired, `trigger run` sat.
+  const longRun = (id: string) => ({ taskId: id, tmuxSession: `ct-claude-${id}`, startedAt: Date.now(), maxRuntimeMs: 4 * 3600_000 });
+
+  it("still injects and still runs prechecks while long runs are live", async () => {
+    const inject = { ...spawnTask("inj"), originating_conversation_id: "conv1" };
+    const gated = { ...spawnTask("gated", dir), schedule_type: "recurring", precheck: "exit 1" };
+    const { scheduler, calls } = makeScheduler([inject, gated], { claimResult: (t) => t });
+    scheduler.track(longRun("a"));
+    scheduler.track(longRun("b"));
+    scheduler.track(longRun("c"));
+    try {
+      await scheduler.poll();
+      expect(calls.claimed).toEqual(["inj", "gated"]);
+      expect(calls.injected).toEqual(["conv1"]);
+      expect(calls.skipped.map((s) => s.taskId)).toEqual(["gated"]);
+    } finally {
+      scheduler.stop();
+    }
+  });
+
+  it("paces fresh agents per poll, leaving the rest due, without starving injects behind them", async () => {
+    const due = [spawnTask("s1"), spawnTask("s2"), spawnTask("s3"), { ...spawnTask("inj"), originating_conversation_id: "conv1" }];
+    const { scheduler } = makeScheduler(due);
+    const started: string[] = [];
+    scheduler.executeTask = async (t: any) => {
+      started.push(t._id);
+      return !t.originating_conversation_id;
+    };
+    await scheduler.poll();
+    expect(started).toEqual(["s1", "s2", "inj"]);
+  });
+
+  it("a tick that lands while a poll still waits on prechecks skips instead of racing it", async () => {
+    const { scheduler } = makeScheduler([spawnTask("s1")]);
+    let release!: () => void;
+    let runs = 0;
+    scheduler.executeTask = () => {
+      runs++;
+      if (runs > 1) return Promise.resolve(false);
+      return new Promise<boolean>((r) => (release = () => r(false)));
+    };
+    const first = scheduler.poll();
+    await new Promise((r) => setTimeout(r, 0));
+    await scheduler.poll();
+    expect(runs).toBe(1);
+    release();
+    await first;
+    await scheduler.poll();
+    expect(runs).toBe(2);
+  });
+});
