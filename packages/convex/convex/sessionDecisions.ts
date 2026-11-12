@@ -1024,6 +1024,8 @@ export type AskArgs = {
   card?: ChangeCard;
   /** A cast command for a person to run (`cast decide --run`): the line as the agent wrote it, parsed here (commandRun.ts). */
   run?: string;
+  /** Where the run goes (`cast decide --run --on`): `laptop` or a machine of the person's; default the session's own (lib/commandRuns.resolveRunDevice). */
+  run_on?: string;
   blocking?: boolean;
   /** A pointer card: answering resolves it and delivers nothing into the
    *  asking session (a staffing proposal's queue card, org-staffing.md S4). */
@@ -1166,8 +1168,13 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   const assigned = assignCategory({ question: args.question, options: args.options, context_md: args.context_md }, args.category);
   // Running a command in the person's name is always the person's (never a role's under a grant).
   const { category, pinned } = parsedRun && !isProtectedCategory(assigned.category) ? { category: "access", pinned: true } : assigned;
+  const runDevice = parsedRun && args.run_on
+    ? resolveRunDevice(await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", auth.userId)).collect(), conversation.owner_device_id, args.run_on)
+    : { device_id: conversation.owner_device_id };
+  if ("error" in runDevice) return { error: runDevice.error };
+  const elsewhere = runDevice.device_id !== conversation.owner_device_id;
   const run: CommandRun | undefined = parsedRun
-    ? { argv: parsedRun.argv, state: "waiting", device_id: conversation.owner_device_id, cwd: conversation.git_root ?? conversation.project_path, at: now }
+    ? { argv: parsedRun.argv, state: "waiting", device_id: runDevice.device_id, ...(elsewhere ? {} : { cwd: conversation.git_root ?? conversation.project_path }), at: now }
     : undefined;
 
   // Re-asking the same question from the same session updates the open row

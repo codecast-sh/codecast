@@ -720,9 +720,10 @@ export async function readPushableCredentialAsync(): Promise<{ cred: string | nu
   return gatePushableCredential((fleetOnPoolCopy() ? null : await readFleetCredentialAsync()) ?? (await readLocalCredentialAsync()));
 }
 
-/** The fleet runs on a teammate's pooled account (ccPool.ts). Its token goes
- *  only to machines the server sealed a copy for, never on to this machine's
- *  hosts, where a take-back could not reach it; they keep this machine's own login. */
+/** The fleet runs on a pool copy (ccPool.ts). Its token goes only to machines
+ *  the server sealed a copy for, never on to this machine's hosts, where a
+ *  take-back could not reach it; a host gets its own copies of its owner's
+ *  accounts from the pool, and otherwise keeps this machine's own login. */
 function fleetOnPoolCopy(): boolean {
   const profile = readFleetState()?.profile;
   return !!profile && !!readProfileIndex().profiles[profile]?.pool_share_id;

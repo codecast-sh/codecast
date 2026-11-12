@@ -601,7 +601,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     setAcTrigger(null);
   }, [acTrigger, acItems, acServerLoading, acQuery]);
 
-  const applyAutocomplete = useCallback((item: AcItem) => {
+  const applyAutocomplete = useCallback((item: AcItem, opts?: { askReply?: boolean }) => {
     if (!acTrigger) return;
     const before = message.slice(0, acTrigger.startPos);
     const cursorPos = textareaRef.current?.selectionStart ?? message.length;
@@ -623,8 +623,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       // anchor's label never did, which is how "@[Anchor] hi" woke nothing.
       // A role is the same shape: `@growth` wakes it, `@[Growth or-3]` is prose.
       inserted = `@${item.handle} `;
-    } else if (chatMentionMode && item.type === "session" && item.shortId) {
-      // Only the bare 7-char short id resolves to a session in chat.
+    } else if (chatMentionMode && item.type === "session" && item.shortId && opts?.askReply) {
+      // The address form: the one way a chat line asks a session to reply
+      // (lib/sessionReplyDraft). Picking a session plainly names it below.
       inserted = `@${item.shortId} `;
     } else if (item.type === "file" || item.type === "skill") {
       inserted = `@${item.label} `;
@@ -2166,7 +2167,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       }
       if (e.key === "Enter") {
         e.preventDefault();
-        applyAutocomplete(acItems[clampedAcIndex]);
+        applyAutocomplete(acItems[clampedAcIndex], { askReply: e.shiftKey });
         return;
       }
       if (e.key === "Escape") {
@@ -2862,6 +2863,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   selectedIndex={clampedAcIndex}
                   onHover={setAcIndex}
                   onPick={(index) => applyAutocomplete(acItems[index])}
+                  onAskReply={chatMentionMode ? (index) => applyAutocomplete(acItems[index], { askReply: true }) : undefined}
                   query={acQuery}
                   loading={acTrigger.type === "@" && acServerLoading}
                   heading={acTrigger.type === "/" ? "Commands" : undefined}
