@@ -5,6 +5,8 @@ const source = readFileSync(new URL("../Sidebar.tsx", import.meta.url), "utf8");
 // The rail's row primitives (SectionRow, NavSection) live beside it.
 const primitives = readFileSync(new URL("../sidebar/navPrimitives.tsx", import.meta.url), "utf8");
 const chatNav = readFileSync(new URL("../sidebar/ChatNav.tsx", import.meta.url), "utf8");
+// The pinned rail (pinned chat rows) moved out of Sidebar.tsx.
+const pinnedRail = readFileSync(new URL("../sidebar/PinnedRail.tsx", import.meta.url), "utf8");
 const rowSignals = readFileSync(new URL("../../lib/chatRowSignals.tsx", import.meta.url), "utf8");
 
 function block(startMarker: string, endMarker: string, text = source) {
@@ -40,7 +42,7 @@ test("a row's control survives hover while its trailing marker steps aside", () 
 });
 
 test("both chat rows in the rail wear the same signals", () => {
-  const spreads = (source + chatNav).match(/\.\.\.\(?(?:live \? )?channelSignals\(/g) ?? [];
+  const spreads = (source + chatNav + pinnedRail).match(/\.\.\.\(?(?:live \? )?channelSignals\(/g) ?? [];
   expect(spreads.length).toBe(2);
 });
 

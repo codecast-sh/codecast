@@ -195,3 +195,41 @@ export function pickInheritedGitMeta(
     git_root: best?.git_root ?? null,
   };
 }
+
+export function matchesPathPrefix(projectPath: string | null | undefined, pathPrefix: string) {
+  return !!projectPath && (
+    projectPath === pathPrefix ||
+    projectPath.startsWith(pathPrefix + "/")
+  );
+}
+
+export function getConversationProjectPath(conv: { git_root?: string | null; project_path?: string | null }) {
+  return conv.git_root || conv.project_path || null;
+}
+
+export function getPathPrefixUpperBound(pathPrefix: string) {
+  return `${pathPrefix}\uffff`;
+}
+
+export function getRepoNameFromPath(path: string | null | undefined) {
+  if (!path) return null;
+  const parts = path.split("/").filter(Boolean);
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const part = parts[i];
+    if (!part.startsWith(".")) {
+      return part.toLowerCase();
+    }
+  }
+  return null;
+}
+
+export function getRepoKeyFromRemote(remote: string | null | undefined) {
+  if (!remote) return null;
+  const normalized = remote.trim().replace(/\/+$/, "");
+  const githubMatch = normalized.match(/github\.com[:/](.+?)(?:\.git)?$/i);
+  if (githubMatch?.[1]) {
+    return githubMatch[1].toLowerCase();
+  }
+  const genericMatch = normalized.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/);
+  return genericMatch?.[1]?.toLowerCase() || null;
+}

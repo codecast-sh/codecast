@@ -37,7 +37,10 @@ import { canSeeMemberSpend, fetchUserUsageDays } from "./lib/usageDaily";
 import { bucketPunchcardRows } from "./lib/activityPunchcard";
 import { ccAccountsValidator } from "./ccAccountsShared";
 import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
-import { conversationProjectRoot, foldCheckoutsByRepository, knownCheckoutRoots, pathWithinLocalRoots } from "./projectPaths";
+import {
+  conversationProjectRoot, foldCheckoutsByRepository, getConversationProjectPath, getPathPrefixUpperBound,
+  getRepoKeyFromRemote, getRepoNameFromPath, knownCheckoutRoots, matchesPathPrefix, pathWithinLocalRoots,
+} from "./projectPaths";
 import { bucketTs } from "./presenceState";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
 import { activeEnrollmentTeam, heartbeatTeamPolicy } from "./lib/teamPolicyGuard";
@@ -311,7 +314,6 @@ export const removeAlternateEmail = mutation({
     return { ok: true as const, email, remaining: left };
   },
 });
-
 
 // internal: had zero callers and was a public mutation that let anyone stamp
 // any user's daemon_last_seen. The real daemon-liveness write is daemonHeartbeat
@@ -1131,7 +1133,6 @@ export const sendDaemonCommandToAll = mutation({
   },
 });
 
-
 export const resumeSession = mutation({
   args: {
     conversation_id: v.id("conversations"),
@@ -1875,7 +1876,6 @@ export const getUserAbstractActivity = query({
       .slice(0, 3)
       .map(([hour]) => parseInt(hour));
 
-
     const daySet = new Set<string>();
     recentConversations.forEach(c => {
       const day = new Date(c.started_at).toISOString().split('T')[0];
@@ -2004,7 +2004,6 @@ export const getPublicActivityPunchcard = query({
     return bucketPunchcardRows(live, args.tz_offset_minutes ?? 0, sendDays, undefined, days);
   },
 });
-
 
 export const getUserTasks = query({
   args: {
@@ -2458,17 +2457,6 @@ export const getDirectoryTeamMappings = query({
 
 const DIRECTORY_MATCH_BATCH_SIZE = 32;
 
-function matchesPathPrefix(projectPath: string | null | undefined, pathPrefix: string) {
-  return !!projectPath && (
-    projectPath === pathPrefix ||
-    projectPath.startsWith(pathPrefix + "/")
-  );
-}
-
-function getConversationProjectPath(conv: { git_root?: string | null; project_path?: string | null }) {
-  return conv.git_root || conv.project_path || null;
-}
-
 // One walk over the viewer's most recently ACTIVE conversations, folded into
 // distinct projects. Keyed by git root when present, else project path. The
 // window is by updated_at, not creation time: a project whose sessions are
@@ -2531,33 +2519,6 @@ async function collectRecentProjects(ctx: QueryCtx, userId: Id<"users">, take = 
   }
 
   return Array.from(projectMap.values()).sort((a, b) => b.last_active - a.last_active);
-}
-
-function getPathPrefixUpperBound(pathPrefix: string) {
-  return `${pathPrefix}\uffff`;
-}
-
-function getRepoNameFromPath(path: string | null | undefined) {
-  if (!path) return null;
-  const parts = path.split("/").filter(Boolean);
-  for (let i = parts.length - 1; i >= 0; i--) {
-    const part = parts[i];
-    if (!part.startsWith(".")) {
-      return part.toLowerCase();
-    }
-  }
-  return null;
-}
-
-function getRepoKeyFromRemote(remote: string | null | undefined) {
-  if (!remote) return null;
-  const normalized = remote.trim().replace(/\/+$/, "");
-  const githubMatch = normalized.match(/github\.com[:/](.+?)(?:\.git)?$/i);
-  if (githubMatch?.[1]) {
-    return githubMatch[1].toLowerCase();
-  }
-  const genericMatch = normalized.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/);
-  return genericMatch?.[1]?.toLowerCase() || null;
 }
 
 async function getMatchingConversationsPage(
@@ -2806,7 +2767,6 @@ export const backfillDirectoryTeamMappingConversations = internalMutation({
   },
 });
 
-
 // The one write behind every "share this directory with a team" control
 // (web settings, the team setup flows, `cast teams map`). A mapping shares
 // every session in the directory, past included, unless `include_past` is
@@ -2945,7 +2905,6 @@ export async function upsertDirectoryMapping(
 
   return { success: true, action: existingMapping ? "updated" : "created", share_since: shareSince ?? null };
 }
-
 
 export const updateDirectoryTeamMapping = mutation({
   args: {
@@ -3618,7 +3577,6 @@ export async function performGetRecentProjectPaths(
     return recents;
   }
 }
-
 
 export const deleteAccount = mutation({
   args: {},
