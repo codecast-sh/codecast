@@ -8498,7 +8498,10 @@ async function executeRemoteCommand(
           error = "Missing session_id";
           break;
         }
-        if (conversationId) folderFetchFailures.forgetConversation(conversationId);
+        if (conversationId) {
+          folderFetchFailures.forgetConversation(conversationId);
+          (await import("./sessionTransfer.js")).forgetSessionFetchFailures(conversationId);
+        }
         // A backend switch is moving this session and brings it back itself. A Restart, an agent
         // switch or a repair now would rebuild or rebind it under the switch.
         if (backendSwitchHeld(sessionId, conversationId)) {
@@ -8955,11 +8958,21 @@ async function executeRemoteCommand(
           resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType, resumeOptions);
         } else {
           log(`[REMOTE] Force-resuming session ${sessionId.slice(0, 8)}${projectPath ? ` in ${projectPath}` : ""}`);
-          resumed = await autoResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType, resumeOptions);
-          if (!resumed) {
-            log(`[REMOTE] Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
-            resumed = await repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType, resumeOptions);
+          const outcome = await resumeOrRepair(
+            sessionId,
+            () => autoResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType, resumeOptions),
+            () => {
+              log(`[REMOTE] Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
+              return repairAndResumeSession(sessionId, "", readTitleCache(), projectPath, conversationId, resumeAgentType, resumeOptions);
+            },
+          );
+          if (outcome === "cancelled") {
+            log(`[REMOTE] Not resuming ${sessionId.slice(0, 8)}: its transcript transfer was cancelled`);
+            restartingSessionIds.delete(sessionId);
+            result = JSON.stringify({ skipped: true, reason: "transfer_cancelled" });
+            break;
           }
+          resumed = outcome !== null;
         }
         if (resumed) {
           if (conversationId) {
@@ -21076,6 +21089,9 @@ let resumeInnerForTests: typeof autoResumeSessionInner | null = null;
 const accountLifecycleGate = new AccountLifecycleGate();
 const resumeInFlight = new Map<string, Promise<boolean>>();
 const resumeInFlightStarted = new Map<string, number>();
+const resumeTransferCancelledAt = new Map<string, number>();
+let resumeTransferEpoch = 0;
+let resumeTransferTouchMs = 5_000;
 // Must stay STRICTLY LARGER than the longest a single resume can legitimately
 // take, or the guard expires under a healthy resume and admits a second one into
 // the SAME tmux name — observed live on jx78ksdh85pw: the first resume ran 128s
@@ -23920,6 +23936,12 @@ export type ResumeOptions = {
    * credential read.
    */
   onProcessSpawned?: () => void;
+  /**
+   * Runs a transcript transfer without the account-switch hold, keeping the
+   * in-flight guard fresh while it runs; "superseded" when another resume
+   * took over meanwhile, "closed" when the resume gate shut.
+   */
+  duringTransfer?: <T>(run: () => Promise<T>) => Promise<T | "superseded" | "closed">;
 };
 
 // Convex side of the gate. Runs only on resurrection paths (rare), never per
@@ -25198,8 +25220,8 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
   }
   const existing = resumeInFlight.get(sessionId);
   if (existing) {
-    const age = Date.now() - (resumeInFlightStarted.get(sessionId) ?? 0);
-    if (age < RESUME_IN_FLIGHT_TIMEOUT_MS) {
+    const ageOf = () => Date.now() - (resumeInFlightStarted.get(sessionId) ?? 0);
+    for (let age = ageOf(); age < RESUME_IN_FLIGHT_TIMEOUT_MS && resumeInFlight.get(sessionId) === existing; age = ageOf()) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const result = await Promise.race([
@@ -25245,6 +25267,19 @@ async function autoResumeSession(sessionId: string, content: string, titleCache:
       onProcessSpawned: () => {
         releaseAccountResume?.();
         releaseAccountResume = undefined;
+      },
+      duringTransfer: async (run) => {
+        const held = !!releaseAccountResume;
+        releaseAccountResume?.();
+        releaseAccountResume = undefined;
+        const touch = setInterval(() => { if (resumeInFlight.get(sessionId) === promise) resumeInFlightStarted.set(sessionId, Date.now()); }, resumeTransferTouchMs);
+        let out;
+        try { out = await run(); } finally { clearInterval(touch); }
+        if ((out as unknown) === "cancelled") resumeTransferCancelledAt.set(sessionId, ++resumeTransferEpoch);
+        if (held) releaseAccountResume = await accountLifecycleGate.acquireResume(agentTypeHint);
+        if (resumeInFlight.get(sessionId) !== promise) return "superseded";
+        if (!(await canResume())) return "closed";
+        return resumeInFlight.get(sessionId) === promise ? out : "superseded";
       },
     };
     const resumed = await (resumeInnerForTests ?? autoResumeSessionInner)(sessionId, content, titleCache, cwdOverride, conversationId, agentTypeHint, resumeOpts);
@@ -25355,11 +25390,23 @@ function serializeSessionStatus(sessionId: string, write: () => Promise<boolean>
 export const hibernationConcurrencyForTests = {
   sendAgentStatus, serializeSessionStatus, sessionStatusQueues, sessionStatusWrites,
   pendingHibernationStamps, hibernationStampWrites, hibernationStampCleared,
-  pendingOpenTaskReports, resumeInFlight, resumeInFlightStarted, autoResumeSession,
+  pendingOpenTaskReports, resumeInFlight, resumeInFlightStarted, autoResumeSession, accountLifecycleGate,
   hibernationInFlight, hibernationEvidenceJobs, abandonedEvidenceJobs, subagentActivityByParent, tmuxTargetLocks,
   freshClaims: (pid: number, registryDir: string) => hookClaimsForPid(pid, { fresh: true, registryDir }),
   setResumeInner: (fn: typeof autoResumeSessionInner | null) => { resumeInnerForTests = fn; },
+  setTransferTouchMs: (ms: number) => { resumeTransferTouchMs = ms; },
 };
+
+export async function resumeOrRepair(
+  sessionId: string,
+  resume: () => Promise<boolean>,
+  repair: () => Promise<boolean>,
+): Promise<"resumed" | "repaired" | "cancelled" | null> {
+  const startedAt = resumeTransferEpoch;
+  if (await resume()) return "resumed";
+  if ((resumeTransferCancelledAt.get(sessionId) ?? 0) > startedAt) return "cancelled";
+  return (await repair()) ? "repaired" : null;
+}
 
 function queueHibernationStamp(sessionId: string, conversationId: string | undefined, at: number | null): void {
   pendingHibernationStamps.set(sessionId, { conversationId, at });
@@ -25696,8 +25743,9 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   if (!sessionFile && !forkFromSessionId && conversationId && (agentTypeHint ?? "claude") === "claude" && syncServiceRef) {
     const { fetchSessionForResume } = await import("./sessionTransfer.js");
     const home = process.env.HOME || os.homedir();
-    const fetched = await fetchSessionForResume({
-      svc: syncServiceRef,
+    const svc = syncServiceRef;
+    const fetchIt = () => fetchSessionForResume({
+      svc,
       conversationId,
       sessionId,
       deviceId: deviceId(),
@@ -25707,6 +25755,12 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       bind: () => mapSessionToConversation(sessionId, conversationId),
       log: logDelivery,
     });
+    const fetched = opts?.duringTransfer ? await opts.duringTransfer(fetchIt) : await fetchIt();
+    if (fetched === "cancelled" || fetched === "superseded" || fetched === "closed") {
+      const why = { cancelled: "its transcript transfer was cancelled", superseded: "another resume took over while its transcript moved", closed: "it may no longer resume" }[fetched];
+      logDelivery(`Not resuming ${sessionId.slice(0, 8)}: ${why}`);
+      return false;
+    }
     if (fetched) sessionFile = { path: fetched.jsonl, agentType: "claude" };
   }
   if (mayReconstituteResumeTranscript(storeOwnedResumeType) && !sessionFile && (!isStoreOwnedResume || storeLacksSession) && conversationId && config?.auth_token && config?.convex_url) {
@@ -27620,7 +27674,14 @@ async function deliverMessageIntoSession(
   // resume+inject — the same failure mode fixed on the live-tmux path above.
   await admit();
   markInjectedBestEffort(syncService, messageId, undefined, { conversationId });
-  const resumed = await autoResumeSession(sessionId, content, titleCache, undefined, conversationId, agentTypeHint ?? detectedType, { delivery: { messageId, conversationId } });
+  const outcome = await resumeOrRepair(
+    sessionId,
+    () => autoResumeSession(sessionId, content, titleCache, undefined, conversationId, agentTypeHint ?? detectedType, { delivery: { messageId, conversationId } }),
+    () => {
+      logDelivery(`Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
+      return repairAndResumeSession(sessionId, content, titleCache, undefined, conversationId, agentTypeHint ?? detectedType, { delivery: { messageId, conversationId } });
+    },
+  );
   // A resume that delivered: the session is healthy again, and its new pane
   // gets the same prompt watch and health check a live delivery gets.
   const resumedDelivery = (via: string, sid: string): true => {
@@ -27634,14 +27695,13 @@ async function deliverMessageIntoSession(
     });
     return true;
   };
-  if (resumed) return resumedDelivery("auto-resume", sessionId);
-
-  // Auto-resume failed - try repair (regenerate JSONL from Convex)
-  logDelivery(`Auto-resume failed for ${sessionId.slice(0, 8)}, attempting repair...`);
-  // Row is already marked "injected" from the auto-resume attempt above; repair+resume is a
-  // second delivery path for the same message, so no re-mark needed.
-  const repaired = await repairAndResumeSession(sessionId, content, titleCache, undefined, conversationId, agentTypeHint ?? detectedType, { delivery: { messageId, conversationId } });
-  if (repaired) return resumedDelivery("repair+resume", sessionId);
+  if (outcome === "resumed") return resumedDelivery("auto-resume", sessionId);
+  if (outcome === "repaired") return resumedDelivery("repair+resume", sessionId);
+  if (outcome === "cancelled") {
+    logDelivery(`Not delivering to ${sessionId.slice(0, 8)} yet: its transcript transfer was cancelled`);
+    recordSessionDeliveryFailure(sessionId, { transient: true });
+    return false;
+  }
 
   // Only a genuinely-unrecoverable resume (recorded in resumeFatalReasons: missing
   // conversation, retired model, session truly gone) earns the long 5-min cooldown.

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test, setDefaultTimeout } from "bun:test";
 import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
@@ -11,6 +11,10 @@ import { acceptGrantSocket, closeAllGrants, liveGrantCount, MAX_LIVE_GRANTS, new
 import { pullGrantInto } from "./pull";
 import { unpackFolderStream } from "../folderSync";
 import { pollUntil } from "../test-helpers/pollUntil";
+
+// Nearly every test here spawns git or tar, or serves a real socket; under
+// `bun test --parallel` on a loaded runner the 5 s default is not enough.
+setDefaultTimeout(30_000);
 
 const LOOP = "127.0.0.1";
 const PEER = { ip: "100.64.0.2", name: "mini.tail1234.ts.net." };
@@ -68,14 +72,14 @@ describe("firewallBlocksIncoming", () => {
     return p;
   };
   test("block all enabled", async () => {
-    expect(await firewallBlocksIncoming({ platform: "darwin", bin: bin("Firewall has block all state set to enabled.") })).toBe(true);
-    expect(await firewallBlocksIncoming({ platform: "darwin", bin: bin("Block all ENABLED!") })).toBe(true);
+    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "darwin", bin: bin("Firewall has block all state set to enabled.") })).toBe(true);
+    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "darwin", bin: bin("Block all ENABLED!") })).toBe(true);
   });
   test("disabled, broken, missing, or not macOS", async () => {
-    expect(await firewallBlocksIncoming({ platform: "darwin", bin: bin("Firewall has block all state set to disabled.") })).toBe(false);
-    expect(await firewallBlocksIncoming({ platform: "darwin", bin: bin("enabled", 1) })).toBe(false);
-    expect(await firewallBlocksIncoming({ platform: "darwin", bin: path.join(dir, "missing") })).toBe(false);
-    expect(await firewallBlocksIncoming({ platform: "linux", bin: bin("enabled") })).toBe(false);
+    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "darwin", bin: bin("Firewall has block all state set to disabled.") })).toBe(false);
+    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "darwin", bin: bin("enabled", 1) })).toBe(false);
+    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "darwin", bin: path.join(dir, "missing") })).toBe(false);
+    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "linux", bin: bin("enabled") })).toBe(false);
   });
 });
 

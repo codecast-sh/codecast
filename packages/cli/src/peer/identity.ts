@@ -39,10 +39,10 @@ export function grantBindAddress(
 const SOCKETFW = "/usr/libexec/ApplicationFirewall/socketfilterfw";
 
 /** The macOS application firewall is set to block all incoming connections. Any doubt answers false. */
-export function firewallBlocksIncoming(opts: { platform?: string; bin?: string } = {}): Promise<boolean> {
+export function firewallBlocksIncoming(opts: { platform?: string; bin?: string; timeoutMs?: number } = {}): Promise<boolean> {
   if ((opts.platform ?? process.platform) !== "darwin") return Promise.resolve(false);
   return new Promise((resolve) => {
-    execFile(opts.bin ?? SOCKETFW, ["--getblockall"], { encoding: "utf-8", timeout: 2_000 }, (err: unknown, stdout: unknown) => {
+    execFile(opts.bin ?? SOCKETFW, ["--getblockall"], { encoding: "utf-8", timeout: opts.timeoutMs ?? 2_000 }, (err: unknown, stdout: unknown) => {
       resolve(!err && /\benabled\b/i.test(String(stdout ?? "")));
     });
   });
