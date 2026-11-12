@@ -7,7 +7,10 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { ElementGone, click, locate, pressKey, screenshot, scroll, type } from "./actions.js";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { ClickMissed, ClickNotDelivered, DELIVERY_PROBE, ElementGone, click, hover, locate, pressKey, screenshot, scroll, type, uploadFiles } from "./actions.js";
 import type { PageSession } from "./instance.js";
 
 interface Call {
@@ -16,8 +19,17 @@ interface Call {
 }
 
 /** A page that records what was dispatched and answers geometry queries. */
-function recorder(opts: { quads?: number[][]; hit?: string | null; missing?: boolean; detached?: boolean; scale?: number } = {}) {
+function recorder(opts: {
+  quads?: number[][]; hit?: string | null; missing?: boolean; detached?: boolean; scale?: number;
+  /** The tab is in the background, not drawn. */
+  hidden?: boolean;
+  /** What the delivery probe saw, one per press; an Error means the context went (navigation). */
+  delivered?: Array<{ hit: boolean; name: string } | null | Error>;
+  /** The press point is over a frame, so its events land in another document. */
+  frame?: boolean;
+} = {}) {
   const calls: Call[] = [];
+  let reads = 0;
   const page = {
     sessionId: "s1",
     targetId: "t1",
@@ -32,7 +44,14 @@ function recorder(opts: { quads?: number[][]; hit?: string | null; missing?: boo
           if (opts.detached) throw new Error("Node with given id does not belong to the document");
           return { object: { objectId: "obj-1" } };
         }
+        if (method === "Runtime.callFunctionOn" && String(params.functionDeclaration).includes("rec.off")) return { result: { objectId: "probe" } };
+        if (method === "Runtime.callFunctionOn" && String(params.functionDeclaration).includes("this.off()")) {
+          const got = opts.delivered && reads < opts.delivered.length ? opts.delivered[reads++] : { hit: true, name: "<a>" };
+          if (got instanceof Error) throw got;
+          return { result: { value: { got, frame: !!opts.frame } } };
+        }
         if (method === "Runtime.callFunctionOn") return { result: { value: opts.hit ?? null } };
+        if (method === "Runtime.evaluate" && params.expression === "document.hidden") return { result: { value: !!opts.hidden } };
         // The pointer probe asks where the page saw the cursor. `scale` fakes a
         // page that receives input scaled, as happens under viewport emulation.
         if (method === "Runtime.evaluate" && String(params.expression).includes("__cast")) {
@@ -124,7 +143,82 @@ describe("click", () => {
   test("skips the hit test entirely when forced", async () => {
     const { page, of } = recorder({ hit: "<div#overlay>" });
     await click(page, 5, { force: true });
-    expect(of("Runtime.callFunctionOn")).toHaveLength(0);
+    expect(of("Runtime.callFunctionOn").filter((c) => String(c.params.functionDeclaration).includes("nothing at that point"))).toHaveLength(0);
+  });
+
+  test("a background tab is drawn before the press, so Chrome hit-tests the page as it is", async () => {
+    // Chrome routes a mouse press through the tab's last drawn frame. A
+    // background tab draws none, and the press was dropped while the click
+    // reported success (example.com "Learn more", 0 of 3 landed).
+    const { page, calls } = recorder({ hidden: true });
+    await click(page, 5);
+    const order = calls.map((c) => c.params?.type ?? c.method);
+    const press = order.indexOf("mousePressed");
+    expect(order.lastIndexOf("Page.captureScreenshot", press)).toBeGreaterThan(order.lastIndexOf("mouseMoved", press));
+  });
+
+  test("a visible tab is not captured", async () => {
+    const { page, of } = recorder();
+    await click(page, 5);
+    expect(of("Page.captureScreenshot")).toHaveLength(0);
+  });
+
+  test("a press a background tab dropped is drawn and pressed once more", async () => {
+    const { page, of } = recorder({ hidden: true, delivered: [null, { hit: true, name: "<a>" }] });
+    await click(page, 5);
+    expect(of("Input.dispatchMouseEvent").filter((c) => c.params.type === "mousePressed")).toHaveLength(2);
+  });
+
+  test("a visible tab is never pressed twice, even when the listener saw nothing", async () => {
+    // A visible tab draws, so the press was not dropped: a page that stops
+    // events at window capture hid it. A second press could act twice.
+    const { page, of } = recorder({ delivered: [null, null] });
+    await click(page, 5);
+    expect(of("Input.dispatchMouseEvent").filter((c) => c.params.type === "mousePressed")).toHaveLength(1);
+  });
+
+  test("hover on a dead session fails instead of reporting success", async () => {
+    const { page } = recorder();
+    const send = page.conn.send.bind(page.conn);
+    (page.conn as any).send = async (method: string, params: any = {}, ...rest: unknown[]) => {
+      if (method === "Input.dispatchMouseEvent") throw new Error("Session with given id not found");
+      return send(method, params, ...(rest as []));
+    };
+    await expect(hover(page, 5)).rejects.toThrow(/Session with given id not found/);
+  });
+
+  test("a click that never arrives fails instead of reporting success", async () => {
+    const { page, of } = recorder({ hidden: true, delivered: [null, null] });
+    await expect(click(page, 5)).rejects.toThrow(ClickNotDelivered);
+    expect(of("Input.dispatchMouseEvent").filter((c) => c.params.type === "mousePressed")).toHaveLength(2);
+  });
+
+  test("a click that lands on something else says where it landed", async () => {
+    const { page } = recorder({ delivered: [{ hit: false, name: "<div#modal>" }] });
+    await expect(click(page, 5)).rejects.toThrow(ClickMissed);
+    await expect(click(recorder({ delivered: [{ hit: false, name: "<div#modal>" }] }).page, 5)).rejects.toThrow(/landed on <div#modal>/);
+  });
+
+  test("a press over a frame is pressed once and not called dropped", async () => {
+    // The press is delivered inside the iframe (a payment field, a captcha),
+    // where the outer page's listener never sees it. Pressing again would act
+    // twice on a third-party page, and "nothing was clicked" would be false.
+    const { page, of } = recorder({ frame: true, delivered: [null] });
+    await click(page, 5);
+    expect(of("Input.dispatchMouseEvent").filter((c) => c.params.type === "mousePressed")).toHaveLength(1);
+  });
+
+  test("the probe asks what is under the press point", async () => {
+    const { page, of } = recorder();
+    await click(page, 5);
+    const arm = of("Runtime.callFunctionOn").find((c) => String(c.params.functionDeclaration).includes("rec.off"))!;
+    expect(arm.params.arguments).toEqual([{ value: 20 }, { value: 30 }]);
+  });
+
+  test("a click whose navigation took the page away counts as delivered", async () => {
+    const { page, of } = recorder({ delivered: [new Error("Cannot find context with specified id")] });
+    await click(page, 5);
+    expect(of("Input.dispatchMouseEvent").filter((c) => c.params.type === "mousePressed")).toHaveLength(1);
   });
 });
 
@@ -261,6 +355,22 @@ describe("scroll", () => {
     return page;
   }
 
+  test("a background tab is drawn while it scrolls, or Chrome holds the wheel forever", async () => {
+    // A hidden tab answers a wheel event only when it draws, and applies the
+    // scroll only then: `cast browser scroll` hung 30s and timed out.
+    const page = scrollable(300, 2000);
+    const send = page.conn.send.bind(page.conn);
+    const sent: string[] = [];
+    (page.conn as any).send = async (method: string, params: any = {}, ...rest: unknown[]) => {
+      sent.push(method);
+      if (method === "Runtime.evaluate" && params.expression === "document.hidden") return { result: { value: true } };
+      return send(method, params, ...(rest as []));
+    };
+    const r = await scroll(page, 900);
+    expect(r.moved).toBe(true);
+    expect(sent.indexOf("Page.captureScreenshot")).toBeGreaterThan(sent.indexOf("Input.dispatchMouseEvent"));
+  });
+
   test("reports the position AFTER the scroll, not before", async () => {
     // Reading scrollY straight after dispatching returns the old offset — a
     // wheel event is handled asynchronously — which made the first scroll of
@@ -309,5 +419,115 @@ describe("screenshot --ref", () => {
     } as any;
     await screenshot(page, { ref: 7 });
     expect(calls.find((c) => c.method === "Page.captureScreenshot")!.params.clip).toEqual({ x: 10, y: 1520, width: 100, height: 50, scale: 1 });
+  });
+});
+
+describe("upload", () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "cast-upload-")), "mandate.csv");
+  fs.writeFileSync(file, "a,b\n1,2\n");
+
+  function chrome(opts: { refuse?: boolean; page?: string | null }) {
+    const calls: Call[] = [];
+    const page = {
+      sessionId: "s1",
+      targetId: "t1",
+      conn: {
+        send: async (method: string, params: any = {}) => {
+          calls.push({ method, params });
+          if (method === "DOM.setFileInputFiles" && opts.refuse) throw new Error('DOM.setFileInputFiles: {"code":-32000,"message":"Not allowed"}');
+          if (method === "DOM.resolveNode") return { object: { objectId: "obj-1" } };
+          if (method === "Runtime.callFunctionOn") return { result: { value: opts.page ?? null } };
+          return {};
+        },
+      },
+    } as unknown as PageSession;
+    return { page, calls };
+  }
+
+  test("hands the paths to Chrome when it allows it", async () => {
+    const { page, calls } = chrome({});
+    expect(await uploadFiles(page, 5, [file])).toBe("native");
+    expect(calls.some((c) => c.method === "Runtime.callFunctionOn")).toBe(false);
+  });
+
+  test("builds the files in the page when the extension has no file access", async () => {
+    // The store build of the extension is refused DOM.setFileInputFiles until
+    // the human turns on "Allow access to file URLs", which blocked every
+    // marketplace listing that needs a photo or a document.
+    const { page, calls } = chrome({ refuse: true });
+    expect(await uploadFiles(page, 5, [file])).toBe("page");
+    const sent = calls.find((c) => c.method === "Runtime.callFunctionOn")!.params.arguments[0].value;
+    expect(sent).toEqual([{ name: "mandate.csv", type: "text/csv", data: Buffer.from("a,b\n1,2\n").toString("base64") }]);
+  });
+
+  test("an input gone from the page is gone, not a file-access problem", async () => {
+    const { page } = chrome({ refuse: true, page: "gone" });
+    await expect(uploadFiles(page, 5, [file])).rejects.toThrow(ElementGone);
+  });
+
+  test("refuses up front a payload too large for the bridge, counting it as sent (base64)", async () => {
+    // 50MB of raw bytes is about 67MB of base64, past the bridge's 64MB
+    // message limit, which failed the socket with no explanation.
+    const big = path.join(path.dirname(file), "big.bin");
+    fs.writeFileSync(big, "");
+    fs.truncateSync(big, 50 * 1024 * 1024);
+    const { page, calls } = chrome({ refuse: true });
+    await expect(uploadFiles(page, 5, [big])).rejects.toThrow(/too large to build in the page/);
+    expect(calls.some((c) => c.method === "Runtime.callFunctionOn")).toBe(false);
+    fs.rmSync(big);
+  });
+
+  test("names the switch when the page cannot take the files either", async () => {
+    const { page } = chrome({ refuse: true, page: "this is not a file input" });
+    await expect(uploadFiles(page, 5, [file])).rejects.toThrow(/Allow access to file URLs/);
+  });
+});
+
+describe("delivery probe (the in-page half)", () => {
+  /** Enough of a DOM to run the probe: nodes with parents, shadow roots with hosts. */
+  class FakeElement {
+    nodeType = 1;
+    parentNode: any = null;
+    constructor(public tagName: string, public id = "") {}
+  }
+  const el = (tag: string, parent: any, id = "") => Object.assign(new FakeElement(tag, id), { parentNode: parent });
+  const root = (host: any) => ({ nodeType: 11, parentNode: null, host });
+
+  function run(target: any, clicked: any, eventTarget = target) {
+    const listeners: Record<string, (e: any) => void> = {};
+    const probe = new Function("Element", "document", "addEventListener", "removeEventListener", `return (${DELIVERY_PROBE})`)(
+      FakeElement,
+      { elementFromPoint: () => target },
+      (ty: string, fn: (e: any) => void) => (listeners[ty] = fn),
+      () => {},
+    );
+    const rec = probe.call(clicked, 0, 0);
+    const path: any[] = [];
+    for (let n = target; n; n = n.parentNode || n.host) path.push(n);
+    listeners.pointerdown({ isTrusted: true, target: eventTarget, composedPath: () => path });
+    return rec.got;
+  }
+
+  test("a button inside a web component is a hit, though window sees only the host", () => {
+    // Reddit, YouTube and Salesforce build buttons this way. Window-level
+    // listeners get e.target retargeted to the outermost host, and contains()
+    // stops at a shadow root, so this was reported missed after it clicked.
+    const body = el("BODY", null);
+    const host = el("DIV", body, "host");
+    const button = el("BUTTON", root(host), "inner");
+    expect(run(button, button, host)).toEqual({ hit: true, name: "<button#inner>" });
+  });
+
+  test("a press inside the clicked element's own shadow tree is a hit", () => {
+    const host = el("MY-BUTTON", el("BODY", null), "vote");
+    const label = el("SPAN", root(host));
+    expect(run(label, host, host).hit).toBe(true);
+  });
+
+  test("a press on something else is still a miss, named by what it hit", () => {
+    const body = el("BODY", null);
+    const modal = el("DIV", body, "modal");
+    const target = el("BUTTON", el("DIV", body));
+    expect(run(modal, target)).toEqual({ hit: false, name: "<div#modal>" });
   });
 });

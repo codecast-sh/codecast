@@ -358,6 +358,18 @@ playwright caches, or install one with
 
 - `chrome://` pages and the Chrome Web Store cannot be attached (Chrome
   forbids it).
+- File uploads: Chrome hands local files to a page through the debugger
+  (`DOM.setFileInputFiles`) only when the extension's **Allow access to file
+  URLs** switch is on (chrome://extensions → Codecast → Details). It is off
+  for every store install and no manifest entry turns it on; the `file:///*`
+  in `web_accessible_resources` only serves the setup page. Without it,
+  `cast browser upload` builds the files in the page and sets them on the
+  input, which ordinary upload widgets accept; turning the switch on gives
+  Chrome's own path.
+- A background tab draws no frames, and Chrome routes mouse input by
+  hit-testing the last frame drawn, so a press there is dropped. The CLI has
+  Chrome draw the tab (a one-pixel capture) before each click and while it
+  scrolls, then checks the page received the press and fails when it did not.
 - Several Chrome profiles can be paired with one bridge host. Each keeps its
   own key and all stay connected; `setup` pins the profile new sessions use,
   and `--browser <id>` moves one session to another. A profile reconnecting

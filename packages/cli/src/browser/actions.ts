@@ -17,6 +17,7 @@
  */
 
 import type { PageSession } from "./instance.js";
+import { mediaTypeForFile } from "@codecast/shared/files";
 import { pageForRef } from "./oopif.js";
 
 export class ElementGone extends Error {
@@ -148,15 +149,69 @@ export interface ClickOptions {
   modifiers?: number;
 }
 
+export class ClickNotDelivered extends Error {
+  constructor(where: string) {
+    super(`the click never reached the page at ${where}: Chrome dropped it, so nothing was clicked — take a snapshot and try again`);
+    this.name = "ClickNotDelivered";
+  }
+}
+
+export class ClickMissed extends Error {
+  constructor(ref: number, landed: string) {
+    super(`the click on #e${ref} landed on ${landed} instead — the page moved under it; take a fresh snapshot`);
+    this.name = "ClickMissed";
+  }
+}
+
 export async function click(page: PageSession, ref: number, opts: ClickOptions = {}): Promise<Point> {
+  const top = page;
   ({ page, ref } = await pageForRef(page, ref)); // a ref inside a cross-origin frame acts on its session (oopif.ts)
   const pt = await locate(page, ref);
   if (!opts.force) {
     const blocker = await hitTest(page, ref, pt);
     if (blocker) throw new ElementOccluded(ref, blocker);
   }
-  await clickAt(page, pt, opts);
+  await press(page, pt, opts, top, ref);
   return pt;
+}
+
+/**
+ * Make Chrome draw the tab once.
+ *
+ * Chrome routes mouse input by hit-testing the tab's last drawn frame, and a
+ * background tab draws none: a press is dropped or lands where the page used
+ * to be, and a mouseMoved is held unanswered for 5s waiting on a frame. Keys
+ * need no hit test, which is why typing works there. Capturing a single pixel
+ * makes Chrome produce a frame without showing the tab, raising the window or
+ * making the page visible (document.hidden stays true).
+ */
+async function paint(top: PageSession): Promise<void> {
+  await top.conn
+    .send("Page.captureScreenshot", { format: "jpeg", quality: 1, clip: { x: 0, y: 0, width: 1, height: 1, scale: 1 } }, top.sessionId, 5000)
+    .catch(() => {});
+}
+
+async function isHidden(page: PageSession): Promise<boolean> {
+  const r = await page.conn
+    .send<any>("Runtime.evaluate", { expression: "document.hidden", returnByValue: true }, page.sessionId, 3000)
+    .catch(() => null);
+  return r?.result?.value === true;
+}
+
+/** A mouse event, answered promptly even in a background tab: Chrome holds a
+ *  move's or wheel's reply until the tab draws, so draw it while it waits. */
+async function sendMouse(page: PageSession, params: Record<string, unknown>, hidden: boolean, top: PageSession = page): Promise<void> {
+  const sent = page.conn.send("Input.dispatchMouseEvent", params, page.sessionId, hidden ? 6000 : undefined);
+  if (hidden) await paint(top);
+  await sent;
+}
+
+/** A pointer move. A reply Chrome still held after the tab drew is not a
+ *  failure (the move is queued); anything else is. */
+async function moveTo(page: PageSession, x: number, y: number, modifiers: number, hidden: boolean, top: PageSession): Promise<void> {
+  await sendMouse(page, { type: "mouseMoved", x, y, button: "none", modifiers }, hidden, top).catch((err) => {
+    if (!(hidden && /did not answer within/.test(String((err as Error)?.message)))) throw err;
+  });
 }
 
 /**
@@ -172,15 +227,10 @@ export async function click(page: PageSession, ref: number, opts: ClickOptions =
  *
  * Returns 1 when the page cannot answer, which is the correct assumption.
  */
-async function inputScale(page: PageSession, at: Point): Promise<number> {
+async function inputScale(page: PageSession, at: Point, hidden: boolean, top: PageSession): Promise<number> {
   const { conn, sessionId } = page;
   try {
-    await conn.send(
-      "Input.dispatchMouseEvent",
-      { type: "mouseMoved", x: at.x, y: at.y, button: "none" },
-      sessionId,
-      3000,
-    );
+    await moveTo(page, at.x, at.y, 0, hidden, top);
     const r = await conn.send<any>(
       "Runtime.evaluate",
       { expression: `JSON.stringify(window.__cast && window.__cast.ptr)`, returnByValue: true },
@@ -199,30 +249,134 @@ async function inputScale(page: PageSession, at: Point): Promise<number> {
   }
 }
 
+/**
+ * The in-page half of the delivery check, run with the clicked element as
+ * `this` (or none for raw coordinates). A listener on window sees a target
+ * inside a shadow root retargeted to its outermost host, so the real target
+ * is the first node of the event's composed path, and containment is walked
+ * across shadow roots (through each root's host): a button inside a web
+ * component is a hit, not a miss.
+ */
+export const DELIVERY_PROBE = `function(x, y) {
+    const el = this instanceof Element ? this : null;
+    const under = document.elementFromPoint(x, y);
+    const rec = { got: null, frame: !!under && /^(IFRAME|FRAME|EMBED|OBJECT)$/.test(under.tagName) };
+    const within = (outer, node) => {
+      for (let n = node; n; n = n.parentNode || n.host) if (n === outer) return true;
+      return false;
+    };
+    const on = (e) => {
+      if (!e.isTrusted || rec.got) return;
+      const path = typeof e.composedPath === "function" ? e.composedPath() : [];
+      const t = path[0] && path[0].nodeType === 1 ? path[0] : e.target;
+      const name = t && t.tagName ? "<" + t.tagName.toLowerCase() + (t.id ? "#" + t.id : "") + ">" : "the page";
+      rec.got = { hit: !el || !t || path.includes(el) || within(el, t) || within(t, el), name };
+    };
+    const types = ["pointerdown", "mousedown", "pointerup", "mouseup", "click", "auxclick", "contextmenu"];
+    for (const ty of types) addEventListener(ty, on, true);
+    rec.off = () => { for (const ty of types) removeEventListener(ty, on, true); };
+    return rec;
+  }`;
+
+/**
+ * Listen for the press reaching the page, so a click is never reported done
+ * when Chrome dropped it. The record lives in a page object held by id, not on
+ * window. Pointer, mouse and click events all count: a page that cancels
+ * pointerdown suppresses mousedown, and the click still happens. A press
+ * over a frame is delivered inside that frame, out of this listener's sight,
+ * so the record notes when the point is over one: delivery is then unknown.
+ */
+async function armDelivery(page: PageSession, pt: Point, ref?: number): Promise<string | null> {
+  const fn = DELIVERY_PROBE;
+  try {
+    if (ref !== undefined) {
+      const objectId = await resolveRef(page, ref);
+      const r = await page.conn.send<any>(
+        "Runtime.callFunctionOn",
+        { objectId, functionDeclaration: fn, arguments: [{ value: pt.x }, { value: pt.y }] },
+        page.sessionId,
+      );
+      await page.conn.send("Runtime.releaseObject", { objectId }, page.sessionId).catch(() => {});
+      return r?.result?.objectId ?? null;
+    }
+    const r = await page.conn.send<any>("Runtime.evaluate", { expression: `(${fn}).call(null, ${Number(pt.x)}, ${Number(pt.y)})` }, page.sessionId);
+    return r?.result?.objectId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** What the armed listener saw. A context torn down by the click's own navigation means it arrived. */
+type Delivery = { got: { hit: boolean; name: string } | null; frame: boolean };
+
+async function readDelivery(page: PageSession, probe: string): Promise<Delivery | "navigated"> {
+  try {
+    const r = await page.conn.send<any>(
+      "Runtime.callFunctionOn",
+      { objectId: probe, functionDeclaration: "function() { this.off(); return { got: this.got, frame: this.frame }; }", returnByValue: true },
+      page.sessionId,
+      3000,
+    );
+    if (r?.exceptionDetails) return "navigated";
+    return r?.result?.value ?? { got: null, frame: false };
+  } catch {
+    return "navigated";
+  } finally {
+    page.conn.send("Runtime.releaseObject", { objectId: probe }, page.sessionId).catch(() => {});
+  }
+}
+
 /** Click raw viewport coordinates. The escape hatch when no ref fits. */
 export async function clickAt(page: PageSession, pt: Point, opts: ClickOptions = {}): Promise<void> {
+  await press(page, pt, opts, page);
+}
+
+async function press(page: PageSession, pt: Point, opts: ClickOptions, top: PageSession, ref?: number): Promise<void> {
   const { conn, sessionId } = page;
   const button = opts.button ?? "left";
   const clickCount = opts.clickCount ?? 1;
   const modifiers = opts.modifiers ?? 0;
+  const hidden = await isHidden(page);
 
   // Aim in the space the browser routes input through, which is not always the
   // page's own. Dividing by the measured scale makes the two agree.
-  const scale = await inputScale(page, pt);
+  const scale = await inputScale(page, pt, hidden, top);
   const x = pt.x / scale;
   const y = pt.y / scale;
 
   // The move matters: hover styles, menus and tooltips only appear for a
   // pointer that actually travelled there.
-  await conn.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none", modifiers }, sessionId);
-  await conn.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount, modifiers }, sessionId);
-  await conn.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount, modifiers }, sessionId);
+  for (let attempt = 0; ; attempt++) {
+    const probe = await armDelivery(page, pt, ref);
+    await moveTo(page, x, y, modifiers, hidden, top);
+    await conn.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button, clickCount, modifiers }, sessionId);
+    await conn.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button, clickCount, modifiers }, sessionId);
+    if (!probe) return;
+    const seen = await readDelivery(page, probe);
+    if (seen === "navigated") return;
+    const { got } = seen;
+    if (got) {
+      if (!got.hit && ref !== undefined && !opts.force) throw new ClickMissed(ref, got.name);
+      return;
+    }
+    // Over a frame, the press went into it where this page cannot see:
+    // unknown, so never pressed again and never reported as dropped.
+    if (seen.frame) return;
+    // A visible tab draws, so its press was not dropped for want of a frame;
+    // the listener just did not see it (a page that stops events at window
+    // capture). Pressing again could act twice, so only a hidden tab, where
+    // a dropped press is the known failure, is pressed again.
+    if (!hidden) return;
+    // Nothing reached the page, so nothing acted and pressing again is safe.
+    if (attempt >= 1) throw new ClickNotDelivered(`[${Math.round(pt.x)},${Math.round(pt.y)}]`);
+  }
 }
 
 export async function hover(page: PageSession, ref: number): Promise<Point> {
+  const top = page;
   ({ page, ref } = await pageForRef(page, ref)); // a ref inside a cross-origin frame acts on its session (oopif.ts)
   const pt = await locate(page, ref);
-  await page.conn.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: pt.x, y: pt.y, button: "none" }, page.sessionId);
+  await moveTo(page, pt.x, pt.y, 0, await isHidden(page), top);
   return pt;
 }
 
@@ -394,12 +548,9 @@ export async function scroll(page: PageSession, deltaY: number, deltaX = 0): Pro
     return { y, max, cx, cy };
   };
 
+  const hidden = await isHidden(page);
   const start = await read();
-  await conn.send(
-    "Input.dispatchMouseEvent",
-    { type: "mouseWheel", x: start.cx, y: start.cy, deltaX, deltaY },
-    sessionId,
-  );
+  await sendMouse(page, { type: "mouseWheel", x: start.cx, y: start.cy, deltaX, deltaY }, hidden);
 
   // Wait for the position to stop changing rather than guessing a delay: a
   // smooth-scrolling page is still moving for a few hundred ms.
@@ -408,6 +559,7 @@ export async function scroll(page: PageSession, deltaY: number, deltaX = 0): Pro
   let stable = 0;
   for (let i = 0; i < 25; i++) {
     await new Promise((r) => setTimeout(r, 40));
+    if (hidden) await paint(page); // a background tab only advances a scroll when it draws
     const cur = await read();
     max = cur.max;
     if (cur.y === y) {
@@ -463,10 +615,69 @@ export async function selectOption(page: PageSession, ref: number, value: string
   return value;
 }
 
-/** Attach files to an <input type=file> without touching the OS picker. */
-export async function uploadFiles(page: PageSession, ref: number, files: string[]): Promise<void> {
+/** Largest base64 payload the in-page fallback sends: it travels as one CDP
+ *  message, and the bridge host refuses messages over 64MiB
+ *  (bridge/host.ts MAX_MESSAGE_BYTES), so this leaves room for the rest. */
+const PAGE_UPLOAD_MAX_ENCODED = 60 * 1024 * 1024;
+
+const FILE_ACCESS_HINT =
+  "Chrome lets an extension hand files to a page only with its \"Allow access to file URLs\" switch: chrome://extensions → Codecast → Details";
+
+/**
+ * Attach files to a file input. Returns how: "native" through Chrome, or
+ * "page" when Chrome refused ("Not allowed": the extension driving the human's
+ * Chrome lacks file access) and the files were built in the page instead and
+ * set on the input with input and change events, which is all an ordinary
+ * upload widget reads.
+ */
+export async function uploadFiles(page: PageSession, ref: number, files: string[]): Promise<"native" | "page"> {
   ({ page, ref } = await pageForRef(page, ref)); // a ref inside a cross-origin frame acts on its session (oopif.ts)
-  await page.conn.send("DOM.setFileInputFiles", { backendNodeId: ref, files }, page.sessionId);
+  try {
+    await page.conn.send("DOM.setFileInputFiles", { backendNodeId: ref, files }, page.sessionId);
+    return "native";
+  } catch (err) {
+    if (!/not allowed/i.test(String((err as Error)?.message ?? err))) throw err;
+  }
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const total = files.reduce((n, f) => n + fs.statSync(f).size, 0);
+  const encoded = files.reduce((n, f) => n + Math.ceil(fs.statSync(f).size / 3) * 4, 0);
+  if (encoded > PAGE_UPLOAD_MAX_ENCODED) throw new Error(`Chrome refused the files (Not allowed), and ${Math.round(total / 1048576)}MB is too large to build in the page. ${FILE_ACCESS_HINT}`);
+  const payload = files.map((f) => {
+    const type = mediaTypeForFile(f);
+    return { name: path.basename(f), type: type === "application/octet-stream" ? "" : type, data: fs.readFileSync(f).toString("base64") };
+  });
+  const objectId = await resolveRef(page, ref);
+  const r = await page.conn.send<any>(
+    "Runtime.callFunctionOn",
+    {
+      objectId,
+      functionDeclaration: `function(files) {
+        if (!this.isConnected) return "gone";
+        if (!(this instanceof HTMLInputElement) || this.type !== "file") return "this is not a file input";
+        const dt = new DataTransfer();
+        for (const f of files) {
+          const bin = atob(f.data);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          dt.items.add(new File([bytes], f.name, { type: f.type, lastModified: Date.now() }));
+        }
+        this.files = dt.files;
+        this.dispatchEvent(new Event("input", { bubbles: true }));
+        this.dispatchEvent(new Event("change", { bubbles: true }));
+        return this.files.length === files.length ? null : "the input took " + this.files.length + " of " + files.length + " files";
+      }`,
+      arguments: [{ value: payload }],
+      returnByValue: true,
+    },
+    page.sessionId,
+    60_000,
+  );
+  await page.conn.send("Runtime.releaseObject", { objectId }, page.sessionId).catch(() => {});
+  const problem = r?.exceptionDetails?.exception?.description ?? r?.result?.value;
+  if (problem === "gone") throw new ElementGone(ref);
+  if (problem) throw new Error(`Chrome refused the files (Not allowed), and building them in the page failed: ${problem}. ${FILE_ACCESS_HINT}`);
+  return "page";
 }
 
 export interface ShotOptions {
