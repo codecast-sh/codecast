@@ -500,7 +500,8 @@ function kpiDelta(result: DataResult, rows: number[], block: KpiBlock, agg: KpiA
     ratio,
     base: before,
     display,
-    caption: dir === "flat" ? `${lead}same as ${against}` : `${lead}${sign}${formatValue(Math.abs(diff), fmt)} vs ${against}`,
+    // The chip already shows the count when there is no percent; the caption then names only what it is compared with.
+    caption: dir === "flat" ? `${lead}same as ${against}` : display.endsWith("%") ? `${lead}${sign}${formatValue(Math.abs(diff), fmt)} vs ${against}` : `${lead}vs ${against}`,
     against: words,
     dir,
     good: dir === "flat" || !block.good ? null : (dir === "up") === (block.good === "up"),

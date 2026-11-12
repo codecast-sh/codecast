@@ -10,12 +10,28 @@ import { Trash2 } from "lucide-react";
 import { dashboard, type ArtifactElement, type ArtifactOp, type Json } from "@codecast/shared/artifacts";
 import { PanelShell, Field } from "./CheckPanel";
 import { resultFor } from "../../hooks/useDashboardData";
+import { useRef } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import type { BlockEnv } from "./blocks";
 
 const KIND_LABEL: Record<string, string> = { kpi: "KPI", chart: "Chart", table: "Table", text: "Text", section: "Section" };
 const FORMATS = ["number", "compact", "usd", "percent"] as const;
+/** What a block's rows are shaped by. A new source drops them: another source's columns would only break the block. */
+const SHAPING = ["field", "agg", "label", "compare", "format", "x", "y", "series", "chart", "columns", "sort", "group", "where", "limit"] as const;
 
 export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { docId: string; block: ArtifactElement | undefined; env: BlockEnv; apply: (ops: ArtifactOp[]) => void; onClose: () => void; onRemove: () => void }) {
+  // A source picked here gets the same starting fields as "From a source" (sum of merged, compared by halves), filled in once its first rows arrive.
+  const suggestFor = useRef<string | null>(null);
+  const fresh = block ? resultFor(env.results, block) : undefined;
+  useWatchEffect(() => {
+    if (!block || !suggestFor.current || !fresh?.refreshed_at || fresh.error) return;
+    if (dashboard.blockQuery({ query: block.query })?.source !== suggestFor.current) return;
+    suggestFor.current = null;
+    if (block.kind !== "kpi" && block.kind !== "chart" && block.kind !== "table") return;
+    const sample = fresh.rows.find((r) => r.some((v) => v !== null && v !== undefined));
+    const fields = dashboard.suggestFields(block.kind, fresh.columns, sample);
+    if (Object.keys(fields).length) apply([{ k: block.key, set: fields }]);
+  }, [fresh, block, apply]);
   if (!block) {
     return (
       <PanelShell title="Edit" onClose={onClose}>
@@ -52,7 +68,16 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
 
       {block.kind === "kpi" || block.kind === "chart" || block.kind === "table" ? (
         <>
-          <QueryField docId={docId} block={block} onCommit={(query) => set({ query: query as unknown as Json })} problem={result?.error && !result.refreshed_at ? result.error : undefined} />
+          <QueryField
+            docId={docId}
+            block={block}
+            onCommit={(query, newSource) => {
+              if (!newSource) return set({ query: query as unknown as Json });
+              suggestFor.current = query?.source ?? null;
+              const label = dashboard.DATA_SOURCES.find((d) => d.id === query?.source)?.label;
+              set({ query: query as unknown as Json, ...Object.fromEntries(SHAPING.map((f) => [f, null])), ...(!block.title && label ? { title: label } : {}) });
+            }}
+            problem={result?.error && !result.refreshed_at ? result.error : undefined} />
           {block.kind === "kpi" ? (
             <>
               <Row>
@@ -121,10 +146,12 @@ function Row({ children }: { children: React.ReactNode }) {
 
 const inputCls = "w-full rounded-md bg-sol-bg border border-sol-border/60 px-2 h-8 text-sm text-sol-text outline-none focus:border-sol-blue";
 
-function TextField({ label, value, onCommit, multiline, mono, placeholder, hint, validate }: { label: string; value: unknown; onCommit: (v: string) => void; multiline?: boolean; mono?: boolean; placeholder?: string; hint?: string; validate?: (v: string) => string | null }) {
+function TextField({ label, value, onCommit, multiline, mono, placeholder, hint, validate, warn }: { label: string; value: unknown; onCommit: (v: string) => void; multiline?: boolean; mono?: boolean; placeholder?: string; hint?: string; validate?: (v: string) => string | null; warn?: (v: string) => string | null }) {
   const shown = value === undefined || value === null ? "" : String(value);
   const { draft, setDraft, onFocus, onBlur } = useCommittedDraft(shown);
   const error = validate ? validate(draft) : null;
+  // A warning is read while typing, before anything is saved; unlike an error it doesn't stop the save.
+  const caution = !error && warn ? warn(draft) : null;
   const props = {
     value: draft,
     onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => setDraft(e.target.value),
@@ -146,7 +173,7 @@ function TextField({ label, value, onCommit, multiline, mono, placeholder, hint,
       ) : (
         <input {...props} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} className={`${inputCls} ${mono ? "font-mono text-[12px]" : ""} ${bad}`} />
       )}
-      {error ? <span className="block text-meta text-sol-red">{error}</span> : hint ? <span className="block text-meta text-sol-text-dim truncate" title={hint}>{hint}</span> : null}
+      {error ? <span className="block text-meta text-sol-red">{error}</span> : caution ? <span className="block text-meta text-sol-yellow">{caution}</span> : hint ? <span className="block text-meta text-sol-text-dim truncate" title={hint}>{hint}</span> : null}
     </label>
   );
 }
@@ -170,7 +197,7 @@ function Select({ label, value, options, labels, empty, onChange }: { label: str
   );
 }
 
-function QueryField({ docId, block, onCommit, problem }: { docId: string; block: ArtifactElement; onCommit: (q: dashboard.DataQuery | null) => void; problem?: string }) {
+function QueryField({ docId, block, onCommit, problem }: { docId: string; block: ArtifactElement; onCommit: (q: dashboard.DataQuery | null, newSource?: boolean) => void; problem?: string }) {
   // The query as the block stores it. blockQuery(block) is what is read (a period KPI reads twice its window); editing that would double the window on every change.
   const q = dashboard.blockQuery({ query: block.query });
   return (
@@ -179,7 +206,7 @@ function QueryField({ docId, block, onCommit, problem }: { docId: string; block:
         value={q?.source ?? ""}
         onChange={(e) => {
           const s = e.target.value;
-          onCommit(s ? { source: s, args: (dashboard.DEFAULT_ARGS[s] ?? {}) as any } : null);
+          onCommit(s ? { source: s, args: (dashboard.DEFAULT_ARGS[s] ?? {}) as any } : null, true);
         }}
         className={`${inputCls} pr-6`}
         aria-label="Source"
@@ -259,15 +286,26 @@ function AlertFields({ block, result, onSet }: { block: ArtifactElement; result:
   const ev = dashboard.evaluateKpi(block as dashboard.KpiBlock, result);
   const state = dashboard.alertState(block, result);
   const now = ev.state === "ok" ? `now ${ev.display}` : "–";
+  // A line the value already crosses notifies at the next read: say so while it is typed, not after it is saved.
+  const crossing = (side: "above" | "below") => (v: string) => {
+    const n = parse(v);
+    if (typeof n !== "number" || ev.state !== "ok" || typeof ev.value !== "number") return null;
+    return (side === "above" ? ev.value > n : ev.value < n) ? `Already past (${ev.display}): alerts on the next read` : null;
+  };
+  const whoName = useInboxStore((s: any) => {
+    if (!alert?.by || alert.by === me) return null;
+    const m = (s.teamMembers ?? []).find((t: any) => String(t?._id ?? t?.user_id) === alert.by);
+    return m?.name ? String(m.name) : null;
+  });
   return (
     <Field label="Alert when it goes">
       <Row>
-        <TextField label={percent ? "Above (%)" : "Above"} value={shownLine(alert?.above)} placeholder={now} validate={check("above")} onCommit={(v) => write("above", v)} />
-        <TextField label={percent ? "Below (%)" : "Below"} value={shownLine(alert?.below)} placeholder={now} validate={check("below")} onCommit={(v) => write("below", v)} />
+        <TextField label={percent ? "Above (%)" : "Above"} value={shownLine(alert?.above)} placeholder={now} validate={check("above")} warn={crossing("above")} onCommit={(v) => write("above", v)} />
+        <TextField label={percent ? "Below (%)" : "Below"} value={shownLine(alert?.below)} placeholder={now} validate={check("below")} warn={crossing("below")} onCommit={(v) => write("below", v)} />
       </Row>
       <div className="flex flex-wrap gap-x-2 text-meta text-sol-text-dim tabular-nums" data-alert-status>
         {ev.state === "ok" ? <span>Now {ev.display}</span> : null}
-        {alert ? <span>· notifies {!alert.by || alert.by === me ? "you" : "the person who set it"}</span> : null}
+        {alert ? <span>· notifies {!alert.by || alert.by === me ? "you" : whoName ?? "the person who set it"}</span> : null}
         {state && state.state !== "ok" ? <span className="text-sol-red">· past the line now: an alert goes out on the next read</span> : null}
       </div>
     </Field>

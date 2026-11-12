@@ -43,14 +43,17 @@ export function typedNumbers(text: string): string[] {
     .map((p) => ("text" in p ? p.text : " "))
     .join("");
   const out: string[] = [];
-  for (const m of literal.matchAll(/[$+−-]?\d[\d,]*(\.\d+)?[%KMB]?/g)) {
+  // A number in any form the tiles print or a person writes: 23, 4.5K, 1.2k, $600, 12%, 3x, 2.5 million, 9 PRs.
+  for (const m of literal.matchAll(/(?<![\w.])[$+−-]?\d+(?:,\d{3})*(\.\d+)?(?:[%KMBkmb]|x)?(?![\w])(?:\s+(?:thousand|million|billion))?/g)) {
     const n = m[0];
-    if (!/\d{2,}|%|\$/.test(n)) continue;
-    // A year, a window ("last 30 days") or a rank ("top 10") names what is measured, not a measurement.
+    const plain = /^\d+$/.test(n);
+    // A year, a window ("last 30 days"), a rank ("top 10") or a place in a list ("step 2") names what is measured, not a measurement.
     if (/^(19|20)\d\d$/.test(n)) continue;
-    const before = literal.slice(0, m.index).match(/(\w+)\s*$/)?.[1]?.toLowerCase();
+    const before = literal.slice(0, m.index).match(/(\w+)\s*#?$/)?.[1]?.toLowerCase();
     const after = literal.slice(m.index! + n.length).match(/^\s*-?\s*(\w+)/)?.[1]?.toLowerCase();
-    if (/^\d+$/.test(n) && ((before && /^(last|past|next|first|top|bottom|over|every|per|q[1-4])$/.test(before)) || (after && /^(days?|weeks?|months?|years?|hours?|minutes?|d|w|h|m|mins?|hrs?)$/.test(after)))) continue;
+    if (plain && ((before && /^(last|past|next|first|top|bottom|over|every|per|q[1-4]|step|part|phase|chapter|section|no|number|version|v|page|item)$/.test(before)) || (after && /^(days?|weeks?|months?|years?|hours?|minutes?|d|w|h|m|mins?|hrs?)$/.test(after)))) continue;
+    // A lone digit counts only when it counts something ("9 PRs"); "1 of" a list or a digit ending a sentence is left alone.
+    if (plain && n.length === 1 && (!after || /^(of|and|or|to)$/.test(after))) continue;
     out.push(n);
   }
   return out;

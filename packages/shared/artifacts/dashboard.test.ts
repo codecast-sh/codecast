@@ -170,6 +170,9 @@ describe("text", () => {
   test("typed numbers are found outside references, small counts ignored", () => {
     expect(typedNumbers("We sold 58,500 pies, up 17% in 2 weeks; {b_x} live")).toEqual(["58,500", "17%"]);
     expect(typedNumbers("Spend is {b_spend}.")).toEqual([]);
+    // The forms the tiles print are typed numbers too; windows, ranks and list places are not.
+    expect(typedNumbers("Spend hit 4.5K, 1.2k tokens, 9 PRs, 2.5 million rows, 3x more")).toEqual(["4.5K", "1.2k", "9", "2.5 million", "3x"]);
+    expect(typedNumbers("The top 10 over the last 30 days, step 2 of 3, Q4 2026")).toEqual([]);
   });
 });
 

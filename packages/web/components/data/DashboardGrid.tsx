@@ -46,9 +46,13 @@ export function DashboardGrid({ blocks: all, env, edit, selected, me, onSelect, 
   useMountEffect(() => {
     const el = gridRef.current;
     if (!el) return;
+    // A band around each breakpoint: a scrollbar coming and going as blocks load moves the width by ~15px, and must not flip the layout.
+    let cur: dashboard.GridWidth = "wide";
     const ro = new ResizeObserver((e) => {
       const w = e[0]?.contentRect.width ?? 1200;
-      setWidth(w > 860 ? "wide" : w > 480 ? "medium" : "narrow");
+      const pad = (edge: number, above: boolean) => (above ? w > edge - 24 : w > edge + 24);
+      cur = pad(860, cur === "wide") ? "wide" : pad(480, cur !== "narrow") ? "medium" : "narrow";
+      setWidth(cur);
     });
     ro.observe(el);
     return () => ro.disconnect();
@@ -177,7 +181,8 @@ const Cell = memo(function Cell({ b, drawn, env, edit, selected, fresh, dropSide
       ) : (
         <>
           <div className="flex items-start gap-2 mb-1.5 min-h-[22px]">
-            <div className="min-w-0 flex-1">
+            {/* The title keeps room for a word or two: tags shrink and truncate before it does. */}
+            <div className="min-w-[min(7rem,50%)] flex-1">
               <div className={`truncate ${b.kind === "kpi" ? "text-[13px] text-sol-text-muted" : "text-sm font-semibold text-sol-text"}`}>{String(b.title || (edit ? "Untitled" : ""))}</div>
               {b.kind !== "kpi" && b.caption ? <div className="text-meta text-sol-text-muted truncate">{String(b.caption)}</div> : null}
             </div>
@@ -224,7 +229,7 @@ function WhereTag({ b }: { b: ArtifactElement }) {
   const words = clauses.map((c) => `${OPS[c.op] ?? ""}${value(c.value)}`);
   const short = clauses.length === 1 && (clauses[0].op === "eq" || clauses[0].op === "in") ? `${value(clauses[0].value)} only` : `${clauses.length} filter${clauses.length === 1 ? "" : "s"}`;
   return (
-    <span className="shrink-0 max-w-[45%] h-5 px-1.5 rounded bg-sol-blue/10 text-meta leading-5 text-sol-text-secondary truncate" title={`Only rows where ${clauses.map((c, i) => `${c.column} ${words[i]}`).join(" and ")}`} data-where-tag>
+    <span className="min-w-0 max-w-[45%] h-5 px-1.5 rounded bg-sol-blue/10 text-meta leading-5 text-sol-text-secondary truncate" title={`Only rows where ${clauses.map((c, i) => `${c.column} ${words[i]}`).join(" and ")}`} data-where-tag>
       {short}
     </span>
   );
@@ -236,7 +241,7 @@ function UnfilteredTag({ b, env }: { b: ArtifactElement; env: BlockEnv }) {
   if (!missing.length) return null;
   const word = (c: string) => (c === "day" || c === "date" ? "dates" : c === "person" ? "people" : `${c}s`);
   return (
-    <span className="shrink-0 h-5 px-1.5 rounded bg-sol-bg-alt text-meta leading-5 text-sol-text-dim whitespace-nowrap" title={`This source has no ${missing.join(" or ")} column, so the filter on it doesn't apply here`} data-unfiltered={missing.join(",")}>
+    <span className="min-w-0 max-w-[45%] truncate h-5 px-1.5 rounded bg-sol-bg-alt text-meta leading-5 text-sol-text-dim whitespace-nowrap" title={`This source has no ${missing.join(" or ")} column, so the filter on it doesn't apply here`} data-unfiltered={missing.join(",")}>
       All {missing.map(word).join(", ")}
     </span>
   );

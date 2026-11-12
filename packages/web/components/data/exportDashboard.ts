@@ -1,6 +1,6 @@
 // The whole dashboard as a file: a PNG drawn from the page as laid out (card
 // boxes, every line of text in its own font and color, each chart's canvas),
-// and a one-page PDF around that image. No DOM-to-image library: the
+// and a PDF of that image cut into Letter pages at the gaps between blocks. No DOM-to-image library: the
 // dashboard is boxes, text and canvases, and drawing those directly keeps the
 // output exact and the bundle unchanged.
 
