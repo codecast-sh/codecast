@@ -58,6 +58,7 @@ import { pasteOps, placeImage, serializeSelection, stickiesToTasks } from "./boa
 import type { BoardEl, BoardTool } from "./boardTypes";
 import { drawOrder, fitBox } from "./boardFrame";
 import { BoardMinimap } from "./BoardMinimap";
+import { nextStickySpot } from "./boardPlacement";
 import { BoardEditBar } from "./BoardEditBar";
 import { BOARD_ART_URLS } from "./boardArtUrls";
 
@@ -227,17 +228,13 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
         if (el?.kind !== "sticky") return;
         const b = elementBox(el);
         const k = newElementKey("el");
-        // The next free spot in that direction: past anything already there.
+        // The next free spot in that direction; inside a frame the row wraps and the frame grows.
         const h = editBaseH.current ?? b.h;
-        const taken = [...byKeyRef.current.values()].filter((o) => o.kind !== "frame" && o.kind !== "connector" && o.kind !== "pen").map(elementBounds);
-        let spot = { x: dir > 0 ? b.x + b.w + 24 : b.x, y: dir > 0 ? b.y : b.y + b.h + 24 };
-        for (let i = 0; i < 40 && taken.some((t) => intersects({ ...spot, w: b.w, h }, { x: t.x + 1, y: t.y + 1, w: t.w - 2, h: t.h - 2 })); i++) {
-          spot = dir > 0 ? { ...spot, x: spot.x + b.w + 24 } : { ...spot, y: spot.y + h + 24 };
-        }
+        const { growFrame, ...spot } = nextStickySpot(b, h, dir, byKeyRef.current.values());
         const put = { kind: "sticky", ...spot, w: b.w, h, text: "", color: el.color ?? "yellow", z: nextZ({ elements: [...byKeyRef.current.values()] }) };
         live.commit();
         editBaseH.current = null;
-        live.apply([{ k, put: put as any }]);
+        live.apply([{ k, put: put as any }, ...(growFrame ? [{ k: growFrame.key, set: { h: growFrame.h } }] : [])]);
         byKeyRef.current.set(k, { ...(put as any), key: k, rev: 0 });
         setSelection([k]);
         setEditing(k);
