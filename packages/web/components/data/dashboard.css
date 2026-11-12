@@ -59,7 +59,8 @@
 }
 /* Scrollyteller: words scroll past a pinned stage that swaps to the step being read. */
 .scrolly-group { position: relative; display: grid; grid-template-columns: 1fr; }
-.scrolly-stage { position: sticky; top: 0; z-index: 1; height: 56vh; padding: 12px 0; background: var(--sol-bg); }
+/* One column: the stage pins on top and covers the cards behind it, so words appear only below the chart and never over it. */
+.scrolly-stage { position: sticky; top: 0; z-index: 3; height: 54vh; padding: 12px 0; background: var(--sol-bg); }
 .scrolly-stage-inner { position: relative; height: 100%; }
 .scrolly-visual {
   position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center;
@@ -67,9 +68,8 @@
   transition: opacity 0.5s ease, transform 0.6s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 .scrolly-visual.is-on { opacity: 1; transform: none; pointer-events: auto; }
-.scrolly-steps { position: relative; z-index: 2; }
-/* One column: the stage holds the top half, so a step's words sit low, under the chart, never over its axis. */
-.scrolly-step { min-height: 85vh; display: flex; align-items: flex-end; padding-bottom: 6vh; }
+.scrolly-steps { position: relative; z-index: 1; }
+.scrolly-step { min-height: 70vh; display: flex; align-items: flex-end; padding-bottom: 4vh; }
 .scrolly-card {
   max-width: 520px; padding: 18px 20px; border-radius: 14px;
   background: color-mix(in srgb, var(--sol-card) 94%, transparent); border: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);

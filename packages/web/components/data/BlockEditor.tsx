@@ -171,7 +171,8 @@ function Select({ label, value, options, labels, empty, onChange }: { label: str
 }
 
 function QueryField({ docId, block, onCommit, problem }: { docId: string; block: ArtifactElement; onCommit: (q: dashboard.DataQuery | null) => void; problem?: string }) {
-  const q = dashboard.blockQuery(block);
+  // The query as the block stores it. blockQuery(block) is what is read (a period KPI reads twice its window); editing that would double the window on every change.
+  const q = dashboard.blockQuery({ query: block.query });
   return (
     <Field label="Source">
       <select

@@ -29,7 +29,7 @@ function StoryBlock({ b, env, reveal }: { b: ArtifactElement; env: BlockEnv; rev
         </div>
         {check ? <CheckMark check={check} onClick={() => env.onCheck?.(b.key)} /> : null}
       </div>
-      {b.kind === "chart" ? (reveal ? <ChartBody b={b} env={env} height={340} compact={false} revealMs={1400} annotate /> : <div style={{ height: 340 }} />) : null}
+      {b.kind === "chart" ? (reveal ? <ChartBody b={b} env={env} height="min(340px, 36vh)" compact={false} revealMs={1400} annotate /> : <div style={{ height: "min(340px, 36vh)" }} />) : null}
       {b.kind === "table" ? <TableBody b={b} env={env} maxHeight={420} /> : null}
       {b.kind === "text" ? <TextBody b={b} env={env} /> : null}
     </div>
@@ -97,7 +97,8 @@ export function ScrollyStory({ title, layout, elements, env }: StoryProps) {
           setShown((prev) => (prev.has(i) ? prev : new Set(prev).add(i)));
         }
       },
-      { rootMargin: "-45% 0px -45% 0px" },
+      // The band a step is read in sits low on the pane, under the pinned stage on one column and level with the words on two.
+      { rootMargin: "-62% 0px -18% 0px" },
     );
     for (const el of refs.current) if (el) io.observe(el);
     return () => io.disconnect();
