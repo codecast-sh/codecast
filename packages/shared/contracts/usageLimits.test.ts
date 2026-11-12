@@ -397,8 +397,8 @@ describe("spendCapUntil — a spend-limit park names the week that lifts it", ()
   test("a blocked account is exhausted whatever its meters say, until the block lifts", () => {
     const u = usage({ weekly: { percent: 29, resets_at: now + 86_400_000 }, blocked_until: now + 86_400_000 });
     expect(isUsageExhausted(u, now)).toBe(true);
-    expect(standingLabel(u, now)).toBe("spend cap hit");
-    expect(exhaustedLabel(u, now)).toBe("spend cap hit");
+    expect(standingLabel(u, now)).toBe("spend limit reached");
+    expect(exhaustedLabel(u, now)).toBe("spend limit reached");
     expect(isUsageExhausted(u, now + 2 * 86_400_000)).toBe(false);
   });
 });

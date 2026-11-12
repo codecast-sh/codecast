@@ -103,10 +103,10 @@ export function planTypeLabel(planType: string): string {
   return PLAN_TYPE_LABELS[planType.toLowerCase()] ?? `${planType.charAt(0).toUpperCase()}${planType.slice(1)}`;
 }
 
-/** Why an exhausted account is out, in a few words: "spend cap hit" or
+/** Why an exhausted account is out, in a few words: "spend limit reached" or
  *  "Week (7d) full". */
 export function exhaustedLabel(usage: CcUsage | undefined | null, now: number): string {
-  if ((usage?.blocked_until ?? 0) > now) return "spend cap hit";
+  if ((usage?.blocked_until ?? 0) > now) return "spend limit reached";
   return `${peggedWindowLabel(usage, now) ?? "limit"} full`;
 }
 
@@ -238,7 +238,7 @@ export function usageStanding(usage: CcUsage | undefined | null, now: number): U
  * pegged, "stale" when a rolled window is unmeasured, "no data" when nothing
  * was ever read, else "N% used". */
 export function standingLabel(usage: CcUsage | undefined | null, now: number): string {
-  if ((usage?.blocked_until ?? 0) > now) return "spend cap hit";
+  if ((usage?.blocked_until ?? 0) > now) return "spend limit reached";
   const s = usageStanding(usage, now);
   if (s.pegged) return "at limit";
   if (s.percent === null) return s.stale ? "stale" : "no data";

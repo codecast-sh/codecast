@@ -131,7 +131,7 @@ export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: 
           percent={100}
           resetsAt={usage.blocked_until}
           now={now}
-          title={`Monthly spend cap hit: a parked session's banner named this account. Usable again when its week resets in ${formatCountdown(usage.blocked_until! - now)}.`}
+          title={`Monthly spend limit reached: a parked session's banner named this account. Usable again when its week resets in ${formatCountdown(usage.blocked_until! - now)}.`}
         />
       )}
       {usage.extra && showExtraSpend(usage.extra) && (
