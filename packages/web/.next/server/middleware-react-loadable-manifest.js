@@ -1,0 +1,1 @@
+self.__REACT_LOADABLE_MANIFEST="{\"components/DashboardLayout.tsx -> ./InviteModal\":{\"id\":\"components/DashboardLayout.tsx -> ./InviteModal\",\"files\":[\"static/chunks/_app-pages-browser_components_InviteModal_tsx.js\"]}}"

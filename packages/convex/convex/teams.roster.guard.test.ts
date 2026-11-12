@@ -31,6 +31,10 @@ describe("the team roster reads nothing that churns at streaming rate", () => {
     expect(handler).not.toMatch(/query\(\s*["']conversations["']\s*\)/);
   });
 
+  test("it gets no conversation by id (the viewed one is gated on the presence row's copy)", () => {
+    expect(handler).not.toMatch(/db\.get\([^)]*viewing/);
+  });
+
   test("it reads no message", () => {
     expect(handler).not.toMatch(/query\(\s*["']messages["']\s*\)/);
   });
