@@ -7,8 +7,8 @@ import { useWatchEffect } from "./useWatchEffect";
  * Marks a surface's top row as the window titlebar while zen mode hides the
  * global header: the row becomes the drag region (desktop app) and, at the
  * window's left edge, indents past the zen corner, which holds the traffic
- * lights on the desktop and the zen toggle everywhere (lib/desktop
- * attachTitlebarHead, ZenCorner). Outside zen it is inert. Attach the
+ * lights on the desktop (lib/desktop attachTitlebarHead, zenCornerWidth).
+ * Outside zen it is inert. Attach the
  * returned ref to the topmost row of the page or panel — specifically the
  * element that PAINTS that row's background and border, so the traffic-light
  * inset padding shares its surface instead of exposing a parent's.

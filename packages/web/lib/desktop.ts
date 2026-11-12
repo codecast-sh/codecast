@@ -1493,32 +1493,16 @@ const TRAFFIC_LIGHTS_W = 78;
 const TRAFFIC_LIGHTS_H = 24;
 // Rows starting within this band act as the titlebar (drag surface).
 const TITLEBAR_H = 36;
-// Zen's toggle sits in the titlebar band exactly where the top bar's toggle
-// sits outside zen (the bar's inset plus its 12px padding), so entering and
-// leaving is one spot; rows at the left edge clear it too.
-const ZEN_TOGGLE_LEFT_DESKTOP = TRAFFIC_LIGHTS_W + 12;
-const ZEN_TOGGLE_LEFT_WEB = 12;
-// In the corner the toggle carries its label ("Exit zen"), at a fixed width.
-export const ZEN_EXIT_W = 92;
-const ZEN_TOGGLE_GAP = 6;
-// The workspace switcher's crest button sits beside the toggle in zen.
-const ZEN_SWITCHER_SIZE = 28;
-
-export function zenToggleLeft(): number {
-  return isElectron() ? ZEN_TOGGLE_LEFT_DESKTOP : ZEN_TOGGLE_LEFT_WEB;
-}
-
-/** The width of the top-left corner zen reserves: lights (desktop), the
- *  toggle and the workspace switcher. */
+/** The width of the top-left corner zen keeps clear: the traffic lights on the
+ *  desktop. Zen draws no controls of its own (the top bar peeks in from the
+ *  top edge, components/ZenBarPeek), so on the web there is nothing to clear. */
 export function zenCornerWidth(): number {
-  // A phone has no corner toggle (zen's controls are desktop width only).
-  if (!isElectron() && window.innerWidth < 768) return 0;
-  return zenToggleLeft() + ZEN_EXIT_W + ZEN_TOGGLE_GAP + ZEN_SWITCHER_SIZE + ZEN_TOGGLE_GAP;
+  return isElectron() ? TRAFFIC_LIGHTS_W : 0;
 }
 
 // Zen mode hides the global header, yet the window still needs a surface to
-// drag by and its top-left corner cleared: on the desktop the traffic lights
-// and the zen toggle sit there, on the web just the toggle (ZenCorner). Rather
+// drag by and its top-left corner cleared of the traffic lights on the
+// desktop (zenCornerWidth). Rather
 // than a dedicated strip, the top row of whatever surface is showing plays the
 // titlebar: while it lies in the titlebar band it becomes the drag region (the
 // .titlebar-head rules), and when it also sits at the window's left edge it
@@ -1628,7 +1612,7 @@ export function guardZenCorner(corner: number, controls: Element): () => void {
     pending = null;
     if (adopted && !adopted.el.isConnected) release();
     // Probe level with the lights, across the corner: at the edge, mid-way,
-    // and just inside its right end where the zen controls sit.
+    // and just inside its right end.
     for (const x of [4, corner / 2, corner - 6]) {
       const hit = document.elementsFromPoint(x, TRAFFIC_LIGHTS_H - 6).find((e) => !controls.contains(e));
       if (!hit || hit.closest(".titlebar-head")) continue;

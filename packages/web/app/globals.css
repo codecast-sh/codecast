@@ -2363,7 +2363,7 @@ diffs-container {
    --titlebar-inset clears the macOS traffic lights (main.js places them at
    x:16,y:12). .electron-drag-region is the global header; .titlebar-head is
    any surface's top row standing in for it while zen mode hides that header
-   (hooks/useTitlebarHead), clearing the zen corner (ZenCorner). */
+   (hooks/useTitlebarHead), clearing the traffic lights. */
 :root {
   --titlebar-inset: 78px;
 }
@@ -2411,10 +2411,16 @@ diffs-container {
    no-drag only wins where it comes LATER in the document than the drag
    region it overlaps (Blink sends the rects in tree order, Electron lets the
    last one win), so a fixed control over the titlebar must also mount after
-   the page: portals do, and ZenCorner sits at the end of the shell. */
+   the page: portals do, and zen's top-edge strip sits at the end of the shell. */
 [data-flyout],
 [data-radix-popper-content-wrapper],
 [aria-modal="true"] {
+  -webkit-app-region: no-drag;
+}
+/* Zen's top bar, peeked down over the page (components/ZenBarPeek), sits
+   earlier in the shell than the page rows that play the titlebar, so those
+   rows would win its clicks; they stop dragging while it is down. */
+[data-zen-bar-open] .titlebar-head {
   -webkit-app-region: no-drag;
 }
 
