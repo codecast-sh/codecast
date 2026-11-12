@@ -12,12 +12,8 @@ import { noTerminal } from "./psTerminal.js";
 
 /** The variables that name the session a process works for (sessionIdFromEnv reads them). */
 export const SESSION_ENV_KEYS = ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODECAST_SESSION_ID", "CODECAST_MANAGED_SESSION"];
-/** Credentials Claude Code takes from the environment ahead of its credential
- *  store. One inherited from a tmux server's global env, a daemon unit's
- *  EnvironmentFile or a shell rc pins every launch to that account, so a switch
- *  that moves the store moves nothing: on 2026-11-12 a cloud host's sessions
- *  stayed on one spent org through every switch, first by a dotfile's
- *  ANTHROPIC_API_KEY, then by a claude.env CLAUDE_CODE_OAUTH_TOKEN. */
+/** Env credentials Claude bills ahead of its credential store, so an inherited
+ *  one (a dotfile, a unit's EnvironmentFile, tmux) survives every switch. */
 export const STORE_OUTRANKING_ENV = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY"] as const;
 const KEYS = [...SESSION_ENV_KEYS, "TMUX", "TERM_PROGRAM", "CLAUDE_SECURESTORAGE_CONFIG_DIR", ...STORE_OUTRANKING_ENV];
 

@@ -1800,15 +1800,10 @@ export const FLEET_GATE_ACCOUNT = "+fleet";
 
 export { STORE_OUTRANKING_ENV };
 
-/** Dropping them, ahead of any launch codecast puts on a chosen account. A
- *  token profile's own file is sourced after this and sets its token again. */
+/** Run first on any launch on a chosen account; a token profile re-exports its own. */
 export const ACCOUNT_LAUNCH_UNSET = `unset ${STORE_OUTRANKING_ENV.join(" ")}; `;
 
-/** Claude bills ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY ahead of every
- *  subscription login, so a key a shell profile exports (a dotfile mirrored to
- *  a cloud host, 2026-11-12) moves every session onto that key's org and its
- *  spend cap. A keychain launch on a machine that keeps saved profiles drops
- *  them; a machine with none may run claude on a key on purpose. */
+/** A keychain launch where saved profiles exist: Claude bills these ahead of the login. */
 export const SUBSCRIPTION_KEY_UNSET = "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; ";
 
 /** Source a credential-store launch file, dropping any credential the shell
