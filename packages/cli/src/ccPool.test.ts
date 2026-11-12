@@ -191,6 +191,25 @@ describe("the shared account pool on two machines", () => {
     expect(readAccountTokenValue("pool-claude4-2")).toBe(fresh);
   });
 
+  it("an account moving to another share keeps its profile, and the fleet stays on it", async () => {
+    const s = server();
+    use(holderHome);
+    await runPoolPass(s.holder, cfg(holderHome), NOW);
+    use(drawerHome);
+    await runPoolPass(s.drawer, cfg(drawerHome), NOW);
+    await putFleetOn("pool-claude4", NOW);
+    // The same account, now from the owner's personal pool instead of a team's.
+    const moved: PoolBackend = {
+      state: async () => ({ seal: [], copies: [{ ...(await s.drawer.state())!.copies[0], share_id: "s2" }] }),
+      store: async () => { throw new Error("a drawer stores nothing"); },
+    };
+    expect(await runPoolPass(moved, cfg(drawerHome), NOW)).toEqual([]);
+    expect(readProfileIndex().profiles["pool-claude4"]).toMatchObject({ pool_share_id: "s2" });
+    expect(installedPoolProfiles()).toEqual(new Map([["s2", "pool-claude4"]]));
+    expect(readFleetState()?.profile).toBe("pool-claude4");
+    expect(readAccountTokenValue("pool-claude4")).toBe(TOKEN);
+  });
+
   it("a holder with no live token says so and seals nothing", async () => {
     const s = server();
     use(holderHome);

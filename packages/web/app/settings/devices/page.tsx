@@ -23,6 +23,7 @@ import { ManagedDevicePill } from "../../../components/settings/ManagedDevicePil
 import { useSharedWithLabel } from "../../../hooks/useDeviceSharing";
 import { CloudHostPanel } from "../../../components/settings/CloudHostPanel";
 import { TeamMachineCard } from "../../../components/settings/TeamMachineCard";
+import { ConnectMachine, ConnectMachineDialog } from "../../../components/ConnectMachine";
 import { useSyncTeamMachines } from "../../../hooks/useSyncTeamMachines";
 
 type RepoPlane = NonNullable<Device["git_plane"]>[number];
@@ -280,12 +281,22 @@ function RemoveMachineButton({ d }: { d: Device }) {
   );
 }
 
+/** An offline machine of your own comes back through the same command that connected it. A cloud box wakes on use instead. */
+function ReconnectButton({ d, onReconnect }: { d: Device; onReconnect: (d: Device) => void }) {
+  if (d.online || d.is_remote) return null;
+  return (
+    <Button type="button" size="sm" variant="secondary" className="h-7 px-2.5 text-meta" onClick={() => onReconnect(d)}>
+      Reconnect
+    </Button>
+  );
+}
+
 /**
  * A machine that has gone quiet: one line, since the usual thing to do with it
  * is remove it. The name opens the same details an active machine shows, so its
  * SSH host and checkouts stay reachable.
  */
-function InactiveDeviceRow({ d }: { d: Device }) {
+function InactiveDeviceRow({ d, onReconnect }: { d: Device; onReconnect: (d: Device) => void }) {
   const [open, setOpen] = useState(false);
   const sharedWith = useSharedWithLabel(d);
   return (
@@ -309,6 +320,7 @@ function InactiveDeviceRow({ d }: { d: Device }) {
             {deviceKindLabel(d)} · last seen {relativeSeen(d.last_seen)}{sharedWith ? ` · ${sharedWith}` : ""} · {d.device_id.slice(0, 8)}
           </div>
         </button>
+        <ReconnectButton d={d} onReconnect={onReconnect} />
         <RemoveMachineButton d={d} />
       </div>
       {open && (
@@ -370,7 +382,7 @@ function DeviceDetails({ d }: { d: Device }) {
   );
 }
 
-function DeviceRow({ d }: { d: Device }) {
+function DeviceRow({ d, onReconnect }: { d: Device; onReconnect: (d: Device) => void }) {
   const accent = d.is_remote ? "text-sol-violet" : /linux/i.test(d.platform) ? "text-sol-orange" : "text-sol-blue";
   return (
     <div className="px-4 py-4 sm:px-5">
@@ -382,8 +394,9 @@ function DeviceRow({ d }: { d: Device }) {
           <DevicePanelHeader selected={d} note="seen" />
           <DeviceShareControl d={d} />
           <DeviceDetails d={d} />
-          <div className="mt-3 flex justify-end empty:hidden">
+          <div className="mt-3 flex items-center justify-end gap-3 empty:hidden">
             <RemoveMachineButton d={d} />
+            <ReconnectButton d={d} onReconnect={onReconnect} />
           </div>
         </div>
       </div>
@@ -470,11 +483,11 @@ function TeamMachinesSection() {
   );
 }
 
-const openCliSection = () => useInboxStore.getState().openSettingsModal("cli");
-
 export default function DevicesSettingsPage() {
   const { devices } = useDevices();
   const [remoteSetupOpen, setRemoteSetupOpen] = useState(false);
+  const [connect, setConnect] = useState<{ open: boolean; target?: Device }>({ open: false });
+  const reconnect = (target: Device) => setConnect({ open: true, target });
   const sorted = useMemo(
     () =>
       [...devices].sort(
@@ -491,16 +504,6 @@ export default function DevicesSettingsPage() {
       <SettingsSection
         title="Machines"
         icon={MonitorSmartphone}
-        description={
-          <>
-            Machines running the codecast daemon. A session runs on exactly one device. New sessions and
-            messages from your phone route to your most-recently-active laptop or desktop — a{" "}
-            <span className="text-sol-violet">cloud box</span> only runs a session you explicitly move there,
-            and wakes from sleep when you do. Share a machine with a team and teammates can start sessions on
-            it too. A machine can be removed once it is offline; stop its daemon with{" "}
-            <code className="font-mono text-sol-text">cast stop</code> first, or it lists itself again.
-          </>
-        }
         actions={
           sorted.length > 0 ? (
             <span className="text-meta text-sol-text-muted">
@@ -511,22 +514,20 @@ export default function DevicesSettingsPage() {
         }
       >
         {sorted.length === 0 ? (
-          <div className="px-4 py-6 text-center text-sm text-sol-text-muted sm:px-5">
-            No devices yet. Install the CLI on a machine to see it here —{" "}
-            <button type="button" onClick={openCliSection} className="text-sol-yellow hover:text-sol-yellow/80">
-              get the install command
-            </button>
-            . Already installed? Start it with <code className="font-mono text-sol-text">cast start</code>.
+          <div className="px-4 py-5 sm:px-5">
+            <ConnectMachine location="settings_machines_empty" />
           </div>
         ) : (
-          current.map((d) => <DeviceRow key={d.device_id} d={d} />)
+          current.map((d) => <DeviceRow key={d.device_id} d={d} onReconnect={reconnect} />)
         )}
-        <SettingsLinkRow
-          icon={Terminal}
-          label="Connect a machine"
-          description="Install the cast CLI and sign a machine in"
-          onClick={openCliSection}
-        />
+        {sorted.length > 0 && (
+          <SettingsLinkRow
+            icon={Terminal}
+            label="Connect a machine"
+            description="Add another computer or server"
+            onClick={() => setConnect({ open: true })}
+          />
+        )}
         <SettingsLinkRow
           icon={Cloud}
           label="Add a cloud machine"
@@ -544,7 +545,7 @@ export default function DevicesSettingsPage() {
         <SettingsSection
           title="Inactive"
           icon={Archive}
-          description="Not seen in the last day. Removing a machine only clears it from your lists: its sessions and transcripts stay, and it lists itself again if its daemon ever runs."
+          description="Not seen in the last day."
           actions={
             stale.length > 1 ? (
               <ConfirmButton
@@ -557,12 +558,13 @@ export default function DevicesSettingsPage() {
           }
         >
           {stale.map((d) => (
-            <InactiveDeviceRow key={d.device_id} d={d} />
+            <InactiveDeviceRow key={d.device_id} d={d} onReconnect={reconnect} />
           ))}
         </SettingsSection>
       )}
       <TeamMachinesSection />
       <RemoteMachineSetup open={remoteSetupOpen} onOpenChange={setRemoteSetupOpen} />
+      <ConnectMachineDialog target={connect.target} open={connect.open} onOpenChange={(open) => setConnect((c) => ({ ...c, open }))} />
     </SettingsPanel>
   );
 }
