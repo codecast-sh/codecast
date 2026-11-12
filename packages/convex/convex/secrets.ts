@@ -405,6 +405,7 @@ function metaOf(row: SecretRow, names: Map<string, string>): SecretMeta {
     updated_by_name: row.updated_by ? names.get(String(row.updated_by)) : undefined,
     has_otp: row.has_otp,
     ask_first: row.ask_first,
+    touch_id: row.touch_id,
     version_count: row.version_count,
   };
 }
@@ -875,11 +876,10 @@ export const remove = mutation({
 
 /**
  * Ask first on or off. On, an agent's read from a session needs a person's
- * approval for that session (cliRead files the decision); a person's own
- * reveal on the web takes Touch ID instead (reveal). Anyone may turn it on, a
- * token included; turning it off takes a person signed in to the app, since an
- * api token is what the gated agent itself holds, and an ask_first_off grant
- * (passkeys.ts), since an agent may be driving that app, spent with the
+ * approval for that session (cliRead files the decision). Anyone may turn it
+ * on, a token included; turning it off takes a person signed in to the app,
+ * since an api token is what the gated agent itself holds, and, when the
+ * secret has Touch ID on, an ask_first_off grant (passkeys.ts), spent with the
  * `grant` string the person's confirmation handed their client. The web's
  * dispatch side effect calls this.
  */
@@ -891,8 +891,7 @@ export const setAskFirst = mutation({
     const row = await findSecret(ctx, userId, args.ref);
     if ("error" in row) return row;
     if (!!row.ask_first !== args.ask_first) {
-      // The person's own browser may be driven by an agent, so off takes a passkey too.
-      const refusal = args.ask_first ? null : await consumePresence(ctx, userId, "ask_first_off", String(row._id), args.grant);
+      const refusal = !args.ask_first && row.touch_id ? await consumePresence(ctx, userId, "ask_first_off", String(row._id), args.grant) : null;
       if (refusal) return { error: refusal };
       await ctx.db.patch(row._id, { ask_first: args.ask_first, ...metaStamp(row, userId) });
       await recordSecretEvent(ctx, row, args.ask_first ? "ask_first_on" : "ask_first_off", { actor: userId });
@@ -902,6 +901,32 @@ export const setAskFirst = mutation({
       await bumpRedaction(ctx, row.workspace);
     }
     return { id: String(row._id), short_id: row.short_id, name: row.name, ask_first: args.ask_first };
+  },
+});
+
+/**
+ * Touch ID on or off, independent of Ask first. On, revealing the value,
+ * approving an Ask first read of it and turning either guard off take a
+ * passkey. Anyone may turn it on; off takes a person signed in to the app and
+ * a touch_id_off grant. Open Ask first decisions follow the switch, so their
+ * Approve asks (or stops asking) for Touch ID at once.
+ */
+export const setTouchId = mutation({
+  args: { api_token: v.optional(v.string()), ref: v.string(), touch_id: v.boolean(), grant: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = args.touch_id ? await requireCaller(ctx, args.api_token) : await getAuthUserId(ctx);
+    if (!userId) return { error: "Only a person turns Touch ID off: switch it off in the secret's panel on the Vault page" };
+    const row = await findSecret(ctx, userId, args.ref);
+    if ("error" in row) return row;
+    if (!!row.touch_id !== args.touch_id) {
+      const refusal = args.touch_id ? null : await consumePresence(ctx, userId, "touch_id_off", String(row._id), args.grant);
+      if (refusal) return { error: refusal };
+      await ctx.db.patch(row._id, { touch_id: args.touch_id, ...metaStamp(row, userId) });
+      await recordSecretEvent(ctx, row, args.touch_id ? "touch_id_on" : "touch_id_off", { actor: userId });
+      const pending = await ctx.db.query("secret_approvals").withIndex("by_secret_conversation", (q) => q.eq("secret_id", row._id)).collect();
+      for (const a of pending) if (a.status === "pending") await ctx.db.patch(a.decision_id, { touch_id: args.touch_id || undefined });
+    }
+    return { id: String(row._id), short_id: row.short_id, name: row.name, touch_id: args.touch_id };
   },
 });
 
@@ -1204,6 +1229,7 @@ async function askFirstGate(
     if (open?.status === "pending") {
       // A newer why rewrites the open decision in place; a repeat without one leaves it as asked.
       if (why?.trim() && open.context_md !== context_md) await ctx.db.patch(open._id, { context_md, updated_at: now });
+      if (!!open.touch_id !== !!row.touch_id) await ctx.db.patch(open._id, { touch_id: row.touch_id || undefined });
       approvals.push({ decision: open.short_id, secret: row.name });
       continue;
     }
@@ -1213,9 +1239,11 @@ async function askFirstGate(
       options: [{ label: APPROVE_FOR_SESSION }, { label: DENY }],
       context_md,
       category: "access",
+      vault: true,
       blocking: true,
     });
     if (asked?.error) return { error: `Could not ask for ${row.name}: ${asked.error}` };
+    if (row.touch_id) await ctx.db.patch(asked.id, { touch_id: true });
     const fields = { decision_id: asked.id, status: "pending" as const, approved_by: undefined, at: now };
     if (existing) await ctx.db.patch(existing._id, fields);
     else await ctx.db.insert("secret_approvals", { secret_id: row._id, workspace: row.workspace, conversation_id: conversation._id, ...fields });
@@ -1240,7 +1268,7 @@ export const recordReads = internalMutation({
     conversation_id: v.optional(v.id("conversations")),
     purpose: v.optional(purposeValidator),
     why: v.optional(v.string()),
-    // revealed: the Touch ID grant string an Ask first secret's reveal spends.
+    // revealed: the Touch ID grant string a Touch ID secret's reveal spends.
     grant: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<SecretNeedsApproval | { error: string } | null> => {
@@ -1249,10 +1277,10 @@ export const recordReads = internalMutation({
       const held = await askFirstGate(ctx, args.user_id, rows, args.conversation_id, args.purpose ?? "get", args.why);
       if (held) return held;
     } else {
-      // A reveal of an Ask first secret takes a passkey: the click may be an agent driving the person's own browser.
+      // A reveal of a Touch ID secret takes a passkey: the click may be an agent driving the person's own browser.
       for (const id of args.ids) {
         const row = await ctx.db.get(id);
-        const refusal = row?.ask_first ? await consumePresence(ctx, args.user_id, "reveal", String(row._id), args.grant) : null;
+        const refusal = row?.touch_id ? await consumePresence(ctx, args.user_id, "reveal", String(row._id), args.grant) : null;
         if (refusal) return { error: refusal };
       }
     }
