@@ -11,7 +11,8 @@ import type { Doc, Id } from "../_generated/dataModel";
 import { teamVisibleConvTeam } from "../privacy";
 
 /** The conversation fields a session_starts row derives from. */
-const DERIVED_FROM = ["user_id", "team_id", "is_private", "auto_shared", "team_visibility", "agent_type", "started_at", "is_subagent", "parent_conversation_id"];
+const CARD_FIELDS = ["title", "project_path", "character_avatar", "character_name", "drawn_icon", "org_role_id", "standing_role_id"] as const;
+const DERIVED_FROM = ["user_id", "team_id", "is_private", "auto_shared", "team_visibility", "agent_type", "started_at", "is_subagent", "parent_conversation_id", ...CARD_FIELDS];
 
 export function sessionStartFields(conv: Doc<"conversations">) {
   const visible = teamVisibleConvTeam(conv);
@@ -22,15 +23,28 @@ export function sessionStartFields(conv: Doc<"conversations">) {
     agent_type: String(conv.agent_type),
     started_at: conv.started_at,
     subagent: !!(conv.is_subagent || conv.parent_conversation_id),
+    card: cardOf(conv),
   };
 }
+
+// The card holds only the fields the conversation has set, so a row compares
+// equal to its re-derivation field for field.
+function cardOf(conv: Doc<"conversations">) {
+  const card: Record<string, any> = {};
+  for (const f of CARD_FIELDS) if ((conv as any)[f] !== undefined) card[f] = (conv as any)[f];
+  return card as Partial<Pick<Doc<"conversations">, (typeof CARD_FIELDS)[number]>>;
+}
+
+const sameCard = (a: Record<string, any> | undefined, b: Record<string, any>) =>
+  !!a && CARD_FIELDS.every((f) => String(a[f] ?? "") === String(b[f] ?? "") && (a[f] === undefined) === (b[f] === undefined));
 
 const same = (row: any, next: ReturnType<typeof sessionStartFields>) =>
   String(row.user_id) === String(next.user_id) &&
   String(row.visible_team_id ?? "") === String(next.visible_team_id ?? "") &&
   row.agent_type === next.agent_type &&
   row.started_at === next.started_at &&
-  row.subagent === next.subagent;
+  row.subagent === next.subagent &&
+  sameCard(row.card, next.card);
 
 /** Re-derive one conversation's row from what it is now: write it, rewrite it, or drop it with the conversation. */
 export async function syncSessionStart(db: any, conversationId: Id<"conversations">): Promise<void> {

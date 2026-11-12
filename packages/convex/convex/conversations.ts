@@ -9790,6 +9790,7 @@ const CHILD_AUQ_PROBE_CACHE_MAX = 4096;
 const childAuqProbeCache = new Map<string, boolean>();
 export function _resetChildAuqProbeCacheForTests(): void {
   childAuqProbeCache.clear();
+  newestMessageCache.clear();
 }
 
 // Parents with a child that is asking: a child whose trusted status is
@@ -10168,27 +10169,59 @@ export async function classifyNamedWorkState(
 async function readLivenessRowInputs(ctx: any, conv: any, maps: InboxSessionMaps, now: number): Promise<LivenessRowReads> {
   let lastMsgRole: string | undefined = conv.last_message_role;
   let lastUserMessage: string | null = conv.last_message_preview || null;
-  let lastMsg: any = undefined; // undefined = not read yet
+  let facts: NewestMessageFacts | null | undefined = undefined; // undefined = not read yet
   if (!lastMsgRole && conv.message_count > 0) {
-    lastMsg = await newestMessage(ctx, conv._id);
-    if (lastMsg) {
-      lastMsgRole = lastMsg.role;
-      if (lastMsg.role === "user" && lastMsg.content?.trim()) {
-        lastUserMessage = lastMsg.content
-          .replace(/\[Image[:\s][^\]]*\]/gi, "")
-          .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
-          .trim()
-          .slice(0, 200);
-      }
+    facts = await newestMessageFacts(ctx, conv);
+    if (facts) {
+      lastMsgRole = facts.role;
+      if (facts.userText !== null) lastUserMessage = facts.userText;
     }
   }
   const reads: LivenessRowReads = { lastMsgRole, lastUserMessage, auqOpen: false };
   const base = deriveLivenessAt(conv, maps, reads, null, now);
   if ((!base.is_idle || base.agent_status === "hibernated") && conv.message_count > 0) {
-    if (lastMsg === undefined) lastMsg = await newestMessage(ctx, conv._id);
-    reads.auqOpen = isOpenAskUserQuestion(lastMsg);
+    if (facts === undefined) facts = await newestMessageFacts(ctx, conv);
+    reads.auqOpen = !!facts?.auqOpen;
   }
   return reads;
+}
+
+// The newest message as the liveness readers use it, cached across executions
+// by (conversation id, message_count) like the child probe cache above. The
+// probe reads a whole message document (tool results, inline images, the
+// embedding), tens of KB for a working session, and the overlay and the org
+// tree re-ran it for every non-idle row on every heartbeat: about 2 MB a
+// sessionsLiveness run on 2026-11-12 (ct-92571). A message is cached only when
+// no in-place edit can turn it into an open AskUserQuestion: a streamed row
+// is patched without touching the conversation (so message_count holds), and
+// only an assistant row without its final usage is still streaming. Anything
+// else that moves the answer is a new message, which moves message_count.
+type NewestMessageFacts = { role: string; userText: string | null; auqOpen: boolean };
+const NEWEST_MESSAGE_CACHE_MAX = 4096;
+const newestMessageCache = new Map<string, NewestMessageFacts>();
+
+async function newestMessageFacts(ctx: any, conv: any): Promise<NewestMessageFacts | null> {
+  const key = `${conv._id.toString()}:${conv.message_count ?? 0}`;
+  const hit = newestMessageCache.get(key);
+  if (hit) return hit;
+  const msg = await newestMessage(ctx, conv._id);
+  if (!msg) return null;
+  const facts: NewestMessageFacts = {
+    role: msg.role,
+    userText: msg.role === "user" && msg.content?.trim()
+      ? msg.content
+        .replace(/\[Image[:\s][^\]]*\]/gi, "")
+        .replace(/<image\b[^>]*\/?>\s*(?:<\/image>)?/gi, "")
+        .trim()
+        .slice(0, 200)
+      : null,
+    auqOpen: isOpenAskUserQuestion(msg),
+  };
+  if (msg.role !== "assistant" || msg.usage || facts.auqOpen) {
+    if (newestMessageCache.size >= NEWEST_MESSAGE_CACHE_MAX) newestMessageCache.clear();
+    newestMessageCache.set(key, facts);
+  }
+  return facts;
 }
 
 

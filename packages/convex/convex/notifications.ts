@@ -13,6 +13,7 @@ import { commentIdValidator } from "./lib/conversationCommentRows";
 import { internal } from "./_generated/api";
 import { enqueuePush, readMissedSince } from "./pushRouter";
 import { getAuthUserId } from "@convex-dev/auth/server";
+import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { canAccessConversation, canAccessDoc, canAccessPlan, canAccessTask } from "./lib/access";
 import { isConversationTeamVisible } from "./privacy";
@@ -324,6 +325,21 @@ export const create = internalMutation({
   },
 });
 
+// The session a notification names, as the list shows it: the conversation's
+// session_starts card (lib/sessionStarts.ts), which changes only when one of
+// its fields does. Reading the conversation itself re-ran this list for every
+// subscriber on every streamed message of any session in it: about 40k runs an
+// hour at ~150 ms, 5% of prod CPU on 2026-11-12 (ct-92571). A row written before
+// the card existed reads the conversation until the backfill fills it in.
+async function conversationCardOf(ctx: { db: any }, conversationId: Id<"conversations">) {
+  const start = await ctx.db
+    .query("session_starts")
+    .withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversationId))
+    .first();
+  if (start?.card) return { _id: conversationId, agent_type: start.agent_type, ...start.card };
+  return await ctx.db.get(conversationId);
+}
+
 export const list = query({
   args: {},
   handler: async (ctx) => {
@@ -344,7 +360,7 @@ export const list = query({
           ? await ctx.db.get(notification.actor_user_id)
           : null;
         const conversation = notification.conversation_id
-          ? await ctx.db.get(notification.conversation_id)
+          ? await conversationCardOf(ctx, notification.conversation_id)
           : null;
         // A chat line's author is not always the user on the row: Slack inbound
         // lines are stored under the workspace bridge (the snapshot, or for old

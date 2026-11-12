@@ -982,3 +982,48 @@ describe("the replica's live derivation is the server's", () => {
     expect(trustedStatusAt(liveness.conversations_dead, EPOCH)).toBe("stopped");
   });
 });
+
+describe("overlay read budget — the newest-message cache (ct-92571)", () => {
+  const world = (newest: Record<string, any>) => ({
+    conversations: [conv("live", { updated_at: EPOCH - MIN })],
+    managed_sessions: [
+      { _id: "ms_live", user_id: ME, conversation_id: "conversations_live", last_heartbeat: EPOCH - 1000, agent_status: "working", agent_status_updated_at: EPOCH - MIN },
+    ],
+    messages: [{ _id: "messages_newest", conversation_id: "conversations_live", timestamp: EPOCH - MIN, ...newest }],
+  });
+  const messageReads = (ops: string[]) => ops.filter((o) => o.startsWith("messages")).length;
+
+  test("a settled newest message is read once per message_count: a heartbeat re-run reads no message and emits the same payload", async () => {
+    const tables = () => world({ role: "user", tool_results: [{ tool_use_id: "t", content: "x".repeat(50_000) }] });
+    const cold = countingCtx(db(tables()));
+    const first = await computeSessionsLiveness(cold.ctx, ME as any);
+    expect(messageReads(cold.ops)).toBe(1);
+    const warm = countingCtx(db(tables()));
+    const second = await computeSessionsLiveness(warm.ctx, ME as any);
+    expect(messageReads(warm.ops)).toBe(0);
+    expect(JSON.stringify(second)).toBe(JSON.stringify(first));
+  });
+
+  test("an assistant row still streaming (no usage yet) is probed again, so an AskUserQuestion it gains in place is seen", async () => {
+    const streaming = countingCtx(db(world({ role: "assistant", content: "thinking" })));
+    const first = await computeSessionsLiveness(streaming.ctx, ME as any);
+    expect(first.liveness.conversations_live.awaiting_input).toBe(false);
+    const edited = countingCtx(db(world({ role: "assistant", content: "thinking", tool_calls: [{ id: "q", name: "AskUserQuestion", input: "{}" }] })));
+    const second = await computeSessionsLiveness(edited.ctx, ME as any);
+    expect(messageReads(edited.ops)).toBe(1);
+    expect(second.liveness.conversations_live.awaiting_input).toBe(true);
+  });
+
+  test("an open AskUserQuestion is cached, and a new message (message_count moves) re-probes", async () => {
+    const auq = { role: "assistant", tool_calls: [{ id: "q", name: "AskUserQuestion", input: "{}" }] };
+    await computeSessionsLiveness({ db: db(world(auq)) }, ME as any);
+    const warm = countingCtx(db(world(auq)));
+    expect((await computeSessionsLiveness(warm.ctx, ME as any)).liveness.conversations_live.awaiting_input).toBe(true);
+    expect(messageReads(warm.ops)).toBe(0);
+    const answered = world({ role: "user", tool_results: [{ tool_use_id: "q", content: "yes" }] });
+    answered.conversations[0].message_count = 5;
+    const next = countingCtx(db(answered));
+    expect((await computeSessionsLiveness(next.ctx, ME as any)).liveness.conversations_live.awaiting_input).toBe(false);
+    expect(messageReads(next.ops)).toBe(1);
+  });
+});
