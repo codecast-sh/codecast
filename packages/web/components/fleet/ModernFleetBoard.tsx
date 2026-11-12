@@ -22,8 +22,8 @@ import { ModernBranchChip, ModernProjectChip } from "../inbox/ModernCardParts";
 // (with Starting), Done, Dormant, Idle. A tile is the session card's anatomy
 // at board size, from the same parts: the agent mark and the title, the time,
 // the state's mark and word with the one line about the work, the project and
-// the branch or PR. Nothing on it moves; a working tile's recency bar is a
-// still width the coarse clock sets.
+// the branch or PR, laid out as one list row per session. Nothing on it moves;
+// a working row's recency bar is a still width the coarse clock sets.
 
 const BAND_STATUS: Record<StatusBand, SessionStatus> = {
   needs_you: "needs_you",
@@ -40,6 +40,9 @@ const QUIET_TILE_CAP = 24;
 type TileProps = {
   session: InboxSession;
   status: SessionStatus;
+  /** The row's status is its band's: the heading above already says it, so
+   *  the row leads with the work, not the word. */
+  bandSays: boolean;
   /** The clock's words and the recency bar, as plain values: a coarse tick
    *  re-renders only the tiles whose words or bar moved. */
   time: string;
@@ -50,10 +53,14 @@ type TileProps = {
   onContextMenu?: (e: ReactMouseEvent, session: InboxSession) => void;
 };
 
-const ModernFleetTile = memo(function ModernFleetTile({ session, status, time, reason, text, progress, onOpen, onContextMenu }: TileProps) {
+const ModernFleetTile = memo(function ModernFleetTile({ session, status, bandSays, time, reason, text, progress, onOpen, onContextMenu }: TileProps) {
   const meta = SESSION_STATUS[status];
   const title = sessionCardTitle(session) || "Untitled";
   const project = getProjectName(session.git_root, session.project_path);
+  // One row of the board's list: the mark; the title; the state's word with
+  // the one line about the work; the project and branch; the time on the
+  // right edge. A list scans down at fleet size where a grid of tiles made
+  // the eye zig-zag, and it reads the way the rail does.
   return (
     <div
       role="button"
@@ -64,29 +71,31 @@ const ModernFleetTile = memo(function ModernFleetTile({ session, status, time, r
       onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(session._id); } }}
       onContextMenu={onContextMenu ? (e) => onContextMenu(e, session) : undefined}
       aria-label={`${title}, ${meta.word}${reason ? `, ${reason}` : ""}, ${time}`}
-      className="group relative flex min-w-0 cursor-pointer flex-col gap-1 overflow-hidden rounded-card border border-sol-border bg-sol-card px-3 pb-2.5 pt-2.5 text-left transition-colors hover:border-sol-text-dim/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[color:var(--focus-ring)]"
+      className="group relative grid min-w-0 cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 overflow-hidden rounded-control px-2 py-2 text-left transition-colors hover:bg-sol-text/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[color:var(--focus-ring)]"
     >
-      <span className="flex min-w-0 items-start gap-2">
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-sol-text-muted">
-          <SessionMark session={session as any} size={18} />
+      <span className="flex min-w-0 items-start gap-2.5">
+        <span className="flex h-5 w-5 shrink-0 items-center justify-center">
+          <SessionMark session={session as any} size={20} />
         </span>
-        <span className="line-clamp-2 min-w-0 flex-1 text-body font-semibold text-sol-text">{title}</span>
-        <span className="shrink-0 pt-0.5 text-meta tabular-nums text-sol-text-dim">{time}</span>
-      </span>
-      <span className="flex min-w-0 items-start gap-2">
-        <span className="flex h-[18px] w-5 shrink-0 items-center justify-center"><SessionStatusMark status={status} /></span>
-        <span className="line-clamp-2 min-w-0 flex-1 text-ui">
-          <SessionStatusWord status={status} className="font-medium" />
-          {reason && <span className={meta.text}><span aria-hidden className="text-sol-text-dim"> · </span>{reason}</span>}
-          {text && <span className="text-sol-text-muted"><span aria-hidden className="text-sol-text-dim"> · </span>{text}</span>}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-body font-semibold text-sol-text">{title}</span>
+          <span className="flex min-w-0 items-center gap-1.5 text-ui">
+            {!bandSays && <SessionStatusMark status={status} />}
+            <span className="min-w-0 truncate">
+              {!bandSays && <SessionStatusWord status={status} className="font-medium" />}
+              {reason && <span className={meta.text}>{!bandSays && <span aria-hidden className="text-sol-text-dim"> · </span>}{reason}</span>}
+              {text && <span className="text-sol-text-muted">{(!bandSays || reason) && <span aria-hidden className="text-sol-text-dim"> · </span>}{text}</span>}
+            </span>
+          </span>
+          <span className="mt-1 flex min-w-0 items-center gap-1 overflow-hidden empty:hidden">
+            <ModernProjectChip project={project} label={null} directory={session.git_root || session.project_path} className="shrink-[100] min-w-[3rem]" />
+            <ModernBranchChip session={session} showBranch={false} className="shrink min-w-[3rem]" />
+          </span>
         </span>
       </span>
-      <span className="mt-auto flex min-w-0 items-center gap-1 overflow-hidden pl-7 pt-0.5 empty:hidden">
-        <ModernProjectChip project={project} label={null} directory={session.git_root || session.project_path} className="shrink-[100] min-w-[3rem]" />
-        <ModernBranchChip session={session} showBranch={false} className="shrink min-w-[3rem]" />
-      </span>
+      <span className="pt-0.5 text-meta tabular-nums text-sol-text-dim">{time}</span>
       {(status === "working" || status === "starting") && (
-        <span aria-hidden className="absolute inset-x-0 bottom-0 h-[2px] bg-sol-border/40">
+        <span aria-hidden className="absolute bottom-0 left-9 right-2 h-px bg-sol-border/40">
           <span className="block h-full bg-sol-green/70" style={{ width: `${progress}%` }} />
         </span>
       )}
@@ -125,7 +134,7 @@ function Band({ band, tiles, now, stoppedOf, onOpen, onTileContextMenu }: {
       {tiles.length === 0 ? (
         <div className="pl-5 text-ui text-sol-text-dim">Nothing needs you right now</div>
       ) : (
-        <div className="grid items-stretch gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))" }}>
+        <div className="-mx-2 flex flex-col">
           {shown.map(({ session: s, status }) => {
             const stateView = threadStateView(s, s.message_count ?? 0, now);
             const line = sessionCardLine({
@@ -143,6 +152,7 @@ function Band({ band, tiles, now, stoppedOf, onOpen, onTileContextMenu }: {
                 key={s._id}
                 session={s}
                 status={status}
+                bandSays={status === BAND_STATUS[band]}
                 time={formatRowTime(s.updated_at, isHostedAgentType(s.agent_type), now)}
                 reason={line.reason}
                 text={line.text}

@@ -90,6 +90,7 @@ export function TriageBar() {
     (st) => st.clientState.ui?.triage_bar_compact,
     (st) => st.clientState.ui?.inbox_shortcuts_hidden,
     (st) => st.clientState.ui?.zen_mode ?? false,
+    (st) => st.clientState.ui?.modern_style,
     (st) => hasCollectionRows(st.sessions),
   ]);
   const onInboxView = isInboxSessionView(pathname, s.currentConversation?.source);
@@ -125,6 +126,9 @@ export function TriageBar() {
   if (!onInboxView || (s.clientState.ui?.zen_mode ?? false)) return null;
   if (!hasCollectionRows(s.sessions)) return null;
   if (isTriageBarCompact(s.clientState.ui)) return null;
+  // In Modern, verbs with no session to act on are noise: the board with
+  // nothing open shows no bar rather than a row of disabled buttons.
+  if (!activeId && s.clientState.ui?.modern_style === true) return null;
 
   const run = (verb: TriageVerb) => {
     if (!activeId) return;

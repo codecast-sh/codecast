@@ -76,7 +76,7 @@ import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader, SlowBootNote } from "./AppLoader";
 import { freshHomeLaunchPending, settleFreshHomeLaunch } from "../store/viewNav";
-import { useInboxStore, useTrackedStore, getProjectName, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, resolveSimpleView, resolveInboxCompact, resolveVisualStyle } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, getProjectName, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, resolveInboxHome } from "../store/inboxStore";
 import { newConversationAgentType } from "../lib/defaultAgent";
 import { ConnectToast } from "./simple/ConnectToast";
 import { pathOnMyMachines, savedDefaultProject } from "../lib/machinePicker";
@@ -101,7 +101,7 @@ import { ChatPrefetchFeeder } from "../hooks/useChatPrefetch";
 import { useSyncLineDecisionsEverywhere } from "../hooks/useSyncSessionDecisions";
 import { useSyncOpenDecisionDetails } from "../hooks/useSyncDecisionDetail";
 import { useSyncDocs } from "../hooks/useSyncDocs";
-import { isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionFocusKind } from "../lib/inboxRouting";
+import { isInboxRoute, isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionFocusKind } from "../lib/inboxRouting";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { RecentSwitcherHost } from "./RecentSwitcher";
 import { UndoTimelineHost } from "./undo/UndoTimeline";
@@ -658,6 +658,11 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.workspace.dock.pane != null,
     s => s.currentConversation?.source,
     s => selectSessionRailOpen(s),
+    // Modern's inbox board lists every session, so the rail beside it would
+    // list them twice: the board hides it (inboxBoardHere below).
+    s => s.showMySessions,
+    s => resolveInboxHome(s.clientState.ui),
+    s => s.clientState.ui?.modern_style,
     // The session pointers, the comments map, and the palette's and people
     // wall's open flags are read by leaves of their own (SessionRailList,
     // CommentsToggle, PaletteHost, PeopleWallHost), so a session switch, a
@@ -810,7 +815,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // rail to a thin strip (StageRail below) for as long as it is there; the
   // rail's own open state is untouched, so leaving brings it back as it was.
   const stageWideHere = !!s.stageWide && s.stageWide.tabId === s.activeTabId;
-  const showSessionList = railOpen && !isMobile && !isOnSettingsPage && !appWindow && !stageWideHere;
+  const inboxBoardHere = s.clientState.ui?.modern_style === true && isInboxRoute(pathname) && s.showMySessions && resolveInboxHome(s.clientState.ui) === "board";
+  const showSessionList = railOpen && !isMobile && !isOnSettingsPage && !appWindow && !stageWideHere && !inboxBoardHere;
   const showMobileSessionList = isMobileSessionListOpen && isMobile && !isOnSettingsPage && !appWindow;
   // Right session list, collapsed: no persistent rail — a right-edge hover-peek
   // slides the full list out, mirroring the left sidebar's collapsed behavior.
