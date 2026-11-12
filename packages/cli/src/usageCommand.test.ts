@@ -209,5 +209,6 @@ describe("cast usage --all", () => {
     const text = renderAccountUsage(rows, now, c);
     expect(text.split("\n")[0]).toContain("Session (5h) 70% 2h");
     expect(text).toContain("2 of 6 accounts are auto-switch targets");
+    expect(text).toContain("cast accounts use spare --continue --yes --include-subagents");
   });
 });
