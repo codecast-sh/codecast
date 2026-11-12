@@ -1,4 +1,5 @@
 import { ConvexHttpClient, ConvexClient } from "convex/browser";
+import { WriteBudgetBackoff, isWriteBudgetRefusal } from "./writeBudgetBackoff.js";
 import type { PermissionSource } from "./permissionHandler.js";
 import type { PermissionRuleRequest } from "@codecast/shared/contracts/permissionRules";
 // The rule engine is 25 KB the command tree never runs; the two calls that
@@ -375,6 +376,8 @@ export class SyncService {
   private apiToken?: string;
   private lastRequestTime = 0;
   private throttleQueue: Promise<void> = Promise.resolve();
+  // Bulk sync pauses after the deployment refuses a write for its write budget (writeBudgetBackoff.ts).
+  private writeBudget = new WriteBudgetBackoff();
   // Per-network-leg deadline for image uploads. A field (not the bare constant)
   // only so tests can shorten it; production always uses UPLOAD_IMAGE_TIMEOUT_MS.
   private imageUploadTimeoutMs = UPLOAD_IMAGE_TIMEOUT_MS;
@@ -432,11 +435,16 @@ export class SyncService {
   // their abandoned entries still run, retries re-enqueue duplicates, and
   // sync clogs against a perfectly healthy backend.
   private mutate(name: string, args: Record<string, unknown>): Promise<any> {
-    return this.client.mutation(name as any, args, { skipQueue: true });
+    return this.client.mutation(name as any, args, { skipQueue: true }).catch((err: unknown) => {
+      if (isWriteBudgetRefusal(err)) this.writeBudget.refused();
+      throw err;
+    });
   }
 
   private async throttle(): Promise<void> {
     const ticket = this.throttleQueue.then(async () => {
+      const paused = this.writeBudget.waitMs();
+      if (paused > 0) await new Promise(resolve => setTimeout(resolve, paused));
       const now = Date.now();
       const elapsed = now - this.lastRequestTime;
       if (elapsed < MIN_REQUEST_INTERVAL_MS) {
