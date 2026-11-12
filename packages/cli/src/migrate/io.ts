@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "../proc.js";
-import { isTransientNetworkError, isWriteConflict } from "../cliHttp.js";
+import { isWriteConflict } from "../cliHttp.js";
 import { type CloudHost } from "../browser/cloudHost.js";
 import { deviceId as localDeviceId } from "../remote/device.js";
 import {
@@ -104,6 +104,18 @@ export function resolveLocalDestination(opts: {
   const name = opts.worktreeName || (wtMatch ? wtMatch[2] : remoteBase);
   const localCwd = path.join(root, ".codecast", "worktrees", name);
   return opts.exists(localCwd) ? { localCwd } : { localCwd, createIn: root };
+}
+
+/**
+ * The connection dropped before an answer came back (a laptop's wifi blinking,
+ * a socket reset mid-request). Whether the write landed is unknown, so only an
+ * idempotent call may be sent again.
+ */
+function isTransientNetworkError(err: unknown): boolean {
+  const e = err as { code?: string; cause?: { code?: string }; message?: string } | null;
+  const code = e?.cause?.code ?? e?.code;
+  if (code && /^(ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|ENETUNREACH|EHOSTUNREACH|ENOTFOUND|EAI_AGAIN|ConnectionClosed|ConnectionRefused)$/.test(code)) return true;
+  return /ECONNRESET|socket connection was closed unexpectedly|fetch failed|network (?:error|connection was lost)/i.test(e?.message ?? String(err));
 }
 
 export function createRunnerIo(batchId: string, opts: { out?: (line: string) => void } = {}): RunnerIo & { ready(): Promise<void> } {
