@@ -62,7 +62,7 @@ describe("cast vault on the wire", () => {
   test("the guide says a 2FA code is fine to read, how to use it, and that run and [vault] never provide one", async () => {
     const { VAULT_REFERENCE } = await import("@codecast/shared/contracts");
     const otp = VAULT_REFERENCE.split(/\n\n/).find((s) => s.includes("comes only from `cast vault otp"))!;
-    for (const part of ["reading it is fine", "cast browser type", "< <(cast vault otp <name>)", "`run` and `[vault]` never provide"]) expect(otp).toContain(part);
+    for (const part of ["reading it is fine", "cast browser fill <field> --vault <name>/otp", "`run` and `[vault]` never provide"]) expect(otp).toContain(part);
     expect(VAULT_REFERENCE).toContain("never its 2FA code");
   });
 

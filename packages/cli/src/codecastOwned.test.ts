@@ -9,7 +9,8 @@ import {
 } from "./codecastOwned";
 
 const indexSrc = fs.readFileSync(path.join(import.meta.dir, "index.ts"), "utf-8");
-const stableSrc = fs.readFileSync(path.join(import.meta.dir, "stableContext.ts"), "utf-8");
+// The hook installers (which name the hook file) live in stableContextHooks.ts, split out of stableContext.ts.
+const stableSrc = ["stableContext.ts", "stableContextHooks.ts"].map((f) => fs.readFileSync(path.join(import.meta.dir, f), "utf-8")).join("\n");
 
 describe("CODECAST_HOOK_SCRIPTS is the set the installers actually write", () => {
   test("every hook HARNESS_HOOKS registers is listed, and nothing else is but the retired one", () => {
