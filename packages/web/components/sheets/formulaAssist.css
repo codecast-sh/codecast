@@ -431,7 +431,14 @@ button.sheet-error-chip { cursor: pointer; }
 .sheet-unhide-row { top: -6px; left: 3px; right: 3px; height: 11px; }
 
 /* Custom number format: the code and a live sample. */
-.sheet-custom-code { display: flex; flex-direction: column; gap: 4px; padding: 6px; width: 220px; }
+.sheet-custom-code { display: flex; flex-direction: column; gap: 4px; padding: 6px; width: 260px; }
+.sheet-custom-row { display: flex; gap: 4px; }
+.sheet-custom-row input { flex: 1; min-width: 0; }
+.sheet-custom-apply { padding: 0 10px; border-radius: 6px; background: var(--sol-blue); color: var(--sol-bg); font-size: var(--fs-meta); font-weight: 500; }
+.sheet-custom-examples { display: flex; flex-direction: column; max-height: 220px; overflow-y: auto; border-top: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent); padding-top: 4px; }
+.sheet-custom-examples button { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 3px 4px; border-radius: 5px; font-size: var(--fs-meta); color: var(--sol-text-muted); text-align: left; }
+.sheet-custom-examples button:hover, .sheet-custom-examples button.is-on { background: var(--sol-bg-alt); color: var(--sol-text); }
+.sheet-custom-examples code { font-family: var(--font-mono, inherit); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sheet-custom-code input {
   height: 28px;
   padding: 0 8px;

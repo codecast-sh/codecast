@@ -99,6 +99,23 @@ function Menu({ trigger, title, children, on }: { trigger: ReactNode; title: str
 }
 
 /** A format code typed into the menu, previewed on a sample as you type ("#,##0.0 \"kg\"", "0.0%", "mmm d"). */
+/** Codes a person can start from: thousands, percent, red negatives, thousands as K, units, dates and durations. */
+const CODE_EXAMPLES = ['#,##0.00', '0.0%', '"$"#,##0;[Red]("$"#,##0)', '#,##0,"K"', '0 "kg"', "mmm d, yyyy", "ddd, mmm d", "h:mm AM/PM", "[h]:mm"];
+
+/** A stand-in to preview an example on when no cell is selected: a duration, a date and time, or a number. */
+function exampleValue(code: string): number {
+  if (/^\[h\]/i.test(code)) return 29.75 / 24;
+  return /[dmyh]/i.test(code.replace(/"[^"]*"|\[[^\]]*\]/g, "")) ? 46336.5625 : 1234.5;
+}
+
+function previewOf(v: number, code: string): string {
+  try {
+    return formatValue(v, { nf: "custom", code });
+  } catch {
+    return "";
+  }
+}
+
 function CustomCode({ initial, onApply, sample: value }: { initial: string; onApply: (code: string) => void; sample?: number }) {
   const [code, setCode] = useState(initial || "#,##0.00");
   // Previewed on the selected cell's number (a negative shows its own section), else a stand-in.
@@ -117,8 +134,19 @@ function CustomCode({ initial, onApply, sample: value }: { initial: string; onAp
       }}
       onKeyDown={(e) => e.stopPropagation()}
     >
-      <input autoFocus value={code} spellCheck={false} aria-label="Format code" onChange={(e) => setCode(e.target.value)} />
+      <div className="sheet-custom-row">
+        <input autoFocus value={code} spellCheck={false} aria-label="Format code" onChange={(e) => setCode(e.target.value)} />
+        <button type="submit" className="sheet-custom-apply">Apply</button>
+      </div>
       <span className="sheet-custom-sample tabular-nums">{sample}</span>
+      <div className="sheet-custom-examples" role="list" aria-label="Example codes">
+        {CODE_EXAMPLES.map((ex) => (
+          <button key={ex} type="button" role="listitem" onClick={() => setCode(ex)} className={ex === code ? "is-on" : ""}>
+            <code>{ex}</code>
+            <span className="tabular-nums">{previewOf(value ?? exampleValue(ex), ex)}</span>
+          </button>
+        ))}
+      </div>
     </form>
   );
 }

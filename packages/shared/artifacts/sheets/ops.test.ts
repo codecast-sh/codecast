@@ -296,3 +296,16 @@ describe("tab order and copies", () => {
     expect(m.tabs.map((t) => t.name)).toEqual(["Sheet1 copy", "Sheet1", "Other"]);
   });
 });
+
+describe("custom-formula rules on insert", () => {
+  test("the rule's formula moves with the rows it reads", async () => {
+    const { structuralOps } = await import("./ops");
+    const { rectA1 } = await import("./refs");
+    const d = doc(sheetSpec.seed!());
+    d.verb("write", ["A1"], "Task\tStatus\nA\tDone\nB\tOpen");
+    d.verb("cond", ["Sheet1!A2:B3", "formula", '=$B2="Done"', "green"]);
+    d.apply(structuralOps(buildModel(d.elements()), "Sheet1", "row", 2, 1));
+    const c = buildModel(d.elements()).conds[0];
+    expect([rectA1(c.rect), c.value]).toEqual(["A3:B4", '=$B3="Done"']);
+  });
+});

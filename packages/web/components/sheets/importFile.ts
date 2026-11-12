@@ -162,7 +162,7 @@ function styleKinds(stylesXml: string | undefined): Styles {
   if (!stylesXml) return out;
   const custom = new Map<number, string>();
   for (const m of stylesXml.matchAll(/<numFmt\s[^>]*>/g)) custom.set(Number(attr(m[0], "numFmtId")), unescape(attr(m[0], "formatCode") ?? ""));
-  const xfList = [...(stylesXml.match(/<cellXfs[^>]*>([\s\S]*?)<\/cellXfs>/)?.[1] ?? "").matchAll(/<xf\s[^>]*?(?:\/>|>[\s\S]*?<\/xf>)/g)].map((m) => m[0]);
+  const xfList = [...(stylesXml.match(/<cellXfs[^>]*>([\s\S]*?)<\/cellXfs>/)?.[1] ?? "").matchAll(/<xf(?:\s[^>]*?)?(?:\/>|>[\s\S]*?<\/xf>)/g)].map((m) => m[0]);
   out.looks = styleLooks(stylesXml, xfList);
   xfList.forEach((xf, i) => {
     const id = Number(attr(xf, "numFmtId") ?? 0);

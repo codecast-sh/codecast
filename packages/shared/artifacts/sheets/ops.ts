@@ -348,6 +348,14 @@ export function structuralOps(model: SheetModel, tabId: string, axis: "row" | "c
     if (next === null) dels.add(item.key);
     else if (next !== rectA1(item.rect)) puts.set(item.key, { k: item.key, set: { range: next } });
   }
+  // A custom-formula rule's formula points at cells like any formula: it moves with them, on whichever tab the rule lives.
+  for (const c of model.conds) {
+    if (c.rule !== "formula" || typeof c.value !== "string" || dels.has(c.key)) continue;
+    const value = adjustFormula(c.value, model.byId.get(c.tab)?.meta.name ?? c.tab, s);
+    if (value === c.value) continue;
+    const prev = puts.get(c.key);
+    puts.set(c.key, { k: c.key, set: { ...(prev && "set" in prev ? prev.set : {}), value } });
+  }
   // The filter block and frozen panes move with the rows/columns they cover.
   const patch: Record<string, Json> = {};
   const f = t.meta.filter;

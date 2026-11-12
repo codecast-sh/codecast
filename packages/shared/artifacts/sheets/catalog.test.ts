@@ -90,3 +90,11 @@ describe("dates typed without a year", () => {
     expect(["Nov 5", "5 November", "11/5", "Feb 30", "Novel 5", "5"].map((t) => completeDateInput(t, now))).toEqual(["2026-11-05", "2026-11-05", "2026-11-05", "Feb 30", "Novel 5", "5"]);
   });
 });
+
+describe("elapsed time codes", () => {
+  test("[h]:mm keeps counting past a day; [mm] counts minutes", async () => {
+    const { formatValue } = await import("./format");
+    expect(formatValue(29.75 / 24, { nf: "custom", code: "[h]:mm" })).toBe("29:45");
+    expect(formatValue(1.5 / 24, { nf: "custom", code: "[mm]:ss" })).toBe("90:00");
+  });
+});

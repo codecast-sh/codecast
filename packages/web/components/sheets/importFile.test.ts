@@ -75,7 +75,7 @@ describe("readXlsx", () => {
     const bytes = zip({
       "xl/workbook.xml": `<workbook><sheets><sheet name="Plan" sheetId="1" r:id="rId1"/></sheets></workbook>`,
       "xl/_rels/workbook.xml.rels": `<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`,
-      "xl/styles.xml": `<styleSheet><numFmts><numFmt numFmtId="165" formatCode="&quot;$&quot;#,##0.00"/></numFmts><cellXfs><xf numFmtId="0"/><xf numFmtId="9"/><xf numFmtId="165"/></cellXfs></styleSheet>`,
+      "xl/styles.xml": `<styleSheet><numFmts><numFmt numFmtId="165" formatCode="&quot;$&quot;#,##0.00"/></numFmts><cellXfs><xf/><xf numFmtId="9"/><xf numFmtId="165"/></cellXfs></styleSheet>`,
       "xl/worksheets/sheet1.xml": `<worksheet><sheetData>
         <row r="1"><c r="A1"><v>10</v></c><c r="B1"><f t="shared" ref="B1:B3" si="0">A1*2</f><v>20</v></c><c r="C1" s="1"><v>0.125</v></c><c r="D1" s="2"><v>1200.5</v></c></row>
         <row r="2"><c r="A2"><v>11</v></c><c r="B2"><f t="shared" si="0"/><v>22</v></c></row>

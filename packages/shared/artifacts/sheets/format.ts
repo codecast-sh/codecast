@@ -114,7 +114,8 @@ export function isNumericValue(v: Scalar): boolean {
 function codeSection(v: number, code: string): { section: string; color?: string } {
   const raw = code.split(";")[v < 0 && code.includes(";") ? 1 : 0] ?? code;
   const color = raw.match(/\[(red|blue|green|yellow|magenta|cyan)\]/i)?.[1]?.toLowerCase();
-  return { section: raw.replace(/\[[^\]]*\]/g, ""), color };
+  // Colors and conditions ([Red], [>100]) drop out; elapsed-time units ([h], [mm]) are part of the format.
+  return { section: raw.replace(/\[(?![hms]+\])[^\]]*\]/gi, ""), color };
 }
 
 /** The color a custom code paints a value in ("#,##0;[Red](#,##0)" makes negatives red), if any. */
@@ -164,7 +165,8 @@ function strip(s: string): string {
 function formatDateCode(serial: number, code: string): string {
   const d = serialToDate(serial);
   const ampm = /AM\/PM/i.test(code);
-  const tokens = code.match(/"[^"]*"|yyyy|yy|mmmm|mmm|mm|m|dddd|ddd|dd|d|hh|h|ss|s|AM\/PM|./gi) ?? [];
+  // [h], [mm], [ss]: elapsed time that keeps counting past a day (a 29:45 timesheet total).
+  const tokens = code.match(/"[^"]*"|\[h+\]|\[m+\]|\[s+\]|yyyy|yy|mmmm|mmm|mm|m|dddd|ddd|dd|d|hh|h|ss|s|AM\/PM|./gi) ?? [];
   let out = "";
   let lastWasHour = false;
   for (let i = 0; i < tokens.length; i++) {
@@ -172,6 +174,12 @@ function formatDateCode(serial: number, code: string): string {
     const lower = t.toLowerCase();
     const nextIsSecond = tokens.slice(i + 1).find((x) => /[a-z]/i.test(x))?.toLowerCase().startsWith("s");
     if (t.startsWith('"')) out += t.slice(1, -1);
+    else if (/^\[[hms]+\]$/i.test(t)) {
+      const secs = Math.round(serial * 86400);
+      const unit = lower[1];
+      const total = unit === "h" ? Math.floor(secs / 3600) : unit === "m" ? Math.floor(secs / 60) : secs;
+      out += String(total).padStart(t.length - 2, "0");
+    }
     else if (lower === "yyyy") out += d.y;
     else if (lower === "yy") out += String(d.y).slice(-2);
     else if (lower === "mmmm") out += MONTHS_LONG[d.m - 1];
@@ -191,7 +199,7 @@ function formatDateCode(serial: number, code: string): string {
     else if (lower === "s") out += String(d.s);
     else if (lower === "am/pm") out += d.h < 12 ? "AM" : "PM";
     else out += t;
-    if (/^h+$/.test(lower)) lastWasHour = true;
+    if (/^\[?h+\]?$/.test(lower)) lastWasHour = true;
     else if (/[a-z]/i.test(t)) lastWasHour = false;
   }
   return out;
