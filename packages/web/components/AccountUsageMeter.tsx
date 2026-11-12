@@ -125,6 +125,15 @@ export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: 
       {labeledUsageWindows(usage).map((w) => (
         <UsageMeterRow key={w.label} label={w.name} percent={w.percent} resetsAt={w.resets_at} now={now} />
       ))}
+      {(usage.blocked_until ?? 0) > now && (
+        <UsageMeterRow
+          label="Spend"
+          percent={100}
+          resetsAt={usage.blocked_until}
+          now={now}
+          title={`Monthly spend cap hit: a parked session's banner named this account. Usable again when its week resets in ${formatCountdown(usage.blocked_until! - now)}.`}
+        />
+      )}
       {usage.extra && showExtraSpend(usage.extra) && (
         <UsageMeterRow
           label="Extra"
