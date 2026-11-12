@@ -72,14 +72,24 @@ export function settleAfter(docId: string, rev: number, rowIds: string[], before
  * not stamped yet (rev 0) is left out, so it can never stand in for a server
  * row the cache missed.
  */
-function localRowCount(docId: string): number {
+function localRows(docId: string): { count: number; revSum: number } {
   const coll = (useInboxStore.getState() as any).liveElements ?? {};
-  let n = 0;
+  let count = 0;
+  let revSum = 0;
   for (const id in coll) {
     const r = coll[id];
-    if (r?.doc_id === docId && Number(r.rev) > 0) n += 1;
+    if (r?.doc_id !== docId || !(Number(r.rev) > 0)) continue;
+    count += 1;
+    revSum += Number(r.rev);
   }
-  return n;
+  return { count, revSum };
+}
+
+/** Whether the store holds the doc exactly as the server does: as many rows, at the same revisions. */
+function cacheMatches(payload: any): boolean {
+  if (typeof payload.total !== "number" || typeof payload.rev_sum !== "number") return false;
+  const mine = localRows(payload.doc_id);
+  return mine.count === payload.total && mine.revSum === payload.rev_sum;
 }
 
 /** Hand one elementsSince answer to the store. Returns the revision to ask from next. */
@@ -103,9 +113,9 @@ export function applyElementsPayload(payload: any): number {
   if (live.length) store.syncTable("liveElements", live);
   if (dead.length) store.dropRows("liveElements", dead);
   // `complete`: the revision this store holds the whole doc through, set only
-  // when the store's rows for the doc number exactly what the server says a
-  // complete copy holds. The next open reads the tail from there.
-  const complete = !payload.more && typeof payload.total === "number" && localRowCount(payload.doc_id) === payload.total ? payload.head : null;
+  // when the store's server rows for the doc match the server's count and
+  // revision sum (a row held at an older value sums lower). The next open reads the tail from there.
+  const complete = !payload.more && cacheMatches(payload) ? payload.head : null;
   store.syncTable("liveHeads", [{ _id: payload.doc_id, head: payload.head, draft: payload.draft ?? null, restoring: payload.restoring ?? null, title: payload.title, doc_type: payload.doc_type, complete, edit: payload.edit ?? "team", editors: payload.editors ?? [], can_edit: payload.can_edit !== false }]);
   const next = payload.next ?? 0;
   if (!payload.more) appliedRev.set(payload.doc_id, Math.max(appliedRev.get(payload.doc_id) ?? 0, payload.head ?? next));
@@ -144,7 +154,7 @@ function useElementsFeed(docId: string): { ready: boolean } {
       if (unproven.current && !payload.more) {
         unproven.current = false;
         // The cache counted short (or long): read the whole doc instead.
-        if (typeof payload.total !== "number" || localRowCount(payload.doc_id) !== payload.total) {
+        if (!cacheMatches(payload)) {
           setSince(0);
           return;
         }

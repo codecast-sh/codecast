@@ -5,7 +5,8 @@ import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import { createLiveArtifact } from "../lib/createLiveArtifact";
 import { docTypeIcon, docTypeStyle } from "../lib/docTypeStyle";
 import { useWorkspaceArgs, workspaceStamp } from "./useWorkspaceArgs";
-import type { ArtifactType } from "@codecast/shared/artifacts";
+import { dashboard, type ArtifactOp, type ArtifactType } from "@codecast/shared/artifacts";
+import { SHEET_TEMPLATES } from "@codecast/shared/artifacts/sheets";
 import { BOARD_TEMPLATES, BOARD_TEMPLATE_ART, BOARD_TEMPLATE_LABELS, templateOps } from "@codecast/shared/artifacts/board";
 import { BOARD_ART_URLS } from "../components/boards/boardArtUrls";
 import type { ShortcutAction } from "../shortcuts";
@@ -40,6 +41,8 @@ export type CreateKind = {
   template?: boolean;
   /** A picture of what the template lays out, for a picker that shows one. */
   art?: string;
+  /** What a template makes ("Board"), for a list that mixes kinds. */
+  makes?: string;
   run: (env: CreateEnv) => void;
 };
 
@@ -58,9 +61,19 @@ export function useCreateKinds(): CreateKind[] {
       icon: docTypeIcon(id)!, tone: docTypeStyle(id).color,
       run: (env) => void createLiveArtifact(id, stamp, env.navigate),
     });
+    // Templates a product offers, as ways to start one of its kind.
+    const template = (type: ArtifactType, makes: string, t: { id: string; label: string; ops: () => ArtifactOp[] }, art?: string): CreateKind => ({
+      id: `${type}:${t.id}`, label: `New ${t.label.toLowerCase()} ${makes.toLowerCase()}`, noun: t.label, makes,
+      keywords: `template ${makes.toLowerCase()} ${t.id} ${t.label.toLowerCase()}`, variant: true, doc: true, template: true, art,
+      icon: docTypeIcon(type)!, tone: docTypeStyle(type).color,
+      // ops() at create time: a template's dates and keys are made when it is used.
+      run: (env) => void createLiveArtifact(type, stamp, env.navigate, { title: t.label, ops: t.ops() }),
+    });
+    const sheetTemplates = SHEET_TEMPLATES.map((t) => template("sheet", "Sheet", t));
+    const dashboardTemplates = dashboard.DASHBOARD_TEMPLATES.map((t) => template("dashboard", "Dashboard", t));
     // Every board template, as a way to start a board.
     const boardTemplates = BOARD_TEMPLATES.map((t): CreateKind => ({
-      id: `board:${t}`, label: `New ${BOARD_TEMPLATE_LABELS[t].toLowerCase()} board`, noun: `${BOARD_TEMPLATE_LABELS[t]} board`,
+      id: `board:${t}`, label: `New ${BOARD_TEMPLATE_LABELS[t].toLowerCase()} board`, noun: BOARD_TEMPLATE_LABELS[t], makes: "Board",
       keywords: `template board ${t}`, variant: true, doc: true, template: true, art: BOARD_ART_URLS[BOARD_TEMPLATE_ART[t]],
       icon: docTypeIcon("board")!, tone: docTypeStyle("board").color,
       run: (env) => void createLiveArtifact("board", stamp, env.navigate, { title: BOARD_TEMPLATE_LABELS[t], ops: templateOps(t, { x: 0, y: 0 }, 0, 1).ops }),
@@ -73,7 +86,9 @@ export function useCreateKinds(): CreateKind[] {
       live("board", "Board", "b", "whiteboard canvas sticky diagram brainstorm timeline draw"),
       ...boardTemplates,
       live("sheet", "Sheet", "e", "spreadsheet table grid tracker cells formula"),
+      ...sheetTemplates,
       live("dashboard", "Dashboard", "a", "data chart metrics kpi story report analytics"),
+      ...dashboardTemplates,
       { id: "plan", label: "New plan", noun: "Plan", keywords: "create project", icon: MapIcon, tone: "text-sol-yellow", key: "p", run: (env) => env.openModal("plan") },
       chatOn && { id: "channel", label: "New channel", noun: "Channel", keywords: "create chat room", icon: Hash, tone: "text-sol-cyan", key: "c", run: (env) => env.openModal("chat") },
       callsOn && { id: "huddle", label: "Start huddle", noun: "Huddle", keywords: "new call ring people group voice", icon: Headphones, tone: "text-sol-violet", key: "h", run: (env) => env.openModal("huddle") },

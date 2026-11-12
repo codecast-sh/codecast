@@ -87,7 +87,7 @@ export async function upsertPresence(
   caller: Caller,
   actor: string,
   at: { position?: any; selection?: string[]; status?: string },
-) {
+) : Promise<boolean> {
   const existing = await ctx.db
     .query("live_presence")
     .withIndex("by_doc_actor", (q: any) => q.eq("doc_id", docId).eq("actor", actor))
@@ -105,8 +105,10 @@ export async function upsertPresence(
     status: at.status?.slice(0, 80),
     updated_at: Date.now(),
   };
-  if (existing) await ctx.db.patch(existing._id, fields);
-  else {
+  if (existing) {
+    await ctx.db.patch(existing._id, fields);
+    return false;
+  } else {
     await ctx.db.insert("live_presence", { doc_id: docId, actor, ...fields });
     // A new arrival sweeps out whoever left without saying so (a closed tab, a finished session).
     const stale = await ctx.db
@@ -114,5 +116,6 @@ export async function upsertPresence(
       .withIndex("by_doc_updated", (q: any) => q.eq("doc_id", docId).lt("updated_at", Date.now() - PRESENCE_TTL_MS.agent))
       .take(50);
     for (const r of stale) await ctx.db.delete(r._id);
+    return true;
   }
 }

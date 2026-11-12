@@ -20,8 +20,12 @@ export function NewDocMenu({ children }: { children: ReactElement }) {
   };
   const row = (k: CreateKind) => (
     <DropdownMenuItem key={k.id} data-new-doc={k.id} onSelect={() => create(k)} className="gap-2.5 rounded-md px-2 py-1.5 text-[13px]">
-      {k.art ? <img src={k.art} alt="" className="h-6 w-6 object-contain shrink-0" /> : <k.icon className={`h-4 w-4 ${k.tone}`} strokeWidth={1.75} />}
+      {/* One slot for every row's mark, so the names line up whether it is an icon or a template's art. */}
+      <span className="w-6 h-6 shrink-0 inline-flex items-center justify-center">
+        {k.art ? <img src={k.art} alt="" className="h-6 w-6 object-contain" /> : <k.icon className={`h-4 w-4 ${k.tone}`} strokeWidth={1.75} />}
+      </span>
       <span className="flex-1 truncate">{k.noun}</span>
+      {k.template && k.makes && <span className={`text-meta ${k.tone}`}>{k.makes}</span>}
       {k.key && <KeyCap size="xs">{k.key.toUpperCase()}</KeyCap>}
     </DropdownMenuItem>
   );

@@ -2,7 +2,7 @@
 // creates things (the header's New, the palette's Create group) calls this, so
 // a new artifact always gets its product's seed (a sheet's first tab) and a
 // title the person can rename in place.
-import { artifactSpec, fromElement, type ArtifactOp, type ArtifactType } from "@codecast/shared/artifacts";
+import { artifactSpec, fromElement, type ArtifactElement, type ArtifactOp, type ArtifactType } from "@codecast/shared/artifacts";
 import { docRows, sendLiveOps } from "../components/live/useLiveArtifact";
 import { useInboxStore } from "../store/inboxStore";
 
@@ -31,13 +31,16 @@ export async function createLiveArtifact(type: ArtifactType, stamp: WorkspaceSta
 export async function duplicateLiveArtifact(
   doc: { _id: string; title: string; doc_type: ArtifactType; team_id?: string; workspace?: string },
   navigate: (href: string) => void,
+  /** The elements to copy, when not the saved layer as it is now (a version that is open). */
+  from?: ArtifactElement[],
 ): Promise<string | null> {
   const store = useInboxStore.getState() as any;
   const stamp: WorkspaceStamp = String(doc.workspace ?? "").startsWith("team:") && doc.team_id
     ? { workspace: "team", team_id: doc.team_id }
     : { workspace: "personal" };
   const ops: ArtifactOp[] = [];
-  for (const [key, row] of docRows(doc._id).main) {
+  const source: Iterable<[string, any]> = from ? from.map((e) => [e.key, e] as [string, any]) : docRows(doc._id).main;
+  for (const [key, row] of source) {
     if (row.deleted) continue;
     const { kind, fields } = fromElement(row);
     ops.push({ k: key, put: { kind, ...fields } });

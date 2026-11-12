@@ -24,14 +24,16 @@ type Props = {
   doc: DatedRow;
   variant?: "compact" | "full";
   className?: string;
+  /** The compact form's date: a list sorted by one shows that one, so the column reads in order. Unset: updated once edited, else created. */
+  timeKey?: "created_at" | "updated_at";
 };
 
-export function DocDates({ doc, variant = "compact", className = "" }: Props) {
+export function DocDates({ doc, variant = "compact", className = "", timeKey }: Props) {
   const now = useCoarseNow(30_000);
   const edited = wasEdited(doc);
 
   if (variant === "compact") {
-    const ts = edited ? doc.updated_at! : doc.created_at;
+    const ts = timeKey === "created_at" ? doc.created_at : timeKey === "updated_at" ? (doc.updated_at ?? doc.created_at) : edited ? doc.updated_at! : doc.created_at;
     return (
       <span className={`tabular-nums whitespace-nowrap ${className}`} title={describeDatesFull(doc)}>
         {formatDateSmart(ts, now)}
