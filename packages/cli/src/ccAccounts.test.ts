@@ -1761,7 +1761,7 @@ describe("per-profile credential stores (sandboxed $HOME, file store)", () => {
     // Once another account is the login, "work" is dormant and its store carries the session.
     login("at-other", "u-other", "other@x.com");
     saveProfile("other");
-    expect(accountSourcePrefix("work")).toBe(`. ${launch} 2>/dev/null || true; export CODECAST_CC_ACCOUNT=work; `);
+    expect(accountSourcePrefix("work")).toBe(`unset CLAUDE_CODE_OAUTH_TOKEN; . ${launch} 2>/dev/null || true; export CODECAST_CC_ACCOUNT=work; `);
     expect(accountSourcePrefix("work")).not.toContain("at-work");
     expect(accountSourcePrefix(undefined)).toBe("");
   });
