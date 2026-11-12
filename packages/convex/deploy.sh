@@ -57,24 +57,36 @@ if ! git merge-base --is-ancestor "$BASE_REMOTE/main" HEAD; then
     exit 1
 fi
 
-# The repo-root .env.local carries CONVEX_DEPLOYMENT=anonymous (the local dev
-# pointer). The convex CLI picks it up and hijacks the deploy away from the
-# self-hosted prod configured in packages/convex/.env.local — move it aside
-# for the deploy and always restore it.
-HOLD=""
-if [ -f "$ROOT/.env.local" ] && grep -q '^CONVEX_DEPLOYMENT=' "$ROOT/.env.local"; then
-    HOLD="$ROOT/.env.local.deployhold"
-    mv "$ROOT/.env.local" "$HOLD"
-fi
-restore_env() { if [ -n "$HOLD" ] && [ -f "$HOLD" ]; then mv "$HOLD" "$ROOT/.env.local"; fi }
+# An .env.local naming a CONVEX_DEPLOYMENT (the repo root's `anonymous` dev
+# pointer, or a stale cloud project in this directory's) hijacks the CLI away
+# from self-hosted prod: "You don't have access to the selected project"
+# (2026-11-12). Move each aside for the deploy and always restore it.
+HELD=()
+for f in "$ROOT/.env.local" "$PWD/.env.local"; do
+    if [ -f "$f" ] && grep -q '^CONVEX_DEPLOYMENT=' "$f"; then
+        mv "$f" "$f.deployhold"
+        HELD+=("$f")
+    fi
+done
+restore_env() {
+    for f in ${HELD[@]+"${HELD[@]}"}; do [ -f "$f.deployhold" ] && mv "$f.deployhold" "$f"; done
+    HELD=()
+}
 trap 'restore_env; release_lock' EXIT
+
+# Prod is self-hosted. The admin key comes from the vault when the shell does
+# not carry it: the macOS Interactive re-exec above keeps no credentials, and
+# this session's id survives it, so the vault's Ask first gate still applies.
+export CONVEX_SELF_HOSTED_URL="${CONVEX_SELF_HOSTED_URL:-https://convex.codecast.sh}"
+WITH_KEY=()
+[ -z "${CONVEX_SELF_HOSTED_ADMIN_KEY:-}" ] && WITH_KEY=(cast vault run convex-admin-key --)
 
 # Read before the push, since the push ships what is on disk at that moment:
 # uncommitted edits to what the backend bundles (its functions, shared code,
 # the vendored platform packages).
 DIRTY="$(git -C "$ROOT" status --porcelain -- packages/convex/convex packages/shared platform/packages | wc -l | tr -d ' ')"
 
-env -u CONVEX_DEPLOYMENT npx convex deploy -y "$@"
+${WITH_KEY[@]+"${WITH_KEY[@]}"} env -u CONVEX_DEPLOYMENT npx convex deploy -y "$@"
 restore_env
 
 # Tell the Changes page the backend now runs this commit (deploy marker,
