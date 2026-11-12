@@ -48,6 +48,8 @@ export function useBoardKeys(cmds: KeyCommands, spaceHeld: React.MutableRefObjec
   const active = useRef(true);
   /** Tab is walking elements (set by a walk, cleared by an Escape with nothing left to clear). */
   const walked = useRef(false);
+  /** Set by an Escape with nothing to clear: the next Tab moves on through the page. */
+  const leaving = useRef(false);
   useWatchEffect(() => {
     const onPress = (e: PointerEvent) => {
       const root = rootRef.current;
@@ -82,10 +84,14 @@ export function useBoardKeys(cmds: KeyCommands, spaceHeld: React.MutableRefObjec
       if (e.shiftKey && (e.key === "!" || e.code === "Digit1")) { stop(); c.fit(false); return; }
       if (e.shiftKey && (e.key === "@" || e.code === "Digit2")) { stop(); c.fit(true); return; }
       // Escape belongs to the board while it is in use: it backs out of a menu, a selection or a tool, never out of the page.
-      if (e.key === "Escape") { if (!c.clearSelection()) walked.current = false; c.setTool("select"); stop(); return; }
+      if (e.key === "Escape") { if (!c.clearSelection()) { walked.current = false; leaving.current = true; } c.setTool("select"); stop(); return; }
       // Tab walks the board's elements (with Shift, backwards). With nothing selected after an Escape, Tab moves on through the page.
       if (e.key === "Tab" && !mod && !e.altKey) {
-        const inBoard = c.hasSelection() || document.activeElement === root || walked.current;
+        // Anywhere in the board (the canvas, a button on it) Tab walks elements; after an Escape with nothing selected it moves on through the page.
+        const focus = document.activeElement;
+        // An Escape with nothing left to clear lets the next Tab leave the board, so Tab never traps focus.
+        if (leaving.current) { leaving.current = false; return; }
+        const inBoard = c.hasSelection() || walked.current || !!(focus && root.contains(focus)) || focus === document.body;
         if (inBoard && c.cycle(e.shiftKey ? -1 : 1)) { walked.current = true; stop(); return; }
         return;
       }

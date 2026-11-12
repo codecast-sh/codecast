@@ -85,7 +85,7 @@ export function useBoardCamera(docId: string) {
     if (root) {
       root.style.setProperty("--z", String(z));
       // Far out, stickies show their titles only, large enough to read (board.css).
-      const far = z < 0.5;
+      const far = z < 0.32;
       if (far !== (root.dataset.lod === "far")) { if (far) root.dataset.lod = "far"; else delete root.dataset.lod; }
       // Dots thin out as you zoom out, so the grid never turns into noise.
       const step = GRID * z * (z < 0.35 ? 4 : z < 0.7 ? 2 : 1);

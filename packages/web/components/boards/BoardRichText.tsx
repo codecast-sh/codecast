@@ -16,6 +16,8 @@ function link(href: string, label: ReactNode, key: number): ReactNode {
       href={href}
       target="_blank"
       rel="noreferrer noopener"
+      // On the canvas a link opens with Cmd/Ctrl-click; it is not a stop when Tab walks the board.
+      tabIndex={-1}
       style={{ color: "var(--sol-blue)", textDecoration: "underline", textUnderlineOffset: "0.15em", cursor: "pointer" }}
       // A press on the canvas selects and drags the element; Cmd/Ctrl-click opens the link.
       onClick={(e) => { if (!(e.metaKey || e.ctrlKey)) e.preventDefault(); }}

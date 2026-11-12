@@ -101,12 +101,10 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   // What the board's own chrome covers at its edges: the zoom bar above, the toolbar below, the overview at the right.
   const chromeInsets = () => {
     const w = cam.rootRef.current?.clientWidth ?? 0;
-    return { top: 52, bottom: 76, right: minimapRef.current && w >= MINIMAP_MIN_W ? 196 : 0 };
+    return { top: w ? 40 : 0, bottom: 64, right: 0 };
   };
   const [locked, setLocked] = useState(false);
   const [minimap, setMinimapState] = useState(() => { try { return localStorage.getItem(MINIMAP_KEY) === "1"; } catch { return false; } });
-  const minimapRef = useRef(minimap);
-  minimapRef.current = minimap;
   const setMinimap = (on: boolean) => { setMinimapState(on); try { localStorage.setItem(MINIMAP_KEY, on ? "1" : "0"); } catch { /* private mode */ } };
   const spaceHeld = useRef(false);
   const lastPointer = useRef<Pt | null>(null);
@@ -379,7 +377,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       case "frame": {
         // Wrap what is selected in a new frame, title ready to type, as FigJam's Frame selection does.
         const inside = selectedEls.filter((e) => e.kind !== "connector").map(elementBounds);
-        const op = frameAround(inside, "Frame", bottomZ({ elements: allEls() }), 40);
+        const op = frameAround(inside, "Frame", bottomZ({ elements: allEls() }), 24);
         if (!op) return;
         live.apply([op]);
         byKeyRef.current.set(op.k, { ...("put" in op ? (op.put as any) : {}), key: op.k, rev: 0 });

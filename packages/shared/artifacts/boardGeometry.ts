@@ -373,6 +373,16 @@ export function roundedPath(pts: readonly Pt[], radius = 10): string {
   return `${d} L${r(last.x)},${r(last.y)}`;
 }
 
+/** An elbow's label by default: the middle of its longest straight leg, never on a bend. */
+function longestLegMiddle(pts: readonly Pt[]): Pt {
+  let best = 0, at = { x: pts[0].x, y: pts[0].y };
+  for (let i = 1; i < pts.length; i++) {
+    const len = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    if (len > best) { best = len; at = { x: (pts[i].x + pts[i - 1].x) / 2, y: (pts[i].y + pts[i - 1].y) / 2 }; }
+  }
+  return at;
+}
+
 /** Where along a connector its label sits, 0 (start) to 1 (end); the middle by default. */
 function labelT(v: unknown): number {
   return typeof v === "number" && Number.isFinite(v) ? Math.max(0.05, Math.min(0.95, v)) : 0.5;
@@ -387,7 +397,7 @@ function elbowGeometry(A: Box, B: Box, obstacles: readonly Box[], labelAt: unkno
   return {
     a, b,
     d: roundedPath(pts),
-    mid: pointAlong(pts, labelT(labelAt)),
+    mid: typeof labelAt === "number" ? pointAlong(pts, labelT(labelAt)) : longestLegMiddle(pts),
     box: boxOfPoints(pts),
     angleEnd: Math.atan2(b.y - pb.y, b.x - pb.x),
     angleStart: Math.atan2(a.y - pa.y, a.x - pa.x),

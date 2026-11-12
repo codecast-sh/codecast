@@ -376,9 +376,11 @@ export function useBoardGestures(d: GestureDeps) {
         return;
       }
       case "resize": {
+        // A picture keeps its proportions on a corner drag (Shift frees it); everything else scales freely (Shift locks it).
+        const keep = keepsAspect(cur.items) ? !e.shiftKey : e.shiftKey;
         const nb = cur.rot
-          ? rotatedResizeBox(cur.box, cur.rot, cur.handle, p.x - cur.start.x, p.y - cur.start.y, e.shiftKey)
-          : resizedBox(cur.box, cur.handle, p.x - cur.start.x, p.y - cur.start.y, e.shiftKey);
+          ? rotatedResizeBox(cur.box, cur.rot, cur.handle, p.x - cur.start.x, p.y - cur.start.y, keep)
+          : resizedBox(cur.box, cur.handle, p.x - cur.start.x, p.y - cur.start.y, keep);
         dd.live.preview(resizeOps(cur.items, cur.box, nb, cur.handle));
         return;
       }
@@ -542,6 +544,11 @@ export function useBoardGestures(d: GestureDeps) {
   };
 
   return { onPointerDown, onPointerMove, onPointerUp, onDoubleClick, overlay, placeAt };
+}
+
+/** Whether a resize keeps the selection's proportions by default: pictures (images, stickers, cards) do. */
+export function keepsAspect(items: Map<string, BoardEl>): boolean {
+  return items.size > 0 && [...items.values()].every((e) => e.kind === "image" || e.kind === "stamp" || e.kind === "card");
 }
 
 /** The selection box after dragging `handle` by (dx, dy); shift keeps the aspect ratio. */

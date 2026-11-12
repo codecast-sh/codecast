@@ -13,34 +13,62 @@ export function activeBoardEditor(): HTMLElement | null {
   return a?.classList.contains("board-edit") ? a : null;
 }
 
-/** The line (block) of a rich editor the caret is in. */
-function caretBlock(editor: HTMLElement): HTMLElement | null {
-  const sel = document.getSelection();
-  let n: Node | null = sel?.anchorNode ?? null;
-  while (n && n.parentNode !== editor) n = n.parentNode;
-  return n && n.nodeType === 1 ? (n as HTMLElement) : null;
+
+const isBlock = (n: Node | null) => !!n && n.nodeType === 1 && ["DIV", "P", "BR"].includes((n as Element).tagName);
+
+/**
+ * The editor's lines as the nodes each starts with. A line is a block (<div>),
+ * or a run of inline nodes at the top (the first line before any block, or
+ * text after a <br>).
+ */
+function lineStarts(editor: HTMLElement): Node[] {
+  const out: Node[] = [];
+  let prev: Node | null = null;
+  for (const n of Array.from(editor.childNodes)) {
+    if (n.nodeType === 1 && (n as Element).tagName === "BR") { prev = n; continue; }
+    if (isBlock(n) || !prev || isBlock(prev)) out.push(n);
+    prev = n;
+  }
+  return out;
+}
+
+/** The start of the line holding `node` (a top-level child of the editor). */
+function lineOf(editor: HTMLElement, node: Node | null): Node | null {
+  if (!node) return null;
+  if (node === editor) return null;
+  while (node.parentNode && node.parentNode !== editor) node = node.parentNode;
+  if (isBlock(node) && (node as Element).tagName !== "BR") return node;
+  while (node.previousSibling && !isBlock(node.previousSibling)) node = node.previousSibling;
+  return node;
 }
 
 /**
  * Bullet every line the selection touches, or take the bullets off when all
  * of them already have one (the List button and its toggle).
  */
-function toggleBullet(editor: HTMLElement) {
-  const sel = document.getSelection();
+export function toggleBullet(editor: HTMLElement, sel: Selection | null = document.getSelection()) {
+  const doc = editor.ownerDocument;
   const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
-  let blocks = Array.from(editor.childNodes).filter((n) => range?.intersectsNode(n)) as Node[];
-  if (!blocks.length) { const b = caretBlock(editor); if (b) blocks = [b]; }
-  if (!blocks.length) { document.execCommand("insertText", false, "• "); return; }
-  const firsts = blocks.map((b) => ({ b, t: firstText(b) }));
+  const starts = lineStarts(editor);
+  if (!starts.length) { doc.execCommand("insertText", false, "• "); return; }
+  let lines = range && !range.collapsed ? starts.filter((n) => range.intersectsNode(n) || (n.nodeType === 1 && (n as Element).contains(range.startContainer))) : [];
+  if (!lines.length) {
+    // A caret: its line, or (the caret between lines) the line just before it.
+    const at = sel?.anchorNode === editor ? editor.childNodes[Math.max(0, (sel?.anchorOffset ?? 1) - 1)] ?? null : sel?.anchorNode ?? null;
+    const line = lineOf(editor, at) ?? starts[starts.length - 1];
+    lines = [line];
+  }
+  const firsts = lines.map((n) => ({ n, t: firstText(n) }));
   const allOn = firsts.every(({ t }) => t?.textContent?.startsWith("• "));
-  for (const { b, t } of firsts) {
+  for (const { n, t } of firsts) {
     if (allOn) t!.textContent = t!.textContent!.slice(2);
     else if (!t?.textContent?.startsWith("• ")) {
-      if (t && b.nodeType === 3) t.textContent = `• ${t.textContent}`;
-      else b.insertBefore(document.createTextNode("• "), b.firstChild);
+      if (n.nodeType === 3) (n as Text).textContent = `• ${n.textContent}`;
+      else if (isBlock(n)) n.insertBefore(doc.createTextNode("• "), n.firstChild);
+      else n.parentNode!.insertBefore(doc.createTextNode("• "), n);
     }
   }
-  editor.dispatchEvent(new Event("input", { bubbles: true }));
+  editor.dispatchEvent(new (doc.defaultView ?? window).Event("input", { bubbles: true }));
 }
 
 function firstText(n: Node): Text | null {
