@@ -47,7 +47,7 @@ import { settleCardWaiting } from "./lineNotices";
 import { gateTrialPages, settleTrialCard, trialDeciderOf, trialProjectOf, trialStackOf, trialStationOf } from "./lib/trialDecision";
 import { linkProposalDecision, proposalToAsk, settleExpectationCard } from "./lib/expectationsApply";
 import { pendingApproval, secretApprovalRefusal, settleSecretApproval } from "./lib/secretApprovals";
-import { applyCommandRunReport, commandRunRefusal, settleCommandRun } from "./lib/commandRuns";
+import { applyCommandRunReport, commandRunRefusal, resolveRunDevice, settleCommandRun } from "./lib/commandRuns";
 import { RUN_OPTION, RUN_OPTIONS, parseRunCommand, type CommandRun } from "@codecast/shared/contracts/commandRun";
 import { proposalAnswersError } from "@codecast/shared/contracts/expectations";
 import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
@@ -1024,6 +1024,8 @@ export type AskArgs = {
   card?: ChangeCard;
   /** A cast command for a person to run (`cast decide --run`): the line as the agent wrote it, parsed here (commandRun.ts). */
   run?: string;
+  /** Where the run goes (`cast decide --run --on`): `laptop` or a machine of the person's; default the session's own (lib/commandRuns.resolveRunDevice). */
+  run_on?: string;
   blocking?: boolean;
   /** A pointer card: answering resolves it and delivers nothing into the
    *  asking session (a staffing proposal's queue card, org-staffing.md S4). */
@@ -1049,6 +1051,8 @@ export type AskArgs = {
   trial?: boolean;
   /** The station whose work this decision is about, when another session asks it (a proposal's decision re-asked): it routes as that station's. Set by the server, never by a caller. */
   as_station?: any;
+  /** The Vault's Ask first read (secrets.ts): always `access`, whatever the asking session's title says, since every client gates its Approve on that category. Set by the server, never by a caller. */
+  vault?: boolean;
 };
 
 // An option's page (the-line.md L6) must be a published page: a mistyped
@@ -1131,6 +1135,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   // A run request is always the same card: the command, Run or Don't run.
   const parsedRun = args.run !== undefined ? parseRunCommand(args.run) : null;
   if (parsedRun && "error" in parsedRun) return { error: parsedRun.error };
+  if (args.run_on && !parsedRun) return { error: "--on says where a --run command runs: pass --run with it" };
   if (parsedRun) args = { ...args, options: RUN_OPTIONS.map((o) => ({ ...o })), kind: "single", form: undefined, default_option: undefined, blocking: true };
   const kind: DecisionKind = args.kind ?? "single";
   const shapeError = validateShape(kind, args) ?? (await missingOptionPage(ctx, args.options));
@@ -1165,15 +1170,14 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
 
   const assigned = assignCategory({ question: args.question, options: args.options, context_md: args.context_md }, args.category);
   // Running a command in the person's name is always the person's (never a role's under a grant).
-  const { category, pinned } = parsedRun && !isProtectedCategory(assigned.category) ? { category: "access", pinned: true } : assigned;
+  const { category, pinned } = args.vault || (parsedRun && !isProtectedCategory(assigned.category)) ? { category: "access", pinned: true } : assigned;
+  const runDevice = parsedRun && args.run_on
+    ? resolveRunDevice(await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", auth.userId)).collect(), conversation.owner_device_id, args.run_on)
+    : { device_id: conversation.owner_device_id };
+  if ("error" in runDevice) return { error: runDevice.error };
+  const elsewhere = runDevice.device_id !== conversation.owner_device_id;
   const run: CommandRun | undefined = parsedRun
-    ? {
-        argv: parsedRun.argv,
-        state: "waiting",
-        device_id: conversation.owner_device_id,
-        cwd: conversation.git_root ?? conversation.project_path,
-        at: now,
-      }
+    ? { argv: parsedRun.argv, state: "waiting", device_id: runDevice.device_id, ...(elsewhere ? {} : { cwd: conversation.git_root ?? conversation.project_path }), at: now }
     : undefined;
 
   // Re-asking the same question from the same session updates the open row
@@ -1348,6 +1352,7 @@ export const ask = mutation({
     report_slug: v.optional(v.string()),
     card: v.optional(v.any()),
     run: v.optional(v.string()),
+    run_on: v.optional(v.string()),
     blocking: v.optional(v.boolean()),
     default_option: v.optional(v.number()),
     kind: v.optional(kindValidator),
