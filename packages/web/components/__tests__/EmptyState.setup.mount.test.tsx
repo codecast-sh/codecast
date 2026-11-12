@@ -28,6 +28,7 @@ mock.module("../../lib/analytics", () => ({ ...analytics, track: (e: string, p: 
 
 const { EmptyState } = await import("../EmptyState");
 const { CLI_CONNECTED_KEY, cliJustConnected } = await import("../../lib/cliConnected");
+const { useInboxStore } = await import("../../store/inboxStore");
 
 let root: Root;
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
@@ -52,6 +53,7 @@ beforeEach(() => {
   setupResult = { ok: true };
   setupTokens = [];
   tracked.length = 0;
+  useInboxStore.setState({ currentUser: { _id: "u1", name: "Ada" } } as any);
 });
 afterEach(async () => { await act(async () => root.unmount()); });
 
@@ -62,26 +64,28 @@ test("a person with no machine is offered their own coding tools", async () => {
   expect(text()).toContain("Get started");
   expect(text()).toContain("Connect your coding tools");
   expect(text()).toContain("For developers:");
-  expect(button("Generate install command")).toBeTruthy();
+  expect(button("Show install command")).toBeTruthy();
 });
 
 test("asking for the install command counts as choosing the machine", async () => {
   await render();
-  await click("Generate install command");
+  await click("Show install command");
   await flush();
   expect(tracked[0]).toEqual(["first_run_start_chosen", { start: "machine" }]);
 });
 
 test("a browser tab gets the install command", async () => {
   await render();
-  expect(button("Generate install command")).toBeTruthy();
   expect(button("Set up this machine")).toBeUndefined();
+  await click("Show install command");
+  await flush();
+  expect(text()).toContain("curl -fsSL codecast.sh/install | sh -s -- setup_tok_123456");
 });
 
 test("the desktop app sets the machine up in one click, then waits for sessions", async () => {
   desktop();
   await render();
-  expect(button("Generate install command")).toBeUndefined();
+  expect(button("Show install command")).toBeUndefined();
   await act(async () => { button("Set up this machine")!.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
   await flush();
   expect(setupTokens).toEqual(["setup_tok_123456"]);
@@ -98,7 +102,7 @@ test("a failed run falls back to the command to paste", async () => {
   await act(async () => { button("Set up this machine")!.dispatchEvent(new window.MouseEvent("click", { bubbles: true })); });
   await flush();
   expect(text()).toContain("Setup did not finish from here");
-  expect(button("Generate install command")).toBeTruthy();
+  expect(text()).toContain("curl -fsSL codecast.sh/install | sh -s -- setup_tok_123456");
   expect(tracked[2][1]).toEqual({ ok: false, error: "installer_failed" });
 });
 
@@ -106,12 +110,12 @@ test("a desktop build without the bridge, or on an unsupported OS, gets the comm
   desktop({ supported: false, installed: false, linked: false, running: false });
   await render();
   expect(button("Set up this machine")).toBeUndefined();
-  expect(button("Generate install command")).toBeTruthy();
+  expect(button("Show install command")).toBeTruthy();
 });
 
 test("a terminal that just connected is told to wait, not to install", async () => {
   sessionStorage.setItem(CLI_CONNECTED_KEY, String(Date.now()));
   await render();
   expect(text()).toContain("This machine is connected");
-  expect(button("Generate install command")).toBeUndefined();
+  expect(button("Show install command")).toBeUndefined();
 });
