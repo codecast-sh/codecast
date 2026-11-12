@@ -579,7 +579,7 @@ export async function hostGitInstallationFor(
     return {
       reason:
         `the codecast GitHub App is not installed on ${repository} for you — install it on that repository ` +
-        `(codecast settings, integrations), or grant this host's device key: cast hosts key`,
+        `from codecast settings, integrations, or grant this host's device key from settings, devices`,
     };
   }
   return {
@@ -727,7 +727,8 @@ export const hostGitCredential = action({
       return {
         reason:
           `the codecast GitHub App on ${resolved.account_login} cannot write to ${args.repository} ` +
-          `(its contents permission is ${minted.permissions?.contents ?? "unknown"}) — re-install it with write access`,
+          `(its contents permission is ${minted.permissions?.contents ?? "unknown"}) — an owner of ${resolved.account_login} ` +
+          `accepts the App's write permission on GitHub, under installed GitHub Apps`,
       };
     }
     return {

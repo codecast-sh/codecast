@@ -127,6 +127,8 @@ export function mintRepositoryName(repository: string | undefined): string | und
   return parseOwnerRepo(repository)?.split("/")[1];
 }
 
+export const HOST_TOKEN_PERMISSIONS = { contents: "write", workflows: "write", pull_requests: "write" } as const;
+
 export const getInstallationToken = internalAction({
   args: {
     installation_id: v.number(),
@@ -165,21 +167,23 @@ export const getInstallationToken = internalAction({
 
     // GitHub refuses a scoped mint that asks for more than the installation
     // holds (422), so a read-only App cannot yield a token this path would
-    // call a push credential.
-    const scoped = name ? { repositories: [name], permissions: { contents: "write" } } : undefined;
-    const response = await fetch(
-      `${GITHUB_API_BASE}/app/installations/${args.installation_id}/access_tokens`,
-      {
+    // call a push credential. The first ask carries everything a host needs
+    // (a push that touches .github/workflows, and gh opening a PR with the
+    // same token); an installation that has not accepted those extras still
+    // pushes on contents alone.
+    const mint = (permissions?: Record<string, string>) =>
+      fetch(`${GITHUB_API_BASE}/app/installations/${args.installation_id}/access_tokens`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${jwt}`,
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": "2022-11-28",
-          ...(scoped ? { "Content-Type": "application/json" } : {}),
+          ...(name ? { "Content-Type": "application/json" } : {}),
         },
-        ...(scoped ? { body: JSON.stringify(scoped) } : {}),
-      }
-    );
+        ...(name ? { body: JSON.stringify({ repositories: [name], permissions }) } : {}),
+      });
+    let response = await mint(name ? HOST_TOKEN_PERMISSIONS : undefined);
+    if (name && response.status === 422) response = await mint({ contents: "write" });
 
     if (!response.ok) {
       const errorText = await response.text();
