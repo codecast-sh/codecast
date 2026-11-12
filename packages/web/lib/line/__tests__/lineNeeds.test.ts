@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildLineInbox, inboxCount, type InboxGroup, type InboxRow } from "../lineInbox";
-import { foldDuplicateNeeds, isPractice, goOnProof, lineNeeds, needCount, oneCaseClaim, proseAdvice, type LineNeed, needCounted, needForRef, needKind, needOfCase, stopAnswered, stoppedAsk, waitNote, yesNote, needsOfLine } from "../lineNeeds";
+import { foldDuplicateNeeds, isPractice, goOnProof, lineNeeds, needCount, oneCaseClaim, proseAdvice, type LineNeed, needCounted, needKind, needOfCase, stopAnswered, stoppedAsk, waitNote, yesNote, needsOfLine } from "../lineNeeds";
 import { waitsForFindings } from "../lineInbox";
 import { failCause } from "../runReport";
 import type { LineAdmission, RollupRow } from "../../lineFlow";
@@ -72,12 +72,7 @@ describe("what waits on the viewer (lineNeeds)", () => {
     expect(q.ask).toBe("Choose which before work starts.");
   });
 
-  test("a ref finds its need: the URL's own, an older link's decision or card, a problem", () => {
-    expect(needForRef(needs, "sd-1")?.key).toBe("decide:1");
-    expect(needForRef(needs, "d2")?.key).toBe("decide:2");
-    expect(needForRef(needs, "tc-10")?.kind).toBe("reask");
-    expect(needForRef(needs, "ct-3")?.kind).toBe("question");
-    expect(needForRef(needs, "ct-404")).toBeNull();
+  test("a problem finds its need", () => {
     expect(needOfCase(needs, "4")?.kind).toBe("lapsed");
   });
 
@@ -186,7 +181,7 @@ describe("a twin is asked once (foldDuplicateNeeds)", () => {
     const older = needs[0];
     expect(older.findings).toBe(8);
     expect(older.dups).toEqual([{ ref: "ct-59757", caseId: "59757", projectId: "p2", findings: 3 }]);
-    expect(needForRef(needs, "ct-59757")).toBe(older);
+    expect(older.aliases).toContain("ct-59757");
   });
 
   test("a twin whose older problem asks nothing waits on one act, merging it in, on Problems and never For you", () => {
