@@ -7,6 +7,7 @@ import {
   fetchSessionForResume,
   fetchSessionFromPeers,
   findClaudeTranscript,
+  forgetSessionFetchFailures,
   placeSession,
   type ExportSessionResult,
   type FetchSessionDeps,
@@ -104,6 +105,15 @@ describe("source resolution", () => {
     expect(out).toMatchObject({ ok: true, storage_id: "s1", session_id: ID, cwd, home: srcHome, files: 3 });
     expect(stored).not.toBeNull();
   });
+
+  test("symlinks in the session folder are never packed", async () => {
+    const cwd = path.join(srcHome, "src", "family");
+    const jsonl = writeTranscript(srcHome, cwd, ID, { "tool-results/a.txt": "out" });
+    fs.symlinkSync(path.join(root, "outside.txt"), path.join(path.dirname(jsonl), ID, "tool-results", "link"));
+    fs.writeFileSync(path.join(root, "outside.txt"), "secret");
+    const out = await exportSession({ conversation_id: CONV, session_id: ID }, sourceDeps());
+    expect(out).toMatchObject({ ok: true, files: 2 });
+  });
 });
 
 describe("placeSession", () => {
@@ -128,6 +138,20 @@ describe("placeSession", () => {
     fs.cpSync(srcDir, again, { recursive: true });
     placeSession(again, { session_id: ID, cwd: srcCwd, home: srcHome }, { home: dstHome, cwd: dstCwd, projectsDir: projects(dstHome) });
     expect(fs.readFileSync(placed, "utf-8")).toBe("mine\n");
+  });
+
+  test("a symlink in the archive never lands", () => {
+    const srcCwd = path.join(srcHome, "src", "family");
+    const staging = path.join(root, "staging");
+    fs.mkdirSync(path.join(staging, ID, "sub"), { recursive: true });
+    fs.writeFileSync(path.join(staging, `${ID}.jsonl`), JSON.stringify({ cwd: srcCwd }) + "\n");
+    fs.writeFileSync(path.join(staging, `${OTHER}.jsonl`), "{}\n");
+    fs.symlinkSync(`../${OTHER}.jsonl`, path.join(staging, ID, "link"));
+    fs.symlinkSync("/etc", path.join(staging, ID, "sub", "etc"));
+    const placed = placeSession(staging, { session_id: ID, cwd: srcCwd, home: srcHome }, { home: dstHome, cwd: path.join(dstHome, "family"), projectsDir: projects(dstHome) });
+    const folder = path.join(path.dirname(placed), ID);
+    expect(fs.existsSync(path.join(folder, "sub"))).toBe(true);
+    expect(fs.readdirSync(folder, { recursive: true }).map(String).sort()).toEqual(["sub"]);
   });
 });
 
@@ -187,16 +211,15 @@ describe("fetchSessionFromPeers", () => {
       const f = fleet(srcCwd, dstCwd);
       const dest = path.join(projects(dstHome), claudeProjectDirName(dstCwd), `${ID}.jsonl`);
       fs.mkdirSync(projects(dstHome), { recursive: true });
-      const seen: string[] = [];
-      const watcher = fs.watch(projects(dstHome), { recursive: true }, (_e, name) => { if (name) seen.push(String(name)); });
-      let boundBeforeLanding = null as boolean | null;
+      const transcriptsUnder = (dir: string): string[] =>
+        (fs.readdirSync(dir, { recursive: true }) as string[]).filter((n) => n.endsWith(".jsonl"));
+      let beforeLanding = null as string[] | null;
       const r = await fetchSessionFromPeers({
         ...(mode === "direct" ? f.deps : { ...f.deps, direct: async () => null }),
-        beforePlace: () => { boundBeforeLanding = !fs.existsSync(dest); },
+        beforePlace: () => { beforeLanding = transcriptsUnder(projects(dstHome)); },
       });
-      await pollUntil(() => seen.some((n) => n.endsWith(`${ID}.jsonl`)), "the landed transcript observed").finally(() => watcher.close());
-      expect(seen.filter((n) => n.endsWith(".jsonl") && !n.startsWith(`${claudeProjectDirName(dstCwd)}/`))).toEqual([]);
-      expect(boundBeforeLanding).toBe(true);
+      expect(beforeLanding).toEqual([]);
+      expect(transcriptsUnder(projects(dstHome))).toEqual([`${claudeProjectDirName(dstCwd)}/${ID}.jsonl`]);
       expect(r).toMatchObject({ ok: true, sessionId: ID, cwd: dstCwd, from: "Mac mini", mode });
       if (!r.ok) return;
       expect(r.jsonl).toBe(dest);
@@ -218,7 +241,7 @@ describe("fetchSessionFromPeers", () => {
     writeTranscript(srcHome, srcCwd, ID);
     const g = fleet(srcCwd, path.join(dstHome, "x"));
     const r = await fetchSessionFromPeers({ ...g.deps, localCwd: async () => null });
-    expect(r).toEqual({ ok: false, reason: `no local folder for ${srcCwd}` });
+    expect(r).toEqual({ ok: false, reason: `no local folder for ${srcCwd}`, noLocalFolder: true });
     expect(listed(projects(dstHome))).toEqual([]);
   });
 
@@ -251,38 +274,153 @@ describe("fetchSessionFromPeers", () => {
 });
 
 describe("fetchSessionForResume", () => {
-  test("does nothing unless this machine owns the conversation", async () => {
+  type Report = { phase: string; reason?: string };
+  function service(over: Record<string, unknown> = {}) {
     const asked: string[] = [];
+    const reports: Report[] = [];
     const svc = {
-      getConversationOwner: async () => "other-device",
+      getConversationOwner: async (): Promise<string | null> => "me",
       requestSessionExport: async (c: string) => { asked.push(c); return { command_ids: [], labels: {} }; },
-      sessionExportOutcomes: async () => [],
+      sessionExportOutcomes: async (): Promise<PeerOutcome[]> => [],
       discardSessionBundle: async () => {},
-      getImageUrl: async () => null,
+      getImageUrl: async (): Promise<string | null> => null,
       recordPeerLink: async () => {},
-      reportPeerTransfer: async () => ({ cancel: false }),
+      reportPeerTransfer: async (_c: string, _d: string, _s: number, r: Report) => { reports.push(r); return { cancel: false }; },
+      ...over,
     };
-    const base = { svc, conversationId: "conv_a", sessionId: ID, deviceId: "me", home: dstHome, projectsDir: projects(dstHome), localCwd: async () => null, bind: () => {}, log: () => {} };
-    expect(await fetchSessionForResume(base)).toBeNull();
-    expect(await fetchSessionForResume({ ...base, svc: { ...svc, getConversationOwner: async () => "me" }, sessionId: "forked-abc" })).toBeNull();
-    expect(asked).toEqual([]);
+    return { svc, asked, reports };
+  }
+  const opts = (svc: ReturnType<typeof service>["svc"], conversationId: string, extra: Record<string, unknown> = {}) =>
+    ({ svc, conversationId, sessionId: ID, deviceId: "me", home: dstHome, projectsDir: projects(dstHome), localCwd: async () => null, bind: () => {}, log: () => {}, ...extra });
+
+  test("does nothing when another machine owns the conversation; an unowned one is fetched", async () => {
+    const other = service({ getConversationOwner: async () => "other-device" });
+    expect(await fetchSessionForResume(opts(other.svc, "conv_a"))).toBeNull();
+    expect(await fetchSessionForResume(opts(service().svc, "conv_a", { sessionId: "forked-abc" }))).toBeNull();
+    expect(other.asked).toEqual([]);
+    const unowned = service({ getConversationOwner: async () => null });
+    expect(await fetchSessionForResume(opts(unowned.svc, "conv_a2"))).toBeNull();
+    expect(unowned.asked).toEqual(["conv_a2"]);
   });
 
-  test("a failed fetch is not retried within a minute", async () => {
-    let asked = 0;
-    const svc = {
-      getConversationOwner: async () => "me",
-      requestSessionExport: async () => { asked++; return { command_ids: [], labels: {} }; },
-      sessionExportOutcomes: async () => [],
-      discardSessionBundle: async () => {},
-      getImageUrl: async () => null,
-      recordPeerLink: async () => {},
-      reportPeerTransfer: async () => ({ cancel: false }),
-    };
-    const opts = { svc, conversationId: "conv_b", sessionId: ID, deviceId: "me", home: dstHome, projectsDir: projects(dstHome), localCwd: async () => null, bind: () => {}, log: () => {} };
-    expect(await fetchSessionForResume(opts)).toBeNull();
-    expect(await fetchSessionForResume(opts)).toBeNull();
-    expect(asked).toBe(1);
+  test("a failed fetch clears the strip, is not retried within a minute, and a restart forgets it", async () => {
+    const f = service();
+    expect(await fetchSessionForResume(opts(f.svc, "conv_b"))).toBeNull();
+    await pollUntil(() => f.reports.at(-1)?.phase === "done", "the strip cleared");
+    expect(f.reports.map((r) => r.phase)).not.toContain("failed");
+    expect(await fetchSessionForResume(opts(f.svc, "conv_b"))).toBeNull();
+    expect(f.asked).toHaveLength(1);
+    forgetSessionFetchFailures("conv_other");
+    expect(await fetchSessionForResume(opts(f.svc, "conv_b"))).toBeNull();
+    expect(f.asked).toHaveLength(1);
+    forgetSessionFetchFailures("conv_b");
+    expect(await fetchSessionForResume(opts(f.svc, "conv_b"))).toBeNull();
+    expect(f.asked).toHaveLength(2);
+  });
+
+  describe("through the relay", () => {
+    let server: ReturnType<typeof Bun.serve>;
+    const store = new Map<string, Uint8Array>();
+    let aborted = 0;
+    beforeEach(() => {
+      server = Bun.serve({
+        port: 0,
+        fetch: (req) => {
+          const id = new URL(req.url).pathname.slice(1);
+          if (id === "hang") return new Promise<Response>(() => { req.signal.addEventListener("abort", () => { aborted++; }); });
+          const body = store.get(id);
+          return body ? new Response(body.slice()) : new Response("no", { status: 404 });
+        },
+      });
+    });
+    afterEach(() => { server.stop(true); store.clear(); });
+
+    function relaying(srcCwd: string, over: Record<string, unknown> = {}) {
+      const rows: PeerOutcome[] = [];
+      const f = service({
+        requestSessionExport: async (c: string) => {
+          f.asked.push(c);
+          const id = `r${rows.length + 1}`;
+          const out = await exportSession({ conversation_id: c, session_id: ID }, sourceDeps({ upload: async (b: Uint8Array) => { store.set(id, b); return id; } }));
+          rows.push({ command_id: id, executed_at: 1, result: JSON.stringify(out), error: null, label: "Mac mini", device_id: "mini" });
+          return { command_ids: [id], labels: { [id]: "Mac mini" } };
+        },
+        sessionExportOutcomes: async () => rows,
+        getImageUrl: async (sid: string) => `${server.url}${sid}`,
+        ...over,
+      });
+      return f;
+    }
+
+    test("no local folder for the transcript's cwd does not close the transcript gate", async () => {
+      writeTranscript(srcHome, path.join(srcHome, "src", "family"), ID);
+      const f = relaying(path.join(srcHome, "src", "family"));
+      expect(await fetchSessionForResume(opts(f.svc, "conv_c"))).toBeNull();
+      expect(await fetchSessionForResume(opts(f.svc, "conv_c"))).toBeNull();
+      expect(f.asked).toHaveLength(2);
+      await pollUntil(() => f.reports.at(-1)?.phase === "done", "the strip cleared");
+      expect(listed(projects(dstHome))).toEqual([]);
+    });
+
+    test("a long download keeps reporting, and a cancel aborts it, holds off automatic refetches, and a restart lifts it", async () => {
+      writeTranscript(srcHome, path.join(srcHome, "src", "family"), ID);
+      let receiving = 0;
+      const f = relaying(path.join(srcHome, "src", "family"), {
+        getImageUrl: async () => `${server.url}hang`,
+        reportPeerTransfer: async (_c: string, _d: string, _s: number, r: Report) => {
+          f.reports.push(r);
+          if (r.phase === "receiving") receiving++;
+          return { cancel: receiving >= 3 };
+        },
+      });
+      expect(await fetchSessionForResume(opts(f.svc, "conv_d", { heartbeatMs: 20 }))).toBe("cancelled");
+      expect(receiving).toBeGreaterThanOrEqual(3);
+      await pollUntil(() => aborted > 0, "the download aborted");
+      await pollUntil(() => f.reports.at(-1)?.phase === "failed", "the cancel reported");
+      expect(f.reports.at(-1)).toEqual({ phase: "failed", reason: "you cancelled the transfer" });
+      const reportsAfterCancel = f.reports.length;
+      expect(await fetchSessionForResume(opts(f.svc, "conv_d", { heartbeatMs: 20 }))).toBe("cancelled");
+      expect(f.asked).toHaveLength(1);
+      expect(f.reports).toHaveLength(reportsAfterCancel);
+      forgetSessionFetchFailures("conv_d");
+      receiving = -100;
+      const again = fetchSessionForResume(opts(f.svc, "conv_d", { heartbeatMs: 20 }));
+      await pollUntil(() => f.asked.length === 2, "a fresh fetch after the restart");
+      receiving = 100;
+      expect(await again).toBe("cancelled");
+    });
+
+    test("the transcript's strip is finished before the folder lookup, so a folder transfer owns the strip alone", async () => {
+      writeTranscript(srcHome, path.join(srcHome, "src", "family"), ID);
+      const f = relaying(path.join(srcHome, "src", "family"));
+      let atLookup = -1;
+      const r = await fetchSessionForResume(opts(f.svc, "conv_e", {
+        heartbeatMs: 10,
+        localCwd: async () => {
+          atLookup = f.reports.length;
+          await new Promise((res) => setTimeout(res, 80));
+          return dstHome;
+        },
+      }));
+      expect(r).toMatchObject({ ok: true });
+      expect(f.reports.at(atLookup - 1)).toEqual({ phase: "done" });
+      expect(f.reports).toHaveLength(atLookup);
+    });
+
+    test("a folder fetch that failed keeps its failure on the strip", async () => {
+      writeTranscript(srcHome, path.join(srcHome, "src", "family"), ID);
+      const f = relaying(path.join(srcHome, "src", "family"));
+      const folderFailure = { phase: "failed", reason: "the folder is over the limit" };
+      const r = await fetchSessionForResume(opts(f.svc, "conv_f", {
+        localCwd: async () => {
+          await f.svc.reportPeerTransfer("conv_f", "me", 0, folderFailure);
+          return null;
+        },
+      }));
+      expect(r).toBeNull();
+      await new Promise((res) => setTimeout(res, 30));
+      expect(f.reports.at(-1)).toEqual(folderFailure);
+    });
   });
 });
 
