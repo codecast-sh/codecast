@@ -8,6 +8,7 @@
 import { approvesSecretRead } from "./secrets";
 import { shellArg, shellWords } from "./shellWords";
 import { APPROVAL_ANSWERS } from "./approvalAnswers";
+import { deviceDisplayName, type DeviceNameSource } from "./deviceName";
 
 /** The answers are an approval's, so every surface draws the card as one. */
 export const RUN_OPTION = APPROVAL_ANSWERS.approve;
@@ -21,7 +22,7 @@ export interface CommandRun {
   /** The words after `cast`, exactly as the machine runs them. */
   argv: string[];
   state: CommandRunState;
-  /** The machine that runs it: the asking session's. */
+  /** The machine that runs it: the asking session's, or the one `--on` named (resolveRunDevice). */
   device_id?: string;
   /** Where it runs: the asking session's project folder, so workspace and repo resolve as they would for the agent. */
   cwd?: string;
@@ -37,6 +38,23 @@ const MAX_CHARS = 8000;
 export const MAX_RUN_OUTPUT = 6000;
 /** How long the machine lets a run go before it stops it. */
 export const RUN_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * `--on laptop`: the person's own computer rather than the session's machine.
+ * From a cloud host session that is the laptop managing the host (the one
+ * holding its Chrome link and its ssh keys); from a laptop session, itself.
+ */
+export const RUN_ON_LAPTOP = "laptop";
+
+/**
+ * The line an agent runs to have its person take a step only they may take:
+ * a Yes card in the conversation that runs `command` as theirs (on `on`, when
+ * given). Every hint that would otherwise tell a person to type a cast
+ * command hands the agent this instead.
+ */
+export function askToRun(question: string, command: string, on?: string): string {
+  return `cast decide ${shellArg(question)} --run ${shellArg(command)}${on ? ` --on ${on}` : ""}`;
+}
 
 /** The words of `line` as a run's argv, or why it cannot be one. Takes the line an agent would have pasted for the person (`cast …`, `! cast …`). */
 export function parseRunCommand(line: string): { argv: string[] } | { error: string } {
@@ -101,3 +119,43 @@ export function runResultText(run: { argv: readonly string[]; exit_code?: number
   const out = run.output?.trim();
   return out ? `${head}\n\n\`\`\`\n${out}\n\`\`\`` : head;
 }
+
+/** What an answered permission ask's record says, on every surface. */
+export const PERMISSION_LABEL: Record<PermissionOutcome, string> = {
+  running: "Running",
+  done: "Done",
+  failed: "Didn't go through",
+  declined: "Not now",
+};
+
+/** A machine whose heartbeat is older than this reads as offline: a run sent to it waits there. A live daemon beats about once a minute. */
+export const RUN_MACHINE_QUIET_MS = 3 * 60_000;
+
+export type RunMachine = { name: string; offline: boolean };
+
+/**
+ * Where a permission ask runs, when that is not the session's own machine
+ * (`--on laptop` from a cloud host): the person says Yes to something on that
+ * machine, so the card and its record name it, and say when it is offline.
+ * Null when it runs on the session's machine, or the machine is unknown.
+ */
+export function runMachine(
+  run: Pick<CommandRun, "device_id"> | undefined,
+  ownDeviceId: string | null | undefined,
+  roster: ReadonlyArray<DeviceNameSource & { device_id: string; last_seen: number }> | undefined,
+  now: number,
+): RunMachine | null {
+  const target = run?.device_id;
+  if (!target || (ownDeviceId && ownDeviceId === target)) return null;
+  const m = roster?.find((r) => r.device_id === target);
+  return m ? { name: deviceDisplayName(m), offline: now - m.last_seen > RUN_MACHINE_QUIET_MS } : null;
+}
+
+/** The record's words for an outcome: the machine when it ran elsewhere, and a wait when it is queued on a machine that is offline. */
+export function permissionStatus(outcome: PermissionOutcome, machine: RunMachine | null, queued: boolean): { label: string; waiting: boolean } {
+  if (outcome === "running" && queued && machine?.offline) return { label: `Waiting for ${machine.name} to come online`, waiting: true };
+  const base = PERMISSION_LABEL[outcome];
+  const label = machine && outcome !== "declined" ? `${base} on ${machine.name}` : base;
+  return { label: outcome === "running" ? `${label}…` : label, waiting: false };
+}
+

@@ -531,12 +531,12 @@ function registerRequestVerbs(vault: Command, deps: PublishDeps): void {
 
   helpText(
     vault.command("save-signin"),
-    "Save a site's sign-in from your own Chrome here (--from-chrome, a person's terminal only) or a cloud host's browser; cast browser open then starts every agent signed in",
+    "Save a site's sign-in from your own Chrome here (--from-chrome, the person's act: an agent asks with cast decide --run) or a cloud host's browser; cast browser open then starts every agent signed in",
     ". Saving again replaces it; an open request's name is filled\n\nExample: cast vault save-signin vercel.com",
   )
     .argument("<site>", "Host or URL, like vercel.com")
     .option("--name <name>", "Name it (default: <site>-signin)")
-    .option("--from-chrome", "Read the sign-in out of your own Chrome on this machine; a person's terminal only, refused under any agent")
+    .option("--from-chrome", "Read the sign-in out of your own Chrome on this machine; the person's act, refused under any agent (an agent asks with cast decide --run)")
     .option("--check", "With --from-chrome: count the site's cookies there and store nothing")
     .option(...WRITE_TEAM_OPTION)
     .option("--personal", "Only you can use it")
