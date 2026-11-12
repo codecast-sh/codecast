@@ -37,6 +37,7 @@ import { bridgeAddressStale, heldSshArgs } from "./agentBridge.js";
 import { HeldConnections } from "./heldConnection.js";
 import { mintHostClientToken, readBridgeState, revokeHostClient, type BridgeState } from "../browser/bridge/host.js";
 import { hashHostToken } from "../browser/bridge/hostClients.js";
+import { askToRun } from "@codecast/shared/contracts/commandRun";
 import { LAPTOP_LINK_CLOSED_FILE, LAPTOP_LINK_FILE, type LaptopLink, type LaptopLinkClosed } from "../browser/bridge/laptopLink.js";
 
 /** The idle watchdog version that subtracts the link's own connection. */
@@ -78,8 +79,8 @@ export function browserLinkArgs(host: RemoteHost, bridgePort: number): string[] 
  */
 export function browserLinkRefusal(cloud: CloudHost, bridge: BridgeState | null, opts: { explicit?: boolean } = {}): string | null {
   if (cloud.shared) return "the host is shared with teammates: their sessions would drive this human's Chrome";
-  if (cloud.laptopBrowser === false) return "turned off for this host (cast browser extension link --host to turn it on)";
-  if (!bridge?.token || !bridge.extensionSeenAt) return "this laptop's Chrome extension was never paired (cast browser extension setup)";
+  if (cloud.laptopBrowser === false) return `turned off for this host; turning it on is your person's call: ${askToRun("Let this cloud host use your Chrome?", `cast browser extension link --host ${cloud.id}`)}`;
+  if (!bridge?.token || !bridge.extensionSeenAt) return "this laptop's Chrome extension was never paired: any `cast browser` command here puts the pairing card in front of your person";
   if (!opts.explicit && (cloud.watchdogVersion ?? 0) < BROWSER_LINK_MIN_WATCHDOG) {
     return `the host's idle watchdog (version ${cloud.watchdogVersion ?? 1}) would count the link as activity; \`cast hosts provision ${cloud.id}\` installs version ${BROWSER_LINK_MIN_WATCHDOG}`;
   }

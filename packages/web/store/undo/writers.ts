@@ -302,7 +302,7 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   pendingPermissions: "Written only by resolvePermission, an answer the agent acts on at once; never undoable.",
   guestSuggestions:
     "Written only by sendGuestSuggestion, a send, and dismissGuestSuggestion, an answer the guest sees at once; never undoable.",
-  accountPool: "Written only by setAccountShares, a setting changed back in the same control; never undoable.",
+  accountPool: "Written only by setAccountShares and setAccountDevices, settings changed back in the same control; never undoable.",
   workflowRuns: "Written only by respondToGate, a gate answer that resumes the run; never undoable.",
   currentUser: "Profile and preference settings; never undoable, and the undo binding ignores the key.",
   migrationBatches:
