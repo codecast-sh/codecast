@@ -1797,6 +1797,19 @@ export function describeFleetWrite(state: FleetState): string {
  *  Not a valid profile name, so it can never collide with one. */
 export const FLEET_GATE_ACCOUNT = "+fleet";
 
+/** Credentials Claude Code takes from the environment ahead of its credential
+ *  store. One inherited from a tmux server's global env or a shell rc pins every
+ *  launch to that account, so a switch that moves the store moves nothing: on
+ *  2026-11-12 a host's tmux carried another tool's token and auto-switch
+ *  restarted a session onto three fresh accounts that all ran on the spent one. */
+export const STORE_OUTRANKING_ENV = ["CLAUDE_CODE_OAUTH_TOKEN"] as const;
+
+/** Source a credential-store launch file, dropping any credential the shell
+ *  inherited that would outrank the store. */
+export function storeLaunchPrefix(file: string): string {
+  return `unset ${STORE_OUTRANKING_ENV.join(" ")}; ${sourceFilePrefix(file)}`;
+}
+
 /** The launch prefix for a Claude session, and the account the live gate
  *  should attribute it to. A pin (a person's `--account`, or a pin the server
  *  kept) sources that profile; no pin runs on the fleet store when it is
@@ -1805,7 +1818,7 @@ export const FLEET_GATE_ACCOUNT = "+fleet";
 export function launchAccountPrefix(pin: string | undefined, warn?: (msg: string) => void): { prefix: string; account?: string } {
   adoptPushedCredential();
   if (!pin && fleetStoreReady() && fs.existsSync(fleetLaunchFile())) {
-    return { prefix: sourceFilePrefix(fleetLaunchFile()), account: FLEET_GATE_ACCOUNT };
+    return { prefix: storeLaunchPrefix(fleetLaunchFile()), account: FLEET_GATE_ACCOUNT };
   }
   const account = pin ?? launchProfileName();
   const prefix = accountSourcePrefix(account, warn);
@@ -2056,7 +2069,7 @@ export function accountSourcePrefix(name: string | undefined, warn?: (msg: strin
   if (info.expires_at <= Date.now()) {
     warn?.(`cc_account "${name}" saved login is past its refresh lifetime — sign into it again from Settings`);
   }
-  return `${sourceFilePrefix(info.file)}${nameExport}`;
+  return `${storeLaunchPrefix(info.file)}${nameExport}`;
 }
 
 /** Re-snapshot the ACTIVE account into whichever saved profile matches its

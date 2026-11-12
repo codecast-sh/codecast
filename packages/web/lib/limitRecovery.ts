@@ -75,3 +75,12 @@ export function limitRecoveryPhase(input: {
   if (!action) return { phase: "parked" };
   return { phase: "recovering", action, step: input.continueDelivered ? "resuming" : "moving" };
 }
+
+// The server stamps a conversation's block with the timestamp of the banner
+// that set it, so a banner older than the stamp was superseded by a newer one.
+// Without this every park card in a thread read as in force and each claimed
+// the machine's latest switch, so three switches to three accounts all read
+// "moving this session to" the last one.
+export function isSupersededBanner(bannerAt: number | undefined, stampedAt: number | null | undefined): boolean {
+  return bannerAt != null && stampedAt != null && bannerAt < stampedAt - 1_000;
+}

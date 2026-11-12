@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { limitRecoveryAction, limitRecoveryPhase, RESUMED_MATCH_MS } from "../limitRecovery";
+import { isSupersededBanner, limitRecoveryAction, limitRecoveryPhase, RESUMED_MATCH_MS } from "../limitRecovery";
 
 const PARK = 1_790_671_650_000;
 
@@ -60,5 +60,19 @@ describe("limitRecoveryPhase", () => {
   test("an old card does not claim a recovery long after it", () => {
     const late = { ...action, at: PARK + RESUMED_MATCH_MS + 1 };
     expect(limitRecoveryPhase({ live: false, parkedAt: PARK, action: late })).toEqual({ phase: "moved_on" });
+  });
+});
+
+describe("isSupersededBanner", () => {
+  test("only the banner the block is stamped with stays in force", () => {
+    const newest = PARK + 7 * 60_000;
+    expect(isSupersededBanner(PARK, newest)).toBe(true);
+    expect(isSupersededBanner(newest, newest)).toBe(false);
+  });
+
+  test("a missing stamp or timestamp never retires a card", () => {
+    expect(isSupersededBanner(PARK, undefined)).toBe(false);
+    expect(isSupersededBanner(PARK, null)).toBe(false);
+    expect(isSupersededBanner(undefined, PARK)).toBe(false);
   });
 });

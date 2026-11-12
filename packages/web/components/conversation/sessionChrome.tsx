@@ -2,6 +2,7 @@ import { AppLoader } from "../AppLoader";
 import { useState, useMemo, memo, Fragment, type ReactNode } from "react";
 import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { isSupersededBanner } from "../../lib/limitRecovery";
 import { withSafetyBlock, SAFETY_BLOCK_HINT, PROVIDER_KEYS, getProviderKeySpec, computeConversationTaskStats, isHostedAgentType, isSessionActivityFresh } from "@codecast/shared/contracts";
 import { LimitParkCard } from "../LimitParkCard";
 import { KeyCap, ShortcutTooltip } from "../KeyboardShortcutsHelp";
@@ -289,13 +290,18 @@ function MessagesLoading() {
 // an hours-old "Usage limit reached" must not still read as the current state
 // once the session moved on. A row missing from the store (not in this viewer's
 // inbox window) is treated as still live: the banner is the newest thing we
-// know about, so the neutral guess is "unresolved".
-function useApiErrorLive(conversationId?: string): boolean {
+// know about, so the neutral guess is "unresolved". The flag is stamped with
+// the banner's own timestamp, so a banner older than the stamp was superseded
+// by a newer one: only the newest card is in force, and only it may claim the
+// machine's latest recovery.
+function useApiErrorLive(conversationId?: string, timestamp?: number): boolean {
   return useInboxStore((s) => {
     if (!conversationId) return true;
     const row = s.sessions[conversationId];
     if (!row) return true;
-    return withSafetyBlock(row).pending_api_error === true;
+    const flagged = withSafetyBlock(row);
+    if (flagged.pending_api_error !== true) return false;
+    return !isSupersededBanner(timestamp, flagged.pending_api_error_at);
   });
 }
 
@@ -303,7 +309,7 @@ export function ApiErrorCard({ error, agentType, conversationId, messageUuid, ti
   // A cloud agent's setup card (the daemon's): its provider is the session's, its kind in the id the daemon posted it under.
   const cloudCard = useCloudAgentSetupCard(conversationId, messageUuid, error.message);
   // A credential card is history once the machine has the credential, whatever the session did since.
-  const live = useApiErrorLive(conversationId) && !cloudCard?.resolved;
+  const live = useApiErrorLive(conversationId, timestamp) && !cloudCard?.resolved;
   const modern = useIsModernStyle();
   // A usage-limit park has its own card in every density and style: the reset
   // in the viewer's clock, the owner machine's recovery flags as "what next".
