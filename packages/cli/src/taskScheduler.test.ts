@@ -757,4 +757,35 @@ describe("runs already going never hold due triggers (ct-92447)", () => {
       now.mockRestore();
     }
   });
+
+  it("a claim or skip record the backend did not answer is tried again before the lease lapses", async () => {
+    const gated = { ...spawnTask("gated", dir), schedule_type: "recurring", precheck: "exit 1" };
+    const { scheduler, calls } = makeScheduler([gated], { claimResult: (t) => t });
+    scheduler.retryDelaysMs = [0, 0, 0];
+    const realClaim = scheduler.syncService.claimTask;
+    const realSkip = scheduler.syncService.skipTaskRun;
+    let claimTries = 0;
+    let skipTries = 0;
+    scheduler.syncService.claimTask = async (...a: any[]) => {
+      if (++claimTries === 1) throw new Error("The operation timed out.");
+      return realClaim(...a);
+    };
+    scheduler.syncService.skipTaskRun = async (...a: any[]) => {
+      if (++skipTries < 3) throw new Error("fetch failed");
+      return realSkip(...a);
+    };
+    await scheduler.poll();
+    expect(claimTries).toBe(2);
+    expect(skipTries).toBe(3);
+    expect(calls.skipped.map((x) => x.taskId)).toEqual(["gated"]);
+  });
+
+  it("a queue read the backend did not answer is reported, never taken for an empty queue", async () => {
+    const lines: string[] = [];
+    const { scheduler } = makeScheduler([]);
+    scheduler.log = (msg: string) => lines.push(msg);
+    scheduler.syncService.getDueTasks = async () => { throw new Error("The operation timed out."); };
+    await scheduler.poll();
+    expect(lines.some((l) => l.includes("Poll error") && l.includes("timed out"))).toBe(true);
+  });
 });

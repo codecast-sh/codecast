@@ -30,6 +30,9 @@ const HEARTBEAT_INTERVAL_MS = 60_000;
  *  is the older form of this mistake: two long runs held every trigger for hours (2026-11-11). Load is the
  *  governor's call (startableDue). */
 const MAX_STARTING = 6;
+/** Waits between tries of a trigger write the backend did not answer: all inside the 5 min lease, so an answer lost on
+ *  a bad link is retried before the server takes the firing for dead. */
+export const UNANSWERED_RETRY_MS = [3_000, 10_000, 30_000];
 /** The poll itself only reads the queue; past this, a tick treats a still-pending read as lost and reads again. */
 const POLL_STALE_MS = 2 * 60_000;
 /** While the machine is "over", a due run waits for room, but no longer than this: the level holds as long as any
@@ -293,6 +296,8 @@ export class TaskScheduler {
   private running = new Map<string, RunningTask>();
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
+  /** Overridable by tests. */
+  retryDelaysMs: readonly number[] = UNANSWERED_RETRY_MS;
   /** Runs between claim and inject/spawn, so a later tick never starts the same one twice. */
   private starting = new Set<string>();
   /** When the in-flight queue read began; a tick skips while it is fresh. */
@@ -430,7 +435,8 @@ export class TaskScheduler {
 
   /** Returns true when it started a fresh agent. */
   private async executeTask(task: any): Promise<boolean> {
-    const claimed = await this.syncService.claimTask(task._id, this.daemonId);
+    // A claim whose answer was lost may have landed: the server takes a retry from the lease holder as the same claim.
+    const claimed = await this.untilAnswered(`claim task ${task._id}`, () => this.syncService.claimTask(task._id, this.daemonId));
     if (!claimed) {
       this.log(`Failed to claim task ${task._id} (already claimed?)`);
       return false;
@@ -685,8 +691,28 @@ export class TaskScheduler {
 
     const reason = verdict.reason ?? describeTriggerPrecheckFailure(result);
     this.log(`Skipping ${source} run of task "${task.title}": ${reason}`);
-    await this.syncService.skipTaskRun(task._id, this.daemonId, result, reason, source, verdict.state, mode);
+    await this.untilAnswered(`record the skip of task ${task._id}`, () =>
+      this.syncService.skipTaskRun(task._id, this.daemonId, result, reason, source, verdict.state, mode),
+    ).catch(() => {});
     return true;
+  }
+
+  /** Runs a trigger write until the backend answers, waiting UNANSWERED_RETRY_MS between tries; throws the last error. */
+  private async untilAnswered<T>(what: string, call: () => Promise<T>): Promise<T> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await call();
+      } catch (err) {
+        const wait = this.retryDelaysMs[attempt];
+        const msg = err instanceof Error ? err.message : String(err);
+        if (wait === undefined) {
+          this.log(`Could not ${what} after ${attempt + 1} tries: ${msg}`, "warn");
+          throw err;
+        }
+        this.log(`Backend did not answer (${msg}); will ${what} again in ${wait / 1000}s`, "warn");
+        await new Promise((r) => setTimeout(r, wait));
+      }
+    }
   }
 
   // Bounded retry chain for linkRunConversation; standalone timers (not tied
