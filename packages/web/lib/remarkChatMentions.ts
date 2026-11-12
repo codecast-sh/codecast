@@ -85,6 +85,23 @@ export function channelNameMap(
   return map;
 }
 
+// lucide's Reply glyph, as an mdast carrier rehype turns into an inline svg.
+function replyMarkMdast() {
+  const stroke = { fill: "none", stroke: "currentColor", strokeWidth: 2, strokeLinecap: "round", strokeLinejoin: "round" };
+  return {
+    type: "emphasis",
+    data: {
+      hName: "svg",
+      hProperties: { className: ["ch-session-ask-mark"], viewBox: "0 0 24 24", ariaHidden: "true" },
+      hChildren: [
+        { type: "element" as const, tagName: "polyline", properties: { points: "9 17 4 12 9 7", ...stroke }, children: [] },
+        { type: "element" as const, tagName: "path", properties: { d: "M20 18v-2a4 4 0 0 0-4-4H4", ...stroke }, children: [] },
+      ],
+    },
+    children: [],
+  };
+}
+
 // The Slack mark as hast, for the chip above. mdast hands `data.hChildren`
 // straight through to rehype, so the plugin can draw the glyph without React.
 function slackMarkHast() {
@@ -136,19 +153,26 @@ export function remarkChatMentions(options: ChatMentionOptions = {}) {
               };
             }
             if (sessions?.has(lower)) {
+              // An address asks the session to reply; a bare id or
+              // `@[Title id]` only names it. The reply mark before the pill is
+              // what tells a reader which sessions this line woke.
               return {
-                type: "link",
-                url: `entity://${lower}`,
-                // The text is the payload EntityAwareLink reads (react-markdown
-                // strips the entity:// href), exactly as remarkEntityIds emits it.
-                // data-mention marks it as an ADDRESS, so remarkEntityCards
-                // leaves it an inline pill rather than promoting it to a card:
-                // "@jx7abcd" asks the session something, a bare id shares it.
-                // Tree-level only: EntityAwareLink renders the pill from the
-                // text payload and forwards no props, so nothing here reaches
-                // the DOM — the pill wears the session pill's own dress.
-                data: { hProperties: { "data-mention": lower } },
-                children: [{ type: "text", value: lower }],
+                type: "emphasis",
+                data: { hName: "span", hProperties: { className: "ch-session-ask", title: "Asked to reply" } },
+                children: [replyMarkMdast(), {
+                  type: "link",
+                  url: `entity://${lower}`,
+                  // The text is the payload EntityAwareLink reads (react-markdown
+                  // strips the entity:// href), exactly as remarkEntityIds emits it.
+                  // data-mention marks it as an ADDRESS, so remarkEntityCards
+                  // leaves it an inline pill rather than promoting it to a card:
+                  // "@jx7abcd" asks the session something, a bare id shares it.
+                  // Tree-level only: EntityAwareLink renders the pill from the
+                  // text payload and forwards no props, so nothing here reaches
+                  // the DOM — the pill wears the session pill's own dress.
+                  data: { hProperties: { "data-mention": lower } },
+                  children: [{ type: "text", value: lower }],
+                }],
               };
             }
             const slackPerson = slack?.get(lower);
