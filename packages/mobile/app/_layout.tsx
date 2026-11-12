@@ -44,6 +44,7 @@ import { appAlert } from '@/lib/popups';
 // as web's toast does.
 setTaskErrorReporter((msg) => appAlert('Task', msg));
 
+import { PresenceRequests } from '@/components/PresenceRequests';
 const CallOverlay = lazy(() => import('@/components/calls/CallOverlay').then((m) => ({ default: m.CallOverlay })));
 
 class OverlayErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
@@ -333,6 +334,7 @@ function RootLayoutNav() {
                     </Suspense>
                   </OverlayErrorBoundary>
                 ) : null}
+                <PresenceRequests />
                 {/* Last, so the lock sits above every host before it. */}
                 <BiometricGate />
               </AuthGate>
