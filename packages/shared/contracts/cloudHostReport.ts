@@ -60,6 +60,8 @@ export interface CloudHostReport {
   /** The laptop that manages the host (its registry holds the key) and runs the web's actions. */
   managed_by: string;
   instance_id: string;
+  /** The instance's own name (its AWS Name tag): what tells hosts apart in a picker. */
+  name?: string;
   provider: "aws" | "scaleway-mac";
   region?: string;
   instance_type?: string;

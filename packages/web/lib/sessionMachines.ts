@@ -141,7 +141,9 @@ export function machineChipNote(d: SessionMachine, roster: SessionMachine[]): st
   const name = deviceDisplayName(d);
   if (!roster.some((o) => o !== d && o.bot_name === d.bot_name && deviceDisplayName(o) === name)) return null;
   if (!d.online) return `${isCloudHost(d) ? "asleep" : "off"} ${compactAge(Date.now() - d.last_seen)}`;
-  return d.cloud_host?.region ?? d.cloud_host?.instance_type ?? d.device_id.slice(0, 6);
+  // Region is the same for every host in one account, so it never tells two apart.
+  const host = d.cloud_host;
+  return host ? [host.instance_type, host.instance_id.slice(-4)].filter(Boolean).join(" ") : d.device_id.slice(0, 6);
 }
 
 /**

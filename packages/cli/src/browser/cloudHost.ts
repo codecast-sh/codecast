@@ -279,6 +279,11 @@ function instanceFacts(inst: any): { state: HostState; address?: string } {
   return { state, address: inst.PublicIpAddress };
 }
 
+/** The instance's Name tag, the name a person gave the box (union-line-1), or undefined. */
+export function instanceNameTag(inst: { Tags?: Array<{ Key?: string; Value?: string }> } | null | undefined): string | undefined {
+  return inst?.Tags?.find((t) => t.Key === "Name")?.Value?.trim() || undefined;
+}
+
 /**
  * Everything `cast hosts ls` needs about one machine, in as few AWS calls as
  * it can be had: state and address and the bill, from a single
@@ -297,6 +302,7 @@ export function inspectHost(host: CloudHost): {
   state: HostState;
   address?: string;
   instanceType?: string;
+  name?: string;
   platform?: "linux" | "darwin";
   volumeGiB?: number;
 } {
@@ -312,7 +318,8 @@ export function inspectHost(host: CloudHost): {
     const sizes: number[] = (vols?.Volumes ?? []).map((v: any) => Number(v.Size) || 0);
     if (sizes.length) volumeGiB = sizes.reduce((a, b) => a + b, 0);
   } catch { /* the disk size is the only field this loses */ }
-  return { ...instanceFacts(inst), instanceType: inst.InstanceType, platform: /^mac\d|^mac-/.test(inst.InstanceType ?? "") ? "darwin" : "linux", ...(volumeGiB === undefined ? {} : { volumeGiB }) };
+  const name = instanceNameTag(inst);
+  return { ...instanceFacts(inst), instanceType: inst.InstanceType, ...(name ? { name } : {}), platform: /^mac\d|^mac-/.test(inst.InstanceType ?? "") ? "darwin" : "linux", ...(volumeGiB === undefined ? {} : { volumeGiB }) };
 }
 
 /**

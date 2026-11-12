@@ -33,6 +33,7 @@ export function buildCloudHostReport(host: CloudHost, managedBy: string, now = D
   return {
     managed_by: managedBy,
     instance_id: host.id,
+    ...(facts.name ? { name: facts.name } : {}),
     provider: host.provider,
     ...(host.region ? { region: host.region } : {}),
     ...(facts.instanceType ? { instance_type: facts.instanceType } : {}),

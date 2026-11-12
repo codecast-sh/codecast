@@ -11,6 +11,8 @@ export type DeviceNameSource = {
   label: string;
   platform: string;
   is_remote?: boolean;
+  /** A cloud host's own name (its AWS Name tag), reported by the laptop that manages it. */
+  cloud_host?: { name?: string | null } | null;
 };
 
 const OS_PREFIX = /^(macOS|Linux|Windows)\s*-\s*/i;
@@ -63,6 +65,10 @@ export function deviceKindLabel(d: DeviceNameSource): string {
 /** A clean display name: chosen names when present, generated hostnames by kind. */
 export function deviceDisplayName(d: DeviceNameSource | undefined | null): string {
   if (!d) return "Unknown device";
+  // A cloud host someone named (union-line-1, a codecast-linux box) reads by
+  // that name; eight hosts that all read "Cloud Linux" cannot be told apart.
+  const named = d.cloud_host?.name?.trim();
+  if (named) return named;
   // The same predicate that decides "this machine boots when work arrives",
   // so the name and the placement rule cannot diverge.
   if (deviceWakesOnUse(d) && /linux/i.test(d.platform)) return "Cloud Linux";

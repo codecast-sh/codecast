@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { patchHost, readHosts, registryLockPath, writeHosts, type CloudHost } from "./cloudHost";
+import { instanceNameTag, patchHost, readHosts, registryLockPath, writeHosts, type CloudHost } from "./cloudHost";
 
 let dir: string, prev: string | undefined;
 const base: CloudHost = { id: "i-1", provider: "aws", region: "us-west-2", user: "ubuntu", keyPath: "/k", address: "1.1.1.1", forwardAgent: true, idleStopMinutes: 20 };
@@ -108,4 +108,13 @@ esac
     expect(readHosts().find((h) => h.id === "i-2")!.address).toBe("2.2.2.2");
     expect(fs.existsSync(registryLockPath())).toBe(false);
   }, 40_000);
+});
+
+describe("instanceNameTag", () => {
+  test("reads the Name tag a person gave the instance, and nothing for a blank or missing one", () => {
+    expect(instanceNameTag({ Tags: [{ Key: "managed-by", Value: "codecast" }, { Key: "Name", Value: " union-line-1 " }] })).toBe("union-line-1");
+    expect(instanceNameTag({ Tags: [{ Key: "Name", Value: "  " }] })).toBeUndefined();
+    expect(instanceNameTag({})).toBeUndefined();
+    expect(instanceNameTag(null)).toBeUndefined();
+  });
 });

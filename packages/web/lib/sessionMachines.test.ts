@@ -61,6 +61,15 @@ describe("a cloud host whose instance is gone", () => {
     expect(machineChipNote(deadA, roster)).toBe("gone");
     expect(machineChipNote(laptop, roster)).toBeNull();
   });
+
+  test("two awake unnamed hosts in one region read apart by size and instance, never by the region they share", () => {
+    const a = { ...live, device_id: "a", online: true, cloud_host: report(now, { region: "us-west-2", instance_type: "m7i.4xlarge", instance_id: "i-087c7f5b1c9661f26", state: "running" }) };
+    const b = { ...live, device_id: "b", online: true, cloud_host: report(now, { region: "us-west-2", instance_type: "m7i.4xlarge", instance_id: "i-0b910d09160c158ef", state: "running" }) };
+    expect(machineChipNote(a, [laptop, a, b])).toBe("m7i.4xlarge 1f26");
+    expect(machineChipNote(b, [laptop, a, b])).toBe("m7i.4xlarge 58ef");
+    const named = { ...a, cloud_host: { ...a.cloud_host, name: "union-line-1" } };
+    expect(machineChipNote(named, [laptop, named, b])).toBeNull();
+  });
 });
 
 describe("new-session machines", () => {
