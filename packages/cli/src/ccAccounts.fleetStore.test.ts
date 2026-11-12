@@ -18,7 +18,7 @@ import {
   readFleetState,
   listProfiles,
   writeAccountToken,
-  drawsLinePool,
+  drawsPool,
   fleetStoreEnabled,
   getAccountsHeartbeatPayload,
   switchFleetTo,
@@ -138,7 +138,7 @@ describe("fleet store (sandboxed $HOME)", () => {
 
     it("without a copy keeps the pushed login: no fleet store, no launch account", async () => {
       process.env.CODECAST_REMOTE_DEVICE = "1";
-      expect(drawsLinePool()).toBe(false);
+      expect(drawsPool()).toBe(false);
       expect(fleetStoreEnabled()).toBe(false);
       expect(await maintainFleetStore(now)).toBeNull();
       expect(readFleetState()).toBeNull();

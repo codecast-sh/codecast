@@ -1466,14 +1466,14 @@ export function clearLaunchProfile(): boolean {
 export function launchRecordInEffect(active?: ActiveIdentity, now = Date.now()): LaunchRecord | null {
   const record = readLaunchRecord();
   if (!record) return null;
-  // A cloud host runs the login the laptop pushes, so every machine follows
-  // one account and one switch. A launch account of its own took the host out
-  // of that: recovery could neither see nor move it, and it sat on a spent
-  // week while other accounts had room (jx75sbx, 2026-10-24). The one
-  // exception is a host drawing on its team's line pool: there the record
-  // names the pool copy its fleet store carries, the heartbeat reports it, and
-  // the server's recovery moves it (autoSwitchCheck's host pass). Nothing
-  // else may stand as a host's launch account.
+  // A cloud host with no pool copies runs the login the laptop pushes. A
+  // launch account of its own took the host out of that: recovery could
+  // neither see nor move it, and it sat on a spent week while other accounts
+  // had room (jx75sbx, 2026-10-24). A host drawing on the pool (its owner's
+  // accounts, or its team's line pool) is the exception: the record names the
+  // pool copy its fleet store carries, the heartbeat reports it, and the
+  // server's recovery moves it (autoSwitchCheck's host pass). Nothing else
+  // may stand as a host's launch account.
   const meta = readProfileIndex().profiles[record.profile];
   if (isRemoteDevice() && !(fleetStoreEnabled() && meta?.pool_share_id)) {
     clearLaunchProfile();
@@ -1547,20 +1547,19 @@ export function fleetStatePath(): string {
   return path.join(fleetStoreDir(), "state.json");
 }
 
-/** A cloud host holding copies from its team's line pool (ccPool.ts). The
- *  server seals only line-pool shares to a host (accountPool.deviceMayHold),
- *  so any pool copy here is one. */
-export function drawsLinePool(): boolean {
+/** A cloud host holding pool copies (ccPool.ts): its owner's own accounts,
+ *  which reach every one of their machines, or its team's line pool
+ *  (accountPool.deviceMayHold). */
+export function drawsPool(): boolean {
   return isRemoteDevice() && Object.values(readProfileIndex().profiles).some((m) => !!m.pool_share_id);
 }
 
 /** Sessions on this machine launch on the fleet store. A remote runs a pushed
- *  copy of the primary's login instead, unless it draws on its team's line
- *  pool: then its fleet store carries the pool copies. CODECAST_CC_FLEET=0
- *  turns it off. */
+ *  copy of the primary's login instead, until it draws on the pool: then its
+ *  fleet store carries the pool copies. CODECAST_CC_FLEET=0 turns it off. */
 export function fleetStoreEnabled(): boolean {
   if (process.env.CODECAST_CC_FLEET === "0") return false;
-  return !isRemoteDevice() || drawsLinePool();
+  return !isRemoteDevice() || drawsPool();
 }
 
 export interface FleetState {
@@ -1780,7 +1779,7 @@ export async function moveFleetToFallback(leaving: string | undefined, now: numb
   const { accounts: usage } = readUsageCache();
   const candidates = fallbackProfiles(
     listProfiles()
-      // A host's fleet carries only its line-pool copies (fleetStoreEnabled).
+      // A host's fleet carries only its pool copies (fleetStoreEnabled).
       .filter((p) => p.name !== leaving && (!isRemoteDevice() || !!p.pool_share_id))
       .map((p) => ({ ...p, usage: usage[p.uuid || p.email || ""], setup_token: accountTokenInfo(p.name) })),
     leaving ? readProfileIndex().profiles[leaving]?.email : undefined,
