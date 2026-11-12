@@ -398,7 +398,9 @@ describe("command groups stay off the boot graph", () => {
     // behind the dynamic import in formatKnowledge.ts. 4654 with Tailscale direct
     // links: syncService.ts (+1.3, the folder, transcript, transfer and peer-link
     // calls) and daemonCommands.ts (+0.6, export_folder and export_session).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4654);
+    // 4655: cliHttp.ts (+0.7, isTransientNetworkError, so a migration batch
+    // keeps moving through a network blip).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4655);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
