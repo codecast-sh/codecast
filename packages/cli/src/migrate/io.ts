@@ -9,7 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "../proc.js";
-import { isWriteConflict } from "../cliHttp.js";
+import { isTransientNetworkError, isWriteConflict } from "../cliHttp.js";
 import { type CloudHost } from "../browser/cloudHost.js";
 import { deviceId as localDeviceId } from "../remote/device.js";
 import {
@@ -147,8 +147,9 @@ export function createRunnerIo(batchId: string, opts: { out?: (line: string) => 
       try {
         return await client.mutation(ref, args);
       } catch (err) {
-        if (attempt >= 5 || !isWriteConflict(err)) throw err;
-        await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+        const network = isTransientNetworkError(err);
+        if (attempt >= 5 || !(network || isWriteConflict(err))) throw err;
+        await new Promise((r) => setTimeout(r, (network ? 2_000 : 500) * 2 ** attempt));
       }
     }
   };

@@ -431,7 +431,16 @@ export async function runBatch(io: RunnerIo, opts: { concurrency?: number } = {}
   if (mine.length === 0) return [];
   const ledger = new SharedTreeLedger();
   const width = Math.max(1, opts.concurrency ?? batch.concurrency ?? 1);
-  const outcomes = await mapLimit(mine, width, (row) => migrateRow(io, batch, row, ledger));
+  const outcomes = await mapLimit(mine, width, async (row): Promise<RowOutcome> => {
+    try {
+      return await migrateRow(io, batch, row, ledger);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      io.log(`FAILED ${describeRow(row)}: ${detail} (the runner kept going)`);
+      await io.fail(row.migration_id, detail, false, true).catch(() => {});
+      return { migration_id: row.migration_id, outcome: "failed", detail };
+    }
+  });
   const tally = outcomes.reduce((acc, o) => ({ ...acc, [o.outcome]: (acc[o.outcome] ?? 0) + 1 }), {} as Record<string, number>);
   io.log(`batch ${batch.batch_id} finished: ${Object.entries(tally).map(([k, n]) => `${n} ${k}`).join(", ") || "nothing to do"}`);
   return outcomes;
