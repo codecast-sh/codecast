@@ -11,7 +11,10 @@ export type PoolSplit = { user_id: string; name: string; tokens: number };
 export type PoolAccount = {
   _id: string;
   share_key: string;
-  team_id: string;
+  /** null: the owner's personal row, their own machines alone. */
+  team_id: string | null;
+  /** Personal row: the machines it is narrowed to, or null for all of yours. */
+  device_ids?: string[] | null;
   user_id: string;
   contributor_name: string;
   mine: boolean;
@@ -33,7 +36,7 @@ export function useSyncAccountPool() {
 
 /** The fields the pool surfaces draw; a re-sent meter or split wakes them, nothing else does. */
 const poolSig = (r: PoolAccount) =>
-  `${r.team_id}|${r.email}|${r.machines}|${r.usage?.fetched_at ?? 0}|${r.split.map((s) => `${s.user_id}:${s.tokens}`).join(",")}|${r.profile_name ?? ""}`;
+  `${r.team_id}|${r.email}|${r.machines}|${r.device_ids ? r.device_ids.join(",") : "*"}|${r.usage?.fetched_at ?? 0}|${r.split.map((s) => `${s.user_id}:${s.tokens}`).join(",")}|${r.profile_name ?? ""}`;
 
 /** Reader: the pool rows, optionally narrowed to one team. */
 export function useAccountPool(teamId?: string | null): PoolAccount[] {

@@ -237,6 +237,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setDeviceShares: SETTINGS,
   setDeviceDirectLinks: SETTINGS,
   setAccountShares: SETTINGS,
+  setAccountDevices: SETTINGS,
   joinTeamMachine: never("machine: a join creates a Linux user on a shared box; leaving is its own explicit control"),
   removeTeamMachineMember: never("machine: a removal stops someone's daemon on a shared box; they join again to come back"),
   renameTeamMachine: SETTINGS,

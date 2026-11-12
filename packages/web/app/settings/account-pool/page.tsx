@@ -1,6 +1,7 @@
 "use client";
 
-// Settings › Account pool: the Claude accounts teammates put in a team's pool
+// Settings › Account pool: your own accounts, which every machine of yours
+// runs on, and the Claude accounts teammates put in a team's pool
 // (convex/accountPool.ts), and who is spending which. Every member sees the
 // whole split (sd-1687). Accounts join and leave the pool from the pill on
 // their row in Settings › Claude Accounts; this page reads the store.
@@ -154,9 +155,9 @@ export default function AccountPoolSettings() {
       {byTeam.map(([teamId, list]) => (
         <TeamPool
           key={teamId}
-          teamName={teams.find((t) => String(t._id) === teamId)?.name ?? "Team"}
+          teamName={teamId === "null" ? "Your machines" : (teams.find((t) => String(t._id) === teamId)?.name ?? "Team")}
           rows={list}
-          showTeam={byTeam.length > 1}
+          showTeam={byTeam.length > 1 || teamId === "null"}
         />
       ))}
       {byTeam.length > 0 && (

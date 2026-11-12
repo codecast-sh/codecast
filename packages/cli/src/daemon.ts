@@ -31001,9 +31001,9 @@ async function main(): Promise<void> {
   // common case near-instant; this tick is the backfill/safety net.
   setTimeout(() => { pushProviderKeysToRemoteHosts("daemon start").catch(() => {}); }, 62_000 * bootPacing.fanoutOffsetScale);
   setInterval(() => { pushProviderKeysToRemoteHosts("periodic", { onlyIfChanged: true }).catch(() => {}); }, REMOTE_CRED_CHANGE_TICK_MS);
-  // The team's shared account pool (ccPool.ts): seal this machine's shared
-  // accounts for teammates, and keep the copies sealed to it. A line host
-  // draws its team's line pool the same way.
+  // The account pool (ccPool.ts): seal this machine's accounts for the
+  // owner's other machines and for teammates, and keep the copies sealed to
+  // it. A cloud host draws its owner's accounts the same way.
   void import("./ccPool.js").then(({ startPoolPasses }) => startPoolPasses({
     client: () => syncService.getClient(),
     token: () => readConfig()?.auth_token,

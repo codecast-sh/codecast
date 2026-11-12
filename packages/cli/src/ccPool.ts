@@ -1,16 +1,18 @@
-// The daemon's side of the team's shared account pool (convex/accountPool.ts).
+// The daemon's side of the account pool (convex/accountPool.ts): every account
+// of the owner's reaches all of their machines, and accounts opened to a team
+// reach teammates' machines.
 //
 // Each pass asks the server what this machine owes the pool and what the pool
-// owes it. As a HOLDER (the machine that keeps a shared account's setup-token)
-// it seals the token to every teammate machine that lacks a current copy, with
+// owes it. As a SEALER (a machine that keeps an account's setup-token) it
+// seals the token to every drawing machine that lacks a current copy, with
 // the same ECDH transport provider keys use, so the server only ever stores
 // ciphertext. As a DRAWER it opens the copies sealed to it and keeps each as a
 // `pool-…` profile: an index entry plus the token file, and no saved login.
 // That is exactly the shape a token-only profile already has, so the fleet
 // store, pins and switches carry it with no new launch code (fleetBearer,
 // switchModeFor). A copy the server stops returning (the contributor took the
-// account back, or either person left the team) is removed here, and the fleet
-// moves off it if it was on it.
+// account back from a team, or either person left it) is removed here, and the
+// fleet moves off it if it was on it.
 
 import * as fs from "fs";
 import {
@@ -162,6 +164,27 @@ export async function removePoolProfile(name: string, now = Date.now()): Promise
   return moved;
 }
 
+/**
+ * The account moved to another share (a teammate's copy of one's own account
+ * becoming the personal pool's, or the reverse): the profile already holding
+ * it takes the new share in place, so its name, the fleet store on it and
+ * sessions pinned to it all stand, where removing one copy and adding the
+ * other would move the fleet off the account in between.
+ */
+function adoptCopy(installed: Map<string, string>, wanted: Set<string>, copy: PoolState["copies"][number]): string | undefined {
+  const index = readProfileIndex();
+  for (const [shareId, name] of installed) {
+    if (wanted.has(shareId) || !sameAccount(index.profiles[name]?.email, copy.email)) continue;
+    index.profiles[name] = { ...index.profiles[name], pool_share_id: copy.share_id, pool_contributor: copy.contributor_name };
+    writeProfileIndex(index);
+    invalidateAccountsCache();
+    installed.delete(shareId);
+    installed.set(copy.share_id, name);
+    return name;
+  }
+  return undefined;
+}
+
 /** One pass. Returns what it did, one line each, for the daemon log. */
 export async function runPoolPass(backend: PoolBackend, configDir: string, now = Date.now()): Promise<string[]> {
   const state = await backend.state();
@@ -184,10 +207,9 @@ export async function runPoolPass(backend: PoolBackend, configDir: string, now =
   }
 
   const installed = installedPoolProfiles();
-  const wanted = new Set<string>();
+  const wanted = new Set(state.copies.map((c) => c.share_id));
   for (const copy of state.copies) {
-    wanted.add(copy.share_id);
-    const have = installed.get(copy.share_id);
+    const have = installed.get(copy.share_id) ?? adoptCopy(installed, wanted, copy);
     if (have && sameStoreTime(storedAt(have), copy.token_stored_at)) continue;
     let token: string;
     try {
@@ -213,8 +235,9 @@ export async function runPoolPass(backend: PoolBackend, configDir: string, now =
  *  machine on the fleet store takes part: a pool copy carries sessions only
  *  there (a take-back can empty it), so a machine with the fleet turned off
  *  neither holds copies nor draws. A cloud host always asks: the server seals
- *  it copies only from its team's line pool, and holding one is what turns
- *  its fleet store on (fleetStoreEnabled); its last copy going turns it off. */
+ *  it its owner's accounts and its team's line pool, and holding a copy is
+ *  what turns its fleet store on (fleetStoreEnabled); its last copy going
+ *  turns it off. */
 export function startPoolPasses(opts: {
   client: () => { query(name: any, args: any): Promise<any>; mutation(name: any, args: any, o?: any): Promise<any> } | null;
   token: () => string | undefined;

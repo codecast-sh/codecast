@@ -61,7 +61,7 @@ export const myTeams = async (b: Backend): Promise<Team[]> =>
   ((await b.client.query(b.api.teams.getUserTeams, { api_token: b.token })) ?? []).map((t: any) => ({ _id: String(t._id), name: t.name, role: t.role }));
 
 /** One of your own machines by name; exits with the candidates when the name is not exactly one. */
-async function ownDevice(b: Backend, needle: string): Promise<any> {
+export async function ownDevice(b: Backend, needle: string): Promise<any> {
   const r = pickDevice(await ownDevices(b), needle, "machine of yours");
   if ("error" in r) die(r.error);
   return r.device;

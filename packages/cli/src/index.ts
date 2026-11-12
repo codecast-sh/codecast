@@ -4389,6 +4389,8 @@ accountsCmd.command("share <profile> [teams...]").description("Pool an account w
 accountsCmd.command("unshare <profile> [teams...]").description("Take an account out of a team's pool")
   .addOption(new Option("--pool <label>", "Take only this label off, keeping the team share").choices(["line"]))
   .action(async (p, t, o) => (await poolCmd()).unshareAccount(p, t, o));
+accountsCmd.command("devices <profile> [devices...]").description("Narrow an account to some of your machines")
+  .option("--all", "All of them again").action(async (p, d, o) => (await poolCmd()).accountDevices(p, d, o));
 accountsCmd.command("pool").description("Pooled accounts and who spent them").option("--json", "JSON")
   .action(async (o) => (await poolCmd()).printPool(o));
 

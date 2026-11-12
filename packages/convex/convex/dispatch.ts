@@ -25,7 +25,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { performSetDeviceDirectLinks } from "./peerLinks";
 import { enqueueStartSession, performRemoveDevices, performSetDeviceShares, performSetDeviceSnippet, performRequestDeviceUpdate, performSetProviderKey } from "./devices";
 import { performJoinTeamHost, performRemoveTeamHostMember, performRenameTeamHost, performUnregisterTeamHost } from "./teamHosts";
-import { performSetAccountShares } from "./accountPool";
+import { performSetAccountDevices, performSetAccountShares } from "./accountPool";
 import type { DeviceSnippetChange, ProviderKeyCommand } from "@codecast/shared/contracts";
 import { upsertBinding } from "./capabilityBindings";
 import { Id } from "./_generated/dataModel";
@@ -1356,6 +1356,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // set on the accountPool draft; account_shares is the server home.
   setAccountShares: async (ctx, userId, [deviceId, email, teamIds]: [string, string, string[]]) =>
     performSetAccountShares(ctx as any, userId, deviceId, email, teamIds),
+  // Settings > Claude Accounts' machine control: narrow an account to some of
+  // the owner's machines, or open it to all of them (null).
+  setAccountDevices: async (ctx, userId, [email, deviceIds]: [string, string[] | null]) =>
+    performSetAccountDevices(ctx as any, userId, email, deviceIds),
   // Team machines (teamHosts.ts): the web paints the teamMachines rows; the
   // server writes the member row and queues the admin daemon's work.
   joinTeamMachine: async (ctx, userId, [hostId, opts]: [string, { linux_user?: string } | undefined]) =>

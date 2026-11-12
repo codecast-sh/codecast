@@ -253,7 +253,7 @@ type ContinueDevice = {
 
 /** A cloud host that runs the login its laptop pushes: it never pins, never
  *  switches on its own, and its parks are the laptop's account's. A host on a
- *  fleet store of its own (line-pool copies, accountPool.deviceMayHold) is
+ *  fleet store of its own (pool copies, accountPool.deviceMayHold) is
  *  none of that: it answers for its own account like a local machine. */
 export function runsPushedLogin(device: { is_remote?: boolean; cc_accounts?: { fleet_store?: boolean } | null } | undefined | null): boolean {
   return device?.is_remote === true && device.cc_accounts?.fleet_store !== true;
