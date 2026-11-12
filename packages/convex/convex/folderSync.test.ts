@@ -8,6 +8,8 @@ import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { allModules } from "./testModules.testkit";
 import { pickFolderPeers } from "./folderSync";
+import { hashToken } from "./apiTokens";
+import { presentToken } from "@platform/auth/convex";
 
 setDefaultTimeout(120_000);
 
@@ -88,6 +90,47 @@ describe("requestFolderExport", () => {
     expect(await t.run(async (ctx) => (await ctx.storage.get(storageId)) !== null)).toBe(true);
     expect(await as(owner).mutation(api.folderSync.discardFolderBundle, { command_id: id })).toEqual({ discarded: true });
     expect(await t.run(async (ctx) => (await ctx.storage.get(storageId)) !== null)).toBe(false);
+  });
+});
+
+describe("a late export answer", () => {
+  const PATH = "/Users/ashot/src/family";
+  const sourceReporter = async (t: any, owner: Id<"users">) => {
+    await t.run(async (ctx: any) => ctx.db.insert("api_tokens", { user_id: owner, token_hash: await hashToken("there-secret"), name: "there", created_at: 1, last_used_at: 1, device_id: "there" }));
+    return (id: Id<"daemon_commands">, result: string) =>
+      t.mutation(api.users.reportCommandResult, { api_token: presentToken("there-secret", "there"), command_id: id, result });
+  };
+  test("a request discarded before any answer is never run, and its late archive is deleted", async () => {
+    const { t, owner, conv, as } = await setup();
+    const asked = await as(owner).mutation(api.folderSync.requestFolderExport, { device_id: "here", conversation_id: conv, path: PATH });
+    const id = asked.command_ids[0] as Id<"daemon_commands">;
+    expect(await as(owner).mutation(api.folderSync.discardFolderBundle, { command_id: id })).toEqual({ discarded: false });
+    const abandoned = await t.run((ctx) => ctx.db.get(id));
+    expect(abandoned).toMatchObject({ error: "abandoned" });
+    expect(abandoned!.executed_at).toBeGreaterThan(0);
+    const pending = await t.run((ctx) => ctx.db.query("daemon_commands").withIndex("by_user_pending", (q) => q.eq("user_id", owner).eq("executed_at", undefined)).collect());
+    expect(pending.map((c) => c._id)).not.toContain(id);
+
+    const report = await sourceReporter(t, owner);
+    const storageId = await t.run((ctx) => ctx.storage.store(new Blob(["tgz"])));
+    const late = JSON.stringify({ ok: true, storage_id: storageId, bytes: 3, files: 1, path: PATH });
+    expect(await report(id, late)).toEqual({ success: true });
+    expect(await t.run(async (ctx) => (await ctx.storage.get(storageId)) !== null)).toBe(false);
+    const after = await t.run((ctx) => ctx.db.get(id));
+    expect(after).toMatchObject({ error: "abandoned", executed_at: abandoned!.executed_at });
+    expect(after!.result).toBeUndefined();
+  });
+
+  test("an answer to a pending request is still recorded", async () => {
+    const { t, owner, conv, as } = await setup();
+    const asked = await as(owner).mutation(api.folderSync.requestFolderExport, { device_id: "here", conversation_id: conv, path: PATH });
+    const id = asked.command_ids[0] as Id<"daemon_commands">;
+    const report = await sourceReporter(t, owner);
+    const storageId = await t.run((ctx) => ctx.storage.store(new Blob(["tgz"])));
+    const answer = JSON.stringify({ ok: true, storage_id: storageId, bytes: 3, files: 1, path: PATH });
+    await report(id, answer);
+    expect(await t.run((ctx) => ctx.db.get(id))).toMatchObject({ result: answer });
+    expect(await t.run(async (ctx) => (await ctx.storage.get(storageId)) !== null)).toBe(true);
   });
 });
 
@@ -180,24 +223,24 @@ describe("requestFolderExport: direct grants, dedupe, rate limit", () => {
     expect(await argsOf(t, other.command_ids[0])).toMatchObject({ requester: "third", direct: { requester: { ip: "100.64.0.9" } } });
   });
 
-  test("the rate limit counts every machine of the owner and refuses a fan-out that would cross it", async () => {
+  test("the rate limit counts requests across the owner's machines, one unit per request however many machines it asks", async () => {
     const { t, owner, conv, as } = await setup();
     const now = Date.now();
     await t.run(async (ctx) => {
       for (const id of ["p1", "p2", "p3"]) await ctx.db.insert("devices", { user_id: owner, device_id: id, last_seen: now } as any);
       const there = await ctx.db.query("devices").filter((q) => q.eq(q.field("device_id"), "there")).first();
-      await ctx.db.patch(there!._id, { folder_export_at: Array(17).fill(now - 60_000) });
+      await ctx.db.patch(there!._id, { folder_export_at: Array(19).fill(now - 60_000) });
     });
     const ask = (only_device_id?: string) => as(owner).mutation(api.folderSync.requestFolderExport, { device_id: "here", conversation_id: conv, path: PATH, ...(only_device_id ? { only_device_id } : {}) });
-    await expect(ask()).rejects.toThrow("too many folder requests");
-    const one = await ask("p1");
-    expect(one.command_ids).toHaveLength(1);
-    expect((await ask("p1")).command_ids).toEqual(one.command_ids);
-    await ask("p2");
-    await ask("p3");
-    await expect(ask("there")).rejects.toThrow("too many folder requests");
-    const here = await t.run((ctx) => ctx.db.query("devices").filter((q) => q.eq(q.field("device_id"), "here")).first());
-    expect(here!.folder_export_at).toHaveLength(3);
+    const all = await ask();
+    expect(all.command_ids).toHaveLength(4);
+    const here = () => t.run((ctx) => ctx.db.query("devices").filter((q) => q.eq(q.field("device_id"), "here")).first());
+    expect((await here())!.folder_export_at).toHaveLength(1);
+    const p1 = await ask("p1");
+    expect(all.command_ids).toContain(p1.command_ids[0]);
+    expect((await here())!.folder_export_at).toHaveLength(1);
+    await done(t, all.command_ids);
+    await expect(ask("p1")).rejects.toThrow("too many folder requests");
   });
 
   test("a pending request older than two minutes is not reused, and the rate window slides", async () => {

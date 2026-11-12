@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import {
   MAX_DIRECT_BYTES,
   MAX_FOLDER_BYTES,
+  peerTransferReporter,
   planFolderExport,
   servePlan,
   syncFolderFromPeer,
@@ -80,8 +81,12 @@ export async function exportSession(args: ExportSessionArgs, deps: ExportSession
   if (fs.lstatSync(sibling, { throwIfNoEntry: false })?.isDirectory()) {
     const sub = await planFolderExport(sibling, cap - bytes);
     if (!sub.ok) return { ok: false, reason: sub.reason };
-    entries.push(...sub.entries.map((e) => path.join(sessionId, e)));
-    bytes += sub.bytes;
+    for (const e of sub.entries) {
+      const st = fs.lstatSync(path.join(sibling, e), { throwIfNoEntry: false });
+      if (!st?.isFile()) continue;
+      entries.push(path.join(sessionId, e));
+      bytes += st.size;
+    }
   }
   if (bytes > cap) return tooBig;
   const out = await servePlan({ ok: true, dir, entries, bytes, files: entries.length }, args, deps);
@@ -104,7 +109,8 @@ function relocateFile(file: string, from: { home: string; cwd: string }, to: { h
 function relocateTree(dir: string, from: { home: string; cwd: string }, to: { home: string; cwd: string }): void {
   for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
     const p = path.join(dir, d.name);
-    if (d.isDirectory()) relocateTree(p, from, to);
+    if (d.isSymbolicLink()) fs.unlinkSync(p);
+    else if (d.isDirectory()) relocateTree(p, from, to);
     else if (d.isFile() && d.name.endsWith(".jsonl")) relocateFile(p, from, to);
   }
 }
@@ -138,7 +144,7 @@ export interface FetchSessionDeps extends Omit<SyncFromPeerDeps, "receive" | "va
 
 export type FetchSessionResult =
   | { ok: true; sessionId: string; jsonl: string; cwd: string; from: string; mode: TransferMode }
-  | { ok: false; reason: string };
+  | { ok: false; reason: string; noLocalFolder?: true };
 
 export const SESSION_PEER_WAIT_MS = 45_000;
 const STAGING_PREFIX = ".codecast-incoming-";
@@ -179,7 +185,7 @@ export async function fetchSessionFromPeers(deps: FetchSessionDeps, waitMs = SES
     const s = fields as SessionAnswerFields | null;
     if (!s) return { ok: false, reason: "the answer names no session" };
     const cwd = await deps.localCwd(s.cwd);
-    if (!cwd) return { ok: false, reason: `no local folder for ${s.cwd}` };
+    if (!cwd) return { ok: false, reason: `no local folder for ${s.cwd}`, noLocalFolder: true };
     deps.beforePlace?.();
     const jsonl = placeSession(staging, s, { home: deps.home, cwd, projectsDir: deps.projectsDir });
     return { ok: true, sessionId: s.session_id, jsonl, cwd, from: got.from, mode: got.mode };
@@ -205,10 +211,15 @@ export interface SessionTransferService {
   ): Promise<{ cancel: boolean }>;
 }
 
-type Fetched = Extract<FetchSessionResult, { ok: true }>;
-const inFlight = new Map<string, Promise<Fetched | null>>();
-const failures = new Map<string, number>();
+export type Fetched = Extract<FetchSessionResult, { ok: true }>;
+export type ResumeFetch = Fetched | "cancelled" | null;
+const inFlight = new Map<string, Promise<ResumeFetch>>();
+const failures = new Map<string, { at: number; cancelled: boolean }>();
 const RETRY_MS = 60_000;
+
+export function forgetSessionFetchFailures(conversationId: string): void {
+  for (const key of failures.keys()) if (key.startsWith(`${conversationId}\0`)) failures.delete(key);
+}
 
 export function fetchSessionForResume(opts: {
   svc: SessionTransferService;
@@ -220,33 +231,33 @@ export function fetchSessionForResume(opts: {
   localCwd: (recorded: string) => Promise<string | null>;
   bind: () => void;
   log: (m: string) => void;
-}): Promise<Fetched | null> {
+  heartbeatMs?: number;
+}): Promise<ResumeFetch> {
   const { svc, conversationId, sessionId, deviceId, log } = opts;
   if (!isSessionUuid(sessionId)) return Promise.resolve(null);
   const key = `${conversationId}\0${sessionId}`;
   const running = inFlight.get(key);
   if (running) return running;
-  if (Date.now() - (failures.get(key) ?? 0) < RETRY_MS) return Promise.resolve(null);
-  const run = (async (): Promise<Fetched | null> => {
-    if ((await svc.getConversationOwner(conversationId).catch(() => null)) !== deviceId) return null;
+  const failed = failures.get(key);
+  if (failed && Date.now() - failed.at < RETRY_MS) return Promise.resolve(failed.cancelled ? "cancelled" : null);
+  const run = (async (): Promise<ResumeFetch> => {
+    const owner = await svc.getConversationOwner(conversationId).catch(() => null);
+    if (owner && owner !== deviceId) return null;
     log(`[SESSION] no transcript for ${sessionId.slice(0, 8)} here; asking your other machines for it`);
     const startedAt = Date.now();
-    let cancelled = false;
-    let reports = Promise.resolve();
-    const report = (p: Parameters<SessionTransferService["reportPeerTransfer"]>[3]) => {
-      reports = reports
-        .then(() => svc.reportPeerTransfer(conversationId, deviceId, startedAt, p))
-        .then((res) => { if (res?.cancel) cancelled = true; })
-        .catch((e) => log(`[SESSION] transfer progress not reported: ${e instanceof Error ? e.message : String(e)}`));
-    };
+    const progress = peerTransferReporter((p) => svc.reportPeerTransfer(conversationId, deviceId, startedAt, p), { log, heartbeatMs: opts.heartbeatMs });
     const r = await fetchSessionFromPeers({
       home: opts.home,
       projectsDir: opts.projectsDir,
       sessionId,
-      localCwd: opts.localCwd,
+      localCwd: async (recorded) => {
+        progress.report({ phase: "done" });
+        await progress.settled();
+        return opts.localCwd(recorded);
+      },
       beforePlace: opts.bind,
-      onProgress: report,
-      cancelled: () => cancelled,
+      onProgress: progress.report,
+      cancelled: progress.cancelled,
       request: (o) => svc.requestSessionExport(conversationId, deviceId, o),
       outcomes: (ids) => svc.sessionExportOutcomes(ids),
       discard: (id) => svc.discardSessionBundle(id),
@@ -268,14 +279,21 @@ export function fetchSessionForResume(opts: {
       },
       log,
     });
+    if (!r.ok && r.reason === "cancelled") {
+      progress.report({ phase: "failed", reason: "you cancelled the transfer" });
+      failures.set(key, { at: Date.now(), cancelled: true });
+      log(`[SESSION] transcript ${sessionId.slice(0, 8)}: you cancelled the transfer`);
+      return "cancelled";
+    }
     if (!r.ok) {
-      const reason = r.reason === "cancelled" ? "you cancelled the transfer" : r.reason;
-      report({ phase: "failed", reason });
-      failures.set(key, Date.now());
-      log(`[SESSION] couldn't fetch transcript ${sessionId.slice(0, 8)}: ${reason}`);
+      if (!r.noLocalFolder) {
+        progress.report({ phase: "done" });
+        failures.set(key, { at: Date.now(), cancelled: false });
+      }
+      log(`[SESSION] couldn't fetch transcript ${sessionId.slice(0, 8)}: ${r.reason}`);
       return null;
     }
-    report({ phase: "done", from: r.from, mode: r.mode });
+    progress.report({ phase: "done", from: r.from, mode: r.mode });
     failures.delete(key);
     log(`[SESSION] transcript ${sessionId.slice(0, 8)} arrived from ${r.from} (${r.mode}) at ${r.jsonl}`);
     return r;
