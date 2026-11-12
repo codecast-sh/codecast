@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -22,6 +22,10 @@ import {
 import type { TailnetStatus } from "./cloud/tailnet";
 import { closeAllGrants, liveGrantCount, type GrantOutcome } from "./peer/grant";
 import { pollUntil } from "./test-helpers/pollUntil";
+
+// Nearly every test here spawns git or tar, or serves a real socket; under
+// `bun test --parallel` on a loaded runner the 5 s default is not enough.
+setDefaultTimeout(30_000);
 
 let root: string;
 beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), "folder-sync-test-")); });
