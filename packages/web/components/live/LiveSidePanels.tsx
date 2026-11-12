@@ -91,7 +91,11 @@ export function CommentsPanel({
     else if (heldAnchor === null && selection[0]) setHeldAnchor(selection[0]);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- holds the anchor the draft began on
   }, [hasDraft]);
-  const anchor = heldAnchor ?? selection[0];
+  const wanted = heldAnchor ?? selection[0];
+  // A comment pins to something that is there: a cell (empty or not) or a live element. One that went away
+  // before posting (a stray empty text cleaned up) leaves the comment unpinned rather than on a dead key.
+  const wantedEl = useLiveElement(doc._id, wanted && !wanted.startsWith("c:") ? wanted : "");
+  const anchor = wanted && (wanted.startsWith("c:") || wantedEl) ? wanted : undefined;
   // A thread opened from a link (?c=) shows wherever it is filed.
   const focusedResolved = focusKey ? threads.find((x) => x.root.key === focusKey)?.root.resolved : undefined;
   const focusKnown = focusedResolved !== undefined || (!!focusKey && threads.some((x) => x.root.key === focusKey));
@@ -350,11 +354,9 @@ function CommentTime({ ts, edited }: { ts: number; edited: boolean }) {
 }
 
 function CommentLine({ docId, c, anchor = c.anchor ? String(c.anchor) : undefined, canDelete, onDelete, onEdit }: { docId: string; c: ArtifactElement; anchor?: string | null; canDelete: boolean; onDelete: () => void; onEdit?: (text: string) => void }) {
-  // The author's own words open into an editor; Enter saves, Esc leaves them as they were.
+  // The author's own words open into an editor with Save and Cancel; Enter saves, Esc cancels.
   const [draft, setDraft] = useState<string | null>(null);
-  const cancelled = useRef(false);
   const save = () => {
-    if (cancelled.current) { cancelled.current = false; return; }
     const next = draft?.trim();
     if (next && next !== c.text) onEdit?.(next);
     setDraft(null);
@@ -371,8 +373,8 @@ function CommentLine({ docId, c, anchor = c.anchor ? String(c.anchor) : undefine
             type="button"
             title="Edit"
             aria-label="Edit comment"
-            onClick={(e) => { e.stopPropagation(); cancelled.current = false; setDraft(String(c.text ?? "")); }}
-            className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-sol-text-dim hover:text-sol-text"
+            onClick={(e) => { e.stopPropagation(); setDraft(String(c.text ?? "")); }}
+            className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 p-0.5 rounded text-sol-text-dim hover:text-sol-text"
           >
             <Pencil className="w-3 h-3" />
           </button>
@@ -383,27 +385,31 @@ function CommentLine({ docId, c, anchor = c.anchor ? String(c.anchor) : undefine
             title="Delete"
             aria-label="Delete comment"
             onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            className="opacity-0 group-hover:opacity-100 p-0.5 rounded text-sol-text-dim hover:text-sol-red"
+            className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 p-0.5 rounded text-sol-text-dim hover:text-sol-red"
           >
             <Trash2 className="w-3 h-3" />
           </button>
         )}
       </div>
       {draft !== null ? (
-        <textarea
-          autoFocus
-          data-live-comment-edit
-          value={draft}
-          rows={Math.min(6, Math.max(2, draft.split("\n").length))}
-          onClick={(e) => e.stopPropagation()}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={save}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); save(); }
-            if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); cancelled.current = true; setDraft(null); }
-          }}
-          className="mt-1 w-full resize-none rounded-md bg-sol-bg-alt border border-sol-blue/50 px-2 py-1.5 text-xs text-sol-text outline-none"
-        />
+        <div onClick={(e) => e.stopPropagation()}>
+          <textarea
+            autoFocus
+            data-live-comment-edit
+            value={draft}
+            rows={Math.min(6, Math.max(2, draft.split("\n").length))}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.stopPropagation(); save(); }
+              if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); setDraft(null); }
+            }}
+            className="mt-1 w-full resize-none rounded-md bg-sol-bg-alt border border-sol-blue/50 px-2 py-1.5 text-xs text-sol-text outline-none"
+          />
+          <div className="mt-1 flex justify-end gap-1">
+            <Button type="button" variant="ghost" size="xs" data-live-comment-edit-cancel onClick={() => setDraft(null)}>Cancel</Button>
+            <Button type="button" size="xs" data-live-comment-edit-save disabled={!draft.trim() || draft.trim() === c.text} onClick={save}>Save</Button>
+          </div>
+        </div>
       ) : (
         <div className="mt-0.5 text-xs text-sol-text break-words"><CommentMarkdown content={String(c.text ?? "")} /></div>
       )}

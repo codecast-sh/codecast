@@ -4,6 +4,7 @@
 // title the person can rename in place.
 import { artifactSpec, fromElement, type ArtifactElement, type ArtifactOp, type ArtifactType } from "@codecast/shared/artifacts";
 import { docRows, sendLiveOps } from "../components/live/useLiveArtifact";
+import { toast } from "sonner";
 import { useInboxStore } from "../store/inboxStore";
 
 export type WorkspaceStamp = { workspace: "team"; team_id: string } | { workspace: "personal" } | Record<string, never>;
@@ -11,16 +12,29 @@ export type WorkspaceStamp = { workspace: "team"; team_id: string } | { workspac
 /** What a new artifact starts from: its product's seed, or a template's title and elements. */
 export type LiveStart = { title?: string; ops?: ArtifactOp[] };
 
-export async function createLiveArtifact(type: ArtifactType, stamp: WorkspaceStamp, navigate: (href: string) => void, start?: LiveStart): Promise<string | null> {
-  const store = useInboxStore.getState() as any;
+// One creation at a time: a second press while the first waits on the server makes nothing.
+let creating: Promise<string | null> | null = null;
+
+export function createLiveArtifact(type: ArtifactType, stamp: WorkspaceStamp, navigate: (href: string) => void, start?: LiveStart): Promise<string | null> {
+  if (creating) return creating;
   const spec = artifactSpec(type);
-  const res = await store.createDoc({ title: start?.title ?? `Untitled ${spec.label.toLowerCase()}`, content: "", doc_type: type, ...stamp }, { version: 1, kind: "navigate" });
-  const id: string | undefined = res?.row?._id ?? res?.id ?? res?._id;
-  if (!id) return null;
-  const ops = start?.ops ?? spec.seed?.() ?? [];
-  if (ops.length) sendLiveOps(id, "main", ops);
-  navigate(`/docs/${id}`);
-  return id;
+  const title = start?.title ?? `Untitled ${spec.label.toLowerCase()}`;
+  // The press shows at once; the artifact opens when the server has made it.
+  const toastId = toast.loading(`Creating ${title}…`);
+  creating = (async () => {
+    const res = await (useInboxStore.getState() as any).createDoc({ title, content: "", doc_type: type, ...stamp }, { version: 1, kind: "navigate" });
+    const id: string | undefined = res?.row?._id ?? res?.id ?? res?._id;
+    if (!id) throw new Error("no id");
+    const ops = start?.ops ?? spec.seed?.() ?? [];
+    if (ops.length) sendLiveOps(id, "main", ops);
+    navigate(`/docs/${id}`);
+    toast.dismiss(toastId);
+    return id;
+  })().catch(() => {
+    toast.error(`Could not create ${title}`, { id: toastId });
+    return null;
+  }).finally(() => { creating = null; });
+  return creating;
 }
 
 /**

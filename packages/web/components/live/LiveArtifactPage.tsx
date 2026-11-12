@@ -701,9 +701,9 @@ function EditAccessSection({ doc, requested, onGranted }: { doc: { _id: string; 
       {asker && (
         <div className="flex items-center gap-2 h-8 px-2 rounded-md bg-sol-blue/10" data-live-edit-request={asker._id}>
           <span className="text-xs text-sol-text truncate min-w-0 flex-1">{asker.name} asks to edit</span>
-          <button type="button" data-live-grant-edit onClick={() => { set("owners", [...editors, asker._id]); toast.success(`${asker.name} can edit now`); onGranted?.(); }} className="h-6 px-2 rounded text-xs font-medium bg-sol-blue text-sol-bg hover:opacity-90 shrink-0">
+          <Button type="button" size="xs" data-live-grant-edit onClick={() => { set("owners", [...editors, asker._id]); toast.success(`${asker.name} can edit now`); onGranted?.(); }} className="shrink-0">
             Let them edit
-          </button>
+          </Button>
         </div>
       )}
       <SegmentedChoice

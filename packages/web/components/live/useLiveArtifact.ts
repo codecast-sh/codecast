@@ -143,6 +143,8 @@ type Overlay = Map<string, ElementState>;
 const overlays = new Map<string, Overlay>();
 const gestureOverlays = new Map<string, Overlay>();
 const queuedOverlays = new Map<string, Overlay>();
+// Comment writes queued behind a send: their own map, since a comment key is read from the comments layer.
+const queuedComments = new Map<string, Overlay>();
 const overlayListeners = new Map<string, Set<() => void>>();
 function publishOverlay(docId: string) {
   const queued = queuedOverlays.get(docId);
@@ -161,10 +163,11 @@ function subscribeOverlay(docId: string, fn: () => void) {
   return () => set!.delete(fn);
 }
 const EMPTY_OVERLAY: Overlay = new Map();
-function useOverlay(docId: string): Overlay {
+function useOverlay(docId: string, layer: "page" | "comments" = "page"): Overlay {
+  const from = layer === "comments" ? queuedComments : overlays;
   return useSyncExternalStore(
     useCallback((fn) => subscribeOverlay(docId, fn), [docId]),
-    () => overlays.get(docId) ?? EMPTY_OVERLAY,
+    () => from.get(docId) ?? EMPTY_OVERLAY,
     () => EMPTY_OVERLAY,
   );
 }
@@ -209,17 +212,31 @@ function mergedElements(rows: DocRows, overlay: Overlay, draftOpen: boolean): Ar
 export function useLiveElements(docId: string, opts: { kinds?: readonly string[]; layer?: LiveReadLayer } = {}): ArtifactElement[] {
   const rows = useDocRows(docId);
   const overlay = useOverlay(docId);
+  const commentsQueued = useOverlay(docId, "comments");
   const draftOpen = !!useLiveDraftState(docId);
   const layer = opts.layer ?? "merged";
   const kindsKey = opts.kinds?.join(",") ?? "";
   return useMemo(() => {
     let els: ArtifactElement[];
     if (layer === "merged") els = mergedElements(rows, overlay, draftOpen);
+    else if (layer === "comments" && commentsQueued.size) els = layerElements(rows.comments, commentsQueued);
     else els = [...rows[layer].values()].filter((r) => !r.deleted).map(rowElement);
     if (!kindsKey) return els;
     const kinds = new Set(kindsKey.split(","));
     return els.filter((e) => kinds.has(e.kind));
-  }, [rows, overlay, draftOpen, layer, kindsKey]);
+  }, [rows, overlay, commentsQueued, draftOpen, layer, kindsKey]);
+}
+
+/** One layer's rows with queued writes laid over them. */
+function layerElements(layerRows: Map<string, any>, overlay: Overlay): ArtifactElement[] {
+  const out: ArtifactElement[] = [];
+  for (const [k, r] of layerRows) {
+    const o = overlay.get(k);
+    if (!o) { if (!r.deleted) out.push(rowElement(r)); continue; }
+    if (!o.deleted) out.push({ ...rowElement(r), ...(o.fields as any), key: k, kind: o.kind } as ArtifactElement);
+  }
+  for (const [k, o] of overlay) if (!layerRows.has(k) && !o.deleted) out.push({ ...(o.fields as any), key: k, rev: 0, kind: o.kind } as ArtifactElement);
+  return out;
 }
 
 /** One element as the page shows it. */
@@ -255,19 +272,31 @@ export function useLivePresence(docId: string): ArtifactPresence[] {
 export type LiveVersion = { _id: string; rev: number; label: string; reason: string; by: string; by_name: string; at: number; elements?: number };
 
 export function useLiveVersions(docId: string): LiveVersion[] {
-  const rows = useInboxStore((s: any) => s.liveVersions);
+  // Wakes on this doc's versions only, never another doc's.
+  const sig = useInboxStore((s: any) => {
+    let out = "";
+    for (const id in s.liveVersions ?? {}) { const r = s.liveVersions[id]; if (r?.doc_id === docId) out += `${id}:${r.label}:${r.at};`; }
+    return out;
+  });
   return useMemo(() => {
+    const rows = (useInboxStore.getState() as any).liveVersions;
+    const stubs = new Map<number, LiveVersion>();
+    for (const id in rows ?? {}) if (rows[id]?.doc_id === docId && rows[id].stub) stubs.set(rows[id].rev, rows[id]);
+    // A stub (a version just saved here) stands until the server's row for its revision arrives;
+    // a save that renames the row already at this revision shows the new name until the echo carries it.
     const out: LiveVersion[] = [];
-    const real = new Set<number>();
-    for (const id in rows ?? {}) if (rows[id]?.doc_id === docId && !rows[id].stub) real.add(rows[id].rev);
-    // A stub (a version just saved here) stands until the server's row for its revision arrives.
+    const now = Date.now();
     for (const id in rows ?? {}) {
       const r = rows[id];
-      if (r?.doc_id !== docId || (r.stub && real.has(r.rev))) continue;
-      out.push(r);
+      if (r?.doc_id !== docId || r.stub) continue;
+      const stub = stubs.get(r.rev);
+      stubs.delete(r.rev);
+      out.push(stub && stub.label !== r.label && now - stub.at < 60_000 ? { ...r, label: stub.label } : r);
     }
+    out.push(...stubs.values());
     return out.sort((a, b) => b.rev - a.rev || b.at - a.at);
-  }, [rows, docId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sig is this doc's rows
+  }, [sig, docId]);
 }
 
 /** Comment pins: the comments layer, roots and replies. */
@@ -300,14 +329,19 @@ function storeState(docId: string, key: string): ElementState | undefined {
 function rebuildQueuedOverlay(docId: string) {
   const q = sendQueues.get(docId);
   const next: Overlay = new Map();
+  const comments: Overlay = new Map();
+  const commentRows = docRows(docId).comments;
   for (const item of q?.pending ?? []) {
+    const into = item.layer === "comments" ? comments : next;
     for (const op of item.ops) {
-      const prev = next.get(op.k) ?? storeState(docId, op.k);
+      const stored = item.layer === "comments" ? commentRows.get(op.k) : undefined;
+      const prev = into.get(op.k) ?? (item.layer === "comments" ? (stored ? fromElement(stored) : undefined) : storeState(docId, op.k));
       if ("set" in op && (!prev || prev.deleted)) continue;
-      next.set(op.k, applyOp(prev, op));
+      into.set(op.k, applyOp(prev, op));
     }
   }
   queuedOverlays.set(docId, next);
+  queuedComments.set(docId, comments);
   publishOverlay(docId);
 }
 
