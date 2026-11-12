@@ -522,6 +522,7 @@ function RestoreStoppedBar({ live }: { live: ReturnType<typeof useLiveArtifact> 
 function ArtifactMenu({ doc, copyOf, shareQuery, canEdit, ready, exports, fileImport, selection }: { doc: { _id: string; title: string; doc_type: ArtifactType; team_id?: string; workspace?: string }; copyOf?: ArtifactElement[]; shareQuery: string; canEdit: boolean; ready: boolean; exports: LiveExport[] | null; fileImport: LiveImport | null; selection: string[] }) {
   const router = useRouter();
   const [archiving, setArchiving] = useState(false);
+  const teamName = useInboxStore((s: any) => (s.teams ?? []).find((t: any) => t && `team:${t._id}` === doc.workspace)?.name as string | undefined);
   const zen = useInboxStore((s: any) => s.clientState.ui?.zen_mode ?? false);
   const { dispatchAction } = useShortcuts();
   const fileInput = useRef<HTMLInputElement>(null);
@@ -565,7 +566,7 @@ function ArtifactMenu({ doc, copyOf, shareQuery, canEdit, ready, exports, fileIm
         >
           <Copy className="w-3.5 h-3.5" /> Duplicate
         </DropdownMenuItem>
-        <DropdownMenuItem data-live-menu-zen onSelect={() => dispatchAction("ui.zenToggle")}>
+        <DropdownMenuItem data-live-menu-zen onSelect={() => toggleZenFromArtifact(zen, dispatchAction)}>
           {zen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />} {zen ? "Exit zen" : "Zen"}
         </DropdownMenuItem>
         <DropdownMenuItem
@@ -604,7 +605,7 @@ function ArtifactMenu({ doc, copyOf, shareQuery, canEdit, ready, exports, fileIm
             subject: doc.title || "Untitled",
             shift: null,
             figures: [],
-            rows: [{ k: "Who loses it", v: String(doc.workspace ?? "").startsWith("team:") ? "Everyone in the team" : "Only you" }, { k: "Undo", v: "From the toast that follows" }],
+            rows: [{ k: "Who loses it", v: String(doc.workspace ?? "").startsWith("team:") ? `All of ${teamName ?? "the team"}` : "Only you" }, { k: "Undo", v: "From the toast that follows" }],
             confirm: "Archive",
             keep: "Keep",
           }}
@@ -725,6 +726,13 @@ function EditAccessSection({ doc }: { doc: { _id: string; user_id?: string; work
  * sidebar folded away, remembered per person), and while an artifact is open
  * in it the list column beside the open doc folds away too.
  */
+/** Whether zen was turned on from an artifact (the header button or "..."), and so is the artifact's to give back. */
+let zenFromArtifact = false;
+function toggleZenFromArtifact(zen: boolean, dispatch: (a: any) => void) {
+  zenFromArtifact = !zen;
+  dispatch("ui.zenToggle");
+}
+
 function FocusToggle({ docId }: { docId: string }) {
   const zen = useInboxStore((s: any) => s.clientState.ui?.zen_mode ?? false);
   const { dispatchAction } = useShortcuts();
@@ -733,16 +741,15 @@ function FocusToggle({ docId }: { docId: string }) {
     document.documentElement.dataset.liveFocus = "";
     return () => { delete document.documentElement.dataset.liveFocus; };
   }, [zen]);
-  // Focus turned on here is the artifact's: leaving it gives the app its chrome back.
-  // Zen the person had on already stays on.
-  const turnedOnHere = useRef(false);
   const dispatchRef = useRef(dispatchAction);
   dispatchRef.current = dispatchAction;
+  // Zen turned on from an artifact holds while the person moves between docs (a copy, a link, a search hit)
+  // and gives the app its chrome back once they leave Docs. A reload or hot update goes nowhere, so it holds too.
   useWatchEffect(() => () => {
-    if (!turnedOnHere.current) return;
-    // Only when the person left the artifact: a reload or a hot update unmounts the page without going anywhere.
+    if (!zenFromArtifact) return;
     setTimeout(() => {
-      if (window.location.pathname.startsWith(`/docs/${docId}`)) return;
+      if (window.location.pathname.startsWith("/docs/")) return;
+      zenFromArtifact = false;
       if ((useInboxStore.getState() as any).clientState.ui?.zen_mode) dispatchRef.current("ui.zenToggle");
     }, 0);
   }, [docId]);
@@ -755,7 +762,7 @@ function FocusToggle({ docId }: { docId: string }) {
       aria-pressed={zen}
       title={zen ? "Exit zen" : "Zen: give the canvas the window"}
       aria-label={zen ? "Exit zen" : "Enter zen"}
-      onClick={() => { turnedOnHere.current = !zen; dispatchAction("ui.zenToggle"); }}
+      onClick={() => toggleZenFromArtifact(zen, dispatchAction)}
       className={`inline-flex items-center justify-center w-7 h-7 rounded-md shrink-0 transition-colors ${zen ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt"}`}
     >
       {zen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}

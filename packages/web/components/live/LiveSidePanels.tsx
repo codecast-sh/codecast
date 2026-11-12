@@ -83,6 +83,8 @@ export function CommentsPanel({
   // moves the selection, not the comment. Posting or emptying the box lets go.
   const draftText = useInboxStore((s: any) => (s.drafts?.[`comment:live:${doc._id}:new`]?.draft_message as string | undefined) ?? "");
   const [heldAnchor, setHeldAnchor] = useState<string | null>(null);
+  // Bumped by "New comment": the box it brings back takes focus.
+  const [newTick, setNewTick] = useState(0);
   const hasDraft = draftText.trim().length > 0;
   useWatchEffect(() => {
     if (!hasDraft) setHeldAnchor(null);
@@ -100,6 +102,8 @@ export function CommentsPanel({
   }, [focusKey, focusKnown]);
 
   const post = (body: string) => {
+    // A viewer's @session stays a mention: the agent would work with their rights, and they cannot edit.
+    if (!canAsk && /@\[[^\]]*\b(jx[0-9a-z]{5})\]/i.test(body)) toast("Posted as a comment: only editors can hand a comment to an agent");
     const key = live.comment({ text: body, ...(anchor ? { anchor } : {}) });
     // Tie the new thread to its element (a sheet's cell) so it moves with it. Only an editor can write the element.
     if (anchor && canAsk && spec.pinComment) {
@@ -137,7 +141,7 @@ export function CommentsPanel({
       {/* The new-thread box stands aside while a thread is open (its own reply box answers it) or the resolved ones show. */}
       {!readOnly && tab === "open" && focusKey && threads.some((t) => t.root.key === focusKey) && (
         <div className="px-2 py-1.5 border-b border-sol-border/30 shrink-0">
-          <button type="button" data-live-comment-new-open onClick={() => onFocus("", undefined)} className="inline-flex items-center gap-1 h-6 px-1.5 rounded text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt">
+          <button type="button" data-live-comment-new-open onClick={() => { setNewTick((n) => n + 1); onFocus("", undefined); }} className="inline-flex items-center gap-1 h-6 px-1.5 rounded text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt">
             <Plus className="w-3 h-3" /> New comment
           </button>
         </div>
@@ -146,8 +150,8 @@ export function CommentsPanel({
         <div className="p-2 border-b border-sol-border/30 shrink-0 min-w-0" data-live-comment-new>
           {anchor && <AnchorLabel docId={doc._id} anchor={anchor} />}
           <CommentComposer
-            key={composeTick ?? 0}
-            autoFocus={!!composeTick}
+            key={`${composeTick ?? 0}:${newTick}`}
+            autoFocus={!!composeTick || newTick > 0}
             conversationId={`live:${doc._id}`}
             scopeKey={`live:${doc._id}:new`}
             enabled={false}
@@ -235,6 +239,11 @@ function Thread({ doc, live, me, root, replies, focused, readOnly, onFocus, onRe
     >
       <CommentLine docId={live.docId} c={root} anchor={anchor} canDelete={!readOnly && canDeleteThread} onDelete={() => remove(root)} onEdit={!readOnly && mine(root) ? (text) => edit(root, text) : undefined} />
       {root.sent_to ? <AskState root={root} /> : null}
+      {root.resolved && root.resolved_by_name ? (
+        <div className="mt-1 text-meta text-sol-text-dim" data-live-resolved-by>
+          Resolved by {String(root.resolved_by_name)}{root.resolved_at ? ` · ${formatRelative(Number(root.resolved_at))}` : ""}
+        </div>
+      ) : null}
       {replies.map((r) => (
         <div key={r.key} className="mt-2 pl-3 border-l border-sol-border/40">
           <CommentLine docId={live.docId} c={r} canDelete={!readOnly && canDelete(r)} onDelete={() => remove(r)} onEdit={!readOnly && mine(r) ? (text) => edit(r, text) : undefined} />

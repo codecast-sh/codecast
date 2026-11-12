@@ -107,7 +107,7 @@ export async function insertVersion(
 }
 
 /** Fields of a comment anyone with access may change: whether its thread is resolved. */
-const COMMENT_SHARED_FIELDS = new Set(["resolved"]);
+const COMMENT_SHARED_FIELDS = new Set(["resolved", "resolved_by", "resolved_by_name", "resolved_at"]);
 /** Where an ask went and who answered it: written by the server's own follow-up (and `sent_to` by the comment's author), never by another client. */
 const COMMENT_ASK_FIELDS = new Set(["sent_to", "answered_at", "answered_by", "answered_by_name"]);
 
@@ -157,7 +157,9 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
       return { k: op.k, put: { ...(input.internal ? op.put : put), kind: op.put.kind, author: caller.actor, author_name: caller.name } };
     }
     if ("set" in op) {
-      const { author: _a, author_name: _n, ...rest } = op.set;
+      const { author: _a, author_name: _n, resolved_by: _rb, resolved_by_name: _rbn, resolved_at: _ra, ...rest } = op.set as Record<string, any>;
+      // Who resolved a thread, and when, is the server's to say.
+      if ("resolved" in rest) Object.assign(rest, rest.resolved ? { resolved_by: caller.actor, resolved_by_name: caller.name, resolved_at: Date.now() } : { resolved_by: null, resolved_by_name: null, resolved_at: null });
       return { k: op.k, set: rest };
     }
     return op;

@@ -328,7 +328,18 @@ export const setEditAccess = mutation({
       head = (await ctx.db.get(id))!;
     }
     // Every open page's feed reads the head, so it learns at once.
+    const before = new Set((head!.editors ?? []).map(String));
     await ctx.db.patch(head!._id, { edit: args.edit, editors });
+    // A person just named an editor hears it, with the artifact one click away.
+    if (args.edit === "owners") {
+      for (const uid of editors) {
+        if (before.has(String(uid))) continue;
+        await ctx.runMutation(internal.notificationRouter.emit, {
+          event_type: "mention", actor_user_id: caller.userId, entity_type: "doc", entity_id: String(doc._id),
+          message: `${caller.name} made you an editor of "${doc.title || "Untitled"}"`, link: `/docs/${doc._id}`, direct_recipient_id: uid,
+        });
+      }
+    }
     return { edit: args.edit, editors: editors.map(String) };
   },
 });

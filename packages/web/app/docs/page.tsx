@@ -336,7 +336,7 @@ export function DocListContent() {
     const have = new Set(searchScopeDocs.map((d) => d._id));
     const elsewhere = contentHits.hits
       .filter((h) => !have.has(h._id))
-      .map((h) => ({ _id: h._id, title: h.title, doc_type: h.doc_type, updated_at: h.updated_at ?? 0, created_at: h.updated_at ?? 0, where: h.where }) as unknown as DocItem);
+      .map((h) => ({ _id: h._id, title: h.title, doc_type: h.doc_type, source: "human", updated_at: h.updated_at ?? 0, created_at: h.updated_at ?? 0, where: h.where }) as unknown as DocItem);
     return elsewhere.length ? [...searchScopeDocs, ...elsewhere] : searchScopeDocs;
   }, [searchScopeDocs, contentHits.hits]);
   const renderDocRow = useCallback((doc: DocItem, state: ItemRowState) => {

@@ -95,6 +95,9 @@ export const search = query({
         out.push({ _id: String(doc._id), title: doc.title, doc_type: doc.doc_type, snippet: searchSnippet(h.text.slice(h.text.indexOf("\n") + 1), q), updated_at: doc.updated_at, where: teamNames.get(key) ?? "Personal" });
       }
     }
-    return out.sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0)).slice(0, limit);
+    // An artifact named for the words comes first, then the rest, each most recently changed first.
+    const lq = q.toLowerCase();
+    const named = (h: { title: string }) => (h.title.toLowerCase().includes(lq) ? 0 : 1);
+    return out.sort((a, b) => named(a) - named(b) || (b.updated_at ?? 0) - (a.updated_at ?? 0)).slice(0, limit);
   },
 });
