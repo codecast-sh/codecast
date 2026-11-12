@@ -11,7 +11,7 @@ import { lineViewHome, type LineSelection, type LineSelectionPatch } from "./lin
 export const PIPELINE_STAGES = ["signals", "problems", "flows", "decisions", "shipped", "volume"] as const;
 export type PipelineStage = (typeof PIPELINE_STAGES)[number];
 
-export const PIPELINE_LABELS: Record<PipelineStage, string> = { signals: "Signals", problems: "Problems", flows: "Flows", decisions: "For you", shipped: "Shipped", volume: "Volume" };
+export const PIPELINE_LABELS: Record<PipelineStage, string> = { signals: "Signals", problems: "Problems", flows: "Flows", decisions: "Decisions", shipped: "Shipped", volume: "Volume" };
 
 /** The stages the nav's rail joins, in the order work moves through them; For you sits above them, since a decision
  *  can wait at any of them. */
