@@ -150,7 +150,7 @@ export function ModernSidebar({
   /** Any team: the workspace switcher heads the rail. */
   hasTeams: boolean;
   /** A solo account's short rail (lib/railFocus.ts). */
-  focus: { offered: boolean; focused: boolean };
+  focus: { offered: boolean; focused: boolean; daily?: boolean };
 }) {
   // Every page lights its section, an object page reached by link included
   // (a session lights Inbox, a teammate Org): lib/navPlace.
@@ -209,6 +209,7 @@ export function ModernSidebar({
       activeId={activeId}
       gates={gates}
       focused={focus.focused}
+      daily={focus.daily}
       onMore={drillOn ? () => drill.open("more") : undefined}
       live={{
         inbox: <ModernInboxRow isActive={activeId === "inbox"} {...row} />,
@@ -284,6 +285,7 @@ export function ModernSidebar({
             activeId={activeId}
             gates={gates}
             focused={focus.focused}
+            daily={focus.daily}
             focusToggle={focus.offered ? () => useInboxStore.getState().updateClientUI({ rail_everything: focus.focused }) : undefined}
             onMobileClose={onMobileClose}
           />

@@ -38,7 +38,7 @@ export function AgentTypeIcon({ agentType, className = "w-3 h-3", mono = false }
     );
   } else if (agentType === "pi") {
     return (
-      <span className={`${className} inline-flex items-center justify-center shrink-0 font-semibold leading-none${tone("text-teal-400")}`}>
+      <span className={`${className} inline-flex items-center justify-center shrink-0 font-semibold${tone("text-teal-400")} leading-none`}>
         π
       </span>
     );

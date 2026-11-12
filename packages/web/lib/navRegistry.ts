@@ -42,10 +42,11 @@ type NavRowSpec = {
   icon: NavIconName;
   group: NavGroup;
   feature?: NavGate;
-  /** A focused rail keeps the "keep" rows and leaves the rest to More: every
-   *  Modern rail until the person asks for every page, and in Classic a solo
-   *  account's (lib/railFocus.ts). */
+  /** A solo account's focused rail keeps the "keep" rows and leaves the rest
+   *  to More (lib/railFocus.ts). */
   focus: "keep" | "more";
+  /** Modern focused's short rail keeps this row too (keptOnShortRail). */
+  dailyPage?: true;
   badge?: NavBadge;
   /** The addresses that light this row, when more than its own path: each
    *  one and everything under it. */
@@ -66,8 +67,8 @@ const ROWS = [
   { id: "decisions", label: "Decisions", path: "/decisions", icon: "CircleHelp", group: "top", focus: "keep", badge: "decisions", title: "Decisions you own, and the team's" },
   { id: "threads", label: "Threads", path: "/threads", icon: "MessagesSquare", group: "top", focus: "more", badge: "threads", match: ["/threads", "/chat/threads"], title: "Threads: every conversation you're in" },
   // Team: the people.
-  { id: "chat", label: "Chat", path: "/chat", icon: "MessageSquare", group: "team", feature: "chat", focus: "keep", badge: "chat" },
-  { id: "calls", label: "Calls", path: "/calls", icon: "Phone", group: "team", feature: "calls", focus: "keep", title: "Calls: live huddles and transcripts" },
+  { id: "chat", label: "Chat", path: "/chat", icon: "MessageSquare", group: "team", feature: "chat", focus: "more", dailyPage: true, badge: "chat" },
+  { id: "calls", label: "Calls", path: "/calls", icon: "Phone", group: "team", feature: "calls", focus: "more", dailyPage: true, title: "Calls: live huddles and transcripts" },
   { id: "activity", label: "Activity", path: "/team/activity", icon: "Activity", group: "team", feature: "team", focus: "more", classicLabel: "Feed", formerLabels: ["Dashboard"], title: "Activity: what the team's sessions did" },
   // Work: what the team is doing.
   { id: "tasks", label: "Tasks", path: "/tasks", icon: "ClipboardCheck", group: "work", focus: "keep" },
@@ -139,6 +140,12 @@ const BY_PATH = new Map<string, NavRow>(NAV_REGISTRY.map((row) => [row.path, row
 
 export function navRow(id: NavId): NavRow {
   return BY_ID.get(id)!;
+}
+
+/** Whether a short rail keeps `row`: the registry's "keep" rows, and in Modern
+ *  focused its daily pages (Inbox, Decisions, Chat, Calls, Tasks, Docs). */
+export function keptOnShortRail(row: NavRow, daily = false): boolean {
+  return row.focus === "keep" || (daily && row.dailyPage === true);
 }
 
 export function navRowsIn(group: NavGroup): NavRow[] {

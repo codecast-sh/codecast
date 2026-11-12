@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { EyeOff, Keyboard, MoreHorizontal, PinOff, Sparkles } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { hasCollectionRows } from "../../lib/hasCollectionRows";
-import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
+import { useInboxStore, useTrackedStore, isModernFocused } from "../../store/inboxStore";
 import { startTour } from "../../tours/engine";
 import { isInboxSessionView } from "../../lib/inboxRouting";
 import { focusedActionSessionId } from "../../shortcuts/actions";
@@ -90,7 +90,7 @@ export function TriageBar() {
     (st) => st.clientState.ui?.triage_bar_compact,
     (st) => st.clientState.ui?.inbox_shortcuts_hidden,
     (st) => st.clientState.ui?.zen_mode ?? false,
-    (st) => st.clientState.ui?.modern_style,
+    (st) => isModernFocused(st.clientState.ui),
     (st) => hasCollectionRows(st.sessions),
   ]);
   const onInboxView = isInboxSessionView(pathname, s.currentConversation?.source);
@@ -126,9 +126,9 @@ export function TriageBar() {
   if (!onInboxView || (s.clientState.ui?.zen_mode ?? false)) return null;
   if (!hasCollectionRows(s.sessions)) return null;
   if (isTriageBarCompact(s.clientState.ui)) return null;
-  // In Modern, verbs with no session to act on are noise: the board with
-  // nothing open shows no bar rather than a row of disabled buttons.
-  if (!activeId && s.clientState.ui?.modern_style === true) return null;
+  // In Modern focused, verbs with no session to act on are noise: the board
+  // with nothing open shows no bar rather than a row of disabled buttons.
+  if (!activeId && isModernFocused(s.clientState.ui)) return null;
 
   const run = (verb: TriageVerb) => {
     if (!activeId) return;

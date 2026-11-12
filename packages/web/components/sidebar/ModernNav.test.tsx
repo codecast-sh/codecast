@@ -140,11 +140,18 @@ test("a pathname maps to its registry row", () => {
   for (const [path, id] of cases) expect(navActiveId(path)).toBe(id);
 });
 
-test("focused: the six daily pages (Inbox, Decisions, Chat, Calls, Tasks, Docs), then More", () => {
-  const html = rail({ focused: true });
+test("Modern focused's short rail keeps Chat and Calls too: six daily pages, then More", () => {
+  const html = rail({ focused: true, daily: true });
   for (const kept of ["inbox-row", "decisions-row", "chat-row", "calls-row", 'href="/tasks"', 'href="/docs"', "data-rail-more"]) expect(html).toContain(kept);
-  for (const gone of ["threads-row", 'href="/team/activity"', 'href="/projects"', 'href="/org"', 'href="/triggers"', 'href="/repo"', 'href="/deploys"', 'href="/ops"']) expect(html).not.toContain(gone);
-  for (const h of ["Automation", "Code &amp; Ops"]) expect(html).not.toContain(`data-rail-heading="${h}"`);
+  for (const gone of ["threads-row", 'href="/team/activity"', 'href="/projects"', 'href="/org"', 'href="/triggers"']) expect(html).not.toContain(gone);
+  expect(current(rail({ focused: true, daily: true, activeId: "chat" }))).not.toEqual(["More"]);
+});
+
+test("focused: Inbox, Decisions, Tasks and Docs, then More", () => {
+  const html = rail({ focused: true });
+  for (const kept of ["inbox-row", "decisions-row", 'href="/tasks"', 'href="/docs"', "data-rail-more"]) expect(html).toContain(kept);
+  for (const gone of ["threads-row", "chat-row", "calls-row", 'href="/team/activity"', 'href="/projects"', 'href="/org"', 'href="/triggers"', 'href="/repo"', 'href="/deploys"', 'href="/ops"']) expect(html).not.toContain(gone);
+  for (const h of ["Team", "Automation", "Code &amp; Ops"]) expect(html).not.toContain(`data-rail-heading="${h}"`);
   // A page the short rail folds lights More.
   expect(current(rail({ focused: true, activeId: "deploys" }))).toEqual(["More"]);
 });

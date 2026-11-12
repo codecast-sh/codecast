@@ -77,7 +77,7 @@ import { useUpgradesOpen } from "./simple/billing";
 import type { NoticeKind } from "@codecast/shared/contracts/assistant";
 import { LabelChipsRow } from "./LabelChipsRow";
 import { RailFilterMenu } from "./RailFilterMenu";
-import { useIsModernStyle } from "../hooks/useVisualStyle";
+import { useIsModernFocused } from "../hooks/useVisualStyle";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -1907,7 +1907,7 @@ function SessionListPanelImpl({
     // Structural change + the view keys + the question inputs + the epoch tick
     // (coarseNow drives the deadline signature).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, s.newSessionHolds, coarseNow],
+    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, s.newSessionHolds, coarseNow, nestsWorkers(s.clientState.ui)],
   );
   // The section a held row is headed for, as its accent: the fuse and the
   // landing wash speak in the color of where the row is going.
@@ -2063,9 +2063,9 @@ function SessionListPanelImpl({
   // report) while no chip narrows the list and the nested rows are on screen;
   // shared sectionHeaderCount, so this panel and mobile can't drift.
   const showSubagents = resolveShowSubagents(s.clientState.ui);
-  // Modern folds the workers an agent spawned under its card (nestsWorkers).
+  // Modern focused folds the workers an agent spawned under its card (nestsWorkers).
   const nestWorkers = nestsWorkers(s.clientState.ui);
-  const modernStyle = useIsModernStyle();
+  const modernFocused = useIsModernFocused();
   // In the flat views a nested worker is a hoisted row of its own, drawn as
   // the compact sub row.
   const nestedWorkerIds = useMemo(() => {
@@ -2900,8 +2900,8 @@ function SessionListPanelImpl({
                     here while its schedule keeps firing — so the stashed/killed
                     buckets carry the same bars as the live sections; without
                     them an expanded bucket hides that a card is a loop. */}
-                {/* The workers this agent spawned fold under its card (Modern,
-                    nestsWorkers); the line keeps them counted while folded,
+                {/* The workers this agent spawned fold under its card (Modern
+                    focused, nestsWorkers); the line keeps them counted while folded,
                     and names any that wait on you even when the option lists
                     them. */}
                 {(!showSubagents || workersNeedingYouByParent.has(session._id)) && (
@@ -3247,10 +3247,10 @@ function SessionListPanelImpl({
           </button>
         )}
         {showViewTabs && <InboxViewPicker value={viewMode} onChange={s.setInboxViewMode} modes={viewModes} />}
-        {/* Modern: one Filter menu (labels, projects, the folders worked in
-            most, every folder one step away); Classic and Minimal keep the
-            chip row. */}
-        {modernStyle ? (
+        {/* Modern focused: one Filter menu (labels, projects, the folders
+            worked in most, every folder one step away); every other style
+            keeps the chip row. */}
+        {modernFocused ? (
           <RailFilterMenu
             bucketCounts={favoritesView ? favChipCounts!.bucketCounts : bucketCounts}
             projectCounts={favoritesView ? favChipCounts!.projectCounts : projectCounts}

@@ -1845,6 +1845,11 @@ export type ClientUI = {
   visual_style?: "classic" | "minimal";
   /** The opt-in Modern style, kept apart from visual_style (components/ThemeProvider.tsx says why). */
   modern_style?: boolean;
+  /** Modern's trimmed variant, a switch under Modern (isModernFocused): the
+   *  six-row rail, one Filter menu, spawned workers folded under their
+   *  spawner, one strip above the page, and no rail beside the board. Stamped,
+   *  so it follows the person; it acts only where Modern is on. */
+  modern_focused?: boolean;
   /** The phone's own Modern choice (packages/mobile/lib/mobileLook.ts). Absent or null: the phone follows modern_style. */
   mobile_modern_style?: boolean | null;
   sidebar_collapsed?: boolean;
@@ -3578,7 +3583,7 @@ export type PlaceInboxState = {
   killedShelf?: Pick<KilledShelf, "ids">;
   sessionsWithQueuedMessages: Set<string>;
   pendingMessages: Record<string, Message[]>;
-  clientState: { ui?: { inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean } };
+  clientState: { ui?: { inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean } };
   currentUser?: { _id?: unknown } | null;
   teamInboxIds?: ReadonlySet<string>;
   sessionsProjection?: Record<string, { epoch: number; receivedAtMono?: number; stamps?: Record<string, { bucket_stale_at?: number | null }> }>;
@@ -4134,7 +4139,8 @@ export function placeInboxRows(
   // (workersNeedingYouByParent). A workflow sub is never its own member, so it
   // has no row of its own to keep: it nests and the parent names it. A worker
   // whose spawner is absent stands as its own row.
-  const nestParentOf = inboxNestParentOf(sorted, nestsWorkers(state.clientState.ui));
+  const nestWorkers = nestsWorkers(state.clientState.ui);
+  const nestParentOf = inboxNestParentOf(sorted, nestWorkers);
   const subsByParent = new Map<string, InboxSession[]>();
   const roleSessionsByLead = new Map<string, number>();
   const roleRidden = new Set<string>();
@@ -4143,7 +4149,7 @@ export function placeInboxRows(
   for (const s of sorted) {
     const nestParent = nestParentOf(s);
     if (!nestParent || !allIds.has(nestParent)) continue;
-    if (isSpawnedWorker(s)) {
+    if (nestWorkers && isSpawnedWorker(s)) {
       const own = placements.get(s._id)?.bucket ?? null;
       const needsYou = own ? workerNeedsYou(own) : sessionWorkState(s, now) === "needs_input" || askingOf(s);
       const keepsOwnRow = isMemberCandidate(s) && (needsYou || own === "pinned");
@@ -4177,7 +4183,7 @@ export function placeInboxRows(
     }
     return cur;
   };
-  for (const [parent, subs] of [...subsByParent]) {
+  for (const [parent, subs] of nestWorkers ? [...subsByParent] : []) {
     if (!nestedUnder.has(parent) || roleRidden.has(parent)) continue;
     const top = topCardOf(parent);
     if (top === parent) continue;
@@ -4337,7 +4343,7 @@ export function placeInboxRows(
   for (const id of subsWithParent) {
     if (roleRidden.has(id)) continue;
     const worker = scoped[id];
-    if (worker && isSpawnedWorker(worker)) {
+    if (nestWorkers && worker && isSpawnedWorker(worker)) {
       if (!isMemberCandidate(worker)) continue; // a workflow sub is no member, like a Task subagent
       const k = sectionOfCard.get(topCardOf(id));
       if (k) counts[k]++;
@@ -5467,11 +5473,18 @@ export function inboxNestParentOf(rows: Iterable<InboxSession>, nestWorkers = fa
   };
 }
 
-// Whether spawned workers nest under their spawner: in the Modern style, where
-// the rail lists the main agents and each names its workers. Classic and
-// Minimal list every worker as its own row, as they always have.
-export function nestsWorkers(ui: { modern_style?: boolean } | undefined): boolean {
-  return ui?.modern_style === true;
+// Modern focused: the Modern style with its switch on (settings, Appearance).
+// Only the trims read it; Classic and Minimal never see it, and Modern without
+// it keeps every row and button it had.
+export function isModernFocused(ui: { modern_style?: boolean; modern_focused?: boolean } | undefined): boolean {
+  return ui?.modern_style === true && ui?.modern_focused === true;
+}
+
+// Whether spawned workers nest under their spawner: in Modern focused, where
+// the rail lists the main agents and each names its workers. Every other style
+// lists every worker as its own row, as it always has.
+export function nestsWorkers(ui: { modern_style?: boolean; modern_focused?: boolean } | undefined): boolean {
+  return isModernFocused(ui);
 }
 
 // A session an agent spawned that the shared nestParentIdOf leaves first-class:
@@ -5480,7 +5493,7 @@ export function nestsWorkers(ui: { modern_style?: boolean } | undefined): boolea
 // card of its own: its teammates nest under it, and a sub row never draws rows
 // of its own.
 export function isSpawnedWorker(s: InboxSession): boolean {
-  if (nestParentIdOf(s)) return false;
+  if (nestParentIdOf(s) || isUnderRole(s)) return false;
   if (s.is_workflow_sub) return !!s.workflow_run_id;
   if (!s.spawned_by_conversation_id) return false;
   return !(s.agent_team_name && s.agent_name === "team-lead");
@@ -5527,7 +5540,7 @@ export function computeManualSortKey(orderedKeys: number[], insertIndex: number)
 // is what re-plans the inbox warm loop (hooks/inboxWarm.ts). Lives beside the
 // chokepoint so the synced view keys are read inside the store, nowhere else.
 export function visualOrderViewSig(state: {
-  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean } };
+  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean } };
   activeProjectFilter?: string | null;
   activeBucketFilter?: string | null;
   chipFilterExclude?: boolean;
@@ -5542,6 +5555,7 @@ export function visualOrderViewSig(state: {
     resolveInboxViewMode(ui), resolveShowOld(ui), ui?.inbox_scope ?? "mine", resolveShowSubagents(ui),
     state.activeProjectFilter ?? "", state.activeBucketFilter ?? "", !!state.chipFilterExclude,
     terms(state.extraBucketFilters), terms(state.extraProjectFilters), !!state.showFavorites, state.teamInboxIds?.size ?? 0,
+    nestsWorkers(ui),
   ].join("|");
 }
 
@@ -5604,7 +5618,7 @@ export function computeVisualOrder(state: {
   // Local answered/dismissed marks — same map the panel renders with, so nav
   // walks exactly the QUESTIONS section on screen.
   questionResolutions?: QuestionResolutions;
-  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean } };
+  clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean; inbox_manual_order?: Record<string, number>; show_subagents?: boolean; inbox_scope?: "mine" | "team"; inbox_show_old?: boolean; modern_style?: boolean; modern_focused?: boolean } };
 }, opts: {
   // Only the rows that are the user's move (questions, NEEDS YOU, DONE), in
   // the same on-screen order — see visualOrderSessions. Every mode honors it,

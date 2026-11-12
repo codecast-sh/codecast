@@ -89,7 +89,7 @@ test("every page row of the rail closes the drawer; More opens its level and kee
 
 test("every row of the More level closes the drawer", async () => {
   const r = await clicks((close) => <MoreDrillList activeId={null} gates={ALL} focused onMobileClose={close} />);
-  expect(r.rows).toBeGreaterThanOrEqual(28);
+  expect(r.rows).toBeGreaterThanOrEqual(30);
   expect(r.closed).toBe(r.rows);
 });
 

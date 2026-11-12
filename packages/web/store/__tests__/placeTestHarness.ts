@@ -32,7 +32,7 @@ export type PlaceHarnessOpts = {
   reviveRequestedAt?: Record<string, number>;
   now?: number;
   showOld?: boolean;
-  /** The Modern style: spawned workers nest under their spawner (nestsWorkers). */
+  /** Modern focused: spawned workers nest under their spawner (nestsWorkers). */
   modern?: boolean;
   scope?: "mine" | "team";
   teamInboxIds?: ReadonlySet<string>;
@@ -128,7 +128,7 @@ export function placeSections(
       sessions: filled,
       sessionsWithQueuedMessages: new Set([...queued].map((id) => rk.to(id))),
       pendingMessages,
-      clientState: { ui: { inbox_show_old: opts.showOld ?? true, inbox_scope: opts.scope ?? "mine", modern_style: opts.modern } },
+      clientState: { ui: { inbox_show_old: opts.showOld ?? true, inbox_scope: opts.scope ?? "mine", modern_style: opts.modern, modern_focused: opts.modern } },
       currentUser: opts.currentUser ?? null,
       teamInboxIds: opts.teamInboxIds ? new Set([...opts.teamInboxIds].map((id) => rk.to(id))) : undefined,
       sessionDecisions,

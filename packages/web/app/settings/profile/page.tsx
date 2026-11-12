@@ -136,9 +136,25 @@ function AppearanceSection() {
           className="visual-style-options w-full"
         />
       </SettingsField>
+      {visualStyle === "modern" && <ModernFocusedField />}
       <ColorThemeField />
       {visualStyle === "minimal" && <BubbleColorField />}
     </SettingsSection>
+  );
+}
+
+/** Modern's trimmed variant (inboxStore.isModernFocused), shown only under
+ *  Modern. Off, Modern keeps every rail row, chip and button it has. */
+function ModernFocusedField() {
+  const on = useInboxStore((s) => s.clientState.ui?.modern_focused === true);
+  const updateUI = useInboxStore((s) => s.updateClientUI);
+  return (
+    <SettingsRow
+      label={<label htmlFor="modern-focused">Focused</label>}
+      description="A shorter rail, one Filter menu in place of the chips, spawned workers folded under the agent that started them, one banner at a time, and no session list beside the inbox board."
+    >
+      <Switch id="modern-focused" checked={on} onCheckedChange={(v) => updateUI({ modern_focused: v })} aria-label="Modern focused" />
+    </SettingsRow>
   );
 }
 

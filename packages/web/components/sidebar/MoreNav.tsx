@@ -11,12 +11,13 @@ import { ChevronsDownUp, ChevronsUpDown } from "lucide-react";
 import { RailHeading } from "./navPrimitives";
 import { RegistryNavSection } from "./ModernNav";
 import { NewMark, RailButtonRow } from "./modernRailParts";
-import { RAIL_GROUPS, navRowShown, navRowsIn, type NavGates, type NavGroup, type NavId } from "../../lib/navRegistry";
+import { RAIL_GROUPS, keptOnShortRail, navRowShown, navRowsIn, type NavGates, type NavGroup, type NavId } from "../../lib/navRegistry";
 
 export function MoreDrillList({
   activeId,
   gates,
   focused,
+  daily = false,
   focusToggle,
   onMobileClose,
 }: {
@@ -24,13 +25,15 @@ export function MoreDrillList({
   gates: NavGates;
   /** The short rail: the rows it leaves out are listed here too. */
   focused: boolean;
+  /** Modern focused: the short rail keeps its daily pages too (keptOnShortRail). */
+  daily?: boolean;
   /** A solo account's switch between the short rail and every page. */
   focusToggle?: () => void;
   onMobileClose?: () => void;
 }) {
   const rowsOf = (group: NavGroup) =>
     navRowsIn(group).flatMap((row) => {
-      if (group !== "more" && row.focus === "keep") return [];
+      if (group !== "more" && keptOnShortRail(row, daily)) return [];
       const on = navRowShown(row, gates);
       if (!on) return [];
       return [

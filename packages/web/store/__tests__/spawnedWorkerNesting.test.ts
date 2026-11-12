@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { flatViewSessions, inboxNestParentOf, isSpawnedWorker, type InboxSession } from "../inboxStore";
+import { flatViewSessions, inboxNestParentOf, isSpawnedWorker, nestsWorkers, type InboxSession } from "../inboxStore";
 import { placeSections } from "./placeTestHarness";
 
-// In the Modern style (nestsWorkers), sessions an agent spawned (`cast spawn`
+// In Modern focused (nestsWorkers), sessions an agent spawned (`cast spawn`
 // workers, workflow subs) fold under the session that spawned them in the web
 // list, like Task subagents: hidden
 // until the Sub-agents and workers option is on. Display only: the shared
@@ -32,7 +32,14 @@ const flat = (placed: ReturnType<typeof place>, showSubagents: boolean) =>
   ids(flatViewSessions(placed.sorted, placed.subsByParent, { mode: "recent", showSubagents, nestWorkers: true }));
 
 describe("spawned workers nest under their spawner (web display only)", () => {
-  it("only in Modern: Classic and Minimal keep every worker as its own row", () => {
+  it("only Modern focused nests: Classic, Minimal and plain Modern do not", () => {
+    expect(nestsWorkers({ modern_style: true, modern_focused: true })).toBe(true);
+    expect(nestsWorkers({ modern_style: true })).toBe(false);
+    expect(nestsWorkers({ modern_focused: true })).toBe(false);
+    expect(nestsWorkers(undefined)).toBe(false);
+  });
+
+  it("only in Modern focused: every other style keeps every worker as its own row", () => {
     const parent = row("par0", working);
     const worker = row("wk0", { ...working, spawned_by_conversation_id: "par0" });
     const placed = place([parent, worker], false);
