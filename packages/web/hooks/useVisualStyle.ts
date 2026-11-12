@@ -17,6 +17,16 @@ export function useIsModernStyle(): boolean {
  *  Appearance; inboxStore.isModernFocused). The trims branch on this. */
 export function useIsModernFocused(): boolean {
   const modern = useIsModernStyle();
-  const minimal = useInboxStore((s) => s.clientState.ui?.modern_focused === true);
-  return modern && minimal;
+  const focused = useInboxStore((s) => s.clientState.ui?.modern_focused === true);
+  return modern && focused;
+}
+
+/** The Modern rail's short-rail rule. Modern focused opens every rail on its
+ *  daily pages (Inbox, Decisions, Chat, Calls, Tasks, Docs:
+ *  navRegistry.keptOnShortRail) with the rest behind More, until the person
+ *  chooses to see every page. Plain Modern keeps the solo account's rule
+ *  (lib/railFocus.ts), passed in as `offered` and `focused`. */
+export function useModernRailFocus(everything: boolean | undefined, offered: boolean, focused: boolean): { offered: boolean; focused: boolean; daily?: boolean } {
+  const on = useIsModernFocused();
+  return on ? { offered: true, focused: everything !== true, daily: true } : { offered, focused };
 }
