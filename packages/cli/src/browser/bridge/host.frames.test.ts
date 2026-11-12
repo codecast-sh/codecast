@@ -109,3 +109,28 @@ test("a frame attached before its URL commits is admitted, host refusals bind it
   expect((await conn.send<any>("DOM.getDocument", {}, root)).echo.tabId).toBe(7);
   conn.close();
 });
+
+test("a tab the host detaches loses its children, so the next client is offered only the live one", async () => {
+  const { ext, conn, root } = await rig();
+  await conn.send("Target.setAutoAttach", { autoAttach: true, flatten: true }, root);
+  ext.event(7, "Target.attachedToTarget", { sessionId: "CHROME-OLD", targetInfo: frameInfo("https://pay.test/card"), waitingForDebugger: false });
+  await conn.waitFor((e) => e.method === "Target.attachedToTarget" && e.sessionId === root, 2000);
+  // The last client lets go: the host detaches the debugger, which ends Chrome's child sessions without an event.
+  conn.close();
+  await ext.waitFor("detach");
+
+  // The next command attaches again, and Chrome reports the same frame under a new session.
+  const next = await CdpConnection.fromPort({ port: host!.port, token: host!.token });
+  const events: CdpEvent[] = [];
+  next.on((ev) => void events.push(ev));
+  const nextRoot = (await next.send<{ sessionId: string }>("Target.attachToTarget", { targetId: targetIdOfTab(7), flatten: true })).sessionId;
+  ext.event(7, "Target.attachedToTarget", { sessionId: "CHROME-NEW", targetInfo: frameInfo("https://pay.test/card"), waitingForDebugger: false });
+  await settle();
+  await next.send("Target.setAutoAttach", { autoAttach: true, flatten: true }, nextRoot);
+  await settle();
+  const offered = events.filter((e) => e.method === "Target.attachedToTarget" && e.sessionId === nextRoot);
+  expect(offered).toHaveLength(1);
+  await next.send("DOM.getDocument", {}, String(offered[0].params.sessionId));
+  expect(ext.seen.filter((m) => m.op === "cdp" && m.method === "DOM.getDocument").at(-1)?.sessionId).toBe("CHROME-NEW");
+  next.close();
+});

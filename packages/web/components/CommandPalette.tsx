@@ -2549,6 +2549,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 conversationId={PALETTE_PICK_DRAFT}
                 bareComposer
                 chatMentionMode={chatTarget}
+                sessionReplies={chatTarget}
                 mentionTeamId={activeTeamId ? String(activeTeamId) : undefined}
                 composerPlaceholder={pick.notePlaceholder}
                 autoFocusInput
