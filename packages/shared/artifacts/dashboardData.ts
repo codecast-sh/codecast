@@ -13,6 +13,9 @@
 import type { Json } from "./core";
 import { WHERE_OPS, cellMatches, cellNumber, num, whereClauses, type Where, type WhereOp } from "./dashboardWhere";
 import { textProblems } from "./dashboardWords";
+import { shaped } from "./dashboardShape";
+import { groupRows } from "./dashboardGroup";
+export { sheetTable } from "./dashboardGroup";
 
 export * from "./dashboardWhere";
 export * from "./dashboardWords";
@@ -95,7 +98,16 @@ export function queryKey(q: DataQuery): string {
 export function blockQuery(block: object): DataQuery | null {
   const q = (block as { query?: unknown }).query as DataQuery | undefined;
   if (!q || typeof q !== "object" || !isDataSource(q.source)) return null;
-  return q;
+  // A KPI that compares periods reads its window twice over, so "the last 30 days" has "the 30 days before" to be measured against.
+  const days = periodDays(block);
+  return days ? { ...q, args: { ...(q.args ?? {}), days: days * 2 } } : q;
+}
+
+/** The window a period-comparing KPI shows (its query's `days`), or null when it isn't one. */
+export function periodDays(block: object): number | null {
+  const b = block as { kind?: unknown; compare?: unknown; query?: { args?: { days?: unknown } } };
+  const days = b.query?.args?.days;
+  return b.kind === "kpi" && b.compare === "halves" && typeof days === "number" && days > 0 ? days : null;
 }
 
 const REFRESH_UNIT: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: 86_400_000 };
@@ -274,37 +286,6 @@ function round(n: number): number {
   return Math.round(n * 1e6) / 1e6;
 }
 
-// ── reading a block's fields ──
-
-const TEXT_FIELDS = ["field", "label", "compare", "good", "x", "y", "series", "columns", "sort", "chart", "agg", "format"] as const;
-
-/**
- * A block as the evaluators read it. Anyone can write an element (an agent's
- * raw `apply`, an older client), so a field of the wrong shape is coerced, never
- * trusted: a list becomes "a,b", a number its text, an object nothing. One
- * badly written block must not take down a page of good ones.
- */
-function shaped<T extends object>(block: T): T {
-  const b = block as Record<string, unknown>;
-  let out: Record<string, unknown> | null = null;
-  for (const f of TEXT_FIELDS) {
-    const v = b[f];
-    if (v === undefined || v === null || typeof v === "string") continue;
-    out ??= { ...b };
-    out[f] = Array.isArray(v) ? v.map(String).join(",") : typeof v === "number" || typeof v === "boolean" ? String(v) : undefined;
-  }
-  if (b.limit !== undefined && typeof b.limit !== "number") {
-    out ??= { ...b };
-    const n = Number(b.limit);
-    out.limit = Number.isFinite(n) && n > 0 ? n : undefined;
-  }
-  if (b.where !== undefined && (typeof b.where !== "object" || b.where === null || Array.isArray(b.where))) {
-    out ??= { ...b };
-    out.where = undefined;
-  }
-  return (out ?? b) as T;
-}
-
 // ── KPI ──
 
 export type KpiBlock = {
@@ -325,7 +306,7 @@ export type KpiBlock = {
 };
 
 /** A KPI's change. `against` names what it is compared with, in words a sentence can carry ("the prior 7 days"). */
-export type Delta = { value: number; ratio: number | null; display: string; caption: string; against: string; dir: "up" | "down" | "flat"; good: boolean | null };
+export type Delta = { value: number; ratio: number | null; base: number; display: string; caption: string; against: string; dir: "up" | "down" | "flat"; good: boolean | null };
 
 export type KpiEval =
   | { state: "ok"; value: number | string | null; display: string; delta?: Delta; used: number[]; how: string }
@@ -333,12 +314,13 @@ export type KpiEval =
   | { state: "loading" }
   | { state: "unbound"; display: string };
 
-export function evaluateKpi(raw: KpiBlock, result: DataResult | undefined, scope?: Where): KpiEval {
+export function evaluateKpi(raw: KpiBlock, result: DataResult | undefined, outer?: Where): KpiEval {
   const block = shaped(raw);
   const q = blockQuery(block);
   if (!q) return { state: "unbound", display: block.value === undefined || block.value === null ? "–" : formatValue(block.value, block.format) };
   if (!result || (!result.refreshed_at && !result.error)) return { state: "loading" };
   if (result.error && !result.refreshed_at) return { state: "problem", problem: result.error };
+  const scope = periodScope(block, result, outer);
   const filtered = filterRows(result, block.where, scope);
   if ("problem" in filtered) return { state: "problem", problem: filtered.problem };
   const agg = block.agg ?? (block.field ? "sum" : "count");
@@ -353,6 +335,33 @@ export function evaluateKpi(raw: KpiBlock, result: DataResult | undefined, scope
     if (d) out.delta = d;
   }
   return out;
+}
+
+/**
+ * A period-comparing KPI shows its own window (the last `days` days of what it
+ * read), never the doubled read behind it. A dashboard date filter, when set,
+ * already names the window and wins.
+ */
+function periodScope(block: KpiBlock, result: DataResult, scope: Where | undefined): Where | undefined {
+  const days = periodDays(block);
+  const col = ["day", "date"].find((c) => result.columns.includes(c));
+  if (!days || !col) return scope;
+  const ti = result.columns.indexOf(col);
+  let last = "";
+  for (const r of result.rows) {
+    const d = String(r[ti] ?? "");
+    if (/^\d{4}-\d\d-\d\d$/.test(d) && d > last) last = d;
+  }
+  if (!last) return scope;
+  // The window ends on the newest day, today included, so this number and every chart beside it count the same days.
+  const start = new Date(`${last}T00:00:00Z`);
+  start.setUTCDate(start.getUTCDate() - (days - 1));
+  const from = start.toISOString().slice(0, 10);
+  // A dashboard date filter narrows the window, never widens it: the KPI read twice its days only to have a period to compare with, not to show more history than the page's charts.
+  const asked = (scope?.[col] ?? {}) as { gte?: string; lte?: string };
+  const gte = typeof asked.gte === "string" && asked.gte > from ? asked.gte : from;
+  const lte = typeof asked.lte === "string" && asked.lte < last ? asked.lte : last;
+  return { ...(scope ?? {}), [col]: { gte, lte } };
 }
 
 const TIME_COLUMNS = ["day", "date", "week", "month", "hour", "at", "time"];
@@ -471,10 +480,13 @@ function kpiDelta(result: DataResult, rows: number[], block: KpiBlock, agg: KpiA
   const ratio = before !== 0 ? diff / Math.abs(before) : null;
   const dir = diff > 0 ? "up" : diff < 0 ? "down" : "flat";
   const sign = diff > 0 ? "+" : diff < 0 ? "−" : "±";
-  const display = dir === "flat" ? "flat" : ratio !== null ? `${sign}${formatValue(Math.abs(ratio), "percent")}` : `${sign}${formatValue(Math.abs(diff), fmt)}`;
+  // A percent on a tiny base ("up 533%" for 3 to 19) headlines noise; under 10 the change reads in counts.
+  const small = Math.abs(before) < 10;
+  const display = dir === "flat" ? "flat" : ratio !== null && !small ? `${sign}${formatValue(Math.abs(ratio), "percent")}` : `${sign}${formatValue(Math.abs(diff), fmt)}`;
   return {
     value: diff,
     ratio,
+    base: before,
     display,
     caption: dir === "flat" ? `${lead}same as ${against}` : `${lead}${sign}${formatValue(Math.abs(diff), fmt)} vs ${against}`,
     against: words,
@@ -568,7 +580,12 @@ export function evaluateChart(raw: ChartBlock, result: DataResult | undefined, s
   if (filtered.rows.length && !series.length) return { state: "problem", problem: `no numbers in ${ys.join(", ")}` };
   let x = xs;
   const sumOf = (s: ChartSeries) => s.values.reduce<number>((a, v) => a + (v ?? 0), 0);
-  if (si >= 0 && block.limit && series.length > block.limit) series = [...series].sort((a, b) => sumOf(b) - sumOf(a)).slice(0, block.limit);
+  if (si >= 0 && block.limit && series.length > block.limit) {
+    // The largest series by name, and the rest gathered as "Other", so the stack still adds up to the total.
+    const ranked = [...series].sort((a, b) => sumOf(b) - sumOf(a));
+    const rest = ranked.slice(block.limit);
+    series = [...ranked.slice(0, block.limit), { name: "Other", values: xs.map((_, i) => (rest.some((s) => s.values[i] !== null) ? round(rest.reduce((a, s) => a + (s.values[i] ?? 0), 0)) : null)) }];
+  }
   if (type === "hbar" && series.length === 1) {
     // A ranking: largest first, top n.
     const order = x.map((_, i) => i).sort((a, b) => (series[0].values[b] ?? 0) - (series[0].values[a] ?? 0));
@@ -599,7 +616,8 @@ export function chartPointRows(raw: ChartBlock, result: DataResult | undefined, 
 
 // ── tables ──
 
-export type TableBlock = { title?: string; caption?: string; query?: unknown; columns?: string; sort?: string; limit?: number; where?: Where; format?: NumberFormat };
+/** `group`: one row per value of this column, numbers summed, with a `rows` count. */
+export type TableBlock = { title?: string; caption?: string; query?: unknown; columns?: string; sort?: string; limit?: number; where?: Where; format?: NumberFormat; group?: string };
 
 export type TableEval =
   | { state: "ok"; columns: string[]; rows: unknown[][]; used: number[]; total: number; how: string }
@@ -614,27 +632,37 @@ export function evaluateTable(raw: TableBlock, result: DataResult | undefined, s
   if (result.error && !result.refreshed_at) return { state: "problem", problem: result.error };
   const filtered = filterRows(result, block.where, scope);
   if ("problem" in filtered) return { state: "problem", problem: filtered.problem };
-  const cols = block.columns ? block.columns.split(",").map((s) => s.trim()).filter(Boolean) : result.columns;
-  const idx = cols.map((c) => columnIndex(result, c));
+  // Grouped, the table shows the groups; the check still points at the source rows behind them.
+  let src = result;
+  let shown = filtered.rows;
+  let back: number[][] | null = null;
+  if (block.group) {
+    const g = groupRows(result, filtered.rows, block.group);
+    if ("problem" in g) return { state: "problem", problem: g.problem };
+    src = g.result;
+    shown = g.result.rows.map((_, i) => i);
+    back = g.groups;
+  }
+  const cols = block.columns ? block.columns.split(",").map((s) => s.trim()).filter(Boolean) : src.columns;
+  const idx = cols.map((c) => columnIndex(src, c));
   const bad = cols.find((_, i) => idx[i] < 0);
-  if (bad) return { state: "problem", problem: missing(result, bad) };
-  let used = filtered.rows;
+  if (bad) return { state: "problem", problem: missing(src, bad) };
   if (block.sort) {
     const desc = block.sort.startsWith("-");
     const name = block.sort.replace(/^[-+]/, "");
-    const si = columnIndex(result, name);
-    if (si < 0) return { state: "problem", problem: missing(result, name) };
-    used = [...used].sort((a, b) => compareCells(result.rows[a][si], result.rows[b][si]) * (desc ? -1 : 1));
+    const si = columnIndex(src, name);
+    if (si < 0) return { state: "problem", problem: missing(src, name) };
+    shown = [...shown].sort((a, b) => compareCells(src.rows[a][si], src.rows[b][si]) * (desc ? -1 : 1));
   }
-  const total = used.length;
-  if (block.limit && block.limit > 0) used = used.slice(0, block.limit);
+  const total = shown.length;
+  if (block.limit && block.limit > 0) shown = shown.slice(0, block.limit);
   return {
     state: "ok",
     columns: cols,
-    rows: used.map((r) => idx.map((i) => result.rows[r][i])),
-    used,
+    rows: shown.map((r) => idx.map((i) => src.rows[r][i])),
+    used: back ? shown.flatMap((i) => back![i]) : shown,
     total,
-    how: `${cols.length} columns, ${used.length}${total > used.length ? ` of ${total}` : ""} rows${block.sort ? `, sorted by ${block.sort.replace(/^-/, "")}${block.sort.startsWith("-") ? " descending" : ""}` : ""}`,
+    how: `${cols.length} columns, ${shown.length}${total > shown.length ? ` of ${total}` : ""} ${back ? `groups by ${block.group}` : "rows"}${block.sort ? `, sorted by ${block.sort.replace(/^-/, "")}${block.sort.startsWith("-") ? " descending" : ""}` : ""}`,
   };
 }
 
@@ -669,7 +697,10 @@ export function checkBlock(kind: string, block: Record<string, unknown>, result:
   const scope = ctx.scope;
   if (kind === "section") return null;
   if (kind === "text") {
-    const problems = textProblems(String(block.text ?? ""), ctx.kpi ?? (() => undefined));
+    // Without a KPI lookup nothing can be judged unknown; only the words themselves are checked.
+    const problems = textProblems(String(block.text ?? ""), ctx.kpi ?? (() => undefined)).filter((p) => ctx.kpi || p.kind !== "unknown");
+    const missing = problems.find((p) => p.kind === "unknown");
+    if (missing) return { state: "broken", label: "Names no value", detail: missing.detail };
     const wrong = problems.find((p) => p.kind === "contradicts");
     if (wrong) return { state: "broken", label: "Contradicts the data", detail: wrong.detail };
     return problems.length ? { state: "typed", label: "Typed claims", detail: problems.map((p) => p.detail).join("; ") } : null;
@@ -741,29 +772,3 @@ export function compareRerun(kind: string, block: Record<string, unknown>, shown
   const after = !same && was && was.shown === now.shown ? `${now.shown} (values differ)` : now.shown;
   return { same, before: was?.shown ?? null, after };
 }
-
-// ── sheets as a source ──
-
-type Cell = number | string | boolean | null;
-// A sheet range's evaluated values come from the Sheets engine (readSheetRange in ./sheet).
-
-/** Values as a table: the first row names the columns, or columns are A, B, C. */
-export function sheetTable(values: Cell[][], header: boolean, firstCol = 1): { columns: string[]; rows: Cell[][] } {
-  const width = Math.max(0, ...values.map((r) => r.length));
-  const letters = (i: number) => {
-    let s = "";
-    for (let n = i; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
-    return s;
-  };
-  if (!header || !values.length) return { columns: Array.from({ length: width }, (_, i) => letters(firstCol + i)), rows: values };
-  const taken = new Set<string>();
-  const columns = Array.from({ length: width }, (_, i) => {
-    const base = String(values[0][i] ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || letters(firstCol + i).toLowerCase();
-    let name = base;
-    for (let n = 2; taken.has(name); n++) name = `${base}_${n}`;
-    taken.add(name);
-    return name;
-  });
-  return { columns, rows: values.slice(1) };
-}
-

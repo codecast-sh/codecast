@@ -50,7 +50,7 @@ export function CheckMark({ check, onClick, size = 16 }: { check: dashboard.Chec
     <button
       type="button"
       data-check={check.state}
-      data-export-skip={check.state === "loading" || check.state === "refreshing" ? "" : undefined}
+      data-export-skip
       onClick={(e) => {
         e.stopPropagation();
         onClick?.();
@@ -164,7 +164,7 @@ export const ChartBody = memo(function ChartBody({ b, env, height = 220, compact
   if (ev.state === "unbound") return <BindSource height={height} onBind={env.onBind && (() => env.onBind!(b.key))} />;
   if (ev.state === "problem") return <BlockEmpty height={height} text={ev.problem} tone="red" />;
   if (!ev.x.length || ev.series.every((s) => s.values.every((v) => !v))) return <BlockEmpty height={height} text={env.scope ? "Nothing in this view" : "Nothing recorded in this window"} />;
-  return <SizedChart ev={ev} b={b} height={height} compact={compact} revealMs={revealMs} annotate={annotate} slotOf={b.series ? env.slotOf : undefined} onPoint={env.onPoint && ((x, series) => env.onPoint!(b.key, x, series))} />;
+  return <SizedChart ev={ev} b={b} height={height} compact={compact} revealMs={revealMs} annotate={annotate} slotOf={b.series ? env.slotOf : measureSlot(result)} onPoint={env.onPoint && ((x, series) => env.onPoint!(b.key, x, series))} />;
 });
 
 /** The chart with its width bucketed (narrow or not), so a resize redraws only when the layout it picks changes. */
@@ -346,4 +346,20 @@ export function TextBody({ b, env }: { b: ArtifactElement; env: BlockEnv }) {
       <LiveText text={text} env={env} />
     </div>
   );
+}
+
+/** A value column keeps its color by where it sits in the source, so turning one off never repaints another. */
+const measureSlots = new WeakMap<DataResult, (name: string) => number | undefined>();
+function measureSlot(result: DataResult | undefined): ((name: string) => number | undefined) | undefined {
+  if (!result) return undefined;
+  let f = measureSlots.get(result);
+  if (!f) {
+    const numeric = result.columns.filter((_, i) => result.rows.some((r) => typeof r[i] === "number"));
+    f = (name) => {
+      const i = numeric.indexOf(name);
+      return i < 0 ? undefined : i;
+    };
+    measureSlots.set(result, f);
+  }
+  return f;
 }

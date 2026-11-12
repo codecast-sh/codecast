@@ -36,7 +36,7 @@ export function filterWords(search: string): string[] {
     const col = k.slice(2);
     const vals = params.getAll(k).filter(Boolean);
     if (!vals.length) continue;
-    out.push(col === "day" || col === "date" ? dateLabel(vals[0]) : vals.join(" or "));
+    out.push(col === "day" || col === "date" ? dateLabel(vals[0]) : `${col.charAt(0).toUpperCase()}${col.slice(1).replace(/_/g, " ")}: ${vals.join(" or ")}`);
   }
   return out;
 }

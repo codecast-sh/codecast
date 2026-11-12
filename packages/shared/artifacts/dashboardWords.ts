@@ -13,7 +13,10 @@ export function kpiPartText(ev: KpiEval, part: TokenPart): string {
   if (!ev.delta) return "";
   if (part === "delta") return ev.delta.display;
   if (part === "vs") return ev.delta.against;
-  return ev.delta.dir === "flat" ? "flat" : `${ev.delta.dir} ${ev.delta.display.replace(/^[+−±]/, "")}`;
+  if (ev.delta.dir === "flat") return "flat";
+  // From a tiny base, where the number came from says more than a percent.
+  if (Math.abs(ev.delta.base) < 10) return `${ev.delta.dir} from ${ev.delta.base}`;
+  return `${ev.delta.dir} ${ev.delta.display.replace(/^[+−±]/, "")}`;
 }
 
 /** A text block's pieces: literal text, and {b_key} / {b_key.delta} references to a KPI's live value. */
@@ -55,10 +58,10 @@ export function typedNumbers(text: string): string[] {
 
 // ── directions stated in words ──
 
-const UP_WORDS = /^(rose|rise[sn]?|rising|gr[eo]w[sn]?|growing|increas(e[sd]?|ing)|climb(s|ed|ing)?|jump(s|ed|ing)?|surg(e[sd]?|ing)|soar(s|ed|ing)?|gain(s|ed|ing)?|higher|doubl(e[sd]?|ing)|tripl(e[sd]?|ing)|spik(e[sd]|ing)|accelerat(e[sd]?|ing))$/i;
-const DOWN_WORDS = /^(f[ae]ll[sn]?|falling|fallen|drop(s|ped|ping)?|declin(e[sd]?|ing)|decreas(e[sd]?|ing)|shr[aiu]nk(s|ing)?|slip(s|ped|ping)?|slid(es|ing)?|plung(e[sd]?|ing)|plummet(s|ed|ing)?|dip(s|ped|ping)?|lower|halv(e[sd]?|ing)|sank|sink(s|ing)?|slow(s|ed|ing)|cool(s|ed|ing))$/i;
+const UP_WORDS = /^(rose|rise[sn]?|rising|gr[eo]w[sn]?|growing|increas(e[sd]?|ing)|climb(s|ed|ing)?|jump(s|ed|ing)?|surg(e[sd]?|ing)|soar(s|ed|ing)?|gain(s|ed|ing)?|doubl(e[sd]?|ing)|tripl(e[sd]?|ing)|spik(e[sd]|ing)|accelerat(e[sd]?|ing))$/i;
+const DOWN_WORDS = /^(f[ae]ll[sn]?|falling|fallen|drop(s|ped|ping)?|declin(e[sd]?|ing)|decreas(e[sd]?|ing)|shr[aiu]nk(s|ing)?|slip(s|ped|ping)?|slid(es|ing)?|plung(e[sd]?|ing)|plummet(s|ed|ing)?|dip(s|ped|ping)?|halv(e[sd]?|ing)|sank|sink(s|ing)?|slow(s|ed|ing)|cool(s|ed|ing))$/i;
 // "up" and "down" claim a direction only next to a measurement: "spend is up 12%", "down from last week", "is up." Never "set up" or "follow up on".
-const UP_DOWN_NEXT = /^(\u0000|[$+−-]?\d|from|on|vs|versus|over|since|compared|against|again|sharply|slightly|$)/i;
+const UP_DOWN_NEXT = /^(\u0000|[$+−-]?\d|from|on|vs|versus|over|since|than|compared|against|again|sharply|slightly|by|$)/i;
 
 export type DirectionWord = { word: string; dir: "up" | "down" };
 
@@ -86,7 +89,8 @@ function clauseDirections(words: readonly string[]): DirectionWord[] {
     if (!word) return;
     if (UP_WORDS.test(word)) out.push({ word, dir: "up" });
     else if (DOWN_WORDS.test(word)) out.push({ word, dir: "down" });
-    else if (/^(up|down)$/i.test(word) && UP_DOWN_NEXT.test(words[i + 1] ?? "")) out.push({ word, dir: word.toLowerCase() as "up" | "down" });
+    // "up", "down", "higher", "lower" claim a direction only beside a measurement ("higher than", "up 12%"), never in "higher priority" or "lower bound".
+    else if (/^(up|down|higher|lower)$/i.test(word) && UP_DOWN_NEXT.test(words[i + 1] ?? "")) out.push({ word, dir: /^(up|higher)$/i.test(word) ? "up" : "down" });
   });
   return out;
 }
@@ -96,7 +100,7 @@ export function directionWords(text: string): DirectionWord[] {
   return clauses(text).flatMap((c) => clauseDirections(c.words));
 }
 
-export type TextProblem = { kind: "contradicts" | "typed"; detail: string };
+export type TextProblem = { kind: "contradicts" | "typed" | "unknown"; detail: string };
 
 /**
  * Where words and data disagree. A clause that says "rose" about a KPI whose
@@ -105,6 +109,12 @@ export type TextProblem = { kind: "contradicts" | "typed"; detail: string };
  */
 export function textProblems(text: string, kpi: (key: string) => { title?: string; ev: KpiEval } | undefined): TextProblem[] {
   const out: TextProblem[] = [];
+  // A token naming no KPI, or a part the page can't draw, prints raw to every reader.
+  for (const m of text.matchAll(/\{([^{}]*)\}/g)) {
+    const ok = m[1].match(/^(b_[A-Za-z0-9_]+)(?:\.(value|delta|trend|vs))?$/);
+    if (!ok) out.push({ kind: "unknown", detail: `{${m[1]}} is not a live value` });
+    else if (!kpi(ok[1])) out.push({ kind: "unknown", detail: `{${m[1]}} names no KPI on this dashboard` });
+  }
   const typed = typedNumbers(text);
   if (typed.length) out.push({ kind: "typed", detail: `${typed.join(", ")} ${typed.length === 1 ? "is" : "are"} typed, not read from a source` });
   for (const c of clauses(text)) {

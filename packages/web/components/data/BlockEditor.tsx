@@ -29,7 +29,13 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
   const sample = result?.rows.find((r) => r.some((v) => v !== null && v !== undefined)) ?? [];
   const numeric = columns.filter((_, i) => typeof sample[i] === "number");
   const labels = columns.filter((_, i) => typeof sample[i] !== "number");
-  const kpis = [...env.blocks.values()].filter((b) => b.kind === "kpi" && b.key !== block.key).sort((a, b) => Number(a.order ?? 0) - Number(b.order ?? 0));
+  // Grouped, a table has the group, its summed numbers and a row count; sorting picks among those.
+  const tableCols = typeof block.group === "string" && block.group ? [block.group, ...numeric, "rows"] : columns;
+  const kpis = [...env.blocks.values()].filter((b) => b.kind === "kpi").sort((a, b) => Number(a.order ?? 0) - Number(b.order ?? 0));
+  const preview = (key: string, part: dashboard.TokenPart) => {
+    const k = env.blocks.get(key);
+    return k ? dashboard.kpiPartText(dashboard.evaluateKpi(k as dashboard.KpiBlock, resultFor(env.results, k), env.scope), part) : "";
+  };
   const q = dashboard.blockQuery(block);
   return (
     <PanelShell
@@ -42,7 +48,7 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
       }
     >
       {block.kind !== "text" ? <TextField label="Title" value={block.title} onCommit={(v) => set({ title: v || null })} /> : null}
-      {block.kind === "text" ? <LiveTextField label="Text" value={block.text} kpis={kpis} multiline holdKey={`${docId}:${block.key}:text`} onCommit={(v) => set({ text: v })} /> : <TextField label="Caption" value={block.caption} onCommit={(v) => set({ caption: v || null })} />}
+      {block.kind === "text" ? <LiveTextField label="Text" value={block.text} kpis={kpis} preview={preview} multiline holdKey={`${docId}:${block.key}:text`} onCommit={(v) => set({ text: v })} /> : <TextField label="Caption" value={block.caption} onCommit={(v) => set({ caption: v || null })} />}
 
       {block.kind === "kpi" || block.kind === "chart" || block.kind === "table" ? (
         <>
@@ -51,14 +57,14 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
             <>
               <Row>
                 <Select label="Value" value={block.agg ?? (block.field ? "sum" : "count")} options={dashboard.KPI_AGGS} onChange={(v) => set({ agg: v })} />
-                <Select label="of" value={block.field} options={columns} empty="–" onChange={(v) => set({ field: v || null, ...(v ? { format: formatFor(v) } : {}) })} />
+                <Select label="of" value={block.field} options={columns} empty="–" onChange={(v) => set({ field: v || null, ...(v && formatFor(v) !== (block.format ?? "number") ? { format: formatFor(v) } : {}) })} />
               </Row>
               {block.agg === "top" ? <Select label="Named by" value={block.label} options={columns} empty="auto" onChange={(v) => set({ label: v || null })} /> : null}
               <Select label="Format" value={block.format ?? "number"} options={FORMATS} onChange={(v) => set({ format: v })} />
               <Select label="Compare to" value={block.compare} options={["halves", "prev", ...columns]} labels={{ halves: "the window's earlier half", prev: "the previous row" }} empty="nothing" onChange={(v) => set({ compare: v || null })} />
               {block.compare ? <Select label="Good when" value={block.good} options={["up", "down"]} empty="neutral" onChange={(v) => set({ good: v || null })} /> : null}
               {!q ? <TextField label="Typed value (not verified)" value={block.value === undefined ? undefined : String(block.value)} onCommit={(v) => set({ value: v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : v })} /> : null}
-              {q ? <AlertFields block={block} onSet={(alert) => set({ alert })} /> : null}
+              {q ? <AlertFields block={block} result={result} onSet={(alert) => set({ alert })} /> : null}
             </>
           ) : null}
           {block.kind === "chart" ? (
@@ -68,7 +74,7 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
                 <Select label="X" value={block.x} options={labels.length ? labels : columns} empty="first" onChange={(v) => set({ x: v || null })} />
                 <Select label="Series" value={block.series} options={labels.filter((c) => c !== (block.x ?? columns[0]))} empty="none" onChange={(v) => set({ series: v || null, ...(v && String(block.y ?? "").includes(",") ? { y: String(block.y).split(",")[0] } : {}) })} />
               </Row>
-              <SeriesPicker value={block.y} options={numeric} single={!!block.series} onChange={(v) => set({ y: v, ...(v ? { format: formatFor(v.split(",")[0]) } : {}) })} />
+              <SeriesPicker value={block.y} options={numeric} single={!!block.series} onChange={(v) => set({ y: v, ...(v && formatFor(v.split(",")[0]) !== (block.format ?? "number") ? { format: formatFor(v.split(",")[0]) } : {}) })} />
               <Row>
                 <Select label="Format" value={block.format ?? "number"} options={FORMATS} onChange={(v) => set({ format: v })} />
               </Row>
@@ -80,9 +86,10 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
           ) : null}
           {block.kind === "table" ? (
             <>
+              <Select label="One row per" value={block.group} options={labels} empty="source row" onChange={(v) => set({ group: v || null, columns: null, sort: v ? "-rows" : null })} />
               <TextField label="Columns" placeholder="all, or a,b,c" value={block.columns} onCommit={(v) => set({ columns: v || null })} />
               <Row>
-                <Select label="Sort" value={block.sort} options={columns.flatMap((c) => [`-${c}`, c])} labels={Object.fromEntries(columns.flatMap((c) => [[`-${c}`, `${c} ↓`], [c, `${c} ↑`]]))} empty="source order" onChange={(v) => set({ sort: v || null })} />
+                <Select label="Sort" value={block.sort} options={tableCols.flatMap((c) => [`-${c}`, c])} labels={Object.fromEntries(tableCols.flatMap((c) => [[`-${c}`, `${c} ↓`], [c, `${c} ↑`]]))} empty="source order" onChange={(v) => set({ sort: v || null })} />
                 <TextField label="Limit" value={block.limit === undefined ? undefined : String(block.limit)} onCommit={(v) => set({ limit: v && Number(v) > 0 ? Number(v) : null })} />
               </Row>
             </>
@@ -96,9 +103,9 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
       <Select label="Width" value={String(dashboard.blockSpan(block))} options={dashboard.SPANS.map(String)} labels={{ "3": "quarter", "4": "third", "6": "half", "8": "two thirds", "12": "full" }} onChange={(v) => set({ span: Number(v) })} />
 
       <Field label="In a story">
-        <LiveTextField label="Story title" value={block.say_title} kpis={kpis} holdKey={`${docId}:${block.key}:say_title`} onCommit={(v) => set({ say_title: v || null })} />
+        <LiveTextField label="Story title" value={block.say_title} kpis={kpis} preview={preview} holdKey={`${docId}:${block.key}:say_title`} onCommit={(v) => set({ say_title: v || null })} />
         <div className="h-2" />
-        <LiveTextField label="Story line" value={block.say} kpis={kpis} multiline holdKey={`${docId}:${block.key}:say`} onCommit={(v) => set({ say: v || null })} />
+        <LiveTextField label="Story line" value={block.say} kpis={kpis} preview={preview} multiline holdKey={`${docId}:${block.key}:say`} onCommit={(v) => set({ say: v || null })} />
         <label className="mt-2 flex items-center gap-2 text-sm text-sol-text-secondary">
           <input type="checkbox" checked={block.in_story !== false} onChange={(e) => set({ in_story: e.target.checked ? null : false })} className="accent-[var(--sol-blue)]" />
           Show in stories
@@ -216,24 +223,52 @@ function SeriesPicker({ value, options, single, onChange }: { value: unknown; op
 }
 
 /** Notify me when this number goes above or below a line. Empty both to stop. The alert fires whenever the number is read: while the page is open, or on the dashboard's schedule. */
-function AlertFields({ block, onSet }: { block: ArtifactElement; onSet: (alert: Json) => void }) {
+function AlertFields({ block, result, onSet }: { block: ArtifactElement; result: ReturnType<typeof resultFor>; onSet: (alert: Json) => void }) {
   const me = useInboxStore((s: any) => (s.currentUser?._id ? String(s.currentUser._id) : undefined));
   const alert = dashboard.readAlert(block);
+  // Editing someone else's alert keeps it theirs: changing a line never moves who hears it.
+  const owner = alert?.by ?? me;
+  // Lines are typed the way the tile shows the number: "20K", "$1.5M", "15" on a percent tile meaning 15%.
+  const percent = block.format === "percent";
+  const parse = (v: string): number | undefined | null => {
+    const t = v.trim().replace(/[$,\s%]/g, "");
+    if (!t) return undefined;
+    const m = t.match(/^(-?\d*\.?\d+)([kmb])?$/i);
+    if (!m) return null;
+    const n = Number(m[1]) * (m[2] ? { k: 1e3, m: 1e6, b: 1e9 }[m[2].toLowerCase() as "k" | "m" | "b"] : 1);
+    return percent ? n / 100 : n;
+  };
+  const shownLine = (n: number | undefined) => (n === undefined ? undefined : percent ? String(Math.round(n * 1e6) / 1e4) : String(n));
   const write = (side: "above" | "below", v: string) => {
-    const n = v.trim() === "" ? undefined : Number(v.replace(/[$,\s]/g, ""));
-    if (n !== undefined && !Number.isFinite(n)) return;
+    const n = parse(v);
+    if (n === null) return;
     const next = { ...(alert ?? {}), [side]: n };
     const above = next.above;
     const below = next.below;
-    onSet(above === undefined && below === undefined ? null : { ...(above !== undefined ? { above } : {}), ...(below !== undefined ? { below } : {}), ...(me ? { by: me } : {}) });
+    onSet(above === undefined && below === undefined ? null : { ...(above !== undefined ? { above } : {}), ...(below !== undefined ? { below } : {}), ...(owner ? { by: owner } : {}) });
   };
-  const num = (v: string) => (v.trim() === "" || Number.isFinite(Number(v.replace(/[$,\s]/g, ""))) ? null : "A number");
+  const check = (side: "above" | "below") => (v: string) => {
+    const n = parse(v);
+    if (n === null) return "A number, like 20K";
+    // An upper line under the lower one would always be alerting.
+    const other = side === "above" ? alert?.below : alert?.above;
+    if (n !== undefined && other !== undefined && (side === "above" ? n < other : n > other)) return side === "above" ? "Above sits under Below" : "Below sits over Above";
+    return null;
+  };
+  const ev = dashboard.evaluateKpi(block as dashboard.KpiBlock, result);
+  const state = dashboard.alertState(block, result);
+  const now = ev.state === "ok" ? `now ${ev.display}` : "–";
   return (
-    <Field label="Alert me when it goes">
+    <Field label="Alert when it goes">
       <Row>
-        <TextField label="Above" value={alert?.above} placeholder="–" validate={num} onCommit={(v) => write("above", v)} />
-        <TextField label="Below" value={alert?.below} placeholder="–" validate={num} onCommit={(v) => write("below", v)} />
+        <TextField label={percent ? "Above (%)" : "Above"} value={shownLine(alert?.above)} placeholder={now} validate={check("above")} onCommit={(v) => write("above", v)} />
+        <TextField label={percent ? "Below (%)" : "Below"} value={shownLine(alert?.below)} placeholder={now} validate={check("below")} onCommit={(v) => write("below", v)} />
       </Row>
+      <div className="flex flex-wrap gap-x-2 text-meta text-sol-text-dim tabular-nums" data-alert-status>
+        {ev.state === "ok" ? <span>Now {ev.display}</span> : null}
+        {alert ? <span>· notifies {!alert.by || alert.by === me ? "you" : "the person who set it"}</span> : null}
+        {state && state.state !== "ok" ? <span className="text-sol-red">· past the line now: an alert goes out on the next read</span> : null}
+      </div>
     </Field>
   );
 }

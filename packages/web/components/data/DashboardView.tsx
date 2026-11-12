@@ -14,13 +14,14 @@ import { useLiveElements } from "../live/useLiveArtifact";
 import { pickAskTarget, sendAsk, useAskDraft, useClaimAsk } from "../live/askAgent";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useInboxStore } from "../../store/inboxStore";
-import { resultFor, useDashboardFeed, useDataResults, useRerun, type DataResult } from "../../hooks/useDashboardData";
+import { useDashboardFeed, useDataResults, useRerun } from "../../hooks/useDashboardData";
 import { CheckMark, type BlockEnv } from "./blocks";
 import { blockCheck } from "./blockCheck";
 import { DashboardGrid, FormatBody } from "./DashboardGrid";
 import { DashboardToolbar, type Freshness, type PanelKind } from "./DashboardToolbar";
 import { CheckPanel, PanelShell, type CheckPoint } from "./CheckPanel";
 import { DashboardFilters } from "./DashboardFilters";
+import { seriesSlots } from "./seriesSlots";
 import { filterWords, useDashboardScope } from "../../hooks/useDashboardScope";
 import { canvasBlob, pdfFromCanvas, renderPng } from "./exportDashboard";
 import { SourcesPanel } from "./SourcesPanel";
@@ -220,6 +221,8 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
       return;
     }
     if (e.key === "Escape" && (panel || selected)) {
+      // This Esc closes something here; nothing above (the shell, the docs list) may act on it too.
+      e.preventDefault();
       e.stopPropagation();
       if (panel) setPanelState(null);
       else select(null);
@@ -279,24 +282,6 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
   );
 }
 
-/**
- * One color slot per split value across the whole dashboard, given in reading
- * order: the first chart's people take the first colors, and a person seen
- * again in a later chart keeps theirs. Value columns ("opened", "merged")
- * are not people; they keep the palette's order.
- */
-function seriesSlots(blocks: readonly ArtifactElement[], results: Map<string, DataResult>): (name: string) => number | undefined {
-  // Sorted by name, so a person's color never depends on which query answered first.
-  const names = new Set<string>();
-  for (const b of blocks) {
-    if (b.kind !== "chart" || typeof b.series !== "string") continue;
-    const r = resultFor(results, b);
-    const i = r ? r.columns.indexOf(b.series) : -1;
-    if (r && i >= 0) for (const row of r.rows) if (row[i] !== null && row[i] !== undefined) names.add(String(row[i]));
-  }
-  const slots = new Map([...names].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" })).map((n, i) => [n, i]));
-  return (name) => slots.get(name);
-}
 
 const ADD: Array<{ kind: dashboard.BlockKind; label: string; icon: typeof Hash }> = [
   { kind: "kpi", label: "KPI", icon: Hash },

@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { artifactView, type ArtifactElement } from "./index";
 import {
   chartPointRows,
+  DASHBOARD_TEMPLATES,
   alertLine,
+  blockQuery,
   alertState,
   checkBlock,
   readSchedule,
@@ -456,7 +458,7 @@ describe("dashboard filters", () => {
     const tasks = result(["assignee", "count"], [["ada", 3], ["bo", 1]]);
     const solo = result(["day", "agent", "n"], [["2026-11-07", "claude", 1]]);
     expect(filterDimensions([spend, tasks, solo, undefined])).toEqual([
-      { column: "day", kind: "time", values: [] },
+      { column: "day", kind: "time", values: [], first: "2026-11-07", last: "2026-11-10", days: 4 },
       { column: "person", kind: "category", values: ["ada", "bo"] },
       { column: "assignee", kind: "category", values: ["ada", "bo"] },
     ]);
@@ -574,5 +576,94 @@ describe("badly written blocks", () => {
     expect(ev.state === "ok" && ev.series.map((s) => s.name)).toEqual(["opened", "merged"]);
     expect(evaluateTable({ query: q, columns: 5 as any, sort: {} as any, limit: "x" as any }, daily).state).toBe("problem");
     expect(evaluateKpi({ query: q, field: ["opened"] as any, where: "bad" as any }, daily)).toMatchObject({ state: "ok", value: 4 });
+  });
+});
+
+describe("changes on a tiny base", () => {
+  test("3 to 19 reads in counts and where it came from, not +533%", () => {
+    const daily = result(["day", "n"], [["d1", 1], ["d2", 2], ["d3", 9], ["d4", 10]]);
+    const ev = evaluateKpi({ query: q, field: "n", compare: "halves" }, daily);
+    expect(ev.state === "ok" && [ev.delta?.display, kpiPartText(ev, "trend")]).toEqual(["+16", "up from 3"]);
+  });
+});
+
+describe("period-comparing KPIs", () => {
+  const days = Array.from({ length: 8 }, (_, i) => [`2026-11-0${i + 1}`, i + 1]);
+  const kpi = el("b_n", "kpi", { query: { source: "usage", args: { days: 4 } }, field: "n", compare: "halves" });
+  test("the query reads twice the window; the value is the window, and the change is against the window before it", () => {
+    expect(blockQuery(kpi)?.args).toEqual({ days: 8 });
+    const ev = evaluateKpi(kpi as any, result(["day", "n"], days));
+    // Nov 5-8 = 26, Nov 1-4 = 10.
+    expect(ev.state === "ok" && [ev.value, ev.delta?.caption, ev.delta?.against]).toEqual([26, "+16 vs prior 4d", "the prior 4 days"]);
+  });
+  test("a block that doesn't compare periods reads what it asked for", () => {
+    expect(blockQuery({ ...kpi, compare: "prev" })?.args).toEqual({ days: 4 });
+    expect(blockQuery({ kind: "chart", query: { source: "usage", args: { days: 4 } } })?.args).toEqual({ days: 4 });
+  });
+});
+
+describe("unknown tokens are caught on read too", () => {
+  test("a text naming no KPI, or a part the page can't draw, is broken; the story check lists them", () => {
+    const kpi = (k: string) => (k === "b_spend" ? { title: "Spend", ev: { state: "ok", value: 1, display: "1", used: [], how: "" } as any } : undefined);
+    expect(checkBlock("text", { text: "Spend is {b_spnd}" }, undefined, NOW, { kpi })).toMatchObject({ state: "broken", label: "Names no value" });
+    expect(checkBlock("text", { text: "Spend {b_spend.dleta}" }, undefined, NOW, { kpi })?.detail).toMatch(/is not a live value/);
+    expect(storyProblems({ headline: "{b_spend.trnd}", summary: "{b_nope} so far" }, [], kpi).map((p) => p.kind)).toEqual(["unknown", "unknown"]);
+  });
+});
+
+describe("a period KPI's window", () => {
+  const days = Array.from({ length: 9 }, (_, i) => [`2026-11-0${i + 1}`, i + 1]);
+  const kpi = el("b_n", "kpi", { query: { source: "usage", args: { days: 4 } }, field: "n", compare: "halves" });
+  const daily = result(["day", "n"], days, { refreshed_at: Date.UTC(2026, 10, 9, 15) });
+  test("ends on the newest day, today included, so it counts the same days as the charts beside it", () => {
+    const ev = evaluateKpi(kpi as any, daily);
+    // Nov 6-9 = 30, against Nov 2-5 = 14.
+    expect(ev.state === "ok" && [ev.value, ev.delta?.value]).toEqual([30, 16]);
+  });
+  test("a dashboard date filter longer than the window is clamped to it, never widening what the number counts", () => {
+    const wide = evaluateKpi(kpi as any, daily, { day: { gte: "2026-01-01", lte: "2026-11-09" } });
+    expect(wide.state === "ok" && wide.value).toBe(30);
+    const narrow = evaluateKpi(kpi as any, daily, { day: { gte: "2026-11-08", lte: "2026-11-09" } });
+    // Nov 8-9 = 17, against Nov 6-7 = 13.
+    expect(narrow.state === "ok" && [narrow.value, narrow.delta?.value]).toEqual([17, 4]);
+  });
+});
+
+
+describe("chart limits", () => {
+  test("a split chart over its limit keeps the largest series and gathers the rest as Other", () => {
+    const ev = evaluateChart({ query: q, x: "day", y: "spend", series: "person", limit: 1 }, spend);
+    expect(ev.state === "ok" && ev.series.map((s) => [s.name, s.values.reduce<number>((a, v) => a + (v ?? 0), 0)])).toEqual([["ada", 8.5], ["Other", 0.85]]);
+  });
+});
+
+describe("grouped tables", () => {
+  test("one row per person, numbers summed, a row count; the check points at every source row", () => {
+    const ev = evaluateTable({ query: q, group: "person", sort: "-spend" }, spend);
+    expect(ev.state === "ok" && [ev.columns, ev.rows, ev.used.length]).toEqual([["person", "tokens", "spend", "rows"], [["ada", 600, 8.5, 3], ["bo", 80, 0.85, 3]], 6]);
+    expect(evaluateTable({ query: q, group: "team" }, spend)).toMatchObject({ state: "problem" });
+  });
+});
+
+describe("direction words in context", () => {
+  test("higher and lower count only beside a measurement", () => {
+    expect(directionWords("Higher priority work and a lower bound, then double-check.")).toEqual([]);
+    expect(directionWords("Spend is higher than last week, and sessions are lower by 3.").map((d) => d.dir)).toEqual(["up", "down"]);
+  });
+});
+
+describe("starter dashboards", () => {
+  test("each template builds blocks whose words pass the same checks an agent's writes do", () => {
+    for (const t of DASHBOARD_TEMPLATES) {
+      const ops = t.ops();
+      expect(ops.length).toBeGreaterThan(3);
+      const view = artifactView("dashboard", t.label, ops.map((o: any) => el(o.k, o.put.kind, o.put)));
+      for (const o of ops as any[]) {
+        if (o.put.kind === "text") expect(() => dashboardSpec.verbs!.text.run(view, [o.put.text])).not.toThrow();
+        if (o.put.query) expect(blockQuery(o.put)).not.toBeNull();
+      }
+      // Fresh keys each time: two dashboards from one template share nothing.
+      expect(t.ops()[0].k).not.toBe(ops[0].k);
+    }
   });
 });

@@ -82,9 +82,10 @@ export function chartOption(ev: ChartOk, t: ChartTheme, look: ChartLook = {}): E
     const unit = top >= 1e9 ? { d: 1e9, s: "B" } : top >= 1e6 ? { d: 1e6, s: "M" } : top >= 1e4 ? { d: 1e3, s: "K" } : null;
     const rankFmt = (v: unknown) => {
       if (typeof v !== "number" || !unit) return fmtFull(v);
-      const x = v / unit.d;
-      const n = x !== 0 && Math.abs(x) < 0.1 ? "<0.1" : x.toFixed(1).replace(/\.0$/, "");
-      return ev.format === "usd" ? `$${n}${unit.s}` : `${n}${unit.s}`;
+      const cur = ev.format === "usd" ? "$" : "";
+      // Under one unit, the amount reads plainly: "$600", "<$100", never "$0.6K".
+      if (Math.abs(v) < unit.d) return Math.abs(v) < 100 && v !== 0 ? `<${cur}100` : `${cur}${Math.round(v / 10) * 10}`;
+      return `${cur}${(v / unit.d).toFixed(1).replace(/\.0$/, "")}${unit.s}`;
     };
     const s = ev.series[0];
     const n = ev.x.length;
@@ -163,6 +164,9 @@ export function chartOption(ev: ChartOk, t: ChartTheme, look: ChartLook = {}): E
           data: s.values,
           stack: stacked ? "total" : undefined,
           barMaxWidth: 28,
+          // Dense days need fat bars: a month of two series in a third of a row must not draw as hairlines.
+          barCategoryGap: ev.x.length > 14 ? "12%" : "30%",
+          barGap: "6%",
           itemStyle: { color, borderRadius: stacked ? (i === ev.series.length - 1 ? [3, 3, 0, 0] : 0) : [3, 3, 0, 0] },
           emphasis: { focus: "series" as const },
           ...peak,

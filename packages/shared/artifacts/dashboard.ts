@@ -15,6 +15,7 @@ import { readAlert, readSchedule } from "./dashboardWatch";
 export * from "./dashboardData";
 export * from "./dashboardWatch";
 export * from "./dashboardStory";
+export * from "./dashboardTemplates";
 
 export const BLOCK_KINDS = ["kpi", "chart", "table", "text", "section"] as const;
 export type BlockKind = (typeof BLOCK_KINDS)[number];
@@ -379,11 +380,11 @@ const verbs: ArtifactSpec["verbs"] = {
   },
   table: {
     summary: "Add or update a table of a source's rows",
-    usage: `table <doc> --source tasks --args '{"view":"assignee"}' [--columns a,b] [--sort -count] [--limit 10] ${BLOCK_FLAGS}`,
+    usage: `table <doc> --source tasks --args '{"view":"assignee"}' [--group person] [--columns a,b] [--sort -count] [--limit 10] ${BLOCK_FLAGS}`,
     run(view, args) {
       const f = parseFlags(args, ["first"]);
       const fields = commonFields(f);
-      for (const name of ["columns", "sort"]) {
+      for (const name of ["columns", "sort", "group"]) {
         const v = flagText(f, name);
         if (v !== undefined) fields[name] = v;
       }

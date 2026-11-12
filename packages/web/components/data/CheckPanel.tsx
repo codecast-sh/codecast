@@ -92,7 +92,8 @@ export function CheckPanel({ docId, block, env, onClose, canRerun = true, point 
               {result?.workspace ? <WorkspaceChip workspace={result.workspace} /> : null}
             </div>
             {q.source === "sheet" && typeof q.args?.doc === "string" ? <SheetLink id={q.args.doc} range={typeof q.args.range === "string" ? q.args.range : undefined} /> : null}
-            <div className="text-meta text-sol-text-muted break-words">{result?.query_text?.replace(/; in the (team|publisher's personal) workspace$/, "") ?? "Not read yet"}</div>
+            {/* A sheet is already named by its link above; the reader's own words would only repeat it with a raw id. */}
+            {q.source !== "sheet" ? <div className="text-meta text-sol-text-muted break-words">{result?.query_text?.replace(/; in the (team|publisher's personal) workspace$/, "") ?? "Not read yet"}</div> : !result?.refreshed_at ? <div className="text-meta text-sol-text-muted">Not read yet</div> : null}
             {result?.refreshed_at ? (
               <div className="text-meta text-sol-text-dim mt-0.5">
                 Read {dashboard.ago(env.now - result.refreshed_at)} · every {Math.round(result.refresh_ms / 60_000)}m
@@ -100,8 +101,11 @@ export function CheckPanel({ docId, block, env, onClose, canRerun = true, point 
             ) : null}
           </Field>
 
-          <Field label="Query">
-            <pre className="text-meta leading-5 font-mono text-sol-text-secondary bg-sol-bg-alt/60 rounded-md px-2.5 py-2 whitespace-pre-wrap break-all">{JSON.stringify({ source: q.source, args: q.args ?? {} }, null, 1)}</pre>
+          <details className="group" data-check-query>
+            <summary className="cursor-pointer list-none text-meta text-sol-text-dim hover:text-sol-text select-none">
+              <span className="inline-block transition-transform group-open:rotate-90">›</span> Query
+            </summary>
+            <pre className="mt-1 text-meta leading-5 font-mono text-sol-text-secondary bg-sol-bg-alt/60 rounded-md px-2.5 py-2 whitespace-pre-wrap break-all">{JSON.stringify({ source: q.source, args: q.args ?? {} }, null, 1)}</pre>
             <button
               type="button"
               onClick={() => navigator.clipboard.writeText(cli).then(() => toast.success("Copied"))}
@@ -109,7 +113,7 @@ export function CheckPanel({ docId, block, env, onClose, canRerun = true, point 
             >
               <Copy className="w-3 h-3" /> Copy as cast command
             </button>
-          </Field>
+          </details>
 
           {canRerun ? <div className="flex items-center gap-2">
             <button

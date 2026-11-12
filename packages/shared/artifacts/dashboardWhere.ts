@@ -101,16 +101,27 @@ export function num(v: unknown): number | null {
 export const FILTER_COLUMNS = ["person", "author", "agent", "project", "repository", "assignee", "status", "kind", "source", "model", "group"] as const;
 const DATE_COLUMNS = ["day", "date"];
 
-export type FilterDimension = { column: string; kind: "time" | "category"; values: string[] };
+/** One filter a dashboard can offer. A date filter knows the days the sources hold (`days`, counted the way the filter counts them), so it never offers a range the data can't fill. */
+export type FilterDimension = { column: string; kind: "time" | "category"; values: string[]; first?: string; last?: string; days?: number };
 
 /** The filters a dashboard can offer: a date range when a source has days, and each shared category with its values. */
 export function filterDimensions(results: readonly (DataResult | undefined)[]): FilterDimension[] {
   const values = new Map<string, Map<string, number>>();
   let time: string | null = null;
+  // The narrowest span every dated source covers: a "last 90 days" is only true if each source reaches back that far.
+  let first = "";
+  let last = "";
   for (const r of results) {
     if (!r) continue;
     r.columns.forEach((c, i) => {
-      if (DATE_COLUMNS.includes(c)) time ??= c;
+      if (DATE_COLUMNS.includes(c)) {
+        time ??= c;
+        const days = r.rows.map((row) => String(row[i] ?? "")).filter((d) => /^\d{4}-\d\d-\d\d$/.test(d)).sort();
+        if (days.length) {
+          if (!first || days[0] > first) first = days[0];
+          if (!last || days[days.length - 1] > last) last = days[days.length - 1];
+        }
+      }
       if (!(FILTER_COLUMNS as readonly string[]).includes(c)) return;
       const m = values.get(c) ?? new Map<string, number>();
       for (const row of r.rows) {
@@ -120,7 +131,8 @@ export function filterDimensions(results: readonly (DataResult | undefined)[]): 
       values.set(c, m);
     });
   }
-  const out: FilterDimension[] = time ? [{ column: time, kind: "time", values: [] }] : [];
+  const span = first && last ? Math.round((Date.parse(`${last}T00:00:00Z`) - Date.parse(`${first}T00:00:00Z`)) / 86_400_000) + 1 : undefined;
+  const out: FilterDimension[] = time ? [{ column: time, kind: "time", values: [], ...(first ? { first, last, days: span } : {}) }] : [];
   for (const c of FILTER_COLUMNS) {
     const m = values.get(c);
     if (m && m.size > 1) out.push({ column: c, kind: "category", values: [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([v]) => v) });

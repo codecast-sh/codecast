@@ -75,7 +75,7 @@ export function downloadChartPng(key: string, name: string, head: { title?: stri
   const css = getComputedStyle(document.documentElement);
   const bg = css.getPropertyValue("--sol-card").trim() || "#fff";
   const width = chart.getWidth();
-  const LEGEND_ROOM = 44;
+  const LEGEND_ROOM = 24;
   const height = chart.getHeight() + LEGEND_ROOM;
   const host = document.createElement("div");
   host.style.cssText = `position:fixed;left:-20000px;top:0;width:${width}px;height:${height}px`;
@@ -122,4 +122,12 @@ export function downloadChartPng(key: string, name: string, head: { title?: stri
     host.remove();
   }
   return true;
+}
+
+/** Clear every chart's hover state (tooltip, highlight) so a picture never freezes one. */
+export function clearChartHover(): void {
+  for (const chart of charts.values()) {
+    chart.dispatchAction({ type: "hideTip" });
+    chart.dispatchAction({ type: "downplay" });
+  }
 }

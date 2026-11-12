@@ -631,7 +631,17 @@ export const cliCheck = internalAction({
       } else if (b.kind === "table") {
         const ev = evaluateTable(b as any, result);
         value = ev.state === "ok" ? ev.how : ev.state === "problem" ? ev.problem : "";
-      } else if (b.kind === "text") value = String(b.text ?? "").slice(0, 80);
+      } else if (b.kind === "text") {
+        // The sentence as readers see it, live values filled in, so an agent checks the words, not the template.
+        value = dashboard
+          .parseText(String(b.text ?? ""))
+          .map((p) => ("text" in p ? p.text : (() => {
+            const k = kpi(p.ref);
+            return k ? dashboard.kpiPartText(k.ev, p.part) : `{${p.ref}}`;
+          })()))
+          .join("")
+          .slice(0, 160);
+      }
       return { key: b.key, kind: b.kind, title: b.title ?? null, value, check: check ?? null };
     });
     const lines = out.map((o) => `${o.check ? MARK[o.check.state] ?? " " : " "} ${o.key} ${o.kind}${o.title ? ` "${o.title}"` : ""}  ${o.value}${o.check && o.check.state !== "verified" ? `  [${o.check.label}${o.check.detail ? `: ${o.check.detail}` : ""}]` : ""}`);

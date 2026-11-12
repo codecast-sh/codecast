@@ -7,7 +7,8 @@ import { dashboard, type ArtifactElement } from "@codecast/shared/artifacts";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useDashboardFeed, useDataResults } from "../../hooks/useDashboardData";
 import { DashboardGrid, FormatBody } from "./DashboardGrid";
-import { CheckPanel } from "./CheckPanel";
+import { CheckPanel, type CheckPoint } from "./CheckPanel";
+import { seriesSlots } from "./seriesSlots";
 import { DashboardFilters } from "./DashboardFilters";
 import { useDashboardScope } from "../../hooks/useDashboardScope";
 import type { BlockEnv } from "./blocks";
@@ -19,13 +20,16 @@ export default function SharedDashboard({ doc, elements, shareToken }: { doc: { 
   useDashboardFeed(doc._id, blocks, { canWant: true, shareToken });
   const results = useDataResults(doc._id);
   const now = useCoarseNow(15_000);
-  const [check, setCheck] = useState<string | null>(null);
-  const onCheck = useCallback((k: string) => setCheck(k), []);
+  // The check drawer, opened on a block or on one chart point's rows, the same as in the app.
+  const [check, setCheck] = useState<{ key: string; point?: CheckPoint } | null>(null);
+  const onCheck = useCallback((key: string) => setCheck({ key }), []);
+  const onPoint = useCallback((key: string, x: string, series?: string) => setCheck({ key, point: { x, ...(series !== undefined ? { series } : {}) } }), []);
+  const slotOf = useMemo(() => seriesSlots(blocks, results), [blocks, results]);
   // A filtered view travels in its link (?f.day=30d&f.person=ada): the shared page opens on the same rows, and its readers can change them.
   const filter = useDashboardScope(now);
   const scope = layout.format === "dashboard" ? filter.scope : undefined;
   const dims = useMemo(() => dashboard.filterDimensions([...dashboard.dashboardQueries(blocks).keys()].map((k) => results.get(k))), [blocks, results]);
-  const env: BlockEnv = useMemo(() => ({ results, blocks: byKey, now, scope, onCheck }), [results, byKey, now, scope, onCheck]);
+  const env: BlockEnv = useMemo(() => ({ results, blocks: byKey, now, scope, slotOf, onCheck, onPoint }), [results, byKey, now, scope, slotOf, onCheck, onPoint]);
   const noop = useCallback(() => {}, []);
   // The byline speaks for the whole page: the oldest read among the queries it shows.
   const latest = useMemo(() => {
@@ -49,7 +53,7 @@ export default function SharedDashboard({ doc, elements, shareToken }: { doc: { 
       </div>
       {check ? (
         <aside className="fixed right-0 top-0 bottom-0 w-[min(360px,100vw)] border-l border-sol-border/40 bg-sol-bg shadow-xl z-40">
-          <CheckPanel docId={doc._id} block={byKey.get(check)} env={env} onClose={() => setCheck(null)} canRerun={false} />
+          <CheckPanel key={`${check.key}|${check.point?.x ?? ""}|${check.point?.series ?? ""}`} docId={doc._id} block={byKey.get(check.key)} env={env} point={check.point} onClose={() => setCheck(null)} canRerun={false} />
         </aside>
       ) : null}
     </div>

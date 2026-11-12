@@ -12,8 +12,8 @@ export function DashboardFilters({ dims, value, values, set, clear }: { dims: da
   if (!dims.length) return null;
   const any = dims.some((d) => value(d.column));
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-1.5" data-dashboard-filters data-export-skip>
-      {dims.map((d) => (d.kind === "time" ? <DateChip key={d.column} spec={value(d.column)} onSet={(v) => set(d.column, v)} /> : <CategoryChip key={d.column} dim={d} chosen={values(d.column)} onSet={(v) => set(d.column, v)} />))}
+    <div className="sticky top-0 z-10 -mx-2 mb-3 px-2 py-2 flex flex-wrap items-center gap-1.5 bg-sol-bg/95 backdrop-blur-sm" data-dashboard-filters data-export-skip>
+      {dims.map((d) => (d.kind === "time" ? <DateChip key={d.column} dim={d} spec={value(d.column)} onSet={(v) => set(d.column, v)} /> : <CategoryChip key={d.column} dim={d} chosen={values(d.column)} onSet={(v) => set(d.column, v)} />))}
       {any ? (
         <button type="button" onClick={clear} className="h-7 px-2 rounded-md text-xs text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt">
           Clear
@@ -26,8 +26,12 @@ export function DashboardFilters({ dims, value, values, set, clear }: { dims: da
 const chipCls = (on: boolean) =>
   `inline-flex items-center gap-1.5 h-7 max-w-[260px] pl-2 pr-1.5 rounded-md border text-xs transition-colors ${on ? "border-sol-blue/50 bg-sol-blue/10 text-sol-text" : "border-sol-border/60 text-sol-text-muted hover:text-sol-text hover:border-sol-border"}`;
 
-function DateChip({ spec, onSet }: { spec: string; onSet: (v: string | null) => void }) {
+function DateChip({ dim, spec, onSet }: { dim: dashboard.FilterDimension; spec: string; onSet: (v: string | null) => void }) {
   const [open, setOpen] = useState(false);
+  // A range longer than the sources hold would show the same days under a bigger label.
+  const held = dim.days;
+  const tooLong = (s: string) => !!held && /^\d+d$/.test(s) && Number(s.slice(0, -1)) > held;
+  const over = tooLong(spec);
   const m = spec.match(/^(\d{4}-\d\d-\d\d)?\.\.(\d{4}-\d\d-\d\d)?$/);
   const from = m?.[1] ?? "";
   const to = m?.[2] ?? "";
@@ -37,7 +41,7 @@ function DateChip({ spec, onSet }: { spec: string; onSet: (v: string | null) => 
       <PopoverTrigger asChild>
         <button type="button" className={chipCls(!!spec)} data-filter-chip="date">
           <Calendar className="w-3.5 h-3.5 shrink-0" />
-          <span className="truncate">{spec ? dateLabel(spec) : "All dates"}</span>
+          <span className="truncate">{spec ? (over ? `All ${held} days` : dateLabel(spec)) : "All dates"}</span>
           <ChevronDown className="w-3 h-3 shrink-0 opacity-60" />
         </button>
       </PopoverTrigger>
@@ -46,24 +50,26 @@ function DateChip({ spec, onSet }: { spec: string; onSet: (v: string | null) => 
           <button
             key={p.spec}
             type="button"
+            disabled={tooLong(p.spec)}
             onClick={() => {
               onSet(p.spec || null);
               setOpen(false);
             }}
-            className="w-full flex items-center gap-2 h-7 px-2 rounded text-left text-xs text-sol-text hover:bg-sol-bg-alt"
+            className="w-full flex items-center gap-2 h-7 px-2 rounded text-left text-xs text-sol-text hover:bg-sol-bg-alt disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
           >
             <span className="w-3.5">{spec === p.spec ? <Check className="w-3.5 h-3.5 text-sol-blue" /> : null}</span>
             {p.label}
           </button>
         ))}
+        {held ? <div className="px-2 pt-1 text-meta text-sol-text-dim tabular-nums" data-days-held>Sources hold {held} days</div> : null}
         <div className="mt-1 pt-1.5 border-t border-sol-border/50 grid grid-cols-2 gap-1.5 px-1 pb-1">
           <label className="space-y-0.5">
             <span className="text-meta text-sol-text-dim">From</span>
-            <input type="date" value={from} max={to || undefined} onChange={(e) => custom(e.target.value, to)} className="w-full h-7 rounded-md bg-sol-bg border border-sol-border/60 px-1 text-xs text-sol-text outline-none focus:border-sol-blue" />
+            <input type="date" value={from} min={dim.first} max={to || dim.last} onChange={(e) => custom(e.target.value, to)} className="w-full h-7 rounded-md bg-sol-bg border border-sol-border/60 px-1 text-xs text-sol-text outline-none focus:border-sol-blue" />
           </label>
           <label className="space-y-0.5">
             <span className="text-meta text-sol-text-dim">To</span>
-            <input type="date" value={to} min={from || undefined} onChange={(e) => custom(from, e.target.value)} className="w-full h-7 rounded-md bg-sol-bg border border-sol-border/60 px-1 text-xs text-sol-text outline-none focus:border-sol-blue" />
+            <input type="date" value={to} min={from || dim.first} max={dim.last} onChange={(e) => custom(from, e.target.value)} className="w-full h-7 rounded-md bg-sol-bg border border-sol-border/60 px-1 text-xs text-sol-text outline-none focus:border-sol-blue" />
           </label>
         </div>
       </PopoverContent>
@@ -90,6 +96,11 @@ function CategoryChip({ dim, chosen, onSet }: { dim: dashboard.FilterDimension; 
       <PopoverContent align="start" className="w-56 p-1.5">
         {dim.values.length > 8 ? (
           <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder={`Find ${name.toLowerCase()}`} aria-label={`Find ${name.toLowerCase()}`} className="mb-1 w-full h-7 rounded-md bg-sol-bg border border-sol-border/60 px-2 text-xs text-sol-text outline-none focus:border-sol-blue" />
+        ) : null}
+        {chosen.length ? (
+          <button type="button" onClick={() => onSet([])} className="w-full flex items-center h-7 px-2 mb-1 rounded text-left text-xs text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt" data-filter-clear>
+            Any {name.toLowerCase()}
+          </button>
         ) : null}
         <div className="max-h-64 overflow-y-auto">
           {shown.map((v) => (

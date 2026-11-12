@@ -14,6 +14,7 @@ import { resultFor } from "../../hooks/useDashboardData";
 import { filterWords } from "../../hooks/useDashboardScope";
 import { blockRows, downloadChartPng, downloadCsv, fileName, hasChart } from "./exportBlock";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { ErrorBoundary } from "../ErrorBoundary";
 
 const SPAN_LABEL: Record<number, string> = { 3: "¼", 4: "⅓", 6: "½", 8: "⅔", 12: "1" };
 
@@ -156,6 +157,8 @@ const Cell = memo(function Cell({ b, drawn, env, edit, selected, fresh, dropSide
       {fresh ? <span key={String(b.rev)} className="data-flash" aria-hidden /> : null}
       {dropSide ? <span className={`data-drop data-drop-${drawn === 12 ? (dropSide === "after" ? "below" : "above") : dropSide}`} /> : null}
 
+      {/* One block that can't draw says so in its own place; the rest of the dashboard stays. */}
+      <ErrorBoundary key={String(b.rev)} name={`DashboardBlock:${b.kind}`} level="inline" silent fallback={({ error }) => <div className="p-1 text-meta text-sol-red break-words" data-block-error>This block can't be drawn: {error.message}</div>}>
       {b.kind === "section" ? (
         <div className="pt-4 pb-1">
           <h2 className="text-[17px] font-semibold text-sol-text">{String(b.title ?? "Section")}</h2>
@@ -164,6 +167,7 @@ const Cell = memo(function Cell({ b, drawn, env, edit, selected, fresh, dropSide
       ) : b.kind === "text" ? (
         <div className="py-1 pr-8">
           <TextBody b={b} env={env} />
+          <TextScopeTag b={b} env={env} />
           {check ? (
             <span className="absolute top-1.5 right-1.5">
               <CheckMark check={check} onClick={() => env.onCheck?.(b.key)} />
@@ -188,6 +192,7 @@ const Cell = memo(function Cell({ b, drawn, env, edit, selected, fresh, dropSide
           {b.kind === "table" ? <div className="mt-2"><TableBody b={b} env={env} /></div> : null}
         </>
       )}
+      </ErrorBoundary>
 
       {edit ? (
         <div data-export-skip className={`data-chrome absolute -top-3 right-3 z-10 flex items-center gap-px rounded-md border border-sol-border/60 bg-sol-bg shadow-sm ${selected ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"}`}>
@@ -254,7 +259,7 @@ function BlockExport({ b, env }: { b: ArtifactElement; env: BlockEnv }) {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button type="button" onClick={(e) => e.stopPropagation()} aria-label="Download" title="Download" className={`inline-flex items-center justify-center w-7 h-7 -m-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt shrink-0 ${open ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`} data-block-export>
+        <button type="button" onClick={(e) => e.stopPropagation()} aria-label="Download" title="Download" className={`inline-flex items-center justify-center w-7 h-7 -m-1.5 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt shrink-0 ${open ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"}`} data-block-export data-export-skip>
           <Download className="w-3.5 h-3.5" />
         </button>
       </PopoverTrigger>
@@ -301,5 +306,22 @@ export function FormatBody({ title, layout, elements, env, children, onBackgroun
       <DashboardHeading title={layout.headline && layout.headline !== title ? layout.headline : byline ? title : undefined} summary={layout.summary} env={env} byline={byline} />
       {children}
     </div>
+  );
+}
+
+/** Under a dashboard filter, a sentence whose live values don't all narrow to it says so: it may mix one person's spend with the team's PRs. */
+function TextScopeTag({ b, env }: { b: ArtifactElement; env: BlockEnv }) {
+  if (!env.scope) return null;
+  const refs = [...new Set(dashboard.parseText(String(b.text ?? "")).flatMap((p) => ("ref" in p ? [p.ref] : [])))];
+  const loose = refs.filter((k) => {
+    const kb = env.blocks.get(k);
+    return kb && dashboard.scopeMissing(resultFor(env.results, kb), env.scope).length > 0;
+  });
+  if (!loose.length) return null;
+  const names = loose.map((k) => String(env.blocks.get(k)?.title || k)).join(", ");
+  return (
+    <span className="mt-1 inline-block h-5 px-1.5 rounded bg-sol-bg-alt text-meta leading-5 text-sol-text-dim" title={`${names} can't take this filter, so the sentence mixes filtered and unfiltered numbers`} data-text-scope>
+      Partly filtered: {names} unfiltered
+    </span>
   );
 }

@@ -2,7 +2,7 @@
 // declaration and the reader registry, refusal of anything the publisher
 // cannot read, the refresh lease a crowd of viewers shares, and the data
 // route answering only past the page's own gates.
-import { describe, expect, test } from "bun:test";
+import { describe, expect, jest, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { httpRouter } from "convex/server";
 import schema from "./schema";
@@ -163,10 +163,18 @@ describe("refresh on read", () => {
 describe("the data route", () => {
   async function withQuery(patch: Record<string, unknown>) {
     const ctx = await setup();
-    await ctx.t.mutation(internal.pageData.replaceQueries, {
-      slug: "dashslug01", owner: ctx.owner, version: 1,
-      set_json: setJson(`team:${ctx.team}`, [{ query_id: "done", position: 0, reader: "tasks", args_json: "{}", query_text: "tasks by status", refresh_ms: 3_600_000 }]),
-    });
+    // replaceQueries schedules a first refresh of the new query. Run it to completion before planting the fixture's
+    // answer, so nothing can land afterwards and overwrite it, however the machine schedules the timer.
+    jest.useFakeTimers();
+    try {
+      await ctx.t.mutation(internal.pageData.replaceQueries, {
+        slug: "dashslug01", owner: ctx.owner, version: 1,
+        set_json: setJson(`team:${ctx.team}`, [{ query_id: "done", position: 0, reader: "tasks", args_json: "{}", query_text: "tasks by status", refresh_ms: 3_600_000 }]),
+      });
+      await ctx.t.finishAllScheduledFunctions(() => jest.runAllTimers());
+    } finally {
+      jest.useRealTimers();
+    }
     await ctx.t.run(async (c) => {
       const row = (await c.db.query("page_queries").first())!;
       await c.db.patch(row._id, { result_json: JSON.stringify({ columns: ["status", "tasks"], rows: [["done", 3]] }), refreshed_at: Date.now(), lease_until: undefined });
