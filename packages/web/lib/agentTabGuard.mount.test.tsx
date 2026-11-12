@@ -33,7 +33,6 @@ const restoreGlobals = replaceGlobals({
 const { createRoot } = await import("react-dom/client");
 const { DecisionAnswerControls } = await import("../components/decisions/DecisionAnswerControls");
 const { MaskedField } = await import("../components/secrets/parts");
-const { AskFirst } = await import("../components/secrets/SecretDetail");
 
 afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 beforeEach(() => sessionStorage.clear());
@@ -162,32 +161,5 @@ describe("an Ask first secret's value", () => {
     await act(async () => { m.reveal.click(); });
     expect(m.loads()).toBe(1);
     m.unmount();
-  });
-});
-
-describe("the Ask first switch", () => {
-  const row: any = { _id: "s-zz", short_id: "sec-zz", name: "zz-guard", kind: "key", workspace: "user:u1", status: "ready", created_at: 0, updated_at: 0 };
-  const sw = (c: HTMLElement) => c.querySelector("[role=switch]") as HTMLButtonElement;
-
-  test("in an agent's tab, on cannot be turned off, and says a person does it", async () => {
-    stamp();
-    const { container, unmount } = await mount(<AskFirst row={{ ...row, ask_first: true }} team={null} />);
-    expect(sw(container).disabled).toBe(true);
-    expect(container.querySelector("[data-vault-held]")!.getAttribute("aria-label")).toBe(PERSON_ONLY.askFirstOff);
-    unmount();
-  });
-
-  test("in an agent's tab, off can still be turned on", async () => {
-    stamp();
-    const { container, unmount } = await mount(<AskFirst row={{ ...row, ask_first: false }} team={null} />);
-    expect(sw(container).disabled).toBe(false);
-    expect(container.querySelector("[data-vault-held]")).toBeNull();
-    unmount();
-  });
-
-  test("in a person's tab, on can be turned off", async () => {
-    const { container, unmount } = await mount(<AskFirst row={{ ...row, ask_first: true }} team={null} />);
-    expect(sw(container).disabled).toBe(false);
-    unmount();
   });
 });

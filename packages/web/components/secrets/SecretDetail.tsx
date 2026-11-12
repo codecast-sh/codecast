@@ -5,7 +5,7 @@
 // first, previous values with Restore, who used it from which session, and Delete.
 
 import { useMemo, useRef, useState, type ReactNode } from "react";
-import { ChevronLeft, ChevronRight, Fingerprint, Loader2, Lock, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Lock, X } from "lucide-react";
 import { envNameIssue, isExpiring, siteProblem, type EnvNameIssue, type FilePayload, type KeyPayload, type LoginPayload, type SecretMeta, type SecretMetaEdit, type SecretVersionMeta, type SigninPayload } from "@codecast/shared/contracts/secrets";
 import { peopleOf } from "@codecast/shared/team/memberKind";
 import { useInboxStore } from "../../store/inboxStore";
@@ -15,7 +15,6 @@ import { formatRelativeTime, formatFullTimestamp } from "../../lib/conversationF
 import { EntityIdPill } from "../EntityIdPill";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { KeyCap } from "../KeyCap";
-import { Switch } from "../ui/switch";
 import { PERSON_ONLY, useAgentDrivenTab } from "../../lib/agentTabGuard";
 import { FieldProblem, KindGlyph, MaskedField, ReplaceButton, RevealButton, Row, ScopeMark, TotpCode, type Replace } from "./parts";
 import { KIND } from "../../lib/secretLook";
@@ -24,7 +23,7 @@ import { useReveal } from "../../hooks/useReveal";
 import { entityRoute } from "@codecast/shared/entities";
 import { ShareControl } from "../ShareControl";
 import { DeclineRequest, ValueEditor } from "./ValueForm";
-import { askFirstOffLedger, deleteLedger, restoreLedger, rotateLedger, type LedgerTeam } from "../../lib/secretLedgers";
+import { deleteLedger, restoreLedger, rotateLedger, type LedgerTeam } from "../../lib/secretLedgers";
 import { EVENT_TONE, EVENT_VERB, HEALTH, envVars, formatIn, isStub, nameIssue, namesIn, isStaged, secretHealth, splitList, withPendingAskFirst } from "./vaultModel";
 import { modernButton } from "../ui/modernLook";
 
@@ -303,40 +302,6 @@ function Versions({ row, team }: { row: SecretMeta; team: LedgerTeam }) {
   );
 }
 
-/** Ask first: on is one press; off removes a guard, so it goes through the confirm and then Touch ID. */
-export function AskFirst({ row, team }: { row: SecretMeta; team: LedgerTeam }) {
-  const { setAskFirst } = useVaultActions();
-  const saving = !!useAskFirstLock(row._id);
-  const [reviewing, setReviewing] = useState(false);
-  const on = !!row.ask_first;
-  // An agent's tab may turn the guard on, never off.
-  const agentTab = useAgentDrivenTab();
-  const held = on && agentTab ? PERSON_ONLY.askFirstOff : undefined;
-  return (
-    <Row label="Ask first">
-      <span className="flex items-center gap-2 pt-0.5" title={held ?? (on ? "Turn off with Touch ID" : undefined)}>
-        <Switch checked={on} onCheckedChange={(next) => (next ? setAskFirst(row._id, true) : setReviewing(true))} disabled={isStub(row) || !!held} aria-label="Ask first" aria-busy={saving || undefined} />
-        <span className={`whitespace-nowrap text-[12px] ${on ? "text-sol-cyan" : "text-sol-text-dim"}`} data-vault-ask-first={on ? "on" : "off"}>
-          {on ? "On · per session" : "Off"}
-        </span>
-        {on && !held && <Fingerprint size={12} className="shrink-0 text-sol-text-dim" aria-label="Turning it off asks for Touch ID" data-vault-ask-first-gated />}
-        {held && <Lock size={12} className="shrink-0 text-sol-text-dim" aria-label={held} data-vault-held />}
-        {saving && <Loader2 size={12} className="shrink-0 animate-spin text-sol-text-dim motion-reduce:animate-none" aria-label="Saving" data-vault-ask-first-saving />}
-      </span>
-      {reviewing && (
-        <SwitchReview
-          ledger={askFirstOffLedger(row, team)}
-          onClose={() => setReviewing(false)}
-          onConfirm={() => {
-            setReviewing(false);
-            setAskFirst(row._id, false);
-          }}
-        />
-      )}
-    </Row>
-  );
-}
-
 /** The value fields for a ready secret, per kind; `replace` goes on the field that holds the value. */
 function Fields({ row, replace }: { row: SecretMeta; replace?: Replace }) {
   const gated = !!row.ask_first;
@@ -545,7 +510,6 @@ export function SecretDetail({ row, rows, team, over, onClose }: { row: SecretMe
           <Row label="Note">
             <InlineText value={row.note ?? ""} label="Note" multiline placeholder="What it is for" onSave={(note) => edit({ note })} className="-ml-1 block min-h-0 resize-none px-1 py-0.5 text-[12.5px] leading-[18px] text-sol-text" />
           </Row>
-          {row.status === "ready" && <AskFirst row={row} team={ledgerTeam} />}
           {(row.version_count ?? 0) > 0 && <Versions row={row} team={ledgerTeam} />}
         </section>
 
