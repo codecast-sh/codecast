@@ -336,6 +336,11 @@ export default defineSchema({
     ...cloudSessionSyncFields,
     team_share_paths: v.optional(v.array(v.string())),
     muted_members: v.optional(v.array(v.id("users"))),
+    // Projects and folders (a session's git_root, else project_path) whose
+    // sessions ring nobody here unless a session's own setting says otherwise
+    // (lib/sessionWatch.ts).
+    muted_projects: v.optional(v.array(v.id("projects"))),
+    muted_folders: v.optional(v.array(v.string())),
     team_conversations_last_seen: v.optional(v.number()),
     cli_version: v.optional(v.string()),
     cli_platform: v.optional(v.string()),
@@ -969,6 +974,14 @@ export default defineSchema({
     // Mirrors the web idle-sound's notified-keys map so one episode pushes
     // once but each new turn can push again.
     needs_input_notified_key: v.optional(v.string()),
+    // The waiting episode last announced to the session's subscribers
+    // (sessionWatch.notifyNeedsInputWatchers), same shape as the key above.
+    watch_notified_key: v.optional(v.string()),
+    // "Every message" subscribers hear a session in coalesced batches
+    // (sessionWatch.flushWatchedActivity): the open batch's flush time, and the
+    // last message time a flush covered.
+    watch_flush_due_at: v.optional(v.number()),
+    watch_flushed_at: v.optional(v.number()),
     // The settle episode that last woke whoever this session reports to: a
     // hand's role (org-roles-standing.md T3), or a spawned worker's parent
     // (workerSettle.ts), so one settle tells once, not once per check.
@@ -4810,6 +4823,8 @@ export default defineSchema({
       // waiting inside the window. Names no conversation on purpose — it
       // points at the inbox, not at one session out of several.
       v.literal("sessions_need_input"),
+      // New messages in a session the recipient subscribed to every message of.
+      v.literal("session_activity"),
       // A teammate opened one of their machines to a team you are on, so you
       // can now start sessions there (devices.performSetDeviceShares).
       v.literal("device_shared"),
@@ -5178,6 +5193,8 @@ export default defineSchema({
         items: v.array(v.object({ label: v.string(), lines: v.array(v.string()), note: v.optional(v.string()) })),
       })),
     })),
+    // An Ask first read of a secret with Touch ID on (secrets.ts askFirstGate): its Approve confirms with a passkey.
+    touch_id: v.optional(v.boolean()),
     // true = the agent ended its turn and is parked on this answer.
     // false = advisory: the agent proceeded with default_option and the
     // human's answer can override it later.
@@ -6367,6 +6384,8 @@ export default defineSchema({
     has_otp: v.optional(v.boolean()),
     // Ask first: an agent's read needs a person's approval per session (secret_approvals).
     ask_first: v.optional(v.boolean()),
+    // Touch ID: revealing it, approving an Ask first read of it and turning a guard off take a passkey.
+    touch_id: v.optional(v.boolean()),
     // How many previous values secret_versions holds for it, kept by every write that moves one.
     version_count: v.optional(v.number()),
   })
@@ -8652,6 +8671,9 @@ export default defineSchema({
     // retroactive sweep. Membership rules (thread inbox) read this; identity
     // alone never implies attention.
     via: v.optional(v.union(v.literal("human"), v.literal("agent"))),
+    // A conversation only: how loudly this person hears the session
+    // (lib/sessionWatch.ts). Separate from `muted`, which is thread following.
+    notify: v.optional(v.union(v.literal("all"), v.literal("needs_input"), v.literal("muted"))),
     muted: v.boolean(),
     created_at: v.number(),
   })

@@ -110,6 +110,12 @@ describe("hrefs", () => {
     expect(filePathHref("/tmp/x.png", undefined, ctx)).toBe(filesHref({ localPath: "/tmp/x.png" }));
   });
 
+  test("a link carries the conversation it was written in, so the page can ask that machine", () => {
+    const ctx = { base: "/Users/ashot/src/family", home: "/Users/ashot", conversationId: "conv1" };
+    expect(filePathHref("x-growth/daily/2026-11-12.md", undefined, ctx)).toBe("/files?path=%2FUsers%2Fashot%2Fsrc%2Ffamily%2Fx-growth%2Fdaily%2F2026-11-12.md&conv=conv1");
+    expect(parseFilePathHref(filePathHref("a.md", 3, ctx))).toEqual({ path: "/Users/ashot/src/family/a.md", line: 3 });
+  });
+
   test("a mention written relative to somewhere else resolves to the path the session touched", () => {
     const home = "/Users/ashot";
     const knownPaths = namedAbsolutePaths(
