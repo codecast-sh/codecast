@@ -58,7 +58,7 @@ const RECOVERY: Record<ComputerErrorCode, string[]> = {
   ],
   permission_denied: [
     "Run `cast computer permissions` to read the grants; it reports and shows nothing on screen.",
-    "To grant, ask the human first: `cast computer permissions --open-settings --id accessibility` takes the front.",
+    "A missing grant puts the setup card under this command: the person grants it from there. Never ask them to run a command.",
     "A token or peer failure means the helper belongs to another user or another launch: rerun the command, which relaunches it.",
   ],
   element_not_found: [
@@ -86,11 +86,11 @@ const RECOVERY: Record<ComputerErrorCode, string[]> = {
   ],
   screenshot_failed: [
     "If the tree is enough, rerun with `--no-screenshot`.",
-    "If the message names Screen Recording, `cast computer permissions --open-settings --id screenshots` opens the pane — it takes the front, so ask the human first.",
+    "If the message names Screen Recording, the setup card under this command walks the person through the grant.",
   ],
   accessibility_error: [
     "Run `cast computer capabilities`.",
-    "If the message names Accessibility, `cast computer permissions --open-settings --id accessibility` opens the pane — it takes the front, so ask the human first.",
+    "If the message names Accessibility, the setup card under this command walks the person through the grant.",
     "If it names the helper app, run `cast doctor`.",
     "Do not loop while availability is unchanged.",
   ],
