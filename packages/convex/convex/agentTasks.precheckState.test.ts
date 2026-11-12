@@ -119,3 +119,12 @@ test("a changes gate on a trigger that fires once is refused: it would only ever
   await expect(insertTask(ctx, "users_one" as any, { title: "t", prompt: "p", schedule_type: "once", run_at: Date.now() + 60_000, precheck: "git rev-parse HEAD", precheck_mode: "changes" } as any)).rejects.toThrow("needs a trigger that fires more than once");
   await expect(applyTaskUpdate(ctx, task, { schedule_type: "once", run_at: Date.now() + 60_000 }, { userId: "users_one", source: "cli" } as any)).rejects.toThrow("needs a trigger that fires more than once");
 });
+
+// ct-92447: a monitor's prechecks almost always skip, so lost leases piled up across days and the third retired it.
+test("a recorded skip is a healthy firing: earlier lost leases stop counting", async () => {
+  const { ctx, task, args, skip } = await fixture("changes");
+  task.retry_count = 2;
+  await (claimTask as any)._handler(ctx, args);
+  await (skipTaskRun as any)._handler(ctx, { ...skip, reason: "precheck output unchanged" });
+  expect(task.retry_count).toBe(0);
+});

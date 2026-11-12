@@ -748,34 +748,62 @@ describe("runs already going never hold due triggers (ct-92447)", () => {
     }
   });
 
-  it("paces fresh agents per poll, leaving the rest due, without starving injects behind them", async () => {
-    const due = [spawnTask("s1"), spawnTask("s2"), spawnTask("s3"), { ...spawnTask("inj"), originating_conversation_id: "conv1" }];
+  // 2026-11-12: on a lossy link every backend call ran near its 60s timeout, a serial poll took 8-15 min, and the
+  // guard against overlapping polls held every later tick behind it: tr-4693 went overdue, a one-shot never fired.
+  it("a slow run start holds only itself: the next tick starts the rest", async () => {
+    const due = [spawnTask("slow"), spawnTask("next")];
     const { scheduler } = makeScheduler(due);
     const started: string[] = [];
-    scheduler.executeTask = async (t: any) => {
-      started.push(t._id);
-      return !t.originating_conversation_id;
-    };
-    await scheduler.poll();
-    expect(started).toEqual(["s1", "s2", "inj"]);
-  });
-
-  it("a tick that lands while a poll still waits on prechecks skips instead of racing it", async () => {
-    const { scheduler } = makeScheduler([spawnTask("s1")]);
     let release!: () => void;
-    let runs = 0;
-    scheduler.executeTask = () => {
-      runs++;
-      if (runs > 1) return Promise.resolve(false);
-      return new Promise<boolean>((r) => (release = () => r(false)));
+    scheduler.executeTask = (t: any) => {
+      started.push(t._id);
+      if (t._id === "slow") return new Promise<boolean>((r) => (release = () => r(true)));
+      return Promise.resolve(false);
     };
     const first = scheduler.poll();
     await new Promise((r) => setTimeout(r, 0));
+    expect(started).toEqual(["slow", "next"]);
     await scheduler.poll();
-    expect(runs).toBe(1);
+    // "next" finished and is due again; "slow" is still starting and is never started twice.
+    expect(started).toEqual(["slow", "next", "next"]);
     release();
     await first;
-    await scheduler.poll();
-    expect(runs).toBe(2);
+  });
+
+  it("starts at most six runs at once and leaves the rest due", async () => {
+    const due = Array.from({ length: 9 }, (_, i) => spawnTask(`t${i}`));
+    const { scheduler } = makeScheduler(due);
+    const started: string[] = [];
+    const releases: Array<() => void> = [];
+    scheduler.executeTask = (t: any) => {
+      started.push(t._id);
+      return new Promise<boolean>((r) => releases.push(() => r(true)));
+    };
+    const first = scheduler.poll();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(started).toHaveLength(6);
+    releases.forEach((r) => r());
+    await first;
+  });
+
+  it("a queue read that never answers stops holding ticks after two minutes", async () => {
+    const { scheduler } = makeScheduler([]);
+    let reads = 0;
+    scheduler.syncService.getDueTasks = () => {
+      reads++;
+      return reads === 1 ? new Promise(() => {}) : Promise.resolve([]);
+    };
+    const now = spyOn(Date, "now");
+    try {
+      now.mockReturnValue(1_000_000);
+      void scheduler.poll();
+      await scheduler.poll();
+      expect(reads).toBe(1);
+      now.mockReturnValue(1_000_000 + 2 * 60_000);
+      await scheduler.poll();
+      expect(reads).toBe(2);
+    } finally {
+      now.mockRestore();
+    }
   });
 });

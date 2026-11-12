@@ -49,7 +49,7 @@ async function world(overrides: Record<string, any> = {}, tableOverrides: Record
     agent_tasks: [task(overrides)],
     conversations: [
       { _id: OWNER, user_id: USER, session_id: "owner-session", status: "active", owner_device_id: "laptop" },
-      { _id: RUN, user_id: USER, session_id: RUN_UUID, status: "active", short_id: "jx74v0r", agent_task_id: "agent_tasks_owned" },
+      { _id: RUN, _creationTime: NOW - 1000, user_id: USER, session_id: RUN_UUID, status: "active", short_id: "jx74v0r", agent_task_id: "agent_tasks_owned" },
     ],
     devices: [{ _id: "devices_laptop", user_id: USER, device_id: "laptop", is_remote: false, last_seen: NOW - 1000,
       cc_accounts: { profiles: [{ name: "a", usage: { session: { resets_at: NOW + 3_600_000 } } }] } }],
@@ -184,7 +184,7 @@ describe("a recurring spawn run and its parent", () => {
         {
           conversations: [
             { _id: OWNER, user_id: USER, session_id: "owner-session", status: "active", owner_device_id: "laptop", ...extra },
-            { _id: RUN, user_id: USER, session_id: RUN_UUID, status: "active", short_id: "jx74v0r", agent_task_id: "agent_tasks_owned" },
+            { _id: RUN, _creationTime: NOW - 1000, user_id: USER, session_id: RUN_UUID, status: "active", short_id: "jx74v0r", agent_task_id: "agent_tasks_owned" },
           ],
         },
       );
@@ -337,7 +337,7 @@ describe("a lapsed lease on a spawn run", () => {
   const lapsed = (conv: Record<string, any> = {}, agentStatus?: string) => world({ lease_expires_at: NOW - 1 }, {
     conversations: [
       { _id: OWNER, user_id: USER, session_id: "owner-session", status: "active", owner_device_id: "laptop" },
-      { _id: RUN, user_id: USER, session_id: RUN_UUID, status: "active", short_id: "jx74v0r", agent_task_id: "agent_tasks_owned", ...conv },
+      { _id: RUN, _creationTime: NOW - 1000, user_id: USER, session_id: RUN_UUID, status: "active", short_id: "jx74v0r", agent_task_id: "agent_tasks_owned", ...conv },
     ],
     managed_sessions: agentStatus ? [{ _id: "managed_run", user_id: USER, session_id: RUN_UUID, conversation_id: RUN, agent_status: agentStatus }] : [],
   });
@@ -364,6 +364,33 @@ describe("a lapsed lease on a spawn run", () => {
     await reclaim(ctx);
     expect(tables.agent_tasks[0]).toMatchObject({ status: "scheduled", retry_count: 1, run_at: NOW });
     expect(wakes(tables)).toHaveLength(0);
+  });
+
+  // ct-92447 (2026-11-12): on a lossy link a claim's or a skip's answer was lost, the lease lapsed during the precheck,
+  // and the sweep judged it by a run from two days earlier: tr-4820 retired as "Run jx77010 failed", tr-4693 after
+  // three lost firings while its precheck ran fine.
+  test("a lease that lapsed before this firing started a run fires again and never counts toward retiring", async () => {
+    const { ctx, tables } = await lapsed({ _creationTime: NOW - 2 * 86_400_000 }, "stopped");
+    tables.agent_tasks[0].retry_count = 3;
+    tables.agent_tasks[0].firing_claimed_at = NOW - 6 * 60_000;
+    await reclaim(ctx);
+    expect(tables.agent_tasks[0]).toMatchObject({ status: "scheduled", retry_count: 3, run_at: NOW, lease_holder: undefined });
+    // The earlier run is not settled again, and nobody is told this firing failed.
+    expect(wakes(tables)).toHaveLength(0);
+    expect(tables.agent_tasks[0].run_count).toBe(0);
+  });
+
+  test("a run this firing started is still judged by its own conversation", async () => {
+    const { ctx, tables } = await lapsed({ _creationTime: NOW - 60_000 }, "working");
+    tables.agent_tasks[0].firing_claimed_at = NOW - 6 * 60_000;
+    await reclaim(ctx);
+    expect(tables.agent_tasks[0]).toMatchObject({ status: "scheduled", retry_count: 1 });
+  });
+
+  test("the claim stamps when this firing began", async () => {
+    const { ctx, tables } = await world({ status: "scheduled", lease_holder: undefined, lease_expires_at: undefined });
+    await (claimTask as any)._handler(ctx, { api_token: TOKEN, task_id: "agent_tasks_owned", daemon_id: DAEMON });
+    expect(tables.agent_tasks[0].firing_claimed_at).toBe(NOW);
   });
 });
 

@@ -5817,6 +5817,8 @@ export default defineSchema({
     // Denormalized newest precheck skip, same role as last_run_* above: the
     // trigger rows and `cast trigger log` read one row, not the skip history.
     last_precheck_skip_at: v.optional(v.number()),
+    /** When the firing now holding the lease was claimed: a lapsed lease is judged only by a run started after it. */
+    firing_claimed_at: v.optional(v.number()),
     last_precheck_skip_reason: v.optional(v.string()),
     run_count: v.number(),
     created_at: v.number(),

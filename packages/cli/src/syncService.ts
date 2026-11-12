@@ -2629,29 +2629,23 @@ export class SyncService {
 
   // --- Agent Tasks ---
 
+  /** Throws when the backend does not answer, so a failed read is never mistaken for an empty queue. */
   async getDueTasks(limit?: number): Promise<any[]> {
     if (!this.apiToken) return [];
-    try {
-      const result = await this.client.query(
-        "agentTasks:getDueTasks" as any,
-        { api_token: this.apiToken, limit }
-      );
-      return (result as any[]) || [];
-    } catch {
-      return [];
-    }
+    const result = await this.client.query(
+      "agentTasks:getDueTasks" as any,
+      { api_token: this.apiToken, limit }
+    );
+    return (result as any[]) || [];
   }
 
+  /** null when the server refuses the claim; throws when it does not answer (the claim may have landed). */
   async claimTask(taskId: string, daemonId: string): Promise<any> {
     if (!this.apiToken) return null;
-    try {
-      return await this.mutate(
-        "agentTasks:claimTask" as any,
-        { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId }
-      );
-    } catch {
-      return null;
-    }
+    return await this.mutate(
+      "agentTasks:claimTask" as any,
+      { api_token: this.apiToken, task_id: taskId, daemon_id: daemonId }
+    );
   }
 
   /** `cast trigger add --as`: the definition a spawned run launches as. */
@@ -2724,27 +2718,24 @@ export class SyncService {
     precheckMode?: string,
   ): Promise<boolean> {
     if (!this.apiToken) return false;
-    try {
-      const ok = await this.mutate(
-        "agentTasks:skipTaskRun" as any,
-        {
-          api_token: this.apiToken,
-          task_id: taskId,
-          daemon_id: daemonId,
-          command: result.command,
-          exit_code: result.exitCode,
-          timed_out: result.timedOut,
-          duration_ms: result.durationMs,
-          output: result.output,
-          reason,
-          source,
-          ...(precheckState !== undefined ? { precheck_state: precheckState, precheck_mode: precheckMode } : {}),
-        }
-      );
-      return ok as boolean;
-    } catch {
-      return false;
-    }
+    // Throws when the backend does not answer, so the caller can retry before the lease lapses.
+    const ok = await this.mutate(
+      "agentTasks:skipTaskRun" as any,
+      {
+        api_token: this.apiToken,
+        task_id: taskId,
+        daemon_id: daemonId,
+        command: result.command,
+        exit_code: result.exitCode,
+        timed_out: result.timedOut,
+        duration_ms: result.durationMs,
+        output: result.output,
+        reason,
+        source,
+        ...(precheckState !== undefined ? { precheck_state: precheckState, precheck_mode: precheckMode } : {}),
+      }
+    );
+    return ok as boolean;
   }
 
   /** A `changes` or `state` precheck woke this firing: keep its state and

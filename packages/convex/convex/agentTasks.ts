@@ -237,6 +237,21 @@ async function latestRunConversation(ctx: TaskCtx, task: Doc<"agent_tasks">): Pr
   return latest ? stampRunConversation(ctx, task.user_id, task, latest.session_id) : null;
 }
 
+/** The run the firing holding the lease started, or null. A run conversation from before this firing's claim belongs
+ *  to an earlier firing: judging a lapsed lease by it retired healthy triggers on a two-day-old run (ct-92447). A row
+ *  claimed before firing_claimed_at existed falls back to when the previous firing ended. */
+export function runOfCurrentFiring<T extends { _creationTime: number }>(
+  task: Pick<Doc<"agent_tasks">, "firing_claimed_at" | "last_run_at" | "last_precheck_skip_at">,
+  latest: T | null,
+): T | null {
+  const firingBegan = task.firing_claimed_at ?? Math.max(task.last_run_at ?? 0, task.last_precheck_skip_at ?? 0);
+  return latest && latest._creationTime >= firingBegan ? latest : null;
+}
+
+async function firingRunConversation(ctx: TaskCtx, task: Doc<"agent_tasks">): Promise<Doc<"conversations"> | null> {
+  return runOfCurrentFiring(task, await latestRunConversation(ctx, task));
+}
+
 // The run's agent process is gone: the daemon stamps the managed session
 // "stopped" when the process it registered exits (its conversation row keeps
 // no such field). A run never registered is not known to be over.
@@ -1146,6 +1161,7 @@ export const claimTask = mutation({
       status: "running",
       lease_holder: args.daemon_id,
       lease_expires_at: now + LEASE_DURATION_MS,
+      firing_claimed_at: now,
       parked_run_session_uuid: undefined,
       // A message belongs to the run its precheck woke; this firing's gate
       // writes its own (passTaskPrecheck), an ungated one carries none, and a
@@ -1594,6 +1610,8 @@ export const skipTaskRun = mutation({
       ...nextArmingAfterRun(task, now),
       last_precheck_skip_at: now,
       last_precheck_skip_reason: args.reason,
+      // A firing that recorded its skip worked: retries count failures in a row, never across healthy firings.
+      retry_count: 0,
       ...(args.precheck_state !== undefined && sameGate(task, args.command, args.precheck_mode) ? { precheck_state: args.precheck_state } : {}),
       lease_holder: undefined,
       lease_expires_at: undefined,
@@ -2780,13 +2798,27 @@ export const reclaimStaleTasks = internalMutation({
         // limit. Re-firing then spends a whole fresh session on finished
         // work, so a finished run settles as an unreported exit (its owner is
         // told, runOwnerWakeOf) and a parked one re-arms at the reset.
-        const runConv = await latestRunConversation(ctx, task);
-        if (runConv && runIsLimitParked(runConv)) {
+        const runConv = await firingRunConversation(ctx, task);
+        // No run of this firing: its lease lapsed during the claim or the precheck (a lost response on a bad link, a
+        // daemon restart). That firing is lost, not failed: it fires again and never counts toward retiring the
+        // trigger (ct-92447: tr-4693 and tr-4820 retired while their prechecks ran fine).
+        if (!runConv) {
+          await patchTask(ctx, task, {
+            status: "scheduled",
+            ...offCadence(task, now),
+            requested_run_source: task.last_run_source === "manual" ? "manual" : undefined,
+            lease_holder: undefined,
+            lease_expires_at: undefined,
+          });
+          reclaimed++;
+          continue;
+        }
+        if (runIsLimitParked(runConv)) {
           await parkRunAtLimit(ctx, task, runConv, now);
           reclaimed++;
           continue;
         }
-        if (runConv && (await runAgentStopped(ctx, runConv))) {
+        if (await runAgentStopped(ctx, runConv)) {
           await settleRunConversation(ctx, task, runConv, { daemon_id: "reclaim" }, now);
           await patchTask(ctx, task, completedTaskRunFields(task, now, {}, false));
           reclaimed++;

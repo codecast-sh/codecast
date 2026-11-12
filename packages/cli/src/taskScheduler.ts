@@ -24,10 +24,14 @@ const execAsync = (cmd: string, opts?: Record<string, any>) => _execAsync(cmd, {
 
 const POLL_INTERVAL_MS = 30_000;
 const HEARTBEAT_INTERVAL_MS = 60_000;
-/** Fresh agents one poll may start, so a burst of due runs is paced 30s apart. It never counts runs already going: a
- *  cap on live runs let two long ones (a 4h paced X-reply run plus a 45 min one) hold every trigger on the machine,
- *  prechecks and inject runs included, for hours (ct-92447, 2026-11-11). Load is the governor's call (startableDue). */
-const MAX_SPAWNS_PER_POLL = 2;
+/** Due runs being started at once (claim, precheck, then inject or spawn). Each run starts on its own, so one slow
+ *  start holds one place, never the queue: on a lossy link (30-55% packet loss, every backend call near its 60s
+ *  timeout, 2026-11-12) a serial poll took 8-15 min and every trigger behind it waited (ct-92447). A cap on LIVE runs
+ *  is the older form of this mistake: two long runs held every trigger for hours (2026-11-11). Load is the
+ *  governor's call (startableDue). */
+const MAX_STARTING = 6;
+/** The poll itself only reads the queue; past this, a tick treats a still-pending read as lost and reads again. */
+const POLL_STALE_MS = 2 * 60_000;
 /** While the machine is "over", a due run waits for room, but no longer than this: the level holds as long as any
  *  session is confined, so a Mac running hundreds of sessions can stay "over" all day (44 triggers up to 12 hours
  *  late, the Union line's slot governor among them, 2026-10-26). */
@@ -289,8 +293,10 @@ export class TaskScheduler {
   private running = new Map<string, RunningTask>();
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
-  /** A poll waits on prechecks and claims, so it can outlast the interval; the next tick skips rather than racing it. */
-  private polling = false;
+  /** Runs between claim and inject/spawn, so a later tick never starts the same one twice. */
+  private starting = new Set<string>();
+  /** When the in-flight queue read began; a tick skips while it is fresh. */
+  private pollStartedAt: number | null = null;
   private skipLogged = new Set<string>();
   private runsFile: string;
   private adoptable: TrackedRun[];
@@ -349,8 +355,11 @@ export class TaskScheduler {
   }
 
   private async poll(): Promise<void> {
-    if (this.stopped || this.polling) return;
-    this.polling = true;
+    if (this.stopped) return;
+    const now = Date.now();
+    if (this.pollStartedAt !== null && now - this.pollStartedAt < POLL_STALE_MS) return;
+    const startedAt = (this.pollStartedAt = now);
+    const starts: Promise<unknown>[] = [];
 
     try {
       // Over-fetch so ineligible tasks (wrong machine) can't shadow eligible
@@ -359,18 +368,24 @@ export class TaskScheduler {
       if (!dueTasks || dueTasks.length === 0) return;
 
       // At "over" due runs stay due, up to TRIGGER_STARVE_MS (startableDue).
-      const eligible = dueTasks.filter((t) => !this.running.has(t._id) && this.canServeTask(t));
-      let spawned = 0;
+      const eligible = dueTasks.filter((t) => !this.running.has(t._id) && !this.starting.has(t._id) && this.canServeTask(t));
       for (const task of startableDue(eligible, governor.admit("trigger"), Date.now())) {
-        // An inject run only enqueues a turn; it needs no room. A spawn past this poll's budget stays due for the next.
-        if (!task.originating_conversation_id && spawned >= MAX_SPAWNS_PER_POLL) continue;
-        if (await this.executeTask(task)) spawned++;
+        // Past the cap a run stays due for the next tick.
+        if (this.starting.size >= MAX_STARTING) break;
+        this.starting.add(task._id);
+        starts.push(
+          this.executeTask(task)
+            .catch((err) => this.log(`Run start failed for task ${task._id}: ${err instanceof Error ? err.message : String(err)}`, "warn"))
+            .finally(() => this.starting.delete(task._id)),
+        );
       }
     } catch (err) {
       this.log(`Poll error: ${err instanceof Error ? err.message : String(err)}`, "warn");
     } finally {
-      this.polling = false;
+      // The next tick may read the queue now; only the runs this one started are still in flight.
+      if (this.pollStartedAt === startedAt) this.pollStartedAt = null;
     }
+    await Promise.allSettled(starts);
   }
 
   /**
