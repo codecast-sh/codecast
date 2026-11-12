@@ -11,7 +11,8 @@ export type PoolSplit = { user_id: string; name: string; tokens: number };
 export type PoolAccount = {
   _id: string;
   share_key: string;
-  team_id: string;
+  /** null: the owner's personal row, their own machines alone. */
+  team_id: string | null;
   user_id: string;
   contributor_name: string;
   mine: boolean;
