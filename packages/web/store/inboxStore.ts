@@ -4516,11 +4516,11 @@ export function visualOrderSessions(
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
-  // Same order the status view renders: questions, pinned, new, needs input,
+  // Same order the status view renders: pinned, questions, new, needs input,
   // done, working, dormant — the chokepoint's own sections, so the walk and
   // the render can never disagree.
   const sections: Array<[InboxSession[], string]> = [
-    [placed.questions, "questions"], [placed.pinned, "pinned"], [placed.newSessions, "new"],
+    [placed.pinned, "pinned"], [placed.questions, "questions"], [placed.newSessions, "new"],
     [placed.needsInput, "needs_input"], [placed.done, "done"],
     [placed.working, "working"], [placed.dormant, "dormant"],
   ];
