@@ -67,6 +67,20 @@ describe('a call rep posted with the evals key', () => {
     expect(readCallRun(req, run, 1, 5).harnessFailure).toContain('credit balance');
   }, 30_000);
 
+  test('a 200 whose body is cut off mid-read is retried, then a harness failure, never an empty reply graded 0', async () => {
+    let posts = 0;
+    globalThis.fetch = (async () => {
+      posts++;
+      return new Response('{"content":[{"type":"te', { status: 200 });
+    }) as unknown as typeof fetch;
+    const run = join(mkdtempSync(join(tmpdir(), 'evals-apicall-')), 'run');
+    expect(await postCall(req, run, 'sk-test')).toBe(1);
+    expect(posts).toBe(4);
+    const r = readCallRun(req, run, 1, 5);
+    expect(r.isError).toBe(true);
+    expect(r.harnessFailure).toContain('did not arrive as a message');
+  }, 60_000);
+
   test('a service that stays down is a harness failure, so the rep crashes instead of scoring 0', async () => {
     fakeApi([{ status: 529, body: { error: { message: 'overloaded' } } }]);
     const run = join(mkdtempSync(join(tmpdir(), 'evals-apicall-')), 'run');

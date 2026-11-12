@@ -37,6 +37,9 @@ export function evalsApiKey(): string | null {
 /** Statuses worth another try: the request was fine, the service was not. */
 const RETRY = new Set([429, 500, 502, 503, 504, 529]);
 
+/** One try's limit: a reply that has not arrived whole by then is a hung connection, retried rather than waited on. */
+const ATTEMPT_MS = 150_000;
+
 /** Post one call rep into `run`, the way the harness's --call mode leaves it. Resolves to its exit code. */
 export async function postCall(req: SurfaceRequest, run: string, apiKey: string): Promise<number> {
   mkdirSync(run, { recursive: true });
@@ -47,14 +50,19 @@ export async function postCall(req: SurfaceRequest, run: string, apiKey: string)
   for (let attempt = 0; attempt < 4; attempt++) {
     if (attempt) await new Promise((r) => setTimeout(r, 2000 * 2 ** attempt));
     try {
-      const res = await postMessages(req, { apiKey });
+      const res = await postMessages(req, { apiKey, signal: AbortSignal.timeout(ATTEMPT_MS) });
       status = res?.status ?? 0;
       data = res ? await res.json().catch(() => null) : null;
+      // A 200 whose body never arrived whole (a timeout or a closed socket mid-read) holds no reply: a failed try, never an empty answer.
+      if (status === 200 && !Array.isArray(data?.content)) {
+        status = 0;
+        data = { error: { message: 'the API answered 200 but its body did not arrive as a message' } };
+      }
     } catch (e) {
       status = 0;
       data = { error: { message: e instanceof Error ? e.message : String(e) } };
     }
-    if (status === 200 || !RETRY.has(status)) break;
+    if (status === 200 || (status !== 0 && !RETRY.has(status))) break;
   }
   const ok = status === 200;
   const usage = { input_tokens: data?.usage?.input_tokens ?? 0, output_tokens: data?.usage?.output_tokens ?? 0 };
