@@ -43,6 +43,9 @@ env:
 
 jobs:
   build:
+    # A dispatch from any other branch builds that branch's commit; only a dry
+    # run may do that, so a branch never signs and stages release binaries.
+    if: github.ref == 'refs/heads/main' || inputs.dry_run
     runs-on: macos-15
     timeout-minutes: 90
     steps:

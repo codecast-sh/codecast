@@ -132,3 +132,9 @@ describe("the builder builds the commit it was dispatched on", () => {
     expect(checkout?.with?.ref).toBe("${{ github.sha }}");
   });
 });
+
+describe("only main ships", () => {
+  test("a dispatch from another branch runs only as a dry run", () => {
+    expect((cut.jobs.build as any).if).toBe("github.ref == 'refs/heads/main' || inputs.dry_run");
+  });
+});
