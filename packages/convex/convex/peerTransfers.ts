@@ -43,7 +43,8 @@ export const reportPeerTransfer = mutation({
     const prev = conv.peer_transfer?.started_at === args.started_at ? conv.peer_transfer : undefined;
     const cancel = !!prev?.cancel_requested_at && prev.cancel_requested_at >= args.started_at;
     if (args.phase === "done") {
-      await ctx.db.patch(conv._id, { peer_transfer: undefined });
+      const cur = conv.peer_transfer;
+      if (cur && (prev || cur.phase === "failed")) await ctx.db.patch(conv._id, { peer_transfer: undefined });
       return { cancel };
     }
     await ctx.db.patch(conv._id, {
@@ -63,20 +64,21 @@ export const reportPeerTransfer = mutation({
   },
 });
 
-export async function performCancelPeerTransfer(ctx: any, userId: Id<"users">, conversationId: Id<"conversations">) {
+// Only the transfer the person saw: a newer one started since keeps running.
+export async function performCancelPeerTransfer(ctx: any, userId: Id<"users">, conversationId: Id<"conversations">, startedAt: number) {
   const conv = await ctx.db.get(conversationId);
   if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
   const pt = conv.peer_transfer;
-  if (!pt || pt.phase === "failed" || pt.cancel_requested_at) return;
+  if (!pt || pt.started_at !== startedAt || pt.phase === "failed" || pt.cancel_requested_at) return;
   await ctx.db.patch(conv._id, { peer_transfer: { ...pt, cancel_requested_at: Math.max(Date.now(), pt.started_at) } });
 }
 
 export const cancelPeerTransfer = mutation({
-  args: { conversation_id: v.id("conversations") },
+  args: { conversation_id: v.id("conversations"), started_at: v.number() },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx);
     if (!userId) throw new Error("Authentication required");
-    await performCancelPeerTransfer(ctx, userId, args.conversation_id);
+    await performCancelPeerTransfer(ctx, userId, args.conversation_id, args.started_at);
   },
 });
 
