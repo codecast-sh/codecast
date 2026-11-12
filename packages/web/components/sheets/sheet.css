@@ -576,3 +576,6 @@ button.sheet-query-chip.is-menu:hover { background: color-mix(in srgb, var(--sol
 .sheet-filter-scope { display: flex; gap: 2px; padding: 2px; border-radius: 7px; background: var(--sol-bg-alt); }
 .sheet-filter-scope button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px; height: 24px; border-radius: 5px; font-size: 12px; color: var(--sol-text-muted); }
 .sheet-filter-scope button.is-on { background: var(--sol-card, var(--sol-bg)); color: var(--sol-text); box-shadow: 0 0 0 1px color-mix(in srgb, var(--sol-border) 60%, transparent); }
+.sheet-find-opt { height: 22px; min-width: 26px; padding: 0 5px; border-radius: 5px; font-size: 12px; font-weight: 600; color: var(--sol-text-dim); }
+.sheet-find-opt:hover { color: var(--sol-text); background: var(--sol-bg-alt); }
+.sheet-find-opt.is-on { color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 14%, transparent); }

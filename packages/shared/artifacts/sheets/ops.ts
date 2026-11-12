@@ -11,7 +11,7 @@ import { buildModel, cellNum, inheritedFormat, STYLE_FIELDS, styleOf, workbookFo
 import { formatValue } from "./format";
 import { condOps, validationOps } from "./ruleOps";
 import { newElementKey } from "../spec";
-import { compareScalars, parseLiteral, type Scalar } from "./values";
+import { compareScalars, parseLiteral, serialToDate, type Scalar } from "./values";
 
 type CellFields = Record<string, Json>;
 
@@ -222,9 +222,14 @@ export function fillOps(model: SheetModel, tabId: string, src: Rect, dest: Rect)
         const mean = ns.reduce((a, b) => a + b, 0) / ns.length;
         const v = mean + step * (offset - (ns.length - 1) / 2);
         fields.input = String(Number(v.toPrecision(12)));
-        // Typed 10%, $5 or a date continue as percents, currency, dates.
+        // Typed 10%, $5 or a date continue as percents, currency, dates. Dates and times are written the way
+        // they were typed (2026-02-01), so every reader, the CLI included, sees a date and not a serial number.
         const implied = parseLiteral(inputs[j]).implied;
-        if (implied && fields.nf === undefined) {
+        if (implied && (implied.nf === "date" || implied.nf === "datetime") && fields.nf === undefined) {
+          const d = serialToDate(v);
+          const two = (x: number) => String(x).padStart(2, "0");
+          fields.input = `${d.y}-${two(d.m)}-${two(d.d)}${implied.nf === "datetime" ? ` ${two(d.h)}:${two(d.min)}` : ""}`;
+        } else if (implied && fields.nf === undefined) {
           fields.nf = implied.nf;
           if (implied.dp !== undefined) fields.dp = implied.dp;
         }
@@ -721,22 +726,40 @@ export function fitWidthOps(model: SheetModel, wb: Workbook, tabId: string, cols
   return ops;
 }
 
+/** How find matches: any case or the exact case, anywhere in the text or the whole cell. */
+export type FindOptions = { matchCase?: boolean; wholeCell?: boolean };
+
+/** One matcher for find and replace, so what is highlighted is what gets replaced. */
+export function findMatcher(find: string, opts: FindOptions = {}): { test: (text: string) => boolean; replace: (text: string, replacement: string) => string } {
+  const body = find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(opts.wholeCell ? `^${body}$` : body, opts.matchCase ? "g" : "gi");
+  return {
+    test: (text) => {
+      re.lastIndex = 0;
+      return re.test(text);
+    },
+    replace: (text, replacement) => {
+      re.lastIndex = 0;
+      return text.replace(re, () => replacement);
+    },
+  };
+}
+
 /**
- * Find and replace: every occurrence of `find` (any case) in the typed text of
- * a tab's cells, or of one cell. Formulas are left alone, so a replace never
- * rewrites references. Returns the ops and how many cells changed.
+ * Find and replace: every occurrence of `find` in the typed text of a tab's
+ * cells, or of one cell. Formulas are left alone, so a replace never rewrites
+ * references. Returns the ops and how many cells changed.
  */
-export function replaceOps(model: SheetModel, tabId: string, find: string, replacement: string, only?: { col: number; row: number }): { ops: ArtifactOp[]; count: number } {
+export function replaceOps(model: SheetModel, tabId: string, find: string, replacement: string, only?: { col: number; row: number }, opts: FindOptions = {}): { ops: ArtifactOp[]; count: number } {
   const t = tabData(model, tabId);
   if (!t || !find) return { ops: [], count: 0 };
-  const re = new RegExp(find.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi");
+  const m = findMatcher(find, opts);
   const cells: Array<{ col: number; row: number; input: string }> = [];
   for (const [n, el] of t.cells) {
     const col = n % 32768, row = Math.floor(n / 32768);
     if (only && (only.col !== col || only.row !== row)) continue;
-    if (typeof el.input !== "string" || el.input.startsWith("=") || !re.test(el.input)) continue;
-    re.lastIndex = 0;
-    cells.push({ col, row, input: el.input.replace(re, () => replacement) });
+    if (typeof el.input !== "string" || el.input.startsWith("=") || !m.test(el.input)) continue;
+    cells.push({ col, row, input: m.replace(el.input, replacement) });
   }
   return { ops: inputOps(model, tabId, cells), count: cells.length };
 }

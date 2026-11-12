@@ -21,6 +21,15 @@ export function sheetExports(S: MutableRefObject<SheetState>): LiveExport[] {
       },
     },
     {
+      format: "pdf",
+      label: "PDF, this tab (to print)",
+      run: async () => {
+        const { model, wb, activeTabId } = S.current;
+        const { sheetPdf } = await import("./pdfExport");
+        return new Blob([sheetPdf(model, wb, activeTabId) as BlobPart], { type: "application/pdf" });
+      },
+    },
+    {
       format: "xlsx",
       label: "Excel, every tab",
       run: async () => {
@@ -34,6 +43,15 @@ export function sheetExports(S: MutableRefObject<SheetState>): LiveExport[] {
 const csvField = (v: string) => (/[",\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
 
 /** A tab's cells (or a rectangle of them) as CSV, each value as it shows in the grid. */
+/** A cell's text as the grid shows it: a formula without its own format takes the one of what it reads. */
+export function shownText(model: SheetModel, wb: Workbook, tabId: string, col: number, row: number): string {
+  const info = wb.cell(tabId, col, row);
+  if (!info) return "";
+  const el = model.byId.get(tabId)?.cells.get(cellNum(col, row));
+  const implied = info.formula && !el?.nf ? (inheritedFormat(model, tabId, info.input) ?? info.implied) : info.implied;
+  return formatValue(info.value, styleOf(el), implied);
+}
+
 export function sheetCsv(model: SheetModel, wb: Workbook, tabId: string, rect?: Rect): string {
   const t = model.byId.get(tabId);
   if (!t) return "";
@@ -42,11 +60,7 @@ export function sheetCsv(model: SheetModel, wb: Workbook, tabId: string, rect?: 
   for (let row = r.r0; row <= Math.min(r.r1, Math.max(t.rows, r.r0)); row++) {
     const out: string[] = [];
     for (let col = r.c0; col <= Math.min(r.c1, Math.max(t.cols, r.c0)); col++) {
-      const info = wb.cell(tabId, col, row);
-      const el = t.cells.get(cellNum(col, row));
-      // As the grid shows it: a formula without its own format takes the one of what it reads.
-      const implied = info?.formula && !el?.nf ? (inheritedFormat(model, tabId, info.input) ?? info.implied) : info?.implied;
-      out.push(csvField(info ? formatValue(info.value, styleOf(el), implied) : ""));
+      out.push(csvField(shownText(model, wb, tabId, col, row)));
     }
     lines.push(out.join(","));
   }

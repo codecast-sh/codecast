@@ -97,7 +97,7 @@ describe("verbs and ops", () => {
     const d = doc(sheetSpec.seed!());
     d.verb("write", ["A1"], "2026-11-30\tJan\tMONDAY\t5\n\tMar\t\t");
     d.apply(fillOps(buildModel(d.elements()), "Sheet1", { c0: 1, r0: 1, c1: 1, r1: 1 }, { c0: 1, r0: 1, c1: 1, r1: 3 }));
-    expect(d.input("c:Sheet1!A3")).toBe(String(dateToSerial(2026, 12, 2)));
+    expect(d.input("c:Sheet1!A3")).toBe("2026-12-02");
     d.apply(fillOps(buildModel(d.elements()), "Sheet1", { c0: 2, r0: 1, c1: 2, r1: 2 }, { c0: 2, r0: 1, c1: 2, r1: 7 }));
     expect([3, 4, 7].map((r) => d.input(`c:Sheet1!B${r}`))).toEqual(["May", "Jul", "Jan"]);
     d.apply(fillOps(buildModel(d.elements()), "Sheet1", { c0: 3, r0: 1, c1: 4, r1: 1 }, { c0: 3, r0: 1, c1: 4, r1: 3 }));
@@ -307,5 +307,19 @@ describe("custom-formula rules on insert", () => {
     d.apply(structuralOps(buildModel(d.elements()), "Sheet1", "row", 2, 1));
     const c = buildModel(d.elements()).conds[0];
     expect([rectA1(c.rect), c.value]).toEqual(["A3:B4", '=$B3="Done"']);
+  });
+});
+
+describe("find options", () => {
+  test("match case and whole cell narrow what is replaced", async () => {
+    const { replaceOps, findMatcher } = await import("./ops");
+    const d = doc(sheetSpec.seed!());
+    d.verb("write", ["A1"], "Open\nopen\nReopen\nOPEN");
+    const m = () => buildModel(d.elements());
+    expect(replaceOps(m(), "Sheet1", "open", "x").count).toBe(4);
+    expect(replaceOps(m(), "Sheet1", "open", "x", undefined, { matchCase: true }).count).toBe(2);
+    expect(replaceOps(m(), "Sheet1", "open", "x", undefined, { wholeCell: true }).count).toBe(3);
+    expect(replaceOps(m(), "Sheet1", "Open", "x", undefined, { matchCase: true, wholeCell: true }).count).toBe(1);
+    expect(findMatcher("a.b").test("axb")).toBe(false);
   });
 });

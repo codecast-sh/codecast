@@ -9,7 +9,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { Radio } from "lucide-react";
 import type { ArtifactOp, ArtifactPresence, Json } from "@codecast/shared/artifacts";
-import { a1, sortOps, valueMeetsRule, addTabOps, duplicateTabOps, moveTabOps, moveTabToOps, LiveSheet, enforceValidation, replaceOps, expandToMerges, mergeAt, cellNum, deleteTabOps, formatValue, inputOps, isFormula, parseQualifiedRange, quoteTabName, rectA1, renameTabOps, styleOf, tabPatchOps, toTsv, fitWidthOps, inheritedFormat, uniqueTabName, type CellStyle, type Rect, type TabData, type QuerySource } from "./sheetCore";
+import { a1, findMatcher, type FindOptions, sortOps, valueMeetsRule, addTabOps, duplicateTabOps, moveTabOps, moveTabToOps, LiveSheet, enforceValidation, replaceOps, expandToMerges, mergeAt, cellNum, deleteTabOps, formatValue, inputOps, isFormula, parseQualifiedRange, quoteTabName, rectA1, renameTabOps, styleOf, tabPatchOps, toTsv, fitWidthOps, inheritedFormat, uniqueTabName, type CellStyle, type Rect, type TabData, type QuerySource } from "./sheetCore";
 import type { LiveViewProps } from "../live/registry";
 import { useLiveElements, useLivePresence } from "../live/useLiveArtifact";
 import { sendAsk, pickAskTarget, reopenAsk } from "../live/askAgent";
@@ -521,17 +521,17 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
   const addMenu = useContextMenu<null>();
   const [findOpen, setFindOpen] = useState<boolean | "replace">(false);
   /** Every cell of the tab whose shown text or formula holds the query, in reading order. */
-  const findMatches = useCallback((q: string) => {
+  const findMatches = useCallback((q: string, opts: FindOptions) => {
     const { tab: t, wb: w, activeTabId: id, hiddenRows: hid } = S.current;
     if (!q) return [] as Array<{ col: number; row: number }>;
-    const needle = q.toLowerCase();
+    const m = findMatcher(q, opts);
     const out: Array<{ col: number; row: number }> = [];
     for (const [n, el] of t.cells) {
       const col = n % 32768, row = Math.floor(n / 32768);
       if (hid.has(row)) continue;
       const info = w.cell(id, col, row);
       const shown = info ? formatValue(info.value, styleOf(el), info.implied) : "";
-      if (shown.toLowerCase().includes(needle) || (typeof el.input === "string" && el.input.toLowerCase().includes(needle))) out.push({ col, row });
+      if (m.test(shown) || (typeof el.input === "string" && m.test(el.input))) out.push({ col, row });
     }
     return out.sort((a, b) => a.row - b.row || a.col - b.col);
   }, []);
@@ -648,8 +648,8 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
             onGo={(c) => select({ anchor: c, focus: c })}
             from={() => S.current.sel.anchor}
             replace={findOpen === "replace"}
-            onReplace={readOnly ? undefined : (q, r, at) => {
-              const res = replaceOps(S.current.model, activeTabId, q, r, at);
+            onReplace={readOnly ? undefined : (q, r, at, opts) => {
+              const res = replaceOps(S.current.model, activeTabId, q, r, at, opts);
               apply(res.ops);
               return res.count;
             }}

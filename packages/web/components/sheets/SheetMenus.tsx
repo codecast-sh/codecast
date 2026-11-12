@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { CalendarDays, Check, ChevronRight, ClipboardPaste, Copy, Eye, EyeOff, MessageSquare, Filter as FilterIcon, ListChecks, Scissors, User, Users, X } from "lucide-react";
 import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
-import { a1, COND_RULE_NAMES, condPlaceholder, condTakesValue, type CondRule, type SheetModel, type TabData } from "./sheetCore";
+import { a1, type FindOptions, COND_RULE_NAMES, condPlaceholder, condTakesValue, type CondRule, type SheetModel, type TabData } from "./sheetCore";
 import { CtxItem } from "../ui/context-menu";
 import { DropdownMenuSeparator } from "../ui/dropdown-menu";
 import type { AxisLayout } from "./layout";
@@ -290,21 +290,22 @@ export function FindBar({
   replace: replaceInitially,
   onReplace,
 }: {
-  find: (q: string) => Array<{ col: number; row: number }>;
+  find: (q: string, opts: FindOptions) => Array<{ col: number; row: number }>;
   onGo: (c: { col: number; row: number }) => void;
   from: () => { col: number; row: number };
   onClose: () => void;
   /** Open with the replace row showing (⌘⇧H). */
   replace?: boolean;
   /** Replace in one cell (at) or everywhere; returns how many cells changed. Absent when the sheet is read-only. */
-  onReplace?: (q: string, replacement: string, at?: { col: number; row: number }) => number;
+  onReplace?: (q: string, replacement: string, at: { col: number; row: number } | undefined, opts: FindOptions) => number;
 }) {
   const [q, setQ] = useState("");
+  const [opts, setOpts] = useState<FindOptions>({});
   const [r, setR] = useState("");
   const [showReplace, setShowReplace] = useState(!!replaceInitially);
   const [at, setAt] = useState<number | null>(null);
   const [replaced, setReplaced] = useState<number | null>(null);
-  const matches = useMemo(() => find(q), [find, q]);
+  const matches = useMemo(() => find(q, opts), [find, q, opts]);
   const go = (dir: 1 | -1) => {
     if (!matches.length) return;
     let i: number;
@@ -319,7 +320,7 @@ export function FindBar({
   const replaceOne = () => {
     if (!onReplace || !q) return;
     if (at === null) return go(1);
-    onReplace(q, r, matches[at]);
+    onReplace(q, r, matches[at], opts);
     setReplaced(null);
     go(1);
   };
@@ -349,6 +350,23 @@ export function FindBar({
           }}
         />
         <span className="sheet-find-count">{q ? `${at === null ? 0 : at + 1}/${matches.length}` : ""}</span>
+        {([["matchCase", "Aa", "Match case"], ["wholeCell", "[ab]", "Whole cell"]] as const).map(([k, label, name]) => (
+          <button
+            key={k}
+            type="button"
+            className={`sheet-find-opt ${opts[k] ? "is-on" : ""}`}
+            aria-label={name}
+            aria-pressed={!!opts[k]}
+            title={name}
+            onClick={() => {
+              setOpts((o) => ({ ...o, [k]: !o[k] }));
+              setAt(null);
+              setReplaced(null);
+            }}
+          >
+            {label}
+          </button>
+        ))}
         <button type="button" aria-label="Close find" onClick={onClose}>
           <X className="w-3.5 h-3.5" />
         </button>
@@ -369,7 +387,7 @@ export function FindBar({
             }}
           />
           <button type="button" className="sheet-find-action" disabled={!q || !matches.length} onClick={replaceOne}>Replace</button>
-          <button type="button" className="sheet-find-action" disabled={!q || !matches.length} onClick={() => { setReplaced(onReplace(q, r)); setAt(null); }}>
+          <button type="button" className="sheet-find-action" disabled={!q || !matches.length} onClick={() => { setReplaced(onReplace(q, r, undefined, opts)); setAt(null); }}>
             All{replaced !== null ? ` · ${replaced}` : ""}
           </button>
         </div>
