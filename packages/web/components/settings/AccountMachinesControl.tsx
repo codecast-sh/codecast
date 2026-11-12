@@ -30,6 +30,7 @@ export function AccountMachinesControl({ deviceId, email }: { deviceId: string; 
   const list = personal.device_ids ?? null;
   const on = (id: string) => list === null || list.includes(id);
   const count = others.filter((d) => on(d.device_id)).length;
+  const sameName = (d: (typeof others)[number]) => others.filter((o) => deviceDisplayName(o) === deviceDisplayName(d)).length > 1;
   const label = list === null ? "All machines" : count === 0 ? "This machine only" : `${count + 1} machines`;
   const toggle = (id: string) => {
     const current = list ?? others.map((d) => d.device_id);
@@ -71,6 +72,7 @@ export function AccountMachinesControl({ deviceId, email }: { deviceId: string; 
           >
             <DeviceIcon d={d} className="mr-1.5 h-3 w-3 shrink-0 text-sol-text-muted" />
             <span className="truncate">{deviceDisplayName(d)}</span>
+            {sameName(d) && <span className="ml-1.5 truncate text-meta text-sol-text-dim">{d.hostname ?? d.device_id.slice(0, 8)}</span>}
           </DropdownMenuCheckboxItem>
         ))}
       </DropdownMenuContent>
