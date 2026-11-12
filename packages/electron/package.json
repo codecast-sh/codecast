@@ -55,6 +55,8 @@
       "updatePolicy.js",
       "preload.js",
       "native/notifications.node",
+      "native/deviceKey.node",
+      "deviceKey.js",
       "assets/icon.png",
       "assets/trayTemplate.png",
       "assets/trayTemplate@2x.png",

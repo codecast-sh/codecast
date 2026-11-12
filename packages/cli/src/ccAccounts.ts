@@ -1813,12 +1813,20 @@ export const FLEET_GATE_ACCOUNT = "+fleet";
 export function launchAccountPrefix(pin: string | undefined, warn?: (msg: string) => void): { prefix: string; account?: string } {
   adoptPushedCredential();
   if (!pin && fleetStoreReady() && fs.existsSync(fleetLaunchFile())) {
-    return { prefix: sourceFilePrefix(fleetLaunchFile()), account: FLEET_GATE_ACCOUNT };
+    return { prefix: `${SUBSCRIPTION_KEY_UNSET}${sourceFilePrefix(fleetLaunchFile())}`, account: FLEET_GATE_ACCOUNT };
   }
   const account = pin ?? launchProfileName();
   const prefix = accountSourcePrefix(account, warn);
-  return { prefix, account: prefix ? account : undefined };
+  if (prefix) return { prefix: `${SUBSCRIPTION_KEY_UNSET}${prefix}`, account };
+  return { prefix: Object.keys(readProfileIndex().profiles).length ? SUBSCRIPTION_KEY_UNSET : "", account: undefined };
 }
+
+/** Claude bills ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY ahead of every
+ *  subscription login, so a key a shell profile exports (a dotfile mirrored
+ *  to a cloud host, 2026-11-12) moves every session onto that key's org and
+ *  its spend cap, and no account switch can move it back. A launch on a
+ *  subscription account, or on a machine that keeps saved profiles, drops them. */
+export const SUBSCRIPTION_KEY_UNSET = "unset ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN; ";
 
 /** `argv` run under the unpinned launch account (launchAccountPrefix), for a
  *  caller that execs without a shell. Unchanged when the launch is the
