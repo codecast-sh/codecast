@@ -5178,6 +5178,8 @@ export default defineSchema({
         items: v.array(v.object({ label: v.string(), lines: v.array(v.string()), note: v.optional(v.string()) })),
       })),
     })),
+    // An Ask first read of a secret with Touch ID on (secrets.ts askFirstGate): its Approve confirms with a passkey.
+    touch_id: v.optional(v.boolean()),
     // true = the agent ended its turn and is parked on this answer.
     // false = advisory: the agent proceeded with default_option and the
     // human's answer can override it later.
@@ -6367,6 +6369,8 @@ export default defineSchema({
     has_otp: v.optional(v.boolean()),
     // Ask first: an agent's read needs a person's approval per session (secret_approvals).
     ask_first: v.optional(v.boolean()),
+    // Touch ID: revealing it, approving an Ask first read of it and turning a guard off take a passkey.
+    touch_id: v.optional(v.boolean()),
     // How many previous values secret_versions holds for it, kept by every write that moves one.
     version_count: v.optional(v.number()),
   })
