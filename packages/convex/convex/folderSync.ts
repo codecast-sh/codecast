@@ -135,12 +135,11 @@ export async function requestPeerExport(
   const since = now - FOLDER_EXPORT_RATE_WINDOW_MS;
   const inWindow = (d: { folder_export_at?: number[] }) => (d.folder_export_at ?? []).filter((t) => t > since);
   const recent = devices.reduce((n, d) => n + inWindow(d).length, 0);
-  const inserts = plan.filter((p) => !p.reuse).length;
-  if (recent + inserts > FOLDER_EXPORT_RATE_LIMIT) {
-    throw new Error(`too many ${command === "export_folder" ? "folder" : "transcript"} requests: at most ${FOLDER_EXPORT_RATE_LIMIT} every ${FOLDER_EXPORT_RATE_WINDOW_MS / 60_000} minutes`);
-  }
-  if (inserts > 0) {
-    await ctx.db.patch(requester._id, { folder_export_at: [...inWindow(requester), ...Array(inserts).fill(now)] });
+  if (plan.some((p) => !p.reuse)) {
+    if (recent + 1 > FOLDER_EXPORT_RATE_LIMIT) {
+      throw new Error(`too many ${command === "export_folder" ? "folder" : "transcript"} requests: at most ${FOLDER_EXPORT_RATE_LIMIT} every ${FOLDER_EXPORT_RATE_WINDOW_MS / 60_000} minutes`);
+    }
+    await ctx.db.patch(requester._id, { folder_export_at: [...inWindow(requester), now] });
   }
 
   const command_ids: string[] = [];
@@ -205,10 +204,25 @@ export async function discardPeerBundle(ctx: { db: any; storage: any }, args: { 
   const userId = await getAuthenticatedUserId(ctx, args.api_token);
   if (!userId) throw new Error("Authentication required");
   const cmd = await ownExportCommand(ctx, userId, args.command_id, command);
+  if (cmd && cmd.executed_at === undefined) {
+    await ctx.db.patch(cmd._id, { executed_at: Date.now(), error: "abandoned" });
+    return { discarded: false };
+  }
   if (!cmd?.result) return { discarded: false };
   let storageId: string | undefined;
   try { storageId = JSON.parse(cmd.result)?.storage_id; } catch {}
   if (!storageId) return { discarded: false };
   await ctx.storage.delete(storageId as Id<"_storage">).catch(() => {});
   return { discarded: true };
+}
+
+/** An export answer that arrives after its requester discarded the request
+ *  (or after another answer settled it) is not recorded: its archive is
+ *  deleted and the row stays as it was. True when the report was handled here. */
+export async function dropLateExportAnswer(ctx: { storage: any }, command: { command: string; executed_at?: number }, result: string | undefined): Promise<boolean> {
+  if ((command.command !== "export_folder" && command.command !== "export_session") || command.executed_at === undefined) return false;
+  let storageId: unknown;
+  try { storageId = result ? JSON.parse(result)?.storage_id : undefined; } catch {}
+  if (typeof storageId === "string" && storageId) await ctx.storage.delete(storageId as Id<"_storage">).catch(() => {});
+  return true;
 }

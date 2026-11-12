@@ -9,11 +9,12 @@
  * (export_folder), puts the archive in Convex storage, and the destination
  * unpacks it at the same place and resumes there.
  *
- * What travels. In a git checkout, exactly what git would carry plus .git
- * itself: tracked and untracked files minus .gitignore'd ones, so a gitignored
- * .env stays behind the same way it does for wipSnapshot. Outside git, every
- * file except regenerable caches (node_modules, virtualenvs, build caches) and
- * .env files. A folder past MAX_FOLDER_BYTES is refused before anything is
+ * What travels. In a git checkout or a folder inside one, exactly what git
+ * would carry from it (plus .git itself at the checkout's root): tracked and
+ * untracked files minus .gitignore'd ones, so a gitignored .env stays behind
+ * the same way it does for wipSnapshot. Outside git, every file except
+ * regenerable caches (node_modules, virtualenvs, build caches). Files that look
+ * like keys or credentials never travel, tracked or not. A folder past MAX_FOLDER_BYTES is refused before anything is
  * packed: storage is a relay for a working folder, not a backup channel.
  */
 
@@ -29,6 +30,9 @@ import { localTailnetAsync, selfTailnet, type TailnetStatus } from "./cloud/tail
 import { firewallBlocksIncoming, grantBindAddress, verifyOwnerPeer } from "./peer/identity.js";
 import { newGrantSecret, openGrant, type GrantOutcome } from "./peer/grant.js";
 import { pullGrantInto } from "./peer/pull.js";
+import { sanitizeExtractedTree } from "./folderSanitize.js";
+
+export { sanitizeExtractedTree };
 
 const execFileAsync = promisify(execFile);
 
@@ -51,17 +55,41 @@ export function isSecretFile(name: string): boolean {
 /**
  * Where a session folder may be carried from or to: inside home, not in a
  * dot-folder at the top of home (~/.ssh, ~/.aws, ~/.config...), not under
- * ~/Library, and never home itself. Null when allowed, else the reason.
+ * ~/Library, and never home itself. Checked on the path as named and on where
+ * it really leads, so a symlink into a private folder is refused too. Null
+ * when allowed, else the reason.
  */
 export function refusedFolder(dir: string, home: string): string | null {
-  const abs = path.resolve(dir);
-  const h = path.resolve(home);
-  if (!home || abs === h || abs === "/") return `${dir} is a home or root folder`;
-  const rel = path.relative(h, abs);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) return `${dir} is outside your home folder`;
-  const top = rel.split(path.sep)[0];
-  if (top.startsWith(".") || top === "Library") return `${dir} is a private folder`;
+  if (!home) return `${dir} is a home or root folder`;
+  const named = placeRefusal(path.resolve(dir), path.resolve(home));
+  const real = placeRefusal(realPathOf(dir), realPathOf(home));
+  const why = real ?? (named === "outside" ? null : named);
+  if (why === "home") return `${dir} is a home or root folder`;
+  if (why === "outside") return `${dir} is outside your home folder`;
+  if (why === "private") return `${dir} is a private folder`;
   return null;
+}
+
+function placeRefusal(abs: string, h: string): "home" | "outside" | "private" | null {
+  if (abs === h || abs === "/") return "home";
+  const rel = path.relative(h, abs);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return "outside";
+  const top = rel.split(path.sep)[0];
+  return top.startsWith(".") || top === "Library" ? "private" : null;
+}
+
+/** Where `p` really leads: the deepest existing ancestor resolved through its
+ *  symlinks, with the parts that do not exist yet appended. */
+function realPathOf(p: string): string {
+  const rest: string[] = [];
+  for (let cur = path.resolve(p); ; cur = path.dirname(cur)) {
+    try {
+      return path.join(fs.realpathSync(cur), ...rest);
+    } catch {
+      if (path.dirname(cur) === cur) return path.resolve(p);
+      rest.unshift(path.basename(cur));
+    }
+  }
 }
 
 /** The recorded path as it would sit on this machine: another user's home
@@ -81,15 +109,20 @@ async function gitOut(dir: string, args: string[]): Promise<string> {
   return typeof out === "string" ? out : String((out as { stdout: string }).stdout);
 }
 
-async function gitFiles(dir: string): Promise<string[] | null> {
+/** What git would carry from `dir` when it sits in a work tree (the whole
+ *  checkout, or the subtree a session ran in), relative to `dir`; null outside
+ *  git or when an enclosing repo ignores `dir`. */
+async function gitFiles(dir: string): Promise<{ root: boolean; files: string[] } | null> {
   try {
-    const top = await gitOut(dir, ["rev-parse", "--show-toplevel"]);
-    if (fs.realpathSync(top.trim()) !== fs.realpathSync(dir)) return null;
+    const top = fs.realpathSync((await gitOut(dir, ["rev-parse", "--show-toplevel"])).trim());
+    const real = fs.realpathSync(dir);
+    const root = top === real;
+    if (!root && (await gitOut(top, ["check-ignore", "-q", "--", path.relative(top, real) + "/"]).then(() => true, () => false))) return null;
     const split = (out: string) => out.split("\0").filter(Boolean);
     const tracked = split(await gitOut(dir, ["ls-files", "-c", "-z"]));
-    const untracked = split(await gitOut(dir, ["ls-files", "-o", "--exclude-standard", "-z"]))
-      .filter((rel) => !isSecretFile(path.basename(rel)));
-    return [...new Set([...tracked, ...untracked])];
+    const untracked = split(await gitOut(dir, ["ls-files", "-o", "--exclude-standard", "-z"]));
+    const files = [...new Set([...tracked, ...untracked])].filter((rel) => !isSecretFile(path.basename(rel)));
+    return { root, files };
   } catch {
     return null;
   }
@@ -131,12 +164,12 @@ async function dirBytes(dir: string, cap: number): Promise<number> {
 export async function planFolderExport(dir: string, cap = MAX_FOLDER_BYTES): Promise<FolderPlan> {
   const st = await fs.promises.stat(dir).catch(() => null);
   if (!st?.isDirectory()) return { ok: false, missing: true, reason: `${dir} is not on this machine` };
-  const tracked = await gitFiles(dir);
+  const git = await gitFiles(dir);
   const tooBig = { ok: false as const, reason: `${dir} is over ${Math.round(cap / (1024 * 1024))} MB, too large to carry` };
-  if (tracked) {
-    let bytes = await dirBytes(path.join(dir, ".git"), cap);
-    const entries: string[] = [".git"];
-    for (const rel of tracked) {
+  if (git) {
+    let bytes = git.root ? await dirBytes(path.join(dir, ".git"), cap) : 0;
+    const entries: string[] = git.root ? [".git"] : [];
+    for (const rel of git.files) {
       const fst = await fs.promises.lstat(path.join(dir, rel)).catch(() => null);
       if (!fst || fst.isDirectory()) continue;
       bytes += fst.size;
@@ -144,7 +177,7 @@ export async function planFolderExport(dir: string, cap = MAX_FOLDER_BYTES): Pro
       if (bytes > cap) return tooBig;
     }
     if (bytes > cap) return tooBig;
-    return { ok: true, dir, entries, bytes, files: entries.length - 1 };
+    return { ok: true, dir, entries, bytes, files: git.root ? entries.length - 1 : entries.length };
   }
   const out = { entries: [] as string[], bytes: 0 };
   if (!(await walk(dir, "", out, cap))) return tooBig;
@@ -227,132 +260,6 @@ function extractInto(body: NodeJS.ReadableStream, dir: string, maxBytes: number,
       settle();
     });
   });
-}
-
-const SAFE_GIT_KEY = new RegExp("^(" + [
-  "core\\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode|symlinks|autocrlf|eol|safecrlf|quotepath|checkstat|trustctime|untrackedcache|splitindex|commitgraph|multipackindex|abbrev|compression|loosecompression|sparsecheckout|sparsecheckoutcone|warnambiguousrefs|worktree)",
-  "remote\\..+\\.(url|pushurl|fetch|push|tagopt|prune|mirror|promisor|partialclonefilter)",
-  "branch\\..+\\.(remote|pushremote|merge|rebase|description)",
-  "user\\.(name|email|signingkey)",
-  "submodule\\..+\\.(url|path|active|branch)",
-  "submodule\\.active",
-  "extensions\\.(objectformat|refstorage|partialclone|preciousobjects)",
-  "lfs\\.(repositoryformatversion|url|pushurl)",
-  "init\\.defaultbranch",
-  "pull\\.(rebase|ff)",
-  "push\\.(default|autosetupremote)",
-  "fetch\\.prune",
-].join("|") + ")$", "is");
-
-async function gitConfig(cfg: string, args: string[]): Promise<string> {
-  const out: unknown = await execFileAsync("git", ["config", "--file", cfg, ...args], { cwd: os.tmpdir(), encoding: "utf-8", maxBuffer: 16 * 1024 * 1024 });
-  return typeof out === "string" ? out : String((out as { stdout: string }).stdout);
-}
-
-/** Keep only git config keys known to run nothing and point nowhere outside the
- *  tree; every other key goes. A config git cannot read goes entirely. */
-async function sanitizeGitConfig(cfg: string, gitDir: string, root: string): Promise<void> {
-  try {
-    const entries = (await gitConfig(cfg, ["--list", "-z"])).split("\0").filter(Boolean).map((e) => {
-      const nl = e.indexOf("\n");
-      return nl < 0 ? [e, ""] : [e.slice(0, nl), e.slice(nl + 1)];
-    });
-    const drop = new Set<string>();
-    for (const [key, value] of entries) {
-      if (!SAFE_GIT_KEY.test(key)) drop.add(key);
-      else if (key.toLowerCase() === "core.worktree" && !inside(root, path.resolve(gitDir, value))) drop.add(key);
-    }
-    for (const key of drop) await gitConfig(cfg, ["--unset-all", key]);
-  } catch {
-    await fs.promises.rm(cfg, { force: true });
-  }
-}
-
-const inside = (root: string, p: string) => p === root || p.startsWith(root + path.sep);
-
-async function symlinkEscapes(link: string, root: string, realRoot: string): Promise<boolean> {
-  const target = await fs.promises.readlink(link);
-  if (!inside(root, path.resolve(path.dirname(link), target))) return true;
-  const real = await fs.promises.realpath(link).catch(() => null);
-  if (real) return !inside(realRoot, real);
-  return target.split(/[\\/]/).includes("..");
-}
-
-/** Where a gitdir pointer (a `.git` file or a `commondir`) leads, if it stays inside the tree. */
-async function pointerTarget(file: string, base: string, root: string): Promise<string | null> {
-  const text = (await fs.promises.readFile(file, "utf-8").catch(() => "")).trim();
-  const target = path.basename(file) === ".git" ? /^gitdir:\s*(.+)$/m.exec(text)?.[1]?.trim() : text;
-  if (!target) return null;
-  const real = await fs.promises.realpath(path.resolve(base, target)).catch(() => null);
-  return real && inside(root, real) ? real : null;
-}
-
-/**
- * Make an extracted tree safe to open: no devices, fifos or sockets, no
- * symlink that resolves outside it, and in every git dir (found by its shape,
- * `.git` files and `commondir` pointers, not by name) no hooks, no pointer out
- * of the tree, and no config that runs a program.
- */
-export async function sanitizeExtractedTree(staging: string): Promise<void> {
-  const root = await fs.promises.realpath(staging);
-  const links: string[] = [];
-  const gitFiles: string[] = [];
-  const gitDirs = new Set<string>();
-  const visit = async (dir: string): Promise<void> => {
-    const items = await fs.promises.readdir(dir, { withFileTypes: true });
-    const names = new Set(items.map((d) => d.name));
-    if (path.basename(dir) === ".git" || (names.has("HEAD") && (names.has("objects") || names.has("refs") || names.has("commondir")))) gitDirs.add(dir);
-    for (const d of items) {
-      const p = path.join(dir, d.name);
-      if (d.isSymbolicLink()) {
-        if (d.name === ".git") await fs.promises.rm(p, { force: true });
-        else links.push(p);
-      } else if (d.isDirectory()) {
-        await visit(p);
-      } else if (!d.isFile()) {
-        await fs.promises.rm(p, { force: true });
-      } else if (d.name === ".git") {
-        gitFiles.push(p);
-      }
-    }
-  };
-  await visit(root);
-  const remaining = new Set(links);
-  for (let removed = true; removed; ) {
-    removed = false;
-    for (const link of remaining) {
-      if (!(await symlinkEscapes(link, root, root))) continue;
-      await fs.promises.rm(link, { force: true });
-      remaining.delete(link);
-      removed = true;
-    }
-  }
-  for (const file of gitFiles) {
-    const target = await pointerTarget(file, path.dirname(file), root);
-    if (target) gitDirs.add(target);
-    else await fs.promises.rm(file, { force: true });
-  }
-  const done = new Set<string>();
-  for (let pending = [...gitDirs]; pending.length; pending = [...gitDirs].filter((g) => !done.has(g))) {
-    for (const g of pending) {
-      done.add(g);
-      const common = path.join(g, "commondir");
-      if (fs.existsSync(common)) {
-        const target = await pointerTarget(common, g, root);
-        if (target) gitDirs.add(target);
-        else await fs.promises.rm(common, { force: true });
-      }
-      const hooks = path.join(g, "hooks");
-      await fs.promises.rm(hooks, { recursive: true, force: true });
-      await fs.promises.mkdir(hooks);
-      for (const name of ["config", "config.worktree"]) {
-        const cfg = path.join(g, name);
-        const st = await fs.promises.lstat(cfg).catch(() => null);
-        if (st?.isSymbolicLink()) await fs.promises.rm(cfg, { force: true });
-        else if (st?.isFile()) await sanitizeGitConfig(cfg, g, root);
-      }
-    }
-  }
 }
 
 /** Unpack a gzipped tar stream into `dest`, which must not exist yet. Extracts
@@ -537,11 +444,23 @@ export type SyncFromPeerResult =
 
 export const PEER_WAIT_MS = 120_000;
 const POLL_MS = 1_500;
-const PROGRESS_MS = 1_000;
+const PROGRESS_MS = 5_000;
 const CANCEL_CHECK_MS = 250;
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 const CANCELLED = { ok: false as const, reason: "cancelled" };
+
+/** A new phase goes out at once; repeats of one phase at most every `everyMs`
+ *  (the reporter's heartbeat keeps the row fresh in between). */
+export function progressThrottle(send: (p: PeerProgress) => void, now: () => number = Date.now, everyMs = PROGRESS_MS) {
+  let last: { phase: string; at: number } | null = null;
+  return (p: PeerProgress) => {
+    const t = now();
+    if (last && last.phase === p.phase && t - last.at < everyMs) return;
+    last = { phase: p.phase, at: t };
+    send(p);
+  };
+}
 
 /** The destination side: ask every other online machine, take the first that
  *  has the folder (directly when it granted a link, else through the relay),
@@ -558,13 +477,7 @@ export async function syncFolderFromPeer(dest: string, deps: SyncFromPeerDeps, w
 async function askPeers(dest: string, deps: SyncFromPeerDeps, waitMs: number, ids: string[]): Promise<SyncFromPeerResult> {
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const now = deps.now ?? Date.now;
-  let last: { phase: string; at: number } | null = null;
-  const progress = (p: PeerProgress) => {
-    const t = Date.now();
-    if (last && last.phase === p.phase && t - last.at < PROGRESS_MS) return;
-    last = { phase: p.phase, at: t };
-    deps.onProgress?.(p);
-  };
+  const progress = progressThrottle((p) => deps.onProgress?.(p));
   const stop = () => deps.cancelled?.() === true;
   progress({ phase: "asking" });
   if (stop()) return CANCELLED;
@@ -604,6 +517,10 @@ async function askPeers(dest: string, deps: SyncFromPeerDeps, waitMs: number, id
       if (refused) {
         reasons.set(row.command_id, `${label}: ${refused}`);
         continue;
+      }
+      const skipped = parsed && "direct_skipped" in parsed ? parsed.direct_skipped : undefined;
+      if (secret && skipped && !skipped.startsWith("too_large")) {
+        deps.onAttempt?.({ device: label, device_id: deviceId, mode: "direct", ok: false, reason: skipped });
       }
       if (parsed?.ok && "direct" in parsed && secret) {
         const started = now();
