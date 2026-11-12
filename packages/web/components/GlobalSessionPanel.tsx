@@ -76,6 +76,8 @@ import { useThinkingAvailable } from "./simple/assistantPromise";
 import { useUpgradesOpen } from "./simple/billing";
 import type { NoticeKind } from "@codecast/shared/contracts/assistant";
 import { LabelChipsRow } from "./LabelChipsRow";
+import { RailFilterMenu } from "./RailFilterMenu";
+import { useIsModernStyle } from "../hooks/useVisualStyle";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -1996,7 +1998,7 @@ function SessionListPanelImpl({
   // is_favorite out, so a placed row still carries the flag from before the toggle.
   // Resolved to a scalar so each card memoizes on it.
   const cardIsFavorite = (sess: InboxSession) => isFavoriteInStore(s, sess._id);
-  const { bucketCounts, projectCounts, projectPathByName } = useMemo(
+  const { bucketCounts, projectCounts, projectPathByName, projectActivity } = useMemo(
     // Project chips resolve each session's project off the store's sessions,
     // tasks and plans (store/workProjects, memoized on their refs).
     () => computeChipCounts(activeSessions, bucketByConv, projectOfFromState(useInboxStore.getState())),
@@ -2063,6 +2065,7 @@ function SessionListPanelImpl({
   const showSubagents = resolveShowSubagents(s.clientState.ui);
   // Modern folds the workers an agent spawned under its card (nestsWorkers).
   const nestWorkers = nestsWorkers(s.clientState.ui);
+  const modernStyle = useIsModernStyle();
   // In the flat views a nested worker is a hoisted row of its own, drawn as
   // the compact sub row.
   const nestedWorkerIds = useMemo(() => {
@@ -3244,12 +3247,25 @@ function SessionListPanelImpl({
           </button>
         )}
         {showViewTabs && <InboxViewPicker value={viewMode} onChange={s.setInboxViewMode} modes={viewModes} />}
-        <LabelChipsRow
-          bucketCounts={favoritesView ? favChipCounts!.bucketCounts : bucketCounts}
-          projectCounts={favoritesView ? favChipCounts!.projectCounts : projectCounts}
-          projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
-          dropSessionOnLabel={dropSessionOnLabel}
-        />
+        {/* Modern: one Filter menu (labels, projects, the folders worked in
+            most, every folder one step away); Classic and Minimal keep the
+            chip row. */}
+        {modernStyle ? (
+          <RailFilterMenu
+            bucketCounts={favoritesView ? favChipCounts!.bucketCounts : bucketCounts}
+            projectCounts={favoritesView ? favChipCounts!.projectCounts : projectCounts}
+            projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
+            projectActivity={favoritesView ? favChipCounts!.projectActivity : projectActivity}
+            dropSessionOnLabel={dropSessionOnLabel}
+          />
+        ) : (
+          <LabelChipsRow
+            bucketCounts={favoritesView ? favChipCounts!.bucketCounts : bucketCounts}
+            projectCounts={favoritesView ? favChipCounts!.projectCounts : projectCounts}
+            projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
+            dropSessionOnLabel={dropSessionOnLabel}
+          />
+        )}
         {/* The rail header's tools: the blocked-fleet alert when there is
             one, then one menu for how the list is shown (team scope,
             subagents, old sessions, the bars under cards, favorites). The
