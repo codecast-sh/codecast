@@ -151,10 +151,11 @@ export function ComposerTextRow({
  * the surface's own controls on the left, the send cluster pinned right, all
  * on one centre line.
  */
-export function ComposerFoot({ start, end }: { start?: ReactNode; end: ReactNode }) {
+export function ComposerFoot({ start, aside, end }: { start?: ReactNode; aside?: ReactNode; end: ReactNode }) {
   return (
     <div className="flex items-center gap-1.5 min-h-[36px] pt-0.5 pb-1.5">
       <div className="flex flex-1 min-w-0 items-center gap-1.5">{start}</div>
+      {aside}
       <div className="shrink-0 flex items-center gap-1">{end}</div>
     </div>
   );

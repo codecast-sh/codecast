@@ -9,6 +9,8 @@ import { RevealInBandCtx } from "../lib/revealHost";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { isMac, hasOpenModal, altChordDirection } from "../shortcuts";
+import { draftSessionsKey, setSessionAsk } from "../lib/sessionReplyDraft";
+import { SessionReplyStrip } from "./chat/SessionReplyStrip";
 import { armJointSend, disarmJointSend, jointSendReady, takeJointSend } from "../lib/jointSend";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { createPortal } from "react-dom";
@@ -282,6 +284,21 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   }, []);
   const messageRef = useRef(message);
   messageRef.current = message;
+  const replyKey = chatMentionMode ? draftSessionsKey(message) : "";
+  const toggleSessionReply = useCallback((id: string, ask: boolean, title: string | null) => {
+    const ta = textareaRef.current;
+    const before = messageRef.current;
+    const next = setSessionAsk(before, id, ask, title);
+    if (next === before) return;
+    const caret = ta?.selectionStart ?? before.length;
+    setMessage(next);
+    const moved = caret >= before.length ? next.length : caret;
+    setTimeout(() => {
+      if (!textareaRef.current) return;
+      textareaRef.current.focus();
+      textareaRef.current.selectionStart = textareaRef.current.selectionEnd = Math.min(moved, next.length);
+    }, 0);
+  }, []);
   const sendingRef = useRef(false);
   const [isFocused, setIsFocused] = useState(false);
   const [composeMode, setComposeMode] = useState(false);
@@ -601,7 +618,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     setAcTrigger(null);
   }, [acTrigger, acItems, acServerLoading, acQuery]);
 
-  const applyAutocomplete = useCallback((item: AcItem) => {
+  const applyAutocomplete = useCallback((item: AcItem, opts?: { askReply?: boolean }) => {
     if (!acTrigger) return;
     const before = message.slice(0, acTrigger.startPos);
     const cursorPos = textareaRef.current?.selectionStart ?? message.length;
@@ -623,8 +640,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       // anchor's label never did, which is how "@[Anchor] hi" woke nothing.
       // A role is the same shape: `@growth` wakes it, `@[Growth or-3]` is prose.
       inserted = `@${item.handle} `;
-    } else if (chatMentionMode && item.type === "session" && item.shortId) {
-      // Only the bare 7-char short id resolves to a session in chat.
+    } else if (chatMentionMode && item.type === "session" && item.shortId && opts?.askReply) {
+      // The address form: the one way a chat line asks a session to reply
+      // (lib/sessionReplyDraft). Picking a session plainly names it below.
       inserted = `@${item.shortId} `;
     } else if (item.type === "file" || item.type === "skill") {
       inserted = `@${item.label} `;
@@ -2166,7 +2184,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       }
       if (e.key === "Enter") {
         e.preventDefault();
-        applyAutocomplete(acItems[clampedAcIndex]);
+        applyAutocomplete(acItems[clampedAcIndex], { askReply: e.shiftKey });
         return;
       }
       if (e.key === "Escape") {
@@ -2578,7 +2596,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       composeMode={composeMode}
       selectionActive={isSelectionActive}
       onSubmit={handleFormSubmit}
-      foot={composerFoot && !composeMode ? <ComposerFoot start={composerFoot} end={<>{rowActions}{sendButton}</>} /> : undefined}
+      foot={composerFoot && !composeMode ? <ComposerFoot start={composerFoot} aside={chatMentionMode ? <SessionReplyStrip sessionsKey={replyKey} onToggle={toggleSessionReply} /> : undefined} end={<>{rowActions}{sendButton}</>} /> : undefined}
       before={<>
           <StopConfirm request={stopRequest} onClose={() => { setStopRequest(null); requestAnimationFrame(() => textareaRef.current?.focus()); }} />
           {serverDeleted && !isRestarting && canResume && (
@@ -2862,6 +2880,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
                   selectedIndex={clampedAcIndex}
                   onHover={setAcIndex}
                   onPick={(index) => applyAutocomplete(acItems[index])}
+                  onAskReply={chatMentionMode ? (index) => applyAutocomplete(acItems[index], { askReply: true }) : undefined}
                   query={acQuery}
                   loading={acTrigger.type === "@" && acServerLoading}
                   heading={acTrigger.type === "/" ? "Commands" : undefined}
