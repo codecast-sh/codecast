@@ -100,9 +100,12 @@ describe("KPI", () => {
     const ev = evaluateKpi({ query: q, field: "tokens", where: { person: "ada" } }, spend);
     expect(ev.state === "ok" && ev.value).toBe(600);
   });
-  test("top names the label of the largest row", () => {
+  test("top names the label with the largest total, not the largest single row", () => {
     const ev = evaluateKpi({ query: q, field: "tokens", agg: "top", label: "person" }, spend);
-    expect(ev.state === "ok" && ev.display).toBe("ada");
+    expect(ev.state === "ok" && [ev.display, ev.used]).toEqual(["ada", [0, 2, 4]]);
+    // bo has the biggest day (90) but ada the bigger total (70 + 60).
+    const days = result(["day", "person", "n"], [["a", "ada", 70], ["a", "bo", 90], ["b", "ada", 60], ["b", "bo", 5]]);
+    expect(evaluateKpi({ query: q, field: "n", agg: "top", label: "person" }, days)).toMatchObject({ state: "ok", display: "ada" });
   });
   test("compare halves: the later half against the earlier", () => {
     const daily = result(["day", "n"], [["a", 10], ["b", 10], ["c", 15], ["d", 15]]);
@@ -638,9 +641,12 @@ describe("chart limits", () => {
 });
 
 describe("grouped tables", () => {
-  test("one row per person, numbers summed, a row count; the check points at every source row", () => {
+  test("one row per person, numbers summed; the check points at every source row", () => {
     const ev = evaluateTable({ query: q, group: "person", sort: "-spend" }, spend);
-    expect(ev.state === "ok" && [ev.columns, ev.rows, ev.used.length]).toEqual([["person", "tokens", "spend", "rows"], [["ada", 600, 8.5, 3], ["bo", 80, 0.85, 3]], 6]);
+    // Every person has three days, so the count column carries nothing and is left out.
+    expect(ev.state === "ok" && [ev.columns, ev.rows, ev.used.length]).toEqual([["person", "tokens", "spend"], [["ada", 600, 8.5], ["bo", 80, 0.85]], 6]);
+    const uneven = { ...spend, rows: spend.rows.slice(0, -1) };
+    expect(evaluateTable({ query: q, group: "person", sort: "-spend" }, uneven)).toMatchObject({ state: "ok", columns: ["person", "tokens", "spend", "rows"] });
     expect(evaluateTable({ query: q, group: "team" }, spend)).toMatchObject({ state: "problem" });
   });
 });

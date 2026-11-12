@@ -268,15 +268,27 @@ export function aggregate(result: DataResult, rows: number[], agg: KpiAgg, field
     case "first":
       return { value: vals[0].v, used: [vals[0].r], how: `${field} in the first row` };
     case "min":
-    case "max":
-    case "top": {
+    case "max": {
       let best = vals[0];
       for (const x of vals) if (agg === "min" ? x.v < best.v : x.v > best.v) best = x;
-      if (agg !== "top") return { value: best.v, used: [best.r], how: `${agg} ${field} across ${vals.length} rows` };
-      const li = label ? columnIndex(result, label) : result.columns.findIndex((_, i) => i !== fi && typeof result.rows[best.r][i] === "string");
+      return { value: best.v, used: [best.r], how: `${agg} ${field} across ${vals.length} rows` };
+    }
+    case "top": {
+      const li = label ? columnIndex(result, label) : result.columns.findIndex((_, i) => i !== fi && typeof result.rows[vals[0].r][i] === "string");
       if (label && li < 0) return { problem: missing(result, label) };
       if (li < 0) return { problem: `"top" needs a label column naming the row` };
-      return { value: String(result.rows[best.r][li]), used: [best.r], how: `the ${result.columns[li]} with the most ${field} across ${vals.length} rows` };
+      // Totals per label, the way a ranking chart sums them: on per-day rows the top spender is the largest total, not the largest day.
+      const totals = new Map<string, { sum: number; rows: number[] }>();
+      for (const x of vals) {
+        const k = String(result.rows[x.r][li] ?? "(none)");
+        const t = totals.get(k) ?? { sum: 0, rows: [] };
+        t.sum += x.v;
+        t.rows.push(x.r);
+        totals.set(k, t);
+      }
+      let top: [string, { sum: number; rows: number[] }] | null = null;
+      for (const e of totals) if (!top || e[1].sum > top[1].sum) top = e;
+      return { value: top![0], used: top![1].rows, how: `the ${result.columns[li]} with the most ${field} in total across ${vals.length} rows` };
     }
   }
 }
@@ -643,7 +655,9 @@ export function evaluateTable(raw: TableBlock, result: DataResult | undefined, s
     shown = g.result.rows.map((_, i) => i);
     back = g.groups;
   }
-  const cols = block.columns ? block.columns.split(",").map((s) => s.trim()).filter(Boolean) : src.columns;
+  // A group count that is the same for every group (30 days per person) says nothing, so the default columns leave it out.
+  const sameCount = !!back && back.length > 1 && back.every((g) => g.length === back![0].length);
+  const cols = block.columns ? block.columns.split(",").map((s) => s.trim()).filter(Boolean) : sameCount ? src.columns.slice(0, -1) : src.columns;
   const idx = cols.map((c) => columnIndex(src, c));
   const bad = cols.find((_, i) => idx[i] < 0);
   if (bad) return { state: "problem", problem: missing(src, bad) };

@@ -35,8 +35,46 @@ function typedClaims(text: string): string | null {
   return all.length ? `Typed ${all.slice(0, 3).join(", ")}${all.length > 3 ? "…" : ""}: use a live value` : null;
 }
 
-/** Words refused on save, kept per field until fixed: closing the editor never throws away what was typed. */
-const held = new Map<string, string>();
+/** Words refused on save, kept per field until fixed: closing the editor or reloading the tab never throws away what was typed. */
+const HELD = "cc-data-held:";
+const held = {
+  get: (k: string) => {
+    try {
+      return sessionStorage.getItem(HELD + k) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  },
+  set: (k: string, v: string) => {
+    try {
+      sessionStorage.setItem(HELD + k, v);
+    } catch {}
+  },
+  delete: (k: string) => {
+    try {
+      sessionStorage.removeItem(HELD + k);
+    } catch {}
+  },
+};
+
+/** The text as a reader sees it: each token drawn as its value today, so the box's raw keys are never the only view. */
+function ReadsAs({ text, preview }: { text: string; preview: (key: string, part: dashboard.TokenPart) => string }) {
+  const parts = text.split(/(\{b_[A-Za-z0-9_]+(?:\.(?:value|delta|trend|vs))?\})/);
+  if (parts.length < 2) return null;
+  return (
+    <div className="text-meta text-sol-text-muted break-words" data-reads-as>
+      {parts.map((p, i) => {
+        const m = p.match(/^\{(b_[A-Za-z0-9_]+)(?:\.(value|delta|trend|vs))?\}$/);
+        if (!m) return <span key={i}>{p}</span>;
+        return (
+          <span key={i} className="px-1 rounded bg-sol-blue/10 text-sol-text">
+            {preview(m[1], (m[2] ?? "value") as dashboard.TokenPart) || "…"}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
 
 export function LiveTextField({ label, value, kpis, multiline, placeholder, onCommit, holdKey, preview }: { label: string; value: unknown; kpis: ArtifactElement[]; multiline?: boolean; placeholder?: string; onCommit: (v: string) => void; holdKey?: string; preview?: (key: string, part: dashboard.TokenPart) => string }) {
   const shown = value === undefined || value === null ? "" : String(value);
@@ -137,6 +175,7 @@ export function LiveTextField({ label, value, kpis, multiline, placeholder, onCo
         ) : null}
       </div>
       {multiline ? <textarea {...props} rows={4} /> : <input {...props} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />}
+      {preview && !error ? <ReadsAs text={draft} preview={preview} /> : null}
       {error ? <span className="block text-meta text-sol-red">{error}</span> : null}
     </div>
   );

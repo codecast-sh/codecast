@@ -45,7 +45,7 @@ function DateChip({ dim, spec, onSet }: { dim: dashboard.FilterDimension; spec: 
       <PopoverTrigger asChild>
         <button type="button" className={chipCls(!!spec)} title={cut || over ? `The sources hold ${held ?? "fewer"} days, from ${dim.first}` : undefined} data-filter-chip="date">
           <Calendar className="w-3.5 h-3.5 shrink-0" />
-          <span className="truncate">{spec ? (over ? `All ${held} days` : cut ? `${dateLabel(clamped!)} (all held)` : dateLabel(spec)) : "All dates"}</span>
+          <span className="truncate">{spec ? (over ? `All ${held} days` : cut ? dateLabel(clamped!) : dateLabel(spec)) : "All dates"}</span>
           <ChevronDown className="w-3 h-3 shrink-0 opacity-60" />
         </button>
       </PopoverTrigger>

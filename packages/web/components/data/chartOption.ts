@@ -177,7 +177,8 @@ export function chartOption(ev: ChartOk, t: ChartTheme, look: ChartLook = {}): E
         type: "line" as const,
         name: seriesLabel(s.name),
         data: s.values,
-        smooth: 0.25,
+        // Straight segments: daily counts are whole steps, and a curve draws values between days that never happened.
+        smooth: false,
         showSymbol: false,
         symbol: "circle",
         symbolSize: 6,
