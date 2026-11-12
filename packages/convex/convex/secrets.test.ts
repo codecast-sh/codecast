@@ -253,7 +253,7 @@ const SEED = "JBSWY3DPEHPK3PXP";
 const read = (t: any, refs: string[], extra: Record<string, unknown> = {}) =>
   t.action(api.secrets.cliRead, { api_token: ANA_TOKEN, refs, conversation: "jx7ana1", purpose: "run", ...extra });
 /** The Touch ID grant string a person's press on the web carries, for one secret. */
-const touch = async (t: any, as: (u: string) => any, user: string, action: "reveal" | "ask_first_off", ref: string) =>
+const touch = async (t: any, as: (u: string) => any, user: string, action: "reveal" | "ask_first_off" | "touch_id_off", ref: string) =>
   seedPresence(t, user, action, (await as(user).query(api.secrets.show, { ref }))._id);
 /** A person answers on the web, signed in: the only way an Ask first decision settles. An Approve comes with its Touch ID grant. */
 const answer = async (t: any, as: (u: string) => any, user: string, decision: string, index: number) => {
@@ -267,6 +267,7 @@ test("Ask first: an agent's read files one decision for the session, Approve let
   await as(ana).action(api.secrets.create, { name: "stripe-live", kind: "key", payload: { value: STRIPE }, team_id: acme });
   expect(await as(ben).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: true })).toMatchObject({ ask_first: true });
   expect((await as(ana).query(api.secrets.show, { ref: "stripe-live" })).ask_first).toBe(true);
+  await as(ana).mutation(api.secrets.setTouchId, { ref: "stripe-live", touch_id: true });
 
   const held = await read(t, ["stripe-live"], { why: "refund order 123" });
   expect(held.secrets).toBeUndefined();
@@ -509,6 +510,44 @@ test("refresh refuses a stale write-back with a distinct answer", async () => {
   expect((await as(ana).action(api.secrets.reveal, { ref: "app" })).payload.cookies[0].value).toBe("cookie-2");
 });
 
+test("Touch ID is its own switch: it gates reveal, Approve and turning a guard off, and Ask first works without it", async () => {
+  const { t, as, ana, acme } = await seed();
+  await as(ana).action(api.secrets.create, { name: "stripe-live", kind: "key", payload: { value: STRIPE }, team_id: acme });
+  await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: true });
+  const decisions = () => t.run(async (ctx: any) => ctx.db.query("session_decisions").collect());
+
+  // Ask first without Touch ID: reveal and Approve are one press each, no grant.
+  expect(await as(ana).action(api.secrets.reveal, { ref: "stripe-live" })).toEqual({ payload: { value: STRIPE } });
+  await read(t, ["stripe-live"]);
+  const [first] = await decisions();
+  expect(first.touch_id).toBeUndefined();
+  await as(ana).mutation(api.sessionDecisions.resolve, { decision_id: first._id, status: "answered", answer_index: 0 });
+  expect((await read(t, ["stripe-live"])).secrets[0].payload).toEqual({ value: STRIPE });
+
+  // Touch ID on from a token; off only from a signed-in person, with a grant.
+  expect(await t.mutation(api.secrets.setTouchId, { api_token: ANA_TOKEN, ref: "stripe-live", touch_id: true })).toMatchObject({ touch_id: true });
+  expect((await t.mutation(api.secrets.setTouchId, { api_token: ANA_TOKEN, ref: "stripe-live", touch_id: false })).error).toMatch(/Only a person turns Touch ID off/);
+  expect((await as(ana).query(api.secrets.show, { ref: "stripe-live" })).touch_id).toBe(true);
+
+  // Re-armed, the next decision carries touch_id and its Approve takes a grant.
+  expect(isPresenceRequired(await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false }))).toBe(true);
+  await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false, grant: await touch(t, as, ana, "ask_first_off", "stripe-live") });
+  await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: true });
+  await read(t, ["stripe-live"]);
+  const gated = (await decisions()).find((d: any) => d.status === "pending");
+  expect(gated.touch_id).toBe(true);
+  await expect(as(ana).mutation(api.sessionDecisions.resolve, { decision_id: gated._id, status: "answered", answer_index: 0 })).rejects.toThrow(/presence_required/);
+
+  // Touch ID off takes its own grant, and clears the flag on the open decision, whose Approve is then one press.
+  expect(isPresenceRequired(await as(ana).mutation(api.secrets.setTouchId, { ref: "stripe-live", touch_id: false }))).toBe(true);
+  const off = await touch(t, as, ana, "touch_id_off", "stripe-live");
+  expect(await as(ana).mutation(api.secrets.setTouchId, { ref: "stripe-live", touch_id: false, grant: off })).toMatchObject({ touch_id: false });
+  expect((await t.run(async (ctx: any) => ctx.db.get(gated._id))).touch_id).toBeUndefined();
+  await as(ana).mutation(api.sessionDecisions.resolve, { decision_id: gated._id, status: "answered", answer_index: 0 });
+  expect((await read(t, ["stripe-live"])).secrets[0].payload).toEqual({ value: STRIPE });
+  expect(await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false })).toMatchObject({ ask_first: false });
+});
+
 test("Ask first is a person's control: a token cannot turn it off or answer its decision, from a session or a plain shell", async () => {
   const { t, as, ana, acme } = await seed();
   await as(ana).action(api.secrets.create, { name: "stripe-live", kind: "key", payload: { value: STRIPE }, team_id: acme });
@@ -531,7 +570,8 @@ test("Ask first is a person's control: a token cannot turn it off or answer its 
   // The person, signed in, approves and turns it off.
   await answer(t, as, ana, decision, 0);
   expect((await read(t, ["stripe-live"])).secrets[0].payload).toEqual({ value: STRIPE });
-  // Off takes Touch ID too: the signed-in browser may be an agent's.
+  // With Touch ID on, off takes it too: the signed-in browser may be an agent's.
+  await as(ana).mutation(api.secrets.setTouchId, { ref: "stripe-live", touch_id: true });
   expect(isPresenceRequired(await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false }))).toBe(true);
   const touched = await touch(t, as, ana, "ask_first_off", "stripe-live");
   expect(await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false, grant: touched })).toMatchObject({ ask_first: false });
