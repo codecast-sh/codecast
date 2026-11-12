@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { autoContinueArmedOnPane, classifyStartedPane, parsePermissionModeFooter, stepPermissionMode, clearUnresolvablePane, extractTmuxLiveRegion, limitDialogOnPane, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
-import { classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, GROK_TRUST_PANE_CAPTURE_LINES, isClaudeIdleResumeDialog, isGrokTrustDialog, isIdleResumeOptionRow } from "./tmuxPaneState.js";
+import { classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, GROK_TRUST_PANE_CAPTURE_LINES, isClaudeIdleResumeDialog, isClaudeNudgeDialog, isGrokTrustDialog, isIdleResumeOptionRow } from "./tmuxPaneState.js";
 import { AGENT_CLIENTS } from "@codecast/shared/contracts";
 import { CLAUDE_BYPASS_WARNING_PANE, CODEX_TRUST_PANE, GROK_TRUST_PANE } from "./test-helpers/trustDialogFrames.js";
 
@@ -1171,5 +1171,41 @@ describe("Claude idle-resume dialog", () => {
     expect(rows).toEqual(["❯ 1. Resume"]);
     expect(isIdleResumeOptionRow("  1. Resume")).toBe(true);
     expect(isIdleResumeOptionRow("❯ 3. Resume from summary")).toBe(false);
+  });
+});
+
+// Live capture of jx7eahf on 2026-11-12: Claude Code's compaction nudge over an
+// idle turn. The picker's "›" read as a composer, so nine messages were pasted
+// into the dialog and given up on.
+const COMPACT_NUDGE_PANE = `  wasn't there when the ads patch passed earlier. Once the check finishes, I'll know whether it blocks this follow-up.
+
+✻ Cooked for 2m 1s · done 10:05 AM
+
+────────────────────────────────────────────────────────────────────────────────────────────────
+ We recommend compacting earlier
+
+   Each message re-sends the whole conversation, so long conversations use up your plan's usage limits faster. With your current settings, Claude Code autocompacts (replaces older messages with a summary) at 1m tokens
+   (default via auto setting). Compacting earlier can reduce usage, but it happens more often, and some details can be lost each time.
+
+   Want to autocompact at 400k tokens instead? Your model doesn't change. Switch back any time with /autocompact.
+
+     Autocompact at ‹ 400k › tokens
+     Keep auto (1m tokens)
+
+   ↑/↓ choose · ←/→ change size · enter confirm · esc not now
+`;
+
+describe("Claude Code nudge dialog", () => {
+  test("classifies as nudge, not idle", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(COMPACT_NUDGE_PANE))).toBe("nudge");
+  });
+
+  test("a value picker's › is not a composer", () => {
+    const withoutFooter = COMPACT_NUDGE_PANE.replace(/^.*esc not now\n/m, "");
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(withoutFooter))).not.toBe("idle");
+  });
+
+  test("prose quoting the footer is not the dialog", () => {
+    expect(isClaudeNudgeDialog("the footer says esc not now, so Escape declines it")).toBe(false);
   });
 });

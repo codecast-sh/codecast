@@ -2956,10 +2956,14 @@ program
   .addHelpText("after",
     "\nExamples:\n" +
     "  cast auth                # open the browser sign-in page and link this machine\n" +
-    "  cast auth status         # signed in or not, and the daemon's state\n" +
+    "  cast auth status         # signed in or not, and the daemon's state; exits 1 when not signed in\n" +
     "  cast login -             # no browser here: paste a setup token from codecast.sh/cli")
   .action(async (action?: string) => {
-    if (action === "status") return showStatus({ network: false });
+    if (action === "status") {
+      await showStatus({ network: false });
+      if (!readConfig()?.auth_token || readDaemonState()?.authExpired) process.exitCode = 1;
+      return;
+    }
     if (action) {
       console.error(`Unknown auth action "${action}". Run ${fmt.cmd("cast auth")} to sign in or ${fmt.cmd("cast auth status")} to check.`);
       process.exit(1);
@@ -4389,6 +4393,9 @@ accountsCmd.command("share <profile> [teams...]").description("Pool an account w
 accountsCmd.command("unshare <profile> [teams...]").description("Take an account out of a team's pool")
   .addOption(new Option("--pool <label>", "Take only this label off, keeping the team share").choices(["line"]))
   .action(async (p, t, o) => (await poolCmd()).unshareAccount(p, t, o));
+accountsCmd.command("devices <profile> [devices...]").description("Which of your machines run on an account: --all (the default), the named ones, or none named for this machine only")
+  .option("--all", "Every machine of yours again")
+  .action(async (p, d, o) => (await poolCmd()).accountDevices(p, d, o));
 accountsCmd.command("pool").description("Pooled accounts and who spent them").option("--json", "JSON")
   .action(async (o) => (await poolCmd()).printPool(o));
 

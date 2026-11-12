@@ -10,11 +10,13 @@
 // follows them when they change. Pure and free of the `@/` alias: the phone's
 // bundle and tests import it.
 
-import { RUN_OPTION, runResultText } from "@codecast/shared/contracts/commandRun";
+import { RUN_OPTION, SKIP_OPTION, runResultText } from "@codecast/shared/contracts/commandRun";
+
 import { formatGoalMessage } from "@codecast/shared/contracts/sessionGoal";
 import {
   composeContextRecoveryPrompt,
   formatAgentSwitchNotice,
+  agentSetupLines,
   formatDecisionAnswer,
   formatVaultReady,
   formatHuddleSummaryTag,
@@ -53,6 +55,13 @@ export const GALLERY_ORG = {
   decision2: "gallerydecision000000002",
   decision2Short: "sd-90002",
 } as const;
+
+/** Permission asks (`cast decide --run`), one per state the transcript draws. */
+export const GALLERY_PERMISSION = [
+  { id: "gallerypermission0000001", short: "sd-90011", question: "Let this cloud host use the Chrome on your laptop again?", run: { argv: ["browser", "extension", "link", "--host", "i-0b910d09160c158ef"], state: "running" as const, device_id: "gallery-laptop" } },
+  { id: "gallerypermission0000002", short: "sd-90012", question: "Carry your vercel.com login to this cloud host?", run: { argv: ["browser", "sync", "vercel.com"], state: "failed" as const, exit_code: 1, output: "Keychain access was denied: click Always Allow when your Mac asks for Chrome Safe Storage." } },
+  { id: "gallerypermission0000003", short: "sd-90013", question: "Update codecast on your laptop?", run: { argv: ["update"], state: "skipped" as const } },
+];
 
 export const GALLERY_FLOW = {
   slug: "gallery-flaky-fix",
@@ -154,7 +163,14 @@ export function renderGalleryRecords(now: number, viewerId: string, workspace: s
       _id: GALLERY_ORG.decision2, short_id: GALLERY_ORG.decision2Short, conversation_id: conversationId, user_id: viewerId, workspace,
       question: "Keep the old parser for a release as a fallback?", kind: "single", status: "pending", blocking: false, default_option: 0, created_at: now - 60_000, updated_at: now - 60_000,
       options: [{ label: "Keep it", description: "One release, then delete" }, { label: "Delete now", description: "No fallback" }],
-    }],
+    }, ...GALLERY_PERMISSION.map((p) => ({
+      _id: p.id, short_id: p.short, conversation_id: conversationId, user_id: viewerId, workspace,
+      question: p.question, kind: "single", status: p.run.state === "waiting" ? "pending" : "answered", blocking: true, category: "access",
+      ...(p.run.state === "waiting" ? {} : { answer_index: p.run.state === "skipped" ? 1 : 0 }),
+      created_at: now - 30_000, updated_at: now - 30_000,
+      options: [{ label: RUN_OPTION }, { label: SKIP_OPTION }],
+      run: { ...p.run, at: now - 20_000 },
+    }))],
     sessionFlows: [{ _id: GALLERY_FLOW.sessionFlow, workspace, graph_hash: GALLERY_FLOW.hash, from: "graph", name: GALLERY_FLOW.slug, label: "Spine, flaky test", kind: null, base: "spine", fills: ["implement"], nodes: FLOW_NODES, edges: FLOW_EDGES, runs: [GALLERY_FLOW.liveRun], run_count: 1, more: false, last_at: now, sessions: [], by: [viewerId], saved: null }],
   };
 }
@@ -447,6 +463,13 @@ export function renderGalleryMessages(now: number): Row[] {
   user(formatDecisionAnswer({ id: "sd-311", question: "Ship the renderer behind a flag?", answer: "Ship now" }));
   // A `cast decide --run` answer: the Run label, the command's result after the tag.
   user(formatDecisionAnswer({ id: "sd-312", question: "Grant @ads up to $500 a month?", answer: RUN_OPTION, detail: runResultText({ argv: ["role", "authority", "@ads", "--grant", '[{"id":"ads-spend","kind":"spend","label":"Ads","limit":{"usd_per_month":500}}]'], state: "done", exit_code: 0, output: "✓ @ads may spend (Ads)" }) }));
+  // The same asks still on their way, failed and declined: each answer reads its decision row (GALLERY_PERMISSION).
+  for (const p of GALLERY_PERMISSION) {
+    user(formatDecisionAnswer({ id: p.id, question: p.question, answer: p.run.state === "skipped" ? SKIP_OPTION : RUN_OPTION, ...(p.run.state === "failed" ? { detail: runResultText(p.run) } : {}) }));
+  }
+  // A step only the person can take, under the command that needed it: the setup card.
+  sh("cast browser open https://vercel.com/dashboard", ["the extension bridge is not set up (the Codecast extension: https://chromewebstore.google.com/detail/codecast). No separate browser was started.", ...agentSetupLines("browser")].join("\n"), { error: true });
+  sh("cast computer get-app-state --app com.apple.TextEdit", ["permission_denied: Accessibility is not granted to codecast computer", ...agentSetupLines("computer")].join("\n"), { error: true });
 
   section("Commands and terminal");
   user("<command-message>deploy</command-message>\n<command-name>/deploy</command-name>\n<command-args>web only</command-args>");
