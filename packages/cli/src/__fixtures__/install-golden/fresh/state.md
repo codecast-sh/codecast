@@ -14,11 +14,11 @@ Pin a short state on this session saying where the work stands. The human sees i
 
 The first line says where the work stands **now**, for a reader with no context: one thought, about 60 characters, plain words; if it waits on someone, name them. Then up to three lines, one line each, only when they carry something:
 
-- `You:` what the human must do or decide, with the exact command (in backticks), link or choice
+- `You:` what the human must do or decide: the card, link or choice, never a command to type
 - `Done:` what is finished, short items joined by ` · `; proof counts ("tests green")
 - `Next:` what happens next and when, in local time: the running job, your next step, or what wakes you
 
-Leave IDs, hashes, branches, paths and UTC stamps in the transcript unless one is what the human must type, and never repeat the first line or write a line that says "nothing".
+Leave IDs, hashes, branches, paths and UTC stamps in the transcript unless the human needs one, and never repeat the first line or write a line that says "nothing".
 
 ```bash
 cast state --status done "Shipped: all four fixes verified in the browser"

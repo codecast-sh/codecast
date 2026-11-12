@@ -88,14 +88,11 @@ for (const [owner, name] of [[w.Element.prototype, "getBoundingClientRect"], [w,
 }
 
 type Tally = { commits: number; storeWrites: number; outsideMutations: string[]; layoutReads: string[] };
-let measure: (fn: () => void) => Promise<Tally>;
+type Mounted = { textarea: HTMLTextAreaElement; measure: (fn: () => void) => Promise<Tally> };
 let totalCommits = 0;
-let textarea: HTMLTextAreaElement;
+let MessageInput: typeof import("../MessageInput").MessageInput;
 
-beforeAll(async () => {
-  (useInboxStore.getState() as any)._setDispatch(async () => undefined);
-  useInboxStore.setState({ sessions: syntheticSessions(SESSIONS), conversations: {}, pendingMessages: {}, drafts: {}, currentSessionId: CONV_ID, currentUser: { _id: "user_type_budget", name: "Typist" } } as any);
-  const { MessageInput } = await import("../MessageInput");
+async function mountComposer(props: Record<string, unknown>): Promise<Mounted> {
   const container = w.document.createElement("div");
   w.document.body.appendChild(container);
   let commits = 0;
@@ -104,7 +101,7 @@ beforeAll(async () => {
     root.render(
       <ConvexProvider client={fakeConvex()}>
         <Profiler id="composer" onRender={() => { commits++; totalCommits++; }}>
-          <MessageInput conversationId={CONV_ID} status="active" sessionId="s-typebud" agentType="claude_code" agentStatus={"idle" as any} isSessionReady />
+          <MessageInput {...(props as any)} />
         </Profiler>
       </ConvexProvider>,
     );
@@ -113,8 +110,8 @@ beforeAll(async () => {
   // The store's boot hydration (inboxStore bootPersistence) ends with a write of its own; on a loaded machine it can
   // land inside a keystroke's window and count as typing's. Let it settle before anything is measured.
   for (let i = 0; i < 400 && !useInboxStore.getState().clientStateInitialized; i++) await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
-  textarea = container.querySelector("textarea[data-composer-field]") as HTMLTextAreaElement;
-  measure = async (fn) => {
+  const textarea = container.querySelector("textarea[data-composer-field]") as HTMLTextAreaElement;
+  const measure = async (fn: () => void): Promise<Tally> => {
     commits = 0;
     let storeWrites = 0;
     const unsub = useInboxStore.subscribe(() => { storeWrites++; });
@@ -136,6 +133,16 @@ beforeAll(async () => {
     unsub();
     return { commits, storeWrites, outsideMutations, layoutReads: reads };
   };
+  return { textarea, measure };
+}
+
+let session: Mounted;
+
+beforeAll(async () => {
+  (useInboxStore.getState() as any)._setDispatch(async () => undefined);
+  useInboxStore.setState({ sessions: syntheticSessions(SESSIONS), conversations: {}, pendingMessages: {}, drafts: {}, currentSessionId: CONV_ID, currentUser: { _id: "user_type_budget", name: "Typist" } } as any);
+  ({ MessageInput } = await import("../MessageInput"));
+  session = await mountComposer({ conversationId: CONV_ID, status: "active", sessionId: "s-typebud", agentType: "claude_code", agentStatus: "idle", isSessionReady: true });
 });
 
 // The composer's own handlers, called as React would for a typed key (native
@@ -152,7 +159,7 @@ async function settle() {
   }
 }
 
-function typeChar(ch: string) {
+function typeChar(textarea: HTMLTextAreaElement, ch: string) {
   const propsKey = Object.keys(textarea).find((k) => k.startsWith("__reactProps"))!;
   const props = (textarea as any)[propsKey];
   const keyEvent = { key: ch, code: `Key${ch.toUpperCase()}`, target: textarea, currentTarget: textarea, nativeEvent: new w.KeyboardEvent("keydown", { key: ch }), preventDefault() {}, stopPropagation() {}, isComposing: false, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, repeat: false };
@@ -161,12 +168,13 @@ function typeChar(ch: string) {
   props.onChange?.({ target: textarea, currentTarget: textarea, nativeEvent: new w.Event("input") });
 }
 
-test("a keystroke into a box with text commits once, writes nothing to the store, changes nothing in the DOM tree, and reads no layout", async () => {
+async function holdsBudget({ textarea, measure }: Mounted, seed: string) {
   expect(textarea).toBeTruthy();
+  for (const ch of seed) await measure(() => typeChar(textarea, ch));
   // The first characters change what an empty box shows (the ghost suggestion
   // hides, send turns on), and that settles one commit later. Then the budget.
-  await measure(() => typeChar("h"));
-  await measure(() => typeChar("e"));
+  await measure(() => typeChar(textarea, "h"));
+  await measure(() => typeChar(textarea, "e"));
   await settle();
   const text = "llo there, this is a long prompt being typed".slice(0, KEYS);
   let worstCommits = 0;
@@ -174,16 +182,29 @@ test("a keystroke into a box with text commits once, writes nothing to the store
   const outside = new Set<string>();
   const reads = new Set<string>();
   for (const ch of text) {
-    const t = await measure(() => typeChar(ch));
+    const t = await measure(() => typeChar(textarea, ch));
     worstCommits = Math.max(worstCommits, t.commits);
     storeWrites += t.storeWrites;
     for (const m of t.outsideMutations) outside.add(m);
     for (const r of t.layoutReads) reads.add(r);
   }
-  expect(textarea.value.startsWith("hello there")).toBe(true);
+  expect(textarea.value.startsWith(`${seed}hello there`)).toBe(true);
   expect({ worstCommitsPerKey: worstCommits }).toEqual({ worstCommitsPerKey: 1 });
   expect({ storeWritesWhileTyping: storeWrites }).toEqual({ storeWritesWhileTyping: 0 });
   expect([...outside]).toEqual([]);
   expect({ layoutReadsWhileTyping: [...reads] }).toEqual({ layoutReadsWhileTyping: [] });
   expect(draftWritesScheduled).toBeGreaterThan(0);
+}
+
+test("a keystroke into a box with text commits once, writes nothing to the store, changes nothing in the DOM tree, and reads no layout", async () => {
+  await holdsBudget(session, "");
+});
+
+// The chat composer's reply strip draws the sessions a draft names. Typing
+// after one must cost the same as typing anywhere: the strip is keyed on who
+// is named, which a keystroke of prose does not change.
+test("the same budget holds in a chat box whose draft names a session", async () => {
+  const chat = await mountComposer({ conversationId: "chat:typebud", bareComposer: true, chatMentionMode: true, mentionTeamId: "team_typebud", onGateSend: () => {} });
+  await holdsBudget(chat, "ask @[Cam Broker jx7abcd] ");
+  expect(chat.textarea.closest("form")!.querySelector(".ch-reply-toggle")).toBeTruthy();
 });

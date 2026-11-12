@@ -15,6 +15,7 @@ import { useDecisionAnswer } from "../../hooks/useDecisionAnswer";
 import { useOneAnswer } from "../../hooks/useOneAnswer";
 import { useInboxStore } from "../../store/inboxStore";
 import type { QueueItem } from "../../lib/decisionQueue";
+import { deviceDisplayName } from "@codecast/shared/contracts";
 import { cn } from "@/lib/utils";
 
 type Outcome = PermissionOutcome;
@@ -23,7 +24,7 @@ const OUTCOME: Record<Outcome, { label: string; tone: string; tile: string; Icon
   running: { label: "Running", tone: "text-sol-text-muted", tile: "bg-sol-blue/10 text-sol-blue", Icon: Loader2 },
   done: { label: "Done", tone: "text-sol-green", tile: "bg-sol-green/10 text-sol-green", Icon: ShieldCheck },
   failed: { label: "Didn't go through", tone: "text-sol-red", tile: "bg-sol-red/10 text-sol-red", Icon: ShieldAlert },
-  declined: { label: "Not allowed", tone: "text-sol-text-dim", tile: "bg-sol-bg-alt text-sol-text-dim", Icon: ShieldX },
+  declined: { label: "Not now", tone: "text-sol-text-dim", tile: "bg-sol-bg-alt text-sol-text-dim", Icon: ShieldX },
 };
 
 function Tile({ className, children, size = "lg" }: { className: string; children: ReactNode; size?: "lg" | "sm" }) {
@@ -34,10 +35,37 @@ function Tile({ className, children, size = "lg" }: { className: string; childre
   );
 }
 
+/** A machine whose heartbeat is older than this is shown as offline: a run sent to it waits there. */
+const MACHINE_QUIET_MS = 2 * 60_000;
+
+/**
+ * Where a permission ask runs, when that is not the session's own machine
+ * (`cast decide --run --on laptop` from a cloud host): the person says Yes to
+ * something on their laptop, so the card and its record name it, and say when
+ * it is offline and the step waits for it.
+ */
+export function useRunMachine(decisionId: string | undefined): { name: string; offline: boolean } | null {
+  const key = useInboxStore((s) => {
+    const d = decisionId ? s.sessionDecisions[decisionId] : undefined;
+    const target = d?.run?.device_id;
+    if (!target) return null;
+    const cid = String(d.conversation_id);
+    const own = (s.sessions as any)[cid]?.owner_device_id ?? (s.conversations as any)[cid]?.owner_device_id;
+    if (own && own === target) return null;
+    const m = ((s as any).machineRoster ?? []).find((r: any) => r.device_id === target);
+    if (!m) return null;
+    return `${deviceDisplayName(m)}\u0000${Date.now() - m.last_seen > MACHINE_QUIET_MS ? 1 : 0}`;
+  });
+  if (!key) return null;
+  const [name, off] = key.split("\u0000");
+  return { name, offline: off === "1" };
+}
+
 /** The open ask, at the end of the transcript. */
 export function PermissionAskCard({ item }: { item: QueueItem }) {
   const { question, options, answer } = useDecisionAnswer(item);
   const { answered, refused, pick } = useOneAnswer(answer);
+  const machine = useRunMachine(item.decisionId);
   return (
     <div className="w-full pt-4" data-session-decision={item.conversationId} data-permission-ask>
       <div
@@ -47,6 +75,12 @@ export function PermissionAskCard({ item }: { item: QueueItem }) {
         <Tile className="mt-px bg-sol-amber/15 text-sol-amber"><ShieldQuestion /></Tile>
         <div className="min-w-0 flex-1 pt-[5px]">
           <HostedApprovalBody question={question} options={options} onPick={pick} answered={answered} refused={refused} keys yesIcon={<Fingerprint />} />
+          {machine && (
+            <p data-permission-machine className="mt-2 text-[12px] text-sol-text-dim">
+              Runs on <span className="text-sol-text-muted">{machine.name}</span>
+              {machine.offline && <span className="text-sol-amber"> · offline now, it runs when it is back</span>}
+            </p>
+          )}
         </div>
       </div>
     </div>
@@ -54,9 +88,11 @@ export function PermissionAskCard({ item }: { item: QueueItem }) {
 }
 
 /** The answered ask, one line: what was asked and where the step stands. */
-export function PermissionRecordLine({ question, outcome, output, className }: { question: string; outcome: Outcome; output?: string; className?: string }) {
+export function PermissionRecordLine({ question, outcome, output, machine, queued, className }: { question: string; outcome: Outcome; output?: string; machine?: { name: string; offline: boolean } | null; queued?: boolean; className?: string }) {
   const [open, setOpen] = useState(false);
   const o = OUTCOME[outcome];
+  const waitingOn = outcome === "running" && queued && machine?.offline;
+  const label = waitingOn ? `Waiting for ${machine!.name} to come online` : machine && outcome !== "declined" ? `${o.label} on ${machine.name}` : o.label;
   const why = outcome === "failed" && !!output?.trim();
   return (
     <div className={cn("w-full", className)} data-permission-record={outcome} data-cc-row="permission" data-cc-row-tone={outcome === "failed" ? "error" : undefined}>
@@ -65,10 +101,10 @@ export function PermissionRecordLine({ question, outcome, output, className }: {
         <span data-cc-row-text className={cn("min-w-0 truncate text-[13px]", outcome === "declined" ? "text-sol-text-dim" : "text-sol-text-muted")} title={question}>{question}</span>
         {why ? (
           <button data-cc-row-meta type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} className={cn("shrink-0 text-[12px] underline-offset-2 hover:underline", o.tone)}>
-            {o.label}
+            {label}
           </button>
         ) : (
-          <span data-cc-row-meta role="status" className={cn("shrink-0 text-[12px]", o.tone)}>{outcome === "running" ? `${o.label}…` : o.label}</span>
+          <span data-cc-row-meta role="status" className={cn("shrink-0 text-[12px]", waitingOn ? "text-sol-amber" : o.tone)}>{outcome === "running" && !waitingOn ? `${label}…` : label}</span>
         )}
       </div>
       {why && open && (
@@ -78,6 +114,13 @@ export function PermissionRecordLine({ question, outcome, output, className }: {
   );
 }
 
+/** A Yes still running, holding the card's place at the end of the transcript. */
+export function RunningPermissionLine({ id, question }: { id: string; question: string }) {
+  const machine = useRunMachine(id);
+  const queued = useRunQueued(id);
+  return <PermissionRecordLine question={question} outcome="running" machine={machine} queued={queued} className="pt-4" />;
+}
+
 /** The record an answer leaves in the transcript (permissionRecord); null
  *  when the answer is not a permission ask's. */
 function usePermissionRecord(decision: DecisionAnswerMessage): ReturnType<typeof permissionRecord> {
@@ -85,9 +128,15 @@ function usePermissionRecord(decision: DecisionAnswerMessage): ReturnType<typeof
   return permissionRecord(decision, run);
 }
 
+function useRunQueued(decisionId: string | undefined): boolean {
+  return useInboxStore((s) => (decisionId ? s.sessionDecisions[decisionId]?.run?.state === "queued" : false));
+}
+
 /** An answer in the transcript: a permission ask's record line, else the
  *  ordinary answer it was going to be. */
 export function PermissionAnswer({ decision, children }: { decision: DecisionAnswerMessage; children: ReactNode }) {
   const record = usePermissionRecord(decision);
-  return record ? <PermissionRecordLine {...record} className="py-1.5" /> : <>{children}</>;
+  const machine = useRunMachine(decision.id);
+  const queued = useRunQueued(decision.id);
+  return record ? <PermissionRecordLine {...record} machine={machine} queued={queued} className="py-1.5" /> : <>{children}</>;
 }

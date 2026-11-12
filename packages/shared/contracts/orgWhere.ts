@@ -75,7 +75,7 @@ Information goes to whoever owns it, in the cheapest form that reaches them in t
 
 As a lead, read your whole area each time you run, connect what one session found to the sessions it affects, and send each only what changes its next action.
 
-cast role wake @handle reaches a role; cast send <id> a session; cast chat dm @handle "<text>" a person; cast route --dry names the owner of a request when you are unsure; cast decide puts a choice in a person's queue; cast org where shows this picture as it stands now.`;
+cast role wake @handle reaches a role; cast send <id> a session; cast chat dm @handle "<text>" a person; cast route --dry names the owner of a request when you are unsure; cast decide puts a choice in a person's queue, and cast decide "<what Yes does>?" --run "cast …" (--on laptop from a cloud host) is how a step only your person may take reaches them: a Yes card that runs it as theirs, never a command for them to type; cast org where shows this picture as it stands now.`;
 
 /** The block injected at session start. */
 export function orgContextBlock(w: OrgWhere): string {
