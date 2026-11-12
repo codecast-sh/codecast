@@ -1,4 +1,6 @@
 import { describe, test, expect } from "bun:test";
+import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { buildDisclaimShellPrefix } from "./disclaim.js";
 
@@ -57,6 +59,27 @@ describe("runDisclaimed (subprocess)", () => {
       stdout: "pipe",
     });
     expect(r.stdout.toString().trim()).toBe("carried");
+  });
+
+  test("leaves the working directory's .env out of the command's environment", () => {
+    // The wrapper runs in the agent's project directory, where bun loads .env into process.env.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "disclaim-dotenv-"));
+    try {
+      fs.writeFileSync(path.join(dir, ".env"), "DISCLAIM_DOTENV_PROBE=leaked\n");
+      const r = Bun.spawnSync({
+        cmd: [
+          process.execPath,
+          "-e",
+          `import { runDisclaimed } from ${JSON.stringify(entry)}; runDisclaimed(["--", "/bin/sh", "-c", "echo probe=$DISCLAIM_DOTENV_PROBE carried=$DISCLAIM_TEST_VAR"]);`,
+        ],
+        cwd: dir,
+        env: { ...process.env, DISCLAIM_TEST_VAR: "carried" },
+        stdout: "pipe",
+      });
+      expect(r.stdout.toString().trim()).toBe("probe= carried=carried");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("takes the real disclaim path on macOS (not the fallback)", () => {

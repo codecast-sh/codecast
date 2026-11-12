@@ -1,6 +1,6 @@
 # The production Convex host
 
-What is actually running, as of 2026-11-10. The files beside this one are the
+What is actually running, as of 2026-11-12. The files beside this one are the
 source of truth for configuration; this file records the facts about the machine
 that no file in the repo can tell you.
 
@@ -8,7 +8,7 @@ that no file in the repo can tell you.
 
 | | |
 |---|---|
-| Instance | `i-015ef3512c33009f0`, `r7g.16xlarge` (64 vCPU, 494 GB RAM, Graviton), launched 2026-11-10 from AMI `ami-058ffe161035c37b5` (a copy of the previous host's root disk) |
+| Instance | `i-015ef3512c33009f0`, `r8g.24xlarge` (96 vCPU, 768 GB RAM, Graviton4) since 2026-11-12, launched 2026-11-10 from AMI `ami-058ffe161035c37b5` (a copy of the previous host's root disk) |
 | Account / region | AWS `045275879943` (the default AWS CLI profile), `us-east-1d` |
 | Address | `184.192.248.132`, an Elastic IP (`eipalloc-0fb9c5bd0778d91f6`) |
 | Disk | 1.5 TB gp3 (`vol-00fc743a09f9540e7`, 16000 IOPS, 1000 MB/s) mounted at `/srv` by filesystem label `codecast-data`, restored from a snapshot of the previous host's data volume |
@@ -23,6 +23,13 @@ prod was rebuilt here from snapshots with no data lost (down 19:16 to 23:17 UTC)
 The old data volume is detached. Starting the old host with it reattached would
 run a second Convex with its own crons and side effects against a stale copy.
 
+It was an `r7g.16xlarge` (64 vCPU) from 2026-10-23 to 2026-11-12, when 28 hours at
+83 to 87% CPU (a 131-file import cycle in the Convex modules, and queries
+re-running on heartbeat-rate writes; ct-92329, ct-92571) held Union's line
+behind it, and Ashot moved it to 96 Graviton4 cores. The stop took 2.5 minutes
+(Postgres flushing), the start 20 seconds, and the backend reported healthy at
+3.5 minutes; both volumes were snapshotted while stopped
+(`snap-0c69d9e9110457fe8` data, `snap-027e88d9e91dc3945` root).
 It was an `r7g.8xlarge` (32 vCPU) from 2026-09-22 to 2026-10-23, when a day at
 80 to 94% CPU from the growing agent fleet moved it to 64 vCPU (sd-1280).
 It was an `r7g.4xlarge` (16 vCPU) until 2026-09-22. CPU, not memory, forced the
@@ -127,6 +134,6 @@ cold cache, not a fault.
 
 ## Cost
 
-About $2,500 a month for the instance on demand (r7g.16xlarge since 2026-10-23; $1,250 as an 8xlarge), plus about $120 for the volume (1.5 TB since 2026-10-22).
+About $4,130 a month for the instance on demand (r8g.24xlarge since 2026-11-12; $2,500 as an r7g.16xlarge, $1,250 as an 8xlarge), plus about $120 for the volume (1.5 TB since 2026-10-22).
 It was about $625 before the resize. Nothing here is on a reserved instance or a
 savings plan yet, so the whole bill is on demand.

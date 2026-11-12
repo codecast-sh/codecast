@@ -50,6 +50,35 @@ export function buildDisclaimShellPrefix(
   return `${castBin} _disclaimed -- `;
 }
 
+/** The environment this wrapper was started with, as KEY=value strings, or
+ *  null when it cannot be read. The wrapper runs in the agent's project
+ *  directory, and bun loads that directory's .env files into process.env
+ *  (never into the C environ), so an environment built from process.env
+ *  hands the agent every secret in the project's .env. An ANTHROPIC_API_KEY
+ *  there moves Claude off the subscription onto that key: on 2026-11-12, 38
+ *  sessions at Union's repo root billed its key until it ran out of credit. */
+export function inheritedEnvStrings(): string[] | null {
+  try {
+    if (process.platform === "linux") {
+      return (require("fs") as typeof import("fs")).readFileSync("/proc/self/environ", "utf8").split("\0").filter(Boolean);
+    }
+    if (process.platform !== "darwin") return null;
+    const { dlopen, FFIType, CString, read } = require("bun:ffi") as typeof import("bun:ffi");
+    const lib = dlopen("libSystem.B.dylib", { _NSGetEnviron: { args: [], returns: FFIType.ptr } });
+    const envp = read.ptr(lib.symbols._NSGetEnviron()!, 0);
+    const out: string[] = [];
+    for (let i = 0; ; i++) {
+      const p = read.ptr(envp, i * 8);
+      if (!p) break;
+      out.push(new CString(p).toString());
+    }
+    lib.close();
+    return out;
+  } catch {
+    return null;
+  }
+}
+
 /** Exec argv[0..] in place of this process, disclaimed. Only returns on
  *  failure (errno, or -1 when the FFI path is unavailable). */
 export function execDisclaimed(argv: string[]): number {
@@ -100,9 +129,11 @@ export function execDisclaimed(argv: string[]): number {
 
   const file = cstr(argv[0]);
   const argvArr = cstrArray(argv, keep);
-  const envStrings = Object.entries(process.env)
-    .filter(([, v]) => v !== undefined)
-    .map(([k, v]) => `${k}=${v}`);
+  const envStrings =
+    inheritedEnvStrings() ??
+    Object.entries(process.env)
+      .filter(([, v]) => v !== undefined)
+      .map(([k, v]) => `${k}=${v}`);
   const envArr = cstrArray(envStrings, keep);
 
   const pidOut = Buffer.alloc(4);
@@ -129,7 +160,11 @@ export function runDisclaimed(rawArgs: string[]): void {
   execDisclaimed(argv); // only returns on failure
 
   const { spawn } = require("child_process") as typeof import("child_process");
-  const child = spawn(argv[0], argv.slice(1), { stdio: "inherit" });
+  const inherited = inheritedEnvStrings();
+  const env = inherited
+    ? Object.fromEntries(inherited.filter((s) => s.indexOf("=") > 0).map((s) => [s.slice(0, s.indexOf("=")), s.slice(s.indexOf("=") + 1)]))
+    : process.env;
+  const child = spawn(argv[0], argv.slice(1), { stdio: "inherit", env });
   for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     process.on(sig, () => {
       try { child.kill(sig); } catch {}
