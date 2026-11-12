@@ -109,14 +109,13 @@ describe("sticky target", () => {
   test("the sign-in hint names the step that fits the bridge's state", () => {
     expect(realModeHint("session:a")).toBeNull();
     setStickyTarget("session:a", "clone");
-    expect(withAdvancedClone(() => realModeHint("session:a"))).toContain("cast browser extension setup");
-    expect(withAdvancedClone(() => realModeHint("session:a"))).toContain(BRIDGE_STORE_URL);
+    expect(withAdvancedClone(() => realModeHint("session:a"))).toContain("setup card");
+    expect(withAdvancedClone(() => realModeHint("session:a"))).not.toContain("extension setup");
     setStickyTarget("session:a", "real");
     writeBridgeState({ port: 41999, token: "t".repeat(64), hostPid: 2 ** 22 + 12345, extensionConnected: false, extensionSeenAt: Date.now() });
     expect(realModeHint("session:a")).toBeNull();
     setStickyTarget("session:a", "clone");
     expect(withAdvancedClone(() => realModeHint("session:a"))).toContain("not connected right now");
-    expect(withAdvancedClone(() => realModeHint("session:a"))).toContain(BRIDGE_STORE_URL);
     // A session that settled on the clone before the extension came is told the way over.
     setStickyTarget("session:a", "clone");
     writeBridgeState({ port: 41999, token: "t".repeat(64), hostPid: process.pid, extensionConnected: true, extensionSeenAt: Date.now() });
@@ -241,7 +240,7 @@ describe("the browser behind an engine session key", () => {
   });
 
   test("a -real key with no bridge set up is refused, never routed to the clone", async () => {
-    await expect(engineBrowserFor("env-abc-real")).rejects.toThrow(/extension setup/);
+    await expect(engineBrowserFor("env-abc-real")).rejects.toThrow(/not set up/);
     expect(await bridgeEndpointIfConfigured()).toBeNull();
   });
 

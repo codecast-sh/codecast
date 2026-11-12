@@ -559,6 +559,22 @@ async function decideApi(deps: PublishDeps, body: Record<string, unknown>, route
   return result;
 }
 
+/** Post a Yes / Not now card in this session that runs `command` as the person on Yes (the `--run` ask), for a command that is theirs to start. Null outside a session. */
+export async function askPersonToRun(deps: PublishDeps, ask: { question: string; command: string; on?: string }): Promise<string | null> {
+  const sessionId = deps.detectCurrentSessionId();
+  if (!sessionId) return null;
+  const result = await decideApi(deps, {
+    session_id: sessionId,
+    question: ask.question,
+    options: RUN_OPTIONS.map((o) => ({ ...o })),
+    run: ask.command,
+    ...(ask.on ? { run_on: ask.on } : {}),
+    blocking: true,
+    kind: "single",
+  });
+  return decisionHandle(result);
+}
+
 async function publishReport(deps: PublishDeps, file: string, sessionId: string): Promise<{ slug?: string; url?: string }> {
   const absPath = path.resolve(file);
   if (!fs.existsSync(absPath)) fail(`No such report file: ${file}`);
@@ -677,7 +693,8 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
     .option("--context <text>", stdinText("Markdown context for someone who never saw this session, read alone: what went wrong (one real case), what you would pick and why, what cuts against it. Explain everything where you mention it, with no ids, file paths or rule numbers; never repeat the question or options. A cast-canvas block renders inline, so options worth comparing can sit side by side"))
     .option("--report <file>", "HTML/markdown report published as the decision's body (reuses cast publish)")
     .option("--proposal <xp-N>", "The expectations proposal this decision settles: an answer opening with Apply lands it, one opening with Keep closes it, any other course leaves it open for you")
-    .option("--run <command>", "Ask permission for a step only your person may take (a grant, a spend, a publish): the question says in plain words what will happen, the card asks Yes or Not now with the command only as a small terminal line at its foot, and Yes runs this cast command on this machine as theirs; its output comes back as the answer")
+    .option("--run <command>", "Ask permission for any cast command only your person may run (a grant, a spend, a publish, a pairing, a setting on their laptop): the question says in plain words what will happen, the card asks Yes or Not now with the command only as a small terminal line at its foot, and Yes runs it as theirs; its output comes back as the answer. Never ask them to type a cast command instead")
+    .option("--on <machine>", "With --run: where it runs. laptop is their own computer (from a cloud host, the laptop that manages it); or a machine's label or id. Default: this session's machine")
     .option("--card <card.json>", "A change card (cast card build) the decision is about; the queue draws it natively. Without -o the options are Ship, Revise, Drop")
     .option("--advisory", "Don't block: proceed with --default. Only when the default is cheap to undo: the answer often lands an hour later and may override you")
     .option("--default <n>", "1-based option you proceed with when --advisory (required with it)")
@@ -752,6 +769,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
       const card: ChangeCard | undefined = options.card ? (() => { const r = readCardFile(options.card); return "error" in r ? fail(r.error) : r.card; })() : undefined;
       // --run: a permission ask, answered Yes or Not now; Yes runs the command (commandRun.ts).
       const runLine: string | undefined = typeof options.run === "string" ? options.run : undefined;
+      if (options.on && runLine === undefined) fail("--on says where a --run command runs: pass --run with it.");
       if (runLine !== undefined) {
         const parsedRun = parseRunCommand(runLine);
         if ("error" in parsedRun) fail(parsedRun.error);
@@ -990,7 +1008,7 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
         context_md: contextMd,
         report_slug: reportSlug,
         ...(card ? { card } : {}),
-        ...(runLine !== undefined ? { run: runLine } : {}),
+        ...(runLine !== undefined ? { run: runLine, ...(options.on ? { run_on: String(options.on) } : {}) } : {}),
         blocking: !options.advisory,
         default_option: defaultOption,
         kind,
@@ -1027,8 +1045,8 @@ export function registerDecideCommand(program: Command, deps: PublishDeps): void
 
       if (runLine !== undefined) {
         const parsed = parseRunCommand(runLine);
-        if ("argv" in parsed) console.log(fmt.muted(`  runs: ${commandLine(parsed.argv)}`));
-        console.log(fmt.muted("\nThe card asks your question with Yes and Not now. Do not run it yourself and do not paste it for them: end your turn. Yes runs it on this machine as theirs, and the answer arrives with its output."));
+        if ("argv" in parsed) console.log(fmt.muted(`  runs: ${commandLine(parsed.argv)}${options.on ? ` on ${options.on}` : ""}`));
+        console.log(fmt.muted(`\nThe card asks your question with Yes and Not now. Do not run it yourself and do not paste it for them: end your turn. Yes runs it ${options.on ? `on ${options.on}` : "on this machine"} as theirs, and the answer arrives with its output.`));
         return;
       }
       console.log(fmt.muted("\nThis renders as a card in the conversation and in their queue. Do not repeat the question, options, or reasoning in prose."));
