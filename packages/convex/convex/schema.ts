@@ -4929,7 +4929,20 @@ export default defineSchema({
     // and the id goes with it.
     viewing_conversation_id: v.optional(v.id("conversations")),
     viewing_since: v.optional(v.number()),
-  }).index("by_user", ["user_id"]),
+    // The viewed conversation's access fields, copied when the id is written
+    // and refreshed by patchConversationVisibility (the one writer of the
+    // mutable ones), so the roster gates the id without reading the
+    // conversation: a read there re-ran getTeamMembers for every subscriber
+    // at the viewed session's streaming rate (ct-92571).
+    viewing_access: v.optional(v.object({
+      user_id: v.id("users"),
+      team_id: v.optional(v.id("teams")),
+      is_private: v.boolean(),
+      team_visibility: v.optional(v.string()),
+      started_at: v.optional(v.number()),
+    })),
+  }).index("by_user", ["user_id"])
+    .index("by_viewing_conversation", ["viewing_conversation_id"]),
 
   // Mobile push staging (pushRouter.ts). Rows wait out a routing delay (short
   // away-debounce, or a longer hold while the desktop is active), then a
@@ -7594,6 +7607,18 @@ export default defineSchema({
     agent_type: v.string(),
     started_at: v.number(),
     subagent: v.boolean(),
+    // What a list naming the session shows of it (notifications.list): fields
+    // that change at a person's pace, so a reader of this row is not re-run by
+    // every streamed message the way a reader of the conversation is (ct-92571).
+    card: v.optional(v.object({
+      title: v.optional(v.string()),
+      project_path: v.optional(v.string()),
+      character_avatar: v.optional(v.string()),
+      character_name: v.optional(v.string()),
+      drawn_icon: v.optional(roleIconValidator),
+      org_role_id: v.optional(v.id("org_roles")),
+      standing_role_id: v.optional(v.id("org_roles")),
+    })),
   })
     .index("by_conversation", ["conversation_id"])
     .index("by_visible_team_started", ["visible_team_id", "started_at"])
