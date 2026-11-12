@@ -60,12 +60,16 @@ const MAX_PUSH_FAILURES = 6;
 const TICK_MS = 100;
 
 export async function runWatchRelay(args: StreamBrowserArgs, deps: WatchRelayDeps): Promise<void> {
-  let frame: { data: string; w: number; h: number } | null = null;
-  let tab: { id: string; title: string; url: string } | null = null;
-  let control: boolean | null = null;
-  let actions: Record<string, unknown>[] = [];
-  let actionsDirty = false;
-  let end: BrowserRelayEnd | null = null;
+  // What the session produced since the last push. One object, because the
+  // sink's callbacks write it and TypeScript does not see closure writes.
+  const st: {
+    frame: { data: string; w: number; h: number } | null;
+    tab: { id: string; title: string; url: string } | null;
+    control: boolean | null;
+    actions: Record<string, unknown>[];
+    actionsDirty: boolean;
+    end: BrowserRelayEnd | null;
+  } = { frame: null, tab: null, control: null, actions: [], actionsDirty: false, end: null };
 
   const session = deps.startSession(
     {
@@ -81,27 +85,27 @@ export async function runWatchRelay(args: StreamBrowserArgs, deps: WatchRelayDep
       send(msg) {
         switch (msg.type) {
           case "ready":
-            tab = { id: String(msg.targetId ?? ""), title: String(msg.title ?? ""), url: String(msg.url ?? "") };
-            control = msg.control === true;
+            st.tab = { id: String(msg.targetId ?? ""), title: String(msg.title ?? ""), url: String(msg.url ?? "") };
+            st.control = msg.control === true;
             // A new tab's cursor memory starts over; the replay that follows
             // ready refills it.
-            actions = [];
-            actionsDirty = true;
+            st.actions = [];
+            st.actionsDirty = true;
             break;
           case "frame":
-            frame = { data: String(msg.data ?? ""), w: Number(msg.w) || 0, h: Number(msg.h) || 0 };
+            st.frame = { data: String(msg.data ?? ""), w: Number(msg.w) || 0, h: Number(msg.h) || 0 };
             break;
           case "tab":
-            tab = { id: String(msg.targetId ?? ""), title: String(msg.title ?? ""), url: String(msg.url ?? "") };
+            st.tab = { id: String(msg.targetId ?? ""), title: String(msg.title ?? ""), url: String(msg.url ?? "") };
             break;
           case "action":
-            actions = [...actions, msg].slice(-BROWSER_RELAY_RECENT_ACTIONS);
-            actionsDirty = true;
+            st.actions = [...st.actions, msg].slice(-BROWSER_RELAY_RECENT_ACTIONS);
+            st.actionsDirty = true;
             break;
         }
       },
       finish(msg) {
-        end = msg.type === "error"
+        st.end = msg.type === "error"
           ? { kind: "error", code: msg.code, message: msg.message }
           : { kind: "exit", code: msg.reason };
       },
@@ -123,9 +127,9 @@ export async function runWatchRelay(args: StreamBrowserArgs, deps: WatchRelayDep
         return;
       }
       const since = deps.now() - lastPushAt;
-      const changed = frame !== null || tab !== null || control !== null || actionsDirty;
+      const changed = st.frame !== null || st.tab !== null || st.control !== null || st.actionsDirty;
       const due =
-        end !== null ||
+        st.end !== null ||
         (changed && since >= BROWSER_RELAY_FRAME_INTERVAL_MS) ||
         since >= (fast ? BROWSER_RELAY_INPUT_POLL_MS : BROWSER_RELAY_HEARTBEAT_MS);
       if (!due) {
@@ -134,12 +138,12 @@ export async function runWatchRelay(args: StreamBrowserArgs, deps: WatchRelayDep
       }
 
       const msg: RelayPush = { key: args.key };
-      const sent = { frame, tab, control, actionsDirty };
-      if (frame) Object.assign(msg, { frame: frame.data, frame_w: frame.w, frame_h: frame.h });
-      if (tab) msg.tab = tab;
-      if (control !== null) msg.control = control;
-      if (actionsDirty) msg.actions = JSON.stringify(actions);
-      const ending = end as BrowserRelayEnd | null;
+      const sent = { frame: st.frame, tab: st.tab, control: st.control, actionsDirty: st.actionsDirty };
+      if (sent.frame) Object.assign(msg, { frame: sent.frame.data, frame_w: sent.frame.w, frame_h: sent.frame.h });
+      if (sent.tab) msg.tab = sent.tab;
+      if (sent.control !== null) msg.control = sent.control;
+      if (sent.actionsDirty) msg.actions = JSON.stringify(st.actions);
+      const ending = st.end;
       if (ending) msg.end = JSON.stringify(ending);
 
       const answer = await deps.push(msg);
@@ -156,10 +160,10 @@ export async function runWatchRelay(args: StreamBrowserArgs, deps: WatchRelayDep
       fast = !!answer.fast;
       // Clear only what this push carried: anything that arrived while it was
       // in flight goes out on the next one.
-      if (frame === sent.frame) frame = null;
-      if (tab === sent.tab) tab = null;
-      if (control === sent.control) control = null;
-      if (sent.actionsDirty) actionsDirty = false;
+      if (st.frame === sent.frame) st.frame = null;
+      if (st.tab === sent.tab) st.tab = null;
+      if (st.control === sent.control) st.control = null;
+      if (sent.actionsDirty) st.actionsDirty = false;
       if (ending) {
         deps.log(`[BROWSER-RELAY] ${args.key}: stream ended (${ending.kind} ${ending.code})`);
         return;

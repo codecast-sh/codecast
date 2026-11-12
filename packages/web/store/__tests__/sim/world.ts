@@ -24,7 +24,7 @@ import { GEN_MIN, convexIdFor } from "@codecast/shared/contracts/__fixtures__/in
 import { genTeamWorld, teamIdFor, userIdFor, type WorldRow } from "@codecast/shared/contracts/__fixtures__/teamWorldGen";
 import { hashToken } from "@codecast/convex/convex/apiTokens";
 import { internalMutation } from "@codecast/convex/convex/functions";
-import { patchConversationVisibility } from "@codecast/convex/convex/lib/access";
+import { patchConversationVisibility } from "@codecast/convex/convex/lib/conversationVisibility";
 import { _resetChildAuqProbeCacheForTests } from "@codecast/convex/convex/conversations";
 import { makeSimBackend, type Principal, type SimBackend, type SimClient } from "@codecast/convex/convex/simBackend.testing";
 import { SimLabels } from "./labels";
