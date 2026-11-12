@@ -30,7 +30,7 @@ import { AUTO_CONTINUE_WINDOW_MS, fleetAccount, actedBlockedConversations, skipp
 import { contextShareOf, formatIdle, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
 import { withSafetyBlock } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
-import { fallbackProfiles, rankByHeadroom, USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
+import { fallbackProfiles, rankByHeadroom, peggedWindowLabel, USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
 import { sessionLiveAt } from "../lib/liveness";
 import { TooltipProvider } from "./ui/tooltip";
 import { cleanTitle } from "../lib/conversationProcessor";
@@ -399,12 +399,29 @@ function BlockedSessionsBanner({
   const activeEmail = activeEmails.length === 1 ? activeEmails[0] : undefined;
   type AccountOption = { key: string; name: string; email?: string; usage?: CcUsage; missingOn: string[] };
   const accountOptions: AccountOption[] = [];
+  const parkedModels = [...new Set(acted.map((sess) => sess.model).filter((m): m is string => !!m))];
+  const unavailable = new Map<string, string>();
+  for (const device of executors) {
+    for (const p of device.profiles) {
+      if (!p.email || p.email === fleetEmailOf(device) || unavailable.has(p.email)) continue;
+      const why = p.reserved_for
+        ? `reserved for ${p.reserved_for}`
+        : p.access_refused_at
+          ? "access refused"
+          : p.login_expired_at && !(p.setup_token && p.setup_token.expires_at > now)
+            ? "signed out"
+            : isUsageExhausted(p.usage, now, parkedModels)
+              ? `${peggedWindowLabel(p.usage, now) ?? "limit"} full`
+              : null;
+      if (why) unavailable.set(p.email, why);
+    }
+  }
   for (const device of executors) {
     // The account a machine runs now is "this account", not a switch. A dead
     // login without a live token and a pegged window are not offers (the same
     // fallbackProfiles rule auto-switch uses): suggesting one is how the
     // banner named an account whose week was already full.
-    for (const p of fallbackProfiles(device.profiles, fleetEmailOf(device), now)) {
+    for (const p of fallbackProfiles(device.profiles, fleetEmailOf(device), now, parkedModels)) {
       const key = p.email ? `email:${p.email}` : `name:${p.name}`;
       const existing = accountOptions.find((t) => t.key === key);
       if (!existing) accountOptions.push({ key, name: p.name, email: p.email, usage: p.usage, missingOn: [] });
@@ -417,6 +434,7 @@ function BlockedSessionsBanner({
       .map((d) => d.label);
   }
   const rankedAccounts = rankByHeadroom(accountOptions, now);
+  for (const opt of accountOptions) if (opt.email) unavailable.delete(opt.email);
   // Usage of what the executing machines run now — the account that parked
   // these sessions, not whatever the machine at the desk is signed into.
   const activeUsage = executors
@@ -506,6 +524,7 @@ function BlockedSessionsBanner({
   // the account this picker ranks first is the one a person would point to on
   // the meters. A stale account never shows a confident green number here.
   const usageNote = (usage?: CcUsage): string => {
+    if (usage && isUsageExhausted(usage, now, parkedModels)) return ` — ${peggedWindowLabel(usage, now) ?? "limit"} full`;
     const s = usageStanding(usage, now);
     if (s.percent === null && !s.stale) return ""; // no data at all
     return ` — ${standingLabel(usage, now)}`;
@@ -927,12 +946,17 @@ function BlockedSessionsBanner({
               className="min-w-0 max-w-[220px] rounded border border-amber-500/25 bg-sol-bg px-1.5 py-0.5 text-meta text-sol-text outline-none hover:border-amber-500/50 focus:border-amber-500 disabled:opacity-60"
             >
               <option value="">
-                {activeEmail ? `this account (${activeEmail})` : activeEmails.length > 1 ? `current accounts (${activeEmails.join(" / ")})` : "this account"}
+                {activeEmail ? `stay on ${activeEmail}` : activeEmails.length > 1 ? `stay on ${activeEmails.join(" / ")}` : "stay on the current account"}
                 {usageNote(activeUsage)}
               </option>
               {rankedAccounts.map((t) => (
                 <option key={t.key} value={t.key}>
                   {t.email ?? t.name}{usageNote(t.usage)}{t.missingOn.length > 0 ? ` — not on ${t.missingOn.join(", ")}` : ""}
+                </option>
+              ))}
+              {[...unavailable].map(([email, why]) => (
+                <option key={`off:${email}`} value={`off:${email}`} disabled>
+                  {email} — {why}
                 </option>
               ))}
             </select>
