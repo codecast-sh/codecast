@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
+import { gzipSync } from "node:zlib";
 import {
   exportFolder,
   isSecretFile,
@@ -154,6 +155,23 @@ describe("exportFolder", () => {
     const out = await exportFolder({ path: path.join(root, "gone") }, { home: root, upload: async () => "s" });
     expect(out).toMatchObject({ ok: false, missing: true });
   });
+});
+
+describe("unpackFolderStream on a dead body", () => {
+  for (const [name, kill] of [
+    ["destroyed with an error before the unpack listens", (b: PassThrough) => b.destroy(new Error("source died"))],
+    ["closed without its end", (b: PassThrough) => b.destroy()],
+  ] as const) {
+    test(`a body ${name} fails the unpack, kills tar and leaves nothing`, async () => {
+      const body = new PassThrough();
+      body.on("error", () => {});
+      body.write(gzipSync(Buffer.alloc(200_000, 7)).subarray(0, 100));
+      kill(body);
+      const dest = path.join(root, "here", "proj");
+      await expect(unpackFolderStream(body, dest)).rejects.toThrow();
+      expect(fs.readdirSync(path.join(root, "here"))).toEqual([]);
+    });
+  }
 });
 
 describe("syncFolderFromPeer", () => {

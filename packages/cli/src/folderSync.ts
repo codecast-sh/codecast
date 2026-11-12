@@ -166,13 +166,26 @@ export function packFolderStream(plan: PlannedFolder): { stream: NodeJS.Readable
   let stderr = "";
   const cleanup = () => fs.rmSync(tmp, { recursive: true, force: true });
   child.stderr!.on("data", (d: Buffer) => { stderr = (stderr + d).slice(-4000); });
+  let exit: { code: number | null; signal: string | null } | undefined;
+  let drained = false;
+  const settle = () => {
+    if (!exit || out.writableEnded || out.destroyed) return;
+    if (exit.code !== 0) return void out.destroy(new Error(`tar: ${lastErrorLine(stderr) || (exit.signal ? `killed by ${exit.signal}` : `exit ${exit.code}`)}`));
+    if (drained) out.end();
+  };
+  // "close" waits on every stdio stream; under load bun has left one open, so
+  // the exit status and the end of stdout decide instead.
+  const exited = (code: number | null, signal: string | null) => {
+    if (exit) return;
+    exit = { code, signal };
+    cleanup();
+    settle();
+  };
+  child.stdout!.on("end", () => { drained = true; settle(); });
   child.stdout!.pipe(out, { end: false });
   child.on("error", (e: Error) => { cleanup(); out.destroy(e); });
-  child.on("close", (code: number | null, signal: string | null) => {
-    cleanup();
-    if (code === 0) out.end();
-    else out.destroy(new Error(`tar: ${lastErrorLine(stderr) || (signal ? `killed by ${signal}` : `exit ${code}`)}`));
-  });
+  child.on("exit", exited);
+  child.on("close", exited);
   return { stream: out, kill: () => { child.kill("SIGKILL"); } };
 }
 
@@ -209,7 +222,12 @@ function extractInto(body: NodeJS.ReadableStream, dir: string, maxBytes: number,
     tar.stderr!.on("data", (d: Buffer) => { stderr = (stderr + d).slice(-4000); });
     tar.stdin!.on("error", () => {});
     tar.on("error", stop);
+    const readable = body as NodeJS.ReadableStream & { destroyed?: boolean; readableEnded?: boolean };
+    let bodyEnded = !!readable.readableEnded;
+    body.on("end", () => { bodyEnded = true; });
     body.on("error", (e: Error) => stop(e));
+    body.on("close", () => { if (!bodyEnded) stop(new Error("archive stream closed before its end")); });
+    if (readable.destroyed && !bodyEnded) stop(new Error("archive stream closed before its end"));
     body.on("data", (chunk: Buffer) => {
       bytes += chunk.length;
       if (bytes > maxBytes) stop(new Error(`archive is over ${maxBytes} bytes`));
@@ -221,11 +239,14 @@ function extractInto(body: NodeJS.ReadableStream, dir: string, maxBytes: number,
     });
     gunzip.on("end", () => { gunzipEnded = true; settle(); });
     body.pipe(gunzip).pipe(tar.stdin!);
-    tar.on("close", (code: number | null) => {
+    const exited = (code: number | null) => {
+      if (tarCode !== undefined) return;
       tarCode = code;
       if (!gunzipEnded) gunzip.resume();
       settle();
-    });
+    };
+    tar.on("exit", exited);
+    tar.on("close", exited);
   });
 }
 
@@ -360,9 +381,11 @@ export async function sanitizeExtractedTree(staging: string): Promise<void> {
  *  leaves a half folder that the next resume would take for the real one. */
 export async function unpackFolderStream(body: NodeJS.ReadableStream, dest: string, opts: { maxBytes?: number; maxUnpackedBytes?: number } = {}): Promise<void> {
   const parent = path.dirname(dest);
-  await fs.promises.mkdir(parent, { recursive: true });
+  // Synchronous on purpose: extractInto must be listening before this turn
+  // ends, or a body the puller destroys meanwhile is never seen to fail.
+  fs.mkdirSync(parent, { recursive: true });
   const staging = path.join(parent, `.${path.basename(dest)}.codecast-sync-${randomUUID().slice(0, 8)}`);
-  await fs.promises.mkdir(staging);
+  fs.mkdirSync(staging);
   try {
     await extractInto(body, staging, opts.maxBytes ?? MAX_DIRECT_BYTES, opts.maxUnpackedBytes ?? MAX_UNPACKED_BYTES);
     await sanitizeExtractedTree(staging);

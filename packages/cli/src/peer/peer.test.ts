@@ -72,14 +72,14 @@ describe("firewallBlocksIncoming", () => {
     return p;
   };
   test("block all enabled", async () => {
-    expect(await firewallBlocksIncoming({ platform: "darwin", bin: bin("Firewall has block all state set to enabled.") })).toBe(true);
-    expect(await firewallBlocksIncoming({ platform: "darwin", bin: bin("Block all ENABLED!") })).toBe(true);
+    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "darwin", bin: bin("Firewall has block all state set to enabled.") })).toBe(true);
+    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "darwin", bin: bin("Block all ENABLED!") })).toBe(true);
   });
   test("disabled, broken, missing, or not macOS", async () => {
-    expect(await firewallBlocksIncoming({ platform: "darwin", bin: bin("Firewall has block all state set to disabled.") })).toBe(false);
-    expect(await firewallBlocksIncoming({ platform: "darwin", bin: bin("enabled", 1) })).toBe(false);
-    expect(await firewallBlocksIncoming({ platform: "darwin", bin: path.join(dir, "missing") })).toBe(false);
-    expect(await firewallBlocksIncoming({ platform: "linux", bin: bin("enabled") })).toBe(false);
+    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "darwin", bin: bin("Firewall has block all state set to disabled.") })).toBe(false);
+    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "darwin", bin: bin("enabled", 1) })).toBe(false);
+    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "darwin", bin: path.join(dir, "missing") })).toBe(false);
+    expect(await firewallBlocksIncoming({ timeoutMs: 20_000, platform: "linux", bin: bin("enabled") })).toBe(false);
   });
 });
 
