@@ -49,7 +49,7 @@ export const DASHBOARD_TEMPLATES: readonly DashboardTemplate[] = [
         { k: k("note"), kind: "text", text: `Finished tasks are {${k("done")}.trend} and merged PRs are {${k("merged")}.trend} on {${k("merged")}.vs}.` },
         { k: k("done_chart"), kind: "chart", title: "Finished per day", chart: "bar", query: { source: "tasks", args: { view: "done_per_day", days: 30, board: "all" } }, x: "day", y: "done", span: 6 },
         { k: k("prs"), kind: "chart", title: "Pull requests", chart: "line", query: { source: "prs", args: { days: 30 } }, x: "day", y: "opened,merged", span: 6 },
-        { k: k("status"), kind: "table", title: "Open work by status", query: { source: "tasks", args: { view: "status", days: 30, board: "all" } }, sort: "-tasks" },
+        { k: k("status"), kind: "table", title: "Open work by status", query: { source: "tasks", args: { view: "status", days: 30, board: "all" } }, where: { status: { nin: ["done", "dropped", "cancelled"] } }, sort: "-tasks" },
       ]),
   },
   {

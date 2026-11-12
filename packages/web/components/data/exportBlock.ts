@@ -134,6 +134,8 @@ export function clearChartHover(): HTMLElement[] {
   for (const chart of charts.values()) {
     chart.dispatchAction({ type: "hideTip" });
     chart.dispatchAction({ type: "downplay" });
+    // The shaded band a pointer leaves over a bar is part of the hover too.
+    chart.dispatchAction({ type: "updateAxisPointer", currTrigger: "leave" });
     // ECharts draws its tooltip as a top-layer div inside the chart's box.
     for (const el of chart.getDom().querySelectorAll<HTMLElement>("div")) if (el.style.zIndex === "9999999") tips.push(el);
   }

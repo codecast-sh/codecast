@@ -13,6 +13,8 @@ import { ArrowDown, Pause, Play, RotateCcw } from "lucide-react";
 import { dashboard, type ArtifactElement } from "@codecast/shared/artifacts";
 import { ChartBody, CheckMark, KpiBody, LiveText, TableBody, TextBody, type BlockEnv } from "./blocks";
 import { blockCheck } from "./blockCheck";
+import { axisLabel } from "./chartOption";
+import { resultFor } from "../../hooks/useDashboardData";
 import { KeyCap } from "../KeyCap";
 
 type StoryProps = { title: string; layout: dashboard.DashboardLayout; elements: ArtifactElement[]; env: BlockEnv };
@@ -67,6 +69,8 @@ function NumbersRow({ keys, env, run, size = "lg" }: { keys: string[]; env: Bloc
  */
 function stepWords(step: dashboard.StoryStep, env: BlockEnv): { title?: string; say?: string } {
   if (step.kind === "hero" || step.kind === "chapter") return {};
+  // A chart its author gave no line still says what it shows, read live from its own rows (never stored, so never stale).
+  if (step.kind === "block" && !step.say) return { title: step.title, say: chartLine(step.keys[0], env) };
   if (step.title || step.say) return { title: step.title, say: step.say };
   if (step.kind === "numbers") {
     const lines = step.keys
@@ -76,6 +80,25 @@ function stepWords(step: dashboard.StoryStep, env: BlockEnv): { title?: string; 
     return { title: lines[0], say: lines.slice(1).join(" · ") || undefined };
   }
   return {};
+}
+
+/** One plain sentence about a chart: who leads a split, or where a single line peaks. */
+function chartLine(key: string, env: BlockEnv): string | undefined {
+  const b = env.blocks.get(key);
+  if (!b || b.kind !== "chart") return undefined;
+  const ev = dashboard.evaluateChart(b as dashboard.ChartBlock, resultFor(env.results, b), env.scope);
+  if (ev.state !== "ok" || !ev.x.length) return undefined;
+  const fmt = (v: number) => dashboard.formatValue(v, ev.format === "number" ? "compact" : ev.format);
+  const sum = (vals: Array<number | null>) => vals.reduce<number>((a, v) => a + (v ?? 0), 0);
+  if (ev.series.length > 1) {
+    const lead = [...ev.series].sort((p, q) => sum(q.values) - sum(p.values))[0];
+    return `${lead.name} leads with ${fmt(sum(lead.values))} of ${fmt(ev.total)}`;
+  }
+  const vals = ev.series[0]?.values ?? [];
+  let at = 0;
+  vals.forEach((v, i) => (v ?? -Infinity) > (vals[at] ?? -Infinity) && (at = i));
+  if (ev.type === "hbar") return `${ev.x[0]} leads with ${fmt(vals[0] ?? 0)} of ${fmt(ev.total)}`;
+  return `Peaks at ${fmt(vals[at] ?? 0)} on ${axisLabel(ev.x[at])}`;
 }
 
 export function ScrollyStory({ title, layout, elements, env }: StoryProps) {
@@ -395,7 +418,7 @@ function Beat({ step, env }: { step: dashboard.StoryStep; env: BlockEnv }) {
       <div className="mb-3 flex items-start gap-3">
         <div className="min-w-0 flex-1">
         <h2 className="text-[length:clamp(16px,2.4cqw,28px)] font-bold tracking-[-0.02em] text-sol-text"><LiveText text={step.title ?? String(b.title ?? "")} env={env} /></h2>
-        {step.say ? <p className="mt-1 text-[length:clamp(12px,1.4cqw,16px)] text-sol-text-secondary"><LiveText text={step.say} env={env} /></p> : null}
+        {w.say ? <p className="mt-1 text-[length:clamp(12px,1.4cqw,16px)] text-sol-text-secondary"><LiveText text={w.say} env={env} /></p> : null}
         </div>
         {check ? <span className="relative z-10"><CheckMark check={check} onClick={() => env.onCheck?.(b.key)} /></span> : null}
       </div>
