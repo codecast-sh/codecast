@@ -16,6 +16,7 @@
 //     it. An unhandled row left unprocessed sits in the by_processed index
 //     forever and every catch-up sweep pays for it again.
 
+import { fitWebhookPayload } from "./lib/webhookPayload";
 import { recordLanded } from "./lib/taskLanded";
 import { v } from "convex/values";
 import { scheduleTriggerMatch } from "./lib/triggerMatch";
@@ -306,11 +307,15 @@ export const storeWebhookEvent = internalMutation({
     if (ciRepository && await claimDrain(ctx, ciDrainKey(ciRepository), { staleMs: CI_DRAIN_STALE_MS })) {
       await ctx.scheduler.runAfter(CI_DRAIN_DELAY_MS, internal.githubWebhooks.drainCiEvents, { repository: ciRepository });
     }
+    const stored = fitWebhookPayload(args.payload);
+    if (stored !== args.payload) {
+      console.warn(`[githubWebhooks] ${args.event_type} ${args.delivery_id}: payload of ${args.payload.length} chars shortened to ${stored.length} to fit a document`);
+    }
     const eventId = await ctx.db.insert("github_webhook_events", {
       delivery_id: args.delivery_id,
       event_type: args.event_type,
       action: args.action,
-      payload: args.payload,
+      payload: stored,
       processed: !handled,
       created_at: Date.now(),
       ...(ciRepository ? { ci_repository: ciRepository } : {}),

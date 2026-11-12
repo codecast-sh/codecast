@@ -76,6 +76,20 @@ describe("CI deliveries drain per repository", () => {
     expect(await s.unprocessed()).toHaveLength(78);
   });
 
+  test("a delivery over a document's size is stored shortened, not lost", async () => {
+    const s = await setup();
+    await s.deliver("check_run", {
+      check_run: { id: 1, name: "job", status: "completed", conclusion: "success", head_sha: HEAD, html_url: "https://ci/1",
+        pull_requests: [{ number: 12 }], check_suite: { id: 900 }, app: { slug: "github-actions" }, output: { text: "x".repeat(1_500_000) } },
+    });
+    const rows = await s.t.run(async (ctx) => ctx.db.query("github_webhook_events").collect());
+    expect(rows).toHaveLength(1);
+    expect(rows[0].payload.length).toBeLessThan(1_000_000);
+    await s.drain();
+    const pr = await s.t.run(async (ctx) => ctx.db.get(s.ids.pr));
+    expect(pr?.checks?.length).toBe(1);
+  });
+
   test("a drained delivery keeps its row for dedupe but drops its payload", async () => {
     const s = await setup();
     await s.checkRun(1000, HEAD, [12]);
