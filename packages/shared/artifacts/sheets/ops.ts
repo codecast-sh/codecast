@@ -30,8 +30,9 @@ function withoutComment(f: CellFields): CellFields {
   return rest;
 }
 
-function hasStyle(el: CellEl | undefined): boolean {
-  return !!el && STYLE_FIELDS.some((f) => el[f] !== undefined);
+/** A cell whose input is cleared stays when it has more than its input: a style, or a comment thread pinned to it. */
+function keepsCell(el: CellEl | undefined): boolean {
+  return !!el && (el.cm !== undefined || STYLE_FIELDS.some((f) => el[f] !== undefined));
 }
 
 function tabData(model: SheetModel, tabId: string): TabData | undefined {
@@ -47,7 +48,7 @@ export function inputOps(model: SheetModel, tabId: string, cells: Array<{ col: n
     const el = t?.cells.get(cellNum(c.col, c.row));
     if (c.input === "") {
       if (!el) continue;
-      ops.push(hasStyle(el) ? { k, set: { input: null } } : { k, del: true });
+      ops.push(keepsCell(el) ? { k, set: { input: null } } : { k, del: true });
     } else if (el) {
       if (el.input !== c.input) ops.push({ k, set: { input: c.input } });
     } else {
@@ -116,7 +117,7 @@ export function clearOps(model: SheetModel, tabId: string, rect: Rect, what: "co
   for (const [n, el] of t.cells) {
     const col = n % 32768, row = Math.floor(n / 32768);
     if (col < rect.c0 || col > rect.c1 || row < rect.r0 || row > rect.r1) continue;
-    if (what === "all" || !hasStyle(el)) ops.push({ k: el.key, del: true });
+    if (what === "all" || !keepsCell(el)) ops.push({ k: el.key, del: true });
     else if (el.input !== undefined) ops.push({ k: el.key, set: { input: null } });
   }
   return ops;
@@ -575,7 +576,7 @@ export function queryTabOps(model: SheetModel, tabId: string, grid: string[][], 
     }
     for (const [n, el] of t?.cells ?? []) {
       if (want.has(n) || el.input === undefined) continue;
-      ops.push(hasStyle(el) ? { k: el.key, set: { input: null } } : { k: el.key, del: true });
+      ops.push(keepsCell(el) ? { k: el.key, set: { input: null } } : { k: el.key, del: true });
     }
   }
   ops.push(...tabPatchOps(model, tabId, { refreshed_at: now, query_error: error ?? null }));

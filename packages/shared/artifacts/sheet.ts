@@ -228,7 +228,8 @@ function done(t: Target, ops: ArtifactOp[], status: string): VerbResult {
     const fields = "put" in op ? op.put : "set" in op ? op.set : null;
     if (!fields || typeof fields.input !== "string" || !op.k.startsWith("c:")) return op;
     const input = completeDateInput(fields.input);
-    return input === fields.input ? op : "put" in op ? { ...op, put: { ...op.put, input } } : { ...op, set: { ...op.set, input } };
+    if (input === fields.input) return op;
+    return "put" in op ? { ...op, put: { ...op.put, input } } : "set" in op ? { ...op, set: { ...op.set, input } } : op;
   });
   // Strict dropdown and date cells hold agents to the same values as people.
   const held = enforceValidation(t.model, dated);

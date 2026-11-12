@@ -738,6 +738,8 @@ function joinTexts(items: Scalar[], delim: string): Value {
 // Array functions spill into the cells beside them; they live in their own module.
 Object.assign(FUNCTIONS, ARRAY_FUNCTION_DEFS, MORE_FUNCTION_DEFS, TIME_FUNCTION_DEFS, STAT_FUNCTION_DEFS, { SPLIT: SPLIT_DEF });
 FUNCTIONS.SUBTOTAL = subtotalDef(FUNCTIONS);
+// Evaluated by the engine itself, which needs their arguments as written (names, references); listed here so they autocomplete and count as known.
+for (const [name, min, max] of [["LET", 3, undefined], ["OFFSET", 3, 5], ["INDIRECT", 1, 2], ["FORMULATEXT", 1, 1]] as const) FUNCTIONS[name] = { min, max, eager: () => err("#N/A", `${name} is evaluated by the engine`) };
 
 export const FUNCTION_NAMES = Object.keys(FUNCTIONS).sort();
 

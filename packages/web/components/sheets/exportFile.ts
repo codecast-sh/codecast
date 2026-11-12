@@ -60,7 +60,7 @@ const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
  * (_xlfn.XLOOKUP, and _xlfn._xlws.FILTER / SORT for the dynamic-array ones);
  * without it Excel shows #NAME?. Strings in the formula are left alone.
  */
-const XLFN = ["XLOOKUP", "XMATCH", "UNIQUE", "SEQUENCE", "SORTBY", "IFS", "SWITCH", "TEXTJOIN", "CONCAT", "MAXIFS", "MINIFS", "IFNA", "DAYS", "STDEV.S", "ISOWEEKNUM", "VSTACK", "HSTACK", "TAKE", "DROP", "CHOOSECOLS", "CHOOSEROWS", "TOCOL", "TOROW", "TEXTSPLIT", "LET", "LAMBDA", "RANDARRAY", "FORECAST.LINEAR", "PERCENTILE.INC", "REGEXEXTRACT", "REGEXREPLACE", "REGEXTEST"];
+const XLFN = ["XLOOKUP", "XMATCH", "UNIQUE", "SEQUENCE", "SORTBY", "IFS", "SWITCH", "TEXTJOIN", "CONCAT", "MAXIFS", "MINIFS", "IFNA", "DAYS", "STDEV.S", "ISOWEEKNUM", "VSTACK", "HSTACK", "TAKE", "DROP", "CHOOSECOLS", "CHOOSEROWS", "TOCOL", "TOROW", "TEXTSPLIT", "LET", "LAMBDA", "RANDARRAY", "FORECAST.LINEAR", "PERCENTILE.INC", "REGEXEXTRACT", "REGEXREPLACE", "REGEXTEST", "FORMULATEXT"];
 const XLWS = ["FILTER", "SORT"];
 export function excelFormula(f: string): string {
   return f

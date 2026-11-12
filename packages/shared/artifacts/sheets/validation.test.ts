@@ -262,3 +262,19 @@ describe("comment anchors from a reference", () => {
     expect(sheetSpec.anchorFor!(view, "zzz")).toBeUndefined();
   });
 });
+
+describe("clearing a commented cell", () => {
+  test("keeps the cell, so its thread stays put", async () => {
+    const { pinCommentOps, threadCell } = await import("./comments");
+    const { inputOps, clearOps } = await import("./ops");
+    const d = doc(sheetSpec.seed!());
+    d.verb("write", ["B2"], "42");
+    const th = { key: "cm_c", anchor: "c:Sheet1!B2" };
+    d.apply(pinCommentOps(buildModel(d.elements()), [th]));
+    d.apply(inputOps(buildModel(d.elements()), "Sheet1", [{ col: 2, row: 2, input: "" }]));
+    expect(threadCell(buildModel(d.elements()), th)).toEqual({ tab: "Sheet1", col: 2, row: 2 });
+    d.apply(inputOps(buildModel(d.elements()), "Sheet1", [{ col: 2, row: 2, input: "7" }]));
+    d.apply(clearOps(buildModel(d.elements()), "Sheet1", { c0: 2, r0: 2, c1: 2, r1: 2 }));
+    expect(threadCell(buildModel(d.elements()), th)).toEqual({ tab: "Sheet1", col: 2, row: 2 });
+  });
+});

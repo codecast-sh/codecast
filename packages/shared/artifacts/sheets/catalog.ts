@@ -50,6 +50,10 @@ export const FUNCTION_DOCS: Record<string, FnDoc> = {
   STDEVP: d("Statistics", "Standard deviation of a population", "value1", "value2..."),
   VAR: d("Statistics", "Variance of a sample", "value1", "value2..."),
   // Lookup
+  OFFSET: d("Lookup", "The range a number of rows and columns away from a reference", "reference", "rows", "columns", "height?", "width?"),
+  INDIRECT: d("Lookup", "The cell or range a text reference names", "reference_text", "a1?"),
+  FORMULATEXT: d("Lookup", "A cell's formula as text", "cell"),
+  LET: d("Logic", "Names values, then calculates with the names", "name1", "value1", "calculation", "more..."),
   ADDRESS: d("Lookup", "A cell reference as text", "row", "column", "absolute?", "a1?", "sheet?"),
   XLOOKUP: d("Lookup", "Finds a value in one range and returns the matching item from another", "search_key", "lookup_range", "result_range", "if_not_found?", "match_mode?", "search_mode?"),
   VLOOKUP: d("Lookup", "Finds a value in a table's first column and returns a column of that row", "search_key", "range", "column", "is_sorted?"),

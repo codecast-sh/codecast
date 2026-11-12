@@ -18,10 +18,11 @@ import {
   toNumber,
   toText,
   type ImpliedFormat,
+  type SheetError,
   type Scalar,
   type Value,
 } from "./values";
-import { a1, type Rect } from "./refs";
+import { a1, parseQualifiedRange, type Rect } from "./refs";
 
 export type TabInfo = { id: string; name: string };
 
@@ -84,6 +85,8 @@ const DIRTY_ALL_AFTER = 4_000;
 const DIRTY_ALL_WORK = 250_000;
 const ADDRESS_ONLY = new Set(["ROW", "COLUMN", "ROWS", "COLUMNS"]);
 const VOLATILE = new Set(["TODAY", "NOW"]);
+/** Functions whose cells are found while evaluating (OFFSET, INDIRECT): they recalculate after every change, as in Excel. */
+const DYNAMIC = new Set(["OFFSET", "INDIRECT"]);
 
 export class Workbook {
   private entries = new Map<number, Entry>();
@@ -102,6 +105,9 @@ export class Workbook {
   private rangeWide = new Map<number, Set<number>>();
   /** Formulas that read the clock (TODAY, NOW). */
   private volatile = new Set<number>();
+  private dynamic = new Set<number>();
+  /** LET's names while its body evaluates, innermost last. */
+  private scopes: Array<Map<string, Value>> = [];
   /** Array formulas (outermost function FILTER, UNIQUE, SORT, ...): their block spills into the cells beside them. */
   private anchors = new Set<number>();
   private spills = new Map<number, Spill>();
@@ -181,6 +187,8 @@ export class Workbook {
       }
       for (const a of anchors) if (this.entries.has(a)) changed.push(a);
     }
+    // OFFSET and INDIRECT read cells nobody can know ahead: they run again after any change.
+    for (const d of this.dynamic) if (this.entries.has(d)) changed.push(d);
     if (changed.length > BULK_THRESHOLD) this.dirtyAll();
     else this.invalidate(changed);
     this.settle();
@@ -371,6 +379,7 @@ export class Workbook {
             return;
           }
           if (VOLATILE.has(n.name)) volatile = true;
+          if (DYNAMIC.has(n.name)) dynamic = true;
           n.args.forEach(walk);
           return;
         case "neg":
@@ -384,9 +393,12 @@ export class Workbook {
       }
     };
     let volatile = false;
+    let dynamic = false;
     walk(e.ast!);
     if (volatile) this.volatile.add(id);
     else this.volatile.delete(id);
+    if (dynamic) this.dynamic.add(id);
+    else this.dynamic.delete(id);
     e.points = points;
     e.ranges = ranges;
     for (const p of points) {
@@ -423,6 +435,7 @@ export class Workbook {
     for (const r of this.rangeDeps.get(id) ?? []) for (const b of this.bucketsOf(r)) (b.wide ? this.rangeWide : this.rangeByCol).get(b.key)?.delete(id);
     this.rangeDeps.delete(id);
     this.volatile.delete(id);
+    this.dynamic.delete(id);
     e.points = undefined;
     e.ranges = undefined;
   }
@@ -637,6 +650,55 @@ export class Workbook {
     return out;
   }
 
+  /** LET(name1, value1, [name2, value2, ...], calculation): each name holds its value while the rest evaluates. */
+  private evalLet(args: Node[], ti: number, ctx: FnContext): Value {
+    if (args.length < 3 || args.length % 2 === 0) return err("#N/A", "LET takes name, value pairs and then a calculation");
+    const frame = new Map<string, Value>();
+    this.scopes.push(frame);
+    try {
+      for (let i = 0; i < args.length - 1; i += 2) {
+        const name = args[i];
+        if (name.t !== "name") return err("#NAME?", "LET's names are words like price or total");
+        frame.set(name.v.toLowerCase(), this.evalNode(args[i + 1], ti, ctx));
+      }
+      return this.evalNode(args[args.length - 1], ti, ctx);
+    } finally {
+      this.scopes.pop();
+    }
+  }
+
+  /** OFFSET(reference, rows, cols, [height], [width]) and INDIRECT(text): a reference worked out while evaluating, read like one typed. */
+  private evalReference(name: "OFFSET" | "INDIRECT", args: Node[], ti: number, ctx: FnContext): Value {
+    let t: number | null;
+    let rect: { c0: number; r0: number; c1: number; r1: number };
+    if (name === "INDIRECT") {
+      if (args.length < 1 || args.length > 2) return err("#N/A", "INDIRECT takes a reference as text");
+      const text = toText(scalarOf(this.evalNode(args[0], ti, ctx)));
+      if (isError(text)) return text;
+      const q = parseQualifiedRange(text.replace(/\$/g, ""));
+      if (!q) return err("#REF!", `"${text}" is not a reference`);
+      t = this.resolveTab(q.tab, ti);
+      if (t === null) return err("#REF!", `no tab named ${q.tab}`);
+      rect = q.rect;
+    } else {
+      if (args.length < 3 || args.length > 5) return err("#N/A", "OFFSET takes a reference, rows, columns and an optional height and width");
+      const base = args[0];
+      if (base.t !== "ref" && base.t !== "range") return err("#VALUE!", "OFFSET starts from a cell or range");
+      t = this.resolveTab(base.tab, ti);
+      if (t === null) return err("#REF!", `no tab named ${base.tab}`);
+      const b = base.t === "ref" ? { c0: base.col, r0: base.row, c1: base.col, r1: base.row } : base;
+      const [dr, dc] = [intOf(this.evalNode(args[1], ti, ctx)), intOf(this.evalNode(args[2], ti, ctx))];
+      const h = args[3] && args[3].t !== "empty" ? intOf(this.evalNode(args[3], ti, ctx)) : b.r1 - b.r0 + 1;
+      const w = args[4] && args[4].t !== "empty" ? intOf(this.evalNode(args[4], ti, ctx)) : b.c1 - b.c0 + 1;
+      for (const x of [dr, dc, h, w]) if (isError(x)) return x;
+      if ((h as number) < 1 || (w as number) < 1) return err("#REF!", "OFFSET's height and width start at 1");
+      rect = { r0: b.r0 + (dr as number), c0: b.c0 + (dc as number), r1: b.r0 + (dr as number) + (h as number) - 1, c1: b.c0 + (dc as number) + (w as number) - 1 };
+    }
+    if (rect.r0 < 1 || rect.c0 < 1) return err("#REF!", "the reference falls off the sheet");
+    if (rect.r0 === rect.r1 && rect.c0 === rect.c1) return this.valueById(cid(t, rect.c0, rect.r0));
+    return { grid: this.readGrid(t, rect.c0, rect.r0, rect.c1, rect.r1) };
+  }
+
   private evalNode(n: Node, ti: number, ctx: FnContext): Value {
     switch (n.t) {
       case "num":
@@ -649,8 +711,13 @@ export class Workbook {
         return err(n.v);
       case "empty":
         return null;
-      case "name":
+      case "name": {
+        for (let i = this.scopes.length - 1; i >= 0; i--) {
+          const v = this.scopes[i].get(n.v.toLowerCase());
+          if (v !== undefined) return v;
+        }
         return err("#NAME?", `unknown name ${n.v}`);
+      }
       case "ref": {
         const t = this.resolveTab(n.tab, ti);
         if (t === null) return err("#REF!", `no tab named ${n.tab}`);
@@ -691,6 +758,15 @@ export class Workbook {
           if (a.t === "range") return n.name === "ROW" ? a.r0 : a.c0;
           return err("#VALUE!", `${n.name} takes a reference`);
         }
+        if (n.name === "LET") return this.evalLet(n.args, ti, ctx);
+        if (n.name === "OFFSET" || n.name === "INDIRECT") return this.evalReference(n.name, n.args, ti, ctx);
+        if (n.name === "FORMULATEXT") {
+          const a = n.args[0];
+          if (a?.t !== "ref") return err("#N/A", "FORMULATEXT takes one cell");
+          const t = this.resolveTab(a.tab, ti);
+          const e = t === null ? undefined : this.entries.get(cid(t, a.col, a.row));
+          return e && (e.ast || e.syntax) ? e.input : err("#N/A", `${a1(a.col, a.row)} has no formula`);
+        }
         const def = FUNCTIONS[n.name];
         if (!def) return err("#NAME?", `unknown function ${n.name}`);
         if (n.args.length < def.min || (def.max !== undefined && n.args.length > def.max)) {
@@ -702,6 +778,11 @@ export class Workbook {
       }
     }
   }
+}
+
+function intOf(v: Value): number | SheetError {
+  const n = toNumber(scalarOf(v));
+  return isError(n) ? n : Math.trunc(n);
 }
 
 function topLevel(v: Value): Scalar {

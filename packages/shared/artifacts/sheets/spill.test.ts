@@ -185,3 +185,13 @@ describe("stacking and slicing", () => {
     expect(v(w, "M3")).toBe(3);
   });
 });
+
+describe("references worked out while evaluating", () => {
+  test("OFFSET, INDIRECT, LET and FORMULATEXT; OFFSET follows a change to the cell it lands on", () => {
+    const w = wb({ A1: "1", A2: "2", A3: "3", B1: "Total", C1: "=OFFSET(A1,2,0)", C2: "=SUM(OFFSET(A1,0,0,3,1))", C3: '=INDIRECT("A"&2)', C4: "=LET(x,A1*10,y,x+A2,y*2)", C5: "=FORMULATEXT(C4)", C6: '=INDIRECT("Nope!A1")' });
+    expect([v(w, "C1"), v(w, "C2"), v(w, "C3"), v(w, "C4"), v(w, "C5")]).toEqual([3, 6, 2, 24, "=LET(x,A1*10,y,x+A2,y*2)"]);
+    expect(v(w, "C6")).toMatchObject({ error: "#REF!" });
+    set(w, "A3", "30");
+    expect([v(w, "C1"), v(w, "C2")]).toEqual([30, 33]);
+  });
+});
