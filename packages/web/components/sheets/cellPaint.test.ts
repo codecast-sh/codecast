@@ -95,3 +95,24 @@ describe("more rule conditions", () => {
     expect([hit("filled", undefined, "x"), hit("filled", undefined, null)]).toEqual([true, false]);
   });
 });
+
+describe("status bar totals", () => {
+  test("durations sum as time, mixed formats as plain numbers", async () => {
+    const { selectionSummary } = await import("./sheetActions");
+    const { LiveSheet } = await import("./sheetCore");
+    const { foldOps, toElement } = await import("@codecast/shared/artifacts");
+    const live = new LiveSheet();
+    const ops = [
+      { k: "tab:S", put: { kind: "tab", name: "S", order: 0 } },
+      { k: "c:S!A1", put: { kind: "cell", input: "9:00" } },
+      { k: "c:S!B1", put: { kind: "cell", input: "17:30" } },
+      { k: "c:S!C1", put: { kind: "cell", input: "=B1-A1" } },
+      { k: "c:S!C2", put: { kind: "cell", input: "=B1-A1+1" } },
+      { k: "c:S!D1", put: { kind: "cell", input: "$5" } },
+    ];
+    live.update([...foldOps(new Map(), ops as never)].map(([k, st]) => toElement(k, st)) as never);
+    const tab = live.model.byId.get("S")!;
+    expect(selectionSummary(live.model, live.wb, tab, { c0: 3, r0: 1, c1: 3, r1: 2 }, new Set()).style?.nf).toBe("time");
+    expect(selectionSummary(live.model, live.wb, tab, { c0: 3, r0: 1, c1: 4, r1: 1 }, new Set()).style).toBeUndefined();
+  });
+});

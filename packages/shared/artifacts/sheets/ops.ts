@@ -7,9 +7,9 @@ import { isFormula } from "./formula";
 import { Workbook } from "./engine";
 import { adjustFormula, adjustRangeText, mapFormulaRefs, refText, renameTabInFormula, shiftFormula, type Structural } from "./rewrite";
 import { cellKey, colKey, colLetters, newTabId, normRect, parseKey, rectA1, rowKey, tabKey, type Rect } from "./refs";
-import { buildModel, cellNum, inheritedFormat, STYLE_FIELDS, styleOf, workbookFor, type CellEl, type CellStyle, type SheetModel, type TabData, type TabMeta } from "./model";
+import { buildModel, cellNum, inheritedFormat, STYLE_FIELDS, styleOf, workbookFor, type CellEl, type CellStyle, type CondRule, type SheetModel, type TabData, type TabMeta } from "./model";
 import { formatValue } from "./format";
-import { validationOps } from "./ruleOps";
+import { condOps, validationOps } from "./ruleOps";
 import { newElementKey } from "../spec";
 import { compareScalars, parseLiteral, type Scalar } from "./values";
 
@@ -22,6 +22,12 @@ function fieldsOf(el: CellEl): CellFields {
     out[k] = v as Json;
   }
   return out;
+}
+
+/** A copy (paste, fill) doesn't copy the comment thread; a move carries it. */
+function withoutComment(f: CellFields): CellFields {
+  const { cm: _cm, ...rest } = f;
+  return rest;
 }
 
 function hasStyle(el: CellEl | undefined): boolean {
@@ -144,7 +150,7 @@ export function clipOf(model: SheetModel, tabId: string, rect: Rect, rows?: numb
     const line: Array<CellFields | null> = [];
     for (let c = rect.c0; c <= rect.c1; c++) {
       const el = t?.cells.get(cellNum(c, r));
-      line.push(el ? fieldsOf(el) : null);
+      line.push(el ? withoutComment(fieldsOf(el)) : null);
     }
     cells.push(line);
   }
@@ -279,7 +285,7 @@ export function fillOps(model: SheetModel, tabId: string, src: Rect, dest: Rect)
       const source = seq[j];
       const col = vertical ? lane : i, row = vertical ? i : lane;
       const k = cellKey(tabId, col, row);
-      const fields: Record<string, Json> = source ? fieldsOf(source) : {};
+      const fields: Record<string, Json> = source ? withoutComment(fieldsOf(source)) : {};
       if (named) {
         const list = SERIES[named[0].list];
         const by = len >= 2 ? named[1].at - named[0].at : 1;
@@ -485,6 +491,67 @@ export function addTabOps(model: SheetModel, name: string, extra: Record<string,
   return { id, ops: [{ k: tabKey(id), put: { kind: "tab", name: uniqueTabName(model, name), order, ...extra } }] };
 }
 
+/** Tabs in a new order: every tab's order rewritten to its place, so ties can't leave two tabs in one slot. */
+function reorderOps(model: SheetModel, ids: string[]): ArtifactOp[] {
+  return ids.flatMap((id, i) => (model.byId.get(id)?.meta.order === i ? [] : tabPatchOps(model, id, { order: i })));
+}
+
+/** Move a tab one place left (-1) or right (+1) in the strip. */
+export function moveTabOps(model: SheetModel, tabId: string, dir: -1 | 1): ArtifactOp[] {
+  const i = model.tabs.findIndex((t) => t.id === tabId);
+  return i < 0 ? [] : moveTabToOps(model, tabId, i + dir);
+}
+
+/** Put a tab at a place in the strip (a drag). */
+export function moveTabToOps(model: SheetModel, tabId: string, to: number): ArtifactOp[] {
+  const ids = model.tabs.map((t) => t.id).filter((id) => id !== tabId);
+  if (ids.length === model.tabs.length || to < 0 || to > ids.length) return [];
+  ids.splice(to, 0, tabId);
+  return reorderOps(model, ids);
+}
+
+/**
+ * A copy of a tab placed right after it: its cells, widths, heights, hidden
+ * lines, rules, tables, dropdowns and merges. Comment threads stay on the
+ * original. A live query tab copies as a live query.
+ */
+export function duplicateTabOps(model: SheetModel, tabId: string): { id: string; ops: ArtifactOp[] } {
+  const t = tabData(model, tabId);
+  if (!t) return { id: tabId, ops: [] };
+  const id = newTabId(model.byId.keys());
+  const m = t.meta;
+  const ops: ArtifactOp[] = [{
+    k: tabKey(id),
+    put: {
+      kind: "tab",
+      name: uniqueTabName(model, `${m.name} copy`),
+      order: m.order,
+      ...(m.frozenRows ? { frozen_rows: m.frozenRows } : {}),
+      ...(m.frozenCols ? { frozen_cols: m.frozenCols } : {}),
+      ...(m.filter ? { filter: m.filter as unknown as Json } : {}),
+      ...(m.query ? { query: m.query as unknown as Json } : {}),
+    },
+  }];
+  for (const [n, el] of t.cells) ops.push({ k: cellKey(id, n % 32768, Math.floor(n / 32768)), put: { kind: "cell", ...withoutComment(fieldsOf(el)) } });
+  const cols = new Set([...t.colWidths.keys(), ...(t.hiddenCols ?? [])]);
+  for (const c of cols) ops.push({ k: colKey(id, c), put: { kind: "col", ...(t.colWidths.has(c) ? { w: t.colWidths.get(c)! } : {}), ...(t.hiddenCols?.has(c) ? { hidden: true } : {}) } });
+  const rows = new Set([...t.rowHeights.keys(), ...(t.hiddenRows ?? [])]);
+  for (const r of rows) ops.push({ k: rowKey(id, r), put: { kind: "row", ...(t.rowHeights.has(r) ? { h: t.rowHeights.get(r)! } : {}), ...(t.hiddenRows?.has(r) ? { hidden: true } : {}) } });
+  for (const c of model.conds) if (c.tab === tabId) ops.push({ k: newElementKey("cf"), put: { kind: "cf", tab: id, range: rectA1(c.rect), rule: c.rule, ...(c.value !== undefined ? { value: c.value } : {}), ...(c.color ? { color: c.color } : {}) } });
+  for (const x of model.tables) if (x.tab === tabId) ops.push({ k: newElementKey("tbl"), put: { kind: "table", tab: id, range: rectA1(x.rect), color: x.color, banded: x.banded } });
+  for (const v of model.validations) if (v.tab === tabId) ops.push({ k: newElementKey("dv"), put: { kind: "dv", tab: id, range: rectA1(v.rect), rule: v.rule, ...(v.rule === "list" ? { options: v.options as unknown as Json } : {}), ...(v.strict ? { strict: true } : {}) } });
+  for (const g of model.merges) if (g.tab === tabId) ops.push({ k: newElementKey("mg"), put: { kind: "merge", tab: id, range: rectA1(g.rect) } });
+  // Right after the original in the strip: the copy takes the next slot and the tabs after it shift.
+  const ids = model.tabs.map((x) => x.id);
+  const at = ids.indexOf(tabId) + 1;
+  (ops[0] as { put: Record<string, Json> }).put.order = at;
+  ids.forEach((x, i) => {
+    const want = i < at ? i : i + 1;
+    if (model.byId.get(x)?.meta.order !== want) ops.push(...tabPatchOps(model, x, { order: want }));
+  });
+  return { id, ops };
+}
+
 export function uniqueTabName(model: SheetModel, name: string): string {
   const taken = new Set(model.tabs.map((t) => t.name.toLowerCase()));
   if (!taken.has(name.toLowerCase())) return name;
@@ -533,6 +600,7 @@ export function tabPatchOps(model: SheetModel, tabId: string, patch: Record<stri
     ...(m?.query ? { query: m.query as unknown as Json } : {}),
     ...(m?.refreshedAt ? { refreshed_at: m.refreshedAt } : {}),
     ...(m?.queryError ? { query_error: m.queryError } : {}),
+    ...(m?.pinned?.length ? { pinned: m.pinned } : {}),
   };
   for (const [f, v] of Object.entries(patch)) {
     if (v === null) delete base[f];
@@ -715,7 +783,40 @@ export type ImportTable = {
   styles?: Array<{ col: number; row: number; style: CellStyle }>;
   merges?: Rect[];
   lists?: Array<{ rect: Rect; values: string[]; strict?: boolean }>;
+  /** Ranges that take a date (a date picker). */
+  dates?: Array<{ rect: Rect; strict?: boolean }>;
+  /** Conditional colors. */
+  conds?: Array<{ rect: Rect; rule: CondRule; value?: string | number; color?: string }>;
 };
+
+/**
+ * A table written with its top-left at col0,row0: the inputs, then what a file
+ * or a pasted web table also carries (cell styles, merges, dropdown lists), all
+ * moved to the same place. A styled blank cell (a fill alone) is a new cell.
+ */
+export function placeTableOps(model: SheetModel, tabId: string, col0: number, row0: number, table: Omit<ImportTable, "name">): ArtifactOp[] {
+  const cells = gridOps(model, tabId, col0, row0, table.grid);
+  const shift = (r: Rect): Rect => ({ c0: r.c0 + col0 - 1, c1: r.c1 + col0 - 1, r0: r.r0 + row0 - 1, r1: r.r1 + row0 - 1 });
+  const t = tabData(model, tabId);
+  const exists = new Set(cells.filter((o) => "put" in o).map((o) => o.k));
+  const styled = (table.styles ?? []).map(({ col, row, style }): ArtifactOp => {
+    const c = col + col0 - 1, r = row + row0 - 1;
+    const k = cellKey(tabId, c, r);
+    return exists.has(k) || t?.cells.has(cellNum(c, r)) ? { k, set: style as CellFields } : { k, put: { kind: "cell", ...(style as CellFields) } };
+  });
+  const merges = (table.merges ?? []).map((rect) => ({ k: newElementKey("mg"), put: { kind: "merge", tab: tabId, range: rectA1(shift(rect)) } }));
+  const lists = (table.lists ?? []).flatMap((l) => validationOps(model, tabId, shift(l.rect), "list", l.values.map((v) => ({ v })), l.strict));
+  const dates = (table.dates ?? []).flatMap((x) => validationOps(model, tabId, shift(x.rect), "date", [], x.strict));
+  // A rule the sheet can't hold (a value it refuses) is skipped rather than failing the whole import.
+  const conds = (table.conds ?? []).flatMap((c) => {
+    try {
+      return condOps(model, tabId, shift(c.rect), c.rule, c.value, c.color, newElementKey("cf"));
+    } catch {
+      return [];
+    }
+  });
+  return [...cells, ...styled, ...merges, ...lists, ...dates, ...conds];
+}
 
 export function importTablesOps(model: SheetModel, tables: ImportTable[]): { ops: ArtifactOp[]; tabIds: string[] } {
   const ops: ArtifactOp[] = [];
@@ -727,20 +828,12 @@ export function importTablesOps(model: SheetModel, tables: ImportTable[]): { ops
     const name = "put" in first && typeof first.put.name === "string" ? first.put.name : table.name;
     const meta: TabMeta = { id: add.id, name, order: Math.max(-1, ...m.tabs.map((t) => t.order)) + 1, frozenRows: 0, frozenCols: 0 };
     m = { ...m, tabs: [...m.tabs, meta], byId: new Map(m.byId).set(add.id, { meta, cells: new Map(), colWidths: new Map(), rowHeights: new Map(), rows: 0, cols: 0 }) };
-    const cells = gridOps(m, add.id, 1, 1, table.grid);
+    const cells = placeTableOps(m, add.id, 1, 1, table);
     // Fit against the imported cells alone: the new tab holds nothing else yet.
     const alone = buildModel([...foldOps(new Map(), [...add.ops, ...cells])].map(([k, st]) => toElement(k, st)));
     const width = Math.max(0, ...table.grid.map((r) => r.length));
     const fit = fitWidthOps(alone, workbookFor(alone), add.id, Array.from({ length: Math.min(width, 200) }, (_, i) => i + 1));
-    // Styles ride on the cells just written; a styled blank cell (a fill alone) is a new one.
-    const written = new Set(cells.map((o) => o.k));
-    const styled = (table.styles ?? []).map(({ col, row, style }) => {
-      const k = cellKey(add.id, col, row);
-      return written.has(k) ? { k, set: style as CellFields } : { k, put: { kind: "cell", ...(style as CellFields) } };
-    });
-    const merges = (table.merges ?? []).map((rect) => ({ k: newElementKey("mg"), put: { kind: "merge", tab: add.id, range: rectA1(rect) } }));
-    const lists = (table.lists ?? []).flatMap((l) => validationOps(m, add.id, l.rect, "list", l.values.map((v) => ({ v })), l.strict));
-    ops.push(...add.ops, ...cells, ...styled, ...merges, ...lists, ...fit);
+    ops.push(...add.ops, ...cells, ...fit);
     tabIds.push(add.id);
   }
   return { ops, tabIds };

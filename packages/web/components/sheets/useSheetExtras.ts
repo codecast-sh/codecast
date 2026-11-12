@@ -5,7 +5,7 @@ import { createElement, useCallback, useMemo, useRef, useState, type MutableRefO
 import { CondPanel } from "./CondPanel";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { toast } from "sonner";
-import { a1, rectA1, cellNum, importTablesOps, inputOps, parseKey, tabKey, validationAt, validationOps, type Rect } from "./sheetCore";
+import { a1, rectA1, cellNum, carriedThreads, importTablesOps, pinCommentOps, threadCell, inputOps, parseKey, tabKey, validationAt, validationOps, type Rect } from "./sheetCore";
 import { cellViewportRect, hitTest } from "./gridGeometry";
 import { readSheetFile } from "./importFile";
 import { linkOf } from "./cellPaint";
@@ -37,14 +37,23 @@ export function useSheetExtras({ S, scrollerRef, sinkRef, select, apply, menu, l
 
   // ── Cell comments: open threads anchored to this tab's cells ──────────────
   const comments = useLiveComments(docId);
-  const commentCells = useMemo(() => {
-    const out = new Map<number, LiveThread>();
-    for (const t of groupThreads(comments)) {
-      const k = typeof t.root.anchor === "string" && !t.root.resolved ? parseKey(t.root.anchor) : null;
-      if (k?.type === "cell" && k.tab === activeTabId && !out.has(cellNum(k.col, k.row))) out.set(cellNum(k.col, k.row), t);
+  // A thread sits on the cell carrying its key, so it follows that cell through sorts and inserts (sheets/comments.ts).
+  const places = useMemo(() => {
+    const open = groupThreads(comments).filter((t) => !t.root.resolved);
+    const cells = new Map<number, LiveThread>();
+    if (!open.length) return { cells, pin: [] as ArtifactOp[] };
+    const carried = carriedThreads(model);
+    for (const t of open) {
+      const at = threadCell(model, t.root, carried);
+      if (at && at.tab === activeTabId && !cells.has(cellNum(at.col, at.row))) cells.set(cellNum(at.col, at.row), t);
     }
-    return out;
-  }, [comments, activeTabId]);
+    // Threads made where the sheet wasn't open (an agent's comment) are tied to their cell on first sight.
+    return { cells, pin: pinCommentOps(model, open.map((t) => t.root)) };
+  }, [comments, activeTabId, model]);
+  const commentCells = places.cells;
+  useWatchEffect(() => {
+    if (!S.current.readOnlyDoc && places.pin.length) live.apply(places.pin, { undoable: false });
+  }, [places]); // eslint-disable-line react-hooks/exhaustive-deps
   const commentCellsRef = useRef(commentCells);
   commentCellsRef.current = commentCells;
   /** Comment on the active cell: its open thread, or a new comment anchored to it. */
@@ -180,8 +189,10 @@ export function useSheetExtras({ S, scrollerRef, sinkRef, select, apply, menu, l
   // outside it is someone else asking to go there.
   useWatchEffect(() => {
     if (selection.length !== 1) return;
-    const k = parseKey(selection[0]);
+    let k = parseKey(selection[0]);
     if (k?.type !== "cell") return;
+    // A thread's anchor is where it was made; go to where its cell is now.
+    for (const [n, t] of commentCellsRef.current) if (t.root.anchor === selection[0] && k.tab === S.current.activeTabId) k = { ...k, col: n % 32768, row: Math.floor(n / 32768) };
     const { activeTabId: id, rect } = S.current;
     if (k.tab === id && k.col >= rect.c0 && k.col <= rect.c1 && k.row >= rect.r0 && k.row <= rect.r1) return;
     if (k.tab !== id) showTab(k.tab);

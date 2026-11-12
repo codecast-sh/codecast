@@ -60,7 +60,7 @@ const xml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replac
  * (_xlfn.XLOOKUP, and _xlfn._xlws.FILTER / SORT for the dynamic-array ones);
  * without it Excel shows #NAME?. Strings in the formula are left alone.
  */
-const XLFN = ["XLOOKUP", "XMATCH", "UNIQUE", "SEQUENCE", "SORTBY", "IFS", "SWITCH", "TEXTJOIN", "CONCAT", "MAXIFS", "MINIFS", "IFNA", "DAYS", "STDEV.S"];
+const XLFN = ["XLOOKUP", "XMATCH", "UNIQUE", "SEQUENCE", "SORTBY", "IFS", "SWITCH", "TEXTJOIN", "CONCAT", "MAXIFS", "MINIFS", "IFNA", "DAYS", "STDEV.S", "ISOWEEKNUM", "VSTACK", "HSTACK", "TAKE", "DROP", "CHOOSECOLS", "CHOOSEROWS", "TOCOL", "TOROW", "TEXTSPLIT", "LET", "LAMBDA", "RANDARRAY", "FORECAST.LINEAR", "PERCENTILE.INC", "REGEXEXTRACT", "REGEXREPLACE", "REGEXTEST"];
 const XLWS = ["FILTER", "SORT"];
 export function excelFormula(f: string): string {
   return f
@@ -97,13 +97,15 @@ class XlsxStyles {
   private ids = new Map<string, number>([["", 0]]);
   private fontIds = new Map<string, number>([["", 0]]);
   private fillIds = new Map<string, number>([["", 0]]);
+  private borders = ["<border/>"];
+  private borderIds = new Map<string, number>([["", 0]]);
 
   private numFmts: string[] = [];
   private numFmtIds = new Map<string, number>();
 
   /** An Excel number format id for a cell's format: built-ins where they match, custom codes (164+) otherwise. */
   fmtId(fmt: { nf?: string; dp?: number; cur?: string; code?: string } | undefined, date: boolean): number {
-    if (date) return 14;
+    if (date && fmt?.nf !== "datetime" && fmt?.nf !== "custom") return 14;
     const nf = fmt?.nf;
     if (!nf || nf === "plain" || nf === "text" || nf === "check") return 0;
     const dp = fmt?.dp;
@@ -129,10 +131,12 @@ class XlsxStyles {
     return id;
   }
 
-  id(o: { bold?: boolean; italic?: boolean; underline?: boolean; color?: string; fill?: string; date?: boolean; numFmt?: number; align?: string; wrap?: boolean }): number {
+  id(o: { bold?: boolean; italic?: boolean; underline?: boolean; color?: string; fill?: string; date?: boolean; numFmt?: number; align?: string; wrap?: boolean; border?: string }): number {
     const numFmt = o.numFmt ?? (o.date ? 14 : 0);
-    if (!o.bold && !o.italic && !o.underline && !o.color && !o.fill && !numFmt && !o.align && !o.wrap) return 0;
-    const key = `${o.bold ? "b" : ""}${o.italic ? "i" : ""}${o.underline ? "u" : ""}|${o.color ?? ""}|${o.fill ?? ""}|${numFmt}|${o.align ?? ""}|${o.wrap ? "w" : ""}`;
+    // Border letters in Excel's order (left, right, top, bottom), so "tb" and "bt" are one border.
+    const bd = [..."lrtb"].filter((x) => o.border?.includes(x)).join("");
+    if (!o.bold && !o.italic && !o.underline && !o.color && !o.fill && !numFmt && !o.align && !o.wrap && !bd) return 0;
+    const key = `${o.bold ? "b" : ""}${o.italic ? "i" : ""}${o.underline ? "u" : ""}|${o.color ?? ""}|${o.fill ?? ""}|${numFmt}|${o.align ?? ""}|${o.wrap ? "w" : ""}|${bd}`;
     const known = this.ids.get(key);
     if (known !== undefined) return known;
     const fontKey = `${o.bold ? "b" : ""}${o.italic ? "i" : ""}${o.underline ? "u" : ""}|${o.color ?? ""}`;
@@ -148,9 +152,16 @@ class XlsxStyles {
       this.fills.push(`<fill><patternFill patternType="solid"><fgColor rgb="${PALETTE_HEX[o.fill!]?.fill ?? "FFFFFFFF"}"/></patternFill></fill>`);
       this.fillIds.set(o.fill!, fillId);
     }
+    let borderId = this.borderIds.get(bd);
+    if (borderId === undefined) {
+      borderId = this.borders.length;
+      const side = (x: string, tag: string) => (bd.includes(x) ? `<${tag} style="thin"><color auto="1"/></${tag}>` : `<${tag}/>`);
+      this.borders.push(`<border>${side("l", "left")}${side("r", "right")}${side("t", "top")}${side("b", "bottom")}<diagonal/></border>`);
+      this.borderIds.set(bd, borderId);
+    }
     const id = this.xfs.length;
     const alignment = o.align || o.wrap ? `<alignment${o.align ? ` horizontal="${o.align}"` : ""}${o.wrap ? ' wrapText="1"' : ""}/>` : "";
-    this.xfs.push(`<xf numFmtId="${numFmt}" fontId="${fontId}" fillId="${fillId}"${fontId ? ' applyFont="1"' : ""}${fillId ? ' applyFill="1"' : ""}${numFmt ? ' applyNumberFormat="1"' : ""}${alignment ? ' applyAlignment="1">' + alignment + "</xf>" : "/>"}`);
+    this.xfs.push(`<xf numFmtId="${numFmt}" fontId="${fontId}" fillId="${fillId}" borderId="${borderId}"${fontId ? ' applyFont="1"' : ""}${fillId ? ' applyFill="1"' : ""}${borderId ? ' applyBorder="1"' : ""}${numFmt ? ' applyNumberFormat="1"' : ""}${alignment ? ' applyAlignment="1">' + alignment + "</xf>" : "/>"}`);
     this.ids.set(key, id);
     return id;
   }
@@ -172,7 +183,7 @@ class XlsxStyles {
   }
 
   xml(): string {
-    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${this.numFmts.length ? `<numFmts count="${this.numFmts.length}">${this.numFmts.join("")}</numFmts>` : ""}<fonts count="${this.fonts.length}">${this.fonts.join("")}</fonts><fills count="${this.fills.length}">${this.fills.join("")}</fills><borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="${this.xfs.length}">${this.xfs.join("")}</cellXfs>${this.dxfs.length ? `<dxfs count="${this.dxfs.length}">${this.dxfs.join("")}</dxfs>` : ""}</styleSheet>`;
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${this.numFmts.length ? `<numFmts count="${this.numFmts.length}">${this.numFmts.join("")}</numFmts>` : ""}<fonts count="${this.fonts.length}">${this.fonts.join("")}</fonts><fills count="${this.fills.length}">${this.fills.join("")}</fills><borders count="${this.borders.length}">${this.borders.join("")}</borders><cellStyleXfs count="1"><xf/></cellStyleXfs><cellXfs count="${this.xfs.length}">${this.xfs.join("")}</cellXfs>${this.dxfs.length ? `<dxfs count="${this.dxfs.length}">${this.dxfs.join("")}</dxfs>` : ""}</styleSheet>`;
   }
 }
 
@@ -259,7 +270,7 @@ export function sheetXlsx(model: SheetModel, wb: Workbook): Uint8Array {
         const isDate = date && typeof info?.value === "number";
         // A formula's number takes the format it shows in the grid (its own, else the one it inherits from what it reads).
         const fmt = style.nf ? style : info?.formula ? inheritedFormat(model, meta.id, input) ?? info.implied : info?.implied;
-        const s = styles.id({ bold: style.b, italic: style.i, underline: style.u, color: style.color, fill: style.fill, date: isDate, numFmt: typeof info?.value === "number" ? styles.fmtId(fmt, isDate) : 0, align: style.al, wrap: style.wrap });
+        const s = styles.id({ bold: style.b, italic: style.i, underline: style.u, color: style.color, fill: style.fill, date: isDate, numFmt: typeof info?.value === "number" ? styles.fmtId(fmt, isDate) : 0, align: style.al, wrap: style.wrap, border: style.bd });
         const ref = a1(col, row);
         const sAttr = s ? ` s="${s}"` : "";
         // An array formula carries the block it fills, as Excel stores one.

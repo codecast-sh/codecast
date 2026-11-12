@@ -3,26 +3,11 @@
 // one. Reads only the rule and tab elements, so it costs nothing on a big sheet.
 import { useMemo, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
-import { COND_RULES, PALETTE, buildModel, condLabel, condOps, condTakesValue, parseRectA1, rectA1, type CondRule, type PaletteColor } from "./sheetCore";
+import { COND_RULES, COND_RULE_NAMES, condPlaceholder, PALETTE, buildModel, condLabel, condOps, condTakesValue, parseRectA1, rectA1, type CondRule, type PaletteColor } from "./sheetCore";
 import { useLiveElements, type LiveHandle } from "../live/useLiveArtifact";
 import { tint } from "./cellPaint";
 import "./formulaAssist.css";
 
-const RULE_NAMES: Record<CondRule, string> = {
-  gt: "Greater than",
-  lt: "Less than",
-  between: "Between",
-  eq: "Is exactly",
-  ne: "Is not",
-  empty: "Is empty",
-  filled: "Is not empty",
-  contains: "Text contains",
-  before: "Date before",
-  after: "Date after",
-  sign: "Gains and losses",
-  scale: "Color scale",
-  formula: "Custom formula",
-};
 
 export function CondPanel({ live, tabId, tabName, selection, onClose }: { live: LiveHandle; tabId: string; tabName: string; selection: () => string; onClose: () => void }) {
   const els = useLiveElements(live.docId, { kinds: ["cf", "tab"] });
@@ -91,10 +76,10 @@ export function CondPanel({ live, tabId, tabName, selection, onClose }: { live: 
           <button type="button" className="sheet-picker-clear" onClick={() => setRange(selection())}>Use selection</button>
         </div>
         <select value={rule} onChange={(e) => setRule(e.target.value as CondRule)} aria-label="Condition">
-          {COND_RULES.map((r) => <option key={r} value={r}>{RULE_NAMES[r]}</option>)}
+          {COND_RULES.map((r) => <option key={r} value={r}>{COND_RULE_NAMES[r]}</option>)}
         </select>
         {condTakesValue(rule) && (
-          <input value={value} onChange={(e) => setValue(e.target.value)} aria-label="Value" spellCheck={false} placeholder={rule === "formula" ? '=$B2="Offer"' : rule === "before" || rule === "after" ? "today, or 2026-12-01" : rule === "contains" || rule === "eq" || rule === "ne" ? "Rejected" : rule === "between" ? "10, 20" : "100"} />
+          <input value={value} onChange={(e) => setValue(e.target.value)} aria-label="Value" spellCheck={false} placeholder={condPlaceholder(rule)} />
         )}
         <div className="sheet-cond-colors" role="radiogroup" aria-label="Color">
           {PALETTE.map((c) => (

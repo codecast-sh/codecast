@@ -32,13 +32,18 @@ export function useQueryTabRefresh(docId: string, meta: TabMeta, readOnly: boole
   }, [run, docId, meta.id, isQuery, readOnly]);
 
   const refreshedAt = meta.refreshedAt;
+  // A changed query (source, project, status) clears the stamp and reloads; the short wait lets the change reach the server first.
+  const querySig = JSON.stringify(meta.query ?? null);
   useWatchEffect(() => {
     if (!isQuery || readOnly) return;
-    if (!refreshedAt || Date.now() - refreshedAt > STALE_MS) refresh();
+    const first = !refreshedAt ? setTimeout(refresh, 800) : Date.now() - refreshedAt > STALE_MS ? (refresh(), undefined) : undefined;
     const t = setInterval(refresh, STALE_MS);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-arm per tab, not per refresh stamp
-  }, [isQuery, readOnly, meta.id, docId]);
+    return () => {
+      clearInterval(t);
+      if (first) clearTimeout(first);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-arm per tab and per query, not per refresh stamp
+  }, [isQuery, readOnly, meta.id, docId, querySig]);
 
   return { refreshing, refresh, lastError };
 }

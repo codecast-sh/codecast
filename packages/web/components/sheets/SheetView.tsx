@@ -7,9 +7,9 @@
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
-import { RefreshCw, Radio } from "lucide-react";
-import type { ArtifactPresence } from "@codecast/shared/artifacts";
-import { a1, addTabOps, LiveSheet, enforceValidation, replaceOps, expandToMerges, mergeAt, cellNum, deleteTabOps, formatValue, inputOps, isFormula, parseQualifiedRange, quoteTabName, rectA1, renameTabOps, styleOf, tabPatchOps, toTsv, fitWidthOps, inheritedFormat, uniqueTabName, type CellStyle, type Rect, type TabData, type QuerySource } from "./sheetCore";
+import { Radio } from "lucide-react";
+import type { ArtifactPresence, Json } from "@codecast/shared/artifacts";
+import { a1, sortOps, valueMeetsRule, addTabOps, duplicateTabOps, moveTabOps, moveTabToOps, LiveSheet, enforceValidation, replaceOps, expandToMerges, mergeAt, cellNum, deleteTabOps, formatValue, inputOps, isFormula, parseQualifiedRange, quoteTabName, rectA1, renameTabOps, styleOf, tabPatchOps, toTsv, fitWidthOps, inheritedFormat, uniqueTabName, type CellStyle, type Rect, type TabData, type QuerySource } from "./sheetCore";
 import type { LiveViewProps } from "../live/registry";
 import { useLiveElements, useLivePresence } from "../live/useLiveArtifact";
 import { sendAsk, pickAskTarget, reopenAsk } from "../live/askAgent";
@@ -25,13 +25,14 @@ import { FormatBar, type FormatAction } from "./FormatBar";
 import { SHEET_ASK_SLOT } from "./askSlot";
 import { useQueryTabRefresh } from "./useQueryTabRefresh";
 import { useAgentFlash, useUnseenTabs } from "./tabActivity";
+import { QueryBar } from "./QueryBar";
 import { useSheetExtras } from "./useSheetExtras";
 import { sheetExports } from "./exportFile";
 import { SheetExtrasView } from "./SheetExtras";
 import { IMPORT_ACCEPT } from "./importFile";
 import { solVar } from "./cellPaint";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { DEF_COL_W, DEF_ROW_H, REF_COLORS, type Sel, type Menu, selRect, parsePosition, visibleRowsOf, clearVisible, QUERY_LABEL, ago, cellNumOfKey, elementsHaveTab, shiftFormulaSafe, columnValues, refsKeyOf, formatSelection, spillSource, moveSelection, unhideBefore, hideSelection, layoutWidths, writeSheetClipboard, pasteSheetClipboard, sheetClipboardCommand, checkCommit, type SheetState, type SheetCtx } from "./sheetActions";
+import { DEF_COL_W, DEF_ROW_H, REF_COLORS, type Sel, type Menu, selRect, parsePosition, visibleRowsOf, clearVisible, QUERY_LABEL, ago, cellNumOfKey, elementsHaveTab, shiftFormulaSafe, columnValues, refsKeyOf, formatSelection, filterEnd, selectionSummary, spillSource, moveSelection, unhideBefore, hideSelection, layoutWidths, writeSheetClipboard, pasteSheetClipboard, sheetClipboardCommand, checkCommit, type SheetState, type SheetCtx } from "./sheetActions";
 import { TabMenu, CellMenu, FilterPanel, FilterButtons, FindBar, type ClipKind } from "./SheetMenus";
 import { handleSheetKey } from "./sheetKeys";
 import { sheetPointerDown, sheetResizeStart, sheetFillStart } from "./sheetPointer";
@@ -94,8 +95,14 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
     const hidden = new Set<number>(tab.hiddenRows);
     if (!filter) return hidden;
     const entries = Object.entries(filter.hidden ?? {}).filter(([, vals]) => vals.length);
-    if (!entries.length) return hidden;
-    for (let r = filter.row + 1; r <= tab.rows; r++) {
+    const conds = Object.entries(filter.when ?? {});
+    if (!entries.length && !conds.length) return hidden;
+    for (let r = filter.row + 1, end = filterEnd(tab, filter); r <= end; r++) {
+      // A row shows when every column's condition holds and none of its values is unticked.
+      if (conds.some(([c, w]) => !valueMeetsRule(w.rule, w.value, wb.cell(activeTabId, Number(c), r)?.value ?? null))) {
+        hidden.add(r);
+        continue;
+      }
       for (const [c, vals] of entries) {
         const col = Number(c);
         const info = wb.cell(activeTabId, col, r);
@@ -363,7 +370,11 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
   const onFilterClick = useCallback((col: number, e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    filterPop.open(e, { col }, { force: true });
+    // From the keyboard the click has no position: open under the button.
+    if (e.clientX === 0 && e.clientY === 0) {
+      const b = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      filterPop.openAt(b.left, b.bottom + 2, { col });
+    } else filterPop.open(e, { col }, { force: true });
   }, [filterPop]);
 
   // Agent writes flash, live or when you open a tab they changed while you were elsewhere.
@@ -461,13 +472,7 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
   const now = useCoarseNow(15_000);
 
   // ── Selection summary ─────────────────────────────────────────────────────
-  const summaryValues = useMemo(() => {
-    if (rect.c0 === rect.c1 && rect.r0 === rect.r1) return [];
-    const r1 = Math.min(rect.r1, Math.max(tab.rows, rect.r0)), c1 = Math.min(rect.c1, Math.max(tab.cols, rect.c0));
-    if ((r1 - rect.r0 + 1) * (c1 - rect.c0 + 1) > 200_000) return [];
-    // Rows a filter hides are not part of what the person sees, so they are not summed.
-    return wb.read(activeTabId, { ...rect, r1, c1 }).filter((_, i) => !hiddenRows.has(rect.r0 + i)).flat();
-  }, [rect.c0, rect.r0, rect.c1, rect.r1, wb, version, activeTabId, tab.rows, tab.cols, hiddenRows]); // eslint-disable-line react-hooks/exhaustive-deps
+  const summary = useMemo(() => selectionSummary(model, wb, tab, rect, hiddenRows), [rect.c0, rect.r0, rect.c1, rect.r1, wb, version, tab, hiddenRows]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const activeInfo = wb.cell(activeTabId, active.col, active.row);
   const refLabel = rect.c0 === rect.c1 && rect.r0 === rect.r1 ? a1(active.col, active.row) : rectA1({ ...rect, r1: Math.min(rect.r1, rows.count), c1: Math.min(rect.c1, cols.count) });
@@ -577,18 +582,16 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
         onKey={onKey}
       />
       {queryTab && (
-        <div className="sheet-query-bar" data-sheet-query>
-          <Radio className="w-3.5 h-3.5 text-sol-green" />
-          <span className="text-sol-text">Live</span>
-          <span className="sheet-query-chip">{tab.meta.query!.source}</span>
-          {tab.meta.query!.project && <span className="sheet-query-chip">{tab.meta.query!.project}</span>}
-          <span className="text-sol-text-dim">{tab.meta.refreshedAt ? `updated ${ago(tab.meta.refreshedAt, now)}` : "not loaded yet"}</span>
-          {(lastError || tab.meta.queryError) && <span className="text-sol-red truncate">{lastError ?? tab.meta.queryError}</span>}
-          <span className="flex-1" />
-          <button type="button" className="sheet-query-refresh" onClick={refresh} disabled={refreshing || readOnlyDoc}>
-            <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} /> Refresh
-          </button>
-        </div>
+        <QueryBar
+          query={tab.meta.query!}
+          refreshedAt={tab.meta.refreshedAt}
+          error={lastError ?? tab.meta.queryError}
+          refreshing={refreshing}
+          readOnly={readOnlyDoc}
+          now={now}
+          onRefresh={refresh}
+          onChange={(query) => apply(tabPatchOps(S.current.model, activeTabId, { query: query as unknown as Json, refreshed_at: null, query_error: null }))}
+        />
       )}
       <div
         className="sheet-body"
@@ -681,10 +684,11 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
         }}
         onRename={(id, name) => apply(renameTabOps(S.current.model, id, uniqueTabName({ ...S.current.model, tabs: S.current.model.tabs.filter((t) => t.id !== id) }, name)))}
         onContext={(id, e) => menu.open(e, { kind: "tab", tabId: id }, { force: true })}
+        onReorder={(id, to) => apply(moveTabToOps(S.current.model, id, to))}
         renameRequest={renameTab}
         onRenameDone={() => setRenameTab(null)}
         onAdd={(e) => addMenu.open(e, null, { force: true })}
-        summary={<SelectionSummary values={summaryValues} style={activeStyle.nf ? activeStyle : { ...activeStyle, nf: activeInfo?.implied?.nf }} />}
+        summary={<SelectionSummary values={summary.values} style={summary.style} />}
         others={others}
         unseen={unseenTabs}
       />
@@ -710,6 +714,12 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
               tabId={m.tabId}
               model={model}
               onRename={() => setRenameTab(m.tabId)}
+              onDuplicate={() => {
+                const dup = duplicateTabOps(model, m.tabId);
+                apply(dup.ops);
+                showTab(dup.id);
+              }}
+              onMove={(dir) => apply(moveTabOps(model, m.tabId, dir))}
               onDelete={() => {
                 if (model.tabs.length === 1) return;
                 const name = model.byId.get(m.tabId)?.meta.name ?? "tab";
@@ -719,7 +729,7 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
               }}
             />
           ) : (
-            <CellMenu filtered={!!tab.meta.filter} kind={m.kind} readOnly={readOnly} onFormat={onFormat} validation={activeValidation?.rule} onValidate={onValidate} onClipboard={onClipboard} onComment={() => openCellComment()} onHide={(axis, hide) => hideSelection(axis, hide, ctx.current)} onClear={() => apply(clearVisible(model, activeTabId, rect, hiddenRows))} onCopyHint={() => {
+            <CellMenu filtered={!!tab.meta.filter} hiddenLines={{ cols: !!tab.hiddenCols?.size, rows: !!tab.hiddenRows?.size }} frozen={!!(tab.meta.frozenRows || tab.meta.frozenCols)} kind={m.kind} readOnly={readOnly} onFormat={onFormat} validation={activeValidation?.rule} onValidate={onValidate} onClipboard={onClipboard} onComment={() => openCellComment()} onHide={(axis, hide) => hideSelection(axis, hide, ctx.current)} onClear={() => apply(clearVisible(model, activeTabId, rect, hiddenRows))} onCopyHint={() => {
               const { rect: r, tab: t } = S.current;
               const lines = visibleRowsOf(r, hiddenRows, t.rows).map((row) => {
                 const out: string[] = [];
@@ -738,12 +748,21 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
       <CursorPopover state={filterPop}>
         {(p) => (
           <FilterPanel
-            values={columnValues(wb, tab, p.col, filter?.row ?? 1)}
+            values={columnValues(wb, tab, p.col, filter?.row ?? 1, filter ? filterEnd(tab, filter) : tab.rows)}
             hidden={filter?.hidden?.[String(p.col)] ?? []}
-            onApply={(hidden) => {
+            when={filter?.when?.[String(p.col)]}
+            onApply={(hidden, when) => {
               const f = S.current.tab.meta.filter;
               if (!f) return;
-              apply(tabPatchOps(S.current.model, activeTabId, { filter: { ...f, hidden: { ...f.hidden, [String(p.col)]: hidden } } as any }));
+              const { [String(p.col)]: _drop, ...others } = f.when ?? {};
+              apply(tabPatchOps(S.current.model, activeTabId, { filter: { ...f, hidden: { ...f.hidden, [String(p.col)]: hidden }, when: when ? { ...others, [String(p.col)]: when } : others } as any }));
+              filterPop.close();
+            }}
+            onSort={(desc) => {
+              const { model: m, wb: w, tab: t } = S.current;
+              const f = t.meta.filter;
+              if (!f) return;
+              apply(sortOps(m, w, activeTabId, { c0: f.c0, c1: f.c1, r0: f.row + 1, r1: filterEnd(t, f) }, p.col, desc));
               filterPop.close();
             }}
           />

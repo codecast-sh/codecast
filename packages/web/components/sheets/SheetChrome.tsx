@@ -264,6 +264,8 @@ export const CellEditor = memo(function CellEditor({
 
 // ── Tab strip ───────────────────────────────────────────────────────────────
 
+const TAB_DRAG = "application/x-codecast-sheet-tab";
+
 export function TabStrip({
   tabs,
   activeId,
@@ -277,6 +279,7 @@ export function TabStrip({
   onRenameDone,
   others,
   unseen,
+  onReorder,
 }: {
   tabs: TabMeta[];
   activeId: string;
@@ -293,6 +296,8 @@ export function TabStrip({
   others?: ArtifactPresence[];
   /** Tabs an agent wrote to since this page last showed them. */
   unseen?: Set<string>;
+  /** A tab dragged to a place in the strip. */
+  onReorder?: (id: string, to: number) => void;
 }) {
   const onTab = (id: string) => (others ?? []).filter((p) => presenceTab(p) === id);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -346,8 +351,19 @@ export function TabStrip({
               data-sheet-tab={t.name}
               className={`sheet-tab ${t.id === activeId ? "is-active" : ""}`}
               onClick={() => onSelect(t.id)}
+              draggable={!readOnly && !!onReorder}
+              onDragStart={(e) => e.dataTransfer.setData(TAB_DRAG, t.id)}
+              onDragOver={(e) => {
+                if (e.dataTransfer.types.includes(TAB_DRAG)) e.preventDefault();
+              }}
+              onDrop={(e) => {
+                const id = e.dataTransfer.getData(TAB_DRAG);
+                if (!id || id === t.id) return;
+                e.preventDefault();
+                onReorder?.(id, tabs.findIndex((x) => x.id === t.id));
+              }}
               onDoubleClick={() => {
-                if (readOnly || t.query) return;
+                if (readOnly) return;
                 setDraft(t.name);
                 setRenaming(t.id);
               }}

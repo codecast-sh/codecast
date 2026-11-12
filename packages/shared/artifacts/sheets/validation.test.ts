@@ -228,3 +228,37 @@ describe("replace", () => {
     expect(one.count).toBe(1);
   });
 });
+
+describe("comment threads follow their cell", () => {
+  test("threads ride their cell through insert and sort, two on one cell both ride it, an empty cell's too; a deleted cell leaves them nowhere", async () => {
+    const { pinCommentOps, threadCell } = await import("./comments");
+    const { structuralOps, sortOps } = await import("./ops");
+    const { workbookFor } = await import("./model");
+    const d = doc(sheetSpec.seed!());
+    d.verb("write", ["A1"], "Name\tAmount\nBo\t5\nAna\t9");
+    const threads = [{ key: "cm_1", anchor: "c:Sheet1!B3" }, { key: "cm_2", anchor: "c:Sheet1!B3" }, { key: "cm_e", anchor: "c:Sheet1!D3" }];
+    d.apply(pinCommentOps(buildModel(d.elements()), threads));
+    const at = (key: string) => threadCell(buildModel(d.elements()), threads.find((t) => t.key === key)!);
+    d.apply(structuralOps(buildModel(d.elements()), "Sheet1", "row", 2, 1));
+    expect([at("cm_1"), at("cm_2"), at("cm_e")]).toEqual([{ tab: "Sheet1", col: 2, row: 4 }, { tab: "Sheet1", col: 2, row: 4 }, { tab: "Sheet1", col: 4, row: 4 }]);
+    const m = buildModel(d.elements());
+    d.apply(sortOps(m, workbookFor(m), "Sheet1", { c0: 1, r0: 3, c1: 4, r1: 4 }, 1));
+    expect([at("cm_1"), at("cm_2"), at("cm_e")]).toEqual([{ tab: "Sheet1", col: 2, row: 3 }, { tab: "Sheet1", col: 2, row: 3 }, { tab: "Sheet1", col: 4, row: 3 }]);
+    d.apply(structuralOps(buildModel(d.elements()), "Sheet1", "row", 3, -1));
+    expect([at("cm_1"), at("cm_2"), at("cm_e")]).toEqual([null, null, null]);
+    // Pinning again does nothing.
+    expect(pinCommentOps(buildModel(d.elements()), threads)).toEqual([]);
+  });
+});
+
+describe("comment anchors from a reference", () => {
+  test("Tab!A1, A1 and a tab id name the cell; an unknown tab names nothing", () => {
+    const d = doc(sheetSpec.seed!());
+    d.verb("write", ["A1"], "x");
+    const view = { elements: d.elements(), get: (k: string) => d.elements().find((e) => e.key === k) } as never;
+    expect(sheetSpec.anchorFor!(view, "Sheet1!C4")).toBe("c:Sheet1!C4");
+    expect(sheetSpec.anchorFor!(view, "b2:c3")).toBe("c:Sheet1!B2");
+    expect(sheetSpec.anchorFor!(view, "Nope!A1")).toBeUndefined();
+    expect(sheetSpec.anchorFor!(view, "zzz")).toBeUndefined();
+  });
+});

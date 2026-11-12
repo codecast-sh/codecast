@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { CalendarDays, Check, ChevronRight, ClipboardPaste, Copy, Eye, EyeOff, MessageSquare, Filter as FilterIcon, ListChecks, Scissors, X } from "lucide-react";
 import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
-import { a1, type SheetModel, type TabData } from "./sheetCore";
+import { a1, COND_RULE_NAMES, condPlaceholder, condTakesValue, type CondRule, type SheetModel, type TabData } from "./sheetCore";
 import { CtxItem } from "../ui/context-menu";
 import { DropdownMenuSeparator } from "../ui/dropdown-menu";
 import type { AxisLayout } from "./layout";
@@ -12,12 +12,17 @@ import { COL_HEADER_H, cellViewportRect } from "./gridGeometry";
 import type { FormatAction } from "./FormatBar";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 
-export function TabMenu({ tabId, model, onRename, onDelete }: { tabId: string; model: SheetModel; onRename: () => void; onDelete: () => void }) {
+export function TabMenu({ tabId, model, onRename, onDelete, onDuplicate, onMove }: { tabId: string; model: SheetModel; onRename: () => void; onDelete: () => void; onDuplicate: () => void; onMove: (dir: -1 | 1) => void }) {
   const t = model.byId.get(tabId);
   if (!t) return null;
+  const at = model.tabs.findIndex((x) => x.id === tabId);
   return (
     <>
-      <CtxItem onSelect={onRename} disabled={!!t.meta.query}>Rename</CtxItem>
+      <CtxItem onSelect={onRename}>Rename</CtxItem>
+      <CtxItem onSelect={onDuplicate}>Duplicate</CtxItem>
+      {at > 0 && <CtxItem onSelect={() => onMove(-1)}>Move left</CtxItem>}
+      {at < model.tabs.length - 1 && <CtxItem onSelect={() => onMove(1)}>Move right</CtxItem>}
+      <DropdownMenuSeparator />
       <CtxItem danger onSelect={onDelete} disabled={model.tabs.length === 1}>Delete tab</CtxItem>
     </>
   );
@@ -27,6 +32,8 @@ export function CellMenu({
   kind,
   readOnly,
   filtered,
+  hiddenLines,
+  frozen,
   onFormat,
   onClear,
   onCopyHint,
@@ -48,6 +55,9 @@ export function CellMenu({
   onComment: () => void;
   onHide: (axis: "col" | "row", hide: boolean) => void;
   filtered?: boolean;
+  /** Whether the tab has hidden columns or rows (Unhide shows only then). */
+  hiddenLines?: { cols: boolean; rows: boolean };
+  frozen?: boolean;
 }) {
   if (readOnly) return <CtxItem onSelect={onCopyHint}>Copy</CtxItem>;
   return (
@@ -78,13 +88,13 @@ export function CellMenu({
       {kind === "colHeader" && (
         <>
           <CtxItem icon={EyeOff} onSelect={() => onHide("col", true)}>Hide columns</CtxItem>
-          <CtxItem icon={Eye} onSelect={() => onHide("col", false)}>Unhide columns</CtxItem>
+          {hiddenLines?.cols !== false && <CtxItem icon={Eye} onSelect={() => onHide("col", false)}>Unhide columns</CtxItem>}
         </>
       )}
       {kind === "rowHeader" && (
         <>
           <CtxItem icon={EyeOff} onSelect={() => onHide("row", true)}>Hide rows</CtxItem>
-          <CtxItem icon={Eye} onSelect={() => onHide("row", false)}>Unhide rows</CtxItem>
+          {hiddenLines?.rows !== false && <CtxItem icon={Eye} onSelect={() => onHide("row", false)}>Unhide rows</CtxItem>}
         </>
       )}
       <DropdownMenuSeparator />
@@ -96,7 +106,7 @@ export function CellMenu({
       <CtxItem icon={FilterIcon} onSelect={() => onFormat({ type: "filter" })}>{filtered ? "Remove filter" : "Filter"}</CtxItem>
       {kind !== "colHeader" && <CtxItem onSelect={() => onFormat({ type: "freeze", axis: "row" })}>Freeze rows to here</CtxItem>}
       {kind !== "rowHeader" && <CtxItem onSelect={() => onFormat({ type: "freeze", axis: "col" })}>Freeze columns to here</CtxItem>}
-      <CtxItem onSelect={() => onFormat({ type: "freeze", axis: "none" })}>Unfreeze</CtxItem>
+      {frozen !== false && <CtxItem onSelect={() => onFormat({ type: "freeze", axis: "none" })}>Unfreeze</CtxItem>}
       <DropdownMenuSeparator />
       {kind !== "rowHeader" && (
         <>
@@ -133,12 +143,37 @@ export function PasteHint() {
   );
 }
 
-export function FilterPanel({ values, hidden, onApply }: { values: Array<{ text: string; count: number }>; hidden: string[]; onApply: (hidden: string[]) => void }) {
+/** Conditions a filter can keep rows by: the rules that look at a value alone. */
+const FILTER_RULES: CondRule[] = ["gt", "lt", "between", "eq", "ne", "contains", "empty", "filled", "before", "after"];
+
+export function FilterPanel({ values, hidden, when, onApply, onSort }: {
+  values: Array<{ text: string; count: number }>;
+  hidden: string[];
+  when?: { rule: CondRule; value?: string | number };
+  onApply: (hidden: string[], when: { rule: CondRule; value?: string | number } | null) => void;
+  onSort: (desc: boolean) => void;
+}) {
   const [off, setOff] = useState(() => new Set(hidden));
   const [q, setQ] = useState("");
+  const [rule, setRule] = useState<CondRule | "">(when?.rule ?? "");
+  const [value, setValue] = useState(when?.value !== undefined ? String(when.value) : "");
   const shown = values.filter((v) => !q || v.text.toLowerCase().includes(q.toLowerCase()));
+  const apply = () => {
+    const v = value.trim();
+    const n = Number(v);
+    onApply([...off], rule && (!condTakesValue(rule) || v) ? { rule, ...(condTakesValue(rule) ? { value: v !== "" && Number.isFinite(n) && rule !== "contains" && rule !== "eq" && rule !== "ne" ? n : v } : {}) } : null);
+  };
   return (
     <div className="sheet-filter-panel" data-sheet-filter-panel>
+      <div className="sheet-filter-actions">
+        <button type="button" onClick={() => onSort(false)}>Sort A to Z</button>
+        <button type="button" onClick={() => onSort(true)}>Sort Z to A</button>
+      </div>
+      <select value={rule} onChange={(e) => setRule(e.target.value as CondRule | "")} aria-label="Filter by condition">
+        <option value="">Any value</option>
+        {FILTER_RULES.map((r) => <option key={r} value={r}>{COND_RULE_NAMES[r]}</option>)}
+      </select>
+      {rule && condTakesValue(rule) && <input value={value} onChange={(e) => setValue(e.target.value)} aria-label="Condition value" placeholder={condPlaceholder(rule)} spellCheck={false} onKeyDown={(e) => e.key === "Enter" && apply()} />}
       <input autoFocus placeholder="Search values" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="sheet-filter-actions">
         <button type="button" onClick={() => setOff(new Set())}>All</button>
@@ -166,7 +201,7 @@ export function FilterPanel({ values, hidden, onApply }: { values: Array<{ text:
           );
         })}
       </div>
-      <button type="button" className="sheet-filter-ok" onClick={() => onApply([...off])}>Apply</button>
+      <button type="button" className="sheet-filter-ok" onClick={apply}>Apply</button>
     </div>
   );
 }
@@ -216,7 +251,7 @@ export function FilterButtons({
   for (let c = filter.c0; c <= filter.c1; c++) {
     const r = cellViewportRect(el, cols, rows, frozenCols, frozenRows, c, filter.row);
     if (!r.visible || r.x + r.w > el.clientWidth || r.y < COL_HEADER_H - 2 || r.y > el.clientHeight) continue;
-    const active = (filter.hidden?.[String(c)] ?? []).length > 0;
+    const active = (filter.hidden?.[String(c)] ?? []).length > 0 || !!filter.when?.[String(c)];
     out.push(
       <button
         key={c}

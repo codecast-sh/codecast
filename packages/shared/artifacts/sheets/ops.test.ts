@@ -274,3 +274,24 @@ describe("lead review fixes", () => {
     expect(text).toContain("B2 21000");
   });
 });
+
+describe("tab order and copies", () => {
+  test("duplicate copies cells, widths, rules and merges right after the original; move swaps neighbors", async () => {
+    const { duplicateTabOps, moveTabOps } = await import("./ops");
+    const d = doc(sheetSpec.seed!());
+    d.verb("write", ["A1"], "Name\tAmount\nBo\t=1+1");
+    d.verb("tab", ["add", "Other"]);
+    d.verb("cond", ["Sheet1!B2:B9", "gt", "1", "red"]);
+    d.verb("merge", ["Sheet1!A4:B4"]);
+    const dup = duplicateTabOps(buildModel(d.elements()), "Sheet1");
+    d.apply(dup.ops);
+    let m = buildModel(d.elements());
+    expect(m.tabs.map((t) => t.name)).toEqual(["Sheet1", "Sheet1 copy", "Other"]);
+    expect(d.input(`c:${dup.id}!B2`)).toBe("=1+1");
+    expect(m.conds.filter((c) => c.tab === dup.id).length).toBe(1);
+    expect(m.merges.filter((g) => g.tab === dup.id).length).toBe(1);
+    d.apply(moveTabOps(m, "Sheet1", 1));
+    m = buildModel(d.elements());
+    expect(m.tabs.map((t) => t.name)).toEqual(["Sheet1 copy", "Sheet1", "Other"]);
+  });
+});

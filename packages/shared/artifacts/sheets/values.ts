@@ -59,6 +59,7 @@ export function nowSerial(now = new Date()): number {
   return todaySerial(now) + (now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds()) / 86400;
 }
 
+const MONTH_NAMES = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 
 /** Parse a date written as text: 2026-11-10, 11/10/2026, Nov 10 2026, 10 Nov 2026. */
@@ -79,6 +80,24 @@ export function parseDateText(text: string): number | null {
     if (mi >= 0) return validDate(+m[3], mi + 1, +m[1]);
   }
   return null;
+}
+
+/**
+ * A typed month and day without a year ("Nov 5", "5 Nov", "11/5") as an ISO
+ * date in the current year, the way Google and Excel read it. Applied when a
+ * person commits the text, so the cell holds a date that stays put next year.
+ */
+export function completeDateInput(text: string, now = new Date()): string {
+  const t = text.trim();
+  // A month written as its name or any start of it at least three letters long ("Sep", "Sept", "September").
+  const month = (w: string) => (w.length >= 3 ? MONTH_NAMES.findIndex((n) => n.startsWith(w.toLowerCase())) + 1 : 0);
+  let mo = 0, d = 0;
+  let m = t.match(/^([A-Za-z]+)\.? (\d{1,2})$/);
+  if (m) [mo, d] = [month(m[1]), +m[2]];
+  else if ((m = t.match(/^(\d{1,2}) ([A-Za-z]+)\.?$/))) [mo, d] = [month(m[2]), +m[1]];
+  else if ((m = t.match(/^(\d{1,2})\/(\d{1,2})$/))) [mo, d] = [+m[1], +m[2]];
+  if (!mo || validDate(now.getFullYear(), mo, d) === null) return text;
+  return `${now.getFullYear()}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
 }
 
 function fullYear(y: number): number {

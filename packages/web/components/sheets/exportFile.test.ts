@@ -77,6 +77,7 @@ describe("conditional colors in Excel", () => {
 
 describe("arrays in Excel", () => {
   test("a spill is an array formula with its block's values; E1# is ANCHORARRAY", () => {
+    expect(excelFormula("TAKE(VSTACK(A1:A2,B1:B2),1)")).toBe("_xlfn.TAKE(_xlfn.VSTACK(A1:A2,B1:B2),1)");
     expect(excelFormula("ROWS(E1#)+SUM(Data!B2#)")).toBe("ROWS(_xlfn.ANCHORARRAY(E1))+SUM(_xlfn.ANCHORARRAY(Data!B2))");
     const ops: ArtifactOp[] = [
       { k: "tab:S", put: { kind: "tab", name: "S", order: 0 } },

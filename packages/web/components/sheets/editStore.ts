@@ -1,7 +1,7 @@
 // The cell being edited, held outside React state so a keystroke re-renders
 // only the in-cell editor and the formula bar, never the grid.
 import { useSyncExternalStore } from "react";
-import { isFormula, refText, tokenize } from "./sheetCore";
+import { completeDateInput, isFormula, refText, tokenize } from "./sheetCore";
 
 export type EditState = {
   /** The tab the edit belongs to: a commit always writes there, whatever tab is showing by then. */
@@ -68,7 +68,8 @@ export function fnPrefixAt(text: string, caret: number): string | null {
 
 /** Auto-close an open string and parentheses on a formula; text inside strings does not count. */
 export function finishInput(text: string): string {
-  if (!(text.length > 1 && text[0] === "=")) return text;
+  // A month and day without a year ("Nov 5") is a date this year.
+  if (!(text.length > 1 && text[0] === "=")) return completeDateInput(text);
   let depth = 0;
   let inStr = false;
   for (let i = 1; i < text.length; i++) {

@@ -96,6 +96,8 @@
   background: color-mix(in srgb, var(--sol-text) 8%, transparent);
   color: var(--sol-text-secondary, var(--sol-text));
 }
+button.sheet-query-chip.is-menu { display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+button.sheet-query-chip.is-menu:hover { background: color-mix(in srgb, var(--sol-text) 14%, transparent); }
 .sheet-query-refresh {
   display: inline-flex;
   align-items: center;
@@ -533,7 +535,7 @@
 .sheet-filter-btn:hover { color: var(--sol-text); }
 .sheet-filter-btn.is-active { color: var(--sol-bg); background: var(--sol-green); box-shadow: none; }
 .sheet-filter-panel { width: 240px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
-.sheet-filter-panel input { height: 28px; padding: 0 8px; border-radius: 6px; background: var(--sol-bg-alt); color: var(--sol-text); outline: none; font-size: 12px; }
+.sheet-filter-panel input, .sheet-filter-panel select { height: 28px; padding: 0 8px; border-radius: 6px; background: var(--sol-bg-alt); color: var(--sol-text); outline: none; font-size: 12px; }
 .sheet-filter-actions { display: flex; gap: 10px; font-size: 12px; color: var(--sol-blue); padding: 0 2px; }
 .sheet-filter-list { max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; }
 .sheet-filter-list button { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 6px; border-radius: 5px; font-size: 12px; color: var(--sol-text-muted); }

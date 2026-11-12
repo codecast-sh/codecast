@@ -3,7 +3,7 @@
 // CLI verbs and the web view both write through these.
 import type { ArtifactOp, Json } from "../core";
 import { newElementKey } from "../spec";
-import { parseLiteral } from "./values";
+import { parseDateText, parseLiteral, todaySerial } from "./values";
 import { colKey, parseKey, rectA1, rowKey, type Rect } from "./refs";
 import { validationAt, type CondRule, type SheetModel } from "./model";
 
@@ -95,6 +95,28 @@ export function betweenOf(value: string | number | undefined): [number, number] 
   const parts = String(value ?? "").split(/\s*(?:,|\.\.|\bto\b|\band\b)\s*/i).filter(Boolean).map(Number);
   if (parts.length !== 2 || parts.some((n) => Number.isNaN(n))) return null;
   return parts[0] <= parts[1] ? [parts[0], parts[1]] : [parts[1], parts[0]];
+}
+
+/** Each rule's name in a picker. */
+export const COND_RULE_NAMES: Record<CondRule, string> = {
+  gt: "Greater than",
+  lt: "Less than",
+  between: "Between",
+  eq: "Is exactly",
+  ne: "Is not",
+  empty: "Is empty",
+  filled: "Is not empty",
+  contains: "Text contains",
+  before: "Date before",
+  after: "Date after",
+  sign: "Gains and losses",
+  scale: "Color scale",
+  formula: "Custom formula",
+};
+
+/** An example value for a rule's input. */
+export function condPlaceholder(rule: CondRule): string {
+  return rule === "formula" ? '=$B2="Offer"' : rule === "before" || rule === "after" ? "today, or 2026-12-01" : rule === "contains" || rule === "eq" || rule === "ne" ? "Rejected" : rule === "between" ? "10, 20" : "100";
 }
 
 /** Rules that compare against a value the person gives. */
@@ -195,4 +217,40 @@ export function expandToMerges(model: SheetModel, tabId: string, rect: Rect): Re
     if (!grew) break;
   }
   return r;
+}
+
+/**
+ * Whether a cell's value meets a rule that compares the value alone (not
+ * sign, scale or a formula): conditional colors paint it, and a filter by
+ * condition keeps its row.
+ */
+export function valueMeetsRule(rule: CondRule, target: string | number | undefined, value: unknown, now = new Date()): boolean {
+  const numeric = typeof value === "number";
+  const blank = value === null || value === undefined || value === "";
+  switch (rule) {
+    case "eq":
+    case "ne": {
+      const same = String(value ?? "").toLowerCase() === String(target ?? "").toLowerCase() || (numeric && value === Number(target));
+      return rule === "eq" ? same : !blank && !same;
+    }
+    case "empty": return blank;
+    case "filled": return !blank;
+    case "between": {
+      const range = betweenOf(target);
+      return numeric && !!range && value >= range[0] && value <= range[1];
+    }
+    case "gt":
+    case "lt": {
+      const n = typeof target === "number" ? target : Number(target);
+      return numeric && Number.isFinite(n) && target !== "" && (rule === "gt" ? value > n : value < n);
+    }
+    case "before":
+    case "after": {
+      // Dates are serials; the rule's value is "today" or a date as typed.
+      const t = String(target ?? "").trim().toLowerCase() === "today" ? todaySerial(now) : parseDateText(String(target ?? ""));
+      return numeric && t !== null && (rule === "before" ? value < t : value > t);
+    }
+    case "contains": return typeof value === "string" && value.toLowerCase().includes(String(target ?? "").toLowerCase());
+    default: return false;
+  }
 }

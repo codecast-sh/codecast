@@ -2,7 +2,7 @@
 // sheet doc holds tabs; each tab holds cells (input + style), column widths,
 // row heights, conditional colors and table styles:
 //
-//   tab:<id>          {name, order, frozen_rows?, frozen_cols?, filter?, query?, refreshed_at?}
+//   tab:<id>          {name, order, frozen_rows?, frozen_cols?, filter?, query?, refreshed_at?, pinned?}
 //   c:<tab>!<A1>      {input?, nf?, dp?, sign?, cur?, b?, i?, u?, fs?, al?, color?, fill?, bd?, wrap?}
 //   col:<tab>!<C>     {w}
 //   row:<tab>!<n>     {h}
@@ -33,7 +33,8 @@ export type CellStyle = CellNumberFormat & {
   wrap?: boolean;
 };
 
-export type CellEl = ArtifactElement & CellStyle & { input?: string };
+/** `cm` is the comment thread pinned to the cell: it rides with the cell through sorts, inserts and moves. */
+export type CellEl = ArtifactElement & CellStyle & { input?: string; cm?: string };
 
 export const STYLE_FIELDS = ["nf", "dp", "sign", "cur", "code", "b", "i", "u", "fs", "al", "color", "fill", "bd", "wrap"] as const;
 
@@ -47,6 +48,8 @@ export type TabFilter = {
   c1: number;
   /** Per column index, the display values that are hidden. */
   hidden: Record<string, string[]>;
+  /** Per column index, a condition a row's value must meet to show (the conditional rules' comparisons). */
+  when?: Record<string, { rule: CondRule; value?: string | number }>;
 };
 
 export type TabMeta = {
@@ -59,6 +62,8 @@ export type TabMeta = {
   query?: TabQuery;
   refreshedAt?: number;
   queryError?: string;
+  /** Comment threads ever pinned to a cell of this tab (commentPlaces): one whose cell is gone sits nowhere. */
+  pinned?: string[];
 };
 
 export type CondRule = "sign" | "scale" | "gt" | "lt" | "eq" | "ne" | "between" | "empty" | "filled" | "contains" | "before" | "after" | "formula";
@@ -175,6 +180,7 @@ export function buildModel(elements: readonly ArtifactElement[]): SheetModel {
           query: (el.query as TabQuery | undefined) ?? undefined,
           refreshedAt: typeof el.refreshed_at === "number" ? el.refreshed_at : undefined,
           queryError: typeof el.query_error === "string" ? el.query_error : undefined,
+          pinned: Array.isArray(el.pinned) ? (el.pinned as unknown[]).filter((x): x is string => typeof x === "string") : undefined,
         };
         break;
       case "cell":

@@ -123,20 +123,45 @@ describe("Excel round trip", () => {
       { k: "c:S!C1", put: { kind: "cell", input: "=SORT(B1:B2)" } },
       { k: "c:S!D1", put: { kind: "cell", input: "=ROWS(C1#)" } },
       { k: "c:S!E5", put: { kind: "cell", fill: "yellow" } },
+      { k: "c:S!F1", put: { kind: "cell", input: "9:15" } },
+      { k: "c:S!F2", put: { kind: "cell", input: "29:45", bd: "tb" } },
+      { k: "c:S!F3", put: { kind: "cell", input: "1200.5", nf: "currency", cur: "€", dp: 2 } },
+      { k: "c:S!F4", put: { kind: "cell", input: "2026-11-20 14:30" } },
+      { k: "c:S!F5", put: { kind: "cell", input: "1234.5", nf: "number", dp: 2 } },
+      { k: "c:S!F6", put: { kind: "cell", input: "-42", nf: "accounting", dp: 2 } },
+      { k: "c:S!F7", put: { kind: "cell", input: "2026-11-20", nf: "custom", code: "mmm d, yyyy" } },
+      { k: "cf1", put: { kind: "cf", tab: "S", range: "B1:B9", rule: "gt", value: 3, color: "red" } },
+      { k: "cf2", put: { kind: "cf", tab: "S", range: "C1:C9", rule: "sign" } },
+      { k: "cf3", put: { kind: "cf", tab: "S", range: "D1:D9", rule: "between", value: "1, 5", color: "blue" } },
+      { k: "cf4", put: { kind: "cf", tab: "S", range: "A1:A9", rule: "contains", value: "Stat", color: "green" } },
+      { k: "cf5", put: { kind: "cf", tab: "S", range: "E1:E9", rule: "empty", color: "orange" } },
+      { k: "cf6", put: { kind: "cf", tab: "S", range: "G1:G9", rule: "formula", value: '=$A1="x"', color: "violet" } },
+      { k: "dv2", put: { kind: "dv", tab: "S", range: "H2:H9", rule: "date" } },
       { k: "mg1", put: { kind: "merge", tab: "S", range: "A3:B4" } },
       { k: "dv1", put: { kind: "dv", tab: "S", range: "A2:A9", rule: "list", options: [{ v: "Open" }, { v: "Done" }], strict: true } },
     ];
     const live = new LiveSheet();
     live.update([...foldOps(new Map(), ops as never)].map(([k, st]) => toElement(k, st)) as never);
     const [table] = await readXlsx(sheetXlsx(live.model, live.wb));
-    expect(table.grid[0]).toEqual(["Status", "b", "=SORT(B1:B2)", "=ROWS(C1#)"]);
-    expect(table.grid[1]).toEqual(["", "a"]);
+    expect(table.grid[0].slice(0, 4)).toEqual(["Status", "b", "=SORT(B1:B2)", "=ROWS(C1#)"]);
+    expect(table.grid[1].slice(0, 2)).toEqual(["", "a"]);
     const back = importTablesOps(buildModel([]), [table]);
     const model = buildModel([...foldOps(new Map(), back.ops)].map(([k, st]) => toElement(k, st)));
     const tab = model.byId.get(back.tabIds[0])!;
     expect(tab.cells.get(1 * 32768 + 1)).toMatchObject({ input: "Status", b: true, i: true, u: true, fill: "blue", color: "red", al: "center" });
     expect(tab.cells.get(5 * 32768 + 5)).toMatchObject({ fill: "yellow" });
     expect(model.merges.map((m) => m.rect)).toEqual([{ c0: 1, r0: 3, c1: 2, r1: 4 }]);
-    expect(model.validations[0]).toMatchObject({ rule: "list", strict: true, options: [{ v: "Open" }, { v: "Done" }] });
+    const f = (r: number) => tab.cells.get(r * 32768 + 6);
+    expect(f(1)).toMatchObject({ input: "9:15:00" });
+    expect(f(2)).toMatchObject({ input: "29:45:00", bd: "tb" });
+    expect(f(3)).toMatchObject({ input: "€1200.5", nf: "currency", cur: "€", dp: 2 });
+    expect(f(4)?.input).toBe("2026-11-20 14:30:00");
+    expect(f(5)).toMatchObject({ input: "1234.5", nf: "number", dp: 2 });
+    expect(f(6)).toMatchObject({ nf: "accounting", dp: 2 });
+    expect(f(7)).toMatchObject({ input: "2026-11-20", nf: "custom", code: "mmm d, yyyy" });
+    const rules = model.conds.map((c) => [c.rule, c.value ?? null, c.color ?? null]);
+    expect(rules).toEqual(expect.arrayContaining([["gt", 3, "red"], ["sign", null, null], ["between", "1, 5", "blue"], ["contains", "Stat", "green"], ["empty", null, "orange"], ["formula", '=$A1="x"', "violet"]]));
+    expect(model.validations.map((v) => v.rule).sort()).toEqual(["date", "list"]);
+    expect(model.validations.find((v) => v.rule === "list")).toMatchObject({ rule: "list", strict: true, options: [{ v: "Open" }, { v: "Done" }] });
   });
 });

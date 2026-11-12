@@ -82,3 +82,11 @@ describe("argument help", () => {
     expect(argHelp("SUM", 0)).toBeUndefined();
   });
 });
+
+describe("dates typed without a year", () => {
+  test("take the current year; other text is left alone", async () => {
+    const { completeDateInput } = await import("./values");
+    const now = new Date(2026, 10, 11);
+    expect(["Nov 5", "5 November", "11/5", "Feb 30", "Novel 5", "5"].map((t) => completeDateInput(t, now))).toEqual(["2026-11-05", "2026-11-05", "2026-11-05", "Feb 30", "Novel 5", "5"]);
+  });
+});

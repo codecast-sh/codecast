@@ -10,4 +10,6 @@ export * from "./model";
 export * from "./ops";
 export * from "./rewrite";
 export * from "./catalog";
+export * from "./templates";
 export * from "./ruleOps";
+export * from "./comments";

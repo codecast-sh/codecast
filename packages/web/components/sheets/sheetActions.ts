@@ -4,7 +4,8 @@
 import { createElement } from "react";
 import { toast } from "sonner";
 import { PasteHint } from "./SheetMenus";
-import { Workbook, mergeAt, mergeOps, unmergeOps, condOps, hideOps, parseFormula, validateInput, validationAt, a1, borderOps, cellNum, clearOps, clipOf, formatValue, gridOps, inputOps, moveOps, isFormula, tokenize, newElementKey, normRect, parseQualifiedRange, parseTsv, pasteClipOps, rectA1, sortOps, structuralOps, styleOf, styleOps, tabPatchOps, toTsv, inheritedFormat, shiftFormula, type PaletteColor, type Rect, type SheetClip, type SheetModel, type TabData, type QuerySource } from "./sheetCore";
+import { htmlTable } from "./pasteHtml";
+import { Workbook, mergeAt, mergeOps, unmergeOps, condOps, hideOps, parseFormula, validateInput, validationAt, a1, borderOps, cellNum, clearOps, clipOf, formatValue, gridOps, inputOps, moveOps, isFormula, tokenize, newElementKey, normRect, parseQualifiedRange, parseTsv, pasteClipOps, rectA1, sortOps, structuralOps, styleOf, styleOps, tabPatchOps, toTsv, inheritedFormat, shiftFormula, placeTableOps, compareScalars, type Scalar, type CellNumberFormat, type PaletteColor, type Rect, type SheetClip, type SheetModel, type TabData, type QuerySource } from "./sheetCore";
 import { finishInput, type EditStore } from "./editStore";
 import type { AxisLayout } from "./layout";
 import type { FormatAction } from "./FormatBar";
@@ -123,14 +124,35 @@ export function isHeaderRow(wb: Workbook, tabId: string, r: Rect): boolean {
   return textTop === r.c1 - r.c0 + 1 || (textTop > 0 && numBelow > 0);
 }
 
-export function columnValues(wb: Workbook, tab: TabData, col: number, headerRow: number): Array<{ text: string; count: number }> {
-  const counts = new Map<string, number>();
-  for (let r = headerRow + 1; r <= tab.rows; r++) {
+/**
+ * The last row a filter covers: its block runs down from the header to the
+ * first row blank across all its columns, so rows typed under the block join
+ * it and a separate table further down doesn't.
+ */
+export function filterEnd(tab: TabData, f: { row: number; c0: number; c1: number }): number {
+  for (let r = f.row + 1; r <= tab.rows; r++) {
+    let blank = true;
+    for (let c = f.c0; c <= f.c1 && blank; c++) {
+      const el = tab.cells.get(cellNum(c, r));
+      if (typeof el?.input === "string" && el.input !== "") blank = false;
+    }
+    if (blank) return r - 1;
+  }
+  return tab.rows;
+}
+
+/** A filter column's values as they read, with counts, in value order (numbers by size, then text, blanks last). */
+export function columnValues(wb: Workbook, tab: TabData, col: number, headerRow: number, lastRow = tab.rows): Array<{ text: string; count: number }> {
+  const counts = new Map<string, { count: number; value: Scalar }>();
+  for (let r = headerRow + 1; r <= lastRow; r++) {
     const info = wb.cell(tab.meta.id, col, r);
     const text = info ? formatValue(info.value, styleOf(tab.cells.get(cellNum(col, r))), info.implied) : "";
-    counts.set(text, (counts.get(text) ?? 0) + 1);
+    const seen = counts.get(text);
+    counts.set(text, { count: (seen?.count ?? 0) + 1, value: seen ? seen.value : info?.value ?? null });
   }
-  return [...counts].map(([text, count]) => ({ text, count })).sort((a, b) => (a.text === "" ? 1 : b.text === "" ? -1 : a.text.localeCompare(b.text, undefined, { numeric: true })));
+  return [...counts]
+    .sort(([ta, a], [tb, b]) => (ta === "" ? 1 : tb === "" ? -1 : compareScalars(a.value, b.value) || ta.localeCompare(tb, undefined, { numeric: true })))
+    .map(([text, { count }]) => ({ text, count }));
 }
 
 /** References in the formula being typed, as "tab|A1:B2;..." so the grid can color them. */
@@ -217,7 +239,11 @@ export function formatSelection(a: FormatAction, c: SheetCtx) {
         break;
       }
       case "sort": {
-        const region = rect.r0 === rect.r1 ? dataRegion(tab, rect.c0, rect.r0) : rect;
+        // One cell, or a whole column from its header, sorts the table around it with whole rows moving; a drawn range sorts just itself.
+        const wholeCol = rect.r0 <= 1 && rect.r1 >= tab.rows;
+        const firstFilled = wholeCol ? range(1, tab.rows).find((r) => { const el = tab.cells.get(cellNum(sel.anchor.col, r)); return typeof el?.input === "string" && el.input !== ""; }) : undefined;
+        if (wholeCol && firstFilled === undefined) break;
+        const region = wholeCol ? dataRegion(tab, sel.anchor.col, firstFilled!) : rect.r0 === rect.r1 ? dataRegion(tab, rect.c0, rect.r0) : rect;
         const hasHeader = region.r0 <= tab.meta.frozenRows || (filter && filter.row === region.r0) || isHeaderRow(wb, activeTabId, region);
         const body = { ...region, r0: hasHeader ? region.r0 + 1 : region.r0 };
         apply(sortOps(model, wb, activeTabId, body, sel.anchor.col, a.desc));
@@ -320,9 +346,12 @@ export function pasteSheetClipboard(e: React.ClipboardEvent, c: SheetCtx) {
         for (let r = rect.r0; r <= rect.r1; r++) for (let c = rect.c0; c <= rect.c1; c++) cells.push({ col: c, row: r, input: grid[0][0] });
         apply(inputOps(model, activeTabId, cells));
       } else {
-        apply(gridOps(model, activeTabId, rect.c0, rect.r0, grid));
-        const w = Math.max(...grid.map((r) => r.length));
-        select({ anchor: { col: rect.c0, row: rect.r0 }, focus: { col: rect.c0 + w - 1, row: rect.r0 + grid.length - 1 } }, { reveal: false });
+        // A table from a web page or another spreadsheet keeps its look (bold, fills, merges); values-only takes the text.
+        const table = valuesOnly ? null : htmlTable(e.clipboardData.getData("text/html"));
+        const placed = table && table.grid.length === grid.length ? table : { grid };
+        apply(placeTableOps(model, activeTabId, rect.c0, rect.r0, placed));
+        const w = Math.max(...placed.grid.map((r) => r.length));
+        select({ anchor: { col: rect.c0, row: rect.r0 }, focus: { col: rect.c0 + w - 1, row: rect.r0 + placed.grid.length - 1 } }, { reveal: false });
       }
     }
     setCopyRect(null);
@@ -499,3 +528,34 @@ export type SheetCtx = {
   /** Open the conditional color rules panel. */
   openRules: () => void;
 };
+
+/**
+ * What the status bar sums: the values a selection shows (rows a filter hides
+ * left out), and the format they share, so durations total as 29:45 and money
+ * as money. Cells in different formats sum as plain numbers.
+ */
+export function selectionSummary(model: SheetModel, wb: Workbook, tab: TabData, rect: Rect, hiddenRows: Set<number>): { values: unknown[]; style?: CellNumberFormat } {
+  if (rect.c0 === rect.c1 && rect.r0 === rect.r1) return { values: [] };
+  const tabId = tab.meta.id;
+  const r1 = Math.min(rect.r1, Math.max(tab.rows, rect.r0)), c1 = Math.min(rect.c1, Math.max(tab.cols, rect.c0));
+  if ((r1 - rect.r0 + 1) * (c1 - rect.c0 + 1) > 200_000) return { values: [] };
+  const grid = wb.read(tabId, { ...rect, r1, c1 });
+  const values: unknown[] = [];
+  let style: CellNumberFormat | undefined;
+  let mixed = false, seen = 0;
+  grid.forEach((line, i) => {
+    if (hiddenRows.has(rect.r0 + i)) return;
+    line.forEach((v, j) => {
+      values.push(v);
+      if (typeof v !== "number" || mixed || seen++ > 5000) return;
+      const el = tab.cells.get(cellNum(rect.c0 + j, rect.r0 + i));
+      const own = styleOf(el);
+      const input = typeof el?.input === "string" ? el.input : "";
+      const fmt = own.nf ? own : input.startsWith("=") ? inheritedFormat(model, tabId, input) : wb.cell(tabId, rect.c0 + j, rect.r0 + i)?.implied;
+      const f: CellNumberFormat = fmt?.nf && fmt.nf !== "plain" ? { nf: fmt.nf, dp: fmt.dp, cur: fmt.cur, code: fmt.code } : { nf: "number" };
+      if (!style) style = f;
+      else if (style.nf !== f.nf || style.cur !== f.cur || style.code !== f.code) mixed = true;
+    });
+  });
+  return { values, style: mixed ? undefined : style };
+}

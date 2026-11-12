@@ -17,7 +17,7 @@ import {
   parseDateText,
   shiftFormula,
   codeColor,
-  betweenOf,
+  valueMeetsRule,
   PALETTE,
 } from "@codecast/shared/artifacts/sheets";
 
@@ -128,30 +128,6 @@ export function paintCell(el: CellEl | undefined, value: Scalar, implied: Implie
         if (numeric && r && r.max > r.min) p.fill = tint(color ?? "green", Math.round(6 + 34 * ((value - r.min) / (r.max - r.min))));
         break;
       }
-      case "gt":
-      case "lt":
-      case "between":
-      case "eq":
-      case "ne":
-      case "empty":
-      case "filled": {
-        const target = c.value;
-        const same = String(value ?? "").toLowerCase() === String(target ?? "").toLowerCase() || (numeric && value === Number(target));
-        const range = c.rule === "between" ? betweenOf(target) : null;
-        const blank = value === null || value === "";
-        const hit =
-          c.rule === "eq" ? same
-          : c.rule === "ne" ? !blank && !same
-          : c.rule === "empty" ? blank
-          : c.rule === "filled" ? !blank
-          : c.rule === "between" ? numeric && !!range && value >= range[0] && value <= range[1]
-          : numeric && typeof target === "number" && (c.rule === "gt" ? value > target : value < target);
-        if (hit) {
-          p.fill = tint(color ?? "yellow", 22);
-          p.color = ruleText(color ?? "yellow");
-        }
-        break;
-      }
       case "formula": {
         const f = typeof c.value === "string" ? c.value : "";
         const r = f && ctx.evalAt ? ctx.evalAt(shiftFormula(f, col - c.rect.c0, row - c.rect.r0), col, row) : null;
@@ -161,20 +137,12 @@ export function paintCell(el: CellEl | undefined, value: Scalar, implied: Implie
         }
         break;
       }
-      case "before":
-      case "after": {
-        // Dates are serials; the rule's value is "today" or a date as typed.
-        const target = String(c.value ?? "").trim().toLowerCase() === "today" ? todaySerial() : parseDateText(String(c.value ?? ""));
-        if (numeric && target !== null && (c.rule === "before" ? value < target : value > target)) {
-          p.fill = tint(color ?? "orange", 22);
-          p.color = ruleText(color ?? "orange");
-        }
-        break;
-      }
-      case "contains":
-        if (typeof value === "string" && value.toLowerCase().includes(String(c.value ?? "").toLowerCase())) {
-          p.fill = tint(color ?? "yellow", 22);
-          p.color = ruleText(color ?? "yellow");
+      default:
+        // Rules on the value alone: comparisons, between, blanks, text, dates (one check shared with the filter).
+        if (valueMeetsRule(c.rule, c.value, value)) {
+          const tone = color ?? (c.rule === "before" || c.rule === "after" ? "orange" : "yellow");
+          p.fill = tint(tone, 22);
+          p.color = ruleText(tone);
         }
         break;
     }
