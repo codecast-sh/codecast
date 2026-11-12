@@ -31,9 +31,11 @@ export type KeyCommands = {
   readOnly: boolean;
 };
 
-/** A dialog, popover or menu is open over the page: its own Escape closes it. */
+/** A dialog, popover or menu (not a tooltip) is open over the page: its keys are its own. */
 function overlayOpen(): boolean {
-  return !!document.querySelector("[role=dialog][data-state=open], [data-radix-popper-content-wrapper], [role=menu], [role=listbox]");
+  if (document.querySelector("[role=dialog][data-state=open], [role=menu], [role=listbox]")) return true;
+  // A popover owns its keys; a tooltip (shown just by hovering a board button) owns none.
+  return Array.from(document.querySelectorAll("[data-radix-popper-content-wrapper]")).some((w) => !w.querySelector("[role=tooltip]"));
 }
 
 export function useBoardKeys(cmds: KeyCommands, spaceHeld: React.MutableRefObject<boolean>, rootRef: React.RefObject<HTMLDivElement | null>) {
