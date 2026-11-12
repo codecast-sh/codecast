@@ -90,7 +90,7 @@ packages/convex/convex/codeComments.ts 1100
 packages/convex/convex/comments.ts 1400
 packages/convex/convex/comments.v2.test.ts 1300
 packages/convex/convex/composerSuggestions.ts 1000
-packages/convex/convex/conversations.projection.test.ts 1000
+packages/convex/convex/conversations.projection.test.ts 900
 packages/convex/convex/conversations.ts
 packages/convex/convex/devices.ts 2200
 packages/convex/convex/dispatch.test.ts 1500
