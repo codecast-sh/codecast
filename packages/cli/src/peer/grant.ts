@@ -134,7 +134,12 @@ export async function openGrant(opts: GrantOpts): Promise<{ port: number; done: 
       finish(false, `producer_failed: ${e.message}`);
     });
     res.on("finish", () => finish(true, "served"));
-    res.on("close", () => { if (!res.writableFinished) finish(false, "reader_closed"); });
+    // A reader that goes away ends the grant at once. bun's ServerResponse does
+    // not always emit "close" when the client drops, so the socket closing
+    // counts too; otherwise the transfer waits out the idle deadline.
+    const readerGone = () => { if (!res.writableFinished) finish(false, "reader_closed"); };
+    res.on("close", readerGone);
+    req.socket.once("close", readerGone);
     stream.pipe(res);
   });
 
