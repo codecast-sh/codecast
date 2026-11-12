@@ -198,7 +198,7 @@ describe("acquire trust gate", () => {
 
     const message = await refusal(acquireWorkspace(repoRoot, "agent-first", asAgent));
     expect(message).toContain("agent driven");
-    expect(message).toContain("Ask a human");
+    expect(message).toContain("approves them in codecast");
     expect(readRepoTrust(repoRoot)).toEqual({});
 
     // Once a person approves, the same agent acquire goes through.

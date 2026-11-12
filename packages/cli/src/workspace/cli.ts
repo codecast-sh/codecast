@@ -31,7 +31,9 @@ import {
   collectTrustTargets,
   recordTrust,
   reviewRepoTrust,
+  WorkspaceTrustError,
 } from "./trust.js";
+import { askPersonForTrust, checkExpected, trustAskLines } from "./trustAsk.js";
 import { defaultRegistry } from "./backends/registry.js";
 import type { WorkspaceManifest } from "./types.js";
 import { commandGroup } from "../commandGroups.js";
@@ -52,14 +54,15 @@ import {
  * Resolve the repo root for the current working directory.
  * Falls back to cwd if not in a git repo.
  */
-function findRepoRoot(): string {
+function findRepoRoot(dir?: string): string {
   try {
     return execSync("git rev-parse --show-toplevel", {
       encoding: "utf-8",
       stdio: ["ignore", "pipe", "ignore"],
+      ...(dir ? { cwd: dir } : {}),
     }).trim();
   } catch {
-    return process.cwd();
+    return dir ?? process.cwd();
   }
 }
 
@@ -202,6 +205,9 @@ export function registerWorkspaceCommand(program: Command): void {
           }
         } catch (err) {
           console.error(`acquire failed: ${(err as Error).message}`);
+          if (err instanceof WorkspaceTrustError && err.agentDriven && sessionIdFromEnv()) {
+            for (const line of trustAskLines(askPersonForTrust(repoRoot, err.findings))) console.error(line);
+          }
           process.exit(1);
         }
       },
@@ -351,9 +357,11 @@ export function registerWorkspaceCommand(program: Command): void {
     .option("--list", "Show what is approved and what changed, approving nothing")
     .addOption(new Option("--dry-run", "same as --list").hideHelp())
     .option("--revoke", "Forget every approval for this repo")
-    .action((targets: string[], opts: { list?: boolean; dryRun?: boolean; revoke?: boolean }) => {
+    .option("--repo <path>", "The repo to approve (default: the one this directory is in)")
+    .option("--expect <id=digest>", "Approve this target only if it is still exactly what was shown (repeatable; what an approval card runs)", (v: string, acc: string[]) => [...acc, v], [] as string[])
+    .action((targets: string[], opts: { list?: boolean; dryRun?: boolean; revoke?: boolean; repo?: string; expect: string[] }) => {
       if (opts.dryRun) opts.list = true;
-      const repoRoot = findRepoRoot();
+      const repoRoot = opts.repo ? findRepoRoot(opts.repo) : findRepoRoot();
       const all = collectTrustTargets({ hooksRoot: repoRoot });
       if (opts.revoke) {
         clearRepoTrust(repoRoot);
@@ -372,6 +380,16 @@ export function registerWorkspaceCommand(program: Command): void {
           console.log(`${mark}  ${target.id}`);
         }
         if (findings.length > 0) process.exit(2);
+        return;
+      }
+      if (opts.expect.length) {
+        const { picked, stale } = checkExpected(all, opts.expect);
+        if (stale.length) {
+          console.error(`Nothing approved: ${stale.join(", ")} changed after the approval was asked. The agent asks again with what is there now.`);
+          process.exit(1);
+        }
+        recordTrust(repoRoot, picked, all);
+        for (const target of picked) console.log(`approved: ${target.id}`);
         return;
       }
       const picked = targets.length === 0 ? all : all.filter((t) => targets.some((q) => t.id.includes(q)));
