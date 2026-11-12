@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, existsSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { launchAccountPrefix } from "./ccAccounts.js";
+import { launchAccountPrefix, ACCOUNT_LAUNCH_UNSET } from "./ccAccounts.js";
 import { HIBERNATE_SUBAGENT_QUIET_MS } from "./hibernation.js";
 import { buildClaudeResumeCommand, herdTakeDeps, herdTakeForTests, hibernationConcurrencyForTests, liveOutsideTmux, resetSubagentActivityForTests, typedLaunchLine } from "./daemon.js";
 import { functionBlock } from "./test-helpers/sourceRegion.js";
@@ -156,9 +156,9 @@ describe("a take launches on the keychain login", () => {
     return buildClaudeResumeCommand({ sessionId: "11111111-2222-3333-4444-555555555555", cwd: dir, jsonlPath, jsonlContent: "", config: null, keychain });
   };
 
-  test("no account prefix and no account attribution, whatever the launch would have used", async () => {
+  test("no account beyond dropping a shell API key, and no account attribution, whatever the launch would have used", async () => {
     const taken = await build(true);
-    expect(taken.resumeAccountPrefix).toBe("");
+    expect(taken.resumeAccountPrefix).toBe(ACCOUNT_LAUNCH_UNSET);
     expect(taken.resumeAccount).toBeUndefined();
     expect(taken.resumeCmd).toContain("--resume 11111111-2222-3333-4444-555555555555");
   });

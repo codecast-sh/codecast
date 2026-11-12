@@ -503,6 +503,38 @@ Deny and dismiss stay one press, and switching Ask first on needs nothing.
   challenge. Settings > Accounts lists passkeys (rename, Remove with Touch ID,
   or one press for a grant-less one, Add, and how long a new one waits). A
   cancelled confirm answers `NOT_CONFIRMED` and sends nothing.
+- Device keys (`convex/deviceKeys.ts`): the desktop app and the phone confirm
+  without a browser. Each holds a P-256 key that signs only after the system
+  prompt: the Mac's in its Secure Enclave (`electron/native/deviceKey.swift`,
+  CryptoKit's encrypted blob in the app's data folder, `.userPresence`), the
+  phone's in its keychain behind biometry (`mobile/lib/deviceKey.ts`,
+  expo-secure-store `requireAuthentication`, made from expo-crypto's random
+  bytes, so a binary without expo-crypto keeps the browser path). A device key
+  is a `passkeys` row of kind `device_key` (public key, credential id = its
+  SHA-256), kept out of every WebAuthn option list. It signs
+  `deviceKeyMessage(purpose, challenge)` (`shared/contracts/secrets.ts`); the
+  Electron main process builds those bytes itself, so the page names only the
+  challenge and the prompt's words. `deviceKeys.register` verifies a signature
+  over the register challenge (setting up takes the finger too) and stores it
+  through `storePasskey`, so a second credential spends an add_passkey grant
+  as any passkey does; `deviceKeys.confirm` verifies one over a presence
+  challenge and grants it through `grantPresence`. Both need the challenge's
+  own person signed in. The shared client flow is `web/lib/deviceKeyPresence`:
+  a key the server knows signs at once; with no credential at all it sets up
+  at once; with a passkey elsewhere it offers to set up here, which spends one
+  confirmation the old way, once.
+- Another device can answer. `presenceBegin` records the asking device
+  (`from`, shown on /confirm and the phone). `passkeys.waiting` lists the
+  person's pending presence challenges, and the phone shows the newest one
+  another device opened (`mobile/components/PresenceRequests`) for Face ID.
+  `passkeys.askPhone` pushes one to the phone, once per challenge: the desktop
+  handoff sends it on its own, /confirm has Send to my phone, and the web
+  offers Use phone when its own ceremony did not finish (a computer with no
+  passkey shows a QR code). The grant string never leaves the asker.
+- /confirm starts the ceremony on load in a focused tab, or on the tab's
+  first focus; a browser that wants a press refuses quietly and the button
+  stays. A passkey made there for the desktop app is named for the machine
+  that asked ("Chrome on MacBook-Pro-2").
 
 ## Previous values
 
