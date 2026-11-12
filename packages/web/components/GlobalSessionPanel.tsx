@@ -20,7 +20,7 @@ import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
-import { sessionsWakeSig, resolveInboxViewMode, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
+import { sessionsWakeSig, resolveInboxViewMode, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -65,6 +65,7 @@ import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { X, ChevronsRight, ChevronRight, ChevronDown, Star, Workflow, Play, Pause, Settings2, ArrowUpRight, Zap, Copy, ArrowUp, ArrowDown } from "lucide-react";
 import { InboxViewPicker } from "./InboxViewPicker";
 import { InboxViewOptions, type CardBarsMode } from "./InboxViewOptions";
+import { CardWorkersLine } from "./inbox/SessionCardParts";
 import { resolveCardBars } from "../lib/uiPrefDefaults";
 import { inboxViewModes } from "../store/inboxViewModes";
 import { SessionCard } from "./inbox/SessionCard";
@@ -75,6 +76,8 @@ import { useThinkingAvailable } from "./simple/assistantPromise";
 import { useUpgradesOpen } from "./simple/billing";
 import type { NoticeKind } from "@codecast/shared/contracts/assistant";
 import { LabelChipsRow } from "./LabelChipsRow";
+import { RailFilterMenu } from "./RailFilterMenu";
+import { useIsModernFocused } from "../hooks/useVisualStyle";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { useMountEffect } from "../hooks/useMountEffect";
@@ -1904,7 +1907,7 @@ function SessionListPanelImpl({
     // Structural change + the view keys + the question inputs + the epoch tick
     // (coarseNow drives the deadline signature).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, s.newSessionHolds, coarseNow],
+    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, s.newSessionHolds, coarseNow, nestsWorkers(s.clientState.ui)],
   );
   // The section a held row is headed for, as its accent: the fuse and the
   // landing wash speak in the color of where the row is going.
@@ -1923,7 +1926,7 @@ function SessionListPanelImpl({
       "--hold-delay": `${left - NEW_SESSION_HOLD_MS}ms`,
     } as React.CSSProperties;
   };
-  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, roleSessionsByLead } = placed;
+  const { visibleSessions, oldCount, sorted: sortedSessions, pinned, newSessions, needsInput, done, dormant, working, snoozed: snoozedList, stashed: stashedList, dismissed: dismissedList, subsByParent: globalSubByParent, forksByParent: globalForksByParent, questions: placedQuestions, isQuestion, roleSessionsByLead, workerCountByParent, workersNeedingYouByParent } = placed;
 
   // -- Schedules in the inbox (status view) --
   // The same per-user webList the badges/strip/schedules page subscribe to
@@ -1995,7 +1998,7 @@ function SessionListPanelImpl({
   // is_favorite out, so a placed row still carries the flag from before the toggle.
   // Resolved to a scalar so each card memoizes on it.
   const cardIsFavorite = (sess: InboxSession) => isFavoriteInStore(s, sess._id);
-  const { bucketCounts, projectCounts, projectPathByName } = useMemo(
+  const { bucketCounts, projectCounts, projectPathByName, projectActivity } = useMemo(
     // Project chips resolve each session's project off the store's sessions,
     // tasks and plans (store/workProjects, memoized on their refs).
     () => computeChipCounts(activeSessions, bucketByConv, projectOfFromState(useInboxStore.getState())),
@@ -2060,6 +2063,17 @@ function SessionListPanelImpl({
   // report) while no chip narrows the list and the nested rows are on screen;
   // shared sectionHeaderCount, so this panel and mobile can't drift.
   const showSubagents = resolveShowSubagents(s.clientState.ui);
+  // Modern focused folds the workers an agent spawned under its card (nestsWorkers).
+  const nestWorkers = nestsWorkers(s.clientState.ui);
+  const modernFocused = useIsModernFocused();
+  // In the flat views a nested worker is a hoisted row of its own, drawn as
+  // the compact sub row.
+  const nestedWorkerIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const subs of globalSubByParent.values()) for (const sub of subs) if (isSpawnedWorker(sub)) ids.add(sub._id);
+    return ids;
+  }, [globalSubByParent]);
+  const subRowOf = (sub: InboxSession) => (isUnderRole(sub) ? "role" : isSpawnedWorker(sub) ? "worker" : undefined);
   const countOf = (shown: InboxSession[], full: InboxSession[], n: number) =>
     sectionHeaderCount(shown, full, n, showSubagents);
   const statusPinned = filteredPinned;
@@ -2408,6 +2422,7 @@ function SessionListPanelImpl({
       flatViewSessions(sortedSessions, globalSubByParent, {
         mode: viewMode === "recent" ? "recent" : "time",
         showSubagents,
+        nestWorkers,
         focusedId: activeSessionId,
         manualOrder,
         freezeOrder: viewMode === "recent" ? recentFreezeOrder : null,
@@ -2581,7 +2596,7 @@ function SessionListPanelImpl({
     // a no-op (the hoist would snap it right back), and a drop aimed at one
     // resolves to "after its parent's group".
     const inList = new Set(flatList.map((sess) => sess._id));
-    const nestParentOf = inboxNestParentOf(flatList);
+    const nestParentOf = inboxNestParentOf(flatList, nestWorkers);
     const nestedUnder = (sess: InboxSession) => {
       const p = nestParentOf(sess);
       return p && p !== sess._id && inList.has(p) ? p : null;
@@ -2737,7 +2752,7 @@ function SessionListPanelImpl({
     // subagent (or nested teammate) renders under its parent's card, so the
     // parent's membership decides which section hosts the row.
     const activeRow = s.sessions[activeSessionId];
-    const parentId = activeRow ? inboxNestParentOf(sortedSessions)(activeRow) : null;
+    const parentId = activeRow ? inboxNestParentOf(sortedSessions, nestWorkers)(activeRow) : null;
     const inList = (items: InboxSession[]) => items.some(i => i._id === activeSessionId || (!!parentId && i._id === parentId));
     const sections: [InboxSession[], string][] = flatView
       ? [[flatList, "all"]]
@@ -2885,6 +2900,17 @@ function SessionListPanelImpl({
                     here while its schedule keeps firing — so the stashed/killed
                     buckets carry the same bars as the live sections; without
                     them an expanded bucket hides that a card is a loop. */}
+                {/* The workers this agent spawned fold under its card (Modern
+                    focused, nestsWorkers); the line keeps them counted while folded,
+                    and names any that wait on you even when the option lists
+                    them. */}
+                {(!showSubagents || workersNeedingYouByParent.has(session._id)) && (
+                  <CardWorkersLine
+                    count={workerCountByParent.get(session._id) ?? 0}
+                    needsYou={workersNeedingYouByParent.get(session._id) ?? []}
+                    onOpen={handleSelect}
+                  />
+                )}
                 <CardBars
                   session={session}
                   mode={cardBars}
@@ -2907,7 +2933,7 @@ function SessionListPanelImpl({
                     onRestore={variant === "snoozed" ? s.wakeSnoozedSession : restoreWithNotice}
                     onKill={onKill}
                     variant={variant}
-                    subRow={isUnderRole(sub) ? "role" : undefined}
+                    subRow={subRowOf(sub)}
                     sessionLabel={labelByConv[sub._id] ?? null}
                     isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
@@ -3047,7 +3073,7 @@ function SessionListPanelImpl({
           // The flat views hoist a role's session under its role's card as a
           // row of its own (hoistNestedUnderParent), so it takes the small row
           // there too; with the role's card absent it stays a full card.
-          const flatNestParentOf = flat ? inboxNestParentOf(items) : null;
+          const flatNestParentOf = flat ? inboxNestParentOf(items, nestWorkers) : null;
           return (<>
           {visibleItems.map((session) => {
             // In flat view, subagents already appear as their own top-level
@@ -3115,7 +3141,7 @@ function SessionListPanelImpl({
                   sectionStatus={SECTION_DECLARED_STATUS[key]}
                   forkColorKey={forkColorKeyOf(session)}
                   roleSessions={roleSessionsByLead.get(session._id)}
-                  subRow={flatNestParentOf && isUnderRole(session) && flatNestParentOf(session) ? "role" : undefined}
+                  subRow={flatNestParentOf && isUnderRole(session) && flatNestParentOf(session) ? "role" : flat && nestedWorkerIds.has(session._id) ? "worker" : undefined}
                   sessionLabel={labelByConv[session._id] ?? null}
                   isUnread={!!unreadByConv[session._id]}
                   isFavorite={cardIsFavorite(session)}
@@ -3153,7 +3179,7 @@ function SessionListPanelImpl({
                     onDismiss={handleAnimatedDismiss}
                     onStash={handleAnimatedStash}
                     variant={sectionVariant || "default"}
-                    subRow={isUnderRole(sub) ? "role" : undefined}
+                    subRow={subRowOf(sub)}
                     sessionLabel={labelByConv[sub._id] ?? null}
                     isUnread={!!unreadByConv[sub._id]}
                     isFavorite={cardIsFavorite(sub)}
@@ -3221,12 +3247,25 @@ function SessionListPanelImpl({
           </button>
         )}
         {showViewTabs && <InboxViewPicker value={viewMode} onChange={s.setInboxViewMode} modes={viewModes} />}
-        <LabelChipsRow
-          bucketCounts={favoritesView ? favChipCounts!.bucketCounts : bucketCounts}
-          projectCounts={favoritesView ? favChipCounts!.projectCounts : projectCounts}
-          projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
-          dropSessionOnLabel={dropSessionOnLabel}
-        />
+        {/* Modern focused: one Filter menu (labels, projects, the folders
+            worked in most, every folder one step away); every other style
+            keeps the chip row. */}
+        {modernFocused ? (
+          <RailFilterMenu
+            bucketCounts={favoritesView ? favChipCounts!.bucketCounts : bucketCounts}
+            projectCounts={favoritesView ? favChipCounts!.projectCounts : projectCounts}
+            projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
+            projectActivity={favoritesView ? favChipCounts!.projectActivity : projectActivity}
+            dropSessionOnLabel={dropSessionOnLabel}
+          />
+        ) : (
+          <LabelChipsRow
+            bucketCounts={favoritesView ? favChipCounts!.bucketCounts : bucketCounts}
+            projectCounts={favoritesView ? favChipCounts!.projectCounts : projectCounts}
+            projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
+            dropSessionOnLabel={dropSessionOnLabel}
+          />
+        )}
         {/* The rail header's tools: the blocked-fleet alert when there is
             one, then one menu for how the list is shown (team scope,
             subagents, old sessions, the bars under cards, favorites). The

@@ -140,6 +140,13 @@ test("a pathname maps to its registry row", () => {
   for (const [path, id] of cases) expect(navActiveId(path)).toBe(id);
 });
 
+test("Modern focused's short rail keeps Chat and Calls too: six daily pages, then More", () => {
+  const html = rail({ focused: true, daily: true });
+  for (const kept of ["inbox-row", "decisions-row", "chat-row", "calls-row", 'href="/tasks"', 'href="/docs"', "data-rail-more"]) expect(html).toContain(kept);
+  for (const gone of ["threads-row", 'href="/team/activity"', 'href="/projects"', 'href="/org"', 'href="/triggers"']) expect(html).not.toContain(gone);
+  expect(current(rail({ focused: true, daily: true, activeId: "chat" }))).not.toEqual(["More"]);
+});
+
 test("focused: Inbox, Decisions, Tasks and Docs, then More", () => {
   const html = rail({ focused: true });
   for (const kept of ["inbox-row", "decisions-row", 'href="/tasks"', 'href="/docs"', "data-rail-more"]) expect(html).toContain(kept);

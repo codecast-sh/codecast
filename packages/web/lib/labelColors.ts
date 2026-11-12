@@ -61,46 +61,45 @@ function fnv1a(str: string): number {
 // Once every slot is claimed, later names fall back to the raw hash slot.
 // Server renders never see per-user names, so the registry is browser-only to
 // keep server output pure.
-const STORAGE_KEY = `codecast:label-color-slots:${HASH_PALETTE.length}`;
-const MAX_ASSIGNED = 512;
-const assignedSlot = new Map<string, number>();
-const takenSlots = new Set<number>();
 const canRegister = typeof window !== "undefined";
+const MAX_ASSIGNED = 512;
 
-function loadAssigned() {
-  try {
-    const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "{}") as Record<string, unknown>;
-    for (const [name, slot] of Object.entries(saved)) {
-      if (typeof slot !== "number" || slot < 0 || slot >= HASH_PALETTE.length) continue;
-      assignedSlot.set(name, slot);
-      takenSlots.add(slot);
-    }
-  } catch {}
-}
-
-function saveAssigned() {
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(Object.fromEntries(assignedSlot)));
-  } catch {}
-}
-
-if (canRegister) loadAssigned();
-
-function slotFor(lower: string): number {
-  const n = HASH_PALETTE.length;
-  const natural = fnv1a(lower) % n;
-  if (!canRegister) return natural;
-  const existing = assignedSlot.get(lower);
-  if (existing !== undefined) return existing;
-  let slot = natural;
-  while (takenSlots.has(slot) && takenSlots.size < n) slot = (slot + 1) % n;
-  if (assignedSlot.size < MAX_ASSIGNED) {
-    assignedSlot.set(lower, slot);
-    takenSlots.add(slot);
-    saveAssigned();
+/** A first-come slot registry over `n` colours, persisted under `storageKey`. */
+function slotRegistry(storageKey: string, n: number) {
+  const assignedSlot = new Map<string, number>();
+  const takenSlots = new Set<number>();
+  if (canRegister) {
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(storageKey) || "{}") as Record<string, unknown>;
+      for (const [name, slot] of Object.entries(saved)) {
+        if (typeof slot !== "number" || slot < 0 || slot >= n) continue;
+        assignedSlot.set(name, slot);
+        takenSlots.add(slot);
+      }
+    } catch {}
   }
-  return slot;
+  const save = () => {
+    try {
+      window.localStorage.setItem(storageKey, JSON.stringify(Object.fromEntries(assignedSlot)));
+    } catch {}
+  };
+  return (lower: string): number => {
+    const natural = fnv1a(lower) % n;
+    if (!canRegister) return natural;
+    const existing = assignedSlot.get(lower);
+    if (existing !== undefined) return existing;
+    let slot = natural;
+    while (takenSlots.has(slot) && takenSlots.size < n) slot = (slot + 1) % n;
+    if (assignedSlot.size < MAX_ASSIGNED) {
+      assignedSlot.set(lower, slot);
+      takenSlots.add(slot);
+      save();
+    }
+    return slot;
+  };
 }
+
+const slotFor = slotRegistry(`codecast:label-color-slots:${HASH_PALETTE.length}`, HASH_PALETTE.length);
 
 export type LabelColor = (typeof HASH_PALETTE)[number];
 
@@ -131,3 +130,38 @@ export function useLabelColor(): (name: string) => LabelColor {
 }
 
 export const DEFAULT_LABELS = Object.keys(LABEL_COLORS);
+
+// A workspace's colour (the session tiles and the sidebar's folders,
+// WorkspaceTile). Its own palette and registry: no red, rose or orange, which
+// say "failed" and "needs you" elsewhere, so a workspace never reads as an
+// alarm; and workspaces claim slots among themselves, so a handful of them
+// stay apart however many labels exist.
+const WORKSPACE_PALETTE = [
+  { text: "text-blue-600 dark:text-blue-400", dot: "bg-blue-500 dark:bg-blue-400" },
+  { text: "text-teal-600 dark:text-teal-400", dot: "bg-teal-500 dark:bg-teal-400" },
+  { text: "text-violet-600 dark:text-violet-400", dot: "bg-violet-500 dark:bg-violet-400" },
+  { text: "text-amber-600 dark:text-amber-400", dot: "bg-amber-500 dark:bg-amber-400" },
+  { text: "text-fuchsia-600 dark:text-fuchsia-400", dot: "bg-fuchsia-500 dark:bg-fuchsia-400" },
+  { text: "text-emerald-600 dark:text-emerald-400", dot: "bg-emerald-500 dark:bg-emerald-400" },
+  { text: "text-sky-600 dark:text-sky-400", dot: "bg-sky-500 dark:bg-sky-400" },
+  { text: "text-lime-700 dark:text-lime-400", dot: "bg-lime-600 dark:bg-lime-400" },
+  { text: "text-pink-600 dark:text-pink-400", dot: "bg-pink-500 dark:bg-pink-400" },
+  { text: "text-cyan-600 dark:text-cyan-400", dot: "bg-cyan-500 dark:bg-cyan-400" },
+] as const;
+
+export type WorkspaceColor = (typeof WORKSPACE_PALETTE)[number];
+
+const workspaceSlotFor = slotRegistry(`codecast:workspace-color-slots:${WORKSPACE_PALETTE.length}`, WORKSPACE_PALETTE.length);
+
+export function getWorkspaceColor(name: string): WorkspaceColor {
+  return WORKSPACE_PALETTE[workspaceSlotFor(name.toLowerCase())];
+}
+
+/** The natural slot only, claiming nothing (the marketing hero's fixtures). */
+export function peekWorkspaceColor(name: string): WorkspaceColor {
+  return WORKSPACE_PALETTE[fnv1a(name.toLowerCase()) % WORKSPACE_PALETTE.length];
+}
+
+export function useWorkspaceColor(): (name: string) => WorkspaceColor {
+  return useContext(LabelColorsReadOnly) ? peekWorkspaceColor : getWorkspaceColor;
+}

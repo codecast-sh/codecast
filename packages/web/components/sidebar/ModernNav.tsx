@@ -17,7 +17,7 @@ import { NavSection, RailHeading } from "./navPrimitives";
 import type { NavSectionList } from "./SidebarNav";
 import { RailIcon } from "./RailIcon";
 import { NewMark, RailButtonRow } from "./modernRailParts";
-import { RAIL_GROUPS, navRow, navRowShown, navRowsIn, type NavGates, type NavId, type NavRow } from "../../lib/navRegistry";
+import { RAIL_GROUPS, keptOnShortRail, navRow, navRowShown, navRowsIn, type NavGates, type NavId, type NavRow } from "../../lib/navRegistry";
 
 /** A registry row as a rail row: its name, address, icon and hover text from
  *  lib/navRegistry, the rest from the caller. */
@@ -42,6 +42,7 @@ export function ModernNavView({
   opsBadge,
   workAction,
   focused = false,
+  daily = false,
   onMore,
   workspaceHeader,
 }: {
@@ -67,6 +68,8 @@ export function ModernNavView({
   /** A solo account's short rail (lib/railFocus.ts): only the registry's
    *  "keep" rows, everything else behind More. */
   focused?: boolean;
+  /** Modern focused: the short rail keeps its daily pages too (keptOnShortRail). */
+  daily?: boolean;
   /** Opens the More level. */
   onMore?: () => void;
   /** The workspace switcher, the header of everything under it. */
@@ -74,10 +77,10 @@ export function ModernNavView({
 }) {
   const activeRow = activeId ? navRow(activeId) : null;
   // More is lit while the page you are on lives behind it.
-  const moreLit = !!activeRow && (activeRow.group === "more" || (focused && activeRow.focus === "more"));
+  const moreLit = !!activeRow && (activeRow.group === "more" || (focused && !keptOnShortRail(activeRow, daily)));
 
   const rowEl = (row: NavRow): ReactNode => {
-    if (focused && row.focus !== "keep") return null;
+    if (focused && !keptOnShortRail(row, daily)) return null;
     if (row.id in LIVE_IDS) return live[row.id as LiveRowId] || null;
     const on = navRowShown(row, gates);
     if (!on) return null;

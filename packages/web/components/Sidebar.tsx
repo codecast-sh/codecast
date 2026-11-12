@@ -1,4 +1,5 @@
 import { CallsNavRow } from "./sidebar/CallsNav";
+import { workspaceNameOf, workspaceColorOf } from "../lib/projectColors";
 import { useCallsAvailable, useTeamFeature, useWorkspaceFeature, useWorkspaceFeatureState } from "../lib/teamFeatures";
 import { usePathname, useRouter } from "next/navigation";
 import { lazy, Suspense, useState, useMemo, useCallback, useRef, memo } from "react";
@@ -51,7 +52,7 @@ import { SidebarDrillStack } from "./sidebar/SidebarDrill";
 import { useSidebarDrill } from "../hooks/useSidebarDrill";
 import { FeedNavRowView, QuestionsNavRowView, SidebarNavView, ThreadsNavRowView, orgRowsActive } from "./sidebar/SidebarNav";
 import { usePoppedOut } from "../hooks/usePoppedOut";
-import { useIsModernStyle } from "../hooks/useVisualStyle";
+import { useIsModernStyle, useIsModernFocused } from "../hooks/useVisualStyle";
 import { ModernSidebar } from "./sidebar/ModernSidebar";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 
@@ -349,6 +350,14 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
   })));
   const railMoreOffered = railFocusOffered(focusFacts);
   const railIsFocused = railFocused(focusFacts);
+  // Modern focused opens every rail on its daily pages (Inbox, Decisions, Chat,
+  // Calls, Tasks, Docs: navRegistry.keptOnShortRail) with the rest behind
+  // More, until the person chooses to see every page. Plain Modern keeps the
+  // solo account's rule above.
+  const modernFocused = useIsModernFocused();
+  const modernFocus = modernFocused
+    ? { offered: true, focused: focusFacts.everything !== true, daily: true }
+    : { offered: railMoreOffered, focused: railIsFocused };
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isChat = pathname === "/chat" || pathname?.startsWith("/chat/");
@@ -766,9 +775,20 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
           }`}
           title={dir}
         >
-          <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-          </svg>
+          {/* In Modern the folder wears its workspace colour, the colour
+              every session tile from it is drawn in (WorkspaceTile). Wrapped,
+              so a rail rule that inks a row's own svg leaves it be. */}
+          {modern ? (
+            <span className={`flex flex-shrink-0 ${workspaceColorOf(workspaceNameOf({ project_path: dir })).text}`}>
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+              </svg>
+            </span>
+          ) : (
+            <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+            </svg>
+          )}
           <span className="truncate modern:font-mono">{getShortPath(dir)}</span>
         </button>
       ))}
@@ -916,7 +936,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
   );
 
   // The Modern style draws its own rail (lib/navRegistry) from the same data.
-  if (modern) return <ModernSidebar {...{ isMobileOpen, onMobileClose, isNarrow, scope, peek, pathname, titlebarStripRef, pinnedRail, taskViewItems, docViewItems, decisionViewItems, viewSectionOverride, setViewSectionOverride, bookmarkRows, folderRows, appFooter, openCompose }} counts={{ bookmarks: bookmarks?.length ?? 0, folders: computedDirectories.length }} hasTeam={!!activeTeam} hasTeams={!!teams?.length} focus={{ offered: railMoreOffered, focused: railIsFocused }} />;
+  if (modern) return <ModernSidebar {...{ isMobileOpen, onMobileClose, isNarrow, scope, peek, pathname, titlebarStripRef, pinnedRail, taskViewItems, docViewItems, decisionViewItems, viewSectionOverride, setViewSectionOverride, bookmarkRows, folderRows, appFooter, openCompose }} counts={{ bookmarks: bookmarks?.length ?? 0, folders: computedDirectories.length }} hasTeam={!!activeTeam} hasTeams={!!teams?.length} focus={modernFocus} />;
   return (
     <nav
       data-sv-nav

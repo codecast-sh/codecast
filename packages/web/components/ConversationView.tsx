@@ -152,7 +152,7 @@ import { openFiles } from "../lib/filesPane";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useCallsAvailable, useTeamFeature } from "../lib/teamFeatures";
 import { CursorPopover, useContextMenu } from "./ui/context-menu";
-import { IdentityFace } from "./identity";
+import { IdentityFace, SessionMark } from "./identity";
 import { CharacterPicker } from "./identity/CharacterPicker";
 import { type IdentityRow } from "../lib/sessionIdentity";
 import { useConversationIdentityRow } from "../hooks/useLiveIdentityRow";
@@ -4155,6 +4155,7 @@ const ConversationViewInner = (
               />
             ) : (
               <ConversationHeaderTitle
+                lead={modernStyle && conversation ? <SessionMark session={conversation as any} size={20} className="flex-shrink-0" /> : undefined}
                 text={identityRow
                   ? <SessionIdentityLine row={identityRow} title={truncatedTitle} className="max-w-full align-bottom" />
                   : truncatedTitle}

@@ -548,3 +548,42 @@ export function SessionProjectChip({ project, label, directory, className = "", 
     </span>
   );
 }
+
+/** Under a card whose agent spawned workers (cast spawn, workflow subs): how
+ *  many there are, and how many wait on the person. The workers fold under the
+ *  card (the Sub-agents and workers view option lists them), so this line is
+ *  what keeps them in sight. Quiet ink; only "needs you" takes the accent, and
+ *  it opens the first worker waiting. */
+export function CardWorkersLine({
+  count,
+  needsYou,
+  onOpen,
+}: {
+  count: number;
+  needsYou: InboxSession[];
+  onOpen: (session: InboxSession, e?: React.MouseEvent) => void;
+}) {
+  if (count <= 0) return null;
+  const first = needsYou[0];
+  return (
+    <div data-sv-workers={count} className="pl-[26px] pr-2 pb-1 text-[12px] leading-tight text-sol-text-muted tabular-nums">
+      <span title={`${count} ${count === 1 ? "session" : "sessions"} this agent spawned; View options › Sub-agents and workers lists them`}>
+        {count} {count === 1 ? "worker" : "workers"}
+      </span>
+      {first && (
+        <>
+          <span aria-hidden> · </span>
+          <button
+            type="button"
+            data-sv-workers-needs-you={needsYou.length}
+            onClick={(e) => { e.stopPropagation(); onOpen(first, e); }}
+            className="text-sol-cyan hover:underline underline-offset-2"
+            title={needsYou.length === 1 ? "Open the worker waiting on you" : `Open the first of ${needsYou.length} workers waiting on you`}
+          >
+            {needsYou.length} {needsYou.length === 1 ? "needs" : "need"} you
+          </button>
+        </>
+      )}
+    </div>
+  );
+}

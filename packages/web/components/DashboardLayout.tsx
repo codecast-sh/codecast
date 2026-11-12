@@ -76,7 +76,7 @@ import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader, SlowBootNote } from "./AppLoader";
 import { freshHomeLaunchPending, settleFreshHomeLaunch } from "../store/viewNav";
-import { useInboxStore, useTrackedStore, getProjectName, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, resolveSimpleView, resolveInboxCompact, resolveVisualStyle } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, getProjectName, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, resolveInboxHome, isModernFocused } from "../store/inboxStore";
 import { newConversationAgentType } from "../lib/defaultAgent";
 import { ConnectToast } from "./simple/ConnectToast";
 import { pathOnMyMachines, savedDefaultProject } from "../lib/machinePicker";
@@ -101,8 +101,9 @@ import { ChatPrefetchFeeder } from "../hooks/useChatPrefetch";
 import { useSyncLineDecisionsEverywhere } from "../hooks/useSyncSessionDecisions";
 import { useSyncOpenDecisionDetails } from "../hooks/useSyncDecisionDetail";
 import { useSyncDocs } from "../hooks/useSyncDocs";
-import { isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionFocusKind } from "../lib/inboxRouting";
+import { isInboxRoute, isInboxSessionView, pageOwnsRailHighlight, railPointerOnNavigate, sessionFocusKind } from "../lib/inboxRouting";
 import { useOpenSession } from "../hooks/useOpenSession";
+import { useIsModernFocused } from "../hooks/useVisualStyle";
 import { RecentSwitcherHost } from "./RecentSwitcher";
 import { UndoTimelineHost } from "./undo/UndoTimeline";
 import { TabBar, AttachTabButton } from "./TabBar";
@@ -253,7 +254,18 @@ function WindowTitle() {
 // The shell's prop-less chrome, grouped into memo leaves: each part reads the
 // store itself, so a shell render (a navigation, a layout change) skips them.
 
+// Modern focused's inbox board stands alone: the rail beside it would list
+// the same sessions twice. One boolean, so no other style tracks its parts.
+function inboxBoardHides(s: { showMySessions: boolean; clientState: { ui?: { inbox_home?: "board" | "feed"; modern_style?: boolean; modern_focused?: boolean } } }): boolean {
+  return isModernFocused(s.clientState.ui) && s.showMySessions && resolveInboxHome(s.clientState.ui) === "board";
+}
+
+function StripsLine({ one, children }: { one: boolean; children: ReactNode }) {
+  return one ? <div data-cc-strips>{children}</div> : <>{children}</>;
+}
+
 const ShellBanners = memo(function ShellBanners() {
+  const stripsOne = useIsModernFocused();
   return <>
     {/* A phone's top bar has no face row, so a call's card has its own line. */}
     <PhoneCallStrip />
@@ -263,8 +275,12 @@ const ShellBanners = memo(function ShellBanners() {
         so a status that flaps never shifts the layout. The onboarding strips
         still sit in the flow. */}
     <ErrorBoundary name="Banners" level="inline">
+      {/* Modern focused lines the strips up in one wrapper where only the
+          first that renders shows (globals.css [data-cc-strips]) and
+          dismissing it brings up the next; every other style stacks them. */}
       <StatusNoticeStack />
       <ConnectionBanner />
+      <StripsLine one={stripsOne}>
       <StorageHealthBanner />
       <SetupPromptBanner />
       <NewSnippetsBanner />
@@ -284,6 +300,7 @@ const ShellBanners = memo(function ShellBanners() {
         <SharingSetupBanner />
         <TeamSharingNudgeBanner />
       </div>
+      </StripsLine>
       <DeviceSetupDialog />
     </ErrorBoundary>
   </>;
@@ -652,6 +669,9 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.workspace.dock.pane != null,
     s => s.currentConversation?.source,
     s => selectSessionRailOpen(s),
+    // Modern focused's inbox board lists every session, so the rail beside it
+    // would list them twice: the board hides it (inboxBoardHere below).
+    s => inboxBoardHides(s),
     // The session pointers, the comments map, and the palette's and people
     // wall's open flags are read by leaves of their own (SessionRailList,
     // CommentsToggle, PaletteHost, PeopleWallHost), so a session switch, a
@@ -804,7 +824,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   // rail to a thin strip (StageRail below) for as long as it is there; the
   // rail's own open state is untouched, so leaving brings it back as it was.
   const stageWideHere = !!s.stageWide && s.stageWide.tabId === s.activeTabId;
-  const showSessionList = railOpen && !isMobile && !isOnSettingsPage && !appWindow && !stageWideHere;
+  const inboxBoardHere = inboxBoardHides(s) && isInboxRoute(pathname);
+  const showSessionList = railOpen && !isMobile && !isOnSettingsPage && !appWindow && !stageWideHere && !inboxBoardHere;
   const showMobileSessionList = isMobileSessionListOpen && isMobile && !isOnSettingsPage && !appWindow;
   // Right session list, collapsed: no persistent rail — a right-edge hover-peek
   // slides the full list out, mirroring the left sidebar's collapsed behavior.

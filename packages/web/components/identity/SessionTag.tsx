@@ -5,6 +5,8 @@
 // same everywhere.
 import type { ReactNode } from "react";
 import { AgentTypeIcon } from "../AgentTypeIcon";
+import { WorkspaceTile } from "./WorkspaceTile";
+import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { SessionGlyph } from "./SessionGlyph";
 import { SessionIdentityLine } from "./SessionIdentityLine";
 import { identityRowOf, type IdentityRow } from "../../lib/sessionIdentity";
@@ -21,26 +23,32 @@ const SIZES: Record<SessionTagSize, { face: number; icon: string; text: string; 
 type TagRow = IdentityRow & { agent_type?: string | null } & Record<string, unknown>;
 
 /** A session's one glyph with its agent brand: the face with the brand on its
- *  corner when the session is personified, the brand alone when it is not. */
-export function SessionMark({ session, size = 16, iconClassName = "w-3.5 h-3.5", className = "flex-shrink-0" }: {
+ *  corner when the session is personified; else, in Modern, its workspace tile
+ *  with the agent inside (WorkspaceTile), and the brand alone in Classic and
+ *  Minimal. Every list of sessions leads its rows with this, so a session
+ *  looks the same on the board, the rail, a task and the org chart. */
+export function SessionMark({ session, size = 16, iconClassName = "w-3.5 h-3.5", className = "flex-shrink-0", showAgent = true }: {
   session: TagRow;
   size?: number;
   /** The plain brand's box, sized to sit beside the surface's text. */
   iconClassName?: string;
   className?: string;
+  /** Off (the viewer hid agent icons), Modern's tile shows the workspace's initial. */
+  showAgent?: boolean;
 }) {
   const agent = session.agent_type || "claude_code";
+  const modern = useIsModernStyle();
   return (
     <SessionGlyph
       row={identityRowOf(session)}
       size={size}
       className={className}
-      badge={<AgentTypeIcon agentType={agent} className="w-full h-full p-[1px]" />}
-      fallback={
+      badge={showAgent ? <AgentTypeIcon agentType={agent} className="w-full h-full p-[1px]" /> : undefined}
+      fallback={modern ? <WorkspaceTile row={session} size={size} showAgent={showAgent} className={className} /> : (
         <span className={`inline-flex ${className}`} title={agent}>
           <AgentTypeIcon agentType={agent} className={iconClassName} />
         </span>
-      }
+      )}
     />
   );
 }
