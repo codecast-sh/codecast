@@ -27,6 +27,8 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { isRecentlyShipped, snippetEnabledOn } from "../../lib/newSnippets";
 import { FeatureVignette } from "./FeatureVignette";
 import { FeatureDialog, NewPill, STABLE_NAME } from "./FeatureDetail";
+import { FeaturePath } from "./FeaturePath";
+import { Button } from "../ui/button";
 import { featureIcon, featureTone, TONE } from "./featureLook";
 import { AgentToolSetupPanel } from "../conversation/blocks/AgentToolSetupCard";
 import { useAgentToolSetup } from "../../lib/useAgentToolSetup";
@@ -261,16 +263,41 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
       <FeatureDialog
         slug={openFeature ? openFeature.slug : open === STABLE_KEY ? STABLE_KEY : null}
         feature={openFeature}
-        setup={
-          openFeature && isAgentSetupTool(openFeature.slug) && isOn(openFeature) && d.online ? (
-            <AgentToolSetupPanel tool={openFeature.slug} target={{ deviceId: d.device_id }} machineName={deviceDisplayName(d)} />
+        path={
+          openFeature ? (
+            <FeaturePath
+              name={openFeature.name}
+              on={isOn(openFeature)}
+              machineName={deviceDisplayName(d)}
+              blocked={
+                lockOf(openFeature)
+                  ? { reason: lockOf(openFeature)!, locked: true }
+                  : !d.online
+                    ? { reason: `${deviceDisplayName(d)} is offline. Its switches come back when it reconnects.` }
+                    : null
+              }
+              setup={isAgentSetupTool(openFeature.slug) && d.online ? { tool: openFeature.slug, deviceId: d.device_id } : null}
+              tryIt={FEATURE_EXPLAINERS[openFeature.slug]?.tryIt ?? ""}
+              onClose={() => setOpen(null)}
+              turnOn={
+                <FeatureSwitch
+                  s={openFeature}
+                  machine={deviceDisplayName(d)}
+                  on={false}
+                  disabled={pending.has(openFeature.slug)}
+                  onToggle={(next) => toggle(openFeature, next)}
+                  asButton
+                />
+              }
+            />
           ) : null
         }
         onClose={() => setOpen(null)}
         control={
           openFeature ? (
+            isOn(openFeature) && (
             <label className="flex shrink-0 items-center gap-2 pt-1 text-xs text-sol-text-muted">
-              {isOn(openFeature) ? "On" : "Off"}
+              On
               <FeatureSwitch
                 s={openFeature}
                 machine={deviceDisplayName(d)}
@@ -279,6 +306,7 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
                 onToggle={(next) => toggle(openFeature, next)}
               />
             </label>
+            )
           ) : open === STABLE_KEY ? (
             <StableControls d={d} panel={panel} />
           ) : null
@@ -289,7 +317,7 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
 }
 
 /** A feature's switch. On goes through the shared review (it hands this machine's agents a capability); off is one press. */
-function FeatureSwitch({ s, machine, on, disabled, onToggle }: { s: SnippetDescriptor; machine: string; on: boolean; disabled: boolean; onToggle: (next: boolean) => void }) {
+function FeatureSwitch({ s, machine, on, disabled, onToggle, asButton }: { s: SnippetDescriptor; machine: string; on: boolean; disabled: boolean; onToggle: (next: boolean) => void; /** A primary "Turn on" button instead of a switch. */ asButton?: boolean }) {
   const name = s.name;
   return (
     <ConsequentialSwitch
@@ -297,7 +325,9 @@ function FeatureSwitch({ s, machine, on, disabled, onToggle }: { s: SnippetDescr
       ledger={featureOnLedger(s, [machine])}
       onTurnOn={() => onToggle(true)}
       onTurnOff={() => onToggle(false)}
-      trigger={({ on, press }) => <Switch checked={on} disabled={disabled} onCheckedChange={press} aria-label={name} aria-haspopup={on ? undefined : "dialog"} />}
+      trigger={({ on, press }) => asButton ? (
+        <Button variant="cyan" disabled={disabled} onClick={press} aria-haspopup="dialog" data-feature-turn-on>Turn on {name}</Button>
+      ) : <Switch checked={on} disabled={disabled} onCheckedChange={press} aria-label={name} aria-haspopup={on ? undefined : "dialog"} />}
     />
   );
 }
