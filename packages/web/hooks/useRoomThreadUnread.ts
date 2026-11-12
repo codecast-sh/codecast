@@ -29,7 +29,8 @@ export function useRoomThreadUnread(
   const newestAt = rows?.[rows.length - 1]?.at ?? 0;
   const base = useRef<{ roomKey: string; at: number } | null>(null);
   if (roomKey && rows && base.current?.roomKey !== roomKey) base.current = { roomKey, at: newestAt };
-  const since = base.current?.roomKey === roomKey ? base.current.at : Infinity;
+  const b = base.current;
+  const since = b && b.roomKey === roomKey ? b.at : Infinity;
   const arrived = rows?.findLast((r) => r.agent && r.at > since && isArrival(r)) ?? null;
 
   useWatchEffect(() => {

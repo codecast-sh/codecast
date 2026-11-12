@@ -7,11 +7,11 @@ import { auth } from "./auth";
 import { internal, api } from "./_generated/api";
 import { callback as googleOAuthCallback, GOOGLE_CALLBACK_PATH } from "./googleOAuth";
 import { callback as connectorCallback, CONNECTOR_CALLBACK_PATH } from "./oauthConnectors";
-import { installCallbackHandler } from "./githubApp";
+import { installCallbackHandler } from "./lib/githubInstallCallback";
 import { verifyLinearSignature, linearDeliveryId } from "./linearWebhooks";
-import { readConversationRange } from "./conversations";
+import { readConversationRange } from "./lib/conversationRead";
 import { SHARED_CALL_VIDEO_PATH, signForCli } from "./callRecordings";
-import { SHARED_CALL_AUDIO_PATH, sharedCallAudio, sharedCallVideo } from "./publicShare";
+import { SHARED_CALL_AUDIO_PATH, sharedCallAudio, sharedCallVideo } from "./lib/sharedCallMedia";
 import { VAULT_BODY_UPLOAD_PATH, uploadBody as vaultUploadBody } from "./vaultMirror";
 import { ipRateLimited } from "./lib/httpRateLimit";
 import { cliAuthRequest } from "./cliAuthHttp";
@@ -19,14 +19,14 @@ import { cliErrorReply } from "./lib/cliErrorStatus";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
 import { publishedKeys } from "./lib/codecastSigning";
 import { CODECAST_KEYS_PATH } from "@codecast/shared/contracts/codecastSignature";
-import { ENROLL_PATH, enrollHttp } from "./managedDevices";
+import { ENROLL_PATH, enrollHttp } from "./lib/enrollHttp";
 import { REPLAY_CHUNK_PATH, REPLAY_FRAME_ADMIT_PATH, REPLAY_PLAYER_MANIFEST_PATH, REPLAY_SIGN_PREFIXES, replayChunk, replayChunkPreflight, replayFrameAdmit, replayPlayerManifest, replayPlayerManifestPreflight, replaySign } from "./replaysHttp";
 import { signReplayChunks } from "./lib/replayChunks";
 import { hmacSha256Hex, timingSafeEqualHex } from "./lib/hmac";
 import { handleFaceRequest } from "./callFace";
-import { sentryWebhook, setEventGroupStatus } from "./sources/sentry";
+import { sentryWebhook, setEventGroupStatus } from "./lib/sentryHttp";
 import { STRIPE_WEBHOOK_PATH, stripeWebhook } from "./billing";
-import { claimFrontier } from "./taskFrontier";
+import { claimFrontier } from "./lib/claimFrontier";
 import { heartbeatTailnetArg } from "./lib/heartbeatTailnet";
 import {
   serve as repoPublicServe,
@@ -196,10 +196,10 @@ http.route({
 });
 
 // A managed device presents its MDM profile's enrollment token
-// (managedDevices.enrollHttp).
+// (lib/enrollHttp.enrollHttp).
 http.route({ path: ENROLL_PATH, method: "POST", handler: enrollHttp });
 
-// The install callback lives in githubApp.ts beside the intents it spends, so
+// The install callback is a plain function (lib/githubInstallCallback.ts) so
 // a test can drive the real handler.
 http.route({
   path: "/api/github-app/callback",
@@ -5417,7 +5417,7 @@ http.route({ pathPrefix: "/cli/a/", method: "GET", handler: artifactServe });
 
 http.route({ path: SHARED_CALL_VIDEO_PATH, method: "GET", handler: sharedCallVideo });
 // A shared call's audio, re-checked against the link on every request the
-// same way (publicShare.sharedCallAudio).
+// same way (lib/sharedCallMedia.sharedCallAudio).
 http.route({ path: SHARED_CALL_AUDIO_PATH, method: "GET", handler: sharedCallAudio });
 
 // Reading a public repository with no account at all — the standalone /r/ shell
