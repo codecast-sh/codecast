@@ -4435,11 +4435,11 @@ export function visualOrderSessions(
   } = {},
 ): InboxSession[] {
   const collapsed = opts.collapsedSections;
-  // Same order the status view renders: questions, pinned, new, needs input,
+  // Same order the status view renders: pinned, questions, new, needs input,
   // done, working, dormant — the chokepoint's own sections, so the walk and
   // the render can never disagree.
   const sections: Array<[InboxSession[], string]> = [
-    [placed.questions, "questions"], [placed.pinned, "pinned"], [placed.newSessions, "new"],
+    [placed.pinned, "pinned"], [placed.questions, "questions"], [placed.newSessions, "new"],
     [placed.needsInput, "needs_input"], [placed.done, "done"],
     [placed.working, "working"], [placed.dormant, "dormant"],
   ];
@@ -9719,9 +9719,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const pool = this.accountPool as Record<string, any>;
     const key = email.toLowerCase();
     const wanted = new Set(teamIds);
-    const mine = Object.values(pool).filter((r) => r.mine && r.email === key);
-    for (const r of mine) if (!wanted.has(String(r.team_id))) delete pool[r._id];
-    const have = new Set(mine.map((r) => String(r.team_id)));
+    const mine = Object.values(pool).filter((r) => r.mine && r.email === key).sort((a, b) => a.shared_at - b.shared_at);
+    // The oldest row is the one the owner's machines draw through
+    // (accountPool.performSetAccountShares): with no team left it becomes the
+    // personal row, and a personal row turns into the first team's.
+    const keeper = mine[0];
+    for (const r of mine) if (r.team_id && !wanted.has(String(r.team_id)) && (wanted.size > 0 || r !== keeper)) delete pool[r._id];
+    if (keeper && wanted.size === 0) pool[keeper._id] = { ...keeper, team_id: null, pools: [], share_key: `${key}|personal` };
+    if (keeper && !keeper.team_id && wanted.size > 0) delete pool[keeper._id];
+    const have = new Set(mine.filter((r) => r.team_id).map((r) => String(r.team_id)));
     for (const teamId of wanted) {
       if (have.has(teamId)) continue;
       const stub = `temp_pool_${key}_${teamId}`;

@@ -1,9 +1,14 @@
 const $ = (id) => document.getElementById(id);
+let unpaired = false;
 
 async function refresh() {
   const s = await readBridgeStatus();
   const { bridge } = await chrome.storage.local.get("bridge");
-  renderBridgeStatus($("status"), s, (bridge && bridge.port) || CAST_DEFAULT_PORT);
+  const d = renderBridgeStatus($("status"), s, (bridge && bridge.port) || CAST_DEFAULT_PORT);
+  unpaired = d.cls === "state-none";
+  $("reconnect").hidden = d.cls !== "state-wait" && d.cls !== "state-bad";
+  $("settings").textContent = unpaired ? "Pair" : "Settings";
+  $("settings").classList.toggle("primary", unpaired);
   const rows = await Promise.all(
     (s.attached || []).map(async (id) => {
       const t = await chrome.tabs.get(id).catch(() => null);
@@ -39,7 +44,10 @@ $("reconnect").addEventListener("click", async () => {
   await reconnectWorker();
   setTimeout(refresh, 600);
 });
-$("settings").addEventListener("click", () => chrome.runtime.openOptionsPage());
+$("settings").addEventListener("click", () => {
+  if (unpaired) chrome.tabs.create({ url: chrome.runtime.getURL("options.html#pair") });
+  else chrome.runtime.openOptionsPage();
+});
 refresh();
 setInterval(refresh, 1500);
 
