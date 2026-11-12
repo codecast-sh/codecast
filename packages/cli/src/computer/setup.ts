@@ -202,7 +202,7 @@ async function allowed(
   if (opts.yes) return true;
   if (!deps.isTty()) {
     say("This is not a terminal, so there is nobody here to confirm, and nothing will be opened.");
-    say("Run `cast computer setup` in a terminal, or pass --yes to open the panes without asking.");
+    say("Pass --yes to open the panes without asking.");
     if (deps.setupPage) say(`Or grant them from a browser: ${deps.setupPage()}`);
     for (const line of agentSetupLines("computer")) say(line);
     return false;
