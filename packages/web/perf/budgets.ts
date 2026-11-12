@@ -66,13 +66,18 @@ await test("switch", "a warm conversation switch fetches no history and opens th
   }
 });
 
-await test("inbox-load", "the inbox over 5,000 sessions draws a bounded list and asks the server for nothing but its two queries", async () => {
+await test("inbox-load", "the inbox over 5,000 sessions draws a bounded list and asks the server for nothing but its one query", async () => {
   await setup("inbox-load");
   for (const r of await twice()) {
     expect(pick(r, ["cards", "convexQueries", "convexSubscribes", "convexMutations"])).toEqual({
       // GLOBAL_CARD_BUDGET plus the active row the panel always keeps.
       cards: 51,
-      convexQueries: 0, convexSubscribes: 2, convexMutations: 0,
+      // usageCalibration:get. The trigger feed (agentTasks:webList, armed rows
+      // plus a recent tail) now comes through the store feeder useSyncTriggers,
+      // which holds at "skip" until auth settles; the harness never settles auth,
+      // so it is not counted here (ct-92571, 2026-11-12: the old direct
+      // subscription read the complete trigger history).
+      convexQueries: 0, convexSubscribes: 1, convexMutations: 0,
     });
   }
 });
@@ -99,12 +104,12 @@ await test("inbox-heartbeat", "a rename that arrives through the feed reaches it
 // The Modern style draws its own card (ModernSessionCardView) and section
 // header over the same panel: the same bounded list, the same two queries, and
 // a heartbeat still re-renders nothing.
-await test("inbox-load-modern", "in the Modern style the inbox over 5,000 sessions draws the same bounded list with the same two queries", async () => {
+await test("inbox-load-modern", "in the Modern style the inbox over 5,000 sessions draws the same bounded list with the same one query", async () => {
   await setup("inbox-load-modern");
   for (const r of await twice()) {
     expect(pick(r, ["cards", "convexQueries", "convexSubscribes", "convexMutations"])).toEqual({
       cards: 51,
-      convexQueries: 0, convexSubscribes: 2, convexMutations: 0,
+      convexQueries: 0, convexSubscribes: 1, convexMutations: 0,
     });
   }
 });
