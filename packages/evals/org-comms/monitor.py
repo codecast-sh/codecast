@@ -109,7 +109,8 @@ def fill_long_lived(convs, short, msgs, user):
     def add(row):
         convs.setdefault(row["_id"], row)
         if convs[row["_id"]] not in short[row["short_id"]]: short[row["short_id"]].append(convs[row["_id"]])
-    teams = re.findall(r"\bk97[a-z0-9]{29}\b", subprocess.run(["cast", "teams"], capture_output=True, text=True).stdout)
+    try: teams = [t["id"] for t in json.loads(subprocess.run(["cast", "teams", "--json"], capture_output=True, text=True).stdout)]
+    except Exception: sys.exit("monitor.py: `cast teams --json` gave no team list, so role anchors cannot be placed.")
     for team in teams:
         out = subprocess.run(["cast", "org", "ls", "--team", team, "--json"], capture_output=True, text=True, timeout=300).stdout
         try: anchors = json.loads(out).get("anchors", [])

@@ -660,7 +660,7 @@ export function formatReadResult(result: ReadResult, options: FormatOptions = {}
   }
 
   const id = truncateId(conv.id);
-  const page = fitReadPage(blocks, options.maxChars, id);
+  const page = fitReadPage(blocks, options.maxChars, id, targetLine);
   lines.push(...page.texts);
   if (!page.cut) {
     const footer = readFooter(result, id, options.grep);
@@ -717,7 +717,7 @@ function readFooter(result: ReadResult, id: string, grep?: string): string | nul
  * the end) keeps its newest messages. A single message larger than the page
  * is cut, with the command that prints it whole.
  */
-export function fitReadPage(blocks: Array<{ line: number; text: string }>, maxChars: number | undefined, id: string): { texts: string[]; cut: boolean } {
+export function fitReadPage(blocks: Array<{ line: number; text: string }>, maxChars: number | undefined, id: string, targetLine?: number): { texts: string[]; cut: boolean } {
   const total = blocks.reduce((n, b) => n + b.text.length, 0);
   if (!maxChars || total <= maxChars) return { texts: blocks.map((b) => b.text), cut: false };
   const limit = `${Math.round(maxChars / 1000)}K-character page`;
@@ -727,6 +727,27 @@ export function fitReadPage(blocks: Array<{ line: number; text: string }>, maxCh
       texts: [b.text.slice(0, maxChars), fmt.muted(`… message ${b.line} is ${b.text.length} characters, cut to fit a ${limit}; whole: cast read ${id} ${b.line} --full --json`)],
       cut: true,
     };
+  }
+  // A read around a linked message keeps that message and grows outward from
+  // it, nearest first: filling forward from the earliest context line can push
+  // the very message asked for off the page.
+  const at = targetLine === undefined ? -1 : blocks.findIndex((b) => b.line === targetLine);
+  if (at >= 0) {
+    // A linked message larger than the page takes half of it, so what answered
+    // it still shows: a reader following a link needs the reaction as much as the text.
+    const big = blocks[at].text.length > maxChars;
+    const target = big ? fitReadPage([blocks[at]], Math.floor(maxChars / 2), id).texts.join("\n") + "\n" : blocks[at].text;
+    blocks = blocks.map((b, i) => (i === at ? { ...b, text: target } : b));
+    let lo = at, hi = at, used = target.length, grew = true;
+    while (grew) {
+      grew = false;
+      if (hi + 1 < blocks.length && used + blocks[hi + 1].text.length <= maxChars) { used += blocks[++hi].text.length; grew = true; }
+      if (lo > 0 && used + blocks[lo - 1].text.length <= maxChars) { used += blocks[--lo].text.length; grew = true; }
+    }
+    const texts = blocks.slice(lo, hi + 1).map((b) => b.text);
+    if (lo > 0) texts.unshift(fmt.muted(`… ${lo} earlier message${lo === 1 ? "" : "s"} cut to fit a ${limit}; read them: cast read ${id} ${blocks[0].line}:${blocks[lo - 1].line}`) + "\n");
+    if (hi < blocks.length - 1) texts.push(fmt.muted(`… page ends here (${limit}); continue: cast read ${id} ${blocks[hi + 1].line}:${blocks[blocks.length - 1].line}`));
+    return { texts, cut: true };
   }
   const fromEnd = blocks.some((b) => b.line < 0);
   const ordered = fromEnd ? [...blocks].reverse() : blocks;

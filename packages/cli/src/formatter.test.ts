@@ -590,3 +590,39 @@ describe("cast search output", () => {
     expect(out[1]).toBe('inside one: cast read <id> --grep "retry cap"');
   });
 });
+
+import { fitReadPage } from "./formatter";
+
+describe("fitReadPage around a linked message", () => {
+  const block = (line: number, size: number) => ({ line, text: `${line}:` + "x".repeat(size) });
+
+  test("keeps the linked message when long context before it fills the page", () => {
+    // Three long turns before line 236 used to fill the page, so the read
+    // "around linked message (line 236)" ended at 235 and never showed 236.
+    const blocks = [block(233, 9000), block(234, 9000), block(235, 9000), block(236, 500), block(237, 500)];
+    const page = fitReadPage(blocks, 24_000, "jx7abcd", 236);
+    const text = page.texts.join("");
+    expect(text).toContain("236:");
+    expect(text).toContain("237:");
+    expect(text).toContain("235:");
+    expect(text).not.toContain("233:x");
+    expect(text).toContain("cast read jx7abcd 233:233");
+    expect(page.cut).toBe(true);
+  });
+
+  test("a linked message larger than the page takes half of it and keeps the reply", () => {
+    // A Line run's re-brief to a station is often over 24K; the station's
+    // reaction after it is what a reader following the link came for.
+    const page = fitReadPage([block(10, 100), block(11, 30_000), block(12, 100)], 24_000, "jx7abcd", 11);
+    const text = page.texts.join("");
+    expect(text).toContain("cast read jx7abcd 11 --full --json");
+    expect(text).toContain("10:");
+    expect(text).toContain("12:");
+    expect(text.length).toBeLessThan(24_000);
+  });
+
+  test("a page that fits is returned whole", () => {
+    const blocks = [block(1, 10), block(2, 10)];
+    expect(fitReadPage(blocks, 24_000, "jx7abcd", 2)).toEqual({ texts: blocks.map((b) => b.text), cut: false });
+  });
+});
