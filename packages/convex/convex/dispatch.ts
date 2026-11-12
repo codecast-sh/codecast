@@ -1928,6 +1928,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // `grant`: the Touch ID grant string turning it off spends.
   setSecretAskFirst: async (ctx, userId, [id, askFirst, grant]: [string, boolean, string?]) =>
     liveSecretWrite(ctx, id, () => (ctx as any).runMutation(api.secrets.setAskFirst, { ref: id, ask_first: askFirst, grant })),
+  setSecretTouchId: async (ctx, userId, [id, touchId, grant]: [string, boolean, string?]) =>
+    liveSecretWrite(ctx, id, () => (ctx as any).runMutation(api.secrets.setTouchId, { ref: id, touch_id: touchId, grant })),
   addIssueSyncSource: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.issueSync.addSource, {
       provider: opts.provider,

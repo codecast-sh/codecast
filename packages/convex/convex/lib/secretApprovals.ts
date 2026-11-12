@@ -65,6 +65,8 @@ export const pendingApproval = async (ctx: Ctx, decisionId: Id<"session_decision
   return approval?.status === "pending" ? approval : null;
 };
 
+const needsTouchId = async (ctx: Ctx, approval: Doc<"secret_approvals">) => !!(await ctx.db.get(approval.secret_id))?.touch_id;
+
 type Verdict = { status: string; answer_index?: number };
 
 const approves = (row: { options?: Array<{ label: string }> }, verdict: Verdict) =>
@@ -76,10 +78,10 @@ const approves = (row: { options?: Array<{ label: string }> }, verdict: Verdict)
  * its dispatch rail): an answer through an api token may be the gated agent
  * answering its own question, from its own shell with no session named, and
  * a teammate viewing the session is not the person whose secret it opens.
- * Approving it also takes an approve grant for the decision (passkeys.ts),
- * since an agent may be driving the person's signed-in browser, spent with
- * the grant string the answer carries (`by.presence`); a Deny or a dismissal
- * stays one press. With no verdict the answer is taken to approve.
+ * Approving one for a secret with Touch ID on also takes an approve grant for
+ * the decision (passkeys.ts), since an agent may be driving the person's
+ * signed-in browser, spent with the grant string the answer carries
+ * (`by.presence`); a Deny or a dismissal stays one press. With no verdict the answer is taken to approve.
  * finalizeAnswer, answerCore and the dispatch rail check it the way they
  * check hostedAnswerRefusal; settleSecretApproval uses the grant up.
  */
@@ -93,7 +95,7 @@ export async function secretApprovalRefusal(
   if (!approval) return null;
   if (!by.signed_in) return "An Ask first decision is a person's: answer it on the web or the phone, where you are signed in";
   if (!(await mayApprove(ctx, approval, by.user_id))) return "Only the person whose session asked can answer an Ask first decision";
-  if (!verdict || approves(row, verdict)) return await presenceRefusal(ctx, by.user_id!, "approve", String(row._id), by.presence);
+  if ((!verdict || approves(row, verdict)) && (await needsTouchId(ctx, approval))) return await presenceRefusal(ctx, by.user_id!, "approve", String(row._id), by.presence);
   return null;
 }
 
@@ -121,7 +123,7 @@ export async function settleSecretApproval(
   if (!approval) return;
   const approved = approves(row, verdict);
   if (approved && (by.kind !== "user" || !by.signed_in || !(await mayApprove(ctx, approval, by.user_id)))) return;
-  if (approved && (await consumePresence(ctx, by.user_id!, "approve", String(row._id), by.presence))) return;
+  if (approved && (await needsTouchId(ctx, approval)) && (await consumePresence(ctx, by.user_id!, "approve", String(row._id), by.presence))) return;
   const withdrawn = verdict.status === "withdrawn";
   if (withdrawn) await ctx.db.delete(approval._id);
   else await ctx.db.patch(approval._id, { status: approved ? "approved" : "denied", approved_by: approved ? by.user_id : undefined, at: now });
