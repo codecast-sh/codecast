@@ -3,8 +3,12 @@ import { makeFakeDb } from "./testDb";
 import { getTeamMembers } from "./teams";
 import { reportPresence } from "./pushRouter";
 import { PRESENCE_BUCKET_MS, PRESENCE_FRESH_MS } from "./presenceState";
+<<<<<<< Updated upstream
 import { viewingAccessStamp } from "./lib/access";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
+=======
+import { patchConversationVisibility, viewingAccessStamp } from "./lib/access";
+>>>>>>> Stashed changes
 
 // Who is viewing what, as the roster tells it. The stored id is a fact about
 // the viewed session, so it reaches only callers who could open that session
