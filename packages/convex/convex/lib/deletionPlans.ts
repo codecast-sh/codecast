@@ -170,6 +170,7 @@ function plans() {
     { table: "doc_deltas", index: "id_version", field: "id", value: (d: any) => String(d._id) },
     under("doc_presence", "by_doc", "doc_id"),
     under("data_queries", "by_doc_qkey", "doc_id"),
+    under("live_search", "by_doc", "doc_id"),
   ];
   const channelRows = [
     under("chat_messages", "by_channel_created", "channel_id", { children: [under("chat_reactions", "by_message", "message_id")] }),

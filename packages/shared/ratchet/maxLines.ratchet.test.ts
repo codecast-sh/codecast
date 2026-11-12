@@ -101,6 +101,10 @@ import { join } from "node:path";
 // secrets/command.ts its printing to secrets/format.ts. PIN stays 257.
 // 2026-11-10: the audit fix pass took two files under the cap. PIN 255.
 // 2026-11-10: the UI audit ship took ConversationList.tsx under the cap. PIN 254.
+// 2026-11-11: the fix forward of a7b972dac split instead of re-pinning: the
+// stable-context hook installers moved to stableContextHooks.ts, the live
+// artifact write path to lib/liveArtifactWrite.ts, sheet text parsing to
+// sheets/delimited.ts, and buckets.test.ts its filter-list tests out. PIN 252.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");
@@ -117,7 +121,7 @@ function pinnedSize(source: string): number {
 }
 
 /** How many files are over the cap today. May only fall. */
-const PIN = 254;
+const PIN = 252;
 
 const result = checkRatchet({
   name: "max lines",

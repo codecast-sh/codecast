@@ -39,7 +39,7 @@ packages/cli/src/daemon.waiting-tasks.test.ts 900
 packages/cli/src/decideCommand.ts
 packages/cli/src/doctor.ts 950
 packages/cli/src/execution/coordinator.ts 1000
-packages/cli/src/formatter.ts 2500
+packages/cli/src/formatter.ts 2400
 packages/cli/src/hosts/cli.ts 1800
 packages/cli/src/index.ts
 packages/cli/src/jsonlGenerator.test.ts 900
@@ -104,7 +104,7 @@ packages/convex/convex/githubWebhooks.checks.test.ts 850
 packages/convex/convex/githubWebhooks.ts 2350
 packages/convex/convex/googleOAuth.test.ts 1100
 packages/convex/convex/googleOAuth.ts 1000
-packages/convex/convex/http.ts 5500
+packages/convex/convex/http.ts 5450
 packages/convex/convex/inboxFilters.test.ts 1200
 packages/convex/convex/ingest.ts 1450
 packages/convex/convex/issueSync.ts 1900
@@ -131,7 +131,7 @@ packages/convex/convex/prCli.ts
 packages/convex/convex/prShepherd.ts 850
 packages/convex/convex/pushRouter.test.ts 950
 packages/convex/convex/replays.ts 950
-packages/convex/convex/repos.ts 1600
+packages/convex/convex/repos.ts 1400
 packages/convex/convex/schema.ts
 packages/convex/convex/secrets.test.ts 1050
 packages/convex/convex/secrets.ts 1550
@@ -146,7 +146,6 @@ packages/convex/convex/slackSync.test.ts 900
 packages/convex/convex/slackSync.ts 3250
 packages/convex/convex/smallViews.v2.test.ts 850
 packages/convex/convex/sources/sentry.test.ts 950
-packages/convex/convex/sources/sentry.ts 1100
 packages/convex/convex/syncLog.test.ts 950
 packages/convex/convex/taskWaits.test.ts 950
 packages/convex/convex/taskWaits.ts 950
@@ -169,7 +168,7 @@ packages/shared/contracts/capabilityResolver.test.ts 900
 packages/shared/contracts/causeHistory.ts 900
 packages/shared/contracts/changeCard.ts 850
 packages/shared/contracts/fleetDiff.ts 850
-packages/shared/contracts/inboxProjection.test.ts 1100
+packages/shared/contracts/inboxProjection.test.ts 950
 packages/shared/contracts/inboxProjection.ts 1650
 packages/shared/contracts/orgProposal.test.ts
 packages/shared/contracts/orgProposal.ts 2000
@@ -242,7 +241,6 @@ packages/web/lib/line/problemPage.ts 1150
 packages/web/lib/line/runReport.ts 1350
 packages/web/lib/lineFlow.ts 950
 packages/web/lib/mods/host.ts 900
-packages/web/store/__tests__/buckets.test.ts 950
 packages/web/store/__tests__/capabilities.test.ts 1000
 packages/web/store/__tests__/chatSlice.test.ts 1000
 packages/web/store/__tests__/gestureBridge.test.ts 1500

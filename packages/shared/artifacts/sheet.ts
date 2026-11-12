@@ -10,6 +10,7 @@ import type { ArtifactSpec, ArtifactView, VerbResult } from "./spec";
 import { newElementKey } from "./spec";
 import { isFormula } from "./sheets/formula";
 import { formatValue } from "./sheets/format";
+import { completeDateInput } from "./sheets/values";
 import { buildModel, inheritedFormat, PALETTE, readSheetRange, readSheetTab, resolveRange, styleOf, tabByName, workbookFor, type CellEl, type PaletteColor, type SheetModel, type TabMeta, type QuerySource } from "./sheets/model";
 import {
   addTabOps,
@@ -19,7 +20,6 @@ import {
   deleteTabOps,
   fillOps,
   gridOps,
-  parseTsv,
   renameTabOps,
   sortOps,
   structuralOps,
@@ -27,9 +27,9 @@ import {
   tabPatchOps,
   fitWidthOps,
   importTablesOps,
-  parseTable,
   type StylePatch,
 } from "./sheets/ops";
+import { parseTable, parseTsv } from "./sheets/delimited";
 import { COND_RULES, condOps, condTakesValue, enforceValidation, hideOps, mergeOps, unmergeOps, validationOps } from "./sheets/ruleOps";
 import { DEFAULT_TAB, a1, colIndex as colIdx, colLetters as colLtrs, parseA1 as parseA1Ref, parseKey, parseQualifiedRange, quoteTabName, rectA1, tabKey, type Rect } from "./sheets/refs";
 
@@ -223,8 +223,15 @@ function pos(tab: TabMeta, rect: Rect): ArtifactPosition {
 }
 
 function done(t: Target, ops: ArtifactOp[], status: string): VerbResult {
+  // A month and day without a year ("Nov 5") is a date this year, as it is when a person types it.
+  const dated = ops.map((op) => {
+    const fields = "put" in op ? op.put : "set" in op ? op.set : null;
+    if (!fields || typeof fields.input !== "string" || !op.k.startsWith("c:")) return op;
+    const input = completeDateInput(fields.input);
+    return input === fields.input ? op : "put" in op ? { ...op, put: { ...op.put, input } } : { ...op, set: { ...op.set, input } };
+  });
   // Strict dropdown and date cells hold agents to the same values as people.
-  const held = enforceValidation(t.model, ops);
+  const held = enforceValidation(t.model, dated);
   const note = held.refused ? ` (skipped ${held.refused} value${held.refused === 1 ? "" : "s"} a strict dropdown or date cell doesn't allow; read the sheet's validate lines)` : "";
   return { ops: [...t.created, ...held.ops], position: pos(t.tab, t.rect), status: status + note };
 }

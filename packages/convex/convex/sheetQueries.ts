@@ -14,7 +14,8 @@ import { parseWorkspaceKey, requireAccessibleDoc, resolveWorkspaceKey } from "./
 import { createDataContext } from "./data";
 import { isConversationTeamVisible, teamVisibleConvTeam } from "./privacy";
 import { assigneeNamesFor } from "./tasks";
-import { applyBatchCore, readLiveElements } from "./liveArtifacts";
+import { readLiveElements } from "./liveArtifacts";
+import { applyBatchCore } from "./lib/liveArtifactWrite";
 import { buildModel, queryTabOps, tabByName, type TabQuery } from "@codecast/shared/artifacts/sheets";
 import { DEFAULT_TASK_STATUS_NAMES, TASK_STATUS_CATEGORIES, isTaskStatusCategory } from "@codecast/shared/tasks";
 

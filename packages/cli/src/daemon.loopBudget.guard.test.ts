@@ -167,7 +167,9 @@ const ROWS: Row[] = [
   { file: "vault/vaultServer.ts", name: "handleOp", kind: "function", minLines: 30, mustContain: "moveToTrash" },
   { file: "browser/focusHttp.ts", name: "handleBrowserFocusHttp", kind: "function", minLines: 10, mustContain: "focusBrowserTab" },
   { file: "browser/watchServer.ts", name: "attachWatchServer", kind: "function", minLines: 10, mustContain: "onWsUpgrade" },
-  { file: "browser/watchServer.ts", name: "handleConnection", kind: "function", minLines: 60, mustContain: "ownerCandidates" },
+  { file: "browser/watchServer.ts", name: "handleConnection", kind: "function", minLines: 40, mustContain: "runWatchSession" },
+  { file: "browser/watchServer.ts", name: "runWatchSession", kind: "function", minLines: 60, mustContain: "ownerCandidates" },
+  { file: "browser/watchRelay.ts", name: "runWatchRelay", kind: "function", minLines: 40, mustContain: "deps.push" },
   { file: "browser/watchServer.ts", name: "ownerCandidates", kind: "function", minLines: 5, mustContain: "paneIdFor" },
   { file: "browser/watchServer.ts", name: "tmuxPaneId", kind: "function", minLines: 3, mustContain: "display-message" },
   // The panel detach path; closeSync is the daemon shutdown path and stays sync.

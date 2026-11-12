@@ -22,9 +22,9 @@ export function RunSubjectView({ run, className }: { run: Run | undefined; class
       {subject.items.map((item) => (
         <div key={item.label} className="overflow-hidden rounded-md border border-sol-border/70" data-run-item={item.label}>
           <div className="flex items-center justify-between gap-2 border-b border-sol-border/60 bg-sol-bg-alt px-2.5 py-1">
-            <span className="min-w-0 truncate font-mono text-[11.5px] text-sol-text-muted">{item.label}</span>
+            <span className="min-w-0 truncate font-mono text-meta text-sol-text-muted">{item.label}</span>
             {item.note && (
-              <span className={cn("shrink-0 rounded px-1.5 text-[11px]", item.note === "new" ? "bg-sol-blue/10 text-sol-blue" : "bg-sol-orange/12 text-sol-orange")}>
+              <span className={cn("shrink-0 rounded px-1.5 text-meta", item.note === "new" ? "bg-sol-blue/10 text-sol-blue" : "bg-sol-orange/12 text-sol-orange")}>
                 {item.note}
               </span>
             )}
@@ -45,7 +45,7 @@ export function RunFallbackLine({ run, className }: { run: Run | undefined; clas
   if (!run || run.state !== "waiting") return null;
   const line = fallbackLine(run);
   return (
-    <div className={cn("flex min-w-0 items-center gap-1.5 text-[11px] text-sol-text-dim", className)} data-run-fallback>
+    <div className={cn("flex min-w-0 items-center gap-1.5 text-meta text-sol-text-dim", className)} data-run-fallback>
       <SquareTerminal className="size-3 shrink-0" aria-hidden />
       <code className="min-w-0 select-all truncate font-mono" title={line}>{line}</code>
     </div>

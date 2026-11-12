@@ -119,7 +119,7 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
       "is_deferred", "is_favorite", "is_idle", "is_pinned", "is_private",
       "is_subagent", "is_unresponsive", "is_workflow_primary", "is_workflow_sub", "last_comment_at",
       "last_comment_author", "last_comment_author_id", "last_comment_excerpt", "last_heartbeat", "last_model_call_at",
-      "last_role_is_user", "last_user_message", "local_mirror", "loop_state", "merge_back", "message_count", "migration_batch_id", "model",
+      "last_role_is_user", "last_turn_origin", "last_user_message", "local_mirror", "loop_state", "merge_back", "message_count", "migration_batch_id", "model",
       "open_comment_threads", "open_tasks", "open_tasks_at", "org_role_id", "owned_by_me", "owner_device_id",
       "owner_user_id", "parent_conversation_id", "parent_message_uuid", "pending_api_error",
       "pending_api_error_at", "pending_api_error_kind", "permission_mode", "pr_status", "producing_until",

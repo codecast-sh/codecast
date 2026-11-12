@@ -77,6 +77,8 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/liveArtifactsSlice.ts:ROW_META": CONSTANT,
   "store/inboxStore.ts:PER_DEVICE_UI_KEYS": CONSTANT,
   "store/inboxStore.ts:HELD_IN_NEW": CONSTANT,
+  "store/inboxStore.ts:QUIET_BUCKETS": CONSTANT,
+  "store/inboxStore.ts:SURFACED_PLAN_STATES": CONSTANT,
 
   // the rest of store/
   "store/gestureBridge.ts:sourceToken": "window",

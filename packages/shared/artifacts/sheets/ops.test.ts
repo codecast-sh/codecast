@@ -4,7 +4,8 @@ import { sheetSpec, readSheetRange, describeSheet } from "../sheet";
 import { adjustFormula, renameTabInFormula, shiftFormula } from "./rewrite";
 import { buildModel, workbookFor } from "./model";
 import { dateToSerial } from "./values";
-import { fillOps, parseTsv, structuralOps, sortOps, toTsv, clipOf, pasteClipOps } from "./ops";
+import { fillOps, structuralOps, sortOps, clipOf, pasteClipOps } from "./ops";
+import { parseTsv, toTsv } from "./delimited";
 
 describe("rewrite", () => {
   test("relative shift keeps anchors", () => {

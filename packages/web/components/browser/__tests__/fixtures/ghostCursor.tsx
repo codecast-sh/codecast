@@ -60,7 +60,11 @@ const convexReact = await import("convex/react");
 // it, and a fresh object per render would dial again on every render.
 const fakeConvex = {};
 mock.module("convex/react", () => ({ ...convexReact, useConvex: () => fakeConvex }));
+// Keep the module's real exports: the stream's graph reads more of it than
+// getTerminalEndpoint (useLocalDeviceId reads isOverrideEndpoint).
+const realEndpoint = { ...(await import("../../../../lib/terminal/endpoint")) };
 mock.module("../../../../lib/terminal/endpoint", () => ({
+  ...realEndpoint,
   getTerminalEndpoint: async () => ({ port: 4321, token: "t".repeat(32) }),
 }));
 

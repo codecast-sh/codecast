@@ -37,7 +37,7 @@ describe("validation", () => {
   });
 });
 
-import { parseTable } from "./ops";
+import { parseTable } from "./delimited";
 describe("parseTable", () => {
   test("sniffs CSV, TSV and semicolons; quoted fields keep commas and line breaks", () => {
     expect(parseTable('Name,Note,Amount\nPie,"a, b",12\n"Tart ""v2""","line\nbreak",8\n')).toEqual([["Name", "Note", "Amount"], ["Pie", "a, b", "12"], ['Tart "v2"', "line\nbreak", "8"]]);

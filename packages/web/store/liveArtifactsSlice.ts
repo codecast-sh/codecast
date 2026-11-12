@@ -71,11 +71,14 @@ export type LiveArtifactsSliceActions = {
   liveCheckpoint: (docId: string, label?: string) => void;
   /** Who may change the artifact: everyone who can open it ("team"), or its owner and `editors` ("owners"). Owner only. */
   liveSetEditAccess: (docId: string, edit: "team" | "owners", editors: string[]) => void;
+  /** A viewer asks the owner to let them edit. Resolves once the owner is notified. */
+  liveAskToEdit: (docId: string) => Promise<{ asked: boolean } | null>;
 };
 
 // The middleware wraps an asyncAction so its CALLER receives the server
 // result as a promise; the body returns nothing.
-type LiveSliceImpl = Omit<LiveArtifactsSliceActions, "applyLiveOps" | "liveDraft"> & {
+type LiveSliceImpl = Omit<LiveArtifactsSliceActions, "applyLiveOps" | "liveDraft" | "liveAskToEdit"> & {
+  liveAskToEdit: (docId: string) => void;
   applyLiveOps: (docId: string, layer: LiveLayer, ops: ArtifactOp[], clientId?: string) => void;
   liveDraft: (docId: string, op: "start" | "save" | "discard", draftAt?: number) => void;
 };
@@ -135,6 +138,9 @@ export function createLiveArtifactsSlice(): LiveArtifactsSliceActions {
       head.edit = edit;
       head.editors = editors;
     }),
+
+    // Nothing to paint: the owner's notification is the whole effect.
+    liveAskToEdit: asyncAction(function (this: LiveDraft, _docId: string) {}),
   };
   return impl as unknown as LiveArtifactsSliceActions;
 }

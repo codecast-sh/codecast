@@ -286,7 +286,15 @@ describe("command groups stay off the boot graph", () => {
     // machineMessages.ts for its max-lines cap; no new code). 351 after
     // mtimeGatedCache.ts, split out of ccAccounts.ts for its max-lines cap
     // (no new code).
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(351);
+    // 355 on 2026-11-11, four leaves that import no repo module:
+    // castInvocation.ts (how this process was invoked, read by stableContext.ts
+    // and the deploy paths), writeBudgetBackoff.ts (syncService.ts's backoff
+    // when Convex reports the write budget spent), and two contracts the
+    // barrels carry: contracts/browserStream.ts (the remote browser watch
+    // relay) and tasks/planState.ts. 356 the same day: stableContextHooks.ts,
+    // the hook script and installers split out of stableContext.ts for its
+    // max-lines cap (no new code).
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(356);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -381,7 +389,14 @@ describe("command groups stay off the boot graph", () => {
     // 4637 on 2026-11-10: contracts/inboxProjection.ts (+0.4, commandsSession,
     // the one command rule the server and the inbox share) and tmuxPaneState.ts
     // (+0.8, the idle-resume dialog a machine wake answers itself).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4637);
+    // 4652 on 2026-11-11: stableContext.ts (+19, the one combined stable-context
+    // read and the session-start fast path; its hook script and installers
+    // split into stableContextHooks.ts, both still loaded), the remote browser
+    // watch relay's contracts/browserStream.ts (+4.7), tasks/planState.ts
+    // (+2.9), castInvocation.ts (+2.1) and writeBudgetBackoff.ts (+2), less
+    // formatter.ts's cast decisions and patterns formatters, which moved
+    // behind the dynamic import in formatKnowledge.ts.
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4652);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -559,7 +574,12 @@ describe("command groups stay off the boot graph", () => {
     // 583 after keychainLock.ts and contracts/sessionEscalation.ts, the same two
     // files as on index.ts's graph above. 584 after mtimeGatedCache.ts, the
     // same split as on index.ts's graph.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(584);
+    // 589 on 2026-11-11, five leaves: browser/watchRelay.ts (the stream_browser
+    // relay loop, types only from watchServer.ts) with contracts/browserStream.ts,
+    // writeBudgetBackoff.ts, stepTimer.ts (a 17-line timing helper), and
+    // fastPath.ts, which stableContext.ts now reads. 590 with stableContextHooks.ts,
+    // the same max-lines split as on index.ts's graph.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(590);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

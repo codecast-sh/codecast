@@ -16,7 +16,7 @@
 // held rows of its time range that the server no longer returns.
 // Search results never enter mySends (a match below the held window would
 // break the run); they sit in mySendSearch.
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import type { MySendRow } from "@codecast/convex/convex/userSends";
@@ -24,6 +24,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { MAX_CACHED_MY_SENDS } from "../store/cacheRetention";
 import { applyCollectionFeed, useSyncCollection } from "./useSyncCollection";
 import { useServerAuthSettled } from "./useServerAuthSettled";
+import { useWatchEffect } from "./useWatchEffect";
 
 export type { MySendRow };
 
@@ -98,7 +99,7 @@ export function useMySends(): {
       .finally(() => { busy.current = false; setLoadingOlder(false); });
   }, [fetchPage]);
 
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!authSettled) return;
     // History can grow below a known end (the log is backfilled), so each
     // visit re-confirms it with one page when the walk gets there.

@@ -76,8 +76,20 @@ export function CommentsPanel({
     placeOf.has(root.key) ? placeOf.get(root.key) : root.anchor ? String(root.anchor) : undefined;
   const open = threads.filter((t) => !t.root.resolved);
   const resolved = threads.filter((t) => t.root.resolved);
+  // A thread whose element is gone is shown, but no longer counts as open.
+  const openCount = open.filter((t) => anchorOf(t.root) !== null).length;
   const shown = tab === "open" ? open : resolved;
-  const anchor = selection[0];
+  // Once words are in the new-comment box, it stays on the element it was started for: clicking elsewhere
+  // moves the selection, not the comment. Posting or emptying the box lets go.
+  const draftText = useInboxStore((s: any) => (s.drafts?.[`comment:live:${doc._id}:new`]?.draft_message as string | undefined) ?? "");
+  const [heldAnchor, setHeldAnchor] = useState<string | null>(null);
+  const hasDraft = draftText.trim().length > 0;
+  useWatchEffect(() => {
+    if (!hasDraft) setHeldAnchor(null);
+    else if (heldAnchor === null && selection[0]) setHeldAnchor(selection[0]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- holds the anchor the draft began on
+  }, [hasDraft]);
+  const anchor = heldAnchor ?? selection[0];
   // A thread opened from a link (?c=) shows wherever it is filed.
   const focusedResolved = focusKey ? threads.find((x) => x.root.key === focusKey)?.root.resolved : undefined;
   const focusKnown = focusedResolved !== undefined || (!!focusKey && threads.some((x) => x.root.key === focusKey));
@@ -116,7 +128,7 @@ export function CommentsPanel({
             onClick={() => setTab(k)}
             className={`h-6 px-2 rounded text-xs ${tab === k ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-dim hover:text-sol-text"}`}
           >
-            {k === "open" ? "Open" : "Resolved"} <span className="text-sol-text-dim tabular-nums">{k === "open" ? open.length : resolved.length}</span>
+            {k === "open" ? "Open" : "Resolved"} <span className="text-sol-text-dim tabular-nums">{k === "open" ? openCount : resolved.length}</span>
           </button>
         ))}
         <span className="flex-1" />
@@ -339,7 +351,7 @@ function CommentLine({ docId, c, anchor = c.anchor ? String(c.anchor) : undefine
     <div>
       <div className="flex items-center gap-1.5 text-meta">
         <span className={`font-medium truncate min-w-0 ${String(c.author ?? "").startsWith("s:") ? "text-sol-violet" : "text-sol-text"}`}>{String(c.author_name ?? "Someone")}</span>
-        {anchor === null ? <span className="text-sol-text-dim italic shrink-0" data-live-comment-detached>its {c.anchor && String(c.anchor).startsWith("c:") ? "cell" : "element"} was deleted</span> : anchor ? <AnchorLabel docId={docId} anchor={anchor} inline /> : null}
+        {anchor === null ? <span className="text-sol-text-dim italic shrink-0" data-live-comment-detached>its {c.anchor && String(c.anchor).startsWith("c:") ? "cell" : "element"} was deleted</span> : null}{anchor ? <AnchorLabel docId={docId} anchor={anchor} inline /> : null}
         <span className="flex-1" />
         <CommentTime ts={Number(c.created_at ?? c.at ?? 0)} edited={!!c.edited_at} />
         {onEdit && draft === null && (

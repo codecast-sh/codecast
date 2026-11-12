@@ -7,12 +7,15 @@
 // while the server searches the rest, and opens the session scrolled to that
 // message. j/k (or the arrows) walk it and open the selected message whole;
 // Enter jumps. Coming back restores the selection and the scroll.
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Check, Copy, CornerDownLeft, Filter, Search, X } from "lucide-react";
 import { useMySends, useMySendSearch, useMySendText, type MySendRow } from "../../hooks/useMySends";
 import { useTabActive } from "../../hooks/usePagePresence";
+import { useDebounce } from "../../hooks/useDebounce";
+import { useEventListener } from "../../hooks/useEventListener";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { matchesAction } from "../../shortcuts";
 import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
 import { scrollParentOf } from "../../lib/scrollWithin";
@@ -54,7 +57,7 @@ function Highlight({ text, terms }: { text: string; terms: string[] }) {
 
 function Chip({ children }: { children: ReactNode }) {
   return (
-    <span className="mx-0.5 inline-flex items-center rounded border border-sol-border/40 bg-sol-bg-alt px-1 align-[1px] font-mono text-[11px] leading-[16px] text-sol-text-dim">
+    <span className="mx-0.5 inline-flex items-center rounded border border-sol-border/40 bg-sol-bg-alt px-1 align-[1px] font-mono text-meta leading-[16px] text-sol-text-dim">
       {children}
     </span>
   );
@@ -144,7 +147,7 @@ const Row = memo(function Row({
         aria-hidden
         className={`absolute inset-y-1.5 left-0 w-[2px] rounded-full transition-opacity ${selected ? "bg-sol-blue opacity-100" : "opacity-0"}`}
       />
-      <time className="w-[52px] shrink-0 pt-[2px] text-right font-mono text-[11px] tabular-nums text-sol-text-dim">
+      <time className="w-[52px] shrink-0 pt-[2px] text-right font-mono text-meta tabular-nums text-sol-text-dim">
         {timeOf(row.timestamp)}
       </time>
       <div className="min-w-0 flex-1">
@@ -174,7 +177,7 @@ const Row = memo(function Row({
           <span className={`min-w-0 truncate ${selected ? "text-sol-text-muted" : "text-sol-text-dim"}`}>
             <Highlight text={row.session_title} terms={terms} />
           </span>
-          {row.project ? <span className="shrink-0 font-mono text-[11px] text-sol-text-dim/70">{row.project}</span> : null}
+          {row.project ? <span className="shrink-0 font-mono text-meta text-sol-text-dim/70">{row.project}</span> : null}
           <span className="ml-auto flex shrink-0 items-center gap-1">
             <span className={`flex items-center gap-1 ${selected ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
               {!filteredToSession ? (
@@ -214,6 +217,8 @@ const Row = memo(function Row({
 
 // Where the person was, so coming back from a session lands them on the same
 // message. Module state: it outlives the page's unmount, not a reload.
+const PASSIVE = { passive: true } as const;
+
 const memory: { selectedId: string | null; scrollTop: number; q: string; session: { id: string; title: string } | null } = {
   selectedId: null, scrollTop: 0, q: "", session: null,
 };
@@ -227,11 +232,7 @@ export function MyMessages() {
   const terms = useMemo(() => termsOf(q), [q]);
 
   // Debounced server search over everything typed, cached window or not.
-  const [serverQ, setServerQ] = useState(q);
-  useEffect(() => {
-    const t = setTimeout(() => setServerQ(q), 220);
-    return () => clearTimeout(t);
-  }, [q]);
+  const serverQ = useDebounce(q, 220);
   const search = useMySendSearch(serverQ);
   const searching = terms.length > 0 && (serverQ !== q || !search.ready);
 
@@ -309,19 +310,14 @@ export function MyMessages() {
     restored.current = true;
     if (memory.scrollTop > 0) scroller.scrollTop = memory.scrollTop;
   }, [scroller, items.length]);
-  useEffect(() => {
-    if (!scroller) return;
-    const onScroll = () => { memory.scrollTop = scroller.scrollTop; };
-    scroller.addEventListener("scroll", onScroll, { passive: true });
-    return () => scroller.removeEventListener("scroll", onScroll);
-  }, [scroller]);
-  useEffect(() => { memory.q = q; memory.session = session; memory.selectedId = selectedId; }, [q, session, selectedId]);
+  useEventListener("scroll", () => { if (scroller) memory.scrollTop = scroller.scrollTop; }, scroller, PASSIVE);
+  memory.q = q; memory.session = session; memory.selectedId = selectedId;
 
   // Page older history in as the bottom comes near.
   const virtualItems = virtualizer.getVirtualItems();
   const lastVisible = virtualItems[virtualItems.length - 1]?.index ?? 0;
   const { loadOlder, hasMore, loadingOlder } = feed;
-  useEffect(() => {
+  useWatchEffect(() => {
     if (!terms.length && !session && hasMore && !loadingOlder && items.length && lastVisible >= items.length - 25) loadOlder();
   }, [lastVisible, items.length, hasMore, loadingOlder, loadOlder, terms.length, session]);
 
@@ -371,39 +367,35 @@ export function MyMessages() {
     if (idx !== undefined) virtualizer.scrollToIndex(idx, { align: "auto" });
   }, [rows, rowIndexOfItem, virtualizer]);
 
-  useEffect(() => {
+  useEventListener("keydown", (e) => {
     if (!paneActive) return;
-    const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (target === searchRef.current) {
-        if (e.key === "ArrowDown" || (e.key === "Enter" && !selectedId)) { e.preventDefault(); searchRef.current?.blur(); move(e.key === "Enter" ? 0 : 1); return; }
-        if (e.key === "Enter") { e.preventDefault(); const r = rows.find((x) => x._id === selectedId); if (r) open(r, e.metaKey || e.ctrlKey); return; }
-        if (e.key === "Escape") { e.preventDefault(); if (q) setQ(""); else searchRef.current?.blur(); }
-        return;
-      }
-      if (keyBelongsElsewhere(target)) return;
-      if (e.metaKey && e.key !== "Enter") return;
-      if (target.closest?.('[role="menu"],[role="listbox"],[role="dialog"]')) return;
-      if (matchesAction(e, "list.down") || (e.key === "ArrowDown" && !e.ctrlKey)) { e.preventDefault(); move(1); return; }
-      if (matchesAction(e, "list.up") || (e.key === "ArrowUp" && !e.ctrlKey)) { e.preventDefault(); move(-1); return; }
-      if (e.key === "Enter") {
-        const r = rows.find((x) => x._id === selectedId);
-        if (r) { e.preventDefault(); open(r, e.metaKey || e.ctrlKey); }
-        return;
-      }
-      if (matchesAction(e, "list.search")) { e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select(); return; }
-      if (matchesAction(e, "list.first")) { e.preventDefault(); if (rows[0]) { setSelectedId(rows[0]._id); virtualizer.scrollToIndex(0); } return; }
-      if (e.key === "Escape") {
-        if (session) { e.preventDefault(); setSession(null); return; }
-        if (q) { e.preventDefault(); setQ(""); }
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [paneActive, move, open, rows, selectedId, q, session, virtualizer]);
+    const target = e.target as HTMLElement;
+    if (target === searchRef.current) {
+      if (e.key === "ArrowDown" || (e.key === "Enter" && !selectedId)) { e.preventDefault(); searchRef.current?.blur(); move(e.key === "Enter" ? 0 : 1); return; }
+      if (e.key === "Enter") { e.preventDefault(); const r = rows.find((x) => x._id === selectedId); if (r) open(r, e.metaKey || e.ctrlKey); return; }
+      if (e.key === "Escape") { e.preventDefault(); if (q) setQ(""); else searchRef.current?.blur(); }
+      return;
+    }
+    if (keyBelongsElsewhere(target)) return;
+    if (e.metaKey && e.key !== "Enter") return;
+    if (target.closest?.('[role="menu"],[role="listbox"],[role="dialog"]')) return;
+    if (matchesAction(e, "list.down") || (e.key === "ArrowDown" && !e.ctrlKey)) { e.preventDefault(); move(1); return; }
+    if (matchesAction(e, "list.up") || (e.key === "ArrowUp" && !e.ctrlKey)) { e.preventDefault(); move(-1); return; }
+    if (e.key === "Enter") {
+      const r = rows.find((x) => x._id === selectedId);
+      if (r) { e.preventDefault(); open(r, e.metaKey || e.ctrlKey); }
+      return;
+    }
+    if (matchesAction(e, "list.search")) { e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select(); return; }
+    if (matchesAction(e, "list.first")) { e.preventDefault(); if (rows[0]) { setSelectedId(rows[0]._id); virtualizer.scrollToIndex(0); } return; }
+    if (e.key === "Escape") {
+      if (session) { e.preventDefault(); setSession(null); return; }
+      if (q) { e.preventDefault(); setQ(""); }
+    }
+  });
 
   // A filter that hides the selection moves it to the first match.
-  useEffect(() => {
+  useWatchEffect(() => {
     if (selectedId && rows.length && !rowIndexOfItem.has(selectedId) && (terms.length || session)) setSelectedId(rows[0]._id);
   }, [rows, rowIndexOfItem, selectedId, terms.length, session]);
 
@@ -452,7 +444,7 @@ export function MyMessages() {
   );
 
   if (!feed.ready) {
-    return <div ref={listRef}>{toolbar}<SkeletonRows rows={8} className="px-3 pt-3" rowClassName="h-10" /></div>;
+    return <div ref={listRef}>{toolbar}<SkeletonRows rows={8} className="px-3 pt-3" rowClassName="h-10 rounded modern:rounded-control" /></div>;
   }
 
   return (
@@ -460,7 +452,7 @@ export function MyMessages() {
       {toolbar}
       {rows.length === 0 ? (
         terms.length || session ? (
-          searching ? <SkeletonRows rows={3} className="px-3 pt-3" rowClassName="h-10" /> : <EmptyState icon={Search} title={q ? `Nothing you typed matches “${q}”` : "No messages in this session"} />
+          searching ? <SkeletonRows rows={3} className="px-3 pt-3" rowClassName="h-10 rounded modern:rounded-control" /> : <EmptyState icon={Search} title={q ? `Nothing you typed matches “${q}”` : "No messages in this session"} />
         ) : (
           <EmptyState icon={Search} title="Nothing typed yet" />
         )

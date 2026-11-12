@@ -7,7 +7,7 @@ import { Suspense, useCallback, useMemo, useRef, useState, useSyncExternalStore,
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Archive, Check, Copy, Download, Link2, Lock, Maximize2, Minimize2, Plus, RotateCcw, Upload, Users, History, MessageSquare, MoreHorizontal, Redo2, Undo2, X } from "lucide-react";
-import { artifactSpec, type ArtifactElement, type ArtifactPosition, type ArtifactType } from "@codecast/shared/artifacts";
+import { artifactSpec, artifactView, type ArtifactElement, type ArtifactPosition, type ArtifactType } from "@codecast/shared/artifacts";
 import { useInboxStore } from "../../store/inboxStore";
 import { ShareControl } from "../ShareControl";
 import { policyTeamOf } from "@codecast/shared/contracts";
@@ -34,7 +34,6 @@ import { LIVE_VIEWS, MINIMAL_VIEWS, type LiveExport, type LiveImport, type Scree
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
-import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { duplicateLiveArtifact } from "../../lib/createLiveArtifact";
 import { Button } from "../ui/button";
@@ -254,7 +253,14 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
   }, [params]);
   const openVersion = useLiveVersions(doc._id).find((v) => v.rev === openRev);
   const draftLabel = useLiveDraftState(doc._id)?.label;
-  const commentCount = useLiveElements(doc._id, { layer: "comments" }).filter((c) => !c.parent && !c.resolved).length;
+  const commentRows = useLiveElements(doc._id, { layer: "comments" });
+  const openRoots = useMemo(() => commentRows.filter((c) => !c.parent && !c.resolved), [commentRows]);
+  // A thread whose element is gone (a deleted sheet cell) does not count as open.
+  const commentCount = useMemo(() => {
+    if (!spec.commentPlaces || openRoots.length === 0) return openRoots.length;
+    const places = spec.commentPlaces(artifactView(doc.doc_type, doc.title, elements), openRoots.map((r) => ({ key: r.key, anchor: r.anchor })));
+    return openRoots.filter((r) => places.get(r.key) !== null).length;
+  }, [spec, openRoots, elements, doc.doc_type, doc.title]);
   const typeStyle = docTypeStyle(doc.doc_type);
   const mod = isMac ? "⌘" : "Ctrl";
 
@@ -634,7 +640,6 @@ function AskToEdit({ doc, canEdit }: { doc: { _id: string; user_id?: string }; c
   // Asked once, remembered here, so a visit later does not ask again.
   const askedKey = `live-asked-edit:${doc._id}`;
   const [asked, setAsked] = useState(() => typeof localStorage !== "undefined" && localStorage.getItem(askedKey) === "1");
-  const askToEdit = useMutation(api.liveArtifacts.askToEdit);
   if (canEdit || !me || String(doc.user_id) === me) return null;
   return (
     <button
@@ -644,7 +649,7 @@ function AskToEdit({ doc, canEdit }: { doc: { _id: string; user_id?: string }; c
       disabled={asked}
       onClick={() => {
         setAsked(true);
-        void askToEdit({ doc_id: doc._id as any }).then(() => { localStorage.setItem(askedKey, "1"); toast.success("The owner was asked"); }).catch(() => { setAsked(false); toast.error("Could not ask the owner"); });
+        void useInboxStore.getState().liveAskToEdit(doc._id).then(() => { localStorage.setItem(askedKey, "1"); toast.success("The owner was asked"); }).catch(() => { setAsked(false); toast.error("Could not ask the owner"); });
       }}
       className="inline-flex items-center gap-1 h-6 px-1.5 rounded text-meta shrink-0 text-sol-text-muted bg-sol-bg-alt hover:text-sol-text disabled:opacity-60"
     >

@@ -1,31 +1,29 @@
 // The approval card's Yes records exactly what the card showed (trustApproval.ts).
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { AGENT_CONTEXT_ENV_VARS, collectTrustTargets, readRepoTrust, reviewRepoTrust, type TrustFinding } from "./trust.js";
+import { askTrustApproval as askReal, recordApprovedTrust as recordReal, trustSubject } from "./trustApproval.js";
 
 /** What the server's approvedRun answers; null = no live approved run. */
 let served: unknown = null;
 const asked: unknown[] = [];
-const real = { ...(await import("../remote/convexClient.js")) };
-mock.module("../remote/convexClient.js", () => ({
-  ...real,
-  convexClient: async () => ({
-    token: "tok",
-    api: { sessionDecisions: { approvedRun: "approvedRun", ask: "ask" } },
-    client: {
-      query: async () => structuredClone(served),
-      mutation: async (_ref: unknown, args: unknown) => {
-        asked.push(structuredClone(args));
-        return { short_id: "sd-9" };
-      },
+const connect = async () => ({
+  token: "tok",
+  api: { sessionDecisions: { approvedRun: "approvedRun", ask: "ask" } },
+  client: {
+    query: async () => structuredClone(served),
+    mutation: async (_ref: unknown, args: unknown) => {
+      asked.push(structuredClone(args));
+      return { short_id: "sd-9" };
     },
-  }),
-}));
+  },
+});
 
-const { AGENT_CONTEXT_ENV_VARS, collectTrustTargets, readRepoTrust, reviewRepoTrust } = await import("./trust.js");
-const { askTrustApproval, recordApprovedTrust, trustSubject } = await import("./trustApproval.js");
+const askTrustApproval = (root: string, f: TrustFinding[], env: NodeJS.ProcessEnv) => askReal(root, f, env, connect);
+const recordApprovedTrust = (root: string, decision: string) => recordReal(root, decision, connect);
 
 let repoRoot: string;
 let saved: Record<string, string | undefined>;

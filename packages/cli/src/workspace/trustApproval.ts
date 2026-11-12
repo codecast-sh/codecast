@@ -44,6 +44,9 @@ function realRoot(repoRoot: string): string {
   }
 }
 
+/** The server connection; tests pass a fake. */
+export type TrustConnect = () => Promise<{ client: any; token: string; api: any }>;
+
 async function client() {
   const { convexClient } = await import("../remote/convexClient.js");
   return convexClient({ timeoutMs: 20_000 });
@@ -58,11 +61,12 @@ export async function askTrustApproval(
   repoRoot: string,
   findings: TrustFinding[],
   env: NodeJS.ProcessEnv = process.env,
+  connect: TrustConnect = client,
 ): Promise<{ short_id?: string } | { error: string }> {
   const sessionId = sessionIdFromEnv(env);
   if (!sessionId) return { error: "no session to ask in" };
   try {
-    const { client: c, token, api } = await client();
+    const { client: c, token, api } = await connect();
     const result = await c.mutation(api.sessionDecisions.ask, {
       api_token: token,
       session_id: sessionId,
@@ -97,8 +101,9 @@ export function agentTrustLine(posted: { short_id?: string } | { error: string }
 export async function recordApprovedTrust(
   repoRoot: string,
   decisionId: string,
+  connect: TrustConnect = client,
 ): Promise<{ approved: string[]; unseen: string[] }> {
-  const { client: c, token, api } = await client();
+  const { client: c, token, api } = await connect();
   const run: { argv: string[]; cwd?: string; approves?: RunSubject } | null = await c.query(api.sessionDecisions.approvedRun, {
     api_token: token,
     decision_id: decisionId,

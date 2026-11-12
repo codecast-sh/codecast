@@ -106,8 +106,6 @@ const NOT_THE_ACTIONS_WRITE: Record<string, string> = {
     "cancels a cast migrate batch; a resource offload batch cancels through cancelResourceOffload in the same handler",
   "components/ConfigEditor.tsx users.sendConfigCommand":
     "lists, reads and writes agent config files through the daemon; editLineProfile sends only line.toml edits through the same command rail",
-  "hooks/useResourceActions.ts resourceOffload.start":
-    "the preflight's dry run writes nothing; the real start goes through startResourceOffload",
 };
 
 describe("surfaces write through the store action that owns the write", () => {

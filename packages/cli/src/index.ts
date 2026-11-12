@@ -11525,7 +11525,7 @@ program
       }
 
       if (options.json) { console.log(JSON.stringify(result)); return; }
-      const { formatDecisionsResults } = await import("./formatter.js");
+      const { formatDecisionsResults } = await import("./formatKnowledge.js");
       console.log(formatDecisionsResults(result));
     } catch (error) {
       console.error("Decisions failed:", error instanceof Error ? error.message : error);
@@ -11638,7 +11638,7 @@ program
           process.exit(1);
         }
 
-        const { formatPatternShow } = await import("./formatter.js");
+        const { formatPatternShow } = await import("./formatKnowledge.js");
         console.log(formatPatternShow(result));
       } catch (error) {
         console.error("Show failed:", error instanceof Error ? error.message : error);
@@ -11668,7 +11668,7 @@ program
           process.exit(1);
         }
 
-        const { formatPatternsResults } = await import("./formatter.js");
+        const { formatPatternsResults } = await import("./formatKnowledge.js");
         console.log(formatPatternsResults(result));
       } catch (error) {
         console.error("Search failed:", error instanceof Error ? error.message : error);
@@ -11729,7 +11729,7 @@ program
         process.exit(1);
       }
 
-      const { formatPatternsResults } = await import("./formatter.js");
+      const { formatPatternsResults } = await import("./formatKnowledge.js");
       console.log(formatPatternsResults(result));
     } catch (error) {
       console.error("Learn failed:", error instanceof Error ? error.message : error);

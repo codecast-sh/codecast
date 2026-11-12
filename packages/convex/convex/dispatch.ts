@@ -1647,6 +1647,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (!ctx.db.normalizeId("docs", docId)) return null;
     return await (ctx as any).runMutation(api.liveArtifacts.setEditAccess, { doc_id: docId, edit, editors });
   },
+  liveAskToEdit: async (ctx, _userId, [docId]: [string]) => {
+    if (!ctx.db.normalizeId("docs", docId)) return null;
+    return await (ctx as any).runMutation(api.liveArtifacts.askToEdit, { doc_id: docId });
+  },
   liveCheckpoint: async (ctx, _userId, [docId, label]: [string, string | undefined]) => {
     if (!ctx.db.normalizeId("docs", docId)) return null;
     return await (ctx as any).runMutation(api.liveArtifacts.checkpoint, { doc_id: docId, ...(label ? { label } : {}) });

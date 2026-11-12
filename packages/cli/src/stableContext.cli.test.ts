@@ -5,6 +5,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { SNIPPET_CATALOG } from "@codecast/shared/contracts";
+import { refreshStableCache } from "./stableContext.js";
 
 const scratchHomes: string[] = [];
 const cliEntry = path.join(import.meta.dir, "index.ts");
@@ -54,6 +55,21 @@ function runCli(
   });
 }
 
+// A cold start waits at most STABLE_COLD_BUDGET_MS of wall clock for each read
+// and prints nothing when none arrived, a race a loaded CI runner loses. Warm
+// the scope first, as the daemon's warmer does, so the block is deterministic.
+async function warmScope(home: string, port: number, cwd: string): Promise<void> {
+  await refreshStableCache(
+    { auth_token: "test-token", convex_url: `http://127.0.0.1:${port}` },
+    { mode: "solo", global: false, cwd, cacheDir: path.join(home, ".codecast", "stable-cache") },
+  );
+}
+
+async function until(check: () => boolean, ms = 10_000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!check() && Date.now() < end) await new Promise((r) => setTimeout(r, 25));
+}
+
 afterEach(() => {
   for (const home of scratchHomes.splice(0)) {
     fs.rmSync(home, { recursive: true, force: true });
@@ -92,6 +108,7 @@ describe("stable-context CLI isolation", () => {
         stable_mode: "solo",
         auto_update: false,
       }));
+      await warmScope(home, address.port, "/tmp/project");
       // A Commander-routed stable-context command would run preAction and emit
       // this debug line to stderr. The hidden protocol path must not.
       const result = await runCli(
@@ -116,6 +133,8 @@ Use --mine for only your sessions, -g for all teams.
 </stable-context>
 `,
       );
+      // The record of what was injected is posted by a detached child after the hook exits.
+      await until(() => recordCalls > 0);
       expect(recordCalls).toBe(1);
       expect(fs.existsSync(path.join(home, ".codecast", "daemon.pid"))).toBe(false);
     } finally {
@@ -143,6 +162,7 @@ Use --mine for only your sessions, -g for all teams.
         stable_mode: "solo",
         auto_update: false,
       }));
+      await warmScope(home, address.port, "/tmp/project");
 
       const codex = await runCli(
         home,
