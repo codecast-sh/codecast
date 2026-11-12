@@ -6,7 +6,8 @@ import { act, useRef } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
-import { useZenBarPeek, ZenTopEdge } from "../ZenBarPeek";
+import { ZenTopEdge } from "../ZenBarPeek";
+import { useZenBarPeek } from "../../hooks/useZenBarPeek";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>");
 const restoreGlobals = replaceGlobals({
