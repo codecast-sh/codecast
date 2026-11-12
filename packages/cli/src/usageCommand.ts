@@ -273,7 +273,9 @@ export function renderAccountUsage(rows: AccountUsageRow[], now: number, c: Reco
     const age = r.fetched_at ? ` ${c.dim}${formatAgo(now - r.fetched_at)}${c.reset}` : "";
     return `${r.active ? "●" : "○"} ${pad(r.name, width)} ${windows}  ${tone}${r.status}${c.reset}${age}`;
   });
-  const targets = rows.filter((r) => r.switch_target).length;
-  lines.push(`${c.dim}${targets} of ${rows.length} accounts are auto-switch targets now (headroom, reachable, not reserved)${c.reset}`);
+  const targets = rows.filter((r) => r.switch_target);
+  lines.push(`${c.dim}${targets.length} of ${rows.length} accounts are auto-switch targets now (headroom, reachable, not reserved)${c.reset}`);
+  const best = [...targets].sort((a, b) => (a.worst ?? 100) - (b.worst ?? 100))[0];
+  if (best) lines.push(`${c.dim}Sessions parked on a limit continue now on ${best.name}, workers included:${c.reset} cast accounts use ${best.name} --continue --yes --include-subagents`);
   return lines.join("\n");
 }
