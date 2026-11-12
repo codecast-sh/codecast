@@ -1213,6 +1213,7 @@ async function askFirstGate(
       options: [{ label: APPROVE_FOR_SESSION }, { label: DENY }],
       context_md,
       category: "access",
+      vault: true,
       blocking: true,
     });
     if (asked?.error) return { error: `Could not ask for ${row.name}: ${asked.error}` };
