@@ -57,7 +57,9 @@ function budget(): ArtifactOp[] {
   const rows: string[][] = [["Category", "Budgeted", "Actual", "Difference", "Used"]];
   items.forEach(([name, plan, actual], i) => rows.push([String(name), String(plan), String(actual), `=B${i + 2}-C${i + 2}`, `=IF(B${i + 2}=0,0,C${i + 2}/B${i + 2})`]));
   const total = items.length + 2;
-  rows.push(["Total", `=SUM(B2:B${total - 1})`, `=SUM(C2:C${total - 1})`, `=B${total}-C${total}`, `=IF(B${total}=0,0,C${total}/B${total})`]);
+  // Totals sum from row 2 down to the row above them, so a line inserted above Total counts too.
+  const above = (c: string) => `=SUM(OFFSET(${c}2,0,0,ROW()-ROW(${c}2)))`;
+  rows.push(["Total", above("B"), above("C"), `=B${total}-C${total}`, `=IF(B${total}=0,0,C${total}/B${total})`]);
   b.add((m) => gridOps(m, DEFAULT_TAB, 1, 1, rows));
   b.add((m) => styleOps(m, DEFAULT_TAB, rect(1, 1, 5, 1), { b: true }));
   b.add((m) => styleOps(m, DEFAULT_TAB, rect(1, total, 5, total), { b: true, bd: "t" }));
@@ -82,7 +84,7 @@ function timesheet(now = new Date()): ArtifactOp[] {
     const r = i + 2;
     rows.push([d, iso(monday + i), "9:00", i === 4 ? "15:30" : "17:30", "0:30", `=IF(D${r}="","",(D${r}-C${r}-E${r})*24)`, i % 2 ? "Website" : "Launch"]);
   });
-  rows.push(["Total", "", "", "", "", "=SUM(F2:F6)", ""]);
+  rows.push(["Total", "", "", "", "", "=SUM(OFFSET(F2,0,0,ROW()-ROW(F2)))", ""]);
   b.add((m) => gridOps(m, DEFAULT_TAB, 1, 1, rows));
   b.add((m) => styleOps(m, DEFAULT_TAB, rect(1, 1, 7, 1), { b: true }));
   b.add((m) => styleOps(m, DEFAULT_TAB, rect(1, 7, 7, 7), { b: true, bd: "t" }));

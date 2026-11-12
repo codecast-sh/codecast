@@ -592,7 +592,16 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
           readOnly={readOnlyDoc}
           now={now}
           onRefresh={refresh}
-          onChange={(query) => apply(tabPatchOps(S.current.model, activeTabId, { query: query as unknown as Json, refreshed_at: null, query_error: null }))}
+          empty={tab.rows <= 1}
+          onChange={(query) => {
+            const m = S.current.model, old = tab.meta.query!.source;
+            // A tab still named after its source ("Tasks", "Tasks 2") follows the new one.
+            const named = tab.meta.name === QUERY_LABEL[old] || tab.meta.name.startsWith(`${QUERY_LABEL[old]} `);
+            const name = named && query.source !== old ? uniqueTabName({ ...m, tabs: m.tabs.filter((t) => t.id !== activeTabId) }, QUERY_LABEL[query.source]) : undefined;
+            // One write for the tab itself; the rename's other ops repoint formulas that name the tab.
+            const repoint = name ? renameTabOps(m, activeTabId, name).filter((o) => o.k !== `tab:${activeTabId}`) : [];
+            apply([...tabPatchOps(m, activeTabId, { query: query as unknown as Json, refreshed_at: null, query_error: null, ...(name ? { name } : {}) }), ...repoint]);
+          }}
         />
       )}
       <div

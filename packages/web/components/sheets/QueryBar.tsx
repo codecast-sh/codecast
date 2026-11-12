@@ -30,8 +30,10 @@ function Chip({ label, value, options, onPick, disabled }: { label: string; valu
   );
 }
 
-export function QueryBar({ query, refreshedAt, error, refreshing, readOnly, now, onChange, onRefresh }: {
+export function QueryBar({ query, refreshedAt, error, refreshing, readOnly, now, empty, onChange, onRefresh }: {
   query: TabQuery;
+  /** Loaded, and nothing matched (the header row alone). */
+  empty: boolean;
   refreshedAt?: number;
   error?: string | null;
   refreshing: boolean;
@@ -65,7 +67,7 @@ export function QueryBar({ query, refreshedAt, error, refreshing, readOnly, now,
         <Chip label="Status" value={query.status ?? ""} disabled={readOnly} options={["", "all", ...TASK_STATUS_CATEGORIES].map((s) => ({ v: s, text: STATUS_LABEL[s] ?? s }))} onPick={(v) => set({ status: v || undefined })} />
       )}
       <span className="text-sol-text-dim">{refreshedAt ? `updated ${ago(refreshedAt, now)}` : "loading"}</span>
-      {error && <span className="text-sol-red truncate">{error}</span>}
+      {error ? <span className="text-sol-red truncate">{error}</span> : empty && refreshedAt ? <span className="sheet-query-chip">0 {QUERY_LABEL[query.source].toLowerCase()}</span> : null}
       <span className="flex-1" />
       <button type="button" className="sheet-query-refresh" onClick={onRefresh} disabled={refreshing || readOnly}>
         <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} /> Refresh

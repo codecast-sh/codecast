@@ -31,3 +31,26 @@ describe("sheet templates", () => {
     expect(read("timesheet", 2, 2)).toBe("2026-11-09");
   });
 });
+
+describe("adding a line to a template", () => {
+  test("a row inserted above Budget's Total takes the row above's formats and counts in the total", async () => {
+    const { structuralOps, inputOps } = await import("./ops");
+    let els: import("../core").ArtifactElement[] = [];
+    const all: import("../core").ArtifactOp[] = [...SHEET_TEMPLATES.find((t) => t.id === "budget")!.ops(new Date(2026, 10, 11, 12))];
+    const apply = (ops: import("../core").ArtifactOp[]) => {
+      all.push(...ops);
+      els = [...foldOps(new Map(), all)].filter(([, st]) => !(st as { deleted?: boolean }).deleted).map(([k, st]) => toElement(k, st));
+    };
+    apply([]);
+    let model = buildModel(els);
+    const tab = model.tabs[0].id;
+    apply(structuralOps(model, tab, "row", 8, 1));
+    model = buildModel(els);
+    apply(inputOps(model, tab, [{ col: 1, row: 8, input: "Insurance" }, { col: 2, row: 8, input: "500" }, { col: 3, row: 8, input: "600" }]));
+    model = buildModel(els);
+    const el = model.byId.get(tab)!.cells.get(8 * 32768 + 2);
+    expect(el).toMatchObject({ nf: "currency" });
+    const info = workbookFor(model).cell(tab, 2, 9);
+    expect(formatValue(info?.value ?? null, styleOf(model.byId.get(tab)!.cells.get(9 * 32768 + 2)), info?.implied)).toBe("$26,300");
+  });
+});
