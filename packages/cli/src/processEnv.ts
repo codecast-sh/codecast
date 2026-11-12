@@ -12,7 +12,7 @@ import { noTerminal } from "./psTerminal.js";
 
 /** The variables that name the session a process works for (sessionIdFromEnv reads them). */
 export const SESSION_ENV_KEYS = ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODECAST_SESSION_ID", "CODECAST_MANAGED_SESSION"];
-const KEYS = [...SESSION_ENV_KEYS, "TMUX", "TERM_PROGRAM", "CLAUDE_SECURESTORAGE_CONFIG_DIR"];
+const KEYS = [...SESSION_ENV_KEYS, "TMUX", "TERM_PROGRAM", "CLAUDE_SECURESTORAGE_CONFIG_DIR", "CLAUDE_CODE_OAUTH_TOKEN"];
 
 /** An environment that names no session: for what the daemon starts on its own behalf. */
 export function withoutSessionIds<T extends Record<string, string | undefined>>(env: T): T {
