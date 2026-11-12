@@ -265,24 +265,30 @@ const ShellBanners = memo(function ShellBanners() {
     <ErrorBoundary name="Banners" level="inline">
       <StatusNoticeStack />
       <ConnectionBanner />
-      <StorageHealthBanner />
-      <SetupPromptBanner />
-      <NewSnippetsBanner />
-      <OrgIntroAnywhere />
-      <FeatureOfferAnywhere />
-      <ThemeIntroAnywhere />
       <CliOfflineBanner />
       <TmuxMissingBanner />
-      <SeatBanner />
-      {/* The nudges share one slot, in priority order: only the first that
-          renders shows (globals.css [data-nudge-slot]), and dismissing it
-          brings up the next. Stacked, a new account met four at once. */}
-      <div data-nudge-slot>
-        <NativeAppBanner />
-        <TeamDomainBanner />
-        <NotificationNudgeBanner />
-        <SharingSetupBanner />
-        <TeamSharingNudgeBanner />
+      {/* The strips in the flow, in priority order. In Modern only the first
+          that renders shows (globals.css [data-cc-strips]) and dismissing it
+          brings up the next; stacked, a new account met two to four strips
+          above every page. */}
+      <div data-cc-strips>
+        <StorageHealthBanner />
+        <SetupPromptBanner />
+        <SeatBanner />
+        <NewSnippetsBanner />
+        <OrgIntroAnywhere />
+        <FeatureOfferAnywhere />
+        <ThemeIntroAnywhere />
+        {/* The nudges share one slot, in priority order: only the first that
+            renders shows (globals.css [data-nudge-slot]), and dismissing it
+            brings up the next. Stacked, a new account met four at once. */}
+        <div data-nudge-slot>
+          <NativeAppBanner />
+          <TeamDomainBanner />
+          <NotificationNudgeBanner />
+          <SharingSetupBanner />
+          <TeamSharingNudgeBanner />
+        </div>
       </div>
       <DeviceSetupDialog />
     </ErrorBoundary>

@@ -350,6 +350,10 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
   })));
   const railMoreOffered = railFocusOffered(focusFacts);
   const railIsFocused = railFocused(focusFacts);
+  // Modern opens every rail on its daily pages (navRegistry's "keep" rows:
+  // Inbox, Decisions, Chat, Tasks, Docs, Calls) with the rest behind More,
+  // for everyone, until the person chooses to see every page.
+  const modernFocus = { offered: true, focused: focusFacts.everything !== true };
   const isWindows = pathname?.startsWith("/windows");
   const isTeamActivity = pathname === "/team/activity" || pathname?.startsWith("/team/activity");
   const isChat = pathname === "/chat" || pathname?.startsWith("/chat/");
@@ -922,7 +926,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
   );
 
   // The Modern style draws its own rail (lib/navRegistry) from the same data.
-  if (modern) return <ModernSidebar {...{ isMobileOpen, onMobileClose, isNarrow, scope, peek, pathname, titlebarStripRef, pinnedRail, taskViewItems, docViewItems, decisionViewItems, viewSectionOverride, setViewSectionOverride, bookmarkRows, folderRows, appFooter, openCompose }} counts={{ bookmarks: bookmarks?.length ?? 0, folders: computedDirectories.length }} hasTeam={!!activeTeam} hasTeams={!!teams?.length} focus={{ offered: railMoreOffered, focused: railIsFocused }} />;
+  if (modern) return <ModernSidebar {...{ isMobileOpen, onMobileClose, isNarrow, scope, peek, pathname, titlebarStripRef, pinnedRail, taskViewItems, docViewItems, decisionViewItems, viewSectionOverride, setViewSectionOverride, bookmarkRows, folderRows, appFooter, openCompose }} counts={{ bookmarks: bookmarks?.length ?? 0, folders: computedDirectories.length }} hasTeam={!!activeTeam} hasTeams={!!teams?.length} focus={modernFocus} />;
   return (
     <nav
       data-sv-nav

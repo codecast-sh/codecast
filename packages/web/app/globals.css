@@ -5153,6 +5153,12 @@ diffs-container {
 [data-nudge-slot] > [data-nudge] ~ [data-nudge] {
   display: none;
 }
+/* Modern: one strip above the page at a time. The first child of the strips
+   line that draws a banner shows; every later one waits its turn
+   (DashboardLayout). */
+.modern-style [data-cc-strips] > :is([data-cc-banner], :has([data-cc-banner])) ~ :is([data-cc-banner], :has([data-cc-banner])) {
+  display: none;
+}
 
 .minimal-style [data-cc-banner] {
   border-bottom: 1px solid var(--cc-panel-rule);
