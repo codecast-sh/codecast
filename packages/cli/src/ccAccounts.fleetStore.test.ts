@@ -18,7 +18,7 @@ import {
   readFleetState,
   listProfiles,
   writeAccountToken,
-  drawsLinePool,
+  drawsPool,
   fleetStoreEnabled,
   getAccountsHeartbeatPayload,
   switchFleetTo,
@@ -126,7 +126,7 @@ describe("fleet store (sandboxed $HOME)", () => {
     expect(launchAccountPrefix(undefined)).toEqual({ prefix: "", account: undefined });
   });
 
-  describe("a cloud host drawing on its team's line pool", () => {
+  describe("a cloud host drawing on the pool", () => {
     const POOL = "sk-ant-oat01-" + "p".repeat(90);
     const addCopy = (name: string, email: string, shareId: string) => {
       writeAccountToken(name, POOL);
@@ -138,7 +138,7 @@ describe("fleet store (sandboxed $HOME)", () => {
 
     it("without a copy keeps the pushed login: no fleet store, no launch account", async () => {
       process.env.CODECAST_REMOTE_DEVICE = "1";
-      expect(drawsLinePool()).toBe(false);
+      expect(drawsPool()).toBe(false);
       expect(fleetStoreEnabled()).toBe(false);
       expect(await maintainFleetStore(now)).toBeNull();
       expect(readFleetState()).toBeNull();
@@ -149,7 +149,7 @@ describe("fleet store (sandboxed $HOME)", () => {
       addCopy("pool-a", "a@x.com", "account_shares_a");
       expect(fleetStoreEnabled()).toBe(true);
       const did = await maintainFleetStore(now);
-      expect(did).toContain("from the line pool");
+      expect(did).toContain("from the pool");
       // Only a pool copy, never one of the host's own profiles or its pushed login.
       expect(readFleetState()?.profile).toBe("pool-a");
       expect(launchProfileName(now)).toBe("pool-a");

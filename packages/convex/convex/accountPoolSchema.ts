@@ -2,31 +2,39 @@ import { defineTable } from "convex/server";
 import { v } from "convex/values";
 
 /**
- * The team's shared account pool (accountPool.ts): a person's Claude account
- * opened to one of their teams, the way device_shares opens a machine. Every
- * teammate's machines then run on it as one more saved profile.
+ * The account pool (accountPool.ts). A person's Claude account reaches every
+ * one of their own machines by default (a personal row, no team), and a team
+ * when they open it to one, the way device_shares opens a machine. Every
+ * machine that draws on it runs it as one more saved profile.
  */
 export const accountPoolTables = {
-  // One row per account per team; its presence is the whole fact, as for
-  // device_shares. Membership is the access rule: a share counts only while
-  // its contributor is on the team, and a machine draws on it only while its
-  // owner is too (accountPool.shareCounts).
+  // One personal row per account (team_id absent): the account on every one
+  // of its owner's machines, written by default (accountPool
+  // .ensurePersonalShares). And one row per account per team it is opened
+  // to, as for device_shares: its presence is the whole fact. The owner's
+  // machines draw an account through one row (accountPool.servingRow); a
+  // teammate's only while both are on the team (accountPool.mayDraw).
   account_shares: defineTable({
     user_id: v.id("users"),
     provider: v.literal("claude"),
     // The account, by the email every account read here keys on
     // (fallbackProfiles, fleetAccount). Lowercased.
     email: v.string(),
-    // The machine that keeps the account's setup-token and seals copies of it
-    // to every teammate's machine. Its heartbeat is the one home of the
-    // account's usage meter.
+    // The machine preferred to keep the account's setup-token and seal copies
+    // of it. Any of the owner's machines holding a live token takes over when
+    // this one stops (accountPool.sealerFor). The sealer's heartbeat is the
+    // one home of the account's usage meter.
     holder_device_id: v.string(),
-    team_id: v.id("teams"),
+    // Absent: the personal row, the owner's machines alone.
+    team_id: v.optional(v.id("teams")),
     // The kinds of work that may draw on the account besides the team's
     // members' own machines. "line": the team's line hosts (cloud hosts with
     // line_slots) get a sealed copy and run their stations on it. Absent: the
     // team pool alone.
     pools: v.optional(v.array(v.string())),
+    // Personal row only: the owner's machines the account is narrowed to.
+    // Absent: every one of them.
+    device_ids: v.optional(v.array(v.string())),
     shared_at: v.number(),
   })
     .index("by_team", ["team_id"])
