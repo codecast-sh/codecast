@@ -20,6 +20,16 @@ export type BlogPost = {
 
 export const POSTS: BlogPost[] = [
   {
+    slug: "agents-in-your-own-chrome",
+    title: "Your coding agent can check the page in your own Chrome",
+    dek: "Codecast lets a coding agent open pages in the Chrome you already use, with your logins, in a background tab of its own. Its screenshots and the errors the page logged come back into the conversation, so you see what it saw without switching windows.",
+    author: "the codecast team",
+    date: "2026-11-11",
+    dateLabel: "November 11, 2026",
+    readingMinutes: 5,
+    cover: { src: "/blog/agents-in-your-own-chrome/pricing-reply.png", alt: "A Codecast conversation where Claude reports on the codecast.sh pricing page, with its screenshot of the page inline and the console error from the first load" },
+  },
+  {
     slug: "claude-code-history-on-day-one",
     title: "Your old Claude Code sessions, on the day you install Codecast",
     dek: "By the time most people try Codecast, they have months of Claude Code sessions sitting in files on their laptop. When you sign in on a machine, Codecast now uploads all of them in the background. The ones from the past week go in your inbox. The rest are in search and open in full, from the first day.",
