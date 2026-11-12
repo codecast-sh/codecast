@@ -22,7 +22,7 @@ import { convexPreconnectPlugin } from "./plugins/convexPreconnect";
 import { uiFontPreloadPlugin } from "./plugins/uiFontPreload";
 import { precacheScope } from "./plugins/precacheScope";
 import autoprefixer from "autoprefixer";
-import { APP_SHELL_GLOB_IGNORES, APP_SHELL_GLOB_PATTERNS } from "./vite.pwa";
+import { APP_SHELL_GLOB_IGNORES, APP_SHELL_GLOB_PATTERNS, NAVIGATION_ROUTE } from "./vite.pwa";
 
 const appShell = precacheScope();
 
@@ -115,15 +115,11 @@ export default defineConfig(({ mode, command }) => ({
         // Boot's common chunk (3.4 MB) is over workbox's 2 MiB default, which
         // would silently drop it from the precache and break offline boot.
         maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
-        navigateFallback: "/index.html",
-        // Real server endpoints (server/index.ts) — never serve the SPA shell
-        // for these. /a/ is the server-rendered artifact page: without the
-        // denylist entry, a visitor with the SW installed would get the cached
-        // SPA shell instead of the static page. /share/ is server-rendered
-        // too (server/share.ts: the payload-inlined page, or the redirect a
-        // conversation link takes), and /i/ is an install script.
-        navigateFallbackDenylist: [/^\/api\//, /^\/download\//, /^\/install/, /^\/a\//, /^\/share\//, /^\/i\//],
+        // Explicitly off: vite-plugin-pwa fills in "index.html" when unset, and that
+        // route answers every navigation from the precache ahead of NAVIGATION_ROUTE.
+        navigateFallback: null,
         runtimeCaching: [
+          NAVIGATION_ROUTE,
           // Hashed build files the precache leaves out (a grammar, an icon, a
           // marketing page): cached once fetched, so they work offline after
           // first use. Their names change with their content, so a cached one

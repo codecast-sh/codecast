@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { OutputBundle, OutputChunk } from "rollup";
-import { APP_SHELL_GLOB_IGNORES, APP_SHELL_GLOB_PATTERNS } from "../../vite.pwa";
+import { readFileSync } from "node:fs";
+import { APP_SHELL_GLOB_IGNORES, APP_SHELL_GLOB_PATTERNS, NAVIGATION_ROUTE, SHELL_DENYLIST } from "../../vite.pwa";
 import { appShellFiles, precacheScope } from "../../plugins/precacheScope";
 
 describe("offline app shell precache", () => {
@@ -55,5 +56,33 @@ describe("offline app shell precache", () => {
       .map((url) => ({ url, revision: null, size: 1 }));
     const { manifest } = await scope.manifestTransform(entries);
     expect(manifest.map((e) => e.url)).toEqual(["index.html", "favicon.ico", "assets/main.js"]);
+  });
+
+  describe("navigations (ct-92522)", () => {
+    const matches = NAVIGATION_ROUTE.urlPattern as (o: { request: { mode: string }; url: URL }) => boolean;
+    const nav = (path: string, mode = "navigate") => matches({ request: { mode }, url: new URL(path, "https://codecast.sh") });
+
+    test("go to the network first, never answered from a stored page", () => {
+      expect(NAVIGATION_ROUTE.handler).toBe("NetworkFirst");
+      expect(NAVIGATION_ROUTE.options?.cacheableResponse).toEqual({ statuses: [] });
+      expect(NAVIGATION_ROUTE.options?.precacheFallback).toEqual({ fallbackURL: "/index.html" });
+      expect(NAVIGATION_ROUTE.options?.networkTimeoutSeconds).toBeGreaterThan(0);
+    });
+
+    test("cover app pages and leave server endpoints and subresources alone", () => {
+      for (const p of ["/", "/pricing", "/inbox", "/conversation/abc", "/blog/post"]) expect(nav(p)).toBe(true);
+      for (const p of ["/api/x", "/download/mac", "/install.sh", "/a/1", "/share/2", "/i/3"]) expect(nav(p)).toBe(false);
+      expect(nav("/assets/index-abc.js", "cors")).toBe(false);
+    });
+
+    test("the matcher serialized into sw.js repeats the denylist exactly", () => {
+      expect(String(NAVIGATION_ROUTE.urlPattern)).toContain(`/${SHELL_DENYLIST.source}/`);
+    });
+
+    test("the worker no longer answers every navigation from its precache", () => {
+      const config = readFileSync(new URL("../../vite.config.ts", import.meta.url), "utf8");
+      expect(config.match(/navigateFallback\w*\s*:[^,\n]*/g)).toEqual(["navigateFallback: null"]);
+      expect(config).toMatch(/runtimeCaching:\s*\[\s*NAVIGATION_ROUTE,/);
+    });
   });
 });
