@@ -2069,8 +2069,10 @@ export async function notifyStuckSend(
 ): Promise<void> {
   const giveUp = reach === "gone";
   const senderConv = await ctx.db.get(msg.from_conversation_id);
-  if (!senderConv) {
-    // Sender's session is gone — nowhere to report; just stop re-evaluating this row.
+  // A sender the user killed has nobody to read the receipt, and queuing it would revive the
+  // killed agent just to tell it about an old send (enqueue clears the kill).
+  if (!senderConv || senderConv.inbox_killed_at || senderConv.status === "completed") {
+    // Sender's session is gone or stopped — nowhere to report; just stop re-evaluating this row.
     await ctx.db.patch(msg._id, { sender_notified_at: Date.now() });
     if (giveUp) await patchPendingMessageStatus(ctx, msg, { status: "cancelled" as const });
     return;

@@ -16719,6 +16719,22 @@ async function resolveTaskId(config: any, siteUrl: string, idInput: string): Pro
   if (!isShortId && input.length > 16) return input;
 
   try {
+    if (isShortId) {
+      // One indexed row by short id, under the conversation-access rule, so a
+      // trigger armed under another account (a team bot on a remote daemon) is
+      // manageable too. Never the whole list: a busy account's every trigger is
+      // 13 MB and 4 s on the server, and that list timing out left trigger runs
+      // unable to report for hours (tr-5342, 2026-11-12).
+      const response = await cliFetchRead(`${siteUrl}/cli/tasks/resolve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ api_token: config.auth_token, ref: input }),
+      });
+      const resolved = await response.json();
+      if (resolved?.error) return notFound(`Could not resolve ${input}: ${cliErrorMessage(resolved.error)}`);
+      if (resolved && typeof resolved === "object" && resolved._id) return resolved._id;
+      return exitNotFound("trigger", input, LIST_TRIGGERS);
+    }
     const response = await cliFetchRead(`${siteUrl}/cli/tasks/list`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -16730,20 +16746,6 @@ async function resolveTaskId(config: any, siteUrl: string, idInput: string): Pro
     }
     const exact = tasks.find((t: any) => t.short_id && t.short_id.toLowerCase() === input.toLowerCase());
     if (exact) return exact._id;
-    if (isShortId) {
-      // Not in the own-only list: a trigger armed under another account (a
-      // team bot on a remote daemon) is still manageable when this user can
-      // view its conversation; resolve it through that rule.
-      const shared = await cliFetchRead(`${siteUrl}/cli/tasks/resolve`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ api_token: config.auth_token, ref: input }),
-      })
-        .then((r) => r.json())
-        .catch(() => null);
-      if (shared && typeof shared === "object" && shared._id) return shared._id;
-      return exitNotFound("trigger", input, LIST_TRIGGERS);
-    }
     const matches = tasks.filter((t: any) => t._id.endsWith(input));
     if (matches.length === 0) return exitNotFound("trigger", input, LIST_TRIGGERS);
     if (matches.length > 1) {

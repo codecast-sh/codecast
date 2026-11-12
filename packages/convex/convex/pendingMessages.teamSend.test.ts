@@ -519,6 +519,22 @@ describe("settled recipient recovery end to end", () => {
     expect((await collectDeliverableForOwner(ctx as any, "uBob" as any, "devBob")).map(row => row._id)).toEqual([msg._id]);
   });
 
+  test("a sender killed since its send gets no receipt, and stays killed", async () => {
+    const now = Date.now();
+    const { ctx, db, tables } = world({ now });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", body: "The release is ready" });
+    const msg = tables.pending_messages[0];
+    await claimPendingMessageForDaemon(ctx as any, msg._id, "uBob" as any, "devBob");
+    await updatePendingMessageStatusForDaemon(ctx as any, msg._id, "uBob" as any, "devBob", { status: "injected", paste_verified_at: now - 9 * 60_000 });
+    await db.patch(msg._id, { created_at: now - 10 * 60_000 });
+    await db.patch("msBob", { agent_status: "idle" });
+    await db.patch("convAlice", { status: "completed", inbox_killed_at: now - 60_000 });
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ failedUnconfirmed: 1 });
+    expect(tables.pending_messages.filter((r: any) => r.conversation_id === "convAlice")).toHaveLength(0);
+    expect(await db.get("convAlice")).toMatchObject({ status: "completed" });
+    expect((await db.get(msg._id))?.sender_notified_at).toBeDefined();
+  });
+
   test("a sender told its send is waiting gets that receipt rewritten when the send turns unconfirmed, quoted on one line", async () => {
     const now = Date.now();
     const { ctx, db, tables } = world({ now });
