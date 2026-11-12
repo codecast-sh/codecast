@@ -38,6 +38,9 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
   const liveEls = useLiveElements(docId);
   const elements = snapshot ?? liveEls;
   const blocks = useMemo(() => dashboard.orderedBlocks(elements), [elements]);
+  // Rows the server has written but this store has not read yet: a skeleton, never the empty-dashboard prompt over a full doc.
+  const head = useInboxStore((s: any) => s.liveHeads?.[docId]);
+  const unread = !snapshot && !elements.length && (!head || Number(head.head) > 0);
   const byKey = useMemo(() => new Map(elements.map((e) => [e.key, e])), [elements]);
   const layout = useMemo(() => dashboard.readLayout({ get: (k) => byKey.get(k) }), [byKey]);
   const canEdit = mode === "edit" && !snapshot;
@@ -272,7 +275,14 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
             onRemove={remove}
             onSpan={(k, span) => write([{ k, set: { span } }])}
             onMove={(k, to) => write(dashboard.moveBlockOps(elements, k, to))}
+            {...(canEdit && layout.format === "dashboard" ? { onStartEdit: () => setEditing(true) } : {})}
           />
+        ) : unread ? (
+          <div className="data-grid" aria-busy data-dashboard-loading>
+            {[3, 3, 3, 3, 8, 4].map((span, i) => (
+              <div key={i} className="h-32 rounded-xl bg-sol-bg-alt animate-pulse" style={{ gridColumn: `span ${span}` }} />
+            ))}
+          </div>
         ) : (
           <EmptyDashboard docId={askDoc._id} canEdit={canEdit} onSources={() => setPanelState({ kind: "sources" })} onAsk={(prompt) => pickAskTarget("Who builds it?", (t) => sendAsk(askDoc, { slot: EMPTY_ASK_SLOT, prompt }, t))} />
         )}

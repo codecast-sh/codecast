@@ -15,6 +15,7 @@ import { filterWords } from "../../hooks/useDashboardScope";
 import { blockRows, downloadChartPng, downloadCsv, fileName, hasChart } from "./exportBlock";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import { ErrorBoundary } from "../ErrorBoundary";
+import { Button } from "../ui/button";
 
 const SPAN_LABEL: Record<number, string> = { 3: "¼", 4: "⅓", 6: "½", 8: "⅔", 12: "1" };
 
@@ -29,6 +30,8 @@ export type GridProps = {
   onRemove: (key: string) => void;
   onSpan: (key: string, span: number) => void;
   onMove: (key: string, toIndex: number) => void;
+  /** Switch to editing: what a viewer of a page of unbound blocks can do about it. */
+  onStartEdit?: () => void;
 };
 
 /** A data block with nothing to show (no source, no typed value): editors bind it, viewers never see it. */
@@ -38,7 +41,7 @@ function isEmptyBlock(b: ArtifactElement): boolean {
   return !dashboard.blockQuery(b) && (b.kind !== "kpi" || b.value === undefined || b.value === null);
 }
 
-export function DashboardGrid({ blocks: all, env, edit, selected, me, onSelect, onEdit, onRemove, onSpan, onMove }: GridProps) {
+export function DashboardGrid({ blocks: all, env, edit, selected, me, onSelect, onEdit, onRemove, onSpan, onMove, onStartEdit }: GridProps) {
   const blocks = edit ? all : all.filter((b) => !isEmptyBlock(b));
   // The grid's own width picks the layout (a side panel open, a pane, a phone), not the window's.
   const gridRef = useRef<HTMLDivElement>(null);
@@ -71,6 +74,17 @@ export function DashboardGrid({ blocks: all, env, edit, selected, me, onSelect, 
   };
   return (
     <div ref={gridRef} className="data-grid" role="list" onDragEnd={() => setDrag(null)}>
+      {/* Every block is still unbound: the page says so rather than drawing nothing. */}
+      {!blocks.length && all.length ? (
+        <div className="data-cell py-20 flex flex-col items-center gap-3 text-sm text-sol-text-dim" style={{ gridColumn: "span 12" }} data-unbound-dashboard>
+          <span>No block has a source yet</span>
+          {onStartEdit ? (
+            <Button size="sm" variant="outline" onClick={onStartEdit}>
+              Edit
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {blocks.map((b, i) => (
         <Cell
           key={b.key}
