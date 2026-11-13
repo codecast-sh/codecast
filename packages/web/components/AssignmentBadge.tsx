@@ -38,6 +38,7 @@ import {
 } from "./DeviceBadge";
 import { useOwnersFromStore, OwnerAvatar, OwnerMenuItems } from "./OwnersBadge";
 import { useSessionRoleFacts } from "../hooks/useOwnersStoreEnv";
+import { SessionAccountLine } from "./conversation/SessionAccountLabel";
 import { RoleFace } from "./org/RoleFace";
 import { MakeRoleDialog } from "./org/MakeRoleDialog";
 import { MirrorMenuItems } from "./LocalMirror";
@@ -287,6 +288,7 @@ export function AssignmentBadge({
           <>
             <DropdownMenuSeparator />
             {runner && <div className="px-2 py-1.5 text-xs text-sol-text-muted">Runs under {runner.name}’s account</div>}
+            <SessionAccountLine conversationId={conversationId} className="px-2 pb-1 pt-0" />
             {!isRunner && <div className="px-2 pb-1.5 text-meta text-sol-text-dim">Moving to your machine uses your account and billing.</div>}
             <RunOnDeviceItems conversationId={conversationId} ownerDeviceId={ownerDeviceId} allowRemoteMove={isRunner} />
             {cloudHost && isRunner && !preparing && (
