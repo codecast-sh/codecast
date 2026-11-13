@@ -12,6 +12,7 @@ import { isOptimisticComment, threadResolved, type CodeCommentRow } from "../../
 import { AnchorPlacementChip, AnchorPlacementQuote, placementBorderClass } from "../comments/AnchorPlacementNote";
 import type { AnchorPlacement } from "@codecast/shared/comments";
 import "../chat/chat.css";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 /** Where a new line note goes: into the reader's review, or straight out. */
 export type NoteMode = "review" | "now";
@@ -24,12 +25,12 @@ export type NoteMode = "review" | "now";
 /** Who wrote it: the GitHub login when GitHub sent it, otherwise the teammate
  *  from the live roster, so a name change shows up without a round trip. */
 function useAuthor(comment: CodeCommentRow): { name: string; image?: string; isAgent: boolean } {
-  const s = useTrackedStore([(st: any) => st.teamMembers?.length ?? 0]);
+  const s = useTrackedStore([(st: any) => teamMembersOf(st)?.length ?? 0]);
   if (comment.author_kind === "agent") return { name: "Agent", isAgent: true };
   if (comment.author_github_username) {
     return { name: comment.author_github_username, image: comment.author_avatar_url, isAgent: false };
   }
-  const member = (s as any).teamMembers?.find((m: any) => m?._id === comment.author_user_id);
+  const member = teamMembersOf(s)?.find((m: any) => m?._id === comment.author_user_id);
   return {
     name: member?.name || member?.github_username || "Someone",
     image: comment.author_avatar_url || member?.image || member?.github_avatar_url,
