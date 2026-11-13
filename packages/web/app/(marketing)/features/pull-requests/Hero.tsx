@@ -70,7 +70,7 @@ export function Hero() {
 
 function Stage() {
   return (
-    <div className="prx-rise grid gap-0 lg:grid-cols-[minmax(0,1fr)_190px_minmax(0,1fr)] items-stretch" style={at(0.35)}>
+    <div data-og-art className="prx-rise grid gap-0 lg:grid-cols-[minmax(0,1fr)_190px_minmax(0,1fr)] items-stretch" style={at(0.35)}>
       <PrCard />
       <Tether />
       <SessionCard />

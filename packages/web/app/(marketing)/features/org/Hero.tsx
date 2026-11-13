@@ -201,7 +201,7 @@ function Stage() {
   const eng = role("eng");
   const maya = person("maya");
   return (
-    <div className="relative w-full" style={{ aspectRatio: `${W} / ${H}` }}>
+    <div data-og-art className="relative w-full" style={{ aspectRatio: `${W} / ${H}` }}>
       <svg className="absolute inset-0 w-full h-full" viewBox={`0 0 ${W} ${H}`} fill="none" aria-hidden>
         {LEAD_LINES.map((d, i) => (
           <path key={d} d={d} pathLength={1} className="og-anim og-draw" style={at(0.45 + i * 0.08)} stroke={SOL.base1} strokeWidth={1.5} />

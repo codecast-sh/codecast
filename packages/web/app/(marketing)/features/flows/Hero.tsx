@@ -121,7 +121,7 @@ function FloorFigure({ floor, className }: { floor: Floor; className: string }) 
   const live = playing && !still;
   const { W, H } = floor.plan;
   return (
-    <div ref={ref} className={`flx-hero-fig ${className}`} data-play={playing ? "" : undefined}>
+    <div ref={ref} data-og-art className={`flx-hero-fig ${className}`} data-play={playing ? "" : undefined}>
       <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" className="block w-full h-auto font-mono" role="img" aria-label={ARIA}>
         <FontCtx.Provider value={floor === WIDE ? WIDE_FONTS : TALL_FONTS}>
           <Defs />

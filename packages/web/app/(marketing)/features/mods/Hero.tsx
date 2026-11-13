@@ -113,7 +113,7 @@ export function Hero() {
             </dl>
           </div>
           <div className="min-w-0 pb-24 sm:pb-40">
-            <Conversation />
+            <div data-og-art><Conversation /></div>
           </div>
         </div>
       </div>

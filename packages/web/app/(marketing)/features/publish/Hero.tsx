@@ -128,7 +128,7 @@ export function Hero() {
           </div>
         </div>
 
-        <div className="relative">
+        <div data-og-art className="relative">
           <div className="relative h-[420px] sm:h-[360px] mr-6 sm:mr-8">
             <Sheet v={1} offset={28} d={1.25} />
             <Sheet v={2} offset={14} d={2.15} />

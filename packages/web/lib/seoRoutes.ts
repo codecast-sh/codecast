@@ -2,7 +2,7 @@ import { GUIDES, guideHref } from "../app/(marketing)/documentation/guides/guide
 import { POSTS } from "../app/(marketing)/blog/posts";
 import { CHAPTERS, chapterHref } from "../app/(marketing)/blog/field-manual/chapters";
 import { COMPARISONS, compareHref } from "../app/(marketing)/compare/comparisons";
-import { FEATURE_DEEP_DIVES, featureHref } from "../app/(marketing)/features/catalog";
+import { FEATURE_DEEP_DIVES, deepDiveForSnippet, featureHref, getFeatureDeepDive } from "../app/(marketing)/features/catalog";
 
 /**
  * seoRoutes — the single source of truth for every publicly indexable route.
@@ -30,6 +30,11 @@ export type SeoEntry = {
   heading?: string;
   /** ISO date an article first went live (guides and posts), for datePublished. */
   published?: string;
+  /**
+   * Social card picture (a PNG or JPEG, relative to packages/web) and accent
+   * color (hex, or a Solarized hue name such as "violet").
+   */
+  card?: { art?: string; color?: string };
 };
 
 export const SITE_URL = "https://codecast.sh";
@@ -43,6 +48,7 @@ const STATIC_ENTRIES: SeoEntry[] = [
     path: "/",
     title: DEFAULT_TITLE,
     description: DEFAULT_DESCRIPTION,
+    card: { art: "public/hero/page.jpg" },
   },
   {
     path: "/about",
@@ -73,6 +79,7 @@ const STATIC_ENTRIES: SeoEntry[] = [
     title: "Download — Codecast",
     description:
       "Download the Codecast desktop app for macOS. Watch, steer, and search every agent session.",
+    card: { art: cardArt("/blog/field-manual/inbox-hero.webp") },
   },
   {
     path: "/blog",
@@ -128,6 +135,7 @@ export const SEO_ROUTES: SeoEntry[] = [
     title: `${f.title} — Codecast`,
     heading: f.title,
     description: f.dek,
+    card: featureCard(f.slug),
   })),
   {
     path: "/setup/browser",
@@ -147,6 +155,7 @@ export const SEO_ROUTES: SeoEntry[] = [
     heading: g.title,
     description: g.dek,
     published: g.published,
+    card: featureCard((g.feature && deepDiveForSnippet(g.feature)?.slug) || g.slug),
   })),
   ...POSTS.map((p) => ({
     path: `/blog/${p.slug}`,
@@ -154,14 +163,31 @@ export const SEO_ROUTES: SeoEntry[] = [
     heading: p.title,
     description: p.dek,
     published: p.date,
+    card: { art: cardArt(p.cover.src) },
   })),
   ...CHAPTERS.map((c) => ({
     path: chapterHref(c.slug),
     title: `${c.title} — Codecast field manual`,
     heading: c.title,
     description: c.dek,
+    card: { art: cardArt(`/blog/field-manual/${c.cover}`), color: c.color },
   })),
 ];
+
+/**
+ * A public image as card art. The card renderer reads PNG and JPEG only, so a
+ * WebP image uses its JPEG copy under scripts/og-art/webp, which
+ * `bun scripts/capture-og-art.ts --webp` makes.
+ */
+function cardArt(publicSrc: string): string {
+  return publicSrc.endsWith(".webp") ? `scripts/og-art/webp${publicSrc.replace(/\.webp$/, ".jpg")}` : `public${publicSrc}`;
+}
+
+/** The card of the feature deep dive `slug` (its captured hero and color), if there is one. */
+function featureCard(slug: string): SeoEntry["card"] {
+  const f = getFeatureDeepDive(slug);
+  return f && { art: `scripts/og-art/${f.slug}.jpg`, color: f.color };
+}
 
 const BY_PATH = new Map(SEO_ROUTES.map((e) => [e.path, e]));
 

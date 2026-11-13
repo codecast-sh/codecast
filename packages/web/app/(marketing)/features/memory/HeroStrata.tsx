@@ -62,7 +62,7 @@ function Stop({ d }: { d: number }) {
 
 export function HeroStrata() {
   return (
-    <div className="relative select-none" role="img" aria-label="Session blame on retry.ts: line 5 traced through three sessions to the session that wrote it, opened on message 88 where the retry cap was set to 3 and the later message that raised it to 5">
+    <div data-og-art className="relative select-none" role="img" aria-label="Session blame on retry.ts: line 5 traced through three sessions to the session that wrote it, opened on message 88 where the retry cap was set to 3 and the later message that raised it to 5">
       {/* The file */}
       <div className="mm-anim mm-rise relative rounded-t-xl overflow-hidden" style={{ backgroundColor: SOL.base03, border: "1px solid #0a4352", "--d": ".1s" } as CSSProperties}>
         <div className="flex items-center gap-2 px-4 py-2" style={{ backgroundColor: SOL.base02, borderBottom: "1px solid #0a4352" }}>

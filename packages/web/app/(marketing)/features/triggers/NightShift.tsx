@@ -185,7 +185,7 @@ function Morning() {
 export function NightShift() {
   const [take, setTake] = useState(0);
   return (
-    <div className="rounded-2xl p-4 sm:p-5 shadow-xl text-left" style={{ backgroundColor: "#fffbf0", border: `1px solid ${SOL.base2}` }}>
+    <div data-og-art className="rounded-2xl p-4 sm:p-5 shadow-xl text-left" style={{ backgroundColor: "#fffbf0", border: `1px solid ${SOL.base2}` }}>
       <div className="mb-3 flex items-center justify-between gap-3">
         <div className="font-mono text-[12px]" style={{ color: SOL.base01 }}>
           <span className="font-semibold" style={{ color: SOL.base03 }}>One night, six triggers</span>

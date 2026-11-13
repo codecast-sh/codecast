@@ -175,7 +175,7 @@ export function HeroDiptych() {
   return (
     <div className="relative">
       <div className="hidden lg:block absolute inset-y-0 right-0 w-1/2 cl-night" aria-hidden />
-      <div className="relative max-w-6xl mx-auto px-5 sm:px-8 lg:grid lg:grid-cols-[1fr_110px_1fr]">
+      <div data-og-art className="relative max-w-6xl mx-auto px-5 sm:px-8 lg:grid lg:grid-cols-[1fr_110px_1fr]">
         <div className="pt-4 pb-0 lg:py-16 lg:pr-2"><LaptopSide /></div>
         <Wire vertical={false} />
         <Wire vertical />

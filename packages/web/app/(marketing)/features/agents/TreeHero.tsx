@@ -205,7 +205,7 @@ const ROWS: Row[] = [
 
 export function TreeHero() {
   return (
-    <div className="relative rounded-2xl overflow-hidden" style={{ backgroundColor: "#fbf4df", border: `1px solid ${SOL.base2}`, boxShadow: "0 30px 60px -36px rgba(0,43,54,0.45)" }} role="img" aria-label="One conversation fanning out: a fork that carries the history, two workers on Codex and Gemini that report back, and a switch that continues the same thread on Codex">
+    <div data-og-art className="relative rounded-2xl overflow-hidden" style={{ backgroundColor: "#fbf4df", border: `1px solid ${SOL.base2}`, boxShadow: "0 30px 60px -36px rgba(0,43,54,0.45)" }} role="img" aria-label="One conversation fanning out: a fork that carries the history, two workers on Codex and Gemini that report back, and a switch that continues the same thread on Codex">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2.5" style={{ borderBottom: `1px solid ${SOL.base2}`, backgroundColor: SOL.base3 }}>
         <span className="font-mono text-[12px] font-semibold" style={{ color: SOL.base02 }}>Webhook retries</span>
         <AgentTag agent="claude" size="xs" />

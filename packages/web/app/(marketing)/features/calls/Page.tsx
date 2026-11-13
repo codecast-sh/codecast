@@ -106,7 +106,7 @@ export default function CallsPage() {
             </div>
           </div>
           <div className="cc-rise mt-12" style={{ "--d": "0.4s" } as CSSProperties}>
-            <CallScore />
+            <div data-og-art><CallScore /></div>
             <p className="mt-3 text-center text-[12.5px] font-mono" style={{ color: SOL.base1 }}>
               The first minute of a six minute huddle. One lane per voice, the session that heard it live, and the digest it left behind.
             </p>

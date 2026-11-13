@@ -133,7 +133,7 @@ function Count() {
 
 export function QueueStage() {
   return (
-    <div className="dq-in relative" style={at(0.2)}>
+    <div data-og-art className="dq-in relative" style={at(0.2)}>
       <div className="flex items-center gap-3 mb-3 px-1 text-[12px]" style={{ color: DIM }}>
         <span className="text-[15px]" style={{ color: TEXT }}>Questions</span>
         <span className="flex items-center gap-1"><Count /> waiting on you</span>
