@@ -214,6 +214,7 @@ const { MemoryRouter } = await import("react-router");
 const { default: ReactMarkdown } = await import("react-markdown");
 const { entityRemarkPlugins } = await import("../lib/remarkEntityIds");
 const { EntityAwareLink, EntityAwareCode } = await import("./EntityIdPill");
+const { withTeamRoster } = await import("../test-helpers/teamRoster");
 
 const MD_COMPONENTS = { a: EntityAwareLink, code: EntityAwareCode } as const;
 
@@ -797,7 +798,7 @@ describe("the company's objects (or-N, pj-…, @person)", () => {
   useInboxStore.setState({
     projects: { [PROJECT._id]: PROJECT },
     orgTree: { workspace: { kind: "team", id: "t", name: "Union" }, people: [], roles: [ROLE], anchors: [], generated_at: 0 },
-    teamMembers: [PERSON],
+    ...withTeamRoster([PERSON], { clientState: useInboxStore.getState().clientState }),
   } as any);
 
   test("a role and a project read as their names and open their sheet", () => {
