@@ -43,6 +43,8 @@ import { FeedChip } from "./FeedChip";
 import { SessionFace } from "../identity";
 import { TranscribeSwitch } from "./TranscribePanel";
 import { TranscriptTurnList } from "./TranscriptTurns";
+import { ThreadFindField, passageHits, useThreadFind } from "./ThreadFind";
+import { usePaneShortcutAction } from "../../shortcuts/ShortcutProvider";
 import { ChatLine, EventLine, PassageBlock, RecapCard, type LocalRow, type RoomThreadSelection } from "./RoomThreadRows";
 import { useAddToCall, useAgentsInRoom, useRemoveLiveFeed } from "./useCallFeed";
 import { teamHasFeature } from "../../lib/teamFeatures";
@@ -251,6 +253,23 @@ export const RoomThread = memo(function RoomThread({
   // clock would move the indices under a selection until the echo landed.
   const breakAts = useMemo(() => chatRows.filter((r) => !r.pending).map((r) => r.at), [chatRows]);
   const passages = useMemo(() => buildPassages(segments ?? [], breakAts, { recording }), [segments, breakAts, recording]);
+  // Find (the page's header field, Cmd/Ctrl+F): the passages holding a match
+  // open and show whatever the words control says, and the hook below
+  // highlights and steps through the matches in the rendered thread.
+  const [findQuery, setFindQuery] = useState("");
+  const findInputRef = useRef<HTMLInputElement>(null);
+  const hits = useMemo(() => passageHits(passages, findQuery), [passages, findQuery]);
+  const find = useThreadFind(scrollRef, findQuery, () => {
+    stuckRef.current = false;
+  });
+  const canFind = surface === "page";
+  usePaneShortcutAction("call.find", () => {
+    const input = findInputRef.current;
+    if (!canFind || !input || !input.isConnected) return false;
+    input.focus();
+    input.select();
+    return true;
+  });
   // The huddle this thread shows: its record, kept while mounted so the rows
   // just written stay this huddle's while the stage reloads the call.
   const lastCallRef = useRef<{ id: string; at: number } | undefined>(undefined);
@@ -448,6 +467,7 @@ export const RoomThread = memo(function RoomThread({
   // its turn row alone), so it is open in every density but hidden; the
   // folded density folds passages of two or more turns.
   const isOpen = (p: Passage) =>
+    hits.has(p.index) ||
     (activeIndex !== null && p.turns.some((t) => t.index === activeIndex)) ||
     (!recording && p.turns.length === 1) ||
     (overrides[p.index] ?? (density === "full" || (transcribing && p.index === newestIndex)));
@@ -475,6 +495,9 @@ export const RoomThread = memo(function RoomThread({
   const hasSummary = !!call?.summary;
   useWatchEffect(() => {
     if (!focus || !focusKey || landedRef.current === focusKey) return;
+    // Passage and turn indices shift when the typed rows land and split
+    // passages; land on indices taken after they have.
+    if (!recording && rows === undefined) return;
     if (focus.kind === "turns" ? !focusTurn : !hasSummary) return;
     landedRef.current = focusKey;
     stuckRef.current = false;
@@ -497,7 +520,7 @@ export const RoomThread = memo(function RoomThread({
       el.classList.add("cc-msg-flash");
       setTimeout(() => el.classList.remove("cc-msg-flash"), 1300);
     }, 60);
-  }, [focusKey, focusTurn, hasSummary]);
+  }, [focusKey, focusTurn, hasSummary, rows === undefined]);
 
   // Event rows are the room's log, not its content: a room that has only
   // ever seen agents come and go is still empty.
@@ -508,7 +531,8 @@ export const RoomThread = memo(function RoomThread({
   // Nothing to fold, open or hide until someone has spoken.
   const showDensity = !recording && passages.length > 0;
   const showSwitch = seated && !recording;
-  const showHead = showChips || canAdd || showDensity || showSwitch;
+  const showFind = canFind && (passages.length > 0 || chatRows.some((r) => !r.event));
+  const showHead = showChips || canAdd || showDensity || showSwitch || showFind;
   // Only the density control: no band, no rule, it sits with the recap row.
   const quietHead = showHead && !showChips && !canAdd && !showSwitch;
   // The empty card leads while nobody is in the room; the header's own Add
@@ -643,6 +667,16 @@ export const RoomThread = memo(function RoomThread({
               <span className="rt-listening rt-head-listening" title={listeningText}>
                 <span className="truncate">{listeningShort}</span>
               </span>
+            )}
+            {showFind && (
+              <ThreadFindField
+                query={findQuery}
+                onQuery={setFindQuery}
+                count={find.count}
+                current={find.current}
+                step={find.step}
+                inputRef={findInputRef}
+              />
             )}
             {showDensity && <DensityControl value={density} onChange={setDensity} />}
             {showSwitch && <TranscribeSwitch live={transcribing} />}
@@ -820,7 +854,8 @@ export const RoomThread = memo(function RoomThread({
               ) : i === laterAt && laterAt < timeline.length ? (
                 <p className="rt-note rt-divider">Later in this room</p>
               ) : null;
-            const hidden = (inEarlier && !earlierOpen) || (item.kind === "passage" && density === "hidden");
+            const hidden =
+              (inEarlier && !earlierOpen) || (item.kind === "passage" && density === "hidden" && !hits.has(item.index));
             if (hidden && !divider) return null;
             let node: React.ReactNode = null;
             if (hidden) {

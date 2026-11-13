@@ -41,6 +41,8 @@ import { LiveRoomAction, LiveRoomLabel } from "../../components/calls/LiveNow";
 import { useLiveRooms } from "../../hooks/useLiveRooms";
 import { RevealInBandCtx } from "../../lib/revealHost";
 import { RoomThread } from "../../components/calls/RoomThread";
+import { CallSearchField, CallSearchHits, termsOf, useCallSearch } from "../../components/calls/CallSearch";
+import { usePaneShortcutAction } from "../../shortcuts/ShortcutProvider";
 import type { ClickedLine } from "../../components/calls/TranscriptTurns";
 import type { CallMoment } from "../../components/calls/RoomThreadRows";
 import { buildPassages, flatTurns, type ThreadRow } from "../../components/calls/roomThreadModel";
@@ -151,7 +153,7 @@ function RecordingScopeChip({ call }: { call: any }) {
   );
 }
 
-function CallListRow({ call, selected, place }: { call: any; selected: boolean; place?: CallPlace | null }) {
+function CallListRow({ call, selected, place, below }: { call: any; selected: boolean; place?: CallPlace | null; below?: React.ReactNode }) {
   const live = isCallLive(call);
   // A recording sits in the same list under the same idiom — it is a call
   // object like any other — and the glyph is the whole difference: a
@@ -173,11 +175,10 @@ function CallListRow({ call, selected, place }: { call: any; selected: boolean; 
     callTitle({ ...call, place }, s as any, { untitled: silent ? "Typed huddle, nothing said" : undefined }),
   );
   return (
+    <div className={`border-b border-sol-border/15 border-l-2 ${selected ? "border-l-sol-cyan bg-sol-bg-alt/60" : "border-l-transparent"}`}>
     <Link
       href={callAnchorHref(callPathRef(call))}
-      className={`block border-b border-sol-border/15 px-4 py-3 transition-colors hover:bg-sol-bg-alt/40 ${
-        selected ? "border-l-2 border-l-sol-cyan bg-sol-bg-alt/60" : "border-l-2 border-l-transparent"
-      }`}
+      className="block px-4 py-3 transition-colors hover:bg-sol-bg-alt/40"
     >
       {/* Titles take two lines: a run of huddles held in one place share a
           prefix, and one line cut them all to the same words. The glyph and
@@ -250,6 +251,8 @@ function CallListRow({ call, selected, place }: { call: any; selected: boolean; 
         )}
       </div>
     </Link>
+    {below}
+    </div>
   );
 }
 
@@ -474,6 +477,9 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
   const landed = useRef<string | null>(null);
   useWatchEffect(() => {
     if (focus?.kind !== "turns" || turns.length === 0) return;
+    // The typed and event rows split passages, and with them every later
+    // turn's index: an index taken before they load names another turn.
+    if (!recording && rows === undefined) return;
     const key = `${id}:${focus.from_seq}-${focus.to_seq}`;
     if (landed.current === key) return;
     const hit = turns
@@ -483,7 +489,7 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
     landed.current = key;
     setAnchor(hit[0]);
     setEnd(hit[hit.length - 1]);
-  }, [id, focus, turns]);
+  }, [id, focus, turns, rows, recording]);
 
   // A link to a moment (`?t=754`, what `cl-42@12:34` opens) lands there
   // (useCallMomentLanding), once the recordings have answered whether there
@@ -1160,6 +1166,11 @@ export default function CallsPage() {
   // History narrowed to the calls somebody filmed: a selector over the same
   // rows (the record's `filmed`), offered once there is one to find.
   const [videoOnly, setVideoOnly] = useState(false);
+  // Search: the list narrows to the calls that match, each with what matched.
+  const [query, setQuery] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const search = useCallSearch(calls, places, query);
+  const terms = useMemo(() => termsOf(query.trim()), [query]);
   const anyFilmed = pastCalls.some((r) => r.filmed);
   const shownPast = videoOnly && anyFilmed ? pastCalls.filter((r) => r.filmed) : pastCalls;
   // A call is its own page: with one open, the history folds away (a
@@ -1170,6 +1181,15 @@ export default function CallsPage() {
   const listPref = useInboxStore((s) => s.clientState?.ui?.calls_list_open === true);
   const showList = !selectedId || (!inBand && listPref);
   const setListOpen = (open: boolean) => useInboxStore.getState().updateClientUI({ calls_list_open: open });
+  // Cmd/Ctrl+F searches the list while no call is open; an open call's
+  // thread takes the chord for its own find.
+  usePaneShortcutAction("call.find", () => {
+    const input = searchRef.current;
+    if (selectedId || !input?.isConnected) return false;
+    input.focus();
+    input.select();
+    return true;
+  });
   const listToggle = selectedId && !inBand && !listPref ? (
     <button
       type="button"
@@ -1222,7 +1242,34 @@ export default function CallsPage() {
               <div className="-mt-2.5 w-full">{records}</div>
               {huddlesOff}
             </PageHeader>
+            {calls.length > 0 && (
+              <div className="shrink-0 px-3 pb-2">
+                <CallSearchField value={query} onChange={setQuery} inputRef={searchRef} />
+              </div>
+            )}
             <div className="min-h-0 flex-1 overflow-y-auto">
+              {search.results ? (
+                <>
+                  <div className="flex items-center justify-between bg-sol-bg-alt/30 px-4 py-1.5">
+                    <span className="text-mark font-medium uppercase tracking-wide text-sol-text-dim">
+                      {search.results.length === 0 && !search.searching
+                        ? "No calls match"
+                        : `${search.results.length} call${search.results.length === 1 ? "" : "s"}`}
+                    </span>
+                    {search.searching && <span className="cs-searching text-meta text-sol-text-dim">searching words</span>}
+                  </div>
+                  {search.results.map((r) => (
+                    <CallListRow
+                      key={r.call._id}
+                      call={r.call}
+                      selected={String(r.call._id) === callId}
+                      place={places[String(r.call._id)]}
+                      below={<CallSearchHits result={r} terms={terms} />}
+                    />
+                  ))}
+                </>
+              ) : (
+              <>
               {callsOn && <LiveNowSection transcribedRoomKeys={transcribedRoomKeys} />}
               {calls.length === 0 && callsError ? (
                 <div className="p-4 text-[12px] leading-relaxed text-sol-text-dim">
@@ -1273,6 +1320,8 @@ export default function CallsPage() {
                     <CallListRow key={r._id} call={r} selected={String(r._id) === callId} place={places[String(r._id)]} />
                   ))}
                 </>
+              )}
+              </>
               )}
             </div>
           </div>

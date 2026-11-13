@@ -1,61 +1,70 @@
-When an agent takes on work that will run for a while, it files it where you can see it. A **task** is one piece of work: a feature, a bug, a chore. A **plan** groups several tasks under one goal. Agents create them, claim them, post progress as they go, and close each one with a line on what they checked. You follow all of it on the Tasks and Plans pages instead of scrolling back through conversations.
+When an agent takes on work that will run for a while, it files it where you can see it. A **task** is one piece of work: a feature, a bug, a chore. A **plan** groups several tasks under one goal. Agents create them, claim them, post progress as they go, and close each one with a line on what they checked. You follow it on the task and plan pages instead of scrolling back through conversations.
 
-![A plan with its goal, progress bar and four tasks](/documentation/tasks-and-plans/plan.webp "A plan an agent filed: the goal in its charter, one task done, one in progress with the session working on it, and two still open.")
+![A plan with its goal, progress bar and four tasks](/documentation/tasks-and-plans/plan.webp "A plan an agent filed: one task done, one in progress with its session, two still open.")
 
 ## Turn it on
 
-Open **Agent features** from your account menu, pick the computer your agents run on, and switch on **Tasks & Plans**. Repeat it on each computer you use.
+Open **Agent features** (under **More** in the sidebar), pick the computer your agents run on, and switch on **Tasks & Plans** under **Tracking & automation**. Do it on each computer you use.
 
-![The Tasks & Plans detail in Agent features](/documentation/tasks-and-plans/feature.webp "Click How it works on the card to see what it adds and a request to try.")
+![The Tasks & Plans card in Agent features](/documentation/tasks-and-plans/feature.webp "Click How it works on the card for what it adds and a request to try.")
 
 ## What agents file, and what they don't
 
 Agents use judgment here, not a rule that every request becomes a task:
 
-- **A task** when the work will outlive the conversation, needs a handoff to someone else, or should be tracked so you can check on it.
+- **A task** when the work will outlive the conversation, needs a handoff, or should be tracked so you can check on it.
 - **A plan** when the work has several distinct parts that could run in separate sessions.
 - **Nothing** for questions, quick lookups and small fixes they will finish right away.
 
 Before filing anything, an agent looks for an existing task or plan on the same topic and picks that up instead of making a duplicate.
 
-## Ask for it in plain words
+## Ask for it
 
 - "Break the billing rewrite into a plan with tasks we can split across sessions."
-- "File a task for the flaky checkout test and start on it."
-- "Pick up the next ready task in the dark mode plan."
+- "File a task for the flaky webhook retry test and start on it."
+- "Pick up the next ready task in the webhook retries plan."
 - "What's left on the onboarding plan?"
 - "Mark the export task done, with what you verified."
 
-## What you see
+## The Tasks page
 
-### The task page
+Click **Tasks** in the sidebar, under **Work**. It lists every task in your workspace. Switch between **List** and **Board** at the top, filter by status, priority, label or assignee, and click **Add task** to file one yourself. Work filed in a team shows to that team; work you file privately stays yours.
 
-Every task has its own page. At the top is its status, which moves through **Backlog**, **Open**, **In Progress**, **In Review** and **Done**, with **Dropped** for work that won't happen. You can change the status, priority and assignee yourself from the same row.
+![The Tasks page as a board](/documentation/tasks-and-plans/board.webp "The Board view: tasks in columns by status, each with its assignee.")
 
-![A finished task with its evidence, session, plan and activity](/documentation/tasks-and-plans/task.webp "A task an agent closed. Evidence holds what it verified, Sessions links the conversation that did the work, and Activity lists each status change and progress note.")
+## A task's page
 
-- **Evidence** is what the agent says it verified when it marked the task done. An agent is told to close only work it actually checked.
-- **Sessions** links every conversation that worked on the task, so you can open the one that did the work.
+Click a task to open it. Its status moves through **Backlog**, **Open**, **In Progress**, **In Review** and **Done**, with **Dropped** for work that won't happen. Change the status, priority and assignee yourself from the row at the top.
+
+![A finished task with its evidence, session, plan and activity](/documentation/tasks-and-plans/task.webp "A task an agent closed, with what it verified and the session that did the work.")
+
+- **Session** shows the session working on the task, and you can read it and answer it right there. With no session yet, click **Hand to an agent** to start one.
+- **Evidence** is what the agent says it verified when it marked the task done. Agents are told to close only work they actually checked.
+- **Sessions** (or **Other sessions**, when one is working on it now) links every conversation that worked on the task.
+- **Plan** links the plan the task belongs to.
 - **Blocks** and **Blocked by** show what has to finish first. A task waiting on another doesn't show as ready until that one is done.
-- **Activity** is the running log: status changes and the agent's progress notes, newest at the bottom.
-- **Add comment** leaves a note on the task. If a session is working on it, the comment also reaches that session, so you can steer the work from the task page.
+- **Activity** is the running log: status changes and the agent's progress notes.
+- **Leave a comment** at the bottom. When a session is working on the task, the comment also goes to that session (*Also sends to this session*), so you can steer the work from the task page.
 
-### The plan page
+## A plan's page
 
-A plan page shows the goal at the top under **Charter** (with optional success metrics and non goals), a progress bar across all its tasks, and four tabs: **Overview** lists the tasks and the plan's timeline, **Orchestration** shows which agents are working which tasks right now, **Board** lays the tasks out by status, and **Graph** draws what depends on what. Decisions an agent makes along the way land on the plan's timeline, so the reasons survive after the conversations end.
+Open **Plans** from the command palette, or click the plan named on any of its tasks. The goal sits under the title, with a progress bar across all its tasks, and four tabs:
 
-### The Tasks and Plans pages
+- **Overview** lists the tasks and the plan's timeline. Decisions an agent makes along the way land here, so the reasons survive after the conversations end.
+- **Orchestration** shows which agents are working which tasks right now ([Orchestration](/documentation/orchestration)).
+- **Board** lays the tasks out by status.
+- **Graph** draws what depends on what.
 
-**Tasks** and **Plans** in the sidebar (or the command palette) list everything in your workspace. Work you file in a team shows to that team; work you file privately stays yours.
+## On your phone
 
-### On your phone
+The **Tasks** tab in the iPhone app has **Tasks**, **Plans**, **Docs** and **Triggers**. Open a task to see its status, plan, blockers and activity, and add a comment; open a plan to see its tasks.
 
-The iPhone app shows the same tasks and plans, so you can check progress and leave a comment away from your desk.
+![The Tasks tab on the iPhone app](/documentation/tasks-and-plans/phone.webp "The Tasks tab on the phone, with open tasks at the top.")
 
 ## When an agent needs you
 
-If an agent gets stuck, it says so plainly instead of going quiet: blocked on something only you can provide, missing context, or finished but with a concern you should look at. The conversation is flagged as needing your attention in the inbox, and the reason sits on the task.
+If an agent gets stuck, it says so instead of going quiet: blocked on something only you can provide, missing context, or finished with a concern you should look at. The conversation is flagged in your inbox as needing you, and the reason sits on the task.
 
 ## Where this leads
 
-Tasks and plans are what the rest of the tracking tools hang on. [Orchestration](/documentation/orchestration) runs a whole plan across many agents at once. [Workflows](/documentation/workflows) run a fixed sequence of steps against a task, with approval gates. [Triggers](/documentation/triggers) come back to a task later on a schedule.
+Tasks and plans are what the rest of the tracking tools hang on. [Orchestration](/documentation/orchestration) runs a whole plan across many agents at once. [Workflows](/documentation/workflows) run a fixed sequence of steps against a task, with approval gates. [Triggers](/documentation/triggers) come back to a task later or on a schedule.

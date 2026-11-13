@@ -59,6 +59,7 @@ import { SwitchReview } from "./consequential/ConsequentialSwitch";
 import { useRunCost } from "./consequential/useRunCost";
 import { workflowAgentSteps, workflowRunLedger, workflowSteps } from "./work/startLedgers";
 import { useWorkflow } from "../hooks/useSyncWorkflows";
+import { teamMembersOf } from "../lib/activeTeam";
 
 const api = _api as any;
 
@@ -1025,7 +1026,7 @@ export function PlanExternalEvents({ planId }: { planId: string }) {
 export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Where ✕ returns to (the list under this panel). */ closeHref?: string }) {
   const queryArgs = planId.startsWith("pl-") ? { short_id: planId } : { id: planId };
   const queryPlan = useQuery(api.plans.webGet, queryArgs);
-  const teamMembers = useInboxStore((s) => s.teamMembers);
+  const teamMembers = useInboxStore(teamMembersOf);
   const currentUser = useInboxStore((s) => s.currentUser);
   const [activeTab, setActiveTab] = useState<PlanTab>("overview");
   const modern = useIsModernStyle();

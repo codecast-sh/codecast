@@ -2,28 +2,30 @@ An agent that changes a web app should look at the result, and the pages worth l
 
 What the agent sees comes back to the conversation. Screenshots appear inline, and when a page misbehaves the agent reports the errors the page logged and the requests that failed, so you can read the cause without opening the page yourself.
 
-![The agent's answer in the conversation, with its browser steps and screenshot thumbnails above it](/documentation/browser/conversation.webp "An agent asked to check the changelog and pricing pages. Each browser step sits above its reply with thumbnails of the screenshots it took, a watch live button, and a pill for the tab it used.")
+![The agent's answer in the conversation, with its browser steps and screenshot thumbnails above it](/documentation/browser/conversation.webp "Each browser step sits above the reply, with its screenshots, watch live, and the tab it used.")
 
 ## Turn it on
 
 You need desktop Chrome and codecast running on the same computer as your agents ([Getting started](/documentation#getting-started) covers connecting a computer).
 
-1. Open **Agent features** from your account menu and pick the computer your agents run on.
-2. Switch on **Browser**, under *Hands on the machine*.
-3. The card asks for the two steps that remain. Click **Install extension** to add Codecast from the Chrome Web Store, in the Chrome profile you want agents to use. Then click **Pair**: Chrome opens the extension, and you click **Pair** there.
-4. The card turns green and reads *Chrome extension connected*.
+1. Open **Settings** and choose **Agent Features** under *Machines*. The page shows one computer at a time; pick the one your agents run on.
+2. Find **Browser** under *Hands on the machine*, switch it on, and confirm with **Turn on Browser**.
+3. The card lists the two steps left. **Add to Chrome** installs Codecast from the Chrome Web Store, in the Chrome profile you want agents to use. **Pair** opens the extension in Chrome, where you click **Pair** once more.
+4. The card's footer turns green and reads *Chrome connected*.
 
-![The Hands on the machine section of Agent features, with the Browser and Computer cards switched on](/documentation/browser/agent-features.webp "Agent features, one computer at a time. Browser and Computer live under Hands on the machine.")
+![The Hands on the machine section of Agent features, with Browser switched on and Chrome connected](/documentation/browser/agent-features.webp "Browser and Computer live under Hands on the machine, one computer at a time.")
 
-Repeat this on each computer you use. If an agent reaches for the browser before setup is done, the same steps appear as a card under its step in the conversation, with a **Tell the agent to continue** button once Chrome is connected. You never have to leave the conversation to finish setup.
+Repeat this on each computer you use. If an agent reaches for the browser before setup is done, the same steps appear as a card under its step in the conversation, with a **Tell the agent to continue** button once Chrome is connected, so you can finish setup without leaving the conversation.
+
+![The browser setup card under an agent's step, with Add to Chrome and Pair](/documentation/browser/setup-card.webp "Setup can finish right in the conversation.")
 
 Click **How it works** on the card to see what the feature adds and a request to try.
 
-![The Browser feature's detail: what you'll see, when agents use it, and a request to try](/documentation/browser/browser-feature.webp "The Browser detail in Agent features. The switch at the top right turns it on for the selected computer.")
+![The Browser feature's detail: what you'll see, when agents use it, and a request to try](/documentation/browser/browser-feature.webp "The Browser detail. Its switch turns it on for the selected computer.")
 
 ## Ask for it in plain words
 
-There is nothing to learn. Mention a page, or ask for something only a page can show:
+Mention a page, or ask for something only a page can show:
 
 - "Open the settings page, change the theme, and show me a screenshot."
 - "Reproduce the checkout bug on staging and tell me what the console says."
@@ -53,14 +55,16 @@ Every browser step lands in the conversation as a small row above the agent's re
 | Screenshot thumbnails | Click one to see it full size |
 | **open tab** | Brings the agent's tab to the front in your Chrome |
 | **watch live** | Opens the agent's tab in a pane beside the conversation, so you can watch it work |
-| **tab gone · reopen?** | The tab was closed. Click to bring the page back |
+| **reopen tab** | Shows when the tab was closed. Click to bring the page back |
+
+![The watch live pane beside a conversation, showing the agent's tab as it works](/documentation/browser/watch-live.webp "watch live shows the agent's tab beside the conversation.")
 
 An agent can also offer you a page: a chip appears next to the session title, and clicking it opens the page in a pane beside the conversation. It never opens on its own, because an agent should not move what you are looking at. In the Mac app this pane loads any site, including ones that refuse to be embedded in a web page.
 
 ## What it will and won't do
 
 - **It uses your Chrome, never a copy.** No profiles or cookies are copied or synced anywhere. If the extension is missing or asleep, the agent waits for it and tells you what to fix. It never quietly starts a different browser.
-- **Sign-ins stay with you.** When a page asks for a login, the agent opens it in your Chrome and asks you to sign in there, then carries on in the same tab.
+- **Sign-ins stay with you.** When a page asks for a login, the agent opens it in your Chrome and asks you to sign in there, then carries on in the same tab. Logins you keep in the [Vault](/documentation/vault) can start its tab signed in.
 - **Some pages are off limits.** Chrome does not let any extension drive its own pages (`chrome://` settings, the Chrome Web Store). The agent hands you the link and the exact steps, and carries on with the rest.
 - **Leaving a mark waits for you.** Agents read, click through and check pages freely. Submitting a form, sending a message, buying something or changing account settings happens only when you asked for it.
 - **A project can fence it in.** A team can limit which sites agents may visit for a project, and every site an agent lands on is recorded.
@@ -75,3 +79,7 @@ An agent can also offer you a page: a chip appears next to the session title, an
 | A session on another computer can't reach your Chrome | Chrome must run on the same computer as the session. Turn Browser on for that computer too |
 
 For anything inside a native Mac app rather than a web page, such as a file picker, System Settings or Slack, see [Computer use](/documentation/computer).
+
+## For agents and scripts
+
+Agents drive the tab with `cast browser` (open, snapshot, click, type, shot). You never need to type it; `cast guide browser` prints the reference agents read.

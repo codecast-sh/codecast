@@ -32,11 +32,17 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
 } from "./ui/dropdown-menu";
+import { TEAM_ICONS, TeamIcon } from "./TeamIcon";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 export type Device = {
   device_id: string;
   label: string;
+  /** A name set in Settings. Absent means the automatic name from the hostname. */
+  display_name?: string | null;
+  /** A team-icon token, and its color. Absent means the platform glyph. */
+  icon?: string | null;
+  icon_color?: string | null;
   platform: string;
   /** Heartbeat-reported machine name. Only ever a placeholder for ssh_host. */
   hostname?: string;
@@ -166,7 +172,10 @@ export function relativeSeen(lastSeen: number): string {
   return `${Math.round(h / 24)}d ago`;
 }
 
-export function DeviceIcon({ d, className = "w-3 h-3" }: { d: Device; className?: string }) {
+export function DeviceIcon({ d, className = "w-3 h-3" }: { d: Pick<Device, "platform"> & { is_remote?: boolean; icon?: string | null; icon_color?: string | null }; className?: string }) {
+  if (d.icon && (TEAM_ICONS as readonly string[]).includes(d.icon)) {
+    return <TeamIcon icon={d.icon} color={d.icon_color} className={className} />;
+  }
   if (d.is_remote) {
     // cloud / remote box
     return (

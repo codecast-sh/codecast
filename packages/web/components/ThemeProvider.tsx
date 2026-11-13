@@ -6,6 +6,7 @@ import { BUBBLE_HUE_VAR, resolveBubbleHue } from "../lib/bubbleColor";
 import { lockedAtBoot } from "../lib/themeBootLock";
 import { applyThemeVars, availableThemes, cacheThemeVars, DEFAULT_COLOR_THEME, resolveColorThemeKey, themeVarsByMode } from "../lib/theme/colorTheme";
 import type { ModRow } from "../lib/mods/host";
+import { prefersModern } from "../lib/modernStyle";
 // The family's faces and token sheet, for the hosted assistant's note cards
 // and the marketing pages' assistant section. The faces are fetched only once
 // a rule uses them.
@@ -46,10 +47,16 @@ function getInitialVisualStyle(): BaseStyle {
 // localStorage key). A build from before Modern normalizes any style it does
 // not know to Classic and writes that back, so a "modern" value in the shared
 // key would be fought over by an old tab and a new one. Old builds never read
-// this key, and under it they show Classic.
+// this key, and under it they show Classic. A device with no value here is
+// Modern (lib/modernStyle.ts).
 const MODERN_STYLE_KEY = "codecast-modern-style";
+function storedModern(): boolean | undefined {
+  const v = localStorage.getItem(MODERN_STYLE_KEY);
+  return v === null ? undefined : v === "1";
+}
 function getInitialModern(): boolean {
-  return typeof window !== "undefined" && localStorage.getItem(MODERN_STYLE_KEY) === "1";
+  if (typeof window === "undefined") return false;
+  return prefersModern({ modern_style: storedModern(), visual_style: localStorage.getItem("codecast-visual-style") });
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -119,22 +126,22 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [visualStyle, mounted]);
 
   // This device's own choice wins; a device that has never chosen takes the
-  // stored one.
+  // stored one, and with none stored, the default.
   useWatchEffect(() => {
-    if (!mounted || serverModern === undefined) return;
-    if (localStorage.getItem(MODERN_STYLE_KEY) === null) setModernOn(serverModern === true);
-  }, [serverModern, mounted]);
+    if (!mounted || storedModern() !== undefined) return;
+    setModernOn(prefersModern({ modern_style: serverModern, visual_style: visualStyle }));
+  }, [serverModern, visualStyle, mounted]);
 
   useWatchEffect(() => {
     if (!styleReady) return;
     document.documentElement.classList.remove("codex-style");
     document.documentElement.classList.toggle("minimal-style", shownStyle === "minimal");
-    // Modern is the opt-in redesign: its rules and the `modern:` variant key on
+    // Modern is the default redesign: its rules and the `modern:` variant key on
     // this class, so Classic and Minimal never see them.
     document.documentElement.classList.toggle("modern-style", shownStyle === "modern");
   }, [shownStyle, styleReady]);
 
-  // The color theme (lib/theme): Verdigris unless the person chose another,
+  // The color theme (lib/theme): the default (Verdigris light, Fjord dark) unless the person chose another,
   // its variables inline on the root for the mode on screen. A lock keeps
   // Classic's, so it shows codecast's own palette. Until a mod's theme is in the store the root keeps what
   // index.html replayed from the cache, so a cold load never flashes the

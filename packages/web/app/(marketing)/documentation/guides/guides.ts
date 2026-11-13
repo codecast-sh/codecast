@@ -95,7 +95,7 @@ export const GUIDES: Guide[] = [
     slug: "team-sessions",
     published: "2026-08-20",
     title: "See your whole team's agent sessions in one place",
-    dek: "Every session your team runs, on every machine and agent, in one live feed and inbox, shared per folder.",
+    dek: "Every session your team runs, on every machine and agent, in one live Activity page and inbox, shared per folder.",
     category: "Working together",
   },
   {
@@ -131,7 +131,7 @@ export const GUIDES: Guide[] = [
     slug: "decisions",
     published: "2026-09-20",
     title: "Decisions: asking without interrupting",
-    dek: "Agents put the calls only you can make into one queue you clear when you choose to, and each answer goes back to the session that asked.",
+    dek: "Agents put the calls only you can make on one Decisions page you clear when you choose to, and each answer goes back to the session that asked.",
     category: "Working together",
     feature: "decide",
   },

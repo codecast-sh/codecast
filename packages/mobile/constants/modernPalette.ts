@@ -1,8 +1,8 @@
-// The Modern look's palette: the web's default theme, Verdigris, under the
-// app's palette names. Under Modern the web paints Verdigris over Solarized
+// The Modern look's palette: the web's default theme (Verdigris light, Fjord
+// dark) under the app's palette names. Under Modern the web paints it over Solarized
 // ("Modern was not drawn for Solarized", packages/web/components/ThemeProvider
 // .tsx), so the phone does too. The values are imported, never copied: when
-// the web retunes Verdigris, the phone follows on its next update.
+// the web retunes its default, the phone follows on its next update.
 //
 // Derived surfaces use the mixes the web's lib/theme/themeVars.ts makes over
 // the same tokens, so a surface here is the colour the web computes.
@@ -13,7 +13,7 @@ import type { ColorScheme, Palette } from './Theme';
 
 type Token = keyof ThemePalette;
 
-// Verdigris declares every token in both modes (modernPalette.test.ts holds
+// The default declares every token in both modes (modernPalette.test.ts holds
 // that). A missing one falls back to a neutral rather than throwing: this
 // module evaluates at boot, where a throw would roll an update back.
 function tokens(p: ThemePalette | undefined, fallback: string): (t: Token) => string {

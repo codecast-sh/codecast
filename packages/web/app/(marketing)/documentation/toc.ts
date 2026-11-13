@@ -1,82 +1,50 @@
 // The documentation page's table of contents: the sidebar, the phone bar and
-// the scroll spy all read it.
+// the scroll spy all read it. Every id here is a heading id in page.tsx.
 export const TOC: { id: string; label: string; group?: string; children: { id: string; label: string }[] }[] = [
-  { id: "getting-started", label: "Getting Started", group: "Using codecast", children: [
+  { id: "getting-started", label: "Getting started", group: "Using codecast", children: [
     { id: "open-app", label: "Open codecast" },
     { id: "installation", label: "Connect your computer" },
     { id: "chrome-extension", label: "Chrome & Mac apps" },
   ]},
-  { id: "desktop-app", label: "The App", children: [
-    { id: "inbox", label: "Inbox" },
-    { id: "conversations", label: "Conversations" },
-    { id: "command-palette", label: "Command Palette" },
-    { id: "changes", label: "Changes" },
-    { id: "dashboard-plans", label: "Tasks & Plans" },
-    { id: "documents", label: "Documents" },
-    { id: "chat", label: "Chat & Calls" },
-    { id: "inbox-shortcuts", label: "Keyboard Shortcuts" },
-    { id: "desktop-download", label: "Download" },
+  { id: "inbox", label: "Inbox", children: [
+    { id: "inbox-groups", label: "How cards are grouped" },
+    { id: "decisions", label: "Decisions" },
+    { id: "inbox-shortcuts", label: "Keyboard shortcuts" },
   ]},
-  { id: "mobile-app", label: "Mobile App", children: [
-    { id: "mobile-features", label: "Features" },
+  { id: "conversations", label: "Conversations", children: [
+    { id: "steer", label: "Steer a running agent" },
+    { id: "permissions", label: "Permissions" },
+    { id: "diff-panel", label: "Diff & branch map" },
+  ]},
+  { id: "command-palette", label: "Command palette", children: [] },
+  { id: "changes", label: "Changes", children: [] },
+  { id: "tasks-plans", label: "Tasks & plans", children: [
+    { id: "tasks", label: "Tasks" },
+    { id: "plans", label: "Plans" },
+  ]},
+  { id: "triggers", label: "Triggers & workflows", children: [] },
+  { id: "documents", label: "Documents", children: [] },
+  { id: "chat", label: "Chat & calls", children: [
+    { id: "channels", label: "Channels" },
+    { id: "calls", label: "Calls" },
+  ]},
+  { id: "mobile-app", label: "Mobile app", children: [
+    { id: "mobile-inbox", label: "Inbox & sessions" },
     { id: "mobile-download", label: "Download" },
   ]},
   { id: "teams", label: "Teams", children: [
-    { id: "team-setup", label: "Setup" },
-    { id: "team-sharing", label: "Sharing & Privacy" },
+    { id: "team-setup", label: "Create or join a team" },
+    { id: "team-sharing", label: "What your team sees" },
   ]},
   { id: "integrations", label: "Integrations", children: [
-    { id: "supported-tools", label: "Supported Tools" },
-    { id: "github-integration", label: "GitHub" },
+    { id: "supported-tools", label: "Coding agents" },
+    { id: "connected-apps", label: "GitHub, Slack & more" },
   ]},
+  { id: "desktop-download", label: "Mac app", children: [] },
   { id: "guides", label: "Guides", children: [] },
-  { id: "agent-memory", label: "Agent Memory", group: "Agents & the CLI", children: [
-    { id: "memory-setup", label: "Setup" },
-    { id: "memory-commands", label: "Commands" },
-    { id: "memory-how-it-works", label: "How It Works" },
+  { id: "cli", label: "For agents and scripts", group: "Agents & the CLI", children: [
+    { id: "cli-background", label: "The background app" },
+    { id: "cli-reference", label: "Command reference" },
+    { id: "editor-integration", label: "Editor blame" },
   ]},
-  { id: "search-browse", label: "Search & Browse", children: [
-    { id: "search", label: "Search" },
-    { id: "feed-list", label: "Feed & List" },
-    { id: "read", label: "Read Messages" },
-  ]},
-  { id: "session-analysis", label: "Session Analysis", children: [
-    { id: "diff-summary", label: "Diff & Summary" },
-    { id: "context-handoff", label: "Context & Handoff" },
-    { id: "blame-similar", label: "Blame & Similar" },
-  ]},
-  { id: "editor-integration", label: "Editor Integration", children: [
-    { id: "blame-sessions", label: "Session Blame" },
-    { id: "vim-fugitive", label: "Vim / Neovim" },
-    { id: "vscode-cursor", label: "VS Code / Cursor" },
-  ]},
-  { id: "plans", label: "Plans", children: [
-    { id: "plans-overview", label: "Overview" },
-    { id: "plans-commands", label: "Commands" },
-    { id: "plans-workflow", label: "Workflow" },
-    { id: "orchestration", label: "Orchestration" },
-  ]},
-  { id: "tasks", label: "Tasks", children: [
-    { id: "tasks-overview", label: "Overview" },
-    { id: "tasks-commands", label: "Commands" },
-    { id: "task-mining", label: "Auto-Mining & Triage" },
-  ]},
-  { id: "workflows", label: "Workflows", children: [
-    { id: "workflow-nodes", label: "Node Types" },
-    { id: "workflow-execution", label: "Execution" },
-  ]},
-  { id: "triggers", label: "Triggers", children: [
-    { id: "trigger-overview", label: "Overview" },
-    { id: "trigger-commands", label: "Commands" },
-    { id: "trigger-events", label: "Event Triggers" },
-  ]},
-  { id: "knowledge", label: "Knowledge", children: [
-    { id: "decisions", label: "Decisions" },
-    { id: "bookmarks", label: "Bookmarks" },
-  ]},
-  { id: "daemon", label: "Background Sync", children: [
-    { id: "authentication", label: "Authentication" },
-    { id: "daemon-commands", label: "The Daemon" },
-  ]},
-  { id: "reference", label: "CLI Reference", children: [] },
 ];

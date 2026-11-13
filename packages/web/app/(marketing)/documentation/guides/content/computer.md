@@ -2,22 +2,26 @@ Some work isn't in a web page at all. It is in Preview, Slack, Mail, System Sett
 
 They do it in the background. The agent works in a window behind the one you are using, an orange pointer shows you where it acts, and your own pointer and keyboard stay yours. You can keep writing an email while an agent fills in a form in another app.
 
-![A conversation where the agent used Calculator and read System Settings](/documentation/computer/conversation.webp "Asked to work out a sum in Calculator and check Bluetooth and the sound output in System Settings. Each step sits above the reply with a picture of the window the agent read, and it changed nothing it wasn't asked to.")
+![A conversation where the agent used Calculator and read System Settings](/documentation/computer/conversation.webp "Each step sits above the reply with a picture of the window the agent read.")
 
 ## Turn it on
 
 Computer use runs on a Mac with codecast connected ([Getting started](/documentation#getting-started) covers connecting a computer).
 
-1. Open **Agent features** from your account menu and pick the Mac your agents run on.
-2. Switch on **Computer**, under *Hands on the machine*.
+1. Open **Settings** and choose **Agent Features** under *Machines*, then pick the Mac your agents run on.
+2. Find **Computer** under *Hands on the machine*, switch it on, and confirm with **Turn on Computer**.
 3. The card asks for two macOS permissions. Click **Open System Settings** and turn on **codecast computer** under **Accessibility**, then under **Screen Recording**.
-4. The card turns green and reads *Accessibility and Screen Recording granted*.
+4. The card's footer turns green and reads *Permissions granted*.
 
-![The Computer feature's detail: what you'll see, when agents use it, and a request to try](/documentation/computer/computer-feature.webp "The Computer detail in Agent features. The switch at the top right turns it on for the selected Mac.")
+![The Computer card's setup steps: Accessibility and Screen Recording, each with Open System Settings](/documentation/computer/permissions-card.webp "Two macOS permissions, granted once to the codecast computer helper.")
 
 Accessibility lets the agent read a window and click, type and scroll in it. Screen Recording lets it take a picture of the window it is reading. Without Screen Recording it can still work, it just can't show you or itself what the window looks like.
 
 The permissions go to a small codecast helper app, not to your terminal, so granting them doesn't hand the same access to everything else you run there. You grant them once; they survive codecast updates. If an agent needs the permissions before you've granted them, the same steps appear as a card under its step in the conversation, with a **Tell the agent to continue** button once they're on.
+
+Click **How it works** on the card for what the feature adds and a request to try.
+
+![The Computer feature's detail: what you'll see, when agents use it, and a request to try](/documentation/computer/computer-feature.webp "The Computer detail. Its switch turns it on for the selected Mac.")
 
 ## Ask for it in plain words
 
@@ -38,7 +42,7 @@ TwoCursorsFigure
 Your pointer stays in the window you are using. The agent's orange pointer works in the window behind it.
 ```
 
-- **The orange pointer.** Whenever the agent clicks or types somewhere, an orange pointer glides there and pulses on the press. It never takes your focus; it is there so you can see what the agent is doing.
+- **The orange pointer.** Whenever the agent clicks or types somewhere, an orange pointer glides there and pulses on the press. It never takes your focus.
 - **Windows stay where they are.** The agent doesn't bring apps to the front. Typing and most clicks reach a window in the background.
 - **It asks before taking your screen.** A few controls only respond to a real mouse click on a window in front. The agent first looks for another way (a keyboard shortcut, a menu item), and if there is none, it asks you before bringing the window forward.
 
@@ -72,3 +76,7 @@ Two refusals that hold no matter what the agent is asked: 1Password, Bitwarden, 
 | The agent can't find a window | Open the app, or the document, and ask again |
 
 Computer use is built for macOS. On a Linux machine running a desktop, the same feature drives apps through Linux's accessibility layer.
+
+## For agents and scripts
+
+Agents work through `cast computer` (read a window, click an element by name, type, check what changed). `cast guide computer` prints the reference they read.

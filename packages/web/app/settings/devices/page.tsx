@@ -1,7 +1,7 @@
 "use client";
 
 import { copyToClipboard } from "../../../lib/utils";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
@@ -12,7 +12,9 @@ import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { SettingsLinkRow, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { DevicePanelHeader } from "../../../components/settings/DevicePanelHeader";
-import { useDevices, deviceDisplayName, deviceKindLabel, deviceWakesOnUse, relativeSeen, DeviceDot, type Device } from "../../../components/DeviceBadge";
+import { useDevices, deviceDisplayName, deviceKindLabel, deviceWakesOnUse, relativeSeen, DeviceDot, DeviceIcon, type Device } from "../../../components/DeviceBadge";
+import { TEAM_COLORS, TEAM_ICONS, TeamIcon, colorBgClassMap, iconLabelMap } from "../../../components/TeamIcon";
+import { cn } from "../../../lib/utils";
 import { ConfirmButton } from "../../../components/integrations/parts";
 import { canRemoveMachine, splitStaleMachines } from "../../../lib/staleMachines";
 import { describeDeviceFreeze } from "../../../lib/daemonHealthCopy";
@@ -120,24 +122,191 @@ function GrantAccessCard({ d, blocked }: { d: Device; blocked: RepoPlane[] }) {
   );
 }
 
-function PlatformGlyph({ d }: { d: Device }) {
-  const cls = "w-5 h-5";
-  if (d.is_remote)
-    return (
-      <svg className={cls} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3 15a4 4 0 004 4h11a3 3 0 000-6 5 5 0 00-9.584-1.5A3.5 3.5 0 003 15z" />
-      </svg>
-    );
-  if (/linux/i.test(d.platform))
-    return (
-      <svg className={cls} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-      </svg>
-    );
+type AppearanceDevice = Pick<Device, "device_id" | "label" | "platform"> & {
+  is_remote?: boolean;
+  display_name?: string | null;
+  icon?: string | null;
+  icon_color?: string | null;
+  hostname?: string | null;
+  cloud_host?: Device["cloud_host"];
+};
+
+/** Name and icon for a machine. Saved on blur, like the SSH host. An empty
+ *  name returns to the automatic one; no icon keeps the platform glyph. */
+function DeviceAppearance({
+  d,
+  ownerUserId,
+  readOnly,
+}: {
+  d: AppearanceDevice;
+  ownerUserId?: string;
+  readOnly?: boolean;
+}) {
+  const setAppearance = useMutation(api.devices.setDeviceAppearance);
+  const storedName = d.display_name ?? "";
+  const serverIcon = d.icon ?? "";
+  const serverColor = d.icon_color ?? "";
+  const [value, setValue] = useState(storedName);
+  const [committed, setCommitted] = useState(storedName);
+  const [chosenIcon, setChosenIcon] = useState(serverIcon);
+  const [chosenColor, setChosenColor] = useState(serverColor);
+  const [iconCommitted, setIconCommitted] = useState(serverIcon);
+  const [colorCommitted, setColorCommitted] = useState(serverColor);
+  const [saving, setSaving] = useState(false);
+  if (storedName !== committed && value === committed) {
+    setCommitted(storedName);
+    setValue(storedName);
+  }
+  // The roster echo replaces a choice once it lands, and never while a click
+  // is in flight: that click already painted the tile it picked. An effect,
+  // not a render-time setState: the save's toast flushes a render, and a
+  // setState from inside that render is the flushSync error React throws.
+  useEffect(() => {
+    if (saving) return;
+    if (serverIcon !== iconCommitted && chosenIcon === iconCommitted) {
+      setIconCommitted(serverIcon);
+      setChosenIcon(serverIcon);
+    }
+    if (serverColor !== colorCommitted && chosenColor === colorCommitted) {
+      setColorCommitted(serverColor);
+      setChosenColor(serverColor);
+    }
+  }, [saving, serverIcon, serverColor, iconCommitted, colorCommitted, chosenIcon, chosenColor]);
+  const automatic = deviceDisplayName({ ...d, display_name: null });
+  const dirty = value.trim() !== committed;
+
+  const saveName = async () => {
+    if (!dirty || saving || readOnly) return;
+    setSaving(true);
+    try {
+      const res = await setAppearance({
+        device_id: d.device_id,
+        display_name: value.trim(),
+        ...(ownerUserId ? { owner_user_id: ownerUserId as any } : {}),
+      });
+      const next = res?.display_name ?? "";
+      setCommitted(next);
+      setValue(next);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't save the name");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveIcon = async (nextIcon: string, color?: string) => {
+    if (readOnly || saving) return;
+    const prevIcon = chosenIcon;
+    const prevColor = chosenColor;
+    const nextColor = nextIcon ? (color ?? chosenColor) : "";
+    setChosenIcon(nextIcon);
+    setChosenColor(nextColor);
+    setSaving(true);
+    try {
+      const res = await setAppearance({
+        device_id: d.device_id,
+        icon: nextIcon,
+        ...(color !== undefined || !nextIcon ? { icon_color: nextColor } : {}),
+        ...(ownerUserId ? { owner_user_id: ownerUserId as any } : {}),
+      });
+      const storedIcon = res?.icon ?? "";
+      const storedColor = res?.icon_color ?? "";
+      setChosenIcon(storedIcon);
+      setChosenColor(storedColor);
+      setIconCommitted(storedIcon);
+      setColorCommitted(storedColor);
+    } catch (e) {
+      setChosenIcon(prevIcon);
+      setChosenColor(prevColor);
+      toast.error(e instanceof Error ? e.message : "Couldn't save the icon");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
-    <svg className={cls} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-    </svg>
+    <div className="mt-3">
+      <label className="block text-meta text-sol-text-muted" htmlFor={`name-${d.device_id}`}>
+        Name
+      </label>
+      <div className="mt-1 flex items-center gap-2">
+        <Input
+          id={`name-${d.device_id}`}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onBlur={() => void saveName()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") void saveName();
+            if (e.key === "Escape") setValue(committed);
+          }}
+          placeholder={automatic}
+          disabled={readOnly}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          className="h-7 flex-1 min-w-0 px-2 text-meta bg-transparent border-sol-border"
+        />
+        {dirty && (
+          <Button size="sm" onClick={() => void saveName()} disabled={saving} variant="cyan" className="h-7">
+            {saving ? "Saving…" : "Save"}
+          </Button>
+        )}
+      </div>
+      <div role="radiogroup" aria-label="Icon" className="mt-2 flex flex-wrap gap-1">
+        <button
+          type="button"
+          role="radio"
+          aria-checked={!chosenIcon}
+          aria-label="Platform icon"
+          disabled={readOnly}
+          onClick={() => void saveIcon("")}
+          className={cn("rounded-md p-1.5", !chosenIcon ? "bg-sol-bg-alt ring-1 ring-sol-border" : "hover:bg-sol-bg-alt", readOnly && "opacity-50")}
+        >
+          <DeviceIcon d={{ ...d, icon: null }} className="h-4 w-4 text-sol-text-muted" />
+        </button>
+        {TEAM_ICONS.map((icon) => {
+          const selected = chosenIcon === icon;
+          return (
+            <button
+              key={icon}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              aria-label={iconLabelMap[icon]}
+              disabled={readOnly}
+              onClick={() => void saveIcon(icon)}
+              className={cn("rounded-md p-1.5", selected ? "bg-sol-bg-alt ring-1 ring-sol-border" : "hover:bg-sol-bg-alt", readOnly && "opacity-50")}
+            >
+              <TeamIcon icon={icon} color={selected ? chosenColor : undefined} className={cn("h-4 w-4", !selected && "text-sol-text-muted")} />
+            </button>
+          );
+        })}
+      </div>
+      {chosenIcon && (
+        <div role="radiogroup" aria-label="Color" className="mt-2 flex gap-1">
+          {TEAM_COLORS.map((color) => (
+            <button
+              key={color}
+              type="button"
+              role="radio"
+              aria-checked={chosenColor === color}
+              aria-label={color}
+              disabled={readOnly}
+              onClick={() => void saveIcon(chosenIcon, color)}
+              className={cn("rounded-full p-1", readOnly && "opacity-50")}
+            >
+              <span
+                className={cn(
+                  "block h-3.5 w-3.5 rounded-full",
+                  colorBgClassMap[color],
+                  chosenColor === color && "ring-2 ring-sol-text ring-offset-1 ring-offset-sol-card",
+                )}
+              />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -293,7 +462,7 @@ function InactiveDeviceRow({ d }: { d: Device }) {
     <div className="px-4 py-2.5 sm:px-5">
       <div className="flex items-center gap-4">
         <div className="text-sol-text-dim">
-          <PlatformGlyph d={d} />
+          <DeviceIcon d={d} className="h-5 w-5" />
         </div>
         <button
           type="button"
@@ -330,6 +499,7 @@ function DeviceDetails({ d }: { d: Device }) {
   return (
     <>
       <div className="mt-1 text-meta text-sol-text-dim font-mono truncate">{d.label}</div>
+      <DeviceAppearance d={d} />
       <div className="mt-2 flex items-center gap-4 text-meta text-sol-text-dim">
         <span>{d.platform}</span>
         <span>
@@ -377,7 +547,7 @@ function DeviceRow({ d }: { d: Device }) {
     <div className="px-4 py-4 sm:px-5">
       <div className="flex items-start gap-4">
         <div className={`mt-0.5 ${accent}`}>
-          <PlatformGlyph d={d} />
+          <DeviceIcon d={d} className="h-5 w-5" />
         </div>
         <div className="min-w-0 flex-1">
           <DevicePanelHeader selected={d} note="seen" />
@@ -409,6 +579,9 @@ type TeamMachine = {
   team_id: string;
   can_edit: boolean;
   label: string;
+  display_name?: string | null;
+  icon?: string | null;
+  icon_color?: string | null;
   hostname?: string;
   platform: string;
   is_remote: boolean;
@@ -422,7 +595,7 @@ function TeamMachineRow({ box }: { box: TeamMachine }) {
     <div className="px-4 py-4 sm:px-5">
       <div className="flex items-start gap-4">
         <div className={`mt-0.5 ${person ? "text-sol-cyan" : "text-sol-magenta"}`}>
-          {person ? <PlatformGlyph d={box as any} /> : <Bot className="w-4 h-4" />}
+          {person || box.icon ? <DeviceIcon d={box} className="h-4 w-4" /> : <Bot className="w-4 h-4" />}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-sm text-sol-text">
@@ -441,6 +614,7 @@ function TeamMachineRow({ box }: { box: TeamMachine }) {
             </p>
           ) : (
             <>
+              {box.can_edit && <DeviceAppearance d={box} ownerUserId={box.owner_user_id} />}
               <SshHostField d={box} ownerUserId={box.owner_user_id} readOnly={!box.can_edit} />
               {!box.can_edit && (
                 <p className="mt-1 text-meta text-sol-text-dim">Only an admin of the bot's team can change this.</p>

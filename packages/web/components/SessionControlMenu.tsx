@@ -495,10 +495,9 @@ export function HeaderModelControl({
   if (!interactive) {
     if (!label) return null;
     return (
-      <div className="hidden sm:flex items-center gap-1.5 flex-shrink-0">
-        <span className="text-sol-text-dim">&middot;</span>
+      <div className="hidden sm:flex items-center flex-shrink-0">
         <span className="font-mono truncate max-w-none" title={overlayModel}>{label}</span>
-        {glyph && <span className="text-sol-text-dim/80" title={`${overlayEffort} effort`}>{glyph}</span>}
+        {glyph && <span className="ml-1 text-sol-text-dim/80" title={`${overlayEffort} effort`}>{glyph}</span>}
       </div>
     );
   }
@@ -515,8 +514,7 @@ export function HeaderModelControl({
   </>;
 
   return (
-    <div className={composer ? "flex items-center flex-shrink-0" : "hidden sm:flex items-center gap-1.5 flex-shrink-0"}>
-      {!composer && <span className="text-sol-text-dim">&middot;</span>}
+    <div className={composer ? "flex items-center flex-shrink-0" : "hidden sm:flex items-center flex-shrink-0"}>
       <DropdownMenu open={isOpen} onOpenChange={setOpen}>
         <DropdownMenuTrigger asChild>
           {composer ? (
@@ -534,7 +532,7 @@ export function HeaderModelControl({
           ) : (
             <button
               data-session-control-trigger
-              className="group flex items-center gap-1 font-mono rounded px-1 -mx-1 transition-colors hover:bg-sol-bg-alt hover:text-sol-text-secondary"
+              className="group flex items-center gap-1 font-mono rounded px-1 transition-colors hover:bg-sol-bg-alt hover:text-sol-text-secondary"
               title={title}
             >
               {triggerBody}

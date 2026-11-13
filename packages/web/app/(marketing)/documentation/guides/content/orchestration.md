@@ -1,19 +1,21 @@
-Orchestration hands a whole [plan](/documentation/tasks-and-plans) to one agent and lets it run a team. That lead agent splits the goal into tasks, starts an implementer agent for every task that is ready, has a reviewer check each one before it lands, and finishes with critics who look over the combined result. Several tasks move at once, and you watch the plan fill in rather than steering one conversation through every step.
+Orchestration hands a whole [plan](/documentation/tasks-and-plans) to one lead agent, and that agent runs a team. It starts an implementer for every task that is ready, has a reviewer check each one before it lands, and finishes with critics who look over the combined result. Several tasks move at once, and you follow the plan page instead of steering one conversation through every step.
 
 It only starts when you ask for it.
 
-![A plan's Orchestration tab while agents work on it](/documentation/orchestration/plan.webp "The Orchestration tab on a plan: how many agents are working, how many tasks are done, any that are stuck, and each task's status in order.")
+![A plan's Orchestration tab while agents work on it](/documentation/orchestration/plan.webp "The Orchestration tab: agents working, tasks done, and each task's status in order.")
 
 ## Turn it on
 
-Open **Agent features** from your account menu, pick the computer your agents run on, and switch on **Orchestration**. It works with Claude Code, and the computer it runs on does the work, so a plan of many tasks keeps that machine busy for a while.
+Open **Agent features** (under **More** in the sidebar), pick the computer your agents run on, and switch on **Orchestration** under **Tracking & automation**. It works with Claude Code. That computer does all the work, so a plan of many tasks keeps it busy for a while.
 
-![The Orchestration detail in Agent features](/documentation/orchestration/feature.webp "Click How it works on the card to see what it adds and a request to try.")
+![The Orchestration card in Agent features](/documentation/orchestration/feature.webp "Click How it works on the card for what it adds and a request to try.")
 
-## Ask for it in plain words
+## Ask for it
+
+Say it in the conversation, in your own words:
 
 - "Make a plan for the settings redesign, then orchestrate it."
-- "Orchestrate the dark mode plan."
+- "Orchestrate the webhook retries plan."
 - "Orchestrate the rest of the billing plan, two tasks at a time."
 - "Stop after the first wave so I can look at it."
 
@@ -28,7 +30,7 @@ Eight tasks in three waves. Each wave starts the moment the work it depends on i
 
 **In waves.** Every task whose dependencies are done starts at once, each with its own implementer. As those finish, the next tasks unlock.
 
-**Each in its own copy.** Every implementer works in a separate copy of your repository on its own branch, so agents running side by side never trip over each other's files. Finished work merges back once it passes review.
+**Each in its own copy.** Every implementer works in a separate copy of your repository on its own branch, so agents running side by side never touch each other's files. Finished work merges back once it passes review.
 
 ```figure
 ReviewVerdictFigure
@@ -42,18 +44,25 @@ CriticRoundFigure
 Critics look at the whole result, not single tasks. Serious findings go back in as a new wave.
 ```
 
-**A final sweep.** Once every task has passed, critics review the combined code. Anything serious becomes new fix tasks and another wave; when they find nothing serious, the plan is done.
+**A final sweep.** Once every task has passed, critics review the combined code. Anything serious becomes new fix tasks and another wave. When they find nothing serious, the plan is done.
 
-## What you see
+## Follow it on the plan page
 
-- **The plan page.** Tasks move from open to in progress to done as agents pick them up and finish. The **Orchestration** tab shows how many agents are working, how many tasks are complete, and any that are blocked, with each task's status in order. **Graph** draws what depends on what.
-- **The lead agent's conversation.** It narrates each wave: what it started, what passed review, what it sent back. You can message it at any point to change course.
-- **The plan's timeline.** Progress at the end of each wave and the decisions the lead agent made land on the plan, so the record of why survives the run.
-- **Your inbox, when it needs you.** A task the agents can't finish, a rejected review or a missing piece of context comes back to you as a question, and the conversation is flagged as needing input.
+Open the plan. Its tasks move from **Open** to **In Progress** to **Done** as agents pick them up and finish, and the progress bar under the goal fills in.
+
+- **Orchestration** shows how many agents are working, how many tasks are done and any that are blocked, the **Active Sessions** with a link into each, and a **Task Timeline** with every task's status.
+- **Graph** draws what depends on what, so you can see which tasks are waiting on which.
+- **Overview** keeps the plan's timeline: progress at the end of each wave and the decisions the lead agent made, so the reasons survive the run.
+
+![A plan's Graph tab](/documentation/orchestration/graph.webp "The Graph tab: finished tasks, the ones running now, and the ones still waiting on them.")
+
+The lead agent's own conversation narrates each wave: what it started, what passed review, what it sent back. Message it at any point to change course.
+
+When it needs you, you hear about it. A task the agents can't finish, a rejected review or a missing piece of context comes back as a question, and the lead's conversation is flagged in your inbox as needing you.
 
 ## Orchestration or a workflow
 
-Choose orchestration when the shape of the work isn't known up front and an agent should work it out. When the steps are known and must run the same way every time, with an approval at a fixed point, use a [workflow](/documentation/workflows) instead.
+Choose orchestration when the shape of the work isn't known up front and an agent should work it out. When the steps are known and must run the same way every time, with an approval at a fixed point, use a [workflow](/documentation/workflows).
 
 ## When something is off
 
@@ -61,5 +70,5 @@ Choose orchestration when the shape of the work isn't known up front and an agen
 |-----------------|------------|
 | The lead agent asks you about a task | Answer in its conversation. It carries on with the rest of the plan meanwhile |
 | Too many agents run at once for your machine | Tell the lead agent to run fewer tasks at a time |
-| A task is stuck in progress | Open the task; its sessions and activity show where it stopped. Ask the lead agent to retry or split it |
-| The plan's tasks look wrong before it starts | Edit the plan first, or ask for a new breakdown. Orchestrating a bad plan just builds the wrong thing faster |
+| A task is stuck in progress | Open the task. Its sessions and activity show where it stopped. Ask the lead agent to retry or split it |
+| The plan's tasks look wrong before it starts | Edit the plan first, or ask for a new breakdown. Orchestrating a bad plan builds the wrong thing faster |
