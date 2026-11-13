@@ -1208,3 +1208,36 @@ describe("Claude Code's Rewind picker (2026-11-11)", () => {
     await expect(inputGuard(async () => question)()).rejects.toThrow(/waiting for a human answer/);
   });
 });
+
+// Claude Code's "We recommend compacting earlier" offer, captured from a live
+// pane on 2026-11-13. Its "‹ 400k ›" picker holds a › the idle rule read as a
+// composer caret, so messages were pasted into the dialog and held for good.
+const COMPACT_OFFER_PANE = `⏺ The batch finished; results are in the run log.
+
+✻ Waiting for 2 dynamic workflows to finish
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ We recommend compacting earlier
+
+   Each message re-sends the whole conversation, so long conversations use up your plan's usage limits faster. With your current settings, Claude Code autocompacts (replaces older messages with a summary) at 1m tokens
+   (default via auto setting). Compacting earlier can reduce usage, but it happens more often, and some details can be lost each time.
+
+   Want to autocompact at 400k tokens instead? Your model doesn't change. Switch back any time with /autocompact.
+
+     Autocompact at ‹ 400k › tokens
+     Keep auto (1m tokens)
+
+   ↑/↓ choose · ←/→ change size · enter confirm · esc not now`;
+
+describe("Claude Code suggestion dialog (esc not now)", () => {
+  test("classifies as offer_dialog, not idle", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(COMPACT_OFFER_PANE))).toBe("offer_dialog");
+  });
+
+  // The next unknown dialog will not say "esc not now". A › or ❯ inside a row
+  // is never a composer caret, so such a dialog must not read idle.
+  test("a mid-row › in an unrecognised dialog does not read idle", () => {
+    const unknownFooter = COMPACT_OFFER_PANE.replace("esc not now", "esc maybe later");
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(unknownFooter))).not.toBe("idle");
+  });
+});

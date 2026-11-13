@@ -156,6 +156,7 @@ export type TmuxLiveState =
   | "warning"       // dismissable banner — Enter to ack
   | "update_menu"   // agent's own "Update available" menu — Escape (Enter would RUN the update)
   | "limit_dialog"  // usage/spend limit dialog — Escape (its options are billing actions and a day-long wait)
+  | "offer_dialog"  // agent's own suggestion ("esc not now") — Escape declines it (Enter would accept a settings change)
   | "cwd_picker"    // Codex resume "Choose working directory" picker — answered by answerResumeCwdPicker
   | "signed_out"    // the agent's own login splash — hold, press nothing; the machine must log in
   | "menu"          // a select dialog (parseSelectDialog) or a numbered dialog with its cursor on an option — only a card answer moves it; press nothing, hold delivery
@@ -267,6 +268,13 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // The limit dialog ends in "Esc to cancel" too; named first so its Escape is
   // a deliberate dismissal, not a Rewind cancel that happens to fit.
   if (limitDialogOnPane(region)) return "limit_dialog";
+  // Claude Code's unprompted suggestions ("We recommend compacting earlier")
+  // replace the composer with a choice whose footer ends "esc not now". The
+  // "‹ 400k ›" size picker carries a › that the idle rule reads as a composer
+  // caret, so the pane read idle and every message for the session was pasted
+  // into the dialog and held (seven sessions on 2026-11-13). Escape declines;
+  // Enter would change the session's settings.
+  if (/·\s*esc not now\s*$/im.test(dialogText)) return "offer_dialog";
   if (/Esc to cancel|❯\s*\(current\)/i.test(dialogText)) return "rewind";
   if (/What should Claude do instead\?/i.test(region)) return "interrupted";
   // Teammate panel: a lead session with in-process agents renders a chip list
@@ -344,7 +352,11 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // the pane waited hours behind that receipt. Only a card answer (a poll)
   // moves this cursor; everything else holds.
   if (numberedCursorRow) return "menu";
-  const promptVisible = region.includes("❯") || region.includes("›");
+  // The caret opens its row, as in isComposerRow. A glyph inside a row belongs
+  // to a dialog: the autocompact offer's "Autocompact at ‹ 400k › tokens" read
+  // as a composer, and messages were typed into the dialog until delivery gave
+  // up (2026-11-13, jx7eahf).
+  const promptVisible = /^\s?[❯›]/m.test(region);
   if (promptVisible) return "idle";
   if (/Press enter to continue|Update available|weekly limit|recorded with model|⚠/i.test(region)) return "warning";
   return "unknown";
