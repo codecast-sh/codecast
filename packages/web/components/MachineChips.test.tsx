@@ -57,14 +57,14 @@ test("a sleeping cloud host says it boots on start, not that it falls back", () 
 test("same-named cloud hosts read apart: the sleeping one says how long, the dead one stays out of the row", () => {
   const report = (at: number) => ({ managed_by: "laptop", instance_id: "i-1", provider: "aws" as const, state: "stopped" as const, images: [], logins_held: [], at });
   const now = Date.now();
-  const live = { ...cloud, device_id: "live", online: true, last_seen: now, cloud_host: { ...report(now), state: "running" as const, region: "us-west-2" } };
+  const live = { ...cloud, device_id: "live", online: true, last_seen: now, cloud_host: { ...report(now), state: "running" as const, region: "us-west-2", instance_type: "m7i.4xlarge", instance_id: "i-087c7f5b1c9661f26" } };
   const asleep = { ...cloud, device_id: "asleep", last_seen: now - 3 * 86_400_000, cloud_host: report(now) };
   const dead = { ...cloud, device_id: "dead", last_seen: now - 14 * 86_400_000, cloud_host: report(now - 14 * 86_400_000) };
   const { host, unmount } = mount(
     <MachineChips machines={[laptop, live, asleep, dead]} selectedDeviceId="laptop" open onOpen={() => {}} onPick={() => {}} />,
   );
   const labels = Array.from(host.querySelectorAll("button")).map((b) => b.textContent);
-  expect(labels).toContain("Cloud Linux · us-west-2");
+  expect(labels).toContain("Cloud Linux · m7i.4xlarge 1f26");
   expect(labels).toContain("Cloud Linux · asleep 3d");
   expect(labels.some((l) => l?.includes("gone"))).toBe(false);
   unmount();
