@@ -14,7 +14,7 @@
 // the placements it can, plus any its access rule must refuse (EXPECTED_FOR).
 //
 // The feed list comes from CLIENT_SYNC_REGISTRY: every feed of a
-// workspaceScoped key is either exercised here (FEED_CASES) or named in
+// workspace-scoped key (DATA_SCOPE "workspace") is either exercised here (FEED_CASES) or named in
 // NOT_YET_COVERED, a list that may only shrink. Registering a new feed fails
 // this test until it is covered.
 import { describe, expect, test } from "bun:test";
@@ -24,7 +24,7 @@ import { api } from "./_generated/api";
 import { allModules } from "./testModules.testkit";
 import { makeChangeTrackedDb } from "./changeLog";
 import { makeSyncAckCollector, teamScopeKey, userScopeKey } from "./syncLog";
-import { CLIENT_SYNC_REGISTRY } from "../../web/store/clientSyncRegistry";
+import { CLIENT_SYNC_REGISTRY, WORKSPACE_SCOPED_KEYS } from "../../web/store/clientSyncRegistry";
 import { routerRoster } from "./orgRoute";
 import { gatherShipFacts } from "./ship";
 
@@ -49,6 +49,10 @@ const NOT_YET_COVERED = new Set([
   "workflows.webGetBySlug", "workflows.webPool", "workflow_runs.graphOfRun", "signals.webList",
   "signals.forTask", "lineWorkspace.labels", "lineWorkspace.deploys", "lineTimeline.page",
   "ingest.listSources", "replays.get", "metrics.listWatches", "orgChanges.list",
+  // Classed workspace-scoped with the store scope declaration (DATA_SCOPE); their
+  // rows need seeds this world lacks (dynamic runs, session flow runs, proposals).
+  // listForWorkflow answers only the workflow's owner: stricter than the matrix's workspace rule.
+  "workflow_runs.listForWorkflow", "workflow_runs.listDynamicRuns", "sessionFlowRuns.forConversation", "sessionFlowRuns.forTeam", "orgProposals.list",
 ]);
 
 type Ids = Awaited<ReturnType<typeof seed>>;
@@ -97,6 +101,9 @@ const FEED_CASES: Record<string, (ids: Ids) => Record<string, unknown>[]> = {
   "ingest.listEvents": listArgs,
   "replays.list": listArgs,
   // The feed reads one workspace: the active team (named or the pointer), else personal.
+  "workflow_runs.get": (ids) => Object.values(ids.rows.workflowRuns).map((id) => ({ id })),
+  "workflow_runs.byIds": (ids) => [{ ids: Object.values(ids.rows.workflowRuns).map(String) }],
+  "workflow_runs.listRuns": (ids) => [{}, { team_id: ids.T }, { team_id: ids.O }],
   "conversations.getMessageFeed": (ids) => [{ filter: "team" }, { filter: "team", activeTeamId: ids.T }, { filter: "team", activeTeamId: ids.O }, { filter: "my" }],
   // Mention indexes (useSyncMentionTasks/Docs/Plans): rows land in store.mentionIndex,
   // not a registry key, so FEED_TABLE names their table.
@@ -115,6 +122,8 @@ const FEED_TABLE: Record<string, string> = {
 // A feed whose answer is not a list of rows: what the web feeder hands the
 // store, so the matrix reads the rows the store would hold.
 const SELECT: Record<string, (res: any) => unknown> = {
+  // One run, not a list.
+  "workflow_runs.get": (r) => (r?._id ? [r] : []),
   // useFlowMap: one row keyed by its workspace.
   "flowMap.forTeam": (m) => (m ? [{ _id: m.workspace }] : []),
   // useSyncTeamKit: the answer's items.
@@ -128,7 +137,7 @@ const SELECT: Record<string, (res: any) => unknown> = {
 function registeredFeeds(): Map<string, string> {
   const out = new Map<string, string>();
   for (const [key, entry] of Object.entries(CLIENT_SYNC_REGISTRY) as [string, any][]) {
-    if (!entry.workspaceScoped) continue;
+    if (!(WORKSPACE_SCOPED_KEYS as readonly string[]).includes(key)) continue;
     for (const feed of entry.feeds ?? []) out.set(feed, key);
     for (const feed of HOOK_FEEDS[key as keyof typeof HOOK_FEEDS] ?? []) out.set(feed, key);
   }
@@ -162,7 +171,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
     };
     let n = 0;
     const base = (place: string) => ({ title: `${place} row`, created_at: now, updated_at: now });
-    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {}, opsGroups: {}, opsEvents: {}, opsReplays: {}, teamDeploys: {}, messageFeed: {} };
+    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {}, opsGroups: {}, opsEvents: {}, opsReplays: {}, teamDeploys: {}, messageFeed: {}, workflowRuns: {} };
     const groupRefs: Record<string, string> = {};
     for (const [place, p] of Object.entries(placements)) {
       rows.tasks[place] = await db.insert("tasks", { ...p, ...base(place), short_id: `ct-${++n}`, task_type: "task", priority: "medium", source: "human", status: "open" });
@@ -171,6 +180,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
       rows.projects[place] = await db.insert("projects", { ...p, ...base(place), status: "active" });
       const workflow_id = await db.insert("workflows", { ...p, name: `${place} flow`, slug: `${place}-flow`, nodes: [], edges: [], created_at: now, updated_at: now } as any);
       const run = await db.insert("workflow_runs", { ...p, workflow_id, workflow_name: `${place} flow`, status: "completed", node_statuses: [], created_at: now, updated_at: now } as any);
+      rows.workflowRuns[place] = run;
       rows.sessionFlows[place] = await db.insert("session_flows", { ...p, graph_hash: `g-${place}`, from: "graph", name: `${place} flow`, source: "", nodes: [], edges: [], file: "flow.cast", files: [], graph_nodes: [], first_run_id: run, last_run_at: now, created_at: now });
       // A live flow is a team's (createLiveFlowCore); the private one is the row its access rule must refuse.
       if (place !== "personal") rows.liveFlows[place] = await db.insert("live_flows", { ...p, workflow_id, on: false, changed_by: p.user_id, changed_at: now, created_at: now });
