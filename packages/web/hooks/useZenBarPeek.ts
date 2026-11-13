@@ -62,5 +62,10 @@ export function useZenBarPeek(enabled: boolean, barRef: RefObject<HTMLElement | 
     }
   }, [enabled]);
   useWatchEffect(() => () => clear(), []);
-  return { open: enabled && open, onEdgeEnter, onEdgeLeave, onBarEnter, onBarLeave };
+  const shown = enabled && open;
+  // What the bar itself carries while zen hides it (globals.css styles these).
+  const barProps = enabled
+    ? { "data-zen-bar": shown ? "open" : "closed", "data-flyout": "", onMouseEnter: onBarEnter, onMouseLeave: onBarLeave }
+    : {};
+  return { open: shown, barProps, onEdgeEnter, onEdgeLeave, onBarEnter, onBarLeave };
 }

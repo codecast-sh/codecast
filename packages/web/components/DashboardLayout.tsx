@@ -693,8 +693,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
   const [desktopClass, setDesktopClass] = useState(desktopHeaderClass);
   const [isDesktopApp, setIsDesktopApp] = useState(isElectron);
   const headerRef = useRef<HTMLElement>(null);
-  // Zen hides this header off the top of the window; the top edge peeks it
-  // back down (ZenBarPeek). An app window draws its own bar instead.
+  // Zen hides this header; the top edge peeks it down (an app window has its own bar).
   const zenBar = isZenMode && !appWindow;
   const zenPeek = useZenBarPeek(zenBar, headerRef);
   const prevWasInboxRef = useRef(false);
@@ -1343,20 +1342,14 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       <ErrorBoundary name="DashboardSync" level="inline" fallback={null}>
         <DashboardSyncEffects />
       </ErrorBoundary>
-      {/* Zen hides this header. Each surface's own top row then stands in as
-          the titlebar (drag region + an inset past the traffic lights) via
-          useTitlebarHead, and resting the pointer on the window's top edge
-          slides this header back down over the page (ZenBarPeek). An app
-          window (Chat, Work) replaces it with the app's own bar. */}
+      {/* Zen hides this header (each surface's top row stands in as the titlebar
+          via useTitlebarHead) and the window's top edge peeks it back down
+          (ZenBarPeek). An app window (Chat, Work) draws its own bar instead. */}
       {appWindow && <AppWindowBar app={appWindow} />}
-      {/* Header spans full width */}
       <header
         data-cc-topbar
-        data-zen-bar={zenBar ? (zenPeek.open ? "open" : "closed") : undefined}
-        data-flyout={zenBar ? "" : undefined}
+        {...zenPeek.barProps}
         ref={headerRef}
-        onMouseEnter={zenBar ? zenPeek.onBarEnter : undefined}
-        onMouseLeave={zenBar ? zenPeek.onBarLeave : undefined}
         className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] modern:border-sol-border ${desktopClass} ${appWindow ? "hidden" : ""} ${zenBar ? `fixed inset-x-0 top-0 !z-[120] transition-transform duration-200 ease-out ${zenPeek.open ? "translate-y-0 shadow-lg" : "-translate-y-full pointer-events-none"}` : "relative"}`}
       >
         {typeof window !== "undefined" && window.location.hostname.includes("local.") && (
@@ -1375,8 +1368,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 <Menu />
               </TopbarButton>
             )}
-            {/* In zen this bar peeks down from the top edge, and this
-                toggle reads "Exit zen mode". */}
+            {/* In zen this bar peeks down and this toggle reads "Exit zen mode". */}
             <ZenToggle />
             <ShortcutTooltip label={navHidden ? "Show sidebar" : "Hide sidebar"} action="sidebar.toggleLeft">
               <TopbarButton
@@ -1553,10 +1545,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
         </ErrorBoundary>
       </MobileDrawer>
       <ShellOverlays />
-      {/* Last in the shell on purpose. In zen the page's top row is a drag
-          region, and the desktop app resolves overlapping drag and no-drag
-          areas by document order, not z-index: the later element wins.
-          Mounted before the page, the edge would never see the pointer. */}
+      {/* Last in the shell on purpose: the desktop app lets the later of
+          overlapping drag/no-drag areas win (ZenBarPeek's file comment). */}
       {zenBar && <ZenTopEdge onEnter={zenPeek.onEdgeEnter} onLeave={zenPeek.onEdgeLeave} />}
     </div>
   );
