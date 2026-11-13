@@ -94,6 +94,7 @@ import { memberDisplayName } from "../../lib/liveEntities";
 import { issueListFocus, rememberIssueFocus, rememberIssueList } from "./issueNav";
 import { IssuesEmpty, SourceNoIssues } from "./issueEmpty";
 import "./issues.css";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 const ref = (g: OpsGroup) => g.short_id || g._id;
 const isToggleInput = (t: EventTarget | null) => t instanceof HTMLInputElement && (t.type === "checkbox" || t.type === "radio");
@@ -128,7 +129,7 @@ function useResolverNames(groups: OpsGroup[]): ReadonlyMap<string, string> {
   const sig = useInboxStore((s) => {
     if (!ids.length) return "";
     const me = (s as any).currentUser?._id as string | undefined;
-    const members = new Map((s.teamMembers as any[]).filter(Boolean).map((m) => [String(m._id), m]));
+    const members = new Map((teamMembersOf(s) as any[]).filter(Boolean).map((m) => [String(m._id), m]));
     return ids.map((id) => (id === me ? "you" : members.has(id) ? memberDisplayName(members.get(id)) : "")).join("\u0000");
   });
   return useMemo(() => {
