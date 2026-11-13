@@ -87,6 +87,7 @@ export const SessionHit = memo(function SessionHit({
         </div>
         <div className="mt-1 flex min-w-0 items-center gap-1.5 pl-[26px] text-meta text-sol-text-muted">
           {!row.isOwn && row.authorName && <span className="flex-shrink-0 font-medium text-sol-violet/80">{row.authorName.split(" ")[0]}</span>}
+          {row.teamName && <span className="flex-shrink-0 text-sol-text-dim">{row.teamName}</span>}
           <SessionProjectChip project={project} directory={row.projectPath} />
           {!!row.messageCount && <><MetaDot /><span className="flex-shrink-0 tabular-nums">{row.messageCount} msgs</span></>}
         </div>

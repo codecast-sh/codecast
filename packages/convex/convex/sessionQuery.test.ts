@@ -87,6 +87,8 @@ describe("operator search end to end", () => {
       for (const user_id of [viewer, mate]) {
         await ctx.db.insert("team_memberships", { team_id: team, user_id, role: "member", joined_at: 0, visibility: "full" } as any);
       }
+      // Search reads the workspace the viewer works in.
+      await ctx.db.patch(viewer, { active_team_id: team } as any);
       const remote = "git@github.com:acme/repo.git";
       const conv = (user_id: any, extra: Record<string, unknown>) =>
         ctx.db.insert("conversations", {
@@ -337,7 +339,7 @@ describe("operator search at volume", () => {
   const narrow = (s: any, query: string, limits: Partial<typeof OPERATOR_LIMITS>, isVisible: (c: any) => boolean = () => true) =>
     s.t.run(async (ctx: any) => {
       const viewer = await ctx.db.get(s.viewer);
-      const r = await narrowByOperators(ctx, parseSessionQuery(query), { viewerId: s.viewer, users: [viewer], teamIds: [], isVisible }, { ...OPERATOR_LIMITS, ...limits });
+      const r = await narrowByOperators(ctx, parseSessionQuery(query), { viewerId: s.viewer, users: [viewer], teamIds: [], contentVisible: isVisible }, { ...OPERATOR_LIMITS, ...limits });
       if ("error" in r) throw new Error(r.error);
       return { titles: r.candidates.map((c) => c.conv.title), truncated: r.truncated };
     });

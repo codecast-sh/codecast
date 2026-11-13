@@ -39,6 +39,7 @@ import { graphOutside, sortGraphRefs, stampGraphStatus } from "./lib/taskGraph";
 import { patchDepMirror } from "./tasks";
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { linkConversationToEntityBestEffort } from "./conversationLinks";
+import { cliDocWriter, docLiveState, docRevision, writeDocBody } from "./lib/docBody";
 export { canAccessPlan };
 
 async function canReadPlanTask(ctx: any, userId: Id<"users">, plan: any, task: any) {
@@ -226,7 +227,7 @@ export const create = mutation({
       });
     }
 
-    return { id, short_id, doc_id: docId };
+    return { id, short_id, doc_id: docId, doc_revision: docRevision(args.body || "", 0) };
   },
 });
 
@@ -422,6 +423,10 @@ export const update = mutation({
     workflow_id: v.optional(v.string()),
     // The charter (org-staffing.md S7); `goal` above completes it.
     ...planCharterArgs,
+    // The plan doc's revision `body` was computed from, and the deliberate
+    // overwrite (lib/docBody.ts writeDocBody).
+    base: v.optional(v.string()),
+    force: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -471,14 +476,14 @@ export const update = mutation({
       updates.progress = await recalcProgress(ctx, taskDocIds);
     }
 
+    let doc_revision: string | undefined;
     if (args.body !== undefined) {
       if (plan.doc_id) {
         const doc = await requireAccessibleDoc(ctx, auth.userId, plan.doc_id);
         requireSameWorkspace(doc, planWorkspace, "plan doc");
-        await ctx.db.patch(plan.doc_id, { content: args.body, updated_at: now });
-        if (args.title) {
-          await ctx.db.patch(plan.doc_id, { title: args.title });
-        }
+        ({ revision: doc_revision } = await writeDocBody(ctx, doc, { content: args.body, title: args.title || doc.title }, {
+          writer: await cliDocWriter(ctx, auth.userId, undefined), base: args.base, force: args.force, requireBase: true,
+        }));
       } else {
         const db = await createDataContext(ctx, {
           userId: auth.userId,
@@ -493,11 +498,12 @@ export const update = mutation({
           project_id: plan.project_id,
         });
         updates.doc_id = docId;
+        doc_revision = docRevision(args.body, 0);
       }
     }
 
     await ctx.db.patch(plan._id, updates);
-    return { success: true };
+    return { success: true, short_id: plan.short_id, doc_id: updates.doc_id ?? plan.doc_id, doc_revision };
   },
 });
 
@@ -954,9 +960,14 @@ export const get = query({
     }
 
     let doc_content: string | undefined;
+    // What a `--body` rewrite computed from this read sends back as its base.
+    let doc_revision: string | undefined;
     if (plan.doc_id) {
       const doc = await ctx.db.get(plan.doc_id);
-      if (doc && (await canReadPlanDoc(ctx, auth.userId, plan, doc))) doc_content = doc.content;
+      if (doc && (await canReadPlanDoc(ctx, auth.userId, plan, doc))) {
+        doc_content = doc.content;
+        doc_revision = docRevision(doc.content, (await docLiveState(ctx, doc._id)).version);
+      }
     }
 
     // Merge legacy arrays + new entries into unified comments timeline
@@ -970,7 +981,7 @@ export const get = query({
       searched: outside.searched,
     };
 
-    return { ...plan, tasks, doc_content, comments, graph_outside };
+    return { ...plan, tasks, doc_content, doc_revision, comments, graph_outside };
   },
 });
 

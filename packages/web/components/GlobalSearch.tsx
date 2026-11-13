@@ -87,7 +87,7 @@ export function GlobalSearch() {
     enabled: true,
     limit: 30,
     userOnly,
-    activeTeamId: selectedTeamId,
+    ...(selectedTeamId ? { activeTeamId: selectedTeamId } : { allTeams: true }),
     debounceMs: 200,
   });
   const { debouncedQuery, searchError, contentData: searchData, titleData } = remote;

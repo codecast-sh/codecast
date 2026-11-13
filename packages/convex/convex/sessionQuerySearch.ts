@@ -82,8 +82,10 @@ export type OperatorScope = {
   users: Doc<"users">[];
   /** The teams in scope, whose GitHub installations name the repositories a bare pr:<n> probes. */
   teamIds: Id<"teams">[];
-  /** The caller's search visibility rule, applied to every candidate. */
-  isVisible: (conv: Doc<"conversations">) => boolean;
+  /** Whether the caller may read this session's CONTENT. Operators match on
+   *  what a session did (files it changed, commits, pull requests, its text),
+   *  so a session listed only as a summary never passes. */
+  contentVisible: (conv: Doc<"conversations">) => boolean;
 };
 
 export type OperatorCandidate = { conv: Doc<"conversations">; matchedAt: number };
@@ -401,7 +403,7 @@ export async function narrowByOperators(
     if (i >= limits.hydrate || !budget.spend(unread)) break;
     const convs = await Promise.all(batch.map(([id]) => known.get(id) ?? ctx.db.get(id as Id<"conversations">)));
     convs.forEach((conv, j) => {
-      if (!conv || !scope.isVisible(conv)) return;
+      if (!conv || !scope.contentVisible(conv)) return;
       if (authorIds && !authorIds.has(conv.user_id.toString())) return;
       if (!matchesRepos(conv)) return;
       const changedAt = batch[j][1];

@@ -45,6 +45,10 @@ export type SessionSearchRow = {
   origin?: { started_as?: string; earlier_titles?: string[] } | null;
   /** Worker sessions that matched and are folded into this row. */
   workerCount?: number;
+  /** The workspace the session belongs to (team:<id> or user:<id>). */
+  workspace?: string;
+  /** Its team's name, sent when the search spans every team. */
+  teamName?: string;
   /** This row came from the local cache, not from the server search. */
   instant?: boolean;
   /** The text the local match landed in (summary, project path), for a preview line. */
