@@ -34,6 +34,7 @@ mock.module("../../../hooks/useQueryNoThrow", () => ({ ...noThrow, useQueryNoThr
 const { createRoot } = await import("react-dom/client");
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { MessageDecisionReview } = await import("../MessageDecisionReview");
+const { MemoryRouter } = await import("react-router");
 
 const NOW = Date.now();
 const dec = (n: number, over: Record<string, unknown> = {}) => ({
@@ -52,7 +53,7 @@ beforeEach(() => {
 async function mount(content: string) {
   const host = document.body.appendChild(document.createElement("div"));
   const root = createRoot(host);
-  await act(async () => { root.render(<MessageDecisionReview content={content} messageId="m1" />); });
+  await act(async () => { root.render(<MemoryRouter><MessageDecisionReview content={content} messageId="m1" /></MemoryRouter>); });
   return { host, unmount: () => act(async () => root.unmount()) };
 }
 const button = (host: Element, text: string) => [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === text);

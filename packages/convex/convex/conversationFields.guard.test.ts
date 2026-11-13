@@ -97,15 +97,15 @@ describe("conversation field manifest", () => {
 
   test("the derived allowlists still equal the literals they replaced", () => {
     expect([...PATCHABLE_CONVERSATION_FIELDS].sort()).toEqual([
-      "agent_type", "character_avatar", "character_name", "draft_message", "git_root", "inbox_deferred_at",
+      "agent_type", "character_avatar", "character_name", "draft_message", "git_root", "inbox_adopted_at", "inbox_deferred_at",
       "inbox_dismissed_at", "inbox_pinned_at", "inbox_rest", "inbox_rest_at", "inbox_snoozed_until", "project_path",
     ]);
     expect([...DISPATCHABLE_CONVERSATION_FIELDS].sort()).toEqual([
-      "character_avatar", "character_name", "inbox_deferred_at", "inbox_dismissed_at", "inbox_pinned_at",
+      "character_avatar", "character_name", "inbox_adopted_at", "inbox_deferred_at", "inbox_dismissed_at", "inbox_pinned_at",
       "inbox_rest", "inbox_rest_at", "inbox_snoozed_until", "inbox_stash_hidden", "inbox_stashed_at", "is_favorite", "title",
     ]);
     expect([...TRIAGE_CONVERSATION_FIELDS].sort()).toEqual([
-      "inbox_deferred_at", "inbox_dismissed_at", "inbox_killed_at", "inbox_pinned_at", "inbox_rest",
+      "inbox_adopted_at", "inbox_deferred_at", "inbox_dismissed_at", "inbox_killed_at", "inbox_pinned_at", "inbox_rest",
       "inbox_rest_at", "inbox_snoozed_until", "inbox_stashed_at", "is_deferred", "is_pinned", "user_rest",
     ]);
     expect(CONVERSATION_FIELD_TWINS).toEqual({

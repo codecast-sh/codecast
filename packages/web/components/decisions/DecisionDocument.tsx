@@ -63,9 +63,8 @@ function DocumentBody({ decision, detail, answerable, pager }: { decision: Sessi
   const discussion = useDecisionThread(decision._id);
   const [discussOpen, setDiscussOpen] = useState(false);
 
-  // The thread that asked opens from its own button ("Talk to the session").
-  // An upward scroll no longer does: on a short decision, or in the peek, a
-  // small flick left the page with nothing on screen saying it would.
+  // The thread that asked opens from its own button ("Talk to the session"),
+  // the page's lead action: the session is selected in the inbox at once.
   const jumpToAsk = useJumpToDecisionAsk(decision.conversation_id, decision._id, decision.question);
 
   // Who asked, who may answer, who holds it. A change card leads with the
@@ -135,15 +134,15 @@ function DocumentBody({ decision, detail, answerable, pager }: { decision: Sessi
           <button
             type="button"
             onClick={() => void jumpToAsk()}
-            className={`inline-flex items-center gap-1.5 rounded-md border border-sol-blue/50 px-2.5 py-1 text-[12.5px] text-sol-blue hover:bg-sol-blue/10 transition-colors ${modernButton({ variant: "soft", tone: "blue", size: "sm" })}`}
+            className={`inline-flex items-center gap-2 rounded-md bg-sol-blue px-3.5 py-1.5 text-[13.5px] font-medium text-sol-bg hover:bg-sol-blue/90 transition-colors ${modernButton({ variant: "primary", size: "md" })}`}
             data-decision-open-thread
           >
-            <MessagesSquare className="w-3.5 h-3.5" />Talk to the session
+            <MessagesSquare className="w-4 h-4" />Talk to the session
           </button>
           <button
             type="button"
             onClick={() => { setDiscussOpen(true); requestAnimationFrame(() => document.getElementById("discuss")?.scrollIntoView({ block: "nearest", behavior: "smooth" })); }}
-            className={`inline-flex items-center gap-1.5 rounded-md border border-sol-border px-2.5 py-1 text-[12.5px] text-sol-text hover:border-sol-cyan/60 hover:text-sol-cyan transition-colors ${modernButton({ variant: "outline", size: "sm" })}`}
+            className={`inline-flex items-center gap-1.5 rounded-md border border-sol-border px-3 py-1.5 text-[13px] text-sol-text hover:border-sol-cyan/60 hover:text-sol-cyan transition-colors ${modernButton({ variant: "outline", size: "md" })}`}
             data-decision-discuss-button
           >
             <MessageSquare className="w-3.5 h-3.5" />Comment for the team{discussion.rows.length > 0 && <span className="text-sol-text-dim">{discussion.rows.length}</span>}

@@ -38,6 +38,7 @@ export const OPTIONAL_INBOX_TIMESTAMPS: ReadonlySet<string> = new Set([
   "inbox_stash_hidden",
   "inbox_pinned_at",
   "inbox_killed_at",
+  "inbox_adopted_at",
   "thread_state",
   "thread_state_at",
   "thread_state_msg_count",

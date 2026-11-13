@@ -1,0 +1,148 @@
+{
+  "about": "A flow station rides the run's log, which is never listed, so a station is never a member until the person adopts it (inbox_adopted_at: they talked to it). An adopted station holds its seat through the adopted window alone, for 30 days from the adoption, and files by its own facts: a settled one under done or needs input, a dismissed one under dismissed. An unadopted station, an adoption older than the window, and a killed adopted station are not members.",
+  "epoch": "E",
+  "asking": [],
+  "rows": [
+    {
+      "_id": "run_log",
+      "status": "active",
+      "updated_at": "E-2m",
+      "message_count": 4,
+      "is_idle": true,
+      "agent_status": "stopped",
+      "title": "line",
+      "session_id": "wf-run_a",
+      "workflow_run_id": "run_a",
+      "is_workflow_primary": true,
+      "inbox_stashed_at": "E-1h",
+      "inbox_stash_hidden": true
+    },
+    {
+      "_id": "station_adopted",
+      "status": "active",
+      "updated_at": "E-5m",
+      "message_count": 30,
+      "is_idle": true,
+      "agent_status": "stopped",
+      "title": "Both sides of a match were pitched",
+      "is_subagent": true,
+      "parent_conversation_id": "run_log",
+      "inbox_adopted_at": "E-10m"
+    },
+    {
+      "_id": "station_adopted_working",
+      "status": "active",
+      "updated_at": "E-1m",
+      "message_count": 12,
+      "is_idle": false,
+      "agent_status": "working",
+      "title": "Build",
+      "is_subagent": true,
+      "parent_conversation_id": "run_log",
+      "inbox_adopted_at": "E-3m"
+    },
+    {
+      "_id": "station_adopted_dismissed",
+      "status": "completed",
+      "updated_at": "E-3h",
+      "message_count": 18,
+      "is_idle": true,
+      "title": "Refine",
+      "is_subagent": true,
+      "parent_conversation_id": "run_log",
+      "inbox_adopted_at": "E-4h",
+      "inbox_dismissed_at": "E-2h"
+    },
+    {
+      "_id": "station_plain",
+      "status": "active",
+      "updated_at": "E-4m",
+      "message_count": 20,
+      "is_idle": true,
+      "title": "Check",
+      "is_subagent": true,
+      "parent_conversation_id": "run_log"
+    },
+    {
+      "_id": "station_adopted_long_ago",
+      "status": "active",
+      "updated_at": "E-1h",
+      "message_count": 9,
+      "is_idle": true,
+      "title": "Review",
+      "is_subagent": true,
+      "parent_conversation_id": "run_log",
+      "inbox_adopted_at": "E-31d"
+    },
+    {
+      "_id": "station_adopted_killed",
+      "status": "completed",
+      "updated_at": "E-20m",
+      "message_count": 9,
+      "is_idle": true,
+      "title": "Land",
+      "is_subagent": true,
+      "parent_conversation_id": "run_log",
+      "inbox_adopted_at": "E-30m",
+      "inbox_killed_at": "E-25m",
+      "inbox_dismissed_at": "E-25m"
+    }
+  ],
+  "expected": {
+    "truncated": [],
+    "tally": {
+      "shown": {
+        "questions": 0,
+        "pinned": 0,
+        "new": 0,
+        "needs_input": 1,
+        "done": 0,
+        "dormant": 0,
+        "working": 1,
+        "idle": 0,
+        "snoozed": 0,
+        "stashed": 0,
+        "dismissed": 1,
+        "hidden": 0
+      },
+      "folded": {
+        "questions": 0,
+        "pinned": 0,
+        "new": 0,
+        "needs_input": 0,
+        "done": 0,
+        "dormant": 0,
+        "working": 0,
+        "idle": 0,
+        "snoozed": 0,
+        "stashed": 0,
+        "dismissed": 0,
+        "hidden": 0
+      }
+    },
+    "set_digest": "f5585e597df1f8e3",
+    "placements": {
+      "stationadopteddismissedz23000000": [
+        "dismissed",
+        "needs_input",
+        false
+      ],
+      "stationadoptedworkingz2100000000": [
+        "working",
+        "working",
+        false
+      ],
+      "stationadoptedz14000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ]
+    },
+    "sort_at": {
+      "stationadopteddismissedz23000000": -10800000,
+      "stationadoptedworkingz2100000000": -60000,
+      "stationadoptedz14000000000000000": -300000
+    },
+    "sort_order": {}
+  }
+}

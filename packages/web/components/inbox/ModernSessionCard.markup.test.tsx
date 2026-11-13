@@ -210,6 +210,14 @@ describe("the Modern session card", () => {
     expect(html).not.toContain('data-mc-chip="project"');
   });
 
+  test("a flow station the person adopted draws as a full card named by its flow", () => {
+    const html = render({ _id: "c-station", is_subagent: true, parent_conversation_id: "c-runlog", inbox_adopted_at: NOW - 10 * MIN, flow_name: "Union fix flow", flow_run_id: "run_1" } as never);
+    expect(html).not.toContain('data-mc="nested"');
+    expect(html).not.toContain('aria-label="Subagent"');
+    expect(html).toContain('data-mc-chip="flow"');
+    expect(html).toContain("Union fix flow");
+  });
+
   test("text stays on the type scale", () => {
     const html = render({ _id: "c-scale" }, { isUnread: true, sectionStatus: "blocked" });
     expect(html).not.toMatch(/text-\[(\d|1[01])px\]/);

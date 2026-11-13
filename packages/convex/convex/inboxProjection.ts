@@ -17,6 +17,7 @@ export function inboxVisibilityFields(conv: {
   inbox_stash_hidden?: boolean | null;
   inbox_killed_at?: number | null;
   inbox_pinned_at?: number | null;
+  inbox_adopted_at?: number | null;
 }) {
   return {
     inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
@@ -25,6 +26,7 @@ export function inboxVisibilityFields(conv: {
     inbox_stash_hidden: conv.inbox_stash_hidden ?? null,
     inbox_killed_at: conv.inbox_killed_at ?? null,
     inbox_pinned_at: conv.inbox_pinned_at ?? null,
+    inbox_adopted_at: conv.inbox_adopted_at ?? null,
   };
 }
 

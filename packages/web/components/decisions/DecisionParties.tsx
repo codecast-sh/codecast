@@ -12,6 +12,7 @@ import { categoryMeaning } from "../../lib/decisionCategory";
 import { askingSessionDeps } from "./askingSessionDeps";
 import { askingSessionName } from "../../lib/decisionLinks";
 import { objectHref } from "../../lib/entityLinks";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 // Who is in a decision: the session that asked, the person who holds it, and
 // what its category means. One rendering for the queue card and the document
@@ -105,11 +106,11 @@ export function PersonChip({
   fallbackImage?: string;
   className?: string;
 }) {
-  const s = useTrackedStore([(st) => st.teamMembers?.length, (st) => (st as any).currentUser?._id]);
+  const s = useTrackedStore([(st) => teamMembersOf(st)?.length, (st) => (st as any).currentUser?._id]);
   const info = resolveAssigneeInfo(
     userId,
     fallbackName ? { name: fallbackName, image: fallbackImage } : null,
-    s.teamMembers as any,
+    teamMembersOf(s) as any,
     (s as any).currentUser,
   );
   const name = info?.name ?? fallbackName;

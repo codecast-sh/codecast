@@ -52,6 +52,7 @@ export const INBOX_TRUNCATION_KINDS = [
   "snoozed",
   "stashed",
   "owned",
+  "adopted",
   "members",
   "member_rows",
   "foreign_scan",
@@ -120,7 +121,11 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // only while its last activity is within HISTORY_IMPORT_INBOX_MS.
 // v25: a hibernated session files by the verdict it carries (done, a
 // structural wake, or the person's move) instead of always parking as dormant.
-export const INBOX_PROJECTION_VERSION = 25 as const;
+// v26: a nested session the person talked to (inbox_adopted_at, a flow
+// station opened from its decision) stands alone: it is its own member
+// through the adopted window, files by its own facts and no longer rides its
+// parent.
+export const INBOX_PROJECTION_VERSION = 26 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -661,12 +666,17 @@ export function isNoiseTitle(title: string | null | undefined): boolean {
 
 // A row that can never be its own projection member: subagents, workflow subs,
 // and rows with a parent pointer but no parent message (orphans). Their state
-// surfaces only on the parent (asking rollup, producing grace).
+// surfaces only on the parent (asking rollup, producing grace). The exception
+// is a nested row the person ADOPTED (inbox_adopted_at): they talked to it
+// (a flow station opened from its decision, or a message they sent it), so it
+// stands alone in their inbox like any session instead of riding a parent
+// they never see (a flow's run log is never listed).
 export interface InboxRowIdentity {
   is_subagent?: boolean | null;
   is_workflow_sub?: boolean | null;
   parent_conversation_id?: unknown;
   parent_message_uuid?: string | null;
+  inbox_adopted_at?: number | null;
 }
 
 // A workflow run's own log: the conversation a run opens for itself to carry
@@ -685,11 +695,21 @@ export function isRunLog(conv: RunLogIdentity): boolean {
   return !!conv.is_workflow_primary && !!conv.workflow_run_id;
 }
 
-export function isOrphanOrSubagent(conv: InboxRowIdentity): boolean {
+/** Nested by identity (a subagent, a workflow sub, an orphan), adopted or not. */
+export function isNestedIdentity(conv: InboxRowIdentity): boolean {
   if (conv.is_subagent === true) return true;
   if (conv.is_workflow_sub === true) return true;
   if (conv.parent_conversation_id && !conv.parent_message_uuid) return true;
   return false;
+}
+
+/** A nested row the person adopted: it stands alone (InboxRowIdentity). */
+export function isAdoptedChild(conv: InboxRowIdentity): boolean {
+  return !!conv.inbox_adopted_at && isNestedIdentity(conv);
+}
+
+export function isOrphanOrSubagent(conv: InboxRowIdentity): boolean {
+  return isNestedIdentity(conv) && !conv.inbox_adopted_at;
 }
 
 // The parent a child's state rolls up to (its open ask lifts the parent into
@@ -1032,6 +1052,7 @@ export const INBOX_WINDOW_CAPS = {
   stashed: 200,
   snoozed: 200,
   owned: 200,
+  adopted: 100,
 } as const;
 
 export type WorkingSetWindow = keyof typeof INBOX_WINDOW_CAPS;
@@ -1081,8 +1102,10 @@ export interface WorkingSetRow extends InboxVisibilityRow, RollupRow {
 // eligibility and the fold's exemption, and the server's recent index pins
 // the same four fields to absent (schema by_user_plain_updated), so the scan
 // and the replica cut the recent window over the same rows.
-export function isFiled(row: Pick<WorkingSetRow, "inbox_pinned_at" | "inbox_dismissed_at" | "inbox_stashed_at" | "inbox_snoozed_until">): boolean {
-  return !!(row.inbox_pinned_at || row.inbox_dismissed_at || row.inbox_stashed_at || row.inbox_snoozed_until);
+// An adoption stamp files the row too: it holds its seat through the adopted
+// window, and the server's recent index never reads a nested row at all.
+export function isFiled(row: Pick<WorkingSetRow, "inbox_pinned_at" | "inbox_dismissed_at" | "inbox_stashed_at" | "inbox_snoozed_until" | "inbox_adopted_at">): boolean {
+  return !!(row.inbox_pinned_at || row.inbox_dismissed_at || row.inbox_stashed_at || row.inbox_snoozed_until || row.inbox_adopted_at);
 }
 
 // Window eligibility BEFORE caps ([] = nonmember). Top-level rows only, after
@@ -1099,7 +1122,11 @@ export function inWorkingSet(row: WorkingSetRow, epoch: number): WorkingSetWindo
     !isFiled(row) && (row.status === "active" || row.status === "completed") && row.updated_at >= horizon && !isStaleHistoryImport(row, epoch);
   if (recentEligible) windows.push("recent");
   if (row.inbox_pinned_at) windows.push("pinned");
-  if (!row.inbox_killed_at) {
+  if (row.inbox_adopted_at && row.inbox_adopted_at >= horizon) windows.push("adopted");
+  // The server reads the hide windows over top-level rows only (is_subagent
+  // pinned at the index), so an adopted child holds its seat through the
+  // adopted window alone and files under its hide stamp by placement.
+  if (!row.inbox_killed_at && !isNestedIdentity(row)) {
     if (row.inbox_dismissed_at && row.inbox_dismissed_at >= horizon) windows.push("dismissed");
     if (row.inbox_stashed_at && row.inbox_stashed_at >= horizon) windows.push("stashed");
     if (row.inbox_snoozed_until) windows.push("snoozed");
@@ -1117,6 +1144,7 @@ const WINDOW_SORT_KEY: Record<Exclude<WorkingSetWindow, "owned">, (row: WorkingS
   dismissed: (r) => r.inbox_dismissed_at ?? 0,
   stashed: (r) => r.inbox_stashed_at ?? 0,
   snoozed: (r) => r.inbox_snoozed_until ?? 0,
+  adopted: (r) => r.inbox_adopted_at ?? 0,
 };
 
 export type WorkingSetMember<Row extends WorkingSetRow = WorkingSetRow> = {

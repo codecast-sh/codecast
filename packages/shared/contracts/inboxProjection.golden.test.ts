@@ -106,6 +106,8 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   24: "873f7c5eaedf6e64",
   // v25: a hibernated session files by the verdict it carries, not as dormant.
   25: "820dddba656a01dc",
+  // v26: a flow station the person adopted stands alone (adopted.json).
+  26: "118ba0e91820a47d",
 };
 
 type Expected = {

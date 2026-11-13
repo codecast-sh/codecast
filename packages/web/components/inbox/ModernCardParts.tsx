@@ -1,6 +1,7 @@
 import type React from "react";
 import Link from "next/link";
-import { CornerUpLeft, ArrowRight, GitBranch, GitPullRequest, MessageSquare, Tag, Users } from "lucide-react";
+import { CornerUpLeft, ArrowRight, GitBranch, GitPullRequest, MessageSquare, Tag, Users, Workflow } from "lucide-react";
+import { runHref } from "../../lib/decisionLinks";
 import { badgeVariants } from "../ui/badge";
 import { Button } from "../ui/button";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
@@ -66,6 +67,17 @@ export function ModernProjectChip({ project, label, directory, workProject, onFi
     </button>
   ) : (
     <span data-mc-chip="project" title={where} className={`${CHIP} ${className}`}>{body}</span>
+  );
+}
+
+/** The flow an adopted station works for; opens its run. */
+export function ModernFlowChip({ session, className = "" }: { session: InboxSession; className?: string }) {
+  if (!session.flow_run_id) return null;
+  const name = session.flow_name || "Flow";
+  return (
+    <Link href={runHref(session.flow_run_id)} data-mc-chip="flow" data-flow-chip title={name} onClick={stop} className={`${CHIP_ACCENT} ${PRESS} ${className}`}>
+      <Workflow aria-hidden className="w-3 h-3 shrink-0" /><span className="truncate">{name}</span>
+    </Link>
   );
 }
 

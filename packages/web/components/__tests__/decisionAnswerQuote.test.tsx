@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ConvexProvider } from "convex/react";
+import { MemoryRouter } from "react-router";
 import { useInboxStore } from "../../store/inboxStore";
 import { DecisionAnswerQuote } from "../DecisionAnswerQuote";
 import { offlineConvexClient } from "../../test-helpers/offlineConvex";
@@ -10,7 +11,7 @@ import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 // queue's day-long window still reads against its ask. (Static render reads
 // the store's initial snapshot, so the live-row preference is not testable here.)
 const client = offlineConvexClient("https://example.convex.cloud");
-const render = (el: React.ReactElement) => renderToStaticMarkup(<ConvexProvider client={client}>{el}</ConvexProvider>);
+const render = (el: React.ReactElement) => renderToStaticMarkup(<MemoryRouter><ConvexProvider client={client}>{el}</ConvexProvider></MemoryRouter>);
 const CONV = "conv1234567890123456789012345678";
 
 describe("DecisionAnswerQuote", () => {

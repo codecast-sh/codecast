@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from "react";
 import { SessionWorkProject } from "../projects/SessionWorkProject";
 import { SessionTaskChip } from "../work/SessionTaskChip";
-import { Pin, Star, Clock, EyeOff } from "lucide-react";
+import { Pin, Star, Clock, EyeOff, Workflow } from "lucide-react";
+import { runHref } from "../../lib/decisionLinks";
 import Link from "next/link";
 import { withSafetyBlock, isStashHidden, type UserRest, type ThreadStateStatus } from "@codecast/shared/contracts";
 import type { NoticeKind } from "@codecast/shared/contracts/assistant";
@@ -16,7 +17,6 @@ import { sessionCardSummary } from "../../lib/sessionSummary";
 import { isHandoffFrom } from "../../lib/sessionHandoff";
 import { threadStateView, THREAD_STATE_PIN_CLASS, THREAD_STATE_STATUS_META } from "../../lib/threadState";
 import { getProjectName, isFork, isAgentActive, showsBlockedBadge, type InboxSession, type SessionRoleSnapshot } from "../../store/inboxStore";
-import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import { msgCountColor, formatModel } from "../../lib/conversationProcessor";
 import { ViewerFaces } from "../presence/ViewerFaces";
 import { DeviceIcon, deviceDisplayName, type Device } from "../DeviceBadge";
@@ -51,6 +51,7 @@ import {
   SessionProjectChip,
   SelectTick,
   UnreadDot,
+  drawsNested,
 } from "./SessionCardParts";
 
 // The inbox session card as a pure view: everything it draws arrives as props,
@@ -250,9 +251,9 @@ export function SessionCardView({
   // gate below, which stays keyed on the real dismissed variant).
   const isDismissed = variant === "dismissed" || isStashed;
   // Compact nested-child look: a trigger sub-row, a Task subagent, or an
-  // agent-team teammate (via nestParentIdOf). A worktree is only where the
-  // session runs — it does not make a first-class card look like a child.
-  const isSubagent = !!subRow || !!session.is_subagent || !!nestParentIdOf(session);
+  // agent-team teammate (drawsNested). A worktree is only where the session
+  // runs — it does not make a first-class card look like a child.
+  const isSubagent = drawsNested(session, subRow);
   // Local-first "pending working": a message has been sent but the daemon
   // hasn't confirmed delivery yet (status not active). Clears the moment
   // status goes active or the server echoes the message.
@@ -340,6 +341,19 @@ export function SessionCardView({
     onDropFiles,
   });
 
+  // An adopted flow station names the flow it works for, and opens its run.
+  const flowChip = session.flow_run_id ? (
+    <Link
+      href={runHref(session.flow_run_id)}
+      onClick={(e) => e.stopPropagation()}
+      data-flow-chip
+      className="flex-shrink min-w-0 inline-flex items-center gap-1 text-meta text-sol-green hover:underline underline-offset-2"
+      title={session.flow_name ?? "Flow"}
+    >
+      <Workflow className="w-3 h-3 shrink-0" />
+      <span className="truncate max-w-[180px]">{session.flow_name ?? "Flow"}</span>
+    </Link>
+  ) : null;
   // A subagent's place in the fleet queue, or what became of its worktree.
   const fleetChip = session.subagent_slot === "queued" || session.merge_back ? <SubagentFleetChip session={session} /> : null;
   const worktreeChip = (session.worktree_name || session.cloud_placement === "pending" || session.cloud_workspace === "shared" || session.migration_batch_id) ? (
@@ -775,6 +789,7 @@ export function SessionCardView({
             onFilterLabel={onFilterLabel && ((e) => onFilterLabel(session, e))}
           />
           {workProject && <SessionWorkProject sig={workProject} className="flex-shrink" />}
+          {flowChip}
           {session.is_anchor && anchorIdentity && <><MetaSep /><AnchorScopePill anchor={anchorIdentity} quiet className="flex-shrink-0" /></>}
           {/* A role's sessions are the role's (S23.3): never rows under its
               card, one count that opens the role's page. Silent at zero. */}

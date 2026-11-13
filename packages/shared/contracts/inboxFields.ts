@@ -68,7 +68,7 @@ export const INBOX_FACT_FIELDS = [
 // again. A convex test pins this set to what those three functions write.
 export const INBOX_ROW_FIELDS = [
   "_id", "session_id", "user_id", "team_id", "status", "is_private", "team_visibility",
-  "title", "subtitle", "started_at", "history_import", "agent_type", "model", "effort", "cc_account", "transcript_revision",
+  "title", "subtitle", "started_at", "history_import", "agent_type", "model", "effort", "cc_account", "codex_account", "transcript_revision",
   "project_path", "git_root", "git_branch", "git_remote_url", "worktree_name", "worktree_branch",
   // A staged "Rewind to here" in the checkout (treeSnapshots.reportRewindStaged): the
   // conversation header reads it live from the row, for a fork's parent too.
@@ -78,7 +78,7 @@ export const INBOX_ROW_FIELDS = [
   "handed_off_from_conversation_id", "handed_off_from_details", "handed_off_to_conversation_id", "handed_off_to_details",
   "implementation_session",
   "inbox_pinned_at", "is_pinned", "inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden",
-  "inbox_snoozed_until", "inbox_killed_at", "is_deferred", "inbox_deferred_at", "inbox_rest", "inbox_rest_at", "user_rest",
+  "inbox_snoozed_until", "inbox_killed_at", "inbox_adopted_at", "is_deferred", "inbox_deferred_at", "inbox_rest", "inbox_rest_at", "user_rest",
   "settle_verdict", "is_favorite",
   "has_pending", "last_user_message", "pending_api_error", "pending_api_error_at", "pending_api_error_kind", "session_error", "hosted_stop",
   "idle_summary", "thread_state", "thread_state_at", "thread_state_msg_count", "thread_state_status",
@@ -86,6 +86,8 @@ export const INBOX_ROW_FIELDS = [
   "active_plan", "active_task", "agent_task_id", "armed_trigger_kind", "loop_state", "pr_status",
   "workflow_run_id", "workflow_run_name", "workflow_run_status", "workflow_run_started_at",
   "workflow_run_activity", "workflow_run_agents_done", "workflow_run_agents_total",
+  // An adopted flow station's flow (enrichInboxSessionRow).
+  "flow_name", "flow_run_id",
   "anchor_id", "is_anchor", "last_turn_origin", "org_role_id", "standing_role_id", "role", "acting_user_id",
   "character_avatar", "character_name", "drawn_icon", "icon", "icon_color", "image_preview_url", "browser_pane_offer",
   "owner_device_id", "owner_user_id", "author_avatar", "local_mirror", "migration_batch_id",

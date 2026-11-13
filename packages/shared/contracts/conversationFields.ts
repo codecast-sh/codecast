@@ -57,6 +57,9 @@ export const CONVERSATION_FIELDS = {
   inbox_killed_at: { send: true, triage: true, visibility: true },
   inbox_pinned_at: { send: true, dispatch: true, patch: true, triage: true, twin: "is_pinned", visibility: true },
   inbox_snoozed_until: { send: true, dispatch: true, patch: true, triage: true, visibility: true },
+  // The person talked to a nested session (a flow station), so it stands
+  // alone in their inbox (inboxProjection isAdoptedChild).
+  inbox_adopted_at: { send: true, dispatch: true, patch: true, triage: true, visibility: true },
   // Defer is the one stamp the client learns only through its twin: the row
   // carries is_deferred, currency-filtered by the server, and the raw stamp
   // stays behind. The rest verdict below deliberately does the opposite.

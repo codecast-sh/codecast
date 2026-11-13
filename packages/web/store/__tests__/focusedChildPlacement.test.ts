@@ -85,3 +85,23 @@ describe("a focused child row whose parent is not listed", () => {
     expect(placed.subsByParent.get(RUN_LOG)?.map((r) => r._id)).toEqual([STATION]);
   });
 });
+
+describe("a station the person adopted (inbox_adopted_at)", () => {
+  it("stays on the list as a member when another session is open", () => {
+    const s = state({
+      [STATION]: station({ inbox_adopted_at: NOW - 600_000 } as Partial<InboxSession>),
+      [RUN_LOG]: row(RUN_LOG, { inbox_stashed_at: NOW - 3_600_000, is_workflow_primary: true, workflow_run_id: "run_1" } as Partial<InboxSession>),
+      [OTHER]: row(OTHER),
+    });
+    const placed = placeInboxRows(s, { scope: "mine", focusedId: OTHER, now: NOW });
+    expect(flatIds(placed)).toContain(STATION);
+    const shown = Object.values(placed.tally.shown).reduce((a, b) => a + b, 0);
+    expect(shown).toBe(2);
+  });
+
+  it("is off the list again once the adoption is older than the window", () => {
+    const s = state({ [STATION]: station({ inbox_adopted_at: NOW - 31 * 86_400_000 } as Partial<InboxSession>), [OTHER]: row(OTHER) });
+    const placed = placeInboxRows(s, { scope: "mine", focusedId: OTHER, now: NOW });
+    expect(flatIds(placed)).not.toContain(STATION);
+  });
+});

@@ -2,7 +2,6 @@ import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import { Star, Rocket } from "lucide-react";
 import { withSafetyBlock, isStashHidden, isHostedAgentType } from "@codecast/shared/contracts";
-import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import { entityRoute } from "@codecast/shared/entities";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { formatRowTime, sessionCardTitle } from "../../lib/sessionCard";
@@ -27,8 +26,8 @@ import { WorkspaceTile } from "../identity/WorkspaceTile";
 import { SessionTaskChip } from "../work/SessionTaskChip";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
 import { badgeVariants } from "../ui/badge";
-import { AssignedPingStrip, ForkCorner, SelectTick } from "./SessionCardParts";
-import { ModernAuthorChip, ModernBranchChip, ModernCardToolbar, ModernCommentsChip, ModernFactChip, ModernLinkChip, ModernPinGlyph, ModernProjectChip } from "./ModernCardParts";
+import { AssignedPingStrip, ForkCorner, SelectTick, drawsNested } from "./SessionCardParts";
+import { ModernAuthorChip, ModernBranchChip, ModernCardToolbar, ModernCommentsChip, ModernFactChip, ModernLinkChip, ModernPinGlyph, ModernProjectChip, ModernFlowChip } from "./ModernCardParts";
 import { SessionStatusMark, SessionStatusWord } from "./SessionStatusMark";
 import type { SessionCardViewProps } from "./SessionCardView";
 import "./modernSessionCard.css";
@@ -121,8 +120,7 @@ export function ModernSessionCardView({
   const project = getProjectName(session.git_root, session.project_path);
   const isStashed = variant === "stashed" || variant === "snoozed";
   const isSetAside = isStashed || variant === "dismissed";
-  // A nested row: a trigger's run, a Task subagent, an agent-team teammate.
-  const nested = !!subRow || !!session.is_subagent || !!nestParentIdOf(session);
+  const nested = drawsNested(session, subRow);
   const identity = identityProp ?? session;
   const isPersonified = sessionIdentity(identity, chrome.prefs).kind !== "plain";
   const displayTitle = liveTitle || sessionCardTitle(session);
@@ -219,6 +217,7 @@ export function ModernSessionCardView({
       />,
     );
   }
+  if (session.flow_run_id) chips.push(<ModernFlowChip key="flow" session={session} className="shrink-[200]" />);
   if (ship) {
     chips.push(shipHref
       ? <Link key="ship" href={shipHref} data-mc-chip="ship" title={ship.words} onClick={(e) => e.stopPropagation()} className={`${chipClass} shrink-[100] hover:text-sol-text`}><Rocket aria-hidden className="w-3 h-3 shrink-0" /><span className="truncate">{ship.words}</span></Link>

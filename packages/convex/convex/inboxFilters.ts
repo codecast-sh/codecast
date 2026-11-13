@@ -18,8 +18,8 @@ export type ConversationDoc = Doc<"conversations">;
 // @codecast/shared/contracts/inboxProjection — ONE implementation serves the
 // server scan and every replica's working-set selection (sync-convergence C4).
 // Re-exported so existing `from "./inboxFilters"` importers keep working.
-export { NOISE_TITLE_PREFIXES, isNoiseTitle, isOrphanOrSubagent, isRunLog, shouldShowInInbox } from "@codecast/shared/contracts";
-import { shouldShowInInbox, isCompactionSummaryMessage, isOrphanOrSubagent } from "@codecast/shared/contracts";
+export { NOISE_TITLE_PREFIXES, isNoiseTitle, isOrphanOrSubagent, isAdoptedChild, isRunLog, shouldShowInInbox } from "@codecast/shared/contracts";
+import { shouldShowInInbox, isCompactionSummaryMessage, isNestedIdentity, isRunLog } from "@codecast/shared/contracts";
 
 // The three DISTINCT ways a session leaves the active inbox. They were reported
 // as a single "dismissed" figure back when kill was an event rather than a
@@ -75,18 +75,23 @@ export async function restoreToInbox(
   return true;
 }
 
-// A person wrote into a nested session (a subagent, a flow station): the
-// inbox shows such a row only under its parent, and only while that parent is
-// itself shown, so a stashed or dismissed parent would swallow the thread the
-// person just spoke into. Bring the parent back so the conversation they are
-// waiting on is in their inbox. A killed parent stays killed.
-export async function restoreNestingParent(
+// A person wrote into a nested session (a subagent, a flow station): put the
+// thread they are waiting on in their inbox. Under an ordinary parent the row
+// shows only nested there, and only while that parent is itself shown, so a
+// stashed or dismissed parent is brought back (a killed parent stays killed).
+// A flow station's parent is the run's log, which is never listed, and a
+// missing parent shows nothing, so there the session itself is adopted
+// (inbox_adopted_at): it stands alone in their inbox from now on.
+export async function bringNestedThreadToInbox(
   ctx: { db: { get: (id: any) => Promise<any>; patch: (id: any, patch: Record<string, unknown>) => Promise<void> } },
-  conv: Pick<ConversationDoc, "parent_conversation_id" | "parent_message_uuid" | "is_subagent" | "is_workflow_sub">,
+  conv: Pick<ConversationDoc, "_id" | "parent_conversation_id" | "parent_message_uuid" | "is_subagent" | "is_workflow_sub" | "inbox_adopted_at">,
+  now: number = Date.now(),
 ): Promise<boolean> {
-  if (!conv.parent_conversation_id || !isOrphanOrSubagent(conv)) return false;
-  const parent = await ctx.db.get(conv.parent_conversation_id);
-  return parent ? restoreToInbox(ctx, parent) : false;
+  if (!conv.parent_conversation_id || !isNestedIdentity(conv)) return false;
+  const parent = conv.inbox_adopted_at ? null : await ctx.db.get(conv.parent_conversation_id);
+  if (parent && !isRunLog(parent)) return restoreToInbox(ctx, parent);
+  await ctx.db.patch(conv._id, { inbox_adopted_at: now });
+  return true;
 }
 
 // Whether `parent` is a conversation an orchestration worker can safely be
