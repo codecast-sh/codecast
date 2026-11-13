@@ -594,11 +594,43 @@ const MARK: Record<string, string> = { verified: "✓", refreshing: "…", loadi
  * has no answer yet (or every one, with --rerun) first and waits for it, so
  * an agent can verify the dashboard before handing it back.
  */
+async function judgeBlock(ctx: any, userId: Id<"users">, docId: Id<"docs">, raw: string): Promise<{ text: string; json: unknown; failed: boolean }> {
+  let block: ArtifactElement;
+  try {
+    block = JSON.parse(raw);
+  } catch {
+    return { text: "the alert's block isn't valid JSON", json: null, failed: true };
+  }
+  const q = dashboard.blockQuery(block);
+  if (!q) return { text: "a KPI needs a source before it can alert", json: null, failed: true };
+  const qkey = queryKey(q);
+  await ctx.runMutation(internal.dataQueries.wantAs, { user_id: userId, doc_id: docId, queries: [q] });
+  let results: DataResult[] = await ctx.runQuery(internal.dataQueries.resultsForUser, { user_id: userId, doc_id: docId });
+  let r = results.find((x) => x.qkey === qkey);
+  if (!r || (!r.refreshed_at && !r.error)) {
+    await rerunAs(ctx, userId, docId, qkey).catch(() => null);
+    results = await ctx.runQuery(internal.dataQueries.resultsForUser, { user_id: userId, doc_id: docId });
+    r = results.find((x) => x.qkey === qkey);
+  }
+  const name = String(block.title || block.key || "This block");
+  // A source this dashboard can't read (a team's pull requests on a personal dashboard) would save a block that is broken for every viewer.
+  if (r?.error && !r.refreshed_at) return { text: `${name} can't read here: ${r.error}`, json: null, failed: true };
+  if (!dashboard.readAlert(block)) return { text: `${name} reads`, json: null, failed: false };
+  const s = dashboard.alertState(block, r);
+  // An alert needs a value to stand against; without one, nobody can say whether the line is already crossed.
+  if (!s) return { text: `${name} has no value yet to judge an alert line against; add the alert once it reads`, json: null, failed: true };
+  if (s.state === "ok") return { text: `${name} is ${s.display}, inside the line`, json: s, failed: false };
+  return { text: `${name} is ${s.display}, already ${s.state} that line: it would notify at the next read. Pick a line it hasn't crossed.`, json: s, failed: true };
+}
+
 export const cliCheck = internalAction({
   args: vRemote,
-  handler: async (ctx, args): Promise<{ text: string; json: unknown }> => {
+  handler: async (ctx, args): Promise<{ text: string; json: unknown; failed: boolean }> => {
     const f = parseFlags(args.args, ["rerun"]);
     const docId = args.doc_id!;
+    // `--judge-block <json>`: a block not yet saved, judged before the CLI writes it: its source must read in this dashboard's workspace,
+    // and an alert line must not be one the value already crosses. Run before the write, so reading the data can't fire the alert.
+    if (typeof f.flags["judge-block"] === "string") return await judgeBlock(ctx, args.user_id, docId, f.flags["judge-block"]);
     const { title, elements }: { title: string; elements: ArtifactElement[] } = await ctx.runQuery(internal.dataQueries.blocksForUser, { user_id: args.user_id, doc_id: docId });
     const blocks = orderedBlocks(elements);
     const queries = dashboard.dashboardQueries(blocks);
@@ -624,7 +656,7 @@ export const cliCheck = internalAction({
       let value = "";
       if (b.kind === "kpi") {
         const ev = evaluateKpi(b as any, result);
-        value = ev.state === "ok" ? `${ev.display}${ev.delta ? ` (${ev.delta.caption})` : ""}  · ${ev.how}` : ev.state === "unbound" ? ev.display : ev.state === "problem" ? ev.problem : "";
+        value = ev.state === "ok" ? `${ev.display}${ev.delta ? ` (${ev.delta.display}, ${ev.delta.caption})` : ""}  · ${ev.how}` : ev.state === "unbound" ? ev.display : ev.state === "problem" ? ev.problem : "";
       } else if (b.kind === "chart") {
         const ev = evaluateChart(b as any, result);
         value = ev.state === "ok" ? `${ev.series.length} series × ${ev.x.length} points · ${chartLeaders(ev)} · ${ev.how}` : ev.state === "problem" ? ev.problem : "";
@@ -633,14 +665,7 @@ export const cliCheck = internalAction({
         value = ev.state === "ok" ? ev.how : ev.state === "problem" ? ev.problem : "";
       } else if (b.kind === "text") {
         // The sentence as readers see it, live values filled in, so an agent checks the words, not the template.
-        value = dashboard
-          .parseText(String(b.text ?? ""))
-          .map((p) => ("text" in p ? p.text : (() => {
-            const k = kpi(p.ref);
-            return k ? dashboard.kpiPartText(k.ev, p.part) : `{${p.ref}}`;
-          })()))
-          .join("")
-          .slice(0, 160);
+        value = dashboard.renderText(String(b.text ?? ""), kpi).slice(0, 160);
       }
       return { key: b.key, kind: b.kind, title: b.title ?? null, value, check: check ?? null };
     });
@@ -650,6 +675,8 @@ export const cliCheck = internalAction({
     // Story words are claims too: a headline or story line that contradicts its KPI is as wrong as a broken number.
     const story = dashboard.storyProblems(els.get(dashboard.LAYOUT_KEY), blocks, kpi);
     const storyLines = story.map((p) => `${p.kind === "contradicts" ? MARK.broken : MARK.typed} ${p.key} ${p.field}  [${p.kind === "contradicts" ? "Contradicts the data" : "Typed claim"}: ${p.detail}]`);
-    return { text: [`${title}: ${summary}${story.length ? `; ${story.length} story ${story.length === 1 ? "claim" : "claims"} to fix` : ""}`, ...lines, ...storyLines].join("\n"), json: { title, blocks: out, story, results: results.map((r) => ({ ...r, rows: r.rows.length })) } };
+    // A broken block or a story claim the data contradicts fails the check, so a script or a flow step can gate on it.
+    const failed = (counts.broken ?? 0) > 0 || story.some((p) => p.kind === "contradicts");
+    return { failed, text: [`${title}: ${summary}${story.length ? `; ${story.length} story ${story.length === 1 ? "claim" : "claims"} to fix` : ""}`, ...lines, ...storyLines].join("\n"), json: { title, blocks: out, story, results: results.map((r) => ({ ...r, rows: r.rows.length })) } };
   },
 });

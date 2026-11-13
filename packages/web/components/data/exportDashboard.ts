@@ -28,38 +28,55 @@ function visible(el: Element): boolean {
   return anyEl.checkVisibility ? anyEl.checkVisibility({ opacityProperty: true, visibilityProperty: true }) : true;
 }
 
-/** Text in a node, laid onto the line boxes the browser gave it. A leading space keeps its width, so words beside a live number stay apart. */
-function drawText(ctx: CanvasRenderingContext2D, node: Text, origin: DOMRect) {
-  const text = node.data.replace(/\s+/g, " ");
-  if (!text.trim()) return;
-  const lead = text.startsWith(" ");
+/** Where the last drawn line ended: punctuation right after a live value is drawn against it, not at the page's x (the canvas may draw the value narrower). */
+type Pen = { top: number; end: number } | null;
+
+type Run = { text: string; left: number; right: number; top: number; height: number };
+
+/** A text node's characters as the browser laid them out: one run per line, each at the page's own x, so spacing matches the screen. */
+function lineRuns(node: Text): Run[] {
+  const runs: Run[] = [];
+  const range = document.createRange();
+  const data = node.data;
+  for (let i = 0; i < data.length; i++) {
+    range.setStart(node, i);
+    range.setEnd(node, i + 1);
+    const r = range.getClientRects()[0];
+    const space = /\s/.test(data[i]);
+    // Collapsed whitespace has no box; a space never starts a line.
+    if (!r || (r.width === 0 && space)) continue;
+    const run = runs[runs.length - 1];
+    if (run && Math.abs(run.top - r.top) < 2 && r.left >= run.right - 1) {
+      run.text += space ? " " : data[i];
+      run.right = Math.max(run.right, r.right);
+    } else if (!space) runs.push({ text: data[i], left: r.left, right: r.right, top: r.top, height: r.height });
+  }
+  return runs;
+}
+
+/** Text in a node, drawn run by run at the positions the page gave each line. */
+function drawText(ctx: CanvasRenderingContext2D, node: Text, origin: DOMRect, pen: { at: Pen }) {
+  if (!node.data.trim()) return;
   const parent = node.parentElement;
   if (!parent || !visible(parent)) return;
   const st = getComputedStyle(parent);
-  const range = document.createRange();
-  range.selectNodeContents(node);
-  const rects = [...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0);
-  if (!rects.length) return;
+  const runs = lineRuns(node);
+  if (!runs.length) return;
   ctx.font = `${st.fontStyle} ${st.fontWeight} ${st.fontSize} ${st.fontFamily}`;
   ctx.fillStyle = st.color;
   (ctx as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = st.letterSpacing === "normal" ? "0px" : st.letterSpacing;
   ctx.textBaseline = "middle";
-  const words = text.trim().split(" ");
-  let w = 0;
-  rects.forEach((r, ri) => {
-    let line = "";
-    while (w < words.length) {
-      const next = line ? `${line} ${words[w]}` : words[w];
-      // The canvas measures a little differently from the page; the last line box always takes the words that remain.
-      if (line && ri < rects.length - 1 && ctx.measureText(next).width > r.width + 2) break;
-      line = next;
-      w++;
-    }
-    const pad = ri === 0 && lead ? ctx.measureText(" ").width : 0;
-    const x = st.textAlign === "right" || st.textAlign === "end" ? r.right - ctx.measureText(line).width : r.left + pad;
-    // The canvas measures some faces a little wider than the page (tabular, semibold): held to its line box, a word never runs into the next one.
-    ctx.fillText(line, x - origin.left, r.top + r.height / 2 - origin.top, Math.max(1, r.right - x + 1));
-  });
+  const caps = st.textTransform === "uppercase";
+  for (const run of runs) {
+    const text = (caps ? run.text.toUpperCase() : run.text).trimEnd();
+    // Punctuation right after a live value sits against what was drawn before it, even when the canvas drew that narrower than the page.
+    const glued = /^[,.;:!?)]/.test(text) && !!pen.at && Math.abs(pen.at.top - run.top) < 4 && pen.at.end <= run.left + 1;
+    const x = glued ? pen.at!.end : run.left;
+    const room = Math.max(1, run.right - x + 1);
+    // Held to its line box: a face the canvas measures wider never runs into the next word.
+    ctx.fillText(text, x - origin.left, run.top + run.height / 2 - origin.top, room);
+    pen.at = { top: run.top, end: x + Math.min(ctx.measureText(text).width, room) };
+  }
 }
 
 /** The box an element is visible in: its scrolling and clipping ancestors (a table that scrolls inside its card) cut it. */
@@ -104,10 +121,24 @@ export async function renderPng(root: HTMLElement, head: { title: string; note?:
   const skipped = [...root.querySelectorAll<HTMLElement>("[data-export-skip]"), ...tips];
   const before = skipped.map((el) => el.style.display);
   skipped.forEach((el) => (el.style.display = "none"));
+  // A table that scrolls inside its card is drawn whole: a picture can't scroll, and rows past the fold would be dropped without a word.
+  const scrollers = [...root.querySelectorAll<HTMLElement>("*")].filter((el) => {
+    const st = getComputedStyle(el);
+    return /auto|scroll/.test(st.overflowY) && el.scrollHeight > el.clientHeight + 1;
+  });
+  const held = scrollers.map((el) => [el.style.maxHeight, el.style.height, el.style.overflowY] as const);
+  scrollers.forEach((el) => {
+    el.style.maxHeight = "none";
+    el.style.height = "auto";
+    el.style.overflowY = "visible";
+  });
   try {
     return await draw(root, head);
   } finally {
     skipped.forEach((el, i) => (el.style.display = before[i]));
+    scrollers.forEach((el, i) => {
+      [el.style.maxHeight, el.style.height, el.style.overflowY] = held[i];
+    });
   }
 }
 
@@ -161,11 +192,12 @@ async function draw(root: HTMLElement, head: { title: string; note?: string }): 
       return !visible(el) || (el as HTMLElement).dataset?.exportSkip !== undefined ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
     },
   });
+  const pen: { at: Pen } = { at: null };
   for (let n: Node | null = walker.currentNode; n; n = walker.nextNode()) {
     if (n.nodeType === Node.TEXT_NODE) {
       if (!n.parentElement) continue;
       clipTo(n.parentElement);
-      drawText(ctx, n as Text, origin);
+      drawText(ctx, n as Text, origin, pen);
       ctx.restore();
       continue;
     }

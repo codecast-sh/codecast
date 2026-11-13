@@ -290,10 +290,14 @@ describe("suggested fields", () => {
     const { suggestFields } = await import("./dashboard");
     const cols = ["day", "person", "tokens", "spend"];
     const row = ["2026-11-01", "ada", 10, 1.2];
-    expect(suggestFields("kpi", cols, row)).toEqual({ field: "tokens", agg: "sum", compare: "halves" });
-    expect(suggestFields("chart", cols, row)).toEqual({ chart: "stacked", x: "day", y: "tokens", series: "person" });
+    expect(suggestFields("kpi", cols, row)).toEqual({ field: "spend", agg: "sum", format: "usd", compare: "halves" });
+    expect(suggestFields("chart", cols, row)).toEqual({ chart: "stacked", x: "day", y: "spend", series: "person", format: "usd" });
     expect(suggestFields("chart", ["status", "tasks"], ["open", 4])).toEqual({ chart: "hbar", x: "status", y: "tasks" });
     expect(suggestFields("table", ["status", "tasks"], ["open", 4])).toEqual({ sort: "-tasks", limit: 20 });
+    // One row per status: the KPI is the total, never one row's count.
+    expect(suggestFields("kpi", ["status", "tasks"], ["open", 4])).toEqual({ field: "tasks", agg: "sum" });
+    // A gauge read over time shows its latest reading.
+    expect(suggestFields("kpi", ["at", "value"], [1, 0.5])).toEqual({ field: "value", agg: "last" });
   });
 });
 
@@ -648,8 +652,12 @@ describe("grouped tables", () => {
     const ev = evaluateTable({ query: q, group: "person", sort: "-spend" }, spend);
     // Every person has three days, so the count column carries nothing and is left out.
     expect(ev.state === "ok" && [ev.columns, ev.rows, ev.used.length]).toEqual([["person", "tokens", "spend"], [["ada", 600, 8.5], ["bo", 80, 0.85]], 6]);
+    // Daily rows: a group's count is its days, never shown, even for one group or uneven ones.
     const uneven = { ...spend, rows: spend.rows.slice(0, -1) };
-    expect(evaluateTable({ query: q, group: "person", sort: "-spend" }, uneven)).toMatchObject({ state: "ok", columns: ["person", "tokens", "spend", "rows"] });
+    expect(evaluateTable({ query: q, group: "person", sort: "-spend" }, uneven)).toMatchObject({ state: "ok", columns: ["person", "tokens", "spend"] });
+    // Rows that are things (tasks), not days: the count is the number of things in each group.
+    const tasks = result(["status", "owner", "points"], [["open", "ada", 3], ["open", "bo", 2], ["done", "ada", 5]]);
+    expect(evaluateTable({ query: q, group: "status" }, tasks)).toMatchObject({ state: "ok", columns: ["status", "points", "rows"], rows: [["open", 5, 2], ["done", 5, 1]] });
     expect(evaluateTable({ query: q, group: "team" }, spend)).toMatchObject({ state: "problem" });
   });
 });
@@ -680,6 +688,48 @@ describe("starter dashboards", () => {
 describe("grouped tables under a filter that leaves nothing", () => {
   test("keep their columns and read empty, not as an error", () => {
     const ev = evaluateTable({ query: q, group: "person", sort: "-spend" }, spend, { person: { in: ["nobody"] } });
-    expect(ev.state === "ok" && [ev.columns, ev.rows]).toEqual([["person", "tokens", "spend", "rows"], []]);
+    expect(ev.state === "ok" && [ev.columns, ev.rows]).toEqual([["person", "tokens", "spend"], []]);
   });
 });
+
+describe("verbs refuse a column the source never returns", () => {
+  const empty = artifactView("dashboard", "t", []);
+  const run = (verb: string, args: string[]) => () => dashboardSpec.verbs![verb].run(empty, args);
+  test("a misspelled field names the columns the source has", () => {
+    expect(run("kpi", ["--source", "usage", "--args", '{"days":30}', "--field", "spendz"])).toThrow(/usage has no column "spendz" \(it has day, person, tokens, spend\)/);
+    expect(run("kpi", ["--source", "usage", "--args", '{"days":30}', "--field", "spend", "--agg", "sum"])).not.toThrow();
+  });
+  test("a grouped source's group column and a table's row count are known; open-ended sources are not judged", () => {
+    expect(run("chart", ["--source", "sessions", "--args", '{"group_by":"agent"}', "--x", "day", "--y", "sessions", "--series", "agent"])).not.toThrow();
+    expect(run("table", ["--source", "usage", "--group", "person", "--sort", "-rows"])).not.toThrow();
+    expect(run("table", ["--source", "tasks", "--args", '{"view":"status"}', "--sort", "-anything"])).not.toThrow();
+  });
+});
+
+
+describe("verbs refuse args the reader would refuse, and flags they don't take", () => {
+  const empty = artifactView("dashboard", "t", []);
+  const run = (verb: string, args: string[]) => () => dashboardSpec.verbs![verb].run(empty, args);
+  test("a window out of range, an unknown arg and an off-list value", () => {
+    expect(run("kpi", ["--source", "usage", "--args", '{"days":-3}', "--field", "spend"])).toThrow(/"days" must be a whole number from 1 to 90/);
+    expect(run("kpi", ["--source", "usage", "--args", '{"group":"person"}', "--field", "spend"])).toThrow(/usage takes no "group"/);
+    expect(run("kpi", ["--source", "tasks", "--args", '{"view":"owner"}'])).toThrow(/"view" must be one of/);
+  });
+  test("a misspelled flag is named with the one it was likely meant to be", () => {
+    expect(run("kpi", ["--source", "usage", "--feild", "spend"])).toThrow(/kpi takes no --feild \(did you mean --field\?\)/);
+  });
+});
+
+describe("a grouped table's filter on a summed column judges the groups", () => {
+  test("people whose total spend is over 2, not the days over 2 summed", () => {
+    // ada's days: 1.5, 3, 4 (total 8.5); bo's: 0.5, 0.25, 0.1 (total 0.85).
+    const ev = evaluateTable({ query: q, group: "person", where: { spend: { gt: 2 } } }, spend);
+    expect(ev.state === "ok" && ev.rows).toEqual([["ada", 600, 8.5]]);
+    const both = evaluateTable({ query: q, group: "person", where: { spend: { gt: 0.5 } }, sort: "-spend" }, spend);
+    expect(both.state === "ok" && both.rows.map((r) => r[0])).toEqual(["ada", "bo"]);
+    // A condition on a label still picks the source rows.
+    const one = evaluateTable({ query: q, group: "person", where: { day: { gte: "2026-11-08" } }, sort: "-spend" }, spend);
+    expect(one.state === "ok" && one.rows).toEqual([["ada", 500, 7], ["bo", 30, 0.35]]);
+  });
+});
+

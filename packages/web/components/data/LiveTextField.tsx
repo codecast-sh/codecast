@@ -8,7 +8,9 @@ import { Hash } from "lucide-react";
 import { dashboard, type ArtifactElement } from "@codecast/shared/artifacts";
 import { useCommittedDraft } from "../../hooks/useCommittedDraft";
 import { useMountEffect } from "../../hooks/useMountEffect";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
+import { held, textRefusal } from "./liveTextDrafts";
 
 const PARTS = [
   { part: "", label: "Value" },
@@ -16,46 +18,6 @@ const PARTS = [
   { part: ".trend", label: "Direction" },
   { part: ".vs", label: "Compared with" },
 ] as const;
-
-/** The refusal in a glance: what is typed, never the whole rule. */
-/** A token that names no KPI here, or a part the page can't draw, would print raw to readers. */
-function badToken(text: string, keys: readonly string[]): string | null {
-  for (const m of text.matchAll(/\{([^{}]*)\}/g)) {
-    const ok = m[1].match(/^(b_[A-Za-z0-9_]+)(?:\.(value|delta|trend|vs))?$/);
-    if (!ok) return `{${m[1]}} isn't a live value: pick one from Live value`;
-    if (!keys.includes(ok[1])) return `{${m[1]}} names no KPI here: pick one from Live value`;
-  }
-  return null;
-}
-
-function typedClaims(text: string): string | null {
-  const nums = dashboard.typedNumbers(text);
-  const dirs = dashboard.directionWords(text).map((d) => `"${d.word}"`);
-  const all = [...nums, ...dirs];
-  return all.length ? `Typed ${all.slice(0, 3).join(", ")}${all.length > 3 ? "…" : ""}: use a live value` : null;
-}
-
-/** Words refused on save, kept per field until fixed: closing the editor or reloading the tab never throws away what was typed. */
-const HELD = "cc-data-held:";
-const held = {
-  get: (k: string) => {
-    try {
-      return sessionStorage.getItem(HELD + k) ?? undefined;
-    } catch {
-      return undefined;
-    }
-  },
-  set: (k: string, v: string) => {
-    try {
-      sessionStorage.setItem(HELD + k, v);
-    } catch {}
-  },
-  delete: (k: string) => {
-    try {
-      sessionStorage.removeItem(HELD + k);
-    } catch {}
-  },
-};
 
 /** The text as a reader sees it: each token drawn as its value today, so the box's raw keys are never the only view. */
 function ReadsAs({ text, preview }: { text: string; preview: (key: string, part: dashboard.TokenPart) => string }) {
@@ -79,7 +41,7 @@ function ReadsAs({ text, preview }: { text: string; preview: (key: string, part:
 export function LiveTextField({ label, value, kpis, multiline, placeholder, onCommit, holdKey, preview }: { label: string; value: unknown; kpis: ArtifactElement[]; multiline?: boolean; placeholder?: string; onCommit: (v: string) => void; holdKey?: string; preview?: (key: string, part: dashboard.TokenPart) => string }) {
   const shown = value === undefined || value === null ? "" : String(value);
   const keys = kpis.map((k) => k.key);
-  const problem = (v: string) => badToken(v, keys) ?? typedClaims(v);
+  const problem = (v: string) => textRefusal(v, keys);
   const { draft, setDraft: setDraftRaw, onFocus, onBlur } = useCommittedDraft(shown);
   // Saved after a pause in typing, not only on blur: leaving the page or reloading never drops what was typed. One write per pause keeps typing cheap.
   const idle = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -87,16 +49,23 @@ export function LiveTextField({ label, value, kpis, multiline, placeholder, onCo
   useMountEffect(() => () => {
     if (idle.current) clearTimeout(idle.current);
   });
+  // Every keystroke is kept (synchronously, so a reload a moment after typing keeps it) until the saved value catches up or the field is emptied.
   const setDraft = (v: string) => {
     setDraftRaw(v);
-    if (holdKey) (problem(v) ? held.set(holdKey, v) : held.delete(holdKey));
+    if (holdKey) held.set(holdKey, v);
     if (idle.current) clearTimeout(idle.current);
     idle.current = setTimeout(() => latestCommit.current(v), 900);
   };
   useMountEffect(() => {
     const kept = holdKey ? held.get(holdKey) : undefined;
-    if (kept !== undefined && kept !== shown) setDraftRaw(kept);
+    if (kept === undefined || kept === shown) return;
+    setDraftRaw(kept);
+    // Words typed before a reload that never reached the save go out now; refused words stay held, with their refusal showing.
+    idle.current = setTimeout(() => latestCommit.current(kept), 0);
   });
+  useWatchEffect(() => {
+    if (holdKey && held.get(holdKey) === shown) held.delete(holdKey);
+  }, [shown, holdKey]);
   const box = useRef<HTMLTextAreaElement & HTMLInputElement>(null);
   const caret = useRef<number | null>(null);
   const [open, setOpen] = useState(false);
@@ -157,7 +126,8 @@ export function LiveTextField({ label, value, kpis, multiline, placeholder, onCo
                   <div key={k.key} className="px-1 py-1 border-b border-sol-border/30 last:border-0">
                     <div className="px-1 text-xs font-medium text-sol-text break-words">{String(k.title || k.key)}</div>
                     <div className="mt-0.5 flex flex-wrap gap-1">
-                      {PARTS.map((p) => {
+                      {/* A KPI with no comparison has only its value: a change, direction or "compared with" would read empty. */}
+                      {(k.compare ? PARTS : PARTS.slice(0, 1)).map((p) => {
                         // Each part shows what it would read as today, so the right one is picked by its words, not its name.
                         const now = preview?.(k.key, p.part ? (p.part.slice(1) as dashboard.TokenPart) : "value");
                         return (

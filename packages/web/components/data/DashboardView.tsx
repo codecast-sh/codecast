@@ -28,6 +28,7 @@ import { SourcesPanel } from "./SourcesPanel";
 import { BlockEditor } from "./BlockEditor";
 import { DesignPanel } from "./DesignPanel";
 import { Button } from "../ui/button";
+import { flushHeldDrafts, heldDraftKeys } from "./liveTextDrafts";
 
 type Panel = { kind: PanelKind; key?: string; point?: CheckPoint } | null;
 
@@ -44,7 +45,21 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
   const byKey = useMemo(() => new Map(elements.map((e) => [e.key, e])), [elements]);
   const layout = useMemo(() => dashboard.readLayout({ get: (k) => byKey.get(k) }), [byKey]);
   const canEdit = mode === "edit" && !snapshot;
-  const [editing, setEditing] = useState(false);
+  // Editing is kept per dashboard for this tab, so a reload or a hot remount doesn't drop back to View mid-edit.
+  const editKey = `cc-data-edit:${docId}`;
+  const [editing, setEditing] = useState(() => {
+    try {
+      return sessionStorage.getItem(editKey) === "1";
+    } catch {
+      return false;
+    }
+  });
+  useWatchEffect(() => {
+    try {
+      if (editing) sessionStorage.setItem(editKey, "1");
+      else sessionStorage.removeItem(editKey);
+    } catch {}
+  }, [editing, editKey]);
   const edit = canEdit && editing && layout.format === "dashboard";
   const me = useInboxStore((s: any) => (s.currentUser?._id ? `u:${String(s.currentUser._id)}` : null));
 
@@ -71,6 +86,14 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
     [live, setSelection],
   );
   const write = useCallback((ops: ArtifactOp[]) => live.apply(ops), [live]);
+  // Words typed just before a reload are saved once the dashboard has loaded, not only when their editor opens again.
+  // Only drafts held at load count; a block not in the first (cached) copy is tried again as rows arrive.
+  const pendingDrafts = useRef<string[] | null>(null);
+  useWatchEffect(() => {
+    if (!canEdit || !elements.length) return;
+    pendingDrafts.current ??= heldDraftKeys(docId);
+    if (pendingDrafts.current.length) pendingDrafts.current = flushHeldDrafts(pendingDrafts.current, elements, write);
+  }, [canEdit, elements, docId, write]);
   const remove = useCallback(
     (key: string) => {
       write([{ k: key, del: true }]);
@@ -127,7 +150,7 @@ export default function DashboardView({ doc, live, selection, setSelection, mode
   // ── the top bar ──
   const schedule = dashboard.readSchedule(byKey.get(dashboard.LAYOUT_KEY));
   const setSchedule = useCallback(
-    (s: dashboard.Schedule | null) => write([byKey.has(dashboard.LAYOUT_KEY) ? { k: dashboard.LAYOUT_KEY, set: { refresh: s } } : { k: dashboard.LAYOUT_KEY, put: { kind: "layout", ...(s ? { refresh: s } : {}) } }]),
+    (s: dashboard.Schedule | null) => write(dashboard.scheduleOps(byKey.has(dashboard.LAYOUT_KEY), s)),
     [byKey, write],
   );
   const togglePanel = useCallback((kind: PanelKind) => setPanelState((p) => (p?.kind === kind ? null : { kind })), []);

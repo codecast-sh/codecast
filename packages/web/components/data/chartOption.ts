@@ -3,14 +3,35 @@
 // Scrollyteller and the Visual short all draw through it, so a chart reads
 // the same in every format.
 import type { EChartsOption } from "../ops/chart/echarts";
-import { alpha, axisBase, swatch, tipRow, tooltipBase, esc, type ChartTheme } from "../ops/chart/chartTheme";
+import { alpha, axisBase, resolveColor, swatch, tipRow, tooltipBase, esc, type ChartTheme } from "../ops/chart/chartTheme";
 import { dashboard } from "@codecast/shared/artifacts";
 
 type ChartOk = Extract<dashboard.ChartEval, { state: "ok" }>;
 
 /** The series colors, in order: the first series is the story, the rest support it. Neighbors differ in hue (green and yellow sit far apart). */
 export function seriesColors(t: ChartTheme): string[] {
-  return [t.blue, t.magenta, t.green, t.orange, t.violet, t.cyan, t.yellow, t.red];
+  return distinct([t.blue, t.orange, t.green, t.magenta, t.cyan, t.yellow, t.violet, t.red]);
+}
+
+const rgb = (c: string) => (resolveColor(c).match(/\d+(\.\d+)?/g) ?? []).slice(0, 3).map(Number);
+/**
+ * The palette with look-alikes moved to the back: a theme may tune two tokens
+ * close together (a dark theme's magenta and violet), and two people must never
+ * share a color while a distinct one goes unused.
+ */
+function distinct(colors: string[]): string[] {
+  const keep: string[] = [];
+  const later: string[] = [];
+  for (const c of colors) {
+    const [r, g, b] = rgb(c);
+    const near = keep.some((k) => {
+      const [r2, g2, b2] = rgb(k);
+      // Weighted RGB distance: under 75 two chart colors read as one at a glance (a dark theme puts magenta and violet at 38, blue and cyan at 68).
+      return Math.sqrt(2 * (r - r2) ** 2 + 4 * (g - g2) ** 2 + 3 * (b - b2) ** 2) < 75;
+    });
+    (near ? later : keep).push(c);
+  }
+  return [...keep, ...later];
 }
 
 /** Value columns ("opened", "merged") are measures, not people: their own hues, so a measure never reads as the person who shares its color. */

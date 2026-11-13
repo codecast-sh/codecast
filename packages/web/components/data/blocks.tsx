@@ -90,6 +90,24 @@ function useCountUp(target: number | null, run: boolean, ms = 900): number | nul
   return v;
 }
 
+/** "Last 7 days" when a number covers a different window from most of the dashboard's blocks, so 2,828 beside a 30-day table reads right. */
+function oddWindow(b: ArtifactElement, env: BlockEnv): string | null {
+  const days = (x: ArtifactElement) => {
+    const d = (dashboard.blockQuery({ query: x.query })?.args as Record<string, unknown> | undefined)?.days;
+    return typeof d === "number" ? d : null;
+  };
+  const mine = days(b);
+  // Under a date filter every block shows the filter's days.
+  if (mine === null || (env.scope && "day" in env.scope)) return null;
+  const counts = new Map<number, number>();
+  for (const x of env.blocks.values()) {
+    const d = days(x);
+    if (d !== null) counts.set(d, (counts.get(d) ?? 0) + 1);
+  }
+  const common = [...counts].sort((p, q) => q[1] - p[1])[0]?.[0];
+  return common !== undefined && common !== mine ? `Last ${mine} ${mine === 1 ? "day" : "days"}` : null;
+}
+
 export function KpiBody({ b, env, size = "md", countUp = false }: { b: ArtifactElement; env: BlockEnv; size?: "md" | "lg" | "xl" | "stage"; countUp?: boolean }) {
   const ev = dashboard.evaluateKpi(b as dashboard.KpiBlock, resultFor(env.results, b), env.scope);
   const numeric = ev.state === "ok" && typeof ev.value === "number" ? ev.value : null;
@@ -120,7 +138,7 @@ export function KpiBody({ b, env, size = "md", countUp = false }: { b: ArtifactE
         {ev.state === "problem" ? (
           <span className="text-sol-red truncate">{ev.problem}</span>
         ) : (
-          <span className="text-sol-text-muted line-clamp-2 flex-1 min-w-0">{[delta?.caption, b.caption].filter(Boolean).join(" · ")}</span>
+          <span className="text-sol-text-muted line-clamp-2 flex-1 min-w-0">{[delta?.caption ?? oddWindow(b, env), b.caption].filter(Boolean).join(" · ")}</span>
         )}
       </div>
     </>
@@ -138,7 +156,7 @@ export function AlertMark({ b, env }: { b: ArtifactElement; env: BlockEnv }) {
   // The alert watches the whole dashboard's number, which a filtered view does not show: say which number it judged.
   const whole = env.scope && s ? ` · judged on the unfiltered total, ${s.display}` : "";
   return (
-    <span className={`shrink-0 inline-flex items-center ${on ? (env.scope ? "text-sol-red/60" : "text-sol-red") : "text-sol-text-dim"}`} title={`${on ? `Alerting: ${s!.state} its line` : "Alerts"} when ${lines}${whole}`} aria-label={on ? `Alerting: ${s!.state} its line` : `Alert when ${lines}`} data-kpi-alert={on ? s!.state : "armed"}>
+    <span className={`shrink-0 inline-flex items-center ${on ? (env.scope ? "text-sol-red/60" : "text-sol-red") : "text-sol-text-dim"}`} title={`${on ? `Alerting: ${s!.state} its line` : "Alerts"} when ${lines}${whole}`} aria-label={on ? `Alerting: ${s!.state} its line` : `Alert when ${lines}`} data-kpi-alert={on ? s!.state : "armed"} data-export-skip>
       <Bell className="w-3.5 h-3.5" fill={on ? "currentColor" : "none"} />
     </span>
   );

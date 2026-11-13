@@ -9,8 +9,8 @@
 import type { ArtifactElement, ArtifactOp, Json } from "./core";
 import type { ArtifactSpec, ArtifactView, VerbResult } from "./spec";
 import { newElementKey } from "./spec";
-import { CHART_TYPES, DATA_SOURCES, KPI_AGGS, isDataSource, whereProblem, writtenTextProblem, type DataQuery } from "./dashboardData";
-import { readAlert, readSchedule } from "./dashboardWatch";
+import { CHART_TYPES, DATA_SOURCES, KPI_AGGS, SOURCE_PARAMS, isDataSource, whereProblem, writtenTextProblem, type DataQuery, type DataSourceId } from "./dashboardData";
+import { readAlert, readSchedule, type Schedule } from "./dashboardWatch";
 
 export * from "./dashboardData";
 export * from "./dashboardWatch";
@@ -20,6 +20,11 @@ export * from "./dashboardTemplates";
 export const BLOCK_KINDS = ["kpi", "chart", "table", "text", "section"] as const;
 export type BlockKind = (typeof BLOCK_KINDS)[number];
 export const LAYOUT_KEY = "layout";
+
+/** The write that sets a dashboard's refresh schedule (null: read only while open), creating its layout element if it has none. */
+export function scheduleOps(hasLayout: boolean, s: Schedule | null): ArtifactOp[] {
+  return [hasLayout ? { k: LAYOUT_KEY, set: { refresh: s } } : { k: LAYOUT_KEY, put: { kind: "layout", ...(s ? { refresh: s } : {}) } }];
+}
 
 export const STORY_FORMATS = ["dashboard", "scrolly", "short"] as const;
 export type StoryFormat = (typeof STORY_FORMATS)[number];
@@ -181,7 +186,7 @@ function describeBlock(b: ArtifactElement): string {
     for (const f of ["series", "cumulative", "limit", "format"]) if (b[f] !== undefined) extra.push(`${f}=${b[f]}`);
   } else if (b.kind === "table") {
     extra.push(`of ${describeQuery(b.query)}`);
-    for (const f of ["columns", "sort", "limit"]) if (b[f] !== undefined) extra.push(`${f}=${b[f]}`);
+    for (const f of ["group", "columns", "sort", "limit"]) if (b[f] !== undefined && b[f] !== null) extra.push(`${f}=${b[f]}`);
   } else if (b.kind === "text") extra.push(JSON.stringify(b.text ?? ""));
   if (b.where) extra.push(`where=${JSON.stringify(b.where)}`);
   if (b.caption) extra.push(`caption=${JSON.stringify(b.caption)}`);
@@ -257,9 +262,27 @@ function queryFromFlags(f: Flags, current: unknown): DataQuery | undefined {
   if (!src) throw new Error("--source is required: one of " + DATA_SOURCES.map((s) => s.id).join(", "));
   if (!isDataSource(src)) throw new Error(`unknown source "${src}" (sources: ${DATA_SOURCES.map((s) => s.id).join(", ")})`);
   const q: DataQuery = { source: src, args: args ?? (source && source !== prev?.source ? {} : prev?.args ?? {}) };
+  const bad = argsProblem(src, q.args as Record<string, unknown>);
+  if (bad) throw new Error(`--args: ${bad}`);
   const r = refresh ?? prev?.refresh;
   if (r) q.refresh = r;
   return q;
+}
+
+/** Args a source's reader would refuse, caught on write the way `check` would catch them later: an unknown name, a window out of range, a value off a fixed list. */
+function argsProblem(source: DataSourceId, args: Record<string, unknown>): string | null {
+  const params = SOURCE_PARAMS[source];
+  for (const [name, v] of Object.entries(args ?? {})) {
+    const p = params.find((x) => x.name === name);
+    if (!p) {
+      // Open-ended readers (a connector, a sheet) pass more than their listed controls.
+      if (source === "connector" || source === "hogql") continue;
+      return `${source} takes no "${name}" (it takes ${params.map((x) => x.name).join(", ")})`;
+    }
+    if (p.kind === "days" && (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > (p.max ?? 365))) return `"days" must be a whole number from 1 to ${p.max ?? 365}`;
+    if (p.kind === "enum" && p.options && !p.options.includes(String(v))) return `"${name}" must be one of ${p.options.join(", ")}`;
+  }
+  return null;
 }
 
 /** Fields common to every block verb: title, caption, span, where, story lines. */
@@ -302,29 +325,78 @@ function checkedWords(what: string, text: string, view: ArtifactView): string {
   return text;
 }
 
+/** The columns a source's rows carry, when the source fixes them ("day, [person], tokens, spend"); null when they depend on the view or the data. */
+function sourceColumns(q: DataQuery | undefined): string[] | null {
+  const spec = q && DATA_SOURCES.find((s) => s.id === q.source);
+  if (!spec || !/^[\w\s,[\]|]+$/.test(spec.columns) || /per view|as returned|header row/.test(spec.columns)) return null;
+  const out = spec.columns.split(",").flatMap((c) => c.trim().replace(/[[\]]/g, "").split("|"));
+  const by = (q!.args as Record<string, unknown> | undefined)?.group_by;
+  if (typeof by === "string" && by !== "none") out.push(by);
+  return out;
+}
+
+/** A field naming a column the source never returns: refused on write, with the columns it has, rather than found by a later check. */
+function unknownColumn(q: DataQuery | undefined, fields: Record<string, Json>): string | null {
+  const cols = sourceColumns(q);
+  if (!cols) return null;
+  const known = [...cols, "rows"];
+  for (const name of ["field", "label", "x", "y", "series", "group", "sort", "columns", "compare"]) {
+    const v = fields[name];
+    if (typeof v !== "string" || !v) continue;
+    if (name === "compare" && (v === "halves" || v === "prev")) continue;
+    for (const c of v.split(",").map((x) => x.trim().replace(/^[-+]/, "")).filter(Boolean)) {
+      if (!known.includes(c)) return `--${name}: ${q!.source} has no column "${c}" (it has ${cols.join(", ")})`;
+    }
+  }
+  return null;
+}
+
 /**
  * Create a block, or update the one --key names: a new block takes a fresh
  * key and lands after --after (default: the end); an update writes only the
  * fields given, as one `set`.
  */
 function writeBlock(view: ArtifactView, kind: BlockKind, f: Flags, fields: Record<string, Json>): VerbResult {
+  // A flag this verb doesn't take is named, never silently dropped ("--feild" used to read as nothing to change).
+  const takes = new Set([...BLOCK_FLAGS.matchAll(/--([a-z][a-z-]*)/g), ...verbs![kind].usage.matchAll(/--([a-z][a-z-]*)/g)].map((m) => m[1]));
+  for (const n of ["refresh", "no-cumulative"]) takes.add(n);
+  const stray = Object.keys(f.flags).find((n) => !takes.has(n) && n !== "json");
+  if (stray) {
+    // A misspelling, or a flag named after the field it sets (--chart is set with --type).
+    const ALIAS: Record<string, string> = { chart: "type", kind: "type", value: "field", metric: "field", column: "field" };
+    const near = ALIAS[stray] && takes.has(ALIAS[stray]) ? ALIAS[stray] : [...takes].find((t) => t.length > 2 && [...t].sort().join("") === [...stray].sort().join(""));
+    throw new Error(`${kind} takes no --${stray}${near ? ` (did you mean --${near}?)` : ""}`);
+  }
   const key = flagText(f, "key");
   const existing = key ? view.get(key) : undefined;
   if (existing && existing.kind !== kind) throw new Error(`${key} is a ${existing.kind}, not a ${kind}`);
   const query = queryFromFlags(f, existing?.query);
   if (query) fields.query = query as unknown as Json;
+  const bad = unknownColumn(query ?? (existing?.query as DataQuery | undefined), fields);
+  if (bad) throw new Error(bad);
   const blocks = orderedBlocks(view.elements);
   const after = flagText(f, "after");
   if (after && !view.get(after)) throw new Error(`no block ${after} (cast data read <doc> lists them)`);
   if (existing) {
     if (after) fields.order = orderAfter(blocks.filter((b) => b.key !== key), after);
     if (!Object.keys(fields).length) throw new Error("nothing to change: pass the flags to update");
-    return { ops: [{ k: key!, set: fields }], position: { block: key! }, status: `updated ${key}` };
+    return { ops: [{ k: key!, set: fields }], position: { block: key! }, status: `updated ${key}`, ...judgeFirst(view, kind, key!, fields) };
   }
   const k = key ?? newElementKey("b");
   if (!/^b_[A-Za-z0-9_]+$/.test(k)) throw new Error("block keys look like b_<id>");
+  const judged = judgeFirst(view, kind, k, fields);
   const order = f.flags.first ? orderAfter(blocks, null) : orderAfter(blocks, after);
-  return { ops: [{ k, put: { kind, order, ...fields } }], position: { block: k }, status: `added ${kind} ${k}` };
+  return { ops: [{ k, put: { kind, order, ...fields } }], position: { block: k }, status: `added ${kind} ${k}`, ...judged };
+}
+
+/**
+ * A block whose source or alert changes is judged on the server's data before it is written: a source this dashboard's workspace can't
+ * read, or an alert line the value already crosses (or can't be read against), stops the write with the reason.
+ */
+function judgeFirst(view: ArtifactView, kind: BlockKind, key: string, fields: Record<string, Json>): Pick<VerbResult, "before"> {
+  if ((kind !== "kpi" && kind !== "chart" && kind !== "table") || (!fields.query && !fields.alert)) return {};
+  const block = { ...(view.get(key) ?? {}), ...fields, key, kind };
+  return { before: [{ verb: "check", args: ["--judge-block", JSON.stringify(block)] }] };
 }
 
 const BLOCK_FLAGS = "[--key b_x] [--after b_y|--first] [--title T] [--caption C] [--span 3|4|6|8|12] [--source S --args '{json}'] [--where '{\"col\":\"value\"}']";
@@ -332,7 +404,7 @@ const BLOCK_FLAGS = "[--key b_x] [--after b_y|--first] [--title T] [--caption C]
 const verbs: ArtifactSpec["verbs"] = {
   kpi: {
     summary: "Add or update a KPI tile: one number folded from a source",
-    usage: `kpi <doc> --source usage --args '{"days":30}' --field spend --agg sum --format usd [--compare halves|prev|<column>] [--good up|down] [--label <col>] [--value <typed>] [--alert-above N] [--alert-below N | --no-alert] ${BLOCK_FLAGS}\n  --compare halves: the window's later half against its earlier half (last 15 days vs the 15 before, for 30 days). prev: the last row against the row before it (today vs yesterday on daily rows). <column>: the value against the same fold of another column (this_year vs last_year).`,
+    usage: `kpi <doc> --source usage --args '{"days":30}' --field spend --agg sum --format usd [--compare halves|prev|<column>] [--good up|down] [--label <col>] [--value <typed>] [--alert-above N] [--alert-below N | --no-alert] ${BLOCK_FLAGS}\n  --compare halves: the window against the same span before it (the last 30 days vs the 30 before; the tile reads both). prev: the last row against the row before it (today vs yesterday on daily rows). <column>: the value against the same fold of another column (this_year vs last_year).`,
     run(view, args) {
       const f = parseFlags(args, ["first", "no-alert"]);
       const fields = commonFields(f);
@@ -354,7 +426,10 @@ const verbs: ArtifactSpec["verbs"] = {
       const below = flagNumber(f, "alert-below");
       if (f.flags["no-alert"]) fields.alert = null;
       else if (above !== undefined || below !== undefined) fields.alert = { ...(above !== undefined ? { above } : {}), ...(below !== undefined ? { below } : {}) };
-      return writeBlock(view, "kpi", f, fields);
+      const r = writeBlock(view, "kpi", f, fields);
+      // Without a schedule the number is read only while the page is open, and the alert is checked only then.
+      if (!fields.alert || readSchedule(view.get(LAYOUT_KEY))) return r;
+      return { ...r, status: `${r.status}\nnote: this dashboard reads only while someone has it open, so the alert is checked only then; \`schedule <doc> hourly\` checks it while it's closed` };
     },
   },
   chart: {
@@ -504,7 +579,7 @@ export const dashboardSpec: ArtifactSpec = {
     "2. Bind blocks with the verbs: `kpi`, `chart`, `table` take --source and --args plus how to shape the rows (KPI: --field --agg sum|last|avg|min|max|count|top --compare halves|prev|<column> --good up|down; chart: --type --x --y --series --cumulative).",
     "3. Write prose with `text`, referencing live values as {b_key} (the value), {b_key.delta} (the signed change, \"+12%\") and {b_key.trend} (the direction in words, \"up 12%\", \"down 4%\", \"flat\") and {b_key.vs} (what the change compares with, \"the prior 7 days\"; it follows the dashboard's date filter), so the words update with the data and stay verified. The verbs refuse a typed number or a direction stated in words (rose, fell, up 12%): those go wrong the day the data turns.",
     "4. `cast data check <doc>` prints each block's value and check state; fix anything it reports as broken before you hand the dashboard back.",
-    "Alerts: `kpi <doc> --key b_x --alert-above N` (or --alert-below) notifies when the KPI crosses the line, and again when it recovers. Numbers refresh only while someone has the dashboard open unless it has a schedule: `schedule <doc> hourly|daily`.",
+    "Alerts: `kpi <doc> --key b_x --alert-above N` (or --alert-below) notifies when the KPI crosses the line, and again when it recovers. A line the value already crosses is refused, as is a source the dashboard's workspace can't read. Numbers refresh only while someone has the dashboard open unless it has a schedule: `schedule <doc> hourly|daily`.",
     "Stories: `story <doc> scrolly|short --headline .. --summary ..` (draft first: `cast data draft <doc> start`), then `say <doc> <key> \"<title>\" \"<line>\"` per block, KPIs first, one idea per step. Keep headlines short and concrete. Headline, summary and story lines take the same tokens and follow the same rule: \"Spend is {b_spend.trend} this fortnight\", never \"Spend rose 12%\".",
     `Sources: ${DATA_SOURCES.map((s) => `${s.id} (${s.args})`).join("; ")}.`,
   ].join("\n"),
@@ -566,11 +641,14 @@ export function suggestFields(kind: "kpi" | "chart" | "table", columns: readonly
   const text = columns.filter((_, i) => typeof sample?.[i] === "string");
   const timeCol = columns.find((c) => /^(day|date|week|month|hour|at|time)$/.test(c));
   const x = timeCol ?? text[0] ?? columns[0];
-  const value = numeric.find((c) => c !== x && c !== "at") ?? numeric[0];
+  // The last number column is the one a source is named for (Token spend → spend, Pull requests → merged); earlier ones feed it.
+  const value = [...numeric].reverse().find((c) => c !== x && c !== "at") ?? numeric[0];
   const series = text.find((c) => c !== x);
   if (kind === "kpi") {
     if (!value) return { agg: "count" };
-    return { field: value, agg: timeCol ? "sum" : "last", ...(value === "spend" ? { format: "usd" } : {}), ...(timeCol ? { compare: "halves" } : {}) };
+    // Counts add up across rows (days, statuses, people); only a gauge read over time (a metric's readings at "at") shows its latest value.
+    const gauge = timeCol === "at";
+    return { field: value, agg: gauge ? "last" : "sum", ...(value === "spend" ? { format: "usd" } : {}), ...(timeCol && !gauge ? { compare: "halves" } : {}) };
   }
   if (kind === "chart") {
     if (!x || !value) return {};

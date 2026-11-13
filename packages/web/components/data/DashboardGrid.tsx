@@ -63,6 +63,24 @@ export function DashboardGrid({ blocks: all, env, edit, selected, me, onSelect, 
   const spanSig = blocks.map((b) => dashboard.blockSpan(b)).join(",");
   const kpiSig = blocks.map((b) => (b.kind === "kpi" ? 1 : 0)).join("");
   const drawn = useMemo(() => dashboard.packSpans(spanSig.split(",").filter(Boolean).map(Number), width, [...kpiSig].map((c) => c === "1")), [spanSig, kpiSig, width]);
+  // A number beside a chart keeps its own height; a row of numbers stays even.
+  const short = useMemo(() => {
+    const out = new Set<number>();
+    let row: number[] = [];
+    let used = 0;
+    const close = () => {
+      if (row.some((i) => kpiSig[i] !== "1")) for (const i of row) if (kpiSig[i] === "1") out.add(i);
+      row = [];
+      used = 0;
+    };
+    drawn.forEach((span, i) => {
+      if (used + span > 12) close();
+      row.push(i);
+      used += span;
+    });
+    close();
+    return out;
+  }, [drawn, kpiSig]);
   const [drag, setDrag] = useState<{ key: string; over?: string; after?: boolean } | null>(null);
   const indexOf = (k: string) => blocks.findIndex((b) => b.key === k);
   const drop = () => {
@@ -90,6 +108,7 @@ export function DashboardGrid({ blocks: all, env, edit, selected, me, onSelect, 
           key={b.key}
           b={b}
           drawn={drawn[i] ?? 12}
+          short={short.has(i)}
           env={env}
           edit={edit}
           selected={selected === b.key}
@@ -114,6 +133,8 @@ type CellProps = {
   b: ArtifactElement;
   /** Columns the block is drawn across: its span as the width allows, stretched to close its row. */
   drawn: number;
+  /** A number sharing its row with a chart or table: drawn at its own height, not stretched to theirs. */
+  short: boolean;
   env: BlockEnv;
   edit: boolean;
   selected: boolean;
@@ -130,7 +151,7 @@ type CellProps = {
   onDrop: () => void;
 };
 
-const Cell = memo(function Cell({ b, drawn, env, edit, selected, fresh, dropSide, dragging, onSelect, onEdit, onRemove, onSpan, onDragStart, onDragOver, onDrop }: CellProps) {
+const Cell = memo(function Cell({ b, drawn, short, env, edit, selected, fresh, dropSide, dragging, onSelect, onEdit, onRemove, onSpan, onDragStart, onDragOver, onDrop }: CellProps) {
   const span = dashboard.blockSpan(b);
   const check = blockCheck(b, env);
   const plain = b.kind === "section" || b.kind === "text";
@@ -164,6 +185,7 @@ const Cell = memo(function Cell({ b, drawn, env, edit, selected, fresh, dropSide
       onDoubleClick={() => edit && onEdit(b.key)}
       className={[
         "data-cell group relative min-w-0 outline-none",
+        short ? "self-start" : "",
         plain ? "px-1" : "rounded-xl border bg-sol-card",
         plain ? "" : selected ? "border-sol-blue/70" : "border-sol-border/50",
         b.kind === "kpi" ? "px-4 pt-3.5 pb-3.5" : b.kind === "chart" || b.kind === "table" ? "p-4" : "",

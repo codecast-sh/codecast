@@ -24,6 +24,18 @@ export function kpiPartText(ev: KpiEval, part: TokenPart): string {
 export type TokenPart = "value" | "delta" | "trend" | "vs";
 export type TextPart = { text: string } | { ref: string; part: TokenPart };
 
+/** A text with every token drawn as the words it reads today: for places that take a plain string (a tooltip, an aria label, a file name). */
+export function renderText(text: string, kpi: (key: string) => { ev: KpiEval } | undefined): string {
+  return parseText(text)
+    .map((p) => ("text" in p ? p.text : (() => {
+      const k = kpi(p.ref);
+      return k ? kpiPartText(k.ev, p.part) : "";
+    })()))
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export function parseText(text: string): TextPart[] {
   const parts: TextPart[] = [];
   const re = /\{(b_[A-Za-z0-9_]+)(?:\.(value|delta|trend|vs))?\}/g;

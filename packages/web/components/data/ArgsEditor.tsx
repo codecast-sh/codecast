@@ -99,6 +99,7 @@ function ParamControl({ p, value, rows, loading, onSet }: { p: dashboard.SourceP
         value={value === undefined || value === null ? "" : String(value)}
         placeholder={p.placeholder}
         numeric={p.kind === "days"}
+        max={p.max}
         onCommit={(t) => onSet(p.kind === "days" ? (t ? Number(t) : undefined) : t || undefined)}
       />
     </label>
@@ -106,20 +107,26 @@ function ParamControl({ p, value, rows, loading, onSet }: { p: dashboard.SourceP
 }
 
 /** A text field that writes on blur or Enter, so typing stays cheap; a days field takes whole numbers only. */
-function Committed({ value, placeholder, numeric, onCommit }: { value: string; placeholder?: string; numeric?: boolean; onCommit: (v: string) => void }) {
+function Committed({ value, placeholder, numeric, max, onCommit }: { value: string; placeholder?: string; numeric?: boolean; max?: number; onCommit: (v: string) => void }) {
   const { draft, setDraft, onFocus, onBlur } = useCommittedDraft(value);
-  const bad = numeric && draft !== "" && !/^\d{1,3}$/.test(draft);
+  // A window the source can't serve is refused here, where it is typed, not after the save.
+  const bad = numeric && draft !== "" && (!/^\d{1,3}$/.test(draft) || Number(draft) < 1 || (max !== undefined && Number(draft) > max));
   return (
     <input
       value={draft}
       inputMode={numeric ? "numeric" : undefined}
       placeholder={placeholder}
       onChange={(e) => setDraft(e.target.value)}
-      onFocus={onFocus}
+      onFocus={(e) => {
+        onFocus();
+        // A number is replaced, not appended to: typing 7 into "30" gives 7, not 307.
+        if (numeric) e.currentTarget.select();
+      }}
       onBlur={() => {
         onBlur();
         if (!bad && draft !== value) onCommit(draft);
       }}
+      title={bad && max !== undefined ? `1 to ${max} days` : undefined}
       onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
       aria-invalid={bad || undefined}
       className={`${fieldCls} ${bad ? "border-sol-red/70" : ""}`}

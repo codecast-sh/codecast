@@ -2,6 +2,7 @@
 // summed, and how many source rows each group holds. "Sessions by person"
 // reads as one row per person, not ninety person-days.
 import type { DataResult } from "./dashboardData";
+import type { Where } from "./dashboardWhere";
 
 /** The rows (by index) grouped by `by`: a new result whose rows are the groups, largest first by row count. */
 export function groupRows(result: DataResult, rows: readonly number[], by: string): { result: DataResult; groups: number[][] } | { problem: string } {
@@ -27,6 +28,22 @@ export function groupRows(result: DataResult, rows: readonly number[], by: strin
     g.length,
   ]);
   return { result: { ...result, columns, rows: out }, groups };
+}
+
+/**
+ * A grouped table's row filter, split where it applies: a condition on a
+ * column that is summed ("spend > 5000") judges each group's total, the way a
+ * person reads it ("people whose spend is over 5000"); any other condition
+ * picks the source rows that go into the groups.
+ */
+export function splitGroupedWhere(result: DataResult, where: Where | undefined, by: string): { before?: Where; after?: Where } {
+  if (!where) return {};
+  // The group's row count ("rows") exists only after grouping.
+  const summed = (c: string) => c !== by && (!result.columns.includes(c) || result.rows.some((r) => typeof r[result.columns.indexOf(c)] === "number"));
+  const before: Where = {};
+  const after: Where = {};
+  for (const [c, cond] of Object.entries(where)) (summed(c) ? after : before)[c] = cond;
+  return { ...(Object.keys(before).length ? { before } : {}), ...(Object.keys(after).length ? { after } : {}) };
 }
 
 // ── sheets as a source ──

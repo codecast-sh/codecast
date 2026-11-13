@@ -14,7 +14,7 @@ import type { Json } from "./core";
 import { WHERE_OPS, cellMatches, cellNumber, num, whereClauses, type Where, type WhereOp } from "./dashboardWhere";
 import { textProblems } from "./dashboardWords";
 import { shaped } from "./dashboardShape";
-import { groupRows } from "./dashboardGroup";
+import { groupRows, splitGroupedWhere } from "./dashboardGroup";
 export { sheetTable } from "./dashboardGroup";
 
 export * from "./dashboardWhere";
@@ -43,18 +43,19 @@ export const DATA_SOURCES = [
 export type DataSourceId = (typeof DATA_SOURCES)[number]["id"];
 
 /** One argument of a source as a control: how a person sets it without writing JSON. */
-export type SourceParam = { name: string; label: string; kind: "days" | "enum" | "text" | "sheet" | "watch" | "bool"; options?: readonly string[]; placeholder?: string };
+export type SourceParam = { name: string; label: string; kind: "days" | "enum" | "text" | "sheet" | "watch" | "bool"; options?: readonly string[]; placeholder?: string; max?: number };
 
-const DAYS: SourceParam = { name: "days", label: "Days", kind: "days" };
+/** A window in days, up to what the source's reader serves (pageReaders' `days(raw, fallback, max)`). */
+const days = (max: number): SourceParam => ({ name: "days", label: "Days", kind: "days", max });
 
 export const SOURCE_PARAMS: Record<DataSourceId, readonly SourceParam[]> = {
-  usage: [DAYS, { name: "group_by", label: "Split by", kind: "enum", options: ["none", "person"] }],
-  sessions: [DAYS, { name: "group_by", label: "Split by", kind: "enum", options: ["none", "person", "agent"] }],
-  tasks: [{ name: "view", label: "View", kind: "enum", options: ["status", "project", "assignee", "done_per_day", "created_per_day"] }, DAYS, { name: "board", label: "Board", kind: "enum", options: ["human", "all"] }, { name: "project", label: "Project", kind: "text", placeholder: "any" }],
-  prs: [DAYS, { name: "group_by", label: "Split by", kind: "enum", options: ["none", "author", "repository"] }, { name: "repository", label: "Repository", kind: "text", placeholder: "all" }],
-  signals: [DAYS, { name: "group_by", label: "Split by", kind: "enum", options: ["none", "kind", "source"] }, { name: "source", label: "Source", kind: "text", placeholder: "all" }],
-  events: [DAYS, { name: "group_by", label: "Split by", kind: "enum", options: ["none", "kind", "source"] }, { name: "source", label: "Source", kind: "text", placeholder: "all" }],
-  event_groups: [{ name: "view", label: "View", kind: "enum", options: ["top", "series"] }, { name: "bucket", label: "Bucket", kind: "enum", options: ["day", "hour"] }, DAYS],
+  usage: [days(90), { name: "group_by", label: "Split by", kind: "enum", options: ["none", "person"] }],
+  sessions: [days(90), { name: "group_by", label: "Split by", kind: "enum", options: ["none", "person", "agent"] }],
+  tasks: [{ name: "view", label: "View", kind: "enum", options: ["status", "project", "assignee", "done_per_day", "created_per_day"] }, days(365), { name: "board", label: "Board", kind: "enum", options: ["human", "all"] }, { name: "project", label: "Project", kind: "text", placeholder: "any" }],
+  prs: [days(180), { name: "group_by", label: "Split by", kind: "enum", options: ["none", "author", "repository"] }, { name: "repository", label: "Repository", kind: "text", placeholder: "all" }],
+  signals: [days(365), { name: "group_by", label: "Split by", kind: "enum", options: ["none", "kind", "source"] }, { name: "source", label: "Source", kind: "text", placeholder: "all" }],
+  events: [days(90), { name: "group_by", label: "Split by", kind: "enum", options: ["none", "kind", "source"] }, { name: "source", label: "Source", kind: "text", placeholder: "all" }],
+  event_groups: [{ name: "view", label: "View", kind: "enum", options: ["top", "series"] }, { name: "bucket", label: "Bucket", kind: "enum", options: ["day", "hour"] }, days(30)],
   metric: [{ name: "watch", label: "Watch", kind: "watch" }],
   hogql: [{ name: "source", label: "PostHog source", kind: "text" }, { name: "query", label: "HogQL", kind: "text", placeholder: "select ..." }],
   connector: [{ name: "source", label: "Connector", kind: "text" }, { name: "reader", label: "Reader", kind: "text" }],
@@ -309,7 +310,7 @@ export type KpiBlock = {
   label?: string;
   format?: NumberFormat;
   where?: Where;
-  /** What the delta compares against: "prev" (the previous row), "halves" (the window's earlier half), or a column name. */
+  /** What the delta compares against: "prev" (the previous row), "halves" (the same span just before the window), or a column name. */
   compare?: string;
   /** Which direction is good news; spend going up is not. */
   good?: "up" | "down";
@@ -643,7 +644,8 @@ export function evaluateTable(raw: TableBlock, result: DataResult | undefined, s
   if (!blockQuery(block)) return { state: "unbound" };
   if (!result || (!result.refreshed_at && !result.error)) return { state: "loading" };
   if (result.error && !result.refreshed_at) return { state: "problem", problem: result.error };
-  const filtered = filterRows(result, block.where, scope);
+  const split = block.group ? splitGroupedWhere(result, block.where, block.group) : { before: block.where };
+  const filtered = filterRows(result, split.before, scope);
   if ("problem" in filtered) return { state: "problem", problem: filtered.problem };
   // Grouped, the table shows the groups; the check still points at the source rows behind them.
   let src = result;
@@ -652,12 +654,14 @@ export function evaluateTable(raw: TableBlock, result: DataResult | undefined, s
   if (block.group) {
     const g = groupRows(result, filtered.rows, block.group);
     if ("problem" in g) return { state: "problem", problem: g.problem };
+    const kept = filterRows(g.result, split.after);
+    if ("problem" in kept) return { state: "problem", problem: kept.problem };
     src = g.result;
-    shown = g.result.rows.map((_, i) => i);
+    shown = kept.rows;
     back = g.groups;
   }
-  // A group count that is the same for every group (30 days per person) says nothing, so the default columns leave it out.
-  const sameCount = !!back && back.length > 1 && back.every((g) => g.length === back![0].length);
+  // On daily rows a group's count is its number of days, and a count that is the same for every group says nothing: the default columns leave both out.
+  const sameCount = !!back && (result.columns.includes("day") || (back.length > 1 && back.every((g) => g.length === back![0].length)));
   const cols = block.columns ? block.columns.split(",").map((s) => s.trim()).filter(Boolean) : sameCount ? src.columns.slice(0, -1) : src.columns;
   const idx = cols.map((c) => columnIndex(src, c));
   const bad = cols.find((_, i) => idx[i] < 0);

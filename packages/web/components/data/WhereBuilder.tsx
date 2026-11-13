@@ -52,7 +52,7 @@ export function WhereBuilder({ where, columns, rows, onChange }: { where: dashbo
     <div className="space-y-1.5" data-where-builder>
       {lines.map((c, i) => (
         <div key={i} className="flex items-center gap-1" data-where-line={c.column || "new"}>
-          <select aria-label="Column" value={c.column} onChange={(e) => patch(i, { column: e.target.value, value: c.op === "in" || c.op === "nin" ? [] : "" })} className={`${fieldCls} w-[34%] pr-5`}>
+          <select aria-label="Column" value={c.column} onChange={(e) => patch(i, { column: e.target.value, value: c.op === "in" || c.op === "nin" ? [] : c.value })} className={`${fieldCls} w-[34%] pr-5`}>
             {!c.column ? <option value="">Column</option> : null}
             {c.column && !columns.includes(c.column) ? <option value={c.column}>{c.column} (gone)</option> : null}
             {columns.map((col) => (

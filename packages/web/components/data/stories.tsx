@@ -82,6 +82,13 @@ function stepWords(step: dashboard.StoryStep, env: BlockEnv): { title?: string; 
   return {};
 }
 
+/** A text as plain words with its live values filled in: for a tooltip or an aria label, which can't hold a live number. */
+function plainWords(text: string | undefined, env: BlockEnv): string {
+  if (!text) return "";
+  const kpi = dashboard.kpiResolver((k) => env.blocks.get(k), (b) => resultFor(env.results, b as ArtifactElement), env.scope);
+  return dashboard.renderText(text, kpi);
+}
+
 /** One plain sentence about a chart: who leads a split, or where a single line peaks. */
 function chartLine(key: string, env: BlockEnv): string | undefined {
   const b = env.blocks.get(key);
@@ -233,6 +240,13 @@ export function VisualShort({ title, layout, elements, env }: StoryProps) {
   }, [ready]);
   // Opening the evidence behind a number pauses the film; so does leaving the tab.
   const benv: BlockEnv = useMemo(() => ({ ...env, onCheck: (k: string) => { setPlaying(false); env.onCheck?.(k); } }), [env]);
+  const words = (text: string | undefined) => plainWords(text, env);
+  // A beat with no story title is named by its block: a chart's title, or a text's own words.
+  const beatName = (b: dashboard.ShortBeat) => {
+    if (b.title) return b.title;
+    const el = env.blocks.get(b.step.keys[0] ?? "");
+    return String(el?.title || el?.text || "");
+  };
   useEventListener("visibilitychange", () => document.hidden && setPlaying(false), document);
   const stage = useRef<HTMLDivElement>(null);
   const clock = useRef({ t: 0, last: 0 });
@@ -321,8 +335,8 @@ export function VisualShort({ title, layout, elements, env }: StoryProps) {
               <button
                 key={i}
                 type="button"
-                title={b.title}
-                aria-label={`Beat ${i + 1} of ${beats.length}${b.title ? `: ${b.title}` : ""}`}
+                title={words(beatName(b))}
+                aria-label={`Beat ${i + 1} of ${beats.length}${beatName(b) ? `: ${words(beatName(b))}` : ""}`}
                 aria-current={i === index ? "step" : undefined}
                 onClick={(e) => {
                   // A keyboard press (detail 0) goes to the beat's start; a pointer seeks to where it landed.
@@ -359,7 +373,7 @@ function BigNumber({ k, title, say, env }: { k: string; title?: string; say?: st
   const check = blockCheck(b, env);
   return (
     <div className="w-full max-w-[86%] flex flex-col items-center text-center" data-block={k}>
-      {title ? <h2 className="text-[length:clamp(16px,2.4cqw,28px)] font-bold tracking-[-0.02em] text-sol-text-secondary text-balance">{title}</h2> : null}
+      {title ? <h2 className="text-[length:clamp(16px,2.4cqw,28px)] font-bold tracking-[-0.02em] text-sol-text-secondary text-balance"><LiveText text={title} env={env} /></h2> : null}
       <div className="mt-[3%] flex items-center gap-3">
         <span className="text-sol-text-muted text-[length:clamp(12px,1.4cqw,15px)]">{String(b.title ?? "")}</span>
         {check ? <CheckMark check={check} onClick={() => env.onCheck?.(k)} /> : null}
@@ -412,6 +426,15 @@ function Beat({ step, env }: { step: dashboard.StoryStep; env: BlockEnv }) {
   }
   const b = env.blocks.get(step.keys[0]);
   if (!b) return null;
+  // Words are the beat: a centered card like the hero, the block's own text large, its story title above when it has one.
+  if (b.kind === "text") {
+    return (
+      <div className="text-center max-w-[80%]" data-block={b.key}>
+        {step.title ? <div className="mb-4 text-[length:clamp(12px,1.5cqw,17px)] font-semibold text-sol-text-muted"><LiveText text={step.title} env={env} /></div> : null}
+        <p className="text-[length:clamp(20px,3.4cqw,40px)] leading-[1.2] font-bold tracking-[-0.02em] text-sol-text text-balance"><LiveText text={String(b.text ?? step.say ?? "")} env={env} /></p>
+      </div>
+    );
+  }
   const check = blockCheck(b, env);
   return (
     <div className="w-full h-full flex flex-col" data-block={b.key}>
