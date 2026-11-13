@@ -6,6 +6,7 @@ describe("chatSendOrigin", () => {
     ["CLAUDE_CODE_SESSION_ID", "claude-session"],
     ["CODEX_THREAD_ID", "native-codex-thread"],
     ["CODEX_SESSION_ID", "codex-session"],
+    ["GROK_SESSION_ID", "grok-session"],
     ["CODECAST_SESSION_ID", "codecast-session"],
     ["CODECAST_MANAGED_SESSION", "managed-session"],
   ])("personifies chat sent with %s", (key, sessionId) => {
@@ -17,6 +18,13 @@ describe("chatSendOrigin", () => {
 
   test("leaves a human shell unstamped", () => {
     expect(chatSendOrigin({})).toEqual({});
+  });
+
+  test("a Grok shell names its own session, not the conversation id beside it", () => {
+    expect(sessionIdFromEnv({
+      GROK_SESSION_ID: "01a1d23a-bcff-7360-8706-704c8fb3fed1",
+      CODECAST_CONVERSATION_ID: "jx75w1xw88hqbkwryzqtt4j2v98j4yyk",
+    })).toBe("01a1d23a-bcff-7360-8706-704c8fb3fed1");
   });
 
   test("uses the native Codex thread before legacy wrapper identifiers", () => {

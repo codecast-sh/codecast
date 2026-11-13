@@ -588,9 +588,22 @@ describe("transcriptTailTurnStartTs", () => {
     expect(transcriptTailTurnStartTs(tail, "s1")).toBe(Date.parse(T1));
   });
 
-  test("no user turn in the window (or a torn tail) -> null", () => {
+  test("an empty or torn tail -> null", () => {
     expect(transcriptTailTurnStartTs("", "s1")).toBeNull();
     expect(transcriptTailTurnStartTs('{"type":"assistant"', "s1")).toBeNull();
+  });
+
+  test("a turn longer than the window: its declaration survives a restart, an older stamp does not", () => {
+    // The turn's opening message fell out of the window; only its tail of
+    // tool calls remains, the oldest at T1.
+    const tail =
+      line({ type: "assistant", sessionId: "s1", timestamp: T1, message: { role: "assistant", content: [] } }) +
+      line({ type: "user", sessionId: "s1", timestamp: T2, message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] } });
+    const turnStart = transcriptTailTurnStartTs(tail, "s1")!;
+    expect(turnStart).toBe(Date.parse(T1));
+    const now = Date.parse(T2) + 60_000;
+    expect(declaredSettleVerdict("s1", now, turnStart, { at: Date.parse(T2) - 1_000, status: "done" })).toBe("done");
+    expect(declaredSettleVerdict("s1", now, turnStart, { at: Date.parse(T1) - 1_000, status: "done" })).toBeNull();
   });
 
   test("a stamp written after the tail's turn start is the current turn's declaration", () => {

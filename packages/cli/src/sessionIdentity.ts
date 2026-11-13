@@ -1,6 +1,8 @@
 // The variables that name the agent session a shell belongs to, in the order
-// they are trusted: Claude Code, Codex, the `cast claude` wrapper, a managed session.
-const SESSION_ID_KEYS = ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "CODECAST_SESSION_ID", "CODECAST_MANAGED_SESSION"] as const;
+// they are trusted: Claude Code, Codex, Grok, the `cast claude` wrapper, a managed session.
+// Each is the id the daemon and the hooks key that session by, so a stamp written
+// under it (`cast state`'s turn-end declaration) is one the daemon reads.
+const SESSION_ID_KEYS = ["CLAUDE_CODE_SESSION_ID", "CODEX_THREAD_ID", "CODEX_SESSION_ID", "GROK_SESSION_ID", "CODECAST_SESSION_ID", "CODECAST_MANAGED_SESSION"] as const;
 
 export function sessionIdFromEnv(env: NodeJS.ProcessEnv = process.env): string | null {
   for (const key of SESSION_ID_KEYS) if (env[key]) return env[key]!;
