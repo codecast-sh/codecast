@@ -7,6 +7,7 @@ export async function copyText(text: string, ok = "Copied") {
     await copyToClipboard(text);
     toast.success(ok);
   } catch {
-    toast.error("Couldn't copy");
+    // The text itself, so it can still be selected and copied by hand.
+    toast.error("Couldn't copy", { description: text });
   }
 }

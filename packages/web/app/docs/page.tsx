@@ -337,17 +337,23 @@ export function DocListContent() {
       .filter((h) => !have.has(h._id))
       .map((h) => ({ _id: h._id, title: h.title, doc_type: h.doc_type, source: "human", updated_at: h.updated_at ?? 0, created_at: h.updated_at ?? 0, where: h.where }) as unknown as DocItem);
     const all = elsewhere.length ? [...searchScopeDocs, ...elsewhere] : searchScopeDocs;
-    // One ranked list wherever a doc lives: a title holding the words first, then the rest in list order.
+    // One ranked list wherever a doc lives: a title holding the words first, then content hits in the
+    // server's order (the one holding more of the words first), then the rest in list order.
     const lq = contentHits.query.toLowerCase();
     if (!lq) return all;
     const titled = (d: DocItem) => (String(d.title ?? "").toLowerCase().includes(lq) ? 0 : 1);
-    return all.map((d, i) => [d, i] as const).sort((a, b) => titled(a[0]) - titled(b[0]) || a[1] - b[1]).map(([d]) => d);
+    const served = new Map(contentHits.hits.map((h, i) => [h._id, i]));
+    const rank = (d: DocItem) => served.get(d._id) ?? Infinity;
+    return all
+      .map((d, i) => [d, i] as const)
+      .sort((a, b) => titled(a[0]) - titled(b[0]) || rank(a[0]) - rank(b[0]) || a[1] - b[1])
+      .map(([d]) => d);
   }, [searchScopeDocs, contentHits.hits, contentHits.query]);
   const renderDocRow = useCallback((doc: DocItem, state: ItemRowState) => {
     const where = (doc as any).where as string | undefined;
     const match = contentHits.snippets.get(doc._id);
-    return <DocRow doc={doc} state={state} timeKey={sort === "created" ? "created_at" : "updated_at"} match={where ? `In ${where} · ${match ?? ""}` : match} />;
-  }, [sort, contentHits.snippets]);
+    return <DocRow doc={doc} state={state} timeKey={sort === "created" ? "created_at" : "updated_at"} match={where ? [`In ${where}`, match].filter(Boolean).join(" · ") : match || undefined} query={contentHits.query} />;
+  }, [sort, contentHits.snippets, contentHits.query]);
 
   return (
     <GenericListView<DocItem>
@@ -434,6 +440,7 @@ export function DocListContent() {
       searchAllItems={searchDocs}
       onSearchChange={contentHits.setQuery}
       alsoMatches={contentHits.matches}
+      searchPending={contentHits.pendingFor}
       emptyIcon={<FileText className="w-8 h-8 opacity-30" />}
       emptyMessage="No documents found"
       // With no type tab picked, + asks what to make; a type tab makes that type.

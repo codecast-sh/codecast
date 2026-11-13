@@ -57,6 +57,7 @@ import { requireArtifactEditor } from "./lib/liveArtifactAccess";
 import { applyAsWebUser } from "./liveArtifacts";
 import { docTypeChangeAllowed } from "@codecast/shared/docs";
 import { startHostedConversationFor } from "./assistant/entry";
+import { castMachinesEnabledFor, startOnCastMachine } from "./castMachines";
 import { parseQuoteDrafts, quotesWaiting, removeQuotes, saveQuotes, stampQuotesSent } from "./quoteDrafts";
 import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser, cancelPendingMessageForUser, reorderQueuedForUser, mergeQueuedForUser, releaseQueuedForUser } from "./pendingMessages";
 import { enqueueCloudSpawn, performCloudHostAction, performSetCloudAutoscale, performSetLocalMirror } from "./cloud";
@@ -167,7 +168,7 @@ const PATCH_ONLY_ACTIONS = new Set([
   "answerDecision", "applyWorkbench", "clearCurrentConversation", "clearSelection",
   "clearSidePanelSession", "closeSidePanel", "closeTab", "deferSession",
   "initPagination", "injectSession", "markKilling", "navigateToSession", "openSidePanel", "openTab",
-  "patchConversation", "pinSession", "renameSession", "requestNavigate",
+  "adoptSession", "patchConversation", "pinSession", "renameSession", "requestNavigate",
   "saveCurrentTabState", "selectPanelSession", "setActiveBucketFilter",
   "setActiveProjectFilter", "setCloudSessionMode", "setCloudSharedCheckout", "setConversationAgent",
   "setConversationAgentDefinition", "setConversationModel", "setCurrentConversation", "setCurrentSession",
@@ -967,6 +968,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // A hosted conversation (the simple lane's assistant) runs in this
     // backend: no device, no daemon command. Its start queues the first
     // message in the same transaction, idempotent on session_id like below.
+    // Cast for a person with a cast machine: the same start, as a pi session
+    // on their own cloud machine (castMachines.ts) instead of in this backend.
+    const onCastMachine = isHostedAgentType(opts.agent_type) && castMachinesEnabledFor(userId);
+    if (onCastMachine) opts = { ...opts, agent_type: "pi", target_device_id: undefined, cloud_device_id: undefined };
     if (isHostedAgentType(opts.agent_type)) {
       const started = await startHostedConversationFor(ctx as any, userId, {
         session_id: opts.session_id,
@@ -1194,6 +1199,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         workspace: cloudWorkspace,
         startFrom: cloudStartFrom,
       });
+      return conversationId;
+    }
+    if (onCastMachine) {
+      await startOnCastMachine(ctx as any, userId, conversationId);
+      if (opts.first_message?.trim()) {
+        await enqueuePendingMessage(ctx as any, await ctx.db.get(conversationId), userId, {
+          content: opts.first_message, client_id: opts.first_message_client_id, human: true,
+        });
+      }
       return conversationId;
     }
     await enqueueStartSession(ctx, runnerUserId, {
@@ -1652,8 +1666,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
 
   // Live artifacts (web store/liveArtifactsSlice.ts): an element batch, the
   // draft's save/discard, a named checkpoint. Same core the CLI writes through.
-  applyLiveOps: async (ctx, userId, [docId, layer, ops, clientId]: [string, "main" | "draft" | "comments", any[], string | undefined]) => {
-    return await applyAsWebUser(ctx, userId, docId, layer, ops, clientId);
+  applyLiveOps: async (ctx, userId, [docId, layer, ops, clientId, claim]: [string, "main" | "draft" | "comments", any[], string | undefined, any]) => {
+    return await applyAsWebUser(ctx, userId, docId, layer, ops, clientId, claim);
+  },
+  // The rest of a big write (web liveSendOps): the same batch, painted on the client without
+  // pending locks, since the page holds the doc's rows back until the whole write is in.
+  liveSendOps: async (ctx, userId, [docId, layer, ops, clientId, claim]: [string, "main" | "draft" | "comments", any[], string | undefined, any]) => {
+    return await applyAsWebUser(ctx, userId, docId, layer, ops, clientId, claim);
   },
   liveDraft: async (ctx, _userId, [docId, op, draftAt]: [string, "start" | "save" | "discard", number | undefined]) => {
     if (!ctx.db.normalizeId("docs", docId)) return null;

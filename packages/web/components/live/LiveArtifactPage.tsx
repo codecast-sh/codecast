@@ -23,7 +23,9 @@ import "./live.css";
 import { useLiveArtifact, useLiveVersions, useLiveDraftState, useLiveElements, useLivePresence, useLiveRefusal, useLiveRestoring, useLiveUnsettled } from "./useLiveArtifact";
 import { useWsConnected } from "../../hooks/useWsConnected";
 import { useShortcuts } from "../../shortcuts";
-import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
+import { claimKeys } from "../../shortcuts/keyOwnership";
+import { copyText } from "../../lib/copyText";
+import { hasOpenModal } from "../../shortcuts/registry";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { sharePageUrl } from "../../lib/utils";
 import { LiveCursors } from "./LiveCursors";
@@ -161,36 +163,21 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
     return elements.filter((e) => keys.has(e.key));
   }, [elements, selection]);
 
-  // A bare Esc on an artifact closes nothing: it dismisses what is open inside
-  // it (a menu, a selection, an edit), and with nothing to dismiss it stays put,
-  // on every type. Registered before the page's list split (a child's effects run
-  // first), so its Esc-to-close sees the key already handled.
-  useWatchEffect(() => {
-    if (openRev !== null) return;
-    const onEsc = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented) return;
-      if (keyBelongsElsewhere(e.target)) return;
-      e.preventDefault();
-    };
-    document.addEventListener("keydown", onEsc);
-    return () => document.removeEventListener("keydown", onEsc);
-  }, [openRev]);
-
   // ⌘Z / ⇧⌘Z when focus is not in a text field.
   useWatchEffect(() => {
     // An open version is read only: nothing to undo into, and Esc goes back to the current state.
+    // A claim, newer than the view's own (a board claims Esc to clear its selection), so it is asked first.
+    // The view's focus (a sheet's hidden cell editor) is no text being typed; a side panel's box is.
     if (openRev !== null) {
-      const onEsc = (e: KeyboardEvent) => {
-        if (e.key !== "Escape" || e.defaultPrevented) return;
+      return claimKeys((e) => {
+        if (e.key !== "Escape" || e.defaultPrevented || hasOpenModal()) return false;
         const t = e.target as HTMLElement | null;
-        if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
-        // Ahead of the app's own Esc, which would close the page.
+        const typing = !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+        if (typing && !t!.closest("[data-live-body]")) return false;
         e.preventDefault();
-        e.stopImmediatePropagation();
         setParam("v", null);
-      };
-      window.addEventListener("keydown", onEsc, true);
-      return () => window.removeEventListener("keydown", onEsc, true);
+        return true;
+      });
     }
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "z") return;
@@ -271,14 +258,17 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
   const mod = isMac ? "⌘" : "Ctrl";
 
   return (
-    <div className="h-full min-w-0 flex flex-col bg-sol-bg" data-live-page={doc.doc_type}>
+    // data-detail-owns-keys: the artifact owns the page's bare keys while it is open. Esc dismisses what is open
+    // inside it and never closes the page (useDetailEscClose); the list behind it answers none (GenericListView).
+    <div className="h-full min-w-0 flex flex-col bg-sol-bg" data-live-page={doc.doc_type} data-detail-owns-keys="">
       <AskConfirmHost />
       <header ref={titlebarHead} className="live-head flex items-center gap-2 px-3 h-11 border-b border-sol-border/40 shrink-0">
         <DocTypeMark type={doc.doc_type} size={15} title={spec.label} />
         <TitleInput docId={doc._id} title={doc.title} placeholder={`Untitled ${spec.label.toLowerCase()}`} readOnly={mode === "view"} />
         <span data-live-type-label className={`text-meta shrink-0 ${typeStyle.color}`}>{typeLabel ?? spec.label}</span>
         {locked && <span title="Only its owner and editors can edit" className="inline-flex shrink-0"><Lock data-live-locked aria-label="Only its owner and editors can edit" className="w-3 h-3 text-sol-text-dim" /></span>}
-        {(mode === "edit" || (cold && openRev === null)) && <SyncState docId={doc._id} loading={cold} />}
+        {/* Cached rows paint and stay editable, but the chip says Saved only once the server has answered for all of it. */}
+        {(mode === "edit" || (cold && openRev === null)) && <SyncState docId={doc._id} loading={!live.ready} draft={live.draft.active} />}
         {/* The product's controls take the room left between the title and the
             shell's own, and clip past it: the shell's buttons always stay reachable. */}
         <div data-live-toolbar className="flex-1 min-w-10 flex items-center justify-end gap-2 overflow-hidden">{toolbar}</div>
@@ -390,7 +380,7 @@ export function LiveArtifactPage({ doc }: { doc: { _id: string; title: string; d
           {openRev === null && <CursorLayer others={others} screenMap={screenMap} />}
         </div>
         {panel && (
-          <aside className="live-panel w-[300px] shrink-0 overflow-hidden flex flex-col border-l border-sol-border/40 bg-sol-bg min-h-0" data-live-panel={panel}>
+          <aside className={`live-panel ${panel === "product" ? "w-[clamp(300px,32%,480px)]" : "w-[300px]"} shrink-0 overflow-hidden flex flex-col border-l border-sol-border/40 bg-sol-bg min-h-0`} data-live-panel={panel}>
             {panel === "comments" && (
               <CommentsPanel
                 doc={doc as any}
@@ -480,12 +470,12 @@ function IconToggle({ on, title, label, onClick, badge, children }: { on: boolea
 }
 
 /** Whether this tab's edits have reached the server: Saving, Saved, or Offline with how many wait. */
-function SyncState({ docId, loading = false }: { docId: string; loading?: boolean }) {
+function SyncState({ docId, loading = false, draft = false }: { docId: string; loading?: boolean; draft?: boolean }) {
   const online = useWsConnected();
   const waiting = useLiveUnsettled(docId);
   const refusal = useLiveRefusal(docId);
   const state = !online ? "offline" : loading ? "loading" : waiting > 0 ? "saving" : refusal ? "refused" : "saved";
-  const label = state === "offline" ? (waiting > 0 ? `Offline · ${waiting} waiting` : "Offline") : state === "loading" ? "Loading…" : state === "saving" ? "Saving…" : state === "refused" ? "Not saved" : "Saved";
+  const label = state === "offline" ? (waiting > 0 ? `Offline · ${waiting} waiting` : "Offline") : state === "loading" ? "Loading…" : state === "saving" ? "Saving…" : state === "refused" ? "Not saved" : draft ? "Draft saved" : "Saved";
   return (
     <span
       data-live-sync={state}
@@ -566,11 +556,7 @@ function ArtifactMenu({ doc, copyOf, shareQuery, canEdit, ready, exports, fileIm
           data-live-duplicate
           disabled={!ready}
           onSelect={() => {
-            toast.promise(duplicateLiveArtifact(doc, (href) => router.push(href), copyOf).then((id) => { if (!id) throw new Error("no copy"); return id; }), {
-              loading: "Making a copy…",
-              success: "Copy opened",
-              error: "Could not make a copy",
-            });
+            void duplicateLiveArtifact(doc, (href) => router.push(href), copyOf);
           }}
         >
           <Copy className="w-3.5 h-3.5" /> Duplicate
@@ -580,7 +566,7 @@ function ArtifactMenu({ doc, copyOf, shareQuery, canEdit, ready, exports, fileIm
         </DropdownMenuItem>
         <DropdownMenuItem
           data-live-copy-link
-          onSelect={() => { void navigator.clipboard?.writeText(sharePageUrl(`/docs/${doc._id}${shareQuery ? `?${shareQuery}` : ""}`)).then(() => toast.success("Link copied")); }}
+          onSelect={() => { void copyText(sharePageUrl(`/docs/${doc._id}${shareQuery ? `?${shareQuery}` : ""}`), "Link copied"); }}
         >
           <Link2 className="w-3.5 h-3.5" /> Copy link
         </DropdownMenuItem>

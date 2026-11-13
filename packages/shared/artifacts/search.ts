@@ -28,7 +28,7 @@ export function artifactSearchText(title: string, elements: readonly ArtifactEle
   return parts.join("\n");
 }
 
-/** The stretch of `text` around the first word of `query` it holds, for a result line. */
+/** The stretch around the first word of `query` that `text` holds, cut from the one line (an element's words) it is in; empty when it holds none. */
 export function searchSnippet(text: string, query: string, width = 80): string {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const lower = text.toLowerCase();
@@ -38,8 +38,14 @@ export function searchSnippet(text: string, query: string, width = 80): string {
     if (at >= 0) break;
   }
   // A result line reads as words: markdown marks (emphasis, headings, quotes, links' brackets, code ticks) go.
-  const line = (s: string) => s.replace(/[*_#>`~]+|\[|\]\([^)]*\)|\]/g, "").replace(/\s+/g, " ").trim();
-  if (at < 0) return line(text.slice(0, width));
-  const start = Math.max(0, at - Math.floor(width / 3));
-  return `${start > 0 ? "…" : ""}${line(text.slice(start, start + width))}${start + width < text.length ? "…" : ""}`;
+  const clean = (s: string) => s.replace(/[*_#>`~]+|\[|\]\([^)]*\)|\]/g, "").replace(/\s+/g, " ").trim();
+  // A title-only hit shows no words from inside: there are none that match.
+  if (at < 0) return "";
+  // Never run one sticky's words into the next: the snippet stays inside the matching line.
+  const lineStart = text.lastIndexOf("\n", at) + 1;
+  const nl = text.indexOf("\n", at);
+  const lineEnd = nl < 0 ? text.length : nl;
+  const start = Math.max(lineStart, at - Math.floor(width / 3));
+  const end = Math.min(lineEnd, start + width);
+  return `${start > lineStart ? "…" : ""}${clean(text.slice(start, end))}${end < lineEnd ? "…" : ""}`;
 }

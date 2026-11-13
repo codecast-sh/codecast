@@ -1,12 +1,9 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useInboxStore } from "../../store/inboxStore";
-import { hasOpenModal } from "../../shortcuts/registry";
 import { useTabActive } from "../../hooks/usePagePresence";
-import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useNavClose } from "../../hooks/useNavTrail";
-import { keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
+import { useDetailEscClose } from "../../hooks/useDetailEscClose";
 import { DetailListCtx } from "../../lib/detailSplitContext";
 import "./detailSplit.css";
 
@@ -25,20 +22,7 @@ export function ModernDetailSplit({ list, closeHref, children }: { list: ReactNo
   const active = hasDetail && isTabActive;
   const close = useNavClose(closeHref);
 
-  // Esc closes the item. Never from an editable (editors own Esc), never
-  // under a modal or the shortcuts panel.
-  useWatchEffect(() => {
-    if (!active) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented || hasOpenModal()) return;
-      if (useInboxStore.getState().shortcutsPanelOpen) return;
-      if (keyBelongsElsewhere(e.target)) return;
-      e.preventDefault();
-      close();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [active, close]);
+  const detailRef = useDetailEscClose(active, close);
 
   return (
     <div className="cc-dsplit" data-cc-split={hasDetail ? "open" : "list"}>
@@ -47,7 +31,7 @@ export function ModernDetailSplit({ list, closeHref, children }: { list: ReactNo
       </div>
       {hasDetail && (
         <div className="cc-dsplit__detail" data-cc-split-detail>
-          <div className="min-h-0 flex-1">{children}</div>
+          <div ref={detailRef} className="min-h-0 flex-1">{children}</div>
         </div>
       )}
     </div>

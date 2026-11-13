@@ -160,25 +160,23 @@ export function coalesceOps(ops: readonly ArtifactOp[]): ArtifactOp[] {
  * converges like any edit.
  */
 export function invertOps(before: (key: string) => ElementState | undefined, ops: readonly ArtifactOp[]): ArtifactOp[] {
-  const seen = new Set<string>();
-  const inverse: ArtifactOp[] = [];
+  // Per key, in one pass: every field any set touches, and whether a put or del touches it.
+  const touched = new Map<string, { fields: Set<string>; whole: boolean }>();
   for (const op of ops) {
-    if (seen.has(op.k)) continue;
-    seen.add(op.k);
-    const prev = before(op.k);
-    if (!prev || prev.deleted) {
-      inverse.push({ k: op.k, del: true });
-    } else if ("set" in op) {
+    let t = touched.get(op.k);
+    if (!t) touched.set(op.k, (t = { fields: new Set(), whole: false }));
+    if ("set" in op) for (const f of Object.keys(op.set)) t.fields.add(f);
+    else t.whole = true;
+  }
+  const inverse: ArtifactOp[] = [];
+  for (const [k, t] of touched) {
+    const prev = before(k);
+    if (!prev || prev.deleted) inverse.push({ k, del: true });
+    else if (t.whole) inverse.push({ k, put: { kind: prev.kind, ...prev.fields } });
+    else {
       const restore: Record<string, Json> = {};
-      // Every field any later op on this key touches, read from the before state.
-      for (const later of ops) {
-        if (later.k !== op.k || !("set" in later)) continue;
-        for (const f of Object.keys(later.set)) restore[f] = prev.fields[f] ?? null;
-      }
-      if (ops.some((o) => o.k === op.k && !("set" in o))) inverse.push({ k: op.k, put: { kind: prev.kind, ...prev.fields } });
-      else inverse.push({ k: op.k, set: restore });
-    } else {
-      inverse.push({ k: op.k, put: { kind: prev.kind, ...prev.fields } });
+      for (const f of t.fields) restore[f] = prev.fields[f] ?? null;
+      inverse.push({ k, set: restore });
     }
   }
   return inverse.reverse();

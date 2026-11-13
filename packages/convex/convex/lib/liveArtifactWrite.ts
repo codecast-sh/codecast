@@ -142,7 +142,60 @@ type BatchInput = {
   unbounded?: boolean;
   /** The server's own follow-up (an ask's stamps): skips the per-comment ownership rules. */
   internal?: boolean;
+  /** One batch of a whole-range rewrite: see `claimProblem`. */
+  claim?: BatchClaim;
 };
+
+export type BatchClaim = { scope: string; write: string; base: number; first?: boolean; last?: boolean };
+
+/** How long a rewrite holds its scope after its last batch arrived (a client that died lets go). */
+export const CLAIM_IDLE_MS = 30_000;
+
+/**
+ * Whole-range rewrites (a sort, a paste over a range) are too big for one
+ * batch, and each element resolves last writer wins, so two of them, or one
+ * and someone typing, interleave into rows neither made. A rewrite claims its
+ * scope with its first batch and lets go with its last: while it holds it,
+ * another rewrite or another person's write into the scope is refused, and a
+ * rewrite computed from a revision older than someone else's write into the
+ * scope is refused before it starts. Returns the head fields to write, or
+ * throws the refusal.
+ */
+function claimsAfter(
+  head: { claims?: Record<string, any>; scope_writes?: Record<string, any> },
+  claim: BatchClaim | undefined,
+  scopes: Set<string>,
+  caller: Caller,
+  now: number,
+  rev: number,
+): { claims: Record<string, any>; scope_writes: Record<string, any> } {
+  const claims: Record<string, any> = {};
+  for (const [scope, c] of Object.entries(head.claims ?? {})) if (now - c.at < CLAIM_IDLE_MS) claims[scope] = c;
+  const scopeWrites: Record<string, any> = { ...(head.scope_writes ?? {}) };
+  if (claim) {
+    const held = claims[claim.scope];
+    if (held && held.write !== claim.write) {
+      throw new ConvexError(`${held.name} is rewriting this range; try again when it's saved`);
+    }
+    // A later batch whose write no longer holds the scope (its first was refused, or it sat idle past
+    // CLAIM_IDLE_MS) never starts the rewrite over halfway through.
+    if (!held && claim.first === false) throw new ConvexError("This rewrite stopped partway; do it again");
+    if (!held) {
+      const last = scopeWrites[claim.scope];
+      if (last && last.rev > claim.base && last.actor !== caller.actor) throw new ConvexError("This range changed since you started; do it again");
+    }
+    if (claim.last) delete claims[claim.scope];
+    else claims[claim.scope] = { write: claim.write, actor: caller.actor, name: caller.name, at: now };
+    scopes.add(claim.scope);
+  } else {
+    for (const scope of scopes) {
+      const held = claims[scope];
+      if (held && held.actor !== caller.actor) throw new ConvexError(`${held.name} is rewriting this range; try again when it's saved`);
+    }
+  }
+  for (const scope of scopes) scopeWrites[scope] = { rev, actor: caller.actor };
+  return { claims, scope_writes: scopeWrites };
+}
 
 /** The one write path. Returns the revision the batch ended at. */
 export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev: number; keys: string[] }> {
@@ -175,6 +228,16 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
   if (layer !== "comments" && !mayEditLive(doc, head, caller.userId)) {
     throw new ConvexError(VIEW_ONLY_MESSAGE);
   }
+  // A batch the outbox delivers again (its first answer was lost to a reload or a dropped socket, or
+  // another window replayed it) lands once: replaying a batch of puts after later edits would put
+  // those elements back as they were.
+  if (input.client_id) {
+    const logged = await ctx.db
+      .query("live_batches")
+      .withIndex("by_doc_client", (q: any) => q.eq("doc_id", doc._id).eq("client_id", input.client_id))
+      .collect();
+    if (logged.length) return { rev: Math.max(...logged.map((b: any) => b.rev_to)), keys: [...new Set(logged.flatMap((b: any) => (b.ops ?? []).map((o: any) => o.k)))] as string[] };
+  }
   if (!head) {
     const id = await ctx.db.insert("live_heads", { doc_id: doc._id, rev: 0, last_write_at: now, rows: 0, rev_sum: 0 });
     head = (await ctx.db.get(id))!;
@@ -188,6 +251,17 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
     if (now - head!.last_write_at > QUIET_CHECKPOINT_MS) await insertVersion(ctx, doc._id, head!.rev, "auto", "Before edits", caller);
     else if (now - (head!.last_version_at ?? head!._creationTime) > AUTOSAVE_MS) await insertVersion(ctx, doc._id, head!.rev, "auto", "Autosave", caller);
   }
+
+  // The scopes this batch writes into (main layer only: comments and drafts are no rewrite's).
+  const scopeOf = layer === "main" ? artifactSpec(doc.doc_type as any).claimScope : undefined;
+  const scopes = new Set<string>();
+  if (scopeOf) for (const op of ops) {
+    const sc = scopeOf(op.k, "put" in op ? op.put : "set" in op ? op.set : undefined);
+    if (sc) scopes.add(sc);
+  }
+  // Checked before anything is written; the revision stamped is the one this batch ends at (filled below).
+  const claimCheck = layer === "main" && (input.claim || scopes.size) ? () => claimsAfter(head!, input.claim, new Set(scopes), caller, now, 0) : null;
+  if (claimCheck) claimCheck();
 
   const revFrom = head!.rev;
   let rev = revFrom;
@@ -230,7 +304,11 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
       createdComments.push({ key: op.k, text: next.fields.text, parent: next.fields.parent as string | undefined, sent_to: next.fields.sent_to as string | undefined });
     }
   }
-  if (written.length === 0) return { rev: revFrom, keys: [] };
+  if (written.length === 0) {
+    // A batch that changed nothing still takes or lets go of its claim.
+    if (input.claim) await ctx.db.patch(head!._id, claimsAfter(head!, input.claim, new Set(scopes), caller, now, revFrom));
+    return { rev: revFrom, keys: [] };
+  }
   // The log holds the batch in records under the document size limit; op i
   // of the batch is revision revFrom + 1 + i, so a record's range follows.
   let start = 0;
@@ -251,6 +329,7 @@ export async function applyBatchCore(ctx: any, input: BatchInput): Promise<{ rev
   await ctx.db.patch(head!._id, {
     rev,
     last_write_at: now,
+    ...(claimCheck ? claimsAfter(head!, input.claim, new Set(scopes), caller, now, rev) : {}),
     ...(tracked(head) ? { rows: head!.rows! + addedRows, rev_sum: head!.rev_sum! + revDelta } : {}),
     ...(layer === "draft" ? { draft_count: draftCount, draft_bytes: Math.max(0, draftBytes) } : {}),
   });

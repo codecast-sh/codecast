@@ -233,6 +233,72 @@ describe("live artifacts", () => {
     expect(after.cm_6.sent_to).toBeUndefined();
     await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_7", put: { kind: "comment", text: "@[Lay out the timeline jx7agnt] one more", parent: "cm_3" } }] });
     expect((await state(t, doc, "comments")).cm_3.answered_at).toBeUndefined();
+
+    // An ask handed to the composer is answered by the agent that replies, and then names it.
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_8", put: { kind: "comment", text: "Tidy the lanes", sent_to: "compose" } }] });
+    await t.mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_9", put: { kind: "comment", text: "Tidied", parent: "cm_8" } }], ...agent });
+    expect((await state(t, doc, "comments")).cm_8).toMatchObject({ sent_to: String(conv), answered_by_name: "Lay out the timeline" });
+
+    // A thread with another session is not answered by this one.
+    const other = await t.run((ctx: any) => ctx.db.insert("conversations", { user_id: rosa, agent_type: "claude_code", status: "active", is_private: false, started_at: Date.now(), updated_at: Date.now(), message_count: 0, title: "Other" } as any));
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_10", put: { kind: "comment", text: "For the other one", sent_to: String(other) } }] });
+    await t.mutation(api.liveArtifacts.apply, { doc_id: doc, layer: "comments", ops: [{ k: "cm_11", put: { kind: "comment", text: "Not mine", parent: "cm_10" } }], ...agent });
+    expect((await state(t, doc, "comments")).cm_10.answered_at).toBeUndefined();
+  });
+
+  test("a whole-range rewrite owns its tab until its last batch", async () => {
+    const { t, rosa, dev, team, as } = await setup();
+    const sheet = await t.run((ctx: any) => ctx.db.insert("docs", { user_id: rosa, team_id: team, workspace: `team:${team}`, title: "Budget", content: "", doc_type: "sheet", source: "human", created_at: 1, updated_at: 1 } as any));
+    const put = (k: string, input: string) => ({ k, put: { kind: "cell", input } });
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [{ k: "tab:t1", put: { kind: "tab", name: "Sheet1", order: 0 } }, put("c:t1!A1", "a")] });
+    const head = (await as(rosa).query(api.liveArtifacts.elementsSince, { doc_id: sheet, since: 0 }))!.head;
+    const claim = { scope: "tab:t1", write: "w1", base: head };
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [put("c:t1!A2", "b")], claim: { ...claim, first: true } });
+    // Mid-rewrite: someone else's edit into the tab, and another rewrite, are refused; the writer's own edit is not.
+    await expect(as(dev).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [put("c:t1!B1", "x")] })).rejects.toThrow(/rewriting this range/);
+    await expect(as(dev).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [put("c:t1!B2", "y")], claim: { scope: "tab:t1", write: "w2", base: head, first: true } })).rejects.toThrow(/rewriting this range/);
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [put("c:t1!C1", "own")] });
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [put("c:t1!A3", "c")], claim: { ...claim, first: false, last: true } });
+    // Done: others write again. A rewrite computed before that write is refused; a later batch of a write that holds nothing too.
+    await as(dev).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [put("c:t1!B1", "x")] });
+    await expect(as(rosa).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [put("c:t1!A1", "z")], claim: { scope: "tab:t1", write: "w3", base: head, first: true } })).rejects.toThrow(/changed since you started/);
+    await expect(as(rosa).mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [put("c:t1!A1", "z")], claim: { scope: "tab:t1", write: "w4", base: 999, first: false } })).rejects.toThrow(/stopped partway/);
+  });
+
+  test("a batch delivered again lands once, so a replayed put never takes back a later edit", async () => {
+    const { t, doc, rosa, as } = await setup();
+    const seed = { doc_id: doc, client_id: "seed-1", ops: [{ k: "el_t", put: { kind: "sticky", text: "" } }] };
+    const first = await as(rosa).mutation(api.liveArtifacts.apply, seed);
+    await as(rosa).mutation(api.liveArtifacts.apply, { doc_id: doc, ops: [{ k: "el_t", set: { text: "Templates gallery" } }] });
+    // The outbox replays the seed after a reload lost its answer.
+    const again = await as(rosa).mutation(api.liveArtifacts.apply, seed);
+    expect(first.rev).toBeGreaterThan(0);
+    expect(again.rev).toBe(first.rev);
+    expect((await state(t, doc)).el_t).toMatchObject({ text: "Templates gallery" });
+  });
+
+  test("a new artifact is found by its title before anything is written to it", async () => {
+    const { t, dev, as } = await setup();
+    const token = presentToken("dev_clisecret");
+    await t.mutation(api.docs.create, { api_token: token, title: "Quokka planning", content: "", doc_type: "board", workspace: "personal" });
+    await new Promise((r) => setTimeout(r, 20));
+    await t.finishAllScheduledFunctions(() => {});
+    const hits = await as(dev).query(api.liveSearch.search, { query: "quokka" });
+    expect(hits.map((h: any) => h.title)).toEqual(["Quokka planning"]);
+    // A title-only artifact shows no words from inside.
+    expect(hits[0].snippet).toBe("");
+
+    // Content hits: the one holding both words beats a newer one holding one.
+    const add = async (title: string, text: string, updated_at: number) => {
+      const id = await t.run((ctx: any) => ctx.db.insert("docs", { user_id: dev, title, content: "", doc_type: "board", workspace: `user:${dev}`, created_at: 1, updated_at } as any));
+      await t.run((ctx: any) => ctx.db.insert("live_search", { doc_id: id, workspace: `user:${dev}`, text: `${title}\n${text}`, at: 1 }));
+    };
+    await add("Board A", "Migration\nquokka migration plan", 100);
+    await add("Board B", "Launch plan for Q4", 200);
+    const both = await as(dev).query(api.liveSearch.search, { query: "migration plan quokka" });
+    const order = both.map((h: any) => h.title);
+    expect(order[0]).toBe("Board A");
+    expect(order.indexOf("Board A")).toBeLessThan(order.indexOf("Board B"));
   });
 
   test("create from a team session: --personal keeps it the creator's, no flag follows the session", async () => {

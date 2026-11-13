@@ -480,6 +480,8 @@ export interface GenericListViewProps<T> {
   onSearchChange?: (query: string) => void;
   /** An item the server's search found (its content matched), shown though its own text does not. */
   alsoMatches?: (item: T) => boolean;
+  /** Whether a search answer for this query is still on its way (a server-side content search): the list says so instead of "No results". */
+  searchPending?: (query: string) => boolean;
   /** When set, a subtle "syncing N" whisper renders next to the title while the
    *  reconcile crawl for this scope ("tasks" | "docs") is still streaming in. */
   syncScope?: string;
@@ -562,6 +564,7 @@ export function GenericListView<T>({
   searchAllItems,
   onSearchChange,
   alsoMatches,
+  searchPending,
   syncScope,
   headerExtra,
   displayExtra,
@@ -856,6 +859,10 @@ export function GenericListView<T>({
       if (keyBelongsElsewhere(target)) return;
       // A key something already handled (a menu item's Enter, a picker's Escape) is not the list's.
       if (e.defaultPrevented) return;
+      // An open item that owns its keys (an artifact: its header buttons, a dashboard's bare keys) takes them all;
+      // the list behind or beside it answers none, or Enter would open another doc over it.
+      const owner = document.querySelector("[data-detail-owns-keys]");
+      if (owner && owner.getClientRects().length > 0) return;
       // Every key inside an open menu, listbox or dialog belongs to it (filter dropdowns, pickers, a
       // sheet's format menu): Enter there picks the item, never the list's focused row.
       if (target.closest?.('[role="menu"],[role="listbox"],[role="dialog"]')) return;
@@ -1322,7 +1329,7 @@ export function GenericListView<T>({
             {rowModel.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-48 text-sol-text-dim">
                 {emptyIcon}
-                <p className="text-sm mt-2">{searchQuery ? "No results" : (emptyMessage || "No items found")}</p>
+                <p className="text-sm mt-2">{searchQuery ? (searchPending?.(searchQuery) ? "Searching…" : "No results") : (emptyMessage || "No items found")}</p>
                 {!searchQuery && onCreate && (
                   <button onClick={onCreate} className="mt-3 text-sm text-sol-cyan hover:underline">
                     Create one

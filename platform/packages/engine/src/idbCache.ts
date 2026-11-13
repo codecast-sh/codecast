@@ -1,6 +1,6 @@
 import Dexie from "dexie";
 import type { Patch } from "mutative";
-import { diffCollection } from "./idbCollectionDiff";
+import { createCoalescedWriter, diffCollection, diffPatchedRows, patchedIds } from "./idbCollectionDiff";
 import { deriveRegistryMaps, type RegistryMaps } from "./registry";
 import type { OutboxEntry, PlatformConfig } from "./types";
 import {
@@ -56,6 +56,12 @@ export function createIdbCache(
 
   let hydrating = false;
 
+  const META_WRITE_DEBOUNCE_MS = 250;
+  const metaWriter = createCoalescedWriter(
+    (key, value) => { metaTable.put({ key, value }).catch(() => {}); },
+    META_WRITE_DEBOUNCE_MS,
+  );
+
   // What each collection table currently holds on disk, by id → row reference.
   // Lets writePatchesToIDB persist only the rows that actually changed (and
   // delete the ones that disappeared) instead of clearing + re-pouring the whole
@@ -78,7 +84,6 @@ export function createIdbCache(
         const data = state[key];
         if (data && typeof data === "object") {
           const prevShadow = lastPersisted.get(key);
-          const { puts, deletes: rawDeletes, next } = diffCollection(prevShadow, data);
           // NEVER wipe the cache from a store-shrink. A row leaves IDB ONLY when
           // it was explicitly removed — a delete plants a `${key}:${id}` exclude
           // in `pending`. A diff-delete with NO exclude means the in-memory store
@@ -88,12 +93,25 @@ export function createIdbCache(
           // makes a whole-collection wipe structurally impossible — only
           // intentional per-row removals delete.
           const pending = (state.pending || {}) as Record<string, { type?: string }>;
-          const deletes: string[] = [];
-          for (const id of rawDeletes) {
-            if (pending[`${key}:${id}`]?.type === "exclude") deletes.push(id);
-            else if (prevShadow?.has(id)) next.set(id, prevShadow.get(id));
+          const isRemoved = (id: string) => pending[`${key}:${id}`]?.type === "exclude";
+          let puts: any[];
+          let deletes: string[];
+          // The patches name the rows this write touched: only those are compared, so a
+          // write of a few rows into a large collection costs the rows, not the collection.
+          const ids = prevShadow ? patchedIds(patches, key) : null;
+          if (prevShadow && ids) {
+            ({ puts, deletes } = diffPatchedRows(prevShadow, data, ids, isRemoved));
+          } else {
+            const diff = diffCollection(prevShadow, data);
+            const next = diff.next;
+            puts = diff.puts;
+            deletes = [];
+            for (const id of diff.deletes) {
+              if (isRemoved(id)) deletes.push(id);
+              else if (prevShadow?.has(id)) next.set(id, prevShadow.get(id));
+            }
+            lastPersisted.set(key, next);
           }
-          lastPersisted.set(key, next);
           if (puts.length || deletes.length) {
             // One transaction so a row is never momentarily absent: removed rows
             // and changed rows commit together, and unchanged rows are never
@@ -105,7 +123,9 @@ export function createIdbCache(
           }
         }
       } else if (metaKeys.has(key)) {
-        metaTable.put({ key, value: state[key] }).catch(() => {});
+        // A meta value is one blob (the pending map holds a lock per field in flight): written once per
+        // quiet spell with its latest value, never once per action. Page hide flushes it.
+        metaWriter.write(key, state[key]);
       }
     }
   }
@@ -297,9 +317,9 @@ export function createIdbCache(
   }
 
   if (typeof window !== "undefined") {
-    window.addEventListener("pagehide", flushDetail);
+    window.addEventListener("pagehide", () => { flushDetail(); metaWriter.flush(); });
     window.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "hidden") flushDetail();
+      if (document.visibilityState === "hidden") { flushDetail(); metaWriter.flush(); }
     });
   }
 
@@ -328,6 +348,7 @@ export function createIdbCache(
   // meta, parked outbox). The caller owns navigation/reload afterwards.
   async function purgeLocalCache(): Promise<void> {
     pendingDetailWrites.clear();
+    metaWriter.drop();
     lastPersisted.clear();
     await db.delete();
     // Dexie reopens lazily on next access; a signed-out page navigates away.

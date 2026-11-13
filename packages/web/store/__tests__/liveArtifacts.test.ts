@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "../inboxStore";
 import { liveRowId } from "../liveArtifactsSlice";
 import { applyElementsPayload, sendLiveOps, settleAfter, whenLiveSent } from "../../components/live/useLiveArtifact";
+import { _releaseOrphanLocksForTests } from "../../hooks/useSyncLiveArtifact";
 
 // Live artifact elements are localFirst: an edit paints from the action draft
 // and its field locks hold until the echo. These pin the two ways the locks
@@ -124,5 +125,58 @@ describe("live artifact store", () => {
     expect(calls).toHaveLength(2);
     // The queued writes went out together, after the put.
     expect(calls[1]).toEqual([{ k: "el_new", set: { text: "Write the launch post", x: 5 } }]);
+  });
+
+  it("a write that clears a field shows the field gone while it waits behind another send", async () => {
+    const { layerElements } = await import("../../components/live/useLiveArtifact");
+    const { applyOp, fromElement } = await import("@codecast/shared/artifacts");
+    const stored = { _id: "x", doc_id: DOC, layer: "comments", key: "cm_1", kind: "comment", text: "Hi", resolved: true, resolved_by_name: "Rosa", rev: 4 };
+    const queued = applyOp(fromElement(stored as any), { k: "cm_1", set: { resolved: null, resolved_by_name: null } });
+    const [el] = layerElements(new Map([["cm_1", stored]]), new Map([["cm_1", queued]]));
+    expect(el.resolved).toBeUndefined();
+    expect(el.resolved_by_name).toBeUndefined();
+    expect(el).toMatchObject({ key: "cm_1", kind: "comment", text: "Hi", rev: 4 });
+  });
+
+  it("locks from before this page loaded go once the feed answers", async () => {
+    const old = performance.timeOrigin - 60_000;
+    const A1 = liveRowId(DOC, "main", "c:Sheet1!A1");
+    useInboxStore.setState({ liveElements: { [A1]: { _id: A1, doc_id: DOC, layer: "main", key: "c:Sheet1!A1", kind: "cell", input: "Name 9998", rev: 1 } }, pending: {
+      [`liveElements:${A1}`]: { type: "include", ts: old },
+      [`liveElements:${A1}:input`]: { type: "field", value: "Name 9998", ts: old },
+      [`liveElements:${A1}:bold`]: { type: "field", value: true, ts: Date.now() + 1 },
+      [`liveElements:${A1}:gone`]: { type: "exclude", ts: old },
+    } } as any);
+    // The feed brings a newer value than the old lock holds: the lock pins the old one until it goes.
+    applyElementsPayload(payload([{ ...row({ input: "Name 238" }, 3), key: "c:Sheet1!A1", kind: "cell" }], 3));
+    expect(s().liveElements[A1].input).toBe("Name 9998");
+    _releaseOrphanLocksForTests();
+    expect(s().liveElements[A1].input).toBe("Name 238");
+    // The old field lock and the put's include go; this page's own lock and the exclude stay.
+    expect(Object.keys(s().pending).sort()).toEqual([`liveElements:${A1}:bold`, `liveElements:${A1}:gone`]);
+  });
+
+  it("a write bigger than one server batch paints at once and reaches the store a batch per task, in order", async () => {
+    const calls: any[][] = [];
+    s()._clearDispatch(owner);
+    s()._setDispatch(async (action: string, args: any[]) => {
+      if (action === "applyLiveOps" || action === "liveSendOps") calls.push(args[2]);
+      return { rev: calls.length, keys: [] };
+    }, { owner });
+    const ops = Array.from({ length: 1000 }, (_, i) => ({ k: `el_${i}`, put: { kind: "sticky", x: i } }));
+    sendLiveOps(DOC, "main", ops);
+    // The first batch is in the store and on the wire now; the rest wait their turn, one task each.
+    expect(calls).toHaveLength(1);
+    expect(s().liveElements[liveRowId(DOC, "main", "el_0")]).toBeDefined();
+    expect(s().liveElements[liveRowId(DOC, "main", "el_999")]).toBeUndefined();
+    await Bun.sleep(30);
+    expect(calls.map((c) => c.length)).toEqual([400, 400, 200]);
+    expect(calls[2][199].k).toBe("el_999");
+    expect(s().liveElements[liveRowId(DOC, "main", "el_999")].x).toBe(999);
+    // Only the first batch planted locks; the rest of the write rode the held rows, not 600 more locks.
+    const locks = Object.keys(s().pending).filter((k) => k.startsWith(`liveElements:${DOC}|`));
+    expect(locks.length).toBeLessThanOrEqual(400);
+    expect(locks.some((k) => k.includes("|el_999"))).toBe(false);
+    await whenLiveSent(DOC, 1000);
   });
 });

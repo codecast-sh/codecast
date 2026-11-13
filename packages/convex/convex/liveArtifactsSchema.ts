@@ -67,6 +67,12 @@ export const liveArtifactTables = {
     // restore stopped partway; the page offers to finish (restore to `to`)
     // or undo it (restore to `from`).
     restoring: v.optional(v.object({ to: v.number(), from: v.number(), by: v.string(), by_name: v.string(), at: v.number() })),
+    // Whole-range rewrites in flight (a sort, a paste over a range), by scope ("tab:<id>"): a write
+    // too big for one batch owns its scope until its last batch, so two rewrites never interleave.
+    claims: v.optional(v.record(v.string(), v.object({ write: v.string(), actor: v.string(), name: v.string(), at: v.number() }))),
+    // Per scope, who wrote into it last and at which revision: a rewrite computed from an older
+    // revision than someone else's newer write is refused.
+    scope_writes: v.optional(v.record(v.string(), v.object({ rev: v.number(), actor: v.string() }))),
   }).index("by_doc", ["doc_id"]),
 
   // The op log: every written batch, in order. History folds it.
@@ -80,7 +86,10 @@ export const liveArtifactTables = {
     actor_name: v.string(),
     client_id: v.optional(v.string()),
     at: v.number(),
-  }).index("by_doc_rev", ["doc_id", "rev_to"]),
+  })
+    .index("by_doc_rev", ["doc_id", "rev_to"])
+    // A replayed batch is found by the id its client gave it, and lands once.
+    .index("by_doc_client", ["doc_id", "client_id"]),
 
   // Checkpoints of the main layer. `snapshot` is the folded state at `rev`,
   // stored as a JSON blob once the snapshot job writes it.

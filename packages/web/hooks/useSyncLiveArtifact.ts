@@ -53,11 +53,61 @@ function runSettles() {
   if (due.length === 0) return;
   settles = settles.filter((x) => !due.includes(x));
   const store = useInboxStore.getState() as any;
-  for (const x of due) {
-    store.settleLiveRows(x.rowIds, x.before);
-    const rows = x.rowIds.map((id) => serverRows.get(id)).filter(Boolean);
-    if (rows.length) store.syncTable("liveElements", rows);
+  // One release for every write that came due (a big write lands as many batches at once).
+  const settled: Record<string, number> = {};
+  for (const x of due) for (const id of x.rowIds) settled[id] = Math.max(settled[id] ?? 0, x.before);
+  store.settleLiveRows(settled);
+  const rows = due.flatMap((x) => x.rowIds.map((id) => serverRows.get(id))).filter(Boolean);
+  if (rows.length) store.syncTable("liveElements", rows);
+}
+
+/**
+ * Locks left by writes from before this page loaded. Their sends go out
+ * through the outbox replay (or died with a reload), never through
+ * sendLiveOps, so no settle waits for them; and a lock only ever shows a local
+ * value, it never changes what the server keeps. Held past its page, one pins
+ * a value the server has since moved on from (a later sort of the same cells),
+ * and the page shows that stale value for good. So once per page, after the
+ * first feed answer, every live lock older than the page goes: the server's
+ * rows show, and a replay still on its way lands like any other write.
+ */
+const PAGE_START = typeof performance !== "undefined" ? performance.timeOrigin : Date.now();
+let orphansReleased = false;
+function releaseOrphanLocks() {
+  if (orphansReleased) return;
+  orphansReleased = true;
+  const pending = (useInboxStore.getState() as any).pending ?? {};
+  const prefix = "liveElements:";
+  const settled: Record<string, number> = {};
+  for (const key in pending) {
+    if (!key.startsWith(prefix) || !((pending[key]?.ts ?? Infinity) < PAGE_START)) continue;
+    const rest = key.slice(prefix.length);
+    settled[pending[key].type === "field" ? rest.slice(0, rest.lastIndexOf(":")) : rest] = PAGE_START;
   }
+  const ids = Object.keys(settled);
+  if (ids.length === 0) return;
+  const store = useInboxStore.getState() as any;
+  store.settleLiveRows(settled);
+  // The feed's rows the locks held back stand now.
+  const rows = ids.map((id) => serverRows.get(id)).filter(Boolean);
+  if (rows.length) store.syncTable("liveElements", rows);
+}
+
+/** Test hook: run the once-per-page check again. */
+export function _releaseOrphanLocksForTests(): void {
+  orphansReleased = false;
+  releaseOrphanLocks();
+}
+
+/** The revision this tab holds the doc whole through (its feed's last complete answer), 0 before that. */
+export function liveReadThrough(docId: string): number {
+  return appliedRev.get(docId) ?? 0;
+}
+
+/** Put the server's rows back over these (a write painted without locks that the server refused). */
+export function restoreServerRows(ids: string[]) {
+  const rows = ids.map((id) => serverRows.get(id)).filter(Boolean);
+  if (rows.length) (useInboxStore.getState() as any).syncTable("liveElements", rows);
 }
 
 /** A write landed at `rev`: once the feed has read that far, its locks go and the server's rows stand. */
@@ -159,7 +209,10 @@ function useElementsFeed(docId: string): { ready: boolean } {
           return;
         }
       }
-      if (!payload.more) setReady(true);
+      if (!payload.more) {
+        setReady(true);
+        releaseOrphanLocks();
+      }
       if (next > since) setSince(next);
     }, [since]),
   );

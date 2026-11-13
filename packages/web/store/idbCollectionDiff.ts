@@ -6,7 +6,7 @@
 import { isConvexId } from "../lib/entityLinks";
 import { COLLECTION_STORE_KEYS } from "./clientSyncRegistry";
 
-export { diffCollection, type CollectionDiff } from "@platform/engine";
+export { diffCollection, diffPatchedRows, patchedIds, createCoalescedWriter, type CollectionDiff } from "@platform/engine";
 
 // ── Which diff-deletes may reach disk ────────────────────────────────────────
 // A row leaving the in-memory store is NOT, by itself, a reason to delete it
@@ -81,10 +81,9 @@ export function durableDeletes(
   prevShadow: Map<string, any> | undefined,
   next: Map<string, any>,
 ): string[] {
-  const drops = snapshotDrops.get(key);
   const deletes: string[] = [];
   for (const id of rawDeletes) {
-    if (pending[`${key}:${id}`]?.type === "exclude" || !isConvexId(String(id)) || drops?.has(id)) {
+    if (deleteAllowed(key, id, pending)) {
       deletes.push(id);
     } else if (prevShadow?.has(id)) {
       next.set(id, prevShadow.get(id));
@@ -94,6 +93,16 @@ export function durableDeletes(
   // this diff did not name was never on disk. Spent or moot, the drops go.
   snapshotDrops.delete(key);
   return deletes;
+}
+
+/** One row gone from the store may leave disk: an exclude, a client stub, or a snapshot prune (the rule above). */
+export function deleteAllowed(key: string, id: string, pending: Record<string, { type?: string } | undefined>): boolean {
+  return pending[`${key}:${id}`]?.type === "exclude" || !isConvexId(String(id)) || !!snapshotDrops.get(key)?.has(id);
+}
+
+/** Whether a snapshot prune left drops in `key` that only a whole-collection diff can find. */
+export function hasSnapshotDrops(key: string): boolean {
+  return (snapshotDrops.get(key)?.size ?? 0) > 0;
 }
 
 /** Collections holding drops no write has spent yet (see the post-hydration flush). */

@@ -9,10 +9,12 @@ import { getLabelColor } from "../../lib/labelColors";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { modernPill, modernPillShape } from "../ui/modernLook";
 
-export function DocRow({ doc, onStar, timeKey = "updated_at", match }: {
+export function DocRow({ doc, onStar, timeKey = "updated_at", match, query }: {
   doc: DocItem;
   /** The words inside the doc a search matched, shown after its title. */
   match?: string;
+  /** The searched words, bolded where the match shows them. */
+  query?: string;
   /** The time the row shows: the list's sort key (created or updated), so
    *  the column agrees with the order. */
   timeKey?: "created_at" | "updated_at";
@@ -43,7 +45,7 @@ export function DocRow({ doc, onStar, timeKey = "updated_at", match }: {
       {match ? (
         <>
           <span className="shrink text-sol-text truncate min-w-0 max-w-[45%]">{title}</span>
-          <span className="flex-1 text-sol-text-dim truncate min-w-0" data-doc-match>{match}</span>
+          <span className="flex-1 text-sol-text-dim truncate min-w-0" data-doc-match>{markWords(match, query)}</span>
         </>
       ) : (
         <span className="flex-1 text-sol-text truncate min-w-0">{title}</span>
@@ -83,4 +85,12 @@ export function DocRow({ doc, onStar, timeKey = "updated_at", match }: {
       <DocDates doc={doc} timeKey={timeKey} className="text-xs text-sol-text-dim flex-shrink-0 cq-hide-minimal" />
     </>
   );
+}
+
+/** `text` with each searched word in bold. */
+function markWords(text: string, query?: string) {
+  const words = (query ?? "").trim().split(/\s+/).filter((w) => w.length >= 2).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (!words.length) return text;
+  const re = new RegExp(`(${words.join("|")})`, "gi");
+  return text.split(re).map((part, i) => (i % 2 ? <b key={i} className="font-semibold text-sol-text-muted">{part}</b> : part));
 }

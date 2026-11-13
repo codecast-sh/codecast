@@ -17,7 +17,7 @@ import { action, internalAction, internalMutation, internalQuery, mutation, quer
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { mayEditLive, requireArtifactEditor, requireLiveDoc, resolveCaller, upsertPresence, userName, vCaller, type Caller } from "./lib/liveArtifactAccess";
-import { applyBatchCore, DRAFT_BYTES_MAX, DRAFT_ROWS_MAX, headOf, insertVersion, tracked, type Layer } from "./lib/liveArtifactWrite";
+import { applyBatchCore, DRAFT_BYTES_MAX, DRAFT_ROWS_MAX, headOf, insertVersion, tracked, type BatchClaim, type Layer } from "./lib/liveArtifactWrite";
 import { canAccessDoc } from "./lib/access";
 import { liveArtifactValidators } from "./liveArtifactsSchema";
 import {
@@ -124,12 +124,16 @@ const vOps = v.array(v.any());
  * dispatch; the CLI through /cli/live/apply, as its session. A session's
  * write moves its cursor to what it wrote.
  */
+const vClaim = v.object({ scope: v.string(), write: v.string(), base: v.number(), first: v.optional(v.boolean()), last: v.optional(v.boolean()) });
+
 export const apply = mutation({
   args: {
     doc_id: v.id("docs"),
     layer: v.optional(vLayer),
     ops: vOps,
     client_id: v.optional(v.string()),
+    // One batch of a whole-range rewrite (lib/liveArtifactWrite claimsAfter).
+    claim: v.optional(vClaim),
     position: v.optional(vPosition),
     selection: v.optional(v.array(v.string())),
     status: v.optional(v.string()),
@@ -138,7 +142,7 @@ export const apply = mutation({
   handler: async (ctx, args) => {
     const caller = await resolveCaller(ctx, args);
     const doc = await requireLiveDoc(ctx, caller.userId, args.doc_id);
-    const result = await applyBatchCore(ctx, { doc, layer: args.layer ?? "main", ops: args.ops as ArtifactOp[], caller, client_id: args.client_id });
+    const result = await applyBatchCore(ctx, { doc, layer: args.layer ?? "main", ops: args.ops as ArtifactOp[], caller, client_id: args.client_id, claim: args.claim });
     if (caller.kind === "agent") {
       await upsertPresence(ctx, doc._id, caller, caller.actor, {
         position: args.position,
@@ -151,13 +155,13 @@ export const apply = mutation({
 });
 
 /** The web's write, run by the dispatch side effect `applyLiveOps` as the signed-in person. */
-export async function applyAsWebUser(ctx: any, userId: Id<"users">, docId: string, layer: Layer, ops: ArtifactOp[], clientId?: string) {
+export async function applyAsWebUser(ctx: any, userId: Id<"users">, docId: string, layer: Layer, ops: ArtifactOp[], clientId?: string, claim?: BatchClaim) {
   const id = ctx.db.normalizeId("docs", docId);
   if (!id) return null;
   const user = await ctx.db.get(userId);
   const caller: Caller = { userId, actor: `u:${userId}`, name: userName(user), kind: "person" };
   const doc = await requireLiveDoc(ctx, userId, id);
-  return await applyBatchCore(ctx, { doc, layer, ops, caller, client_id: clientId });
+  return await applyBatchCore(ctx, { doc, layer, ops, caller, client_id: clientId, ...(claim ? { claim } : {}) });
 }
 
 // ── Presence ────────────────────────────────────────────────────────────────
@@ -715,7 +719,7 @@ export const remoteCaller = internalQuery({
 
 export const runRemote = action({
   args: { cli: v.string(), verb: v.string(), doc_id: v.optional(v.string()), args: v.array(v.string()), stdin: v.optional(v.string()), ...vCaller },
-  handler: async (ctx, args): Promise<{ text?: string; json?: any }> => {
+  handler: async (ctx, args): Promise<{ text?: string; json?: any; failed?: boolean }> => {
     const c: { action: string; user_id: Id<"users">; actor: string; actor_name: string; doc_id?: Id<"docs"> } = await ctx.runQuery(internal.liveArtifacts.remoteCaller, {
       cli: args.cli, verb: args.verb, doc_id: args.doc_id, api_token: args.api_token, session_id: args.session_id,
     });

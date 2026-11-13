@@ -55,9 +55,19 @@ type LiveDraft = {
   currentUser?: { _id: string; name?: string } | null;
 };
 
+/** One batch of a whole-range rewrite, as the server's claim check reads it. */
+export type LiveBatchClaim = { scope: string; write: string; base: number; first: boolean; last: boolean };
+
 export type LiveArtifactsSliceActions = {
   /** One batch of element ops, painted now and sent as one write. Resolves to the server's revision once it lands. */
-  applyLiveOps: (docId: string, layer: LiveLayer, ops: ArtifactOp[], clientId?: string) => Promise<{ rev: number; keys: string[] } | null>;
+  applyLiveOps: (docId: string, layer: LiveLayer, ops: ArtifactOp[], clientId?: string, claim?: LiveBatchClaim) => Promise<{ rev: number; keys: string[] } | null>;
+  /**
+   * One batch of a big write past its first, while the page holds the doc's rows back (heldRows):
+   * painted with no pending locks (a lock per field of a 60k-cell sort is a pending map every later
+   * action copies), then sent as liveSendOps. The page reads the write from its overlay meanwhile.
+   */
+  livePaintHeld: (docId: string, layer: LiveLayer, ops: ArtifactOp[]) => void;
+  liveSendOps: (docId: string, layer: LiveLayer, ops: ArtifactOp[], clientId?: string, claim?: LiveBatchClaim) => Promise<{ rev: number; keys: string[] } | null>;
   /** Start, save or discard the doc's draft. Save resolves to the revision it wrote. */
   /** `draftAt` names the draft being closed, so a retried close never hits a newer draft. */
   liveDraft: (docId: string, op: "start" | "save" | "discard", draftAt?: number) => Promise<{ rev?: number } | null>;
@@ -67,7 +77,8 @@ export type LiveArtifactsSliceActions = {
    * for those rows now is authoritative, even when a later writer changed it
    * before this tab saw its own echo.
    */
-  settleLiveRows: (rowIds: string[], before: number) => void;
+  /** Release the locks the server has answered: each row's field locks and put include planted no later than its `before`. */
+  settleLiveRows: (settled: Record<string, number>) => void;
   /** A named checkpoint of the artifact as it is now. */
   liveCheckpoint: (docId: string, label?: string) => void;
   /** Who may change the artifact: everyone who can open it ("team"), or its owner and `editors` ("owners"). Owner only. */
@@ -78,14 +89,23 @@ export type LiveArtifactsSliceActions = {
 
 // The middleware wraps an asyncAction so its CALLER receives the server
 // result as a promise; the body returns nothing.
-type LiveSliceImpl = Omit<LiveArtifactsSliceActions, "applyLiveOps" | "liveDraft" | "liveAskToEdit"> & {
+type LiveSliceImpl = Omit<LiveArtifactsSliceActions, "applyLiveOps" | "liveSendOps" | "liveDraft" | "liveAskToEdit"> & {
+  liveSendOps: (docId: string, layer: LiveLayer, ops: ArtifactOp[], clientId?: string, claim?: LiveBatchClaim) => void;
   liveAskToEdit: (docId: string) => void;
-  applyLiveOps: (docId: string, layer: LiveLayer, ops: ArtifactOp[], clientId?: string) => void;
+  applyLiveOps: (docId: string, layer: LiveLayer, ops: ArtifactOp[], clientId?: string, claim?: LiveBatchClaim) => void;
   liveDraft: (docId: string, op: "start" | "save" | "discard", draftAt?: number) => void;
 };
 
 export function createLiveArtifactsSlice(): LiveArtifactsSliceActions {
   const impl: LiveSliceImpl = {
+    livePaintHeld: sync(function (this: LiveDraft, docId: string, layer: LiveLayer, ops: ArtifactOp[]) {
+      const me = this.currentUser?._id;
+      applyOpsToRows(this.liveElements, docId, layer, ops, me ? `u:${me}` : undefined);
+    }),
+
+    // Draws nothing (livePaintHeld did): its draft is empty, so it plants no locks; it only carries the batch to the server.
+    liveSendOps: asyncAction(function (this: LiveDraft, _docId: string, _layer: LiveLayer, _ops: ArtifactOp[], _clientId?: string) {}),
+
     applyLiveOps: asyncAction(function (this: LiveDraft, docId: string, layer: LiveLayer, ops: ArtifactOp[]) {
       const me = this.currentUser?._id;
       applyOpsToRows(this.liveElements, docId, layer, ops, me ? `u:${me}` : undefined);
@@ -119,15 +139,18 @@ export function createLiveArtifactsSlice(): LiveArtifactsSliceActions {
       head.draft = null;
     }),
 
-    settleLiveRows: sync(function (this: { pending: Record<string, any> }, rowIds: string[], before: number) {
-      const ids = new Set(rowIds);
+    // The server has these rows as of `before`: their field locks and the include a put planted go,
+    // so the next echo stands. An exclude stays (it authorizes the row's removal from disk). One pass
+    // over the pending map for any number of rows.
+    settleLiveRows: sync(function (this: { pending: Record<string, any> }, settled: Record<string, number>) {
       const prefix = "liveElements:";
       for (const key of Object.keys(this.pending)) {
         if (!key.startsWith(prefix)) continue;
-        const id = key.slice(prefix.length, key.lastIndexOf(":"));
-        if (!ids.has(id)) continue;
         const entry = this.pending[key];
-        if (entry?.type === "field" && (entry.ts ?? 0) <= before) delete this.pending[key];
+        const rest = key.slice(prefix.length);
+        const id = entry?.type === "include" ? rest : entry?.type === "field" ? rest.slice(0, rest.lastIndexOf(":")) : null;
+        const before = id === null ? undefined : settled[id];
+        if (before !== undefined && (entry.ts ?? 0) <= before) delete this.pending[key];
       }
     }),
 

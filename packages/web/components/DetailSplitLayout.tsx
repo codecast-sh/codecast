@@ -1,11 +1,8 @@
 "use client";
 import { ReactNode } from "react";
-import { useInboxStore } from "../store/inboxStore";
-import { hasOpenModal } from "../shortcuts/registry";
 import { useTabActive } from "../hooks/usePagePresence";
 
-import { useWatchEffect } from "../hooks/useWatchEffect";
-import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
+import { useDetailEscClose } from "../hooks/useDetailEscClose";
 import { useIsModernStyle } from "../hooks/useVisualStyle";
 import { useNavClose } from "../hooks/useNavTrail";
 import { ModernDetailSplit } from "./nav/ModernDetailSplit";
@@ -47,27 +44,14 @@ function ClassicDetailSplit({
   const hasDetail = children != null && children !== false;
   const active = hasDetail && isTabActive;
 
-  // Esc closes the item, the way it came. Never from an editable (editors own
-  // Esc), never under a modal or the shortcuts panel.
-  useWatchEffect(() => {
-    if (!active) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || e.defaultPrevented || hasOpenModal()) return;
-      if (useInboxStore.getState().shortcutsPanelOpen) return;
-      if (keyBelongsElsewhere(e.target)) return;
-      e.preventDefault();
-      close();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [active, close]);
+  const detailRef = useDetailEscClose(active, close);
 
   return (
     <div className="relative h-full overflow-hidden">
       <div className="h-full cq-container" inert={hasDetail}>{list}</div>
       {hasDetail && (
         <div className="absolute inset-0 z-30 bg-sol-bg flex flex-col">
-          <div className="flex-1 min-h-0">{children}</div>
+          <div ref={detailRef} className="flex-1 min-h-0">{children}</div>
         </div>
       )}
     </div>
