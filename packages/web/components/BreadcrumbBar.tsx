@@ -25,6 +25,7 @@ import { tabStageLayout } from "../lib/stage";
 import { projectDotClass } from "../lib/projectColors";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { useIsModernStyle } from "../hooks/useVisualStyle";
+import { teamMembersOf } from "../lib/activeTeam";
 
 /** A short id's row key, learned on the first hit. These selectors run on
  *  every store notification, and a short-id route ("ct-4102", the form agent
@@ -97,7 +98,7 @@ function ClassicBreadcrumbBar() {
     if ((row as any).kind === "dm") {
       return channelDisplayName(
         { name: "", kind: "dm", dmMemberIds: dmOtherIds((row as any).dm_key, String((s as any).currentUser?._id ?? "")) },
-        (s as any).teamMembers,
+        teamMembersOf(s),
       );
     }
     return row.name;

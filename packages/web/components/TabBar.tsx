@@ -16,6 +16,7 @@ import { LivenessDot } from "./LivenessDot";
 import { sessionLivenessState } from "../lib/liveness";
 import { ContextMenu, useContextMenu, CtxItem, CtxSeparator } from "./ui/context-menu";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
+import { teamMembersOf } from "../lib/activeTeam";
 
 export function TabBar() {
   // A detached tab window (desktop breakout) renders its one surface with no
@@ -34,7 +35,7 @@ export function TabBar() {
     // Same rule for a channel tab's name: a signature over the referenced
     // channels only, never the whole collection. The full derivation IS the
     // signature, so a DM tab also wakes when its counterpart's name loads.
-    (s) => s.tabs.map((t) => chatTabTitle(t.path, s.chatChannels, s.teamMembers, (s as any).currentUser?._id) ?? "").join("\x1f"),
+    (s) => s.tabs.map((t) => chatTabTitle(t.path, s.chatChannels, teamMembersOf(s), (s as any).currentUser?._id) ?? "").join("\x1f"),
     // And for an initiative's tab: its title, once the row is in the store.
     (s) => s.tabs.map((t) => initiativeTabTitle(t.path, s.initiatives, activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id)) ?? "").join("\x1f"),
     // And for a task, project or run tab: its record's name, by key.
@@ -207,7 +208,7 @@ export function TabBar() {
       >
         {tabs.map((tab: AppTab, i: number) => {
           const isActive = tab.id === activeTabId;
-          const title = tabTitle(tab, s.sessions, s.chatChannels, s.teamMembers, s.currentUser?._id, s.initiatives, activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id), s);
+          const title = tabTitle(tab, s.sessions, s.chatChannels, teamMembersOf(s), s.currentUser?._id, s.initiatives, activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id), s);
           const sid = tabSessionId(tab);
           const sessionRow = sid ? s.sessions[sid] : null;
           const prevActive = i > 0 && tabs[i - 1].id === activeTabId;
