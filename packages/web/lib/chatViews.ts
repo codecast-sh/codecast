@@ -18,7 +18,7 @@ import { attachmentKind, type ChatAuthor, type ChatChannelView, type ChatMessage
 import { botHandle } from "@codecast/convex/convex/chatText";
 import { chatRoomKey } from "@codecast/shared/contracts";
 import { dmOtherIds, isClosedAgentPlaceholder, isSessionPartyId, mentionUserIds, threadFaceKey } from "@codecast/shared/chat";
-import { isPerson } from "@codecast/shared/team/memberKind";
+import { isAgentMember, isPerson } from "@codecast/shared/team/memberKind";
 
 export type ChatMember = {
   _id: string;
@@ -28,6 +28,7 @@ export type ChatMember = {
   github_avatar_url?: string;
   github_username?: string;
   is_bot?: boolean;
+  bot_kind?: string | null;
 };
 
 const UNKNOWN: ChatAuthor = { id: "", name: "Someone" };
@@ -246,7 +247,7 @@ export function authorFor(
 ): ChatAuthor {
   const m = byId.get(userId);
   if (!m) return authorKind === "agent" ? { id: userId, name: "Agent", isAgent: true } : { ...UNKNOWN, id: userId };
-  const isAgent = authorKind === "agent" || !!m.is_bot;
+  const isAgent = authorKind === "agent" || isAgentMember(m);
   return {
     id: userId,
     name: memberName(m),

@@ -1,5 +1,6 @@
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { memberName, type ChatMember } from "../../lib/chatViews";
+import { isAgentMember } from "@codecast/shared/team/memberKind";
 import "./chat.css";
 
 // "Someone is typing" — the composer-foot strip.
@@ -30,8 +31,8 @@ export function TypingIndicator({ members }: { members: ChatMember[] }) {
           <CommentAvatar
             key={String(m._id)}
             name={memberName(m)}
-            image={m.is_bot ? undefined : m.image || m.github_avatar_url}
-            isAgent={!!m.is_bot}
+            image={isAgentMember(m) ? undefined : m.image || m.github_avatar_url}
+            isAgent={isAgentMember(m)}
             size={14}
             letters={1}
           />

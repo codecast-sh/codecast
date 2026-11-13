@@ -22,6 +22,12 @@ export function isPerson<T extends KindFacts>(m: T): m is NonNullable<T> {
   return !!m && !m.is_bot;
 }
 
+/** Whether a roster row wears an agent's face. A Slack person is a bot row
+ *  but a person to look at: their photo, never the agent logo. */
+export function isAgentMember(m: KindFacts): boolean {
+  return memberKind(m) === "agent";
+}
+
 /** The people in a roster, nulls dropped. */
 export function peopleOf<T extends KindFacts>(members: readonly T[] | null | undefined): NonNullable<T>[] {
   return (members ?? []).filter(isPerson);
