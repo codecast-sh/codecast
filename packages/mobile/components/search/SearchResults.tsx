@@ -31,6 +31,7 @@ import { CHROME_FONT_CAP, Spacing, themedStyles, useTheme } from '@/constants/Th
 import { SessionHit } from './SessionHit';
 import { ObjectHit } from './ObjectHit';
 import { MessageSnippet } from './MessageSnippet';
+import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 
 /** What the list shows: everything, conversations, chat, or one kind of object. */
 type Tab = 'all' | 'sessions' | 'chat' | ObjectKind;
@@ -164,7 +165,7 @@ export function SearchResults({ query, onOpenSession }: {
   }, [tab, objectGroups, chatHits, sessionRows, totalSessions, remaining, searchData, filters.range]);
 
   const memberById = useMemo(() => {
-    const members = ((useInboxStore.getState() as any).teamMembers ?? []) as any[];
+    const members = teamMembersOf(useInboxStore.getState()) as any[];
     return new Map(members.map((m) => [String(m._id), m]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatHits]);

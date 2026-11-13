@@ -28,6 +28,7 @@ import { AuthorAvatar } from "../../components/entityDisplay";
 import { lineAuthorFor } from "../../lib/chatViews";
 import { ChatAuthorFace } from "../../components/chat/ChatAuthorFace";
 import { useChatAuthorLookups } from "../../hooks/useChatSync";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 // Right-click payloads: a session header row or one message match inside it.
 type SearchCtxPayload =
@@ -241,7 +242,7 @@ export default function SearchPage() {
   const anyResults = nav.length > 0;
   const chatAuthorLookups = useChatAuthorLookups();
   const memberById = useMemo(() => {
-    const members = ((useInboxStore.getState() as any).teamMembers ?? []) as any[];
+    const members = teamMembersOf(useInboxStore.getState()) as any[];
     return new Map(members.map((m) => [String(m._id), m]));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatHits]);
