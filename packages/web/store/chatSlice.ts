@@ -133,6 +133,8 @@ export type ChatSlackLinkRow = {
   direction: SlackDirection;
   options: SlackLinkOptions;
   paused?: boolean;
+  /** Slack refuses posts here (Slackbot's DM, an announcement channel). */
+  slack_read_only?: boolean;
   since_ts: string;
   last_inbound_at?: number;
   last_outbound_at?: number;
@@ -1046,11 +1048,13 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
     // ── Read state ──────────────────────────────────────────────────────────
 
     // Passing the message id makes the local stamp EXACTLY what the server will
-    // write (chat.markRead clamps to that message's created_at), so the badge
-    // that clears here does not flicker back when the echo lands.
+    // write (chat.markRead stores that message's created_at, unclamped), so the
+    // badge that clears here does not flicker back when the echo lands. A stamp
+    // can sit a few milliseconds ahead of this clock; clamping it to now left
+    // that line unread and the header count up.
     markChannelRead: action(function (this: ChatDraft, channelId: string, lastMessageId?: string) {
       const marker = lastMessageId ? this.chatMessages[lastMessageId] : undefined;
-      const readAt = marker ? Math.min(marker.created_at, Date.now()) : Date.now();
+      const readAt = marker ? marker.created_at : Date.now();
       const existing = findReadRow(this, channelId);
       // Never move the mark backwards: a stale "reached bottom" from a list that
       // has since grown would re-unread what the viewer already saw.

@@ -3,7 +3,7 @@ import { DashboardLayout } from "@/components/DashboardLayout";
 import { SessionWindow } from "@/components/SessionWindow";
 import { WindowTaskbar } from "@/components/WindowTaskbar";
 import { useWindowManager } from "@/store/windowManagerStore";
-import { useTrackedStore, isSessionEffectivelyIdle, filterInboxScopeFromState, sessionsWakeSig, type InboxSession } from "@/store/inboxStore";
+import { useTrackedStore, isSessionEffectivelyIdle, filterInboxScopeFromState, sessionsWakeSig, teamInboxIdsOf, type InboxSession } from "@/store/inboxStore";
 import { makeCollectionSig } from "@/store/wakeSig";
 import { cleanTitle } from "@/lib/conversationProcessor";
 import { Plus, MousePointerClick } from "lucide-react";
@@ -47,7 +47,7 @@ function WindowManagerView() {
     // The scope pref lives in the UI prefs; the chokepoint reads it from there.
     (st) => st.clientState.ui,
     (st) => st.currentUser?._id?.toString?.() ?? null,
-    (st) => st.teamInboxIds,
+    (st) => teamInboxIdsOf(st),
     (st) => st.currentSessionId,
   ]);
   const rowsSig = windowRowsSig(s.sessions);
@@ -71,7 +71,7 @@ function WindowManagerView() {
       .filter(sess => !openSessionIds.has(sess._id) && sess.message_count > 0)
       .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0)),
     // eslint-disable-next-line react-hooks/exhaustive-deps -- rowsSig stands in for the churny sessions ref
-    [rowsSig, modern ? sessionsWakeSig(s.sessions) : null, s.clientState.ui, s.currentUser?._id, s.teamInboxIds, s.currentSessionId, openSessionIds],
+    [rowsSig, modern ? sessionsWakeSig(s.sessions) : null, s.clientState.ui, s.currentUser?._id, teamInboxIdsOf(s), s.currentSessionId, openSessionIds],
   );
 
   const handleOpenSession = useCallback((sessionId: string) => {

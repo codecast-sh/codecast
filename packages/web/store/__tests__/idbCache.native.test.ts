@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 
 // jsdom/node has no native expo-sqlite, so back the kv-store with an in-memory
 // AsyncStorage-compatible shim that mirrors the methods idbCache.native uses.
@@ -70,6 +70,10 @@ const {
   persistPendingMessageChanges,
   loadSplitRows,
   persistSplitRows,
+  loadConversationMessages,
+  writeConversationMessages,
+  purgeLocalCache,
+  setCachePrincipalSource,
 } = await import("../idbCache.native");
 
 const { noteSnapshotSync, _resetSnapshotLedger } = await import("../idbCollectionDiff");
@@ -450,5 +454,96 @@ describe("idbCache.native", () => {
     persistSplitRows("conversations:listInboxSessions", [], ["a"]);
     await flushPersistence();
     expect((await loadSplitRows("conversations:listInboxSessions")).map((r) => r.id)).toEqual(["b"]);
+  });
+});
+
+// A shared phone: account A used the app, then B signs in. Nothing of A's on
+// disk may reach B's store, and sign-out leaves nothing of A's behind.
+describe("idbCache.native cache ownership", () => {
+  const signedInAs = (principal: string | null) =>
+    setCachePrincipalSource(() => principal
+      ? { principal, tokenState: "named" }
+      : { principal: null, tokenState: "absent" });
+
+  async function writeCacheFor(owner: string) {
+    setCachePrincipalSource(null);
+    writePatchesToIDB([{ op: "replace", path: ["currentUser"], value: {} } as any], { currentUser: { _id: owner } });
+    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: {} } as any], { sessions: { s1: { _id: "s1", title: `${owner}'s session` } } });
+    writePatchesToIDB([{ op: "replace", path: ["liveInboxIdList"], value: {} } as any], { liveInboxIdList: ["s1"] });
+    writeConversationMessages("c1", [{ _id: "m1", content: `${owner}'s message`, timestamp: 1 }], undefined);
+    await flushPersistence();
+    _resetPersistedShadow();
+  }
+
+  const ownedKeys = () => [...kv.keys()].filter((k) => !k.startsWith("catchup:"));
+
+  beforeEach(() => {
+    _resetSnapshotLedger();
+    kv.clear();
+    _resetPersistedShadow();
+    setHydrating(false);
+    // A key another mobile module keeps in the same kv database.
+    kv.set("catchup:watermark", "{}");
+  });
+
+  afterEach(async () => {
+    await purgeLocalCache().catch(() => {});
+    setCachePrincipalSource(null);
+  });
+
+  it("serves the cache to the account that owns it", async () => {
+    await writeCacheFor("userA");
+    signedInAs("userA");
+    expect(loadPaintCacheSync()?.sessions).toEqual({ s1: { _id: "s1", title: "userA's session" } });
+    expect((await loadCache())?.sessions?.s1?.title).toBe("userA's session");
+    expect((await loadConversationMessages("c1"))?.messages?.[0]?.content).toBe("userA's message");
+  });
+
+  it("never serves another account's cache, and deletes it", async () => {
+    await writeCacheFor("userA");
+    signedInAs("userB");
+    expect(loadPaintCacheSync()).toBeNull();
+    expect(loadCacheSync()).toBeNull();
+    expect(await loadCache()).toBeNull();
+    expect(await loadConversationMessages("c1")).toBeNull();
+    expect(ownedKeys()).toEqual([]);
+    expect(kv.get("catchup:watermark")).toBe("{}");
+  });
+
+  it("deletes a cache when no account is signed in", async () => {
+    await writeCacheFor("userA");
+    signedInAs(null);
+    expect(loadPaintCacheSync()).toBeNull();
+    await purgeLocalCache();
+    expect(ownedKeys()).toEqual([]);
+  });
+
+  it("keeps the cache but serves nothing while the token cannot be read", async () => {
+    await writeCacheFor("userA");
+    setCachePrincipalSource(() => { throw new Error("keychain locked"); });
+    expect(loadPaintCacheSync()).toBeNull();
+    expect(await loadCache()).toBeNull();
+    expect(kv.has("meta:currentUser")).toBe(true);
+    expect(kv.has("col:sessions:s1")).toBe(true);
+  });
+
+  it("keeps the signed-in account's own pending input through a purge of another's cache", async () => {
+    await writeCacheFor("userA");
+    persistPendingMessageChanges({}, { c: [{ _id: "p1", _clientId: "p1", role: "user", content: "B typed", timestamp: 2 }] }, "userB");
+    persistPendingMessageChanges({}, { c: [{ _id: "p2", _clientId: "p2", role: "user", content: "A typed", timestamp: 3 }] }, "userA");
+    signedInAs("userB");
+    const loaded = await loadCache();
+    expect(loaded?.sessions).toBeUndefined();
+    expect(loaded?.pendingMessages?.c?.map((m: any) => m.content)).toEqual(["B typed"]);
+    expect(ownedKeys().every((k) => k.startsWith("pendingInput:v1:userB:"))).toBe(true);
+  });
+
+  it("sign-out purge removes every key the cache wrote and nothing else", async () => {
+    await writeCacheFor("userA");
+    persistPendingMessageChanges({}, { c: [{ _id: "p2", _clientId: "p2", role: "user", content: "A typed", timestamp: 3 }] }, "userA");
+    enqueueDispatch({ id: "d1", action: "x", args: {}, patches: [], result: null, ts: 1 });
+    await purgeLocalCache();
+    expect(ownedKeys()).toEqual([]);
+    expect(kv.get("catchup:watermark")).toBe("{}");
   });
 });

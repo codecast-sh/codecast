@@ -19,6 +19,7 @@ import { useSyncOrgTreeFeeder } from "../../../hooks/useSyncOrgTree";
 import { rolesOnProject } from "../../../lib/line/lineStations";
 import { NO_PROJECT, NO_PROJECT_ADMISSION, type LineAdmission } from "../../../lib/lineFlow";
 import type { OrgRole } from "../../org/orgTypes";
+import { windowOrgTree } from "../../../store/orgSlice";
 
 /** The role that starts a project's line: of the roles whose area holds it,
  *  an active one whose line is on first, then one whose own switch is on,
@@ -51,7 +52,7 @@ const roleSig = (r: OrgRole) => {
 
 /** The org tree's workspace and the fields admission reads, per role: a heartbeat in the tree wakes nothing. */
 const orgTreeSig = (s: ReturnType<typeof useInboxStore.getState>) => {
-  const t = s.orgTree;
+  const t = windowOrgTree(s);
   return t ? `${orgWorkspaceOf(t)}\n${t.roles.map(roleSig).join("\n")}` : "";
 };
 const orgWorkspaceOf = (t: { workspace: { kind: string; id: string } }) => `${t.workspace.kind}:${t.workspace.id}`;
@@ -90,7 +91,7 @@ export function useLineAdmission(projectId: string | null): {
   const workspace = useInboxStore((s) => (projectId ? ((s.projects as Record<string, { workspace?: string }>)[projectId]?.workspace ?? null) : null));
   const sig = useInboxStore(orgTreeSig);
   const { role, known } = useMemo(() => {
-    const tree = useInboxStore.getState().orgTree;
+    const tree = windowOrgTree(useInboxStore.getState());
     // The org on hand is the active workspace's; another workspace's project
     // cannot be judged from it, so the map says nothing rather than "no role".
     if (!projectId || !tree || !workspace || orgWorkspaceOf(tree) !== workspace) return { role: null, known: false };
@@ -123,7 +124,7 @@ export function useLineAdmissions(projects: ReadonlyArray<{ _id: string; workspa
   // Kept outside the fiber (useSharedMemos), so a discarded render of the line reads the same map back.
   const { useShared } = useSharedMemos("lineAdmissions");
   return useShared(() => {
-    const tree = useInboxStore.getState().orgTree;
+    const tree = windowOrgTree(useInboxStore.getState());
     const out = new Map<string, LineAdmission>();
     if (!tree) return out;
     const ws = orgWorkspaceOf(tree);

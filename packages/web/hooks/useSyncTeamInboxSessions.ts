@@ -100,16 +100,17 @@ export function useSyncTeamInboxSessions() {
     lastLivenessRef.current = Date.now();
   }, [activeTeamId]), { coalesceMs: 300 });
 
-  // Leaving team mode clears the active set (the teammate rows stay in the
-  // never-prune cache; the "mine" scope filter is what hides them). This is
-  // hygiene, not correctness — filterInboxScope only reads teamInboxIds in team
-  // scope — but it keeps the set honest so a later switch back to team can't
-  // briefly render another team's stale membership after an active-team change.
+  // Leaving team mode, or switching to another team, clears the active set
+  // (the teammate rows stay in the never-prune cache; the scope filter is what
+  // hides them). Readers already refuse a set answering for another team
+  // (teamInboxIdsOf); clearing it also hands every memo keyed on the set's
+  // identity a new value, so none keeps painting the last team's board.
   useWatchEffect(() => {
-    if (active) return;
-    if (useInboxStore.getState().teamInboxIds.size === 0) return;
+    const st = useInboxStore.getState();
+    if (active && (st.teamInboxIdSnapshot?.team_id ?? null) === (activeTeamId ?? null)) return;
+    if (st.teamInboxIds.size === 0) return;
     useInboxStore.setState({ teamInboxIds: new Set<string>() });
-  }, [active]);
+  }, [active, activeTeamId]);
 
   // Recovery: a Convex subscription can silently stall after sleep/reconnect. When
   // team mode is active, probe a novel-token round-trip to re-sync the list and

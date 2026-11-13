@@ -5,6 +5,10 @@
 import "./lib/polyfills";
 import { bootMark } from "./lib/bootProfile";
 import { startBootFonts } from "./lib/bootFonts";
+import { installCachePrincipal } from "./lib/cachePrincipal";
 bootMark("after-polyfills");
 startBootFonts();
+// Before any route module loads the store: its first paint reads the disk
+// cache synchronously, and that read must know whose cache it may serve.
+installCachePrincipal();
 require("expo-router/entry");

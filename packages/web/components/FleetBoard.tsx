@@ -23,7 +23,7 @@ import { ConversationPlaceholder } from "./ConversationPlaceholder";
 import { PaneControls } from "./stage/PaneControls";
 import { cleanTitle } from "../lib/conversationProcessor";
 import { animatedHideSession } from "../store/undoActions";
-import { getSessionRenderKey } from "../store/inboxStore";
+import { getSessionRenderKey, teamInboxIdsOf } from "../store/inboxStore";
 import { splitFleetBands, fleetTileMeta, fleetTileContext, fleetTileSummary, fleetProgress, type FleetBand, type FleetBands } from "./fleetBands";
 import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { overlayConversationId } from "../store/workspace";
@@ -392,7 +392,7 @@ export function FleetBoard() {
     (st) => resolveShowOld(st.clientState.ui),
     (st) => st.clientState.ui?.inbox_scope ?? "mine",
     (st) => st.currentUser?._id?.toString?.() ?? null,
-    (st) => st.teamInboxIds,
+    (st) => teamInboxIdsOf(st),
     (st) => st.currentSessionId,
     (st) => st.pendingSessionCreates,
     (st) => st.blockedReviveRequestedAt,
@@ -414,7 +414,7 @@ export function FleetBoard() {
   const categorized = useMemo(
     () => placeInboxRows(s, { focusedId, now: coarseNow }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showOld, focusedId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), s.pendingSessionCreates, s.blockedReviveRequestedAt, coarseNow],
+    [sessionsWakeSig(s.sessions), inboxScope, meId, teamInboxIdsOf(s), showOld, focusedId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), s.pendingSessionCreates, s.blockedReviveRequestedAt, coarseNow],
   );
   const pendingSendIds = useMemo(() => sessionsWithPendingSend(s.pendingMessages, coarseNow), [s.pendingMessages, coarseNow]);
   const bands: FleetBands = useMemo(

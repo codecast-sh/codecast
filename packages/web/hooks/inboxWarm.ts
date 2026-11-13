@@ -2,6 +2,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { useInboxStore, isConvexId, ensureHydrated, visualOrderViewSig, inboxMemberRows, sessionRowFromConversation, type InboxSession } from "../store/inboxStore";
 import { whenInputQuiet } from "../lib/inputQuiet";
+import { windowOrgTree } from "../store/orgSlice";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { isHostedAgentType } from "@codecast/shared/contracts";
 
@@ -317,7 +318,7 @@ export function warmOrder(st: ReturnType<typeof useInboxStore.getState>): { id: 
   // A role's standing session needs its row, and the row needs is_anchor:
   // placement files a standing session hidden by it, so a copy seeded without
   // it (before seeds carried it) shows as an active card until refetched.
-  for (const role of st.orgTree?.roles ?? []) {
+  for (const role of windowOrgTree(st)?.roles ?? []) {
     const id = role.standing?.conversation_id && String(role.standing.conversation_id);
     if (id) add(id, st.sessions[id], !st.sessions[id]?.is_anchor);
   }

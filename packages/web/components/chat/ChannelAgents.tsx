@@ -10,6 +10,7 @@ import { ownTitle } from "../../lib/conversationTitle";
 import type { ChatChannelAgentRef } from "./chatTypes";
 import type { OrgRole } from "../org/orgTypes";
 import "./chat.css";
+import { windowOrgTree } from "../../store/orgSlice";
 
 // The roles and sessions inside a room (docs/architecture/agent-channels.md
 // C5): a person's line reaches them, and two or more take turns on it (C6).
@@ -46,7 +47,7 @@ function sessionView(id: string, title: string | undefined, shortId = sessionSho
 function useAgentViews(agents: ChatChannelAgentRef[]): AgentView[] {
   const nameOf = (s: any, a: ChatChannelAgentRef): string => {
     if (a.kind === "role") {
-      const r = (s.orgTree?.roles ?? []).find((x: OrgRole) => x._id === a.role_id);
+      const r = ((windowOrgTree(s) as { roles?: OrgRole[] } | null)?.roles ?? []).find((x: OrgRole) => x._id === a.role_id);
       return r ? `${r.name}\u0001${r.handle}` : "";
     }
     return ownTitle(s.sessions?.[a.conversation_id]) || ownTitle(s.conversations?.[a.conversation_id]);
@@ -98,7 +99,7 @@ export function ChannelAgentRows({ channelId, agents }: { channelId: string; age
 /** Roles of the workspace and the viewer's recent sessions, minus `exclude`,
  *  matching the query. Read from the store when the picker renders. */
 function useAgentCandidates(exclude: Set<string>, q: string): AgentView[] {
-  const roles = useInboxStore((s) => s.orgTree?.roles) as OrgRole[] | undefined;
+  const roles = useInboxStore((s) => windowOrgTree(s)?.roles) as OrgRole[] | undefined;
   const sessions = useInboxStore((s) => s.sessions);
   return useMemo(() => {
     const needle = q.trim().toLowerCase().replace(/^@/, "");

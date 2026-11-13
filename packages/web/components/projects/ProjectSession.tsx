@@ -8,10 +8,11 @@ import { ContextChatInput } from "../ContextChatInput";
 import { useIsPhone } from "../../hooks/useIsPhone";
 import { useInboxStore } from "../../store/inboxStore";
 import { projectDefaultSessionOf, type ProjectRow, type RoleSeat } from "../../lib/projectDefaultSession";
+import { windowOrgTree } from "../../store/orgSlice";
 
 export function ProjectSession({ project, onOpenAbout }: { project: ProjectRow; onOpenAbout?: () => void }) {
   const phone = useIsPhone();
-  const defaultId = useInboxStore((s) => projectDefaultSessionOf(project, s.sessions, s.orgTree?.roles as RoleSeat[] | undefined));
+  const defaultId = useInboxStore((s) => projectDefaultSessionOf(project, s.sessions, windowOrgTree(s)?.roles as RoleSeat[] | undefined));
   // The three fields the conversation takes from the row, not the row (its
   // ref flips on every heartbeat).
   const isIdle = useInboxStore((s) => !!(defaultId && s.sessions[defaultId]?.is_idle));

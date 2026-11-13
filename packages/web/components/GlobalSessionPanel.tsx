@@ -21,7 +21,7 @@ import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
 import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
-import { sessionsWakeSig, resolveInboxViewMode, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
+import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
 import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
@@ -84,8 +84,11 @@ import { useTitlebarHead } from "../hooks/useTitlebarHead";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { Button } from "./ui/button";
 import { ListHeadNewSession } from "./inbox/NewSessionButton";
-import { PlanGroupFacts, PlanGroupMark, RestingPlans } from "./inbox/PlanGroupParts";
+import { CompactPlanRow, PlanAskButton, PlanGroupFacts, PlanGroupMark, PlanTierHeader, RestingPlans } from "./inbox/PlanGroupParts";
+import { PLAN_TIERS, planTierFolded, planTierKey, planTierOf } from "../store/inboxStore";
+import { PLAN_STATE_STATUS } from "../lib/sessionStatus";
 import type { PlanItem } from "../store/inboxStore";
+import { windowOrgTree } from "../store/orgSlice";
 import { useSyncPlansWithArgs } from "../hooks/useSyncPlans";
 import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
 import { useWorkspaceCollection } from "../hooks/useWorkspaceCollection";
@@ -446,11 +449,14 @@ function BlockedSessionsBanner({
   // exactly what the machine asked for — the same account the sentence names.
   const proposalKey = proposal?.target_email ? `email:${proposal.target_email}` : null;
   const proposedOption = proposalKey ? rankedAccounts.find((t) => t.key === proposalKey) : undefined;
-  // Ask mode selects the account the fresh ranking named. Otherwise stay on
-  // the current login, unless that login is spent, in which case the button
-  // offers the account with the most room.
+  // Ask mode selects the account the fresh ranking named. One current login
+  // stays, unless it is spent. Machines that disagree have no account to stay
+  // on: the button moves everyone onto the saved account with the most room
+  // that every executor has.
   const activeExhausted = isUsageExhausted(activeUsage, now);
-  const accountKey = onAccount ?? proposedOption?.key ?? (activeExhausted ? rankedAccounts[0]?.key ?? "" : "");
+  const sharedAccounts = rankedAccounts.filter((t) => t.missingOn.length === 0);
+  const splitDefault = activeEmails.length > 1 ? (sharedAccounts[0] ?? rankedAccounts[0])?.key ?? "" : "";
+  const accountKey = onAccount ?? proposedOption?.key ?? (splitDefault || (activeExhausted ? rankedAccounts[0]?.key ?? "" : ""));
   const selectedAccount = rankedAccounts.find((t) => t.key === accountKey);
   // The meters that matter are the ones the continue will run against: the
   // picked account when the picker moved, else the account the machines are on.
@@ -726,7 +732,6 @@ function BlockedSessionsBanner({
           skippedWorkers.length > 0
             ? `${skippedWorkers.length} subagent worker${skippedWorkers.length === 1 ? "" : "s"} skipped${acted.length > 0 ? " (dismissed on continue)" : ""}`
             : null,
-          acted.length > 30 ? "each pass acts on the 30 most recent" : null,
         ]
           .filter(Boolean)
           .join(" · ")}
@@ -947,8 +952,12 @@ function BlockedSessionsBanner({
               className="min-w-0 max-w-[220px] rounded border border-amber-500/25 bg-sol-bg px-1.5 py-0.5 text-meta text-sol-text outline-none hover:border-amber-500/50 focus:border-amber-500 disabled:opacity-60"
             >
               <option value="">
-                {activeEmail ? `stay on ${activeEmail}` : activeEmails.length > 1 ? `stay on ${activeEmails.join(" / ")}` : "stay on the current account"}
-                {usageNote(activeUsage)}
+                {activeEmails.length > 1
+                  ? "leave each machine on its own account"
+                  : activeEmail
+                    ? `stay on ${activeEmail}`
+                    : "stay on the current account"}
+                {activeEmails.length > 1 ? "" : usageNote(activeUsage)}
               </option>
               {rankedAccounts.map((t) => (
                 <option key={t.key} value={t.key}>
@@ -1767,7 +1776,7 @@ function SessionListPanelImpl({
   const s = useTrackedStore([
     s => s.clientState.ui,
     // Team-mode active set + viewer identity — gate the scope pre-filter below.
-    s => s.teamInboxIds,
+    s => teamInboxIdsOf(s),
     s => s.currentUser?._id,
     s => resolveShowOld(s.clientState.ui),
     // Wake only on STRUCTURAL session change (bucket/order/identity), not on every
@@ -1932,7 +1941,7 @@ function SessionListPanelImpl({
     // Structural change + the view keys + the question inputs + the epoch tick
     // (coarseNow drives the deadline signature).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessionsWakeSig(s.sessions), inboxScope, meId, s.teamInboxIds, showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, s.newSessionHolds, coarseNow, nestsWorkers(s.clientState.ui)],
+    [sessionsWakeSig(s.sessions), inboxScope, meId, teamInboxIdsOf(s), showAllSessions, focusedId, s.sessionsWithQueuedMessages, pendingSendWakeSig(s.pendingMessages), blankOpts, placementDecisionsSig(s.sessionDecisions), s.questionResolutions, s.killedShelf.ids, s.newSessionHolds, coarseNow, nestsWorkers(s.clientState.ui)],
   );
   // The section a held row is headed for, as its accent: the fuse and the
   // landing wash speak in the color of where the row is going.
@@ -2537,7 +2546,7 @@ function SessionListPanelImpl({
     }
     return { count, states };
   };
-  const rolesById = useMemo(() => new Map((s.orgTree?.roles ?? []).map((r) => [String(r._id), r])), [lensSig]);
+  const rolesById = useMemo(() => new Map((windowOrgTree(s)?.roles ?? []).map((r) => [String(r._id), r])), [lensSig]);
 
   // Favorites view: the SAME session cache filtered to the kept set, grouped by
   // project — the shelf's organization ("what is it about"), distinct from the
@@ -3017,8 +3026,10 @@ function SessionListPanelImpl({
       // work-state tallies.
       icon?: React.ReactNode;
       states?: Partial<Record<ReturnType<typeof sessionWorkState>, number>>;
-      // A group's own facts after its count (the plan lens's owner, wait, tasks).
+      // A group's own facts after its count (the plan lens's wait and tasks).
       facts?: React.ReactNode;
+      // The label is a thing's name (a plan title), drawn in the body face; no count.
+      nameLabel?: boolean;
       // A status section: it always shows its first SECTION_CARD_FLOOR cards,
       // even when the sections above it spent the global budget.
       floor?: boolean;
@@ -3074,6 +3085,8 @@ function SessionListPanelImpl({
           icon={opts?.icon}
           states={opts?.states}
           facts={opts?.facts}
+          nameLabel={opts?.nameLabel}
+          hideCount={opts?.nameLabel}
         />
         {!collapsed && (() => {
           const sectionCap = sectionLimits[key] ?? SECTION_RENDER_CAP;
@@ -3454,16 +3467,41 @@ function SessionListPanelImpl({
         </>
         ) : viewMode === "plan" && planView ? (
         <>
-        {planView.planGroups.map((group) => (
-          <div key={group.key}>
-            {renderSection(group.label, group.items, "text-teal-400", undefined, undefined, {
-              key: `plan_${group.key}`,
-              monoLabel: true,
-              icon: <PlanGroupMark group={group} />,
-              facts: <PlanGroupFacts group={group} now={coarseNow} />,
-            })}
-          </div>
-        ))}
+        {PLAN_TIERS.map((tier) => {
+          const groups = planView.planGroups.filter((g) => planTierOf(g.standing.state) === tier);
+          if (!groups.length) return null;
+          const tierCollapsed = planTierFolded(tier, s.collapsedSections);
+          return (
+            <div key={tier}>
+              <PlanTierHeader tier={tier} count={groups.length} collapsed={tierCollapsed} onToggle={() => s.toggleCollapsedSection(planTierKey(tier))} />
+              {/* A folded band lists its plans a line each; a line opens the lead thread. */}
+              {tierCollapsed && groups.map((group) => (
+                <CompactPlanRow
+                  key={group.key}
+                  id={group.key}
+                  title={group.title}
+                  progress={group.plan?.progress}
+                  movedAt={group.standing.movedAt}
+                  now={coarseNow}
+                  status={tier === "quiet" ? PLAN_STATE_STATUS[group.standing.state].status : undefined}
+                  active={!!focusedId && group.items.some((x) => x._id === focusedId)}
+                  onClick={() => handleSelect(group.items[0])}
+                />
+              ))}
+              {!tierCollapsed && groups.map((group) => (
+                <div key={group.key}>
+                  {renderSection(group.title, group.items, "text-sol-text", undefined, undefined, {
+                    key: `plan_${group.key}`,
+                    nameLabel: true,
+                    icon: <PlanGroupMark group={group} />,
+                    facts: <PlanGroupFacts group={group} />,
+                    headerAction: group.standing.asks.length === 0 ? undefined : <PlanAskButton group={group} now={coarseNow} onOpen={(id) => { const row = s.sessions[id]; if (row) handleSelect(row); }} />,
+                  })}
+                </div>
+              ))}
+            </div>
+          );
+        })}
         {/* Plans with open work that no session here is on: folded until opened. */}
         <RestingPlans
           plans={planView.restingPlans}

@@ -14,11 +14,12 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { RetireRoleConfirm } from "./RetireRoleConfirm";
 import { isHeadOfPeopleRole } from "./orgStaffingTypes";
 import { retireToastText } from "../../lib/retireRole";
+import { windowOrgTree } from "../../store/orgSlice";
 
 export function SeatKillDialog() {
   const roleId = useSyncExternalStore(seatKillAsk.subscribe, seatKillAsk.get, () => null);
-  const role = useInboxStore((s: any) => (roleId ? s.orgTree?.roles?.find((r: any) => r._id === roleId) ?? null : null));
-  const head = useInboxStore((s: any) => s.orgTree?.roles?.find((r: any) => isHeadOfPeopleRole(r) && r.status !== "retired") ?? null);
+  const role = useInboxStore((s) => (roleId ? windowOrgTree(s)?.roles?.find((r: any) => r._id === roleId) ?? null : null));
+  const head = useInboxStore((s) => windowOrgTree(s)?.roles?.find((r: any) => isHeadOfPeopleRole(r) && r.status !== "retired") ?? null);
   const router = useRouter();
   if (!roleId) return null;
   const close = closeSeatKillAsk;

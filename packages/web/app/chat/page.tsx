@@ -60,6 +60,7 @@ import { MenuKeyCaps } from "../../components/KeyboardShortcutsHelp";
 import { channelDisplayName } from "../../lib/chatViews";
 import { useSwitchWorkspace } from "../../hooks/useSwitchWorkspace";
 import { useInboxStore, selectChannelReadMarker, selectNavHidden, type ChatNotifyLevel, type ChatRailScope } from "../../store/inboxStore";
+import { windowOrgTree } from "../../store/orgSlice";
 import Link from "next/link";
 import { useAuthGate } from "@platform/auth/web";
 import { useLocalAuth } from "../../lib/localAuth";
@@ -96,8 +97,10 @@ import { useTitlebarHead } from "../../hooks/useTitlebarHead";
 import { useDesktopAppWindow } from "../../hooks/useDesktopWindowRole";
 import { useIsPhone } from "../../hooks/useIsPhone";
 import { setChatFocus, clearChatFocus } from "../../lib/chatFocus";
+import { noteFaceContextRead } from "../../lib/chat/faceChat";
 import "../../components/chat/chat.css";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { teamMembersOf } from "../../lib/activeTeam";
 /** The clock the whole surface shares. Relative times ("3m ago") must stay
  *  honest without a re-render per row per second — see hooks/useCoarseNow. */
 const CLOCK_MS = 30_000;
@@ -381,7 +384,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
   const onSent = useCallback(
     (content: string) => (res: { mention_wakes?: any } | undefined) => {
       const roles = new Set<string>(
-        ((useInboxStore.getState().orgTree?.roles ?? []) as { handle: string }[]).map((r) => r.handle.toLowerCase()),
+        ((windowOrgTree(useInboxStore.getState())?.roles ?? []) as { handle: string }[]).map((r) => r.handle.toLowerCase()),
       );
       const line = mentionWakeLine(content, res?.mention_wakes, roles);
       if (line) toast(line, { duration: 4000 });
@@ -417,6 +420,10 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
   const markRead = useCallback(() => {
     // A visitor has no read mark to advance (and no identity to write one).
     if (!activeChannelId || !present || isGuest) return;
+    // The newest line of the channel is on screen: the header faces drop the
+    // counts those lines raised. A thread reply is not on this timeline, so
+    // it keeps its count until the thread itself is on screen.
+    noteFaceContextRead(activeChannelId);
     // The newest message in the ROOM, replies included — not the newest row on
     // screen. The transcript shows roots only, while the rail's unread tally
     // counts every row in the channel, so a marker taken from the last root can
@@ -425,6 +432,13 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
     const marker = selectChannelReadMarker(state as any, activeChannelId);
     state.markChannelRead(activeChannelId, marker?._id);
   }, [activeChannelId, present, isGuest]);
+
+  // The thread panel is the channel's side rail: its replies are on screen
+  // when its list is at the bottom, and that is what clears their header count.
+  const markThreadSeen = useCallback(() => {
+    if (!activeChannelId || !threadRootId || !present) return;
+    noteFaceContextRead(activeChannelId, threadRootId);
+  }, [activeChannelId, threadRootId, present]);
 
   const react = useCallback((messageId: string, emoji: string) => {
     useInboxStore.getState().toggleChatReaction(messageId, emoji);
@@ -802,7 +816,7 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
               walkieRing={activeChannel?.dmMemberIds}
               placeholder={
                 activeChannel?.kind === "dm"
-                  ? `Message ${channelDisplayName(activeChannel, useInboxStore.getState().teamMembers)}`
+                  ? `Message ${channelDisplayName(activeChannel, teamMembersOf(useInboxStore.getState()))}`
                   : `Message #${activeChannel?.name ?? "channel"}`
               }
               onSend={send}
@@ -881,6 +895,8 @@ export default function ChatPage({ scope = "team" }: { scope?: ChatRailScope } =
           now={now}
           // The link named a reply, and a reply only exists in this panel.
           targetMessageId={targetRow?.thread_root_id ? targetId : undefined}
+          canReportRead={present}
+          onReachedBottom={markThreadSeen}
           onClose={() => setThreadRootId(undefined)}
           onSend={sendReply}
           onReact={react}

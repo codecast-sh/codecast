@@ -26,6 +26,7 @@ import { moveFindingLedger } from "../../../../../lib/line/findingLedger";
 import { SwitchReview, type SwitchLedger } from "../../../../consequential/ConsequentialSwitch";
 import { useFixBranch, useFixCommitChecks, useProblemCiRun } from "../../../../../hooks/useFixCommitChecks";
 import { failingTestOf, fixCiFacts, fixedNoteRest } from "../../../../../lib/line/fixedOnMain";
+import { windowOrgTree } from "../../../../../store/orgSlice";
 
 export type ProblemBandProps = {
   band: Band;
@@ -116,7 +117,7 @@ export function ProblemBand(p: ProblemBandProps) {
   // The role that owns the project's line, from the org on hand: its merge step and its page.
   const roleId = p.admission?.role?.id ?? null;
   const mergeRole = useInboxStore((s) => {
-    const r = roleId ? s.orgTree?.roles.find((x) => x._id === roleId) : null;
+    const r = roleId ? windowOrgTree(s)?.roles.find((x) => x._id === roleId) : null;
     return r ? `${(r as { line_merge?: boolean }).line_merge ? 1 : 0}|${r.short_id ?? r.handle}` : null;
   });
   const merge = mergeRole ? { on: mergeRole.startsWith("1"), ref: mergeRole.slice(2) } : null;

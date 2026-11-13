@@ -35,7 +35,7 @@ import type { WorkState } from "@codecast/shared/contracts";
 import { objectHref } from "@codecast/shared/entities";
 import { useInboxStore, sessionWorkState, type InboxSession } from "../../store/inboxStore";
 import { makeCollectionSig } from "../../store/wakeSig";
-import { reparentToastLine } from "../../store/orgSlice";
+import { reparentToastLine, windowOrgTree } from "../../store/orgSlice";
 import { useSyncOrgTreeFeeder } from "../../hooks/useSyncOrgTree";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -348,7 +348,7 @@ function SessionMapInner() {
   const flow = useReactFlow();
   const now = useCoarseNow(60_000);
   const sig = useInboxStore((s) => sessionsSig(s.sessions));
-  const tree = useInboxStore((s) => s.orgTree);
+  const tree = useInboxStore(windowOrgTree);
   const layout = useInboxStore((s) => s.clientState.ui?.session_map) ?? EMPTY_LAYOUT;
   const view = useInboxStore((s) => s.clientState.ui?.session_map_view) ?? EMPTY_VIEW;
   const { sessions, roles, people } = useMemo(() => collect(useInboxStore.getState().sessions, tree), [sig, tree, now]); // eslint-disable-line react-hooks/exhaustive-deps

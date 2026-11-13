@@ -51,6 +51,7 @@ import { usePendingMessageStatus } from "../hooks/useSyncPendingPermissions";
 import { useInboxStore, isConvexId, convHasPendingSend, viewerCommandsSession, type OptimisticImage } from "../store/inboxStore";
 import { useChangedState } from "../hooks/useChangedState";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
+import { windowOrgTree } from "../store/orgSlice";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { soundSend } from "../lib/sounds";
 import type { MentionItem } from "./editor/MentionList";
@@ -515,8 +516,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
 
   const mentionState = useInboxStore.getState();
   const localMentionItems = effectiveMentionItemsRef.current;
-  const mentionRoles = chatMentionMode ? mentionState.orgTree?.roles : undefined;
-  const mentionAnchors = chatMentionMode ? mentionState.orgTree?.anchors : undefined;
+  const mentionRoles = chatMentionMode ? windowOrgTree(mentionState)?.roles : undefined;
+  const mentionAnchors = chatMentionMode ? windowOrgTree(mentionState)?.anchors : undefined;
   const recentMentionVisits = mentionState.recentVisits;
   const lastMentionViews = mentionState._lastViewedAt;
   const acCandidates = useMemo(() => {

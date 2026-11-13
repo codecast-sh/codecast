@@ -28,6 +28,7 @@ import { docRelatesToTask } from "@codecast/shared/tasks";
 import { roleAssigneeInfo, sameAssigneeInfo, type AssigneeInfo as ResolvedAssignee, type AssigneeRole } from "@codecast/shared/contracts/orgAssignee";
 import type { AvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { roleAuthorOf, type IdentityPrefs } from "./sessionIdentity";
+import { teamMembersOf } from "./activeTeam";
 import type { SessionRoleSnapshot } from "../store/inboxStore";
 
 type Member = { _id: string; name?: string; email?: string; image?: string; github_avatar_url?: string; github_username?: string };
@@ -552,8 +553,8 @@ function orgRoleInStore(state: any, rawId: string): any {
 /** A teammate as the store holds them, by GitHub handle, username or user
  *  id: the forms personRefOf writes and the activity profile reads. */
 export function personInStore(state: any, ref: string): any {
-  const members = state?.teamMembers;
-  if (!Array.isArray(members) || !ref) return undefined;
+  const members = teamMembersOf(state);
+  if (!ref) return undefined;
   const key = ref.replace(/^@/, "").toLowerCase();
   return members.find((m: any) => String(m?._id) === ref || m?.github_username?.toLowerCase() === key || m?.username?.toLowerCase() === key);
 }

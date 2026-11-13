@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import {
   useInboxStore, placeInboxRows, sessionsWakeSig, pendingSendWakeSig, resolveShowOld,
+  teamInboxIdsOf,
 } from '@codecast/web/store/inboxStore';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 
@@ -28,7 +29,7 @@ export function useInboxPlacement() {
   // Scope pre-filter before the old-session partition, like web: the
   // never-prune cache holds rows from other inbox scopes and teams.
   const inboxScope = useInboxStore((s) => s.clientState.ui?.inbox_scope ?? "mine");
-  const teamInboxIds = useInboxStore((s) => s.teamInboxIds);
+  const teamInboxIds = useInboxStore(teamInboxIdsOf);
   const meId = useInboxStore((s) => s.currentUser?._id?.toString?.() ?? null);
   const livenessHeldAt = useInboxStore((s) => s.livenessHeldAt);
   const placed = useMemo(

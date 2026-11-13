@@ -19,6 +19,7 @@ import {
   placeInboxRows,
   isAgentActive,
   getProjectName,
+  teamInboxIdsOf,
 } from "../store/inboxStore";
 import { isLivenessStale, THREAD_STATE_STALE_MSGS } from "@codecast/shared/contracts";
 import { makeCollectionSig } from "../store/wakeSig";
@@ -113,7 +114,7 @@ export function fleetCountedSessions(
     }
   };
   collect(placeInboxRows(state, { scope: "mine", focusedId, now: opts.now }));
-  if ((state.teamInboxIds?.size ?? 0) > 0) {
+  if (teamInboxIdsOf(state).size > 0) {
     collect(placeInboxRows(state, { scope: "team", focusedId, now: opts.now }));
   }
   return [...rows.values()];

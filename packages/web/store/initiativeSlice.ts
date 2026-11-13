@@ -16,6 +16,7 @@ import { pushRoleFieldsIntent, type OrgSliceData } from "./orgSlice";
 import { settleRecordOp, type InitiativeRecordOp } from "./initiativeRecord";
 import { leadScopeChange } from "@codecast/shared/contracts/orgLead";
 import { carryMetricScores, initiativeSignature, type InitiativeMetric, type InitiativeOwner, type InitiativePriority, type InitiativeRow, type InitiativeStatus, type InitiativeUpdateHealth, type InitiativeUpdateRow } from "@codecast/shared/contracts/initiative";
+import { teamMembersOf } from "../lib/activeTeam";
 
 /** Null clears a field, as the mutation reads it. */
 export type InitiativeFields = {
@@ -237,7 +238,7 @@ export function createInitiativeSlice(): InitiativeSliceActions {
       const row = this.initiatives[id];
       if (!row) return;
       const me = this.currentUser;
-      const roster = row.team_id ? this.teamMembers ?? [] : me ? [me] : [];
+      const roster = row.team_id ? teamMembersOf(this) : me ? [me] : [];
       const settled = settleRecordOp(row[op.list] ?? [], op, { by: initiativeSignature(me, roster), now: Date.now() });
       if (!settled) return;
       writeAsServerShape(row, { [op.list]: settled.next });

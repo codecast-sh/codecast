@@ -8,10 +8,11 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 const { useInboxStore } = await import("../store/inboxStore");
 const { TaskPeople } = await import("./entityDisplay");
+const { withTeamRoster } = await import("../test-helpers/teamRoster");
 
 const ME = { _id: "u_me", name: "Ashot", github_username: "ashot", image: null };
 const ADA = { _id: "u_ada", name: "Ada", github_username: "ada", image: null };
-useInboxStore.setState({ currentUser: ME, teamMembers: [ME, ADA] } as any);
+useInboxStore.setState({ currentUser: ME, ...withTeamRoster([ME, ADA], { clientState: useInboxStore.getState().clientState }) } as any);
 
 const count = (html: string, s: string) => html.split(s).length - 1;
 

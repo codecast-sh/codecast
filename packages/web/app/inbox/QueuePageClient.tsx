@@ -42,6 +42,7 @@ import { standingRoleIdOf } from "../../lib/sessionIdentity";
 import { settleSessionViewAsk, useSessionViewAsk } from "../../lib/sessionViewVisit";
 import { requestSessionRestart } from "../../lib/sessionCommands";
 import { SeatHeadState, RolePageControl, type SeatStall } from "../../components/org/scope/SeatHead";
+import { windowOrgTree } from "../../store/orgSlice";
 
 // The role page is a whole surface (the board's tabs, the org tree feeder), so
 // the inbox loads it only when a seat is opened. The dynamic import also keeps
@@ -336,7 +337,7 @@ export function SessionPage(props: InboxConversationProps) {
   // A seat whose role the tree does not hold (one the viewer cannot read, or a
   // cold cache still filling) stays a plain session rather than a page that
   // says it cannot find the role.
-  const roleKnown = useInboxStore((s) => !!roleId && !!s.orgTree?.roles.some((r) => r._id === roleId));
+  const roleKnown = useInboxStore((s) => !!roleId && !!windowOrgTree(s)?.roles.some((r) => r._id === roleId));
   const ask = useSessionViewAsk(sessionId);
   const [visit, setVisit] = useState(() => ({ sessionId, plain: ask != null, ask }));
   // A new session, or a new ask for the one on screen: this visit's answer.

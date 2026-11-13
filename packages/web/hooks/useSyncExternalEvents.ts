@@ -5,7 +5,10 @@
 // key, so a surface reads the store and never the query (the registered-feeds
 // guard enforces that). Mount the team feeder once, on the sync host; mount a
 // scoped feeder wherever that scope is open.
+import { useMemo } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { activeTeamIdOf } from "../lib/activeTeam";
 import { useSyncCollection, entityIdArgs } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import type { ExternalEventRecord } from "../lib/externalEvents";
@@ -18,7 +21,12 @@ const api = _api as any;
 
 const KEY = "externalEvents";
 
-export function useSyncTeamExternalEvents(args: { team_id?: string; limit?: number } | "skip" = { limit: 200 }) {
+/** Feeder: the ACTIVE team's newest events. It names the team, so a switch is a
+ *  new subscription, and it is off in the personal workspace: unnamed, the
+ *  server answered with the viewer's server-side team, whatever this window shows. */
+export function useSyncTeamExternalEvents(limit = 200) {
+  const teamId = useInboxStore(activeTeamIdOf);
+  const args = useMemo(() => (teamId && isConvexId(teamId) ? { team_id: teamId, limit } : "skip" as const), [teamId, limit]);
   return useSyncCollection(KEY, api.externalEvents.listForTeam, args);
 }
 

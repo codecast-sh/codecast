@@ -15,6 +15,7 @@ import { lineRoleOf } from "./map/useLineAdmission";
 import type { OrgRole } from "../org/orgTypes";
 import { LineWorkspace, type FlowFrame } from "./workspace/LineWorkspace";
 import { FlowPageContext } from "../../lib/line/flowPageContext";
+import { windowOrgTree } from "../../store/orgSlice";
 
 type Project = { _id: string; title?: string | null };
 
@@ -24,7 +25,7 @@ export function FlowPage({ owner }: { owner: string }) {
   const space = useLineSpace(selection);
   useOrgScope(space.key);
   useSyncOrgTreeFeeder();
-  const roles = useInboxStore((s) => s.orgTree?.roles) as OrgRole[] | undefined;
+  const roles = useInboxStore((s) => windowOrgTree(s)?.roles) as OrgRole[] | undefined;
   const projects = useInboxStore((s) => s.projects) as Record<string, Project> | undefined;
   const role = roles?.find((r) => r.handle === owner) ?? null;
   const intake = useMemo(() => {

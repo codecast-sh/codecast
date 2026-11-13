@@ -4,6 +4,7 @@ import {
   useTrackedStore,
   sessionsWithPendingSend,
   pendingSendWakeSig,
+  teamInboxIdsOf,
 } from "../../store/inboxStore";
 import { fleetCountedSessions, fleetSessionsWakeSig } from "../fleetBands";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -46,7 +47,7 @@ export function useFleetSummaries(): Map<string, FleetSummary> {
     (st: any) => fleetSessionsWakeSig(st.sessions),
     (st: any) => st.sessionsWithQueuedMessages,
     (st: any) => pendingSendWakeSig(st.pendingMessages),
-    (st: any) => st.teamInboxIds,
+    (st: any) => teamInboxIdsOf(st),
     // Scalar, never the churny row: the viewer id parameterizes the
     // foreign-row rule in fleetCountedSessions.
     (st: any) => (st.currentUser?._id ? String(st.currentUser._id) : ""),
@@ -65,7 +66,7 @@ export function useFleetSummaries(): Map<string, FleetSummary> {
     const counted = fleetCountedSessions(st, opts);
     return fleetSummariesByMember(counted, opts);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the signatures stand in for the churny collections
-  }, [sessionsSig, pendingSig, s.sessionsWithQueuedMessages, s.teamInboxIds, viewerId, now]);
+  }, [sessionsSig, pendingSig, s.sessionsWithQueuedMessages, teamInboxIdsOf(s), viewerId, now]);
 }
 
 export interface MemberActivity {

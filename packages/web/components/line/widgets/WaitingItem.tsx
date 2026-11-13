@@ -60,6 +60,7 @@ import { fixHolder, reviewGates, reviewMove, sendBackNote } from "../../../lib/l
 import { ReaskNotice } from "./ReaskRun";
 import { deployOfCommit, failingTestOf, fixCiFacts, fixedNoteRest, newestDeploy, undeployedCited, type DeployFact } from "../../../lib/line/fixedOnMain";
 import "./waitingItem.css";
+import { teamMembersOf } from "../../../lib/activeTeam";
 
 export type WaitingItemProps = {
   need: LineNeed;
@@ -700,7 +701,7 @@ function NewAsk({ need, facts, branch, drop, acts, yes, said, extra, reprove }: 
  *  waits in their For you as assigned) and the step's reason is left on it. Pick a teammate; one press each, undone by
  *  handing it back to the line. */
 function HandToReviewer({ need, yes }: { need: LineNeed; yes: StoppedAsk }) {
-  const sig = useInboxStore((s) => ((s.teamMembers ?? []) as Array<{ _id: string; name?: string; is_bot?: boolean }>).filter((m) => !m.is_bot && m.name).map((m) => `${m._id}\u0001${m.name}`).join("\u0000"));
+  const sig = useInboxStore((s) => (teamMembersOf(s) as Array<{ _id: string; name?: string; is_bot?: boolean }>).filter((m) => !m.is_bot && m.name).map((m) => `${m._id}\u0001${m.name}`).join("\u0000"));
   const people = useMemo(() => [...new Map(sig.split("\u0000").filter(Boolean).map((x) => { const [id, name] = x.split("\u0001"); return [name, { id, name }] as const; })).values()], [sig]);
   const viewer = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
   const holder = useInboxStore((s) => (need.caseId ? (s.tasks as Record<string, { assignee?: string | null }>)[need.caseId]?.assignee ?? null : null));

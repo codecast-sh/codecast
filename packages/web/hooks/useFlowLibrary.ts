@@ -1,5 +1,6 @@
 import { useMemo } from "react";
-import { usePoolFlowRows, useWorkflowRuns } from "./useSyncWorkflows";
+import { usePoolFlowRows } from "./useSyncWorkflows";
+import { useWorkspaceRuns } from "./useSyncRuns";
 import { useLiveFlow } from "./useLiveFlow";
 import { appPool, flowOfRun } from "../lib/line/flowPool";
 import { flowLibrary, libraryFlows, type LibraryRow } from "../lib/line/flowLibrary";
@@ -15,8 +16,9 @@ export function useFlowLibrary(space: string | null | undefined) {
   const spine = live ? live.flow : null;
   const lib = useMemo(() => flowLibrary(pool, rows, spine), [pool, rows, spine]);
   const flows = useMemo(() => libraryFlows(lib), [lib]);
-  const where = useMemo(() => (r: FlowRun) => !!flowOfRun(flows, r), [flows]);
-  const runs = useWorkflowRuns(where) as FlowRun[];
+  // The workspace's own runs only: built-in flows share a slug in every
+  // workspace, so matching by flow alone would list another team's runs.
+  const runs = useWorkspaceRuns(space, { all: true }) as unknown as FlowRun[];
   const runsOf = useMemo(() => {
     const m = new Map<string, FlowRun[]>();
     for (const r of runs) {

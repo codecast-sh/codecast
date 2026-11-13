@@ -23,13 +23,14 @@ import { ConsequentialSwitch, SwitchReview, type SwitchLedger } from "../../cons
 import { lineStartLedger, startsAtOnce } from "../../consequential/lineStartLedger";
 import { useRunCost } from "../../consequential/useRunCost";
 import "./lineStarts.css";
+import { windowOrgTree } from "../../../store/orgSlice";
 
 const MIN_CARDS = 1;
 const MAX_CARDS = 50;
 const MAX_PER_DAY = 200;
 
 export function LineStarts({ projects, rollups }: { projects: ReadonlyArray<LineProject>; rollups: ReadonlyArray<RollupRow> }) {
-  const roles = useInboxStore((s) => s.orgTree?.roles);
+  const roles = useInboxStore((s) => windowOrgTree(s)?.roles);
   const flows = useOwnedFlows({ projects: projects as LineProject[], admissions: useLineAdmissions(projects) });
   const rows = useMemo(() => roleLines(flows, rollups), [flows, rollups]);
   return (

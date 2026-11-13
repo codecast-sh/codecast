@@ -35,6 +35,7 @@ import type { OrgProposalListRow } from "./orgStaffingTypes";
 import type { OrgFocusTarget } from "./orgLayout";
 import type { OrgTree } from "./orgTypes";
 import { useInboxStore } from "../../store/inboxStore";
+import { windowOrgTree } from "../../store/orgSlice";
 import { useSyncOrgTree } from "../../hooks/useSyncOrgTree";
 import { useSyncProjects } from "../../hooks/useSyncProjects";
 import { ContextMenu, useContextMenu } from "../ui/context-menu";
@@ -47,6 +48,7 @@ import { useOrgMoves } from "./useOrgMoves";
 import { OrgNodeMenu } from "./OrgNodeMenu";
 import { OrgButton } from "./OrgButton";
 import { PageHeader } from "../ui/page-header";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 /** The chart's three readings, in the switch's order. */
 export type OrgChartView = "people" | "everything" | "goals";
@@ -103,12 +105,12 @@ function ViewSwitch({ value, onChange }: { value: OrgChartView; onChange: (v: Or
 /** The page a chart card opens, or null when the store cannot name one yet. */
 export function chartCardHref(o: OrgGraphObject, st: ReturnType<typeof useInboxStore.getState>): string | null {
   if (o.kind === "role") {
-    const role = st.orgTree?.roles.find((r) => r._id === o.id || r.short_id === o.id);
+    const role = windowOrgTree(st)?.roles.find((r) => r._id === o.id || r.short_id === o.id);
     const conv = role?.standing?.conversation_id;
     return conv ? `/conversation/${conv}` : null;
   }
   if (o.kind === "person") {
-    const member = (st.teamMembers as Array<{ _id: string; github_username?: string }> | undefined)?.find((m) => String(m._id) === o.id);
+    const member = (teamMembersOf(st) as Array<{ _id: string; github_username?: string }> | undefined)?.find((m) => String(m._id) === o.id);
     return `/team/${encodeURIComponent(member?.github_username || o.id)}`;
   }
   if (o.kind === "initiative") {
@@ -255,7 +257,7 @@ export function OrgChart() {
     if (!o) return false;
     // A role is its session: it opens in the drawer beside the chart.
     if (o.kind === "role") {
-      const conv = useInboxStore.getState().orgTree?.roles.find((r) => r._id === o.id || r.short_id === o.id)?.standing?.conversation_id;
+      const conv = windowOrgTree(useInboxStore.getState())?.roles.find((r) => r._id === o.id || r.short_id === o.id)?.standing?.conversation_id;
       if (conv) { goPanel({ kind: "session", id: conv }); return true; }
     }
     const href = chartCardHref(o, useInboxStore.getState());

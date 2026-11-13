@@ -18,7 +18,6 @@ export const OPS_SYNC_COLLECTIONS = {
     persistence: { kind: "collection", key: "opsSources" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    workspaceScoped: true,
     sync: { altKey: "name" },
     // The replay import's progress is the server's, written by every page;
     // a start paints it optimistically until the first echo replaces it. A
@@ -30,7 +29,6 @@ export const OPS_SYNC_COLLECTIONS = {
     persistence: { kind: "collection", key: "opsGroups" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    workspaceScoped: true,
     indexes: "_id, source_id",
     sync: { isDelta: true },
     feeds: ["ingest.listGroups", "ingest.getGroup", "ingest.searchGroups"],
@@ -49,7 +47,6 @@ export const OPS_SYNC_COLLECTIONS = {
   opsEvents: {
     persistence: { kind: "collection", key: "opsEvents" },
     hydration: { phase: "deferred" },
-    workspaceScoped: true,
     // Windows of the stream (the newest page, one source's newest, older pages a reader scrolled to) land in one
     // collection, each pruning only the span it vouches for (useSyncOps eventsWindow).
     sync: { isDelta: true },
@@ -58,7 +55,6 @@ export const OPS_SYNC_COLLECTIONS = {
   opsReplays: {
     persistence: { kind: "collection", key: "opsReplays" },
     hydration: { phase: "deferred" },
-    workspaceScoped: true,
     sync: { isDelta: true },
     feeds: ["replays.list", "replays.get", "replays.browse"],
   },
@@ -86,7 +82,6 @@ export const OPS_SYNC_COLLECTIONS = {
     hydration: { phase: "deferred" },
     localFirst: true,
     unprotectedFields: ["history", "state"],
-    workspaceScoped: true,
     sync: {},
     feeds: ["metrics.listWatches"],
   },

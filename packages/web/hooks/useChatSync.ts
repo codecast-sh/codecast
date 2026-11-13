@@ -50,7 +50,7 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useTeamFeature } from "../lib/teamFeatures";
 import { isChatRailLive, markChatRailLive, subscribeChatRailLive } from "../lib/chatLive";
 import { isConvexId } from "../lib/entityLinks";
-import { activeTeamIdOf } from "../lib/activeTeam";
+import { activeTeamIdOf, teamMembersOf } from "../lib/activeTeam";
 import {
   buildHandleSets,
   foldReactions,
@@ -65,6 +65,7 @@ import {
 import type { ChatMessageView } from "../components/chat/chatTypes";
 import { CHAT_PAGE_SIZE, ingestChatPage } from "../lib/ingestChatPage";
 import { holdChatFocus } from "../lib/chatFocus";
+import { noteFaceContextRead } from "../lib/chat/faceChat";
 
 import { useWatchEffect } from "./useWatchEffect";
 import { useSyncCollection } from "./useSyncCollection";
@@ -397,7 +398,7 @@ export function useThreadSync(rootId: string | undefined): {
  *  must draw its faces from the same list. */
 export function useChatMembers(): { members: ChatMember[]; byId: Map<string, ChatMember>; viewerId: string; handles: HandleSets } {
   const s = useTrackedStore([
-    (s: any) => memberListSig(s.teamMembers),
+    (s: any) => memberListSig(teamMembersOf(s)),
     (s: any) => s.currentUser?._id,
     (s: any) => s.currentUser?.name,
     (s: any) => s.currentUser?.image,
@@ -408,7 +409,7 @@ export function useChatMembers(): { members: ChatMember[]; byId: Map<string, Cha
   const orgTree: RoleRows = roleRowsOf(s as never);
   const rolesSig = roleRowsSig(s as never);
   const viewerId = String(s.currentUser?._id ?? "");
-  const roster: any[] = s.teamMembers ?? [];
+  const roster: any[] = teamMembersOf(s);
   const sig = memberListSig(roster);
   const botsSig = anchorBotsSig((s as any).anchors);
   const authors = (s as any).chatAuthors as Record<string, ChatMember> | undefined;
@@ -739,6 +740,8 @@ export function useEnsureChatMessage(messageId: string | undefined): void {
 export function useReadWhileSeen(channelId: string | undefined, seen: boolean, feed: ChannelFeed, wake: unknown): void {
   useWatchEffect(() => {
     if (!channelId || !seen || feed.loading || feed.unavailable) return;
+    // The same moment the room is read: the header count for these lines goes.
+    noteFaceContextRead(channelId);
     const state = useInboxStore.getState();
     const marker = selectChannelReadMarker(state as any, channelId);
     state.markChannelRead(channelId, marker?._id);

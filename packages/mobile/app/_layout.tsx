@@ -22,8 +22,9 @@ import { Mono, markLateFacesLoaded, uiFace, useFacesVersion, useLateFacesLoaded 
 import { resolveMobileLook } from '@/lib/mobileLook';
 import { ensureModernFaces } from '@/lib/modernFaces';
 import { followServerUiKey, useInboxStore } from '@codecast/web/store/inboxStore';
-import { convex, CONVEX_URL } from '@/lib/convex';
+import { convex } from '@/lib/convex';
 import { AuthProvider, useAuth } from '@/lib/auth';
+import { convexAuthStorageKey } from '@/lib/cachePrincipal';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { useLiveActivity } from '@/hooks/useLiveActivity';
 import { useViewerIdentity } from '@codecast/web/hooks/useTeamRoster';
@@ -80,13 +81,12 @@ const secureStorage = {
 
 // Dev-only auth injection for simulator e2e harnesses (driven over the Hermes
 // inspector): writes a minted token pair into the SAME storage the auth
-// provider reads, using its exact key derivation (`<key>_<escaped CONVEX_URL>`).
+// provider reads, using its exact key derivation (convexAuthStorageKey).
 // Reload after calling; the provider boots signed in. Never bundled in release.
 if (__DEV__) {
-  const ns = CONVEX_URL.replace(/[^a-zA-Z0-9]/g, "");
   (global as any).__devAuth = async (jwt: string, refresh: string) => {
-    await secureStorage.setItem(`__convexAuthJWT_${ns}`, jwt);
-    await secureStorage.setItem(`__convexAuthRefreshToken_${ns}`, refresh);
+    await secureStorage.setItem(convexAuthStorageKey('__convexAuthJWT'), jwt);
+    await secureStorage.setItem(convexAuthStorageKey('__convexAuthRefreshToken'), refresh);
     return "ok";
   };
 }

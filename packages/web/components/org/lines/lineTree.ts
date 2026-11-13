@@ -6,6 +6,7 @@ import { useMemo } from "react";
 import { orgRolesSig } from "../../../hooks/useOrgRoles";
 import { useInboxStore } from "../../../store/inboxStore";
 import type { OrgTree } from "../orgTypes";
+import { windowOrgTree } from "../../../store/orgSlice";
 
 /** What a line reads off the org tree: names, charters, who reports to whom,
  *  a role's standing seat, the state words it draws (a role's declared
@@ -25,6 +26,6 @@ function lineTreeSig(tree: OrgTree | null | undefined): string {
 
 /** The org tree, repainting only when something a line draws changed. */
 export function useLineTree(): OrgTree | null {
-  const sig = useInboxStore((s) => lineTreeSig(s.orgTree));
-  return useMemo(() => useInboxStore.getState().orgTree ?? null, [sig]); // eslint-disable-line react-hooks/exhaustive-deps
+  const sig = useInboxStore((s) => lineTreeSig(windowOrgTree(s)));
+  return useMemo(() => windowOrgTree(useInboxStore.getState()) ?? null, [sig]); // eslint-disable-line react-hooks/exhaustive-deps
 }

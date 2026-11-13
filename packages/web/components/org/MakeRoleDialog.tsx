@@ -12,11 +12,12 @@ import { useWorkspaceCollection } from "../../hooks/useWorkspaceCollection";
 import type { ProjectItem } from "../../store/inboxStore";
 import { HireRoleDialog } from "./HireRoleDialog";
 import { seatOfSession } from "../../lib/makeRole";
+import { windowOrgTree } from "../../store/orgSlice";
 
 export function MakeRoleDialog({ conversationId, onClose }: { conversationId: string; onClose: () => void }) {
   // The hire form reads the chart for handles and parents; feed it while open.
   useSyncOrgTreeFeeder();
-  const tree = useInboxStore((s) => s.orgTree);
+  const tree = useInboxStore(windowOrgTree);
   const meId = useInboxStore((s) => (s.currentUser as any)?._id as string | undefined) ?? "";
   const offered = useMemo(() => seatOfSession(conversationId), [conversationId]);
   const projects = useWorkspaceCollection<ProjectItem>("projects");

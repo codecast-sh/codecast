@@ -887,7 +887,8 @@ function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePe
   // it. The team feed must read only the active team's rows, or those stay in
   // the feed after that view unmounts.
   const teamEventsWhere = useMemo(
-    () => (row: { team_id?: string }) => !activeTeamId || String(row.team_id) === String(activeTeamId),
+    // Personal has no team feed: no row is the active team's.
+    () => (row: { team_id?: string }) => !!activeTeamId && String(row.team_id) === String(activeTeamId),
     [activeTeamId],
   );
   const externalEvents = useExternalEvents(teamEventsWhere, externalEventsNewestFirst);

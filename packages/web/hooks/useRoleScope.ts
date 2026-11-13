@@ -17,6 +17,7 @@ import { useInitiatives } from "./useInitiatives";
 import { buildRoleScope, sourceFromCard, sourceFromTree, type RoleCardAnswer, type RoleScopeModel } from "../lib/roleScope";
 import { boundTaskOf } from "../lib/scopePage";
 import type { OrgRole, OrgTree } from "../components/org/orgTypes";
+import { windowOrgTree } from "../store/orgSlice";
 
 const projectSig = (p: ProjectItem) => `${p.title}|${p.status}|${p.owner_role_id ?? ""}`;
 const planSig = (p: PlanItem) => `${p.title}|${p.status}|${(p as any).project_id ?? ""}`;
@@ -40,13 +41,14 @@ export function useRoleScope(roleRef: string, card?: RoleCardAnswer | null): { m
   // The role's own facts as one string: the normalized source (names, scope,
   // counts, limits, who it reports to) plus each top session's state and task.
   const sig = useInboxStore((s) => {
-    const role = findRole(s.orgTree, roleRef);
-    if (!role || !s.orgTree) return "";
-    return JSON.stringify(sourceFromTree(s.orgTree, role)) + "\n" + role.sessions.map((x) => `${x._id}|${x.state}|${x.title}|${(s.sessions[x._id] as any)?.active_task_id ?? ""}`).join("\n");
+    const tree = windowOrgTree(s);
+    const role = findRole(tree, roleRef);
+    if (!role || !tree) return "";
+    return JSON.stringify(sourceFromTree(tree, role)) + "\n" + role.sessions.map((x) => `${x._id}|${x.state}|${x.title}|${(s.sessions[x._id] as any)?.active_task_id ?? ""}`).join("\n");
   });
   // The charter document's text, when the store holds the document.
   const charterDoc = useInboxStore((s) => {
-    const id = findRole(s.orgTree, roleRef)?.charter_doc_id;
+    const id = findRole(windowOrgTree(s), roleRef)?.charter_doc_id;
     return id ? ((s.docs[id] as any)?.content as string | undefined) ?? null : null;
   });
   const { projects, plans, tasks, roles } = useScopeRows();
@@ -55,8 +57,9 @@ export function useRoleScope(roleRef: string, card?: RoleCardAnswer | null): { m
 
   return useMemo(() => {
     const st = useInboxStore.getState();
-    const role = findRole(st.orgTree, roleRef);
-    const source = role && st.orgTree ? sourceFromTree(st.orgTree, role) : card ? sourceFromCard(card) : null;
+    const tree = windowOrgTree(st);
+    const role = findRole(tree, roleRef);
+    const source = role && tree ? sourceFromTree(tree, role) : card ? sourceFromCard(card) : null;
     if (!source) return { model: null, role };
     if (charterDoc) source.charter = charterDoc;
     else if (!source.charter && card?.charter) source.charter = card.charter;

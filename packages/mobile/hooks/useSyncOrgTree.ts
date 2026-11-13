@@ -1,4 +1,5 @@
 import { useInboxStore } from "@codecast/web/store/inboxStore";
+import { windowOrgTree } from "@codecast/web/store/orgSlice";
 import { useSyncOrgTreeFull } from "@codecast/web/hooks/useSyncOrgTree";
 import type { OrgTree } from "@codecast/web/components/org/orgTypes";
 
@@ -9,6 +10,6 @@ export function useSyncOrgTree() {
   // cached tree paints before getCurrentUser answers.
   const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
   const state = useSyncOrgTreeFull();
-  const tree = useInboxStore((s) => s.orgTree) as OrgTree | null;
+  const tree = useInboxStore(windowOrgTree) as OrgTree | null;
   return { tree, meId, ...state };
 }

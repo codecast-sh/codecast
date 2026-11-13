@@ -244,8 +244,8 @@ describe("client sync registry", () => {
       expect(REGISTRY_SYNC_OPTS.savedViews?.isDelta).toBeFalsy();
     });
 
-    it("workspace-scoped tables are declared on the entry", () => {
-      expect(WORKSPACE_SCOPED_KEYS.sort()).toEqual(["agentChains", "agentDefinitions", "deployTargets", "docs", "expectationsOverview", "flowMaps", "initiatives", "issueSyncSources", "lineDeploys", "lineLabels", "lineTimeline", "liveFlows", "modObjects", "opsEvents", "opsGroups", "opsReplays", "opsSources", "opsWatches", "orgLog", "plans", "projects", "secrets", "sessionFlows", "signals", "tasks", "teamDeploys", "teamKitItems", "trialCards", "trialProjects", "trialRuns", "workflows"].sort());
+    it("workspace-scoped tables are the collections DATA_SCOPE classes workspace", () => {
+      expect(WORKSPACE_SCOPED_KEYS.sort()).toEqual(["agentChains", "agentDefinitions", "deployTargets", "docs", "expectationsOverview", "flowMaps", "initiatives", "issueSyncSources", "lineDeploys", "lineLabels", "lineTimeline", "liveFlows", "messageFeed", "modObjects", "opsEvents", "opsGroups", "opsReplays", "opsSources", "opsWatches", "orgLog", "orgProposals", "plans", "projects", "secrets", "sessionFlows", "signals", "tasks", "teamDeploys", "teamKitItems", "trialCards", "trialProjects", "trialRuns", "workflowRuns", "workflows"].sort());
     });
   });
 

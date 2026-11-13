@@ -9,6 +9,7 @@ import { useWatchEffect } from "./useWatchEffect";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useSyncCollection } from "./useSyncCollection";
 import type { OrgTree } from "../components/org/orgTypes";
+import { windowOrgTree } from "../store/orgSlice";
 
 const api = _api as any;
 
@@ -60,7 +61,7 @@ export function useSyncOrgTreeFull(canonicalTeamId?: string | null): { ready: bo
 
 export function useSyncOrgTree(): { tree: OrgTree | null; ready: boolean; error?: Error; missing: boolean; refused: boolean; retry: () => void } {
   const state = useSyncOrgTreeFull();
-  const tree = useInboxStore((s) => s.orgTree);
+  const tree = useInboxStore(windowOrgTree);
   return { tree, ...state };
 }
 

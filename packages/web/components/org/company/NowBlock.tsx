@@ -20,6 +20,7 @@ import { asksFor, proposalLinesFor, sessionsLine, type NowSubject } from "./nowM
 export type { NowSubject } from "./nowModel";
 import type { CompanyRows } from "./useCompanyRows";
 import { SheetSection } from "./SheetFrame";
+import { windowOrgTree } from "../../../store/orgSlice";
 
 /** `lead` says in words what is at work (a role's current session, a
  *  person's work role by role), as NowLines that take the place of the bare
@@ -27,7 +28,7 @@ import { SheetSection } from "./SheetFrame";
 export function NowBlock({ subject, sessions, rows, lead }: { subject: NowSubject; sessions: readonly OrgSession[]; rows: CompanyRows; lead?: React.ReactNode }) {
   const openLinked = useOpenLinkedSession();
   // The full tree (the screen's feeder keeps it), for the asks' role lookup.
-  const fullTree = useInboxStore((s) => s.orgTree) as OrgTree | null;
+  const fullTree = useInboxStore(windowOrgTree) as OrgTree | null;
   const asks = asksFor(useOrgAsks(fullTree), subject);
   const proposalRows = useInboxStore((s) => s.orgProposals);
   const proposalChanges = useInboxStore((s) => s.orgProposalChanges);

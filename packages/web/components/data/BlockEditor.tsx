@@ -13,6 +13,7 @@ import { resultFor } from "../../hooks/useDashboardData";
 import { useRef } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import type { BlockEnv } from "./blocks";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 const KIND_LABEL: Record<string, string> = { kpi: "KPI", chart: "Chart", table: "Table", text: "Text", section: "Section" };
 const FORMATS = ["number", "compact", "usd", "percent"] as const;
@@ -91,10 +92,18 @@ export function BlockEditor({ docId, block, env, apply, onClose, onRemove }: { d
               </Row>
               {block.agg === "top" ? <Select label="Named by" value={block.label} options={columns} empty="auto" onChange={(v) => set({ label: v || null })} /> : null}
               <Select label="Format" value={block.format ?? "number"} options={FORMATS} onChange={(v) => set({ format: v })} />
-              <Select label="Compare to" value={block.compare} options={["halves", "prev", ...columns]} labels={{ halves: "the window's earlier half", prev: "the previous row" }} empty="nothing" onChange={(v) => set({ compare: v || null })} />
+              <Select label="Compare to" value={block.compare} options={["halves", "prev", ...columns]} labels={{ halves: "the prior period", prev: "the previous row" }} empty="nothing" onChange={(v) => set({ compare: v || null })} />
               {block.compare ? <Select label="Good when" value={block.good} options={["up", "down"]} empty="neutral" onChange={(v) => set({ good: v || null })} /> : null}
               {!q ? <TextField label="Typed value (not verified)" value={block.value === undefined ? undefined : String(block.value)} onCommit={(v) => set({ value: v === "" ? null : Number.isFinite(Number(v)) ? Number(v) : v })} /> : null}
-              {q ? <AlertFields block={block} result={result} onSet={(alert) => set({ alert })} /> : null}
+              {q ? (
+                <AlertFields
+                  block={block}
+                  result={result}
+                  onSet={(alert) => set({ alert })}
+                  schedule={dashboard.readSchedule(env.blocks.get(dashboard.LAYOUT_KEY))}
+                  onReadHourly={() => apply(dashboard.scheduleOps(env.blocks.has(dashboard.LAYOUT_KEY), "hourly"))}
+                />
+              ) : null}
             </>
           ) : null}
           {block.kind === "chart" ? (
@@ -235,7 +244,9 @@ function SeriesPicker({ value, options, single, onChange }: { value: unknown; op
   // Chips stay where they are when picked; a chosen column the source no longer has goes last.
   const all = [...options, ...chosen.filter((c) => !options.includes(c))];
   const toggle = (c: string) => {
-    const next = single ? (chosen[0] === c ? [] : [c]) : chosen.includes(c) ? chosen.filter((x) => x !== c) : [...chosen, c];
+    // Values share one axis and one format: a column in another unit (spend beside tokens) replaces the pick rather than joining it.
+    const unlike = chosen.length > 0 && formatFor(chosen[0]) !== formatFor(c);
+    const next = single || unlike ? (chosen[0] === c ? [] : [c]) : chosen.includes(c) ? chosen.filter((x) => x !== c) : [...chosen, c];
     onChange(next.length ? next.join(",") : null);
   };
   return (
@@ -256,7 +267,7 @@ function SeriesPicker({ value, options, single, onChange }: { value: unknown; op
 }
 
 /** Notify me when this number goes above or below a line. Empty both to stop. The alert fires whenever the number is read: while the page is open, or on the dashboard's schedule. */
-function AlertFields({ block, result, onSet }: { block: ArtifactElement; result: ReturnType<typeof resultFor>; onSet: (alert: Json) => void }) {
+function AlertFields({ block, result, onSet, schedule, onReadHourly }: { block: ArtifactElement; result: ReturnType<typeof resultFor>; onSet: (alert: Json) => void; schedule: dashboard.Schedule | null; onReadHourly: () => void }) {
   const me = useInboxStore((s: any) => (s.currentUser?._id ? String(s.currentUser._id) : undefined));
   const alert = dashboard.readAlert(block);
   // Editing someone else's alert keeps it theirs: changing a line never moves who hears it.
@@ -271,7 +282,12 @@ function AlertFields({ block, result, onSet }: { block: ArtifactElement; result:
     const n = Number(m[1]) * (m[2] ? { k: 1e3, m: 1e6, b: 1e9 }[m[2].toLowerCase() as "k" | "m" | "b"] : 1);
     return percent ? n / 100 : n;
   };
-  const shownLine = (n: number | undefined) => (n === undefined ? undefined : percent ? String(Math.round(n * 1e6) / 1e4) : String(n));
+  // The line reads back the way it was typed: 10M, not 10000000.
+  const short = (n: number) => {
+    for (const [unit, size] of [["B", 1e9], ["M", 1e6], ["K", 1e3]] as const) if (Math.abs(n) >= size && Number.isInteger((n / size) * 100)) return `${n / size}${unit}`;
+    return String(n);
+  };
+  const shownLine = (n: number | undefined) => (n === undefined ? undefined : percent ? String(Math.round(n * 1e6) / 1e4) : short(n));
   const write = (side: "above" | "below", v: string) => {
     const n = parse(v);
     if (n === null) return;
@@ -299,7 +315,7 @@ function AlertFields({ block, result, onSet }: { block: ArtifactElement; result:
   };
   const whoName = useInboxStore((s: any) => {
     if (!alert?.by || alert.by === me) return null;
-    const m = (s.teamMembers ?? []).find((t: any) => String(t?._id ?? t?.user_id) === alert.by);
+    const m = teamMembersOf(s).find((t: any) => String(t?._id ?? t?.user_id) === alert.by);
     return m?.name ? String(m.name) : null;
   });
   return (
@@ -310,9 +326,18 @@ function AlertFields({ block, result, onSet }: { block: ArtifactElement; result:
       </Row>
       <div className="flex flex-wrap gap-x-2 text-meta text-sol-text-dim tabular-nums" data-alert-status>
         {ev.state === "ok" ? <span>Now {ev.display}</span> : null}
-        {alert ? <span>· notifies {!alert.by || alert.by === me ? "you" : whoName ?? "the person who set it"}</span> : null}
+        {alert ? <span>· notifies {!alert.by || alert.by === me ? "you" : whoName ?? "the person who set it"}{schedule ? `, checked ${schedule}` : ""}</span> : null}
         {state && state.state !== "ok" ? <span className="text-sol-red">· past the line now: an alert goes out on the next read</span> : null}
       </div>
+      {/* With no schedule the number is read only while someone has the dashboard open, so the alert would stay quiet the rest of the time. */}
+      {alert && !schedule ? (
+        <div className="flex items-center gap-2 text-meta text-sol-yellow" data-alert-unscheduled>
+          <span className="flex-1">Checked only while open</span>
+          <button type="button" onClick={onReadHourly} className="h-6 px-2 rounded-md border border-sol-border/60 text-sol-text hover:bg-sol-bg-alt">
+            Check hourly
+          </button>
+        </div>
+      ) : null}
     </Field>
   );
 }

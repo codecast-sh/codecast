@@ -17,10 +17,12 @@ import { RelativeTime } from '@/components/RelativeTime';
 import { ChatComposerBar } from '@/components/chat/ChatComposerBar';
 import type { MentionCandidate } from '@/components/chat/MentionStrip';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { windowOrgTree } from '@codecast/web/store/orgSlice';
 import { useDecisionThread, useDecisionThreadReadAt, useDecisionThreadUnread } from '@codecast/web/hooks/useDecisionThread';
 import { useWatchEffect } from '@codecast/web/hooks/useWatchEffect';
 import { commentAuthorName, firstUnreadIndex, isOwnComment, isThreadResolved, withImages, type Comment } from '@codecast/web/lib/commentThread';
 import { askDecisionSession, decisionThreadComments, markDecisionThreadRead, newDecisionCommentId, sendDecisionComment } from '@codecast/web/lib/decisionThread';
+import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 
 const api = _api as any;
 
@@ -73,8 +75,8 @@ export function DecisionThread({ decisionId, conversationId }: { decisionId: str
   const me = useInboxStore((s) => String(s.currentUser?._id ?? ''));
   const sessionId = owner?.conversation_id ?? conversationId ?? '';
   const session = useInboxStore((s) => s.sessions[sessionId] as { short_id?: string; title?: string } | undefined);
-  const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
-  const roles = useInboxStore((s) => ((s as any).orgTree?.roles ?? NO_ROLES) as Role[]);
+  const teamMembers = useInboxStore(teamMembersOf) as any[];
+  const roles = useInboxStore((s) => (windowOrgTree(s)?.roles ?? NO_ROLES) as Role[]);
   const [replyTo, setReplyTo] = useState<Comment | null>(null);
   const [editing, setEditing] = useState<{ messageId: string; content: string } | null>(null);
   const [asking, setAsking] = useState(false);

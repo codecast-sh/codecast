@@ -1,5 +1,5 @@
 import { captureException } from "./pendingInputError";
-import { readPendingMessageJournal, writePendingMessageJournal, type PendingJournalStorage } from "./pendingMessageJournal";
+import { PENDING_JOURNAL_PREFIX, readPendingMessageJournal, writePendingMessageJournal, type PendingJournalStorage } from "./pendingMessageJournal";
 import { importLegacyQueuedMessages, queuedMessagesFromPending, applyPendingMessageWrite, pendingMessageWrites, pendingMessagesFromRecords, type PendingMessages } from "./pendingMessageJournal";
 // expo-sqlite's kv-store default export is an AsyncStorage-compatible, SQLite-backed
 // key-value store (getItem/setItem/removeItem + multiGet). It is durable and survives
@@ -18,6 +18,8 @@ import { importLegacyQueuedMessages, queuedMessagesFromPending, applyPendingMess
 // session on those older binaries instead of bricking them; native persistence
 // resumes automatically once users get a build that includes the ExpoSQLite module.
 import type { Patch } from "mutative";
+import type { AuthTokenState } from "@platform/auth/web";
+import { cacheOwnershipVerdict } from "./cacheOwnershipRule";
 import {
   COLLECTION_STORE_KEYS,
   META_STORE_KEYS,
@@ -620,6 +622,7 @@ export function loadCacheSync(
 ): Record<string, any> | null {
   if (!Storage || typeof Storage.getItemSync !== "function") return null;
   if (typeof Storage.getAllKeysSync !== "function") return null;
+  if (!cacheAccess().serve) return null;
   try {
     const wanted = keys ? new Set(keys) : null;
     const db = openCacheDbSync();
@@ -645,6 +648,7 @@ export function loadCacheSync(
 
 export function loadPaintCacheSync(): Record<string, any> | null {
   if (!Storage || typeof Storage.getItemSync !== "function") return null;
+  if (!cacheAccess().serve) return null;
   const t0 = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
   try {
     const readMeta = (key: string): any => {
@@ -712,6 +716,20 @@ export async function loadCache(keys?: readonly string[], context: Record<string
   if (!Storage) return null;
   try {
     const wanted = keys ? new Set(keys) : null;
+    const access = cacheAccess();
+    if (!access.serve) {
+      // Same as web: no row is served without a matching persisted user row,
+      // except the token principal's own pending input, which is keyed by its
+      // owner and survives the purge of everyone else's rows.
+      if (purging) await purging;
+      const principal = access.principal;
+      const wantsPending = !wanted || wanted.has("pendingMessages") || wanted.has("queuedMessages");
+      const claimed = context.currentUser?._id;
+      if (!principal || !wantsPending || (claimed !== undefined && claimed !== principal)) return null;
+      const pendingMessages = await loadPendingInput(principal);
+      if (Object.keys(pendingMessages).length === 0) return null;
+      return { pendingMessages, queuedMessages: queuedMessagesFromPending(pendingMessages) };
+    }
     const db = await openCacheDb();
     let byKey: Map<string, string | null>;
     if (db) {
@@ -753,7 +771,7 @@ const SPLIT_PREFIX = "split:v1:";
 
 /** The rows held for one split query at the last flush, with their hashes. */
 export async function loadSplitRows(name: string): Promise<Array<{ id: string; hash: string; row: unknown }>> {
-  if (!Storage) return [];
+  if (!Storage || !cacheAccess().serve) return [];
   const prefix = SPLIT_PREFIX + name + ":";
   const t0 = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
   try {
@@ -808,7 +826,7 @@ async function loadUserMessages(convId: string): Promise<any[] | undefined> {
 }
 
 export async function loadConversationMessages(convId: string): Promise<CachedConversation | null> {
-  if (!Storage) return null;
+  if (!Storage || !cacheAccess().serve) return null;
   try {
     const userMessages = await loadUserMessages(convId);
     const raw = scheduledValue(CONVMSG_PREFIX + convId) ?? await Storage.getItem(CONVMSG_PREFIX + convId);
@@ -878,18 +896,159 @@ export async function loadOutbox(): Promise<OutboxEntry[]> {
   }
 }
 
-// Web-only surfaces, stubbed for Metro: the retired browser v2 databases never
-// existed on native, and sign-out purge has its own native path.
+// Web-only surface, stubbed for Metro: the retired browser v2 databases never
+// existed on native.
 export async function salvageLocalFirstV2Data(): Promise<number> {
   return 0;
 }
 
-export async function purgeLocalCache(): Promise<void> {}
+// -- Cache ownership --
+//
+// The disk cache belongs to the account whose user row it holds
+// (meta:currentUser) and is served only when the stored token names that
+// account; the rule is cacheOwnershipRule, the same one web applies. The app
+// installs the token reader at its entry (mobile/lib/cachePrincipal), before
+// the store's first synchronous paint read. Without one installed (tests, a
+// bundle that never wires it) every read serves, as before.
+export type CachePrincipal = { principal: string | null; tokenState: AuthTokenState };
+let principalSource: (() => CachePrincipal) | null = null;
+// The principal this process already confirmed as the cache's owner. Reset by
+// every purge, which the app runs at each sign-out and account change, so the
+// keychain is read once per account rather than once per conversation open.
+let servedTo: string | null = null;
+
+export function setCachePrincipalSource(source: (() => CachePrincipal) | null): void {
+  principalSource = source;
+  servedTo = null;
+}
+
+function readCachePrincipal(): CachePrincipal {
+  try {
+    return principalSource!();
+  } catch {
+    return { principal: null, tokenState: "unreadable" };
+  }
+}
+
+function diskOwnerSync(): string | null {
+  try {
+    const raw = scheduledValue(META_PREFIX + "currentUser") ?? Storage.getItemSync(META_PREFIX + "currentUser");
+    const id = raw == null ? null : JSON.parse(raw)?._id;
+    return typeof id === "string" ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+// Anything on disk besides the principal's own pending input. A cache holding
+// nothing else is a fresh cache with their journal in it, and purging it
+// again on every read would cost a delete per launch for nothing.
+function hasForeignRowsSync(principal: string | null): boolean {
+  const keep = principal ? `${PENDING_INPUT_PREFIX}${principal}:` : null;
+  try {
+    const db = openCacheDbSync();
+    if (db) {
+      const { where, params } = ownedKeysWhere(keep);
+      return db.getFirstSync(`SELECT 1 AS hit FROM storage WHERE ${where} LIMIT 1`, params) != null;
+    }
+    return (Storage.getAllKeysSync() as string[]).some((key) => isPurgeable(key, keep));
+  } catch {
+    return true;
+  }
+}
+
+/** Whether this read may serve the disk cache, and the token's principal when
+ *  it names one. A cache someone else owns is purged before anything reads it. */
+function cacheAccess(): { serve: boolean; principal: string | null } {
+  // The owner row is read synchronously; a binary without kv-store's sync API
+  // has no paint read either and keeps serving as before.
+  if (!principalSource || !Storage || typeof Storage.getItemSync !== "function") return { serve: true, principal: null };
+  if (servedTo !== null) return { serve: true, principal: servedTo };
+  const { principal, tokenState } = readCachePrincipal();
+  const verdict = cacheOwnershipVerdict({ principal, owner: diskOwnerSync(), tokenState });
+  if (verdict === "serve") {
+    servedTo = principal;
+    return { serve: true, principal };
+  }
+  if (verdict === "withhold") {
+    console.warn(`[cache] the stored token is ${tokenState}; keeping the cache as it is`);
+    return { serve: false, principal: null };
+  }
+  if (hasForeignRowsSync(principal)) void purgeLocalCache({ keepPendingInputFor: principal });
+  return { serve: false, principal };
+}
+
+// Sign-out and every account change purge; concurrent callers share one delete.
+let purging: Promise<void> | null = null;
+
+/** Delete everything this module persisted. `keepPendingInputFor` keeps that
+ *  principal's own typed-but-unsent messages (a purge from under a signed-in
+ *  account); sign-out passes nothing and keeps nothing. */
+export function purgeLocalCache(opts?: { keepPendingInputFor: string | null }): Promise<void> {
+  if (purging) return purging;
+  purging = purgeLocalCacheNow(opts?.keepPendingInputFor ?? null).finally(() => { purging = null; });
+  return purging;
+}
+
+async function purgeLocalCacheNow(keep: string | null): Promise<void> {
+  servedTo = null;
+  if (!Storage) return;
+  // Nothing queued for the cache being purged may land after the delete.
+  pendingWrites.clear();
+  if (flushTimer != null) { clearTimeout(flushTimer); flushTimer = null; }
+  await Promise.allSettled([...inflightWrites.values()]);
+  await _outboxQueue.catch(() => {});
+  lastPersisted.clear();
+  droppedLegacyBlobs.clear();
+  const keepPrefix = keep ? `${PENDING_INPUT_PREFIX}${keep}:` : null;
+  // The kept principal's journal batches become keyed rows first, so the
+  // delete below leaves their typed messages in place.
+  if (keep) await flushPendingInputJournal().catch(() => {});
+  await deleteOwnedKeys(keepPrefix);
+  // The journal store holds batches only; drop every other owner's.
+  if (PendingStorage && PendingStorage !== Storage) {
+    for (const batch of readPendingMessageJournal(pendingJournalStorage)) {
+      if (batch.ownerId !== keep) PendingStorage.removeItemSync(batch.key);
+    }
+  }
+}
+
+// The kv-store database is shared (the push catch-up watermark lives in it
+// too), so ownership checks and purges cover only the keys this module writes.
+function ownedKeyPrefixes(): string[] {
+  return [COLLECTION_PREFIX, META_PREFIX, CONVMSG_PREFIX, CONVUSERMSG_PREFIX, SPLIT_PREFIX, PENDING_INPUT_PREFIX, PENDING_JOURNAL_PREFIX];
+}
+
+/** A key this module wrote, outside `keepPrefix`. */
+function isPurgeable(key: string, keepPrefix: string | null): boolean {
+  if (keepPrefix && key.startsWith(keepPrefix)) return false;
+  return key === OUTBOX_KEY || ownedKeyPrefixes().some((prefix) => key.startsWith(prefix));
+}
+
+/** isPurgeable as a SQL condition over kv-store's `storage` table. */
+function ownedKeysWhere(keepPrefix: string | null): { where: string; params: Array<string | number> } {
+  const prefixes = ownedKeyPrefixes();
+  const owned = [...prefixes.map(() => "substr(key, 1, ?) = ?"), "key = ?"].join(" OR ");
+  const params: Array<string | number> = [...prefixes.flatMap((p) => [p.length, p]), OUTBOX_KEY];
+  if (!keepPrefix) return { where: `(${owned})`, params };
+  return { where: `(${owned}) AND substr(key, 1, ?) <> ?`, params: [...params, keepPrefix.length, keepPrefix] };
+}
+
+async function deleteOwnedKeys(keepPrefix: string | null): Promise<void> {
+  const db = await openCacheDb();
+  if (db) {
+    const { where, params } = ownedKeysWhere(keepPrefix);
+    await db.runAsync(`DELETE FROM storage WHERE ${where}`, params);
+    return;
+  }
+  for (const key of await storageKeys()) {
+    if (isPurgeable(key, keepPrefix)) await Storage.removeItem(key);
+  }
+}
 
 // Mobile runs one process on one connection, so a schema upgrade is never
 // blocked by another window. Present so the store wires one code path.
 export function setUpgradeBlockedListener(_fn: ((blocked: boolean) => void) | null) {}
-
 
 // Names the web's cross-window sync lock and channel (syncReplication.ts).
 // Mobile has one process and no other window to elect against, so any value

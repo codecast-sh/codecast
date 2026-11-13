@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { CtxItem, CtxHeader, CtxSeparator, CtxSub, CtxSubTrigger, CtxSubContent } from "../ui/context-menu";
+import { SessionAccountLine } from "../conversation/SessionAccountLabel";
 import {
   PRIORITY_OPTIONS,
   PLAN_STATUS_OPTIONS,
@@ -64,6 +65,7 @@ import { useTeamFeature } from "../../lib/teamFeatures";
 import { getLabelColor } from "../../lib/labelColors";
 import { canControlModel } from "../../lib/modelSwitch";
 import { isSessionKilled, isSessionSetAside } from "../../lib/sessionRetirement";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 // Menu CONTENT per object type — the items every right-click surface renders
 // inside a <ContextMenu>. Verbs call the same store actions the command
@@ -139,7 +141,7 @@ export function TaskMenuItems({
   const bulkLabel = single ? single.short_id : `${count} tasks`;
   // One-shot roster snapshot: the assign submenu doesn't need live presence.
   // People and roles come from the one list every picker shares.
-  const members = React.useMemo(() => useInboxStore.getState().teamMembers ?? [], []);
+  const members = React.useMemo(() => teamMembersOf(useInboxStore.getState()), []);
   const { people, roles } = useRolesAndPeopleOptions(members);
   const assignOptions = React.useMemo(() => [...people, ...roles], [people, roles]);
   // The team's status vocabulary (a context-menu selection is always one
@@ -450,6 +452,7 @@ export function SessionMenuItems({
     return (
       <>
         <CtxHeader title={session.title || "Session"} />
+        <SessionAccountLine conversationId={id} className="px-2.5 pb-1.5 pt-0 text-meta" />
         {onOpen && <CtxItem icon={ExternalLink} onSelect={onOpen}>Open</CtxItem>}
         <CtxItem icon={ExternalLink} onSelect={() => window.open(`/conversation/${id}`, "_blank")}>
           Open in new tab
@@ -467,6 +470,7 @@ export function SessionMenuItems({
   return (
     <>
       <CtxHeader title={session.title || "Session"} />
+      <SessionAccountLine conversationId={id} className="px-2.5 pb-1.5 pt-0 text-meta" />
       {onOpen && <CtxItem icon={ExternalLink} onSelect={onOpen}>Open</CtxItem>}
       <CtxItem icon={ExternalLink} onSelect={() => window.open(`/conversation/${id}`, "_blank")}>
         Open in new tab

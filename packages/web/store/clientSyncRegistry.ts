@@ -6,6 +6,8 @@ import { LIVE_SYNC_COLLECTIONS } from "./clientSyncRegistry.live";
 import { DATA_SYNC_COLLECTIONS } from "./clientSyncRegistry.data";
 import { ORG_SYNC_COLLECTIONS } from "./clientSyncRegistry.org";
 import { POOL_SYNC_COLLECTIONS } from "./clientSyncRegistry.pool";
+import { DATA_SCOPE } from "./clientSyncRegistry.scope";
+export { DATA_SCOPE, EPHEMERAL_SLOT_SCOPE, SCOPED_READ_KEYS, type DataScope } from "./clientSyncRegistry.scope";
 
 export type PersistenceKind = "collection" | "meta";
 export type DispatchTableKind = "collection" | "singleton";
@@ -51,9 +53,6 @@ export type ClientSyncRegistryEntry = {
   // The on-disk schema is DERIVED from these — adding a collection or an index
   // here is the whole schema change (then bump CACHE_SCHEMA_VERSION).
   indexes?: string;
-  // Rows carry a `workspace` access key and enumerate only through the
-  // useWorkspaceCollection chokepoint (a strict-boundary table).
-  workspaceScoped?: boolean;
   // The Convex queries that FEED this key ("agentTasks.webList"). Registering
   // one is a promise that components render from the store, not from the
   // query: a source-level test fails any component/app file that subscribes
@@ -174,7 +173,6 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "tasks" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    workspaceScoped: true,
     // The comment stream is append-only and reconciled wholesale by the
     // detail query: addTaskComment renders its optimistic row instantly, and
     // the server's full set (which includes the real comment) replaces it. A
@@ -230,7 +228,6 @@ export const CLIENT_SYNC_REGISTRY = {
   teamKitItems: {
     persistence: { kind: "collection", key: "teamKitItems" },
     hydration: { phase: "deferred" },
-    workspaceScoped: true,
     localFirst: true,
     validRow: (row: any) => typeof row?.slug === "string" && typeof row?.workspace === "string",
     sync: { isDelta: true, altKey: "slug" },
@@ -254,7 +251,6 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "docs" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    workspaceScoped: true,
     sync: { isDelta: true },
     // An archived doc arrives through the sync log with archived_at set; it
     // stays held (undo, its own page) but leaves every docs list.
@@ -448,7 +444,6 @@ export const CLIENT_SYNC_REGISTRY = {
   expectationsOverview: {
     persistence: { kind: "collection", key: "expectationsOverview" },
     hydration: { phase: "deferred" },
-    workspaceScoped: true,
     sync: { deepFields: ["project", "most_broken"] },
     feeds: ["expectations.overview"],
   },
@@ -459,7 +454,6 @@ export const CLIENT_SYNC_REGISTRY = {
   trialCards: {
     persistence: { kind: "collection", key: "trialCards" },
     hydration: { phase: "deferred" },
-    workspaceScoped: true,
     localFirst: true,
     indexes: "_id, project_id",
     // evidence, cited, rule, coverage and overlaps are joined live (lineTrial.cardView) and change while the card row does not.
@@ -471,7 +465,6 @@ export const CLIENT_SYNC_REGISTRY = {
   trialProjects: {
     persistence: { kind: "collection", key: "trialProjects" },
     hydration: { phase: "deferred" },
-    workspaceScoped: true,
     sync: { deepFields: ["dispatch"] },
     feeds: ["lineTrial.projects"],
   },
@@ -481,7 +474,6 @@ export const CLIENT_SYNC_REGISTRY = {
   trialRuns: {
     persistence: { kind: "collection", key: "trialRuns" },
     hydration: { phase: "deferred" },
-    workspaceScoped: true,
     localFirst: true,
     indexes: "_id, project_id",
     // stopped (lineTrial.stopOf) is derived from the run's stations and the problem's comments and findings, which change while the run row does not.
@@ -549,14 +541,12 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "modObjects" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    workspaceScoped: true,
     feeds: ["modObjects.webList"],
   },
   plans: {
     persistence: { kind: "collection", key: "plans" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    workspaceScoped: true,
     sync: { isDelta: true },
     feeds: ["plans.webList"],
   },
@@ -565,7 +555,6 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "projects" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    workspaceScoped: true,
     // Liberal delta cache like the others; a snapshot here was the one
     // remaining collection that pruned by absence. The line profile
     // (signals.publishProfile) is replaced whole without touching any scalar,
@@ -586,7 +575,6 @@ export const CLIENT_SYNC_REGISTRY = {
     indexes: "_id, short_id",
     hydration: { phase: "deferred" },
     localFirst: true,
-    workspaceScoped: true,
     sync: { altKey: "client_key" },
     // The server's copy of the latest update and its stamp: its clock and its
     // id. A client cannot predict either, so a lock on them would never
@@ -756,7 +744,6 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "agentDefinitions" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    workspaceScoped: true,
     indexes: "_id, name",
     sync: { altKey: "client_key" },
     feeds: ["agentDefinitions.list"],
@@ -770,7 +757,6 @@ export const CLIENT_SYNC_REGISTRY = {
   secrets: {
     persistence: { kind: "collection", key: "secrets" },
     localFirst: true,
-    workspaceScoped: true,
     indexes: "_id, name",
     sync: { altKey: "short_id" },
     feeds: ["secrets.list"],
@@ -790,7 +776,6 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "agentChains" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    workspaceScoped: true,
     indexes: "_id, name",
     sync: { altKey: "client_key" },
     feeds: ["agentDefinitions.listChains"],
@@ -799,7 +784,6 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "issueSyncSources" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    workspaceScoped: true,
     indexes: "_id, project_id",
     sync: {},
     feeds: ["issueSync.listSources"],
@@ -826,7 +810,6 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "workflows" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    workspaceScoped: true,
     sync: { isDelta: true, altKey: "slug" },
     // The server's clock; a client cannot predict it.
     unprotectedFields: ["created_at", "updated_at"],
@@ -857,7 +840,6 @@ export const CLIENT_SYNC_REGISTRY = {
   signals: {
     persistence: { kind: "collection", key: "signals" },
     hydration: { phase: "deferred" },
-    workspaceScoped: true,
     sync: { isDelta: true },
     feeds: ["signals.webList", "signals.forTask"],
   },
@@ -870,7 +852,6 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "lineLabels" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    workspaceScoped: true,
     indexes: "_id, run_id",
     sync: { altKey: "key" },
     unprotectedFields: ["at"],
@@ -913,7 +894,6 @@ export const CLIENT_SYNC_REGISTRY = {
   lineDeploys: {
     persistence: { kind: "collection", key: "lineDeploys" },
     hydration: { phase: "deferred" },
-    workspaceScoped: true,
     indexes: "_id, project_id",
     sync: { isDelta: true, altKey: "client_key", deepFields: ["carries", "after", "commits"] },
     feeds: ["lineWorkspace.deploys"],
@@ -924,7 +904,6 @@ export const CLIENT_SYNC_REGISTRY = {
   deployTargets: {
     persistence: { kind: "collection", key: "deployTargets" },
     hydration: { phase: "deferred" },
-    workspaceScoped: true,
     indexes: "_id, workspace",
     sync: { isDelta: true, deepFields: ["queue", "paths", "live_reader", "last_read"] },
     feeds: ["deployTargets.view"],
@@ -936,7 +915,6 @@ export const CLIENT_SYNC_REGISTRY = {
   teamDeploys: {
     persistence: { kind: "collection", key: "teamDeploys" },
     hydration: { phase: "deferred" },
-    workspaceScoped: true,
     indexes: "_id, workspace",
     sync: { isDelta: true, altKey: "client_key", deepFields: ["sessions", "steps", "tasks"] },
     feeds: ["deployTargets.view", "deployRefs.recentForTeam"],
@@ -952,7 +930,6 @@ export const CLIENT_SYNC_REGISTRY = {
   lineTimeline: {
     persistence: { kind: "collection", key: "lineTimeline" },
     hydration: { phase: "deferred" },
-    workspaceScoped: true,
     indexes: "_id, at",
     sync: { isDelta: true },
     feeds: ["lineTimeline.page"],
@@ -1129,7 +1106,6 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "orgLog" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
-    workspaceScoped: true,
     feeds: ["orgChanges.list"],
   },
   orgLogRows: {
@@ -1398,15 +1374,19 @@ export const CLIENT_SYNC_REGISTRY = {
   // messages, keyed by message id. The newest page rides a live subscription
   // and older pages arrive as one-shot fetches; every page overlays (delta),
   // like feedConversations. Paging cursors live in feedCursors/feedHasMore
-  // under "msg:<filter>". A "my" view is the rows with is_own; from_agent marks
+  // under "msg:<filter>:<team id or personal>". A "my" view is the rows with is_own; from_agent marks
   // the prompts an agent wrote (server-derived), which the People/Mine views
   // drop. A row cached before from_agent existed reads as human until the live
-  // page or a refetch replaces it.
+  // page or a refetch replaces it. The feed covers one workspace at a time and
+  // each row carries its conversation's workspace, so it reads through
+  // useWorkspaceCollection; a row cached before that key existed lists nowhere
+  // until the live page restamps it.
   messageFeed: {
     persistence: { kind: "collection", key: "messageFeed" },
     hydration: { phase: "deferred" },
     indexes: "_id, timestamp",
     sync: { isDelta: true },
+    listed: (row: any) => !!row?.workspace,
     feeds: ["conversations.getMessageFeed"],
   },
   // What the viewer typed into sessions (userSends.mine): one row per send,
@@ -1848,13 +1828,11 @@ export const COLLECTION_INDEXES: Record<string, string> = Object.fromEntries(
   ]),
 );
 
-/** Tables whose rows enumerate only through useWorkspaceCollection. */
-export const WORKSPACE_SCOPED_KEYS = registryEntries
-  .filter(([, entry]) => entry.workspaceScoped)
-  .map(([key]) => key);
+/** Collections whose rows enumerate only through useWorkspaceCollection:
+ *  every collection DATA_SCOPE (clientSyncRegistry.scope.ts) classes "workspace". */
 export type WorkspaceScopedStoreKey = {
-  [K in ClientSyncStoreKey]: (typeof CLIENT_SYNC_REGISTRY)[K] extends { readonly workspaceScoped: true } ? K : never
-}[ClientSyncStoreKey];
+  [K in ClientSyncCollectionStoreKey]: (typeof DATA_SCOPE)[K] extends "workspace" ? K : never
+}[ClientSyncCollectionStoreKey];
 
 /** Every registered feed query → the store key it feeds. */
 export const REGISTERED_FEEDS: Record<string, string> = Object.fromEntries(
@@ -2152,6 +2130,11 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   activeTabId: "local",
   sidePanelSessionId: "local",
 };
+
+/** Collections whose rows enumerate only through useWorkspaceCollection. */
+export const WORKSPACE_SCOPED_KEYS = registryEntries
+  .filter(([key, entry]) => DATA_SCOPE[key] === "workspace" && entry.persistence?.kind === "collection")
+  .map(([key]) => key) as WorkspaceScopedStoreKey[];
 
 // Ephemeral store slots — never persisted, so never registry keys — that must
 // still agree across windows. The liveness payload's projection slot: its

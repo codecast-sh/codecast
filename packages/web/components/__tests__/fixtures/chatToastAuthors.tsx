@@ -4,6 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { create } from "zustand";
 import { replaceGlobals } from "../../../test-helpers/globals";
+import { withTeamRoster } from "../../../test-helpers/teamRoster";
 import { realInboxStore, restoreInboxStoreAfterAll } from "../mockInboxStore";
 import type { ChatToastData } from "../../../components/chat/ChatToast";
 
@@ -52,12 +53,11 @@ for (const c of cases) test(c.label, async () => {
     chatRail: [row],
     chatMessages: {},
     chatChannels: { [channelId]: { name: "team", kind: "channel" } },
-    teamMembers: [
+    ...withTeamRoster([
       { _id: "bridge", name: "Union (Slack)", is_bot: true, image: "https://a/bridge.png" },
       { _id: "dana", name: "Dana", image: "https://a/dana.png" },
       { _id: "anchor", name: "Anchor", is_bot: true },
-    ],
-    clientState: { ui: {} },
+    ]),
   });
   toasts.length = 0;
   function Probe() { useChatToasts(); return null; }
@@ -100,8 +100,7 @@ test("huddle digest names the huddle, not its scribe", async () => {
     chatRail: [row],
     chatMessages: {},
     chatChannels: { [channelId]: { name: "", kind: "dm", dm_key: "team:cam:viewer" } },
-    teamMembers: [{ _id: "cam", name: "Cam", image: "https://a/cam.png" }],
-    clientState: { ui: {} },
+    ...withTeamRoster([{ _id: "cam", name: "Cam", image: "https://a/cam.png" }]),
   });
   toasts.length = 0;
   function Probe() { useChatToasts(); return null; }
@@ -143,8 +142,7 @@ test("a session's line names the session, not the human it ran as", async () => 
     chatRail: [row],
     chatMessages: {},
     chatChannels: { [channelId]: { name: "team", kind: "channel" } },
-    teamMembers: [{ _id: "jason", name: "Jason", image: "https://a/jason.png" }],
-    clientState: { ui: {} },
+    ...withTeamRoster([{ _id: "jason", name: "Jason", image: "https://a/jason.png" }]),
   });
   toasts.length = 0;
   function Probe() { useChatToasts(); return null; }

@@ -11,6 +11,7 @@ import { resolveAssigneeInfo } from "../../lib/liveEntities";
 import { shortDay } from "../../lib/line/runReport";
 import { useInboxStore } from "../../store/inboxStore";
 import { cn } from "../../lib/utils";
+import { activeTeamIdOf, teamMembersOf } from "../../lib/activeTeam";
 
 const PILL_KINDS = new Set(["call", "call_grade", "task", "decision", "session", "signal", "desk", "doc"]);
 
@@ -26,7 +27,7 @@ function citationWhen(when: string | undefined): string | null {
 
 /** The person a "person" citation names (its ref is their user id), by name from the live roster. */
 function usePersonName(userId: string | null): string | null {
-  return useInboxStore((s) => (userId ? resolveAssigneeInfo(userId, null, s.teamMembers, s.currentUser as any)?.name ?? null : null));
+  return useInboxStore((s) => (userId ? resolveAssigneeInfo(userId, null, teamMembersOf(s), s.currentUser as any)?.name ?? null : null));
 }
 
 /** Where the citation lives, as a reference a reader can open. */
@@ -35,7 +36,8 @@ export function CitationRef({ c }: { c: ExpectationCitation }) {
   const title = c.quote ? `"${c.quote}"${c.when ? `, ${c.when}` : ""}` : c.when;
   // "#team/<message id>": the channel by name, the message by id.
   const chat = c.kind === "chat" ? /^#?([^/\s]+)\/(\S+)$/.exec(ref) : null;
-  const channelId = useInboxStore((s) => (chat ? (Object.values(s.chatChannels ?? {}) as Array<{ _id: string; name?: string }>).find((ch) => ch.name === chat[1])?._id ?? null : null));
+  // Named within the active team: another team's channel of the same name is not this citation's.
+  const channelId = useInboxStore((s) => (chat ? (Object.values(s.chatChannels ?? {}) as Array<{ _id: string; name?: string; team_id?: string }>).find((ch) => ch.name === chat[1] && String(ch.team_id) === activeTeamIdOf(s))?._id ?? null : null));
   // "app@6422863a35": a commit whose repository the reference names without its owner.
   const commit = c.kind === "commit" ? /^([^@\s]+)@([0-9a-f]{7,40})$/i.exec(ref) : null;
   const repository = useInboxStore((s) => {

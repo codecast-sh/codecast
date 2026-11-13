@@ -16,7 +16,7 @@ import { toast } from "sonner";
 import { UserPlus } from "lucide-react";
 import { watchersLabel } from "@codecast/shared/contracts/orgLead";
 import { useInboxStore } from "../../store/inboxStore";
-import { projectLeadScopeOutcome } from "../../store/orgSlice";
+import { projectLeadScopeOutcome, windowOrgTree } from "../../store/orgSlice";
 import { cn } from "../../lib/utils";
 import { HireRoleDialog } from "../org/HireRoleDialog";
 import { TakeoverGate } from "../org/TakeoverEdit";
@@ -29,7 +29,7 @@ import { useProjectLead } from "../../hooks/useProjectLead";
 /** The hire form reads the whole org tree (reports-to choices, caps), so it
  *  subscribes to it only while open: the surface around it reads the roles. */
 export function HireLeadDialog(props: Omit<React.ComponentProps<typeof HireRoleDialog>, "tree">) {
-  const tree = useInboxStore((s) => s.orgTree);
+  const tree = useInboxStore(windowOrgTree);
   if (!tree) return null;
   return <HireRoleDialog tree={tree} {...props} />;
 }
@@ -69,7 +69,7 @@ export function ProjectLeadChip({ projectId, size = "sm", editable = false, face
   const canHire = !!roles && !!meId && orgOn;
 
   const onChange = (roleId: string | null) => {
-    const tree = useInboxStore.getState().orgTree;
+    const tree = windowOrgTree(useInboxStore.getState());
     const role = roleId ? tree?.roles.find((r) => r._id === roleId) : undefined;
     // Read the outcome BEFORE the write: after it the scope already lists the
     // project and the sentence would lose its second half.
@@ -96,7 +96,7 @@ export function ProjectLeadChip({ projectId, size = "sm", editable = false, face
           <PopoverContent align="start" sideOffset={6} className="w-[300px] p-0 border-0 bg-transparent shadow-none modern:bg-transparent modern:shadow-none" data-lead-gate>
             <TakeoverGate
               key={pending.role._id}
-              workspace={useInboxStore.getState().orgTree?.workspace}
+              workspace={windowOrgTree(useInboxStore.getState())?.workspace}
               ask={{ handle: pending.role.handle, add: [`project:${projectId}`] }}
               what={`${pending.role.name} will lead ${project.title}, and ${project.title} joins what it looks after.`}
               confirmLabel="Name the lead"

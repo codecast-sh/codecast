@@ -8,9 +8,8 @@ import { useMemo } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useSyncCollection } from "./useSyncCollection";
 import { settledRun } from "../lib/line/runReport";
-import { useCollectionRows } from "./useCollectionRows";
 import { useFeederWorkspace } from "./useWorkspaceArgs";
-import { useActiveWorkspaceKey } from "./useWorkspaceCollection";
+import { useWorkspaceCollection } from "./useWorkspaceCollection";
 import type { Superseded } from "@codecast/shared/contracts/superseded";
 
 const api = _api as any;
@@ -75,24 +74,13 @@ const lineRunSig = (r: LineRun) =>
   `${r.superseded?.why ?? ""}|${r.status}|${r.current_node_id ?? ""}|${r.current_node_label ?? ""}|${r.updated_at ?? 0}|${r.gate_decision_id ?? ""}|${r.gate_decision_status ?? ""}|${r.task_id ?? ""}|${r.workflow_name ?? ""}|${r.primary_conversation_id ?? ""}|${r.gate_answer ?? ""}|${r.graph_hash ?? ""}|${r.card_billed_usd ?? ""}|${r.card_list_usd ?? ""}`;
 const newestFirst = (a: LineRun, b: LineRun) => (b.updated_at ?? b.created_at ?? 0) - (a.updated_at ?? a.created_at ?? 0);
 
-/** A run belongs to the active workspace by its stored access key (L8). A
- *  row minted before the key existed has none and reads as personal, the
- *  same rule listRuns applies on the server. */
-export function runInWorkspace(run: { workspace?: string }, key: string | null): boolean {
-  if (!key) return false;
-  if (run.workspace) return run.workspace === key;
-  return key.startsWith("user:");
-}
-
 /** Reader: a workspace's runs from the store, newest first: the active
- *  workspace's unless `workspace` names another. Superseded runs
- *  (line-versions.md LV1) are left out unless `all`. */
+ *  workspace's unless `workspace` names another. A run belongs to a
+ *  workspace by its stored access key (L8), read through the workspace
+ *  chokepoint. Superseded runs (line-versions.md LV1) are left out unless `all`. */
 export function useWorkspaceRuns(workspace?: string | null, opts: { all?: boolean } = {}): LineRun[] {
-  const active = useActiveWorkspaceKey();
-  const key = workspace || active;
   const all = !!opts.all;
-  const where = useMemo(() => (r: LineRun) => runInWorkspace(r, key) && (all || !r.superseded), [key, all]);
-  const rows = useCollectionRows<LineRun>("workflowRuns", { where, sig: lineRunSig, sort: newestFirst });
+  const rows = useWorkspaceCollection<LineRun>("workflowRuns", lineRunSig, workspace || null);
   // A run as it went, not as a second runner's stale report left it (runReport settledRun).
-  return useMemo(() => rows.map(settledRun), [rows]);
+  return useMemo(() => rows.filter((r) => all || !r.superseded).sort(newestFirst).map(settledRun), [rows, all]);
 }

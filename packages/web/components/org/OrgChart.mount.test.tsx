@@ -72,7 +72,7 @@ function seedStore(org_view?: string) {
   const st = useInboxStore.getState() as any;
   useInboxStore.setState({
     currentUser: { ...(st.currentUser ?? {}), _id: ME },
-    clientState: { ...st.clientState, ui: { ...(st.clientState?.ui ?? {}), org_view } },
+    clientState: { ...st.clientState, ui: { ...(st.clientState?.ui ?? {}), org_view, active_team_id: "fixture-team" } },
     updateClientUI: (partial: any) => {
       uiWrites.push(partial);
       const s2 = useInboxStore.getState() as any;

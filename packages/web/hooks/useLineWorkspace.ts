@@ -50,6 +50,7 @@ import { problemOrigins, type ProblemSource } from "../lib/line/stepRuns";
 import { activeProblemCount, isCountedActive, lessonOnlyIds } from "../lib/line/problemTable";
 import { problemOverlapsSteps, type Overlap, type OverlapItem } from "../lib/line/overlap";
 import { heldFrom } from "../lib/line/sourcesView";
+import { windowOrgTree } from "../store/orgSlice";
 
 const api = _api as any;
 const EMPTY: never[] = [];
@@ -369,7 +370,7 @@ export function useLineWorkspace(projectId: string | null, graphKey: string | nu
 
   const roster = useSharedRows(useTeamRosterIdentity());
   // A problem may be assigned to a role as well as a person (its line then starts it): both are named.
-  const roleNames = useInboxStore((s) => (s.orgTree?.roles ?? []).map((r) => `${r._id}\u0000${r.name ?? r.handle ?? ""}`).join("\n"));
+  const roleNames = useInboxStore((s) => (windowOrgTree(s)?.roles ?? []).map((r) => `${r._id}\u0000${r.name ?? r.handle ?? ""}`).join("\n"));
   const names = useShared(() => new Map([
     ...roleNames.split("\n").filter(Boolean).map((x) => x.split("\u0000") as [string, string]),
     ...roster.map((m) => [m._id, m.name ?? m.email ?? ""] as [string, string]),

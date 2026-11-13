@@ -12,7 +12,6 @@ export const FLOW_SYNC_COLLECTIONS = {
     persistence: { kind: "collection", key: "liveFlows" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    workspaceScoped: true,
     indexes: "_id, team_id",
     // altKey: a flow started on the web paints as a row keyed by its client key, which the server row carries.
     sync: { isDelta: true, altKey: "client_key", deepFields: ["queue", "running", "sources", "caps", "load", "flow", "watcher"] },
@@ -26,7 +25,6 @@ export const FLOW_SYNC_COLLECTIONS = {
     persistence: { kind: "collection", key: "sessionFlows" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    workspaceScoped: true,
     indexes: "_id, graph_hash",
     // A complete snapshot of the workspace's session flows each push.
     sync: { deepFields: ["nodes", "edges", "runs", "sessions", "by", "saved"] },
@@ -39,7 +37,6 @@ export const FLOW_SYNC_COLLECTIONS = {
   flowMaps: {
     persistence: { kind: "collection", key: "flowMaps" },
     hydration: { phase: "deferred" },
-    workspaceScoped: true,
     indexes: "_id",
     sync: { isDelta: true, deepFields: ["liveFlow", "lanes", "off", "sources", "header"] },
     feeds: ["flowMap.forTeam"],

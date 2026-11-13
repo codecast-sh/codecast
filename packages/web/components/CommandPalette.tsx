@@ -221,6 +221,7 @@ import { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } fro
 import { hoverFocus } from "../shortcuts/focusSource";
 import { SwitchReview } from "./consequential/ConsequentialSwitch";
 import { permanentDeleteLedger, regulatedTeam, SESSION_REACHES } from "./consequential/deletionLedgers";
+import { teamMembersOf } from "../lib/activeTeam";
 
 /** A relation pick's leading glyph, as every other palette mode has one: the
  *  task's status, or the hourglass of a wait parsed from the query. */
@@ -412,7 +413,7 @@ export function TeammateItem({
 function PersonHuddleItem({ person, className, onDone }: { person: PalettePerson; className: string; onDone: () => void }) {
   const callsOn = useCallsAvailable();
   const viewerId = useInboxStore((s) => String(s.currentUser?._id ?? ""));
-  const member = useInboxStore((s) => s.teamMembers.find((m: any) => String(m?._id) === person._id) ?? person.member);
+  const member = useInboxStore((s) => teamMembersOf(s).find((m: any) => String(m?._id) === person._id) ?? person.member);
   const room = useLiveRoomOfMember(person._id);
   const huddle = useMemberHuddle(member, viewerId, room, person.name);
   if (!callsOn || !person.online) return null;
@@ -1597,7 +1598,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // the sidebar kill button (the webList subscription inside is deduped).
   const { killManyWithNotice } = useTriggerKillNotice();
   const { user: currentUser } = useCurrentUser();
-  const teamMembers = useInboxStore((s) => s.teamMembers.length > 0 ? s.teamMembers : undefined);
+  const teamMembers = useInboxStore((s) => teamMembersOf(s).length > 0 ? teamMembersOf(s) : undefined);
   const openDm = useOpenDm();
 
   const open = standalone || paletteOpen;
@@ -1858,7 +1859,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       return [] as Array<{ id: string; label: string; kind?: string; isPrivate?: boolean; image?: string }>;
     const state = useInboxStore.getState() as any;
     const viewerId = state.currentUser?._id ? String(state.currentUser._id) : "";
-    const members = (state.teamMembers ?? []) as any[];
+    const members = teamMembersOf(state);
     const teamScope = activeTeamId ? String(activeTeamId) : undefined;
     const q = rankQuery.trim().toLowerCase();
     const rows: Array<{ id: string; label: string; kind?: string; isPrivate?: boolean; image?: string; s: number; t: number }> = [];
@@ -1919,11 +1920,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     if (!open || picking) return [] as TeammateWhereabouts[];
     const state = useInboxStore.getState() as any;
     const viewerId = state.currentUser?._id ? String(state.currentUser._id) : null;
-    return teammateWhereabouts(state.teamMembers ?? [], viewerId, rankQuery, state.sessions, state.followLeaderId ?? null).slice(0, 6);
+    return teammateWhereabouts(teamMembersOf(state), viewerId, rankQuery, state.sessions, state.followLeaderId ?? null).slice(0, 6);
   }, [open, rankQuery, picking]);
 
   const chatAuthorName = useCallback((hit: LineAuthorFields) => {
-    const members = ((useInboxStore.getState() as any).teamMembers ?? []) as any[];
+    const members = teamMembersOf(useInboxStore.getState());
     return lineAuthorFor(hit, { members: new Map(members.map((m) => [String(m._id), m])), ...chatAuthorLookupsNow() }).name;
   }, []);
 
@@ -2373,7 +2374,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     const viewerId = state.currentUser?._id ? String(state.currentUser._id) : null;
     const people = new Map<string, TeammateWhereabouts>();
     for (const w of words) {
-      for (const r of teammateWhereabouts(state.teamMembers ?? [], viewerId, w, state.sessions, state.followLeaderId ?? null)) {
+      for (const r of teammateWhereabouts(teamMembersOf(state), viewerId, w, state.sessions, state.followLeaderId ?? null)) {
         if (matchScore(r.name, w) !== Infinity) people.set(r.id, r);
       }
     }
@@ -2642,7 +2643,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       className={itemClass}
     >
       <AgentTypeIcon agentType={HOSTED_AGENT_TYPE} className="w-4 h-4" />
-      <span className="truncate flex-1">Ask the assistant: &ldquo;{previewQuery(query)}&rdquo;</span>
+      <span className="truncate flex-1">Ask Cast: &ldquo;{previewQuery(query)}&rdquo;</span>
       {askHold ? <AskHeldLine hold={askHold} className="ml-auto shrink text-xs" /> : askable && <ModEnterCaps />}
     </CommandPrimitive.Item>
   );
@@ -3470,12 +3471,12 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
             </CommandPrimitive.Item>
             <CommandPrimitive.Item
               key="cmd-visual-style"
-              value="Switch interface style minimal classic appearance"
+              value="Switch interface style minimal mono classic appearance"
               onSelect={() => { closePalette(); setVisualStyle(visualStyle === "minimal" ? "classic" : "minimal"); }}
               className={itemClass}
             >
               <LayoutDashboard className="w-4 h-4 flex-shrink-0 text-sol-text-dim" />
-              <span className="truncate flex-1">Switch to {visualStyle === "minimal" ? "Classic" : "Minimal"} style</span>
+              <span className="truncate flex-1">Switch to {visualStyle === "minimal" ? "Mono" : "Minimal"} style</span>
             </CommandPrimitive.Item>
           </CommandPrimitive.Group>
         )}

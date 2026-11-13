@@ -23,6 +23,7 @@ import { notificationActor } from "../lib/notificationTypes";
 import { memberKind } from "@codecast/shared/team/memberKind";
 import { deliverChatToFace } from "../lib/chat/faceChat";
 import { chatAuthorLookupsNow } from "./useChatSync";
+import { teamMembersOf } from "../lib/activeTeam";
 // Arriving chat messages → in-app toasts.
 //
 // Mounted once, app-wide, beside the other background sync effects — the point
@@ -112,7 +113,7 @@ export function useChatToasts(): void {
 
   /** Sound it, then hand it to its author's face in the header, else a toast. */
   const present = useCallback(
-    (data: ChatToastData, authorId: string, opts: { faceable: boolean; threadRootId?: string; at: number }) => {
+    (data: ChatToastData, authorId: string, opts: { faceable: boolean; threadRootId?: string; broadcast?: boolean; at: number }) => {
       shownRef.current.add(data.messageId);
       // Every arrival gets the sound (Slack's rule: a banner is never silent).
       soundChatMessage(data.messageId);
@@ -150,6 +151,7 @@ export function useChatToasts(): void {
             isDm: !!data.isDm,
             threadRootId: opts.threadRootId,
             inThread: !!data.inThread,
+            broadcast: opts.broadcast,
             preview: data.preview,
             at: opts.at,
             loud: data.tier === "loud",
@@ -182,7 +184,7 @@ export function useChatToasts(): void {
 
     const messages: Record<string, ChatMessageRow> = state.chatMessages ?? {};
     const channels: Record<string, any> = state.chatChannels ?? {};
-    const members: any[] = state.teamMembers ?? [];
+    const members: any[] = teamMembersOf(state);
     const byId = new Map<string, ChatMember>();
     for (const m of members) if (m?._id) byId.set(String(m._id), m);
     const snoozedUntil: number = state.clientState?.ui?.chat_snooze_until ?? 0;
@@ -287,6 +289,7 @@ export function useChatToasts(): void {
       present(data, String(last.user_id), {
         faceable: !isCall && !isAgent && !slackAuthor,
         threadRootId: threadRootId ?? undefined,
+        broadcast: !!full.broadcast,
         at: last.created_at ?? Date.now(),
       });
     }
@@ -304,7 +307,7 @@ export function useChatToasts(): void {
   useWatchEffect(() => {
     if (!viewerId || !notifSig) return;
     const st: any = useInboxStore.getState();
-    const members: any[] = st.teamMembers ?? [];
+    const members: any[] = teamMembersOf(st);
     for (const n of Object.values(st.notifications ?? {}) as any[]) {
       if (!isChatNotif(n)) continue;
       const id = String(n._id);
@@ -352,7 +355,7 @@ export function useChatToasts(): void {
           inThread: n.type === "chat_reply" || !!threadRootId,
         },
         authorId,
-        { faceable: !isAgent && !viaSlack, threadRootId, at: n.created_at },
+        { faceable: !isAgent && !viaSlack, threadRootId, broadcast: !!full?.broadcast, at: n.created_at },
       );
     }
   }, [notifSig, viewerId, present]);

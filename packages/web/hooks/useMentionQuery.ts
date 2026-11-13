@@ -15,6 +15,7 @@ import { matchScore, mergeMentionSuggestions, mentionViewTimes } from "../lib/me
 import { mergeEntityRows } from "../lib/universalSearch";
 import { identityLine, identityRowOf, type IdentityPrefs } from "../lib/sessionIdentity";
 import { identityPrefsNow } from "./useIdentityPrefs";
+import { teamMembersOf } from "../lib/activeTeam";
 
 // score/matchScore moved to lib/mentionRanking, which owns ranking and must not
 // import this module back. Re-exported so every existing caller is unchanged.
@@ -235,7 +236,7 @@ export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, 
   const personify = identityPrefsNow();
   const inputs = [
     scope.kind, scope.kind === "team" ? scope.teamId : scope.kind === "personal" ? scope.userId : "",
-    s.mentionIndex, s.tasks, s.docs, s.plans, s.sessions, s.teamMembers, s.chatSlackPeople,
+    s.mentionIndex, s.tasks, s.docs, s.plans, s.sessions, teamMembersOf(s), s.chatSlackPeople,
     s.buckets, s.bucketAssignments, s.recentVisits, s._lastViewedAt, personify,
   ];
   if (inputs.length === previousMentionInputs.length && inputs.every((value, i) => value === previousMentionInputs[i])) return previousMentionItems;
@@ -244,7 +245,7 @@ export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, 
     mergeEntityRows<any>(windowRows, storeRows).filter((row) => inScope(row, scope));
   const now = Date.now();
   const items: MentionItem[] = [
-    ...(s.teamMembers || []).map((m) => {
+    ...teamMembersOf(s).map((m) => {
       const handle = memberHandle(m) ?? undefined;
       return {
         id: String(m._id), type: "person", label: m.name || m.github_username || "Unknown",
@@ -260,7 +261,7 @@ export function buildMentionItems(s: ReturnType<typeof useInboxStore.getState>, 
     // first and reaches Slack only when no teammate matches.
     ...(scope.kind === "team"
       ? Object.values(s.chatSlackPeople || {})
-        .filter((p) => p.team_id === scope.teamId && !p.codecast_user_id && !!p.handle && !matchHandle(s.teamMembers || [], p.handle))
+        .filter((p) => p.team_id === scope.teamId && !p.codecast_user_id && !!p.handle && !matchHandle(teamMembersOf(s), p.handle))
         .map((p) => ({
           id: `slack:${p.slack_user_id}`, type: "person", label: p.name,
           sublabel: `@${p.handle}`, image: p.avatar_url ?? undefined,

@@ -27,6 +27,8 @@ import { isPerson } from "@codecast/shared/team/memberKind";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { AgentCount, AgentPicker, ChannelAgentRows } from "./ChannelAgents";
 import { chatAgentId } from "../../store/chatSlice";
+import { isAgentMember } from "@codecast/shared/team/memberKind";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 // The people layer of a chat room: who a DM is with, who is inside a private
 // channel, and how someone new gets in. Three surfaces, one file, because they
@@ -45,14 +47,14 @@ function face(name: string, image: string | null | undefined, isAgent: boolean |
 }
 
 function memberAvatar(m: Member | undefined, size: number) {
-  return face(memberName(m), m?.image || m?.github_avatar_url, m?.is_bot, size);
+  return face(memberName(m), m?.image || m?.github_avatar_url, isAgentMember(m), size);
 }
 
 /** The DM header: faces, live names, and — for a 1:1 — the other side's
  *  presence, the same line the avatar bar shows. A DM's header answers "am I
  *  talking to someone who is there?", which a hash never had to. */
 export function DmHeadline({ channel }: { channel: ChatRailChannel }) {
-  const teamMembers = useInboxStore((s) => s.teamMembers) as Member[];
+  const teamMembers = useInboxStore(teamMembersOf) as Member[];
   const now = useCoarseNow(30_000);
   const others = useMemo(
     () =>
@@ -95,7 +97,7 @@ export function DmHeadline({ channel }: { channel: ChatRailChannel }) {
  *  they are already looking at. "Add people" searches everyone who is not in
  *  yet, teammates and Slack people alike. */
 export function ChannelMembersButton({ channel }: { channel: ChatRailChannel }) {
-  const teamMembers = useInboxStore((s) => s.teamMembers) as Member[];
+  const teamMembers = useInboxStore(teamMembersOf) as Member[];
   const slackPeopleById = useInboxStore((s) => s.chatSlackPeople);
   const viewer = useInboxStore((s) => (s as any).currentUser?._id ?? "");
   const creator = useInboxStore((s) => s.chatChannels[channel.id]?.created_by);
@@ -356,7 +358,7 @@ export function ChannelMembersButton({ channel }: { channel: ChatRailChannel }) 
 }
 
 function rosterAvatar(r: RosterRow, size: number) {
-  return face(r.name, r.avatar, r.member?.is_bot, size);
+  return face(r.name, r.avatar, isAgentMember(r.member), size);
 }
 
 /** One side of one person: a mark that says whether they are in, and, when the
@@ -462,7 +464,7 @@ export function MemberPicker({
   onChange?: (ids: string[]) => void;
   autoFocus?: boolean;
 }) {
-  const teamMembers = useInboxStore((s) => s.teamMembers) as Member[];
+  const teamMembers = useInboxStore(teamMembersOf) as Member[];
   const [q, setQ] = useState("");
   const [picked, setPicked] = useState<string[]>([]);
   const candidates = useMemo(() => {

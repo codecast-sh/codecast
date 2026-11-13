@@ -9,6 +9,7 @@ import { objectHref } from "../../lib/entityLinks";
 import { channelListeners, orgRolesListenSig } from "../../lib/chatListeners";
 import type { OrgTree } from "../org/orgTypes";
 import "./chat.css";
+import { windowOrgTree } from "../../store/orgSlice";
 
 // "listening: N roles" — the channel header's account of which org roles read
 // this room (docs/architecture/agent-channels.md C1/C4).
@@ -30,9 +31,9 @@ export function ChannelListeners({ channel, hasAgents = false }: { channel: List
   // The tree ref churns with every session heartbeat in the org; the header
   // only branches on roles and the viewer's grant, so it wakes on THAT
   // signature (lib/chatListeners) and reads the tree from the tracked state.
-  const s = useTrackedStore([(st) => orgRolesListenSig(st.orgTree), (st) => st.currentUser?._id]);
+  const s = useTrackedStore([(st) => orgRolesListenSig(windowOrgTree(st)), (st) => st.currentUser?._id]);
   const viewerId = String(s.currentUser?._id ?? "");
-  const orgTree = s.orgTree as OrgTree | null;
+  const orgTree = windowOrgTree(s) as OrgTree | null;
   const sig = orgRolesListenSig(orgTree);
   const { listening, mine } = useMemo(
     () => channelListeners(orgTree, channel.id, viewerId),

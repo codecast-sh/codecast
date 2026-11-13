@@ -38,7 +38,8 @@ export function SlackMirrorsSummary() {
     | null
     | undefined;
   const [dmsOpen, setDmsOpen] = useState(false);
-  const links = Object.values(s.chatSlackLinks ?? {}) as ChatSlackLinkRow[];
+  // The active team's mirrors only: the store holds every team's links.
+  const links = (Object.values(s.chatSlackLinks ?? {}) as ChatSlackLinkRow[]).filter((l) => !!teamId && String(l.team_id) === teamId);
   const rows = links
     .filter((l) => l.kind !== "dm")
     .map((l) => ({ link: l, channel: s.chatChannels[l.chat_channel_id] }))

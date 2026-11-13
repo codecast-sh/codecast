@@ -11,6 +11,8 @@ import { useConvexAuth, useMutation, useQuery } from 'convex/react';
 import { getDevicePushToken } from './devicePushToken';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { clearProtectedInboxMemory, useInboxStore } from '@codecast/web/store/inboxStore';
+import { purgeLocalCache } from '@codecast/web/store/idbCache';
+import { parseAccessIdentity } from './cachePrincipal';
 import { openPrincipalDispatchOutbox } from './dispatchOutbox';
 import * as SplashScreen from 'expo-splash-screen';
 import { authRenderDecision, localBootTrust, shouldClearMemoryFor, shouldReleaseSplash } from './authTrust';
@@ -52,26 +54,6 @@ export interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-function parseAccessIdentity(token: string | null): { principalId: string; subject: string } | null {
-  if (!token || typeof atob !== 'function') return null;
-  try {
-    const parts = token.split('.');
-    if (parts.length !== 3) return null;
-    const decode = (value: string) => JSON.parse(atob(
-      value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '='),
-    ));
-    const header = decode(parts[0]);
-    const payload = decode(parts[1]);
-    if (header.alg !== 'RS256' || payload.aud !== 'convex' ||
-      typeof payload.iss !== 'string' || typeof payload.sub !== 'string') return null;
-    const [principalId, sessionId, ...extra] = payload.sub.split('|');
-    if (!principalId || !sessionId || extra.length > 0) return null;
-    return { principalId, subject: payload.sub };
-  } catch {
-    return null;
-  }
-}
 
 function RealAuthProvider({ children }: { children: ReactNode }) {
   const { signIn, signOut: convexSignOut } = useAuthActions();
@@ -133,6 +115,12 @@ function RealAuthProvider({ children }: { children: ReactNode }) {
   if (shouldClearMemoryFor(memoryPrincipal.current, trustedPrincipalId)) {
     clearProtectedInboxMemory();
     memoryPrincipal.current = trustedPrincipalId;
+    // The disk copy belongs to whoever held the store before. The clear above
+    // unbound write-through, so nothing of theirs lands after this delete;
+    // the new principal's own typed messages stay.
+    void purgeLocalCache({ keepPendingInputFor: trustedPrincipalId }).catch((error) => {
+      console.error('[auth] failed to purge the previous account\'s cache', error);
+    });
   }
   if (lastTrustedSubject.current !== trustedSubject) {
     lastTrustedSubject.current = trustedSubject;
@@ -342,6 +330,12 @@ function RealAuthProvider({ children }: { children: ReactNode }) {
   const clearPushToken = useMutation(api.users.clearPushToken);
   const signOut = useCallback(async () => {
     clearProtectedInboxMemory();
+    // The disk cache goes with the session: on a shared phone the next person
+    // to open the app must find nothing of this account's on disk. Write-through
+    // is unbound by the clear above, so no late write refills it.
+    await purgeLocalCache().catch((error) => {
+      console.error('[auth] failed to purge the local cache on sign-out', error);
+    });
     // Drop the local-first trust anchor with the session: a signed-out device
     // must not render the old principal's (now cleared) cache on next boot.
     memoryPrincipal.current = null;

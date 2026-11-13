@@ -88,7 +88,9 @@ function readHealth(key: string): Promise<void> {
       const result = await callWithReconnectRetry(() => entry.ask(entry.args));
       // A key whose last holder left mid-read no longer owns the singleton.
       if (entries.get(key) !== entry) return;
-      if (result) useInboxStore.getState().syncTable("orgHealth", result);
+      // Stamped with the workspace it answers for: the store holds one
+      // snapshot, and a switch must not paint the last workspace's flags.
+      if (result) useInboxStore.getState().syncTable("orgHealth", { ...(result as object), held_for: key });
       entry.lastOk = Date.now();
       setSnap(entry, { ready: true });
     } catch (e: unknown) {
@@ -129,6 +131,13 @@ function subscribeHealth(key: string, listener: () => void): () => void {
   return () => { entry.listeners.delete(listener); };
 }
 
+/** The held org health when it answers for workspace read `key` (`ws:<team id|personal>`); null while the slot still
+ *  holds another workspace's. The workspace-checked selector for the orgHealth slot. */
+export function windowOrgHealth(s: { orgHealth: OrgHealth | null }, key: string): OrgHealth | null {
+  const h = s.orgHealth as (OrgHealth & { held_for?: string }) | null;
+  return h && key && h.held_for === key ? h : null;
+}
+
 export function useSyncOrgHealth(enabled = true): { health: OrgHealth | null; ready: boolean; error?: Error; missing: boolean; refresh: () => Promise<void> } {
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id);
   const teamArg = !enabled ? "skip" : !activeTeamId ? {} : isConvexId(activeTeamId) ? { team_id: activeTeamId } : "skip";
@@ -155,6 +164,6 @@ export function useSyncOrgHealth(enabled = true): { health: OrgHealth | null; re
   const refresh = useCallback((): Promise<void> => (key ? readHealth(key) : Promise.resolve()), [key]);
   const current = snap.key === key ? snap.snap : COLD;
   useFeederError("orgHealth.healthReport", current.error);
-  const health = useInboxStore((s) => s.orgHealth);
+  const health = useInboxStore((s) => windowOrgHealth(s, key));
   return { health, ready: current.ready, error: current.error, missing: isMissingFunctionError(current.error), refresh };
 }

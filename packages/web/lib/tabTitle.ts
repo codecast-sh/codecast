@@ -64,7 +64,7 @@ export function initiativeTabTitle(path: string, initiatives: Record<string, { s
 
 /** The records a tab can be titled by, read by key only (never a scan, so
  *  the window title can derive on every store tick). */
-export type TabRecords = { tasks?: Record<string, any>; projects?: Record<string, any>; workflowRuns?: Record<string, any>; orgTree?: { roles?: readonly unknown[] } | null; teamMembers?: readonly unknown[] };
+export type TabRecords = { tasks?: Record<string, any>; projects?: Record<string, any>; workflowRuns?: Record<string, any>; orgTree?: { roles?: readonly unknown[] } | null; teamMembers?: readonly unknown[]; clientState?: unknown };
 
 /** A task, project, run, role or person tab reads its record's name once the
  *  store holds the row: the task's title, the project's title (by Convex id

@@ -3,6 +3,7 @@
 import type { InboxSession, InboxViewMode, PlanItem, ProjectItem, TaskItem } from "./inboxStore";
 import { byPinThenActivity, groupSessionsBy, resolveInboxViewMode } from "./inboxStore";
 import { makeCollectionSig } from "./wakeSig";
+import { windowOrgTree } from "./orgSlice";
 
 // The org lenses: "By project", "By goal" and "By reports" regroup the same
 // active set the label and plan lenses do, on the same skeleton
@@ -44,14 +45,22 @@ export type OrgLensState = {
   projects: OrgLensSources["projects"];
   initiatives: OrgLensSources["initiatives"];
   orgTree: { roles: readonly LensRole[]; people?: readonly LensPerson[] } | null;
+  orgScope?: string | null;
+  clientState?: { ui?: { active_team_id?: string | null } };
   currentUser?: any;
   sessions: Record<string, InboxSession>;
 };
+
+/** The held tree when it is this window's workspace's (orgSlice windowOrgTree), else none. */
+function lensTreeOf(state: Partial<OrgLensState>): OrgLensState["orgTree"] {
+  if (!state.orgTree || !state.clientState) return null;
+  return windowOrgTree({ orgTree: state.orgTree as any, orgScope: state.orgScope ?? null, clientState: state.clientState, currentUser: state.currentUser }) as OrgLensState["orgTree"];
+}
 export function orgLensSourcesOf(state: Partial<OrgLensState> & { sessions: Record<string, InboxSession> }): OrgLensSources {
   return {
     tasks: state.tasks ?? {}, plans: state.plans ?? {}, projects: state.projects ?? {}, initiatives: state.initiatives ?? {},
-    roles: state.orgTree?.roles ?? [],
-    people: state.orgTree?.people ?? [],
+    roles: lensTreeOf(state)?.roles ?? [],
+    people: lensTreeOf(state)?.people ?? [],
     meId: state.currentUser?._id?.toString?.() ?? null,
     sessions: state.sessions,
   };
@@ -226,7 +235,8 @@ function lensPeopleSig(people: readonly LensPerson[]): string {
   return sig;
 }
 export function orgLensWakeSig(state: OrgLensState & { clientState: { ui?: { inbox_view_mode?: InboxViewMode; inbox_flat_view?: boolean } } }): string {
-  const roles = lensRoleSig(state.orgTree?.roles ?? []) + "\u0002" + lensPeopleSig(state.orgTree?.people ?? []);
+  const tree = lensTreeOf(state);
+  const roles = lensRoleSig(tree?.roles ?? []) + "\u0002" + lensPeopleSig(tree?.people ?? []);
   if (!isOrgLensMode(resolveInboxViewMode(state.clientState.ui))) return roles;
   return [roles, lensTaskSig(state.tasks), lensTaskSig(state.plans), lensProjectSig(state.projects), lensGoalSig(state.initiatives)].join("\u0001");
 }

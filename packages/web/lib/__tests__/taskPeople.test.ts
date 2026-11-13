@@ -7,6 +7,7 @@ import { test, expect, describe } from "bun:test";
 
 const { useInboxStore } = await import("../../store/inboxStore");
 const { taskPeople, taskProject } = await import("../entityDisplay");
+const { withTeamRoster } = await import("../../test-helpers/teamRoster");
 
 const ME = { _id: "u_me", name: "Ashot", github_username: "ashot", image: "me.png" };
 const ADA = { _id: "u_ada", name: "Ada", github_username: "ada", image: null };
@@ -14,7 +15,7 @@ const PROJECT = { _id: "p_1", title: "Agent Quality", status: "active" };
 
 useInboxStore.setState({
   currentUser: ME,
-  teamMembers: [ME, ADA],
+  ...withTeamRoster([ME, ADA], { clientState: useInboxStore.getState().clientState }),
   projects: { [PROJECT._id]: PROJECT },
 } as any);
 

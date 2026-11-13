@@ -20,6 +20,7 @@ mock.module("convex/react", () => ({
 }));
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { ConversationAssignmentBadge } = await import("../../AssignmentBadge");
+const { withTeamRoster } = await import("../../../test-helpers/teamRoster");
 const id = "c".repeat(32);
 const me = { _id: "me", name: "Ashot" };
 const runner = { id: "jason", name: "Jason" };
@@ -30,7 +31,7 @@ const devices = [
 const foreign = { device_id: "theirs", label: "Jason MacBook", platform: "darwin", online: true, is_remote: false, last_seen: Date.now(), runner: { name: "Jason", is_bot: false } };
 useInboxStore.setState({
   currentUser: me as any,
-  teamMembers: [me, { _id: "jason", name: "Jason" }] as any,
+  ...withTeamRoster([me, { _id: "jason", name: "Jason" }], { clientState: useInboxStore.getState().clientState }),
   machineRoster: devices,
   sessions: {},
   conversations: { [id]: { _id: id, user_id: runner.id } },
