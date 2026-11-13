@@ -142,7 +142,7 @@ function Hero() {
             </div>
           </div>
         </div>
-        <div className="cx-in mt-10 sm:mt-12" style={{ animationDelay: "340ms" }}>
+        <div data-og-art className="cx-in mt-10 sm:mt-12" style={{ animationDelay: "340ms" }}>
           <HeroStage />
         </div>
       </div>

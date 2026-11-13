@@ -65,7 +65,7 @@ function Hero() {
         </div>
         <div className="bx-rise" style={rise(0.3)}><SetupStrip /></div>
         </div>
-        <div className="bx-rise mt-12 sm:mt-14" style={rise(0.36)}>
+        <div data-og-art className="bx-rise mt-12 sm:mt-14" style={rise(0.36)}>
           <HeroStage />
         </div>
       </div>
