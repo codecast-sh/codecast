@@ -5,7 +5,7 @@ import { ModernPalettes } from "./modernPalette";
 import { mixHex } from "./colorMix";
 
 test("Modern wears the web's default theme, imported, in both schemes", () => {
-  expect(DEFAULT_THEME.id).toBe("verdigris");
+  expect(DEFAULT_THEME.id).toBe("verdigris-fjord");
   for (const scheme of ["light", "dark"] as const) {
     const v = DEFAULT_THEME[scheme]!;
     const p = ModernPalettes[scheme];

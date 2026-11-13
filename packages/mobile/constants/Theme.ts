@@ -123,8 +123,8 @@ export const Palettes: Record<ColorScheme, Palette> = {
 export { mixHex } from './colorMix';
 
 /** Which palette and faces the app wears. `classic` is codecast's Solarized
- *  and JetBrains Mono; `modern` is the web's opt-in Modern style: the
- *  Verdigris palette (constants/modernPalette.ts) and Instrument Sans for the
+ *  and JetBrains Mono (shown as Mono); `modern` is the web's default Modern style: the
+ *  default theme's palette (constants/modernPalette.ts) and Instrument Sans for the
  *  interface, with code-like text kept mono (constants/fonts.ts). Which one a
  *  device wears is lib/mobileLook.ts's decision. */
 export type Look = 'classic' | 'modern';

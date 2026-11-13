@@ -7,10 +7,12 @@ test("a phone that never chose follows the web's Modern switch", () => {
   expect(mobileLookSource({ modern_style: true })).toBe("web");
 });
 
-test("Classic when neither the phone nor the web has chosen", () => {
-  expect(resolveMobileLook(undefined)).toBe("classic");
-  expect(resolveMobileLook(null)).toBe("classic");
-  expect(resolveMobileLook({})).toBe("classic");
+test("Modern when neither the phone nor the web has chosen", () => {
+  expect(resolveMobileLook(undefined)).toBe("modern");
+  expect(resolveMobileLook(null)).toBe("modern");
+  expect(resolveMobileLook({})).toBe("modern");
+  // An old Minimal choice on the web, made before Modern existed, stays off Modern.
+  expect(resolveMobileLook({ visual_style: "minimal" })).toBe("classic");
 });
 
 test("the phone's own choice wins over the web's, either way", () => {
@@ -26,6 +28,7 @@ test("a cleared or malformed phone choice means follow the web", () => {
   expect(resolveMobileLook({ modern_style: true, mobile_modern_style: null })).toBe("modern");
   expect(mobileLookSource({ modern_style: true, mobile_modern_style: null })).toBe("web");
   // Only a real boolean counts, for either key.
-  expect(resolveMobileLook({ modern_style: "true", mobile_modern_style: "false" })).toBe("classic");
-  expect(resolveMobileLook({ modern_style: 1 })).toBe("classic");
+  expect(resolveMobileLook({ modern_style: "true", mobile_modern_style: "false", visual_style: "minimal" })).toBe("classic");
+  expect(resolveMobileLook({ modern_style: 1, visual_style: "minimal" })).toBe("classic");
+  expect(resolveMobileLook({ modern_style: 0 })).toBe("modern");
 });

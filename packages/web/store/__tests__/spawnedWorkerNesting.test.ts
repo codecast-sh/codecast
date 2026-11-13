@@ -35,7 +35,10 @@ describe("spawned workers nest under their spawner (web display only)", () => {
   it("only Modern focused nests: Classic, Minimal and plain Modern do not", () => {
     expect(nestsWorkers({ modern_style: true, modern_focused: true })).toBe(true);
     expect(nestsWorkers({ modern_style: true })).toBe(false);
-    expect(nestsWorkers({ modern_focused: true })).toBe(false);
+    // Modern is the default, so an unset modern_style is Modern.
+    expect(nestsWorkers({ modern_focused: true })).toBe(true);
+    expect(nestsWorkers({ modern_style: false, modern_focused: true })).toBe(false);
+    expect(nestsWorkers({ visual_style: "minimal", modern_focused: true })).toBe(false);
     expect(nestsWorkers(undefined)).toBe(false);
   });
 

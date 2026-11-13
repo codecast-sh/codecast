@@ -1,7 +1,7 @@
-// Settings › Appearance › Style: Classic or Modern on this phone.
+// Settings › Appearance › Style: Mono (stored as classic) or Modern on this phone.
 //
 // Unset, the phone wears whatever the web's Modern switch says
-// (lib/mobileLook.ts). Picking Classic or Modern here is this phone's own
+// (lib/mobileLook.ts). Picking Mono or Modern here is this phone's own
 // choice, kept per device; "Same as web" clears it again.
 import { useCallback } from 'react';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
@@ -15,14 +15,15 @@ export const STYLE_ROW_SHOWN = true;
 
 const CHOICES = [
   { key: 'web', label: 'Same as web', value: null },
-  { key: 'classic', label: 'Classic', value: false },
+  { key: 'classic', label: 'Mono', value: false },
   { key: 'modern', label: 'Modern', value: true },
 ] as const;
 
 export function StyleRow() {
   const own = useInboxStore((s) => s.clientState?.ui?.mobile_modern_style);
   const web = useInboxStore((s) => s.clientState?.ui?.modern_style);
-  const ui = { mobile_modern_style: own, modern_style: web };
+  const webStyle = useInboxStore((s) => s.clientState?.ui?.visual_style);
+  const ui = { mobile_modern_style: own, modern_style: web, visual_style: webStyle };
   const updateClientUI = useInboxStore((s) => s.updateClientUI);
   const source = mobileLookSource(ui);
   const current = source === 'web' ? 'web' : resolveMobileLook(ui);
@@ -33,6 +34,6 @@ export function StyleRow() {
       onPress: () => updateClientUI({ mobile_modern_style: c.value }),
     })));
   }, [current, updateClientUI]);
-  const detail = CHOICES.find((c) => c.key === current)?.label ?? 'Classic';
-  return <NavRow label="Style" description="Classic or Modern, or the same as on the web" detail={detail} onPress={pick} />;
+  const detail = CHOICES.find((c) => c.key === current)?.label ?? 'Modern';
+  return <NavRow label="Style" description="Mono or Modern, or the same as on the web" detail={detail} onPress={pick} />;
 }

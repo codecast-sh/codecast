@@ -3,7 +3,8 @@
 // script treat both alike. Stored as `codecast/<id>`; they are listed ahead
 // of every mod's themes, so a mod named "codecast" cannot shadow one.
 //
-// Verdigris is the default: a person who never chose sees it. Original puts
+// The default, which a person who never chose sees, pairs Verdigris's light
+// side with Fjord's dark side. Original puts
 // no variables on the root, so it is whatever the stylesheet paints for the
 // style on screen (Solarized in Classic, the neutrals in Minimal).
 
@@ -14,42 +15,47 @@ import type { ModTheme, ThemePalette } from "@codecast/shared/contracts/theme";
 
 export const BUILTIN_THEME_SOURCE = "codecast";
 
+const VERDIGRIS: ModTheme = {
+  id: "verdigris",
+  title: "Verdigris",
+  light: {
+    // Near-white surfaces with a faint cool tint, and a white card. The
+    // earlier sage (#edf3ee) read as warm paper next to the teal ink.
+    bg: "#f6f9f8", "bg-alt": "#ecf1ef", card: "#ffffff", border: "#d2ddd9",
+    text: "#1a2d29", "text-muted": "#3e564f", "text-dim": "#50655e", link: "#0d7865",
+    red: "#c3352b", orange: "#a95219", amber: "#8e630c", yellow: "#746c0e",
+    green: "#337425", cyan: "#107771", blue: "#2a66b4", violet: "#694ebf", magenta: "#ae3977",
+  },
+  dark: {
+    bg: "#0e1918", "bg-alt": "#13221f", card: "#172925", border: "#233f39",
+    text: "#d6e5dd", "text-muted": "#93afa5", "text-dim": "#7d988e", link: "#5fd6b9",
+    red: "#f0645a", orange: "#f08a4b", amber: "#e3ad4a", yellow: "#d8cd6b",
+    green: "#7ec76b", cyan: "#4ccac0", blue: "#6aa8e8", violet: "#a28ee6", magenta: "#e27aa9",
+  },
+};
+
+const FJORD: ModTheme = {
+  id: "fjord",
+  title: "Fjord",
+  light: {
+    bg: "#eef1f5", "bg-alt": "#e4e9ef", card: "#f8fafc", border: "#cdd5df",
+    text: "#232a35", "text-muted": "#465262", "text-dim": "#606a78", link: "#2d6a8c",
+    red: "#b0414c", orange: "#9e5129", amber: "#895f0c", yellow: "#75660d",
+    green: "#497131", cyan: "#217082", blue: "#3a5f94", violet: "#7a4f86", magenta: "#9a4577",
+  },
+  dark: {
+    bg: "#20252e", "bg-alt": "#252b35", card: "#2b323d", border: "#3a4351",
+    text: "#e5e9f0", "text-muted": "#aeb7c6", "text-dim": "#909aa7", link: "#88c0d0",
+    red: "#d77b84", orange: "#d8936f", amber: "#e2b86f", yellow: "#ebcb8b",
+    green: "#a3be8c", cyan: "#88c0d0", blue: "#81a1c1", violet: "#b48ead", magenta: "#c896b8",
+  },
+};
+
 export const BUILTIN_THEMES: readonly ModTheme[] = [
-  {
-    id: "verdigris",
-    title: "Verdigris",
-    light: {
-      // Near-white surfaces with a faint cool tint, and a white card. The
-      // earlier sage (#edf3ee) read as warm paper next to the teal ink.
-      bg: "#f6f9f8", "bg-alt": "#ecf1ef", card: "#ffffff", border: "#d2ddd9",
-      text: "#1a2d29", "text-muted": "#3e564f", "text-dim": "#50655e", link: "#0d7865",
-      red: "#c3352b", orange: "#a95219", amber: "#8e630c", yellow: "#746c0e",
-      green: "#337425", cyan: "#107771", blue: "#2a66b4", violet: "#694ebf", magenta: "#ae3977",
-    },
-    dark: {
-      bg: "#0e1918", "bg-alt": "#13221f", card: "#172925", border: "#233f39",
-      text: "#d6e5dd", "text-muted": "#93afa5", "text-dim": "#7d988e", link: "#5fd6b9",
-      red: "#f0645a", orange: "#f08a4b", amber: "#e3ad4a", yellow: "#d8cd6b",
-      green: "#7ec76b", cyan: "#4ccac0", blue: "#6aa8e8", violet: "#a28ee6", magenta: "#e27aa9",
-    },
-  },
+  { id: "verdigris-fjord", title: "Default", light: VERDIGRIS.light, dark: FJORD.dark },
+  VERDIGRIS,
   { id: "original", title: "Original" },
-  {
-    id: "fjord",
-    title: "Fjord",
-    light: {
-      bg: "#eef1f5", "bg-alt": "#e4e9ef", card: "#f8fafc", border: "#cdd5df",
-      text: "#232a35", "text-muted": "#465262", "text-dim": "#606a78", link: "#2d6a8c",
-      red: "#b0414c", orange: "#9e5129", amber: "#895f0c", yellow: "#75660d",
-      green: "#497131", cyan: "#217082", blue: "#3a5f94", violet: "#7a4f86", magenta: "#9a4577",
-    },
-    dark: {
-      bg: "#20252e", "bg-alt": "#252b35", card: "#2b323d", border: "#3a4351",
-      text: "#e5e9f0", "text-muted": "#aeb7c6", "text-dim": "#909aa7", link: "#88c0d0",
-      red: "#d77b84", orange: "#d8936f", amber: "#e2b86f", yellow: "#ebcb8b",
-      green: "#a3be8c", cyan: "#88c0d0", blue: "#81a1c1", violet: "#b48ead", magenta: "#c896b8",
-    },
-  },
+  FJORD,
   {
     id: "vellum",
     title: "Vellum",
@@ -132,7 +138,7 @@ export const BUILTIN_THEMES: readonly ModTheme[] = [
   },
 ];
 
-/** Verdigris, the theme a person who never chose sees. */
+/** Verdigris light with Fjord dark, the theme a person who never chose sees. */
 export const DEFAULT_THEME: ModTheme = BUILTIN_THEMES[0]!;
 
 /**

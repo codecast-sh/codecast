@@ -52,10 +52,14 @@
         document.documentElement.classList.add(theme);
         var visualStyle = localStorage.getItem('codecast-visual-style');
         // Modern has its own key (components/ThemeProvider.tsx says why) and
-        // sits on Classic, so it never carries the Minimal class.
-        if (localStorage.getItem('codecast-modern-style') === '1') {
+        // sits on Classic, so it never carries the Minimal class. With the key
+        // unset Modern is the default, except for an old Minimal choice
+        // (lib/modernStyle.ts).
+        var modern = localStorage.getItem('codecast-modern-style');
+        var minimal = visualStyle === 'minimal' || visualStyle === 'codex';
+        if (modern === '1' || (modern === null && !minimal)) {
           document.documentElement.classList.add('modern-style');
-        } else if (visualStyle === 'minimal' || visualStyle === 'codex') {
+        } else if (minimal) {
           document.documentElement.classList.add('minimal-style');
         }
         // The color theme, as ThemeProvider cached it (lib/theme/colorTheme.ts),

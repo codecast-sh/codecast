@@ -12,8 +12,10 @@ describe("built-in color themes", () => {
     }
   });
 
-  test("a person who never chose gets Verdigris; Original sets no variables", () => {
-    expect(DEFAULT_THEME.id).toBe("verdigris");
+  test("a person who never chose gets Verdigris light and Fjord dark; Original sets no variables", () => {
+    const byId = (id: string) => BUILTIN_THEMES.find((t) => t.id === id)!;
+    expect(DEFAULT_THEME.light).toEqual(byId("verdigris").light!);
+    expect(DEFAULT_THEME.dark).toEqual(byId("fjord").dark!);
     expect(resolveColorThemeKey(undefined)).toBe(DEFAULT_COLOR_THEME);
     expect(resolveColorThemeKey("")).toBe(DEFAULT_COLOR_THEME);
     const original = availableThemes([], []).find((c) => c.key === ORIGINAL_COLOR_THEME)!;
