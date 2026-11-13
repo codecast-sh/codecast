@@ -145,6 +145,21 @@ export function isMidWorkReviveNotice(rawContent: string | null | undefined): bo
   return !!rawContent && stripInjectionNoise(rawContent).startsWith(MID_WORK_REVIVE_MESSAGE.slice(0, 60));
 }
 
+// When the daemon's live-session watchdog (cli sessionWatchdog.ts) ended the
+// process itself, because it hung or leaked memory, the revive says why. The
+// web reads the reason back to caption the restart rule.
+const WATCHDOG_RESTART_LEAD = "Codecast stopped the old process itself because ";
+export function watchdogRestartNote(reason: string): string {
+  return `${MID_WORK_REVIVE_MESSAGE}\n\n${WATCHDOG_RESTART_LEAD}${reason}.`;
+}
+export function watchdogRestartReason(rawContent: string | null | undefined): string | null {
+  if (!isMidWorkReviveNotice(rawContent)) return null;
+  const text = stripInjectionNoise(rawContent!);
+  const at = text.indexOf(WATCHDOG_RESTART_LEAD);
+  if (at < 0) return null;
+  return text.slice(at + WATCHDOG_RESTART_LEAD.length).split("\n")[0].replace(/\.$/, "").trim() || null;
+}
+
 // The message the server queues when a move to another machine stopped a turn
 // partway (convex devices.ts queueMoveContinue). Codecast wrote it, not the person.
 export const MOVE_INTERRUPT_MESSAGE =

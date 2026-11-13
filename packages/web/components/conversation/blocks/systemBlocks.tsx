@@ -23,7 +23,7 @@ import { entityRemarkPlugins } from "../../../lib/remarkEntityIds";
 import { ASSISTANT_MD_REMARK, MESSAGE_MD_REHYPE, MESSAGE_MD_COMPONENTS } from "../../messageMarkdown";
 import { useJumpToSendingMessage } from "../../../hooks/useJumpToSendingMessage";
 import { isTeammateFramingOnly, parseSpawnedTaskPrompt, chatWakeAction, type ChatWakeEntry, type ChatWakePrompt, type HuddleSummaryTag } from "../../sessionMessage";
-import { CLOUD_AGENT_ACTION_SUBTYPE, stripCompactionProvenance, parseHuddleDigestContent, parseScheduledTask, sessionEscalationCaption, type ScheduledTaskFrame, type SessionEscalationMessage, type WaitingSession } from "@codecast/shared/contracts";
+import { CLOUD_AGENT_ACTION_SUBTYPE, stripCompactionProvenance, parseHuddleDigestContent, parseScheduledTask, sessionEscalationCaption, watchdogRestartReason, type ScheduledTaskFrame, type SessionEscalationMessage, type WaitingSession } from "@codecast/shared/contracts";
 import { RoleFace } from "../../org/RoleFace";
 import { CallTranscriptDisclosure } from "../../calls/TranscriptTurns";
 import { CallVideoStretchChip } from "../../calls/CallVideoStretchChip";
@@ -486,11 +486,14 @@ export function EscalationDivider({ escalation, conversationShortId, timestamp }
 
 // The watchdog's revive of a session whose process died mid-work: a rule
 // saying what happened, with the note the agent was given behind a click.
+// When codecast ended the process itself (hung, or leaking memory), the
+// caption says why.
 export function ReviveDivider({ content, timestamp }: { content: string; timestamp: number }) {
+  const watchdogReason = watchdogRestartReason(content);
   return (
     <SwitchDivider
       testId="mid-work-revive"
-      caption="restarted after the agent process exited"
+      caption={watchdogReason ? `restarted by codecast: ${watchdogReason}` : "restarted after the agent process exited"}
       content="Codecast sent the agent:"
       extra={content}
       timestamp={timestamp}
