@@ -34,6 +34,7 @@ import { callTables } from "./callsSchema";
 import { googleOAuthTables } from "./googleOAuthSchema";
 import { roleIconValidator } from "./lib/roleIconValidator";
 import { assistantTables } from "./assistantSchema";
+import { castMachineTables } from "./castMachinesSchema";
 import { oauthConnectorTables } from "./oauthConnectorsSchema";
 import { issueSyncTables, taskExternalValidator, taskCommentExternalValidator } from "./issueSyncSchema";
 import { agentTables } from "./agentSchema";
@@ -1016,6 +1017,11 @@ export default defineSchema({
     // it so rows parked then keep their verdict. Nothing writes it any more.
     inbox_dormant_at: v.optional(v.number()),
     inbox_pinned_at: v.optional(v.number()),
+    // The person talked to this NESTED session (a flow station opened from its
+    // decision, or a message they sent into it), so it stands alone in their
+    // inbox instead of riding a parent they never see (inboxProjection
+    // isAdoptedChild). Only nested rows carry it. Read by the adopted window.
+    inbox_adopted_at: v.optional(v.number()),
     // The settle classifier's verdict for the settle it last inspected: "done"
     // (delivered, no ask present) or "needs_input" — never "dormant", which
     // needs a wake the system can verify. Written by idleSummary alongside idle_summary, from the
@@ -1062,6 +1068,10 @@ export default defineSchema({
     // so agents and humans can see WHERE a session actually works — including
     // a worktree path that project_path alone would hide.
     recent_files: v.optional(v.array(v.string())),
+    // Tool calls whose result came back as an error, counted at message write
+    // (messages.ts bumpFailedTools) as the delta between a row's old and new
+    // tool_results, so a re-synced row counts once. Search hits show it.
+    failed_tool_count: v.optional(v.number()),
     // What the agent is doing right now: a present tense line from the newest
     // assistant tool call ("editing chat.ts", "running npx tsc"), the raw
     // tool name, and the timestamp of the message that carried the call.
@@ -1472,6 +1482,9 @@ export default defineSchema({
     .index("by_spawned_by", ["spawned_by_conversation_id"])
     .index("by_handed_off_from", ["handed_off_from_conversation_id"])
     .index("by_user_pinned", ["user_id", "inbox_pinned_at"])
+    // The adopted window (scanInboxConversations): nested rows the person
+    // talked to, newest adoption first.
+    .index("by_user_adopted", ["user_id", "inbox_adopted_at"])
     .index("by_user_stashed", ["user_id", "inbox_stashed_at"])
     .index("by_user_live_snoozed", ["user_id", "is_subagent", "inbox_killed_at", "inbox_snoozed_until"])
     // Inbox scan indexes (scanInboxConversations): exclude subagent / killed
@@ -3178,9 +3191,11 @@ export default defineSchema({
     label: v.string(),
     platform: v.string(),
     // The machine's own hostname, heartbeat-reported. Distinct from `label`,
-    // which is a display name a human can override to anything ("Cloud Mac").
-    // Only ever a SUGGESTION for ssh_host — never interpolated into a command
-    // on its own, because a hostname is not necessarily a reachable ssh target.
+    // which is the daemon's own string (config device_label, else
+    // "macOS - hostname") and is rewritten on every beat. A name a person
+    // typed lives in display_name. The hostname is only ever a SUGGESTION
+    // for ssh_host — never interpolated into a command on its own, because
+    // a hostname is not necessarily a reachable ssh target.
     hostname: v.optional(v.string()),
     // The WSL distro the daemon runs in, heartbeat-reported; absent off WSL.
     wsl_distro: v.optional(v.string()),
@@ -3191,6 +3206,14 @@ export default defineSchema({
     // attach command it can't stand behind. Shell-safe by construction — see
     // sanitizeSshHost in devices.ts, which is what makes it safe to paste.
     ssh_host: v.optional(v.string()),
+    // A name and icon a person set in Settings → Devices. Heartbeats never
+    // write these: `label` is the daemon's string and the next beat would
+    // clobber a rename stored there. Absent means the automatic name
+    // (deviceDisplayName) and the platform glyph. `icon` is a team-icon
+    // token; `icon_color` is a team-color token. Both are display only.
+    display_name: v.optional(v.string()),
+    icon: v.optional(v.string()),
+    icon_color: v.optional(v.string()),
     last_seen: v.number(),
     // When a human last touched THIS machine's keyboard/mouse — computed
     // server-side as (heartbeat arrival − the daemon's reported input idle), so
@@ -3793,6 +3816,10 @@ export default defineSchema({
     pull_request_id: v.id("pull_requests"),
     conversation_id: v.id("conversations"),
     tier: v.optional(v.union(v.literal("observed"), v.literal("committed"))),
+    // The pull request's number and team, stamped by syncPullRequestSessions
+    // so a reader that lists a session's pull requests skips the heavy row.
+    pr_number: v.optional(v.number()),
+    team_id: v.optional(v.id("teams")),
   })
     .index("by_pull_request", ["pull_request_id"])
     .index("by_conversation", ["conversation_id"]),
@@ -7367,6 +7394,10 @@ export default defineSchema({
     embedding: v.optional(v.array(v.float64())),
 
     cli_edited_at: v.optional(v.number()),
+    // Who made the last whole-body write outside the editor (a CLI, API or
+    // agent write), named when a write from an older read is refused
+    // (docs.writeDocBody).
+    content_writer: v.optional(v.object({ name: v.string(), session: v.optional(v.string()), at: v.number() })),
 
     // The Overflow: loose writing kept beside the doc rather than in it
     // (stashed cuts, notes, words to use later). Plain text, edited from the
@@ -7862,6 +7893,9 @@ export default defineSchema({
     version: v.number(),
     clientId: v.union(v.string(), v.number()),
     steps: v.array(v.string()),
+    // The person whose editor sent the steps, named when an agent's write is
+    // refused because of them.
+    user_id: v.optional(v.id("users")),
   }).index("id_version", ["id", "version"]),
 
   doc_presence: defineTable({
@@ -8143,7 +8177,10 @@ export default defineSchema({
     t0: v.number(),
     t1: v.number(),
   })
-    .index("by_transcript_seq", ["transcript_id", "seq"]),
+    .index("by_transcript_seq", ["transcript_id", "seq"])
+    // Search over what was said, one call at a time (transcripts.webSearchCalls
+    // filters by the calls the viewer may read, so access never rides on it).
+    .searchIndex("search_text", { searchField: "text", filterFields: ["transcript_id"] }),
 
   ...callTables,
 
@@ -9319,6 +9356,7 @@ export default defineSchema({
   ...agentTables,
   ...expectationTables,
   ...assistantTables,
+  ...castMachineTables,
 
 }, {
   // The `messages` table is in the millions of rows, and the default

@@ -87,6 +87,7 @@ import {
   workspacesMatch,
   visibleInTeamList,
   activeTeamMembershipFor,
+  accessJudgeFor,
 } from "./lib/access";
 import { forbidden, notFound } from "./lib/auth";
 import { boundSessionsOf, claimTaskOwnership, isSessionWorking, type TaskOwnerRef } from "./lib/taskOwner";
@@ -3401,13 +3402,16 @@ export const webListPaginated = query({
     }
 
     // Defensive clamp. Each row carries its comments and their sessions'
-    // session_info (enrichTasks), so a page reads several documents per task;
-    // 300 matches webList's floor and keeps a page of comment-heavy tasks well
-    // inside the isolate's read and return caps. The client pages on isDone,
-    // so a smaller page only adds round trips to a cold-cache backfill.
+    // session_info (enrichTasks): a comments query per task, then a read, an
+    // owner lookup, a membership lookup and a role read per session that
+    // commented. A function may make 4,096 of those, and a team page of 300
+    // comment-heavy tasks went past it ("Too many reads", 92 refused pages on
+    // 2026-11-12), so that client's backfill failed every time it ran. 100
+    // keeps a page well inside the cap. The client pages on isDone, so a
+    // smaller page only adds round trips to a cold-cache backfill.
     const paginationOpts = {
       ...args.paginationOpts,
-      numItems: Math.min(args.paginationOpts.numItems, 300),
+      numItems: Math.min(args.paginationOpts.numItems, 100),
     };
 
     const since = args.since;
@@ -3594,6 +3598,13 @@ export const webMentionList = query({
       const id = String(t._id);
       if (!seen.has(id)) { seen.add(id); tasks.push(t); }
     };
+    // by_team_id is the ROUTING index: a task routed to a team can still be
+    // private to its owner (workspace user:<owner>), so every team row passes
+    // the access judge before its title is returned.
+    const judge = await accessJudgeFor(ctx, userId);
+    const pushReadable = async (rows: any[]) => {
+      for (const t of rows) if (await judge("tasks", t)) pushUnique(t);
+    };
 
     if (args.workspace === "all") {
       // The person's own rows first: filled after the teams, two busy teams
@@ -3615,7 +3626,7 @@ export const webMentionList = query({
           .withIndex("by_team_id", (q: any) => q.eq("team_id", m.team_id))
           .order("desc")
           .take(MAX_PER_TEAM);
-        for (const t of teamTasks) pushUnique(t);
+        await pushReadable(teamTasks);
       }
     } else if (args.workspace === "team" && args.team_id) {
       const teamTasks = await ctx.db
@@ -3623,7 +3634,7 @@ export const webMentionList = query({
         .withIndex("by_team_id", (q: any) => q.eq("team_id", args.team_id))
         .order("desc")
         .take(MAX_TOTAL);
-      for (const t of teamTasks) pushUnique(t);
+      await pushReadable(teamTasks);
     } else {
       const userTasks = await ctx.db
         .query("tasks")

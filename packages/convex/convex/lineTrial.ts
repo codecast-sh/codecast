@@ -26,7 +26,7 @@ import { nextShortId } from "./counters";
 import { scopeArgs } from "./lib/ingestScopeArgs";
 import { scopeOf } from "./lib/ingestScope";
 import { resolveWorkspaceProject } from "./lib/projectRef";
-import { canAccessProject } from "./lib/access";
+import { accessJudgeFor, canAccessProject } from "./lib/access";
 import { liveRolesByHandle } from "./lib/orgAccess";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { readBudget } from "./lib/teamBudget";
@@ -1367,10 +1367,13 @@ export const runs = query({
       .filter((p: Doc<"projects">) => !!p.line_trial);
     const out: Array<TrialRunView & { superseded: Superseded }> = [];
     const memo = newLineMemo();
+    // A task in a readable project can still be private to its owner (linked to a private session).
+    const judge = await accessJudgeFor(ctx, userId);
     for (const project of projects) {
       if (!(await canAccessProject(ctx, userId, project))) continue;
       const tasks: Doc<"tasks">[] = await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect();
       for (const task of tasks) {
+        if (!(await judge("tasks", task))) continue;
         const run: Doc<"workflow_runs"> | null = task.workflow_run_id ? await ctx.db.get(task.workflow_run_id) : null;
         if (!run) continue;
         // A run its problem's close ended is not a failure to act on: nothing is left to rerun.

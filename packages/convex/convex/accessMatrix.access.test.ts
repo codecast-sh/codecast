@@ -25,6 +25,8 @@ import { allModules } from "./testModules.testkit";
 import { makeChangeTrackedDb } from "./changeLog";
 import { makeSyncAckCollector, teamScopeKey, userScopeKey } from "./syncLog";
 import { CLIENT_SYNC_REGISTRY } from "../../web/store/clientSyncRegistry";
+import { routerRoster } from "./orgRoute";
+import { gatherShipFacts } from "./ship";
 
 const MATRIX_KEYS = ["tasks", "docs", "plans", "projects"] as const;
 
@@ -94,6 +96,20 @@ const FEED_CASES: Record<string, (ids: Ids) => Record<string, unknown>[]> = {
   "ingest.getGroup": (ids) => Object.values(ids.groupRefs).map((group) => ({ group })),
   "ingest.listEvents": listArgs,
   "replays.list": listArgs,
+  // The feed reads one workspace: the active team (named or the pointer), else personal.
+  "conversations.getMessageFeed": (ids) => [{ filter: "team" }, { filter: "team", activeTeamId: ids.T }, { filter: "team", activeTeamId: ids.O }, { filter: "my" }],
+  // Mention indexes (useSyncMentionTasks/Docs/Plans): rows land in store.mentionIndex,
+  // not a registry key, so FEED_TABLE names their table.
+  "tasks.webMentionList": listArgs,
+  "docs.webMentionList": listArgs,
+  "plans.webMentionList": listArgs,
+};
+
+// Feeds outside the registry: the table whose seeded rows they return.
+const FEED_TABLE: Record<string, string> = {
+  "tasks.webMentionList": "tasks",
+  "docs.webMentionList": "docs",
+  "plans.webMentionList": "plans",
 };
 
 // A feed whose answer is not a list of rows: what the web feeder hands the
@@ -146,7 +162,7 @@ async function seed(t: ReturnType<typeof convexTest>) {
     };
     let n = 0;
     const base = (place: string) => ({ title: `${place} row`, created_at: now, updated_at: now });
-    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {}, opsGroups: {}, opsEvents: {}, opsReplays: {}, teamDeploys: {} };
+    const rows: Record<string, Record<string, string>> = { tasks: {}, docs: {}, plans: {}, projects: {}, liveFlows: {}, sessionFlows: {}, flowMaps: {}, teamKitItems: {}, opsGroups: {}, opsEvents: {}, opsReplays: {}, teamDeploys: {}, messageFeed: {} };
     const groupRefs: Record<string, string> = {};
     for (const [place, p] of Object.entries(placements)) {
       rows.tasks[place] = await db.insert("tasks", { ...p, ...base(place), short_id: `ct-${++n}`, task_type: "task", priority: "medium", source: "human", status: "open" });
@@ -161,6 +177,15 @@ async function seed(t: ReturnType<typeof convexTest>) {
       // A flow map is one per workspace, so the private and personal placements share one.
       if (place !== "private") rows.flowMaps[place] = p.workspace;
       rows.teamKitItems[place] = await db.insert("team_kit_items", { slug: `authored/${p.user_id}/skill/${place}-kit`, ...(p.team_id ? { team_id: p.team_id } : {}), workspace: p.workspace, kind: "skill", name: `${place}-kit`, author_user_id: p.user_id, current_version: 1, current_hash: `h-${place}`, surfaces: [], created_at: now, updated_at: now } as any);
+    }
+    // A session per placement, each with one typed prompt: the message feed's rows.
+    // Sessions keep their own visibility axis, so private is a team-routed, unshared one.
+    for (const [place, p] of Object.entries(placements)) {
+      const conversation_id = await db.insert("conversations", {
+        user_id: p.user_id, ...(p.team_id ? { team_id: p.team_id } : {}), is_private: place === "private" || place === "personal",
+        agent_type: "claude_code", session_id: `s-${place}`, started_at: now, updated_at: now, message_count: 1, status: "active",
+      } as any);
+      rows.messageFeed[place] = await db.insert("messages", { conversation_id, message_uuid: `m-${place}`, role: "user", content: `${place} prompt`, timestamp: now } as any);
     }
     // Ops rows carry only a workspace key, so the private placement is a second personal row.
     for (const [place, p] of Object.entries(placements)) {
@@ -218,6 +243,7 @@ describe("access matrix", () => {
   test("every registered feed of a workspace-scoped key is covered or listed as not yet covered", () => {
     const feeds = registeredFeeds();
     const missing = [...feeds.keys()].filter((f) => !FEED_CASES[f] && !NOT_YET_COVERED.has(f));
+    for (const f of Object.keys(FEED_CASES)) expect(FEED_TABLE[f] ?? feeds.get(f)).toBeDefined();
     expect(missing).toEqual([]);
     // A stale entry would hide a later regression behind a name nobody registers.
     expect([...NOT_YET_COVERED].filter((f) => !feeds.has(f))).toEqual([]);
@@ -228,7 +254,7 @@ describe("access matrix", () => {
     test(`${feed}: each identity receives exactly its rows`, async () => {
       const t = convexTest(schema, allModules);
       const ids = await seed(t);
-      const table = registeredFeeds().get(feed)!;
+      const table = FEED_TABLE[feed] ?? registeredFeeds().get(feed)!;
       const got: Record<string, string[]> = {};
       for (const who of WHO) {
         const seen: string[] = [];
@@ -242,6 +268,70 @@ describe("access matrix", () => {
       expect(got).toEqual(EXPECTED_FOR[table] ?? EXPECTED);
     });
   }
+
+  // The @-mention search answers { id, type }, one type per call.
+  for (const [type, table] of [["task", "tasks"], ["doc", "docs"], ["plan", "plans"]] as const) {
+    test(`docs.mentionSearch (${type}): each identity receives exactly its rows`, async () => {
+      const t = convexTest(schema, allModules);
+      const ids = await seed(t);
+      const variants = [{}, { workspace: "personal" }, { teamId: ids.T }, { teamId: ids.O }, { workspace: "team", teamId: ids.T }, { teamId: ids.T, query: "row" }];
+      const got: Record<string, string[]> = {};
+      for (const who of WHO) {
+        const seen: string[] = [];
+        for (const args of variants) {
+          const res: any[] | null = await t.withIdentity({ subject: ids[who] }).query(api.docs.mentionSearch, { query: "", types: [type], ...args } as any).catch(() => null);
+          seen.push(...(res ?? []).filter((r) => r.type === type).map((r) => r.id));
+        }
+        got[who] = placementsOf(ids, table, seen);
+      }
+      expect(got).toEqual(EXPECTED);
+    });
+  }
+
+  // The router's roster goes into a model prompt and back out through `cast route --dry`.
+  test("orgRoute.routerRoster: titles are only the viewer's readable projects and plans", async () => {
+    const t = convexTest(schema, allModules);
+    const ids = await seed(t);
+    // Every plan under the team's project, so the plan gate decides on its own.
+    await t.run(async (ctx) => {
+      for (const plan of Object.values(ids.rows.plans)) await ctx.db.patch(plan as any, { project_id: ids.rows.projects.team as any });
+    });
+    const placeOf = (title: string) => title.replace(/ row$/, "");
+    const got: Record<string, { projects: string[]; plans: string[] }> = {};
+    for (const who of WHO) {
+      const roster = await t.run((ctx) => routerRoster(ctx, ids[who] as any, { team_id: ids.T as any }, []));
+      const of = (kind: string) => (roster.unled ?? []).filter((u: any) => u.kind === kind).map((u: any) => placeOf(u.title)).sort();
+      got[who] = { projects: of("project"), plans: of("plan") };
+    }
+    expect(got).toEqual({
+      owner: { projects: ["private", "team"], plans: ["personal", "private", "team"] },
+      teammate: { projects: ["team"], plans: ["team"] },
+      stranger: { projects: [], plans: [] },
+      removed: { projects: [], plans: [] },
+      outsider: { projects: [], plans: [] },
+    });
+  });
+
+  // Ship picks the project whose line profile covers a session's checkout off the team's routing index.
+  test("ship.gatherShipFacts: a teammate's session never picks up an owner-private project's profile", async () => {
+    const t = convexTest(schema, allModules);
+    const ids = await seed(t);
+    const conversations = await t.run(async (ctx) => {
+      const profile = (check: string) => ({ commands: { check, prove: null, eval: null, ship: null }, finders: [], root: "/repo", default: true, changed_at: Date.now() });
+      await ctx.db.patch(ids.rows.projects.private as any, { line_profile: profile("private-check") } as any);
+      const session = (user_id: any) => ctx.db.insert("conversations", {
+        user_id, team_id: ids.T, is_private: false, git_root: "/repo", agent_type: "claude_code", session_id: `ship-${user_id}`,
+        started_at: Date.now(), updated_at: Date.now(), message_count: 1, status: "active",
+      } as any);
+      return { owner: await session(ids.owner), teammate: await session(ids.teammate) };
+    });
+    const checkFor = async (who: "owner" | "teammate") => {
+      const got: any = await t.run((ctx) => gatherShipFacts(ctx, ids[who] as any, { kind: "conversation", id: String(conversations[who]) }));
+      return got.facts?.profile?.check ?? null;
+    };
+    expect(await checkFor("owner")).toBe("private-check");
+    expect(await checkFor("teammate")).toBeNull();
+  });
 
   test("syncLog.getRange: each identity receives cargo for exactly its rows, across every scope", async () => {
     const t = convexTest(schema, allModules);

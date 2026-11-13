@@ -8,7 +8,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./functions";
 import type { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
-import { canAccessConversation, canAccessPullRequest, canAccessTask } from "./lib/access";
+import { accessJudgeFor, canAccessConversation, canAccessProject, canAccessPullRequest, canAccessTask } from "./lib/access";
 import { findTaskByRef } from "./taskEvidence";
 import { trialProjectOf } from "./lib/trialDecision";
 import { findConversationByAnyRef } from "./conversationSessionLookup";
@@ -58,12 +58,18 @@ function profileFacts(project: any): ShipProfileFacts | null {
   return { check: p.commands.check ?? null, ship: p.commands.ship ?? null, merge: p.merge ?? SHIP_DEFAULT_MERGE };
 }
 
-/** The project whose published profile covers a checkout: a task's own, else the one whose profile root holds the path. */
-async function projectForPath(ctx: Ctx, conversation: any): Promise<any | null> {
+/** The project whose published profile covers a checkout: a task's own, else the one whose profile root holds the path.
+ *  by_team_id is ROUTING: a project routed to the team can be private to its owner, so only one the shipper may read counts. */
+async function projectForPath(ctx: Ctx, userId: Id<"users">, conversation: any): Promise<any | null> {
   const root = conversation?.git_root ?? conversation?.project_path;
   if (!root || !conversation.team_id) return null;
   const projects = await ctx.db.query("projects").withIndex("by_team_id", (q: any) => q.eq("team_id", conversation.team_id)).take(200);
-  return projects.find((p: any) => p.line_profile?.default && p.line_profile.root && (root === p.line_profile.root || root.startsWith(`${p.line_profile.root}/`))) ?? null;
+  const judge = await accessJudgeFor(ctx as any, userId);
+  for (const p of projects) {
+    if (!p.line_profile?.default || !p.line_profile.root || !(root === p.line_profile.root || root.startsWith(`${p.line_profile.root}/`))) continue;
+    if (await judge("projects", p)) return p;
+  }
+  return null;
 }
 
 const branchOf = (c: any): string | null => c?.worktree_branch ?? c?.git_branch ?? null;
@@ -135,7 +141,10 @@ export async function gatherShipFacts(ctx: Ctx, userId: Id<"users">, target: Shi
   }
   if (!pr && work) pr = openFirst(await pullRequestsLinkedToConversation(ctx, work._id));
 
-  const project = task?.project_id ? await ctx.db.get(task.project_id).catch(() => null) : await projectForPath(ctx, work);
+  const taskProject = task?.project_id ? await ctx.db.get(task.project_id).catch(() => null) : null;
+  const project = task?.project_id
+    ? (taskProject && (await canAccessProject(ctx as any, userId, taskProject)) ? taskProject : null)
+    : await projectForPath(ctx, userId, work);
   let projectPath = checkoutOf(work);
   if (!projectPath && task) {
     const mappings = await ctx.db.query("directory_team_mappings").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();

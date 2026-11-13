@@ -13,6 +13,7 @@ import { requireWorkspaceCaller } from "./org";
 import { liveRoleByHandle, resolveRoleRef, rolesInBoundary } from "./lib/orgAccess";
 import { resolveScopeRef } from "./orgRoles";
 import { findTaskByRef } from "./taskEvidence";
+import { accessJudgeFor, canAccessTask } from "./lib/access";
 import { reachableRole } from "./pendingMessages";
 import { taskWork } from "./lib/orgOwnership";
 import { callModel } from "./lib/anthropic";
@@ -26,8 +27,13 @@ type Boundary = { team_id?: Id<"teams">; scope_user_id?: Id<"users"> };
 const HOLDING_MAX = 6;
 const TITLE_MAX = 120;
 
-/** The roster the router reads: every live role that can own work, as lib/orgRouter wants it. */
-export async function routerRoster(ctx: { db: any }, boundary: Boundary, roles: any[]): Promise<RouterRoster> {
+/** The roster the router reads: every live role that can own work, as lib/orgRouter wants it.
+ *  Every project, plan and task title in it is one the viewer may read: the
+ *  roster goes into a model prompt and back out through `cast route --dry`,
+ *  and by_team_id is ROUTING, so a project routed to the team can still be
+ *  private to its owner. */
+export async function routerRoster(ctx: { db: any }, viewerId: Id<"users">, boundary: Boundary, roles: any[]): Promise<RouterRoster> {
+  const judge = await accessJudgeFor(ctx, viewerId);
   const team = boundary.team_id ? await ctx.db.get(boundary.team_id) : null;
   const out: RouterRoster = { workspace: team?.name ?? "personal workspace", roles: [], unled: [] };
   // The areas no live role names (S26: the whole workspace role's), so the
@@ -39,23 +45,28 @@ export async function routerRoster(ctx: { db: any }, boundary: Boundary, roles: 
     : (await ctx.db.query("projects").withIndex("by_user_id", (q: any) => q.eq("user_id", boundary.scope_user_id)).collect()).filter((p: any) => !p.team_id);
   for (const p of projects) {
     if (p.status === "done" || p.status === "archived") continue;
+    if (!(await judge("projects", p))) continue;
     if (!namedProjects.has(String(p._id))) out.unled!.push({ kind: "project", title: p.title, goal: p.goal ?? undefined });
     const plans: any[] = await ctx.db.query("plans").withIndex("by_project_id", (q: any) => q.eq("project_id", p._id)).collect();
     for (const pl of plans) {
       if (pl.status !== "active" || namedPlans.has(String(pl._id)) || namedProjects.has(String(p._id))) continue;
+      if (!(await judge("plans", pl))) continue;
       out.unled!.push({ kind: "plan", title: pl.title, goal: pl.goal ?? undefined });
     }
   }
   for (const role of roles) {
     if (role.assistant) continue;
     const areas: RouterRoster["roles"][number]["areas"] = [];
-    for (const id of role.scope?.project_ids ?? []) { const p = await ctx.db.get(id); if (p) areas.push({ kind: "project", title: p.title, goal: p.goal ?? undefined }); }
-    for (const id of role.scope?.plan_ids ?? []) { const p = await ctx.db.get(id); if (p) areas.push({ kind: "plan", title: p.title, goal: p.goal ?? undefined }); }
+    for (const id of role.scope?.project_ids ?? []) { const p = await ctx.db.get(id); if (p && (await judge("projects", p))) areas.push({ kind: "project", title: p.title, goal: p.goal ?? undefined }); }
+    for (const id of role.scope?.plan_ids ?? []) { const p = await ctx.db.get(id); if (p && (await judge("plans", p))) areas.push({ kind: "plan", title: p.title, goal: p.goal ?? undefined }); }
     const charterDoc = role.charter_doc_id ? await ctx.db.get(role.charter_doc_id) : null;
     const briefDoc = role.brief_doc_id ? await ctx.db.get(role.brief_doc_id) : null;
     const standing = parseStandingSection(briefDoc?.content).sort((a, b) => (b.written_at ?? 0) - (a.written_at ?? 0)).map((l) => `${l.project}: ${l.text}${l.written_on ? ` (${l.written_on})` : ""}`);
     const held: any[] = await ctx.db.query("conversations").withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id)).order("desc").take(HOLDING_MAX * 3);
-    const openTasks: any[] = await ctx.db.query("tasks").withIndex("by_assignee_updated", (q: any) => q.eq("assignee", String(role._id))).order("desc").take(HOLDING_MAX * 3);
+    const openTasks: any[] = [];
+    for (const t of await ctx.db.query("tasks").withIndex("by_assignee_updated", (q: any) => q.eq("assignee", String(role._id))).order("desc").take(HOLDING_MAX * 3)) {
+      if (await judge("tasks", t)) openTasks.push(t);
+    }
     const holding = [
       ...held.filter((c) => !c.standing_role_id && c.status !== "done" && !c.inbox_killed_at).slice(0, HOLDING_MAX).map((c) => `session: ${(c.title ?? "").trim() || c.short_id}`),
       ...openTasks.filter((t) => t.status !== "done" && t.status !== "dropped").slice(0, HOLDING_MAX).map((t) => `task: ${t.title}`),
@@ -122,7 +133,7 @@ export const prepare = internalQuery({
     const anchor: OwnedWork = {};
     if (args.task) {
       const task = await findTaskByRef(ctx, args.task);
-      if (!task) throw new Error(`Task not found: ${args.task}`);
+      if (!task || !(await canAccessTask(ctx, userId, task))) throw new Error(`Task not found: ${args.task}`);
       Object.assign(anchor, await taskWork(ctx, task));
     }
     if (args.plan) {
@@ -139,7 +150,7 @@ export const prepare = internalQuery({
     // A request has a sender but no starter: a session stays with whoever
     // started it (line 3), a request with nothing to go on is read (line 4).
     const landing = routeWork({ to, anchor }, roles);
-    const roster = landing.owner ? undefined : await routerRoster(ctx, boundary, roles);
+    const roster = landing.owner ? undefined : await routerRoster(ctx, userId, boundary, roles);
     return { user_id: userId, boundary, landing, roster, anchor, roles };
   },
 });
