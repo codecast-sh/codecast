@@ -97,14 +97,17 @@ export function Code({ children }: { children: ReactNode }) {
   );
 }
 
-/** A framed figure with a mono caption. `wide` lets it break out of the text
- *  column on desktop, for illustrations that need the room. */
-export function Figure({ caption, wide = false, children }: { caption: ReactNode; wide?: boolean; children: ReactNode }) {
+/** A figure with a mono caption: the content sits on a bordered card, or on
+ *  the page itself when it brings its own frame (`bare`). `wide` lets it
+ *  break out of the text column on desktop, for illustrations that need the room. */
+export function Figure({ caption, wide = false, bare = false, children }: { caption: ReactNode; wide?: boolean; bare?: boolean; children: ReactNode }) {
   return (
     <figure className={`my-8${wide ? " md:-mx-20" : ""}`}>
-      <div className="rounded-xl border shadow-xl overflow-hidden" style={{ borderColor: SOL.base2, backgroundColor: SOL.base3 }}>
-        {children}
-      </div>
+      {bare ? children : (
+        <div className="rounded-xl border shadow-xl overflow-hidden" style={{ borderColor: SOL.base2, backgroundColor: SOL.base3 }}>
+          {children}
+        </div>
+      )}
       <figcaption className="mt-3 text-sm font-mono text-center" style={{ color: SOL.base1 }}>
         {caption}
       </figcaption>
@@ -112,12 +115,20 @@ export function Figure({ caption, wide = false, children }: { caption: ReactNode
   );
 }
 
-/** A framed screenshot with a mono caption; images live under public/blog/<slug>/. */
-export function Screenshot({ src, alt, caption, wide = false }: { src: string; alt: string; caption: ReactNode; wide?: boolean }) {
+/** Images under /docs/ are written by scripts/docs-shots.ts through
+ *  docs-shots/frame.html, so they arrive framed (plate, window, shadow) and
+ *  must not be boxed a second time. */
+export function isFramedShot(src: string): boolean {
+  return src.startsWith("/docs/");
+}
+
+/** A screenshot with a mono caption. A framed shot (isFramedShot) shows as it
+ *  is; a raw capture sits on the bordered card. */
+export function Screenshot({ src, alt, caption, wide = false, eager = false }: { src: string; alt: string; caption: ReactNode; wide?: boolean; eager?: boolean }) {
   return (
-    <Figure caption={caption} wide={wide}>
+    <Figure caption={caption} wide={wide} bare={isFramedShot(src)}>
       {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img src={src} alt={alt} className="w-full block" loading="lazy" />
+      <img src={src} alt={alt} className="w-full h-auto block" loading={eager ? "eager" : "lazy"} />
     </Figure>
   );
 }
