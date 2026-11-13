@@ -17,6 +17,7 @@ import { useLineTree } from "../org/lines/lineTree";
 import { CompanyRowsOverride } from "../org/company/useCompanyRows";
 import { useProjectSessionCounts } from "../../hooks/useProjectSessionCounts";
 import { companyDoc, flatGoals, type CompanyDoc, type CompanyMember, type CompanyProject, type DocGoal } from "./companyModel";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 const projectSig = (p: ProjectItem) => `${p.title}|${p.status}|${p.short_id ?? ""}|${p.owner_role_id ?? ""}|${p.updated_at}|${p.color ?? ""}|${p.target_date ?? ""}|${p.risks?.length ?? 0}`;
 
@@ -25,7 +26,7 @@ const projectSig = (p: ProjectItem) => `${p.title}|${p.status}|${p.short_id ?? "
  *  re-pushes on every heartbeat). */
 function useCompanyRoster(): CompanyMember[] {
   const roster = useTeamRosterIdentity();
-  const joinedSig = useInboxStore((s) => ((s.teamMembers ?? []) as { _id?: string; joined_at?: number }[]).map((m) => `${m._id}:${m.joined_at ?? ""}`).join(","));
+  const joinedSig = useInboxStore((s) => (teamMembersOf(s) as { _id?: string; joined_at?: number }[]).map((m) => `${m._id}:${m.joined_at ?? ""}`).join(","));
   return useMemo(() => {
     const joined = new Map(joinedSig.split(",").filter(Boolean).map((x) => { const [id, at] = x.split(":"); return [id, Number(at) || undefined] as const; }));
     return roster.map((m) => ({ ...m, ...(joined.get(m._id) ? { joined_at: joined.get(m._id) } : {}) }));

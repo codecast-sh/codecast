@@ -36,6 +36,7 @@ import { TabParamsCtx } from "../../lib/tabParams";
 import { SessionPane } from "./SessionPane";
 import { PageIcon } from "../RecentVisitRow";
 import { ErrorBoundary } from "../ErrorBoundary";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 // What a pane's strip should CALL itself. A section pane is its section
 // ("Tasks"); an entity pane is the entity — the doc's title, the task's
@@ -58,7 +59,7 @@ function usePaneTitle(path: string): string {
       kind === "docs" ? ((st.docs[id] as any)?.display_title ?? st.docs[id]?.title)
       : kind === "tasks" ? st.tasks[id]?.title
       : kind === "plans" ? st.plans[id]?.title
-      : kind === "chat" ? chatTabTitle(path, st.chatChannels, st.teamMembers, (st as any).currentUser?._id)
+      : kind === "chat" ? chatTabTitle(path, st.chatChannels, teamMembersOf(st), (st as any).currentUser?._id)
       : null,
     // A project, a run, an org object: named the way the tab bar names them.
     (st) => (kind ? null : recordTabTitle(path, st as any)),
@@ -67,7 +68,7 @@ function usePaneTitle(path: string): string {
     kind === "docs" ? ((s.docs[id] as any)?.display_title ?? s.docs[id]?.title)
     : kind === "tasks" ? s.tasks[id]?.title
     : kind === "plans" ? s.plans[id]?.title
-    : kind === "chat" ? chatTabTitle(path, s.chatChannels, s.teamMembers, (s as any).currentUser?._id)
+    : kind === "chat" ? chatTabTitle(path, s.chatChannels, teamMembersOf(s), (s as any).currentUser?._id)
     : null;
   return browser || entity || (kind ? null : recordTabTitle(path, s as any)) || pathLabel(path);
 }
