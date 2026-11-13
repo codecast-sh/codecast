@@ -1,4 +1,5 @@
 import { cliNeverConnected } from "../lib/cliConnected";
+import { InboxDecisionsAll, InboxDecisionsHeader } from "./decisions/InboxDecisions";
 import { forkTreeRootId } from "../lib/forkTreeRoot";
 import React, { useState, useCallback, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -3577,17 +3578,18 @@ function SessionListPanelImpl({
         <>
         {/* An exclude chip is a near-global view ("everything but X") — the
             failed/blocked banner must not vanish behind it. */}
-        {/* Questions lead: a session that asked you something is your move
-            before anything else, pinned or not. One move: clicking a card
-            opens the full-width answer view anchored on that question, and
-            answering advances to the next — same flow for one or many. */}
+        {/* Pinned leads, then Decisions: clicking a decision card opens the
+            full-width answer view anchored on that question, and answering
+            advances to the next — same flow for one or many. */}
+        {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { floor: true, count: countOf(statusPinned, pinned, placed.counts.pinned) })}
         {renderSection("Decisions", statusQuestions, "text-sol-violet", undefined, undefined, {
           key: "questions",
           floor: true,
           count: countOf(statusQuestions, placedQuestions, placed.counts.questions),
           onSelect: handleQuestionSelect,
+          headerAction: <InboxDecisionsAll cards={statusQuestions.length} />,
         })}
-        {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { floor: true, count: countOf(statusPinned, pinned, placed.counts.pinned) })}
+        <InboxDecisionsHeader cards={statusQuestions.length} />
         {renderSection("New", statusNew, "text-sol-blue", undefined, undefined, { key: "new", floor: true, count: countOf(statusNew, newSessions, placed.counts.newSessions) })}
         {/* Needs You, Done and Dormant take a dragged card: the drop is the
             user's rest verdict (setSessionRest), the same stamp the context
