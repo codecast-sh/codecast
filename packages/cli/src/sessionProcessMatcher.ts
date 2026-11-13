@@ -50,6 +50,19 @@ export function isRecognizedAgentComm(comm: string): boolean {
   return AGENT_INTERPRETERS.some((i) => lower.includes(i));
 }
 
+/** The agent binary of a headless run (`claude -p`, `codex exec`) from its full
+ *  `ps -o command=` line, or null for an interactive agent or any other process.
+ *  A headless run draws no composer, so nothing can be typed into its pane. */
+export function headlessAgentOfCommand(command: string): string | null {
+  const tokens = command.trim().split(/\s+/);
+  const at = tokens.slice(0, 2).findIndex((t) => AGENT_BINARY_BASENAMES.has(agentBasename(t)));
+  if (at < 0) return null;
+  const bin = agentBasename(tokens[at]);
+  const args = tokens.slice(at + 1);
+  if (bin === "codex") return args[0] === "exec" ? "codex exec" : null;
+  return args.includes("-p") || args.includes("--print") ? `${bin} -p` : null;
+}
+
 // Legacy alias: installs whose ps comm still reports gemini's old binary name.
 const AGENT_BINARY_ALIASES = new Set(["gemini-cli"]);
 

@@ -388,20 +388,20 @@ describe("groupSessionsForLabelView", () => {
 describe("groupSessionsByPlan", () => {
   const plan = (short_id: string, title: string) => ({ _id: short_id, short_id, title, status: "active" });
 
-  it("groups every plan (even a plan of one), sorts by size then label, items by recency", () => {
+  it("groups every plan (even a plan of one), the latest move first, items by recency", () => {
     const items = [
       session("a1", { updated_at: 10, active_plan: plan("pl-1", "Alpha") }),
       session("a2", { updated_at: 20, active_plan: plan("pl-1", "Alpha") }),
       session("b1", { updated_at: 5, active_plan: plan("pl-2", "Beta") }),
-      session("solo", { active_plan: plan("pl-3", "Gamma") }),
+      session("solo", { updated_at: 1, active_plan: plan("pl-3", "Gamma") }),
       session("np1", { git_root: "/x/web" }),
       session("np2", { git_root: "/x/api" }),
     ];
-    // Every plan in the same state, so size orders them.
+    // Every plan in the same state, so the latest move orders them.
     const placements = new Map(items.map((x) => [x._id, { bucket: "working" as const, work_state: "working" as const }]));
     const { planGroups, projectGroups } = groupSessionsByPlan(items, { placements });
 
-    // pl-1 has 2 members → leads; the two singletons follow, tie broken by label.
+    // pl-1 moved last (20), then pl-2 (5), then pl-3 (1).
     expect(planGroups.map((g) => g.key)).toEqual(["pl-1", "pl-2", "pl-3"]);
     // A plan of one still gets its own group — the opposite of the status view's
     // ≥2 flood guard.
@@ -439,6 +439,14 @@ describe("groupSessionsByPlan", () => {
     const items = [
       session("worker", { updated_at: 20, message_count: 30, active_plan: plan("pl-1", "Alpha") }),
       session("lead", { updated_at: 10, message_count: 5000, active_plan: plan("pl-1", "Alpha") }),
+    ];
+    expect(groupSessionsByPlan(items).planGroups[0].items.map((s) => s._id)).toEqual(["lead", "worker"]);
+  });
+
+  it("never leads with a worker another thread spawned, however long it ran", () => {
+    const items = [
+      session("worker", { updated_at: 20, message_count: 900, spawned_by_conversation_id: "lead", active_plan: plan("pl-1", "Alpha") }),
+      session("lead", { updated_at: 10, message_count: 400, active_plan: plan("pl-1", "Alpha") }),
     ];
     expect(groupSessionsByPlan(items).planGroups[0].items.map((s) => s._id)).toEqual(["lead", "worker"]);
   });
