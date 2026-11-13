@@ -105,14 +105,20 @@ async function runStep(tab: CastTab, step: Step) {
   else await Bun.sleep(step.sleep);
 }
 
-/** The box to capture in CSS px, once it holds still (an opening animation). */
-const boxOf = (selector: string | null) => `(async () => {
+/** The box to capture in CSS px, once it holds still (an opening animation). `include` widens it to the last match of a second selector. */
+const boxOf = (selector: string | null, include?: string) => `(async () => {
   const el = ${selector ? `document.querySelector(${JSON.stringify(selector)})` : "null"};
   if (${selector ? "!el" : "false"}) return null;
+  const also = ${include ? `[...document.querySelectorAll(${JSON.stringify(include)})].pop()` : "null"};
+  const union = (a, b) => {
+    if (!b) return a;
+    const x = Math.min(a.x, b.x), y = Math.min(a.y, b.y);
+    return { x, y, width: Math.max(a.right, b.right) - x, height: Math.max(a.bottom, b.bottom) - y };
+  };
   let last = "";
   for (let i = 0; i < 20; i++) {
     await new Promise((r) => setTimeout(r, 250));
-    const r = el ? el.getBoundingClientRect() : { x: 0, y: 0, width: innerWidth, height: innerHeight };
+    const r = el ? union(el.getBoundingClientRect(), also?.getBoundingClientRect()) : { x: 0, y: 0, width: innerWidth, height: innerHeight };
     const box = JSON.stringify({ x: r.x, y: r.y, width: r.width, height: r.height });
     if (box === last) return JSON.parse(box);
     last = box;
@@ -133,12 +139,12 @@ async function captureApp(tab: CastTab, shot: Shot): Promise<string> {
     st.closePalette?.();
     if (st.clientState.ui?.theme !== ${JSON.stringify(theme)}) st.updateClientUI({ theme: ${JSON.stringify(theme)} });
     // The session rail shows only where the shot asks for it.
-    if (${!!shot.rail}) { if (!document.querySelector("[data-sv-rail]")) st.toggleSidePanel(); }
-    else st.closeSidePanel();
+    if (!${!!shot.rail}) st.closeSidePanel();
     history.pushState(null, "", ${JSON.stringify(shot.route)});
     dispatchEvent(new PopStateEvent("popstate"));
   })()`);
   await until(tab, `location.pathname === ${JSON.stringify(shot.route!.split("?")[0])} && innerWidth === ${vp.width}`, `${shot.name}: the route and viewport`);
+  if (shot.rail) await openRail(tab);
   const selector = shot.crop && shot.crop !== "window" ? shot.crop.selector : null;
   const ready = shot.ready ?? (shot.steps?.length ? APP_SHELL : selector ?? APP_SHELL);
   await until(tab, `document.querySelector(${JSON.stringify(ready)})`, `${shot.name}: ${ready}`, 60_000);
@@ -148,8 +154,10 @@ async function captureApp(tab: CastTab, shot: Shot): Promise<string> {
   // Let images and fonts land, and clear toasts nothing in the shot asked for.
   await tab.evaluate(`document.fonts.ready.then(() => new Promise((r) => setTimeout(r, 1200))).then(() => window.__toast?.dismiss())`);
   await Bun.sleep(400);
-  const box = await tab.evaluate<{ x: number; y: number; width: number; height: number } | null>(boxOf(selector));
+  const include = shot.crop && shot.crop !== "window" ? shot.crop.include : undefined;
+  const box = await tab.evaluate<{ x: number; y: number; width: number; height: number } | null>(boxOf(selector, include));
   if (!box) throw new Error(`${shot.name}: no element matches ${selector}`);
+  if (box.width < 1 || box.height < 1) throw new Error(`${shot.name}: ${selector} has no size yet`);
   const pad = shot.crop && shot.crop !== "window" ? shot.crop.pad ?? 0 : 0;
   const clip = { x: box.x - pad, y: box.y - pad, width: box.width + 2 * pad, height: box.height + 2 * pad, scale: 1 };
   const { data } = await tab.send<{ data: string }>("Page.captureScreenshot", { format: "png", clip });
@@ -158,15 +166,28 @@ async function captureApp(tab: CastTab, shot: Shot): Promise<string> {
   return out;
 }
 
+const RAIL_OPEN = `(document.querySelector("[data-sv-rail]")?.getBoundingClientRect().width ?? 0) > 100`;
+/** The session rail open at its width; a toggle can land on a remembered-closed pane, so it checks and tries again. */
+async function openRail(tab: CastTab) {
+  for (let i = 0; i < 3; i++) {
+    if (await tab.evaluate<boolean>(RAIL_OPEN)) return;
+    await tab.evaluate(`__inboxStore.getState().toggleSidePanel()`);
+    try {
+      return await until(tab, RAIL_OPEN, "the session rail", 5_000);
+    } catch {}
+  }
+  throw new Error("the session rail did not open");
+}
+
 /** A capture survives a dev server reload under it (another session's edit) by starting over. */
 async function captureWithRetry(tab: CastTab, shot: Shot): Promise<string> {
   for (let attempt = 1; ; attempt++) {
     try {
       return await captureApp(tab, shot);
     } catch (e) {
-      if (attempt >= 3) throw e;
+      if (attempt >= 6) throw e;
       console.warn(`retry    ${shot.name}: ${(e as Error).message.split("\n")[0]}`);
-      await Bun.sleep(2000);
+      await Bun.sleep(5000);
     }
   }
 }
