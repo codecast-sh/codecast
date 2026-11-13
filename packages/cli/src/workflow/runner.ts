@@ -1299,10 +1299,14 @@ async function loadTaskContext(options: RunOptions, context: Record<string, stri
   context["execution_status"] = String(task.execution_status || "");
   const verdict = task.review_verdict;
   context["review_verdict"] = verdict && (verdict.at ?? 0) >= freshSince ? String(verdict.verdict) : "none";
-  context["review_note"] = verdict?.note ? capForeignText(escapeForeignControlChars(String(verdict.note)), FOREIGN_TEXT_CAPS.descriptionChars) : "";
-  const card = splitReviewNote(context["review_note"]);
+  const note = verdict?.note ? escapeForeignControlChars(String(verdict.note)) : "";
+  context["review_note"] = capForeignText(note, FOREIGN_TEXT_CAPS.descriptionChars);
+  // The question and document are the decide gate's card, which a person reads
+  // whole (like handoff_note), so they split from the uncapped note. The split
+  // already makes the question one line; agents see review_body fenced.
+  const card = splitReviewNote(note);
   // A note with no words still asks something the person can place.
-  context["review_question"] = inlineForeignText(card.question) || `Ship "${context["task_title"]}"?`;
+  context["review_question"] = card.question.replace(/\s+/g, " ") || `Ship "${context["task_title"]}"?`;
   context["review_body"] = card.body;
   // One routable value for "how did the hand end": the execution status of a
   // handoff that placed the task in review, else none. A `changes` verdict
