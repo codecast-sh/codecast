@@ -141,12 +141,12 @@ function ProfileSignInDialog({ deviceId, profile: profileName, start: startOnOpe
         <div className="space-y-3 text-xs leading-relaxed text-sol-text-muted">
           <ol className="space-y-2 rounded-md border border-sol-border bg-sol-bg-alt/60 p-3">
             <Step n={1} state={step1}>
-              Codecast runs <code className="rounded bg-sol-bg px-1 py-px font-mono text-meta">claude auth login</code> for this account on {machine}.
+              Codecast runs <code className="rounded bg-sol-bg px-1 py-px font-mono text-[11px]">claude auth login</code> for this account on {machine}.
             </Step>
             <Step n={2} state={step2}>
               The browser on {machine} opens claude.ai. Sign in as <span className="text-sol-text">{who}</span> and approve.
               {pending && (
-                <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-amber-500">
+                <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-amber-500">
                   <Spinner label={busy || superseded ? `asking ${machine} to open the page` : "waiting for the sign-in"} />
                   <button
                     type="button"
@@ -194,11 +194,11 @@ function ProfileSignInDialog({ deviceId, profile: profileName, start: startOnOpe
         </div>
 
         <DialogFooter className="gap-2">
-          <Button size="sm" variant="ghost" onClick={close} className="h-7 px-2 text-meta">
+          <Button size="sm" variant="ghost" onClick={close} className="h-7 px-2 text-[11px]">
             {confirmed ? "Done" : "Close"}
           </Button>
           {!pending && !confirmed && !unreachable && (
-            <Button size="sm" disabled={busy} onClick={() => start(failed)} className="h-7 px-3 text-meta">
+            <Button size="sm" disabled={busy} onClick={() => start(failed)} className="h-7 px-3 text-[11px]">
               {failed ? "Try again" : "Start the sign-in"}
             </Button>
           )}

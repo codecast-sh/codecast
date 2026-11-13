@@ -406,13 +406,13 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
   const badges = (
     <>
       {item.trial && (
-        <span className="inline-block whitespace-nowrap text-meta px-1.5 py-0.5 rounded border border-sol-magenta/30 text-sol-magenta shrink-0" data-decision-trial>trial · nothing ships</span>
+        <span className="inline-block whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded border border-sol-magenta/30 text-sol-magenta shrink-0" data-decision-trial>trial · nothing ships</span>
       )}
       {tier === 3 && (
-        <span className="inline-block whitespace-nowrap text-meta px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue shrink-0">advisory</span>
+        <span className="inline-block whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded border border-sol-blue/30 text-sol-blue shrink-0">advisory</span>
       )}
       {tier === 2 && (
-        <span className="inline-block whitespace-nowrap text-meta px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim shrink-0">session not running</span>
+        <span className="inline-block whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim shrink-0">session not running</span>
       )}
     </>
   );
@@ -430,7 +430,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
     <button
       onClick={jumpToAsk}
       disabled={!canJumpToAsk}
-      className={`text-meta text-sol-text-dim ${canJumpToAsk ? "hover:text-sol-text hover:underline" : "cursor-default"} transition-colors`}
+      className={`text-[11px] text-sol-text-dim ${canJumpToAsk ? "hover:text-sol-text hover:underline" : "cursor-default"} transition-colors`}
       title={canJumpToAsk ? "Go to the ask in the conversation" : undefined}
     >
       {askedText}
@@ -438,7 +438,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
   );
 
   // A gate on a workflow run (the-line.md L4): the run this question pauses.
-  const runChip = detailDecision?.workflow_run_id ? <GateRunChip runId={detailDecision.workflow_run_id} nodeId={detailDecision.gate_node_id} className="text-meta" /> : null;
+  const runChip = detailDecision?.workflow_run_id ? <GateRunChip runId={detailDecision.workflow_run_id} nodeId={detailDecision.gate_node_id} className="text-[11px]" /> : null;
   const facts = detail && detailDecision ? <DecisionFacts decision={detailDecision} detail={detail} className={card ? "" : "mt-4 mb-5"} /> : null;
 
   const whoIsAsking = askingRole ? (
@@ -469,13 +469,13 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
       ) : (
         <span className="text-sm text-sol-text">{item.blocking ? "Waiting on your decision" : "Asked for your steer"}</span>
       )}
-      {stepper && project && <span className="decision-head-wide whitespace-nowrap text-meta text-sol-text-dim">{project}</span>}
+      {stepper && project && <span className="decision-head-wide whitespace-nowrap text-[11px] text-sol-text-dim">{project}</span>}
       {badges}
     </div>
   );
 
   const escapeHatch = (
-    <div className="flex items-center flex-wrap gap-4 text-meta text-sol-text-dim mt-4">
+    <div className="flex items-center flex-wrap gap-4 text-[11px] text-sol-text-dim mt-4">
       {stepper && (
         <>
           <button onClick={openSession} className="flex items-center gap-1.5 hover:text-sol-text transition-colors">
@@ -534,7 +534,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
       )}
       {showRecent && (
         <div>
-          <div className="text-mark uppercase tracking-wide text-sol-text-dim mb-1">most recent from the agent</div>
+          <div className="text-[10px] uppercase tracking-wide text-sol-text-dim mb-1">most recent from the agent</div>
           <div className="text-sm text-sol-text-muted border-l-2 border-sol-border pl-3">
             <MarkdownRenderer content={recentText!} />
           </div>
@@ -569,13 +569,13 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
     <div ref={optionsRef} className="decision-sheet-options min-w-0" data-decision-options data-reveal-span>
       {pageSlugs.length > 0 && (
         <div className="mb-3">
-          <div className="text-mark uppercase tracking-wide text-sol-text-dim mb-1">the options, as pages</div>
+          <div className="text-[10px] uppercase tracking-wide text-sol-text-dim mb-1">the options, as pages</div>
           <OptionPages decision={decisionRow ?? { options: item.options, status: "pending" }} answerable={kind === "single"} onAnswer={answer} />
         </div>
       )}
       {isPermissionCard && (
         <div className="mb-3">
-          <div className="text-mark uppercase tracking-wide text-sol-text-dim mb-1">waiting on your approval</div>
+          <div className="text-[10px] uppercase tracking-wide text-sol-text-dim mb-1">waiting on your approval</div>
           <PermissionStack permissions={permissions} />
         </div>
       )}
@@ -598,7 +598,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
             held={(n) => held(options[n]?.index ?? -1)}
             gated={(n) => gated(options[n]?.index ?? -1)}
             tags={(n) => item.defaultOption === options[n]?.index && (
-              <span className="text-meta px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">proceeding with this</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">proceeding with this</span>
             )}
           />}
           {/* A permission prompt is answered by Approve/Deny only; an infra
@@ -618,7 +618,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
             placeholder={hosted ? LANE_COPY.approval.typeAnswer : "Answer in your own words; this goes to the agent as a message."}
             className="w-full bg-sol-card border border-sol-border rounded px-2 py-1.5 text-sm text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-blue/50"
           />
-          <div className="flex items-center gap-2 mt-1 text-meta text-sol-text-dim">
+          <div className="flex items-center gap-2 mt-1 text-[11px] text-sol-text-dim">
             <KeyCap size="xs">return</KeyCap><span>send</span>
             <KeyCap size="xs">esc</KeyCap><span>cancel</span>
           </div>
@@ -656,7 +656,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
             {whoIsAsking}
             {stepper ? (
               // The queue's own controls: step either way, and the count opens the whole list.
-              <span className="shrink-0 flex items-center rounded-full border border-sol-border text-meta text-sol-text-muted tabular-nums" data-decision-place>
+              <span className="shrink-0 flex items-center rounded-full border border-sol-border text-[11px] text-sol-text-muted tabular-nums" data-decision-place>
                 {stepper.onPrev && stepper.total > 1 && (
                   <button onClick={stepper.onPrev} className="pl-1.5 pr-0.5 py-0.5 rounded-l-full hover:text-sol-text hover:bg-sol-card transition-colors" title="Previous decision" aria-label="Previous decision">
                     <ChevronLeft className="w-3.5 h-3.5" />
@@ -674,7 +674,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
                 )}
               </span>
             ) : place && (
-              <span className="shrink-0 text-meta text-sol-text-dim tabular-nums" data-decision-place>
+              <span className="shrink-0 text-[11px] text-sol-text-dim tabular-nums" data-decision-place>
                 <span className="decision-head-wide">decision {place.position} of {place.total}</span>
                 <span className="decision-head-short">{place.position}/{place.total}</span>
               </span>
@@ -686,7 +686,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
             )}
             {!hosted && <button
               onClick={shrink}
-              className="shrink-0 flex items-center gap-1 pl-2 pr-3 py-0.5 rounded-full border border-sol-border text-meta text-sol-text-muted hover:text-sol-text hover:bg-sol-card transition-colors"
+              className="shrink-0 flex items-center gap-1 pl-2 pr-3 py-0.5 rounded-full border border-sol-border text-[11px] text-sol-text-muted hover:text-sol-text hover:bg-sol-card transition-colors"
               title="Fold the question away and read the thread"
             >
               <ChevronDown className="w-3.5 h-3.5" />
@@ -725,7 +725,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
             data-decision-options-strip
           >
             {/* Each answer reads whole: a long one wraps in its column, and in a narrow pane they stack. */}
-            <div className="decision-sheet-col mx-auto w-full px-6 py-2 flex items-start gap-x-4 gap-y-1.5 min-w-0 text-left text-meta leading-snug text-sol-text-muted">
+            <div className="decision-sheet-col mx-auto w-full px-6 py-2 flex items-start gap-x-4 gap-y-1.5 min-w-0 text-left text-[11px] leading-snug text-sol-text-muted">
               <ChevronDown className="w-3.5 h-3.5 mt-px shrink-0 text-sol-text-dim" />
               <span className="flex flex-1 flex-wrap gap-x-4 gap-y-1.5 min-w-0">
                 {options.map((o, n) => (
@@ -761,7 +761,7 @@ export function SessionDecisionCard({ item, stepper, more = 0, targetNonce, scro
         onClick={grow}
         title={foldTitle}
         data-decision-fold-pill
-        className={`flex items-center gap-1.5 pl-2 pr-2.5 py-0.5 rounded-full border text-meta transition-colors ${
+        className={`flex items-center gap-1.5 pl-2 pr-2.5 py-0.5 rounded-full border text-[11px] transition-colors ${
           item.blocking ? "border-sol-yellow/50 text-sol-text hover:bg-sol-yellow/10" : "border-sol-blue/40 text-sol-blue hover:bg-sol-blue hover:text-sol-bg"
         }`}
       >

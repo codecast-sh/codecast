@@ -44,7 +44,7 @@ export function useContainerWidth(initial = 800) {
 // untransformed containing block so the tip always lands at the cursor.
 export function HoverTip({ x, y, children }: { x: number; y: number; children: React.ReactNode }) {
   return createPortal(
-    <div className="fixed z-50 px-2 py-1 bg-sol-base03 text-sol-base2 text-meta rounded shadow-lg pointer-events-none whitespace-nowrap" style={{ left: x, top: y, transform: "translate(-50%, -100%)" }}>
+    <div className="fixed z-50 px-2 py-1 bg-sol-base03 text-sol-base2 text-[10px] rounded shadow-lg pointer-events-none whitespace-nowrap" style={{ left: x, top: y, transform: "translate(-50%, -100%)" }}>
       {children}
     </div>,
     document.body
@@ -116,33 +116,11 @@ export function ActivityHeatmap({ data, label = "Agent Activity" }: { data: any[
   const svgW = grid.length * step;
   const svgH = 7 * step;
 
-  // The grid is built once per data and size: hovering a cell sets only the
-  // tooltip, so the 365 cells do not re-render on every pointer move.
-  const cells = useMemo(() => (
-    <svg width={svgW} height={svgH} className="block">
-      {grid.map((week, w) => week.map((cell, d) => (
-        <rect
-          key={`${w}-${d}`}
-          x={w * step} y={d * step}
-          width={cellSize} height={cellSize}
-          rx={2}
-          style={{ fill: heatColor(cell.hours, levels, colors) }}
-          className="cursor-crosshair"
-          onMouseEnter={(e) => {
-            const r = (e.target as SVGRectElement).getBoundingClientRect();
-            setTooltip({ x: r.left + r.width / 2, y: r.top - 4, text: `${cell.date}: ${cell.hours.toFixed(1)}h, ${cell.sessions} sessions` });
-          }}
-          onMouseLeave={() => setTooltip(null)}
-        />
-      )))}
-    </svg>
-  ), [grid, levels, colors, cellSize, step, svgW, svgH]);
-
   return (
     <div className="mt-2 mb-1 w-full">
       <div className="flex items-baseline justify-between mb-2">
-        <span className="text-mark text-sol-text-muted uppercase tracking-wider font-semibold">{label}</span>
-        <span className="text-meta text-sol-text-muted tabular-nums">
+        <span className="text-[11px] text-sol-text-muted uppercase tracking-wider font-semibold">{label}</span>
+        <span className="text-[11px] text-sol-text-muted tabular-nums">
           <span className="text-sol-text font-semibold">{fmtHours(totalHours)}</span> across{" "}
           <span className="text-sol-text font-semibold">{totalSessions.toLocaleString()}</span> sessions
         </span>
@@ -151,16 +129,32 @@ export function ActivityHeatmap({ data, label = "Agent Activity" }: { data: any[
         {/* Month labels */}
         <div className="flex" style={{ width: svgW, height: 14 }}>
           {months.map((m, i) => (
-            <span key={i} className="text-meta text-sol-text-muted select-none absolute" style={{ left: m.col * step }}>{m.label}</span>
+            <span key={i} className="text-[10px] text-sol-text-muted select-none absolute" style={{ left: m.col * step }}>{m.label}</span>
           ))}
         </div>
         {/* SVG grid */}
-        {cells}
+        <svg width={svgW} height={svgH} className="block">
+          {grid.map((week, w) => week.map((cell, d) => (
+            <rect
+              key={`${w}-${d}`}
+              x={w * step} y={d * step}
+              width={cellSize} height={cellSize}
+              rx={2}
+              style={{ fill: heatColor(cell.hours, levels, colors) }}
+              className="cursor-crosshair"
+              onMouseEnter={(e) => {
+                const r = (e.target as SVGRectElement).getBoundingClientRect();
+                setTooltip({ x: r.left + r.width / 2, y: r.top - 4, text: `${cell.date}: ${cell.hours.toFixed(1)}h, ${cell.sessions} sessions` });
+              }}
+              onMouseLeave={() => setTooltip(null)}
+            />
+          )))}
+        </svg>
         {/* Legend */}
         <div className="flex items-center justify-end gap-1 mt-2">
-          <span className="text-meta text-sol-text-muted mr-0.5">Less</span>
+          <span className="text-[10px] text-sol-text-muted mr-0.5">Less</span>
           {colors.map((c, i) => <div key={i} style={{ background: c, width: 10, height: 10, borderRadius: 2 }} />)}
-          <span className="text-meta text-sol-text-muted ml-0.5">More</span>
+          <span className="text-[10px] text-sol-text-muted ml-0.5">More</span>
         </div>
         {/* Tooltip */}
         {tooltip && <HoverTip x={tooltip.x} y={tooltip.y}>{tooltip.text}</HoverTip>}

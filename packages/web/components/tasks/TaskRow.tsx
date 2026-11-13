@@ -154,7 +154,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
       {parentChip && (
         <button
           onClick={(e) => { e.stopPropagation(); router.push(`/tasks/${parentChip.id}`); }}
-          className="flex items-center gap-1 text-meta px-1.5 py-0 rounded border border-sol-border/40 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 flex-shrink-0 font-mono cq-hide-compact transition-colors max-w-[10rem]"
+          className="flex items-center gap-1 text-[10px] px-1.5 py-0 rounded border border-sol-border/40 text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/40 flex-shrink-0 font-mono cq-hide-compact transition-colors max-w-[10rem]"
           title={`Subtask of ${parentChip.short_id}: ${parentChip.title}`}
         >
           <CornerDownRight className="w-3 h-3 flex-shrink-0" />
@@ -165,7 +165,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
           it, so the row explains itself when it surfaces in Done/All views. */}
       {task.duplicate_of && (
         <span
-          className="flex items-center gap-1 text-meta px-1.5 py-0 rounded border border-sol-border/40 text-sol-text-dim flex-shrink-0 font-mono cq-hide-compact"
+          className="flex items-center gap-1 text-[10px] px-1.5 py-0 rounded border border-sol-border/40 text-sol-text-dim flex-shrink-0 font-mono cq-hide-compact"
           title={`Duplicate of ${task.duplicate_of}`}
         >
           <Copy className="w-3 h-3" />
@@ -189,7 +189,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
             {hiddenDescendantCount > 0 && <Bot className="w-3 h-3" />}
           </>
         );
-        const cls = `flex items-center gap-1 text-meta px-1.5 py-0 rounded border flex-shrink-0 font-mono cq-hide-compact ${
+        const cls = `flex items-center gap-1 text-[10px] px-1.5 py-0 rounded border flex-shrink-0 font-mono cq-hide-compact ${
           hiddenDescendantCount > 0 ? "border-sol-cyan/30 text-sol-cyan/80" : "border-sol-border/40 text-sol-text-dim"
         }`;
         // A button only when it actually toggles something; otherwise a span so
@@ -209,7 +209,7 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         <TaskCallChip callId={task.from_call} className="cq-hide-compact" />
       ) : taskOrigin(task) === "meeting" ? (
         <span
-          className="flex items-center gap-1 text-meta px-1.5 py-0 rounded bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 flex-shrink-0 cq-hide-compact"
+          className="flex items-center gap-1 text-[10px] px-1.5 py-0 rounded bg-sol-magenta/10 text-sol-magenta border border-sol-magenta/20 flex-shrink-0 cq-hide-compact"
           title="Captured from a meeting"
         >
           <Users className="w-3 h-3" />meeting
@@ -229,13 +229,13 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         <span className="flex items-center gap-1 flex-shrink-0 cq-hide-compact">
           <TaskSessionBadge task={task} />
           {task.session_count && task.session_count > 1 ? (
-            <span className="text-meta text-sol-text-dim font-mono" title={`${task.session_count} sessions`}>
+            <span className="text-[10px] text-sol-text-dim font-mono" title={`${task.session_count} sessions`}>
               <Link2 className="w-3 h-3 inline mr-0.5" />{task.session_count}
             </span>
           ) : null}
         </span>
       ) : task.session_count && task.session_count > 0 ? (
-        <span className="text-meta text-sol-text-dim flex-shrink-0 font-mono cq-hide-compact" title={`${task.session_count} session${task.session_count > 1 ? "s" : ""}`}>
+        <span className="text-[10px] text-sol-text-dim flex-shrink-0 font-mono cq-hide-compact" title={`${task.session_count} session${task.session_count > 1 ? "s" : ""}`}>
           <Link2 className="w-3 h-3 inline mr-0.5" />{task.session_count}
         </span>
       ) : null}
@@ -243,14 +243,14 @@ export function TaskRow({ task, state, onFilterLabel, triageMode, onTriage, inde
         <Link
           href={`/plans/${(task as any).plan._id}`}
           onClick={(e) => e.stopPropagation()}
-          className="text-meta px-1.5 py-0 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 flex-shrink-0 hover:bg-sol-cyan/20 transition-colors max-w-[120px] truncate cq-hide-compact"
+          className="text-[10px] px-1.5 py-0 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 flex-shrink-0 hover:bg-sol-cyan/20 transition-colors max-w-[120px] truncate cq-hide-compact"
           title={(task as any).plan.title}
         >
           {(task as any).plan.title}
         </Link>
       )}
       {task.source === "insight" && (
-        <span className="text-meta px-1.5 py-0 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 flex-shrink-0 cq-hide-compact">mined</span>
+        <span className="text-[10px] px-1.5 py-0 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 flex-shrink-0 cq-hide-compact">mined</span>
       )}
       {task.execution_status && (
         <TaskStatusBadge status={task.execution_status} type="execution" className="flex-shrink-0 cq-hide-compact" />
@@ -355,7 +355,7 @@ export function KanbanCard({
       }`}
     >
       <div className="flex items-start justify-between gap-2 mb-2">
-        <span className="flex items-center gap-1.5 min-w-0 text-meta font-mono text-sol-text-dim leading-none mt-0.5">
+        <span className="flex items-center gap-1.5 min-w-0 text-[10px] font-mono text-sol-text-dim leading-none mt-0.5">
           <ShortId id={task.short_id} />
           {task.external && <IssueLink external={task.external} className="max-w-[9rem]" />}
           {parentChip && (
@@ -397,7 +397,7 @@ export function KanbanCard({
                 onClick={(e) => { e.stopPropagation(); onFilterLabel(firstLabel); }}
                 title={`Filter by label: ${firstLabel}`}
                 aria-label={`Filter by label: ${firstLabel}`}
-                className={`inline-flex items-center gap-1 text-meta px-1.5 py-0.5 rounded-full border hover:brightness-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-cyan ${lc.bg} ${lc.border} ${lc.text}`}
+                className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border hover:brightness-90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sol-cyan ${lc.bg} ${lc.border} ${lc.text}`}
               >
                 <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
                 {firstLabel}
@@ -405,7 +405,7 @@ export function KanbanCard({
             );
           })()}
         </div>
-        <span className="text-meta text-sol-text-dim tabular-nums">{fmtDate(task.updated_at)}</span>
+        <span className="text-[10px] text-sol-text-dim tabular-nums">{fmtDate(task.updated_at)}</span>
       </div>
     </div>
   );

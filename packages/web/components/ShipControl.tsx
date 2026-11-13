@@ -79,7 +79,7 @@ function ShipControlOn({ target, size = "full" }: { target: ShipTargetRef; size?
             data-ship-button
             // Compact sits in a row of header chips, so it takes their shape:
             // a pill with a /10 tint and /30 border, not a heavier button.
-            className={`inline-flex items-center border bg-sol-green/10 text-sol-green transition-colors hover:bg-sol-green/20 disabled:cursor-default disabled:opacity-60 ${size === "compact" ? "gap-1 rounded-full border-sol-green/30 px-2 py-0.5 text-meta" : "h-7 gap-1.5 rounded border-sol-green/50 px-3 text-sm font-medium"}`}
+            className={`inline-flex items-center border bg-sol-green/10 text-sol-green transition-colors hover:bg-sol-green/20 disabled:cursor-default disabled:opacity-60 ${size === "compact" ? "gap-1 rounded-full border-sol-green/30 px-2 py-0.5 text-[10px]" : "h-7 gap-1.5 rounded border-sol-green/50 px-3 text-sm font-medium"}`}
             title={live ? "Shipping now" : "What Ship will do"}
           >
             <Rocket className={size === "compact" ? "h-3 w-3" : "h-3.5 w-3.5"} />
@@ -113,7 +113,7 @@ function ShipPlanView({ row, onShip, onCancel }: { row: ShipTargetRow | undefine
       <div className="border-b border-sol-border px-4 py-3">
         <div className="text-[13px] font-semibold leading-snug">Ship {plan.label}</div>
         {plan.branch && (
-          <div className="mt-1.5 inline-flex items-center gap-1.5 font-mono text-meta text-sol-text-muted" data-ship-branch>
+          <div className="mt-1.5 inline-flex items-center gap-1.5 font-mono text-[11px] text-sol-text-muted" data-ship-branch>
             <GitBranch className="h-3 w-3" />
             {plan.branch}
             <ArrowRight className="h-3 w-3 text-sol-text-dim" />
@@ -128,7 +128,7 @@ function ShipPlanView({ row, onShip, onCancel }: { row: ShipTargetRow | undefine
       <ol className="flex flex-col gap-1.5 px-4 py-3 text-[12.5px] leading-snug" data-ship-steps>
         {plan.steps.map((step, i) => (
           <li key={i} className="flex gap-2">
-            <span className="mt-px w-4 shrink-0 text-right font-mono text-meta text-sol-text-dim">{i + 1}</span>
+            <span className="mt-px w-4 shrink-0 text-right font-mono text-[11px] text-sol-text-dim">{i + 1}</span>
             <span>{renderCode(step)}</span>
           </li>
         ))}
@@ -159,7 +159,7 @@ function ShipPlanView({ row, onShip, onCancel }: { row: ShipTargetRow | undefine
 function ShipStatusLine({ progress, run, compact }: { progress: ShipProgress; run: ShipTargetRow["run"]; compact?: boolean }) {
   const tone = PHASE_TONE[progress.phase];
   return (
-    <div className={`flex items-center gap-1.5 text-meta text-sol-text-muted ${compact ? "max-w-[22rem] shrink-0" : "max-w-full"}`} data-ship-phase={progress.phase}>
+    <div className={`flex items-center gap-1.5 text-[11.5px] text-sol-text-muted ${compact ? "max-w-[22rem] shrink-0" : "max-w-full"}`} data-ship-phase={progress.phase}>
       <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${LIVE.has(progress.phase) ? "animate-pulse" : ""}`} style={{ background: tone }} />
       <span className="min-w-0 truncate" style={{ color: progress.phase === "failed" ? tone : undefined }} title={progress.text}>{progress.text}</span>
       {progress.pr && (
@@ -180,7 +180,7 @@ function ShipStatusLine({ progress, run, compact }: { progress: ShipProgress; ru
 function renderCode(text: string) {
   return text.split(/(`[^`]+`)/g).map((part, i) =>
     part.startsWith("`") && part.endsWith("`")
-      ? <code key={i} className="rounded bg-sol-bg-alt px-1 font-mono text-meta">{part.slice(1, -1)}</code>
+      ? <code key={i} className="rounded bg-sol-bg-alt px-1 font-mono text-[11px]">{part.slice(1, -1)}</code>
       : part,
   );
 }

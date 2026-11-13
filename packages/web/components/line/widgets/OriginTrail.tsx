@@ -144,9 +144,7 @@ export const OriginTrail = memo(function OriginTrail({ decision, task: taskProp,
             <button type="button" className="ot-nav" disabled={ci >= stages.length - 1} onClick={() => flip(1)} aria-label="Next stage"><ChevronRight aria-hidden /></button>
             <span className="ot-panel-title">{current.label}{current.ref && <span className="ot-ref">{current.ref}</span>}</span>
             <span className="lw-spacer" />
-            {current.onOpen
-              ? <NavLink className="ot-all" href={current.href ?? null} onOpen={current.onOpen}>Open<ArrowUpRight aria-hidden /></NavLink>
-              : current.href ? <Link className="ot-all" href={current.href}>Open<ArrowUpRight aria-hidden /></Link> : null}
+            {(current.href || current.onOpen) && <NavLink className="ot-all" href={current.href ?? null} onOpen={current.onOpen ?? (() => { if (current.href) window.location.assign(current.href); })}>Open<ArrowUpRight aria-hidden /></NavLink>}
             <button type="button" className="ot-nav" onClick={() => setSel(null)} aria-label="Close"><X aria-hidden /></button>
           </div>
           <div className="ot-panel-body">{current.panel!()}</div>

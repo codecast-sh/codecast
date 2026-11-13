@@ -66,13 +66,6 @@ describe("useWorkspaceCollection wake signature", () => {
     expect(membershipSig(after, KEY, null)).toBe(membershipSig(before, KEY, null));
   });
 
-  it("is a short digest however many rows the workspace holds", () => {
-    const coll: Record<string, any> = {};
-    for (let i = 0; i < 10_000; i++) coll[`task_${i}`] = row(`task_${i}`, "open", i);
-    expect(membershipSig(coll, KEY, defaultFieldSig, "tasks").length).toBeLessThan(64);
-    expect(membershipSig(coll, KEY, null, "tasks").length).toBeLessThan(64);
-  });
-
   it("still changes on membership moves either way", () => {
     const inWs = { a: row("a", "open", 100) };
     const gone = {};

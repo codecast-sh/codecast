@@ -670,6 +670,7 @@ export function useBottomAnchoredList(opts: BottomAnchoredListOptions): BottomAn
         // offsetHeight, not a rect: rect heights are screen px under CSS zoom.
         const real = el.offsetHeight;
         if (Math.abs(real - v.size) > 1) {
+          (((window as any).__VSTAT ??= {}).heal ??= []).push({ k: String(v.key), from: v.size, to: real, t: Date.now() }); // TEMP-VSTAT
           virtualizer.resizeItem(v.index, real);
           corrected = true;
         }

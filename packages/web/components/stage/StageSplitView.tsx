@@ -101,7 +101,7 @@ function PaneStrip({ leafId, path, focused }: { leafId: string; path: string; fo
       style={{ background: "var(--cc-panel-head-bg)", borderColor: "var(--cc-panel-rule)" }}
     >
       <PageIcon path={path} className={`w-3 h-3 flex-shrink-0 ${focused ? "text-sol-text-dim" : "text-sol-text-dim/50"}`} />
-      <span className={`text-meta truncate flex-1 leading-none ${focused ? "text-sol-text-muted" : "text-sol-text-dim/70"}`}>
+      <span className={`text-[11px] truncate flex-1 leading-none ${focused ? "text-sol-text-muted" : "text-sol-text-dim/70"}`}>
         {title}
       </span>
       <PaneControls onExpand={() => stageExpand(leafId)} onClose={() => stageClose(leafId)} />

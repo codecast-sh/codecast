@@ -31,7 +31,6 @@ import { featureIcon, featureTone, TONE } from "./featureLook";
 import { AgentToolSetupPanel } from "../conversation/blocks/AgentToolSetupCard";
 import { useAgentToolSetup } from "../../lib/useAgentToolSetup";
 import { featureLock, useDevicePolicy } from "../../lib/managedPolicy";
-import { featureOnLedger } from "./useFeatureOffer";
 
 /**
  * /agent-features: what codecast can teach your agents. The web twin of
@@ -70,26 +69,56 @@ function AgentFeaturesContent() {
   return (
     <div className="h-full overflow-y-auto" data-main-scroll>
       <div className="mx-auto w-full max-w-[1180px] px-5 pb-16 pt-8 sm:px-8">
-        <header className="mb-6 flex flex-wrap items-center justify-between gap-6">
-          <h1 className="flex items-center gap-2.5 text-2xl font-serif text-sol-text">
-            <Blocks className="h-6 w-6 text-sol-cyan" strokeWidth={1.5} />
-            Agent features
-          </h1>
+        <header className="flex flex-wrap items-end justify-between gap-6">
+          <div className="max-w-2xl">
+            <h1 className="flex items-center gap-2.5 text-2xl font-serif text-sol-text">
+              <Blocks className="h-6 w-6 text-sol-cyan" strokeWidth={1.5} />
+              Agent features
+            </h1>
+            <p className="mt-2 text-sm leading-relaxed text-sol-text-muted">
+              Codecast teaches your coding agents to work as a team: to remember, delegate, track work,
+              show results and use your machine. Switch on what you want your agents to know, one computer at a time.
+            </p>
+          </div>
           <button
             type="button"
             onClick={() => router.push("/capabilities")}
             className="inline-flex items-center gap-1 text-xs text-sol-text-muted hover:text-sol-text"
           >
-            Skills and plugins
+            Third-party skills and plugins live in Capabilities
             <ArrowUpRight className="h-3.5 w-3.5" />
           </button>
         </header>
+
+        <HowItWorks />
 
         <DeviceSettingsFrame panel={panel} title="Agent features" icon={Blocks} className="max-w-none space-y-6">
           {(selected) => <FeatureBoard d={selected} features={features} panel={panel} />}
         </DeviceSettingsFrame>
       </div>
     </div>
+  );
+}
+
+function HowItWorks() {
+  const steps = [
+    { n: "1", title: "Switch a feature on", body: "for one machine. Each machine keeps its own setup, so pick it above the list." },
+    { n: "2", title: "Your agents learn it", body: "Codecast adds it to that machine's agent instructions, with any skill or hook it needs." },
+    { n: "3", title: "New sessions pick it up", body: "and use it when the work calls for it. Nothing runs until they do." },
+  ];
+  return (
+    <ol className="my-7 grid gap-px overflow-hidden rounded-lg border border-sol-border/60 bg-sol-border/40 sm:grid-cols-3">
+      {steps.map((s) => (
+        <li key={s.n} className="flex gap-3 bg-sol-bg px-4 py-3.5">
+          <span className="mt-px flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-sol-border font-mono text-[10px] text-sol-text-muted">
+            {s.n}
+          </span>
+          <p className="text-[12.5px] leading-relaxed text-sol-text-muted">
+            <span className="font-medium text-sol-text">{s.title}</span> {s.body}
+          </p>
+        </li>
+      ))}
+    </ol>
   );
 }
 
@@ -175,9 +204,14 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
         <div className="flex-1" />
         <span className="text-xs text-sol-text-muted">
           <span className="font-medium text-sol-text">{totalOn}</span> of {total} on {deviceDisplayName(d)}
-          {!d.online && <span className="ml-2 rounded bg-sol-yellow/10 px-1.5 py-0.5 text-sol-yellow" title="Its switches come back when it reconnects">Offline</span>}
         </span>
       </div>
+
+      {!d.online && (
+        <p className="rounded-md bg-sol-yellow/10 px-3 py-2 text-xs text-sol-text">
+          This machine is offline, so its features are read-only until it reconnects.
+        </p>
+      )}
 
       <div className="grid gap-10 lg:grid-cols-[224px_minmax(0,1fr)]">
         <nav aria-label="Feature groups" className="hidden lg:block">
@@ -191,7 +225,7 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
               >
                 <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${TONE[g.id].dot}`} />
                 <span className="flex-1">{g.name}</span>
-                <span className="font-mono text-meta text-sol-text-dim">
+                <span className="font-mono text-[10.5px] text-sol-text-dim">
                   {g.onCount}/{g.total}
                 </span>
               </button>
@@ -208,7 +242,7 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
                   <div className="max-w-xl">
                     <h2 className="flex items-baseline gap-2.5 text-base font-semibold text-sol-text">
                       <span className={TONE[g.id].text}>{g.name}</span>
-                      <span className="font-mono text-meta font-normal text-sol-text-dim">
+                      <span className="font-mono text-[11px] font-normal text-sol-text-dim">
                         {g.onCount} of {g.total} on
                       </span>
                     </h2>
@@ -270,12 +304,11 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
           openFeature ? (
             <label className="flex shrink-0 items-center gap-2 pt-1 text-xs text-sol-text-muted">
               {isOn(openFeature) ? "On" : "Off"}
-              <FeatureSwitch
-                s={openFeature}
-                machine={deviceDisplayName(d)}
-                on={isOn(openFeature)}
+              <Switch
+                checked={isOn(openFeature)}
                 disabled={!d.online || pending.has(openFeature.slug) || !!lockOf(openFeature)}
-                onToggle={(next) => toggle(openFeature, next)}
+                onCheckedChange={(next) => toggle(openFeature, next)}
+                aria-label={openFeature.name}
               />
             </label>
           ) : open === STABLE_KEY ? (
@@ -287,17 +320,15 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
   );
 }
 
-/** A feature's switch. On goes through the shared review (it hands this machine's agents a capability); off is one press. */
-function FeatureSwitch({ s, machine, on, disabled, onToggle }: { s: SnippetDescriptor; machine: string; on: boolean; disabled: boolean; onToggle: (next: boolean) => void }) {
-  const name = s.name;
+function StatusPill({ on }: { on: boolean }) {
   return (
-    <ConsequentialSwitch
-      on={on}
-      ledger={featureOnLedger(s, [machine])}
-      onTurnOn={() => onToggle(true)}
-      onTurnOff={() => onToggle(false)}
-      trigger={({ on, press }) => <Switch checked={on} disabled={disabled} onCheckedChange={press} aria-label={name} aria-haspopup={on ? undefined : "dialog"} />}
-    />
+    <span
+      className={`rounded-full border px-1.5 py-px text-[10px] ${
+        on ? "border-sol-green/30 bg-sol-green/10 text-sol-green" : "border-sol-border bg-sol-bg-alt text-sol-text-muted"
+      }`}
+    >
+      {on ? "On" : "Off"}
+    </span>
   );
 }
 
@@ -358,8 +389,8 @@ function CardShell({
 
 function CardFooter({ left, mono = true }: { left: React.ReactNode; mono?: boolean }) {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-meta">
-      <span className={`text-meta text-sol-text-dim ${mono ? "font-mono" : ""}`}>{left}</span>
+    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[11.5px]">
+      <span className={`text-[11px] text-sol-text-dim ${mono ? "font-mono" : ""}`}>{left}</span>
       <span className="text-sol-text-muted group-hover:text-sol-text">How it works →</span>
     </div>
   );
@@ -392,9 +423,10 @@ function FeatureCard({
         <>
           <span className="text-sm font-medium text-sol-text">{s.name}</span>
           {isRecentlyShipped(s) && <NewPill />}
+          <StatusPill on={on} />
         </>
       }
-      control={<FeatureSwitch s={s} machine={deviceDisplayName(d)} on={on} disabled={disabled} onToggle={onToggle} />}
+      control={<Switch checked={on} disabled={disabled} onCheckedChange={onToggle} aria-label={s.name} />}
       footer={
         lock
           ? <CardFooter mono={false} left={<span className="inline-flex items-center gap-1 text-sol-text-muted"><Lock className="h-3 w-3" /> {lock}</span>} />
@@ -461,7 +493,7 @@ function StableControls({ d, panel }: { d: Device; panel: Panel }) {
         onChange={(v) => !disabled && apply(v as StableMode, global)}
         items={STABLE_MODES.map((m) => ({ key: m.value, label: m.name, title: m.desc }))}
       />
-      <label className={`flex items-center gap-2 text-meta text-sol-text-muted ${mode === "off" ? "opacity-55" : ""}`}>
+      <label className={`flex items-center gap-2 text-[11.5px] text-sol-text-muted ${mode === "off" ? "opacity-55" : ""}`}>
         All projects
         <Switch
           checked={global}
@@ -484,6 +516,7 @@ function StableCard({ d, panel, onOpen }: { d: Device; panel: Panel; onOpen: () 
       title={
         <>
           <span className="text-sm font-medium text-sol-text">{STABLE_NAME}</span>
+          <StatusPill on={mode !== "off"} />
         </>
       }
       footer={

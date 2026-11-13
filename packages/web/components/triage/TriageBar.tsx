@@ -46,7 +46,7 @@ function VerbButton({ verb, disabled, onRun }: { verb: TriageVerb; disabled: boo
         )}
       >
         <Icon className="w-3.5 h-3.5 shrink-0" strokeWidth={1.75} />
-        <span className="cq-triage-word text-meta leading-none">{verb.label}</span>
+        <span className="cq-triage-word text-[11px] leading-none">{verb.label}</span>
       </button>
     </ShortcutTooltip>
   );
@@ -63,11 +63,11 @@ function FlashLine({ flash }: { flash: Flash }) {
         flash.verb.text,
       )}
     >
-      <span className="text-meta leading-none">{flash.verb.done}</span>
+      <span className="text-[10px] leading-none">{flash.verb.done}</span>
       <span className="flex items-center gap-1 text-sol-text-dim">
         <span aria-hidden>·</span>
         <MenuKeyCaps action="ui.undo" className="flex items-center gap-[2px]" />
-        <span className="text-meta leading-none">to undo</span>
+        <span className="text-[10px] leading-none">to undo</span>
       </span>
     </span>
   );
@@ -151,7 +151,7 @@ export function TriageBar() {
       data-triage-bar
       className={cn(
         "cq-container flex-shrink-0 hidden md:block select-none",
-        "text-meta text-sol-text-dim bg-sol-bg transition-colors duration-500",
+        "text-[10px] text-sol-text-dim bg-sol-bg transition-colors duration-500",
         glow && "bg-sol-cyan/[0.04]",
       )}
     >

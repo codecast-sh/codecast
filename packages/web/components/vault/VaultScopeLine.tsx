@@ -74,7 +74,7 @@ export function VaultScopeLine({
 
   return (
     <div
-      className="flex items-center gap-1.5 px-3 py-1 text-meta text-sol-text-dim border-b border-sol-border/30"
+      className="flex items-center gap-1.5 px-3 py-1 text-[10px] text-sol-text-dim border-b border-sol-border/30"
       title={describeVaultScope({ root, presence, team })}
     >
       <PresenceIcon className="w-3 h-3 flex-shrink-0" />

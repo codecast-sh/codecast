@@ -33,6 +33,7 @@ import { useSyncProjects } from "../hooks/useSyncProjects";
 import { useSyncSavedViews } from "../hooks/useSyncSavedViews";
 import { ModSidebarSections } from "./mods/ModSidebarSections";
 import { activeViewId, currentViewId, VIEW_ID_KEY } from "../lib/savedViews";
+import { useCurrentUser } from "../hooks/useCurrentUser";
 import { toast } from "sonner";
 import { ContextMenu, CtxItem, useContextMenu } from "./ui/context-menu";
 import { MessagesSquare, FolderKanban, Layers, Users, UserMinus, Hash, Pin, PinOff, BellOff, Lock, Monitor, Smartphone } from "lucide-react";
@@ -53,6 +54,18 @@ import { FeedNavRowView, QuestionsNavRowView, SidebarNavView, ThreadsNavRowView,
 import { usePoppedOut } from "../hooks/usePoppedOut";
 import { inActiveWorkspace } from "../lib/workspaceScope";
 
+const CreateTaskModal = lazy(() =>
+  import("./CreateTaskModal").then((module) => ({ default: module.CreateTaskModal })),
+);
+const CreateDocModal = lazy(() =>
+  import("./CreateDocModal").then((module) => ({ default: module.CreateDocModal })),
+);
+const CreateChannelModal = lazy(() =>
+  import("./CreateChannelModal").then((module) => ({ default: module.CreateChannelModal })),
+);
+const NewMessageModal = lazy(() =>
+  import("./chat/NewMessageModal").then((module) => ({ default: module.NewMessageModal })),
+);
 const LiveNowRail = lazy(() =>
   import("./calls/LiveNow").then((module) => ({ default: module.LiveNowRail })),
 );
@@ -101,9 +114,8 @@ const NeedsInputCountBadge = memo(function NeedsInputCountBadge() {
 
 // The decision queue's row. Same isolation rule as the badge above: the count
 // changes whenever any agent asks or gets answered, and that must re-render one
-// row, not the rail. Always drawn: at zero the count goes, but the row stays,
-// so the team's and past decisions stay one click away and an arriving
-// decision never shifts the rail under the pointer.
+// row, not the rail. Hidden entirely at zero — an empty queue should take up no
+// attention, which is the whole premise of the feature.
 const QuestionsNavRow = memo(function QuestionsNavRow({
   isActive,
   isNarrow,
@@ -116,6 +128,7 @@ const QuestionsNavRow = memo(function QuestionsNavRow({
   // The open decisions the viewer owns, as Mine lists them. A session parked
   // on a terminal question counts on the inbox's Needs You instead.
   const pending = useOwnedDecisionCount();
+  if (pending === 0) return null;
   return <QuestionsNavRowView isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} pending={pending} />;
 });
 
@@ -137,28 +150,6 @@ const ThreadsNavRow = memo(function ThreadsNavRow({
   const unread = useThreadUnread();
   return <ThreadsNavRowView isActive={isActive} isNarrow={isNarrow} onMobileClose={onMobileClose} unread={unread} />;
 });
-
-/** The fields the pinned rail draws from each pinned row: a project's title
- *  and ref, a channel's id, kind, DM key and name, a view's name. A handful of
- *  pins, so a short string; empty with no pins. */
-function pinnedRowsSig(s: any): string {
-  let sig = "";
-  for (const p of readPins(s)) {
-    if (p.kind === "project") {
-      const r = s.projects?.[p.id];
-      sig += `p\u0001${r?.title ?? ""}\u0001${r?.short_id ?? ""}\u0002`;
-    } else if (p.kind === "channel") {
-      const id = supersededChannelId(s.chatChannels ?? {}, p.id) ?? p.id;
-      const c = s.chatChannels?.[id];
-      sig += `c\u0001${id}\u0001${c?.kind ?? ""}\u0001${c?.dm_key ?? ""}\u0001${c?.name ?? ""}\u0002`;
-    } else {
-      const views = s.savedViews;
-      const v = (Array.isArray(views) ? undefined : views?.[p.id]) ?? Object.values(views ?? {}).find((r: any) => String(r?._id) === p.id) as any;
-      sig += `v\u0001${v?.name ?? ""}\u0002`;
-    }
-  }
-  return sig;
-}
 
 // The rail of pinned subsection rows — projects, saved views, channels —
 // resolved LIVE from the store so renames follow, with the pin-time label as
@@ -183,13 +174,10 @@ function PinnedRail({
   // The counted rail: a pinned channel is that channel's ONLY row (the Chat
   // sublist skips pinned ids), so its unread signals must ride the pin.
   const chatRail = useChatRail();
-  // This rail is always mounted: it wakes on the fields its pinned rows draw,
-  // never on the whole projects, views and channels maps (a chat unread tick
-  // or a project sync re-rendered it, pins or none). The rows themselves are
-  // read below from the state this signature woke on.
-  useInboxStore((s) => pinnedRowsSig(s));
-  const { projects, savedViews, chatChannels } = useInboxStore.getState() as any;
+  const projects = useInboxStore((s) => s.projects);
+  const savedViews = useInboxStore((s) => (s as any).savedViews);
   const viewRows: any[] = Array.isArray(savedViews) ? savedViews : Object.values(savedViews ?? {});
+  const chatChannels = useInboxStore((s) => s.chatChannels);
   // Identity-stable roster: the raw teamMembers array re-pushes every few
   // seconds on teammates' recent_session_* churn.
   const { members: teamMembers, viewerId: viewer } = useChatMembers();
@@ -329,11 +317,7 @@ function PinnedRail({
 const sidebarSessionSig = (r: any) => `${r.git_root ?? ""}|${r.project_path ?? ""}|${r.git_remote_url ?? ""}|${Math.floor((r.updated_at ?? 0) / 60_000)}`;
 const byUpdatedDesc = (a: any, b: any) => (b.updated_at ?? 0) - (a.updated_at ?? 0);
 
-// Memo: every prop is a primitive or a stable handle, so a shell render
-// (a navigation, a layout change) does not re-run this rail's hooks. The create
-// dialogs it used to host live in DashboardLayout's CreateModalHost, mounted
-// at every width.
-export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false, scope, peek = false }: SidebarProps) {
+export function Sidebar({ directoryFilter, isMobileOpen = false, onMobileClose, isNarrow = false, scope, peek = false }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const isSessions = pathname?.startsWith("/sessions");
@@ -373,10 +357,17 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
     pathname === "/routines" || pathname?.startsWith("/routines/");
   const isTriggers = pathname === "/triggers" || pathname?.startsWith("/triggers/") ||
     pathname === "/schedules" || pathname?.startsWith("/schedules/"); // /schedules = pre-rename alias
+  const { user: currentUser } = useCurrentUser();
+  // Only the create-task modal reads the roster here; don't wake the Sidebar
+  // on roster churn while it is closed.
+  const teamMembers = useInboxStore((s) => (s.createModal ? s.teamMembers : null));
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const teamsQuery = useSyncTeams();
   const teams = useInboxStore((s) => s.teams);
   const activeTeam = (teamsQuery ?? teams)?.find((t: any) => t?._id === activeTeamId);
+  const createModal = useInboxStore((s) => s.createModal);
+  const createModalDefaults = useInboxStore((s) => s.createModalDefaults);
+  const closeCreateModal = useInboxStore((s) => s.closeCreateModal);
   const openCompose = useInboxStore((s) => s.openCompose);
   const hasUsedDesktop = useInboxStore((s) => s.clientState.dismissed?.has_used_desktop ?? false);
   // The footer offers the native app for this device (lib/nativeApps); the Mac
@@ -667,7 +658,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
               onMobileClose={onMobileClose}
             />
           }
-          feed={activeTeam && <FeedNavRowView team={activeTeam} isActive={!!isTeamActivity} isNarrow={isNarrow} onMobileClose={onMobileClose} />}
+          feed={activeTeam && <FeedNavRowView team={activeTeam} isActive={!!isTeamActivity} isNarrow={isNarrow} />}
           questions={<>
             <QuestionsNavRow
               isActive={pathname === "/decisions" || (pathname?.startsWith("/decisions/") ?? false)}
@@ -738,11 +729,10 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
 
         {!isNarrow && bookmarks && bookmarks.length > 0 && (
           <div className="mt-4">
-            <RailHeading
-              label="Bookmarks"
-              isNarrow={false}
-              action={<span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-sol-bg-highlight/70 text-mark tabular-nums text-sol-text-dim normal-case font-normal">{bookmarks.length}</span>}
-            />
+            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center">
+              <span>Bookmarks</span>
+              <span className="ml-auto inline-flex items-center justify-center min-w-[17px] h-[15px] px-1 rounded-full bg-sol-bg-highlight/70 text-[10px] tabular-nums text-sol-text-dim/50 normal-case font-normal">{bookmarks.length}</span>
+            </div>
             <div className="space-y-1">
               {(showAllBookmarks ? bookmarks : bookmarks.slice(0, 8)).map((bm: any, i: number, arr: any[]) => {
                 const isOpen = bm.conversation_id === openConversationId;
@@ -797,7 +787,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
                             {primary || <span className="italic font-normal text-sol-text-dim/60">No preview</span>}
                           </span>
                           <span
-                            className="flex-shrink-0 text-meta tabular-nums text-sol-text-dim"
+                            className="flex-shrink-0 text-[9.5px] tabular-nums text-[color-mix(in_srgb,var(--sol-text-dim)_28%,transparent)] group-hover:text-sol-text-dim transition-colors"
                             title={new Date(bm.created_at).toLocaleString()}
                           >
                             {visitTimeAgo(bm.created_at)}
@@ -808,7 +798,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
                           // second headline; the project dot carries the only color so the eye groups by project.
                           <span className="flex items-center gap-1.5 mt-[3px] min-w-0">
                             {projColor && <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 opacity-75 ${projColor.dot}`} title={proj} />}
-                            <span className="min-w-0 truncate text-meta text-sol-text-dim leading-tight">
+                            <span className="min-w-0 truncate text-[10px] text-[color-mix(in_srgb,var(--sol-text-dim)_38%,transparent)] leading-tight group-hover:text-sol-text-dim transition-colors">
                               {convTitle}
                             </span>
                           </span>
@@ -818,7 +808,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
                     {/* Remove floats over the timestamp on hover so the row never reflows. */}
                     <button
                       onClick={(e) => { e.stopPropagation(); toggleBookmark(bm.conversation_id, bm.message_id); }}
-                      className="absolute right-3 top-1.5 p-0.5 rounded opacity-0 group-hover:opacity-100 focus-visible:opacity-100 bg-sol-bg-highlight text-sol-text-dim hover:text-sol-red transition-opacity"
+                      className="absolute right-3 top-1.5 p-0.5 rounded opacity-0 group-hover:opacity-100 bg-sol-bg-highlight text-sol-text-dim hover:text-sol-red transition-opacity"
                       title="Remove bookmark"
                       aria-label="Remove bookmark"
                     >
@@ -832,7 +822,7 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
               {bookmarks.length > 8 && (
                 <button
                   onClick={() => setShowAllBookmarks(v => !v)}
-                  className="w-full mt-1 px-4 py-1 flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors"
+                  className="w-full mt-1 px-4 py-1 flex items-center gap-1 text-[10.5px] text-sol-text-dim/70 hover:text-sol-text transition-colors"
                 >
                   <svg className={`w-2.5 h-2.5 transition-transform ${showAllBookmarks ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
@@ -851,20 +841,18 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
 
         {!isNarrow && computedDirectories.length > 0 && (
           <div data-rail-group="workspaces" className="mt-4">
-            <RailHeading
-              label="Workspaces"
-              isNarrow={false}
-              action={<button
+            <div className="text-xs font-medium text-sol-text-dim uppercase tracking-wide px-4 mb-2 flex items-center justify-between">
+              <span>Workspaces</span>
+              <button
                 onClick={() => openCompose()}
                 className="text-sol-text-dim hover:text-sol-yellow transition-colors"
                 title="New session"
-                aria-label="New session"
               >
                 <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
                 </svg>
-              </button>}
-            />
+              </button>
+            </div>
             <div className="space-y-0.5">
               {computedDirectories.slice(0, 8).map((dir) => (
                 <button
@@ -930,6 +918,27 @@ export const Sidebar = memo(function Sidebar({ directoryFilter, isMobileOpen = f
           <span>{NATIVE_APP_COPY[nativeApp].cta}</span>
         </a>
       )}
+      <Suspense fallback={null}>
+        {createModal === "task" && (
+          <CreateTaskModal onClose={() => closeCreateModal()} teamMembers={teamMembers ?? []} currentUser={currentUser} defaults={createModalDefaults} />
+        )}
+        {createModal === "plan" && (
+          <CreateDocModal onClose={() => closeCreateModal()} initialType="plan" />
+        )}
+        {createModal === "chat" && chatOn && (
+          <CreateChannelModal
+            onClose={() => closeCreateModal()}
+            // The stub id is what the rail already shows; the tab path follows the
+            // supersede when the server row lands (rekeyId).
+            onCreated={(channelId) => router.push(`/chat/${channelId}`)}
+          />
+        )}
+        {/* "New huddle" is the new-message field with a huddle intent: the
+            same people/rooms search, ending in a ring instead of a room. */}
+        {createModal === "huddle" && callsOn && (
+          <NewMessageModal intent="huddle" onClose={() => closeCreateModal()} />
+        )}
+      </Suspense>
     </nav>
   );
-});
+}

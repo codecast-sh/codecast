@@ -86,7 +86,7 @@ function RepoList() {
                 </span>
               </Link>
               {open > 0 && (
-                <span className="inline-flex items-center gap-1 text-meta text-sol-green">
+                <span className="inline-flex items-center gap-1 text-[11px] text-sol-green">
                   <GitPullRequest className="w-3 h-3" />
                   {open} open
                 </span>

@@ -90,7 +90,7 @@ function CommentProvenance({ external }: { external: TaskCommentExternal }) {
       {label}
     </>
   );
-  const cls = "inline-flex items-center gap-1 text-meta text-sol-text-dim flex-shrink-0";
+  const cls = "inline-flex items-center gap-1 text-[10px] text-sol-text-dim flex-shrink-0";
   const title = external.author ? `${label}, by ${external.author}` : label;
   return external.url ? (
     <a href={external.url} target="_blank" rel="noopener noreferrer" className={`${cls} hover:text-sol-text`} title={title} onClick={(e) => e.stopPropagation()}>
@@ -156,14 +156,14 @@ export function TaskCommentItem({
             <span className="cc-cmt-name">{name}</span>
           )}
           {comment.comment_type && comment.comment_type !== "note" && (
-            <Badge variant="outline" className="text-meta px-1 py-0 leading-4">{comment.comment_type}</Badge>
+            <Badge variant="outline" className="text-[10px] px-1 py-0 leading-4">{comment.comment_type}</Badge>
           )}
           {comment.external && <CommentProvenance external={comment.external} />}
           {!noTime && <TimeAgo ts={comment.created_at} className="cc-cmt-time" />}
         </div>
         <div className="cc-cmt-body">{clamp ? <Clamp>{body}</Clamp> : body}</div>
         {comment.delivered_to_info && (
-          <div className="mt-1 flex items-center gap-1.5 text-meta text-sol-text-dim" title="The session working on this task received this comment">
+          <div className="mt-1 flex items-center gap-1.5 text-[10px] text-sol-text-dim" title="The session working on this task received this comment">
             <span>Sent to</span>
             <SessionTag
               session={comment.delivered_to_info}
@@ -366,7 +366,7 @@ export function TaskCommentComposer({
           </div>
         </div>
         {working && (
-          <div className="flex items-center gap-1.5 pt-1 pl-6 text-meta text-sol-text-dim" title="A comment reaches the session working on this task">
+          <div className="flex items-center gap-1.5 pt-1 pl-6 text-[10px] text-sol-text-dim" title="A comment reaches the session working on this task">
             {owner?.here ? (
               <span>Also sends to this session</span>
             ) : (

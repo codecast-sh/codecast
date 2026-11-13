@@ -103,7 +103,7 @@ export function RepoFileFinder({ repository, refName, family, anchorRef }: {
         <div className="max-h-[52vh] overflow-y-auto">
           {!index.ready && !index.error && <p className="p-6 text-center text-xs text-sol-text-dim">Reading the file list…</p>}
           {index.error && <p className="p-6 text-center text-xs text-sol-red">The file list could not be read.</p>}
-          {index.data?.truncated && <p className="px-3 py-2 text-meta text-sol-yellow border-b border-sol-border/40">
+          {index.data?.truncated && <p className="px-3 py-2 text-[11px] text-sol-yellow border-b border-sol-border/40">
             This repository is large enough that GitHub returned only part of its file list, so some files are missing here.
           </p>}
 
@@ -122,7 +122,7 @@ export function RepoFileFinder({ repository, refName, family, anchorRef }: {
           </p>}
         </div>
 
-        <div className="px-3 py-2 border-t border-sol-border/60 flex gap-3 items-center text-meta text-sol-text-dim">
+        <div className="px-3 py-2 border-t border-sol-border/60 flex gap-3 items-center text-[11px] text-sol-text-dim">
           <span className="flex gap-1 items-center"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap> move</span>
           <span className="flex gap-1 items-center"><KeyCap size="xs">↵</KeyCap> open</span>
           {files.length > 0 && <span className="ml-auto">{files.length} files</span>}

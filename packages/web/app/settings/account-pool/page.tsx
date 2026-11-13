@@ -9,7 +9,7 @@ import { useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { Layers } from "lucide-react";
 import { rankByHeadroom } from "@codecast/shared/contracts";
-import { SettingsBadge, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
+import { SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { AccountUsageBars } from "../../../components/AccountUsageMeter";
 import { Button } from "../../../components/ui/button";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
@@ -46,21 +46,21 @@ function TeamPool({ teamName, rows, showTeam }: { teamName: string; rows: PoolAc
       title={showTeam ? teamName : "Who is spending which account"}
       icon={Layers}
       actions={
-        <span className="text-meta tabular-nums text-sol-text-dim">
+        <span className="text-[11px] tabular-nums text-sol-text-dim">
           {rows.length} account{rows.length === 1 ? "" : "s"} · {machines} machine{machines === 1 ? "" : "s"} · {tokens(week)} tokens, 7 days
         </span>
       }
     >
       {people.length > 0 ? (
         <div className="overflow-x-auto px-4 py-3 sm:px-5" data-pool-grid>
-          <table className="w-full border-separate border-spacing-[3px] text-meta">
+          <table className="w-full border-separate border-spacing-[3px] text-[11px]">
             <thead>
               <tr>
                 <th />
                 {accounts.map((a) => (
                   <th key={a._id} className="px-1 pb-1 text-center font-normal">
                     <div className="truncate font-medium text-sol-text">{accountName(a)}</div>
-                    <div className="truncate text-meta text-sol-text-dim">{a.mine ? "you" : a.contributor_name}</div>
+                    <div className="truncate text-[10px] text-sol-text-dim">{a.mine ? "you" : a.contributor_name}</div>
                   </th>
                 ))}
                 <th className="px-1 pb-1 text-right font-normal text-sol-text-dim">total</th>
@@ -95,7 +95,7 @@ function TeamPool({ teamName, rows, showTeam }: { teamName: string; rows: PoolAc
           </table>
         </div>
       ) : (
-        <div className="px-4 py-3 text-meta text-sol-text-dim sm:px-5">Nobody has run on the pool this week.</div>
+        <div className="px-4 py-3 text-[11px] text-sol-text-dim sm:px-5">Nobody has run on the pool this week.</div>
       )}
 
       {accounts.map((a) => {
@@ -106,8 +106,10 @@ function TeamPool({ teamName, rows, showTeam }: { teamName: string; rows: PoolAc
               <span className="h-2 w-2 shrink-0 rounded-full bg-sol-green" />
               <span className="text-sm font-medium text-sol-text">{accountName(a)}</span>
               <span className="min-w-0 flex-1 truncate text-xs text-sol-text-muted">{a.email}</span>
-              <SettingsBadge tone="cyan">from {a.mine ? "you" : a.contributor_name}</SettingsBadge>
-              <span className="shrink-0 text-meta tabular-nums text-sol-text-dim">
+              <span className="shrink-0 rounded bg-sol-cyan/10 px-1.5 py-0.5 text-[10px] text-sol-cyan">
+                from {a.mine ? "you" : a.contributor_name}
+              </span>
+              <span className="shrink-0 text-[11px] tabular-nums text-sol-text-dim">
                 {a.machines} machine{a.machines === 1 ? "" : "s"}
               </span>
             </div>
@@ -161,7 +163,7 @@ export default function AccountPoolSettings() {
       ))}
       {byTeam.length > 0 && (
         <div className="flex justify-end px-1">
-          <Button size="sm" variant="ghost" className="text-meta" onClick={() => router.push("/settings/claude-accounts")}>
+          <Button size="sm" variant="ghost" className="text-[11px]" onClick={() => router.push("/settings/claude-accounts")}>
             Share or take back an account
           </Button>
         </div>

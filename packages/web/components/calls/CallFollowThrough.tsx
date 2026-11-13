@@ -46,7 +46,7 @@ const titleSig = (d: any) => d.title ?? "";
 function StageMark({ stage }: { stage: FollowStage }) {
   const s = STAGE[stage];
   return (
-    <span className="inline-flex w-[122px] shrink-0 items-center gap-1.5 whitespace-nowrap text-meta" style={{ color: s.color }}>
+    <span className="inline-flex w-[112px] shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px]" style={{ color: s.color }}>
       <span className="h-2 w-2 shrink-0 rounded-[2px]" style={{ background: s.color }} />
       {s.label}
     </span>
@@ -77,7 +77,7 @@ function ItemRow({ item, call }: { item: FollowItem; call: any }) {
       <span className="flex min-w-0 flex-1 items-center gap-2">
         {t ? (
           <a href={taskFacePath(t)} onClick={open} className="flex min-w-0 items-center gap-2 text-[12.5px] text-sol-text hover:underline">
-            <span className="shrink-0 font-mono text-meta text-sol-text-dim">{t.short_id}</span>
+            <span className="shrink-0 font-mono text-[10.5px] text-sol-text-dim">{t.short_id}</span>
             <span className="truncate">{t.title}</span>
           </a>
         ) : (
@@ -88,7 +88,7 @@ function ItemRow({ item, call }: { item: FollowItem; call: any }) {
                 href={taskFacePath(item.guess)}
                 onClick={(e) => openTask(e, item.guess)}
                 title={`Reads like ${item.guess.short_id}: ${item.guess.title}`}
-                className="shrink-0 font-mono text-meta text-sol-orange hover:underline"
+                className="shrink-0 font-mono text-[10.5px] text-sol-orange hover:underline"
               >
                 {item.guess.short_id}?
               </a>
@@ -96,7 +96,7 @@ function ItemRow({ item, call }: { item: FollowItem; call: any }) {
           </>
         )}
       </span>
-      <span className="flex w-[92px] shrink-0 items-center gap-1 truncate text-meta text-sol-text-muted">
+      <span className="flex w-[92px] shrink-0 items-center gap-1 truncate text-[11px] text-sol-text-muted">
         {owner ? (
           <>
             <AuthorAvatar name={owner.name} avatar={owner.image} size={14} />
@@ -108,11 +108,11 @@ function ItemRow({ item, call }: { item: FollowItem; call: any }) {
           <span className="text-sol-text-dim">nobody</span>
         )}
       </span>
-      <span className="flex max-w-[220px] shrink-0 items-center gap-1 overflow-hidden whitespace-nowrap text-meta [&_.entity-ref]:max-w-[120px] [&_.entity-ref]:truncate">
+      <span className="flex max-w-[220px] shrink-0 items-center gap-1 overflow-hidden whitespace-nowrap text-[11px] [&_.entity-ref]:max-w-[120px] [&_.entity-ref]:truncate">
         {item.sessions.slice(0, 2).map((id) => (
           <EntityIdPill key={id} shortId={id.slice(0, 7)} compact />
         ))}
-        {extra > 0 && <span className="text-meta text-sol-text-dim">+{extra}</span>}
+        {extra > 0 && <span className="text-[10.5px] text-sol-text-dim">+{extra}</span>}
         {item.decisions[0]?.short_id && <EntityIdPill shortId={item.decisions[0].short_id} compact />}
       </span>
       {item.raw ? (
@@ -120,12 +120,12 @@ function ItemRow({ item, call }: { item: FollowItem; call: any }) {
           type="button"
           onClick={() => makeCallTask(call, item.raw!)}
           title={item.guess ? `File this ask as its own task, apart from ${item.guess.short_id}` : "File this ask as a task on the call"}
-          className="flex w-[84px] shrink-0 items-center justify-end gap-1 text-meta text-sol-text-dim hover:text-sol-text"
+          className="flex w-[84px] shrink-0 items-center justify-end gap-1 text-[11px] text-sol-text-dim hover:text-sol-text"
         >
           <Plus className="h-3 w-3" /> Make task
         </button>
       ) : (
-        <span className="w-[96px] shrink-0 text-right text-meta tabular-nums text-sol-text-dim">
+        <span className="w-[84px] shrink-0 text-right text-[10.5px] tabular-nums text-sol-text-dim">
           {t ? relativeTime(t.updated_at) : ""}
         </span>
       )}
@@ -144,23 +144,23 @@ function CallBlock({ fc, filter }: { fc: FollowCall; filter: FollowStage | null 
         <Link href={`/calls/${callPathRef(call)}`} className="min-w-0 truncate text-[13px] font-medium text-sol-text hover:underline">
           {title}
         </Link>
-        <span className="shrink-0 font-mono text-meta text-sol-text-dim">{call.short_id}</span>
-        <span className="shrink-0 text-meta text-sol-text-dim">{fmtClock(call.started_at)}</span>
-        <span className="min-w-0 truncate text-meta text-sol-text-dim">{people}</span>
+        <span className="shrink-0 font-mono text-[10.5px] text-sol-text-dim">{call.short_id}</span>
+        <span className="shrink-0 text-[11px] text-sol-text-dim">{fmtClock(call.started_at)}</span>
+        <span className="min-w-0 truncate text-[11px] text-sol-text-dim">{people}</span>
         <span className="flex-1" />
         {call.summary_status === "failed" && (
-          <span className="shrink-0 rounded bg-sol-red/10 px-1.5 py-0.5 text-meta text-sol-red">no summary</span>
+          <span className="shrink-0 rounded bg-sol-red/10 px-1.5 py-0.5 text-[10.5px] text-sol-red">no summary</span>
         )}
-        {fc.sweepDocs.length > 0 && <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-meta">{fc.sweepDocs.map((d) => (
+        {fc.sweepDocs.length > 0 && <span className="flex shrink-0 items-center gap-1 whitespace-nowrap text-[11px]">{fc.sweepDocs.map((d) => (
           <EntityIdPill key={d._id} type="doc" id={String(d._id)} compact fallback={<FileText className="h-3 w-3" />} />
         ))}</span>}
-        <span className="shrink-0 text-meta tabular-nums text-sol-text-muted">
+        <span className="shrink-0 text-[11px] tabular-nums text-sol-text-muted">
           {counts.done}/{fc.items.length - counts.dropped}
         </span>
         <StageBar counts={counts} total={fc.items.length} />
       </header>
       {items.length === 0 ? (
-        <p className="px-4 pb-3 text-meta text-sol-text-dim">{fc.items.length === 0 ? "Nothing filed from this call." : null}</p>
+        <p className="px-4 pb-3 text-[11.5px] text-sol-text-dim">{fc.items.length === 0 ? "Nothing filed from this call." : null}</p>
       ) : (
         <ul className="pb-2">
           {items.map((it) => (
@@ -201,7 +201,7 @@ export function CallFollowThrough({ calls, fallback }: { calls: any[]; fallback:
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-x-1 gap-y-2 border-b border-sol-border/20 px-4 py-3">
         <h2 className="mr-3 text-sm font-medium text-sol-text">What came of each call</h2>
-        <span className="mr-3 text-meta text-sol-text-dim">{board.length} calls, last 14 days</span>
+        <span className="mr-3 text-[11px] text-sol-text-dim">{board.length} calls, last 14 days</span>
         {FOLLOW_STAGES.map((s) => (
           <button
             key={s}
@@ -209,7 +209,7 @@ export function CallFollowThrough({ calls, fallback }: { calls: any[]; fallback:
             aria-pressed={filter === s}
             disabled={totals[s] === 0}
             onClick={() => setFilter(filter === s ? null : s)}
-            className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-meta transition-colors disabled:opacity-40 ${
+            className={`flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11.5px] transition-colors disabled:opacity-40 ${
               filter === s ? "border-current" : "border-sol-border/30 hover:bg-sol-bg-alt"
             }`}
             style={{ color: filter === s || totals[s] > 0 ? STAGE[s].color : undefined }}

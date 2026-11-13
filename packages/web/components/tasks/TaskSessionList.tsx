@@ -169,7 +169,7 @@ export function TaskSessionRow({
               titleClassName={prominent || live ? "font-medium" : undefined}
             />
             {origin && (
-              <span className="flex-shrink-0 text-meta font-medium px-1 py-px rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/25">
+              <span className="flex-shrink-0 text-[9px] font-medium px-1 py-px rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/25">
                 from
               </span>
             )}
@@ -177,7 +177,7 @@ export function TaskSessionRow({
             {live && (
               <span className="flex items-center gap-1 flex-shrink-0">
                 <LivenessDot state="active" size="xs" />
-                <span className="text-mark font-medium uppercase tracking-wider text-sol-green/70">live</span>
+                <span className="text-[8px] font-medium uppercase tracking-wider text-sol-green/70">live</span>
               </span>
             )}
           </div>
@@ -188,16 +188,16 @@ export function TaskSessionRow({
                 strokeWidth={2.4}
               />
               {stateView.status && stateView.status !== "working" && (
-                <span className={`shrink-0 mt-px px-1 py-0 rounded border text-mark font-semibold uppercase tracking-wide ${THREAD_STATE_STATUS_META[stateView.status].chip}`}>
+                <span className={`shrink-0 mt-px px-1 py-0 rounded border text-[9px] font-semibold uppercase tracking-wide ${THREAD_STATE_STATUS_META[stateView.status].chip}`}>
                   {THREAD_STATE_STATUS_META[stateView.status].label}
                 </span>
               )}
-              {line ? <span className="text-meta text-sol-text-secondary truncate leading-snug">{line}</span> : null}
+              {line ? <span className="text-[11px] text-sol-text-secondary truncate leading-snug">{line}</span> : null}
             </div>
           ) : line ? (
-            <p className="mt-0.5 text-meta text-sol-text-muted truncate leading-snug">{line}</p>
+            <p className="mt-0.5 text-[11px] text-sol-text-muted truncate leading-snug">{line}</p>
           ) : null}
-          <div className="mt-0.5 flex items-center gap-1.5 text-meta text-sol-text-dim/70 min-w-0">
+          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-sol-text-dim/70 min-w-0">
             {project !== "unknown" && (
               <span className={`flex items-center gap-1 min-w-0 font-medium ${getLabelColor(project).text}`}>
                 <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${getLabelColor(project).dot}`} />
@@ -261,9 +261,9 @@ export function TaskSessionList({
     <div className="mb-6">
       <div className="flex items-center gap-2 mb-1.5">
         <div className="text-xs font-medium text-sol-text-dim">{heading}</div>
-        <span className="text-meta font-mono text-sol-text-muted">{rows.length}</span>
+        <span className="text-[11px] font-mono text-sol-text-muted">{rows.length}</span>
         {liveCount > 0 && (
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-sol-green/15 text-sol-green text-meta">
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-sol-green/15 text-sol-green text-[10px]">
             <LivePulseDot className="w-1.5 h-1.5" />
             {liveCount} live
           </span>

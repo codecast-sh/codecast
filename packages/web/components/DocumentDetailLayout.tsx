@@ -166,12 +166,11 @@ export function DocumentDetailLayout({
 
   return (
     <div className="flex flex-col h-full">
-      {/* One fixed-height row. When it runs out of width (a narrow split pane)
-          the left cluster (back, type, star, watch, dates) gives way and clips;
-          the actions on the right (Share, close, Info) never shrink, so they
-          stay on screen. */}
+      {/* Wraps the action cluster to a second row rather than letting it overflow
+          (and clip its trailing icons) once the back/type/watch cluster and the
+          icons can no longer share one line — e.g. a narrow split-pane doc view. */}
       <div ref={titlebarRef} data-page-head className="cc-panel__head justify-between">
-        <div className="flex items-center gap-3 min-w-0 overflow-hidden">
+        <div className="flex items-center gap-3">
           {!embedded && (
             <Link
               href={backHref}
@@ -182,7 +181,7 @@ export function DocumentDetailLayout({
           )}
           {topBarLeft}
         </div>
-        <div className="flex items-center gap-1 ml-auto flex-shrink-0">
+        <div className="flex items-center gap-1 ml-auto">
           <button
             onClick={handleCopyMarkdown}
             className="p-1.5 rounded-md text-xs flex items-center gap-1 text-sol-text-dim hover:text-sol-text transition-colors"
@@ -228,7 +227,7 @@ export function DocumentDetailLayout({
       </div>
 
       {showMeta && metaContent && (
-        <div className="px-4 sm:px-10 py-3 border-b border-sol-border/10 flex-shrink-0 max-w-5xl mx-auto w-full">
+        <div className="px-10 py-3 border-b border-sol-border/10 flex-shrink-0 max-w-5xl mx-auto w-full">
           {metaContent}
         </div>
       )}
@@ -237,7 +236,7 @@ export function DocumentDetailLayout({
         <div className="flex flex-col min-h-full">
         <div className="flex-1 flex items-start w-full">
         {draftingOn && <AlternativesPanel d={draft} />}
-        <div className="flex-1 min-w-0 max-w-5xl mx-auto px-4 sm:px-10 pt-10 pb-8 w-full">
+        <div className="flex-1 min-w-0 max-w-5xl mx-auto px-10 pt-10 pb-8 w-full">
           {titleInBody && isEditing ? null : (
             // Editing the title here only applies to the separate-field mode;
             // with the title in the body the editor's first block is the title
@@ -321,7 +320,7 @@ export function DocumentDetailLayout({
         {draftingOn && <TrimBar d={draft} />}
         {draftingOn && draftMenu.element}
         {footerContent && (
-          <div className="max-w-5xl mx-auto px-4 sm:px-10 pb-4 w-full">
+          <div className="max-w-5xl mx-auto px-10 pb-4 w-full">
             {footerContent}
           </div>
         )}

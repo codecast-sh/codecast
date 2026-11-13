@@ -746,7 +746,7 @@ export function VaultEditor({
   return (
     <div data-vault-editor>
       {conflict && (
-        <div className="mb-3 rounded border border-sol-yellow/40 bg-sol-yellow/10 px-3 py-2 text-meta text-sol-text-muted">
+        <div className="mb-3 rounded border border-sol-yellow/40 bg-sol-yellow/10 px-3 py-2 text-[11px] text-sol-text-muted">
           <div className="text-sol-text mb-1.5">
             This note changed on disk while you were editing it.
           </div>
@@ -770,7 +770,7 @@ export function VaultEditor({
         </div>
       )}
       <div ref={hostRef} />
-      <div className="mt-6 pt-2 border-t border-sol-border/20 flex items-center gap-3 text-meta text-sol-text-dim">
+      <div className="mt-6 pt-2 border-t border-sol-border/20 flex items-center gap-3 text-[10px] text-sol-text-dim">
         <span className={status === "error" || status === "stale" ? "text-sol-yellow" : undefined}>
           {MODE_LABEL[mode]}
           {STATUS_SUFFIX[status]}

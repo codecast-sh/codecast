@@ -49,7 +49,7 @@ export function OwnerAvatar({ name, image, size = "w-4 h-4" }: { name: string; i
       alt={name}
       className={`${size} rounded-full object-cover`}
       fallback={
-        <div className={`${size} rounded-full bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-meta font-medium text-sol-text-muted`}>
+        <div className={`${size} rounded-full bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted`}>
           {initials || "?"}
         </div>
       }
@@ -135,7 +135,7 @@ export function OwnerMenuItems({
       {currentRole && !seatRoleId && (
         <>
           <DropdownMenuSeparator />
-          <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">
+          <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">
             Reports to a role
           </DropdownMenuLabel>
           <div className="px-2 pb-1 text-xs text-sol-text">
@@ -143,7 +143,7 @@ export function OwnerMenuItems({
             <RoleHoverCard role={currentRole} side="left" triggerClassName="inline-flex min-w-0 items-center gap-2">
               <RoleFace role={currentRole} size={18} />
               <span className="truncate">{currentRole.name}</span>
-              <span className="text-sol-text-dim font-mono text-meta">@{currentRole.handle}</span>
+              <span className="text-sol-text-dim font-mono text-[10px]">@{currentRole.handle}</span>
             </RoleHoverCard>
           </div>
         </>
@@ -167,7 +167,7 @@ export function OwnerMenuItems({
                   <RoleHoverCard role={r} side="right" triggerClassName="flex flex-1 min-w-0 items-center gap-2">
                     <RoleFace role={r} size={18} />
                     <span className="flex-1 truncate">{r.name}</span>
-                    <span className="text-sol-text-dim font-mono text-meta">@{r.handle}</span>
+                    <span className="text-sol-text-dim font-mono text-[10px]">@{r.handle}</span>
                   </RoleHoverCard>
                 </DropdownMenuItem>
               ))}
@@ -180,7 +180,7 @@ export function OwnerMenuItems({
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={onMakeRole} className="text-xs gap-2" data-make-role>
             <BadgePlus className="w-3.5 h-3.5 shrink-0" />
-            <span>Make this a role<span className="block text-meta text-sol-text-dim">It keeps running as it is, and gets a name and a place on the chart</span></span>
+            <span>Make this a role<span className="block text-[10px] text-sol-text-dim">It keeps running as it is, and gets a name and a place on the chart</span></span>
           </DropdownMenuItem>
         </>
       )}
@@ -214,7 +214,7 @@ function OwnersSection({ owners, people, handingOff, onHandingOff, onDone }: {
   }
   return (
     <>
-      <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">
+      <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">
         Owners · whose inbox
       </DropdownMenuLabel>
       {ownerList.length === 0 && (
@@ -294,7 +294,7 @@ function HandoffStep({ owners, people, onBack, onSent }: {
         >
           <ArrowLeft className="w-3.5 h-3.5" />
         </button>
-        <span className="text-mark font-semibold uppercase tracking-[0.15em] text-sol-violet">Hand off to</span>
+        <span className="text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-violet">Hand off to</span>
       </div>
       <div role="radiogroup" aria-label="Hand off to" className="max-h-[220px] overflow-y-auto">
         {people.map((m) => {
@@ -312,7 +312,7 @@ function HandoffStep({ owners, people, onBack, onSent }: {
             >
               <OwnerAvatar name={memberName(m)} image={memberImage(m)} size="w-5 h-5" />
               <span className="flex-1 truncate">{memberName(m)}</span>
-              {ownerIds.has(m._id) && <span className="shrink-0 text-mark uppercase tracking-wide text-sol-text-dim">owner</span>}
+              {ownerIds.has(m._id) && <span className="shrink-0 text-[9px] uppercase tracking-wide text-sol-text-dim">owner</span>}
               <span className={`shrink-0 w-3.5 h-3.5 rounded-full border flex items-center justify-center ${on ? "border-sol-violet bg-sol-violet" : "border-sol-border"}`}>
                 {on && <span className="w-1.5 h-1.5 rounded-full bg-sol-bg" />}
               </span>
@@ -332,7 +332,7 @@ function HandoffStep({ owners, people, onBack, onSent }: {
       <div className="mt-1.5 flex items-center gap-2">
         {/* Only an owner has anything to keep. */}
         {meId && ownerIds.has(meId) && (
-          <label className="flex items-center gap-1.5 text-meta text-sol-text-muted cursor-pointer select-none">
+          <label className="flex items-center gap-1.5 text-[11px] text-sol-text-muted cursor-pointer select-none">
             <Switch checked={keepSelf} onCheckedChange={setKeepSelf} aria-label="Stay an owner" />
             Stay an owner
           </label>
@@ -360,7 +360,7 @@ function SeatReportsToItems({ people, currentUserId, ownerId, roles, parentRoleI
 }) {
   return (
     <>
-      <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">
+      <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">
         Reports to · whose inbox
       </DropdownMenuLabel>
       <div className="max-h-[320px] overflow-y-auto">
@@ -385,7 +385,7 @@ function SeatReportsToItems({ people, currentUserId, ownerId, roles, parentRoleI
             <RoleHoverCard role={r} side="left" triggerClassName="flex flex-1 min-w-0 items-center gap-2">
               <RoleFace role={r} size={16} />
               <span className="flex-1 truncate">{r.name}</span>
-              <span className="text-sol-text-dim font-mono text-meta">@{r.handle}</span>
+              <span className="text-sol-text-dim font-mono text-[10px]">@{r.handle}</span>
             </RoleHoverCard>
           </DropdownMenuCheckboxItem>
         ))}
@@ -429,7 +429,7 @@ export function AssignedToYouBanner({ conversationId }: { conversationId: string
           owners.ack();
           useInboxStore.getState().clearAssignedPing(conversationId);
         }}
-        className="flex-shrink-0 px-2.5 py-1 rounded-md text-meta font-medium bg-sol-violet/20 text-sol-violet border border-sol-violet/40 hover:bg-sol-violet/30 transition-colors"
+        className="flex-shrink-0 px-2.5 py-1 rounded-md text-[11px] font-medium bg-sol-violet/20 text-sol-violet border border-sol-violet/40 hover:bg-sol-violet/30 transition-colors"
       >
         Got it
       </button>
@@ -492,16 +492,16 @@ export function HandoffPicker({
         onInteractOutside={(e) => { if (anchorRef.current?.contains(e.target as Node)) e.preventDefault(); }}
       >
         <div className="px-3 pt-2.5 pb-2 border-b border-sol-border/60">
-          <div className="flex items-center gap-1.5 text-mark font-semibold uppercase tracking-[0.15em] text-sol-violet">
+          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-violet">
             <ArrowRightLeft className="w-3 h-3" />
             Hand off to
           </div>
           {preview ? (
-            <div className="mt-1 text-meta text-sol-text-muted truncate" title={note.trim()}>
+            <div className="mt-1 text-[11px] text-sol-text-muted truncate" title={note.trim()}>
               with your note: <span className="text-sol-text">“{preview}”</span>
             </div>
           ) : (
-            <div className="mt-1 text-meta text-sol-text-dim">
+            <div className="mt-1 text-[11px] text-sol-text-dim">
               No note — type a message first to send one along.
             </div>
           )}
@@ -535,7 +535,7 @@ export function HandoffPicker({
                   <OwnerAvatar name={name} image={m.image || m.github_avatar_url} size="w-5 h-5" />
                   <span className="flex-1 min-w-0 truncate">{name}</span>
                   {isOwner && (
-                    <span className="shrink-0 text-mark uppercase tracking-wide text-sol-text-dim">owner</span>
+                    <span className="shrink-0 text-[9px] uppercase tracking-wide text-sol-text-dim">owner</span>
                   )}
                 </CommandItem>
               );
@@ -545,12 +545,12 @@ export function HandoffPicker({
         <div className="flex items-center justify-between gap-3 px-3 py-2 border-t border-sol-border/60">
           {/* Only an owner has anything to keep. */}
           {meId && ownerIds.has(meId) ? (
-            <label className="flex items-center gap-2 text-meta text-sol-text-muted cursor-pointer select-none">
+            <label className="flex items-center gap-2 text-[11px] text-sol-text-muted cursor-pointer select-none">
               <Switch checked={keepSelf} onCheckedChange={setKeepSelf} aria-label="Stay an owner" />
               Stay an owner
             </label>
           ) : <span />}
-          <span className="flex items-center gap-1 text-meta text-sol-text-dim">
+          <span className="flex items-center gap-1 text-[10px] text-sol-text-dim">
             <KeyCap size="xs">↵</KeyCap> hand off
           </span>
         </div>

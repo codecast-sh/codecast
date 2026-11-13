@@ -66,7 +66,7 @@ export function BranchCodeLink({ session, className = "", detail = true }: { ses
   const pickup = dirty && session.short_id ? pickupCommand(session.short_id) : null;
   return (
     <span
-      className={`cq-sq2-tight inline-flex items-stretch min-w-0 max-w-[320px] rounded border border-sol-cyan/25 bg-sol-cyan/5 font-mono text-meta text-sol-cyan divide-x divide-sol-cyan/20 ${className}`}
+      className={`cq-sq2-tight inline-flex items-stretch min-w-0 max-w-[320px] rounded border border-sol-cyan/25 bg-sol-cyan/5 font-mono text-[10px] text-sol-cyan divide-x divide-sol-cyan/20 ${className}`}
       title={`${repository}${branch ? ` at ${branch}` : head ? ` detached at ${head.slice(0, 7)}` : ""}${sha ? ` on ${sha.slice(0, 7)}` : ""}${dirty ? ", uncommitted changes" : ""}`}
     >
       <Link href={href} onClick={stop} onKeyDown={stop}

@@ -83,13 +83,13 @@ export function MirrorMenuItems({ conversationId }: { conversationId: string }) 
   const mirrorDevice = mirror ? byId.get(mirror.device_id) : undefined;
   return (
     <>
-      <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Keep a copy on a laptop, in step</DropdownMenuLabel>
+      <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Keep a copy on a laptop, in step</DropdownMenuLabel>
       {mirror ? (
         <>
           <DropdownMenuItem disabled>
             <FolderSync className="w-3 h-3 mr-1.5" />
             <span className="flex-1 truncate">Syncing with {mirrorDevice ? deviceDisplayName(mirrorDevice) : "a laptop"}</span>
-            <span className="ml-2 text-meta text-gray-400">{STATUS_WORD[mirror.status]}</span>
+            <span className="ml-2 text-[10px] text-gray-400">{STATUS_WORD[mirror.status]}</span>
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => setLocalMirror(conversationId, false)}>
             <span className="pl-[18px]">Stop syncing</span>
@@ -97,7 +97,7 @@ export function MirrorMenuItems({ conversationId }: { conversationId: string }) 
         </>
       ) : laptops.length === 0 ? (
         <DropdownMenuItem disabled>
-          <span className="text-meta text-sol-text-dim">No laptop of yours has a checkout of {repo ?? "this repository"}</span>
+          <span className="text-[11px] text-sol-text-dim">No laptop of yours has a checkout of {repo ?? "this repository"}</span>
         </DropdownMenuItem>
       ) : laptops.map((l) => (
         <DropdownMenuItem
@@ -108,7 +108,7 @@ export function MirrorMenuItems({ conversationId }: { conversationId: string }) 
         >
           <DeviceIcon d={l.device} className="w-3 h-3 mr-1.5" />
           <span className="flex-1 truncate">Sync with {deviceDisplayName(l.device)}</span>
-          <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-meta text-gray-400">
+          <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] text-gray-400">
             {l.online ? "" : "offline"}
             <DeviceDot online={l.online} />
           </span>
@@ -217,7 +217,7 @@ export function LocalMirrorChip({ conversationId, compact = false }: { conversat
           data-local-mirror={mirror.status}
           data-mirror-mode={mode}
           title={chipTitle(mirror, laptopName, now)}
-          className={`inline-flex items-center gap-1 rounded-full border border-sol-border/40 px-2 py-0.5 text-meta font-medium outline-none transition-colors hover:border-sol-border/80 ${waiting ? "text-sol-yellow" : TONE[mirror.status]}`}
+          className={`inline-flex items-center gap-1 rounded-full border border-sol-border/40 px-2 py-0.5 text-[10px] font-medium outline-none transition-colors hover:border-sol-border/80 ${waiting ? "text-sol-yellow" : TONE[mirror.status]}`}
         >
           <FolderSync className="w-3 h-3" />
           {!compact && <span className="whitespace-nowrap cq-sq1">{chipLabel(mirror, now, laptopName)}</span>}
@@ -225,18 +225,18 @@ export function LocalMirrorChip({ conversationId, compact = false }: { conversat
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="min-w-[17rem] max-w-[25rem]">
-        <div className="px-2 py-1.5 text-meta leading-snug text-sol-text-muted">{chipTitle(mirror, laptopName, now, false)}</div>
-        {mirror.path && <div className="px-2 pb-1.5 font-mono text-meta text-sol-text-dim break-all">{mirror.path}</div>}
+        <div className="px-2 py-1.5 text-[11px] leading-snug text-sol-text-muted">{chipTitle(mirror, laptopName, now, false)}</div>
+        {mirror.path && <div className="px-2 pb-1.5 font-mono text-[10px] text-sol-text-dim break-all">{mirror.path}</div>}
 
         {mirror.status === "conflict" && conflicts.length > 0 && (
           <>
             <DropdownMenuSeparator />
-            <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-yellow">Changed on both sides</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-yellow">Changed on both sides</DropdownMenuLabel>
             {conflicts.slice(0, 8).map((p) => (
               <DropdownMenuSub key={p}>
-                <DropdownMenuSubTrigger className="font-mono text-meta" title={p}>
+                <DropdownMenuSubTrigger className="font-mono text-[11px]" title={p}>
                   <span className="truncate">{baseName(p)}</span>
-                  {baseName(p) !== p && <span className="ml-2 truncate text-meta text-sol-text-dim">{p.slice(0, -baseName(p).length - 1)}</span>}
+                  {baseName(p) !== p && <span className="ml-2 truncate text-[10px] text-sol-text-dim">{p.slice(0, -baseName(p).length - 1)}</span>}
                 </DropdownMenuSubTrigger>
                 <DropdownMenuSubContent className="min-w-[12rem]">
                   <DropdownMenuItem onSelect={() => keep("laptop", [p])}>Keep the laptop's</DropdownMenuItem>
@@ -246,7 +246,7 @@ export function LocalMirrorChip({ conversationId, compact = false }: { conversat
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
             ))}
-            {conflicts.length > 8 && <div className="px-2 py-1 text-meta text-sol-text-dim">and {conflicts.length - 8} more</div>}
+            {conflicts.length > 8 && <div className="px-2 py-1 text-[10px] text-sol-text-dim">and {conflicts.length - 8} more</div>}
             <DropdownMenuItem onSelect={() => keep("laptop")}>Keep the laptop's for all</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => keep("cloud")}>Keep the cloud's for all</DropdownMenuItem>
           </>
@@ -278,18 +278,18 @@ export function LocalMirrorChip({ conversationId, compact = false }: { conversat
 
         {skipped.length > 0 && (
           <DropdownMenuSub>
-            <DropdownMenuSubTrigger className="text-meta">
+            <DropdownMenuSubTrigger className="text-[11px]">
               <span className="flex-1">Stayed on its own machine</span>
-              <span className="ml-2 text-meta opacity-60">{mirror.skipped_count ?? skipped.length}</span>
+              <span className="ml-2 text-[10px] opacity-60">{mirror.skipped_count ?? skipped.length}</span>
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent className="max-w-[26rem]">
               {(["cloud", "laptop"] as const).map((side) => {
                 const { rebuilt, named, more } = groupSyncSkipped(skipped.filter((s) => s.side === side));
                 if (!rebuilt.length && !named.length) return null;
-                const line = "truncate px-2 py-0.5 font-mono text-meta text-sol-text-muted";
+                const line = "truncate px-2 py-0.5 font-mono text-[10px] text-sol-text-muted";
                 return (
                   <div key={side}>
-                    <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">On the {side === "cloud" ? "cloud" : laptopName}</DropdownMenuLabel>
+                    <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">On the {side === "cloud" ? "cloud" : laptopName}</DropdownMenuLabel>
                     {rebuilt.length > 0 && (
                       <div className={line} title={rebuilt.map((s) => s.path).join("\n")}>{plural(rebuilt.length, "dependency or build folder")}: rebuilt on each machine</div>
                     )}
@@ -299,7 +299,7 @@ export function LocalMirrorChip({ conversationId, compact = false }: { conversat
                 );
               })}
               <DropdownMenuSeparator />
-              <div className="px-2 py-1 text-meta leading-snug text-sol-text-dim">
+              <div className="px-2 py-1 text-[10px] leading-snug text-sol-text-dim">
                 An agent fetches any of these with <code className="font-mono">cast sync pull &lt;path&gt;</code>. To sync one always, add it under <code className="font-mono">[sync] always</code> in <code className="font-mono">.codecast/workspace.toml</code>.
               </div>
             </DropdownMenuSubContent>

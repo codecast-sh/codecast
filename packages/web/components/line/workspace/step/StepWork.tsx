@@ -9,7 +9,6 @@
 // One act by state: a failed row starts the problem again (through its
 // review), a passed one is marked right or wrong.
 import { memo, useMemo, useRef, useState, type ReactNode } from "react";
-import Link from "next/link";
 import { useWatchEffect } from "../../../../hooks/useWatchEffect";
 import { ChevronRight, RotateCcw } from "lucide-react";
 import type { LineModel, LineStep, StepDecision } from "../../../../lib/line/lineModel";
@@ -447,7 +446,7 @@ function Foot({ d, took, earlier, again, session = true, children }: { d: StepDe
         {took && <span className="sp-quiet lw-num">took {took}</span>}
         <NavLink className="lw-link" href={nav.runHref(d.runId, d.caseId)} onOpen={() => nav.openRun(d.runId, d.caseId)}>Open the run</NavLink>
         {d.caseId && nav.openCase && <NavLink className="lw-link" href={nav.caseHref?.(d.caseId) ?? null} onOpen={() => nav.openCase!(d.caseId!)}>Open the problem</NavLink>}
-        {session && d.received.href && <Link className="lw-link" href={d.received.href}>Open the session</Link>}
+        {session && d.received.href && <a className="lw-link" href={d.received.href}>Open the session</a>}
         {older.length > 0 && <button type="button" className="lw-link" aria-expanded={more} onClick={() => setMore((v) => !v)}>{older.length} earlier {older.length === 1 ? "run" : "runs"} of this problem</button>}
       </div>
       {more && older.length > 0 && (

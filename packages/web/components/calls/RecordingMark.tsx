@@ -76,7 +76,7 @@ export function RecordingMark({
   if (size === "dot") {
     return (
       <span
-        className={`inline-flex shrink-0 items-center gap-1 font-mono text-meta font-semibold tracking-wide ${
+        className={`inline-flex shrink-0 items-center gap-1 font-mono text-[10px] font-semibold tracking-wide ${
           saving ? "text-sol-text-muted" : "text-sol-red"
         } ${className}`}
         title={title}
@@ -91,7 +91,7 @@ export function RecordingMark({
   if (saving) {
     return (
       <span
-        className={`inline-flex shrink-0 items-center gap-1.5 rounded-md bg-sol-bg-alt/60 px-2 py-1 font-mono text-meta font-medium text-sol-text-muted ring-1 ring-inset ring-sol-border/40 ${className}`}
+        className={`inline-flex shrink-0 items-center gap-1.5 rounded-md bg-sol-bg-alt/60 px-2 py-1 font-mono text-[11px] font-medium text-sol-text-muted ring-1 ring-inset ring-sol-border/40 ${className}`}
         title={title}
         aria-label={title}
         role="img"
@@ -103,7 +103,7 @@ export function RecordingMark({
   }
   return (
     <span
-      className={`inline-flex shrink-0 items-center gap-1.5 rounded-md bg-sol-red/[0.12] px-2 py-1 font-mono text-meta font-medium text-sol-red ring-1 ring-inset ring-sol-red/25 ${className}`}
+      className={`inline-flex shrink-0 items-center gap-1.5 rounded-md bg-sol-red/[0.12] px-2 py-1 font-mono text-[11px] font-medium text-sol-red ring-1 ring-inset ring-sol-red/25 ${className}`}
       title={title}
       aria-label={title}
       role="img"
@@ -166,7 +166,7 @@ export function StopRecordingQuestion({
       type="button"
       onClick={onKeep}
       className={`flex shrink-0 items-center gap-1.5 rounded-md font-mono text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text ${
-        dense ? "px-1.5 py-0.5 text-meta" : "px-2.5 py-1.5 text-meta"
+        dense ? "px-1.5 py-0.5 text-[10px]" : "px-2.5 py-1.5 text-[11.5px]"
       }`}
     >
       {dense ? "Keep" : STOP_RECORDING_ASK.keep}
@@ -175,7 +175,7 @@ export function StopRecordingQuestion({
   );
   if (dense) {
     return (
-      <span className="inline-flex shrink-0 items-center gap-1 font-mono text-meta text-sol-text-secondary" role="group" aria-label={STOP_RECORDING_ASK.title}>
+      <span className="inline-flex shrink-0 items-center gap-1 font-mono text-[10px] text-sol-text-secondary" role="group" aria-label={STOP_RECORDING_ASK.title}>
         <span className="whitespace-nowrap" title={`${STOP_RECORDING_ASK.title} ${STOP_RECORDING_ASK.body}`}>
           Stop for everyone?
         </span>

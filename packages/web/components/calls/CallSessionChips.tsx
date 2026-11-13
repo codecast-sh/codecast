@@ -50,7 +50,7 @@ export function CallSessionChips({
   const anyExcerpts = sessions.some((s) => s.excerpts.length > 0);
   return (
     <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-      {shown.length > 0 && <span className="text-meta text-sol-text-dim">sent to</span>}
+      {shown.length > 0 && <span className="text-[11px] text-sol-text-dim">sent to</span>}
       {shown.map((s) => (
         <FeedChip
           key={s.conversation_id}
@@ -66,7 +66,7 @@ export function CallSessionChips({
           <DropdownMenuTrigger asChild>
             <button
               type="button"
-              className="flex items-center gap-0.5 rounded-full bg-sol-bg-highlight px-2 py-0.5 font-mono text-meta leading-4 text-sol-text-muted hover:text-sol-text"
+              className="flex items-center gap-0.5 rounded-full bg-sol-bg-highlight px-2 py-0.5 font-mono text-[10.5px] leading-4 text-sol-text-muted hover:text-sol-text"
               title={`Every session this call reached (${sessions.length})`}
             >
               {hidden > 0 ? `+${hidden}` : shown.length > 0 ? "excerpts" : "sent to"}
@@ -74,7 +74,7 @@ export function CallSessionChips({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" className="max-h-[60vh] max-w-[340px] overflow-y-auto">
-            <DropdownMenuLabel className="text-meta font-normal text-sol-text-dim">
+            <DropdownMenuLabel className="text-[11px] font-normal text-sol-text-dim">
               This call reached {sessions.length === 1 ? "one session" : `${sessions.length} sessions`}
             </DropdownMenuLabel>
             {sessions.map((s, i) => (
@@ -88,7 +88,7 @@ export function CallSessionChips({
                   />
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate text-[12.5px] text-sol-text">{s.name}</span>
-                    <span className="truncate text-meta text-sol-text-dim">
+                    <span className="truncate text-[11px] text-sol-text-dim">
                       {s.title} · {callLinkHow(s)}
                     </span>
                   </span>
@@ -98,7 +98,7 @@ export function CallSessionChips({
                   <DropdownMenuItem
                     key={`${e.from_seq}-${e.to_seq}-${e.at}`}
                     onSelect={() => router.replace(callExcerptHref(callId, e))}
-                    className="pl-[32px] text-meta text-sol-text-muted"
+                    className="pl-[32px] text-[11.5px] text-sol-text-muted"
                   >
                     {excerptLabel(e)}
                     <span className="ml-auto text-sol-text-dim">sent {fmtClock(e.at)}</span>

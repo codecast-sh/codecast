@@ -96,7 +96,7 @@ export function PlanContextPanel({ planId }: { planId: Id<"plans"> }) {
             <ShortId id={plan.short_id} className="text-sol-text-dim" />
           </div>
           {plan.goal && (
-            <p className="text-meta text-sol-text-muted line-clamp-2">{plan.goal}</p>
+            <p className="text-[11px] text-sol-text-muted line-clamp-2">{plan.goal}</p>
           )}
 
           <div className="space-y-0.5">
@@ -126,7 +126,7 @@ export function PlanContextPanel({ planId }: { planId: Id<"plans"> }) {
 
           <Link
             href={`/plans/${plan.short_id}`}
-            className="block text-meta text-sol-cyan hover:underline pt-1"
+            className="block text-[10px] text-sol-cyan hover:underline pt-1"
           >
             View full plan
           </Link>

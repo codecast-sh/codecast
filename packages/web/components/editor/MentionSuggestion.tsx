@@ -160,7 +160,7 @@ function StatusDot({ status }: { status?: string }) {
   const key = status.toLowerCase().replace(/ /g, "_");
   const color = STATE_DOTS[key] ?? "bg-sol-text-dim/50";
   return (
-    <span className="shrink-0 inline-flex items-center gap-1 whitespace-nowrap text-meta text-sol-text-dim" title={status.replace(/_/g, " ")}>
+    <span className="shrink-0 inline-flex items-center gap-1 whitespace-nowrap text-[11px] text-sol-text-dim" title={status.replace(/_/g, " ")}>
       <span className={`w-1.5 h-1.5 rounded-full ${color} ${key === "working" ? "animate-pulse" : ""}`} />
       <span className="hidden sm:inline">{status.replace(/_/g, " ")}</span>
     </span>
@@ -180,11 +180,11 @@ export function MentionSuggestion({ item, query }: { item: SuggestionItem; query
         </span>
         {current.slack && <SlackLogo className="w-3 h-3 shrink-0" title="In Slack only, paged there" />}
         <StatusDot status={status} />
-        {meta.length > 0 && <span className="text-meta text-sol-text-dim truncate min-w-0" title={meta.join(" · ")}>{meta.join(" · ")}</span>}
+        {meta.length > 0 && <span className="text-[11px] text-sol-text-dim truncate min-w-0" title={meta.join(" · ")}>{meta.join(" · ")}</span>}
       </span>
-      {current.unread ? <span className="shrink-0 text-meta tabular-nums px-1.5 rounded-full bg-sol-blue/15 text-sol-blue">{current.unread}</span> : null}
-      {token && <span className="shrink-0 font-mono text-meta text-sol-text-dim/80">{token}</span>}
-      {time ? <span className="shrink-0 min-w-[2.5rem] whitespace-nowrap text-right text-meta text-sol-text-dim tabular-nums" title={`${timeLabel} ${new Date(time).toLocaleString()}`}>{visitTimeAgo(time)}</span> : null}
+      {current.unread ? <span className="shrink-0 text-[10px] tabular-nums px-1.5 rounded-full bg-sol-blue/15 text-sol-blue">{current.unread}</span> : null}
+      {token && <span className="shrink-0 font-mono text-[10px] text-sol-text-dim/80">{token}</span>}
+      {time ? <span className="shrink-0 min-w-[2.5rem] whitespace-nowrap text-right text-[10px] text-sol-text-dim tabular-nums" title={`${timeLabel} ${new Date(time).toLocaleString()}`}>{visitTimeAgo(time)}</span> : null}
     </>
   );
 }
@@ -200,8 +200,8 @@ export function MentionDetail({ item }: { item: SuggestionItem }) {
       <Glyph live={live} size={22} />
       <div className="min-w-0 flex-1 flex flex-col gap-0.5">
         <span className="text-[12px] leading-4 font-medium text-sol-text line-clamp-2 break-words">{title}</span>
-        {summary && summary !== title && <span className="text-meta leading-4 text-sol-text-muted truncate">{summary}</span>}
-        <span className="mt-auto flex items-center gap-2 text-meta text-sol-text-dim min-w-0">
+        {summary && summary !== title && <span className="text-[11px] leading-4 text-sol-text-muted truncate">{summary}</span>}
+        <span className="mt-auto flex items-center gap-2 text-[10px] text-sol-text-dim min-w-0">
           <span className="truncate">{kind}</span>
           {time ? <span className="ml-auto shrink-0 whitespace-nowrap">{timeLabel.toLowerCase()} {visitTimeAgo(time)}</span> : null}
         </span>

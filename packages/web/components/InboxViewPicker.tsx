@@ -29,7 +29,7 @@ const PickerButton = forwardRef<HTMLButtonElement, PickerButtonProps>(function P
       type="button"
       data-inbox-view-picker
       aria-label={`Grouped by ${option.label.toLowerCase()}`}
-      className="flex flex-shrink-0 items-center gap-1 h-[22px] px-1.5 rounded-[5px] text-meta font-medium text-sol-text-secondary hover:text-sol-text hover:bg-sol-text/[0.06] data-[state=open]:bg-sol-text/[0.06] transition-colors"
+      className="flex flex-shrink-0 items-center gap-1 h-[22px] px-1.5 rounded-[5px] text-[10px] font-medium text-sol-text-secondary hover:text-sol-text hover:bg-sol-text/[0.06] data-[state=open]:bg-sol-text/[0.06] transition-colors"
       {...rest}
     >
       <Icon className="w-3 h-3 shrink-0" />
@@ -63,7 +63,7 @@ export function InboxViewPicker({ value, onChange, modes }: {
         </DropdownMenuTrigger>
       </ShortcutTooltip>
       <DropdownMenuContent align="start" className="w-40">
-        <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Group by</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Group by</DropdownMenuLabel>
         {options.map((option) => {
           const OptionIcon = option.icon;
           const active = option.key === current.key;

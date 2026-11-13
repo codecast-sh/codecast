@@ -632,7 +632,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       }`}
       onDragEnter={handleDragEnter} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}>
       {isDragging && (
-        <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/95" style={{ animation: "fadeIn 150ms ease-out" }}>
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-sol-bg/80 backdrop-blur-sm" style={{ animation: "fadeIn 150ms ease-out" }}>
           <div className="border-2 border-dashed border-sol-cyan rounded-xl p-12 text-center">
             <svg className="w-10 h-10 mx-auto mb-3 text-sol-cyan" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
             <p className="text-sol-cyan text-sm font-medium">Drop images to attach</p>
@@ -653,7 +653,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
           </ReviewComposerContext.Provider>
         )}
         {conversation && recipient && (
-          <div className={`flex-1 min-h-0 flex items-center justify-center text-center text-sol-text-dim ${docked ? "text-meta pb-2" : "text-xs px-8"}`}>
+          <div className={`flex-1 min-h-0 flex items-center justify-center text-center text-sol-text-dim ${docked ? "text-[11px] pb-2" : "text-xs px-8"}`}>
             <p className="max-w-md">
               <span className="text-sol-text">{recipient.name}</span> takes it from here: the standing session picks the project and the agent, starts the work, and says which session it started.
             </p>
@@ -800,7 +800,7 @@ function DiscardDraftConfirm({ stubId, onKeep, onDiscard, onCancel }: {
         <div className="text-xs text-sol-text-dim mb-3">A kept draft stays in your inbox as a new session, ready to send later.</div>
         <div className="rounded-lg border border-sol-border/60 bg-sol-bg-alt/50 p-2.5 mb-3">
           {(projectName || agentLabel) && (
-            <div className="text-meta text-sol-text-dim mb-1.5">
+            <div className="text-[10px] text-sol-text-dim mb-1.5">
               {[projectName, agentLabel].filter(Boolean).join(" · ")}
             </div>
           )}
@@ -812,7 +812,7 @@ function DiscardDraftConfirm({ stubId, onKeep, onDiscard, onCancel }: {
                   ? <img key={i} src={img.previewUrl} alt="" className="h-10 w-10 rounded object-cover border border-sol-border/60" />
                   : <span key={i} className="h-10 w-10 rounded border border-sol-border/60 bg-sol-bg-alt" />
               ))}
-              {images.length > 5 && <span className="text-meta text-sol-text-dim">+{images.length - 5}</span>}
+              {images.length > 5 && <span className="text-[10px] text-sol-text-dim">+{images.length - 5}</span>}
             </div>
           )}
         </div>
@@ -829,7 +829,7 @@ function DiscardDraftConfirm({ stubId, onKeep, onDiscard, onCancel }: {
             Keep draft
           </Button>
         </div>
-        <div className="mt-2.5 flex items-center justify-end gap-3 text-meta text-sol-text-dim">
+        <div className="mt-2.5 flex items-center justify-end gap-3 text-[10px] text-sol-text-dim">
           <span className="flex items-center gap-1.5"><FooterKeys combo="escape" /> back to draft</span>
         </div>
       </div>
@@ -845,7 +845,7 @@ function ClearDraftButton({ stubId, restored, onClear }: { stubId: string | null
   const hasDraft = useInboxStore((s) => !!composeDraftContent(s, stubId));
   if (!hasDraft) return null;
   return (
-    <div className="px-3 py-1.5 border-t border-sol-border/60 flex items-center justify-end gap-1.5 text-meta text-sol-text-dim bg-sol-bg-alt/40 shrink-0">
+    <div className="px-3 py-1.5 border-t border-sol-border/60 flex items-center justify-end gap-1.5 text-[10px] text-sol-text-dim bg-sol-bg-alt/40 shrink-0">
       {restored && <span className="text-sol-yellow">draft restored</span>}
       <button
         type="button"

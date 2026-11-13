@@ -24,7 +24,7 @@ function Group({ label, unit, children }: { label: string; unit?: string; childr
     <section className="space-y-1.5">
       <div>
         <h4 className="chg-ui text-[12px] font-medium text-sol-text/75">{label}</h4>
-        {unit && <p className="font-mono text-meta" style={{ color: ink(45) }}>{unit}</p>}
+        {unit && <p className="font-mono text-[10px]" style={{ color: ink(45) }}>{unit}</p>}
       </div>
       {children}
     </section>
@@ -40,7 +40,7 @@ function Capped<T>({ label, rows, cap, render }: { label: string; rows: readonly
     <Group label={label}>
       {(all || more <= 0 ? rows : rows.slice(0, cap)).map(render)}
       {more > 0 && !all && (
-        <button type="button" onClick={() => setAll(true)} className="font-mono text-meta text-sol-text-dim transition-colors hover:text-sol-text">
+        <button type="button" onClick={() => setAll(true)} className="font-mono text-[11px] text-sol-text/45 transition-colors hover:text-sol-text">
           +{more} more
         </button>
       )}
@@ -88,10 +88,10 @@ function ReviewRow({ row }: { row: Review }) {
 
 function BranchRow({ row }: { row: Branch }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 font-mono text-meta">
+    <div className="flex min-w-0 items-center gap-2 font-mono text-[11px]">
       <span className="min-w-0 flex-1 truncate text-sol-text/70" title={row.branch}>{row.branch}</span>
-      <span className="shrink-0 tabular-nums text-sol-text-dim" title={`${plural(row.commits, "commit")} in ${plural(row.stories, "story", "stories")}`}>{plural(row.commits, "commit")}</span>
-      {row.top_area && <AreaTag area={row.top_area} className="shrink-0 text-meta" />}
+      <span className="shrink-0 tabular-nums text-sol-text/45" title={`${plural(row.commits, "commit")} in ${plural(row.stories, "story", "stories")}`}>{plural(row.commits, "commit")}</span>
+      {row.top_area && <AreaTag area={row.top_area} className="shrink-0 text-[10px]" />}
     </div>
   );
 }
@@ -126,11 +126,11 @@ function AreaBars({ areas, active, onArea }: { areas: readonly AreaTouch[]; acti
               a.stories > 0 && onArea ? "hover:bg-sol-bg-alt/60" : "cursor-default"
             } ${active.includes(a.area) ? "bg-sol-bg-alt/60" : ""}`}
           >
-            <span className="truncate font-mono text-meta text-sol-text/60">{areaLabel(a.area)}</span>
+            <span className="truncate font-mono text-[11px] text-sol-text/60">{areaLabel(a.area)}</span>
             <span className="h-1 rounded-[1px]" style={{ background: ink(8) }}>
               <span className="block h-full rounded-[1px]" style={{ width: `${Math.max(3, (a.touches / max) * 100)}%`, background: a.stories ? areaFill(a.area, 55, colors) : ink(30) }} />
             </span>
-            <span className="text-right font-mono text-meta tabular-nums text-sol-text-dim">{a.touches}</span>
+            <span className="text-right font-mono text-[10px] tabular-nums text-sol-text/45">{a.touches}</span>
           </button>
         </Tip>
       ))}
@@ -169,9 +169,9 @@ export function InTheWorks({ works, areas, areasLabel, live, viewed, activeAreas
       {!live && rule}
       <div>
         <h3 className="chg-ui text-[13px] font-semibold text-sol-text">{live ? "In the works" : "In the works now"}</h3>
-        {!live && <p className="mt-0.5 font-mono text-meta text-sol-text-dim">Live state, not {viewed}</p>}
+        {!live && <p className="mt-0.5 font-mono text-[11px] text-sol-text/45">Live state, not {viewed}</p>}
       </div>
-      {!moving && <p className="chg-ui text-[13px] text-sol-text-muted">Nothing stuck, in progress or in review in the last two days.</p>}
+      {!moving && <p className="chg-ui text-[13px] text-sol-text/55">Nothing stuck, in progress or in review in the last two days.</p>}
       <Capped label="Stuck" rows={stuck} cap={2} render={(w) => <Quote key={w._id} row={w} rule={STUCK_RULE} />} />
       <Capped label="In progress" rows={building} cap={2} render={(w) => <Quote key={w._id} row={w} rule={ink(18)} />} />
       <Capped label="In review" rows={reviews} cap={4} render={(w) => <ReviewRow key={w._id} row={w} />} />

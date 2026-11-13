@@ -337,7 +337,7 @@
   box-shadow: 0 0 0 2px var(--sol-bg), 0 0 0 3px color-mix(in srgb, var(--sol-text) 18%, transparent);
   color: var(--sol-text-muted);
   font-family: var(--font-mono);
-  font-size: max(var(--fs-mark), calc(var(--face-stacked) * 0.28));
+  font-size: max(10px, calc(var(--face-stacked) * 0.28));
   font-weight: 600;
   line-height: 1;
   cursor: pointer;
@@ -426,7 +426,7 @@
   box-shadow: 0 0 0 1px var(--hairline);
   color: var(--ink-soft);
   font-family: var(--font-mono);
-  font-size: max(var(--fs-mark), calc(var(--face) * 0.15));
+  font-size: max(10px, calc(var(--face) * 0.15));
   font-weight: 500;
   font-variant-numeric: tabular-nums;
   line-height: 1;
@@ -764,8 +764,8 @@
   top: var(--mark-at);
   right: var(--mark-at);
   transform: translate(50%, -50%) scale(var(--mark-k, 1));
-  min-width: 18px;
-  height: 18px;
+  min-width: 15px;
+  height: 15px;
   padding: 0 4px;
   border-radius: 999px;
   border: 1.5px solid var(--sol-bg);
@@ -774,9 +774,9 @@
   white-space: nowrap;
   animation: face-unread-pop 460ms cubic-bezier(0.2, 0.9, 0.25, 1.12);
   font-family: var(--font-mono);
-  font-size: var(--fs-mark);
+  font-size: 9px;
   font-weight: 700;
-  line-height: 15px;
+  line-height: 12px;
   text-align: center;
   cursor: pointer;
   transition: transform 120ms ease;
@@ -1269,7 +1269,7 @@
 }
 .face-card-you {
   flex: none;
-  font-size: var(--fs-meta);
+  font-size: 10px;
   font-weight: 400;
   color: var(--sol-text-dim);
 }
@@ -1298,7 +1298,7 @@
   display: flex;
   gap: 6px;
   margin-top: 2px;
-  font-size: var(--fs-meta);
+  font-size: 11px;
   line-height: 14px;
   color: var(--sol-text-dim);
 }
@@ -1351,7 +1351,7 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  font-size: var(--fs-meta);
+  font-size: 11px;
   line-height: 14px;
   color: var(--sol-text-dim);
 }
@@ -1361,7 +1361,7 @@
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
-  font-size: var(--fs-meta);
+  font-size: 11px;
   line-height: 14px;
 }
 .face-card-fleet-row {
@@ -1431,7 +1431,7 @@
   min-width: 0;
   padding: 5px 4px;
   border-radius: 7px;
-  font-size: var(--fs-meta);
+  font-size: 11.5px;
   font-weight: 500;
   letter-spacing: -0.01em;
   white-space: nowrap;
@@ -1589,7 +1589,7 @@
 }
 .face-row-size-word {
   font-family: var(--font-mono);
-  font-size: var(--fs-meta);
+  font-size: 10.5px;
   font-weight: 600;
   color: var(--ink-soft);
   padding: 0 2px;
@@ -1650,7 +1650,7 @@
   margin-top: 8px;
   padding-top: 8px;
   border-top: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent);
-  font-size: var(--fs-meta);
+  font-size: 11px;
   line-height: 15px;
   color: var(--sol-text-dim);
 }

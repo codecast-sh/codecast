@@ -71,7 +71,7 @@ export function DevicePanelHeader({
           )}
           <ManagedDevicePill d={selected} />
         </div>
-        <span className="shrink-0 text-meta text-sol-text-muted">
+        <span className="shrink-0 text-[11px] text-sol-text-muted">
           {note === "apply"
             ? selected.online
               ? "Online — changes apply now"

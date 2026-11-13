@@ -11,7 +11,7 @@
   text-wrap: balance;
 }
 .decision-doc .decision-kicker {
-  font-size: var(--fs-mark);
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--sol-text-dim);

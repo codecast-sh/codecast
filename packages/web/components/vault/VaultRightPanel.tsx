@@ -112,7 +112,7 @@ const BacklinksPane = memo(function BacklinksPane({
         </div>
       ) : (
         <>
-          <div className="px-3 py-1 text-mark uppercase tracking-wide text-sol-text-dim">
+          <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-sol-text-dim">
             {backlinks.length} linked mention{backlinks.length === 1 ? "" : "s"}
           </div>
           {grouped.map(([source, links]) => (
@@ -124,14 +124,14 @@ const BacklinksPane = memo(function BacklinksPane({
                 title={source}
               >
                 {noteDisplayName(source.split("/").pop()!)}
-                <span className="ml-1.5 text-meta text-sol-text-dim tabular-nums">{links.length}</span>
+                <span className="ml-1.5 text-[10px] text-sol-text-dim tabular-nums">{links.length}</span>
               </button>
               {links.map((bl, i) => (
                 <button
                   key={i}
                   type="button"
                   onClick={() => onNavigate(source)}
-                  className="w-full text-left px-3 py-1 text-meta leading-4 text-sol-text-muted hover:bg-sol-bg-alt"
+                  className="w-full text-left px-3 py-1 text-[11px] leading-4 text-sol-text-muted hover:bg-sol-bg-alt"
                 >
                   <span className="line-clamp-2">{contextLine(bodies[source]?.content, bl.link.line)}</span>
                 </button>
@@ -143,7 +143,7 @@ const BacklinksPane = memo(function BacklinksPane({
 
       {throughObjects.length > 0 && (
         <div className="mt-1 border-t border-sol-border/20 pt-1">
-          <div className="px-3 py-1 text-mark uppercase tracking-wide text-sol-text-dim">
+          <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-sol-text-dim">
             Through shared objects
           </div>
           {throughObjects.map(({ ref, notes }) => (
@@ -170,7 +170,7 @@ const BacklinksPane = memo(function BacklinksPane({
       <button
         type="button"
         onClick={() => setShowUnlinked((v) => !v)}
-        className="w-full flex items-center gap-1 px-3 py-1.5 text-mark uppercase tracking-wide text-sol-text-dim hover:text-sol-text-muted border-t border-sol-border/20 mt-1"
+        className="w-full flex items-center gap-1 px-3 py-1.5 text-[10px] uppercase tracking-wide text-sol-text-dim hover:text-sol-text-muted border-t border-sol-border/20 mt-1"
       >
         <ChevronRight className={`w-3 h-3 transition-transform ${showUnlinked ? "rotate-90" : ""}`} />
         Unlinked mentions
@@ -178,7 +178,7 @@ const BacklinksPane = memo(function BacklinksPane({
       </button>
       {showUnlinked &&
         (unlinked.length === 0 ? (
-          <div className="px-3 py-3 text-meta text-sol-text-dim text-center">
+          <div className="px-3 py-3 text-[11px] text-sol-text-dim text-center">
             No unlinked mentions.
           </div>
         ) : (
@@ -322,7 +322,7 @@ function TagNode({
         )}
         <Hash className="w-3 h-3 flex-shrink-0 opacity-50" />
         <span className="truncate">{node.name}</span>
-        <span className="ml-auto text-meta text-sol-text-dim tabular-nums">{node.total}</span>
+        <span className="ml-auto text-[10px] text-sol-text-dim tabular-nums">{node.total}</span>
       </div>
       {open &&
         node.children.map((c) => (
@@ -355,7 +355,7 @@ const TagsPane = memo(function TagsPane({ onNavigate }: { onNavigate: (path: str
       </div>
       {selected && (
         <div className="border-t border-sol-border/30 max-h-[45%] overflow-y-auto">
-          <div className="px-3 py-1 text-mark uppercase tracking-wide text-sol-text-dim sticky top-0 bg-sol-bg">
+          <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-sol-text-dim sticky top-0 bg-sol-bg">
             #{selected} — {files.length} note{files.length === 1 ? "" : "s"}
           </div>
           {files.map((f) => (
@@ -402,7 +402,7 @@ const OutgoingPane = memo(function OutgoingPane({
     <div className="py-1">
       {resolved.length > 0 && (
         <>
-          <div className="px-3 py-1 text-mark uppercase tracking-wide text-sol-text-dim">
+          <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-sol-text-dim">
             {resolved.length} link{resolved.length === 1 ? "" : "s"}
           </div>
           {resolved.map((l, i) => (
@@ -415,14 +415,14 @@ const OutgoingPane = memo(function OutgoingPane({
             >
               {noteDisplayName(l.resolved!.split("/").pop()!)}
               {l.link.subpath && <span className="text-sol-text-dim"> › {l.link.subpath}</span>}
-              {l.isAmbiguous && <span className="ml-1 text-meta text-sol-yellow">ambiguous</span>}
+              {l.isAmbiguous && <span className="ml-1 text-[10px] text-sol-yellow">ambiguous</span>}
             </button>
           ))}
         </>
       )}
       {unresolved.length > 0 && (
         <>
-          <div className="px-3 py-1 mt-1 text-mark uppercase tracking-wide text-sol-text-dim border-t border-sol-border/20">
+          <div className="px-3 py-1 mt-1 text-[10px] uppercase tracking-wide text-sol-text-dim border-t border-sol-border/20">
             {unresolved.length} unresolved
           </div>
           {unresolved.map((l, i) => (
@@ -434,7 +434,7 @@ const OutgoingPane = memo(function OutgoingPane({
       )}
       {objects.length > 0 && (
         <>
-          <div className="px-3 py-1 mt-1 text-mark uppercase tracking-wide text-sol-text-dim border-t border-sol-border/20">
+          <div className="px-3 py-1 mt-1 text-[10px] uppercase tracking-wide text-sol-text-dim border-t border-sol-border/20">
             {objects.length} codecast object{objects.length === 1 ? "" : "s"}
           </div>
           <div className="px-3 py-1 flex flex-wrap gap-1.5">
@@ -474,7 +474,7 @@ export const VaultRightPanel = memo(function VaultRightPanel({
             type="button"
             onClick={() => setTab(id)}
             title={label}
-            className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-meta transition-colors border-b-2 -mb-px ${
+            className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 text-[11px] transition-colors border-b-2 -mb-px ${
               tab === id
                 ? "border-sol-cyan text-sol-text"
                 : "border-transparent text-sol-text-dim hover:text-sol-text-muted"

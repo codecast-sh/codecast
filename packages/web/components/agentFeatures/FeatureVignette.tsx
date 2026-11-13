@@ -16,7 +16,7 @@ export function FeatureVignette({ slug, className = "" }: { slug: string; classN
   return (
     <div
       aria-hidden
-      className={`relative overflow-hidden rounded-md border border-sol-border/60 bg-sol-bg-alt/50 font-mono text-meta leading-tight text-sol-text-muted select-none ${className}`}
+      className={`relative overflow-hidden rounded-md border border-sol-border/60 bg-sol-bg-alt/50 font-mono text-[10px] leading-tight text-sol-text-muted select-none ${className}`}
     >
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_1px_1px,var(--sol-border)_1px,transparent_0)] [background-size:14px_14px] opacity-40" />
       <div className="relative flex h-full w-full items-center justify-center p-3">{draw(featureTone(slug))}</div>
@@ -130,7 +130,7 @@ const VIGNETTES: Record<string, (t: Tone) => ReactNode> = {
 
   decide: (t) => (
     <Panel className="w-full max-w-[250px] p-2.5">
-      <div className="text-meta text-sol-text">Cache sessions in Redis or in memory?</div>
+      <div className="text-[11px] text-sol-text">Cache sessions in Redis or in memory?</div>
       <Bar w="85%" className="mt-1.5" />
       <div className="mt-2 space-y-1">
         <div className={`flex items-center gap-1.5 rounded border px-1.5 py-1 ${t.wash}`}>
@@ -284,7 +284,7 @@ const VIGNETTES: Record<string, (t: Tone) => ReactNode> = {
 
   pr: (t) => (
     <Panel className="w-full max-w-[250px] p-2.5">
-      <div className="flex items-center gap-1.5 text-meta text-sol-text">
+      <div className="flex items-center gap-1.5 text-[11px] text-sol-text">
         <span className="text-sol-green">●</span> #482 Safer invoice migration
       </div>
       <div className="mt-1.5 flex flex-wrap gap-1">
@@ -326,7 +326,7 @@ const VIGNETTES: Record<string, (t: Tone) => ReactNode> = {
       </div>
       <div className="flex gap-2 p-2.5">
         <div className="flex-1 space-y-1">
-          <div className="text-meta text-sol-text">Error trends</div>
+          <div className="text-[11px] text-sol-text">Error trends</div>
           <Bar w="95%" />
           <Bar w="80%" />
           <Bar w="60%" />
@@ -422,7 +422,7 @@ const VIGNETTES: Record<string, (t: Tone) => ReactNode> = {
         <div className="flex h-full flex-col gap-1 rounded-[6px] bg-sol-bg-alt/70 p-1">
           <Bar w="70%" />
           <Bar w="90%" />
-          <span className={`mt-auto block rounded py-0.5 text-center text-meta ${t.tile}`}>Sign up</span>
+          <span className={`mt-auto block rounded py-0.5 text-center text-[8px] ${t.tile}`}>Sign up</span>
         </div>
       </div>
       <div className="space-y-1">

@@ -89,7 +89,7 @@ export function EmbedCard({
           </span>
         )}
         {section?.missing && (
-          <span className="ml-auto text-meta font-normal text-sol-text-dim italic">
+          <span className="ml-auto text-[10px] font-normal text-sol-text-dim italic">
             section not found — showing the whole note
           </span>
         )}

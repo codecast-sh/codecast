@@ -1,7 +1,6 @@
 // What the Issues tab shows when it has no issues to list: nothing connected,
 // sources that have sent nothing yet, or one source that never made an issue.
 import { useContext } from "react";
-import Link from "next/link";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useOpsReplays, useOpsWatches } from "../../hooks/useSyncOps";
 import { relTimeShort } from "../../lib/utils";
@@ -20,7 +19,7 @@ export function IssuesEmpty({ feed, sources }: { feed: ReturnType<typeof useOpsF
         <div className="text-[14px] text-sol-text font-medium">No sources connected</div>
         <div className="iss-providers">
           {(["sentry", "posthog", "app", "github", "sdk"] as const).map((p) => (
-            <Link key={p} href={sourceConnectHref(p)} className="iss-provider" data-provider={p}><ProviderIcon provider={p} className="w-4 h-4" />{p === "sdk" ? "Ingest key" : p === "github" ? "GitHub CI" : SOURCE_PROVIDER_LABEL[p]}</Link>
+            <a key={p} href={sourceConnectHref(p)} className="iss-provider" data-provider={p}><ProviderIcon provider={p} className="w-4 h-4" />{p === "sdk" ? "Ingest key" : p === "github" ? "GitHub CI" : SOURCE_PROVIDER_LABEL[p]}</a>
           ))}
         </div>
       </div>
@@ -32,7 +31,7 @@ export function IssuesEmpty({ feed, sources }: { feed: ReturnType<typeof useOpsF
       <div className="iss-quiet-sources">
         {sources.map((s) => <QuietSource key={s._id} source={s} />)}
       </div>
-      <Link href={SETUP_HREF} className="ops-btn">Sources</Link>
+      <a href={SETUP_HREF} className="ops-btn">Sources</a>
     </div>
   );
 }
@@ -45,7 +44,7 @@ function QuietSource({ source }: { source: OpsSource }) {
   return (
     <div className="iss-quiet-source" data-bad={bad ? "true" : undefined}>
       <SourceChip source={source} href={opsHref.tab("timeline", { source: source.name })} />
-      <span className="ops-dim text-meta truncate">{sourceFacts(source).join(" · ")}</span>
+      <span className="ops-dim text-[11.5px] truncate">{sourceFacts(source).join(" · ")}</span>
       {bad && health && <HealthFixButton source={source} health={health} />}
     </div>
   );
@@ -90,16 +89,16 @@ export function SourceNoIssues({ source }: { source: OpsSource }) {
         {lands.length > 0 && (
           <div className="iss-src-lands">
             {lands.map((l) => (
-              <Link key={l.tab} href={opsHref.tab(l.tab, { source: source.name })} className="iss-src-land">
+              <a key={l.tab} href={opsHref.tab(l.tab, { source: source.name })} className="iss-src-land">
                 <span className="iss-src-land-k">{l.label}</span>
                 <span className="ops-num"><b>{l.n.toLocaleString()}</b> <span className="ops-dim">{l.unit}</span></span>
-              </Link>
+              </a>
             ))}
           </div>
         )}
         <div className="flex gap-2 flex-wrap">
           {health && bad && <HealthFixButton source={source} health={health} primary />}
-          <Link href={opsHref.home({ source: source.name })} className="ops-btn" data-tone={bad ? undefined : "primary"}>Open {source.name}</Link>
+          <a href={opsHref.home({ source: source.name })} className="ops-btn" data-tone={bad ? undefined : "primary"}>Open {source.name}</a>
         </div>
       </div>
     </div>

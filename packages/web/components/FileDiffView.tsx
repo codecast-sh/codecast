@@ -34,12 +34,12 @@ export function FileDiffView({ file }: { file: DiffFile }) {
         className="w-full px-3 py-2 flex items-center justify-between hover:bg-sol-bg-alt/30 transition-colors text-left"
       >
         <div className="flex items-center gap-2 min-w-0">
-          <span className={`text-meta px-1.5 py-0.5 rounded font-medium ${STATUS_CHIP[file.status] ?? "bg-sol-blue/20 text-sol-blue"}`}>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${STATUS_CHIP[file.status] ?? "bg-sol-blue/20 text-sol-blue"}`}>
             {file.status}
           </span>
           <span className="font-mono text-xs text-sol-text-secondary truncate">{file.filename}</span>
         </div>
-        <div className="flex items-center gap-2 text-meta font-mono flex-shrink-0">
+        <div className="flex items-center gap-2 text-[10px] font-mono flex-shrink-0">
           {file.additions > 0 && <span className="text-sol-green">+{file.additions}</span>}
           {file.deletions > 0 && <span className="text-sol-red">-{file.deletions}</span>}
           <svg
@@ -69,7 +69,7 @@ export function FileDiffList({ files, emptyText, className = "" }: { files?: Dif
   }
   return (
     <div className={`divide-y divide-sol-border/30 ${className}`}>
-      <div className="px-3 py-1.5 bg-sol-bg/20 text-meta text-sol-text-dim font-medium">Changed files ({files.length})</div>
+      <div className="px-3 py-1.5 bg-sol-bg/20 text-[10px] text-sol-text-dim font-medium">Changed files ({files.length})</div>
       {files.map((file, idx) => (
         <FileDiffView key={idx} file={file} />
       ))}

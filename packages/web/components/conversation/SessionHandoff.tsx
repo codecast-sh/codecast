@@ -76,28 +76,28 @@ export function SessionHandoffCard({ handoff, source, timestamp, ...navigation }
       <div className="border-b border-sol-cyan/15 bg-sol-cyan/[0.06] px-4 py-3 sm:px-5">
         <div className="mb-2 flex items-center gap-2 text-sol-cyan">
           <ArrowRightLeft className="h-3.5 w-3.5 shrink-0" />
-          <span className="text-mark font-semibold uppercase tracking-[0.14em]">Session handoff</span>
-          <time className="ml-auto text-meta font-normal tracking-normal text-sol-text-dim" dateTime={new Date(timestamp).toISOString()} title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</time>
+          <span className="text-[10px] font-semibold uppercase tracking-[0.14em]">Session handoff</span>
+          <time className="ml-auto text-[10px] font-normal tracking-normal text-sol-text-dim" dateTime={new Date(timestamp).toISOString()} title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</time>
         </div>
         <HandoffSessionLink details={details} {...navigation} className="group flex min-w-0 items-center gap-2 text-sm font-semibold text-sol-text transition-colors hover:text-sol-cyan">
           <span className="shrink-0 font-normal text-sol-text-dim">From</span>
         </HandoffSessionLink>
-        <div className="mt-1 text-meta text-sol-text-dim" title={handoff.sourceAgent}>
+        <div className="mt-1 text-[11px] text-sol-text-dim" title={handoff.sourceAgent}>
           {linkedSource?.agent_type ? formatAgentType(linkedSource.agent_type) : handoff.sourceAgent}
           {linkedSource?.agent_type && linkedSource.model && ` · ${abbrevModel(linkedSource.model) || linkedSource.model}`}
         </div>
       </div>
       {handoff.direction && (
         <div className="border-b border-sol-border/50 px-4 py-3 sm:px-5">
-          <div className="mb-1.5 text-mark font-semibold uppercase tracking-[0.12em] text-sol-cyan">Direction</div>
+          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-sol-cyan">Direction</div>
           <div className="prose prose-invert prose-sm max-w-none break-words text-sol-text [&_p]:my-1"><MessageMarkdown content={handoff.direction} /></div>
         </div>
       )}
-      <div className="prose prose-invert prose-sm max-w-none break-words px-4 py-4 text-sol-text sm:px-5 [&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-mark [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-[0.1em] [&_h2]:text-sol-text-dim [&_h2:first-child]:mt-0 [&_p]:my-2 [&_ul]:my-2 [&_ol]:my-2 [&_li]:my-1">
+      <div className="prose prose-invert prose-sm max-w-none break-words px-4 py-4 text-sol-text sm:px-5 [&_h2]:mb-2 [&_h2]:mt-5 [&_h2]:text-[11px] [&_h2]:font-semibold [&_h2]:uppercase [&_h2]:tracking-[0.1em] [&_h2]:text-sol-text-dim [&_h2:first-child]:mt-0 [&_p]:my-2 [&_ul]:my-2 [&_ol]:my-2 [&_li]:my-1">
         <MessageMarkdown content={handoff.brief} />
       </div>
       <details className="group border-t border-sol-border/50">
-        <summary className="flex cursor-pointer list-none items-center gap-1.5 px-4 py-2.5 text-meta text-sol-text-dim transition-colors hover:text-sol-cyan sm:px-5 [&::-webkit-details-marker]:hidden">
+        <summary className="flex cursor-pointer list-none items-center gap-1.5 px-4 py-2.5 text-[11px] text-sol-text-dim transition-colors hover:text-sol-cyan sm:px-5 [&::-webkit-details-marker]:hidden">
           <ChevronRight className="h-3 w-3 group-open:rotate-90" />
           Transcript & context
         </summary>

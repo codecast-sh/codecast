@@ -1,5 +1,7 @@
+import { githubRepository } from "../../../lib/repoNavigation";
 import { jointAuthors, parseJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { JointParts } from "../JointParts";
+import { repoTreeHref } from "../../../lib/repoView";
 import { captureException } from "@sentry/react";
 import Link from "next/link";
 import { LogoIcon } from "../../Logo";
@@ -129,7 +131,7 @@ function SkillCard({ name, description, path }: { name?: string; description?: s
     <div className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-sol-bg-alt border border-sol-border/40 text-xs font-mono">
       <span className="text-sol-violet font-semibold">/{name || "skill"}</span>
       {description && <span className="text-sol-text-muted">{description}</span>}
-      {shortPath && <span className="text-sol-text-dim text-meta hidden sm:inline">{shortPath}</span>}
+      {shortPath && <span className="text-sol-text-dim text-[10px] hidden sm:inline">{shortPath}</span>}
     </div>
   );
 }
@@ -142,7 +144,7 @@ function SkillCard({ name, description, path }: { name?: string; description?: s
 export function ForkSeedMark({ parentId, parentTitle, parentUsername, convLink }: { parentId: string; parentTitle?: string; parentUsername?: string; convLink: (id: string) => string }) {
   const label = parentTitle || (parentUsername ? `@${parentUsername}` : parentId.slice(0, 7));
   return (
-    <div className="flex items-center gap-1.5 px-3 pt-1 text-meta text-sol-text-dim" data-cc-fork-seed>
+    <div className="flex items-center gap-1.5 px-3 pt-1 text-[11px] text-sol-text-dim" data-cc-fork-seed>
       <svg className="w-3 h-3 shrink-0 text-purple-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
       </svg>
@@ -191,7 +193,7 @@ function CancelPendingButton({ onClick, disabled, quiet = false }: { onClick: ()
       onClick={(e) => { e.stopPropagation(); onClick(); }}
       disabled={disabled}
       data-testid="pending-message-cancel"
-      className={`text-meta text-sol-text-dim/70 ${quiet ? "hover:text-sol-text" : "hover:text-sol-orange"} underline underline-offset-2 transition-colors disabled:opacity-60`}
+      className={`text-[11px] text-sol-text-dim/70 ${quiet ? "hover:text-sol-text" : "hover:text-sol-orange"} underline underline-offset-2 transition-colors disabled:opacity-60`}
       title="Stop trying to send and discard this message"
     >
       {disabled ? "Cancelling…" : "Cancel"}
@@ -922,7 +924,7 @@ const BeatRow = memo(function BeatRow({ beat, userName, avatarUrl, showPrompt, a
             src={avatarUrl}
             alt=""
             className="w-4 h-4 rounded-full shrink-0 mt-px"
-            fallback={<span className="text-mark font-bold uppercase tracking-wider text-sol-blue shrink-0 mt-0.5">{(userName || "You").slice(0, 1)}</span>}
+            fallback={<span className="text-[10px] font-bold uppercase tracking-wider text-sol-blue shrink-0 mt-0.5">{(userName || "You").slice(0, 1)}</span>}
           />
           <span className="text-[12.5px] text-sol-text-secondary whitespace-pre-wrap break-words leading-snug">{prompt}</span>
         </div>
@@ -936,7 +938,7 @@ const BeatRow = memo(function BeatRow({ beat, userName, avatarUrl, showPrompt, a
 
 function NarrativeFooter({ data, generating, run, unit }: { data: any; generating: boolean; run: () => void; unit: string }) {
   return (
-    <div className="mt-2 pt-3 border-t border-sol-border/40 flex items-center gap-3 text-meta text-sol-text-dim">
+    <div className="mt-2 pt-3 border-t border-sol-border/40 flex items-center gap-3 text-[11px] text-sol-text-dim">
       <span>
         {data?.message_count ? `Through ${data.message_count} messages` : unit}
         {data?.generated_at ? ` · ${formatRelativeTime(data.generated_at)}` : ""}
@@ -1098,16 +1100,22 @@ const CondensedToolsGroup = memo(function CondensedToolsGroup({ entries, expande
       // state carries a transparent border to hold that geometry.
       //
       // Closed, the dashed outline says "something is folded here" without
-      // claiming the weight of a real block: no fill and muted text, so the
-      // receipt reads under the reply it sits below rather than beside it,
-      // and is still readable (it is the only way into the turn's tools).
-      // The pointer brightens it.
+      // claiming the weight of a real block: no fill, dim text, and 60% opacity
+      // over the WHOLE row, so the browser pills and the screenshot thumbnails
+      // fade with it and the receipt reads under the reply it sits below rather
+      // than beside it. The pointer brings it all back.
+      //
+      // Every colour here is a whole token: an opacity modifier on sol-border /
+      // sol-text-dim / sol-bg-alt emits NO rule at all, because tailwind.config
+      // maps those to a bare var() with no <alpha-value> slot. Only the hex
+      // accents (cyan, blue…) take one, which is why the fade is an opacity on
+      // the row rather than alpha on each colour.
       // A hosted receipt stays one line on a phone: the chevron keeps its
       // place and a long step ends in an ellipsis rather than wrapping.
-      className={`flex items-center ${hostedSteps ? "flex-nowrap" : "flex-wrap"} gap-x-1.5 gap-y-1 max-w-full w-fit cursor-pointer rounded-md border px-2 py-1 text-meta transition ${
+      className={`flex items-center ${hostedSteps ? "flex-nowrap" : "flex-wrap"} gap-x-1.5 gap-y-1 max-w-full w-fit cursor-pointer rounded-md border px-2 py-1 text-[11px] transition ${
         expanded
           ? "border-transparent text-sol-text-secondary hover:bg-[var(--cc-panel-head-bg)]"
-          : "border-dashed border-sol-border text-sol-text-muted hover:text-sol-text-secondary hover:border-sol-cyan/35 hover:bg-[var(--cc-panel-head-bg)]"
+          : "border-dashed border-sol-border text-sol-text-dim opacity-60 hover:opacity-100 hover:text-sol-text-secondary hover:border-sol-cyan/35 hover:bg-[var(--cc-panel-head-bg)]"
       }`}
       title={expanded ? "Hide tool activity" : "Show tool activity"}
     >
@@ -1184,7 +1192,7 @@ export const CompactCollapsedTurn = memo(function CompactCollapsedTurn({ content
       {clipped && <div className="absolute -top-px left-0 right-0 h-24 pointer-events-none bg-gradient-to-b from-[var(--sol-bg)] via-[var(--sol-bg)] to-transparent" />}
       <button
         onClick={onExpand}
-        className="not-prose absolute top-1 left-8 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border border-sol-border/70 bg-sol-bg-alt text-meta font-medium text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/50 shadow-sm transition-colors"
+        className="not-prose absolute top-1 left-8 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border border-sol-border/70 bg-sol-bg-alt text-[11px] font-medium text-sol-text-dim hover:text-sol-cyan hover:border-sol-cyan/50 shadow-sm transition-colors"
         title="Expand this turn"
       >
         <ChevronUp className="w-3 h-3" /> Show full turn
@@ -1485,7 +1493,7 @@ function AssistantBlockImpl({
       {onCollapseTurn && (
         <button
           onClick={onCollapseTurn}
-          className="mb-2 inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-cyan transition-colors not-prose"
+          className="mb-2 inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-cyan transition-colors not-prose"
           title="Collapse this turn"
         >
           <ChevronUp className="w-3 h-3" /> Collapse turn
@@ -1566,7 +1574,7 @@ function AssistantBlockImpl({
           </span>
           {/* The hosted assistant is the author, whatever model answered; its
               model stays in the tooltip above for a developer. */}
-          {model && !bubble && !isHostedAgentType(agentType) && <span className="text-sol-text-dim text-meta font-mono truncate" title={`Model: ${model}`}>{formatModel(model)}</span>}
+          {model && !bubble && !isHostedAgentType(agentType) && <span className="text-sol-text-dim text-[10px] font-mono truncate" title={`Model: ${model}`}>{formatModel(model)}</span>}
           <a
             href={`#msg-${messageId}`}
             className="text-sol-text-dim hover:text-sol-text-muted text-xs transition-colors"
@@ -1606,7 +1614,7 @@ function AssistantBlockImpl({
 
         {hasContent && (
           <>
-            <div className={parsedApiError ? "" : "text-sol-text prose prose-invert prose-sm max-w-none break-words"}>
+            <div className={parsedApiError ? "" : "text-sol-text prose prose-invert prose-sm max-w-none"}>
               {parsedApiError ? (
                 <ApiErrorCard error={parsedApiError} agentType={agentType} conversationId={conversationId} messageUuid={messageUuid} timestamp={timestamp} compact={condensed} />
               ) : (
@@ -1767,6 +1775,50 @@ function CopySendable({ markdown }: { markdown: string }) {
   );
 }
 
+function GitBranchBadge({
+  gitBranch,
+  gitStatus,
+  gitRemoteUrl,
+  hasDiff,
+  diffExpanded,
+  onToggleDiff,
+}: {
+  gitBranch: string;
+  gitStatus?: string | null;
+  gitRemoteUrl?: string | null;
+  hasDiff: boolean;
+  diffExpanded: boolean;
+  onToggleDiff: () => void;
+}) {
+  const isClean = gitStatus === "(clean)" || gitStatus === "clean" || !gitStatus;
+
+  // The branch opens the repository's tree at that branch inside the app.
+  const repository = githubRepository(gitRemoteUrl);
+  const branchHref = repository && gitBranch ? repoTreeHref(repository, gitBranch) : null;
+
+  return (
+    <button
+      onClick={() => hasDiff && onToggleDiff()}
+      className={`font-mono text-[11px] text-sol-text-muted flex-shrink-0 ${hasDiff ? "cursor-pointer hover:text-sol-text-secondary" : "cursor-default"}`}
+      title={hasDiff ? (diffExpanded ? "hide diff" : "show diff") : undefined}
+    >
+      (
+      {branchHref ? (
+        <Link
+          href={branchHref}
+          className="text-sol-green hover:underline"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {gitBranch}
+        </Link>
+      ) : (
+        <span className="text-sol-green">{gitBranch}</span>
+      )}
+      {!isClean && <span className="text-sol-orange ml-0.5">*</span>})
+    </button>
+  );
+}
+
 export function GitDiffPanel({
   gitDiff,
   gitDiffStaged,
@@ -1779,14 +1831,14 @@ export function GitDiffPanel({
       <div className="conv-col mx-auto px-4 py-2 max-h-96 overflow-y-auto">
         {gitDiffStaged && gitDiffStaged.trim().length > 0 && (
           <div className="mb-2">
-            <div className="text-sol-green text-meta font-semibold mb-1">Staged</div>
+            <div className="text-sol-green text-[10px] font-semibold mb-1">Staged</div>
             <InlineDiff raw={gitDiffStaged} />
           </div>
         )}
         {gitDiff && gitDiff.trim().length > 0 && (
           <div>
             {gitDiffStaged && gitDiffStaged.trim().length > 0 && (
-              <div className="text-sol-orange text-meta font-semibold mb-1">Unstaged</div>
+              <div className="text-sol-orange text-[10px] font-semibold mb-1">Unstaged</div>
             )}
             <InlineDiff raw={gitDiff} />
           </div>

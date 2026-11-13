@@ -245,7 +245,7 @@ export function ChangeCardDecision({ card: stored, answer, seen = [], impact: im
       )}
       {seen.length > 0 && card.examples.length === 0 && (
         <section className="cc-section" data-card-seen>
-          <div className="cc-label-row"><h3 className="cc-label">What contacts got today</h3>{live ? <span className="text-meta text-sol-text-dim">{seen.length} of {live} conversations</span> : null}</div>
+          <div className="cc-label-row"><h3 className="cc-label">What contacts got today</h3>{live ? <span className="text-[11px] text-sol-text-dim">{seen.length} of {live} conversations</span> : null}</div>
           <ul className="ccd-seen">{seen.map((c) => <SeenQuote key={c.key} c={c} />)}</ul>
         </section>
       )}

@@ -23,7 +23,7 @@ export function AuthErrorBadge({ kind, agentType }: { kind?: string | null; agen
   const icon = ICONS[badge.kind];
   return (
     <span
-      className={`inline-flex items-center gap-0.5 px-1 py-0 rounded text-meta font-semibold bg-amber-500/10 ${badge.kind === "safety" ? "text-amber-700 dark:text-amber-500" : "text-amber-500"} border border-amber-500/30`}
+      className={`inline-flex items-center gap-0.5 px-1 py-0 rounded text-[9px] font-semibold bg-amber-500/10 ${badge.kind === "safety" ? "text-amber-700 dark:text-amber-500" : "text-amber-500"} border border-amber-500/30`}
       title={badge.title}
     >
       {icon && (

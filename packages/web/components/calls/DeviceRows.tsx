@@ -83,14 +83,14 @@ function DeviceSelect({ kind, devices, compact }: { kind: Kind; devices: MediaDe
   if (devices.length === 0) return null;
   return (
     <label className="block">
-      <span className={`uppercase tracking-wide text-sol-text-muted ${compact ? "text-mark" : "text-mark"}`}>
+      <span className={`uppercase tracking-wide text-sol-text-muted ${compact ? "text-[10px]" : "text-[11px]"}`}>
         {KIND_WORD[kind]}
       </span>
       <select
         value={value}
         onChange={(e) => void switchDevice(kind, e.target.value)}
         className={`mt-0.5 w-full rounded-md bg-sol-bg px-1.5 py-1 text-sol-text outline-none focus:ring-1 focus:ring-sol-cyan/60 ${
-          compact ? "text-meta" : "text-xs"
+          compact ? "text-[11px]" : "text-xs"
         }`}
       >
         <DeviceOptions kind={kind} devices={devices} />
@@ -153,7 +153,7 @@ function DeviceList({ kind, devices }: { kind: Kind; devices: MediaDeviceInfo[] 
   if (devices.length === 0) return null;
   return (
     <section>
-      <div className="px-2 pb-1 text-mark uppercase tracking-wide text-sol-text-dim">{KIND_WORD[kind]}</div>
+      <div className="px-2 pb-1 text-[10px] uppercase tracking-wide text-sol-text-dim">{KIND_WORD[kind]}</div>
       {devices.map((d, i) => {
         const on = d.deviceId === chosen;
         return (
@@ -220,7 +220,7 @@ export function DeviceChips({ footer }: { footer?: React.ReactNode }) {
         ),
       )}
       {open && (
-        <div className="absolute bottom-full left-1/2 z-10 mb-2 max-h-[min(420px,calc(100dvh-140px))] w-[min(280px,calc(100vw-24px))] -translate-x-1/2 space-y-2 overflow-y-auto rounded-xl bg-sol-bg-alt p-1.5 shadow-2xl ring-1 ring-white/5">
+        <div className="absolute bottom-full left-1/2 z-10 mb-2 w-[280px] -translate-x-1/2 space-y-2 rounded-xl bg-sol-bg-alt p-1.5 shadow-2xl ring-1 ring-white/5">
           <NameMyDevices lists={lists} refresh={refresh} />
           {CHIPS.find((c) => c.kind === open)!.menu.map((k) => (
             <DeviceList key={k} kind={k} devices={lists[k]} />
@@ -253,7 +253,7 @@ function Chip({
       type="button"
       onClick={onClick}
       title={`${KIND_WORD[kind]}: ${name}. Click to change.`}
-      className={`flex items-center rounded-full px-1.5 py-0.5 text-meta transition-[color,background-color,opacity] duration-200 ${
+      className={`flex items-center rounded-full px-1.5 py-0.5 text-[11px] transition-[color,background-color,opacity] duration-200 ${
         active
           ? "bg-white/10 text-sol-text"
           : "text-sol-text-dim opacity-50 hover:bg-white/[0.06] hover:text-sol-text-muted group-hover/ctl:opacity-100 group-focus-within/ctl:opacity-100"

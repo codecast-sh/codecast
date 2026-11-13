@@ -123,7 +123,7 @@ export function ProjectLeadChip({ projectId, size = "sm", editable = false, face
           type="button"
           onClick={(e) => { e.preventDefault(); setHireOpen(true); }}
           title="A standing role that leads this project: it reads the project's plans, tasks and sessions and reports to you"
-          className={cn("inline-flex items-center gap-1 rounded-md whitespace-nowrap transition-colors hover:bg-sol-bg-highlight/60 hover:text-[var(--sol-text-secondary)]", size === "xs" ? "h-[18px] px-1 text-meta" : "h-[22px] px-1.5 text-meta")}
+          className={cn("inline-flex items-center gap-1 rounded-md whitespace-nowrap transition-colors hover:bg-sol-bg-highlight/60 hover:text-[var(--sol-text-secondary)]", size === "xs" ? "h-[18px] px-1 text-[11px]" : "h-[22px] px-1.5 text-[11.5px]")}
           style={{ color: "var(--sol-text-muted)" }}
           data-add-lead
         >

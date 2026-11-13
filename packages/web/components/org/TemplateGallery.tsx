@@ -54,7 +54,7 @@ export function TemplateGallery({ templates, ready, projectCount, onPick, error,
         <div className="rounded-xl border border-dashed border-sol-border/60 px-5 py-8 text-center" data-template-gallery-empty>
           <p className="text-[14px] font-semibold text-sol-text" style={{ fontFamily: "var(--font-serif)" }}>{builtinCards.length ? "No templates to hire yet" : "Nothing to hire yet"}</p>
           <p className="mx-auto mt-1.5 max-w-[380px] text-[12.5px] leading-relaxed text-sol-text-muted">{error ? "The catalog could not be read right now. Try again in a moment." : "No template has been published for this workspace, and Codecast has not published a shared one to it. A template is a release folder a publisher puts on the record:"}</p>
-          {!error && <pre className="mx-auto mt-3 inline-block rounded-lg border border-sol-border/50 bg-sol-bg-alt px-3 py-2 text-left text-meta leading-relaxed text-sol-text" style={{ fontFamily: "var(--font-mono)" }}>cast org template publish &lt;folder&gt; --team &lt;team&gt;</pre>}
+          {!error && <pre className="mx-auto mt-3 inline-block rounded-lg border border-sol-border/50 bg-sol-bg-alt px-3 py-2 text-left text-[11px] leading-relaxed text-sol-text" style={{ fontFamily: "var(--font-mono)" }}>cast org template publish &lt;folder&gt; --team &lt;team&gt;</pre>}
         </div>
       </div>
     );
@@ -92,16 +92,16 @@ function BuiltinCard({ hire, onPick }: { hire: BuiltinHire; onPick: () => void }
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
             <h3 className="truncate text-[15px] font-semibold text-sol-text" style={{ fontFamily: "var(--font-serif)" }}>{hire.name}</h3>
-            <span className="shrink-0 text-meta text-sol-text-dim" style={{ fontFamily: "var(--font-mono)" }}>@{hire.handle}</span>
+            <span className="shrink-0 text-[10.5px] text-sol-text-dim" style={{ fontFamily: "var(--font-mono)" }}>@{hire.handle}</span>
           </div>
           <p className="mt-0.5 line-clamp-3 text-[12px] leading-snug text-sol-text-muted">{hire.description}</p>
         </div>
       </header>
       <ul className="flex flex-wrap gap-1.5" aria-label="What it does">
-        {hire.does.map((w) => <li key={w} className="rounded-md px-1.5 py-0.5 text-meta leading-tight text-sol-text-muted" style={{ background: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }}>{w}</li>)}
+        {hire.does.map((w) => <li key={w} className="rounded-md px-1.5 py-0.5 text-[10.5px] leading-tight text-sol-text-muted" style={{ background: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }}>{w}</li>)}
       </ul>
       <footer className="mt-auto flex items-center justify-between gap-2 pt-1">
-        <span className="text-meta text-sol-text-dim">built in · asks nothing at hire</span>
+        <span className="text-[10.5px] text-sol-text-dim">built in · asks nothing at hire</span>
         <Button type="button" variant="cyan" size="sm" onClick={onPick} className="rounded-lg" data-template-card-hire>
           Hire <ArrowRight className="transition-transform group-hover:translate-x-0.5" />
         </Button>
@@ -127,31 +127,31 @@ function TemplateCard({ template: t, reason, onPick }: { template: CatalogTempla
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-2">
             <h3 className="truncate text-[15px] font-semibold text-sol-text" style={{ fontFamily: "var(--font-serif)" }}>{t.name}</h3>
-            <span className="shrink-0 text-meta text-sol-text-dim" style={{ fontFamily: "var(--font-mono)" }}>{t.latest.version}</span>
+            <span className="shrink-0 text-[10.5px] text-sol-text-dim" style={{ fontFamily: "var(--font-mono)" }}>{t.latest.version}</span>
           </div>
           <p className="mt-0.5 line-clamp-3 text-[12px] leading-snug text-sol-text-muted">{t.description}</p>
         </div>
       </header>
       <ul className="flex flex-wrap gap-1.5" aria-label="What it asks for">
-        {leads && <li className="rounded-md px-1.5 py-0.5 text-meta font-semibold leading-tight text-sol-violet" style={{ background: "color-mix(in srgb, var(--sol-violet) 14%, transparent)" }} data-template-card-leads>Leads the project</li>}
-        <li className="text-meta leading-[18px] text-sol-text-muted" data-template-asks>{askWords(t).length ? `Asks ${askWords(t).join(" · ")}` : "Asks nothing at hire"}</li>
+        {leads && <li className="rounded-md px-1.5 py-0.5 text-[10.5px] font-semibold leading-tight text-sol-violet" style={{ background: "color-mix(in srgb, var(--sol-violet) 14%, transparent)" }} data-template-card-leads>Leads the project</li>}
+        <li className="text-[10.5px] leading-[18px] text-sol-text-muted" data-template-asks>{askWords(t).length ? `Asks ${askWords(t).join(" · ")}` : "Asks nothing at hire"}</li>
       </ul>
       <div className="min-w-0">
-        <p className="text-mark font-semibold uppercase tracking-[0.08em] text-sol-text-dim">Runs {routines.length} routine{routines.length === 1 ? "" : "s"}{acts ? ` · ${acts} act${acts === 1 ? "s" : ""} once you allow it` : ""}</p>
+        <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-sol-text-dim">Runs {routines.length} routine{routines.length === 1 ? "" : "s"}{acts ? ` · ${acts} act${acts === 1 ? "s" : ""} once you allow it` : ""}</p>
         <ul className="mt-1 space-y-0.5">
           {routines.slice(0, 4).map((r) => (
-            <li key={r.id} className="flex items-baseline justify-between gap-2 text-meta">
+            <li key={r.id} className="flex items-baseline justify-between gap-2 text-[11.5px]">
               <span className="truncate text-sol-text">{displayTitle(t.manifest, r.title)}</span>
               <span className="shrink-0 text-sol-text-dim">{cadenceWords(r.every)}</span>
             </li>
           ))}
-          {routines.length > 4 && <li className="text-meta text-sol-text-dim">and {routines.length - 4} more</li>}
+          {routines.length > 4 && <li className="text-[11px] text-sol-text-dim">and {routines.length - 4} more</li>}
         </ul>
       </div>
       <ToolsRow template={t} />
-      {reason && <p className="mt-auto rounded-md px-2 py-1.5 text-meta leading-snug text-sol-text-muted" style={{ background: "color-mix(in srgb, var(--sol-yellow) 10%, transparent)" }} data-template-card-reason>{reason}</p>}
+      {reason && <p className="mt-auto rounded-md px-2 py-1.5 text-[11px] leading-snug text-sol-text-muted" style={{ background: "color-mix(in srgb, var(--sol-yellow) 10%, transparent)" }} data-template-card-reason>{reason}</p>}
       <footer className={`flex items-center justify-between gap-2 pt-1 ${reason ? "" : "mt-auto"}`}>
-        <span className="text-meta text-sol-text-dim">{byCodecast ? "" : "Your workspace's copy"}</span>
+        <span className="text-[10.5px] text-sol-text-dim">{byCodecast ? "" : "Your workspace's copy"}</span>
         {!reason && (
           <Button type="button" variant="violet" size="sm" onClick={onPick} className="rounded-lg" data-template-card-hire>
             Hire <ArrowRight className="transition-transform group-hover:translate-x-0.5" />
@@ -169,11 +169,11 @@ export function ToolsRow({ template: t, max = 4 }: { template: Pick<CatalogTempl
   if (!commands.length && !skills.length) return null;
   return (
     <div className="min-w-0" data-template-tools={commands.length + skills.length}>
-      <p className="text-mark font-semibold uppercase tracking-[0.08em] text-sol-text-dim">Ships {commands.length ? `${commands.length} tool${commands.length === 1 ? "" : "s"}` : ""}{commands.length && skills.length ? " · " : ""}{skills.length ? `${skills.length} skill${skills.length === 1 ? "" : "s"}` : ""}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-sol-text-dim">Ships {commands.length ? `${commands.length} tool${commands.length === 1 ? "" : "s"}` : ""}{commands.length && skills.length ? " · " : ""}{skills.length ? `${skills.length} skill${skills.length === 1 ? "" : "s"}` : ""}</p>
       <ul className="mt-1 flex flex-wrap gap-1">
-        {commands.slice(0, max).map((id) => <li key={id} className="rounded px-1.5 py-px text-meta text-sol-text" style={{ fontFamily: "var(--font-mono)", background: "color-mix(in srgb, var(--sol-cyan) 12%, transparent)" }} data-template-tool={id}>{id}</li>)}
-        {commands.length > max && <li className="px-0.5 text-meta text-sol-text-dim">+{commands.length - max}</li>}
-        {!commands.length && skills.slice(0, max).map((id) => <li key={id} className="rounded px-1.5 py-px text-meta text-sol-text-muted" style={{ fontFamily: "var(--font-mono)", background: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }}>{id}</li>)}
+        {commands.slice(0, max).map((id) => <li key={id} className="rounded px-1.5 py-px text-[10.5px] text-sol-text" style={{ fontFamily: "var(--font-mono)", background: "color-mix(in srgb, var(--sol-cyan) 12%, transparent)" }} data-template-tool={id}>{id}</li>)}
+        {commands.length > max && <li className="px-0.5 text-[10.5px] text-sol-text-dim">+{commands.length - max}</li>}
+        {!commands.length && skills.slice(0, max).map((id) => <li key={id} className="rounded px-1.5 py-px text-[10.5px] text-sol-text-muted" style={{ fontFamily: "var(--font-mono)", background: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }}>{id}</li>)}
       </ul>
     </div>
   );

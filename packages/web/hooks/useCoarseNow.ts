@@ -110,11 +110,12 @@ export function useNowWhen(sig: (now: number) => string, intervalMs: number): nu
   sigRef.current = sig;
   const renderedSigRef = useRef("");
   renderedSigRef.current = sig(now);
-  // Rides the shared clock for intervalMs, so a list of N rows checks its
-  // signatures on one timer in one task instead of N unaligned intervals.
-  useWatchEffect(() => subscribeCoarseTick(intervalMs, () => {
-    const t = Date.now();
-    if (sigRef.current(t) !== renderedSigRef.current) setNow(t);
-  }), [intervalMs]);
+  useWatchEffect(() => {
+    const id = setInterval(() => {
+      const t = Date.now();
+      if (sigRef.current(t) !== renderedSigRef.current) setNow(t);
+    }, intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
   return now;
 }

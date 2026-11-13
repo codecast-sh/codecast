@@ -79,15 +79,15 @@ function AreaFiles({ area, paths }: { area: string; paths: readonly FileLines[] 
   const colors = useAreaColors();
   const more = paths.length - MAX_FILES;
   return (
-    <div className="mt-0.5 border-l pl-3 font-mono text-meta leading-relaxed text-sol-text-muted" style={{ borderColor: areaColor(area, colors) }}>
+    <div className="mt-0.5 border-l pl-3 font-mono text-[10px] leading-relaxed text-sol-text/55" style={{ borderColor: areaColor(area, colors) }}>
       {(all ? paths : paths.slice(0, MAX_FILES)).map((f) => (
         <div key={f.path} className="flex min-w-0 items-baseline gap-3">
           <span className="min-w-0 flex-1 truncate" title={f.path}>{f.path}</span>
-          {f.lines > 0 && <span className="shrink-0 tabular-nums text-sol-text-dim">{f.lines.toLocaleString()}</span>}
+          {f.lines > 0 && <span className="shrink-0 tabular-nums text-sol-text/45">{f.lines.toLocaleString()}</span>}
         </div>
       ))}
       {more > 0 && (
-        <button type="button" onClick={() => setAll((a) => !a)} className="text-sol-text-dim transition-colors hover:text-sol-text">
+        <button type="button" onClick={() => setAll((a) => !a)} className="text-sol-text/45 transition-colors hover:text-sol-text">
           {all ? "fewer files" : `+${plural(more, "more file")}`}
         </button>
       )}
@@ -115,20 +115,20 @@ export function InsightTurns({ turns }: { turns: readonly Turn[] }) {
         <li key={i} className="min-w-0">
           {t.ask.trim() && (
             <p className="chg-ui text-[12px] leading-[1.5] text-sol-text/80">
-              <span className="mr-1.5 font-mono text-meta text-sol-text-dim">asked</span>
+              <span className="mr-1.5 font-mono text-[10px] text-sol-text/45">asked</span>
               {clip(t.ask.trim(), DID_CHARS)}
             </p>
           )}
           {t.did.slice(0, 3).map((d, j) => (
             <p key={j} className="chg-ui text-[12px] leading-[1.5] text-sol-text/60">
-              <span className="mr-1.5 font-mono text-meta text-sol-text-dim">did</span>
+              <span className="mr-1.5 font-mono text-[10px] text-sol-text/40">did</span>
               {clip(d, DID_CHARS)}
             </p>
           ))}
         </li>
       ))}
       {more > 0 && (
-        <li className="font-mono text-meta text-sol-text-dim">{plural(more, "more turn")} in the session</li>
+        <li className="font-mono text-[10px] text-sol-text/40">{plural(more, "more turn")} in the session</li>
       )}
     </ol>
   );
@@ -160,7 +160,7 @@ function SessionEvidence({ id, insight }: { id: string; insight: StorySessionRow
       {told && <p className="chg-ui mt-1.5 text-[12.5px] leading-[1.6] text-sol-text/75 [overflow-wrap:anywhere]">{told}</p>}
       {turns.length > 0 && (
         <details className="group/steps mt-1.5">
-          <summary className="flex cursor-pointer list-none items-center gap-1 font-mono text-meta text-sol-text-dim hover:text-sol-text/80">
+          <summary className="flex cursor-pointer list-none items-center gap-1 font-mono text-[10px] text-sol-text/45 hover:text-sol-text/80">
             <ChevronRight className="h-2.5 w-2.5 transition-transform group-open/steps:rotate-90" />
             {plural(turns.length, "step")}
           </summary>
@@ -192,7 +192,7 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
           <button
             type="button"
             onClick={() => ctx.copyLink?.(story)}
-            className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-meta text-sol-text-muted hover:bg-sol-bg-alt hover:text-sol-text"
+            className="ml-auto inline-flex shrink-0 items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-[11px] text-sol-text/55 hover:bg-sol-bg-alt hover:text-sol-text"
           >
             <Link2 className="h-3 w-3" />
             Copy link
@@ -222,7 +222,7 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
                 <EntityIdPill key={String(id)} type="pr" id={String(id)} />
               ))}
               {story.private_session_count > 0 && (
-                <span className="font-mono text-meta text-sol-text-dim">
+                <span className="font-mono text-[10px] text-sol-text/45">
                   {plural(story.private_session_count, "session is", "sessions are")} not shared with the team
                 </span>
               )}
@@ -241,7 +241,7 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
           {commits.map((c) => {
             const [subject, ...rest] = String(c.message ?? "").split("\n");
             return (
-              <li key={c.sha} data-commit-href={commitPath(story.repository, c.sha)} className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-meta">
+              <li key={c.sha} data-commit-href={commitPath(story.repository, c.sha)} className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 font-mono text-[11px]">
                 <Link href={commitPath(story.repository, c.sha)} className="shrink-0 text-sol-text/70 underline-offset-2 hover:text-sol-text hover:underline">
                   {c.sha.slice(0, 7)}
                 </Link>
@@ -249,7 +249,7 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
                   <span className="min-w-0 flex-1 truncate text-sol-text/85">{subject}</span>
                 </Tip>
                 <DiffStat additions={c.insertions} deletions={c.deletions} files={c.files_changed} themed />
-                <span className="shrink-0 text-meta text-sol-text-dim">
+                <span className="shrink-0 text-[10px] text-sol-text/45">
                   {c.author_name} {clockOf(c.timestamp)}
                 </span>
                 <CommitLinks
@@ -261,7 +261,7 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
             );
           })}
           {missing > 0 && (
-            <li className="font-mono text-meta text-sol-text-dim">
+            <li className="font-mono text-[10px] text-sol-text/45">
               {feed.ready || feed.refused
                 ? `${plural(missing, "commit is", "commits are")} not readable here`
                 : commits.length ? `${missing} more loading` : "Loading commits"}
@@ -274,14 +274,14 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
         <details className="group">
           <summary className="flex cursor-pointer list-none items-center gap-1.5 text-[12px] font-semibold text-sol-text/80 hover:text-sol-text">
             <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90" />
-            Files <span className="font-mono text-meta font-normal text-sol-text-dim">{areas.reduce((n, a) => n + a.touches, 0)}</span>
+            Files <span className="font-mono text-[10px] font-normal text-sol-text/45">{areas.reduce((n, a) => n + a.touches, 0)}</span>
           </summary>
           <div className="mt-1.5 space-y-1.5">
             {areas.map((a) => (
               <div key={a.area} className="min-w-0">
                 <div className="flex items-center gap-2">
                   <AreaTag area={a.area} />
-                  <span className="font-mono text-meta tabular-nums text-sol-text-dim">{a.touches}</span>
+                  <span className="font-mono text-[10px] tabular-nums text-sol-text/45">{a.touches}</span>
                 </div>
                 {a.paths.length > 0 && <AreaFiles area={a.area} paths={a.paths} />}
               </div>
@@ -290,7 +290,7 @@ export function EvidenceDrawer({ story }: { story: StoryRow }) {
         </details>
       )}
 
-      <p className="flex items-center gap-1.5 font-mono text-meta text-sol-text-dim">
+      <p className="flex items-center gap-1.5 font-mono text-[10px] text-sol-text/45">
         <KeyHint action="changes.open" /> opens {story.conversation_ids.length ? "the session" : "the largest commit"}
       </p>
     </div>

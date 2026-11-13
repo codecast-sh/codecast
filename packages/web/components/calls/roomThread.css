@@ -32,7 +32,7 @@
   --rt-inset: 10px;
   --rt-body: 12.5px;
   --rt-body-lh: 1.5;
-  --rt-secondary: var(--fs-meta);
+  --rt-secondary: 11.5px;
   --rt-measure: 72ch;
   --rt-hairline: color-mix(in srgb, var(--sol-text) 7%, transparent);
 }
@@ -46,7 +46,7 @@
 .rt-name,
 .rt-add,
 .rt-recap-label {
-  font-size: var(--fs-meta);
+  font-size: 11.5px;
   font-weight: 600;
 }
 /* One focus ring for every control in the thread. The stage's accent is
@@ -148,12 +148,6 @@
 .rt[data-surface="stage"] .rt-chip:focus-within .fc-remove {
   opacity: 1;
 }
-/* A touch screen has no hover to reveal it. */
-@media (hover: none) {
-  .rt[data-surface="stage"] .rt-chip .fc-remove {
-    opacity: 1;
-  }
-}
 .rt-add {
   display: inline-flex;
   align-items: center;
@@ -185,7 +179,7 @@
 }
 .rt-density-label {
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: var(--fs-meta);
+  font-size: 10.5px;
   color: var(--sol-text-muted);
 }
 /* The rail's header is one row, so the word goes; the radiogroup keeps its
@@ -195,7 +189,7 @@
 }
 /* A control with a few positions, the live one raised (SegmentedRadio):
    the thread's words control and the stage's view control. The positions
-   are 26x22px in a 2px pad (a 26px control): a target a finger can hit. */
+   are 16px in a 2px pad, so the control is 20px like the pills beside it. */
 .rt-seg {
   display: inline-flex;
   align-items: center;
@@ -209,20 +203,19 @@
   align-items: center;
   justify-content: center;
   gap: 6px;
-  width: 26px;
-  height: 22px;
+  width: 22px;
+  height: 16px;
   border-radius: 4px;
   color: var(--sol-text-muted);
   transition: color 120ms, background 120ms;
 }
-/* The stage's view control lives in the 44px stage header, not this row:
-   24px positions fit it with room to spare. */
+/* The stage's view control lives in the 44px stage header, not this row. */
 .rt-seg-btn-labeled {
   width: auto;
-  height: 24px;
-  padding: 0 10px;
+  height: 20px;
+  padding: 0 8px;
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: var(--fs-meta);
+  font-size: 10.5px;
 }
 .rt-seg-btn:hover {
   color: var(--sol-text);
@@ -278,7 +271,7 @@
 /* A clock, wherever it sits: a passage head, an event, a typed line. */
 .rt-when {
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: var(--fs-meta);
+  font-size: 10.5px;
   font-variant-numeric: tabular-nums;
   color: var(--sol-text-muted);
   white-space: nowrap;
@@ -300,7 +293,7 @@
 .rt-divider,
 .rt-recap-items-label {
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: var(--fs-mark);
+  font-size: 10.5px;
   font-weight: 400;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -853,7 +846,7 @@ button.rt-event-agent:hover {
 }
 .rt-task-id {
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: var(--fs-meta);
+  font-size: 10.5px;
   color: var(--sol-text-muted);
   flex-shrink: 0;
 }
@@ -891,7 +884,7 @@ button.rt-event-agent:hover {
   margin-left: 6px;
   vertical-align: middle;
   font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: var(--fs-meta);
+  font-size: 10.5px;
   color: var(--sol-green);
 }
 @media (hover: none) {

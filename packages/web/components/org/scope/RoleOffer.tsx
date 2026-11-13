@@ -121,7 +121,7 @@ function RoleOfferRow({ tree, role, conversationId }: { tree: OrgTree; role: Org
   const openChip = openProposal && (
     <Link href={entityRoute("proposal", openProposal.short_id) ?? "/org"} className={cn(CHIP, "no-underline")} style={CHIP_STYLE} title={openProposal.title} data-offer-open={openProposal.short_id}>
       Open the proposal
-      {toDecide > 0 && <span className="text-meta" style={{ color: "var(--sol-text-dim)" }}>· {toDecide} to decide</span>}
+      {toDecide > 0 && <span className="text-[11px]" style={{ color: "var(--sol-text-dim)" }}>· {toDecide} to decide</span>}
       <ArrowUpRight className="h-3 w-3 opacity-60" />
     </Link>
   );
@@ -140,7 +140,7 @@ function RoleOfferRow({ tree, role, conversationId }: { tree: OrgTree; role: Org
                   ? (offer.focus ? `${offer.focus.label}: starting…` : "Starting the review…")
                   : `${offer.focus ? offer.focus.running : "Reviewing the org"}…`}
               </span>
-              {offer.kind === "reviewing" && now - offer.since >= 60_000 && <span className="shrink-0 text-meta" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - offer.since)}</span>}
+              {offer.kind === "reviewing" && now - offer.since >= 60_000 && <span className="shrink-0 text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - offer.since)}</span>}
               {offer.trigger.short_id && <span className="shrink-0"><EntityIdPill shortId={offer.trigger.short_id} compact /></span>}
             </span>
           )}

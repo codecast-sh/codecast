@@ -725,10 +725,10 @@ export default function SyncPage() {
                   />
                 ) : (
                   <div className="flex items-baseline gap-1.5 bg-sol-bg-alt/50 px-4 py-1.5 sm:px-5">
-                    <span className="text-mark font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
+                    <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sol-text-dim">
                       {group.label}
                     </span>
-                    <span className="text-meta text-sol-text-dim/70">{group.items.length}</span>
+                    <span className="text-[10px] text-sol-text-dim/70">{group.items.length}</span>
                   </div>
                 )}
                 {group.items.length > 0 && (
@@ -767,26 +767,20 @@ export default function SyncPage() {
                             <div className={`truncate text-sm font-medium ${synced ? "text-sol-text" : "text-sol-text-muted"}`}>
                               {rowName(project)}
                             </div>
-                            {/* Wraps rather than run under the controls: the
-                                count takes the next line when the path and it
-                                do not fit side by side. */}
-                            <div className="flex flex-wrap items-center gap-x-1.5 text-xs">
-                              {/* The path drops its beginning, not its end: the
-                                  repository's own folder is what tells two
-                                  checkouts apart. */}
+                            <div className="flex items-center gap-1.5 text-xs">
                               <span
-                                className="min-w-[12ch] max-w-full truncate text-left font-mono text-meta text-sol-text-muted [direction:rtl]"
-                                title={more > 0 ? project.checkouts.map((checkout) => prettyPath(checkout.path)).join("\n") : prettyPath(project.path)}
+                                className="min-w-[12ch] truncate font-mono text-[11px] text-sol-text-muted"
+                                title={more > 0 ? project.checkouts.map((checkout) => prettyPath(checkout.path)).join("\n") : undefined}
                               >
-                                <bdi dir="ltr">{prettyPath(project.path)}</bdi>
+                                {prettyPath(project.path)}
+                                {more > 0 && (
+                                  <span className="ml-1 text-sol-text-dim">+{more} more checkout{more === 1 ? "" : "s"}</span>
+                                )}
                               </span>
-                              {more > 0 && (
-                                <span className="shrink-0 font-mono text-meta text-sol-text-dim">+{more} more checkout{more === 1 ? "" : "s"}</span>
-                              )}
                               {/* The synced count once it lands; this machine's
                                   count when nothing synced; the recent window's
                                   count, marked as such, until then. */}
-                              <span className="min-w-0 text-sol-text-dim tabular-nums">
+                              <span className="flex-shrink-0 text-sol-text-dim tabular-nums">
                                 · {impact.exact && impact.sessions > 0
                                   ? `${formatSessionCount(impact.sessions, impact.truncated)} · started ${formatDateRange(impact.first, impact.last, Date.now(), impact.truncated)}`
                                   : local && local.sessions > 0
@@ -802,7 +796,7 @@ export default function SyncPage() {
                             </div>
                             {/* Its own line: beside the count it squeezed the path to nothing. */}
                             {isGone(project) && (
-                              <div className="mt-0.5 text-meta text-sol-yellow">Folder moved or deleted on this machine</div>
+                              <div className="mt-0.5 text-[11px] text-sol-yellow">Folder moved or deleted on this machine</div>
                             )}
                             {teamResult && !teamResult.isDefault && (
                               <MappingScopeLine
@@ -902,7 +896,7 @@ export default function SyncPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-2 py-2">
-            <div className="break-all rounded-md bg-sol-bg-alt px-3 py-2 font-mono text-xs text-sol-text-muted">
+            <div className="truncate rounded-md bg-sol-bg-alt px-3 py-2 font-mono text-xs text-sol-text-muted">
               {pendingUnsync?.path}
             </div>
           </div>
@@ -998,7 +992,7 @@ function TeamSharingHeader({ team, projectCount, impact, counting, onIncludePast
  *  does, and the way into the review. */
 function MappingScopeLine({ path, impact, shareSince, onReview }: { path: string; impact: ShareImpact; shareSince: number | null; onReview: () => void }) {
   return (
-    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-meta text-sol-text-dim">
+    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-sol-text-dim">
       <span className="tabular-nums">{describeMappingScope(shareSince, impact.exact ? impact.older : undefined, Date.now(), impact.truncated)}</span>
       {impact.hidden > 0 && <span>· {formatSessionCount(impact.hidden)} hidden by hand</span>}
       <Link

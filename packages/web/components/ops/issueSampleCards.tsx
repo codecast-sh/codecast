@@ -96,9 +96,10 @@ export function EventCard({ group, samples, all, index, state, retry, go, filter
         {s.release && <span className="ops-mono ops-quiet">{s.release}</span>}
         {s.environment && <span className="ops-quiet">{s.environment}</span>}
         {who && <span className="text-sol-text truncate max-w-[240px]" title={who}>{who}</span>}
+        <span className="ops-mono ops-dim text-[10.5px] ml-auto" title="sample id">{s._id.slice(-8)}</span>
       </div>
       {s.message && s.message !== group.title && s.message.trim() !== exceptionValue(s, group.title) ? <div className="px-3 pb-2 text-[12.5px] text-sol-text break-words">{s.message}</div> : group.kind === "job" && !s.message?.trim() ? <div className="px-3 pb-2 text-[12px] ops-dim">no error message sent</div> : null}
-      {s.url && <div className="px-3 pb-2 text-meta ops-mono ops-quiet break-all">{s.url}</div>}
+      {s.url && <div className="px-3 pb-2 text-[11.5px] ops-mono ops-quiet break-all">{s.url}</div>}
       {s.replay_id && <SampleReplay sample={s} />}
     </div>
   );
@@ -175,7 +176,7 @@ export function StackCard({ stack, other, group, now, at }: { stack: string; oth
   return (
     <div className="ops-card">
       <div className="ops-card-head">
-        <span className="inline-flex items-center gap-2">Stack {other && <span className="ops-dim font-normal text-meta">from {relTimeShort(at, now)} ago</span>}</span>
+        <span className="inline-flex items-center gap-2">Stack {other && <span className="ops-dim font-normal text-[11px]">from {relTimeShort(at, now)} ago</span>}</span>
         <span className="inline-flex items-center gap-2">
           <div className="ops-seg" role="group" aria-label="Stack view">
             <button type="button" data-on={!raw ? "true" : undefined} aria-pressed={!raw} onClick={() => setRaw(false)}>Frames</button>
@@ -237,7 +238,7 @@ export function SamplesIndex({ samples, title, current, pick, now }: { samples: 
             <button type="button" className="iss-index-row" data-on={on && r.count === 1 ? "true" : undefined} onClick={() => (r.count > 1 ? setOpenRun(openRun === r.row._id ? null : r.row._id) : pick(r.row._id))}>
               <span className="ops-num ops-dim">{relTimeShort(r.row.at, now)}</span>
               <span className="truncate ops-mono text-sol-text" title={r.row.url ?? undefined}>{r.line}</span>
-              <span className="inline-flex items-center gap-2 text-meta">
+              <span className="inline-flex items-center gap-2 text-[11px]">
                 {r.count > 1 && <span className="ops-pill ops-num" style={{ color: "var(--sol-text-muted)", background: "color-mix(in srgb, var(--sol-text-muted) 12%, transparent)" }}>{r.count} alike</span>}
                 {who && <span className="ops-quiet truncate max-w-[160px]">{who}</span>}
                 {r.row.release && <span className="ops-mono ops-dim">{r.row.release}</span>}
@@ -247,6 +248,7 @@ export function SamplesIndex({ samples, title, current, pick, now }: { samples: 
               <button key={m._id} type="button" className="iss-index-row" data-member="true" data-on={m._id === current ? "true" : undefined} onClick={() => pick(m._id)}>
                 <span className="ops-num ops-dim">{relTimeShort(m.at, now)}</span>
                 <span className="truncate ops-quiet">{new Date(m.at).toLocaleString()}</span>
+                <span className="ops-mono ops-dim text-[10.5px]">{m._id.slice(-8)}</span>
               </button>
             ))}
           </div>
@@ -272,7 +274,7 @@ export function TagsCard({ samples, of, life, filter, setFilter, now }: { sample
       {/* The shares are of the kept samples, so the head names them and the stretch they cover, never the issue's whole count. */}
       <div className="ops-card-head">
         <span>Tags</span>
-        <span className="ops-dim ops-num font-normal text-meta" title={`${new Date(samples[samples.length - 1].at).toLocaleString()} to ${new Date(samples[0].at).toLocaleString()}`}>
+        <span className="ops-dim ops-num font-normal text-[11px]" title={`${new Date(samples[samples.length - 1].at).toLocaleString()} to ${new Date(samples[0].at).toLocaleString()}`}>
           {sliver ? <>last {durationShort(covered)} only · {samples.length} of {of.toLocaleString()}</> : <>{samples.length < of ? `${samples.length} kept of ${of.toLocaleString()}` : `all ${samples.length}`} · over {durationShort(covered)}, last {relTimeShort(samples[0].at, now)} ago</>}
         </span>
       </div>

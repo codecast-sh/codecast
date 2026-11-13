@@ -77,7 +77,7 @@ export const VaultFindBar = memo(function VaultFindBar({
         spellCheck={false}
         className="w-44 bg-transparent text-[12px] text-sol-text placeholder:text-sol-text-dim outline-none"
       />
-      <span className="text-meta text-sol-text-dim tabular-nums w-14 text-right">
+      <span className="text-[10px] text-sol-text-dim tabular-nums w-12 text-right">
         {count ? `${current + 1}/${count}` : query ? "0/0" : ""}
       </span>
       <button
@@ -98,7 +98,7 @@ export const VaultFindBar = memo(function VaultFindBar({
       >
         <ChevronDown className="w-3.5 h-3.5" />
       </button>
-      <span className="text-meta text-sol-text-dim ml-0.5">
+      <span className="text-[10px] text-sol-text-dim ml-0.5">
         <KeyCap size="xs">esc</KeyCap>
       </span>
       <button type="button" onClick={onClose} className="text-sol-text-dim hover:text-sol-text" aria-label="Close find">

@@ -93,7 +93,7 @@ function authorGlyph(showAuthor: boolean, authorName?: string, authorAvatar?: st
       alt={authorName}
       className="w-4 h-4 rounded-full flex-shrink-0"
       fallback={
-        <div className="w-[18px] h-[18px] rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-mark font-medium text-sol-text-muted">
+        <div className="w-4 h-4 rounded-full flex-shrink-0 bg-sol-bg-highlight border border-sol-border/50 flex items-center justify-center text-[8px] font-medium text-sol-text-muted">
           {(authorName || "?").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
         </div>
       }
@@ -161,7 +161,7 @@ function LabelChip({ label }: { label?: string | null }) {
   if (!label) return null;
   const c = getLabelColor(label);
   return (
-    <span className={`flex-shrink-0 px-1.5 py-0.5 rounded-full text-meta flex items-center gap-1 max-w-[120px] ${c.bg} ${c.text}`}>
+    <span className={`flex-shrink-0 px-1.5 py-0.5 rounded-full text-[10px] flex items-center gap-1 max-w-[120px] ${c.bg} ${c.text}`}>
       <span className={`w-1.5 h-1.5 rounded-[2px] flex-shrink-0 ${c.dot}`} />
       <span className="truncate">{label}</span>
     </span>
@@ -174,7 +174,7 @@ function ProjectChip({ directory }: { directory?: string | null }) {
   const project = getProjectName(directory ?? undefined);
   if (project === "unknown") return null;
   return (
-    <span className="flex-shrink-0 flex items-center gap-1 text-meta text-sol-text-dim max-w-[120px]" title={directory || project}>
+    <span className="flex-shrink-0 flex items-center gap-1 text-[10px] text-sol-text-dim max-w-[120px]" title={directory || project}>
       <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 opacity-60 ${getLabelColor(project).dot}`} />
       <span className="truncate">{project}</span>
     </span>
@@ -217,20 +217,20 @@ export function PaletteSessionRow({ conv, bucket, standing, device, onSelect }: 
         className={`flex-1 ${shelved || standing?.sub ? "opacity-60 group-data-[selected=true]:opacity-100" : ""}`}
       />
       {standing?.shelf && (
-        <span className="text-meta text-sol-text-dim/80 flex-shrink-0">{standing.shelf}</span>
+        <span className="text-[10px] text-sol-text-dim/80 flex-shrink-0">{standing.shelf}</span>
       )}
       <LabelChip label={bucket?.name} />
       {device && (
-        <span className="flex-shrink-0 flex items-center gap-1 text-meta text-sol-text-dim max-w-[110px]" title={`Runs on ${deviceDisplayName(device)}`}>
+        <span className="flex-shrink-0 flex items-center gap-1 text-[10px] text-sol-text-dim max-w-[110px]" title={`Runs on ${deviceDisplayName(device)}`}>
           <DeviceIcon d={device} className="w-3 h-3 flex-shrink-0 opacity-70" />
           <span className="truncate">{deviceDisplayName(device)}</span>
         </span>
       )}
       <ProjectChip directory={conv.git_root || conv.project_path} />
       {isTeam && authorFirst && (
-        <span className="text-meta text-sol-text-dim flex-shrink-0" title={`${conv.authorName}'s session`}>· {authorFirst}</span>
+        <span className="text-[10px] text-sol-text-dim flex-shrink-0" title={`${conv.authorName}'s session`}>· {authorFirst}</span>
       )}
-      <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={conv.updated_at} format={formatDateSmart} /></span>
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={conv.updated_at} format={formatDateSmart} /></span>
     </CommandPrimitive.Item>
   );
 }
@@ -290,19 +290,19 @@ export function PaletteSearchResultRow({ result, label, query = "", onSelect }: 
         <div className="truncate text-sm flex items-center gap-1.5">
           <SessionIdentityLine row={row} title={cleanTitle(result.title || "Untitled")} />
           {!result.isOwn && (
-            <span className="text-meta text-sol-text-dim flex-shrink-0">· {result.authorName}</span>
+            <span className="text-[10px] text-sol-text-dim flex-shrink-0">· {result.authorName}</span>
           )}
         </div>
         <SearchOrigin row={result} query={terms} className="mt-0.5" />
         {snippetText && (
-          <div className="truncate text-meta text-sol-text-dim mt-0.5">
+          <div className="truncate text-[11px] text-sol-text-dim mt-0.5">
             {highlightMatch(getSnippet(snippetText, terms, 160), terms)}
           </div>
         )}
       </div>
       <LabelChip label={label} />
       <ProjectChip directory={result.projectPath} />
-      <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0">
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
         {result.titleMatch
           ? "title"
           : result.matches?.length
@@ -310,7 +310,7 @@ export function PaletteSearchResultRow({ result, label, query = "", onSelect }: 
           // An operator-only query (file:, pr:, ...) matches the session, not a message.
           : "filter"}
       </span>
-      <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={result.updatedAt} format={formatDateSmart} /></span>
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={result.updatedAt} format={formatDateSmart} /></span>
     </CommandPrimitive.Item>
   );
 }
@@ -348,9 +348,9 @@ export function PaletteTaskRow({ task, status, onSelect, valuePrefix = "__entity
     >
       <ListTodo className="w-4 h-4 flex-shrink-0 text-sol-cyan" />
       <span className="truncate flex-1">{task.title || "Untitled"}</span>
-      {status && <span className={`text-meta flex-shrink-0 ${status.color}`}>{status.label}</span>}
-      <ShortId id={task.short_id} className="text-meta text-sol-text-dim tabular-nums" />
-      <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={task.updated_at} format={formatDateSmart} /></span>
+      {status && <span className={`text-[10px] flex-shrink-0 ${status.color}`}>{status.label}</span>}
+      <ShortId id={task.short_id} className="text-[10px] text-sol-text-dim tabular-nums" />
+      <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0"><StampTime ts={task.updated_at} format={formatDateSmart} /></span>
     </CommandPrimitive.Item>
   );
 }

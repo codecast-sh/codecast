@@ -12,7 +12,7 @@ export function StandingLine({ standing, className, size = "sm" }: { standing: O
   const line = standingLineOf(standing);
   if (!line) return null;
   return (
-    <div className={cn("flex items-center gap-1.5 min-w-0", size === "sm" ? "text-meta" : "text-meta", className)} title={line.text ?? undefined}>
+    <div className={cn("flex items-center gap-1.5 min-w-0", size === "sm" ? "text-[10.5px]" : "text-[11.5px]", className)} title={line.text ?? undefined}>
       <span className="shrink-0 w-[7px] h-[7px] rounded-full" style={{ background: line.color }} aria-hidden />
       <span className="shrink-0 font-medium" style={{ color: line.color }}>{line.label}</span>
       {line.text && (
@@ -36,7 +36,7 @@ export function StateWords({ counts, max = 2, lead, className }: { counts: State
   if (!lead && words.length === 0) return null;
   const color = (w: string) => (w.includes("need") ? ORG_STATE_META.needs_input.color : w.endsWith("working") ? ORG_STATE_META.working.color : undefined);
   return (
-    <span className={cn("inline-flex items-center gap-1 text-meta tabular-nums whitespace-nowrap", className)} style={{ color: "var(--sol-text-dim)" }} title={countsTitle(counts)} data-state-words>
+    <span className={cn("inline-flex items-center gap-1 text-[10.5px] tabular-nums whitespace-nowrap", className)} style={{ color: "var(--sol-text-dim)" }} title={countsTitle(counts)} data-state-words>
       {[...(lead ? [lead] : []), ...words].map((w, i) => (
         <span key={w} className="inline-flex items-center gap-1">
           {i > 0 && <span aria-hidden>·</span>}

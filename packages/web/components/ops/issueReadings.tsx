@@ -49,8 +49,8 @@ export function ReadingsCard({ group, samples, watch, now, loading, pickedRun, o
     <div className="ops-card">
       <div className="ops-card-head">
         <span>Readings <span className="ops-dim ops-num">{samples.length}</span></span>
-        {group.kind === "metric" && line.threshold !== undefined && <span className="ops-dim font-normal text-meta ops-num">line {line.direction === "below" ? "below" : "above"} {fmtValue(line.threshold)}{unit}</span>}
-        {group.kind === "check" && <span className="ops-dim font-normal text-meta">failures kept</span>}
+        {group.kind === "metric" && line.threshold !== undefined && <span className="ops-dim font-normal text-[11px] ops-num">line {line.direction === "below" ? "below" : "above"} {fmtValue(line.threshold)}{unit}</span>}
+        {group.kind === "check" && <span className="ops-dim font-normal text-[11px]">failures kept</span>}
         {source?.provider === "app" && <AppCheckActions source={source} />}
       </div>
       {template && <ReadingTrend template={template} rows={raw} now={now} />}
@@ -252,9 +252,9 @@ export function ContributorsCard({ group, watch, now, split, parts, onFixPart }:
       <div className="ops-card-head">
         <span>{parts.length || split.state === "reading" ? "What it counted" : "Errors behind it"} {parts.length > 0 && <span className="ops-dim ops-num">{parts.length}</span>}</span>
         {parts.length > 0 ? (
-          <span className="ops-dim font-normal text-meta ops-num">{counted.toLocaleString()} events · {own?.name ?? "its source"} · <span title={new Date(split.state === "rows" ? split.at : now).toLocaleString()}>read {clockTime(split.state === "rows" ? split.at : now)}</span></span>
+          <span className="ops-dim font-normal text-[11px] ops-num">{counted.toLocaleString()} events · {own?.name ?? "its source"} · <span title={new Date(split.state === "rows" ? split.at : now).toLocaleString()}>read {clockTime(split.state === "rows" ? split.at : now)}</span></span>
         ) : rows.length > 0 ? (
-          <span className="ops-dim font-normal text-meta ops-num">{total.toLocaleString()} events · last 24h</span>
+          <span className="ops-dim font-normal text-[11px] ops-num">{total.toLocaleString()} events · last 24h</span>
         ) : null}
       </div>
       {split.state === "reading" && <div className="iss-contrib-note ops-dim">Reading {own?.name ?? "the source"}…</div>}
@@ -326,7 +326,7 @@ export function FailureSplitCard({ split, now, picked, onPick, onFix }: { split:
     <div className="ops-card" data-ops-failure-split>
       <div className="ops-card-head">
         <span>What failed <span className="ops-dim ops-num">{split.rows.length}</span></span>
-        <span className="ops-dim font-normal text-meta ops-num" title={split.since !== null ? `${kept ? "the kept samples" : "every failure"} since ${new Date(split.since).toLocaleString()}` : undefined}>
+        <span className="ops-dim font-normal text-[11px] ops-num" title={split.since !== null ? `${kept ? "the kept samples" : "every failure"} since ${new Date(split.since).toLocaleString()}` : undefined}>
           {split.total.toLocaleString()} {kept ? "kept runs" : "runs"}{split.since !== null ? ` · since ${relTimeShort(split.since, now)} ago` : ""}
         </span>
       </div>

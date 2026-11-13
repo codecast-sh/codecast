@@ -43,13 +43,10 @@ export type GraphEditability =
   | { _id: string; editable: true; file: string; files: Array<{ node: string; prompt?: string; script?: string }>; device_id: string; nodes: Array<{ id: string; h: string }>; target: string; home?: GraphHome | null }
   | { _id: string; editable: false; reason: string; home?: GraphHome | null };
 
-// Module-level: a fresh select per render re-applied the same payload.
-const ONE_EDITABILITY = { select: (row: GraphEditability | null) => (row ? [row] : []) };
-
 /** Whether the viewer can save and try the drawn graph's steps, and where; undefined while unread. */
 export function useGraphEditability(workflowId: string | null | undefined): GraphEditability | null | undefined {
   const args = useMemo(() => (workflowId ? { workflow_id: workflowId } : "skip"), [workflowId]);
-  const { ready } = useSyncCollection("lineGraphEditability", api.lineActions.editability, args as any, ONE_EDITABILITY);
+  const { ready } = useSyncCollection("lineGraphEditability", api.lineActions.editability, args as any, { select: (row: GraphEditability | null) => (row ? [row] : []) });
   const row = useInboxStore((s) => (workflowId ? ((s as unknown as { lineGraphEditability?: Record<string, GraphEditability> }).lineGraphEditability?.[workflowId] ?? null) : null));
   if (!workflowId) return null;
   if (row) return row;

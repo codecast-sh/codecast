@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useRef } from "react";
 import { useQuery } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { useInboxStore } from "../store/inboxStore";
 import { createTaskAndAdopt } from "../lib/taskActions";
 import { useImageUpload } from "../hooks/useImageUpload";
 import { useWorkspaceArgs } from "../hooks/useWorkspaceArgs";
@@ -192,6 +193,7 @@ function LabelsChip({ value, onChange }: { value: string[]; onChange: (v: string
 }
 
 export function CreateTaskModal({ onClose, teamMembers, currentUser, defaults }: { onClose: () => void; teamMembers?: any[] | null; currentUser?: any; defaults?: { project_id?: string; plan_id?: string } | null }) {
+  const createTask = useInboxStore((s) => s.createTask);
   const workspaceArgs = useWorkspaceArgs();
 
   // The team's full status list (per-team custom statuses; personal = the six
@@ -271,7 +273,7 @@ export function CreateTaskModal({ onClose, teamMembers, currentUser, defaults }:
     } else {
       onClose();
     }
-  }, [title, priority, status, taskStatuses, assignee, labels, createMore, onClose, workspaceArgs, defaults]);
+  }, [title, priority, status, taskStatuses, assignee, labels, createMore, createTask, onClose, workspaceArgs, defaults]);
 
   return (
     <CreateDialog

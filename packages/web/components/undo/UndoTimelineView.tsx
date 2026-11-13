@@ -279,7 +279,7 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, canO
                 <div ref={startRef} className="relative mx-1 px-2 pt-1.5 pb-1" data-undo-start>
                   <div className="relative pl-[30px] min-h-[22px] flex items-center">
                     <span aria-hidden className="absolute left-[6px] top-[6px] w-[10px] h-[10px] rounded-full border border-dashed border-sol-text-dim/50 bg-sol-bg" />
-                    <span className="text-meta text-sol-text-dim">Start · before these changes</span>
+                    <span className="text-[11.5px] text-sol-text-dim">Start · before these changes</span>
                   </div>
                 </div>
               )}
@@ -287,7 +287,7 @@ export function UndoTimelineView({ model, mode, onUndoTo, onRedoTo, onOpen, canO
           </Command.List>
         )}
         {!peek && model.rows.length > 0 && (
-          <div className="flex items-center gap-2.5 px-3 py-1.5 border-t border-sol-border/30 text-meta text-sol-text-dim whitespace-nowrap" data-undo-legend>
+          <div className="flex items-center gap-2.5 px-3 py-1.5 border-t border-sol-border/30 text-[10px] text-sol-text-dim whitespace-nowrap" data-undo-legend>
             <span className={HINT}><KeyCap size="xs">&uarr;</KeyCap><KeyCap size="xs">&darr;</KeyCap>move</span>
             <span className={HINT}><KeyCap size="xs">&#9166;</KeyCap>go</span>
             <span className={HINT}><KeyCap size="xs">&rarr;</KeyCap>fold</span>
@@ -314,12 +314,12 @@ function Header({ peek, windowMs }: { peek: boolean; windowMs: number }) {
           {/* Stepping keys sit in the footer beside the list they move; the
               header names only the way out, so the title keeps one line. */}
           {!peek && (
-            <span className="ml-auto flex flex-shrink-0 items-center whitespace-nowrap text-meta text-sol-text-dim" data-undo-header-keys>
+            <span className="ml-auto flex flex-shrink-0 items-center whitespace-nowrap text-[10px] text-sol-text-dim" data-undo-header-keys>
               <span className={HINT}><KeyCap size="xs">Esc</KeyCap>close</span>
             </span>
           )}
         </div>
-        <p className="text-meta text-sol-text-dim leading-[18px] truncate" data-undo-subline>
+        <p className="text-[11px] text-sol-text-dim leading-[18px] truncate" data-undo-subline>
           This window · <MenuKeyCaps action="ui.undo" className={CHORD} /> reaches the last {undoWindowWords(windowMs)}
         </p>
       </div>
@@ -338,7 +338,7 @@ function NowRule({ y, slide }: { y: number; slide: boolean }) {
     >
       <span className="absolute left-0 right-0 -top-px h-px" style={{ background: "linear-gradient(to right, var(--sol-cyan), color-mix(in srgb, var(--sol-cyan) 45%, transparent))" }} />
       <span className="absolute left-[7px] -top-[3.5px] w-[7px] h-[7px] rounded-full" style={{ background: "var(--sol-cyan)", boxShadow: "0 0 0 3px color-mix(in srgb, var(--sol-cyan) 22%, transparent)" }} />
-      <span className="absolute right-0 -top-[9px] px-1.5 h-[18px] inline-flex items-center rounded-full text-mark font-semibold uppercase tracking-[0.08em] text-sol-cyan bg-sol-bg">now</span>
+      <span className="absolute right-0 -top-[7px] px-1.5 h-[14px] inline-flex items-center rounded-full text-[9px] font-semibold uppercase tracking-[0.08em] text-sol-cyan bg-sol-bg">now</span>
     </div>
   );
 }
@@ -418,7 +418,7 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
           >
             {row.label}
           </span>
-          <span className="ml-auto flex-shrink-0 text-meta text-sol-text-dim tabular-nums">{visitTimeAgo(row.ts)}</span>
+          <span className="ml-auto flex-shrink-0 text-[10.5px] text-sol-text-dim tabular-nums">{visitTimeAgo(row.ts)}</span>
         </div>
         <div className="relative flex items-center gap-2 min-h-[18px]">
           {foldInline && <HistoryFold open={foldOpen} onClick={onFold} tabIndex={-1} className="h-[18px]" data-undo-fold>{row.fold!.label}</HistoryFold>}
@@ -430,16 +430,16 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
               type="button"
               onClick={(e) => { e.stopPropagation(); onOpen(); }}
               tabIndex={-1}
-              className="min-w-[6ch] truncate text-left text-meta text-sol-text-muted hover:text-sol-cyan hover:underline underline-offset-2"
+              className="min-w-[6ch] truncate text-left text-[11px] text-sol-text-muted hover:text-sol-cyan hover:underline underline-offset-2"
               data-undo-open
             >
               {visit!.title}
             </button>
           )}
-          {showTitle && row.detail && <span aria-hidden className="-mx-1 flex-shrink-0 text-meta text-sol-text-dim">·</span>}
+          {showTitle && row.detail && <span aria-hidden className="-mx-1 flex-shrink-0 text-[11px] text-sol-text-dim">·</span>}
           <span
             // After a title, the short facts keep their room and the title gives way.
-            className={cn("min-w-0 truncate text-meta", showTitle && "flex-shrink-0 max-w-[55%]")}
+            className={cn("min-w-0 truncate text-[11px]", showTitle && "flex-shrink-0 max-w-[55%]")}
             style={{ color: row.state === "conflict" || flashing ? "var(--sol-yellow)" : row.state === "refused" ? "var(--sol-red)" : row.secondsLeft !== null ? "var(--sol-orange)" : "var(--sol-text-dim)" }}
             data-undo-detail
           >
@@ -453,7 +453,7 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
               className={cn(
                 // Laid over the line's end on the row's own fill (a short fade
                 // into the text before it), so showing it moves nothing.
-                "absolute right-0 top-1/2 -translate-y-1/2 hidden items-center gap-1 h-5 px-1.5 rounded-md text-meta font-medium",
+                "absolute right-0 top-1/2 -translate-y-1/2 hidden items-center gap-1 h-5 px-1.5 rounded-md text-[10.5px] font-medium",
                 "bg-[var(--undo-row-bg)] before:absolute before:right-full before:inset-y-0 before:w-5 before:pointer-events-none before:bg-[linear-gradient(to_left,var(--undo-row-bg),transparent)]",
                 peek ? "group-hover:inline-flex" : "group-hover:inline-flex group-data-[selected=true]:inline-flex",
                 row.act?.kind === "org"
@@ -476,7 +476,7 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
                 {row.fold.children.map((c) => {
                   const left = (c.objects ?? []).some((o) => skipped.has(`${o.store}:${o.id}`));
                   return (
-                    <li key={c.id} className="text-meta text-sol-text-muted truncate" data-undo-child={c.id}>
+                    <li key={c.id} className="text-[11.5px] text-sol-text-muted truncate" data-undo-child={c.id}>
                       {c.label}
                       {left && <span className="text-sol-text-dim"> · changed since, left as it is</span>}
                     </li>
@@ -487,7 +487,7 @@ function Row({ row, aboveHead, peek, flashing, foldOpen, onFold, onAct, onOpen, 
           </div>
         )}
         {row.setAside && (
-          <p className={cn("mt-0.5 text-meta text-sol-text-dim truncate", HISTORY_STRUCK)} title={row.setAside.labels.join("\n")} data-undo-set-aside={row.setAside.count}>
+          <p className={cn("mt-0.5 text-[11px] text-sol-text-dim truncate", HISTORY_STRUCK)} title={row.setAside.labels.join("\n")} data-undo-set-aside={row.setAside.count}>
             {undoSetAsideLine(row.setAside.count, row.label)}
           </p>
         )}

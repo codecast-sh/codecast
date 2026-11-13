@@ -9551,23 +9551,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   machineRosterLive: false,
   localDevice: null,
   setMachineRoster: sync(function (this: Draft, devices: MachineCandidate[]) {
-    // listDevices re-sends the whole roster, freshly decoded, whenever any
-    // device's minute-bucketed last_seen moves. Keep each device whose row is
-    // value-identical at its old reference, and write nothing when no device
-    // changed: an assign woke every roster reader (each inbox card that names a
-    // device) and re-persisted the roster. The live flag still flips on the
-    // first push, unchanged or not (the path-seeding gate waits on it).
-    const prev = ((isDraft(this) ? original(this) : this) as any).machineRoster as MachineCandidate[] | undefined;
-    const prevById = new Map((Array.isArray(prev) ? prev : []).map((d) => [d?.device_id, d]));
-    let changed = !Array.isArray(prev) || prev.length !== devices.length;
-    const next = devices.map((device, i) => {
-      const old = prevById.get(device?.device_id);
-      const kept = old && valueEqual(old, device) ? old : device;
-      if (!changed && prev![i] !== kept) changed = true;
-      return kept;
-    });
-    if (changed) this.machineRoster = next;
-    if (!this.machineRosterLive) this.machineRosterLive = true;
+    this.machineRoster = devices;
+    this.machineRosterLive = true;
   }),
   teamMachines: [],
   setTeamMachines: sync(function (this: Draft, rows: import("../lib/teamMachines").TeamMachine[]) {

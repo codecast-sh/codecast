@@ -55,7 +55,7 @@ export function RoleScopeView({ role, treeRole, card }: { role: RoleKnown; treeR
 export function Section({ label, name, children }: { label: string; name: string; children: ReactNode }) {
   return (
     <section data-scope-section={name}>
-      <h3 className="px-2.5 mb-1.5 text-mark font-semibold uppercase tracking-[0.08em] text-sol-text-dim" data-scope-label={name}>{label}</h3>
+      <h3 className="px-2.5 mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.08em] text-sol-text-dim" data-scope-label={name}>{label}</h3>
       {children}
     </section>
   );

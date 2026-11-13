@@ -1,7 +1,7 @@
 // Mounts a project's Line tab in jsdom and reads its Versions table
 // (the-line-end-to-end.md LE14): every run is accounted for (a Stopped
 // column beside shipped, revised and dropped), and each row leads with what
-// that version changed, its graph hash kept in that change's tooltip.
+// that version changed, its graph hash only a secondary tag.
 import { afterAll, expect, mock, test } from "bun:test";
 import React, { act } from "react";
 import { JSDOM } from "jsdom";
@@ -84,10 +84,8 @@ test("versions say what changed and account for every run, stopped ones included
   await act(async () => { root.render(React.createElement(ProjectLineTab, { projectId: "p1" })); });
   const rows = Object.fromEntries([...host.querySelectorAll<HTMLElement>("[data-line-version]")].map((r) => [r.dataset.lineVersion, [...r.querySelectorAll("td")].map((td) => td.textContent?.trim())]));
   expect(Object.keys(rows)).toEqual(["2222222222222222", "1111111111111111"]);
-  expect(rows["2222222222222222"][0]).toBe("Prove editedlatest");
-  expect(rows["1111111111111111"][0]).toBe("First recorded version");
-  // The hash is data, not a label: it is the change's tooltip.
-  expect(host.querySelector('[data-line-version="2222222222222222"] td span[title]')?.getAttribute("title")).toBe("Graph 2222222222222222");
+  expect(rows["2222222222222222"][0]).toBe("Prove edited22222222latest");
+  expect(rows["1111111111111111"][0]).toBe("First recorded version11111111");
   // Runs, Shipped, Revised, Dropped, Stopped: 2 runs = 1 dropped + 1 stopped.
   expect(rows["1111111111111111"].slice(2, 7)).toEqual(["2", "0 0%", "0 0%", "1", "1"]);
   expect(host.querySelector("[data-line-versions] thead")?.textContent).toContain("Stopped");

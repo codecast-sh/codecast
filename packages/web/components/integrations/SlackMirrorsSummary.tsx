@@ -59,7 +59,7 @@ export function SlackMirrorsSummary() {
   return (
     <div className="mt-3 border-t border-sol-border/40 pt-3">
       <div className="flex items-center gap-2">
-        <div className="text-mark font-semibold uppercase tracking-[0.09em] text-sol-text-dim">Mirrored from Slack</div>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.09em] text-sol-text-dim">Mirrored from Slack</div>
         {teamId && (
           <span className="ml-auto inline-flex items-center gap-2">
             <QuietButton onClick={() => setPeople(true)}>
@@ -82,7 +82,7 @@ export function SlackMirrorsSummary() {
         <div className="mt-1">
           <button
             type="button"
-            className="inline-flex items-center gap-1 text-meta text-sol-text-muted hover:text-sol-text"
+            className="inline-flex items-center gap-1 text-[11px] text-sol-text-muted hover:text-sol-text"
             aria-expanded={dmsOpen}
             onClick={() => setDmsOpen((o) => !o)}
           >
@@ -93,11 +93,11 @@ export function SlackMirrorsSummary() {
           {dmsOpen && (
             <ul className="mt-1 ml-4 flex flex-col gap-1">
               {dmRows.map(({ link, name }) => (
-                <li key={link._id} className="flex items-center gap-2 text-meta">
+                <li key={link._id} className="flex items-center gap-2 text-[11.5px]">
                   <Link href={`/chat/${link.chat_channel_id}`} className="truncate text-sol-text hover:underline">{name}</Link>
-                  {link.paused && <span className="text-meta text-sol-text-dim">paused</span>}
+                  {link.paused && <span className="text-[10px] text-sol-text-dim">paused</span>}
                   {!link.paused && link.last_error && (
-                    <span className="text-meta text-sol-orange" title={link.last_error}>needs attention</span>
+                    <span className="text-[10px] text-sol-orange" title={link.last_error}>needs attention</span>
                   )}
                 </li>
               ))}
@@ -108,10 +108,10 @@ export function SlackMirrorsSummary() {
       {browsing && teamId && <SlackChannelBrowser teamId={teamId} onClose={() => setBrowsing(false)} />}
       {people && teamId && <SlackPeopleDialog teamId={teamId} onClose={() => setPeople(false)} />}
       {rows.length > 0 && (
-        <div className="mt-3 text-mark font-semibold uppercase tracking-[0.09em] text-sol-text-dim">Channels</div>
+        <div className="mt-3 text-[10px] font-semibold uppercase tracking-[0.09em] text-sol-text-dim">Channels</div>
       )}
       {rows.length === 0 ? (
-        <p className="mt-1.5 text-meta leading-relaxed text-sol-text-dim">
+        <p className="mt-1.5 text-[11px] leading-relaxed text-sol-text-dim">
           None yet. Bring Slack channels over with the button above, or open a channel in Chat and choose{" "}
           <span className="text-sol-text-muted">Mirror with Slack</span> from its menu.
         </p>
@@ -119,7 +119,7 @@ export function SlackMirrorsSummary() {
         <ul className="mt-1.5 flex flex-col gap-1">
           {rows.map(({ link, channel }) => {
             return (
-              <li key={link._id} className="flex items-center gap-2 text-meta">
+              <li key={link._id} className="flex items-center gap-2 text-[11.5px]">
                 <Link href={`/chat/${link.chat_channel_id}`} className="inline-flex items-center gap-0.5 text-sol-text hover:underline">
                   <Hash className="w-3 h-3 text-sol-text-dim" />
                   {channel!.name}
@@ -138,12 +138,12 @@ export function SlackMirrorsSummary() {
                   )}
                 </span>
                 {link.backfill?.status === "running" && (
-                  <span className="inline-flex items-center gap-1 text-meta text-sol-green">
+                  <span className="inline-flex items-center gap-1 text-[10px] text-sol-green">
                     <Loader2 className="w-3 h-3 animate-spin" /> importing · {link.backfill.fetched.toLocaleString()} lines
                   </span>
                 )}
-                {link.paused && <span className="text-meta text-sol-text-dim">paused</span>}
-                {!link.paused && link.last_error && <span className="text-meta text-sol-orange">needs attention</span>}
+                {link.paused && <span className="text-[10px] text-sol-text-dim">paused</span>}
+                {!link.paused && link.last_error && <span className="text-[10px] text-sol-orange">needs attention</span>}
               </li>
             );
           })}

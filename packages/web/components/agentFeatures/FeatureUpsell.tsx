@@ -4,14 +4,13 @@
 // up: the decision queue offers Decision queue, the pages gallery offers
 // Publish. It appears only while every one of the person's machines has the
 // feature off, says in a sentence what they would get here, turns it on for
-// every online machine after the shared review, and goes away for good when declined
+// every online machine in one click, and goes away for good when declined
 // (one decline per feature, shared with the new-features banner).
 
 import { ArrowUpRight, Check, X } from "lucide-react";
 import { FEATURE_EXPLAINERS } from "@codecast/shared/contracts";
 import { useRouter } from "next/navigation";
-import { featureOnLedger, useFeatureOffer } from "./useFeatureOffer";
-import { ConsequentialSwitch } from "../consequential/ConsequentialSwitch";
+import { useFeatureOffer } from "./useFeatureOffer";
 import { FeatureVignette } from "./FeatureVignette";
 import { agentFeatureHref } from "../../lib/agentFeatureHref";
 import { featureIcon, featureTone } from "./featureLook";
@@ -48,28 +47,17 @@ export function FeatureUpsell({
     </span>
   );
 
-  // Turning a feature on hands every online machine's agents a capability, so
-  // the press opens the shared review; the confirm runs the same turn-on.
-  const name = o.feature.name;
-  const ledger = featureOnLedger(o.feature, o.onlineNames);
-  const turnOn = (render: (press: () => void) => React.ReactNode) => (
-    <ConsequentialSwitch on={false} ledger={ledger} onTurnOn={() => void o.turnOn()} onTurnOff={() => {}} trigger={({ press }) => render(press)} />
-  );
-
   const actions = (
     <>
-      {turnOn((press) => (
-        <button
-          type="button"
-          onClick={press}
-          aria-haspopup="dialog"
-          disabled={o.busy || o.onlineCount === 0}
-          title={o.onlineCount === 0 ? "No machine is online to turn it on" : `Turns it on for ${target}`}
-          className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${tone.tile} hover:brightness-110`}
-        >
-          {o.busy ? "Turning on…" : "Turn on…"}
-        </button>
-      ))}
+      <button
+        type="button"
+        onClick={o.turnOn}
+        disabled={o.busy || o.onlineCount === 0}
+        title={o.onlineCount === 0 ? "No machine is online to turn it on" : `Turns it on for ${target}`}
+        className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors disabled:opacity-50 ${tone.tile} hover:brightness-110`}
+      >
+        {o.busy ? "Turning on…" : "Turn on"}
+      </button>
       <button type="button" onClick={learn} className="inline-flex items-center gap-0.5 text-xs text-sol-text-muted hover:text-sol-text">
         How it works
         <ArrowUpRight className="h-3 w-3" />
@@ -99,11 +87,9 @@ export function FeatureUpsell({
         ) : (
           <>
             {text}{" "}
-            {turnOn((press) => (
-              <button type="button" onClick={press} aria-haspopup="dialog" disabled={o.busy || o.onlineCount === 0} className={`underline decoration-current/40 underline-offset-2 transition-colors hover:decoration-current ${tone.text} disabled:opacity-50`}>
-                {o.busy ? "Turning on…" : `Turn on ${name}…`}
-              </button>
-            ))}
+            <button type="button" onClick={o.turnOn} disabled={o.busy || o.onlineCount === 0} className={`underline decoration-current/40 underline-offset-2 transition-colors hover:decoration-current ${tone.text} disabled:opacity-50`}>
+              {o.busy ? "Turning on…" : `Turn on ${o.feature.name}`}
+            </button>
             <span className="mx-1.5 text-sol-border">·</span>
             <button type="button" onClick={learn} className={link}>How it works</button>
             <span className="mx-1.5 text-sol-border">·</span>
@@ -118,7 +104,7 @@ export function FeatureUpsell({
 
   if (variant === "inline") {
     return (
-      <div className={`flex items-center gap-2 border-t border-sol-border bg-sol-bg-alt px-3 py-1.5 text-meta leading-snug text-sol-text-muted ${className}`}>
+      <div className={`flex items-center gap-2 border-t border-sol-border bg-sol-bg-alt px-3 py-1.5 text-[11px] leading-snug text-sol-text-muted ${className}`}>
         <Icon className={`h-3.5 w-3.5 shrink-0 ${tone.text}`} />
         <span className="min-w-0 flex-1">{o.turnedOn ? done : text}</span>
         {!o.turnedOn && <span className="flex shrink-0 items-center gap-2.5">{actions}</span>}
@@ -135,7 +121,7 @@ export function FeatureUpsell({
     >
       <FeatureVignette slug={slug} className="hidden h-[132px] w-[240px] shrink-0 sm:block" />
       <div className="flex min-w-0 flex-1 flex-col justify-center gap-1.5">
-        <div className="flex items-center gap-1.5 text-meta text-sol-text-muted">
+        <div className="flex items-center gap-1.5 text-[11px] text-sol-text-muted">
           <Icon className={`h-3.5 w-3.5 ${tone.text}`} />
           Agent feature <span className="text-sol-text-dim">·</span> <span className="font-medium text-sol-text">{o.feature.name}</span>
         </div>

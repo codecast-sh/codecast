@@ -9,7 +9,6 @@
 // that are the page's only filters; each count is the rows it opens.
 //   ?step=<id>&show=waiting|failed|passed&steptab=work|instructions
 import { memo, useMemo, useState } from "react";
-import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 import { factsFor, needSpread, needSteps, waitOwner } from "../../../../lib/line/stepTable";
 import { lineProblemsAt } from "../../../../lib/line/problemTable";
@@ -64,9 +63,9 @@ function WaitingElsewhere({ model, ws, here, href }: { model: LineViewProps["mod
   return (
     <nav className="sp-else" aria-label="Waiting on you elsewhere" data-line-step-elsewhere="">
       <span className="sp-else-k">Waiting on you</span>
-      {steps.map((s) => <Link key={s.id} href={href({ step: s.id, show: "waiting", tab: null })} data-line-else-step={s.id}><b className="lw-num">{s.n}</b> {s.label}</Link>)}
-      {lines.map((l) => <Link key={l.key} href={href({ graph: l.key, step: null, show: null, tab: null })} data-line-else-line={l.key}><b className="lw-num">{l.n}</b> {l.title}</Link>)}
-      {spread.before > 0 && <Link href={href({ view: "foryou", step: null, show: null, tab: null })} data-line-else-before=""><b className="lw-num">{spread.before}</b> before a run</Link>}
+      {steps.map((s) => <a key={s.id} href={href({ step: s.id, show: "waiting", tab: null })} data-line-else-step={s.id}><b className="lw-num">{s.n}</b> {s.label}</a>)}
+      {lines.map((l) => <a key={l.key} href={href({ graph: l.key, step: null, show: null, tab: null })} data-line-else-line={l.key}><b className="lw-num">{l.n}</b> {l.title}</a>)}
+      {spread.before > 0 && <a href={href({ view: "foryou", step: null, show: null, tab: null })} data-line-else-before=""><b className="lw-num">{spread.before}</b> before a run</a>}
     </nav>
   );
 }

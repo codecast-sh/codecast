@@ -84,7 +84,7 @@ export function ModeSwitch({ on, accent, label, title, onClick, disabled = false
       disabled={disabled}
       role="switch"
       aria-checked={on}
-      className="flex items-center gap-2 text-meta text-sol-text-dim hover:text-sol-text transition-colors disabled:cursor-default disabled:hover:text-sol-text-dim"
+      className="flex items-center gap-2 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors disabled:cursor-default disabled:hover:text-sol-text-dim"
       title={title}
     >
       <span className={`w-7 h-4 rounded-full transition-colors relative flex-shrink-0 ${on ? lit.track : "bg-sol-border/40"}`}>
@@ -105,7 +105,7 @@ function PillRadio<T extends string | number>({ label, options, value, onPick, d
   title?: string;
 }) {
   return (
-    <span role="radiogroup" aria-label={label} className="inline-flex items-center gap-1.5 text-meta text-sol-text-dim" title={title}>
+    <span role="radiogroup" aria-label={label} className="inline-flex items-center gap-1.5 text-[11px] text-sol-text-dim" title={title}>
       <span>{label}</span>
       <span className="inline-flex rounded-full border border-sol-border/40 overflow-hidden">
         {options.map((o) => {
@@ -290,19 +290,19 @@ export function SessionPlacementMenu({ cloudHost, cloudMode, cloudToggleEnabled,
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="min-w-[15rem]">
-          <DropdownMenuLabel className="text-mark uppercase tracking-wider text-sol-text-dim">Runs in</DropdownMenuLabel>
+          <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Runs in</DropdownMenuLabel>
           {rows.map((r) => (
             <DropdownMenuItem key={r.key} disabled={r.disabled} title={r.title} onSelect={() => { if (r.key !== current) onPick(r.key); }} className="flex items-center gap-2 text-xs">
               {check(r.key === current)}
               <r.icon className="w-3.5 h-3.5 text-sol-text-dim" />
               <span className={r.key === current ? "text-sol-text font-medium" : ""}>{r.label}</span>
-              <span className="ml-auto pl-3 text-meta text-sol-text-dim">{r.hint}</span>
+              <span className="ml-auto pl-3 text-[10px] text-sol-text-dim">{r.hint}</span>
             </DropdownMenuItem>
           ))}
           {cloudMode && !cloudAgent && cloudHost && (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuLabel className="text-mark uppercase tracking-wider text-sol-text-dim">On the host</DropdownMenuLabel>
+              <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">On the host</DropdownMenuLabel>
               <DropdownMenuItem onSelect={(e) => { e.preventDefault(); if (shared) onToggleShared?.(); }} className="flex items-center gap-2 text-xs">
                 {check(!shared)}own worktree
               </DropdownMenuItem>
@@ -310,7 +310,7 @@ export function SessionPlacementMenu({ cloudHost, cloudMode, cloudToggleEnabled,
                 {check(shared)}main checkout
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuLabel className="text-mark uppercase tracking-wider text-sol-text-dim">Start from</DropdownMenuLabel>
+              <DropdownMenuLabel className="text-[10px] uppercase tracking-wider text-sol-text-dim">Start from</DropdownMenuLabel>
               {START_FROM_OPTIONS.map((o) => (
                 <DropdownMenuItem key={o.value} disabled={shared} onSelect={(e) => { e.preventDefault(); if (o.value !== effectiveStartFrom) onSetStartFrom?.(o.value); }} className="flex items-center gap-2 text-xs" title={o.title}>
                   {check(o.value === effectiveStartFrom)}{o.label}

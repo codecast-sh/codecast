@@ -20,7 +20,6 @@ import {
 import { HOSTED_AGENT_TYPE } from "@codecast/shared/contracts/assistant";
 import { useLaneMailAbilities } from "../../components/simple/useLaneMail";
 import { serverErrorText } from "../../lib/errorCause";
-import { copyToClipboard } from "../../lib/utils";
 import { ShortcutTooltip } from "../../components/KeyboardShortcutsHelp";
 import { isTriggerFailing, isTriggerTerminal, taskDisplayTitle, groupTriggerRowsByHome, type TaskRow, type TriggerRow, type TriggerHomeGroup } from "../../components/triggerTasks";
 import { TriggerRowItem, TriggerHomeHeader } from "../../components/TriggerRow";
@@ -44,7 +43,6 @@ import {
   Search,
   ListFilter,
   Pencil,
-  Terminal,
   X,
 } from "lucide-react";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
@@ -52,9 +50,6 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { FeatureUpsell } from "../../components/agentFeatures/FeatureUpsell";
 import { Button } from "../../components/ui/button";
-import { SwitchReview } from "../../components/consequential/ConsequentialSwitch";
-import { useRunCost } from "../../components/consequential/useRunCost";
-import { newTriggerLedger } from "../../components/work/startLedgers";
 const api = _api as any;
 
 // ── Time helpers (parseDuration is a parity port of `cast trigger add --in/--every`) ──
@@ -166,21 +161,7 @@ function deriveInitial(t: any | undefined) {
 /** The form's example once the person's mail is connected. */
 const MAIL_ROUTINE_PLACEHOLDER = 'What should the assistant do? e.g. "Summarize my unread mail and flag anything urgent"';
 
-// A labeled row on a hairline: label in a fixed column, the control bare
-// beside it. The rule under each row is the control's line; it turns cyan
-// while the row holds focus. Same grammar as the settings kit's rows.
-// Module scope on purpose: declared inside TriggerForm it was a new component
-// type each render, so every field remounted and lost focus.
-function FormRow({ label, children, className = "" }: { label: string; children: React.ReactNode; className?: string }) {
-  return (
-    <div className={`flex items-start gap-4 border-b border-sol-border/40 focus-within:border-sol-cyan/70 transition-colors ${className}`}>
-      <span className="w-14 flex-shrink-0 pt-2 select-none text-mark uppercase tracking-widest text-sol-text-dim">{label}</span>
-      <div className="flex-1 min-w-0 flex flex-wrap items-center gap-x-4 gap-y-1">{children}</div>
-    </div>
-  );
-}
-
-export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
+function TriggerForm({ onClose, editTask, seedTask, embedded }: {
   onClose: () => void;
   editTask?: any;
   seedTask?: any;
@@ -198,10 +179,6 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
   const [agent, setAgent] = useState<"claude" | "codex">(init.agent);
   const [project, setProject] = useState(init.project);
   const [submitting, setSubmitting] = useState(false);
-  // A new trigger spends agent runs: Set trigger opens the shared review and
-  // only its confirm creates. Saving an edit stays one press.
-  const [reviewing, setReviewing] = useState(false);
-  const runCost = useRunCost(null);
   // A routine for the hosted assistant, being edited or copied: its home is a
   // hosted conversation. It takes no agent or project and runs on a schedule
   // only (webCreate starts its home conversation).
@@ -211,9 +188,8 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
 
   // Suggest project paths from sessions already in the store — same data the
   // sidebar's workspace list derives from, without re-running its grouping.
-  // Read once when the form opens: a subscription to `s.sessions` re-rendered
-  // the form on every session heartbeat.
-  const [projectOptions] = useState(() => {
+  const sessions = useInboxStore((s) => s.sessions);
+  const projectOptions = useMemo(() => {
     const seen = new Map<string, number>();
     // Scoped enumeration: cached sessions from other scopes/teams must not
     // leak their project paths into this workspace's suggestions.
@@ -224,7 +200,7 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
       if ((seen.get(p) ?? 0) < u) seen.set(p, u);
     }
     return [...seen.entries()].sort((a, b) => b[1] - a[1]).map(([p]) => p).slice(0, 12);
-  });
+  }, [sessions]);
 
   const parsed = parseDuration(duration);
   const needsDuration = kind === "in" || kind === "every";
@@ -237,12 +213,6 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
       : kind === "in"
         ? `runs at ${fmtClock(Date.now() + parsed)}`
         : `every ${fmtDuration(parsed)}, first run ${fmtClock(Date.now() + parsed)}`;
-
-  const press = () => {
-    if (!valid || submitting) return;
-    if (isEdit) void submit();
-    else setReviewing(true);
-  };
 
   const submit = async () => {
     if (!valid || submitting) return;
@@ -292,6 +262,15 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
     }
   };
 
+  // A labeled row on a hairline: label in a fixed column, the control bare
+  // beside it. The rule under each row is the control's line; it turns cyan
+  // while the row holds focus. Same grammar as the settings kit's rows.
+  const Row = ({ label, children, className = "" }: { label: string; children: React.ReactNode; className?: string }) => (
+    <div className={`flex items-start gap-4 border-b border-sol-border/40 focus-within:border-sol-cyan/70 transition-colors ${className}`}>
+      <span className="w-14 flex-shrink-0 pt-2 select-none text-[10px] uppercase tracking-widest text-sol-text-dim">{label}</span>
+      <div className="flex-1 min-w-0 flex flex-wrap items-center gap-x-4 gap-y-1">{children}</div>
+    </div>
+  );
   const bareInput =
     "bg-transparent py-2 text-xs text-sol-text placeholder:text-sol-text-dim focus:outline-none";
   // A hosted routine asks what to do with what it finds as a positive choice:
@@ -325,33 +304,33 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
     // primary button is the page's one fill.
     <div className={embedded ? "pt-1" : "border-t border-sol-border/40 pt-1 mb-6"}>
       {isEdit && (
-        <div className="flex items-center gap-1.5 text-mark uppercase tracking-widest text-sol-cyan pt-2 pb-1">
+        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-widest text-sol-cyan pt-2 pb-1">
           <Pencil className="w-3 h-3" /> Editing trigger
         </div>
       )}
-      <FormRow label="Prompt">
+      <Row label="Prompt">
         <textarea
           autoFocus
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); press(); }
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) submit();
             if (e.key === "Escape") onClose();
           }}
           placeholder={hostedRoutine && mailAbilities.connected ? MAIL_ROUTINE_PLACEHOLDER : 'What should the agent do? e.g. "Check if CI is green on main and report"'}
           rows={3}
           className={`w-full ${bareInput} text-sm leading-relaxed resize-none`}
         />
-      </FormRow>
-      <FormRow label="Title">
+      </Row>
+      <Row label="Title">
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Optional: named from the prompt"
           className={`w-full ${bareInput}`}
         />
-      </FormRow>
-      <FormRow label="When">
+      </Row>
+      <Row label="When">
         <SegmentedToggle
           variant="bare"
           value={kind}
@@ -373,7 +352,7 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
                 parsed === undefined ? "border-sol-red text-sol-red" : "border-sol-border/60 focus:border-sol-cyan"
               }`}
             />
-            <span className={`text-meta ${parsed === undefined ? "text-sol-red" : "text-sol-text-dim"}`}>{preview}</span>
+            <span className={`text-[11px] ${parsed === undefined ? "text-sol-red" : "text-sol-text-dim"}`}>{preview}</span>
           </span>
         )}
         {kind === "on" && (
@@ -383,10 +362,10 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
             ))}
           </SelectBox>
         )}
-      </FormRow>
-      {hostedRoutine && <FormRow label="Then">{hostedModeChoice}</FormRow>}
+      </Row>
+      {hostedRoutine && <Row label="Then">{hostedModeChoice}</Row>}
       {!hostedRoutine && (
-        <FormRow label="Agent">
+        <Row label="Agent">
           <SegmentedToggle
             variant="bare"
             value={agent}
@@ -397,10 +376,10 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
             ]}
           />
           {readOnlyBox}
-        </FormRow>
+        </Row>
       )}
       {!hostedRoutine && (
-        <FormRow label="Project">
+        <Row label="Project">
           <input
             value={project}
             onChange={(e) => setProject(e.target.value)}
@@ -411,10 +390,11 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
           <datalist id="trigger-project-roots">
             {projectOptions.map((p) => <option key={p} value={p} />)}
           </datalist>
-        </FormRow>
+        </Row>
       )}
 
-      <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-2 pt-3 pb-1">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 pt-3 pb-1">
+        {hostedRoutine ? <span /> : <span className="text-[11px] text-sol-text-dim">Runs on your daemon, which polls every 30s</span>}
         <div className="ml-auto flex items-center gap-3 whitespace-nowrap">
           <button onClick={onClose} className="text-xs text-sol-text-dim hover:text-sol-text transition-colors">
             Cancel
@@ -422,9 +402,8 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
           <Button
             variant="cyan"
             size="sm"
-            onClick={press}
+            onClick={submit}
             disabled={!valid || submitting}
-            aria-haspopup={isEdit ? undefined : "dialog"}
           >
             {isEdit
               ? submitting ? "Saving…" : "Save changes"
@@ -432,27 +411,6 @@ export function TriggerForm({ onClose, editTask, seedTask, embedded }: {
           </Button>
         </div>
       </div>
-      {reviewing && (
-        <SwitchReview
-          ledger={newTriggerLedger({
-            title: title.trim() || prompt.trim().split("\n")[0].slice(0, 80),
-            cadence: kind === "every" && parsed ? `Every ${fmtDuration(parsed)}`
-              : kind === "in" && parsed ? `Once, in ${fmtDuration(parsed)}`
-              : kind === "on" ? `On ${TRIGGER_EVENT_LABELS[eventKey] ?? eventKey}`
-              : "Now",
-            schedule: kind === "every" ? "recurring" : kind === "on" ? "event" : "once",
-            intervalMs: kind === "every" ? parsed ?? null : null,
-            agent: hostedRoutine ? null : agent,
-            project: hostedRoutine ? null : project.trim() || null,
-            applies: mode === "apply",
-            hosted: hostedRoutine,
-            firstAt: needsDuration && parsed !== undefined ? Date.now() + parsed : null,
-            now: kind === "now",
-          }, runCost)}
-          onClose={() => setReviewing(false)}
-          onConfirm={() => { setReviewing(false); void submit(); }}
-        />
-      )}
     </div>
   );
 }
@@ -473,7 +431,7 @@ function Section({ title, count, subtitle, children, defaultOpen = true }: {
       <button
         data-cc-list-section
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1.5 text-mark font-medium uppercase tracking-widest text-sol-text-dim hover:text-sol-text-muted transition-colors mb-2 select-none w-full"
+        className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-widest text-sol-text-dim hover:text-sol-text-muted transition-colors mb-2 select-none w-full"
       >
         {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
         {title}
@@ -566,7 +524,7 @@ function OverviewLine({ stats, now, filters, update }: {
       {stats.running > 0 ? (
         <>
           {sep}
-          <span className="text-sol-green">
+          <span className="text-emerald-400">
             <span className="tabular-nums font-medium">{stats.running}</span> running now
           </span>
         </>
@@ -589,7 +547,7 @@ function OverviewLine({ stats, now, filters, update }: {
           </button>
         </ShortcutTooltip>
       ) : (
-        <span className="inline-flex items-center gap-1 text-sol-green">
+        <span className="inline-flex items-center gap-1 text-emerald-400">
           <CheckCircle2 className="w-3 h-3" /> healthy
         </span>
       )}
@@ -724,7 +682,7 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
           </ShortcutTooltip>
         )}
       </div>
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 py-1.5 text-meta">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 py-1.5 text-[11px]">
         <div className="flex items-center gap-3">
           {TYPE_TOGGLES.filter((p) => p.key !== "event" || hasEvent).map(({ key, label, Icon, on }) => (
             <button
@@ -740,19 +698,19 @@ function FilterBar({ filters, update, projects, hasCodex, hasEvent, shown, total
             </button>
           ))}
         </div>
-        <SelectBox variant="bare" className="text-meta" value={filters.mode} onChange={(e) => update({ mode: e.target.value })}>
+        <SelectBox variant="bare" className="text-[11px]" value={filters.mode} onChange={(e) => update({ mode: e.target.value })}>
           <option value="all">all modes</option>
           <option value="apply">makes changes</option>
           <option value="propose">read-only</option>
         </SelectBox>
         {projects.length > 1 && (
-          <SelectBox variant="bare" className="text-meta" value={filters.project} onChange={(e) => update({ project: e.target.value })}>
+          <SelectBox variant="bare" className="text-[11px]" value={filters.project} onChange={(e) => update({ project: e.target.value })}>
             <option value="all">all projects</option>
             {projects.map((p) => <option key={p} value={p}>{projectName(p)}</option>)}
           </SelectBox>
         )}
         {hasCodex && (
-          <SelectBox variant="bare" className="text-meta" value={filters.agent} onChange={(e) => update({ agent: e.target.value })}>
+          <SelectBox variant="bare" className="text-[11px]" value={filters.agent} onChange={(e) => update({ agent: e.target.value })}>
             <option value="all">all agents</option>
             <option value="claude">claude</option>
             <option value="codex">codex</option>
@@ -846,7 +804,7 @@ function PageRow({ task, isNext, form, setForm, deepLinked }: {
 }
 
 // The band above a group of rows — a project, a day, a home session.
-const bandCls = "flex items-center gap-1.5 text-meta text-sol-text-dim py-1.5 px-4 bg-sol-bg-alt/30 border-b border-sol-border/40";
+const bandCls = "flex items-center gap-1.5 text-[11px] text-sol-text-dim py-1.5 px-4 bg-sol-bg-alt/30 border-b border-sol-border/40";
 
 function groupByProjectPath(tasks: TaskRow[]): [string, TaskRow[]][] {
   const groups = new Map<string, TaskRow[]>();
@@ -976,15 +934,15 @@ function HistoryBody({ tasks, now, grouping, form, setForm, deepLinkId }: {
     <div className="flex flex-col">
       {/* success / failure proportion — a text line and a thin bar, no box */}
       <div className="px-4 py-2.5 border-b border-sol-border/40">
-        <div className="flex items-center justify-between text-meta mb-1.5">
+        <div className="flex items-center justify-between text-[11px] mb-1.5">
           <span className="text-sol-text-dim">
-            <span className="text-sol-green">{succeeded} succeeded</span>
+            <span className="text-emerald-400">{succeeded} succeeded</span>
             {failed > 0 && <> · <span className="text-sol-red">{failed} failed</span></>}
           </span>
           <span className="text-sol-text-muted tabular-nums">{rate}% success</span>
         </div>
         <div className="h-1.5 rounded-full bg-sol-bg-alt overflow-hidden flex">
-          <div className="bg-sol-green/70 h-full transition-all" style={{ width: `${(succeeded / Math.max(tasks.length, 1)) * 100}%` }} />
+          <div className="bg-emerald-500/70 h-full transition-all" style={{ width: `${(succeeded / Math.max(tasks.length, 1)) * 100}%` }} />
           <div className="bg-sol-red/70 h-full transition-all" style={{ width: `${(failed / Math.max(tasks.length, 1)) * 100}%` }} />
         </div>
       </div>
@@ -993,7 +951,7 @@ function HistoryBody({ tasks, now, grouping, form, setForm, deepLinkId }: {
         <div className="flex items-center gap-2 px-4 py-2 border-b border-sol-border/40">
           <button
             onClick={() => setFailuresOnly((v) => !v)}
-            className={`inline-flex items-center gap-1 text-meta rounded-md px-2 py-1 transition-colors ${
+            className={`inline-flex items-center gap-1 text-[11px] rounded-md px-2 py-1 transition-colors ${
               failuresOnly
                 ? "text-sol-red bg-sol-red/15"
                 : "bg-sol-bg-alt text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight"
@@ -1005,7 +963,7 @@ function HistoryBody({ tasks, now, grouping, form, setForm, deepLinkId }: {
       )}
 
       {shown.length === 0 ? (
-        <p className="text-meta text-sol-text-dim py-3 px-4">No failures — every finished run succeeded.</p>
+        <p className="text-[11px] text-sol-text-dim py-3 px-4">No failures — every finished run succeeded.</p>
       ) : grouping === "project" ? (
         groupByProjectPath(visible).map(([proj, rows]) => (
           <div key={proj} className="flex flex-col">
@@ -1030,7 +988,7 @@ function HistoryBody({ tasks, now, grouping, form, setForm, deepLinkId }: {
       {shown.length > limit && (
         <button
           onClick={() => setLimit((l) => l + HISTORY_PAGE)}
-          className="self-start text-meta text-sol-cyan hover:underline underline-offset-2 mt-2 px-4"
+          className="self-start text-[11px] text-sol-cyan hover:underline underline-offset-2 mt-2 px-4"
         >
           show {Math.min(HISTORY_PAGE, shown.length - limit)} more · {shown.length - limit} hidden
         </button>
@@ -1163,6 +1121,7 @@ function TriggersContent() {
         <div ref={titlebarRef} className="flex gap-2 items-center mb-5">
           <Zap className="w-4 h-4 text-sol-amber" />
           <h1 className="text-lg font-semibold text-sol-text whitespace-nowrap">Triggers</h1>
+          <span className="hidden sm:inline min-w-0 truncate text-xs text-sol-text-dim">agents that run on their own, later</span>
           {/* One way to start a trigger at a time: the empty state offers its
               own, and an open form is already the new trigger. */}
           {!showForm && hasTasks && (
@@ -1194,19 +1153,13 @@ function TriggersContent() {
           <div className="flex flex-col items-center justify-center gap-3 py-24 text-center">
             <Zap className="w-8 h-8 text-sol-text-dim" />
             <p className="text-sm text-sol-text-muted">No triggers yet</p>
-            <div className="mt-2 flex items-center gap-2">
-              <Button variant="amber" size="sm" onClick={() => setShowForm(true)}>
-                <Plus /> New trigger
-              </Button>
-              {/* The CLI form is data for whoever wants it, behind a copy. */}
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => { void copyToClipboard('cast trigger add "Check CI on main" --in 30m').then(() => toast.success("CLI command copied")); }}
-              >
-                <Terminal /> Copy CLI command
-              </Button>
-            </div>
+            <p className="text-xs text-sol-text-dim max-w-sm">Set triggers to run agents later (check CI, review PRs, continue work) from here or any session:</p>
+            <code className="font-mono text-xs text-sol-text-muted bg-sol-bg-alt rounded-md px-3 py-1.5">
+              cast trigger add "Check CI on main" --in 30m
+            </code>
+            <Button variant="amber" size="sm" className="mt-2" onClick={() => setShowForm(true)}>
+              <Plus /> New trigger
+            </Button>
           </div>
           )
         ) : (

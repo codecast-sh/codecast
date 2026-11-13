@@ -103,7 +103,7 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
                   onCheckedChange={() => setNotifyLevel(p.channelId, level.value)}
                 >
                   <span className="truncate">{level.label}</span>
-                  <span className="ml-auto pl-4 text-meta text-sol-text-dim">{level.hint}</span>
+                  <span className="ml-auto pl-4 text-[10.5px] text-sol-text-dim">{level.hint}</span>
                 </CtxCheckItem>
               ))}
               {!isDm && <CtxSeparator />}

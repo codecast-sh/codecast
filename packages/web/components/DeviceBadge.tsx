@@ -188,9 +188,11 @@ export function DeviceIcon({ d, className = "w-3 h-3" }: { d: Device; className?
 /** Live online/offline dot. */
 export function DeviceDot({ online, className = "" }: { online: boolean; className?: string }) {
   return (
-    // Still, never a ping: the dot is drawn once per machine row.
     <span className={`relative inline-flex h-1.5 w-1.5 flex-shrink-0 ${className}`}>
-      <span className={`relative inline-flex h-1.5 w-1.5 rounded-full ${online ? "bg-sol-green ring-2 ring-sol-green/30" : "bg-sol-text-dim"}`} />
+      {online && (
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sol-green opacity-60" />
+      )}
+      <span className={`relative inline-flex h-1.5 w-1.5 rounded-full ${online ? "bg-sol-green" : "bg-gray-500"}`} />
     </span>
   );
 }
@@ -294,7 +296,7 @@ export function DeviceBadge({
     if (!showWhenUnassigned) return null;
     return (
       <span
-        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-meta bg-sol-text-dim/10 text-sol-text-muted border border-sol-text-dim/25 ${className}`}
+        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] bg-gray-500/10 text-gray-400 border border-gray-500/25 ${className}`}
         title="No device assigned yet — the next message routes to your most-recently-active machine."
       >
         <DeviceDot online={false} />
@@ -305,7 +307,7 @@ export function DeviceBadge({
 
   return (
     <span
-      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-meta border ${deviceAccentClasses(d)} max-w-[160px] ${className}`}
+      className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] border ${deviceAccentClasses(d)} max-w-[160px] ${className}`}
       title={`Runs on ${deviceDisplayName(d)} (${deviceKindLabel(d)}) — ${d.online ? "online" : `last seen ${relativeSeen(d.last_seen)}`}`}
     >
       <DeviceIcon d={d} />
@@ -321,7 +323,7 @@ export const RUNNING_HERE_ROW = "data-[disabled]:opacity-100 bg-sol-blue/10 ring
 
 export function RunningHereTag({ online, suffix }: { online: boolean; suffix?: string }) {
   return (
-    <span className="ml-2 flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-sol-blue/20 px-2 py-0.5 text-meta font-medium text-sol-blue">
+    <span className="ml-2 flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-sol-blue/20 px-2 py-0.5 text-[10px] font-medium text-sol-blue">
       running here{suffix ? ` · ${suffix}` : ""}
       <DeviceDot online={online} />
     </span>
@@ -356,7 +358,7 @@ export function RunOnDeviceItems({
 
   return (
     <>
-      <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Run on device · which machine</DropdownMenuLabel>
+      <DropdownMenuLabel className="text-[10px] uppercase tracking-wide text-sol-text-dim">Run on device · which machine</DropdownMenuLabel>
       {foreignOwner && (
         <DropdownMenuItem disabled className={RUNNING_HERE_ROW}>
           <DeviceIcon d={foreignOwner} className="w-3 h-3 mr-1.5" />
@@ -383,7 +385,7 @@ export function RunOnDeviceItems({
             <DeviceIcon d={d} className="w-3 h-3 mr-1.5" />
             <span className="flex-1 truncate">{deviceDisplayName(d)}</span>
             {isOwner ? <RunningHereTag online={d.online} /> : (
-              <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-meta text-sol-text-muted">
+              <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] text-gray-400">
                 {d.online ? "run here" : "offline"}
                 <DeviceDot online={d.online} />
               </span>
@@ -408,7 +410,7 @@ export function RunOnDeviceItems({
             <DeviceIcon d={d} className="w-3 h-3 mr-1.5" />
             <span className="flex-1 truncate">{isOwner ? name : `Move to ${name}`}</span>
             {isOwner ? <RunningHereTag online={d.online} /> : (
-              <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-meta text-sol-text-muted">
+              <span className="ml-2 flex shrink-0 items-center gap-1 whitespace-nowrap text-[10px] text-gray-400">
                 {d.online ? "" : usable ? "asleep — wakes on move" : "offline"}
                 <DeviceDot online={d.online} />
               </span>

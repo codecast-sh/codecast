@@ -187,8 +187,8 @@ export function Roadmap({ scope, switcher }: { scope: RoadmapScope; switcher?: R
         <div className="ml-auto flex items-center gap-2">
           <SegmentedToggle size="sm" value={group} onChange={(k) => setGroup(k as "goals" | "roles")} items={[{ key: "goals", label: "By goal", icon: Flag }, { key: "roles", label: "By role", icon: Users }]} />
           <SegmentedToggle size="sm" value={zoom} onChange={(k) => zoomTo(k as Zoom)} items={[{ key: "weeks", label: "Weeks" }, { key: "months", label: "Months" }, { key: "quarters", label: "Quarters" }, { key: "year", label: "Year" }]} />
-          <button type="button" onClick={() => scrollTo(now, 0.38)} className="h-6 rounded-md border border-sol-border/40 px-2 text-meta text-sol-text-dim transition-colors hover:text-sol-text">Today</button>
-          <button type="button" onClick={() => setShowEnded(!showEnded)} aria-pressed={showEnded} disabled={!ended} className={cn("h-6 rounded-md border px-2 text-meta tabular-nums transition-colors disabled:opacity-40", showEnded ? "border-sol-border/60 bg-sol-bg-highlight text-sol-text" : "border-sol-border/40 text-sol-text-dim hover:text-sol-text")} title={showEnded ? "Hide finished goals and projects" : "Show finished goals and projects"}>Finished {ended}</button>
+          <button type="button" onClick={() => scrollTo(now, 0.38)} className="h-6 rounded-md border border-sol-border/40 px-2 text-[11px] text-sol-text-dim transition-colors hover:text-sol-text">Today</button>
+          <button type="button" onClick={() => setShowEnded(!showEnded)} aria-pressed={showEnded} disabled={!ended} className={cn("h-6 rounded-md border px-2 text-[11px] tabular-nums transition-colors disabled:opacity-40", showEnded ? "border-sol-border/60 bg-sol-bg-highlight text-sol-text" : "border-sol-border/40 text-sol-text-dim hover:text-sol-text")} title={showEnded ? "Hide finished goals and projects" : "Show finished goals and projects"}>Finished {ended}</button>
           {switcher}
         </div>
       </header>
@@ -268,18 +268,18 @@ function Axis({ from, to, x, zoom, now }: { from: number; to: number; x: (t: num
   const { top, minor } = useMemo(() => ticks(from, to, zoom), [from, to, zoom]);
   return (
     <div className="sticky top-0 z-[6] flex h-[46px] border-b backdrop-blur" style={{ borderColor: HAIR, background: "color-mix(in srgb, var(--sol-bg) 92%, transparent)" }}>
-      <div className="sticky left-0 z-[7] flex shrink-0 items-end border-r px-6 pb-2 text-meta" style={{ width: LEFT, borderColor: HAIR, background: "var(--sol-bg)", color: "var(--sol-text-dim)" }}>
+      <div className="sticky left-0 z-[7] flex shrink-0 items-end border-r px-6 pb-2 text-[11px]" style={{ width: LEFT, borderColor: HAIR, background: "var(--sol-bg)", color: "var(--sol-text-dim)" }}>
         <span className="flex-1">Name</span>
         <span className="w-[74px] text-right">Done</span>
       </div>
       <div className="relative flex-1">
         {top.map((k) => (
-          <div key={`t${k.t}`} className="absolute top-0 h-[22px] border-l pl-1.5 pt-1 text-meta font-medium whitespace-nowrap" style={{ left: x(k.t), borderColor: HAIR, color: "var(--sol-text-muted)" }}>{k.label}</div>
+          <div key={`t${k.t}`} className="absolute top-0 h-[22px] border-l pl-1.5 pt-1 text-[11px] font-medium whitespace-nowrap" style={{ left: x(k.t), borderColor: HAIR, color: "var(--sol-text-muted)" }}>{k.label}</div>
         ))}
         {minor.map((k) => k.label && Math.abs(x(k.t) - x(now)) > 34 && (
-          <div key={`m${k.t}`} className="absolute bottom-1.5 pl-1 text-meta tabular-nums whitespace-nowrap" style={{ left: x(k.t), color: "var(--sol-text-dim)" }}>{k.label}</div>
+          <div key={`m${k.t}`} className="absolute bottom-1.5 pl-1 text-[10px] tabular-nums whitespace-nowrap" style={{ left: x(k.t), color: "var(--sol-text-dim)" }}>{k.label}</div>
         ))}
-        <div className="absolute bottom-0 z-[1] -translate-x-1/2 rounded-t px-1.5 py-[1px] text-meta font-medium text-white" style={{ left: x(now), background: TODAY }}>Today</div>
+        <div className="absolute bottom-0 z-[1] -translate-x-1/2 rounded-t px-1.5 py-[1px] text-[10px] font-medium text-white" style={{ left: x(now), background: TODAY }}>Today</div>
       </div>
     </div>
   );
@@ -331,7 +331,7 @@ function Row({ r, top, now, x, tOf, selected, folded, onFold, onSelect, drag, on
         <Glyph r={r} accent={accent} />
         <span className={cn("min-w-0 flex-1 truncate", strong ? "text-[13px] font-medium" : "text-[12.5px]")} style={{ color: r.ended ? "var(--sol-text-dim)" : strong ? "var(--sol-text)" : "var(--sol-text-secondary)" }} title={r.title}>{r.title}</span>
         {live > 0 && (
-          <span className="inline-flex shrink-0 items-center gap-1 text-meta tabular-nums" style={{ color: "var(--sol-green)" }} title={`${r.counts?.working ?? 0} working, ${r.counts?.needs_input ?? 0} need you`}>
+          <span className="inline-flex shrink-0 items-center gap-1 text-[10.5px] tabular-nums" style={{ color: "var(--sol-green)" }} title={`${r.counts?.working ?? 0} working, ${r.counts?.needs_input ?? 0} need you`}>
             <span className="h-[6px] w-[6px] rounded-full" style={{ background: r.counts?.needs_input ? "var(--sol-yellow)" : "var(--sol-green)" }} />{live}
           </span>
         )}
@@ -342,7 +342,7 @@ function Row({ r, top, now, x, tOf, selected, folded, onFold, onSelect, drag, on
               <span className="h-[3px] w-[32px] overflow-hidden rounded-full" style={{ background: "color-mix(in srgb, var(--sol-border) 40%, transparent)" }}>
                 <span className="block h-full rounded-full" style={{ width: `${pct}%`, background: accent }} />
               </span>
-              <span className="w-[30px] text-right text-meta tabular-nums" style={{ color: "var(--sol-text-muted)" }}>{pct}%</span>
+              <span className="w-[30px] text-right text-[11px] tabular-nums" style={{ color: "var(--sol-text-muted)" }}>{pct}%</span>
             </>
           )}
         </span>
@@ -414,7 +414,7 @@ function Lane({ r, h, now, x, tOf, accent, onSelect, drag, onDrag, onSet, update
         </div>
       )}
       {target && (
-        <span className={cn("pointer-events-none absolute z-[2] whitespace-nowrap rounded px-1 text-meta leading-[15px] tabular-nums", drag !== null && "font-medium")} style={{ left: xEnd + 6, top: mid - 7.5, background: late || drag !== null ? "var(--sol-bg)" : undefined, color: drag !== null ? "var(--sol-text)" : late ? "var(--sol-red)" : "var(--sol-text-dim)" }}>
+        <span className={cn("pointer-events-none absolute z-[2] whitespace-nowrap rounded px-1 text-[10.5px] leading-[15px] tabular-nums", drag !== null && "font-medium")} style={{ left: xEnd + 6, top: mid - 7.5, background: late || drag !== null ? "var(--sol-bg)" : undefined, color: drag !== null ? "var(--sol-text)" : late ? "var(--sol-red)" : "var(--sol-text-dim)" }}>
           {fmtDay(target, r.targetLocal)}{drag !== null && r.target && drag !== r.target ? ` · ${drag > r.target ? "+" : "−"}${Math.round(Math.abs(drag - r.target) / DAY)}d` : ""}
         </span>
       )}
@@ -430,7 +430,7 @@ function Lane({ r, h, now, x, tOf, accent, onSelect, drag, onDrag, onSet, update
       {hover !== null && undated && hover >= now - DAY && (
         <>
           <span className="pointer-events-none absolute w-[2px] rounded-full" style={{ left: x(hover) - 1, top: mid - bh / 2 - 4, height: bh + 8, background: accent, opacity: 0.6 }} />
-          <span className="pointer-events-none absolute whitespace-nowrap rounded px-1.5 py-[1px] text-meta" style={{ left: x(hover) + 6, top: mid - 8, background: "var(--sol-bg-alt)", color: "var(--sol-text)", border: `1px solid ${HAIR}` }}>Set deadline {dayLabel(hover)}</span>
+          <span className="pointer-events-none absolute whitespace-nowrap rounded px-1.5 py-[1px] text-[10.5px]" style={{ left: x(hover) + 6, top: mid - 8, background: "var(--sol-bg-alt)", color: "var(--sol-text)", border: `1px solid ${HAIR}` }}>Set deadline {dayLabel(hover)}</span>
         </>
       )}
       {hover !== null && !(undated && hover >= now - DAY) && drag === null && <Scrub r={r} t={hover} now={now} x={x(hover)} h={h} />}
@@ -455,7 +455,7 @@ function Forecast({ from, to, y, color, label, quiet }: { from: number; to: numb
   if (to - from < 3) return null;
   return (
     <span className={cn("contents", quiet && "[&>*]:opacity-30 group-hover/row:[&>*]:opacity-90")}>
-      {label && <span className="pointer-events-none absolute whitespace-nowrap text-meta tabular-nums" style={{ left: to + 7, top: y - 7, color }} title="When the open tasks are done at the last four weeks' pace">{label}</span>}
+      {label && <span className="pointer-events-none absolute whitespace-nowrap text-[10px] tabular-nums" style={{ left: to + 7, top: y - 7, color }} title="When the open tasks are done at the last four weeks' pace">{label}</span>}
       <span className="pointer-events-none absolute border-t border-dashed" style={{ left: from, width: to - from, top: y, borderColor: color }} />
       <span className="pointer-events-none absolute h-[7px] w-[7px] rounded-full border-[1.5px]" style={{ left: to - 3.5, top: y - 3.5, borderColor: color, background: "var(--sol-bg)" }} />
     </span>
@@ -473,7 +473,7 @@ function Scrub({ r, t, now, x, h }: { r: RoadRow; t: number; now: number; x: num
   return (
     <>
       <span className="pointer-events-none absolute top-1 w-px" style={{ left: x, height: h - 2, background: "var(--sol-text-muted)", opacity: 0.45 }} />
-      <div className="pointer-events-none absolute z-[9] whitespace-nowrap rounded-md px-2.5 py-1.5 text-meta tabular-nums shadow-lg" style={{ left: x + 10, top: h - 4, background: "var(--sol-bg-alt)", border: `1px solid ${HAIR}`, color: "var(--sol-text-muted)" }} data-road-scrub>
+      <div className="pointer-events-none absolute z-[9] whitespace-nowrap rounded-md px-2.5 py-1.5 text-[11px] tabular-nums shadow-lg" style={{ left: x + 10, top: h - 4, background: "var(--sol-bg-alt)", border: `1px solid ${HAIR}`, color: "var(--sol-text-muted)" }} data-road-scrub>
         <span style={{ color: "var(--sol-text)" }}>{dayLabel(t)}</span>
         {at ? (
           at.total ? <> · <span style={{ color: "var(--sol-text)" }}>{at.done}</span> of {at.total} done <span style={{ color: "var(--sol-text-dim)" }}>{Math.round((at.done / at.total) * 100)}%</span></> : <> · no tasks yet</>

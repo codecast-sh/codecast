@@ -425,19 +425,19 @@ export const ChatMessage = memo(function ChatMessage({
               <a
                 className="ch-msg-author"
                 href={`/conversation/${encodeURIComponent(author.session.id)}`}
-                title={`${author.name} · open session`}
+                title="Open session"
               >
                 {author.name}
               </a>
             ) : author.role ? (
               <>
-                <Link className="ch-msg-author" href={`/org/${author.role.shortId}`} title={`${author.name} · open the role`}>
+                <Link className="ch-msg-author" href={`/org/${author.role.shortId}`} title="Open the role">
                   {author.name}
                 </Link>
                 {author.role.title !== author.name && <span className="ch-msg-via">{author.role.title}</span>}
               </>
             ) : (
-              <span className="ch-msg-author" title={author.name}>{author.name}</span>
+              <span className="ch-msg-author">{author.name}</span>
             )}
             {/* A session persona wears a "session" chip and credits the human
                 it ran as; the anchor keeps its plain "agent" chip. */}

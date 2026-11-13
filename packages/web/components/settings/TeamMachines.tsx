@@ -43,7 +43,7 @@ export function TeamMachines({ teamId }: { teamId: string }) {
         <button
           type="button"
           onClick={() => useInboxStore.getState().openSettingsModal("devices")}
-          className="text-meta text-sol-text-muted hover:text-sol-text"
+          className="text-[11px] text-sol-text-muted hover:text-sol-text"
         >
           All devices
         </button>
@@ -67,7 +67,7 @@ function Row({ d, note, bot, children }: { d: Device; note: string; bot?: boolea
     <div className="flex items-center gap-3 px-4 py-2.5 sm:px-5">
       <span className="text-sol-text-muted">{bot ? <Bot className="h-4 w-4" /> : <DeviceIcon d={d} className="h-4 w-4" />}</span>
       <span className="min-w-0 flex-1 truncate text-sm text-sol-text">
-        {deviceDisplayName(d)} <span className="text-meta text-sol-text-dim">{note}</span>
+        {deviceDisplayName(d)} <span className="text-[11px] text-sol-text-dim">{note}</span>
       </span>
       <ManagedDevicePill d={d} />
       <DeviceDot online={d.online} />

@@ -149,7 +149,7 @@ export function RewindStagedChip({ conversationId, forkedFrom }: { conversationI
   // The staged rewind this chip shows: the daemon refuses if another one is staged by now.
   const ask = (op: "put_back" | "keep", discardToken?: string) => setStepId(requestRewind(owner, op, { staged_id: stagedId, ...(discardToken ? { overwrite: true, discard_token: discardToken } : {}) }));
   return (
-    <span className="inline-flex flex-shrink-0 items-center gap-1 px-1 text-meta text-sol-orange" data-rewind-staged={n} title={failed ?? undefined}>
+    <span className="inline-flex flex-shrink-0 items-center gap-1 px-1 text-[10px] text-sol-orange" data-rewind-staged={n} title={failed ?? undefined}>
       <History className="h-3 w-3" aria-hidden />
       <span className="hidden sm:inline tabular-nums">Rewound {n}</span>
       <button type="button" disabled={inFlight} onClick={() => ask("put_back")} className="rounded border border-sol-orange/40 px-1 transition-colors hover:bg-sol-orange/10 disabled:opacity-60" title="Restore the files as they were before the rewind" data-rewind-put-back>

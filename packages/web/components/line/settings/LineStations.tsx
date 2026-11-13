@@ -169,7 +169,7 @@ export function LineStations({ projectId, focusStation }: { projectId: string; f
                   : <>{roles(onFork.length)} {onFork.length === 1 ? "runs" : "run"} this project's customized copy, {copy}.</>}
           </div>
           {fork !== undefined && (
-            <div className="text-meta mt-0.5" style={{ color: "var(--sol-text-dim)" }}>
+            <div className="text-[11.5px] mt-0.5" style={{ color: "var(--sol-text-dim)" }}>
               {!customized
                 ? "Click a station to read its prompt or script. Customizing makes an editable copy for this project; roles keep the Standard steps until you switch them, and the copy no longer follows later updates to them."
                 : `${changedCount === 0 ? "Every station matches shipped." : `${changedCount} ${changedCount === 1 ? "station differs" : "stations differ"} from shipped.`} Click a station to edit${changedCount ? " or reset" : ""} it.${onFork.length === 0 ? " Switch a role to the copy below for its runs to use it." : ""}`}
@@ -243,7 +243,7 @@ function RepoLineHeader({ repo, changedCount, onResetAll }: { repo: ReturnType<t
             ? <>This project's line lives in its repo, in {dir}{repo.version ? <>, at version <code data-line-version style={{ color: "var(--sol-text-muted)" }}>{repo.version.slice(0, 8)}</code></> : null}.</>
             : <>This project's repo has no steps of its own yet, so its runs use their owner's steps or the Standard ones.</>}
         </div>
-        <div className="text-meta mt-0.5" style={{ color: "var(--sol-text-dim)" }}>
+        <div className="text-[11.5px] mt-0.5" style={{ color: "var(--sol-text-dim)" }}>
           {!repo.gate.writable
             ? repo.gate.reason
             : own
@@ -316,7 +316,7 @@ function StationPanel({ ref, arrived, node, projectId, line = SHIPPED_LINE, edit
     <div ref={ref} className="rounded-md p-3 space-y-2 scroll-mt-4" style={{ background: "var(--sol-bg-alt)", border: "1px solid var(--sol-border)" }} data-station-panel={node.id} data-lset-target={arrived ? "true" : undefined}>
       <div className="flex items-center gap-2 flex-wrap">
         <span className="text-[14px] font-semibold" style={{ color: "var(--sol-text)" }}>{node.label}</span>
-        <code className="text-meta" style={{ color: "var(--sol-text-dim)" }}>{node.id}</code>
+        <code className="text-[11px]" style={{ color: "var(--sol-text-dim)" }}>{node.id}</code>
         {field && <LineChip>{field}{body.file ? ` from ${body.file}` : ""}</LineChip>}
         {changed.length > 0 && <LineChip tone="magenta">edited: {changed.join(", ")}</LineChip>}
         <span className="flex-1" />
@@ -334,7 +334,7 @@ function StationPanel({ ref, arrived, node, projectId, line = SHIPPED_LINE, edit
         </div>
       )}
       {field === "script" && !canEdit && (
-        <pre className="text-meta leading-[1.5] whitespace-pre-wrap max-h-[420px] overflow-auto m-0 p-2 rounded" style={{ fontFamily: "var(--font-mono)", color: "var(--sol-text)", background: "var(--sol-card)" }}>
+        <pre className="text-[11.5px] leading-[1.5] whitespace-pre-wrap max-h-[420px] overflow-auto m-0 p-2 rounded" style={{ fontFamily: "var(--font-mono)", color: "var(--sol-text)", background: "var(--sol-card)" }}>
           {body.text || "(empty)"}
         </pre>
       )}
@@ -351,12 +351,12 @@ function StationPanel({ ref, arrived, node, projectId, line = SHIPPED_LINE, edit
             }}
             spellCheck={false}
             rows={Math.min(24, Math.max(6, draft.split("\n").length + 1))}
-            className="w-full text-meta leading-[1.5] p-2 rounded outline-none resize-y"
+            className="w-full text-[11.5px] leading-[1.5] p-2 rounded outline-none resize-y"
             style={{ fontFamily: "var(--font-mono)", color: "var(--sol-text)", background: "var(--sol-card)", border: `1px solid ${dirty ? "var(--sol-yellow)" : "var(--sol-border)"}` }}
             aria-label={`${node.label} ${field}`}
             data-station-text
           />
-          <div className="flex items-center gap-1.5 text-meta flex-wrap" style={{ color: "var(--sol-text-dim)" }} data-station-save-state>
+          <div className="flex items-center gap-1.5 text-[11px] flex-wrap" style={{ color: "var(--sol-text-dim)" }} data-station-save-state>
             {dirty && offerSend
               ? <>
                   <span className="min-w-0">Send it through the line to have it proven and scored before it lands, or apply it to every run from now. <KeyCap size="xs">Esc</KeyCap> puts it back.</span>
@@ -458,7 +458,7 @@ function RunsThisLine({ rows, forkSlug, hostedHere, setRoleLine, repoLine }: {
                     <LineChip tone={onFork ? "magenta" : "muted"}>{onFork ? "this project's copy" : labelOf(slug)}</LineChip>
                     <span className="flex-1" />
                     {forkSlug && !onFork && mine && <button type="button" className="lset-ghost" onClick={() => setRoleLine(role._id, forkSlug)}>Run the customized steps</button>}
-                    {forkSlug && !onFork && !mine && <span className="lset-dim text-meta">Runs on a teammate's machine, which has no copy of your customized steps</span>}
+                    {forkSlug && !onFork && !mine && <span className="lset-dim text-[11px]">Runs on a teammate's machine, which has no copy of your customized steps</span>}
                     {onFork && <button type="button" className="lset-ghost" onClick={() => setRoleLine(role._id, "line")}>Use Standard steps</button>}
                   </div>
                 </div>

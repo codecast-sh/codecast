@@ -195,7 +195,7 @@ export function BlobContent({
   return (
     <div ref={rootRef} className="relative">
       <div className="sticky top-0 z-20 flex items-center gap-2 px-4 py-2 border-b border-sol-border/30 bg-sol-bg flex-wrap">
-        <span className="text-meta text-sol-text-dim tabular-nums">
+        <span className="text-[11px] text-sol-text-dim tabular-nums">
           {lineCount} lines · {formatSize(blob.data.size)}
         </span>
         <div className="ml-auto flex items-center gap-2 flex-wrap max-w-full justify-end">
@@ -240,27 +240,27 @@ export function BlobContent({
       </div>
 
       {blob.data.truncated && (
-        <p className="px-4 py-2 text-meta text-sol-yellow border-b border-sol-border/30 shrink-0">
+        <p className="px-4 py-2 text-[11px] text-sol-yellow border-b border-sol-border/30 shrink-0">
           GitHub could not return the complete file. Raw and download are unavailable; open it on GitHub for the full content.
         </p>
       )}
       {blameMode !== "off" && blame.error && (
-        <p className="px-4 py-2 text-meta text-sol-red border-b border-sol-border/30 shrink-0">
+        <p className="px-4 py-2 text-[11px] text-sol-red border-b border-sol-border/30 shrink-0">
           Blame could not be read: {serverErrorText(blame.error)}
         </p>
       )}
       {blameMode !== "off" && !blame.ready && !blame.error && (
-        <p className="px-4 py-2 text-meta text-sol-text-dim border-b border-sol-border/30 shrink-0">
+        <p className="px-4 py-2 text-[11px] text-sol-text-dim border-b border-sol-border/30 shrink-0">
           Reading blame.
         </p>
       )}
       {blameMode === "session" && blame.ready && sessions.error && (
-        <p className="px-4 py-2 text-meta text-sol-red border-b border-sol-border/30 shrink-0">
+        <p className="px-4 py-2 text-[11px] text-sol-red border-b border-sol-border/30 shrink-0">
           Sessions could not be traced: {serverErrorText(sessions.error)}
         </p>
       )}
       {blameMode === "session" && blame.ready && !sessions.ready && !sessions.error && (
-        <p className="px-4 py-2 text-meta text-sol-text-dim border-b border-sol-border/30 shrink-0">
+        <p className="px-4 py-2 text-[11px] text-sol-text-dim border-b border-sol-border/30 shrink-0">
           Tracing lines to sessions.
         </p>
       )}

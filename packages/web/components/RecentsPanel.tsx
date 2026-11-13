@@ -76,10 +76,10 @@ export function RecentsPanel({
       className={`flex flex-col overflow-hidden ${className}`}
     >
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
-        <span className="text-mark font-semibold uppercase tracking-widest text-sol-text-dim/70">
+        <span className="text-[10px] font-semibold uppercase tracking-widest text-sol-text-dim/70">
           Recently viewed
         </span>
-        <span className="ml-auto flex items-center gap-2.5 text-meta text-sol-text-dim/60">
+        <span className="ml-auto flex items-center gap-2.5 text-[10px] text-sol-text-dim/60">
           {mode === "walk" && (
             <>
               <span className={HINT}><KeyCap size="xs">Tab</KeyCap><span>next</span></span>
@@ -124,12 +124,12 @@ export function RecentsPanel({
           >
             <RecentVisitRow
               item={item}
-              trailing={i === 0 ? <span className="text-meta text-sol-text-dim/50 flex-shrink-0">current</span> : undefined}
+              trailing={i === 0 ? <span className="text-[10px] text-sol-text-dim/50 flex-shrink-0">current</span> : undefined}
             />
           </CommandPrimitive.Item>
         ))}
       </CommandPrimitive.List>
-      <div className="flex items-center gap-3 px-3 py-1.5 border-t border-sol-border/30 text-meta text-sol-text-dim">
+      <div className="flex items-center gap-3 px-3 py-1.5 border-t border-sol-border/30 text-[10px] text-sol-text-dim">
         {mode === "walk" ? (
           <span className={HINT}><span>release</span><KeyCap size="xs">Ctrl</KeyCap><span>to open</span></span>
         ) : (

@@ -206,7 +206,7 @@ export function SharePopover({
             <div className="space-y-2">
               <div className="flex items-baseline justify-between gap-2">
                 <span className="text-xs font-medium text-sol-text-muted">Link access</span>
-                {isUpdatingLink && <span className="text-meta text-sol-text-dim">Saving…</span>}
+                {isUpdatingLink && <span className="text-[11px] text-sol-text-dim">Saving…</span>}
               </div>
               <SegmentedChoice
                 label="Who can open the link"

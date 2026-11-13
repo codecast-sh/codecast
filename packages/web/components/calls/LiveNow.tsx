@@ -36,7 +36,7 @@ export function LiveRoomAction({
 }) {
   if (row.mine) {
     return (
-      <button type="button" className={`shrink-0 text-meta text-sol-violet ${className}`}
+      <button type="button" className={`shrink-0 text-[11px] text-sol-violet ${className}`}
         title="Show the huddle window"
         aria-label={`Show ${row.label}`}
         onClick={(e) => { e.stopPropagation(); void joinCall(row.roomKey, { intent: "deliberate" }); }}>
@@ -52,7 +52,7 @@ export function LiveRoomAction({
           e.stopPropagation();
           void joinCall(row.roomKey, { intent: "deliberate" });
         }}
-        className={`shrink-0 rounded-full border border-sol-violet/30 bg-sol-violet/10 px-2 py-0.5 text-meta font-medium text-sol-violet transition-colors hover:bg-sol-violet/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-violet ${className}`}
+        className={`shrink-0 rounded-full border border-sol-violet/30 bg-sol-violet/10 px-2 py-0.5 text-[11px] font-medium text-sol-violet transition-colors hover:bg-sol-violet/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-violet ${className}`}
         // The visible word is one syllable because the row already says which
         // room. A screen reader reaches this button with the row's name
         // several stops behind it, so the label carries the room itself.
@@ -66,7 +66,7 @@ export function LiveRoomAction({
   if (row.knocked) {
     return (
       <span
-        className={`shrink-0 rounded-full border border-sol-border/50 px-2 py-0.5 text-meta text-sol-text-dim ${className}`}
+        className={`shrink-0 rounded-full border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text-dim ${className}`}
         title="They can see you at the door"
       >
         knocked
@@ -80,7 +80,7 @@ export function LiveRoomAction({
         e.stopPropagation();
         void knockRoom(row.roomKey);
       }}
-      className={`shrink-0 rounded-full border border-sol-border px-2 py-0.5 text-meta text-sol-text-muted transition-colors hover:border-sol-violet/40 hover:text-sol-violet focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-violet ${className}`}
+      className={`shrink-0 rounded-full border border-sol-border px-2 py-0.5 text-[11px] text-sol-text-muted transition-colors hover:border-sol-violet/40 hover:text-sol-violet focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-violet ${className}`}
       aria-label={`Knock at ${row.label}`}
       title="This huddle is locked — knock to ask in"
     >
@@ -179,7 +179,7 @@ export function LiveNowRail({
 
   return (
     <div className="pb-1">
-      <div className="flex items-center gap-1.5 px-4 pb-0.5 pt-1 text-mark font-medium uppercase tracking-wider text-sol-text-dim">
+      <div className="flex items-center gap-1.5 px-4 pb-0.5 pt-1 text-[10px] font-medium uppercase tracking-wider text-sol-text-dim">
         <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
           <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-sol-violet opacity-60" />
           <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-sol-violet" />
@@ -211,7 +211,7 @@ export function LiveNowRail({
               e.stopPropagation();
               letIn(row);
             }}
-            className="shrink-0 rounded-full border border-sol-yellow/40 bg-sol-yellow/10 px-2 py-0.5 text-meta font-medium text-sol-yellow opacity-90 transition-colors hover:bg-sol-yellow/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-yellow"
+            className="shrink-0 rounded-full border border-sol-yellow/40 bg-sol-yellow/10 px-2 py-0.5 text-[11px] font-medium text-sol-yellow opacity-90 transition-colors hover:bg-sol-yellow/20 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-sol-yellow"
             aria-label={`${waitingLine(row)}. Join to let them in`}
             title="Join the call to let them in"
           >

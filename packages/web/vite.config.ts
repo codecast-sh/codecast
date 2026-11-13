@@ -18,12 +18,8 @@ import { depsCacheGuardPlugin } from "./plugins/depsCacheGuard";
 import { castPlayerScriptPlugin } from "./plugins/castPlayerScript";
 import { tailwindInWorker } from "./plugins/tailwindWorker";
 import { stallWatchdogPlugin } from "./plugins/stallWatchdog";
-import { convexPreconnectPlugin } from "./plugins/convexPreconnect";
-import { precacheScope } from "./plugins/precacheScope";
 import autoprefixer from "autoprefixer";
 import { APP_SHELL_GLOB_IGNORES, APP_SHELL_GLOB_PATTERNS } from "./vite.pwa";
-
-const appShell = precacheScope();
 
 /**
  * Build identity for drivers (window.__CODECAST_BUILD) and for the running app
@@ -75,8 +71,6 @@ export default defineConfig(({ mode, command }) => ({
     // The default color theme's variables in <head>, so a device with no
     // cached theme opens on the default palette, not on the stylesheet's.
     colorThemeBootPlugin(),
-    // DNS and TLS to the Convex deployment start with the page, not after boot.
-    convexPreconnectPlugin(),
     // codecast.sh/a/<slug> is a redirect to the branded artifact document the
     // Convex HTTP action serves (production: Hono route in server/index.ts).
     // Same behavior in dev so the path never falls through to the SPA shell.
@@ -97,9 +91,6 @@ export default defineConfig(({ mode, command }) => ({
     // network — the desktop (Electron) shell loads codecast.sh remotely, so
     // without this an offline launch never even gets HTML. Data comes from
     // the IndexedDB-hydrated store; this only makes the shell itself local.
-    // What it precaches is the app the bundle can reach, without the
-    // grammar, icon and marketing chunks (plugins/precacheScope.ts).
-    appShell.plugin,
     VitePWA({
       registerType: "autoUpdate",
       injectRegister: null, // registered manually from src/boot.tsx after first paint
@@ -107,31 +98,17 @@ export default defineConfig(({ mode, command }) => ({
       workbox: {
         globPatterns: APP_SHELL_GLOB_PATTERNS,
         globIgnores: APP_SHELL_GLOB_IGNORES,
-        manifestTransforms: [appShell.manifestTransform],
-        // Boot's common chunk (3.4 MB) is over workbox's 2 MiB default, which
-        // would silently drop it from the precache and break offline boot.
+        // Several chunks (ConversationView, tiptap, highlight) exceed
+        // workbox's 2 MiB default, which would silently drop them from the
+        // precache and break offline boot.
         maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
         navigateFallback: "/index.html",
         // Real server endpoints (server/index.ts) — never serve the SPA shell
         // for these. /a/ is the server-rendered artifact page: without the
         // denylist entry, a visitor with the SW installed would get the cached
-        // SPA shell instead of the static page. /share/ is server-rendered
-        // too (server/share.ts: the payload-inlined page, or the redirect a
-        // conversation link takes), and /i/ is an install script.
-        navigateFallbackDenylist: [/^\/api\//, /^\/download\//, /^\/install/, /^\/a\//, /^\/share\//, /^\/i\//],
+        // SPA shell instead of the static page.
+        navigateFallbackDenylist: [/^\/api\//, /^\/download\//, /^\/install/, /^\/a\//],
         runtimeCaching: [
-          // Hashed build files the precache leaves out (a grammar, an icon, a
-          // marketing page): cached once fetched, so they work offline after
-          // first use. Their names change with their content, so a cached one
-          // is never stale.
-          {
-            urlPattern: /\/assets\/[^/]+\.(?:js|css|woff2)$/,
-            handler: "CacheFirst",
-            options: {
-              cacheName: "assets",
-              expiration: { maxEntries: 1000, maxAgeSeconds: 30 * 24 * 60 * 60, purgeOnQuotaError: true },
-            },
-          },
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\//,
             handler: "StaleWhileRevalidate",
@@ -255,24 +232,7 @@ export default defineConfig(({ mode, command }) => ({
           // mermaid's bundled lodash. Letting Rollup auto-chunk them keeps them
           // load-on-demand.
 
-          // A manual chunk takes every static dependency of its modules that no
-          // other manual chunk claims, so a rule that names a library a lazy
-          // route owns drags that library into whatever statically imports any
-          // module of the rule. Name only what the importer really needs.
-
-          // ProseMirror's document core: the composer's shared draft
-          // (lib/sharedDraft.ts) needs only these, on every composer route.
-          // Its own chunk, so the editor below is not pulled in with it.
-          if (
-            /\/node_modules\/@tiptap\/pm\/dist\/(?:model|state|transform)\//.test(id) ||
-            /\/node_modules\/prosemirror-(?:model|state|transform|collab)\//.test(id) ||
-            id.includes("/node_modules/orderedmap/")
-          ) {
-            return "prosemirror";
-          }
-
-          // TipTap + the rest of ProseMirror: the editor itself, which
-          // components/MessageInput and the doc views load lazily.
+          // TipTap + ProseMirror editor: only mounted on conversation/doc views.
           if (
             id.includes("/node_modules/@tiptap/") ||
             id.includes("/node_modules/prosemirror-") ||
@@ -291,10 +251,12 @@ export default defineConfig(({ mode, command }) => ({
             return "highlight";
           }
 
-          // No rule for jsdiff: the app's diff@8 is boot code and auto-chunks
-          // with it, while the diff@9 that only @pierre/diffs uses stays in
-          // DiffView's lazy graph. A "diff" rule caught both and put diff@9 in
-          // boot (see the NOTE above).
+          // Text diffing (jsdiff). Not @pierre/diffs or Shiki: DiffView loads
+          // them with a dynamic import, and a named chunk would pull them into
+          // the static graph (see the NOTE above).
+          if (id.includes("/node_modules/diff/")) {
+            return "diff";
+          }
 
           if (
             id.includes("/node_modules/react/") ||
@@ -306,15 +268,11 @@ export default defineConfig(({ mode, command }) => ({
           }
           if (id.includes("/node_modules/convex/") || id.includes("/node_modules/@convex-dev/auth/")) return "convex";
           if (id.includes("/node_modules/@radix-ui/")) return "ui";
-          // The shell's markdown renderer. Not the Vault's math and raw HTML
-          // plugins (components/vault/VaultMarkdown, a lazy route): matched
-          // here they took KaTeX and parse5 into boot with them.
           if (
-            (id.includes("/node_modules/react-markdown/") ||
-              id.includes("/node_modules/rehype-") ||
-              id.includes("/node_modules/remark-") ||
-              id.includes("/node_modules/mdast-")) &&
-            !/\/node_modules\/(?:rehype-katex|rehype-raw|remark-math|mdast-util-math)\//.test(id)
+            id.includes("/node_modules/react-markdown/") ||
+            id.includes("/node_modules/rehype-") ||
+            id.includes("/node_modules/remark-") ||
+            id.includes("/node_modules/mdast-")
           ) {
             return "markdown";
           }

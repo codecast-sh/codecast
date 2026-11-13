@@ -99,7 +99,7 @@ export function PRCard(props: PRCardProps) {
               {props.title}
             </span>
           </div>
-          <div className="flex items-center gap-2 mt-0.5 text-meta text-sol-text-dim">
+          <div className="flex items-center gap-2 mt-0.5 text-[10px] text-sol-text-dim">
             <span className={stateColor}>{stateLabel}</span>
             <span>•</span>
             <span>{props.author_github_username}</span>
@@ -119,7 +119,7 @@ export function PRCard(props: PRCardProps) {
             <span>{formatRelativeTime(props.updated_at)}</span>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-meta font-mono flex-shrink-0">
+        <div className="flex items-center gap-2 text-[10px] font-mono flex-shrink-0">
           {props.changed_files !== undefined && (
             <span className="text-sol-text-dim">
               {props.changed_files} file{props.changed_files !== 1 ? 's' : ''}
@@ -163,7 +163,7 @@ export function PRCard(props: PRCardProps) {
               href={githubUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-meta text-sol-cyan hover:underline flex items-center gap-1"
+              className="text-[10px] text-sol-cyan hover:underline flex items-center gap-1"
               onClick={(e) => e.stopPropagation()}
             >
               <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
@@ -172,7 +172,7 @@ export function PRCard(props: PRCardProps) {
               View on GitHub
             </a>
             {props.commits_count !== undefined && (
-              <span className="text-meta text-sol-text-dim">
+              <span className="text-[10px] text-sol-text-dim">
                 {props.commits_count} commit{props.commits_count !== 1 ? 's' : ''}
               </span>
             )}

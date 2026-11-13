@@ -638,14 +638,14 @@ function TriggersCard({ group, sourceName }: { group: OpsGroup; sourceName: stri
     <div className="ops-card">
       <div className="ops-card-head">
         <span>Triggers <span className="ops-dim ops-num">{hits.length}</span></span>
-        <Link href={add} className="ops-dim text-meta font-normal hover:text-sol-text">Add trigger</Link>
+        <Link href={add} className="ops-dim text-[11px] font-normal hover:text-sol-text">Add trigger</Link>
       </div>
       {hits.length > 0 && (
         <div className="ops-card-body flex flex-col gap-1.5">
           {hits.map(({ trigger, event, waiting }) => (
             <Link key={trigger._id} href={`/triggers/${trigger._id}`} className="flex items-baseline gap-2 text-[12px] hover:underline">
               <span className="truncate flex-1 text-sol-text">{trigger.display_title ?? trigger.title ?? trigger.prompt?.slice(0, 60)}</span>
-              <span className="ops-mono ops-dim text-meta">{event}</span>
+              <span className="ops-mono ops-dim text-[11px]">{event}</span>
               {waiting && <span className="ops-pill" style={{ color: "var(--sol-amber)", background: "color-mix(in srgb, var(--sol-amber) 14%, transparent)" }}>fired</span>}
             </Link>
           ))}
@@ -672,14 +672,14 @@ function ReplaysCard({ group, samples }: { group: OpsGroup; samples: OpsSample[]
     <div className="ops-card">
       <div className="ops-card-head">
         <span>Replays <span className="ops-dim ops-num" data-provisional={total ? undefined : "true"}>{total ? replayTotalText(total) : linked.length}</span></span>
-        <Link className="text-sol-link hover:underline text-meta font-normal" href={`${opsHref.tab("replays")}?issue=${encodeURIComponent(group.short_id)}`}>All</Link>
+        <Link className="text-sol-link hover:underline text-[11.5px] font-normal" href={`${opsHref.tab("replays")}?issue=${encodeURIComponent(group.short_id)}`}>All</Link>
       </div>
       <div className="ops-card-body flex flex-col gap-1.5">
         {linked.slice(0, 8).map(({ r, t }: { r: OpsReplay; t: number | null }) => (
           <Link key={r._id} href={opsHref.replay(r.short_id || r._id, t)} className="flex items-baseline gap-2 text-[12px] hover:underline">
             <span className="ops-mono">{r.short_id}</span>
             <span className="ops-quiet truncate flex-1">{r.user?.email ?? r.user?.name ?? replayPlace(r.url) ?? ""}</span>
-            <span className="ops-num text-meta" style={{ color: t !== null ? "var(--sol-red)" : "var(--sol-text-dim)" }}>
+            <span className="ops-num text-[11px]" style={{ color: t !== null ? "var(--sol-red)" : "var(--sol-text-dim)" }}>
               {t !== null ? `error at ${formatReplayTime(t)}` : r.duration_ms ? formatReplayTime(r.duration_ms) : ""}
             </span>
           </Link>

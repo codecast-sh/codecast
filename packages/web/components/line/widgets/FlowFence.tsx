@@ -9,7 +9,6 @@
 // or `{"run":"<run id>"}` to show where a change is in its flow. The card of a
 // `cast flow run` in a transcript is the same widget on the run it started.
 import { memo, useMemo, useState } from "react";
-import Link from "next/link";
 import { useWorkspaceFeature } from "../../../lib/teamFeatures";
 import { useWorkflowRun } from "../../../hooks/useSyncWorkflows";
 import { useNamedFlow, useRunFlow, type FlowLibraryState } from "../../../hooks/useFlowObject";
@@ -40,9 +39,9 @@ function FlowHead({ flow, title, library, children }: { flow: AppFlow; title?: s
     <div className="lw-flow-head">
       <span className="lw-flow-kind" data-kind={flow.kind}>{KIND_WORD[flow.kind]}</span>
       {inLibrary
-        ? <Link className="lw-flow-name" href={lineWorkspaceHref(null, { view: "flows", item: flow.slug })} data-flow-open={flow.slug}>{title ?? flow.label}</Link>
+        ? <a className="lw-flow-name" href={lineWorkspaceHref(null, { view: "flows", item: flow.slug })} data-flow-open={flow.slug}>{title ?? flow.label}</a>
         : <span className="lw-flow-name">{title ?? flow.label}</span>}
-      {flow.base ? <Link className="lw-flow-base" href={lineWorkspaceHref(null, { view: "flows", item: flow.base })} data-flow-base={flow.base}>on {flow.base}</Link> : null}
+      {flow.base ? <a className="lw-flow-base" href={lineWorkspaceHref(null, { view: "flows", item: flow.base })} data-flow-base={flow.base}>on {flow.base}</a> : null}
       <span className="lw-flow-path">{flow.base ? null : flow.description}</span>
       {children}
       <LibraryAction library={library} />
@@ -54,7 +53,7 @@ function FlowHead({ flow, title, library, children }: { flow: AppFlow; title?: s
 function LibraryAction({ library }: { library: FlowLibraryState }) {
   if (!library || library.kind === "library") return null;
   if (library.kind === "saved") {
-    return <Link className="lw-flow-saved" href={lineWorkspaceHref(null, { view: "flows", item: library.slug })} data-flow-saved={library.slug}>Saved · {library.slug} v{library.version}</Link>;
+    return <a className="lw-flow-saved" href={lineWorkspaceHref(null, { view: "flows", item: library.slug })} data-flow-saved={library.slug}>Saved · {library.slug} v{library.version}</a>;
   }
   return (
     <button type="button" className="lw-flow-save" data-flow-save={library.id}
@@ -90,7 +89,7 @@ export const FlowRunCard = memo(function FlowRunCard({ runId, title }: { runId: 
     <div className="lw-widget lw-flow" data-flow-run={runId} data-flow-state={state.tone}>
       <FlowHead flow={flow} title={title} library={library}>
         <span className="lw-flow-state" data-tone={state.tone}>{state.words}</span>
-        {run.task_short_id ? <Link className="lw-flow-task" href={`/tasks/${run.task_short_id}`}>{run.task_short_id}</Link> : null}
+        {run.task_short_id ? <a className="lw-flow-task" href={`/tasks/${run.task_short_id}`}>{run.task_short_id}</a> : null}
         {state.tone === "running" || state.tone === "waiting" ? (
           <button type="button" className="lw-flow-stop" onClick={() => void useInboxStore.getState().stopLineRun(runId)} data-flow-stop={runId}>Stop</button>
         ) : null}
@@ -110,7 +109,7 @@ function ShipRunCard({ run, flow, title, library }: { run: any; flow: AppFlow; t
   return (
     <div className="lw-widget lw-flow" data-flow-run={run._id} data-ship-run-card={journey.now.kind}>
       <FlowHead flow={flow} title={title ?? run.task_title ?? null} library={library}>
-        {run.task_short_id ? <Link className="lw-flow-task" href={`/tasks/${run.task_short_id}`}>{run.task_short_id}</Link> : null}
+        {run.task_short_id ? <a className="lw-flow-task" href={`/tasks/${run.task_short_id}`}>{run.task_short_id}</a> : null}
         <button type="button" className="lw-flow-save" onClick={() => setGraph((g) => !g)} aria-pressed={graph} data-flow-graph-toggle>{graph ? "Stages" : "Graph"}</button>
       </FlowHead>
       {graph ? <FlowExplorer flow={flow} run={run} /> : null}

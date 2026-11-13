@@ -2,14 +2,15 @@ import { RepositoryLinks } from "./repo/RepositoryLinks";
 import { Button } from "./ui/button";
 import { ShortId } from "./ShortId";
 import { PLAN_STATUS_CONFIG } from "../lib/planStatus";
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useRef, useMemo } from "react";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 import Link from "next/link";
 import { AvatarImg } from "../lib/avatarCache";
 import { useQuery, useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
 import { closeTaskWithGuard, createTaskAndAdopt } from "../lib/taskActions";
-import { mergeLiveTasks, computePlanProgress, findEntityInStore, lookup } from "../lib/liveEntities";
+import { mergeLiveTasks, computePlanProgress, findEntityInStore } from "../lib/liveEntities";
 import { Badge } from "./ui/badge";
 import { AppLoader } from "./AppLoader";
 import { TaskStatusBadge, getExecStatusConfig } from "./TaskStatusBadge";
@@ -40,7 +41,6 @@ import {
   Search,
   RotateCw,
   Play,
-  X,
 } from "lucide-react";
 import { taskPriority } from "../lib/taskPriority";
 import Markdown from "react-markdown";
@@ -52,14 +52,6 @@ import { PlanGraphView } from "./PlanGraphView";
 import { PlanOriginSession } from "./PlanOriginSession";
 import { TaskBlockedMark } from "./tasks/TaskBlockedMark";
 import { LivePulseDot } from "./SessionActivityLine";
-import { ShareControl } from "./ShareControl";
-import { usePlanActiveSessions, usePlanStoreTasks } from "./work/planWakeRows";
-import { useTaskHref } from "../lib/taskHrefContext";
-import { SwitchReview } from "./consequential/ConsequentialSwitch";
-import { useRunCost } from "./consequential/useRunCost";
-import { workflowAgentSteps, workflowRunLedger, workflowSteps } from "./work/startLedgers";
-import { useWorkflow } from "../hooks/useSyncWorkflows";
-import { policyTeamOf } from "@codecast/shared/contracts";
 
 const api = _api as any;
 
@@ -157,19 +149,19 @@ export function PlanProgressBar({ progress }: { progress: { total: number; done:
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-full bg-sol-green/80" />
-          <span className="text-meta text-sol-text-dim tabular-nums">{done} done</span>
+          <span className="text-[11px] text-sol-text-dim tabular-nums">{done} done</span>
         </div>
         {in_progress > 0 && (
           <div className="flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full bg-sol-yellow/60" />
-            <span className="text-meta text-sol-text-dim tabular-nums">{in_progress} active</span>
+            <span className="text-[11px] text-sol-text-dim tabular-nums">{in_progress} active</span>
           </div>
         )}
         <div className="flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-full bg-sol-border/50" />
-          <span className="text-meta text-sol-text-dim tabular-nums">{open} open</span>
+          <span className="text-[11px] text-sol-text-dim tabular-nums">{open} open</span>
         </div>
-        <span className="text-meta text-sol-text-dim tabular-nums ml-auto">{done}/{total} tasks</span>
+        <span className="text-[11px] text-sol-text-dim tabular-nums ml-auto">{done}/{total} tasks</span>
       </div>
     </div>
   );
@@ -209,7 +201,7 @@ export function DriveRoundIndicator({ driveState }: { driveState: { current_roun
         })}
       </div>
       {completedRounds > 0 && completedRounds < total_rounds && (
-        <span className="text-meta text-sol-text-dim tabular-nums">
+        <span className="text-[10px] text-sol-text-dim tabular-nums">
           {Math.round(pct)}%
         </span>
       )}
@@ -266,30 +258,30 @@ function PlanSessionCard({ session: s }: { session: any }) {
         {isActive && (
           <span className="flex items-center gap-0.5 shrink-0">
             <LivePulseDot className="w-1.5 h-1.5" still />
-            <span className="text-mark text-sol-green/60 font-medium uppercase tracking-wider">live</span>
+            <span className="text-[8px] text-sol-green/60 font-medium uppercase tracking-wider">live</span>
           </span>
         )}
         {project && project !== "unknown" && (
-          <span className="font-mono rounded px-1 py-px shrink-0 text-meta bg-sol-bg-alt text-sol-text-muted">
+          <span className="font-mono rounded px-1 py-px shrink-0 text-[9px] bg-sol-bg-alt text-gray-500 dark:text-gray-400">
             {project}
           </span>
         )}
         <span className="flex-1" />
         {outcome.label && (
-          <span className={`rounded-full px-1.5 py-px shrink-0 font-medium text-meta ${outcome.badge}`}>
+          <span className={`rounded-full px-1.5 py-px shrink-0 font-medium text-[9px] ${outcome.badge}`}>
             {outcome.label}
           </span>
         )}
-        <span className="font-mono text-sol-text-dim tabular-nums shrink-0 whitespace-nowrap text-meta">
+        <span className="font-mono text-gray-400 dark:text-gray-500 tabular-nums shrink-0 whitespace-nowrap text-[10px]">
           {time}
         </span>
       </div>
       {s.headline && (
-        <p className="mt-0.5 text-[12px] text-sol-text-muted leading-snug truncate">
+        <p className="mt-0.5 text-[12px] text-gray-500 dark:text-gray-400 leading-snug truncate">
           {s.headline}
         </p>
       )}
-      <div className="mt-0.5 flex items-center gap-2 text-meta text-sol-text-dim font-mono">
+      <div className="mt-0.5 flex items-center gap-2 text-[10px] text-gray-400 dark:text-gray-500 font-mono">
         {duration && <span>{duration}</span>}
         {msgCount > 0 && <span>{msgCount} msgs</span>}
         {s.git_branch && s.git_branch !== "main" && s.git_branch !== "master" && (
@@ -340,14 +332,14 @@ function TaskExecutionDetail({ task }: { task: any }) {
       {task.files_changed?.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {task.files_changed.map((f: string, i: number) => (
-            <span key={i} className="text-meta font-mono px-1 py-px rounded bg-sol-bg-alt text-sol-text-dim">
+            <span key={i} className="text-[10px] font-mono px-1 py-px rounded bg-sol-bg-alt text-sol-text-dim">
               {f.split("/").pop()}
             </span>
           ))}
         </div>
       )}
       {(task.estimated_minutes || task.actual_minutes) && (
-        <div className="flex items-center gap-2 text-meta text-sol-text-dim">
+        <div className="flex items-center gap-2 text-[10px] text-sol-text-dim">
           {task.estimated_minutes && <span>est: {task.estimated_minutes}m</span>}
           {task.actual_minutes && <span>actual: {task.actual_minutes}m</span>}
         </div>
@@ -378,14 +370,14 @@ function TaskSessionCards({ sessions }: { sessions: any[] }) {
           {s.is_active && (
             <span className="flex items-center gap-0.5 flex-shrink-0">
               <LivePulseDot className="w-1.5 h-1.5" still />
-              <span className="text-mark text-sol-green/60 font-medium uppercase">live</span>
+              <span className="text-[8px] text-sol-green/60 font-medium uppercase">live</span>
             </span>
           )}
           <span className="flex-1" />
           {s.message_count > 0 && (
-            <span className="text-meta text-sol-text-dim font-mono tabular-nums">{s.message_count} msgs</span>
+            <span className="text-[10px] text-sol-text-dim/30 font-mono tabular-nums">{s.message_count} msgs</span>
           )}
-          <span className="text-meta text-sol-text-dim font-mono tabular-nums">{getRelativeTime(s.updated_at || s.started_at)}</span>
+          <span className="text-[10px] text-gray-400 dark:text-gray-500 font-mono tabular-nums">{getRelativeTime(s.updated_at || s.started_at)}</span>
         </Link>
       ))}
     </div>
@@ -393,7 +385,7 @@ function TaskSessionCards({ sessions }: { sessions: any[] }) {
 }
 
 export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; sessions: any[] }) {
-  const taskActiveSessions = usePlanActiveSessions(tasks);
+  const taskActiveSessions = useInboxStore((s) => s.taskActiveSessions);
   const activeAgents = tasks.filter((t: any) => taskActiveSessions[t._id]);
   const doneTasks = tasks.filter((t: any) => t.status === "done");
   const blockedTasks = tasks.filter((t: any) => t.execution_status === "blocked" || t.execution_status === "needs_context");
@@ -409,39 +401,39 @@ export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; session
   const hasActiveWork = activeAgents.length > 0 || sessions.some((s: any) => s.is_active);
 
   return (
-    <div className={`mb-5 rounded-lg border overflow-hidden ${hasActiveWork ? "border-sol-green/30 bg-sol-green/5" : "border-sol-border/20 bg-sol-bg-alt/20"}`}>
+    <div className={`mb-5 rounded-lg border overflow-hidden ${hasActiveWork ? "border-emerald-500/30 bg-emerald-950/10" : "border-sol-border/20 bg-sol-bg-alt/20"}`}>
       <div className="px-4 py-3">
         <div className="flex items-center gap-3 mb-2.5">
-          <Zap className={`w-4 h-4 ${hasActiveWork ? "text-sol-green" : "text-sol-text-dim"}`} />
-          <span className={`text-xs font-semibold uppercase tracking-wider ${hasActiveWork ? "text-sol-green" : "text-sol-text-dim"}`}>
+          <Zap className={`w-4 h-4 ${hasActiveWork ? "text-emerald-600 dark:text-emerald-400" : "text-sol-text-dim"}`} />
+          <span className={`text-xs font-semibold uppercase tracking-wider ${hasActiveWork ? "text-emerald-600 dark:text-emerald-400" : "text-sol-text-dim"}`}>
             {hasActiveWork ? "Live Orchestration" : "Orchestration"}
           </span>
-          {hasActiveWork && <span className="w-1.5 h-1.5 rounded-full bg-sol-green" />}
+          {hasActiveWork && <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />}
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div>
-            <div className="text-mark text-sol-text-dim uppercase tracking-wider mb-0.5">Agents</div>
+            <div className="text-[10px] text-sol-text-dim uppercase tracking-wider mb-0.5">Agents</div>
             <div className="flex items-center gap-1.5">
-              <span className={`text-lg font-semibold tabular-nums ${activeAgents.length > 0 ? "text-sol-green" : "text-sol-text-dim"}`}>
+              <span className={`text-lg font-semibold tabular-nums ${activeAgents.length > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-sol-text-dim"}`}>
                 {activeAgents.length}
               </span>
-              <span className="text-meta text-sol-text-dim">
+              <span className="text-[10px] text-sol-text-dim">
                 / {tasks.filter((t: any) => t.status === "in_progress").length} assigned
               </span>
             </div>
           </div>
 
           <div>
-            <div className="text-mark text-sol-text-dim uppercase tracking-wider mb-0.5">Completed</div>
+            <div className="text-[10px] text-sol-text-dim uppercase tracking-wider mb-0.5">Completed</div>
             <div className="flex items-center gap-1.5">
               <span className="text-lg font-semibold tabular-nums text-sol-green">{doneTasks.length}</span>
-              <span className="text-meta text-sol-text-dim">/ {tasks.length}</span>
+              <span className="text-[10px] text-sol-text-dim">/ {tasks.length}</span>
             </div>
           </div>
 
           <div>
-            <div className="text-mark text-sol-text-dim uppercase tracking-wider mb-0.5">Issues</div>
+            <div className="text-[10px] text-sol-text-dim uppercase tracking-wider mb-0.5">Issues</div>
             <div className="flex items-center gap-2">
               {blockedTasks.length > 0 ? (
                 <span className="text-lg font-semibold tabular-nums text-sol-red">{blockedTasks.length}</span>
@@ -451,16 +443,16 @@ export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; session
                 <span className="text-lg font-semibold tabular-nums text-sol-text-dim">0</span>
               )}
               {blockedTasks.length > 0 && (
-                <span className="text-meta text-sol-red">blocked</span>
+                <span className="text-[10px] text-sol-red">blocked</span>
               )}
               {concernTasks.length > 0 && blockedTasks.length === 0 && (
-                <span className="text-meta text-sol-yellow">concerns</span>
+                <span className="text-[10px] text-sol-yellow">concerns</span>
               )}
             </div>
           </div>
 
           <div>
-            <div className="text-mark text-sol-text-dim uppercase tracking-wider mb-0.5">Time</div>
+            <div className="text-[10px] text-sol-text-dim uppercase tracking-wider mb-0.5">Time</div>
             <div className="flex items-center gap-1.5">
               {remainingEstimated > 0 ? (
                 <>
@@ -468,7 +460,7 @@ export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; session
                   <span className="text-sm font-semibold tabular-nums text-sol-text">
                     {remainingEstimated < 60 ? `${remainingEstimated}m` : `${Math.floor(remainingEstimated / 60)}h ${remainingEstimated % 60}m`}
                   </span>
-                  <span className="text-meta text-sol-text-dim">left</span>
+                  <span className="text-[10px] text-sol-text-dim">left</span>
                 </>
               ) : totalActual > 0 ? (
                 <>
@@ -476,7 +468,7 @@ export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; session
                   <span className="text-sm font-semibold tabular-nums text-sol-green">
                     {totalActual < 60 ? `${totalActual}m` : `${Math.floor(totalActual / 60)}h ${totalActual % 60}m`}
                   </span>
-                  <span className="text-meta text-sol-text-dim">total</span>
+                  <span className="text-[10px] text-sol-text-dim">total</span>
                 </>
               ) : (
                 <span className="text-sm text-sol-text-dim">--</span>
@@ -487,26 +479,74 @@ export function OrchestrationHeader({ tasks, sessions }: { tasks: any[]; session
       </div>
 
       {activeAgents.length > 0 && (
-        <div className="border-t border-sol-green/15 px-4 py-2.5 bg-sol-green/5">
+        <div className="border-t border-emerald-500/15 px-4 py-2.5 bg-emerald-950/5">
           <div className="flex flex-wrap gap-2">
             {activeAgents.map((t: any) => (
               <Link
                 key={t._id}
                 href={`/conversation/${taskActiveSessions[t._id]?.session_id}`}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-sol-green/10 hover:bg-sol-green/20 transition-colors group/agent"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-500/10 hover:bg-emerald-500/20 transition-colors group/agent"
               >
                 <LivenessDot state="active" size="xs" />
                 <ShortId id={t.short_id} className="text-xs text-sol-text-dim" />
-                <span className="text-xs text-sol-green truncate max-w-[200px] group-hover/agent:text-sol-text transition-colors">
+                <span className="text-xs text-emerald-700 dark:text-emerald-300/80 truncate max-w-[200px] group-hover/agent:text-emerald-800 dark:group-hover/agent:text-emerald-200 transition-colors">
                   {t.title}
                 </span>
-                <ExternalLink className="w-2.5 h-2.5 text-sol-green/50 group-hover/agent:text-sol-green transition-colors flex-shrink-0" />
+                <ExternalLink className="w-2.5 h-2.5 text-emerald-500 dark:text-emerald-400/40 group-hover/agent:text-emerald-600 dark:group-hover/agent:text-emerald-400/80 transition-colors flex-shrink-0" />
               </Link>
             ))}
           </div>
         </div>
       )}
     </div>
+  );
+}
+
+function InlineEditTitle({ value, onSave, className }: { value: string; onSave: (newVal: string) => void; className?: string }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useWatchEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  const commit = useCallback(() => {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== value) {
+      onSave(trimmed);
+    }
+    setEditing(false);
+  }, [draft, value, onSave]);
+
+  if (!editing) {
+    return (
+      <span
+        onClick={(e) => { e.stopPropagation(); setDraft(value); setEditing(true); }}
+        className={`cursor-text hover:bg-sol-bg-alt/60 rounded px-0.5 -mx-0.5 transition-colors ${className || ""}`}
+        title="Click to edit"
+      >
+        {value}
+      </span>
+    );
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+        if (e.key === "Escape") { setDraft(value); setEditing(false); }
+      }}
+      onClick={(e) => e.stopPropagation()}
+      className="text-sm bg-sol-bg-alt border border-sol-cyan/50 rounded px-1.5 py-0.5 text-sol-text outline-none w-full min-w-0"
+    />
   );
 }
 
@@ -519,22 +559,31 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [showFilterBar, setShowFilterBar] = useState(false);
   const updateTask = useInboxStore((s) => s.updateTask);
-  const taskActiveSessions = usePlanActiveSessions(tasks);
+  const createTask = useInboxStore((s) => s.createTask);
+  const taskActiveSessions = useInboxStore((s) => s.taskActiveSessions);
 
-  // The row's own icon shows the change at once; no toast per click.
   const cycleStatus = useCallback((shortId: string, currentStatus: string) => {
     const idx = TASK_STATUS_CYCLE.indexOf(currentStatus);
     const next = TASK_STATUS_CYCLE[(idx + 1) % TASK_STATUS_CYCLE.length];
-    if (next === "done" || next === "dropped") closeTaskWithGuard(shortId, next as "done" | "dropped");
-    else updateTask(shortId, { status: next });
+    if (next === "done" || next === "dropped") {
+      if (!closeTaskWithGuard(shortId, next as "done" | "dropped").needsConfirm) toast.success(`${shortId} -> ${next}`);
+    } else {
+      updateTask(shortId, { status: next });
+      toast.success(`${shortId} -> ${next}`);
+    }
   }, [updateTask]);
 
   const cyclePriority = useCallback((shortId: string, currentPriority: string) => {
     const idx = PRIORITY_CYCLE.indexOf(currentPriority || "medium");
     const next = PRIORITY_CYCLE[(idx + 1) % PRIORITY_CYCLE.length];
     updateTask(shortId, { priority: next });
+    toast.success(`${shortId} priority -> ${next}`);
   }, [updateTask]);
-  const taskHref = useTaskHref();
+
+  const updateTitle = useCallback((shortId: string, newTitle: string) => {
+    updateTask(shortId, { title: newTitle });
+    toast.success(`${shortId} title updated`);
+  }, [updateTask]);
 
   const handleAdd = useCallback(() => {
     if (!newTitle.trim()) return;
@@ -637,7 +686,7 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
           {hasActiveFilter && (
             <button
               onClick={() => { setSearchQuery(""); setStatusFilter("all"); }}
-              className="text-meta text-sol-text-dim hover:text-sol-text transition-colors whitespace-nowrap"
+              className="text-[10px] text-sol-text-dim hover:text-sol-text transition-colors whitespace-nowrap"
             >
               Clear
             </button>
@@ -677,16 +726,18 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                 <button
                   onClick={() => cycleStatus(task.short_id, task.status)}
                   title={`${tc.label} (click to cycle)`}
-                  aria-label={`Status ${tc.label}; cycle`}
-                  className="flex-shrink-0 p-1 -m-1 hover:scale-110 transition-transform"
+                  className="flex-shrink-0 hover:scale-110 transition-transform"
                 >
                   <TaskIcon className={`w-3.5 h-3.5 ${tc.color}`} />
                 </button>
-                {/* The title opens the task; renaming happens on its page. */}
-                <Link href={taskHref(task.short_id)} className="flex-1 min-w-0 flex items-center gap-2 group/title">
+                <div className="flex-1 min-w-0 flex items-center gap-2">
                   <ShortId id={task.short_id} className="text-xs text-sol-text-dim" />
-                  <span className="text-sm text-sol-text truncate group-hover/title:text-sol-cyan transition-colors">{task.title}</span>
-                </Link>
+                  <InlineEditTitle
+                    value={task.title}
+                    onSave={(newVal) => updateTitle(task.short_id, newVal)}
+                    className="text-sm text-sol-text truncate"
+                  />
+                </div>
                 {taskActiveSessions[task._id] && (
                   <ActiveSessionBadge session={taskActiveSessions[task._id]} />
                 )}
@@ -694,7 +745,7 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                   <TaskStatusBadge status={task.execution_status} type="execution" className="flex-shrink-0" />
                 )}
                 {taskSessions.length > 0 && !taskActiveSessions[task._id] && (
-                  <span className="text-meta text-sol-text-dim flex-shrink-0 font-mono">
+                  <span className="text-[10px] text-gray-400 dark:text-gray-500 flex-shrink-0 font-mono">
                     {taskSessions.length} sess
                   </span>
                 )}
@@ -707,20 +758,14 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                   <button
                     onClick={() => cyclePriority(task.short_id, task.priority || "medium")}
                     title={`${pc.label} priority (click to cycle)`}
-                    aria-label={`${pc.label} priority; cycle`}
-                    className="flex-shrink-0 p-1 -m-1 hover:scale-110 transition-transform"
+                    className="flex-shrink-0 hover:scale-110 transition-transform"
                   >
                     <PriorityIcon className={`w-3 h-3 ${pc.color}`} />
                   </button>
                 )}
                 {hasDetail ? (
-                  <button
-                    onClick={() => setExpandedTask(isExpanded ? null : task._id)}
-                    aria-label={isExpanded ? "Hide details" : "Show details"}
-                    aria-expanded={isExpanded}
-                    className="p-1 -m-1"
-                  >
-                    <ChevronRight className={`w-3 h-3 text-sol-text-dim transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+                  <button onClick={() => setExpandedTask(isExpanded ? null : task._id)}>
+                    <ChevronRight className={`w-3 h-3 text-gray-400 dark:text-gray-500 transition-transform ${isExpanded ? "rotate-90" : ""}`} />
                   </button>
                 ) : (
                   <span className="w-3 flex-shrink-0" aria-hidden />
@@ -762,12 +807,10 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
                     >
                       <TaskIcon className={`w-3.5 h-3.5 ${tc.color}`} />
                     </button>
-                    <Link href={taskHref(task.short_id)} onClick={(e) => e.stopPropagation()} className="min-w-0 flex items-center gap-2.5 group/title">
-                      <ShortId id={task.short_id} className="text-xs text-sol-text-dim" />
-                      <span className="text-sm text-sol-text-muted line-through truncate group-hover/title:text-sol-cyan">{task.title}</span>
-                    </Link>
+                    <ShortId id={task.short_id} className="text-xs text-sol-text-dim" />
+                    <span className="text-sm text-sol-text-muted line-through truncate">{task.title}</span>
                     {taskSessions.length > 0 && (
-                      <span className="text-meta text-sol-text-dim flex-shrink-0 font-mono ml-auto">
+                      <span className="text-[10px] text-gray-400 dark:text-gray-500 flex-shrink-0 font-mono ml-auto">
                         {taskSessions.length} sess
                       </span>
                     )}
@@ -810,8 +853,7 @@ export function PlanTaskSection({ planShortId, tasks, sessions }: { planShortId:
 }
 
 export function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: any[] }) {
-  const taskActiveSessions = usePlanActiveSessions(tasks);
-  const taskHref = useTaskHref();
+  const taskActiveSessions = useInboxStore((s) => s.taskActiveSessions);
   const activeSessions = sessions.filter((s: any) => s.is_active);
   const recentSessions = [...sessions].sort((a: any, b: any) => (b.updated_at || 0) - (a.updated_at || 0));
 
@@ -824,36 +866,36 @@ export function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: 
       {activeSessions.length > 0 && (
         <div>
           <h2 className="flex items-center gap-2 text-sm font-medium text-sol-text mb-3">
-            <Activity className="w-4 h-4 text-sol-green" />
+            <Activity className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
             Active Sessions
-            <span className="text-xs text-sol-green/70 font-normal">({activeSessions.length})</span>
+            <span className="text-xs text-emerald-600/70 dark:text-emerald-400/60 font-normal">({activeSessions.length})</span>
           </h2>
           <div className="space-y-1.5">
             {activeSessions.map((s: any) => (
               <Link
                 key={s._id}
                 href={`/conversation/${s.session_id}`}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-sol-green/20 bg-sol-green/5 hover:bg-sol-green/10 transition-colors group/as"
+                className="flex items-center gap-3 px-3 py-2.5 rounded-lg border border-emerald-500/20 bg-emerald-950/10 hover:bg-emerald-950/20 transition-colors group/as"
               >
-                <span className="w-2 h-2 rounded-full bg-sol-green flex-shrink-0" />
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse flex-shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <span className="text-sm text-sol-text group-hover/as:text-sol-green transition-colors truncate block">
+                  <span className="text-sm text-sol-text group-hover/as:text-emerald-700 dark:group-hover/as:text-emerald-300 transition-colors truncate block">
                     {s.title || "Untitled session"}
                   </span>
-                  <div className="flex items-center gap-2 mt-0.5 text-meta text-sol-text-dim font-mono">
+                  <div className="flex items-center gap-2 mt-0.5 text-[10px] text-gray-500 dark:text-gray-500 font-mono">
                     {s.message_count > 0 && <span>{s.message_count} msgs</span>}
                     {s.project_path && (
                       <span>{s.project_path.split("/").filter(Boolean).pop()}</span>
                     )}
                     {s.git_branch && s.git_branch !== "main" && (
-                      <span className="text-sol-green/70">{s.git_branch}</span>
+                      <span className="text-emerald-600/50 dark:text-emerald-400/30">{s.git_branch}</span>
                     )}
                   </div>
                 </div>
-                <span className="text-meta text-sol-text-dim font-mono tabular-nums flex-shrink-0">
+                <span className="text-[10px] text-gray-400 dark:text-gray-500 font-mono tabular-nums flex-shrink-0">
                   {getRelativeTime(s.updated_at || s.started_at)}
                 </span>
-                <ExternalLink className="w-3 h-3 text-sol-text-dim/60 group-hover/as:text-sol-green transition-colors flex-shrink-0" />
+                <ExternalLink className="w-3 h-3 text-gray-300 dark:text-gray-600 group-hover/as:text-emerald-600 dark:group-hover/as:text-emerald-400/60 transition-colors flex-shrink-0" />
               </Link>
             ))}
           </div>
@@ -886,12 +928,12 @@ export function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: 
                       <TaskIcon className={`w-4 h-4 ${tc.color}`} />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <Link href={taskHref(task.short_id)} className="flex items-center gap-2 min-w-0 group/title">
+                      <div className="flex items-center gap-2 min-w-0">
                         <ShortId id={task.short_id} className="text-xs text-sol-text-dim" />
-                        <span className={`text-sm truncate group-hover/title:text-sol-cyan ${task.status === "done" || task.status === "dropped" ? "text-sol-text-muted line-through" : "text-sol-text"}`}>
+                        <span className={`text-sm truncate ${task.status === "done" || task.status === "dropped" ? "text-sol-text-muted line-through" : "text-sol-text"}`}>
                           {task.title}
                         </span>
-                      </Link>
+                      </div>
                       <div className="flex items-center gap-2 mt-1 flex-wrap">
                         <TaskStatusBadge status={task.status} type="task" />
                         {hasExec && (
@@ -901,13 +943,13 @@ export function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: 
                           <ActiveSessionBadge session={taskActiveSessions[task._id]} />
                         )}
                         {task.actual_minutes && (
-                          <span className="text-meta text-sol-text-dim font-mono">
+                          <span className="text-[10px] text-gray-400 dark:text-gray-500 font-mono">
                             {task.actual_minutes}m
                           </span>
                         )}
                       </div>
                     </div>
-                    <span className="text-meta text-sol-text-dim font-mono tabular-nums whitespace-nowrap flex-shrink-0 mt-0.5">
+                    <span className="text-[10px] text-gray-400 dark:text-gray-500 font-mono tabular-nums whitespace-nowrap flex-shrink-0 mt-0.5">
                       {time}
                     </span>
                   </div>
@@ -936,14 +978,9 @@ export function OrchestrationTab({ tasks, sessions }: { tasks: any[]; sessions: 
   );
 }
 
-export function StartWorkflowButton({ workflowId, planId, planTitle }: { workflowId: string; planId: string; planTitle?: string }) {
+export function StartWorkflowButton({ workflowId, planId }: { workflowId: string; planId: string }) {
   const createRun = useMutation(api.workflow_runs.create);
   const [pending, setPending] = useState(false);
-  // A run starts paid agent sessions: the press opens the shared review, and
-  // only its confirm starts the run.
-  const [reviewing, setReviewing] = useState(false);
-  const workflow = useWorkflow(reviewing ? workflowId : null);
-  const runCost = useRunCost(null);
 
   const handleClick = useCallback(async () => {
     setPending(true);
@@ -960,26 +997,13 @@ export function StartWorkflowButton({ workflowId, planId, planTitle }: { workflo
   return (
     <div className="mb-5">
       <button
-        onClick={() => setReviewing(true)}
+        onClick={handleClick}
         disabled={pending}
-        aria-haspopup="dialog"
         className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded border border-sol-cyan/30 text-sol-cyan hover:bg-sol-cyan/10 transition-colors disabled:opacity-50"
       >
         <Play className="w-3.5 h-3.5" />
         {pending ? "Starting..." : "Run workflow"}
       </button>
-      {reviewing && (
-        <SwitchReview
-          ledger={workflowRunLedger({
-            name: workflow?.name ?? "workflow",
-            subject: planTitle,
-            agentSteps: workflowAgentSteps(workflow?.nodes),
-            steps: workflowSteps(workflow?.nodes),
-          }, runCost)}
-          onClose={() => setReviewing(false)}
-          onConfirm={() => { setReviewing(false); void handleClick(); }}
-        />
-      )}
     </div>
   );
 }
@@ -1023,9 +1047,10 @@ export function PlanExternalEvents({ planId }: { planId: string }) {
   );
 }
 
-export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Where ✕ returns to (the list under this panel). */ closeHref?: string }) {
+export function PlanDetailPanel({ planId }: { planId: string }) {
   const queryArgs = planId.startsWith("pl-") ? { short_id: planId } : { id: planId };
   const queryPlan = useQuery(api.plans.webGet, queryArgs);
+  const storeTasks = useInboxStore((s) => s.tasks);
   const teamMembers = useInboxStore((s) => s.teamMembers);
   const currentUser = useInboxStore((s) => s.currentUser);
   const [activeTab, setActiveTab] = useState<PlanTab>("overview");
@@ -1039,18 +1064,6 @@ export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Whe
   const cachedRow = useInboxStore((s) =>
     queryPlan !== undefined ? null : ((findEntityInStore(s, "plan", planId) as any) ?? null),
   );
-  // The share token as the store holds it (setObjectShareLink writes it there
-  // first): `undefined` when there is no store row, `null` when revoked.
-  const storeShareToken = useInboxStore((s) => {
-    const row = lookup(s.plans, planId) as any;
-    return row ? ((row.share_token as string | undefined) ?? null) : undefined;
-  });
-  // The plan's tasks, by the snapshot's list or the cached row's ids.
-  const planTaskIds = useMemo(
-    () => ((queryPlan as any)?.tasks?.map((t: any) => String(t._id)) ?? (cachedRow?.task_ids ?? []).map(String)) as string[],
-    [queryPlan, cachedRow],
-  );
-  const storeTasks = usePlanStoreTasks(planTaskIds);
   const plan = useMemo(() => {
     if (queryPlan !== undefined) return queryPlan;
     if (!cachedRow) return undefined;
@@ -1082,9 +1095,8 @@ export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Whe
 
   if (plan === null) {
     return (
-      <div className="flex flex-col items-center justify-center gap-2 h-48 text-sol-text-dim">
+      <div className="flex items-center justify-center h-48 text-sol-text-dim">
         <span className="text-sm">Plan not found</span>
-        {closeHref && <Link href={closeHref} className="text-xs text-sol-cyan hover:underline">Back to plans</Link>}
       </div>
     );
   }
@@ -1095,34 +1107,14 @@ export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Whe
   const hasActiveSessions = (plan.sessions || []).some((s: any) => s.is_active);
 
   return (
-    // The panel is drawn into a fixed-height, clipped stage (DetailSplitLayout),
-    // so it owns its scroller.
-    <div className="h-full overflow-y-auto">
     <div className="max-w-3xl mx-auto px-6 py-6">
       <div className="mb-6">
         <div className="flex items-center gap-2.5 mb-2">
-          <StatusIcon className={`w-5 h-5 flex-shrink-0 ${status.color}`} />
-          <h1 className="min-w-0 break-words text-xl font-semibold text-sol-text">{plan.title}</h1>
-          <Badge variant="outline" className={`flex-shrink-0 text-meta px-1.5 py-0 ${status.color} border-current/30`}>
+          <StatusIcon className={`w-5 h-5 ${status.color}`} />
+          <h1 className="text-xl font-semibold text-sol-text">{plan.title}</h1>
+          <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${status.color} border-current/30`}>
             {status.label}
           </Badge>
-          <div className="ml-auto flex items-center gap-1 flex-shrink-0">
-            <ShareControl
-              label="plan"
-              path={`/plans/${plan.short_id}`}
-              publicShare={{ kind: "plan", id: plan._id, token: storeShareToken !== undefined ? storeShareToken : plan.share_token, team: policyTeamOf("plans", plan) }}
-            />
-            {closeHref && (
-              <Link
-                href={closeHref}
-                aria-label="Close"
-                title="Close"
-                className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
-              >
-                <X className="w-4 h-4" />
-              </Link>
-            )}
-          </div>
         </div>
         <div className="flex items-center gap-3 text-xs text-sol-text-dim flex-wrap">
           {plan.author?.image && (
@@ -1163,7 +1155,7 @@ export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Whe
       )}
 
       {(plan as any).workflow_id && !(plan as any).workflow_run_id && (
-        <StartWorkflowButton workflowId={(plan as any).workflow_id} planId={plan._id} planTitle={plan.title} />
+        <StartWorkflowButton workflowId={(plan as any).workflow_id} planId={plan._id} />
       )}
 
       {(plan as any).workflow_run_id && (
@@ -1193,10 +1185,10 @@ export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Whe
                 : "text-sol-text-dim border-transparent hover:text-sol-text-muted"
             }`}
           >
-            <Zap className={`w-3.5 h-3.5 ${hasActiveSessions ? "text-sol-green" : ""}`} />
+            <Zap className={`w-3.5 h-3.5 ${hasActiveSessions ? "text-emerald-600 dark:text-emerald-400" : ""}`} />
             Orchestration
             {hasActiveSessions && (
-              <span className="w-1.5 h-1.5 rounded-full bg-sol-green" />
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             )}
           </button>
           <button
@@ -1241,7 +1233,6 @@ export function PlanDetailPanel({ planId, closeHref }: { planId: string; /** Whe
       ) : (
         <OrchestrationTab tasks={liveTasks || []} sessions={plan.sessions || []} />
       )}
-    </div>
     </div>
   );
 }

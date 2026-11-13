@@ -294,7 +294,7 @@ export function RelationQueryHint({ mode, search, matched, targets }: { mode: Re
   const error = relationQueryError(search, mode, matched);
   const forms = mode === "blocker" ? blockerForms(targets) : ["ct-12"];
   return (
-    <div className="px-4 py-1.5 border-b border-sol-border/30 text-meta text-sol-text-dim" data-relation-hint>
+    <div className="px-4 py-1.5 border-b border-sol-border/30 text-[10px] text-sol-text-dim" data-relation-hint>
       <span className="flex items-center gap-1 flex-wrap">
         {error && <span className="text-sol-red">{mode === "blocker" ? "Not a blocker." : "Not a task."}</span>}
         {error && !error.unrecognized ? (

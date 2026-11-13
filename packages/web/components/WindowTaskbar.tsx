@@ -90,7 +90,7 @@ export const WindowTaskbar = memo(function WindowTaskbar({ containerRef }: { con
       {/* Window count + close all */}
       {windowCount > 0 && (
         <div className="flex items-center gap-2 flex-shrink-0">
-          <span className="text-meta font-mono tabular-nums text-sol-text-dim/50">
+          <span className="text-[11px] font-mono tabular-nums text-sol-text-dim/50">
             {windowCount} window{windowCount !== 1 ? "s" : ""}
           </span>
           <button
@@ -139,7 +139,7 @@ const MinimizedPill = memo(function MinimizedPill({ windowId, sessionId }: { win
           style={{ backgroundColor: isIdle ? "var(--sol-text-dim)" : "var(--sol-green)" }}
         />
       </span>
-      <span className="text-meta text-sol-text-muted truncate">{title}</span>
+      <span className="text-[11px] text-sol-text-muted truncate">{title}</span>
       <button
         onClick={(e) => { e.stopPropagation(); closeWindow(windowId); }}
         className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-red-500/20 text-sol-text-dim/40 hover:text-red-400 transition-all"

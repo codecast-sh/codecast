@@ -50,9 +50,9 @@ export function DensityMenuOptions({ density, setDensity, guest }: { density: Co
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-[13px]">
                 <span className={density === opt.value ? "text-sol-cyan font-medium" : ""}>{opt.label}</span>
-                {opt.ai && <span className="text-mark uppercase tracking-wider px-1 py-px rounded bg-sol-violet/15 text-sol-violet">AI</span>}
+                {opt.ai && <span className="text-[9px] uppercase tracking-wider px-1 py-px rounded bg-sol-violet/15 text-sol-violet">AI</span>}
               </div>
-              <div className="text-meta text-sol-text-dim leading-snug">{opt.description}</div>
+              <div className="text-[11px] text-sol-text-dim leading-snug">{opt.description}</div>
             </div>
             {density === opt.value && <Check className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sol-cyan" />}
           </DropdownMenuItem>
@@ -104,7 +104,7 @@ function GalleryPill({ items, label, className, icon }: { items: GalleryItem[]; 
     <ShortcutTooltip label={`View ${label}`} side="bottom">
       <button
         onClick={() => gallery?.openList(items, items.length - 1)}
-        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-meta font-medium flex-shrink-0 border transition-colors ${className}`}
+        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium flex-shrink-0 border transition-colors ${className}`}
         aria-label={`View ${label}`}
       >
         {icon}
@@ -138,7 +138,7 @@ function ForkCopyingState({ copied, total }: { copied: number; total?: number })
           />
         </div>
       )}
-      <div className="text-meta text-sol-text-dim/60">
+      <div className="text-[11px] text-sol-text-dim/60">
         Large forks copy in batches. Messages will appear automatically as they arrive.
       </div>
     </div>
@@ -176,7 +176,7 @@ export function TimelineRule({
 export function ThreadTailLoader({ loading }: { loading: boolean }) {
   return (
     <TimelineRule color="color-mix(in srgb, var(--sol-text-dim) 35%, transparent)" className="mt-6 mb-10 animate-in fade-in duration-700" label="Later messages">
-      <span className="flex items-center gap-2 px-1 text-meta tracking-wide text-sol-text-dim">
+      <span className="flex items-center gap-2 px-1 text-[11px] tracking-wide text-sol-text-dim">
         <Spinner className={`w-3 h-3 text-sol-cyan transition-opacity duration-500 ${loading ? "opacity-100" : "opacity-75"}`} />
         <span className={`transition-opacity duration-500 ${loading ? "opacity-100" : "opacity-75"}`}>
           {loading ? "Loading later messages" : "Later messages"}
@@ -197,7 +197,7 @@ export function HandoffMarker({ handoff, meId }: { handoff: HandoffInfo; meId?: 
   return (
     <div className={`mt-2 mb-3 ${handoff.pending ? "opacity-70" : ""}`} data-handoff-marker={handoff.to}>
       <TimelineRule color="var(--sol-violet)" className="mb-2" label={`${from} handed this to ${to}`}>
-        <span className="flex items-center gap-2 text-mark font-semibold uppercase tracking-[0.15em] text-sol-violet" title={formatFullTimestamp(handoff.at)}>
+        <span className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.15em] text-sol-violet" title={formatFullTimestamp(handoff.at)}>
           <span className="flex items-center -space-x-1.5">
             <span className="rounded-full ring-2 ring-sol-bg"><OwnerAvatar name={handoff.from_name} image={handoff.from_image ?? undefined} size="w-5 h-5" /></span>
             <span className="rounded-full ring-2 ring-sol-bg"><OwnerAvatar name={handoff.to_name} image={handoff.to_image ?? undefined} size="w-5 h-5" /></span>
@@ -207,14 +207,14 @@ export function HandoffMarker({ handoff, meId }: { handoff: HandoffInfo; meId?: 
       </TimelineRule>
       {handoff.note && (
         <div className="mx-auto max-w-[640px] rounded-lg border border-sol-violet/35 bg-sol-violet/[0.07] px-3.5 py-2.5">
-          <div className="flex items-center gap-2 mb-1.5 text-meta">
+          <div className="flex items-center gap-2 mb-1.5 text-[11px]">
             <OwnerAvatar name={handoff.from_name} image={handoff.from_image ?? undefined} size="w-4 h-4" />
             <span className="font-semibold text-sol-text">{handoff.from_name}</span>
             <ArrowRightLeft className="w-3 h-3 text-sol-violet" />
             <OwnerAvatar name={handoff.to_name} image={handoff.to_image ?? undefined} size="w-4 h-4" />
             <span className="font-semibold text-sol-text">{handoff.to_name}</span>
             {handoff.seen && handoff.to !== meId && (
-              <span className="ml-auto text-meta text-sol-text-dim">seen</span>
+              <span className="ml-auto text-[10px] text-sol-text-dim">seen</span>
             )}
           </div>
           <div className="text-sm text-sol-text leading-relaxed [&_p]:my-0">
@@ -241,7 +241,7 @@ export function EdgeMessagesIndicator({
   const isUp = dir === "up";
   return (
     <div data-cc-edge={dir} className={`sticky ${isUp ? "top-0" : "bottom-0"} z-10 flex justify-center py-1 sm:py-2 pointer-events-none`}>
-      <div className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-0.5 sm:py-1 rounded-full bg-sol-bg border border-sol-border text-sol-text-muted text-meta sm:text-xs shadow-sm pointer-events-auto">
+      <div className="flex items-center gap-1 sm:gap-1.5 px-2 sm:px-3 py-0.5 sm:py-1 rounded-full bg-sol-bg border border-sol-border text-sol-text-muted0 text-[10px] sm:text-xs shadow-sm pointer-events-auto">
         {loading ? (
           <Spinner className="w-3 h-3" />
         ) : (
@@ -333,11 +333,11 @@ export function ApiErrorCard({ error, agentType, conversationId, messageUuid, ti
     // Ahead of the auth branch: a workspace that turned the provider off reads
     // as a refusal, but no sign-in fixes it.
     heading = cloudAgentCardHeading(cloudSetup);
-    icon = <span className="text-meta font-semibold">!</span>;
+    icon = <span className="text-[10px] font-semibold">!</span>;
     hint = cloudSetup.kind === "setup" ? <CloudAgentSetupHint card={cloudSetup} conversationId={conversationId} live={live} /> : null;
   } else if (error.isSafety) {
     heading = "Safety review required";
-    icon = <span className="text-meta font-semibold">!</span>;
+    icon = <span className="text-[10px] font-semibold">!</span>;
     hint = <p className="mt-1.5 text-xs text-sol-text-dim">{SAFETY_BLOCK_HINT}</p>;
   } else if (error.isAuth) {
     heading = "Authentication required";
@@ -402,7 +402,7 @@ export function ApiErrorCard({ error, agentType, conversationId, messageUuid, ti
     );
   } else {
     heading = "API Error";
-    icon = <span className="text-meta font-semibold">!</span>;
+    icon = <span className="text-[10px] font-semibold">!</span>;
     hint = (
       <p className="mt-1 text-xs text-sol-text-dim">
         {error.isFatal ? (
@@ -428,29 +428,29 @@ export function ApiErrorCard({ error, agentType, conversationId, messageUuid, ti
           {heading}
         </span>
         {error.statusCode && !error.isLimit && !error.isConnection && (
-          <span className={`text-meta px-1.5 py-0.5 rounded border font-mono ${tone.badge}`}>
+          <span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono ${tone.badge}`}>
             {error.statusCode}
           </span>
         )}
         {error.errorType && !error.isAuth && !error.isLimit && !error.isConnection && (
-          <span className="text-meta px-1.5 py-0.5 rounded border border-sol-border/40 bg-sol-bg-alt/50 text-sol-text-dim font-mono">
+          <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border/40 bg-sol-bg-alt/50 text-sol-text-dim font-mono">
             {error.errorType}
           </span>
         )}
         {!live && (
-          <span className="text-mark px-1.5 py-0.5 rounded border border-sol-green/40 bg-sol-green/10 text-sol-green uppercase tracking-wide">
+          <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-green/40 bg-sol-green/10 text-sol-green uppercase tracking-wide">
             resolved
           </span>
         )}
         {timestamp != null && (
-          <span className="ml-auto text-meta text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>
+          <span className="ml-auto text-[10px] text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>
             {formatRelativeTime(timestamp)}
           </span>
         )}
       </div>
       <p className={`mt-1 text-sm ${tone.fg}`}>{cloudSetup ? <CloudAgentSetupText spec={cloudSetup.spec} message={error.message} /> : error.message}</p>
       {error.requestId && !error.isAuth && !error.isLimit && !error.isConnection && (
-        <p className="mt-1 text-meta text-sol-text-muted font-mono">
+        <p className="mt-1 text-[11px] text-sol-text-muted font-mono">
           request_id: <span className="text-sol-text-secondary">{error.requestId}</span>
         </p>
       )}
@@ -596,7 +596,7 @@ function ProviderKeyInlineEntry({
                 href={spec.consoleUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-cyan"
+                className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-cyan"
               >
                 get a key
                 <ExternalLink className="w-3 h-3" />
@@ -661,9 +661,9 @@ export function ConversationMetadata({
   if (!resolvedAgent && !resolvedModel) return null;
 
   return (
-    // flex-shrink-0 inside the header's facts strip, which shrinks and fades
-    // its tail ([data-cc-facts] in globals.css) until the squeeze removes it.
-    <div className="flex items-center gap-1 text-meta sm:text-xs text-sol-text-dim flex-shrink-0">
+    // flex-shrink-0: this cluster must overflow, not clip, so the header's
+    // squeeze measurement sees it and sheds its parts tier by tier.
+    <div className="flex items-center gap-1 text-[10px] sm:text-xs text-sol-text-dim flex-shrink-0">
       {resolvedAgent && (
         <div
           className="flex items-center flex-shrink-0 cursor-default"
@@ -752,7 +752,7 @@ function TaskProgressRow({ taskStats }: { taskStats: { total: number; done: numb
             )}
           </div>
         </div>
-        <span className={`text-meta tabular-nums flex-shrink-0 ${isComplete ? "text-sol-green" : "text-sol-text-dim"}`}>
+        <span className={`text-[10px] tabular-nums flex-shrink-0 ${isComplete ? "text-sol-green" : "text-sol-text-dim"}`}>
           {done}/{total} tasks
         </span>
       </button>
@@ -764,7 +764,7 @@ function TaskProgressRow({ taskStats }: { taskStats: { total: number; done: numb
             return (
               <div key={item.id} className="flex items-center gap-1.5 py-0.5">
                 <Icon className={`w-3 h-3 flex-shrink-0 ${cfg.color}`} />
-                <span className={`text-meta truncate ${item.status === "done" ? "text-sol-text-dim line-through" : "text-sol-text-muted"}`}>
+                <span className={`text-[11px] truncate ${item.status === "done" ? "text-sol-text-dim line-through" : "text-sol-text-muted"}`}>
                   {item.content}
                 </span>
               </div>
@@ -913,9 +913,9 @@ export function WorkingStatusLineView({ startedAt, now, label, stopHint, labelNo
     <span className="flex items-center gap-1.5 min-w-0">
       <LivePulseDot className="w-2 h-2" />
       Working
-      {showElapsed && <span className="text-sol-text-dim tabular-nums">· {formatElapsedClock(elapsedMs)}</span>}
+      {showElapsed && <span className="text-sol-text-dim/60 tabular-nums">· {formatElapsedClock(elapsedMs)}</span>}
       {stopHint && <span data-stop-hint className="inline-flex shrink-0 items-center gap-1 text-sol-text-dim/60">· <KeyCap size="xs">Esc</KeyCap> stop</span>}
-      {(showElapsed || labelNow) && label && <span className="text-sol-text-dim truncate" title={label}>· {label}</span>}
+      {(showElapsed || labelNow) && label && <span className="text-sol-text-dim/60 truncate" title={label}>· {label}</span>}
     </span>
   );
 }

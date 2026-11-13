@@ -47,7 +47,6 @@ import { TimelineRule } from "../sessionChrome";
 import type { ContextRecoveryPrompt } from "../../../lib/sessionHandoff";
 import type { ToolCall, ToolResult } from "../types";
 import { chatHref } from "../../../lib/chatHref";
-import { pressable } from "../../ops/parts";
 
 function CommandStatusLine({ content: rawContent, timestamp }: { content: string; timestamp: number }) {
   const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').replace(/<task-reminder>[\s\S]*?<\/task-reminder>/g, '').trim();
@@ -65,8 +64,8 @@ function CommandStatusLine({ content: rawContent, timestamp }: { content: string
           <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
         </svg>
         <span className="font-mono text-sol-cyan/80 font-medium">/{cmdName}</span>
-        {displayText && <span className="text-meta text-sol-text-dim truncate">{displayText}</span>}
-        <span className="text-sol-text-dim text-meta ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        {displayText && <span className="text-[11px] text-sol-text-dim truncate">{displayText}</span>}
+        <span className="text-sol-text-dim text-[10px] ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
     );
   }
@@ -74,7 +73,7 @@ function CommandStatusLine({ content: rawContent, timestamp }: { content: string
   return (
     <div className="mb-2 px-3 py-1.5 flex items-center gap-2 text-xs text-sol-text-dim">
       <span className="text-sol-text-dim" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
-      <span className="px-1.5 py-0.5 rounded bg-sol-bg-alt/50 text-sol-text-muted font-mono text-meta">
+      <span className="px-1.5 py-0.5 rounded bg-sol-bg-alt/50 text-sol-text-muted font-mono text-[10px]">
         {cmdType || "status"}
       </span>
       <span className="font-mono truncate">{displayText}</span>
@@ -147,7 +146,7 @@ export function CommandMessageBlock({
 
   return (
     <div data-cc-message="user" id={messageId ? `msg-${messageId}` : undefined} className="group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 mb-6">
-      <div className="absolute -top-2 right-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity bg-sol-bg rounded shadow-md px-0.5 z-10">
+      <div className="absolute -top-2 right-0 opacity-0 group-hover:opacity-100 transition-opacity bg-sol-bg rounded shadow-md px-0.5 z-10">
         <button onClick={handleCopy} className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary" title="Copy command" aria-label="Copy command">
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
         </button>
@@ -172,7 +171,7 @@ export function CommandMessageBlock({
           ) : (
             <span className={COMMAND_CHIP_CLASS}>{chipInner}</span>
           )}
-          {builtinDesc && <span className="text-meta text-sol-text-dim">{builtinDesc}</span>}
+          {builtinDesc && <span className="text-[11px] text-sol-text-dim">{builtinDesc}</span>}
         </div>
 
         {args && (
@@ -220,7 +219,7 @@ export function BashCommandBlock({ command, stdout, stderr, timestamp, userName,
 
   return (
     <div data-cc-message="user" id={messageId ? `msg-${messageId}` : undefined} className="group relative scroll-mt-20 bg-sol-blue/10 -mx-4 px-4 py-4 rounded-lg border border-sol-blue/30 mb-6">
-      <div className="absolute -top-2 right-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity bg-sol-bg rounded shadow-md px-0.5 z-10">
+      <div className="absolute -top-2 right-0 opacity-0 group-hover:opacity-100 transition-opacity bg-sol-bg rounded shadow-md px-0.5 z-10">
         <button onClick={handleCopy} className="p-1.5 rounded hover:bg-sol-bg-alt text-sol-text-dim hover:text-sol-text-secondary" title="Copy command" aria-label="Copy command">
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
         </button>
@@ -229,7 +228,7 @@ export function BashCommandBlock({ command, stdout, stderr, timestamp, userName,
       <div data-cc-message-who className="flex items-center gap-2 mb-2">
         <UserIcon avatarUrl={avatarUrl} />
         <span className="text-sol-blue text-xs font-medium">{userName || "You"}</span>
-        <span className="inline-flex items-center gap-1 font-mono text-meta text-sol-magenta/80 bg-sol-magenta/10 border border-sol-magenta/25 rounded px-1.5 py-px" title="Shell command run from the composer">bash</span>
+        <span className="inline-flex items-center gap-1 font-mono text-[10px] text-sol-magenta/80 bg-sol-magenta/10 border border-sol-magenta/25 rounded px-1.5 py-px" title="Shell command run from the composer">bash</span>
         <span className="text-sol-text-dim text-xs" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
 
@@ -250,7 +249,7 @@ export function BashCommandBlock({ command, stdout, stderr, timestamp, userName,
                     {err && <span className="text-sol-red/90">{out ? "\n" : ""}{err}</span>}
                   </pre>
                   {isLong && (
-                    <button onClick={() => setExpanded(e => !e)} className="mt-1 text-meta text-sol-text-dim hover:text-sol-text-secondary transition-colors">
+                    <button onClick={() => setExpanded(e => !e)} className="mt-1 text-[11px] text-sol-text-dim hover:text-sol-text-secondary transition-colors">
                       {expanded ? "show less" : `show all ${lineCount} lines`}
                     </button>
                   )}
@@ -308,9 +307,9 @@ export function FoldedPromptBlock({ label, preview, content, timestamp, collapse
         {icon("w-3.5 h-3.5")}
         <span className="font-mono text-xs text-sol-cyan/80 font-medium shrink-0">{label}</span>
         {preview && !expanded && (
-          <span className="text-meta text-sol-text-dim truncate">{preview}</span>
+          <span className="text-[11px] text-sol-text-dim truncate">{preview}</span>
         )}
-        <span className="ml-auto text-sol-text-dim text-meta shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        <span className="ml-auto text-sol-text-dim text-[10px] shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         <svg className={`w-3 h-3 text-sol-text-dim transition-transform ${expanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
         </svg>
@@ -337,8 +336,8 @@ export function WorkflowTaskBlock({ body, timestamp }: { body: string; timestamp
     <div className="mb-3 rounded border-l-2 border-sol-cyan/60 bg-sol-cyan/5">
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
         <Workflow className="w-3.5 h-3.5 text-sol-cyan/70 shrink-0" />
-        <span className="text-mark font-medium tracking-wide uppercase text-sol-cyan/70 shrink-0">Workflow task</span>
-        <span className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-cyan/70 shrink-0">Workflow task</span>
+        <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
       <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
         <div className="text-sm text-sol-text prose prose-invert prose-sm max-w-none">
@@ -388,11 +387,11 @@ export function NudgeLine({ messageId, text, count, timestamp, userName, avatarU
         )}
         <span className="font-medium">{text}</span>
         {count > 1 && (
-          <span className="ml-0.5 px-1.5 rounded-full bg-sol-blue/15 text-sol-blue text-meta font-semibold tabular-nums">×{count}</span>
+          <span className="ml-0.5 px-1.5 rounded-full bg-sol-blue/15 text-sol-blue text-[11px] font-semibold tabular-nums">×{count}</span>
         )}
         {recovery && <span className="text-sol-text-dim">· sent by account recovery after the usage limit</span>}
       </span>
-      <span className="text-meta text-sol-text-dim">{pending ? "sending…" : formatRelativeTime(timestamp)}</span>
+      <span className="text-[11px] text-sol-text-dim">{pending ? "sending…" : formatRelativeTime(timestamp)}</span>
     </div>
   );
 }
@@ -428,7 +427,7 @@ function SwitchDivider({
         title={`${formatFullTimestamp(timestamp)}${hasDetails ? " — click for details" : ""}`}
       >
         <TimelineRule color="var(--sol-violet)" label={caption}>
-          <span className="flex items-center gap-1.5 text-meta text-sol-text-dim group-hover:text-sol-text-muted transition-colors">
+          <span className="flex items-center gap-1.5 text-[11px] text-sol-text-dim group-hover:text-sol-text-muted transition-colors">
             {lead ?? (
               <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M8 7h12m0 0l-4-4m4 4l-4 4M16 17H4m0 0l4 4m-4-4l4-4" />
@@ -592,7 +591,7 @@ export function TaskNotificationLine({ content, timestamp, agentNameToChildMap }
     return (
       <div data-cc-feed-card className="mb-2 px-3 py-1.5 flex items-start gap-2 text-xs border rounded border-sol-blue/20 bg-sol-blue/5">
         <Radar className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sol-blue/70" />
-        <span data-cc-tech className="text-mark font-medium tracking-wide uppercase text-sol-blue/70 shrink-0 mt-px">monitor</span>
+        <span data-cc-tech className="text-[10px] font-medium tracking-wide uppercase text-sol-blue/70 shrink-0 mt-px">monitor</span>
         <ExpandableLine
           text={decodeEntities(parsed.event)}
           className="text-sol-text-muted"
@@ -607,7 +606,7 @@ export function TaskNotificationLine({ content, timestamp, agentNameToChildMap }
     return (
       <div data-cc-feed-card className="mb-2 px-3 py-1.5 flex items-start gap-2 text-xs border rounded border-sol-border/40 bg-sol-bg-alt/30">
         <Radar className="w-3.5 h-3.5 shrink-0 mt-0.5 text-sol-text-dim" />
-        <span className="text-mark font-medium tracking-wide uppercase text-sol-text-dim shrink-0 mt-px">monitor ended</span>
+        <span className="text-[10px] font-medium tracking-wide uppercase text-sol-text-dim shrink-0 mt-px">monitor ended</span>
         {desc && <ExpandableLine text={desc} className="text-sol-text-dim" />}
         <span className="text-sol-text-dim shrink-0 whitespace-nowrap ml-auto" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
@@ -640,7 +639,7 @@ export function TaskNotificationLine({ content, timestamp, agentNameToChildMap }
         data-cc-feed-card
         data-status={parsed.status}
         className={`mb-1.5 mx-1 rounded border-l-2 ${cfg.accent}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
-        {...(childId ? pressable(() => router.push(`/conversation/${childId}`), "link") : {})}
+        onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
       >
         <div className="flex items-start gap-2 px-3 py-2 text-xs">
           {woke ? (
@@ -656,15 +655,15 @@ export function TaskNotificationLine({ content, timestamp, agentNameToChildMap }
           ) : (
             <span className={`font-mono text-sm leading-none shrink-0 mt-0.5 ${cfg.color}`}>{cfg.icon}</span>
           )}
-          <span data-cc-tech className={`text-mark font-medium tracking-wide uppercase shrink-0 mt-px ${cfg.eyebrow}`}>{parts.kind}</span>
+          <span data-cc-tech className={`text-[10px] font-medium tracking-wide uppercase shrink-0 mt-px ${cfg.eyebrow}`}>{parts.kind}</span>
           <ExpandableLine text={parts.description} className="text-sol-text font-medium" title={parsed.summary} />
-          <span className={`px-1 py-0 rounded border text-meta font-semibold shrink-0 mt-px ${cfg.chip}`}>{chipText}</span>
+          <span className={`px-1 py-0 rounded border text-[9px] font-semibold shrink-0 mt-px ${cfg.chip}`}>{chipText}</span>
           {childId && (
             <svg className={`w-3 h-3 shrink-0 mt-0.5 ${cfg.color}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
             </svg>
           )}
-          <span data-cc-tech className="text-sol-text-dim font-mono text-meta shrink-0">{parsed.taskId}</span>
+          <span data-cc-tech className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
           <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         </div>
       </div>
@@ -676,7 +675,7 @@ export function TaskNotificationLine({ content, timestamp, agentNameToChildMap }
       data-cc-feed-card
       data-status={parsed.status}
       className={`mb-2 px-3 py-2 flex items-start gap-2.5 text-xs border rounded ${cfg.bg}${childId ? " cursor-pointer hover:brightness-125 transition-all" : ""}`}
-      {...(childId ? pressable(() => router.push(`/conversation/${childId}`), "link") : {})}
+      onClick={childId ? () => router.push(`/conversation/${childId}`) : undefined}
     >
       <span className={`font-mono text-sm leading-none shrink-0 mt-0.5 ${cfg.color}`}>{cfg.icon}</span>
       <ExpandableLine text={parsed.summary} className="text-sol-text-muted" />
@@ -688,7 +687,7 @@ export function TaskNotificationLine({ content, timestamp, agentNameToChildMap }
       {/* A batch notice names its tasks inside the summary itself, so pinning
           one id on the row would read as if the rest weren't there. */}
       {!isOrphanSummaryNotification(parsed) && (
-        <span data-cc-tech className="text-sol-text-dim font-mono text-meta shrink-0">{parsed.taskId}</span>
+        <span data-cc-tech className="text-sol-text-dim font-mono text-[10px] shrink-0">{parsed.taskId}</span>
       )}
       <span className="text-sol-text-dim shrink-0 whitespace-nowrap" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
     </div>
@@ -716,9 +715,9 @@ export function ScheduleWakeupBlock({ tool, result, timestamp }: { tool: ToolCal
       <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/40 bg-sol-violet/5">
         <div className="flex items-center gap-2 px-3 py-1.5">
           <Zap className="w-3.5 h-3.5 text-sol-violet/50 shrink-0" />
-          <span className="text-mark font-medium tracking-wide uppercase text-sol-violet/60 shrink-0">Loop ended</span>
+          <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/60 shrink-0">Loop ended</span>
           <span className="text-xs text-sol-text-muted truncate">the agent stopped scheduling wakeups</span>
-          <span className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+          <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         </div>
       </div>
     );
@@ -730,19 +729,19 @@ export function ScheduleWakeupBlock({ tool, result, timestamp }: { tool: ToolCal
     <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
       <div className="flex items-center gap-2 px-3 pt-2 pb-1">
         <Zap className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
-        <span className="text-mark font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">Wakeup</span>
+        <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">Wakeup</span>
         {delayMs > 0 && (
           <ShortcutTooltip label={`Fires at ${fmtClock(wakeAt)}`}>
-            <span className="px-1 py-0 rounded border text-meta font-semibold shrink-0 tabular-nums border-sol-violet/40 text-sol-violet/90 bg-sol-violet/10">
+            <span className="px-1 py-0 rounded border text-[9px] font-semibold shrink-0 tabular-nums border-sol-violet/40 text-sol-violet/90 bg-sol-violet/10">
               in {fmtDuration(delayMs)}
             </span>
           </ShortcutTooltip>
         )}
         {input.reason && <span className="text-xs text-sol-text-muted truncate">{input.reason}</span>}
-        <span className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+        <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
       </div>
       {result?.is_error && (
-        <div className="mx-3 mb-2 rounded border border-sol-red/30 bg-sol-red/5 px-2 py-1.5 text-meta leading-relaxed text-sol-red/90">
+        <div className="mx-3 mb-2 rounded border border-sol-red/30 bg-sol-red/5 px-2 py-1.5 text-[11px] leading-relaxed text-sol-red/90">
           {result.content.slice(0, 300)}
         </div>
       )}
@@ -750,7 +749,7 @@ export function ScheduleWakeupBlock({ tool, result, timestamp }: { tool: ToolCal
         <div className="px-3 pb-2">
           <button
             onClick={() => setShowPrompt(!showPrompt)}
-            className="flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text-muted transition-colors"
+            className="flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text-muted transition-colors"
           >
             {showPrompt ? <ChevronDown className="w-2.5 h-2.5" /> : <ChevronRight className="w-2.5 h-2.5" />}
             wakeup prompt
@@ -840,7 +839,7 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
     <div data-cc-session-msg className={`mb-2 mx-1 rounded border-l-2 ${accent}`}>
       <div className="flex items-center flex-wrap gap-x-2 gap-y-1 px-3 pt-2 pb-1">
         <HeaderIcon className={`w-3.5 h-3.5 shrink-0 ${iconText}`} />
-        <span className={`text-mark font-medium tracking-wide uppercase shrink-0 ${labelText}`}>{isTeammate ? "From teammate" : isAgentReport ? "Report from" : "Message from"}</span>
+        <span className={`text-[11px] font-medium tracking-wide uppercase shrink-0 ${labelText}`}>{isTeammate ? "From teammate" : isAgentReport ? "Report from" : "Message from"}</span>
         {namedSender ? (
           // A teammate id or a subagent name isn't a session id, so it can't be an
           // EntityIdPill — but when the sender is resolvable (team-lead → this
@@ -849,13 +848,13 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
           linkToConversationId ? (
             <button
               onClick={() => { void jumpToSendingMessage(); }}
-              className={`px-1.5 py-0.5 rounded border text-meta font-mono shrink-0 cursor-pointer hover:underline underline-offset-2 ${badgeColor}`}
+              className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 cursor-pointer hover:underline underline-offset-2 ${badgeColor}`}
               title="Open the sender's session at the message that sent this"
             >
               {from}
             </button>
           ) : (
-            <span className={`px-1.5 py-0.5 rounded border text-meta font-mono shrink-0 ${badgeColor}`}>{from}</span>
+            <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${badgeColor}`}>{from}</span>
           )
         ) : from && from !== "unknown" ? (
           <EntityIdPill shortId={from} />
@@ -871,7 +870,7 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
         {senderRef && (
           <button
             onClick={() => { void jumpToSendingMessage(); }}
-            className={`inline-flex items-center gap-0.5 text-meta font-medium shrink-0 underline underline-offset-2 decoration-dotted hover:decoration-solid ${linkText}`}
+            className={`inline-flex items-center gap-0.5 text-[11px] font-medium shrink-0 underline underline-offset-2 decoration-dotted hover:decoration-solid ${linkText}`}
             title="Open the sender's session at the message that sent this"
           >
             <ArrowUpRight className="w-3 h-3" />
@@ -879,7 +878,7 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
           </button>
         )}
         {isTeammate && summary && (
-          <span className="text-mark uppercase tracking-wider font-medium text-sol-text-dim/50 truncate">{summary}</span>
+          <span className="text-[10px] uppercase tracking-wider font-medium text-sol-text-dim/50 truncate">{summary}</span>
         )}
         {queueLabel && (pendingScreen ? (
           <button
@@ -887,25 +886,25 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
             onClick={() => setScreenOpen(!screenOpen)}
             aria-expanded={screenOpen}
             data-testid="queued-message-screen-toggle"
-            className="inline-flex items-center gap-1 text-meta font-mono text-amber-400 bg-amber-500/15 border border-amber-500/25 hover:bg-amber-500/25 rounded px-1.5 py-0.5 shrink-0 transition-colors"
+            className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-400 bg-amber-500/15 border border-amber-500/25 hover:bg-amber-500/25 rounded px-1.5 py-0.5 shrink-0 transition-colors"
           >
             <Clock className="w-2.5 h-2.5" />{queueLabel}
             {screenOpen ? <ChevronDown className="w-2.5 h-2.5" /> : <ChevronRight className="w-2.5 h-2.5" />}
           </button>
         ) : (
-          <span className="inline-flex items-center gap-1 text-meta font-mono text-amber-400 bg-amber-500/15 border border-amber-500/25 rounded px-1.5 py-0.5 shrink-0">
+          <span className="inline-flex items-center gap-1 text-[10px] font-mono text-amber-400 bg-amber-500/15 border border-amber-500/25 rounded px-1.5 py-0.5 shrink-0">
             <Clock className="w-2.5 h-2.5" />{queueLabel}
           </span>
         ))}
         {canAct && !pendingScreen && pendingStatus !== "injected" && (
           <button type="button" onClick={() => { void actOnQueued("send"); }} disabled={!!acting} data-testid="queued-message-send"
-            className="text-meta text-amber-400 hover:text-amber-300 underline underline-offset-2 transition-colors disabled:opacity-60 shrink-0">
+            className="text-[11px] text-amber-400 hover:text-amber-300 underline underline-offset-2 transition-colors disabled:opacity-60 shrink-0">
             {acting === "send" ? "Sending…" : "Send now"}
           </button>
         )}
         {canAct && (
           <button type="button" onClick={() => { void actOnQueued("cancel"); }} disabled={!!acting} data-testid="queued-message-cancel"
-            className="text-meta text-sol-text-dim/70 hover:text-sol-orange underline underline-offset-2 transition-colors disabled:opacity-60 shrink-0">
+            className="text-[11px] text-sol-text-dim/70 hover:text-sol-orange underline underline-offset-2 transition-colors disabled:opacity-60 shrink-0">
             {acting === "cancel" ? "Cancelling…" : "Cancel"}
           </button>
         )}
@@ -915,7 +914,7 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
             it has waited, not where it belongs, and saying so is what stops
             the row reading as history that jumped out of order. */}
         {timestamp != null && timestamp > 0 && (
-          <span className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{isPending ? `waiting ${relativeTime(timestamp)}` : relativeTime(timestamp)}</span>
+          <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{isPending ? `waiting ${relativeTime(timestamp)}` : relativeTime(timestamp)}</span>
         )}
       </div>
       {screenOpen && pendingScreen && (
@@ -946,7 +945,7 @@ export function SessionMessageBlock({ from, name, body, timestamp, pendingStatus
 // the framing that exists only to brief the agent.
 
 export function ChatChannelPill({ name, href, direct }: { name: string; href: string | null; direct?: boolean }) {
-  const cls = "inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-sol-magenta/30 bg-sol-magenta/10 text-sol-magenta text-meta font-mono shrink-0";
+  const cls = "inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded border border-sol-magenta/30 bg-sol-magenta/10 text-sol-magenta text-[11px] font-mono shrink-0";
   const inner = direct
     ? <><AtSign className="w-3 h-3" />direct message</>
     : <><Hash className="w-3 h-3" />{name}</>;
@@ -969,16 +968,16 @@ export function HuddleSummaryBlock({ huddle, timestamp }: { huddle: HuddleSummar
     <div className="mb-2 mx-1 rounded border-l-2 border-sol-green/60 bg-sol-green/5">
       <div className="flex items-center gap-2 px-3 pt-2 pb-1 flex-wrap">
         <PhoneCall className="w-3.5 h-3.5 shrink-0 text-sol-green/70" />
-        <span className="text-mark font-medium tracking-wide uppercase shrink-0 text-sol-green/70">Huddle</span>
+        <span className="text-[11px] font-medium tracking-wide uppercase shrink-0 text-sol-green/70">Huddle</span>
         <span className="text-xs font-medium text-sol-text truncate">{huddle.title}</span>
-        <span className="text-meta text-sol-text-dim truncate">
+        <span className="text-[11px] text-sol-text-dim truncate">
           {huddle.minutes > 0 ? `${huddle.minutes} min` : ""}
           {huddle.minutes > 0 && huddle.speakers.length > 0 ? " · " : ""}
           {huddle.speakers.join(", ")}
         </span>
         {huddle.video && <CallVideoStretchChip stretches={huddle.video} callRef={huddle.transcriptId} />}
         {timestamp != null && timestamp > 0 && (
-          <span className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+          <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         )}
       </div>
       {body && (
@@ -1019,21 +1018,21 @@ export function ChatWakeBlock({ wake, timestamp }: { wake: ChatWakePrompt; times
     <div className="mb-2 mx-1 rounded border-l-2 border-sol-magenta/60 bg-sol-magenta/5">
       <div className="flex items-center gap-2 px-3 pt-2 pb-1 flex-wrap">
         <MessageSquare className="w-3.5 h-3.5 shrink-0 text-sol-magenta/70" />
-        <span className="text-mark font-medium tracking-wide uppercase shrink-0 text-sol-magenta/70">Team chat</span>
+        <span className="text-[11px] font-medium tracking-wide uppercase shrink-0 text-sol-magenta/70">Team chat</span>
         <ChatChannelPill name={wake.channelName} href={href} direct={wake.direct} />
         <span className="text-xs text-sol-text-muted truncate">
           <span className="text-sol-text font-medium">{wake.askerName}</span>
           {` ${chatWakeAction(wake)}`}
         </span>
         {timestamp != null && timestamp > 0 && (
-          <span className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+          <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
         )}
       </div>
       <CollapsibleBody className="px-3 pb-2" toggleClassName="mt-1">
         <div className="space-y-1.5">
           {wake.context.length > 0 && (
             <div className="space-y-1.5 pb-1.5 mb-1.5 border-b border-sol-magenta/15">
-              <div className="text-meta text-sol-text-dim">Earlier in {wake.direct ? "the conversation" : `#${wake.channelName}`}</div>
+              <div className="text-[10px] text-sol-text-dim">Earlier in {wake.direct ? "the conversation" : `#${wake.channelName}`}</div>
               {wake.context.map((entry, i) => <ChatWakeLine key={i} entry={entry} dim />)}
             </div>
           )}
@@ -1077,13 +1076,13 @@ export function TeammateMessageCard({ teammateId, color, summary, content, times
       return (
         <div className="py-1.5 px-2.5 text-xs rounded bg-sol-bg-alt/30 border border-sol-border/10">
           <div className="flex items-center gap-2 mb-1">
-            <span className={`px-1.5 py-0.5 rounded border text-meta font-mono ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>
+            <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>
               {teammateId}
             </span>
             <svg className="w-2.5 h-2.5 text-sol-text-dim/40 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
             </svg>
-            <span className="text-mark uppercase tracking-wider text-sol-text-dim/60 font-medium">idle</span>
+            <span className="text-[10px] uppercase tracking-wider text-sol-text-dim/60 font-medium">idle</span>
           </div>
           <div className="text-sol-text-dim leading-relaxed whitespace-pre-line">
             <FormattedSummary text={idleSummary} />
@@ -1093,7 +1092,7 @@ export function TeammateMessageCard({ teammateId, color, summary, content, times
     }
     return (
       <div className="flex items-center gap-2 py-0.5 px-2 text-xs text-sol-text-dim opacity-40">
-        <span className={`px-1.5 py-0.5 rounded border text-meta font-mono ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>
+        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>
           {teammateId}
         </span>
         <span className="italic">idle</span>
@@ -1105,13 +1104,13 @@ export function TeammateMessageCard({ teammateId, color, summary, content, times
     const badgeColor = agentColorMap[color || "blue"] || agentColorMap.blue;
     return (
       <div className="flex items-center gap-2 py-1.5 px-2.5 rounded-md bg-sol-bg-alt/50 border border-sol-border/20">
-        <span className={`px-1.5 py-0.5 rounded border text-meta font-mono shrink-0 ${badgeColor}`}>
+        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${badgeColor}`}>
           {parsed.assignedBy || teammateId}
         </span>
         <svg className="w-3 h-3 text-sol-text-dim/40 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
         </svg>
-        <span className="font-mono text-meta px-1.5 py-0.5 rounded bg-sol-bg-highlight border border-sol-border/30 text-sol-text-secondary shrink-0">
+        <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-sol-bg-highlight border border-sol-border/30 text-sol-text-secondary shrink-0">
           #{parsed.taskId}
         </span>
         <span className="text-xs text-sol-text-secondary truncate">{parsed.subject}</span>
@@ -1123,7 +1122,7 @@ export function TeammateMessageCard({ teammateId, color, summary, content, times
     const isApproved = parsed.type === "shutdown_approved";
     return (
       <div className="flex items-center gap-2 py-1.5 px-2.5 rounded-md bg-red-500/5 border border-red-500/15">
-        <span className={`px-1.5 py-0.5 rounded border text-meta font-mono shrink-0 ${agentColorMap[color || "red"] || agentColorMap.red}`}>
+        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${agentColorMap[color || "red"] || agentColorMap.red}`}>
           {parsed.from || teammateId}
         </span>
         <svg className="w-3 h-3 text-red-400/60 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1137,7 +1136,7 @@ export function TeammateMessageCard({ teammateId, color, summary, content, times
   if (parsed?.type === "teammate_terminated") {
     return (
       <div className="flex items-center gap-2 py-1.5 px-2.5 rounded-md bg-sol-bg-alt/30 border border-sol-border/15">
-        <span className={`px-1.5 py-0.5 rounded border text-meta font-mono shrink-0 ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>
+        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-mono shrink-0 ${agentColorMap[color || "blue"] || agentColorMap.blue}`}>
           {teammateId}
         </span>
         <svg className="w-3 h-3 text-sol-text-dim/40 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1155,6 +1154,12 @@ export function TeammateMessageCard({ teammateId, color, summary, content, times
     // spawned_by parent, and a sibling worker's name is in the team's roster.
     <SessionMessageBlock variant="teammate" from={teammateId} color={color} summary={summary} body={content} timestamp={timestamp} linkToConversationId={teammateId === "team-lead" ? spawnedByConversationId : agentNameToChildMap?.[teammateId]} />
   );
+}
+
+function ToolResultMessage({ toolResults, toolName }: { toolResults: ToolResult[]; toolName?: string }) {
+  // Don't render separate result messages - results are shown inline with tool calls
+  // This component was showing duplicate content with the 1→ line number format
+  return null;
 }
 
 function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, conversationId, onOpenComments, onStartShareSelection }: { content: string; subtype?: string; timestamp?: number; messageUuid?: string; messageId?: string; conversationId?: Id<"conversations">; onOpenComments?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void }) {
@@ -1183,7 +1188,7 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
         <div className="min-w-0 flex-1 break-words [&_p]:m-0">
           <ReactMarkdown remarkPlugins={ASSISTANT_MD_REMARK} rehypePlugins={MESSAGE_MD_REHYPE} components={MESSAGE_MD_COMPONENTS}>{content}</ReactMarkdown>
         </div>
-        {timestamp && <span className="text-meta text-sol-text-dim shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>}
+        {timestamp && <span className="text-[10px] text-sol-text-dim shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>}
       </div>
     );
   }
@@ -1206,10 +1211,10 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
       <div className="mb-2 mx-1 rounded border-l-2 border-sol-violet/60 bg-sol-violet/5">
         <div className="flex items-center gap-2 px-3 py-1.5">
           <Zap className="w-3.5 h-3.5 text-sol-violet/70 shrink-0" />
-          <span className="text-mark font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">Wakeup fired</span>
+          <span className="text-[11px] font-medium tracking-wide uppercase text-sol-violet/70 shrink-0">Wakeup fired</span>
           <span className="text-xs text-sol-text-muted truncate">{stripAnsiCodes(content)}</span>
           {timestamp && (
-            <span className="text-meta text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
+            <span className="text-[10px] text-sol-text-dim ml-auto shrink-0" title={formatFullTimestamp(timestamp)}>{formatRelativeTime(timestamp)}</span>
           )}
         </div>
       </div>
@@ -1267,15 +1272,16 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
             <polyline points="4 17 10 11 4 5" />
           </svg>
           {cmdName && <span className="font-mono text-sol-cyan/80 font-medium">/{cmdName}</span>}
-          {output && <ExpandableLine text={output} className="text-sol-text-muted font-mono" />}
-          {!cmdName && !output && <ExpandableLine text={stripAnsiCodes(content.replace(/<[^>]+>/g, ""))} className="text-sol-text-dim font-mono" />}
+          {output && <span className="text-sol-text-muted font-mono truncate">{output.slice(0, 150)}</span>}
+          {!cmdName && !output && <span className="text-sol-text-dim font-mono truncate">{stripAnsiCodes(content.replace(/<[^>]+>/g, "")).slice(0, 150)}</span>}
         </div>
       );
     }
+    const trimmed = stripAnsiCodes(content).slice(0, 200);
     return (
       <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-sol-bg-alt/30 border-l-2 border-sol-border text-xs">
-        <span className="text-meta text-sol-text-dim bg-sol-bg-highlight px-1.5 py-0.5 rounded font-mono shrink-0">hook</span>
-        <ExpandableLine text={stripAnsiCodes(content)} className="text-sol-text-muted font-mono" />
+        <span className="text-[10px] text-sol-text-dim bg-sol-bg-highlight px-1.5 py-0.5 rounded font-mono">hook</span>
+        <span className="text-sol-text-muted font-mono truncate">{trimmed}</span>
       </div>
     );
   }
@@ -1288,7 +1294,7 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
           <svg className="w-3 h-3 text-sol-text-dim/50 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
           </svg>
-          <span className="text-mark uppercase tracking-wider font-medium text-sol-text-dim/60">away summary</span>
+          <span className="text-[10px] uppercase tracking-wider font-medium text-sol-text-dim/60">away summary</span>
         </div>
         <div className="text-[13px] text-sol-text-secondary break-words leading-relaxed whitespace-pre-line">
           <FormattedSummary text={text} />
@@ -1300,21 +1306,23 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
   const compaction = compactionProgressMessage(content);
   if (compaction) return <CompactionProgressCard progress={compaction} className="mb-3" />;
 
-  const cleanText = stripAnsiCodes(content.replace(/<[^>]+>/g, ""));
+  const cleanText = stripAnsiCodes(content.replace(/<[^>]+>/g, "")).slice(0, 200);
   if (!cleanText) return null;
 
   // Usage-limit notices share the amber warning tone of ApiErrorCard's limit
   // banner; every other status line keeps the neutral system gray.
   const warning = isWarningSystemNotice(content, subtype);
   return (
-    <div className={`mb-4 px-3 py-2 border-l-2 text-xs flex items-baseline gap-2 ${warning ? "bg-amber-500/10 border-amber-500/40" : "bg-sol-bg-alt/20 border-sol-border"}`}>
+    <div className={`mb-4 px-3 py-2 border-l-2 text-xs ${warning ? "bg-amber-500/10 border-amber-500/40" : "bg-sol-bg-alt/20 border-sol-border"}`}>
       {subtype && (
-        <span className={`text-meta shrink-0 ${warning ? "text-amber-500" : "text-sol-text-dim"}`}>
+        <span className={`text-[10px] mr-2 ${warning ? "text-amber-500" : "text-sol-text-dim"}`}>
           {warning ? "warning" : subtype.replace(/_/g, " ")}
         </span>
       )}
-      {/* One line, opened in place to the whole notice. */}
-      <ExpandableLine text={cleanText} className={`font-mono ${warning ? "text-amber-500" : "text-sol-text-muted"}`} />
+      <span className={`font-mono ${warning ? "text-amber-500" : "text-sol-text-muted"}`}>
+        {cleanText}
+        {content.length > 200 && "..."}
+      </span>
     </div>
   );
 }
@@ -1330,14 +1338,14 @@ function DynamicRunCard({ runId, name, goal }: { runId?: string; name?: string; 
     <div data-cc-feed-card className="my-2 rounded-lg border border-sol-cyan/25 bg-sol-cyan/[0.06] overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-sol-cyan/15">
         <Workflow className="w-3.5 h-3.5 text-sol-cyan flex-shrink-0" />
-        <span data-cc-tech className="text-mark text-sol-cyan uppercase tracking-wider font-semibold">Workflow</span>
+        <span data-cc-tech className="text-[10px] text-sol-cyan uppercase tracking-wider font-semibold">Workflow</span>
         <span className="text-xs text-sol-text-muted truncate">{run?.workflow_name || name || "workflow"}</span>
         {goal && <span className="text-xs text-sol-text-dim truncate min-w-0">{goal}</span>}
         <div className="ml-auto flex items-center gap-2 flex-shrink-0">
-          {run?.agent_count != null && <span data-cc-tech className="text-meta text-sol-text-dim">{run.agent_count} agents</span>}
-          {run?.total_tokens ? <span data-cc-tech className="text-meta text-sol-text-dim/70">{wfFmtTokens(run.total_tokens)} tok</span> : null}
+          {run?.agent_count != null && <span data-cc-tech className="text-[10px] text-sol-text-dim">{run.agent_count} agents</span>}
+          {run?.total_tokens ? <span data-cc-tech className="text-[10px] text-sol-text-dim/70">{wfFmtTokens(run.total_tokens)} tok</span> : null}
           {status && (
-            <span className={`text-meta flex items-center gap-1 ${sm.cls}`}>
+            <span className={`text-[10px] flex items-center gap-1 ${sm.cls}`}>
               {sm.dot ? <span className={`w-1.5 h-1.5 rounded-full ${sm.dot}`} /> : sm.icon}
               {status}
             </span>
@@ -1345,7 +1353,7 @@ function DynamicRunCard({ runId, name, goal }: { runId?: string; name?: string; 
         </div>
       </div>
       <div className="px-1.5 py-1.5">
-        {run ? <WorkflowRunNodes run={run} workflow={workflow} /> : <span className="px-1.5 text-meta text-sol-text-dim">loading run…</span>}
+        {run ? <WorkflowRunNodes run={run} workflow={workflow} /> : <span className="px-1.5 text-[11px] text-sol-text-dim">loading run…</span>}
       </div>
     </div>
   );
@@ -1399,19 +1407,19 @@ export function WorkflowEventBlock({ content, workflowRun, onGateChoice }: {
     return (
       <div className="my-0.5">
         <div className="flex items-center gap-1.5 text-xs">
-          {isDone && <span className="text-emerald-400 text-meta">{"\u2713"}</span>}
-          {isFailed && <span className="text-sol-red text-meta">{"\u2717"}</span>}
-          {isRunning && <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow flex-shrink-0" />}
-          <span className={`px-1 py-0.5 rounded text-meta font-medium ${tc.bg} border ${tc.border} ${tc.text}`}>
+          {isDone && <span className="text-emerald-400 text-[10px]">{"\u2713"}</span>}
+          {isFailed && <span className="text-sol-red text-[10px]">{"\u2717"}</span>}
+          {isRunning && <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse flex-shrink-0" />}
+          <span className={`px-1 py-0.5 rounded text-[10px] font-medium ${tc.bg} border ${tc.border} ${tc.text}`}>
             {nodeType}
           </span>
           <span className={`text-xs ${isFailed ? "text-sol-red/80" : "text-sol-text-muted"}`}>{label}</span>
-          {isRunning && <span className="text-sol-text-dim/50 text-meta">running…</span>}
+          {isRunning && <span className="text-sol-text-dim/50 text-[10px]">running…</span>}
           {event.session_id && isDone && (
             <Link
               href={`/conversation/${event.session_id}`}
               onClick={(e) => e.stopPropagation()}
-              className="text-sol-cyan hover:text-sol-cyan text-meta font-medium underline underline-offset-2"
+              className="text-sol-cyan hover:text-sol-cyan text-[10px] font-medium underline underline-offset-2"
             >
               view
             </Link>
@@ -1441,10 +1449,10 @@ export function WorkflowEventBlock({ content, workflowRun, onGateChoice }: {
           <svg className="w-3.5 h-3.5 text-sol-magenta flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          <span className="text-mark text-sol-magenta uppercase tracking-wider font-semibold">Human Gate</span>
+          <span className="text-[10px] text-sol-magenta uppercase tracking-wider font-semibold">Human Gate</span>
           {isResolved
-            ? <span className="ml-auto text-meta text-sol-green">responded</span>
-            : <span className="ml-auto text-meta text-sol-magenta/70">waiting…</span>
+            ? <span className="ml-auto text-[10px] text-sol-green">responded</span>
+            : <span className="ml-auto text-[10px] text-sol-magenta/70 animate-pulse">waiting…</span>
           }
         </div>
         <div className="px-3 py-2.5">
@@ -1480,9 +1488,9 @@ function GateDecisionBlock({ decisionId, shortId, prompt, resolved }: { decision
   }
   return (
     <div className="my-3 rounded-lg border border-sol-magenta/40 bg-sol-magenta/8 px-3 py-2.5 text-sm" data-gate-decision={decisionId}>
-      <div className="flex items-center gap-2 text-mark uppercase tracking-wider font-semibold text-sol-magenta">
+      <div className="flex items-center gap-2 text-[10px] uppercase tracking-wider font-semibold text-sol-magenta">
         Human gate
-        <span className={`ml-auto normal-case tracking-normal font-normal ${resolved ? "text-sol-green" : "text-sol-magenta/70"}`}>{resolved ? "responded" : "waiting…"}</span>
+        <span className={`ml-auto normal-case tracking-normal font-normal ${resolved ? "text-sol-green" : "text-sol-magenta/70 animate-pulse"}`}>{resolved ? "responded" : "waiting…"}</span>
       </div>
       {prompt && <p className="mt-1 text-sol-text">{prompt.split("\n")[0]}</p>}
       <Link href={`/decisions/${shortId ?? decisionId}`} className="mt-1.5 inline-flex items-center gap-1 text-[12px] text-sol-blue hover:underline">

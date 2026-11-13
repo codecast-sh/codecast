@@ -290,7 +290,7 @@ export function WorkspaceSharePicker({
                   argument through the select-all. */}
               cast teams map /path/to/repo "{teamName}"
             </div>
-            <p className="text-meta text-sol-text-dim leading-relaxed">
+            <p className="text-[11px] text-sol-text-dim leading-relaxed">
               Clone the repo, then run the command above from anywhere.
               Or use{" "}
               <span className="font-mono text-sol-text-muted">
@@ -410,12 +410,12 @@ function WorkspaceSection({
                       </span>
                     )}
                     {suggestion?.match_type === "github" && (
-                      <span className="tf-accent-badge rounded border px-1.5 py-0.5 text-meta whitespace-nowrap">
+                      <span className="tf-accent-badge rounded border px-1.5 py-0.5 text-[10px] whitespace-nowrap">
                         GitHub match
                       </span>
                     )}
                     {alreadyMapped && (
-                      <span className="rounded border border-sol-green/30 bg-sol-green/10 px-1.5 py-0.5 text-meta text-sol-green whitespace-nowrap">
+                      <span className="rounded border border-sol-green/30 bg-sol-green/10 px-1.5 py-0.5 text-[10px] text-sol-green whitespace-nowrap">
                         Already shared
                       </span>
                     )}

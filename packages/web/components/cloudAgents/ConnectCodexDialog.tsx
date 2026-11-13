@@ -61,12 +61,12 @@ export function ConnectCodexDialog({ onClose, deviceId }: { onClose: () => void;
             It has no browser, so it signs in with a code you enter here.
           </p>
           {prompt ? <DeviceCodeSteps prompt={prompt} /> : (
-            <Button type="button" size="sm" onClick={() => void signIn({ deviceCode: true })} disabled={waiting} className="h-7 px-2.5 text-meta">
+            <Button type="button" size="sm" onClick={() => void signIn({ deviceCode: true })} disabled={waiting} className="h-7 px-2.5 text-[11px]">
               {waiting ? "Getting a code…" : "Sign in with a code"}
             </Button>
           )}
           {waiting && <Spinner label="waiting for the sign-in" />}
-          <p className="text-meta text-sol-text-dim">Or in a terminal there: <CopyCommand command={CODEX.login.headlessArgv.join(" ")} /></p>
+          <p className="text-[11px] text-sol-text-dim">Or in a terminal there: <CopyCommand command={CODEX.login.headlessArgv.join(" ")} /></p>
         </div>
       )}
       {(needsSignIn || waiting) && !signedIn && !headless && (
@@ -76,7 +76,7 @@ export function ConnectCodexDialog({ onClose, deviceId }: { onClose: () => void;
               ? <>The Codex sign-in on {machine}{view.account ? ` (${view.account})` : ""} has expired. Codecast never refreshes it, because that would sign out the Codex you run yourself.</>
               : <>{machine} has no Codex sign-in.{"detail" in view && view.detail ? ` ${view.detail}` : ""}</>}
             <span className="mt-1.5 block">
-              <Button type="button" size="sm" onClick={() => void signIn()} disabled={waiting} className="h-7 px-2.5 text-meta">
+              <Button type="button" size="sm" onClick={() => void signIn()} disabled={waiting} className="h-7 px-2.5 text-[11px]">
                 {waiting ? "Signing in…" : "Sign in to Codex"}
               </Button>
             </span>
@@ -85,11 +85,11 @@ export function ConnectCodexDialog({ onClose, deviceId }: { onClose: () => void;
             Codex opens its sign-in page in the browser on {machine}. Sign in with the ChatGPT account your Codex Cloud tasks run on.
             {waiting && <Spinner label="waiting for the sign-in" />}
             {prompt ? <DeviceCodeSteps prompt={prompt} /> : !waiting && (
-              <button type="button" onClick={() => void signIn({ deviceCode: true })} className="mt-1 block text-meta text-sol-text-dim underline underline-offset-2 hover:text-sol-text">
+              <button type="button" onClick={() => void signIn({ deviceCode: true })} className="mt-1 block text-[11px] text-sol-text-dim underline underline-offset-2 hover:text-sol-text">
                 Not at {machine}? Sign in here with a code
               </button>
             )}
-            {timedOut && <span className="mt-1 block text-meta text-amber-500">The sign-in didn't finish. Try again.</span>}
+            {timedOut && <span className="mt-1 block text-[11px] text-amber-500">The sign-in didn't finish. Try again.</span>}
           </Step>
         </ol>
       )}
@@ -107,11 +107,11 @@ export function ConnectCodexDialog({ onClose, deviceId }: { onClose: () => void;
       )}
 
       {view.state !== "checking" && !waiting && (
-        <button type="button" onClick={() => void recheck()} className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text">
+        <button type="button" onClick={() => void recheck()} className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text">
           <RefreshCw className="h-3 w-3" aria-hidden /> Check again
         </button>
       )}
-      <p className="text-meta text-sol-text-dim">
+      <p className="text-[11px] text-sol-text-dim">
         Tasks run in the repository's Codex environment. Set one up under <CloudAgentRepoAccessLink spec={CODEX} className="hover:text-sol-text" />.
       </p>
     </CloudConnectDialog>

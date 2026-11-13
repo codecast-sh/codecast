@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { WhisperState } from './useTips';
-import { KeyCap } from '../components/KeyCap';
 
 const FADE_IN_MS = 150;
 const VISIBLE_MS = 3000;
@@ -51,9 +50,16 @@ export function TipWhisper({ whisper, onDone }: TipWhisperProps) {
     <div style={style}>
       <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-sol-bg-alt border border-sol-border/40 shadow-lg backdrop-blur-sm">
         <span className="text-xs text-sol-text-muted whitespace-nowrap">{w.tip.content}</span>
-        <span className="inline-flex items-center gap-0.5">
-          {w.shortcutLabel.map((part, i) => <KeyCap key={i} size="xs">{part}</KeyCap>)}
-        </span>
+        <kbd className="inline-flex items-center gap-0.5">
+          {w.shortcutLabel.map((part, i) => (
+            <span
+              key={i}
+              className="inline-block min-w-[1.25rem] px-1 py-0.5 text-[10px] font-mono text-center text-sol-cyan bg-sol-bg rounded border border-sol-border/60 leading-none"
+            >
+              {part}
+            </span>
+          ))}
+        </kbd>
       </div>
     </div>,
     document.body,

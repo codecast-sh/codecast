@@ -50,14 +50,14 @@ export function BackendRunsInRows({ conversationId, sectionLabelClassName }: { c
               <Icon className={`h-3.5 w-3.5 shrink-0 transition-colors ${row.current ? "text-sol-cyan" : "text-sol-text-dim group-focus:text-sol-cyan"}`} />
               <span className="flex min-w-0 flex-col">
                 <span className="text-xs text-sol-text">{row.verb ?? row.label}</span>
-                <span className="truncate text-meta text-sol-text-dim">{row.verb ? row.label : row.hint}</span>
+                <span className="truncate text-[10px] text-sol-text-dim">{row.verb ? row.label : row.hint}</span>
               </span>
-              {row.current && <span className="ml-auto shrink-0 text-meta text-sol-text-dim">current</span>}
+              {row.current && <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim">current</span>}
             </DropdownMenuItem>
           );
         })}
         {switching && "failed" in switching && (
-          <div data-backend-failed className="mx-3 mt-0.5 mb-1 text-meta leading-snug text-sol-red">{switching.failed}</div>
+          <div data-backend-failed className="mx-3 mt-0.5 mb-1 text-[10px] leading-snug text-sol-red">{switching.failed}</div>
         )}
       </div>
     </div>
@@ -86,7 +86,7 @@ export function SdkBackendPill({ conversationId, isLive, canSwitch }: { conversa
       <DeviceDot online={isLive} />
     </span>
   );
-  const pillClass = `inline-flex items-center rounded-full border pl-2 pr-1.5 py-0.5 text-meta font-medium transition-colors ${colors}`;
+  const pillClass = `inline-flex items-center rounded-full border pl-2 pr-1.5 py-0.5 text-[10px] font-medium transition-colors ${colors}`;
   if (!canSwitch) {
     return (
       <ShortcutTooltip label="Runs in an Agent SDK host: no terminal pane" side="bottom">
@@ -111,10 +111,10 @@ export function SdkBackendPill({ conversationId, isLive, canSwitch }: { conversa
           <SquareTerminal className="h-3.5 w-3.5 shrink-0 text-sol-text-dim" />
           <span className="flex min-w-0 flex-col">
             <span className="text-xs text-sol-text">{toTerminal.verb ?? "Switch to terminal"}</span>
-            <span className="truncate text-meta text-sol-text-dim">{moving ? "Moving…" : "Same session, in a tmux pane"}</span>
+            <span className="truncate text-[10px] text-sol-text-dim">{moving ? "Moving…" : "Same session, in a tmux pane"}</span>
           </span>
         </DropdownMenuItem>
-        {failed && <div data-backend-failed className="px-2 pb-1 text-meta leading-snug text-sol-red">{failed}</div>}
+        {failed && <div data-backend-failed className="px-2 pb-1 text-[10px] leading-snug text-sol-red">{failed}</div>}
       </DropdownMenuContent>
     </DropdownMenu>
   );

@@ -46,7 +46,7 @@ export function RoadmapDetail({ row: r, now, index, updates, map, onClose, onSel
     <aside className={cn("flex shrink-0 flex-col border-l", phone ? "fixed inset-0 z-50 w-full" : "w-[440px]")} style={{ borderColor: HAIR, background: "var(--sol-bg)" }} data-roadmap-detail>
       <div className="flex items-start gap-2 px-5 pb-3 pt-4">
         <div className="min-w-0 flex-1">
-          <div className="text-meta" style={{ color: DIM }}>{r.kind === "goal" ? "Goal" : r.kind === "project" ? "Project" : "Role"} · {r.ref}</div>
+          <div className="text-[11px]" style={{ color: DIM }}>{r.kind === "goal" ? "Goal" : r.kind === "project" ? "Project" : "Role"} · {r.ref}</div>
           <h2 className="mt-1 text-[19px] font-medium leading-[1.25]" style={{ fontFamily: "var(--font-serif)" }}>{r.title}</h2>
         </div>
         <Link href={href} className="grid h-7 w-7 place-items-center rounded-md transition-colors hover:bg-sol-bg-highlight" title="Open its page" aria-label="Open its page"><ArrowUpRight className="h-4 w-4" style={{ color: MUTED }} /></Link>
@@ -81,7 +81,7 @@ export function RoadmapDetail({ row: r, now, index, updates, map, onClose, onSel
 
         {latest && (
           <Section title="Latest update" count={updates.length > 1 ? `of ${updates.length}` : undefined}>
-            <div className="flex items-center gap-2 text-meta" style={{ color: DIM }}>
+            <div className="flex items-center gap-2 text-[11.5px]" style={{ color: DIM }}>
               <HealthChip health={latest.health} now={now} lower /><span>{dayLabel(latest.at)}</span>
             </div>
             <p className="mt-1.5 line-clamp-6 whitespace-pre-wrap leading-[1.5]" style={{ color: "var(--sol-text-secondary)" }}>{latest.body}</p>
@@ -94,7 +94,7 @@ export function RoadmapDetail({ row: r, now, index, updates, map, onClose, onSel
               <div key={m.key} className="flex items-center gap-2 py-1">
                 <span className="h-[8px] w-[8px] shrink-0 rotate-45 border" style={{ borderColor: accent, background: m.done_at ? accent : "transparent" }} />
                 <span className={cn("min-w-0 flex-1 truncate", m.done_at && "line-through opacity-60")}>{m.title}</span>
-                <span className="shrink-0 tabular-nums text-meta" style={{ color: !m.done_at && m.date && m.date < now ? "var(--sol-red)" : DIM }}>{m.done_at ? dayLabel(m.done_at) : m.date ? dayLabel(m.date) : ""}</span>
+                <span className="shrink-0 tabular-nums text-[11px]" style={{ color: !m.done_at && m.date && m.date < now ? "var(--sol-red)" : DIM }}>{m.done_at ? dayLabel(m.done_at) : m.date ? dayLabel(m.date) : ""}</span>
               </div>
             ))}
           </Section>
@@ -109,7 +109,7 @@ export function RoadmapDetail({ row: r, now, index, updates, map, onClose, onSel
                   <span className="h-[7px] w-[7px] shrink-0 rounded-full" style={{ background: rowAccent(c) }} />
                   <span className="min-w-0 flex-1 truncate">{c.title}</span>
                   <MiniBar done={c.done} total={c.total} color={rowAccent(c)} />
-                  <span className="w-[86px] shrink-0 text-right text-meta" style={{ color: PACE_COLOR[cs] }}>{c.target ? fmtDay(c.target, c.targetLocal) : STANDING_WORD[cs]}</span>
+                  <span className="w-[86px] shrink-0 text-right text-[11px]" style={{ color: PACE_COLOR[cs] }}>{c.target ? fmtDay(c.target, c.targetLocal) : STANDING_WORD[cs]}</span>
                 </button>
               );
             })}
@@ -123,8 +123,8 @@ export function RoadmapDetail({ row: r, now, index, updates, map, onClose, onSel
               return (
                 <div key={role._id} className="flex items-center gap-2 py-1">
                   <RoleLink role={role} />
-                  {role._id === r.lead?._id && <span className="text-meta" style={{ color: DIM }}>{r.kind === "goal" ? "owner" : "lead"}</span>}
-                  <span className="ml-auto text-meta tabular-nums" style={{ color: live ? "var(--sol-green)" : DIM }}>{live ? `${live} live` : `${role.sessions.length} sessions`}</span>
+                  {role._id === r.lead?._id && <span className="text-[10.5px]" style={{ color: DIM }}>{r.kind === "goal" ? "owner" : "lead"}</span>}
+                  <span className="ml-auto text-[11px] tabular-nums" style={{ color: live ? "var(--sol-green)" : DIM }}>{live ? `${live} live` : `${role.sessions.length} sessions`}</span>
                 </div>
               );
             })}
@@ -153,7 +153,7 @@ export function RoadmapDetail({ row: r, now, index, updates, map, onClose, onSel
 }
 
 function Label({ children }: { children: React.ReactNode }) {
-  return <span className="text-meta" style={{ color: DIM }}>{children}</span>;
+  return <span className="text-[11.5px]" style={{ color: DIM }}>{children}</span>;
 }
 
 function Section({ title, count, children }: { title: string; count?: number | string; children: React.ReactNode }) {
@@ -168,8 +168,8 @@ function Section({ title, count, children }: { title: string; count?: number | s
 function Stat({ n, of, label }: { n: number; of?: number; label: string }) {
   return (
     <div className="rounded-md px-2 py-1.5" style={{ background: "color-mix(in srgb, var(--sol-bg-alt) 70%, transparent)" }}>
-      <div className="text-[15px] leading-none" style={{ color: "var(--sol-text)" }}>{n}{of !== undefined && <span className="text-meta" style={{ color: DIM }}>/{of}</span>}</div>
-      <div className="mt-1 text-meta" style={{ color: DIM }}>{label}</div>
+      <div className="text-[15px] leading-none" style={{ color: "var(--sol-text)" }}>{n}{of !== undefined && <span className="text-[11px]" style={{ color: DIM }}>/{of}</span>}</div>
+      <div className="mt-1 text-[10.5px]" style={{ color: DIM }}>{label}</div>
     </div>
   );
 }
@@ -198,7 +198,7 @@ function SessionLine({ s, now }: { s: OrgSession; now: number }) {
     <Link href={`/conversation/${s._id}`} className="-mx-1.5 flex items-center gap-2 rounded px-1.5 py-1 transition-colors hover:bg-sol-bg-highlight/60">
       <span className="h-[7px] w-[7px] shrink-0 rounded-full" style={{ background: STATE_COLOR[s.state] }} title={STATE_WORD[s.state]} />
       <span className="min-w-0 flex-1 truncate">{s.title || s.short_id}</span>
-      <span className="shrink-0 text-meta tabular-nums" style={{ color: DIM }}>{ago}</span>
+      <span className="shrink-0 text-[11px] tabular-nums" style={{ color: DIM }}>{ago}</span>
     </Link>
   );
 }
@@ -206,9 +206,9 @@ function SessionLine({ s, now }: { s: OrgSession; now: number }) {
 function TaskLine({ t, right, done }: { t: RoadTask; right: string; done?: boolean }) {
   return (
     <Link href={`/tasks/${t.short_id ?? t._id}`} className="-mx-1.5 flex items-center gap-2 rounded px-1.5 py-1 transition-colors hover:bg-sol-bg-highlight/60">
-      <span className="w-[62px] shrink-0 text-meta tabular-nums" style={{ color: DIM }}>{t.short_id}</span>
+      <span className="w-[62px] shrink-0 text-[11px] tabular-nums" style={{ color: DIM }}>{t.short_id}</span>
       <span className={cn("min-w-0 flex-1 truncate", done && "opacity-70")}>{t.title}</span>
-      <span className="shrink-0 text-meta tabular-nums" style={{ color: DIM }}>{right}</span>
+      <span className="shrink-0 text-[11px] tabular-nums" style={{ color: DIM }}>{right}</span>
     </Link>
   );
 }
@@ -263,11 +263,11 @@ function Chart({ r, now, accent, updates }: { r: RoadRow; now: number; accent: s
       {ticks.map((v) => (
         <g key={v}>
           <line x1={PAD.l} x2={CW - PAD.r} y1={Y(v)} y2={Y(v)} stroke="var(--sol-border)" strokeOpacity={0.18} />
-          <text x={PAD.l - 6} y={Y(v) + 3} textAnchor="end" fontSize={11} fill="var(--sol-text-dim)">{v}</text>
+          <text x={PAD.l - 6} y={Y(v) + 3} textAnchor="end" fontSize={9} fill="var(--sol-text-dim)">{v}</text>
         </g>
       ))}
       {months.filter((_, i) => i % step === 0).map((m) => (
-        <text key={m} x={X(m)} y={CH - 6} textAnchor="middle" fontSize={11} fill="var(--sol-text-dim)">{new Date(m).toLocaleDateString(undefined, { month: "short" })}</text>
+        <text key={m} x={X(m)} y={CH - 6} textAnchor="middle" fontSize={9} fill="var(--sol-text-dim)">{new Date(m).toLocaleDateString(undefined, { month: "short" })}</text>
       ))}
       <path d={`${done}L${X(last.t).toFixed(1)},${Y(0)}L${X(t0).toFixed(1)},${Y(0)}Z`} fill={accent} fillOpacity={0.22} />
       <path d={done} fill="none" stroke={accent} strokeWidth={1.75} />
@@ -277,7 +277,7 @@ function Chart({ r, now, accent, updates }: { r: RoadRow; now: number; accent: s
       {r.target && (
         <g>
           <line x1={X(r.target)} x2={X(r.target)} y1={PAD.t - 4} y2={CH - PAD.b} stroke={r.target < now ? "var(--sol-red)" : "var(--sol-text-muted)"} strokeWidth={1.25} />
-          <text x={X(r.target) - 3} y={PAD.t + 4} textAnchor="end" fontSize={11} fill={r.target < now ? "var(--sol-red)" : "var(--sol-text-muted)"}>deadline</text>
+          <text x={X(r.target) - 3} y={PAD.t + 4} textAnchor="end" fontSize={9} fill={r.target < now ? "var(--sol-red)" : "var(--sol-text-muted)"}>deadline</text>
         </g>
       )}
       <line x1={X(now)} x2={X(now)} y1={PAD.t - 4} y2={CH - PAD.b} stroke="var(--sol-blue)" strokeOpacity={0.6} />
@@ -294,7 +294,7 @@ function Chart({ r, now, accent, updates }: { r: RoadRow; now: number; accent: s
 function Legend({ accent, pace }: { accent: string; pace: boolean }) {
   const item = "inline-flex items-center gap-1.5";
   return (
-    <figcaption className="mb-1 flex flex-wrap gap-x-3.5 text-meta" style={{ color: DIM }}>
+    <figcaption className="mb-1 flex flex-wrap gap-x-3.5 text-[10.5px]" style={{ color: DIM }}>
       <span className={item}><span className="h-px w-3" style={{ background: "var(--sol-text-muted)" }} />all tasks</span>
       <span className={item}><span className="h-2 w-3 rounded-[1px]" style={{ background: accent, opacity: 0.45 }} />done</span>
       {pace && <span className={item}><span className="w-3 border-t border-dashed" style={{ borderColor: accent }} />at this pace</span>}

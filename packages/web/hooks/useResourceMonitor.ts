@@ -110,11 +110,6 @@ export function batchToRun(b: MigrationBatch, sessionByConversation: Map<string,
 
 const RUN_WINDOW_MS = 2 * 3600_000;
 
-// Module-level so the slice signature over every session is built once, not
-// on each render of the page.
-const isPinnedRow = (r: any) => !!r.inbox_pinned_at;
-const rowIdSig = (r: any) => r._id;
-
 export function useResourceMonitor() {
   const now = useCoarseNow(15_000);
   const rows = useMachineResourceRows();
@@ -123,7 +118,7 @@ export function useResourceMonitor() {
   const { candidates } = useMigrationCandidates();
   const { batches } = useMigrationBatches();
   const { rehearsals } = useMoveRehearsals();
-  const pinnedIds = useCollectionRows<any>("sessions", { where: isPinnedRow, sig: rowIdSig });
+  const pinnedIds = useCollectionRows<any>("sessions", { where: (r: any) => !!r.inbox_pinned_at, sig: (r: any) => r._id });
 
   const machines = useMemo(() => joinMachines(devices, rows), [devices, rows]);
   const sessions = useMemo(() => {

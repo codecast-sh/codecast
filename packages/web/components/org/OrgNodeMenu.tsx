@@ -40,8 +40,8 @@ export function OrgNodeMenu({ node, moves, currentParentOf, onToggleCollapse, on
                 key={t.id}
                 disabled={isCur}
                 onSelect={() => moves.move(subject, t.ref, t.title)}
-                leading={t.kind === "person" ? <Avatar name={t.title} image={t.image} /> : t.kind === "top" ? <ArrowUpToLine className="w-4 h-4" /> : <span className="w-4 h-4 rounded inline-flex items-center justify-center text-meta font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>@</span>}
-                trailing={isCur ? <span className="text-meta" style={{ color: "var(--sol-text-dim)" }}>current</span> : undefined}
+                leading={t.kind === "person" ? <Avatar name={t.title} image={t.image} /> : t.kind === "top" ? <ArrowUpToLine className="w-4 h-4" /> : <span className="w-4 h-4 rounded inline-flex items-center justify-center text-[8px] font-semibold" style={{ background: "var(--sol-violet)", color: "var(--sol-bg)" }}>@</span>}
+                trailing={isCur ? <span className="text-[10px]" style={{ color: "var(--sol-text-dim)" }}>current</span> : undefined}
                 data-move-target={t.id}
               >
                 {t.title}

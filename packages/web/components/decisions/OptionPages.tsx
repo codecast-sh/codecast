@@ -72,13 +72,13 @@ function OptionPageCard({ index, label, slug, picked, decisionId, onAnswer }: { 
             type="button"
             onClick={onAnswer}
             data-option-answer={index}
-            className="w-6 h-6 shrink-0 rounded-full border border-sol-yellow/50 text-sol-text font-mono text-meta flex items-center justify-center hover:bg-sol-yellow hover:text-sol-bg transition-colors"
+            className="w-6 h-6 shrink-0 rounded-full border border-sol-yellow/50 text-sol-text font-mono text-[11px] flex items-center justify-center hover:bg-sol-yellow hover:text-sol-bg transition-colors"
             title={`Answer with option ${index + 1}`}
           >
             {index + 1}
           </button>
         ) : (
-          <span className={`w-6 h-6 shrink-0 rounded-full border flex items-center justify-center font-mono text-meta ${picked ? "border-sol-green text-sol-green" : "border-sol-border text-sol-text-dim"}`}>
+          <span className={`w-6 h-6 shrink-0 rounded-full border flex items-center justify-center font-mono text-[11px] ${picked ? "border-sol-green text-sol-green" : "border-sol-border text-sol-text-dim"}`}>
             {picked ? <Check className="w-3.5 h-3.5" /> : index + 1}
           </span>
         )}
@@ -93,7 +93,7 @@ function OptionPageCard({ index, label, slug, picked, decisionId, onAnswer }: { 
           fallback={<span className="w-full h-full flex items-center justify-center text-sol-text-dim font-mono text-2xl select-none">{"</>"}</span>}
         />
       </button>
-      <div className="flex items-center gap-2 px-3 py-1.5 text-meta min-w-0">
+      <div className="flex items-center gap-2 px-3 py-1.5 text-[11px] min-w-0">
         <span className="min-w-0 flex-1 truncate text-sol-text-muted" title={title}>{title}</span>
         <button type="button" onClick={openPane} className="flex items-center gap-1 text-sol-text-dim hover:text-sol-blue transition-colors shrink-0" title="Open in a pane">
           <Columns2 className="w-3 h-3" />pane

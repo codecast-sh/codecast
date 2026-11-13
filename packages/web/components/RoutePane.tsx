@@ -64,9 +64,6 @@ const TeamCharts = lazyPage("@/app/team/charts/page", () => import("@/app/team/c
 const TeamMember = lazyPage("@/app/team/[username]/page", () => import("@/app/team/[username]/page"));
 const Search = lazyPage("@/app/search/page", () => import("@/app/search/page"));
 const Windows = lazyPage("@/app/windows/page", () => import("@/app/windows/page"));
-// A standalone route (it wraps its own DashboardLayout, which steps aside when
-// nested) that the tab shell must still draw: a tab adopts any in-shell path.
-const Orchestration = lazyPage("@/app/orchestration/page", () => import("@/app/orchestration/page"));
 const ConfigPage = lazyPage("@/app/config/page", () => import("@/app/config/page"));
 const Memory = lazyPage("@/app/memory/page", () => import("@/app/memory/page"));
 const Evals = lazyPage("@/app/evals/page", () => import("@/app/evals/page"));
@@ -208,7 +205,6 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/pages$/, paramNames: [], component: Artifacts },
   { pattern: /^\/artifacts$/, paramNames: [], component: Artifacts }, // pre-rename alias for /pages
   { pattern: /^\/windows$/, paramNames: [], component: Windows },
-  { pattern: /^\/orchestration$/, paramNames: [], component: Orchestration },
   { pattern: /^\/config$/, paramNames: [], component: ConfigPage },
   { pattern: /^\/memory$/, paramNames: [], component: Memory },
   // One component for the area and every view under it, so moving between

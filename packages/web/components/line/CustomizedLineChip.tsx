@@ -7,7 +7,7 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
-const CLASS = "shrink-0 inline-flex items-center px-1.5 rounded text-meta leading-[16px]";
+const CLASS = "shrink-0 inline-flex items-center px-1.5 rounded text-[10px] leading-[16px]";
 const toneStyle = (tone: "magenta" | "muted") => {
   const color = tone === "magenta" ? "var(--sol-magenta)" : "var(--sol-text-muted)";
   return { color, background: `color-mix(in srgb, ${color} 12%, transparent)` };

@@ -13,7 +13,7 @@
 .flv-row-path { grid-column: 1; font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .flv-row-n { grid-column: 2; grid-row: 1 / span 2; align-self: center; display: inline-flex; flex-direction: column; align-items: flex-end; gap: 1px; white-space: nowrap; font-size: var(--lw-fs-xs); color: var(--lw-ink-3); font-variant-numeric: tabular-nums; }
 .flv-row-n b[data-live] { color: var(--sol-blue); font-weight: 700; }
-.flv-row-n b[data-live]::before { content: "● "; font-size: var(--fs-meta); vertical-align: 1px; }
+.flv-row-n b[data-live]::before { content: "● "; font-size: 8px; vertical-align: 1px; }
 
 .flv-main { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 .flv-head { display: flex; align-items: baseline; gap: 10px; }

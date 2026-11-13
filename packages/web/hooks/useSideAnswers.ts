@@ -24,17 +24,11 @@ export function useSideAnswersFeed(conversationId: string): void {
   useSyncCollection("sideAnswers", api.sideAnswers.listForConversation, isConvexId(conversationId) ? { conversation_id: conversationId } : "skip", opts);
 }
 
-// One `where` per conversation, so the slice signature is shared, not rebuilt
-// per render. The most recently read conversations only: an evicted one gets a
-// fresh predicate (one rebuilt signature) the next time it is read.
-const MAX_WHERES = 64;
+// One `where` per conversation, so the slice signature is shared, not rebuilt per render.
 const wheres = new Map<string, (row: SideAnswerRow) => boolean>();
 const whereFor = (conversationId: string) => {
   let fn = wheres.get(conversationId);
-  if (fn) wheres.delete(conversationId);
-  else fn = (row) => row.conversation_id === conversationId;
-  wheres.set(conversationId, fn);
-  if (wheres.size > MAX_WHERES) wheres.delete(wheres.keys().next().value!);
+  if (!fn) wheres.set(conversationId, (fn = (row) => row.conversation_id === conversationId));
   return fn;
 };
 const rowSig = (r: SideAnswerRow) => `${r.status}|${r.answer?.length ?? 0}|${r.error_code ?? ""}|${r.answered_at ?? 0}`;

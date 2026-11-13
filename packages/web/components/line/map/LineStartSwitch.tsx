@@ -133,7 +133,7 @@ export function LineStartSwitch({ admit, compact, waiting = null, notReady = [],
         </span>
       </div>
       {lines && (
-        <ul className="flex flex-col gap-0.5 text-meta leading-snug text-sol-text-dim break-words" data-line-start-cost>
+        <ul className="flex flex-col gap-0.5 text-[11.5px] leading-snug text-sol-text-dim break-words" data-line-start-cost>
           <li className="text-sol-text-muted" data-line-start-now>{lines.now}</li>
           {lines.pace && <li data-line-start-pace>{lines.pace}</li>}
           {lines.held && (
@@ -146,7 +146,7 @@ export function LineStartSwitch({ admit, compact, waiting = null, notReady = [],
           {lines.also && <li>{lines.also}</li>}
         </ul>
       )}
-      {paused && <p className="text-meta leading-snug text-sol-orange" data-line-start-paused>@{a.role.handle} is paused; nothing starts until it resumes.</p>}
+      {paused && <p className="text-[11.5px] leading-snug text-sol-orange" data-line-start-paused>@{a.role.handle} is paused; nothing starts until it resumes.</p>}
     </div>
   );
 }

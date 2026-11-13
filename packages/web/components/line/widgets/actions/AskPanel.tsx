@@ -5,15 +5,10 @@
 // the change they propose. It is filed as a cause against the line (LX6) and
 // the project's line starts on it at once: an agent edits the prompt, replays
 // the step on the labeled cases, and returns a card with before and after.
-// That starts a paid run, so the press opens the shared review first
-// (components/consequential); only the review's button files the ask.
 import { useMemo, useState } from "react";
 import { askAgentFields, cameBackPattern, labeledCases, type AskCase } from "../../../../lib/line/lineActions";
 import { useInboxStore } from "../../../../store/inboxStore";
 import { taskStubId } from "../../../../store/taskStub";
-import { SwitchReview, type SwitchLedger } from "../../../consequential/ConsequentialSwitch";
-import { MERGES_NEVER, costFigure, listRow } from "../../../consequential/lineStartLedger";
-import { useRunCost } from "../../../consequential/useRunCost";
 import { backTimes, useLineNav } from "../parts";
 import type { AskSlotProps } from "../actionSlots";
 import "./actions.css";
@@ -63,31 +58,6 @@ export function AskPanel({ model, step, draft, projects }: AskSlotProps) {
   const back = cases.filter((c) => c.cameBack).length;
   const wrong = cases.filter((c) => c.verdict === "wrong" && !c.cameBack).length;
   const can = !!projectId && (!!words.trim() || !!draft);
-  const project = useInboxStore((s) => (projectId ? (s.projects as Record<string, { title?: string }> | undefined)?.[projectId]?.title ?? null : null));
-  const cost = useRunCost(projectId);
-  const [review, setReview] = useState(false);
-  const ledger: SwitchLedger = {
-    name: "Ask an agent",
-    subject: `${model.title} · ${step.label}`,
-    shift: null,
-    figures: [
-      { value: "1", label: "run starts now", tone: "warn" },
-      costFigure(cost, 1),
-      { value: String(caseCount), label: caseCount === 1 ? "case goes with it" : "cases go with it" },
-    ],
-    rows: [
-      listRow(cost),
-      ...(project ? [{ k: "Project", v: project }] : []),
-      { k: "Files", v: "A problem on the flow" },
-      { k: "An agent", v: `Edits ${step.label}, replays it on the cases` },
-      ...(draft ? [{ k: "Your edit", v: "Goes as the change you propose" }] : []),
-      { k: "Ends", v: "A card with before and after" },
-      { k: "Merges", v: MERGES_NEVER, tone: "ok" as const },
-    ],
-    stop: "Stop from its page",
-    confirm: "Ask an agent",
-    keep: "Not now",
-  };
 
   const ask = async () => {
     if (!projectId) return;
@@ -111,7 +81,7 @@ export function AskPanel({ model, step, draft, projects }: AskSlotProps) {
         <textarea
           value={words}
           onChange={(e) => setWords(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && can) { e.preventDefault(); setReview(true); } }}
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && can) { e.preventDefault(); void ask(); } }}
           rows={4}
           placeholder={pattern ?? `Say what ${step.label} gets wrong, in a sentence.`}
         />
@@ -140,10 +110,9 @@ export function AskPanel({ model, step, draft, projects }: AskSlotProps) {
         </div>
       )}
       <div className="lw-try-go">
-        <button type="button" className="lw-act" data-primary="" aria-haspopup="dialog" onClick={() => setReview(true)} disabled={!can || (!!sent && !sent.result && !sent.error)} data-line-ask-agent={step.id}>
+        <button type="button" className="lw-act" data-primary="" onClick={ask} disabled={!can || (!!sent && !sent.result && !sent.error)}>
           Ask an agent
         </button>
-        {review && <SwitchReview ledger={ledger} onClose={() => setReview(false)} onConfirm={() => { setReview(false); void ask(); }} />}
         {!nav.projectId && projects && projects.length > 1 && (
           <label className="lw-ask-project">
             <span>File it in</span>

@@ -155,7 +155,7 @@ export function TeamFlowShell({
           {/* The subject of the whole surface, so it takes the fuller tile. */}
           <TeamCrest icon={crest.icon} color={crest.color} size="lg" tone="strong" className="tf-crest" />
           <div className="min-w-0">
-            <div className="tf-eyebrow text-mark uppercase tracking-wider">{eyebrow}</div>
+            <div className="tf-eyebrow text-[11px] uppercase tracking-wider">{eyebrow}</div>
             {/* No aria-live: on step 1 this mirrors the name field on every
                 keystroke, and a live region would announce each character a
                 second time on top of the input's own echo. */}
@@ -183,7 +183,7 @@ export function TeamFlowShell({
             const marker = (
               <div
                 className={cn(
-                  "tf-marker flex h-6 w-6 items-center justify-center rounded-full text-meta font-semibold shrink-0",
+                  "tf-marker flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-semibold shrink-0",
                   state === "todo" && "bg-sol-bg-alt text-sol-text-dim border border-sol-border/60",
                 )}
                 data-state={state}

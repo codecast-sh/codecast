@@ -74,7 +74,7 @@ export function TeamIdentityPicker({ value, onChange, previewName, disabled, cla
       )}
       <div className="flex-1 min-w-0 space-y-4">
         <div>
-          <div className="text-mark uppercase tracking-wider text-sol-text-dim mb-1.5">Icon</div>
+          <div className="text-[11px] uppercase tracking-wider text-sol-text-dim mb-1.5">Icon</div>
           <div
             role="radiogroup"
             aria-label="Team icon"
@@ -115,7 +115,7 @@ export function TeamIdentityPicker({ value, onChange, previewName, disabled, cla
           </div>
         </div>
         <div>
-          <div className="text-mark uppercase tracking-wider text-sol-text-dim mb-1.5">Color</div>
+          <div className="text-[11px] uppercase tracking-wider text-sol-text-dim mb-1.5">Color</div>
           <div role="radiogroup" aria-label="Team color" className="flex gap-2">
             {TEAM_COLORS.map((color, i) => {
               const selected = color === value.color;

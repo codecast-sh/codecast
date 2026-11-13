@@ -15,7 +15,7 @@ export function ScopeTriggersTab({ standingConversationId }: { standingConversat
   const rows = useMemo<TriggerRow[]>(() => standingConversationId ? tasks.map((task) => ({ task, openId: standingConversationId, unread: false })) : [], [tasks, standingConversationId]);
   return (
     <div className="space-y-2" data-triggers-tab>
-      <p className="text-meta" style={{ color: "var(--sol-text-dim)" }}>
+      <p className="text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>
         What wakes this role on its own: its check, and a trigger that fires when a session under it is waiting. Edit, pause or cancel any of them here. Pausing the role holds them all, and resuming it brings back only those, so one you paused yourself stays paused.
       </p>
       {!standingConversationId && <p className="text-[12px]" style={{ color: "var(--sol-text-muted)" }}>This role has not started yet. Its triggers are created when it starts.</p>}

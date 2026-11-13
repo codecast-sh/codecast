@@ -8,7 +8,7 @@ import { prosePlacementLabel, type AnchorPlacement, type CodeAnchorText, type Pr
 /** The inline part: "moved from line N", or an OUTDATED chip. Sits beside the line label. */
 export function AnchorPlacementChip({ placement }: { placement?: AnchorPlacement | null }) {
   if (placement?.state === "moved") {
-    return <span className="text-meta text-sol-text-dim" data-anchor-state="moved">moved from line {placement.from}</span>;
+    return <span className="text-[11px] text-sol-text-dim" data-anchor-state="moved">moved from line {placement.from}</span>;
   }
   if (placement?.state !== "outdated") return null;
   return <OutdatedTag title="The code this comment was written on is no longer in the file" />;
@@ -19,7 +19,7 @@ export function AnchorPlacementChip({ placement }: { placement?: AnchorPlacement
  *  apart from a copy of it. */
 export function ProsePlacementChip({ placement }: { placement?: ProsePlacement | null }) {
   const label = prosePlacementLabel(placement ?? null);
-  if (label === "moved") return <span className="text-meta text-sol-text-dim" data-anchor-state="moved">moved</span>;
+  if (label === "moved") return <span className="text-[11px] text-sol-text-dim" data-anchor-state="moved">moved</span>;
   if (label !== "outdated") return null;
   return <OutdatedTag title="The text this note was written on is no longer here" />;
 }
@@ -27,7 +27,7 @@ export function ProsePlacementChip({ placement }: { placement?: ProsePlacement |
 function OutdatedTag({ title }: { title: string }) {
   return (
     <span
-      className="rounded-sm border border-sol-yellow/40 px-1 py-px text-mark uppercase tracking-wider text-sol-yellow"
+      className="rounded-sm border border-sol-yellow/40 px-1 py-px text-[10px] uppercase tracking-wider text-sol-yellow"
       data-anchor-state="outdated"
       title={title}
     >
@@ -41,8 +41,8 @@ export function AnchorPlacementQuote({ placement, anchorLines }: { placement?: A
   if (placement?.state !== "outdated" || !anchorLines?.lines.length) return null;
   return (
     <div className="space-y-0.5">
-      <div className="text-meta text-sol-text-dim">Written on code that is gone:</div>
-      <pre className="max-h-40 overflow-auto rounded-sm bg-sol-bg-alt/60 px-2 py-1 font-mono text-meta leading-snug text-sol-text-muted whitespace-pre-wrap [overflow-wrap:anywhere]">
+      <div className="text-[11px] text-sol-text-dim">Written on code that is gone:</div>
+      <pre className="max-h-40 overflow-auto rounded-sm bg-sol-bg-alt/60 px-2 py-1 font-mono text-[11px] leading-snug text-sol-text-muted whitespace-pre-wrap [overflow-wrap:anywhere]">
         {anchorLines.lines.join("\n")}
       </pre>
     </div>

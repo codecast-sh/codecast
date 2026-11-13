@@ -116,10 +116,10 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
         <div className="flex items-center gap-3 rounded-lg border border-sol-border/50 px-3 py-2.5" style={{ background: "linear-gradient(160deg, color-mix(in srgb, var(--sol-cyan) 8%, var(--sol-card)) 0%, var(--sol-card) 60%)" }}>
           <RoleFace role={{ handle: hire.handle, name: hire.name, icon: null }} size={36} className="shrink-0 rounded-full" />
           <div className="min-w-0 flex-1">
-            <p className="text-[13.5px] font-semibold text-sol-text" style={{ fontFamily: "var(--font-serif)" }}>{hire.name} <span className="text-meta font-normal text-sol-text-dim" style={{ fontFamily: "var(--font-mono)" }}>@{hire.handle}</span></p>
-            <p className="truncate text-meta text-sol-text-muted">{hire.description}</p>
+            <p className="text-[13.5px] font-semibold text-sol-text" style={{ fontFamily: "var(--font-serif)" }}>{hire.name} <span className="text-[10.5px] font-normal text-sol-text-dim" style={{ fontFamily: "var(--font-mono)" }}>@{hire.handle}</span></p>
+            <p className="truncate text-[11.5px] text-sol-text-muted">{hire.description}</p>
           </div>
-          <button type="button" onClick={() => setBuiltin("")} className="inline-flex shrink-0 items-center gap-1 text-meta text-sol-text-muted underline-offset-2 hover:underline" data-template-back><ArrowLeft className="h-3 w-3" /> All templates</button>
+          <button type="button" onClick={() => setBuiltin("")} className="inline-flex shrink-0 items-center gap-1 text-[11.5px] text-sol-text-muted underline-offset-2 hover:underline" data-template-back><ArrowLeft className="h-3 w-3" /> All templates</button>
         </div>
         <Suspense fallback={<div className="h-[260px] rounded-xl border border-sol-border/40 bg-sol-bg-alt/60 animate-pulse" aria-busy="true" />}>
           {builtin === "head-of-people" ? <HireHeadOfPeopleCard compact onHired={onClose} /> : <HireAssistantCard compact onHired={onClose} />}
@@ -144,10 +144,10 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
       <div className="flex items-center gap-3 rounded-lg border border-sol-border/50 px-3 py-2.5" style={{ background: "linear-gradient(160deg, color-mix(in srgb, var(--sol-violet) 7%, var(--sol-card)) 0%, var(--sol-card) 60%)" }} data-template-chosen={template.template_id}>
         <RoleFace role={{ avatar: template.avatar, handle: template.template_id, name: template.name, icon: null }} size={36} className="shrink-0 rounded-full" />
         <div className="min-w-0 flex-1">
-          <p className="text-[13.5px] font-semibold text-sol-text" style={{ fontFamily: "var(--font-serif)" }}>{template.name} <span className="text-meta font-normal text-sol-text-dim" style={{ fontFamily: "var(--font-mono)" }}>{template.latest.version}</span></p>
-          <p className="truncate text-meta text-sol-text-muted">{template.description}</p>
+          <p className="text-[13.5px] font-semibold text-sol-text" style={{ fontFamily: "var(--font-serif)" }}>{template.name} <span className="text-[10.5px] font-normal text-sol-text-dim" style={{ fontFamily: "var(--font-mono)" }}>{template.latest.version}</span></p>
+          <p className="truncate text-[11.5px] text-sol-text-muted">{template.description}</p>
         </div>
-        <button type="button" onClick={() => { setTemplateId(""); setConfig({}); }} className="inline-flex shrink-0 items-center gap-1 text-meta text-sol-text-muted underline-offset-2 hover:underline" data-template-back><ArrowLeft className="h-3 w-3" /> All templates</button>
+        <button type="button" onClick={() => { setTemplateId(""); setConfig({}); }} className="inline-flex shrink-0 items-center gap-1 text-[11.5px] text-sol-text-muted underline-offset-2 hover:underline" data-template-back><ArrowLeft className="h-3 w-3" /> All templates</button>
       </div>
       <label className={LABEL}>
         <span className={CAPTION}>Project</span>
@@ -155,7 +155,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
           <option value="">Choose a project</option>
           {available.map((p) => <option key={p._id} value={p._id}>{p.title}</option>)}
         </SelectBox>
-        {!available.length && <span className="text-meta text-sol-text-dim">Create a project in this workspace before hiring from a template.</span>}
+        {!available.length && <span className="text-[11px] text-sol-text-dim">Create a project in this workspace before hiring from a template.</span>}
       </label>
       {lead && (
         <div className="rounded-lg border border-sol-border/50 bg-sol-bg-alt px-3 py-2.5 text-[12px] leading-relaxed" role="group" aria-label="Project lead" data-template-lead={lead.handle} data-lead-runs={leadRunsItHere ? "here" : leadRunsIt ? "elsewhere" : undefined}>
@@ -189,7 +189,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
             ) : (
               <input name={`input:${input.key}`} value={config[input.key] ?? ""} onChange={(e) => setConfig({ ...config, [input.key]: e.target.value })} placeholder={input.default !== undefined ? String(input.default) : input.kind === "money" ? "USD" : ""} inputMode={input.kind === "number" || input.kind === "money" ? "decimal" : undefined} className={INPUT} spellCheck={false} />
             )}
-            {input.help && <span className="text-meta text-sol-text-dim">{input.help}</span>}
+            {input.help && <span className="text-[11px] text-sol-text-dim">{input.help}</span>}
           </label>
         );
         return (
@@ -206,7 +206,7 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
         );
       })()}
       {manifest && !leadRunsItHere && secretInputs(manifest).length > 0 && (
-        <p className="text-meta text-sol-text-muted" data-template-secrets={secretInputs(manifest).length}>
+        <p className="text-[11.5px] text-sol-text-muted" data-template-secrets={secretInputs(manifest).length}>
           <span className="text-sol-text">After you accept,</span> on the role page, sealed to its machine: {secretInputs(manifest).map((s) => s.label).join(" · ")}
         </p>
       )}
@@ -241,8 +241,8 @@ export function OrgTemplateHire({ projects, workspace, roles = [], initialProjec
           {grantsToAsk(manifest, resolvedConfig(manifest, config)).length === 0 && (manifest.authority ?? []).length > 0 && <p className="mt-1 text-sol-text-dim">Authority is not asked for yet: its inputs are unanswered.</p>}
         </div>
       )}
-      {!spec && template && project && errors.length > 0 && !leadRunsItHere && <p role="status" className="text-meta text-sol-text-muted">{errors[0]}</p>}
-      {error && <p role="alert" className="text-meta text-sol-red">{error}</p>}
+      {!spec && template && project && errors.length > 0 && !leadRunsItHere && <p role="status" className="text-[11.5px] text-sol-text-muted">{errors[0]}</p>}
+      {error && <p role="alert" className="text-[11.5px] text-sol-red">{error}</p>}
       <div className="flex items-center justify-end gap-2 pt-1">
         <button type="button" onClick={onClose} className="h-8 shrink-0 rounded-lg px-3 text-[12.5px] text-sol-text-muted hover:bg-sol-bg-highlight">Close</button>
         {!leadRunsItHere && <Button type="submit" variant="violet" size="sm" disabled={!spec || posting} className="shrink-0 rounded-lg">{posting ? "Proposing…" : "Propose the hire"}</Button>}
@@ -274,7 +274,7 @@ function FolderPath({ projects, workspace, initialProjectId, projectPath }: { pr
         <label className={LABEL}>
           <span className={CAPTION}>Template folder on host</span>
           <input value={draft.folder} onChange={(e) => update({ folder: e.target.value })} placeholder="/path/to/templates/growth" className={INPUT} spellCheck={false} autoCapitalize="none" />
-          <span className="text-meta text-sol-text-dim">Contains org-template.json. Both paths must exist on the machine where you run the command.</span>
+          <span className="text-[11px] text-sol-text-dim">Contains org-template.json. Both paths must exist on the machine where you run the command.</span>
         </label>
         <label className={LABEL}>
           <span className={CAPTION}>Instance name</span>
@@ -282,10 +282,10 @@ function FolderPath({ projects, workspace, initialProjectId, projectPath }: { pr
         </label>
         <p className="text-sol-text-muted">Approval comes before setup. After you approve, reconcile creates the role with its routines paused. Spending and publishing need separate authorization.</p>
         {result.command ? (
-          <pre aria-label="Template install command" className="max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-sol-border/50 bg-sol-bg-alt p-3 text-meta leading-relaxed text-sol-text" style={{ fontFamily: "var(--font-mono)" }}>{result.command}</pre>
-        ) : <p role="status" className="text-meta text-sol-text-muted">{result.error}</p>}
+          <pre aria-label="Template install command" className="max-h-44 overflow-auto whitespace-pre-wrap break-all rounded-lg border border-sol-border/50 bg-sol-bg-alt p-3 text-[11px] leading-relaxed text-sol-text" style={{ fontFamily: "var(--font-mono)" }}>{result.command}</pre>
+        ) : <p role="status" className="text-[11.5px] text-sol-text-muted">{result.error}</p>}
         <div className="flex items-center justify-end gap-2">
-          <span role="status" className="mr-auto text-meta text-sol-text-muted">{copyError ? "Copy failed. Select the command and copy it manually." : copied ? "Command copied. Nothing has run yet." : ""}</span>
+          <span role="status" className="mr-auto text-[11px] text-sol-text-muted">{copyError ? "Copy failed. Select the command and copy it manually." : copied ? "Command copied. Nothing has run yet." : ""}</span>
           <button type="button" disabled={!result.command} onClick={() => void copy()} className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-sol-border/50 px-3 text-[12.5px] text-sol-text disabled:opacity-50"><Copy className="h-3.5 w-3.5" />Copy command</button>
         </div>
       </div>
@@ -294,5 +294,5 @@ function FolderPath({ projects, workspace, initialProjectId, projectPath }: { pr
 }
 
 const LABEL = "flex flex-col gap-1";
-const CAPTION = "text-mark font-semibold uppercase tracking-[0.08em] text-sol-text-dim";
+const CAPTION = "text-[11px] font-semibold uppercase tracking-[0.08em] text-sol-text-dim";
 const INPUT = "h-9 w-full rounded-lg border border-sol-border/50 bg-sol-bg-alt px-2.5 text-[13px] text-sol-text outline-none focus:border-sol-cyan";

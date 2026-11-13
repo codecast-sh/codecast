@@ -189,8 +189,7 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
   const stageRef = useStageScroll();
   const rawView = search?.get("view") ?? null;
   const rawMode = search?.get("mode") ?? null;
-  // The app pages' fix-up only: settings keeps its own address whatever it carries.
-  const stale = !settings && ((!!rawView && rawView !== selection.view) || (!!rawMode && rawMode !== selection.mode) || rawView === "foryou" || (selection.view !== "line" && !!rawMode));
+  const stale = !settings && (!!rawView && rawView !== selection.view) || (!!rawMode && rawMode !== selection.mode) || rawView === "foryou" || (selection.view !== "line" && !!rawMode);
   useWatchEffect(() => { if (stale) select({ view: readLineSelection(search).view }, undefined, { replace: true }); }, [stale, select, search]);
   // A run link that names no problem (an old Runs link) takes its problem once the run's row is in the store.
   const runOnly = selection.run && !selection.case ? runCase : null;
@@ -313,7 +312,7 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
           {!embedded && !flow && space && <SpaceSwitcher space={space} onPick={(k) => { space.pick(k); select({ ...lineViewHome(selection.view), project: null, graph: null, status: null }); }} />}
           {flow && flow.projects.length > 1 && (
             <div className="lw-seg" role="tablist" aria-label="Project" data-flow-projects>
-              {flow.projects.map((p) => <button key={p.id} type="button" role="tab" aria-selected={p.id === projectId} onClick={() => select({ project: p.id })} title={p.title}><span className="lw-chip-t">{p.title}</span></button>)}
+              {flow.projects.map((p) => <button key={p.id} type="button" role="tab" aria-selected={p.id === projectId} onClick={() => select({ project: p.id })}>{p.title}</button>)}
             </div>
           )}
           {/* A project narrows Problems, and only Problems. */}

@@ -106,7 +106,7 @@ function MapCorner({ asProposed, onAsProposed, hasProposal, week, size = "sm", c
           onClick={() => week.onToggle(!week.on)}
           aria-pressed={week.on}
           title={week.on ? "Each role shows its week: work that reached it against work it closed. Click to see the roles as they are." : "Show each role's week: work that reached it against work it closed, and the work flowing down each line"}
-          className={cn("inline-flex shrink-0 items-center gap-1.5 rounded-md border font-medium transition-colors", h, size === "sm" ? "px-2 text-meta" : "px-2.5 text-[12.5px]", week.on ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight/60")}
+          className={cn("inline-flex shrink-0 items-center gap-1.5 rounded-md border font-medium transition-colors", h, size === "sm" ? "px-2 text-[11.5px]" : "px-2.5 text-[12.5px]", week.on ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight/60")}
           style={{ borderColor: week.on ? `color-mix(in srgb, ${FLOW_TONE.reached} 45%, transparent)` : "color-mix(in srgb, var(--sol-border) 30%, transparent)", color: week.on ? "var(--sol-text)" : "var(--sol-text-muted)" }}
           data-map-week={week.on ? "on" : "off"}
         >
@@ -123,7 +123,7 @@ function MapCorner({ asProposed, onAsProposed, hasProposal, week, size = "sm", c
           onClick={() => onAsProposed(!asProposed)}
           aria-pressed={asProposed}
           title={asProposed ? "The open proposal is drawn in place, in violet. Click to see the company as it is." : "Draw the open proposal in place"}
-          className={cn("inline-flex shrink-0 items-center gap-1.5 rounded-md border font-medium transition-colors", h, size === "sm" ? "px-2 text-meta" : "px-2.5 text-[12.5px]", asProposed ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight/60")}
+          className={cn("inline-flex shrink-0 items-center gap-1.5 rounded-md border font-medium transition-colors", h, size === "sm" ? "px-2 text-[11.5px]" : "px-2.5 text-[12.5px]", asProposed ? "bg-sol-bg-highlight" : "hover:bg-sol-bg-highlight/60")}
           style={{ borderColor: asProposed ? "color-mix(in srgb, var(--sol-violet) 45%, transparent)" : "color-mix(in srgb, var(--sol-border) 30%, transparent)", color: asProposed ? "var(--sol-text)" : "var(--sol-text-muted)" }}
           data-map-proposed={asProposed ? "on" : "off"}
         >

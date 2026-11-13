@@ -6,7 +6,7 @@ import { KeyRound, ExternalLink, Trash2, Loader2, Check } from "lucide-react";
 import { CLOUD_AGENT_PROVIDERS, PROVIDER_KEYS, getProviderKeySpec, type CloudAgentProviderSpec, type ProviderKeySpec } from "@codecast/shared/contracts";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
-import { SettingsBadge, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
+import { SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { DevicePanelHeader } from "../../../components/settings/DevicePanelHeader";
 import { useDevices, type Device } from "../../../components/DeviceBadge";
 import { useProviderKeyCommand, deviceManagedKeys } from "../../../lib/useProviderKeyCommand";
@@ -153,16 +153,20 @@ function ProviderKeyRow({
           <div className="flex items-center gap-2">
             <span className="text-sm text-sol-text">{spec.label}</span>
             {isManaged ? (
-              <SettingsBadge tone="green">Managed</SettingsBadge>
+              <span className="text-[10px] px-1.5 py-px rounded-full border bg-sol-green/10 text-sol-green border-sol-green/30">
+                Managed
+              </span>
             ) : (
-              <SettingsBadge tone="muted">— system default</SettingsBadge>
+              <span className="text-[10px] px-1.5 py-px rounded-full border bg-sol-bg-alt text-sol-text-muted border-sol-border">
+                — system default
+              </span>
             )}
           </div>
           <a
             href={spec.consoleUrl}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1 text-meta text-sol-text-muted hover:text-sol-cyan mt-1"
+            className="inline-flex items-center gap-1 text-[11px] text-sol-text-muted hover:text-sol-cyan mt-1"
           >
             get a key
             <ExternalLink className="w-3 h-3" />

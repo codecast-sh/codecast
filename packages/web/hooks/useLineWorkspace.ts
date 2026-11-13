@@ -682,9 +682,6 @@ export function useLineSelection(): { selection: LineSelection; select: LineSele
 /** A station's brief as lineWorkspace.stationInput returns it. */
 export type StationInput = { _id: string; conversation_id: string; text: string; truncated: boolean; at: number | null; found: boolean };
 
-// Module-level: a fresh select per render re-applied the same payload.
-const ONE_STATION_INPUT = { select: (row: StationInput | null) => (row ? [row] : []) };
-
 /**
  * What a station was handed: its session's first message, fed when a
  * decision is opened. `runId` lets a teammate who reads the run read its
@@ -693,7 +690,7 @@ const ONE_STATION_INPUT = { select: (row: StationInput | null) => (row ? [row] :
  */
 export function useStationInput(sessionId: string | null | undefined, runId?: string | null): StationInput | null | undefined {
   const args = useMemo(() => (sessionId ? { conversation_id: sessionId, ...(runId ? { run_id: runId } : {}) } : "skip"), [sessionId, runId]);
-  const { ready } = useSyncCollection("stationInputs", api.lineWorkspace.stationInput, args as any, ONE_STATION_INPUT);
+  const { ready } = useSyncCollection("stationInputs", api.lineWorkspace.stationInput, args as any, { select: (row: StationInput | null) => (row ? [row] : []) });
   const row = useInboxStore((s) => (sessionId ? ((s as unknown as { stationInputs?: Record<string, StationInput> }).stationInputs?.[sessionId] ?? null) : null));
   if (!sessionId) return null;
   if (row) return row;

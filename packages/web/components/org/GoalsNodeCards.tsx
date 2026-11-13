@@ -53,7 +53,7 @@ export const CompanyCard = memo(function CompanyCard({ data }: NodeProps<Node<Co
       <span className={cn("inline-flex shrink-0 items-center justify-center rounded-lg", far ? "h-9 w-9" : "h-8 w-8")} style={{ background: "color-mix(in srgb, var(--sol-cyan) 14%, transparent)", color: "var(--sol-cyan)" }}><Building2 className={far ? "h-5 w-5" : "h-4 w-4"} /></span>
       <div className="min-w-0">
         <div className={cn("truncate font-semibold leading-tight tracking-tight", far ? "text-[20px]" : "text-[14px]")} style={{ fontFamily: "var(--font-serif)", color: "var(--sol-text)" }}>{data.name}</div>
-        <div className={cn("mt-[2px] tabular-nums", far ? "text-[12px]" : "text-meta")} style={{ color: DIM }} data-company-tally>
+        <div className={cn("mt-[2px] tabular-nums", far ? "text-[12px]" : "text-[10.5px]")} style={{ color: DIM }} data-company-tally>
           {data.goals === 0 ? "No goals yet" : `${data.mission ? (far ? "mission · " : "the mission · ") : ""}${data.goals} ${data.goals === 1 ? "goal" : "goals"} · ${data.projects} ${data.projects === 1 ? "project" : "projects"}`}
         </div>
       </div>
@@ -83,7 +83,7 @@ function OwnerFace({ owner, size = 28 }: { owner: GoalOwner; size?: number }) {
 }
 
 type GoalRow = NonNullable<Extract<GoalsNode, { kind: "goal" }>["goal"]["row"]>;
-const CLOSE_LINE = "!text-meta !gap-1.5 w-full";
+const CLOSE_LINE = "!text-[10.5px] !gap-1.5 w-full";
 
 /** The goal's latest update, from the store when it holds it; else the health word and its date alone. */
 function LatestUpdate({ goal, now }: { goal: GoalRow; now: number }) {
@@ -91,7 +91,7 @@ function LatestUpdate({ goal, now }: { goal: GoalRow; now: number }) {
   const latest = updates.find((u) => u._id === goal.latest_update_id) ?? updates[0];
   return (
     <div className="flex min-w-0 items-center" style={{ height: GOALS_SIZES.updateRow }} data-goal-update={latest?._id ?? ""}>
-      {latest ? <UpdateLine update={latest} now={now} className={CLOSE_LINE} /> : <HealthChip health={goal.health} at={goal.health_at} now={now} className="!text-meta" />}
+      {latest ? <UpdateLine update={latest} now={now} className={CLOSE_LINE} /> : <HealthChip health={goal.health} at={goal.health_at} now={now} className="!text-[10.5px]" />}
     </div>
   );
 }
@@ -101,7 +101,7 @@ function Running({ sessions }: { sessions: Extract<GoalsNode, { kind: "goal" }>[
   if (sessions.length === 0) return null;
   const color = ORG_STATE_META.working.color;
   return (
-    <div className="flex min-w-0 items-center gap-1.5 text-meta" style={{ height: GOALS_SIZES.runningRow, color: "var(--sol-text-muted)" }} data-goal-running={sessions.length}>
+    <div className="flex min-w-0 items-center gap-1.5 text-[10.5px]" style={{ height: GOALS_SIZES.runningRow, color: "var(--sol-text-muted)" }} data-goal-running={sessions.length}>
       <span className="h-[7px] w-[7px] shrink-0 rounded-full" style={{ background: color }} aria-hidden />
       <span className="shrink-0" style={{ color: "var(--sol-text-secondary)" }}>{sessions.length} working</span>
       <span className="min-w-0 truncate" title={sessions.map((s) => `${s.short_id} ${s.title}`).join("\n")}>
@@ -118,7 +118,7 @@ function ProjectRefs({ refs, hasChildren }: { refs: Extract<GoalsNode, { kind: "
   const names = refs.map((r) => r.project.title);
   const text = hasChildren ? `${refs.length} ${refs.length === 1 ? "project" : "projects"} through the goals below` : `also ${names.join(", ")}`;
   return (
-    <div className="mt-1 flex min-w-0 items-center gap-1 truncate text-meta" style={{ height: GOALS_SIZES.refRow - 4, color: DIM }} title={refs.map((r) => `${r.project.title}, drawn under ${r.under}`).join("\n")} data-project-refs={refs.length}>
+    <div className="mt-1 flex min-w-0 items-center gap-1 truncate text-[10.5px]" style={{ height: GOALS_SIZES.refRow - 4, color: DIM }} title={refs.map((r) => `${r.project.title}, drawn under ${r.under}`).join("\n")} data-project-refs={refs.length}>
       <FolderClosed className="h-2.5 w-2.5 shrink-0" />
       <span className="truncate">{text}</span>
     </div>
@@ -128,7 +128,7 @@ function ProjectRefs({ refs, hasChildren }: { refs: Extract<GoalsNode, { kind: "
 /** The word over a mission's title, in the goal's own colour; the root mission leads with the company's name. */
 function MissionKicker({ ghost, company }: { ghost: boolean; company?: string }) {
   return (
-    <div className="flex min-w-0 items-center gap-1 text-mark font-semibold uppercase tracking-[0.08em]" style={{ height: GOALS_SIZES.missionRow, color: ghost ? GHOST.color : "var(--sol-cyan)" }} data-goal-mission={company ? "root" : ""}>
+    <div className="flex min-w-0 items-center gap-1 text-[9.5px] font-semibold uppercase tracking-[0.08em]" style={{ height: GOALS_SIZES.missionRow, color: ghost ? GHOST.color : "var(--sol-cyan)" }} data-goal-mission={company ? "root" : ""}>
       {company && <><span className="truncate" style={{ color: "var(--sol-text-muted)", fontFamily: "var(--font-serif)", textTransform: "none", letterSpacing: 0, fontSize: 12 }} data-root-company>{company}</span><span aria-hidden style={{ color: DIM }}>·</span></>}
       <Compass className="h-[10px] w-[10px] shrink-0" /> mission
     </div>
@@ -166,7 +166,7 @@ export const GoalCard = memo(function GoalCard({ data }: NodeProps<Node<GoalNode
   // Middle: the first metric against its target, with its bar. Close: each with its trend and the day it was read.
   const metricRow = (m: (typeof metrics)[number]) => (
     <div key={m.key} className="flex min-w-0 items-center" style={{ height: GOALS_SIZES.metricRow - 4, marginTop: close && closeRows ? 0 : 4, marginBottom: close && closeRows ? 4 : 0 }} data-goal-metric={m.key}>
-      {close ? <MetricTile size="line" reading={m} trend={trends[m.key]} now={now} className={cn(CLOSE_LINE, "[&>span:last-child]:!text-meta")} /> : <MetricReadingLine reading={m} now={now} className="!gap-1.5 !text-meta [&>span:last-child]:!text-meta" />}
+      {close ? <MetricTile size="line" reading={m} trend={trends[m.key]} now={now} className={cn(CLOSE_LINE, "[&>span:last-child]:!text-[10px]")} /> : <MetricReadingLine reading={m} now={now} className="!gap-1.5 !text-[10.5px] [&>span:last-child]:!text-[10px]" />}
     </div>
   );
   return (
@@ -178,10 +178,10 @@ export const GoalCard = memo(function GoalCard({ data }: NodeProps<Node<GoalNode
         <div className="min-w-0 flex-1">
           <div className="line-clamp-3 text-[13px] font-semibold leading-[16px]" style={{ color: "var(--sol-text)", opacity: ghost ? 0.9 : 1 }} title={g.title} data-goal-title>{g.title}</div>
           {/* Middle: the goal's state word, the one its line says (the owner is the face). Close: the short id and the owner's name; the health moves to the update line below. */}
-          <div className="mt-[3px] flex min-w-0 items-center gap-1.5 overflow-hidden text-meta whitespace-nowrap" style={{ color: DIM }}>
+          <div className="mt-[3px] flex min-w-0 items-center gap-1.5 overflow-hidden text-[10.5px] whitespace-nowrap" style={{ color: DIM }}>
             {g.ghost?.tag && <GhostTag quiet label={g.ghost.tag} status={ghostTagStatus(g.ghost)} className="shrink-0" />}
             {close && g.short_id && <span className="shrink-0 font-mono">{g.short_id}</span>}
-            {g.row && !(close && g.row.health !== "none") && <GoalStateFace goal={g.row} now={now} dated={false} className="!text-meta shrink-0" />}
+            {g.row && !(close && g.row.health !== "none") && <GoalStateFace goal={g.row} now={now} dated={false} className="!text-[10.5px] shrink-0" />}
             {g.owner && (close || !g.row) && <span className="min-w-0 truncate" data-goal-owner={g.owner.id}>{g.owner.name}</span>}
             {!g.owner && <span className="shrink-0 italic" data-goal-owner="none">no owner</span>}
             {/* The root mission carries the company's totals; any other goal how many projects carry it. */}
@@ -192,13 +192,13 @@ export const GoalCard = memo(function GoalCard({ data }: NodeProps<Node<GoalNode
         {g.owner && <span className="mt-[1px] inline-flex shrink-0" style={g.ownerGhost && !g.ownerGhost.solid ? { opacity: 0.8 } : undefined} title={`Owner: ${g.owner.name}`} data-goal-face={g.owner.id}><OwnerFace owner={g.owner} size={20} /></span>}
       </div>
       {!(close && closeRows) && metrics.slice(0, 1).map(metricRow)}
-      {g.was && <div className="mt-1 truncate text-meta" style={{ color: DIM, height: GOALS_SIZES.wasRow - 4 }} data-goal-was>was under {g.was}</div>}
+      {g.was && <div className="mt-1 truncate text-[10.5px]" style={{ color: DIM, height: GOALS_SIZES.wasRow - 4 }} data-goal-was>was under {g.was}</div>}
       <GhostChips chips={g.chips} focusChangeId={data.focusChangeId} onFocusChange={data.onFocusChange} quiet />
       <ProjectRefs refs={refs} hasChildren={hasChildren} />
       {/* Close: under a rule, what the goal means, every number it is read by, what its owner last said, and what is running under it. */}
       {close && closeRows && (
         <div className="border-t" style={{ marginTop: 4, paddingTop: GOALS_SIZES.closeRule - 5, borderColor: "color-mix(in srgb, var(--sol-border) 30%, transparent)" }} data-goal-close>
-          {g.description?.trim() && <p className="line-clamp-2 text-meta leading-[15px]" style={{ color: "var(--sol-text-muted)", height: 30, marginBottom: GOALS_SIZES.descRow - 30 }} title={g.description} data-goal-description>{g.description}</p>}
+          {g.description?.trim() && <p className="line-clamp-2 text-[10.5px] leading-[15px]" style={{ color: "var(--sol-text-muted)", height: 30, marginBottom: GOALS_SIZES.descRow - 30 }} title={g.description} data-goal-description>{g.description}</p>}
           {metrics.map(metricRow)}
           {milestone && <div className="flex min-w-0 items-center" style={{ height: GOALS_SIZES.milestoneRow }} data-goal-milestone><NextMilestoneChip milestone={milestone} counts={milestoneCounts(g.row!)} now={now} className={CLOSE_LINE} /></div>}
           {g.row && g.row.health !== "none" && <LatestUpdate goal={g.row} now={now} />}
@@ -233,7 +233,7 @@ export const GoalProjectCard = memo(function GoalProjectCard({ data }: NodeProps
         {!far && p.lead && <span className="inline-flex shrink-0" title={`Led by ${p.lead.name}`} data-project-lead-face={p.lead.id}><OwnerFace owner={p.lead} size={16} /></span>}
       </div>
       {!far && !!data.goals?.length && (
-        <div className="flex min-w-0 items-center gap-1 overflow-hidden pl-[22px] text-meta" style={{ height: GOALS_SIZES.projectGoalsRow }} data-project-goals={data.goals.length}>
+        <div className="flex min-w-0 items-center gap-1 overflow-hidden pl-[22px] text-[10px]" style={{ height: GOALS_SIZES.projectGoalsRow }} data-project-goals={data.goals.length}>
           <span className="shrink-0" style={{ color: DIM }}>serves</span>
           {/* Two goals read whole enough to name them; the rest are counted, every title on hover. */}
           {data.goals.slice(0, 2).map((g) => (
@@ -246,7 +246,7 @@ export const GoalProjectCard = memo(function GoalProjectCard({ data }: NodeProps
       )}
       {/* Close: its number, where it stands and who leads it. */}
       {level === "close" && (
-        <div className="mt-[2px] flex min-w-0 items-center gap-1.5 pl-[22px] text-meta whitespace-nowrap" style={{ color: DIM }} data-project-close>
+        <div className="mt-[2px] flex min-w-0 items-center gap-1.5 pl-[22px] text-[10px] whitespace-nowrap" style={{ color: DIM }} data-project-close>
           {p.short_id && <span className="shrink-0 font-mono">{p.short_id}</span>}
           {p.status && <span className="shrink-0" style={{ color: p.status === "active" ? "var(--sol-text-muted)" : DIM }}>{p.status}</span>}
           <span className="min-w-0 truncate" data-project-lead={p.lead ? p.lead.id : "none"}>· {p.lead ? `led by ${p.lead.name}` : "no lead"}</span>
@@ -276,12 +276,12 @@ export const GoalOwnerCard = memo(function GoalOwnerCard({ data }: NodeProps<Nod
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-1.5">
           <span className={cn("truncate font-semibold leading-tight", far ? "text-[15px] tracking-tight" : "text-[12.5px]")} style={{ color: "var(--sol-text)" }}>{o.name}</span>
-          {!far && o.kind === "person" && o.me && <span className="shrink-0 rounded-sm px-1 text-meta font-medium" style={{ background: "color-mix(in srgb, var(--sol-cyan) 14%, transparent)", color: "var(--sol-cyan)" }}>you</span>}
+          {!far && o.kind === "person" && o.me && <span className="shrink-0 rounded-sm px-1 text-[9.5px] font-medium" style={{ background: "color-mix(in srgb, var(--sol-cyan) 14%, transparent)", color: "var(--sol-cyan)" }}>you</span>}
           {!far && data.ghost && <GhostTag quiet label={data.ghost.solid ? data.ghost.status : "new role"} status={data.ghost.status === "failed" ? "failed" : data.ghost.solid ? "accepted" : "proposed"} className="shrink-0" />}
           {!far && data.retire && <GhostTag quiet label="retire" status={data.retire.status} tone="color-mix(in srgb, var(--sol-red) 70%, var(--sol-text))" className="shrink-0" />}
         </div>
         {!far && (
-          <div className="mt-[2px] truncate text-meta" style={{ color: DIM }} title={[o.kind === "role" ? `@${o.handle}` : "", data.reportsTo ? `reports to ${data.reportsTo}` : ""].filter(Boolean).join(" · ") || undefined} data-owner-meta>
+          <div className="mt-[2px] truncate text-[10.5px]" style={{ color: DIM }} title={[o.kind === "role" ? `@${o.handle}` : "", data.reportsTo ? `reports to ${data.reportsTo}` : ""].filter(Boolean).join(" · ") || undefined} data-owner-meta>
             {/* The column card: the handle rides the title (the face and the name say who); what it owns and, on the map, who it is under. */}
             {!data.counts && o.kind === "role" ? `@${o.handle} · ` : o.kind === "unknown" ? "not on this chart · " : ""}{data.owns === 0 ? (data.counts ? "owns nothing" : "owns nothing after this") : `owns ${data.owns}`}{data.reportsTo ? ` · under ${data.reportsTo}` : ""}
           </div>
@@ -293,9 +293,9 @@ export const GoalOwnerCard = memo(function GoalOwnerCard({ data }: NodeProps<Nod
             {!far && <StateWords counts={data.counts} />}
           </div>
         )}
-        {data.was && !far && <div className="truncate text-meta" style={{ color: DIM, height: GOALS_SIZES.ownerWasRow - 2, marginTop: 2 }} title={data.move?.line} data-owner-was>was under {data.was}</div>}
+        {data.was && !far && <div className="truncate text-[10.5px]" style={{ color: DIM, height: GOALS_SIZES.ownerWasRow - 2, marginTop: 2 }} title={data.move?.line} data-owner-was>was under {data.was}</div>}
         {!far && <GhostChips chips={data.chips} focusChangeId={data.focusChangeId} onFocusChange={data.onFocusChange} quiet />}
-        {level === "close" && data.line && <div className="mt-[2px] truncate text-meta" style={{ color: "var(--sol-text-muted)" }} title={data.line} data-owner-line>{data.line}</div>}
+        {level === "close" && data.line && <div className="mt-[2px] truncate text-[10.5px]" style={{ color: "var(--sol-text-muted)" }} title={data.line} data-owner-line>{data.line}</div>}
       </div>
     </Frame>
   );

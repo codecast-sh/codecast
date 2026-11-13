@@ -115,7 +115,7 @@ export function DecisionQueueList() {
           <PageHeading title="Decisions" />
           {/* A count of nothing says what the empty state below says better. */}
           {(mine > 0 || onDefault > 0 || withLead > 0 || terminal.length > 0) && <span className="text-[12px] text-sol-text-dim">{mine} waiting on you{onDefault ? ` · ${onDefault} going ahead` : ""}{withLead ? ` · ${withLead} with a lead` : ""}{terminal.length ? ` · ${terminal.length} in a terminal` : ""}</span>}
-          <div className="ml-auto flex items-center gap-2 text-meta">
+          <div className="ml-auto flex items-center gap-2 text-[11px]">
             {pending.length > 0 && (
               <Link href="/decisions?mode=step" className="flex items-center gap-1.5 px-2 py-1 rounded border border-sol-border text-sol-text-muted hover:text-sol-text transition-colors">
                 <ListChecks className="w-3.5 h-3.5" />one at a time
@@ -167,10 +167,10 @@ export function DecisionQueueList() {
                 {terminal.map((item) => (
                   <li key={item.key}>
                     <Link href={`/decisions?s=${item.conversationId}`} className="flex items-center gap-2 rounded-lg border border-sol-border/70 hover:border-sol-border bg-sol-card/40 px-4 py-2.5 text-sm">
-                      <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow shrink-0" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse shrink-0" />
                       <span className="text-sol-text truncate">{item.session?.title || "Session"}</span>
-                      {item.session?.project_path && <span className="text-meta text-sol-text-dim truncate">{getProjectName(item.session.project_path)}</span>}
-                      <span className="ml-auto text-meta text-sol-text-dim shrink-0">{item.source === "permission" ? "permission prompt" : "a question"}</span>
+                      {item.session?.project_path && <span className="text-[11px] text-sol-text-dim truncate">{getProjectName(item.session.project_path)}</span>}
+                      <span className="ml-auto text-[11px] text-sol-text-dim shrink-0">{item.source === "permission" ? "permission prompt" : "a question"}</span>
                     </Link>
                   </li>
                 ))}
@@ -237,7 +237,7 @@ function QueueGroup({ group, selecting, selected, onToggle, keys }: { group: Dec
           count={group.items.length}
           hint={group.stack.policy.auto_default_after_ms ? `defaults apply after ${Math.round(group.stack.policy.auto_default_after_ms / 3_600_000)}h` : group.stack.policy.delegate_role_id ? "delegated to a role" : undefined}
           right={
-            <span className="flex items-center gap-2 text-meta">
+            <span className="flex items-center gap-2 text-[11px]">
               {due && <span data-stack-due={due.overdue ? "overdue" : "due"} className={due.overdue ? "text-sol-red" : "text-sol-text-dim"}>{due.text}</span>}
               <ShortId id={group.stack.short_id} className="text-sol-text-dim" />
               <Popover>
@@ -314,7 +314,7 @@ function HandledSection({ rows }: { rows: HandledDecisionItem[] }) {
             const answer = decisionAnswerLabel(d, d);
             return (
               <li key={d._id} className="rounded-lg border border-sol-border/60 bg-sol-card/30 px-4 py-2.5">
-                <div className="flex items-center gap-2 flex-wrap text-meta text-sol-text-dim">
+                <div className="flex items-center gap-2 flex-wrap text-[11px] text-sol-text-dim">
                   <span className="text-sol-green">{d.role?.name ?? "a role"}</span>
                   <span>answered {d.resolved_at ? formatTimeAgo(d.resolved_at, now) : ""}</span>
                   {d.category && <span className="px-1.5 py-0.5 rounded border border-sol-border">{d.category}</span>}

@@ -1,4 +1,4 @@
-import { memo, useMemo, useRef, useState, useCallback } from "react";
+import { useMemo, useRef, useState, useCallback } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { History, ArrowUpRight, ExternalLink, Link2 } from "lucide-react";
 import { TopbarButton } from "./TopbarButton";
@@ -29,8 +29,7 @@ const MENU_LIMIT = 30;
 // buttons: the mouse path onto the same panel the Ctrl+Tab walk and Ctrl+R
 // search render (RecentsPanel), anchored under the button with the chords in
 // its header.
-// Memo: the shell passes a stable open handle, so its renders skip this.
-export const RecentlyViewedMenu = memo(function RecentlyViewedMenu({ onSelectSession }: { onSelectSession: (id: string) => void }) {
+export function RecentlyViewedMenu({ onSelectSession }: { onSelectSession: (id: string) => void }) {
   const [open, setOpen] = useState(false);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -97,9 +96,7 @@ export const RecentlyViewedMenu = memo(function RecentlyViewedMenu({ onSelectSes
           onSelect={handleSelect}
           onItemContextMenu={(e, item) => ctxMenu.open(e, item)}
           mode="menu"
-          // cc-topbar-menu: on a phone the panel pins under the bar at the
-          // screen's width instead of running off its right edge (globals.css).
-          className="cc-topbar-menu absolute top-full left-0 mt-1 w-[420px] max-h-[min(560px,75vh)] bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[200]"
+          className="absolute top-full left-0 mt-1 w-[420px] max-h-[min(560px,75vh)] bg-sol-bg border border-sol-border rounded-lg shadow-xl z-[200]"
         />
       )}
 
@@ -134,4 +131,4 @@ export const RecentlyViewedMenu = memo(function RecentlyViewedMenu({ onSelectSes
       </ContextMenu>
     </div>
   );
-});
+}

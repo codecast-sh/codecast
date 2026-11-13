@@ -50,7 +50,7 @@ const api = _api as any;
 // ---------------------------------------------------------------------------
 
 const HEADER_ACTION =
-  "flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-blue transition-colors";
+  "flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-blue transition-colors";
 
 /** Copy a page's share URL. */
 function CopyLinkButton({ url, title, className }: { url: string; title: string; className?: string }) {
@@ -117,7 +117,7 @@ export function PageCard({ icon, title, href, actions, caption, children }: {
             href={href}
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center gap-0.5 text-meta text-sol-text-dim hover:text-sol-blue transition-colors"
+            className="flex items-center gap-0.5 text-[11px] text-sol-text-dim hover:text-sol-blue transition-colors"
           >
             open
             <ArrowUpRight className="h-3 w-3" />
@@ -126,7 +126,7 @@ export function PageCard({ icon, title, href, actions, caption, children }: {
         {children}
       </span>
       {caption && (
-        <span className="block mt-1 text-meta leading-snug text-sol-text-muted">{caption}</span>
+        <span className="block mt-1 text-[11px] leading-snug text-sol-text-muted">{caption}</span>
       )}
     </span>
   );
@@ -149,7 +149,7 @@ function PagePill({ icon, text, title, href, hoverClass, pane }: {
         href={href}
         target="_blank"
         rel="noopener noreferrer"
-        className={`group inline-flex min-w-0 items-center gap-1.5 rounded-full border border-sol-border bg-sol-bg-alt py-px pl-1 pr-2 align-baseline text-meta font-medium leading-[1.4] text-sol-text-secondary no-underline transition-colors hover:text-sol-text ${hoverClass}`}
+        className={`group inline-flex min-w-0 items-center gap-1.5 rounded-full border border-sol-border bg-sol-bg-alt py-px pl-1 pr-2 align-baseline text-[11px] font-medium leading-[1.4] text-sol-text-secondary no-underline transition-colors hover:text-sol-text ${hoverClass}`}
         title={title}
       >
         {icon}
@@ -192,7 +192,7 @@ function PageAgentStatus({ agent }: { agent: PageAgent }) {
       <span className="opacity-70">{PAGE_AGENT_LABELS[agent.chip]}</span>
     </>
   );
-  const className = `page-embed__agent inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap px-1.5 font-mono text-meta ${tone}`;
+  const className = `page-embed__agent inline-flex flex-shrink-0 items-center gap-1.5 whitespace-nowrap px-1.5 font-mono text-[10.5px] ${tone}`;
   const title = agent.chip === "updating"
     ? "A comment was sent to the session that made this page; it reloads here when a new version lands."
     : agent.session?.title || "The session that made this page.";
@@ -260,7 +260,7 @@ function Tool({ label, onClick, pressed, className = "", children }: {
           {children}
         </button>
       </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={8} className="flex items-center gap-1.5 border border-sol-border/60 bg-sol-bg-alt px-2 py-1 text-meta text-sol-text shadow-md">
+      <TooltipContent side="bottom" sideOffset={8} className="flex items-center gap-1.5 border border-sol-border/60 bg-sol-bg-alt px-2 py-1 text-[11px] text-sol-text shadow-md">
         {label}
       </TooltipContent>
     </Tooltip>
@@ -289,7 +289,7 @@ export function PublishedPageActions({ slug, notes }: {
           className={notes.pinMode ? "!bg-sol-yellow/20 !text-sol-yellow" : ""}
         >
           <MessageSquarePlus className="h-3.5 w-3.5" />
-          {notes.count > 0 && <span className="font-mono text-meta tabular-nums text-sol-yellow">{notes.count}</span>}
+          {notes.count > 0 && <span className="font-mono text-[11px] tabular-nums text-sol-yellow">{notes.count}</span>}
         </Tool>
       )}
       {/* The public share URL, not the serving origin the frame uses. */}
@@ -346,7 +346,7 @@ export function FramelessPage({ title, href, actions, status, statusPinned, capt
       href={href}
       target="_blank"
       rel="noopener noreferrer"
-      className="flex min-w-0 max-w-[16rem] items-center gap-1.5 rounded-full py-0.5 pl-1 pr-2 text-meta font-medium text-sol-text-secondary no-underline transition-colors hover:text-sol-text"
+      className="flex min-w-0 max-w-[16rem] items-center gap-1.5 rounded-full py-0.5 pl-1 pr-2 text-[11px] font-medium text-sol-text-secondary no-underline transition-colors hover:text-sol-text"
       title={href}
     >
       <PageFavicon className="h-4 w-4" />
@@ -363,7 +363,7 @@ export function FramelessPage({ title, href, actions, status, statusPinned, capt
           </button>
           {titleLink}
         </span>
-        {caption && <span className="mt-1.5 block text-meta leading-snug text-sol-text-muted">{caption}</span>}
+        {caption && <span className="mt-1.5 block text-[11px] leading-snug text-sol-text-muted">{caption}</span>}
       </span>
     );
   }
@@ -401,13 +401,13 @@ export function FramelessPage({ title, href, actions, status, statusPinned, capt
           type="button"
           onClick={expand.onToggle}
           aria-expanded={expand.expanded}
-          className="page-embed__expand mt-1.5 flex items-center gap-1 text-meta text-sol-text-dim transition-colors hover:text-sol-text-muted"
+          className="page-embed__expand mt-1.5 flex items-center gap-1 text-[11px] text-sol-text-dim transition-colors hover:text-sol-text-muted"
         >
           {expand.expanded ? <ChevronsDownUp className="h-3 w-3" /> : <ChevronsUpDown className="h-3 w-3" />}
           {expand.expanded ? "Shrink" : "Expand"}
         </button>
       )}
-      {caption && <span className="mt-1.5 block text-meta leading-snug text-sol-text-muted">{caption}</span>}
+      {caption && <span className="mt-1.5 block text-[11px] leading-snug text-sol-text-muted">{caption}</span>}
     </span>
   );
 }
@@ -797,12 +797,12 @@ export function ClaudeArtifactEmbed({ id, caption }: { id: string; caption?: str
         <ClaudeFavicon className="h-9 w-9" />
         <span className="flex min-w-0 flex-col gap-0.5">
           <span className="text-xs font-medium text-sol-text">Open on claude.ai</span>
-          <span className="text-meta leading-snug text-sol-text-dim">
+          <span className="text-[11px] leading-snug text-sol-text-dim">
             {canPane
               ? "claude.ai does not let other sites frame an artifact. Open it in its own tab, or as a pane beside this conversation."
               : "claude.ai does not let other sites frame an artifact, so it opens in its own tab."}
           </span>
-          <span className="truncate font-mono text-meta text-sol-text-dim">claude.ai/public/artifacts/{id}</span>
+          <span className="truncate font-mono text-[10px] text-sol-text-dim">claude.ai/public/artifacts/{id}</span>
         </span>
         <ArrowUpRight className="ml-auto h-3.5 w-3.5 flex-shrink-0 text-sol-text-dim transition-transform group-hover:-translate-y-px group-hover:translate-x-px group-hover:text-sol-orange" />
       </a>
@@ -888,7 +888,7 @@ export function LinkPreviewCard({ url, caption }: { url: string; caption?: strin
           className="group flex min-w-0 max-w-xl flex-1 gap-3 rounded-md border border-sol-border border-l-[3px] border-l-sol-border bg-sol-bg-alt py-2 pl-3 pr-2 no-underline transition-colors hover:border-l-sol-blue hover:bg-sol-card"
         >
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="flex min-w-0 items-center gap-1.5 text-meta text-sol-text-dim">
+            <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-sol-text-dim">
               {ok?.favicon && !iconFailed ? (
                 <img src={ok.favicon} alt="" className="h-3.5 w-3.5 flex-shrink-0 rounded-sm" onError={() => setIconFailed(true)} />
               ) : (
@@ -900,7 +900,7 @@ export function LinkPreviewCard({ url, caption }: { url: string; caption?: strin
             {ok?.title ? (
               <span className="line-clamp-2 text-[13px] font-semibold leading-snug text-sol-blue group-hover:underline">{ok.title}</span>
             ) : (
-              <span className="truncate font-mono text-meta text-sol-text-muted">{url.replace(/^https?:\/\//, "")}</span>
+              <span className="truncate font-mono text-[11px] text-sol-text-muted">{url.replace(/^https?:\/\//, "")}</span>
             )}
             {ok?.description && (
               <span className="line-clamp-2 text-xs leading-snug text-sol-text-muted">{ok.description}</span>
@@ -922,7 +922,7 @@ export function LinkPreviewCard({ url, caption }: { url: string; caption?: strin
           className="mt-1 flex-shrink-0 rounded p-1 text-sol-text-dim opacity-0 transition-opacity hover:text-sol-blue focus-visible:opacity-100 group-hover/link:opacity-100 [@media(hover:none)]:opacity-100"
         />
       </span>
-      {caption && <span className="mt-1 block text-meta leading-snug text-sol-text-muted">{caption}</span>}
+      {caption && <span className="mt-1 block text-[11px] leading-snug text-sol-text-muted">{caption}</span>}
     </span>
   );
 }
