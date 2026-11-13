@@ -10,9 +10,11 @@ import { applyFormat, formatForKey, LINK_REQUEST, type FormatCommand } from "./b
 import { claimKeys } from "../../shortcuts/keyOwnership";
 import { useMountEffect } from "../../hooks/useMountEffect";
 
-export function RichEditor({ value, className, style, onInput, onDone, onNext }: {
+export function RichEditor({ value, className, style, onInput, onDone, onNext, "data-list": list }: {
   value: string;
   className: string;
+  /** The text holds a list: it reads left-aligned. */
+  "data-list"?: true;
   style?: React.CSSProperties;
   onInput(text: string): void;
   onDone(): void;
@@ -76,6 +78,7 @@ export function RichEditor({ value, className, style, onInput, onDone, onNext }:
       suppressContentEditableWarning
       spellCheck={false}
       className={`board-edit board-rich-edit ${className}`}
+      data-list={list}
       style={style}
       onInput={emit}
       // The format bar's link field takes focus for a moment; that is not the end of editing.
@@ -125,13 +128,15 @@ export function RichEditor({ value, className, style, onInput, onDone, onNext }:
 
 /** Whether a text node starts its line in the editor (first text of a top-level line). */
 function isLineStart(editor: HTMLElement, node: Node): boolean {
+  // A line starts after a line break, or at the start of a block (or of the editor).
+  const breaks = (n: Node | null) => !!n && n.nodeType === 1 && ["DIV", "P", "BR"].includes((n as Element).tagName);
   let n: Node = node;
-  while (n.parentNode && n.parentNode !== editor) {
-    if (n.parentNode.firstChild !== n) return false;
-    n = n.parentNode;
+  for (;;) {
+    const prev = n.previousSibling;
+    if (prev) return breaks(prev);
+    const parent = n.parentNode;
+    if (!parent || parent === editor) return true;
+    if (breaks(parent)) return true;
+    n = parent;
   }
-  if (n.parentNode !== editor) return false;
-  // A loose text node at the top is a line only when it opens the editor or follows a block.
-  const prev = n.previousSibling;
-  return n.nodeType === 1 || !prev || (prev.nodeType === 1 && ["DIV", "P", "BR"].includes((prev as Element).tagName));
 }

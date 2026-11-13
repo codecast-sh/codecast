@@ -4,6 +4,7 @@
 import { useRef } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { claimKeys, keyBelongsElsewhere } from "../../shortcuts/keyOwnership";
+import { useInboxStore } from "../../store/inboxStore";
 import { TOOL_KEYS } from "./boardModel";
 import type { BoardTool } from "./boardTypes";
 
@@ -51,7 +52,8 @@ export function useBoardKeys(cmds: KeyCommands, spaceHeld: React.MutableRefObjec
   /** Set by an Escape with nothing to clear: the next Tab moves on through the page. */
   const leaving = useRef(false);
   useWatchEffect(() => {
-    const onPress = (e: PointerEvent) => {
+    // The board holds the keyboard while the person's last press, or keyboard focus, is inside it.
+    const onPress = (e: Event) => {
       const root = rootRef.current;
       active.current = !!root && root.contains(e.target as Node);
     };
@@ -59,11 +61,18 @@ export function useBoardKeys(cmds: KeyCommands, spaceHeld: React.MutableRefObjec
     let claimed = false;
     const onKey = (e: KeyboardEvent) => {
       // The page's own Escape goes back to the list; on a board, a stray Escape (after a popover closed, a press in the header) must not.
+      // An open app panel (the ? shortcuts list) closes on its own Escape.
+      if (e.key === "Escape" && (useInboxStore.getState() as { shortcutsPanelOpen?: boolean }).shortcutsPanelOpen) return;
+      // A version view (or a read-only board) belongs to the page: its Escape goes back to the current board.
+      if (e.key === "Escape" && ref.current.readOnly) return;
       if (e.key === "Escape" && !active.current && !e.defaultPrevented && !keyBelongsElsewhere(e.target)) {
         const root = rootRef.current;
         if (root?.isConnected && !overlayOpen()) { e.preventDefault(); claimed = true; ref.current.clearSelection(); return; }
       }
       if (!active.current || keyBelongsElsewhere(e.target) || e.defaultPrevented) return;
+      // A control outside the board (the header's Share, History, "...") keeps its own keys.
+      const t = e.target as Node | null;
+      if (t && t !== document.body && rootRef.current && !rootRef.current.contains(t)) return;
       // Only when the board is on screen and no dialog sits over it.
       const root = rootRef.current;
       if (!root || !root.isConnected || overlayOpen()) return;
@@ -78,8 +87,9 @@ export function useBoardKeys(cmds: KeyCommands, spaceHeld: React.MutableRefObjec
         stop();
         return;
       }
-      if (mod && (k === "=" || k === "+")) { stop(); c.zoomBy(1.25); return; }
-      if (mod && k === "-") { stop(); c.zoomBy(0.8); return; }
+      // Plain + and - zoom too, as in FigJam and tldraw.
+      if ((k === "=" || k === "+") && !e.altKey) { stop(); c.zoomBy(1.25); return; }
+      if ((k === "-" || k === "_") && !e.altKey) { stop(); c.zoomBy(0.8); return; }
       if (mod && k === "0") { stop(); c.zoomTo(1); return; }
       if (e.shiftKey && (e.key === "!" || e.code === "Digit1")) { stop(); c.fit(false); return; }
       if (e.shiftKey && (e.key === "@" || e.code === "Digit2")) { stop(); c.fit(true); return; }
@@ -130,12 +140,14 @@ export function useBoardKeys(cmds: KeyCommands, spaceHeld: React.MutableRefObjec
       }
     };
     window.addEventListener("pointerdown", onPress, { capture: true });
+    window.addEventListener("focusin", onPress, { capture: true });
     // Claimed in the app's first key listener: a tool key (C, S, T...) acts on the board, never
     // reaching an app shortcut registered earlier (C would make a new note and leave the board).
     const release = claimKeys((e) => { claimed = false; onKey(e); return claimed; });
     window.addEventListener("keyup", onUp);
     return () => {
       window.removeEventListener("pointerdown", onPress, { capture: true });
+      window.removeEventListener("focusin", onPress, { capture: true });
       release();
       window.removeEventListener("keyup", onUp);
     };

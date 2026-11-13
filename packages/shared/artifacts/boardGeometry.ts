@@ -338,7 +338,15 @@ export function elbowRoute(A: Box, B: Box, obstacles: readonly Box[], anchors: {
         const d2 = { x: Math.sign(pts[i].x - pts[i - 1].x), y: Math.sign(pts[i].y - pts[i - 1].y) };
         if (d1.x === -d2.x && d1.y === -d2.y) reversals++;
       }
-      const score = polyLength(pts) + (pts.length - 2) * 24 + hits * 10000 + reversals * 5000;
+      // A route leaves its box straight out of the side it starts on and enters the target head-on. (A stub that
+      // tidy() folded away would otherwise leave a line running along the box's own edge.)
+      const out = (from: Pt, to: Pt, side: Side) => {
+        const n = stubOut({ x: 0, y: 0 }, side, 1);
+        return Math.sign(to.x - from.x) === n.x && Math.sign(to.y - from.y) === n.y;
+      };
+      const n = pts.length;
+      const skew = (!freeA && !anchors.a && n > 1 && !out(pts[0], pts[1], sa) ? 1 : 0) + (!freeB && !anchors.b && n > 1 && !out(pts[n - 1], pts[n - 2], sb) ? 1 : 0);
+      const score = polyLength(pts) + (pts.length - 2) * 24 + hits * 10000 + (reversals + skew) * 5000;
       if (!best || score < best.score) best = { pts, score };
     }
   }
@@ -381,6 +389,29 @@ function longestLegMiddle(pts: readonly Pt[]): Pt {
     if (len > best) { best = len; at = { x: (pts[i].x + pts[i - 1].x) / 2, y: (pts[i].y + pts[i - 1].y) / 2 }; }
   }
   return at;
+}
+
+/**
+ * Where a connector's label is drawn (its centre; 15px text on a 24px chip). On
+ * its line by default; when the leg it sits on is too short to show line and
+ * arrowhead past the chip, it moves just beside the line (above a level leg, to
+ * the right of an upright one), so the arrow's direction stays visible.
+ */
+export function labelSpot(g: { points: readonly Pt[]; mid: Pt }, label: string): Pt {
+  const lw = textWidth(label, 15) + 16;
+  let leg: [Pt, Pt] | null = null, near = Infinity;
+  for (let i = 1; i < g.points.length; i++) {
+    const p = g.points[i - 1], q = g.points[i];
+    const t = Math.max(0, Math.min(1, ((g.mid.x - p.x) * (q.x - p.x) + (g.mid.y - p.y) * (q.y - p.y)) / (Math.hypot(q.x - p.x, q.y - p.y) ** 2 || 1)));
+    const d = Math.hypot(p.x + (q.x - p.x) * t - g.mid.x, p.y + (q.y - p.y) * t - g.mid.y);
+    if (d < near) { near = d; leg = [p, q]; }
+  }
+  if (!leg) return g.mid;
+  const [p, q] = leg;
+  const level = Math.abs(q.x - p.x) >= Math.abs(q.y - p.y);
+  const len = Math.hypot(q.x - p.x, q.y - p.y);
+  if (len >= (level ? lw : 24) + 48) return g.mid;
+  return level ? { x: g.mid.x, y: g.mid.y - 20 } : { x: g.mid.x + lw / 2 + 8, y: g.mid.y };
 }
 
 /** Where along a connector its label sits, 0 (start) to 1 (end); the middle by default. */

@@ -16,7 +16,8 @@ const MAX_Z = 2;
 const STEPS = [0.25, 0.33, 0.5, 0.67, 0.8, 1, 1.25, 1.5, 2];
 
 export default function SharedBoard({ elements }: LiveSharedViewProps) {
-  const els = elements as BoardEl[];
+  // The workshop state (kind "session") is never drawn.
+  const els = useMemo(() => (elements as BoardEl[]).filter((e) => e.kind !== "session"), [elements]);
   const byKey = useMemo(() => new Map(els.map((e) => [e.key, e])), [els]);
   const ordered = useMemo(() => drawOrder(els), [els]);
   const box = useMemo(() => fitBox(els, byKey), [els, byKey]);

@@ -5,6 +5,7 @@ import { memo, useLayoutEffect, useRef, useState } from "react";
 import {
   boardArtFor,
   connectorGeometry,
+  labelSpot,
   elementBox,
   shapeFontSize,
   shapeOutline,
@@ -18,7 +19,7 @@ import { formatKey } from "./boardMarks";
 import { RichText } from "./BoardRichText";
 import { RichEditor } from "./BoardRichEditor";
 import { EntityObjectCard } from "../EntityObjectCard";
-import { colorToken, stickyFill, tint } from "./boardColors";
+import { colorToken, shapeFill, stickyFill, tint } from "./boardColors";
 import type { BoardEl } from "./boardTypes";
 
 export type EditProps = {
@@ -106,6 +107,8 @@ const StickyView = memo(function StickyView({ el, editing, onEditInput, onEditDo
   const [draft, setDraft] = useState(text);
   const shown = editing ? draft : text;
   const { iconH, size } = stickyLayout(shown, b.w, b.h, icon, !!art);
+  // A sticky holding a list reads left-aligned, as FigJam's do; centred lines beside left-hung bullets look ragged.
+  const list = /^(- |• )/m.test(shown) || undefined;
   return (
     <div data-key={el.key} className="board-el board-sticky" style={boxStyle(el, { background: stickyFill(el.color) })}>
       {art ? (
@@ -117,6 +120,7 @@ const StickyView = memo(function StickyView({ el, editing, onEditInput, onEditDo
         <RichEditor
           value={text}
           className="board-sticky-text"
+          data-list={list}
           style={{ fontSize: size }}
           onInput={(t) => { setDraft(t); onEditInput(t); }}
           onDone={onEditDone}
@@ -124,7 +128,7 @@ const StickyView = memo(function StickyView({ el, editing, onEditInput, onEditDo
         />
       ) : (
         // A long first line is not a title: the far-zoom view leaves it at its size rather than enlarging and cropping it.
-        <div className="board-sticky-text" data-long={shown.split("\n")[0].length > 28 || undefined} style={{ fontSize: size, ["--fs" as any]: `${size}px` }}>
+        <div className="board-sticky-text" data-list={list} data-long={shown.split("\n")[0].length > 28 || undefined} style={{ fontSize: size, ["--fs" as any]: `${size}px` }}>
           <RichText text={shown} titleFirst />
         </div>
       )}
@@ -165,7 +169,7 @@ const ShapeView = memo(function ShapeView({ el, editing, onEditInput, onEditDone
   const outline = shapeOutline(shape, b.w, b.h);
   const color = colorToken(el.color, "blue");
   const solid = el.solid === true;
-  const fill = solid ? color : tint(el.color, 16);
+  const fill = solid ? color : shapeFill(el.color);
   const stroke = solid ? "transparent" : color;
   const text = typeof el.text === "string" ? el.text : "";
   const fontSize = shapeFontSize(shape, b.h);
@@ -225,6 +229,8 @@ export const ConnectorView = memo(function ConnectorView({ el, from, to, obstacl
   const arrow = typeof el.arrow === "string" ? el.arrow : "end";
   const head = 9 + width * 1.5;
   const label = typeof el.label === "string" ? el.label : "";
+  // While typing, the label stays where the line's middle is; drawn, it steps beside a leg too short to show past it.
+  const spot = editing ? g.mid : labelSpot(g, label);
   return (
     <div data-key={el.key} className="board-el board-connector" style={{ left: 0, top: 0 }}>
       <svg className="board-svg" width={1} height={1} aria-hidden>
@@ -234,7 +240,7 @@ export const ConnectorView = memo(function ConnectorView({ el, from, to, obstacl
         {arrow === "both" && <polygon points={arrowHead(g.a, g.angleStart, head)} fill={color} />}
       </svg>
       {(label || editing) && (
-        <div className="board-connector-label" style={{ left: g.mid.x, top: g.mid.y }}>
+        <div className="board-connector-label" style={{ left: spot.x, top: spot.y }}>
           {editing ? <InlineEditor value={label} className="board-connector-label-edit" onInput={onEditInput} onDone={onEditDone} singleLine /> : label}
         </div>
       )}

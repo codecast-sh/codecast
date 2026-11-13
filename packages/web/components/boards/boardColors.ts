@@ -29,5 +29,10 @@ export function tint(name: unknown, pct = 12): string {
   return `color-mix(in srgb, ${colorToken(name, "blue")} ${pct}%, transparent)`;
 }
 
+/** A shape's fill: the same tint over the board's background, opaque, so a shape laid over a sticky hides it as FigJam's do. */
+export function shapeFill(name: unknown): string {
+  return `color-mix(in srgb, ${colorToken(name, "blue")} 16%, var(--sol-bg))`;
+}
+
 /** The stamp palette, in toolbar order. */
 export const STAMPS = ["👍", "❤️", "🎉", "🔥", "✅", "❓", "⭐", "👀", "🚀", "💡", "⚠️", "😂"] as const;

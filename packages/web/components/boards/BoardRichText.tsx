@@ -2,8 +2,8 @@
 // small markdown subset (what a person types and what an agent writes):
 // **bold**, *italic*, ~~strike~~, `- ` and `1. ` list lines, bare URLs and
 // [label](url) links. The editor shows the marks; the canvas draws them.
-import type { CSSProperties, ReactNode } from "react";
-import { INLINE, richLines } from "./boardMarks";
+import { Fragment, type CSSProperties, type ReactNode } from "react";
+import { markRuns, richLines } from "./boardMarks";
 
 function safeHref(url: string): string | null {
   return /^(https?:\/\/|mailto:)/i.test(url) ? url : null;
@@ -18,7 +18,7 @@ function link(href: string, label: ReactNode, key: number): ReactNode {
       rel="noreferrer noopener"
       // On the canvas a link opens with Cmd/Ctrl-click; it is not a stop when Tab walks the board.
       tabIndex={-1}
-      style={{ color: "var(--sol-blue)", textDecoration: "underline", textUnderlineOffset: "0.15em", cursor: "pointer" }}
+      className="board-a"
       // A press on the canvas selects and drags the element; Cmd/Ctrl-click opens the link.
       onClick={(e) => { if (!(e.metaKey || e.ctrlKey)) e.preventDefault(); }}
     >
@@ -27,32 +27,17 @@ function link(href: string, label: ReactNode, key: number): ReactNode {
   );
 }
 
-/** One line's inline marks. */
+/** One line's inline marks, drawn from the same runs the editor and the export use. */
 function inlineMarks(text: string): ReactNode[] {
-  const out: ReactNode[] = [];
-  let last = 0, i = 0;
-  for (const m of text.matchAll(INLINE)) {
-    const at = m.index ?? 0;
-    if (at > last) out.push(text.slice(last, at));
-    const t = m[0];
-    if (t.startsWith("**")) out.push(<strong key={i++}>{t.slice(2, -2)}</strong>);
-    else if (t.startsWith("~~")) out.push(<s key={i++}>{t.slice(2, -2)}</s>);
-    else if (t.startsWith("*")) out.push(<em key={i++}>{t.slice(1, -1)}</em>);
-    else if (t.startsWith("[")) {
-      const mm = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(t)!;
-      const href = safeHref(mm[2]);
-      out.push(href ? link(href, mm[1], i++) : t);
-    } else {
-      // A bare URL drops trailing sentence punctuation.
-      const url = t.replace(/[.,;:!?]+$/, "");
-      const href = safeHref(url);
-      out.push(href ? link(href, url.replace(/^https?:\/\//, ""), i++) : url);
-      if (url.length < t.length) out.push(t.slice(url.length));
-    }
-    last = at + t.length;
-  }
-  if (last < text.length) out.push(text.slice(last));
-  return out;
+  return markRuns(text).map((r, i) => {
+    let n: ReactNode = r.t;
+    if (r.s) n = <s>{n}</s>;
+    if (r.i) n = <em>{n}</em>;
+    if (r.b) n = <strong>{n}</strong>;
+    const href = r.href ? safeHref(r.href) : null;
+    // Plain runs stay bare text: a sticky's one-line title is what the far zoom level keeps.
+    return href ? link(href, n, i) : <Fragment key={i}>{n}</Fragment>;
+  });
 }
 
 /**

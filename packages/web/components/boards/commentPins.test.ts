@@ -20,3 +20,11 @@ describe("comment pins", () => {
     expect(pts.get("b")).toEqual({ x: 166, y: -8 });
   });
 });
+
+describe("fitting with pins", () => {
+  test("a pin near the content is framed; one out in empty space is not", async () => {
+    const { fitBox } = await import("./boardFrame");
+    expect(fitBox([sticky], byKey, [{ x: 210, y: -10 }])).toEqual({ x: 0, y: -46, w: 246, h: 206 });
+    expect(fitBox([sticky], byKey, [{ x: -110, y: -194 }])).toEqual({ x: 0, y: 0, w: 200, h: 160 });
+  });
+});

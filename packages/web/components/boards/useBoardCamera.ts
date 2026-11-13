@@ -160,7 +160,7 @@ export function useBoardCamera(docId: string) {
     // A narrow pane (a phone, a split) would fit a big board at an unreadable size: open at half size on its top-left instead.
     if (box && opts?.minReadable && W < 700 && target.z < READABLE_Z) {
       const m = fitMargin(W, H);
-      target = { z: READABLE_Z, x: m - box.x * READABLE_Z, y: m - box.y * READABLE_Z };
+      target = { z: READABLE_Z, x: ins.left + m - box.x * READABLE_Z, y: ins.top + m - box.y * READABLE_Z };
     }
     if (opts?.instant) set(target);
     else glide(target);

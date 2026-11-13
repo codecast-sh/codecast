@@ -131,6 +131,10 @@ html.light .board-root {
   gap: 2px;
 }
 .board-sticky-text strong { font-weight: 650; }
+.board-sticky .board-sticky-text[data-list] { text-align: left; }
+/* A link on a pastel sticky: the theme's blue darkened toward the sticky's ink, so it reads on cream. */
+.board-a { color: var(--sol-blue); text-decoration: underline; text-underline-offset: 0.15em; cursor: pointer; }
+.board-sticky .board-a, .board-sticky .board-rich-edit a { color: color-mix(in srgb, var(--sol-blue) 55%, var(--board-ink)); }
 /* One line of formatted text; list items lay their mark beside their words. */
 .board-line { display: block; }
 .board-li { display: flex; }
@@ -678,3 +682,97 @@ html.light .board-root {
 @media (prefers-reduced-motion: reduce) {
   .board-root *, .board-root *::before { animation: none !important; transition: none !important; }
 }
+
+/* Workshop: dot vote and timer, top left */
+.board-session {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  z-index: 20;
+}
+.board-session > .board-bar-btn,
+.board-session-timer > .board-bar-btn,
+.board-session-chip {
+  background: var(--sol-card);
+  border: 1px solid var(--sol-border);
+  border-radius: 9px;
+  box-shadow: var(--board-chrome-shadow);
+}
+.board-session > .board-bar-btn, .board-session-timer > .board-bar-btn { height: 34px; padding: 0 10px; }
+.board-session-timer { position: relative; }
+.board-session-chip {
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 0 10px;
+  font-size: 12px;
+  color: var(--sol-text-muted);
+}
+.board-session-chip.is-live { border-color: color-mix(in srgb, var(--sol-blue) 45%, var(--sol-border)); color: var(--sol-blue); }
+.board-session-chip.is-done { border-color: var(--sol-red); color: var(--sol-red); animation: board-session-pulse 1s ease-in-out 3; }
+.board-session-chip.is-out { animation: board-session-shake 0.35s ease-in-out; }
+.board-session-val { color: var(--sol-text); font-variant-numeric: tabular-nums; min-width: 34px; }
+.board-session-chip.is-done .board-session-val { color: var(--sol-red); font-weight: 600; }
+.board-session-act {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--sol-text);
+  white-space: nowrap;
+}
+.board-session-act:hover, .board-session-act:focus-visible { background: var(--sol-bg-alt); }
+.board-session-menu {
+  position: absolute;
+  top: 40px;
+  left: 0;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  background: var(--sol-card);
+  border: 1px solid var(--sol-border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px color-mix(in srgb, black 14%, transparent);
+}
+.board-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+@keyframes board-session-pulse { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--sol-red) 25%, transparent); } }
+@keyframes board-session-shake { 25% { transform: translateX(-3px); } 75% { transform: translateX(3px); } }
+@media (prefers-reduced-motion: reduce) { .board-session-chip.is-done, .board-session-chip.is-out { animation: none; } }
+
+.board-votes {
+  position: absolute;
+  display: flex;
+  gap: 3px;
+  pointer-events: none;
+  z-index: 2;
+}
+.board-vote-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--sol-blue);
+  border: 2px solid var(--sol-card);
+  box-shadow: 0 1px 2px color-mix(in srgb, black 20%, transparent);
+}
+.board-votes.is-result {
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 14px;
+  align-items: center;
+  justify-content: center;
+  background: var(--sol-blue);
+  color: white;
+  font-size: 14px;
+  font-weight: 700;
+  border: 2px solid var(--sol-card);
+  box-shadow: 0 1px 3px color-mix(in srgb, black 25%, transparent);
+}
+.board-root.is-voting .board-sticky { cursor: pointer; }
+/* A narrow pane: the workshop chips sit under the zoom bar instead of beside it. */
+.board-session.is-compact { top: 54px; left: auto; right: 12px; }
+.board-session.is-compact .board-session-menu { left: auto; right: 0; }

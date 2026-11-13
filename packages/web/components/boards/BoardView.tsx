@@ -45,7 +45,10 @@ import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { KeyCap } from "../KeyCap";
 import { BoardElementView, ConnectorView } from "./BoardElements";
-import { BOARD_ASK_SLOT, editField } from "./boardModel";
+import { BOARD_ASK_SLOT, MOD, SHIFT, editField } from "./boardModel";
+import { BoardContextMenu, type BoardMenuItem, type BoardMenuPayload } from "./BoardContextMenu";
+import { useContextMenu } from "../ui/context-menu";
+import { isMac } from "../../shortcuts";
 import { BoardOverlay, type RemoteSelection } from "./BoardOverlay";
 import { BoardToolbar } from "./BoardToolbar";
 import { BoardSelectionBar, type BarAction } from "./BoardSelectionBar";
@@ -62,6 +65,8 @@ import { BoardMinimap } from "./BoardMinimap";
 import { nextStickySpot } from "./boardPlacement";
 import { BoardEditBar } from "./BoardEditBar";
 import { BOARD_ART_URLS } from "./boardArtUrls";
+import { BoardSessionBar, BoardVoteDots } from "./BoardSessionBar";
+import { clearVotingOps, readSession, sessionOp, startVotingOps, toggleVoteOps, votesOf, votesUsed } from "./boardSession";
 
 const MINIMAP_KEY = "board-minimap";
 /** Below this pane width the overview would cover the board itself, so it is not offered. */
@@ -75,12 +80,30 @@ type PromptState = { mode: PromptMode; at: Pt; world?: Pt; anchor?: string | nul
 export default function BoardView({ doc, live, selection, setSelection, mode, snapshot, toScreen, setExports }: LiveViewProps) {
   const readOnly = mode === "view";
   const liveEls = useLiveElements(doc._id);
-  const elements = (snapshot ?? liveEls) as BoardEl[];
+  const rawEls = (snapshot ?? liveEls) as BoardEl[];
+  // The workshop state (a dot vote, a timer) is one element the canvas never draws.
+  const sessionEl = useMemo(() => rawEls.find((e) => e.kind === "session"), [rawEls]);
+  const elements = useMemo(() => (sessionEl ? rawEls.filter((e) => e !== sessionEl) : rawEls), [rawEls, sessionEl]);
+  const session = useMemo(() => readSession(sessionEl), [sessionEl]);
   const comments = useLiveComments(doc._id);
   const threads = useThreads(comments);
   const others = useLivePresence(doc._id);
   const me = useInboxStore((s: any) => s.currentUser);
   const convex = useConvex();
+  const myId = String(me?._id ?? "me");
+  const votingOpen = !!session.voting?.open && !readOnly;
+  // Bumped when a vote is refused (none left): the votes-left chip shakes.
+  const [outOfVotes, setOutOfVotes] = useState(0);
+  // A click (or Enter) on a sticky while the vote is open puts my vote on it, or takes it back.
+  const voteOn = (key: string) => {
+    const el = byKeyRef.current.get(key);
+    if (!votingOpen || el?.kind !== "sticky") return false;
+    const per = session.voting!.per;
+    const ops = toggleVoteOps(el, myId, votesUsed(byKeyRef.current.values(), myId), per);
+    if (!ops) { setOutOfVotes((n) => n + 1); return true; }
+    live.apply(ops, { undoable: false });
+    return true;
+  };
   const cam = useBoardCamera(doc._id);
 
   const byKey = useMemo(() => new Map(elements.map((e) => [e.key, e])), [elements]);
@@ -101,10 +124,15 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   // What the board's own chrome covers at its edges: the zoom bar above, the toolbar below, the overview at the right.
   const chromeInsets = () => {
     const w = cam.rootRef.current?.clientWidth ?? 0;
-    return { top: w ? 40 : 0, bottom: 64, right: 0 };
+    // An open overview map sits at the bottom right: fitted content stays clear of it.
+    // The zoom bar and the Vote/Timer buttons end 46px down; in a narrow pane a running vote or timer adds a row.
+    const sessionRow = w > 0 && w < 600 && (session.voting || session.timer);
+    return { top: w ? (sessionRow ? 92 : 56) : 0, bottom: 64, right: minimapOn.current && w >= MINIMAP_MIN_W ? 196 : 0 };
   };
+  const minimapOn = useRef(false);
   const [locked, setLocked] = useState(false);
   const [minimap, setMinimapState] = useState(() => { try { return localStorage.getItem(MINIMAP_KEY) === "1"; } catch { return false; } });
+  minimapOn.current = minimap;
   const setMinimap = (on: boolean) => { setMinimapState(on); try { localStorage.setItem(MINIMAP_KEY, on ? "1" : "0"); } catch { /* private mode */ } };
   const spaceHeld = useRef(false);
   const lastPointer = useRef<Pt | null>(null);
@@ -121,7 +149,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   // opening, the window narrowing) frames the content again.
   const fitted = useRef(cam.hadSaved.current);
   const autoCam = useRef<{ x: number; y: number; z: number } | null>(null);
-  const lastFit = useRef<{ w: number; h: number; ready: boolean } | null>(null);
+  const lastFit = useRef<{ w: number; h: number; ready: boolean; count: number } | null>(null);
   useWatchEffect(() => {
     if (!cam.viewport.w) return;
     if (!live.ready && elements.length === 0) return;
@@ -141,12 +169,13 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     if (fitted.current && !untouched) return;
     // Once the board has loaded, a new element is someone's edit, not more of the board arriving:
     // the view stays put (only a pane resize frames it again).
+    // (A board that was empty at that fit, like a fresh duplicate whose copy lands a moment later, still fits its first content.)
     const last = lastFit.current;
-    if (fitted.current && last && last.ready && last.w === cam.viewport.w && last.h === cam.viewport.h) return;
+    if (fitted.current && last && last.ready && last.count > 0 && last.w === cam.viewport.w && last.h === cam.viewport.h) return;
     fitted.current = true;
-    cam.fit(fitBox(elements, byKey), { instant: true, minReadable: true, insets: chromeInsets() });
+    cam.fit(fitBox(elements, byKey, pinPoints(threads, byKey).values()), { instant: true, minReadable: true, insets: chromeInsets() });
     autoCam.current = { ...cam.cam.current };
-    lastFit.current = { w: cam.viewport.w, h: cam.viewport.h, ready: live.ready };
+    lastFit.current = { w: cam.viewport.w, h: cam.viewport.h, ready: live.ready, count: elements.length };
   }, [cam.viewport.w, cam.viewport.h, live.ready, elements.length]);
 
   const screenOf = useCallback((pos: ArtifactPosition & { key?: string }) => {
@@ -174,13 +203,13 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   // ── Export: the shell's Download menu asks the board for a picture of itself (or of the selection) ──
   const exportRef = useRef({ elements, byKey });
   exportRef.current = { elements, byKey };
+  const picture = async (selection: string[]) => {
+    const { boardSvg } = await import("./boardExport");
+    const root = cam.rootRef.current;
+    if (!root) throw new Error("the board is not on screen");
+    return boardSvg({ ...exportRef.current, root, only: selection });
+  };
   useMountEffect(() => {
-    const picture = async (selection: string[]) => {
-      const { boardSvg } = await import("./boardExport");
-      const root = cam.rootRef.current;
-      if (!root) throw new Error("the board is not on screen");
-      return boardSvg({ ...exportRef.current, root, only: selection });
-    };
     setExports([
       { format: "png", selectionAware: true, run: async ({ selection }) => (await import("./boardExport")).svgToPng(await picture(selection), 2) },
       { format: "svg", selectionAware: true, run: async ({ selection }) => new Blob([await picture(selection)], { type: "image/svg+xml" }) },
@@ -377,7 +406,16 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       case "frame": {
         // Wrap what is selected in a new frame, title ready to type, as FigJam's Frame selection does.
         const inside = selectedEls.filter((e) => e.kind !== "connector").map(elementBounds);
-        const op = frameAround(inside, "Frame", bottomZ({ elements: allEls() }), 24);
+        // Even padding, as wide as it can be without reaching into what is not being framed.
+        const sel = new Set(selection);
+        const others = allEls().filter((e) => !sel.has(e.key) && e.kind !== "connector" && e.kind !== "frame").map(elementBounds);
+        const pad = [24, 16, 8].find((p) => {
+          const f = frameAround(inside, "Frame", 0, p);
+          if (!f || !("put" in f)) return true;
+          const b = f.put as unknown as Box;
+          return !others.some((o) => intersects(b, { x: o.x + 1, y: o.y + 1, w: o.w - 2, h: o.h - 2 }));
+        }) ?? 8;
+        const op = frameAround(inside, "Frame", bottomZ({ elements: allEls() }), pad);
         if (!op) return;
         live.apply([op]);
         byKeyRef.current.set(op.k, { ...("put" in op ? (op.put as any) : {}), key: op.k, rev: 0 });
@@ -390,6 +428,9 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
         node?.click();
         return;
       }
+      case "duplicate":
+        duplicate();
+        break;
       case "delete":
         deleteSelection();
     }
@@ -415,7 +456,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   };
   const fitTo = (selectionOnly: boolean) => {
     const els = selectionOnly && selectedEls.length ? selectedEls : elements;
-    cam.fit(fitBox(els, byKey), { maxZ: selectionOnly ? 2 : 1, insets: chromeInsets() });
+    cam.fit(fitBox(els, byKey, selectionOnly ? [] : pinPoints(threads, byKey).values()), { maxZ: selectionOnly ? 2 : 1, insets: chromeInsets() });
   };
 
   const keysActive = useBoardKeys({
@@ -447,9 +488,14 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
     zoomTo: (z) => cam.zoomBy(z / cam.cam.current.z),
     fit: fitTo,
     editSelection: () => {
-      if (selection.length === 1) { startEdit(selection[0]); return; }
-      // With a making tool armed and nothing selected, Enter places one in the middle of the view: the keyboard's click.
-      if (!selection.length && (tool === "sticky" || tool === "text" || tool === "shape" || tool === "frame" || tool === "stamp")) gestures.placeAt(tool, viewCenter());
+      if (selection.length === 1 && voteOn(selection[0])) return;
+      // With a making tool armed, Enter places one (the keyboard's click): beside the selection, else mid-view.
+      if (tool === "sticky" || tool === "text" || tool === "shape" || tool === "frame" || tool === "stamp") {
+        const box = unionBox(selectedEls.map(elementBounds));
+        gestures.placeAt(tool, box ? { x: box.x + box.w + 40 + 80, y: box.y + box.h / 2 } : viewCenter());
+        return;
+      }
+      if (selection.length === 1) startEdit(selection[0]);
     },
     cycle: (dir) => {
       const order = readingOrder([...byKeyRef.current.values()].filter((e) => e.kind !== "pen")) as BoardEl[];
@@ -458,6 +504,8 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       const next = order[at === -1 ? (dir > 0 ? 0 : order.length - 1) : (at + dir + order.length) % order.length];
       setSelection([next.key]);
       reveal(next);
+      // Focus stays on the canvas while Tab walks it, so the next Tab walks on.
+      if (document.activeElement !== cam.rootRef.current) cam.rootRef.current?.focus({ preventScroll: true });
       return true;
     },
     hasSelection: () => selection.length > 0,
@@ -482,13 +530,72 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       const text = e.clipboardData?.getData("text/plain") ?? "";
       if (!text.trim()) return;
       e.preventDefault();
-      const { ops, keys } = pasteOps(text, at, [...byKeyRef.current.values()], (k) => byKeyRef.current.has(k), copiedFrom.current && lastPointer.current && copiedFrom.current === lastPointer.current ? copiedFrom.current : null);
-      if (ops.length) { liveRef.current.apply(ops); setSelectionRef.current(keys); }
+      pasteTextRef.current(text, at);
     };
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
   });
   const liveRef = useRef(live); liveRef.current = live;
+  // Copied board content (or plain lines, a sticky each) lands at `at`; a paste right where the copy was made offsets it.
+  const pasteText = (text: string, at: Pt) => {
+    const { ops, keys } = pasteOps(text, at, [...byKeyRef.current.values()], (k) => byKeyRef.current.has(k), copiedFrom.current && lastPointer.current && copiedFrom.current === lastPointer.current ? copiedFrom.current : null);
+    if (ops.length) { live.apply(ops); setSelection(keys); }
+  };
+  const pasteTextRef = useRef(pasteText); pasteTextRef.current = pasteText;
+
+  // ── Right-click: the verbs for what was clicked, each the command its shortcut runs ──
+  const ctxMenu = useContextMenu<BoardMenuPayload>();
+  // The selection's picture on the clipboard, ready to paste into a doc or a chat. The write starts
+  // inside the click (a promised blob), so the browser counts it as the person's gesture.
+  const copyPng = (keys: string[]) => {
+    const png = picture(keys).then(async (svg) => (await import("./boardExport")).svgToPng(svg, 2));
+    navigator.clipboard.write([new ClipboardItem({ "image/png": png })]).then(
+      () => toast.success("Copied as PNG"),
+      () => toast.error("Could not copy the picture: clipboard access was refused"),
+    );
+  };
+  const menuItems = ({ key, world }: BoardMenuPayload): BoardMenuItem[] => {
+    const paste: BoardMenuItem = {
+      label: "Paste", keys: [MOD, "V"],
+      run: () => void navigator.clipboard?.readText().then((t) => { if (t.trim()) pasteText(t, world); }, () => toast.error("Could not paste: clipboard access was refused")),
+    };
+    const fit: BoardMenuItem = { label: "Fit everything", keys: [SHIFT, "1"], run: () => fitTo(false) };
+    if (!key) {
+      if (readOnly) return [fit];
+      return [
+        { label: "Sticky here", keys: ["S"], run: () => gestures.placeAt("sticky", world) },
+        { label: "Comment here", keys: ["C"], run: () => onComment(world, null) },
+        paste,
+        "sep",
+        { label: "Select all", keys: [MOD, "A"], run: () => setSelection(elements.map((e) => e.key)) },
+        fit,
+      ];
+    }
+    const copyItem: BoardMenuItem = { label: "Copy", keys: [MOD, "C"], run: () => copy(false) };
+    if (readOnly) return [copyItem, { label: "Zoom to selection", keys: [SHIFT, "2"], run: () => fitTo(true) }];
+    const one = selectedEls.length === 1 ? selectedEls[0] : null;
+    const grouped = selectedEls.some((e) => typeof e.group === "string");
+    return [
+      ...(one && ["sticky", "text", "shape", "frame", "connector"].includes(one.kind) ? [{ label: one.kind === "connector" ? "Edit label" : one.kind === "frame" ? "Rename" : "Edit text", keys: ["Enter"], run: () => startEdit(one.key) }] : []),
+      { label: "Comment", keys: ["C"], run: () => onComment(world, key) },
+      { label: "Ask agent about this", keys: ["A"], run: () => openAsk("describe") },
+      "sep",
+      { label: "Cut", keys: [MOD, "X"], run: () => copy(true) },
+      copyItem,
+      paste,
+      { label: "Duplicate", keys: [MOD, "D"], run: duplicate },
+      "sep",
+      { label: "Bring to front", keys: ["]"], run: () => runBar({ type: "order", where: "front" }) },
+      { label: "Send to back", keys: ["["], run: () => runBar({ type: "order", where: "back" }) },
+      ...(selectedEls.length > 1 && !grouped ? [{ label: "Group", keys: [MOD, "G"], run: () => runBar({ type: "group" }) }] : []),
+      ...(grouped ? [{ label: "Ungroup", keys: [SHIFT + MOD, "G"], run: () => runBar({ type: "ungroup" }) }] : []),
+      ...(!one || one.kind !== "frame" ? [{ label: "Frame selection", keys: [isMac ? "⌥⌘" : "Ctrl+Alt", "G"], run: () => runBar({ type: "frame" }) }] : []),
+      { label: "Zoom to selection", keys: [SHIFT, "2"], run: () => fitTo(true) },
+      { label: "Copy as PNG", run: () => copyPng(selection) },
+      "sep",
+      { label: "Delete", keys: ["⌫"], danger: true, run: deleteSelection },
+    ];
+  };
   const readOnlyRef = useRef(readOnly); readOnlyRef.current = readOnly;
   const setSelectionRef = useRef(setSelection); setSelectionRef.current = setSelection;
   const viewCenterRef = useRef(viewCenter); viewCenterRef.current = viewCenter;
@@ -567,13 +674,17 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   return (
     <div
       ref={cam.rootRef}
-      className={`board-root board-tool-${tool}${readOnly ? " is-readonly" : ""}`}
+      className={`board-root board-tool-${tool}${readOnly ? " is-readonly" : ""}${votingOpen ? " is-voting" : ""}`}
       data-board
       tabIndex={0}
       role="application"
       aria-label={`${doc.title}: board. Tab walks elements, Enter edits, ? lists shortcuts`}
       aria-roledescription="board"
       onPointerDown={(e) => {
+        if (votingOpen && tool === "select" && e.button === 0) {
+          const k = (e.target as HTMLElement).closest("[data-key]")?.getAttribute("data-key");
+          if (k && voteOn(k)) { e.preventDefault(); return; }
+        }
         if (!(e.target as HTMLElement).closest("[data-board-ui]")) {
           setPressing(true);
           if (prompt && prompt.mode !== "comment") setPrompt(null);
@@ -595,7 +706,25 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       onDoubleClick={gestures.onDoubleClick}
       onDragOver={(e) => { if (!readOnly && [...e.dataTransfer.items].some((i) => i.kind === "file")) e.preventDefault(); }}
       onDrop={onDrop}
-      onContextMenu={(e) => e.preventDefault()}
+      onContextMenu={(e) => {
+        if ((e.target as HTMLElement).closest("[data-board-ui]")) { e.preventDefault(); return; }
+        // From the keyboard (Shift+F10, the menu key) the menu opens on the selection.
+        if (e.button !== 2 && e.clientX === 0 && e.clientY === 0) {
+          e.preventDefault();
+          const box = unionBox(selectedEls.map(elementBounds));
+          const r = cam.rootRef.current?.getBoundingClientRect();
+          const world = box ? { x: box.x + box.w / 2, y: box.y + box.h / 2 } : viewCenter();
+          const p = cam.toScreen(world);
+          ctxMenu.openAt((r?.left ?? 0) + p.x, (r?.top ?? 0) + p.y, { key: selection[0] ?? null, world });
+          return;
+        }
+        const key = (e.target as HTMLElement).closest("[data-key]")?.getAttribute("data-key") ?? null;
+        // A right-click on something outside the selection selects it first, as FigJam does.
+        if (key && !selection.includes(key)) setSelection([key]);
+        if (!key && selection.length) setSelection([]);
+        // Stands down (the browser's own menu) in text being edited, or with Shift held.
+        ctxMenu.open(e, { key, world: cam.clientToWorld(e.clientX, e.clientY) });
+      }}
     >
       <div className="board-grid" aria-hidden />
       <div ref={cam.worldRef} className="board-world">
@@ -622,6 +751,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
           readOnly={readOnly}
           showHandles={!pressing}
         />
+        {session.voting && <BoardVoteDots els={elements} me={myId} open={session.voting.open} />}
         <CommentPins threads={threads} byKey={byKey} open={thread} onOpen={(k) => setThread(thread === k ? null : k)} />
       </div>
 
@@ -662,8 +792,22 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
         </ShortcutTooltip>}
       </div>
 
+      <BoardSessionBar
+        session={session}
+        left={session.voting ? Math.max(0, session.voting.per - votesUsed(elements, myId)) : 0}
+        voted={elements.filter((e) => votesOf(e).length).length}
+        outOfVotes={outOfVotes}
+        readOnly={readOnly || !!snapshot}
+        compact={cam.viewport.w > 0 && cam.viewport.w < 600}
+        onVote={(a) => live.apply(a === "start" ? startVotingOps(elements, !!sessionEl) : a === "end" ? [sessionOp(true, { voting: { open: false, per: session.voting?.per ?? 3 } })] : clearVotingOps(elements), { undoable: false })}
+        onTimer={(ms, add) => {
+          const t = session.timer;
+          live.apply([sessionOp(!!sessionEl, { timer: ms ? { ends_at: Date.now() + ms, ms } : add && t ? { ends_at: Math.max(t.ends_at, Date.now()) + add, ms: t.ms + add } : null })], { undoable: false });
+        }}
+      />
       {minimap && elements.length > 0 && cam.viewport.w >= MINIMAP_MIN_W && <BoardMinimap elements={elements} byKey={byKey} cam={cam} top={cam.viewport.w < 820} />}
       {editAt && <BoardEditBar at={editAt} />}
+      <BoardContextMenu state={ctxMenu} items={menuItems} />
       <div aria-live="polite" style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", clipPath: "inset(50%)" }}>{announce}</div>
 
       {!readOnly && barAt && !pressing && !editing && !prompt && selectedEls.length > 0 && (

@@ -114,7 +114,7 @@ export const BoardToolbar = memo(function BoardToolbar(p: Props) {
       )}
       {open === "stamp" && (
         <div className="board-tool-menu board-stamp-menu">
-          <BoardArtPicker value={p.stamp} onPick={(s) => { p.setStamp(s); p.setTool("stamp"); setOpen(null); }} />
+          <BoardArtPicker value={p.stamp} onPick={(s) => { p.setStamp(s); p.setTool("stamp"); setOpen(null); }} onClose={() => { setOpen(null); p.setTool("select"); }} />
         </div>
       )}
       {open === "pen" && (

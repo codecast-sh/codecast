@@ -14,6 +14,7 @@ import {
   ArrowDownToLine,
   ArrowUpToLine,
   Bold,
+  Copy,
   CornerDownRight,
   ExternalLink,
   Frame,
@@ -51,6 +52,7 @@ export type BarAction =
   | { type: "edit" }
   | { type: "frame" }
   | { type: "open" }
+  | { type: "duplicate" }
   | { type: "delete" };
 
 const TEXT_SIZES = [14, 20, 28, 40, 56];
@@ -115,6 +117,7 @@ export const BoardSelectionBar = memo(function BoardSelectionBar({ selected, at,
           <BoardArtPicker
             value={typeof first?.icon === "string" ? first.icon : undefined}
             emoji={false}
+            onClose={() => setMenu(null)}
             onPick={(name) => act({ type: "set", fields: { icon: name }, kinds: ["sticky", "shape"] })}
             onClear={() => act({ type: "set", fields: { icon: null }, kinds: ["sticky", "shape"] })}
           />
@@ -228,6 +231,7 @@ export const BoardSelectionBar = memo(function BoardSelectionBar({ selected, at,
           <span>Describe a change</span>
         </button>
       </ShortcutTooltip>
+      <Btn label="Duplicate" accel="CmdOrCtrl+D" onClick={() => act({ type: "duplicate" })}><Copy {...I} /></Btn>
       <Btn label="Delete" accel="Backspace" onClick={() => act({ type: "delete" })}><Trash2 {...I} /></Btn>
     </div>
   );

@@ -3,7 +3,7 @@
 // formatting commands, so the selection, the caret and undo inside the editor
 // behave as in any text field; the plain editor (frame titles, arrow labels)
 // takes the marks as text.
-import { formatKey, toggleList } from "./boardMarks";
+import { editorToMarks, formatKey, marksToHtml, toggleList } from "./boardMarks";
 
 export type FormatCommand = "bold" | "italic" | "strike" | "list" | "link";
 
@@ -14,68 +14,59 @@ export function activeBoardEditor(): HTMLElement | null {
 }
 
 
-const isBlock = (n: Node | null) => !!n && n.nodeType === 1 && ["DIV", "P", "BR"].includes((n as Element).tagName);
-
 /**
- * The editor's lines as the nodes each starts with. A line is a block (<div>),
- * or a run of inline nodes at the top (the first line before any block, or
- * text after a <br>).
+ * A selection end between nodes (the whole editor selected, a caret between
+ * lines) moved down into the nearest text, so a mark placed there lands inside
+ * a line rather than becoming a line of its own.
  */
-function lineStarts(editor: HTMLElement): Node[] {
-  const out: Node[] = [];
-  let prev: Node | null = null;
-  for (const n of Array.from(editor.childNodes)) {
-    if (n.nodeType === 1 && (n as Element).tagName === "BR") { prev = n; continue; }
-    if (isBlock(n) || !prev || isBlock(prev)) out.push(n);
-    prev = n;
+function intoText(node: Node, offset: number, atEnd: boolean): [Node, number] {
+  const len = (n: Node) => (n.nodeType === 3 ? (n.textContent ?? "").length : n.childNodes.length);
+  while (node.nodeType === 1 && node.childNodes.length) {
+    const kids = node.childNodes;
+    // The start goes to the beginning of the node after it; the end to the close of the node before it.
+    if (atEnd) { const c = kids[offset > 0 ? offset - 1 : 0]; node = c; offset = offset > 0 ? len(c) : 0; }
+    else { const c = kids[Math.min(offset, kids.length - 1)]; node = c; offset = offset < kids.length ? 0 : len(c); }
   }
-  return out;
-}
-
-/** The start of the line holding `node` (a top-level child of the editor). */
-function lineOf(editor: HTMLElement, node: Node | null): Node | null {
-  if (!node) return null;
-  if (node === editor) return null;
-  while (node.parentNode && node.parentNode !== editor) node = node.parentNode;
-  if (isBlock(node) && (node as Element).tagName !== "BR") return node;
-  while (node.previousSibling && !isBlock(node.previousSibling)) node = node.previousSibling;
-  return node;
+  return [node, offset];
 }
 
 /**
- * Bullet every line the selection touches, or take the bullets off when all
- * of them already have one (the List button and its toggle).
+ * Bullet the lines the selection touches, or take the bullets off when all of
+ * them already have one. Works on the stored text (the same marks the board
+ * saves): the selection's ends are marked in place, the editor is read back
+ * as text, the lines between the marks toggle their "- ", and the editor is
+ * drawn again from the result. A line is a line however it was made (Enter or
+ * Shift+Enter).
  */
 export function toggleBullet(editor: HTMLElement, sel: Selection | null = document.getSelection()) {
   const doc = editor.ownerDocument;
-  const range = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
-  const starts = lineStarts(editor);
-  if (!starts.length) { doc.execCommand("insertText", false, "• "); return; }
-  let lines = range && !range.collapsed ? starts.filter((n) => range.intersectsNode(n) || (n.nodeType === 1 && (n as Element).contains(range.startContainer))) : [];
-  if (!lines.length) {
-    // A caret: its line, or (the caret between lines) the line just before it.
-    const at = sel?.anchorNode === editor ? editor.childNodes[Math.max(0, (sel?.anchorOffset ?? 1) - 1)] ?? null : sel?.anchorNode ?? null;
-    const line = lineOf(editor, at) ?? starts[starts.length - 1];
-    lines = [line];
+  const START = "\uE000", END = "\uE001";
+  const range = sel && sel.rangeCount && editor.contains(sel.getRangeAt(0).startContainer) ? sel.getRangeAt(0) : null;
+  if (range) {
+    const e = doc.createRange(); const [ec, eo] = intoText(range.endContainer, range.endOffset, true); e.setStart(ec, eo); e.insertNode(doc.createTextNode(END));
+    const b = doc.createRange(); const [bc, bo] = intoText(range.startContainer, range.startOffset, false); b.setStart(bc, bo); b.insertNode(doc.createTextNode(START));
   }
-  const firsts = lines.map((n) => ({ n, t: firstText(n) }));
-  const allOn = firsts.every(({ t }) => t?.textContent?.startsWith("• "));
-  for (const { n, t } of firsts) {
-    if (allOn) t!.textContent = t!.textContent!.slice(2);
-    else if (!t?.textContent?.startsWith("• ")) {
-      if (n.nodeType === 3) (n as Text).textContent = `• ${n.textContent}`;
-      else if (isBlock(n)) n.insertBefore(doc.createTextNode("• "), n.firstChild);
-      else n.parentNode!.insertBefore(doc.createTextNode("• "), n);
-    }
+  // A mark placed before a line's bullet hides the bullet from the reader: list lines are read here too.
+  const marked = editorToMarks(editor).replace(/^([\uE000\uE001]*)• /gm, "$1- ");
+  const at = marked.indexOf(START);
+  const text = marked.split(START).join("").split(END).join("");
+  const a = at >= 0 ? at : text.length;
+  const z = range ? marked.split(START).join("").indexOf(END) : text.length;
+  const r = toggleList(text, a, Math.max(a, z));
+  editor.innerHTML = marksToHtml(r.value);
+  // The caret goes to the end of the last line that changed.
+  const lastLine = r.value.slice(0, r.end).split("\n").length - 1;
+  const block = editor.children[lastLine] ?? editor.lastElementChild;
+  if (block && sel) {
+    const c = doc.createRange();
+    c.selectNodeContents(block);
+    c.collapse(false);
+    sel.removeAllRanges();
+    sel.addRange(c);
   }
   editor.dispatchEvent(new (doc.defaultView ?? window).Event("input", { bubbles: true }));
 }
 
-function firstText(n: Node): Text | null {
-  if (n.nodeType === 3) return n as Text;
-  for (const c of Array.from(n.childNodes)) { const t = firstText(c); if (t) return t; }
-  return null;
-}
 
 /**
  * Apply a format to the focused editor. `link` takes the address; with no

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { formatKey, hasMarks, markRuns, richLines, toggleList, wrapRuns } from "./boardMarks";
+import { formatKey, hasMarks, markRuns, marksToHtml, richLines, toggleList, wrapRuns } from "./boardMarks";
 
 const key = (k: string, shift = false) => ({ key: k, metaKey: true, ctrlKey: false, shiftKey: shift });
 
@@ -55,5 +55,16 @@ describe("styled runs for export", () => {
   });
   test("list lines get their mark", () => {
     expect(wrapRuns("- one", 100, (s) => s.length)[0].map((r) => r.t).join("")).toBe("• one");
+  });
+});
+
+describe("nested marks", () => {
+  test("a bold link is bold and a link, whichever way the marks nest", () => {
+    expect(markRuns("see **[docs](https://x.io/d)** now")).toEqual([{ t: "see " }, { t: "docs", b: true, href: "https://x.io/d" }, { t: " now" }]);
+    expect(markRuns("[**docs**](https://x.io/d)")).toEqual([{ t: "docs", b: true, href: "https://x.io/d" }]);
+    expect(markRuns("**bold *both* end**")).toEqual([{ t: "bold ", b: true }, { t: "both", b: true, i: true }, { t: " end", b: true }]);
+  });
+  test("a bold link round-trips through the editor's HTML", () => {
+    expect(marksToHtml("**[docs](https://x.io/d)**")).toBe('<div><a href="https://x.io/d"><b>docs</b></a></div>');
   });
 });

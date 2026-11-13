@@ -1,7 +1,7 @@
 // The pure half of board text formatting (BoardRichText.tsx draws it): which
 // lines are list items, which runs are marks, and the editor's format keys.
 
-export const INLINE = /(\*\*[^*\n]+\*\*|~~[^~\n]+~~|\*[^*\n]+\*|\[[^\]\n]+\]\((?:https?:\/\/|mailto:)[^)\s]+\)|(?:https?:\/\/)[^\s)]+)/g;
+export const INLINE = /(\*\*(?:\*[^*\n]+\*|[^*\n])+\*\*|~~[^~\n]+~~|\*(?:\*\*[^*\n]+\*\*|[^*\n])+\*|\[[^\]\n]+\]\((?:https?:\/\/|mailto:)[^)\s]+\)|(?:https?:\/\/)[^\s)]+)/g;
 
 export type RichLine = { kind: "text" | "bullet" | "number"; n?: number; text: string };
 
@@ -54,7 +54,8 @@ export function toggleList(value: string, start: number, end: number): { value: 
   const to = nl === -1 ? value.length : nl;
   const lines = value.slice(from, to).split("\n");
   const on = lines.every((l) => /^\s*[-*•]\s+/.test(l));
-  const next = lines.map((l) => (on ? l.replace(/^\s*[-*•]\s+/, "") : `- ${l}`)).join("\n");
+  // All bulleted: the bullets come off. Otherwise the lines without one get one.
+  const next = lines.map((l) => (on ? l.replace(/^\s*[-*•]\s+/, "") : /^\s*[-*•]\s+/.test(l) ? l : `- ${l}`)).join("\n");
   const out = value.slice(0, from) + next + value.slice(to);
   return { value: out, start: from, end: from + next.length };
 }
@@ -62,28 +63,34 @@ export function toggleList(value: string, start: number, end: number): { value: 
 /** A stretch of text with one style: what an export draws as one span. */
 export type Run = { t: string; b?: boolean; i?: boolean; s?: boolean; href?: string };
 
-/** One line's marks as styled runs (the same marks the canvas draws). */
-export function markRuns(line: string): Run[] {
+/**
+ * One line's marks as styled runs: what the canvas, the editor and an export
+ * all draw. Marks nest (a bold link is `**[t](url)**` or `[**t**](url)`): the
+ * inside of a mark is parsed again with that mark's style added.
+ */
+export function markRuns(line: string, style: Omit<Run, "t"> = {}): Run[] {
   const out: Run[] = [];
   let last = 0;
   for (const m of line.matchAll(new RegExp(INLINE.source, "g"))) {
     const at = m.index ?? 0;
-    if (at > last) out.push({ t: line.slice(last, at) });
+    if (at > last) out.push({ ...style, t: line.slice(last, at) });
     const t = m[0];
-    if (t.startsWith("**")) out.push({ t: t.slice(2, -2), b: true });
-    else if (t.startsWith("~~")) out.push({ t: t.slice(2, -2), s: true });
-    else if (t.startsWith("*")) out.push({ t: t.slice(1, -1), i: true });
+    if (t.startsWith("**")) out.push(...markRuns(t.slice(2, -2), { ...style, b: true }));
+    else if (t.startsWith("~~")) out.push(...markRuns(t.slice(2, -2), { ...style, s: true }));
+    else if (t.startsWith("*")) out.push(...markRuns(t.slice(1, -1), { ...style, i: true }));
     else if (t.startsWith("[")) {
       const mm = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(t)!;
-      out.push(/^(https?:\/\/|mailto:)/i.test(mm[2]) ? { t: mm[1], href: mm[2] } : { t });
+      if (/^(https?:\/\/|mailto:)/i.test(mm[2])) out.push(...markRuns(mm[1], { ...style, href: mm[2] }));
+      else out.push({ ...style, t });
     } else {
+      // A bare URL drops trailing sentence punctuation.
       const url = t.replace(/[.,;:!?]+$/, "");
-      out.push({ t: url.replace(/^https?:\/\//, ""), href: url });
-      if (url.length < t.length) out.push({ t: t.slice(url.length) });
+      out.push({ ...style, t: url.replace(/^https?:\/\//, ""), href: style.href ?? url });
+      if (url.length < t.length) out.push({ ...style, t: t.slice(url.length) });
     }
     last = at + t.length;
   }
-  if (last < line.length) out.push({ t: line.slice(last) });
+  if (last < line.length) out.push({ ...style, t: line.slice(last) });
   return out.filter((r) => r.t);
 }
 
@@ -132,8 +139,12 @@ export function marksToHtml(text: string): string {
 
 /** Wrap text in a mark, keeping the spaces at its edges outside it (`a ** b**` is not bold in markdown). */
 function wrapMark(mark: string, s: string): string {
-  const lead = /^\s*/.exec(s)![0], tail = /\s*$/.exec(s)![0];
-  return `${lead}${mark}${s.trim()}${mark}${tail}`;
+  // Bold across a line break (Shift+Enter inside a bold run) is bold on each line.
+  return s.split("\n").map((line) => {
+    if (!line.trim()) return line;
+    const lead = /^\s*/.exec(line)![0], tail = /\s*$/.exec(line)![0];
+    return `${lead}${mark}${line.trim()}${mark}${tail}`;
+  }).join("\n");
 }
 
 function inlineMarks(n: Node): string {

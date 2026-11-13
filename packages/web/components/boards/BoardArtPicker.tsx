@@ -6,8 +6,10 @@ import { BOARD_ART } from "@codecast/shared/artifacts/board";
 import { BOARD_ART_URLS } from "./boardArtUrls";
 import { STAMPS } from "./boardColors";
 
-export const BoardArtPicker = memo(function BoardArtPicker({ value, onPick, onClear, emoji = true }: {
+export const BoardArtPicker = memo(function BoardArtPicker({ value, onPick, onClear, onClose, emoji = true }: {
   value?: string;
+  /** Escape in the search field: the picker closes and the board has the keys again. */
+  onClose(): void;
   onPick(name: string): void;
   /** Shown as the first cell when the target can go without one (a sticky's illustration). */
   onClear?: () => void;
@@ -23,7 +25,13 @@ export const BoardArtPicker = memo(function BoardArtPicker({ value, onPick, onCl
         aria-label="Search illustrations"
         value={q}
         onChange={(e) => setQ(e.target.value)}
-        onKeyDown={(e) => { e.stopPropagation(); if (e.key === "Enter" && art[0]) onPick(art[0]); }}
+        // Opens ready for a search, as FigJam's sticker picker does.
+        autoFocus
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter" && art[0]) onPick(art[0]);
+          if (e.key === "Escape") { e.preventDefault(); onClose(); (e.currentTarget.closest("[data-board]") as HTMLElement | null)?.focus({ preventScroll: true }); }
+        }}
       />
       <div className="board-art-grid">
         {onClear && !q && (

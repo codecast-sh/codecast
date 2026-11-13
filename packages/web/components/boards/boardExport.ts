@@ -10,6 +10,7 @@ import {
   elbowObstacles,
   elementBounds,
   elementBox,
+  labelSpot,
   shapeFontSize,
   shapeOutline,
   smoothPath,
@@ -20,7 +21,7 @@ import {
 } from "@codecast/shared/artifacts/board";
 import { BOARD_ART_URLS } from "./boardArtUrls";
 import { wrapRuns, type Run } from "./boardMarks";
-import { colorToken, stickyFill, tint } from "./boardColors";
+import { colorToken, shapeFill, stickyFill, tint } from "./boardColors";
 import { drawOrder } from "./boardFrame";
 import type { BoardEl } from "./boardTypes";
 
@@ -153,7 +154,7 @@ export async function boardSvg({ elements, byKey, root, only }: ExportInput): Pr
         const shape = typeof e.shape === "string" ? e.shape : "rect";
         const col = c(colorToken(e.color, "blue"));
         const solid = e.solid === true;
-        const fill = solid ? col : c(tint(e.color, 16));
+        const fill = solid ? col : c(shapeFill(e.color));
         const stroke = solid ? "none" : col;
         const outline = shapeOutline(shape, b.w, b.h);
         const body = outline
@@ -199,7 +200,8 @@ export async function boardSvg({ elements, byKey, root, only }: ExportInput): Pr
         if (arrow === "both") out.push(tip(g.a, g.angleStart));
         if (typeof e.label === "string" && e.label) {
           const lw = widthOf([{ t: e.label }], 15, 500) + 16;
-          out.push(`<rect x="${g.mid.x - lw / 2}" y="${g.mid.y - 12}" width="${lw}" height="24" rx="5" fill="${c("var(--sol-bg)")}"/>`, textBlock([e.label], g.mid.x, g.mid.y - 10, 15, { link, color: text, anchor: "middle", weight: 500 }));
+          const at = labelSpot(g, e.label);
+          out.push(`<rect x="${at.x - lw / 2}" y="${at.y - 12}" width="${lw}" height="24" rx="5" fill="${c("var(--sol-bg)")}"/>`, textBlock([e.label], at.x, at.y - 10, 15, { link, color: text, anchor: "middle", weight: 500 }));
         }
         break;
       }

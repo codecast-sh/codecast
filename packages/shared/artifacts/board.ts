@@ -14,7 +14,8 @@ export * from "./boardArt";
 export * from "./boardTemplates";
 export { BOARD_VERBS, parseVerbArgs } from "./boardVerbs";
 
-export const BOARD_KINDS = ["sticky", "text", "shape", "connector", "frame", "pen", "image", "stamp", "card"] as const;
+// "session" is the board's workshop state (dot vote, timer): one undrawn element, key el_session.
+export const BOARD_KINDS = ["sticky", "text", "shape", "connector", "frame", "pen", "image", "stamp", "card", "session"] as const;
 export type BoardKind = (typeof BOARD_KINDS)[number];
 
 const fmtBox = (b: Box) => `${Math.round(b.x)},${Math.round(b.y)} ${Math.round(b.w)}x${Math.round(b.h)}`;
@@ -115,7 +116,10 @@ function overlaps(els: readonly ArtifactElement[], max = 20): string[] {
   return out;
 }
 
-export function describeBoard(view: ArtifactView): string {
+export function describeBoard(whole: ArtifactView): string {
+  // The workshop state (a dot vote, a timer) is one undrawn element; it reads as a line, never as content.
+  const session = whole.elements.find((e) => e.kind === "session");
+  const view = session ? { ...whole, elements: whole.elements.filter((e) => e !== session) } : whole;
   if (view.elements.length === 0) return `board "${view.title}": empty. Start anywhere; 0,0 is a fine top-left.`;
   const content = unionBox(view.elements.filter((e) => e.kind !== "connector").map(elementBox));
   const head = `board "${view.title}" · ${view.elements.length} elements` +
@@ -127,6 +131,9 @@ export function describeBoard(view: ArtifactView): string {
   for (const [g, keys] of groups) lines.push(`group ${g}: ${keys.join(" ")}`);
   const clashes = overlaps(view.elements);
   if (clashes.length) lines.push(`OVERLAPPING (move apart, or ignore if meant): ${clashes.join("  ")}`);
+  const votes = view.elements.filter((e) => Array.isArray(e.votes) && e.votes.length).sort((x, y) => (y.votes as unknown[]).length - (x.votes as unknown[]).length);
+  const voting = session?.voting as { open?: boolean } | null | undefined;
+  if (voting || votes.length) lines.push(`${voting?.open ? "dot vote open" : "dot vote"}: ${votes.length ? votes.map((e) => `${e.key} ${(e.votes as unknown[]).length}`).join(", ") : "no votes yet"}`);
   return [head, ...lines].join("\n");
 }
 

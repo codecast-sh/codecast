@@ -5,6 +5,7 @@ import {
   alignBoxes,
   anchorPoint,
   boardSpec,
+  describeBoard,
   connectorGeometry,
   distributeBoxes,
   elementBox,
@@ -21,6 +22,7 @@ import {
   textHeight,
   BOARD_VERBS,
 } from "./board";
+import { elbowRoute } from "./boardGeometry";
 
 function el(key: string, kind: string, fields: Record<string, any>): ArtifactElement {
   return { key, kind, rev: 1, ...fields } as ArtifactElement;
@@ -467,5 +469,38 @@ describe("sticky layout", () => {
   });
   test("a short sticky keeps its full illustration", () => {
     expect(stickyLayout("Ship it", 200, 200, "rocket", true).iconH).toBe(84);
+  });
+});
+
+describe("workshop session", () => {
+  test("a board's dot vote reads as one line, and the session element is not content", () => {
+    const els = [
+      { key: "el_session", kind: "session", rev: 1, voting: { open: true, per: 3 } },
+      { key: "el_a", kind: "sticky", rev: 1, x: 0, y: 0, w: 200, h: 160, text: "A", votes: ["u1"] },
+      { key: "el_b", kind: "sticky", rev: 1, x: 240, y: 0, w: 200, h: 160, text: "B", votes: ["u1", "u2"] },
+    ] as ArtifactElement[];
+    const out = describeBoard(artifactView("board", "Retro", els));
+    expect(out).toContain("2 elements");
+    expect(out).not.toContain("el_session");
+    expect(out).toContain("dot vote open: el_b 2, el_a 1");
+  });
+});
+
+describe("elbow leaving its box", () => {
+  test("a source below the target's top never routes along its own top edge", () => {
+    const A = { x: -266, y: 215, w: 188, h: 128 }, B = { x: 54, y: 134, w: 188, h: 128 };
+    const pts = elbowRoute(A, B, []);
+    for (let i = 1; i < pts.length; i++) expect(pts[i - 1].y === A.y && pts[i].y === A.y).toBe(false);
+    // It leaves straight out of the side it starts on: here the side facing the target.
+    expect(pts[0].x).toBe(A.x + A.w);
+    expect(pts[1].x).toBeGreaterThan(pts[0].x);
+  });
+});
+
+describe("connector labels", () => {
+  test("a label sits on a long leg, and beside a leg too short to show the line past it", async () => {
+    const { labelSpot } = await import("./boardGeometry");
+    expect(labelSpot({ points: [{ x: 0, y: 0 }, { x: 400, y: 0 }], mid: { x: 200, y: 0 } }, "after email verify")).toEqual({ x: 200, y: 0 });
+    expect(labelSpot({ points: [{ x: 0, y: 0 }, { x: 90, y: 0 }], mid: { x: 45, y: 0 } }, "after email verify")).toEqual({ x: 45, y: -20 });
   });
 });

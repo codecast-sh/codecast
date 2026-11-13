@@ -61,7 +61,11 @@ export function BoardPrompt({ mode, at, doc, selected, initials, onComment, onCl
       data-board-ui
       style={{ left: at.x, top: at.y }}
       onPointerDown={(e) => e.stopPropagation()}
-      onKeyDown={(e) => e.stopPropagation()}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        // Escape that nothing inside used (an open @ menu takes its own) closes the draft, as FigJam's does.
+        if (e.key === "Escape" && !e.defaultPrevented) { e.preventDefault(); onClose(); }
+      }}
     >
       {mode === "comment" && <span className="board-prompt-avatar">{initials}</span>}
       <div className="board-prompt-card">

@@ -439,12 +439,11 @@ export function useBoardGestures(d: GestureDeps) {
     }
     dd.live.apply([op]);
     dd.byKey.current.set(k, { ...(op.put as any), key: k, rev: 0 });
-    if (tool !== "stamp") {
-      dd.setSelection([k]);
-      if (!dd.locked) dd.setTool("select");
-      // A new sticky, text, shape or frame opens for typing straight away.
-      dd.startEdit(k);
-    }
+    dd.setSelection([k]);
+    // Like every tool, a sticker places once and hands back to Select (Q keeps it on).
+    if (!dd.locked) dd.setTool("select");
+    // A new sticky, text, shape or frame opens for typing straight away.
+    if (tool !== "stamp") dd.startEdit(k);
   };
 
   const onPointerUp = useCallback((e: React.PointerEvent) => {
