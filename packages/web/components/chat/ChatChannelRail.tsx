@@ -22,6 +22,7 @@ import { memberAvatarUrl } from "../../lib/liveEntities";
 import { SlackLogo } from "../SlackLogo";
 import { MIRROR_STATE_LABEL } from "@codecast/convex/convex/lib/slackMirror";
 import "./chat.css";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 // The channel rail.
 //
@@ -196,7 +197,7 @@ export const ChatChannelRail = memo(function ChatChannelRail({
   /** Right-click on a row — opens the shared channel menu. */
   onChannelContextMenu?: (e: React.MouseEvent, channel: ChatChannelView) => void;
 }) {
-  const members = useInboxStore((s) => (standalone ? NO_MEMBERS : s.teamMembers)) as ChatMember[];
+  const members = useInboxStore((s) => (standalone ? NO_MEMBERS : teamMembersOf(s))) as ChatMember[];
   const viewer = useInboxStore((s) => (standalone ? "" : (s as any).currentUser?._id ?? ""));
   // The channels pinned in the main sidebar, first here too, so the Chat
   // window's rail carries chat's pins the way the main rail does. Pin ids
