@@ -1,5 +1,6 @@
 import type { FaceState } from "./faceState";
 import { memberKind } from "@codecast/shared/team/memberKind";
+import { teamMembersOf } from "../activeTeam";
 export type { FaceState } from "./faceState";
 // THE FACE ROW: presence, walkie, ringing and calls as the same faces in
 // different states (pl-756).
@@ -785,7 +786,7 @@ export function faceRowInputSig(
     idOf(st.currentUser?._id),
     st.currentUser?.name ?? "",
     st.currentUser?.image ?? "",
-    rosterFaceSig(st.teamMembers),
+    rosterFaceSig(teamMembersOf(st)),
     occupancySig(st.callOccupancy),
     liveRoomsSig(st.liveRooms),
     lockedRoomsSig(st.callRooms),
@@ -814,7 +815,7 @@ export function faceRowInputFrom(
   const room = walkie.liveRoom?.key ?? (call.phase !== "idle" ? call.roomKey : null);
   return {
     viewer: u?._id ? { id: idOf(u._id), name: u.name ?? u.email, image: u.image ?? u.github_avatar_url } : null,
-    roster: st.teamMembers ?? [],
+    roster: teamMembersOf(st),
     occupancy: st.callOccupancy ?? {},
     liveRooms: st.liveRooms ?? [],
     walkie: {

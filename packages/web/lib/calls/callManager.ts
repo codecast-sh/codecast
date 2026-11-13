@@ -1,4 +1,5 @@
 import { isMediaDenial, mediaFailureReason, participantTiles, type ParticipantTile } from "./callMedia";
+import { teamMembersOf } from "../activeTeam";
 export { mediaFailureReason, listDevices, grantDeviceNames, type ParticipantTile } from "./callMedia";
 // The media plane's one owner. Exactly one LiveKit Room lives here (module
 // singleton, never in React state, never in the store); components render
@@ -1354,7 +1355,7 @@ function ringStubs(roomKey: string, toUserIds: string[], on: boolean): void {
   const now = Date.now();
   let next: any[];
   if (on) {
-    const members = st.teamMembers ?? [];
+    const members = teamMembersOf(st);
     const listed = (id: string) =>
       outgoing.some((r) => !isRingStub(r) && String(r.to_user) === id && r.room_key === roomKey && (r.status ?? "ringing") === "ringing");
     const stubs: RingStub[] = toUserIds.filter((id) => !listed(id)).map((id) => ({
@@ -1381,7 +1382,7 @@ function ringStubs(roomKey: string, toUserIds: string[], on: boolean): void {
 // in_room needs no news (they are already here); cooldown and refused mean
 // "not rung", which a caller who just promised to ring N people must hear.
 function reportRingOutcomes(results: RingOutcome[]): void {
-  const members = useInboxStore.getState().teamMembers ?? [];
+  const members = teamMembersOf(useInboxStore.getState());
   const nameOf = (id: string) =>
     memberDisplayName(members.find((m: any) => String(m._id) === id), "A teammate");
   for (const r of results) {
