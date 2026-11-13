@@ -18,6 +18,12 @@ describe("matchDevices", () => {
     expect(matchDevices(devices, "cloud").map((d) => d.device_id)).toEqual(["c0ffee0000000001"]);
   });
 
+  test("a name a person set matches on its own", () => {
+    const named = devices.map((d) => d.device_id === "c0ffee0000000001" ? { ...d, display_name: "Work box" } : d);
+    expect(matchDevices(named, "work box").map((d) => d.device_id)).toEqual(["c0ffee0000000001"]);
+    expect(matchDevices(named, "Work").map((d) => d.device_id)).toEqual(["c0ffee0000000001"]);
+  });
+
   test("an exact label or hostname beats a longer one that contains it", () => {
     const pair = [
       { device_id: "aa", label: "mac" },

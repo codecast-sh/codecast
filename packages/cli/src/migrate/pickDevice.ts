@@ -4,6 +4,7 @@ export interface PickableDevice {
   label?: string | null;
   hostname?: string | null;
   is_remote?: boolean;
+  display_name?: string | null;
 }
 
 /**
@@ -17,10 +18,14 @@ export function matchDevices<D extends PickableDevice>(devices: D[], needle: str
   const matches = devices.filter((d) =>
     d.device_id.toLowerCase().startsWith(n) ||
     String(d.label ?? "").toLowerCase().includes(n) ||
+    String(d.display_name ?? "").toLowerCase().includes(n) ||
     String(d.hostname ?? "").toLowerCase().includes(n) ||
     (n === "cloud" && d.is_remote));
   if (matches.length < 2) return matches;
-  const exact = matches.filter((d) => String(d.label ?? "").toLowerCase() === n || String(d.hostname ?? "").toLowerCase() === n);
+  const exact = matches.filter((d) =>
+    String(d.label ?? "").toLowerCase() === n ||
+    String(d.display_name ?? "").trim().toLowerCase() === n ||
+    String(d.hostname ?? "").toLowerCase() === n);
   return exact.length === 1 ? exact : matches;
 }
 
