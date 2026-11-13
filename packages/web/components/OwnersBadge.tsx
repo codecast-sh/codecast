@@ -38,6 +38,7 @@ import { Switch } from "./ui/switch";
 import { KeyCap } from "./KeyboardShortcutsHelp";
 import { isPerson } from "@codecast/shared/team/memberKind";
 import { Button } from "./ui/button";
+import { teamMembersOf } from "../lib/activeTeam";
 
 export type { OwnersApi, HandoffInfo };
 
@@ -63,7 +64,7 @@ export function OwnerAvatar({ name, image, size = "w-4 h-4" }: { name: string; i
  *  reparentOrgSession, so the chart node moves in the same tick and one write
  *  reaches the core. The toast says both things from the told counts. */
 export function useOwnersFromStore(conversationId: string): OwnersApi {
-  const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
+  const teamMembers = useInboxStore(teamMembersOf) as any[];
   const currentUser = useInboxStore((s) => s.currentUser) as any;
   return useOwners(conversationId, useStoreOwnersEnv(conversationId, {
     teamMembers,
