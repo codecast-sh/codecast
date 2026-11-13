@@ -19,8 +19,9 @@ import { bridgeEndpointIfConfigured } from "../../cli/src/browser/bridge/real";
 // @ts-expect-error plain JS module shared with frame.html
 import { SHOTS } from "../../mobile/store-shots/shots.js";
 
-const ROOT = join(import.meta.dir, "..", "..", "mobile");
-const OUT = join(ROOT, "store-shots", "out");
+// Served from packages/: the frame shares web/docs-shots/frame.css (and its fonts) with the docs shots.
+const ROOT = join(import.meta.dir, "..", "..");
+const OUT = join(ROOT, "mobile", "store-shots", "out");
 const PORT = 8731;
 const SIZES = { iphone: { w: 660, h: 1434 }, ipad: { w: 1032, h: 1376 } } as const;
 type Device = keyof typeof SIZES;
@@ -30,7 +31,6 @@ const wanted: string[] = names.length ? names : Object.keys(SHOTS);
 for (const n of wanted) if (!(n in SHOTS)) throw new Error(`unknown shot "${n}"; known: ${Object.keys(SHOTS).join(", ")}`);
 const devices = (process.env.DEVICES?.split(",") ?? ["iphone", "ipad"]) as Device[];
 
-// The page loads fonts from ../assets and screens from raw/, so serve the whole mobile package.
 const server = Bun.serve({
   port: PORT,
   fetch(req) {
@@ -40,7 +40,7 @@ const server = Bun.serve({
     return file.exists().then((ok) => (ok ? new Response(file, { headers: { "cache-control": "no-store" } }) : new Response("missing", { status: 404 })));
   },
 });
-const base = `http://localhost:${PORT}/store-shots/frame.html`;
+const base = `http://localhost:${PORT}/mobile/store-shots/frame.html`;
 
 try {
   // Async: a sync spawn would block this process's event loop, and with it

@@ -1,0 +1,107 @@
+/*
+  The frame language shared by the docs shots (docs-shots/frame.html) and the
+  App Store set (mobile/store-shots/frame.html): a plate in the default
+  palette (Verdigris light, Fjord dark over a deep verdigris), a fine dot grid
+  that fades toward the shot, a quiet window, a soft element card and one
+  phone body. Both pages are served from the repo's packages/ directory, so
+  the fonts resolve to the phone app's bundled copies.
+*/
+@font-face { font-family: "Instrument Sans"; src: url("../../mobile/assets/fonts/InstrumentSans-Regular.ttf"); font-weight: 400; }
+@font-face { font-family: "Instrument Sans"; src: url("../../mobile/assets/fonts/InstrumentSans-Medium.ttf"); font-weight: 500; }
+@font-face { font-family: "Instrument Sans"; src: url("../../mobile/assets/fonts/InstrumentSans-SemiBold.ttf"); font-weight: 600; }
+@font-face { font-family: "Instrument Sans"; src: url("../../mobile/assets/fonts/InstrumentSans-Bold.ttf"); font-weight: 700; }
+
+/* Light: Verdigris. The plate is a cool patina a step darker than the app's own ground, so a white window lifts off it. */
+.frame-light {
+  --plate: #d2e3dc;
+  --plate-ink: #1a2d29;
+  --dot: color-mix(in srgb, #1a2d29 13%, transparent);
+  --chrome: #f6f9f8;
+  --chrome-line: #d2ddd9;
+  --chrome-text: #50655e;
+  --light-dot: #c3d0cb;
+  --ring: color-mix(in srgb, #1a2d29 14%, transparent);
+  --shadow: 0 1px 2px color-mix(in srgb, #0e1f1b 10%, transparent),
+            0 12px 28px -8px color-mix(in srgb, #0e1f1b 22%, transparent),
+            0 40px 70px -30px color-mix(in srgb, #0e1f1b 30%, transparent);
+  --text: #1a2d29; --text-muted: #3e564f;
+  --red: #c3352b; --orange: #a95219; --amber: #8e630c; --yellow: #746c0e; --green: #337425;
+  --cyan: #107771; --blue: #2a66b4; --violet: #694ebf; --magenta: #ae3977;
+}
+/* Dark: Fjord's window on a deep verdigris plate, the dark side of the same pairing. */
+.frame-dark {
+  --plate: #102220;
+  --plate-ink: #e5e9f0;
+  --dot: color-mix(in srgb, #9fd3c4 13%, transparent);
+  --chrome: #252b35;
+  --chrome-line: #3a4351;
+  --chrome-text: #909aa7;
+  --light-dot: #4a5464;
+  --ring: color-mix(in srgb, #e5e9f0 12%, transparent);
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.3),
+            0 14px 30px -8px rgb(0 0 0 / 0.45),
+            0 40px 70px -30px rgb(0 0 0 / 0.55);
+  --text: #e5e9f0; --text-muted: #aeb7c6;
+  --red: #d77b84; --orange: #d8936f; --amber: #e2b86f; --yellow: #ebcb8b; --green: #a3be8c;
+  --cyan: #88c0d0; --blue: #81a1c1; --violet: #b48ead; --magenta: #c896b8;
+}
+
+/* The plate and its dot grid. The grid is densest at the top-left and gone by the shot's middle. */
+.plate { position: relative; background: var(--plate); overflow: hidden; isolation: isolate; }
+.plate::before {
+  content: ""; position: absolute; inset: 0; z-index: -1;
+  background-image: radial-gradient(circle at center, var(--dot) 1.1px, transparent 1.3px);
+  background-size: 14px 14px;
+  background-position: 7px 7px;
+  mask-image: linear-gradient(160deg, black 0%, black 18%, transparent 58%);
+}
+.plate.bare { background: transparent; }
+.plate.bare::before { display: none; }
+
+/* Window: a title bar with three neutral lights and an optional centred title, the capture under it. */
+.window {
+  position: relative; border-radius: 12px; overflow: hidden;
+  background: var(--chrome);
+  box-shadow: 0 0 0 1px var(--ring), var(--shadow);
+}
+.window .bar {
+  height: 34px; display: flex; align-items: center; padding: 0 14px; gap: 8px;
+  border-bottom: 1px solid var(--chrome-line);
+  font: 500 12.5px/1 "Instrument Sans", sans-serif; color: var(--chrome-text);
+  position: relative;
+}
+.window .bar i { width: 11px; height: 11px; border-radius: 50%; background: var(--light-dot); }
+.window .bar span { position: absolute; left: 90px; right: 90px; text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.window img, .element img { display: block; }
+
+/* Element: one surface of the app, rounded, ringed and lifted. */
+.element { border-radius: 14px; overflow: hidden; box-shadow: 0 0 0 1px var(--ring), var(--shadow); }
+
+/* Phone: one body shape for docs and store. Sizes derive from --phone-w (the screen's CSS width). */
+.phone {
+  --bezel: calc(var(--phone-w) * 0.032);
+  --screen-r: calc(var(--phone-w) * 0.136);
+  position: relative; width: calc(var(--phone-w) + 2 * var(--bezel));
+  padding: var(--bezel); border-radius: calc(var(--screen-r) + var(--bezel));
+  background: #0b0f0e;
+  box-shadow:
+    0 0 0 calc(var(--phone-w) * 0.006) #3b4644,
+    0 0 0 calc(var(--phone-w) * 0.009) #1a2120,
+    var(--shadow);
+}
+.phone img { display: block; width: 100%; border-radius: var(--screen-r); }
+.phone .island {
+  position: absolute; left: 50%; transform: translateX(-50%);
+  top: calc(var(--bezel) + var(--phone-w) * 0.027);
+  width: calc(var(--phone-w) * 0.31); height: calc(var(--phone-w) * 0.092);
+  border-radius: 999px; background: #000;
+}
+.phone .key { position: absolute; width: calc(var(--phone-w) * 0.011); background: #2a3331; border-radius: 2px; }
+.phone .key.l1 { left: calc(var(--phone-w) * -0.015); top: 17%; height: 5%; }
+.phone .key.l2 { left: calc(var(--phone-w) * -0.015); top: 25%; height: 8.5%; }
+.phone .key.l3 { left: calc(var(--phone-w) * -0.015); top: 35%; height: 8.5%; }
+.phone .key.r1 { right: calc(var(--phone-w) * -0.015); top: 27%; height: 12%; }
+
+/* Tablet: the same body with an even bezel, a squarer screen, no island and no side keys. */
+.phone.tablet { --bezel: calc(var(--phone-w) * 0.022); --screen-r: calc(var(--phone-w) * 0.028); }
+.phone.tablet .island, .phone.tablet .key { display: none; }
