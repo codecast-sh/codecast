@@ -37,11 +37,12 @@ async function getAuthenticatedUserId(
 /**
  * Resolve a `cast spawn --device <value>` selector against the user's devices
  * (and, for id/label only, the team agent boxes they may target). The value is
- * whatever the human typed: a device_id, the stored label, or the name the UI
- * shows (deviceDisplayName — "Cloud Linux" for the host whose stored label is
- * "Linux - ip-172-31-40-243"), the last two matched case-insensitively.
- * device_id wins outright, then the stored label — a display name that
- * happens to equal another machine's label must not shadow it.
+ * whatever the human typed: a device_id, the stored label, a name a person
+ * set, or the name the UI shows (deviceDisplayName — "Cloud Linux" for the
+ * host whose stored label is "Linux - ip-172-31-40-243"), matched
+ * case-insensitively. device_id wins outright, then the stored label, then
+ * the chosen name — a display name that happens to equal another machine's
+ * label must not shadow it.
  *
  * Display names are matched against the user's OWN devices only: a teammate's
  * agent box (is_remote + linux) also displays as "Cloud Linux", and a user
@@ -53,10 +54,19 @@ async function getAuthenticatedUserId(
  * `--device` silently starting the session on the laptop is exactly the failure
  * the flag exists to prevent.
  */
+type DeviceSelectorRow = {
+  device_id: string;
+  label?: string;
+  platform?: string;
+  is_remote?: boolean;
+  display_name?: string | null;
+  cloud_host?: { name?: string | null } | null;
+};
+
 export function resolveDeviceSelector(
-  devices: { device_id: string; label?: string; platform?: string; is_remote?: boolean }[],
+  devices: DeviceSelectorRow[],
   value: string,
-  boxes: { device_id: string; label?: string; platform?: string; is_remote?: boolean }[] = [],
+  boxes: DeviceSelectorRow[] = [],
 ): string {
   const wanted = value.trim();
   const all = [...devices, ...boxes];
@@ -64,8 +74,20 @@ export function resolveDeviceSelector(
   if (byId) return byId.device_id;
   const byLabel = all.find((d) => (d.label ?? "").toLowerCase() === wanted.toLowerCase());
   if (byLabel) return byLabel.device_id;
+  const wantedName = wanted.toLowerCase();
+  const byChosen = all.filter((d) => (d.display_name ?? "").trim().toLowerCase() === wantedName);
+  if (byChosen.length > 1) {
+    throw new Error(`"${wanted}" names ${byChosen.length} of your devices — use the device id: ${byChosen.map((d) => d.device_id).join(", ")}`);
+  }
+  if (byChosen.length === 1) return byChosen[0].device_id;
   const byDisplayName = devices.filter((d) =>
-    deviceDisplayName({ label: d.label ?? d.device_id, platform: d.platform ?? "", is_remote: d.is_remote }).toLowerCase() === wanted.toLowerCase());
+    deviceDisplayName({
+      label: d.label ?? d.device_id,
+      platform: d.platform ?? "",
+      is_remote: d.is_remote,
+      display_name: d.display_name,
+      cloud_host: d.cloud_host,
+    }).toLowerCase() === wantedName);
   if (byDisplayName.length > 1) {
     throw new Error(`"${wanted}" names ${byDisplayName.length} of your devices — use the device id: ${byDisplayName.map((d) => d.device_id).join(", ")}`);
   }
