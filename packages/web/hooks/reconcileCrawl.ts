@@ -67,8 +67,15 @@ export type CrawlOptions = {
   throttleMs: number;
   pageDelayMs: number;
   maxPages: number;
-  /** Fetch one page given the previous page's cursor (null for the first page). */
-  fetchPage: (cursor: string | null) => Promise<CrawlPage>;
+  /**
+   * The query's lower bound for this run, when the crawl has one. A
+   * continuation cursor belongs to the exact query that made it, so a run that
+   * resumes a checkpoint gets the bound the checkpoint was taken under, and a
+   * different bound would make Convex refuse the cursor (InvalidCursor).
+   */
+  since?: number;
+  /** Fetch one page given the previous page's cursor (null for the first page) and the run's bound. */
+  fetchPage: (cursor: string | null, since: number | undefined) => Promise<CrawlPage>;
   /** Overlay a freshly-fetched page (delta — never prunes). */
   onPage: (rows: any[]) => void;
   /** Dynamic lifecycle fence (principal changes, durable replay gates, etc.). */
@@ -194,10 +201,13 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
   // un-resumed crawl after the throttle window.
   const RESUME_WINDOW_MS = 30 * 60 * 1000;
   const meta = useInboxStore.getState().syncMeta[metaKey];
+  // A bounded crawl resumes only a checkpoint that recorded its bound.
   const resumeCursor =
     meta?.resumeCursor && Date.now() - (meta.resumeAt ?? 0) < RESUME_WINDOW_MS
+      && (opts.since === undefined || typeof meta.resumeSince === "number")
       ? meta.resumeCursor
       : null;
+  const since = resumeCursor && opts.since !== undefined ? meta!.resumeSince : opts.since;
 
   (async () => {
     setProgress(namespace, true, 0);
@@ -227,7 +237,7 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
       lastFlush = Date.now();
       setProgress(namespace, loading, all.length);
       if (ckpt !== undefined && ckpt !== null && !superseded()) {
-        useInboxStore.getState().recordSyncMeta(metaKey, { resumeCursor: ckpt, resumeAt: Date.now() });
+        useInboxStore.getState().recordSyncMeta(metaKey, { resumeCursor: ckpt, resumeAt: Date.now(), resumeSince: since });
       }
     };
     for (let i = 0; i < maxPages; i++) {
@@ -236,7 +246,7 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
       let page: CrawlPage | null = null;
       for (let attempt = 0; attempt < 5; attempt++) {
         if (!isCurrent()) { stop(all.length); return; }
-        try { page = await opts.fetchPage(cursor); break; }
+        try { page = await opts.fetchPage(cursor, since); break; }
         catch {
           if (attempt === 4) {
             // Persistent failure: don't snapshot a partial set (it would prune

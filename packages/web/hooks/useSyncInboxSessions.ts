@@ -256,9 +256,10 @@ export function runInboxFloorStep(convex: Pick<ConvexReactClient, "query">, flag
     throttleMs: 0,
     pageDelayMs: SESSIONS_FLOOR_PAGE_DELAY_MS,
     maxPages: 200,
-    fetchPage: async (cursor) => {
+    since: floorSince,
+    fetchPage: async (cursor, since) => {
       const page: any = await convex.query(api.conversations.listInboxSessionsPaginated, {
-        since: floorSince,
+        since,
         paginationOpts: { numItems: SESSIONS_FLOOR_PAGE_SIZE, cursor },
       });
       return { rows: page.page ?? [], isDone: page.isDone, continueCursor: page.continueCursor };

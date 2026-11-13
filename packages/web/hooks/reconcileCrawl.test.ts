@@ -132,6 +132,56 @@ describe("runReconcileCrawl — mid-crawl resume", () => {
     expect(meta?.backfilledAt).toBeGreaterThan(0);
   });
 
+  // The sessions floor bounds its query by a since it computes per run. A
+  // resumed cursor sent with the new run's since is a different query, and
+  // Convex refused it (InvalidCursor, ~300 on 2026-11-12), so a heavy account
+  // reloading mid-floor restarted from page zero every time.
+  const boundedRun = (ns: string, since: number, fetched: [string | null, number | undefined][]) =>
+    runReconcileCrawl({
+      namespace: ns, wsKey: "ws1", throttleMs: THROTTLE, pageDelayMs: 0, maxPages: 10, since,
+      fetchPage: async (cursor, bound) => {
+        fetched.push([cursor, bound]);
+        return cursor === null ? { rows: [{ _id: "a" }], isDone: false, continueCursor: "c2" } : { rows: [{ _id: "b" }], isDone: true, continueCursor: null };
+      },
+      onPage: () => {},
+      onComplete: () => {},
+    });
+
+  it("a bounded crawl resumes with the bound its checkpoint was taken under", async () => {
+    const ns = "resumeBoundNs";
+    const key = syncMetaKey(ns, "ws1");
+    useInboxStore.getState().recordSyncMeta(key, { resumeCursor: "c2", resumeAt: Date.now(), resumeSince: 100 });
+    const fetched: [string | null, number | undefined][] = [];
+    boundedRun(ns, 200, fetched);
+    await delay(60);
+    expect(fetched).toEqual([["c2", 100]]);
+  });
+
+  it("a bounded crawl restarts from page zero when its checkpoint recorded no bound", async () => {
+    const ns = "resumeNoBoundNs";
+    const key = syncMetaKey(ns, "ws1");
+    useInboxStore.getState().recordSyncMeta(key, { resumeCursor: "c2", resumeAt: Date.now() });
+    const fetched: [string | null, number | undefined][] = [];
+    boundedRun(ns, 200, fetched);
+    await delay(60);
+    expect(fetched).toEqual([[null, 200], ["c2", 200]]);
+  });
+
+  it("a bounded crawl checkpoints its bound", async () => {
+    const ns = "resumeCkptBoundNs";
+    const key = syncMetaKey(ns, "ws1");
+    runReconcileCrawl({
+      namespace: ns, wsKey: "ws1", throttleMs: THROTTLE, pageDelayMs: 0, maxPages: 1, since: 300,
+      fetchPage: async () => ({ rows: Array.from({ length: 250 }, (_, i) => ({ _id: `r${i}` })), isDone: false, continueCursor: "c2" }),
+      onPage: () => {},
+      onComplete: () => {},
+    });
+    await delay(60);
+    const meta = useInboxStore.getState().syncMeta[key];
+    expect(meta?.resumeCursor).toBe("c2");
+    expect(meta?.resumeSince).toBe(300);
+  });
+
   it("ignores a stale checkpoint and reports complete=true from a full walk", async () => {
     const ns = "resumeStaleNs";
     const key = syncMetaKey(ns, "ws1");
