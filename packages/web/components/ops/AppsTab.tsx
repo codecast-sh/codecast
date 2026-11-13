@@ -26,6 +26,7 @@ import { EntryRun, NoManifest } from "./AppRun";
 import { useAppRunner, type AppRunner } from "./appRunner";
 import { CallFilters, CallFix, CallGroupDetail } from "./appCalls";
 import "./sourceView.css";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 export function AppsTab({ app, source: scope }: { app: string | null; source?: string | null }) {
   const sources = useOpsSources();
@@ -118,7 +119,7 @@ function AppDetail({ source }: { source: OpsSource }) {
   const health = useSourceHealth(source);
   const allWatches = useOpsWatches();
   const metricWatches = useMemo(() => allWatches.filter((w) => w.source_id === source._id).sort((a, b) => a.name.localeCompare(b.name)), [allWatches, source._id]);
-  const members = useInboxStore((s) => s.teamMembers);
+  const members = useInboxStore(teamMembersOf);
   const me = useInboxStore((s) => s.currentUser);
   const manifest: AppManifest | null = useMemo(() => {
     if (!app?.manifest_json) return null;
