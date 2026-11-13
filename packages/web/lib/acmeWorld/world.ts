@@ -14,7 +14,7 @@ import { FACES } from "./faces";
 
 export const MIN = 60_000;
 export const HOUR = 60 * MIN;
-const DAY = 24 * HOUR;
+export const DAY = 24 * HOUR;
 
 /** A Convex-shaped id (32 lowercase letters and digits). Session and team ids need
  *  the shape: the inbox treats any other id as a create it is still waiting on and
@@ -32,7 +32,7 @@ export const PEOPLE = {
   jordan: { _id: "hero-u-jordan", name: "Jordan Lee", handle: "jordan", email: "jordan@acme.dev", image: FACES.jordan },
   priya: { _id: "hero-u-priya", name: "Priya Nair", handle: "priya", email: "priya@acme.dev", image: FACES.priya },
 } as const;
-type Person = (typeof PEOPLE)[keyof typeof PEOPLE];
+export type Person = (typeof PEOPLE)[keyof typeof PEOPLE];
 
 const PRESENCE: Record<string, "active" | "idle" | "away" | "offline"> = {
   "hero-u-me": "active",
@@ -63,6 +63,8 @@ export const TEAMS = [
     timezone: "UTC",
     features: { chat: true, calls: true, org: true, line: true, changes: true, agent_faces: true, agent_realtime: true, ship: true, member_spend: false },
     role: "admin",
+    // Settings and the share review count teammates from this.
+    member_count: 5,
   },
 ];
 
@@ -105,9 +107,10 @@ export const ASK = {
   ],
 };
 
-type Waiting = "asking" | "blocked" | "working" | "done";
+export type Waiting = "asking" | "blocked" | "working" | "done";
 
-function session(
+/** One inbox row in the shape the server sends. Parts (./parts) build theirs with it. */
+export function session(
   now: number,
   s: { _id: string; short_id: string; title: string; agent_type: string },
   o: {
@@ -117,9 +120,12 @@ function session(
     messages: number;
     state?: string;
     preview?: string;
+    /** Whose session it is; default Alex, the viewer. */
+    owner?: Person;
     extra?: Record<string, unknown>;
   },
 ) {
+  const owner = o.owner ?? PEOPLE.me;
   const live = o.waiting === "working";
   const statusAt = now - o.ago;
   return {
@@ -128,9 +134,9 @@ function session(
     short_id: s.short_id,
     title: s.title,
     agent_type: s.agent_type,
-    user_id: PEOPLE.me._id,
-    author_name: PEOPLE.me.name,
-    is_own: true,
+    user_id: owner._id,
+    author_name: owner.name,
+    is_own: owner._id === PEOPLE.me._id,
     status: "active",
     team_id: TEAM_ID,
     workspace: WORKSPACE,
@@ -186,7 +192,16 @@ export const INBOX = (now: number) => [
     messages: 64,
     state: "Retry queue is in, workers on the API and the dashboard\nStatus: 14 of 16 tests green",
     // Shared with the whole team, with a link already made (the share sheet's full state).
-    extra: { is_private: false, team_visibility: "full", share_token: "acme-retry-webhooks" },
+    extra: {
+      is_private: false,
+      team_visibility: "full",
+      share_token: "acme-retry-webhooks",
+      model: "claude-opus-5-5",
+      git_branch: "feat/webhook-retries",
+      // The header's task and plan: the session works ct-4182 under pl-312.
+      active_task: { _id: "hero-t1", short_id: "ct-4182", title: "Retry queue for failed webhooks", status: "in_progress" },
+      active_plan: { _id: cid("planwebhooks"), short_id: "pl-312", title: "Webhook reliability", status: "active" },
+    },
   }),
   session(now, SESSIONS.ui, {
     ago: 40_000,
@@ -330,6 +345,13 @@ export const ENG_MESSAGES = (now: number) =>
       content: "Yes. Both failed on a 502 from the ledger, and a failed delivery now goes to a retry queue with exponential backoff, at most 5 attempts. Both would have landed on the second try. PR #482 is up and its checks are running.",
     },
     { id: "hero-m-7", who: PEOPLE.maya, ago: 40_000, content: "I'll point support at the retry queue once it ships." },
+    {
+      id: "hero-m-8",
+      who: PEOPLE.me,
+      agent: true,
+      ago: 15_000,
+      content: "Shipped: failed webhooks now retry. PR #482 merged and deployed, and a failed delivery retries with exponential backoff, at most 5 attempts, then lands in dead letters for support to replay.",
+    },
   ].map((m) => ({
     // Convex-shaped: a chat line with any other id reads as an unsent stub (store/chatSlice chatSendState).
     _id: cid(m.id),
@@ -349,7 +371,7 @@ export const ENG_REACTIONS = (now: number) => [
 ];
 
 const RAIL_PREVIEWS: Record<string, { who: string; preview: string; ago: number; agent?: boolean }> = {
-  "hero-ch-eng": { who: PEOPLE.maya._id, preview: "I'll point support at the retry queue once it ships.", ago: 40_000 },
+  "hero-ch-eng": { who: PEOPLE.me._id, preview: "Shipped: failed webhooks now retry. PR #482 merged and deployed", ago: 15_000, agent: true },
   "hero-ch-billing": { who: PEOPLE.me._id, preview: "3 webhooks retried, all delivered on attempt 2", ago: 9 * MIN, agent: true },
   "hero-ch-agents": { who: PEOPLE.me._id, preview: "Rate limiter load test: 4,000 req/s holds on one node", ago: 4 * MIN, agent: true },
   "hero-ch-incidents": { who: PEOPLE.maya._id, preview: "Ledger restart done, 502s cleared at 2:04am", ago: 9 * HOUR },
@@ -431,25 +453,15 @@ export const CAPTIONS = (now: number) => ({
 
 /* ── Tasks ─────────────────────────────────────────────────────────────── */
 
-const PLAN = { _id: cid("planwebhooks"), short_id: "pl-312", title: "Webhook reliability" };
+const PLAN = { _id: cid("planwebhooks"), short_id: "pl-312", title: "Webhook retries" };
 const info = (p: Person) => ({ _id: p._id, name: p.name, image: p.image, github_avatar_url: p.image });
 
 /** The plan's document: what the plan page shows under its charter. */
-const PLAN_DOC = `## Why
-
-Support saw two Stripe events dropped overnight. Both failed on a 502 from the ledger during its restart, and nothing tried them again. A customer whose webhook fails once should never have to notice.
-
-## What ships
-
-- **Retry queue.** A failed delivery is retried with exponential backoff (2s, 4s, 8s, 16s, with jitter), at most 5 attempts.
-- **Signed payloads.** Every event carries an HMAC signature so a receiver can verify it.
-- **Dead letters.** An event that fails all 5 attempts lands in a dead-letter queue with its last response.
-- **Dashboard.** Each failed webhook shows its attempt history and a retry button.
-
-## Open questions
-
-- Does a 410 Gone count as a failed delivery? Asked in the Webhook API half session.
+const PLAN_DOC = `Support saw two Stripe events dropped overnight: both failed on a 502 from the ledger during its restart, and nothing tried them again. A failed delivery now retries with exponential backoff (2s, 4s, 8s, 16s, with jitter), at most 5 attempts, and dead-letters after the fifth.
 `;
+
+/** Maya's dashboard agent, working the retry history task (its inbox row is in ./retriesPlan). */
+export const MAYA_DASHBOARD = { _id: cid("smayadash"), short_id: "jx7q8dh", title: "Retry history in the dashboard", agent_type: "cursor" } as const;
 
 export const PLANS = (now: number) => [
   {
@@ -465,14 +477,24 @@ export const PLANS = (now: number) => [
     doc_id: cid("docwebhookplan"),
     doc_content: PLAN_DOC,
     created_from_conversation_id: SESSIONS.lead._id,
-    conversation_ids: [SESSIONS.lead._id, SESSIONS.api._id, SESSIONS.ui._id],
+    conversation_ids: [SESSIONS.lead._id, MAYA_DASHBOARD._id],
     author: info(PEOPLE.me),
+    // The timeline agents posted to the plan, newest first on the page.
+    comments: [
+      { type: "decision", timestamp: now - 3 * DAY + HOUR, content: "Backoff is 2s, 4s, 8s, 16s with jitter, capped at 5 attempts.", rationale: "Covers a ledger restart by the third attempt without hammering a dead endpoint." },
+      { type: "discovery", timestamp: now - DAY, content: "Both dropped Stripe events failed on a 502 from the ledger; a retry on attempt 2 would have delivered them." },
+      { type: "progress", timestamp: now - 3 * HOUR, content: "Backoff and idempotency keys are in; the queue worker and the dashboard history are in progress." },
+      { type: "decision", timestamp: now - 40 * MIN, content: "A 410 Gone is final and never retries.", rationale: "The endpoint is gone; a retry can never succeed." },
+    ],
     workspace: WORKSPACE,
     team_id: TEAM_ID,
     created_at: now - 3 * DAY,
     updated_at: now - 10 * MIN,
   },
 ];
+
+/** Yesterday's "Webhook retry backoff" huddle (./calls CALL_ID), which filed three of these tasks. */
+const FROM_HUDDLE = { from_call: cid("callbackoff") };
 
 export const TASKS = (now: number) => {
   const task = (t: Record<string, unknown> & { _id: string; short_id: string; title: string; status: string; priority: string }, ago: number) => ({
@@ -488,17 +510,22 @@ export const TASKS = (now: number) => {
     ...t,
   });
   return [
-    task({ _id: "hero-t1", short_id: "ct-4182", title: "Retry queue for failed webhooks", status: "in_progress", priority: "high", labels: ["webhooks"], assignee: PEOPLE.me._id, assignee_info: info(PEOPLE.me), source: "agent", source_agent_type: "claude_code" }, MIN),
-    task({ _id: "hero-t2", short_id: "ct-4183", title: "Sign webhook payloads with HMAC", status: "in_progress", priority: "medium", labels: ["webhooks", "security"], assignee: PEOPLE.sarah._id, assignee_info: info(PEOPLE.sarah) }, 3 * HOUR),
-    task({ _id: "hero-t3", short_id: "ct-4184", title: "Dead-letter queue for poisoned events", status: "in_review", priority: "high", labels: ["webhooks"], assignee: PEOPLE.maya._id, assignee_info: info(PEOPLE.maya), source: "agent", source_agent_type: "cursor" }, 5 * HOUR),
-    task({ _id: "hero-t4", short_id: "ct-4185", title: "Page on-call when retries run out", status: "open", priority: "medium", labels: ["ops"], assignee: PEOPLE.sarah._id, assignee_info: info(PEOPLE.sarah) }, DAY),
-    task({ _id: "hero-t5", short_id: "ct-4186", title: "Backfill events Stripe sent while we were down", status: "open", priority: "low", labels: ["data"] }, 2 * DAY),
-    task({ _id: "hero-t6", short_id: "ct-4187", title: "Idempotency keys on webhook handlers", status: "done", priority: "high", labels: ["webhooks"], assignee: PEOPLE.sarah._id, assignee_info: info(PEOPLE.sarah) }, 2 * DAY),
+    task({ _id: "hero-t13", short_id: "ct-4181", title: "Add exponential backoff to webhook retries", description: "Retry a failed delivery at 2s, 4s, 8s and 16s with jitter, and stop after the fifth attempt.", status: "done", priority: "high", labels: ["webhooks"], assignee: PEOPLE.me._id, assignee_info: info(PEOPLE.me), source: "agent", source_agent_type: "claude_code", created_from_conversation_id: SESSIONS.lead._id, conversation_ids: [SESSIONS.lead._id], closed_at: now - 5 * HOUR, execution_status: "done", verification_evidence: "bun test src/billing/retry.test.ts: 16 pass, 0 fail. A 502 retries and lands on attempt 2, five 500s dead-letter, a 404 never retries.", files_changed: ["src/billing/retry.ts", "src/billing/retry.test.ts"], estimated_minutes: 90, actual_minutes: 70, comments: [
+      { _id: cid("tcbackoff1"), task_id: "hero-t13", author: SESSIONS.lead.title, text: "Started: reading deliver() and the queue client.", conversation_id: SESSIONS.lead._id, comment_type: "progress", created_at: now - 7 * HOUR },
+      { _id: cid("tcbackoff2"), task_id: "hero-t13", author: SESSIONS.lead.title, text: "Backoff in with jitter; 16 tests green. PR #482.", conversation_id: SESSIONS.lead._id, comment_type: "progress", created_at: now - 5 * HOUR - 10 * MIN },
+      { _id: cid("tcbackoff3"), task_id: "hero-t13", author: PEOPLE.maya.name, author_user_id: PEOPLE.maya._id, text: "Jitter scaling with the delay looks right. Approved on the PR.", comment_type: "review", created_at: now - 5 * HOUR },
+    ] }, 5 * HOUR),
+    task({ ...FROM_HUDDLE, _id: "hero-t1", short_id: "ct-4182", title: "Retry queue for failed webhooks", status: "in_progress", priority: "high", labels: ["webhooks"], assignee: PEOPLE.me._id, assignee_info: info(PEOPLE.me), source: "agent", source_agent_type: "claude_code", conversation_ids: [SESSIONS.lead._id], blocked_by: ["hero-t13"], estimated_minutes: 120, actual_minutes: 50 }, MIN),
+    task({ _id: "hero-t2", short_id: "ct-4183", title: "Sign webhook payloads with HMAC", status: "in_progress", priority: "medium", labels: ["webhooks", "security"], assignee: PEOPLE.sarah._id, assignee_info: info(PEOPLE.sarah), plan: undefined, plan_id: undefined }, 3 * HOUR),
+    task({ ...FROM_HUDDLE, _id: "hero-t3", short_id: "ct-4184", title: "Dead-letter exhausted deliveries", status: "open", priority: "high", labels: ["webhooks"], blocked_by: ["hero-t1"], estimated_minutes: 60 }, 5 * HOUR),
+    task({ ...FROM_HUDDLE, _id: "hero-t4", short_id: "ct-4185", title: "Page on-call when retries run out", status: "open", priority: "medium", labels: ["ops"], assignee: PEOPLE.sarah._id, assignee_info: info(PEOPLE.sarah), blocked_by: ["hero-t1", "hero-t9"], estimated_minutes: 45 }, DAY),
+    task({ _id: "hero-t5", short_id: "ct-4186", title: "Backfill events Stripe sent while we were down", status: "in_review", priority: "low", labels: ["data"], assignee: PEOPLE.maya._id, assignee_info: info(PEOPLE.maya), source: "agent", source_agent_type: "cursor", plan: undefined, plan_id: undefined }, 2 * DAY),
+    task({ _id: "hero-t6", short_id: "ct-4187", title: "Idempotency keys on webhook handlers", status: "done", priority: "high", labels: ["webhooks"], assignee: PEOPLE.sarah._id, assignee_info: info(PEOPLE.sarah), closed_at: now - 2 * DAY, estimated_minutes: 60, actual_minutes: 45 }, 2 * DAY),
     task({ _id: "hero-t7", short_id: "ct-4179", title: "Rate limit the public API", status: "in_progress", priority: "high", labels: ["gateway"], assignee: PEOPLE.jordan._id, assignee_info: info(PEOPLE.jordan), plan: undefined, plan_id: undefined, source: "agent", source_agent_type: "pi" }, 4 * MIN),
-    task({ _id: "hero-t9", short_id: "ct-4188", title: "Retry button and attempt history", status: "in_progress", priority: "high", labels: ["dashboard"], assignee: PEOPLE.maya._id, assignee_info: info(PEOPLE.maya), source: "agent", source_agent_type: "cursor" }, 40_000),
+    task({ _id: "hero-t9", short_id: "ct-4188", title: "Retry button and attempt history", status: "in_progress", priority: "high", labels: ["dashboard"], assignee: PEOPLE.maya._id, assignee_info: info(PEOPLE.maya), source: "agent", source_agent_type: "cursor", conversation_ids: [MAYA_DASHBOARD._id], blocked_by: ["hero-t6"], estimated_minutes: 90, actual_minutes: 30 }, 40_000),
     task({ _id: "hero-t10", short_id: "ct-4175", title: "Upgrade Stripe SDK to v14", status: "in_review", priority: "high", labels: ["billing"], assignee: PEOPLE.me._id, assignee_info: info(PEOPLE.me), plan: undefined, plan_id: undefined, source: "agent", source_agent_type: "claude_code" }, 25 * MIN),
-    task({ _id: "hero-t11", short_id: "ct-4189", title: "Alert when the retry queue backs up", status: "open", priority: "medium", labels: ["ops"] }, 3 * HOUR),
-    task({ _id: "hero-t12", short_id: "ct-4190", title: "Document the retry policy for support", status: "open", priority: "low", labels: ["docs"], assignee: PEOPLE.priya._id, assignee_info: info(PEOPLE.priya) }, 5 * HOUR),
+    task({ _id: "hero-t11", short_id: "ct-4189", title: "Alert when the retry queue backs up", status: "open", priority: "medium", labels: ["ops"], plan: undefined, plan_id: undefined }, 3 * HOUR),
+    task({ _id: "hero-t12", short_id: "ct-4190", title: "Document the retry policy for support", status: "open", priority: "low", labels: ["docs"], assignee: PEOPLE.priya._id, assignee_info: info(PEOPLE.priya), plan: undefined, plan_id: undefined }, 5 * HOUR),
     task({ _id: "hero-t8", short_id: "ct-4171", title: "Audit log export to S3", status: "done", priority: "medium", labels: ["infra"], assignee: PEOPLE.priya._id, assignee_info: info(PEOPLE.priya), plan: undefined, plan_id: undefined }, 47 * MIN),
   ];
 };
