@@ -165,7 +165,7 @@ export const COMPARISONS: Comparison[] = [
           },
           {
             label: "Search and ask across everything you have run",
-            text: "Keyword and semantic search over every session, filtered by file, commit, pull request or time; cast ask answers a question across all of it, and your agents run the same queries before they start work.",
+            text: "Full text search over every session, filtered by file, commit, pull request or time; cast ask answers a question across all of it, and your agents run the same queries before they start work.",
           },
           {
             label: "cast blame",
@@ -618,7 +618,7 @@ export const COMPARISONS: Comparison[] = [
       codecast: {
         pros: [
           "Records every session live with no change to how anyone works: six agents, any machine, nothing to switch on.",
-          "The record outlives the session. Full text and semantic search, questions across the whole corpus, and cast blame from any line back to the conversation that wrote it.",
+          "The record outlives the session. Full text search, questions across the whole corpus, and cast blame from any line back to the conversation that wrote it.",
           "Agents read the record themselves, so memory carries across sessions, people and months.",
           "Already runs away from your desk: move a live session to another machine with its working tree, fork onto a cloud host, and answer permission prompts from a phone.",
           "Work tracking grows out of the record: tasks, plans, docs, projects, a decisions queue, triggers, workflows and org roles all link back to sessions.",
@@ -717,7 +717,7 @@ export const COMPARISONS: Comparison[] = [
           },
           {
             label: "Memory across every session",
-            text: "Full text and semantic search over the whole team's history, questions answered across the corpus, and agents that run those queries themselves before they start work. Delta documents search within a thread.",
+            text: "Full text search over the whole team's history, questions answered across the corpus, and agents that run those queries themselves before they start work. Delta documents search within a thread.",
           },
           {
             label: "Line attribution",
