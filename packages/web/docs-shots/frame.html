@@ -1,0 +1,87 @@
+<!doctype html>
+<!--
+  Composes one raw 2x capture into a framed docs image. Served from the repo's
+  packages/ directory (fonts come from ../../mobile/assets) and captured at 2x
+  by scripts/docs-shots.ts.
+
+    ?src=<url>          the raw capture, shown at naturalWidth/2 CSS px
+    &kind=window|element|phone   (default window)
+    &title=<text>       window title bar text (optional)
+    &theme=light|dark   Verdigris light or Fjord dark (default light)
+    &bg=plate|none      palette plate, or transparent with shadow only (default plate)
+
+  When composed, body[data-ready="1"] and body[data-w]/[data-h] give the CSS
+  size to clip; data-ready="error" means src failed to load. The plate's
+  outer corners are transparent, so capture with a transparent default
+  background.
+-->
+<html>
+<head>
+<meta charset="utf-8" />
+<link rel="stylesheet" href="frame.css" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: transparent; }
+  body { width: max-content; }
+  .plate { display: inline-block; vertical-align: top; padding: var(--pad); border-radius: var(--plate-r); }
+  .phone { margin: 0 auto; }
+</style>
+</head>
+<body>
+  <div class="plate" id="plate"></div>
+<script type="module">
+  const q = new URLSearchParams(location.search);
+  const kind = ["window", "element", "phone"].includes(q.get("kind")) ? q.get("kind") : "window";
+  const theme = q.get("theme") === "dark" ? "dark" : "light";
+  const plate = document.getElementById("plate");
+  document.body.className = `frame-${theme}`;
+  if (q.get("bg") === "none") plate.classList.add("bare");
+
+  const img = new Image();
+  img.alt = "";
+  // onload rather than decode(): decode() can stall in a background tab.
+  const loaded = new Promise((ok, fail) => { img.onload = ok; img.onerror = fail; });
+  img.src = q.get("src") ?? "";
+  try { await loaded; } catch { document.body.dataset.ready = "error"; throw new Error(`could not load ${img.src}`); }
+  const w = Math.round(img.naturalWidth / 2);
+  img.style.width = `${w}px`;
+
+  let shot;
+  if (kind === "window") {
+    shot = document.createElement("div");
+    shot.className = "window";
+    const bar = document.createElement("div");
+    bar.className = "bar";
+    bar.innerHTML = "<i></i><i></i><i></i>";
+    const title = q.get("title");
+    if (title) { const s = document.createElement("span"); s.textContent = title; bar.append(s); }
+    shot.append(bar, img);
+  } else if (kind === "element") {
+    shot = document.createElement("div");
+    shot.className = "element";
+    shot.append(img);
+  } else {
+    shot = document.createElement("div");
+    shot.className = "phone";
+    shot.style.setProperty("--phone-w", `${w}px`);
+    shot.innerHTML = '<span class="key l1"></span><span class="key l2"></span><span class="key l3"></span><span class="key r1"></span>';
+    img.style.width = "";
+    shot.prepend(img);
+    const island = document.createElement("span");
+    island.className = "island";
+    shot.append(island);
+  }
+  // Padding scales with the shot so a small card and a full window sit in the same proportion of plate.
+  const pad = Math.round(Math.min(72, Math.max(28, w * (kind === "phone" ? 0.11 : 0.05))));
+  plate.style.setProperty("--pad", `${pad}px`);
+  plate.style.setProperty("--plate-r", `${Math.round(Math.min(24, Math.max(14, pad * 0.4)))}px`);
+  plate.append(shot);
+
+  await document.fonts.ready;
+  const r = plate.getBoundingClientRect();
+  document.body.dataset.w = String(Math.ceil(r.width));
+  document.body.dataset.h = String(Math.ceil(r.height));
+  document.body.dataset.ready = "1";
+</script>
+</body>
+</html>

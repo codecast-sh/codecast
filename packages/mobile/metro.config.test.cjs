@@ -172,7 +172,10 @@ for (const name of ['expo-asset', 'expo-modules-core', 'expo-file-system']) {
 test('store shots modules resolve empty without EXPO_PUBLIC_STORE_SHOTS', () => {
   expect(process.env.EXPO_PUBLIC_STORE_SHOTS).not.toBe('1');
   const app = context(path.join(__dirname, 'lib/convex.ts'));
-  for (const name of ['./storeShots/convexStub', './storeShots/seed', './storeShots/world']) {
+  for (const name of ['./storeShots/convexStub', './storeShots/seed', './storeShots/heavy']) {
+    expect(config.resolver.resolveRequest(app, name, 'ios')).toEqual({ type: 'empty' });
+  }
+  for (const name of ['@codecast/web/lib/acmeWorld/world', '@codecast/web/lib/acmeWorld/seed']) {
     expect(config.resolver.resolveRequest(app, name, 'ios')).toEqual({ type: 'empty' });
   }
   expect(config.resolver.resolveRequest(app, './storeShots/flag', 'ios').filePath).toBe(path.join(__dirname, 'lib/storeShots/flag.ts'));

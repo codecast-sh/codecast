@@ -11,10 +11,11 @@ import {
   collectionRowHydrator,
   isPersistedClientStoreKey,
 } from "./clientSyncRegistry";
-import { diffCollection, durableDeletes } from "./idbCollectionDiff";
+import { createCoalescedWriter, deleteAllowed, diffCollection, diffPatchedRows, durableDeletes, hasSnapshotDrops, patchedIds } from "./idbCollectionDiff";
 import { partitionSessionRetention, COLLECTION_RETENTION, expireExcludeTombstones, persistedMessageTail } from "./cacheRetention";
 import { authPrincipal } from "../lib/authPrincipal";
 import { storableActionArgs } from "../lib/tabSafePath";
+import { DOCS_SHOTS } from "../lib/docsShots/flag";
 
 export type OutboxEntry = {
   id: string;
@@ -32,7 +33,8 @@ export type OutboxEntry = {
   coalesceKey?: string;
 };
 
-export const PERSISTENCE_AVAILABLE = typeof window !== "undefined";
+// Docs shots (lib/docsShots) render a fixture world and keep nothing.
+export const PERSISTENCE_AVAILABLE = typeof window !== "undefined" && !DOCS_SHOTS;
 
 // The on-disk schema is DERIVED from the client sync registry: every persisted
 // collection becomes a table keyed by its registered `indexes` (default "_id"),
@@ -319,6 +321,12 @@ export function _cacheOwnerForTests(): string | null {
   return boundOwner;
 }
 
+const metaWriter = createCoalescedWriter((key, value) => { db.meta.put({ key, value }).catch(() => {}); }, 250);
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", () => metaWriter.flush());
+  window.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") metaWriter.flush(); });
+}
+
 export function writePatchesToIDB(patches: Patch[], state: any) {
   if (_hydrating || !persistenceOwned()) return;
 
@@ -335,13 +343,25 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
       const data = state[key];
       if (data && typeof data === "object") {
         const prevShadow = lastPersisted.get(key);
-        const { puts, deletes: rawDeletes, next } = diffCollection(prevShadow, data);
+        const pending = state.pending || {};
         // NEVER wipe the cache from a store-shrink: durableDeletes keeps every
         // delete that nothing authorized (an exclude, a stub id, a snapshot
         // prune) on disk AND in the shadow, so a whole-collection wipe is
         // structurally impossible. The rule and its reasons live there.
-        const deletes = durableDeletes(key, rawDeletes, state.pending || {}, prevShadow, next);
-        lastPersisted.set(key, next);
+        // The patches name the rows this write touched, so only those are compared: a write
+        // of a few rows into a big collection costs the rows. A whole-collection replace,
+        // or snapshot drops only a full diff can find, take the full diff.
+        const ids = prevShadow && !hasSnapshotDrops(key) ? patchedIds(patches, key) : null;
+        let puts: any[];
+        let deletes: string[];
+        if (prevShadow && ids) {
+          ({ puts, deletes } = diffPatchedRows(prevShadow, data, ids, (id) => deleteAllowed(key, id, pending)));
+        } else {
+          const diff = diffCollection(prevShadow, data);
+          puts = diff.puts;
+          deletes = durableDeletes(key, diff.deletes, pending, prevShadow, diff.next);
+          lastPersisted.set(key, diff.next);
+        }
         if (puts.length || deletes.length) {
           // One transaction so a row is never momentarily absent: removed rows
           // and changed rows commit together, and unchanged rows are never
@@ -353,7 +373,9 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
         }
       }
     } else if (META_KEYS.has(key)) {
-      db.meta.put({ key, value: state[key] }).catch(() => {});
+      // One blob per key (the pending map holds a lock per field in flight): its latest value is
+      // written once per quiet spell, never once per action. Page hide flushes it.
+      metaWriter.write(key, state[key]);
     }
   }
 }
@@ -724,7 +746,7 @@ export function enqueueDispatch(entry: OutboxEntry): Promise<void> {
   // A write for an account this window no longer acts for parks nowhere: the
   // clear that follows the boundary unbinds the outbox, and this covers the
   // gap before that clear. Resolved, not rejected: it is not a storage fault.
-  if (!persistenceOwned()) return Promise.resolve();
+  if (!persistenceOwned() || !PERSISTENCE_AVAILABLE) return Promise.resolve();
   // The engine hands over the args as the caller passed them; a tab address in them is stored in its safe form (lib/tabSafePath).
   return db.dispatchOutbox.put({ ...entry, args: storableActionArgs(entry.action, entry.args) }).then(() => {});
 }
@@ -835,6 +857,8 @@ async function purgeLocalCacheNow(keepPendingInputFor: string | null): Promise<v
   clearPendingMessageJournal(localStorage);
   await pendingJournalFlush;
   _pendingMsgWrites.clear();
+  // A meta value still waiting to be written belongs to the cache being purged.
+  metaWriter.drop();
   lastPersisted.clear();
   // A cache purged from under a signed-in principal (someone else's rows were
   // on disk) keeps that principal's own pending input: keyed by owner, it was

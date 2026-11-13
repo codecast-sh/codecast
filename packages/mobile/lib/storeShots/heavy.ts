@@ -7,7 +7,7 @@
 // subagents nested under those, ~120 alive at once.
 import { useInboxStore } from "@codecast/web/store/inboxStore";
 import { INBOX_FACT_FIELDS } from "@codecast/shared/contracts";
-import { CURRENT_USER, TEAM_ID } from "./world";
+import { CURRENT_USER, TEAM_ID } from "@codecast/web/lib/acmeWorld/world";
 
 export const HEAVY_SESSIONS = Number(process.env.EXPO_PUBLIC_STORE_SHOTS_HEAVY ?? 0) || 0;
 const LIVE = 120;

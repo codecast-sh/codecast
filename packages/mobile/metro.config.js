@@ -94,12 +94,14 @@ const resolveApp = (context, moduleName, platform) => {
 // enters the bundle only when Metro runs with EXPO_PUBLIC_STORE_SHOTS=1. Its
 // modules are required only behind that flag, but Metro collects a require
 // before the dead branch folds away, so without this every release would ship
-// the fixture world. The flag module itself always resolves.
-const STORE_SHOTS_DIR = path.join(projectRoot, 'lib', 'storeShots') + path.sep;
+// the fixture world. The flag module itself always resolves. The world and its
+// seed live in web's lib/acmeWorld, shared with the web docs shots; they are
+// gated the same way.
+const STORE_SHOTS_DIRS = [path.join(projectRoot, 'lib', 'storeShots') + path.sep, path.join(workspaceRoot, 'packages', 'web', 'lib', 'acmeWorld') + path.sep];
 const storeShotsOn = process.env.EXPO_PUBLIC_STORE_SHOTS === '1';
 config.resolver.resolveRequest = (context, moduleName, platform) => {
   const res = resolveApp(context, moduleName, platform);
-  if (!storeShotsOn && res.type === 'sourceFile' && res.filePath.startsWith(STORE_SHOTS_DIR) && path.basename(res.filePath) !== 'flag.ts') {
+  if (!storeShotsOn && res.type === 'sourceFile' && STORE_SHOTS_DIRS.some((dir) => res.filePath.startsWith(dir)) && path.basename(res.filePath) !== 'flag.ts') {
     return { type: 'empty' };
   }
   return res;

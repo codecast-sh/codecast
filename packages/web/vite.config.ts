@@ -47,6 +47,10 @@ function buildIdentity(mode: string) {
 }
 
 export default defineConfig(({ mode, command }) => ({
+  // Docs shots (lib/docsShots) run a second dev server beside the main one; its
+  // pre-bundled deps live apart so neither server rewrites the other's. Inside
+  // node_modules/.vite, so a cache purge (vendor-platform.sh) clears both.
+  ...(process.env.VITE_DOCS_SHOTS === "1" ? { cacheDir: "node_modules/.vite/docs-shots" } : {}),
   plugins: [
     // Replaces the dev server with a fresh one if its main thread stops running.
     stallWatchdogPlugin(),

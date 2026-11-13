@@ -7,6 +7,7 @@ import "../app/globals.css";
 import "@platform/design/fonts";
 import { startRouteModule } from "./earlyRoutes";
 import { holdTextareaTextNodes } from "../lib/holdTextareaTextNode";
+import { DOCS_SHOTS } from "../lib/docsShots/flag";
 
 /**
  * The app entry is deliberately almost empty. Everything real lives in
@@ -33,5 +34,7 @@ bootAfterHandoffGate(() => {
   if (isStandaloneSharePath(window.location.pathname)) return void import("./shareBoot");
   // The route's own modules load beside boot's, not after the shell reaches it.
   startRouteModule(window.location.pathname);
-  void import("./boot");
+  // Docs shots (dev only) sign in to the fixture world before the app loads.
+  if (DOCS_SHOTS) void import("../lib/docsShots/install").then(() => import("./boot"));
+  else void import("./boot");
 });

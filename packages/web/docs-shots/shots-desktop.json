@@ -1,0 +1,1382 @@
+[
+ {
+  "file": "/docs/app/inbox.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open",
+  "state": "Acme workspace, signed in as Alex Rivera. Left nav; in the middle, Alex's Claude Code session on webhook retries, mid-run; on the right, the inbox column with cards under Needs You, Working and Dormant from Alex Rivera, Maya Ortiz and Sarah Chen.",
+  "crop": "window",
+  "alt": "The codecast app: navigation on the left, a running agent conversation in the middle, and the inbox of live sessions on the right",
+  "caption": "The conversation you are in, beside the inbox of everything else that is running.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/connect.webp",
+  "device": "desktop",
+  "surface": "/inbox in the Mac app for a fresh account with no computer connected",
+  "state": "A fresh fixture user in Acme with nothing synced. The empty inbox shows the setup card with the Set up this machine button. No cloud machine is enabled, so the Start a session option is absent.",
+  "crop": "element: the empty-inbox setup card",
+  "alt": "The empty inbox's setup card with the Set up this machine button",
+  "caption": "The setup card in an empty inbox.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/inbox-cards.webp",
+  "device": "desktop",
+  "surface": "/inbox, sessions column",
+  "state": "The inbox column with the sections Pinned, Needs You, Working and Dormant (plus one Decisions row if convenient). Cards are titled around webhook retries (retry backoff, idempotency keys, dead-letter queue), from Alex Rivera, Maya Ortiz and Sarah Chen, each with a status line, last message and project.",
+  "crop": "element: the inbox sessions column",
+  "alt": "The inbox column: session cards under Needs You, Working and Dormant, each with a title, a status line and the project",
+  "caption": "Session cards, grouped by what each one needs from you.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/decisions.webp",
+  "device": "desktop",
+  "surface": "/decisions with one decision open as a full card",
+  "state": "A decision from Alex's webhook-retries session asking 'Retry failed webhooks with exponential backoff or a fixed schedule?', with the agent's reasoning and two numbered options, each with its consequence. The Decisions count is visible in the sidebar.",
+  "crop": "element: the decision card",
+  "alt": "A decision card: the question, the agent's reasoning, and numbered options each with its consequence",
+  "caption": "A queued decision, answerable without reading the thread.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/conversation.webp",
+  "device": "desktop",
+  "surface": "/conversation/<id> for Alex's webhook retries session",
+  "state": "The header shows the agent, model, branch, the bound task and plan, and Share. The transcript shows agent replies, folded tool lines ('ran 3 commands', 'read 2 files') and a background command running the webhook retry tests.",
+  "crop": "window",
+  "alt": "A conversation: the agent's replies, collapsed command runs and a background command, with the task and plan in the header",
+  "caption": "A live session, with the task it serves in the header.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/permission.webp",
+  "device": "desktop",
+  "surface": "/conversation/<id> with a pending permission",
+  "state": "A permission card in Alex's webhook retries session asking to run the webhook retry integration tests (e.g. bun test webhooks/retry.test.ts), with Approve and Deny buttons.",
+  "crop": "element: the permission card and the message above it",
+  "alt": "A permission card in a conversation: the command the agent wants to run, with Approve and Deny buttons",
+  "caption": "A permission request, answered in the conversation.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/diff.webp",
+  "device": "desktop",
+  "surface": "/conversation/<id> with the diff panel open (press D)",
+  "state": "The diff panel beside Alex's conversation lists the files changed for webhook retries (webhooks/retry.ts, webhooks/retry.test.ts), with one file's edits shown inline.",
+  "crop": "window",
+  "alt": "The diff panel beside a conversation: the changed files listed, one file's edits shown inline",
+  "caption": "The diff panel: what this session changed.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/palette.webp",
+  "device": "desktop",
+  "surface": "Command palette (Cmd+K) open over /inbox",
+  "state": "The palette with the query 'retry', showing grouped results: sessions, tasks and docs about webhook retries from Alex, Maya and Sarah, plus actions.",
+  "crop": "window",
+  "alt": "The command palette open over the app, with recent sessions, tasks and actions",
+  "caption": "The palette: jump to anything or act on it.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/changes.webp",
+  "device": "desktop",
+  "surface": "/changes",
+  "state": "The Acme team with the Changes feature on. A week summary sits above a day's sentence and its stories (webhook retry backoff shipped, dead-letter queue added, idempotency keys), each with its size and the release that shipped it. The header shows filters, in progress and live.",
+  "crop": "window",
+  "alt": "The Changes page: a week's summary above a day's stories, each with its size and the release that shipped it",
+  "caption": "Changes: every day's work as a list of stories.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/tasks.webp",
+  "device": "desktop",
+  "surface": "/tasks",
+  "state": "The task board grouped In Progress, In Review and Open. Tasks about webhook retries are held by Alex Rivera, Maya Ortiz, Sarah Chen and agent sessions, with priorities and ages.",
+  "crop": "window",
+  "alt": "The task board grouped into In Progress and Open, with assignees, priorities and ages",
+  "caption": "Tasks: one board for people and agents.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/plan.webp",
+  "device": "desktop",
+  "surface": "/plans/<id> for a 'Webhook retries' plan",
+  "state": "The plan page with its goal, a progress bar (e.g. 3 of 5 done), its tasks, the bound sessions, and a timeline of decisions and findings posted by agents.",
+  "crop": "window",
+  "alt": "A plan page with its goal, progress, tasks and comment timeline",
+  "caption": "A plan: the goal, its tasks, and what every session learned.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/triggers.webp",
+  "device": "desktop",
+  "surface": "/triggers",
+  "state": "The Acme workspace's Triggers page. The horizon rail shows dots for runs in the past 24h and fires in the next 24h. Below it is a list of triggers: a recurring 'Check webhook retry dead-letter queue every 4h', a one-time 'Re-run retry integration tests in 30m' and an event trigger on pull request comments for the webhook retries PR. They belong to Alex's and Maya's sessions, and one is paused.",
+  "crop": "window",
+  "alt": "The Triggers page: a 24-hour rail of past runs and upcoming fires above the list of triggers",
+  "caption": "Triggers: what runs later, and what already ran.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/doc.webp",
+  "device": "desktop",
+  "surface": "/docs/<id> open in the editor",
+  "state": "A spec doc titled 'Webhook retry policy' with headings and an inline @mention of a task showing its live status. Optionally, Maya Ortiz's cursor is shown as a teammate.",
+  "crop": "window",
+  "alt": "A document open in the editor, with an inline mention of a task showing its status",
+  "caption": "A document with live mentions of the work it describes.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/chat.webp",
+  "device": "desktop",
+  "surface": "/chat with a team channel open",
+  "state": "An Acme channel with messages from Alex, Maya and Sarah, and a post from an agent session announcing that the webhook retry change shipped.",
+  "crop": "window",
+  "alt": "A team channel with posts from people and from agent sessions",
+  "caption": "A channel where people and agents both post.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/call.webp",
+  "device": "desktop",
+  "surface": "/calls with a finished call open",
+  "state": "A finished huddle between Alex, Maya and Sarah about webhook retries, with its title, summary, action items (filed tasks and who holds them) and a speaker-labeled transcript.",
+  "crop": "window",
+  "alt": "A finished call: its summary and action items above the transcript, with each line labeled by speaker",
+  "caption": "A call after it ends: summary, action items and transcript.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/team-settings.webp",
+  "device": "desktop",
+  "surface": "Settings > Team, viewed as an admin",
+  "state": "The Acme team panel: the Invite button in the section header, the team name, and members Alex Rivera (admin), Maya Ortiz and Sarah Chen with their roles. The Features switches are visible if they fit.",
+  "crop": "element: the settings panel",
+  "alt": "Settings > Team: the team's members with their roles, and the invite controls",
+  "caption": "Settings > Team: members, roles and invites.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/sharing.webp",
+  "device": "desktop",
+  "surface": "Settings > Sync & Privacy",
+  "state": "The Decide with an agent card at the top, then fixture project folders with their session counts: ~/src/acme-api shared with Acme, ~/src/acme-web shared with Acme, and ~/src/notes set to Only me.",
+  "crop": "element: the settings panel",
+  "alt": "Settings > Sync & Privacy: project folders, each with its sharing choice and session count",
+  "caption": "Sync & Privacy: what syncs from this machine, and who sees it.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/integrations.webp",
+  "device": "desktop",
+  "surface": "Settings > Integrations",
+  "state": "Integration cards for GitHub (connected to the Acme team), Slack and Linear with Connect buttons and their bullet lists.",
+  "crop": "element: the settings panel",
+  "alt": "Settings > Integrations: cards for GitHub, Slack and Linear, each with a Connect button",
+  "caption": "Settings > Integrations.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/documentation/decisions/waiting.webp",
+  "device": "desktop",
+  "surface": "/inbox with an Acme session open that is waiting on a blocking decision",
+  "state": "Session 'Webhook retries' (Alex Rivera) shows the full decision card headed 'Waiting on your decision': a question about the retry backoff strategy, a reasoning paragraph, three numbered options each with its consequence, 'Or answer in your own words', and the share button and 'Read the thread' in the card header",
+  "crop": "element: the decision card in the conversation pane",
+  "alt": "A session waiting on a decision: the question in large type, the agent's reasoning, numbered options each with its consequence, and a field to answer in your own words",
+  "caption": "A session waiting on your decision, with everything you need to answer on the card.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/decisions/decisions-page.webp",
+  "device": "desktop",
+  "surface": "/decisions",
+  "state": "List view, Mine tab selected, with counts on Mine, Team, Unassigned, Escalated and Answered; three open questions from Acme sessions about webhook retries (backoff, dead-letter queue, alerting), owner Alex Rivera; List/Cards toggle, 'One at a time' and 'Guide' in the header; the Decisions row in the sidebar shows 3",
+  "crop": "window",
+  "alt": "The Decisions page: a list of open questions from Acme's sessions, with Mine selected and counts on each tab",
+  "caption": "The Decisions page, with three questions waiting on you.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/decisions/one-at-a-time.webp",
+  "device": "desktop",
+  "surface": "/decisions?mode=step",
+  "state": "First of three webhook retries decisions shown full on the asking session's pane, options numbered 1 to 3 with KeyCaps, 't Or answer in your own words', and the footer key hints 'o open the session', 's skip for now', 'x dismiss', 'esc leave the queue'",
+  "crop": "window",
+  "alt": "One decision shown full screen, with its options numbered and the key hints for skip, dismiss and open the session",
+  "caption": "Working through the queue one decision at a time.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/decisions/answered.webp",
+  "device": "desktop",
+  "surface": "/inbox with the Webhook retries session open after answering",
+  "state": "Transcript shows the decision marked answered with a check on 'Exponential backoff, capped at 1 hour', Alex Rivera's answer as a message linked to the ask, and the agent's reply starting the work",
+  "crop": "element: the conversation transcript around the answered decision",
+  "alt": "The answered decision in the transcript: the chosen option checked, the answer as a message, and the agent's reply",
+  "caption": "The same decision after answering, with the agent's next step below it.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/decisions/steer-dock.webp",
+  "device": "desktop",
+  "surface": "/inbox with a working session that has an advisory (non-blocking) decision, Modern style",
+  "state": "Agent still working on webhook retries; the Modern decision dock above the message box shows the question, two option buttons with the default highlighted, the 'Answer in your own words' field with Send, and Open",
+  "crop": "element: the composer area with the docked decision",
+  "alt": "A question docked above the message box while the agent keeps working, with two option buttons, an answer field and Open",
+  "caption": "A question the agent is working around, docked above the message box.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/messaging/message-from.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open that received a message from another session",
+  "state": "Session 'Retry queue worker' shows its Message to card sent to 'Webhook retries API', then a Message from card naming that session with the open-the-sending-message arrow, followed by the agent revising its change",
+  "crop": "element: the conversation transcript",
+  "alt": "A conversation where the agent received feedback from another session in a Message from card and revised its work",
+  "caption": "A reply from another session, with a link back to the message that sent it.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/shots/session-messages.webp",
+  "device": "desktop",
+  "surface": "two Acme sessions open side by side in split panes",
+  "state": "Left: Claude Code session 'Retry queue worker' with a Message to card and a Message from card; right: Codex session 'Webhook retries API' with the matching cards, each naming the other",
+  "crop": "window",
+  "alt": "Two conversations side by side, each showing a Message to card it sent and a Message from card it received from the other",
+  "caption": "Two sessions on different agents trading messages.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/messaging/triage-menu.webp",
+  "device": "desktop",
+  "surface": "/inbox with the right-click menu open on a session card that is still in the inbox",
+  "state": "Context menu on a worker session (not yet stashed) showing Stash, 'Stash and hide \u2014 stays out through trigger wakes' and Kill session with their shortcut hints; the folded Stashed and Killed sections visible at the bottom of the inbox",
+  "crop": "element: inbox sidebar with the open context menu",
+  "alt": "A session's right-click menu in the inbox with Stash, Stash and hide and Kill session",
+  "caption": "The controls for moving a session out of the inbox.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/forks-and-spawn/workers.webp",
+  "device": "desktop",
+  "surface": "/inbox with a parent session open",
+  "state": "Alex Rivera asked the Webhook retries session to split retry research between two workers; the session names both as live session pills, then the rows where it woke as each finished, then one combined answer",
+  "crop": "element: the conversation transcript",
+  "alt": "A session that delegated two workers, linked them by name, and wrote one combined answer when both finished",
+  "caption": "A session that split a job between two workers and combined their results.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/forks-and-spawn/inbox-nest.webp",
+  "device": "desktop",
+  "surface": "/inbox sidebar",
+  "state": "Parent 'Webhook retries' session dormant with two worker rows nested under it (a Codex reviewer working, a Claude Code test writer done) and '+1 more sub-session' below them",
+  "crop": "element: inbox sidebar",
+  "alt": "The Acme inbox with a session and two worker rows nested under it, each showing its agent and state",
+  "caption": "Workers nested under the session that started them.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/forks-and-spawn/fork-from-message.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open, a message's menu open",
+  "state": "Hovering an assistant message in the Webhook retries session with its menu open and 'Fork from here' highlighted; the fork icon visible in the hover toolbar",
+  "crop": "element: the message and its open menu",
+  "alt": "A message's menu open with Fork from here highlighted",
+  "caption": "Forking from a message.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/forks-and-spawn/branch-map.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open and the branch map toggled (T)",
+  "state": "Popover titled 'Branch map' showing the original Webhook retries thread and two branches (queue approach, per-endpoint limits), the current branch highlighted, and the 'fork here' key hint",
+  "crop": "element: the branch map popover over the conversation",
+  "alt": "The branch map open over a conversation, showing the original thread and two branches with the current one highlighted",
+  "caption": "The branch map for a conversation with two forks.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/forks-and-spawn/move-menu.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open, the agent and model chip menu open in the header",
+  "state": "Session control menu showing Switch agent, Fork as and Hand off to, each listing installed agents (Claude Code, Codex, Cursor)",
+  "crop": "element: the session header with its open menu",
+  "alt": "The session control menu with Switch agent, Fork as and Hand off to, each listing installed agents",
+  "caption": "Moving a session to another agent.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/calls/call-page.webp",
+  "device": "desktop",
+  "surface": "/calls with a finished huddle selected",
+  "state": "Finished huddle 'Webhook retry backoff' from #eng with Alex Rivera, Maya Ortiz and Sarah Chen: title, length, summary, action items, transcript lines under each speaker, Send to agent and Copy link buttons",
+  "crop": "window",
+  "alt": "A finished call's page with its summary, action items and the transcript under each speaker",
+  "caption": "A finished huddle's page, with the summary above the full transcript.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/calls/start-huddle.webp",
+  "device": "desktop",
+  "surface": "Start a huddle dialog opened from the #eng channel's Huddle button",
+  "state": "Dialog titled 'Start a huddle' with the Team/Private toggle on Team, the line '#eng \u00b7 Buzzes all 2 members', camera preview (fixture face), moving microphone meter, mic, camera and speaker pickers, Cancel and Start",
+  "crop": "element: the dialog",
+  "alt": "The Start a huddle dialog with a camera preview, the microphone meter, device pickers and the Team and Private toggle",
+  "caption": "Checking camera and microphone before a huddle starts.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/calls/in-call.webp",
+  "device": "desktop",
+  "surface": "call stage during a live #eng huddle",
+  "state": "Alex Rivera, Maya Ortiz and Sarah Chen faces; bottom row Mute, camera, Share your screen, add, End call; top row open, invite, thread; thread rail open with 'transcribing \u00b7 on' and a few live transcript lines about webhook retries",
+  "crop": "window",
+  "alt": "A huddle with Alex Rivera, Maya Ortiz and Sarah Chen, the controls along the bottom and the thread open on the right",
+  "caption": "A huddle in progress, with its thread open.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/calls/digest.webp",
+  "device": "desktop",
+  "surface": "/chat with #eng open after a huddle ended",
+  "state": "Huddle digest message in #eng: title 'Webhook retry backoff', length, faces of Alex Rivera, Maya Ortiz and Sarah Chen, summary, three action items, transcript link",
+  "crop": "element: the digest message in the channel",
+  "alt": "The digest of a finished huddle in the #eng channel, with its title, length, speakers, summary and action items",
+  "caption": "The digest a huddle leaves in its channel.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/calls/agent-quote.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session that answered a question about a call",
+  "state": "Agent reply to 'What did we agree on yesterday's call about the webhook retries?' with a pill for the 'Webhook retry backoff' call and two embedded transcript lines under Maya Ortiz and Sarah Chen",
+  "crop": "element: the agent's reply",
+  "alt": "An agent's reply quoting two transcript lines from a huddle, each under its speaker, with a pill linking to the call",
+  "caption": "An agent quoting the exact lines from a call.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/calls/huddle-agent.webp",
+  "device": "desktop",
+  "surface": "call stage with the thread rail open and an agent session in the room",
+  "state": "Thread shows transcript lines, a typed line from Alex Rivera addressed to the Webhook retries session, and the session's answer marked as an agent; the agent's face in the room",
+  "crop": "element: the call's thread rail",
+  "alt": "A huddle's thread where a typed question goes to the agent and its answer appears marked as an agent",
+  "caption": "A session answering in a huddle's thread.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/calls/call-video.webp",
+  "device": "desktop",
+  "surface": "/calls with a recorded huddle selected",
+  "state": "Video of the 'Webhook retry backoff' huddle (a shared screen showing retry code) on the left, transcript on the right with the current line lit, the Back to the moment pill visible after a scroll",
+  "crop": "window",
+  "alt": "A recorded call's page with the video on the left and the transcript on the right, the current line highlighted",
+  "caption": "A recorded huddle, with the video in step with the transcript.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/team-chat/channel.webp",
+  "device": "desktop",
+  "surface": "/chat with #eng open",
+  "state": "Chat rail with Pinned, Channels and Direct messages; #eng with posts from Maya Ortiz, Sarah Chen and the Webhook retries session (its title, the 'session' chip and 'via Alex Rivera') about webhook retries; header with people, Huddle, search and the bell",
+  "crop": "window",
+  "alt": "The #eng channel in the Acme workspace, with Maya Ortiz, Sarah Chen and a session posting about webhook retries",
+  "caption": "A channel where people and a session post side by side.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/team-chat/mention-picker.webp",
+  "device": "desktop",
+  "surface": "/chat with #eng open, @ typed in the message box",
+  "state": "Mention picker listing Alex Rivera, Maya Ortiz, a role (@eng-lead) and two sessions (Webhook retries, Retry queue worker)",
+  "crop": "element: message box with the open picker",
+  "alt": "The @ picker open in the message box, listing Alex Rivera, a role and two sessions",
+  "caption": "Mentioning a teammate, a role or a session.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/team-chat/session-thread.webp",
+  "device": "desktop",
+  "surface": "/chat #eng with the thread panel open on a session's post",
+  "state": "Thread under the Webhook retries session's post; Sarah Chen's reply; the reply box placeholder addressed to Webhook retries ending 'delivered into its session'; the session's answer below",
+  "crop": "element: the thread panel",
+  "alt": "A thread under a session's post, with the reply box addressed to the session and its answer below",
+  "caption": "Replying to a session in its thread.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/team-chat/slack-mirror.webp",
+  "device": "desktop",
+  "surface": "Slack mirror dialog from #eng's Channel settings > Mirror with Slack\u2026",
+  "state": "Slack channel #eng picked, Both ways selected, the What crosses over switches shown, Bring in Slack history set to a week, Start mirroring button",
+  "crop": "element: the dialog",
+  "alt": "The Slack mirror dialog with a Slack channel picked, Both ways selected, the What crosses over switches and the history options",
+  "caption": "Setting up a Slack mirror for a channel.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/opencode/opencode-tui.webp",
+  "device": "desktop",
+  "surface": "OpenCode TUI in a terminal (outside codecast), Acme webhooks repo",
+  "state": "An OpenCode session asked to add retry backoff to the webhook sender; shows the request, the edit and a test run passing",
+  "crop": "window",
+  "alt": "The OpenCode TUI: a request to add retry backoff to the webhook sender, the edit and a test run",
+  "caption": "A session in the OpenCode TUI.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/opencode/codecast-session.webp",
+  "device": "desktop",
+  "surface": "/inbox with the OpenCode session open",
+  "state": "The same OpenCode webhook-retries session in codecast: OpenCode badge and model in header, files-changed count, reads, an edit drawn as a diff, two commands, final answer",
+  "crop": "element: conversation pane",
+  "alt": "The same session in Codecast: the request, OpenCode's reads, edit and commands, the diff and the answer",
+  "caption": "The same session in Codecast. Edits show as diffs, and each command opens to its output.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/opencode/codecast-follow-up.webp",
+  "device": "desktop",
+  "surface": "/inbox with the OpenCode session open, scrolled to the end",
+  "state": "A second user message typed in codecast ('Also cap the backoff at 5 minutes') and OpenCode's edit and reply below it",
+  "crop": "element: conversation pane",
+  "alt": "An OpenCode conversation in Codecast with a second message sent from the app and OpenCode's edit in reply",
+  "caption": "The second message was typed in Codecast. OpenCode ran it on the laptop and answered within a minute.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/opencode/codecast-new-session.webp",
+  "device": "desktop",
+  "surface": "New > Session compose box",
+  "state": "Compose box for the Acme webhooks folder with OpenCode selected in the agent menu, model menu beside it on OpenCode default, machine picker showing Alex Rivera's laptop",
+  "crop": "element: compose box",
+  "alt": "The new session box with OpenCode chosen as the agent, the folder and the machine it will run on",
+  "caption": "OpenCode in the agent menu of a new session.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/share-a-session/share-popover.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open, share button in the conversation header clicked",
+  "state": "Share popover for a webhook-retries session in the Acme team: What the team sees set to Full, Link access set to Restricted, Copy link and Send to chat at the bottom",
+  "crop": "element: share popover with a slice of the header",
+  "alt": "The share popover: What the team sees set to Full, Link access set to Restricted, and Copy link and Send to chat",
+  "caption": "The share button at the right of a conversation's header.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/share-a-session/share-messages.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open, in Share messages selection mode",
+  "state": "Three messages ticked in a webhook-retries conversation; bottom bar reads '3 messages selected' with the Link full conversation checkbox unticked, Cancel, Send to chat and Copy share link",
+  "crop": "element: conversation pane",
+  "alt": "A conversation in selection mode: three messages ticked, with Link full conversation and Copy share link in the bar below",
+  "caption": "Pick the messages to share, then copy the link.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/share-a-session/shared-messages-page.webp",
+  "device": "desktop",
+  "surface": "/share/message/<token> public page",
+  "state": "Shared messages from Maya Ortiz's session: her question and the agent's answer about webhook retry backoff, 'Shared 2h ago' by Maya, session title, View full conversation button",
+  "crop": "window",
+  "alt": "The shared message page: Maya Ortiz's question, the agent's answer about webhook retry backoff, and when it was shared",
+  "caption": "What the reader sees when they open a message link.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/t3-code/t3-thread.webp",
+  "device": "desktop",
+  "surface": "T3 Code desktop app (outside codecast)",
+  "state": "A T3 Code thread on Claude asked to add retry backoff to the webhook sender, Claude's answer and two changed files",
+  "crop": "window",
+  "alt": "A thread in T3 Code: a request to add retry backoff to the webhook sender, Claude's answer and two changed files",
+  "caption": "A thread started in T3 Code, running Claude.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/t3-code/codecast-session.webp",
+  "device": "desktop",
+  "surface": "/inbox with that session open",
+  "state": "The same thread in codecast with request, Claude's steps and a '2 files changed' chip in the header",
+  "crop": "element: conversation pane",
+  "alt": "The same session in Codecast, with the request, Claude's steps and a 2 files changed chip",
+  "caption": "The same thread in Codecast a minute later. Nothing was installed into T3 Code to get it there.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/team-sessions/activity.webp",
+  "device": "desktop",
+  "surface": "/team/activity (Activity under Team in the Modern sidebar)",
+  "state": "Acme team Activity: Now strip with Maya Ortiz working, then sessions by Alex Rivera, Maya Ortiz and Sarah Chen on webhook retries newest first; filter row with Team selected, the three faces, project menu set to webhooks, Needs someone with count 1, People/Projects grouping at right",
+  "crop": "element: main pane with sidebar edge showing Activity selected",
+  "alt": "The Activity page: Alex Rivera, Maya Ortiz and Sarah Chen's sessions on the webhook retries work, newest first, with their faces above as filters",
+  "caption": "Activity shows what the team's sessions did, filtered here to one project.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/shots/inbox.webp",
+  "device": "desktop",
+  "surface": "/inbox with one session open",
+  "state": "Inbox with sessions under Needs You, Done and Working from several agents and machines in the Acme workspace, one webhook-retries conversation open beside it",
+  "crop": "window",
+  "alt": "The inbox with sessions under Needs You, Done and Working, and one conversation open beside it",
+  "caption": "The inbox files sessions by who acts next, from every machine and every agent.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/team-sessions/sharing-settings.webp",
+  "device": "desktop",
+  "surface": "/settings/sync, Sharing section",
+  "state": "webhooks repository listed under Acme with its session count, a scratch folder under 'Private \u2014 only you'; share control on a repo row showing Only me, Acme, Never share",
+  "crop": "element: Sharing section",
+  "alt": "Sync & Privacy, Sharing: the webhooks repository shared with Acme, a scratch folder under Private \u2014 only you, and the share control open",
+  "caption": "Each repository and who it is shared with.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/team-sessions/share-review.webp",
+  "device": "desktop",
+  "surface": "/settings/sync, share panel open under a repository row after picking Acme",
+  "state": "Inline share panel for the billing-api repository: Acme picked, impact band naming 2 teammates and 14 sessions with a date range, Everything past sessions included / From today on / Since a date with From today on selected, session list with 'Untick a session to keep it private', Share with Acme button",
+  "crop": "element: share panel under the repository row",
+  "alt": "The share panel for a repository: 2 teammates, 14 sessions, From today on selected, and Share with Acme",
+  "caption": "The review before a share takes effect.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/thread-state/pinned-panel.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open, pinned state panel above the composer",
+  "state": "Pinned state with Needs you chip and headline on webhook retry backoff, a You line on amber asking for a staging API key, a Done checklist and a Next line, age '4m' at right",
+  "crop": "element: thread state panel and composer",
+  "alt": "The pinned state above the composer: a Needs you chip and the headline on one line, then a You line on amber, a Done checklist and a Next line",
+  "caption": "A pinned state in a conversation. The chip says who acts next, the headline says where the work stands, and the You line is what the agent needs from you.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/thread-state/inbox-card.webp",
+  "device": "desktop",
+  "surface": "/inbox session list",
+  "state": "Two or three inbox cards with pinned lines: one under Needs You asking for a staging API key, one under Working on webhook retry backoff, pins colored by status",
+  "crop": "element: inbox list",
+  "alt": "Inbox cards with pinned lines: one under Needs You asking for a staging API key, one under Working on webhook retry backoff",
+  "caption": "The pinned line on inbox cards, colored by status.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/agent-snippets/agent-features-intro.webp",
+  "device": "desktop",
+  "surface": "Agent features page (More > Agent features), top",
+  "state": "Agent features header with Skills and plugins link, machine picker on Alex Rivera's laptop marked this computer, Find a feature box, All/On/Off toggle, 'N of M on <machine>' count",
+  "crop": "element: page header and filter row",
+  "alt": "The top of Agent features: the machine picker set to this computer, Find a feature, All, On and Off, and the count of features on",
+  "caption": "Agent features shows one computer at a time, with a count of what is on there.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/agent-snippets/feature-group.webp",
+  "device": "desktop",
+  "surface": "Agent features page, Context group",
+  "state": "Context group heading with 'N of 3 on', Stable context card (Solo/Team/Off, All projects), Memory and Thread State cards with switches and How it works links",
+  "crop": "element: Context group section",
+  "alt": "The Context group: Stable context, Memory and Thread State cards, each with a picture, a switch and a one-line summary",
+  "caption": "Each card shows what the feature looks like in use, its switch, and what you get. Click a card for How it works.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/agent-snippets/feature-detail.webp",
+  "device": "desktop",
+  "surface": "Agent features page with the Memory card opened",
+  "state": "Memory detail dialog: switch On, What you'll see, When agents use it, Try asking, See it in link, Writes to/Since rows, Read exactly what your agent reads folded",
+  "crop": "element: feature detail dialog",
+  "alt": "The Memory detail: its switch, What you'll see, When agents use it, Try asking, and Read exactly what your agent reads folded at the bottom",
+  "caption": "A feature's detail, opened from its card.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/agent-snippets/new-features-banner.webp",
+  "device": "desktop",
+  "surface": "New agent features window, opened from the banner's See what's new button",
+  "state": "The slim 'New agent feature: <name>' banner visible above the tabs, and the New agent features window open over it listing one feature with its New pill, description, what it writes to, and a Turn on\u2026 button; footer 'Turn on applies to your online machine'",
+  "crop": "element: banner plus dialog",
+  "alt": "The New agent features window, listing one new feature with Turn on\u2026 beside it",
+  "caption": "New agent features, opened from the banner.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/sync-engine/sync-status.webp",
+  "device": "desktop",
+  "surface": "Shell header, sync light hovered during a cold first load",
+  "state": "Cyan pulsing sync light with its hover panel open: Sync status kicker, headline Syncing the latest data, settled/total count, per-scope rows (Sessions, Tasks, Docs) showing caught up or loading",
+  "crop": "element: header right side plus hover panel",
+  "alt": "The sync light's hover panel reading Syncing the latest data, with each part of the workspace and whether it has caught up",
+  "caption": "Hover the light to see what is still catching up.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/orchestration/plan.webp",
+  "device": "desktop",
+  "surface": "/plans/<webhook retries plan> on the Orchestration tab",
+  "state": "Acme workspace, plan 'Webhook retries' with 6 tasks: 2 Done, 2 In Progress each with an active session (Alex Rivera's and Maya Ortiz's agents), 2 Open, none blocked. Header reads Live Orchestration with agent, done, blocked and time counts; Active Sessions list with two live rows; Task Timeline below.",
+  "crop": "element: plan detail panel (title, goal, progress bar, tabs, Orchestration tab content)",
+  "alt": "A plan's Orchestration tab while agents work on it",
+  "caption": "The Orchestration tab: agents working, tasks done, and each task's status in order.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/orchestration/feature.webp",
+  "device": "desktop",
+  "surface": "/agent-features?feature=orchestration (Agent features, opened from More in the sidebar)",
+  "state": "Acme workspace, a connected computer selected, Orchestration switched on in the Tracking & automation group, its How it works detail open showing what it adds and a request to try.",
+  "crop": "element: the Orchestration card and its detail",
+  "alt": "The Orchestration card in Agent features",
+  "caption": "Click How it works on the card for what it adds and a request to try.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/orchestration/graph.webp",
+  "device": "desktop",
+  "surface": "/plans/<webhook retries plan> on the Graph tab",
+  "state": "Same Webhook retries plan: dependency graph with 2 done tasks, 2 in progress, 2 open waiting on the in-progress ones.",
+  "crop": "element: plan detail panel with Graph tab active",
+  "alt": "A plan's Graph tab",
+  "caption": "The Graph tab: finished tasks, the ones running now, and the ones still waiting on them.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/org-roles/hire-head-of-people.webp",
+  "device": "desktop",
+  "surface": "/org before any role exists",
+  "state": "Acme workspace with Org on and no roles: chart with Sarah Chen, Alex Rivera and Maya Ortiz; header with People / Everything / Goals switch, Needs you, Hire; the side panel showing the Head of People hire card ('Proposes who owns what. You approve each change.'), its Runs in picker set to acme/api, and the Hire Head of People button.",
+  "crop": "window",
+  "alt": "The Org page before anyone was hired, offering to hire the Head of People",
+  "caption": "A new org starts with one offer: hire the Head of People.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/org-roles/add-a-role.webp",
+  "device": "desktop",
+  "surface": "/org with the Hire dialog open on Write a role",
+  "state": "Dialog on Write a role: Name 'Webhooks lead', Handle webhooks, Area: the Webhooks project, Reports to Sarah Chen, Runs on Alex Rivera's computer, Charter filled from the area, How long Ongoing; Create and start button and the From a template tab visible.",
+  "crop": "element: the hire dialog",
+  "alt": "The form for writing a new role",
+  "caption": "The charter is written from the area you pick, and you can edit it before creating the role.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/org-roles/role.webp",
+  "device": "desktop",
+  "surface": "/org/<webhooks role> on Overview",
+  "state": "Role @webhooks: standing conversation on the left with a recent exchange about webhook retries with Sarah Chen; Overview tab on the right with charter, facts, notes and recent activity; tabs Overview, Work, Sessions, Decisions, Triggers, Settings visible.",
+  "crop": "window",
+  "alt": "A role's page with its conversation and Overview tab",
+  "caption": "A role's page: its conversation on the left, its Overview on the right.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/org-roles/proposal.webp",
+  "device": "desktop",
+  "surface": "/org with the Head of People's conversation in the side panel showing an open proposal card",
+  "state": "A proposal with three changes (add a Webhooks lead reporting to Sarah Chen, widen Alex Rivera's area to the Webhooks project, add a weekly check routine), each with its sentence, Why line, and Accept / Adjust buttons; foot with Map and Accept all 3.",
+  "crop": "element: the proposal card",
+  "alt": "A proposal with its changes and Accept buttons",
+  "caption": "A proposal from the Head of People: each change with its reason, and Accept all at the bottom.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/shots/pull-request.webp",
+  "device": "desktop",
+  "surface": "/pr/acme/api/<n> on the Conversation tab",
+  "state": "Open PR 'Retry failed webhooks with backoff' by Alex Rivera, Shepherd line naming Alex's session (Wakes on changes), linked task, checks passing, review decision from Maya Ortiz, merge state clean, timeline of pushes and reviews.",
+  "crop": "window",
+  "alt": "A pull request page in codecast",
+  "caption": "A pull request with its shepherd, linked sessions and task, checks, review and merge state.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/pull-requests/feature.webp",
+  "device": "desktop",
+  "surface": "/agent-features?feature=pull-requests",
+  "state": "Acme workspace, a computer selected, Pull requests on in the Tracking & automation group, How it works detail open.",
+  "crop": "element: the Pull requests card and its detail",
+  "alt": "The Pull requests card in Agent features",
+  "caption": "Click How it works on the card for what it adds and a request to try.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/pull-requests/header.webp",
+  "device": "desktop",
+  "surface": "/pr/acme/api/<n>",
+  "state": "Same webhook retries PR: header with acme/api #n and the Open on GitHub icon, Shepherd line, Checks passed, Review, Merge, Open comments 1, Diff size, tabs Conversation / Files / Commits / Checks.",
+  "crop": "element: PR header band down to the tab bar",
+  "alt": "The top of a pull request page",
+  "caption": "Checks passed, one open comment, and the shepherd line above the four tabs.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/pull-requests/review.webp",
+  "device": "desktop",
+  "surface": "/pr/acme/api/<n> on the Files tab with the review panel open",
+  "state": "Maya Ortiz reviewing: two held notes on the retry backoff file, the '2 notes not sent yet.' bar, review panel ('Finish your review') listing the notes, a summary typed, Request changes selected, Submit review button.",
+  "crop": "element: Files tab with review panel",
+  "alt": "The review panel with held notes and a verdict",
+  "caption": "Held notes, a summary and the verdict, ready to submit.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/pull-requests/issues.webp",
+  "device": "desktop",
+  "surface": "/settings/integrations, GitHub card",
+  "state": "GitHub connected; Issues as tasks section with acme/api importing into the Webhooks project, Delegate label 'agent', Spawn a session on delegation on, Import button.",
+  "crop": "element: the GitHub integration card",
+  "alt": "Issues as tasks on the GitHub integration card",
+  "caption": "One repository importing into a project, with its delegate label.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/tasks-and-plans/plan.webp",
+  "device": "desktop",
+  "surface": "/plans/<webhook retries plan> on Overview",
+  "state": "Plan 'Webhook retries' with goal under title, progress bar, four tasks: one Done, one In Progress with Alex Rivera's session badge, two Open; timeline entries below.",
+  "crop": "element: plan detail panel",
+  "alt": "A plan with its goal, progress bar and four tasks",
+  "caption": "A plan an agent filed: one task done, one in progress with its session, two still open.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/tasks-and-plans/feature.webp",
+  "device": "desktop",
+  "surface": "/agent-features?feature=tasks",
+  "state": "Acme workspace, a computer selected, Tasks & Plans on in the Tracking & automation group, How it works detail open.",
+  "crop": "element: the Tasks & Plans card and its detail",
+  "alt": "The Tasks & Plans card in Agent features",
+  "caption": "Click How it works on the card for what it adds and a request to try.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/tasks-and-plans/board.webp",
+  "device": "desktop",
+  "surface": "/tasks with the Board view",
+  "state": "Acme tasks in status columns (Open, In Progress, In Review, Done) about webhook retries, assignees Alex Rivera, Maya Ortiz, Sarah Chen; List / Board toggle, Status / Priority / Label / Assignee filters and Add task visible.",
+  "crop": "window",
+  "alt": "The Tasks page as a board",
+  "caption": "The Board view: tasks in columns by status, each with its assignee.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/tasks-and-plans/task.webp",
+  "device": "desktop",
+  "surface": "/tasks/<task id>",
+  "state": "Done task 'Add exponential backoff to webhook retries' assigned to Alex Rivera: status/priority/assignee row, Blocked by row, Evidence with a Verification line, Sessions list with Alex's session, Plan link to Webhook retries, Activity log, Leave a comment composer.",
+  "crop": "window",
+  "alt": "A finished task with its evidence, session, plan and activity",
+  "caption": "A task an agent closed, with what it verified and the session that did the work.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/triggers/trigger.webp",
+  "device": "desktop",
+  "surface": "/triggers/<daily trigger id>",
+  "state": "Daily trigger 'Summarize open webhook PRs': Run now / Pause / Cancel / Edit at the top; Next fire, Cadence every 1d, Runs 6, Last run ok, Where acme/api; Run history list; Briefing.",
+  "crop": "window",
+  "alt": "A recurring trigger's page with its next run, history and briefing",
+  "caption": "A daily trigger: when it fires next, every run so far, and the briefing each run starts from.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/triggers/feature.webp",
+  "device": "desktop",
+  "surface": "/agent-features?feature=triggers",
+  "state": "Acme workspace, a computer selected, Triggers on in the Tracking & automation group, How it works detail open.",
+  "crop": "element: the Triggers card and its detail",
+  "alt": "The Triggers card in Agent features",
+  "caption": "Click How it works on the card for what it adds and a request to try.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/triggers/new.webp",
+  "device": "desktop",
+  "surface": "/triggers with the New trigger form open",
+  "state": "Prompt 'Summarize open webhook PRs and what merged yesterday', Title empty, When = every\u2026 1d, Agent claude, read-only: report, don't change anything ticked, Project acme/api, Set trigger button.",
+  "crop": "element: the New trigger form",
+  "alt": "The New trigger form",
+  "caption": "A new daily trigger: the prompt, every 1d, Claude, and read-only ticked.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/triggers/list.webp",
+  "device": "desktop",
+  "surface": "/triggers",
+  "state": "Five Acme triggers (three recurring, one one-time, one event on PR comment) grouped by session, each with cadence, next firing and last result; the 24-hour strip and the active / recurring / one-time counts at the top; filter bar with search, recurring / one-time / event toggles and grouping.",
+  "crop": "window",
+  "alt": "The Triggers page",
+  "caption": "Every trigger with its cadence, next firing and last result, under the 24-hour strip.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/triggers/run.webp",
+  "device": "desktop",
+  "surface": "a trigger run's conversation opened from Run history",
+  "state": "Run session of the daily 'Summarize open webhook PRs' trigger, bar at the top naming the trigger and linking to the parent conversation, summary message at the bottom listing two open PRs and one merged.",
+  "crop": "window",
+  "alt": "A trigger run's conversation, ending in its summary",
+  "caption": "One run, opened from the run history. The bar at the top links back to the conversation that set it.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/workflows/gate.webp",
+  "device": "desktop",
+  "surface": "/workflows/runs/<run id> waiting at its gate",
+  "state": "Run of a 'review' workflow on the webhook retries task, top line saying it waits for an answer at Approve, chips for the session it ran in and the task, the gate's decision card with Approve / Revise choices and a reply field.",
+  "crop": "window",
+  "alt": "A workflow run paused at its approval gate",
+  "caption": "A run waiting at its Approve step. Pick a choice or answer in your own words.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/workflows/feature.webp",
+  "device": "desktop",
+  "surface": "/agent-features?feature=workflows",
+  "state": "Acme workspace, a computer selected, Workflows on in the Tracking & automation group, How it works detail open.",
+  "crop": "element: the Workflows card and its detail",
+  "alt": "The Workflows card in Agent features",
+  "caption": "Click How it works on the card for what it adds and a request to try.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/workflows/graph.webp",
+  "device": "desktop",
+  "surface": "/workflows/runs/<run id> with Show the graph open",
+  "state": "Same run: the step list by phase with durations above, then the open graph with the typecheck step passed, the current step Approve highlighted, and the Revise edge back to the check.",
+  "crop": "element: the steps and graph section of the run page",
+  "alt": "The workflow's graph and its steps",
+  "caption": "The graph: the check passed, the run sits at Approve, and Revise would send it back.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/workflows/start.webp",
+  "device": "desktop",
+  "surface": "/workflows on Routines with a workflow selected and the Run Workflow popover open",
+  "state": "The 'review' workflow selected in the Routines list, its graph visible, Run Workflow popover showing Project path /Users/alex/src/acme-api, Goal override (optional) empty, Cancel and Run.",
+  "crop": "element: the selected workflow with the run popover",
+  "alt": "Starting a workflow run",
+  "caption": "The run dialog: the project, an optional goal, and Run.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/ambient-awareness/stable-context.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open (conversation view, top of transcript)",
+  "state": "Acme workspace, signed in as Alex Rivera. A session on webhook retries whose top line reads 'Started with 15 session pointers from the team feed', clicked open so the row of session cards shows (Maya Ortiz and Sarah Chen sessions on webhook retries among them, mixed working/waiting/done states).",
+  "crop": "element: the stable context strip and card row at the top of the conversation",
+  "alt": "A conversation whose top line reads \"Started with 15 session pointers from the team feed\", opened to a row of session cards",
+  "caption": "The sessions a conversation started with. Each card opens that session.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/memory/agent-features.webp",
+  "device": "desktop",
+  "surface": "/agent-features",
+  "state": "Acme workspace, Alex Rivera's laptop selected. Context group visible: Stable context card set to Team with the All projects switch off, Memory card switched on, each card showing its 'How it works \u2192' link.",
+  "crop": "element: the Context section with the Stable context and Memory cards",
+  "alt": "The Context section of Agent Features, with the Stable context and Memory cards",
+  "caption": "Memory and Stable context, under Context.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/ambient-awareness/new-session-context.webp",
+  "device": "desktop",
+  "surface": "new session screen (compose a new session from the app)",
+  "state": "Acme workspace, Alex Rivera. The Context line clicked open: segmented Auto/Team/Solo/Off with Team selected, and a row of session cards (webhook retries work by Maya Ortiz and Sarah Chen), each with its \u00d7 button; one card excluded (shows the undo icon).",
+  "crop": "element: the Context picker and its card row on the new session screen",
+  "alt": "The new session screen with its Context line opened: an Auto, Team, Solo, Off choice above a row of session cards, each with an \u00d7",
+  "caption": "The new session preview. Change the choice or drop a card before the session starts.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/memory/conversation.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open",
+  "state": "Acme workspace, Alex Rivera asks 'Why do webhook retries back off the way they do?'. The agent's folded search/read command cards sit above a three-sentence reply that cites Maya Ortiz's earlier session on webhook retries as a link.",
+  "crop": "element: the conversation transcript column",
+  "alt": "A conversation where the agent was asked why webhook retries back off the way they do, searched past sessions, and answered with a link to the session where it was decided",
+  "caption": "The agent looked the decision up and cited the session. Click the link to open that conversation.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/search-sessions-across-machines/search.webp",
+  "device": "desktop",
+  "surface": "/search?q=webhook retry",
+  "state": "Acme workspace, Alex Rivera. Query 'webhook retry'; tabs All/Sessions (plus Tasks if any matched); filter menus Everyone, Any message, Any time, Recent; session results from Alex, Maya Ortiz and Sarah Chen with matched messages highlighted, one showing '2 worker sessions of this one matched too'.",
+  "crop": "element: the search page column",
+  "alt": "The search page with the query \"webhook retry\", its Everyone, Any message, Any time and Recent filters, and sessions with the matching messages highlighted",
+  "caption": "One search over every machine. Each result is a session, with the messages that matched.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/search-sessions-across-machines/palette.webp",
+  "device": "desktop",
+  "surface": "command palette (\u2318K) over /inbox",
+  "state": "Acme workspace, Alex Rivera. Palette open with 'webhook' typed, matching sessions and tasks about webhook retries listed.",
+  "crop": "element: the command palette",
+  "alt": "The command palette open over the inbox, with \"webhook\" typed and matching sessions and tasks listed",
+  "caption": "\u2318K searches as you type. \u2318\u21b5 opens the full search page.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/search-sessions-across-machines/filters.webp",
+  "device": "desktop",
+  "surface": "/search with an empty query",
+  "state": "Acme workspace. Empty search page showing its hint lines and the row of filter chips file:, commit:, pr:, label:, author:, repo:, after:, before:.",
+  "crop": "element: the search box and the empty state with its chip row",
+  "alt": "The empty search page with a row of filter chips: file:, commit:, pr:, label:, author:, repo:, after:, before:",
+  "caption": "Click a chip to add it to the search, then type its value.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/which-session-wrote-this-line/session-blame.webp",
+  "device": "desktop",
+  "surface": "/repo file view (Code > acme-api > src/webhooks.ts)",
+  "state": "Acme workspace. Blame set to Sessions. Strip reads '94% by 3 sessions' with chips for sessions by Alex Rivera, Maya Ortiz and Sarah Chen on webhook retries; gutter names the session per block.",
+  "crop": "element: the file toolbar, session strip and code with gutter",
+  "alt": "A file in the Code view with Blame set to Sessions: a strip reading \"94% by 3 sessions\" with a chip per session, and the session behind each block of lines in the gutter",
+  "caption": "Blame set to Sessions. The strip lists the sessions that wrote the file; the gutter names the one behind each block.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/which-session-wrote-this-line/chip-hover.webp",
+  "device": "desktop",
+  "surface": "/repo file view with Blame set to Sessions",
+  "state": "Same file as session-blame; one chip (Maya Ortiz's webhook retry session) hovered so its lines are lit down the file.",
+  "crop": "element: the session strip and highlighted code",
+  "alt": "The session strip with one chip hovered and its lines highlighted down the file",
+  "caption": "Hovering a chip lights up every line that session wrote.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/which-session-wrote-this-line/commit-session.webp",
+  "device": "desktop",
+  "surface": "/commit/<owner>/<repo>/<sha>",
+  "state": "Acme workspace. A commit to acme-api adding the webhook retry cap; the commit message's Codecast-Session line shown as the session's name (SessionTrailer) linking to the conversation.",
+  "crop": "element: commit header and message",
+  "alt": "A commit page in codecast showing the session that made the commit by name",
+  "caption": "A commit page names the session behind the commit.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/publish/page.webp",
+  "device": "desktop",
+  "surface": "a published page at codecast.sh/a/<slug>",
+  "state": "A report on webhook retry failures published by Alex Rivera's session. Top bar shows title, session, version v3, discussion open with two comments (one by Maya Ortiz) and the Send to agent switch in the composer.",
+  "crop": "window",
+  "alt": "A published report on webhook retry failures, open in the browser with its discussion panel showing two comments",
+  "caption": "A page an agent published. The bar at the top names the session that made it, the version, and the discussion.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/publish/publish-feature.webp",
+  "device": "desktop",
+  "surface": "/agent-features?feature=publish",
+  "state": "Acme workspace, Alex Rivera's laptop. Publish detail dialog open, switch on, with What you'll see, Try asking and See it in Pages.",
+  "crop": "element: the Publish feature dialog",
+  "alt": "The Publish detail in Agent Features",
+  "caption": "The Publish detail. The switch at the top right turns it on for the selected computer.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/publish/embed.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open",
+  "state": "A conversation where the agent replied with the webhook retry report link on its own line; the live page embedded, hovered so its toolbar (pin note, Copy link, Open beside your work, Open in a new tab, Collapse, Expand) shows.",
+  "crop": "element: the embedded page and the reply around it",
+  "alt": "A published page embedded in a conversation, with its toolbar showing on hover",
+  "caption": "The live page in the thread. Hover it for its toolbar.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/publish/manage.webp",
+  "device": "desktop",
+  "surface": "a published page with Manage sharing\u2026 open (opened via Manage from Pages)",
+  "state": "Owner view of the webhook retry report. Manage sharing sheet: views count, Password, Email gate, Session link, Comments, Expires chips (1h 24h 7d 30d never), Editing (owner/link/team), Copy manage link.",
+  "crop": "element: the Manage sharing sheet",
+  "alt": "The Manage sharing sheet on a published page",
+  "caption": "Manage sharing: views, the gates, who may edit, and the manage link.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/publish/pages-list.webp",
+  "device": "desktop",
+  "surface": "/artifacts (Pages in the sidebar)",
+  "state": "Acme workspace. Pages list with pages from Alex Rivera, Maya Ortiz and Sarah Chen (webhook retry report, retry dashboard, a mockup), view counts, open comments, a lock badge on one; Title search, Anyone and Sort controls visible.",
+  "crop": "element: the Pages list",
+  "alt": "The Pages list in the app, with published pages from Alex, Maya and Sarah",
+  "caption": "Pages: everything you and your team published.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/visual-canvas/conversation.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open",
+  "state": "Acme workspace, Alex Rivera asked to compare three backoff strategies for webhook retries. Agent reply is one canvas (bar chart of retry failures by hour, three comparison cards) with its header buttons visible, and one sentence of recommendation.",
+  "crop": "element: the reply with its canvas",
+  "alt": "A conversation where the agent answered with a canvas: a bar chart of webhook retry failures by hour and three cards comparing backoff options",
+  "caption": "Asked to compare three backoff strategies. The answer is one canvas and a sentence of recommendation under it.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/visual-canvas/visual-feature.webp",
+  "device": "desktop",
+  "surface": "/agent-features?feature=visual",
+  "state": "Acme workspace, Alex Rivera's laptop. Visual Canvas detail dialog open with its switch on.",
+  "crop": "element: the Visual Canvas feature dialog",
+  "alt": "The Visual Canvas detail in Agent Features",
+  "caption": "The Visual Canvas detail. The switch at the top right turns it on for the selected computer.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/browser/conversation.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open",
+  "state": "Acme workspace, Alex Rivera's Claude Code session on webhook retries: Alex asked the agent to check the webhook settings page on staging; two cast browser step rows above the agent's reply, each with screenshot thumbnails, an open tab pill and a watch live button",
+  "crop": "element: conversation transcript column",
+  "alt": "The agent's answer in the conversation, with its browser steps and screenshot thumbnails above it",
+  "caption": "Each browser step sits above the reply, with its screenshots, watch live, and the tab it used.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/browser/agent-features.webp",
+  "device": "desktop",
+  "surface": "/agent-features",
+  "state": "Alex Rivera's laptop selected; Hands on the machine group showing Browser switched on with green footer Chrome connected, and Computer switched on with green footer Permissions granted; Typecheck, Vault and Usage limits cards beside them",
+  "crop": "element: Hands on the machine section",
+  "alt": "The Hands on the machine section of Agent features, with Browser switched on and Chrome connected",
+  "caption": "Browser and Computer live under Hands on the machine, one computer at a time.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/browser/setup-card.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open",
+  "state": "Maya Ortiz's webhook retries session where the agent's cast browser step is blocked; the setup card under it lists Add Codecast to Chrome (Add to Chrome button) and Pair it with this machine (Pair button), neither done",
+  "crop": "element: the setup card under the tool step",
+  "alt": "The browser setup card under an agent's step, with Add to Chrome and Pair",
+  "caption": "Setup can finish right in the conversation.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/browser/browser-feature.webp",
+  "device": "desktop",
+  "surface": "/agent-features?feature=browser",
+  "state": "Alex Rivera's laptop selected; Browser detail open showing What you'll see, When agents use it, Try asking, and its switch on",
+  "crop": "element: feature detail panel",
+  "alt": "The Browser feature's detail: what you'll see, when agents use it, and a request to try",
+  "caption": "The Browser detail. Its switch turns it on for the selected computer.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/browser/watch-live.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open and the watch live pane open",
+  "state": "Maya Ortiz's webhook retries session; watch live pressed on a browser step (button reads watching); pane beside the transcript shows the agent's staging tab on a webhook deliveries page with a retried delivery highlighted",
+  "crop": "window",
+  "alt": "The watch live pane beside a conversation, showing the agent's tab as it works",
+  "caption": "watch live shows the agent's tab beside the conversation.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/computer/conversation.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open",
+  "state": "Sarah Chen's session where she asked the agent to work out a sum in Calculator and check whether Bluetooth is on and which sound output is selected in System Settings; cast computer step rows with window thumbnails above the reply, which reports the result and that nothing else was changed",
+  "crop": "element: conversation transcript column",
+  "alt": "A conversation where the agent used Calculator and read System Settings",
+  "caption": "Each step sits above the reply with a picture of the window the agent read.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/computer/permissions-card.webp",
+  "device": "desktop",
+  "surface": "/agent-features",
+  "state": "Alex Rivera's laptop selected; Computer card switched on, its footer showing the two steps Accessibility and Screen Recording, Accessibility not yet done with its Open System Settings button",
+  "crop": "element: Computer card",
+  "alt": "The Computer card's setup steps: Accessibility and Screen Recording, each with Open System Settings",
+  "caption": "Two macOS permissions, granted once to the codecast computer helper.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/computer/computer-feature.webp",
+  "device": "desktop",
+  "surface": "/agent-features?feature=computer",
+  "state": "Alex Rivera's laptop selected; Computer detail open with What you'll see, When agents use it, Try asking, switch on",
+  "crop": "element: feature detail panel",
+  "alt": "The Computer feature's detail: what you'll see, when agents use it, and a request to try",
+  "caption": "The Computer detail. Its switch turns it on for the selected Mac.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/skills/conversation.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open",
+  "state": "Sarah Chen's Claude Code session; her message starts with /cast-second-opinion shown as a skill pill; the agent's reply lists two verified findings in the webhook retry backoff code, both fixed, and two judgment calls left to her",
+  "crop": "element: conversation transcript column",
+  "alt": "A conversation started with /cast-second-opinion: the agent sends the change to a second model, checks each finding against the code, fixes the two real bugs and lists what it left alone",
+  "caption": "/cast-second-opinion on a small change: the skill shows as a pill on your message.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/skills/skills-feature.webp",
+  "device": "desktop",
+  "surface": "/agent-features?feature=skills",
+  "state": "Alex Rivera's laptop selected; Skills detail open, switch on",
+  "crop": "element: feature detail panel",
+  "alt": "The Skills feature's detail in Agent features",
+  "caption": "The Skills detail. Its switch turns it on for the selected computer.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/skills/slash-menu.webp",
+  "device": "desktop",
+  "surface": "/inbox with a Claude Code session open",
+  "state": "Alex Rivera's webhook retries session; message box holds /cast- and the slash menu lists cast- skills (cast-pickup, cast-handoff, cast-second-opinion, cast-ship, cast-verify) with their descriptions, first row highlighted",
+  "crop": "element: composer with slash menu",
+  "alt": "The slash command menu in the message box, filtered to cast- skills, each with its description",
+  "caption": "Type / to see every skill and command for the session.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/typecheck/typecheck-feature.webp",
+  "device": "desktop",
+  "surface": "/agent-features",
+  "state": "Alex Rivera's laptop selected; Typecheck card under Hands on the machine, switched on",
+  "crop": "element: Typecheck card",
+  "alt": "The Typecheck card in Agent features, switched on",
+  "caption": "Typecheck is one switch per computer.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/typecheck/conversation.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open",
+  "state": "Alex Rivera asked the agent to typecheck the webhook service and fix what's red; a cast check row shows three errors in retry.ts, edit rows fix them, a second cast check row passes, and the reply says so",
+  "crop": "element: conversation transcript column",
+  "alt": "A conversation where the agent typechecked a small project, found three errors in one file and fixed them",
+  "caption": "Three errors found, fixed where they were, and the check passes.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/vault/vault-page.webp",
+  "device": "desktop",
+  "surface": "/vault",
+  "state": "Acme team Vault: Asked for section with one open request (stripe-test, Key, why: run webhook retry tests, from Maya Ortiz's session); rows for staging-db (Key, DATABASE_URL), github-app (shield for Ask first), vercel.com (Browser sign-in, expires in 2 days dot), an Only me key with the person icon; last column with session pills; All/Team/Only me filter and Needs attention 1",
+  "crop": "window",
+  "alt": "The Vault page: an agent's open request at the top, then the team's secrets with their env vars and when each was last used",
+  "caption": "The Vault, with an agent's request waiting at the top.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/vault/add-secret.webp",
+  "device": "desktop",
+  "surface": "/vault with Add, Key open",
+  "state": "Add to Vault dialog for a Key: name stripe-test, env var STRIPE_SECRET_KEY and masked value filled from a pasted fake sk_test line, Who can use it set to Team Acme",
+  "crop": "element: Add to Vault dialog",
+  "alt": "The Add to Vault dialog for a key, with name, env var, value and who can use it",
+  "caption": "Adding a key. Pasting an ENV=value line fills both fields.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/vault/secret-detail.webp",
+  "device": "desktop",
+  "surface": "/vault?s=<staging-db short id> with the row open",
+  "state": "Detail panel for the staging-db key beside the list: masked value with reveal, copy and Replace value, env var DATABASE_URL, Ask first switch, Previous row with one earlier value replaced by Sarah Chen 2 days ago and Restore, Activity listing reads by Alex Rivera's and Maya Ortiz's sessions, Delete",
+  "crop": "window",
+  "alt": "A secret's detail beside the list: masked value, env vars, Ask first, previous values and activity",
+  "caption": "Values stay masked. Every use is listed under Activity.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/vault/ask-first-decision.webp",
+  "device": "desktop",
+  "surface": "the decision queue with an Ask first decision open",
+  "state": "Decision from Maya Ortiz's webhook retries session asking to read prod-db (Ask first), with the reason line and the options Approve for this session and Deny",
+  "crop": "element: decision card",
+  "alt": "The Ask first decision in the queue, naming the session and the secret, with Approve for this session and Deny",
+  "caption": "An Ask first secret waits for a person's yes.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/vault/request-card.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open",
+  "state": "Maya Ortiz's webhook retries session; the agent's vault request card for stripe-test (Key) with its why line, an empty masked field and Save",
+  "crop": "element: vault request card",
+  "alt": "An agent's request for a key in the conversation, with a masked field and Save",
+  "caption": "Fill a missing key without the value entering the conversation.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/vault/composer-catch.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open",
+  "state": "Alex Rivera's message box holding a pasted fake sk_test key; the Credential in this message bar above it shows the key's first and last characters, suggested name stripe-test, Team/Only me choice, Save to Vault and send, Send as is",
+  "crop": "element: composer with catch bar",
+  "alt": "The bar above the message box offering Save to Vault and send for a pasted key",
+  "caption": "A pasted key is caught before the message goes out.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/vault/save-signin.webp",
+  "device": "desktop",
+  "surface": "/vault with Add, Browser sign-in open",
+  "state": "Save a sign-in dialog: site vercel.com, Who can use it Team Acme, From my Chrome on Alex Rivera's laptop option",
+  "crop": "element: Save a sign-in dialog",
+  "alt": "The Save a sign-in dialog with the site, who can use it, and From my Chrome",
+  "caption": "Copy a site's sign-in from your own Chrome.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/codex-cloud/provider-row.webp",
+  "device": "desktop",
+  "surface": "/settings/provider-keys",
+  "state": "Alex Rivera's laptop selected; Codex Cloud row with its sign-in line and the button reading Codex connected",
+  "crop": "element: Codex Cloud row",
+  "alt": "The Codex Cloud row in Provider Keys",
+  "caption": "Codex Cloud runs on the computer's Codex sign-in, not on an API key.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/codex-cloud/connect-codex.webp",
+  "device": "desktop",
+  "surface": "/settings/provider-keys with the Connect Codex dialog open",
+  "state": "Dialog saying Alex Rivera's laptop is signed in to Codex as a fixture account (alex@acme.dev) with its ChatGPT plan",
+  "crop": "element: Connect Codex dialog",
+  "alt": "The Connect Codex dialog once a computer is signed in",
+  "caption": "The sign-in itself stays on the computer.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/codex-cloud/composer.webp",
+  "device": "desktop",
+  "surface": "new-session composer",
+  "state": "Codex picked as agent, placement set to OpenAI's cloud, with set to ChatGPT plan, ask off, attempts 3; prompt about adding jitter to webhook retries in the acme/webhooks repo",
+  "crop": "element: composer",
+  "alt": "The new-session composer set to run in OpenAI's cloud on the ChatGPT plan, with ask and attempts",
+  "caption": "Run in OpenAI's cloud, on your ChatGPT plan, with three attempts.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/codex-cloud/chip-menu.webp",
+  "device": "desktop",
+  "surface": "/inbox with a Codex Cloud session open",
+  "state": "Alex Rivera's Codex Cloud session on webhook retry jitter; the Codex Cloud chip menu open in the header: Open on chatgpt.com, Create draft PR, Apply locally, Archive",
+  "crop": "element: session header with chip menu",
+  "alt": "The Codex Cloud chip's menu in a session header",
+  "caption": "The task's actions live on the Codex Cloud chip.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/remote-and-cloud-sessions/cloud-worker.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open",
+  "state": "Maya Ortiz's Codex session on webhook retries running on the Acme Linux cloud machine in its own worktree; header and inbox row name the worktree and the machine",
+  "crop": "window",
+  "alt": "A Codex session running in a cloud worktree, its header naming the worktree",
+  "caption": "A session on a cloud machine is the same thread as one on your laptop.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/remote-and-cloud-sessions/devices.webp",
+  "device": "desktop",
+  "surface": "/settings/devices",
+  "state": "Alex Rivera's laptop online, and a Linux cloud machine row (acme-linux) reading Asleep with size, region, cost per hour awake and per month for disk, and buttons Wake, Apply setup now, Save image",
+  "crop": "element: Devices settings panel",
+  "alt": "Settings, Devices: a laptop and a Linux cloud machine with its state, size, cost and Wake button",
+  "caption": "Every machine, with each cloud machine's state and cost.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/remote-and-cloud-sessions/add-cloud-machine.webp",
+  "device": "desktop",
+  "surface": "/settings/devices with the Add a cloud machine dialog open",
+  "state": "Linux picked, Create new chosen, AWS fields filled with fixture values (region us-east-1, an acme profile), Copy setup command button visible",
+  "crop": "element: Add a cloud machine dialog",
+  "alt": "The Add a cloud machine dialog",
+  "caption": "The dialog builds the one command that sets the machine up.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/remote-and-cloud-sessions/placement-menu.webp",
+  "device": "desktop",
+  "surface": "new-session composer",
+  "state": "Placement menu open: This checkout, Isolated worktree, acme-linux (selected); On the host section with own worktree selected and main checkout; Start from section with my checkout selected and origin/main",
+  "crop": "element: composer with placement menu",
+  "alt": "The new-session composer's placement menu with This checkout, Isolated worktree and a cloud machine",
+  "caption": "Pick where the session runs before you send.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/remote-and-cloud-sessions/machine-menu.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open",
+  "state": "Alex Rivera's webhook retries session; header machine menu open under the label Run on device \u00b7 which machine: Alex Rivera's laptop marked current, acme-linux, and acme-mac marked asleep, wakes on move",
+  "crop": "element: session header with machine menu",
+  "alt": "The machine menu in a conversation's header",
+  "caption": "The session runs on the laptop and can move to either cloud machine.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/remote-and-cloud-sessions/sync-chip.webp",
+  "device": "desktop",
+  "surface": "/inbox with a cloud session open",
+  "state": "Maya Ortiz's session on acme-linux synced to Alex Rivera's laptop; header sync chip reading in step \u00b7 12s ago, its menu open with Both ways selected and Cloud to laptop only, Open in Cursor, Open in VS Code, Stop syncing",
+  "crop": "element: session header with sync menu",
+  "alt": "The sync chip in a cloud session's header, reading in step, with its menu open",
+  "caption": "The sync chip says whether the laptop copy is in step.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/usage-limits/limit-card.webp",
+  "device": "desktop",
+  "surface": "/inbox with a session open",
+  "state": "Alex Rivera's webhook retries session with two Usage limit cards: a live one (session window closed on the work account, Resumes on its own when the window resets, Continue on personal button, Accounts) and an earlier one reading Usage limit \u00b7 resolved",
+  "crop": "element: limit cards in transcript",
+  "alt": "A usage limit card in a conversation, and the same card once the session continued",
+  "caption": "A Usage limit card while the session is parked, and once it continued.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/usage-limits/limits-feature.webp",
+  "device": "desktop",
+  "surface": "/agent-features?feature=limits",
+  "state": "Alex Rivera's laptop selected; Usage limits detail open, switch on",
+  "crop": "element: feature detail panel",
+  "alt": "The Usage limits detail in Agent features",
+  "caption": "The Usage limits detail in Agent features.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/usage-limits/accounts.webp",
+  "device": "desktop",
+  "surface": "/settings/claude-accounts",
+  "state": "Alex Rivera's laptop section with two saved accounts, work (active, Session 92%, Week 40%) and personal (Session 10%, Week 22%) with Switch on personal",
+  "crop": "element: one computer's accounts section",
+  "alt": "Claude Accounts: one computer's saved accounts with their Session and Week usage and a Switch button",
+  "caption": "Each computer's saved Claude accounts and how much room each has.",
+  "batch": "machines"
+ },
+ {
+  "file": "/documentation/usage-limits/recovery-mode.webp",
+  "device": "desktop",
+  "surface": "/settings/claude-accounts",
+  "state": "Alex Rivera's laptop section; When a session stops on its own control showing Never continue for me, Continue on this account, Continue, and ask before switching accounts (selected), Continue, and switch accounts automatically",
+  "crop": "element: recovery choice control",
+  "alt": "The four recovery choices on the Claude Accounts page",
+  "caption": "One choice per computer, for every session on it.",
+  "batch": "machines"
+ }
+]

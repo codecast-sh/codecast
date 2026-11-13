@@ -22,6 +22,7 @@ import { useCurrentUser } from "@/hooks/useCurrentUser";
 import { identifyUser, resetUser } from "@/lib/analytics";
 import { CodecastAuthRoot } from "@/lib/authRoot";
 import { CONVEX_URL } from "@/lib/localAuth";
+import { DOCS_SHOTS, docsShotsConvex } from "@/lib/docsShots/flag";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 // The person's own key bindings (client_state.ui.key_bindings) into the live
@@ -115,8 +116,9 @@ function AnalyticsIdentify() {
   return null;
 }
 
-const convex: ConvexReactClient =
-  import.meta.hot?.data?.convexClient ??
+const convex: ConvexReactClient = DOCS_SHOTS
+  ? docsShotsConvex()
+  : import.meta.hot?.data?.convexClient ??
   new ConvexReactClient(CONVEX_URL, {
     unsavedChangesWarning: false,
     webSocketConstructor: recoveringWebSocket(),
