@@ -270,7 +270,7 @@ export function formatSelection(a: FormatAction, c: SheetCtx) {
         const hasHeader = !drawn && (region.r0 <= tab.meta.frozenRows || (filter && filter.row === region.r0) || isHeaderRow(wb, activeTabId, region, tab));
         const body = { ...region, r0: hasHeader ? region.r0 + 1 : region.r0 };
         if (!apply(sortOps(model, wb, activeTabId, body, sel.anchor.col, a.desc), { claim: true })) break;
-        toast(`Sorted ${rectA1(body)} by ${a1(sel.anchor.col, body.r0).replace(/\d+/, "")} ${a.desc ? "Z→A" : "A→Z"}`, { action: { label: "Undo", onClick: () => c.live.undo() } });
+        toast(`Sorted ${rectA1(body)} by ${a1(sel.anchor.col, body.r0).replace(/\d+/, "")} ${a.desc ? "Z→A" : "A→Z"}`, { id: SORT_TOAST, action: { label: "Undo", onClick: () => c.live.undo() } });
         break;
       }
       case "filter": {
@@ -526,6 +526,8 @@ type Cell = { col: number; row: number };
 
 /** What the sheet's event handlers read and call, refreshed on every render of SheetView. */
 export type ApplyOpts = { claim?: boolean };
+/** The sort's "Sorted …" toast, taken back if the server refuses the rewrite (useSheetExtras). */
+export const SORT_TOAST = "sheet-sort";
 
 export type SheetCtx = {
   S: MutableRefObject<SheetState>;

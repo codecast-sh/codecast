@@ -10,10 +10,10 @@ import { cellViewportRect, hitTest } from "./gridGeometry";
 import { readSheetFile } from "./importFile";
 import { linkOf } from "./cellPaint";
 import { useContextMenu, type ContextMenuState } from "../ui/context-menu";
-import { useLiveComments, type LiveHandle } from "../live/useLiveArtifact";
+import { useLiveComments, useLiveRefusal, type LiveHandle } from "../live/useLiveArtifact";
 import { groupThreads, type LiveThread } from "../live/liveThreads";
 import type { ArtifactOp } from "@codecast/shared/artifacts";
-import type { Sel, SheetState } from "./sheetActions";
+import { SORT_TOAST, type Sel, type SheetState } from "./sheetActions";
 
 export type SheetExtrasDeps = {
   S: MutableRefObject<SheetState>;
@@ -34,6 +34,12 @@ export type SheetExtrasDeps = {
 export function useSheetExtras({ S, scrollerRef, sinkRef, select, apply, menu, live, showTab, docId, openComments, setPanel, selection }: SheetExtrasDeps) {
   const { model, activeTabId, wb, sel } = S.current;
   const active = sel.anchor;
+
+  // A refused rewrite takes back the "Sorted …" it announced: the rows are back and "Not saved" says why.
+  const refusal = useLiveRefusal(docId);
+  useWatchEffect(() => {
+    if (refusal) toast.dismiss(SORT_TOAST);
+  }, [refusal]);
 
   // ── Cell comments: open threads anchored to this tab's cells ──────────────
   const comments = useLiveComments(docId);
