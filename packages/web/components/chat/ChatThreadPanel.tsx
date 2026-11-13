@@ -75,6 +75,8 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
   onDelete,
   onRetrySend,
   onRetryAgent,
+  canReportRead,
+  onReachedBottom,
 }: {
   channelName: string;
   /** Roles and sessions in the room: two or more take turns on a reply. */
@@ -103,6 +105,10 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
   onDelete?: (messageId: string) => void;
   onRetrySend?: (messageId: string) => void;
   onRetryAgent?: (messageId: string) => void;
+  /** The reader is actually looking: a hidden tab must not clear the header count. */
+  canReportRead?: boolean;
+  /** The newest reply is on screen. */
+  onReachedBottom?: () => void;
 }) {
   const { width, onResizeDown } = useEdgeResize({ storageKey: WIDTH_KEY, min: MIN_W, fallback: DEFAULT_W, max: maxWidth });
 
@@ -141,6 +147,8 @@ export const ChatThreadPanel = memo(function ChatThreadPanel({
         now={now}
         inThread
         targetMessageId={targetMessageId}
+        canReportRead={canReportRead}
+        onReachedBottom={onReachedBottom}
         header={root && (
           <>
             <div className="ch-thread-root">
