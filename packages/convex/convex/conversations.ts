@@ -73,7 +73,7 @@ import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget, findSessionCommandByRequest, recentConversationCommands, validateSessionCommandRequestId, stopAndSendForUser, insertEscapeCommand } from "./daemonCommandUtils";
 import { normalizePaneUrl } from "@codecast/shared/contracts/browserPaneOffer";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, localAgentTypeOf, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, THREAD_STATE_RESULT_MAX_CHARS, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, isHostedAgentType, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
-import { shouldShowInInbox, isNoiseTitle, isOrphanOrSubagent, isRunLog, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
+import { shouldShowInInbox, isNoiseTitle, isOrphanOrSubagent, isAdoptedChild, isRunLog, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner, sessionOwnerRow } from "./sessionOwners";
@@ -82,6 +82,7 @@ import { approxMessageBytes, filterUserMessages, isImportNotice, isNavigableUser
 import {
   isTeamMember,
   canTeamMemberAccess,
+  canTeamMemberReadSummary,
   canOwnerOrTeamAccess,
   checkConversationAccess,
   isConversationTeamVisible,
@@ -94,10 +95,13 @@ import {
   buildShareUpdate,
   buildPathRestampUpdate,
   type AccessLevel,
+  type TeamFeedFilter,
   matchDirectoryMapping,
 } from "./privacy";
-import { effectiveMembershipVisibility } from "./teamVisibility";
+import { currentMembershipVisibility, effectiveMembershipVisibility } from "./teamVisibility";
 import { activeTeamMembershipFor, canAccessConversation } from "./lib/access";
+import { linkedPullRequestNumbers } from "./lib/prSessions";
+import { resolveSearchSelf, searchParentId, selfFamilyTest } from "./lib/searchSelf";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { isStaff } from "./lib/staff";
 import { batchScanConversations, paginateTeamFeed } from "./feedPagination";
@@ -111,7 +115,10 @@ import {
   conversationMatchesAllTerms,
   rankConversationsByCoverage,
   groupMessagesByConversation,
-  relevanceWithFields,
+  evidenceWithFields,
+  relevanceOf,
+  missingWords,
+  partialCoverage,
   bestMessages,
   searchFieldsOf,
   originMatch,
@@ -120,7 +127,7 @@ import {
 } from "./searchCore";
 import { MIRROR_WINDOW_MS } from "./searchMirror";
 import { READ_PAGE_SIZE, READ_STEP_BYTES, messageHasFindTerms, type ScanCursor } from "./lib/conversationRead";
-import { emptyEvidence, parseSearchTerms as parseFindTerms, parseSessionQuery, relevanceTier, snippetAround, stripWrapperTags, type SessionQuery } from "@codecast/shared/search";
+import { addEvidence, emptyEvidence, parseSearchTerms as parseFindTerms, parseSessionQuery, relevanceTier, snippetAround, stripWrapperTags, type SessionQuery } from "@codecast/shared/search";
 import { narrowByOperators, type OperatorCandidate, type OperatorScope } from "./sessionQuerySearch";
 import { requireUser } from "./lib/auth";
 import { isDaemonManagedRow, liveConversationIdSet } from "./lib/liveSessions";
@@ -297,7 +304,7 @@ const OPERATOR_TEXT_LOOKUPS = 150;
 const OPERATOR_TEXT_BATCH = 25;
 const OPERATOR_TEXT_TAKE = 20;
 
-type OperatorHit = OperatorCandidate & { messages: SearchPoolMessage[]; scores: number[]; coverage: number; relevance: number };
+type OperatorHit = OperatorCandidate & { messages: SearchPoolMessage[]; scores: number[]; coverage: number; relevance: number; missing: string[] };
 
 // Session query operators (file:, commit:, pr:, ...) narrow the conversations
 // first (sessionQuerySearch.ts); the query's free text then runs over only
@@ -316,7 +323,7 @@ async function searchByOperators(
   const terms = parseSearchTerms(q.text);
   const tier = await messageSearchTier(ctx);
   if (terms.all.length === 0) {
-    return { terms, tier: tier.tier, truncated, hits: narrowed.candidates.map((c) => ({ ...c, messages: [], scores: [], coverage: 1, relevance: 1 })) };
+    return { terms, tier: tier.tier, truncated, hits: narrowed.candidates.map((c) => ({ ...c, messages: [], scores: [], coverage: 1, relevance: 1, missing: [] })) };
   }
 
   const byId = new Map(narrowed.candidates.map((c) => [c.conv._id.toString(), c]));
@@ -366,10 +373,12 @@ async function searchByOperators(
   const hits: OperatorHit[] = rankConversationsByCoverage(groups, terms).map((r) => {
     const candidate = byId.get(r.convId)!;
     const real = r.messages.map((m, i) => ({ m, score: r.scores[i] })).filter(({ m }) => m._id !== TITLE_ROW);
+    const evidence = evidenceWithFields(r, searchFieldsOf(candidate.conv), terms);
     return {
       ...candidate,
       coverage: r.coverage,
-      relevance: relevanceWithFields(r, searchFieldsOf(candidate.conv), terms),
+      relevance: relevanceOf(evidence, terms),
+      missing: missingWords(evidence, terms),
       messages: real.map(({ m }) => m),
       scores: real.map(({ score }) => score),
     };
@@ -389,66 +398,128 @@ function usersViewerFirst(userById: Map<string, Doc<"users">>, viewerId: Id<"use
 // copy about content-search coverage stays truthful if the window changes.
 const CONTENT_WINDOW_DAYS = Math.round(MIRROR_WINDOW_MS / 86_400_000);
 
-// Team-scoped visibility context shared by the conversation-search queries:
-// the rosters of every team the caller can see, the per-team feed filters,
-// and the visibility predicate built from them. mineOnly skips roster loading
-// entirely — the predicate then only passes the caller's own conversations.
+// ONE WORKSPACE PER READ. The scope every session search and feed reads
+// through: which teams' sessions the caller sees, who their members are, and
+// two gates per conversation. `isVisible` says a session is LISTED (its title
+// and summaries may show); `contentVisible` says its CONTENT may show
+// (prompts, message snippets, the opening prompt). A teammate's session shared
+// as a summary passes the first and fails the second.
+//
+// Which teams: an explicit team (membership-proven; a team the caller is not in
+// is an error), else the one a directory mapping names, else the caller's
+// active team (resolveInboxTeamScope), else none, which is the personal
+// workspace. Every team the caller belongs to only when the caller asks for it
+// by name (allTeams), and then each row says which team it came from
+// (workspaceOf). The caller's own sessions are always listed; `ownTeamId` is
+// set when a team was named or mapped, for reads that keep the caller's own
+// sessions inside it too.
+type ReadScope = {
+  teamIds: Id<"teams">[];
+  ownTeamId: Id<"teams"> | undefined;
+  teamUsers: Doc<"users">[];
+  userById: Map<string, Doc<"users">>;
+  isVisible: (conv: Doc<"conversations">) => boolean;
+  contentVisible: (conv: Doc<"conversations">) => boolean;
+  workspaceOf: (conv: Doc<"conversations">) => string;
+  teamNameOf: (conv: Doc<"conversations">) => string | undefined;
+};
+
+async function resolveReadScope(
+  ctx: QueryCtx,
+  userId: Id<"users">,
+  user: Doc<"users">,
+  opts: { teamId?: Id<"teams">; projectPath?: string; allTeams?: boolean; mineOnly?: boolean },
+): Promise<ReadScope | { error: string }> {
+  let teamIds: Id<"teams">[] = [];
+  let ownTeamId: Id<"teams"> | undefined;
+  if (opts.teamId) {
+    if (!(await isTeamMember(ctx, userId, opts.teamId))) return { error: "Unauthorized team" };
+    teamIds = [opts.teamId];
+    ownTeamId = opts.teamId;
+  } else if (opts.allTeams) {
+    const memberships = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+      .collect();
+    teamIds = memberships.map((m) => m.team_id);
+  } else {
+    if (opts.projectPath) {
+      const mappings = await ctx.db
+        .query("directory_team_mappings")
+        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
+        .collect();
+      const mapped = matchDirectoryMapping(mappings, opts.projectPath)?.team_id;
+      if (mapped && (await isTeamMember(ctx, userId, mapped))) ownTeamId = mapped;
+    }
+    const team = ownTeamId ?? (await resolveInboxTeamScope(ctx, userId));
+    teamIds = team ? [team] : [];
+  }
+  if (opts.mineOnly) teamIds = [];
+
+  const feedFilters = new Map<string, TeamFeedFilter>();
+  const teamNames = new Map<string, string>();
+  const userById = new Map<string, Doc<"users">>();
+  for (const teamId of teamIds) {
+    const ff = await createTeamFeedFilter(ctx, teamId);
+    feedFilters.set(teamId.toString(), ff);
+    if (opts.allTeams) teamNames.set(teamId.toString(), (await ctx.db.get(teamId))?.name ?? "");
+    const members = await Promise.all(ff.memberships.map((m) => ctx.db.get(m.user_id)));
+    for (const u of members) if (u) userById.set(u._id.toString(), u);
+  }
+  const teamUsers = [...userById.values()];
+  userById.set(userId.toString(), user);
+
+  const isOwn = (conv: Doc<"conversations">) => conv.user_id.toString() === userId.toString();
+  const teamFilterFor = (conv: Doc<"conversations">): TeamFeedFilter | undefined => {
+    if (!conv.team_id || !userById.has(conv.user_id.toString())) return undefined;
+    return feedFilters.get(conv.team_id.toString());
+  };
+  const isVisible = (conv: Doc<"conversations">): boolean => {
+    if (isRunLog(conv)) return false;
+    if (isOwn(conv)) return true;
+    return teamFilterFor(conv)?.isVisible(conv) ?? false;
+  };
+  const contentVisible = (conv: Doc<"conversations">): boolean => {
+    if (isRunLog(conv)) return false;
+    if (isOwn(conv)) return true;
+    return teamFilterFor(conv)?.contentVisible(conv) ?? false;
+  };
+  const workspaceOf = (conv: Doc<"conversations">) => (conv.team_id ? `team:${conv.team_id}` : `user:${userId}`);
+  const teamNameOf = (conv: Doc<"conversations">) => (conv.team_id ? teamNames.get(conv.team_id.toString()) : undefined);
+
+  return { teamIds, ownTeamId, teamUsers, userById, isVisible, contentVisible, workspaceOf, teamNameOf };
+}
+
+// A session as search may read it for this viewer: a session whose content is
+// hidden keeps only its listed fields (title, summaries, earlier titles), never
+// its opening prompt.
+function searchableAs(scope: Pick<ReadScope, "contentVisible">, conv: Doc<"conversations">): Doc<"conversations"> {
+  return scope.contentVisible(conv) ? conv : { ...conv, first_prompt: undefined };
+}
+
+// Which workspace a CLI row belongs to, and its team's name when the read
+// spans every team, so rows from two teams never read as one list.
+function scopeLabels(scope: ReadScope, conv: Doc<"conversations">): { workspace: string; team?: string } {
+  const team = scope.teamNameOf(conv);
+  return { workspace: scope.workspaceOf(conv), ...(team ? { team } : {}) };
+}
+
+// The web search queries' scope: one workspace (the named team, else the
+// active one, else personal), or every team when the caller asks for it.
 async function loadConversationSearchScope(
   ctx: QueryCtx,
   userId: Id<"users">,
   user: Doc<"users">,
-  args: { mineOnly?: boolean; activeTeamId?: Id<"teams"> },
-) {
-  const userMemberships = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-    .collect();
-  const userTeamIds = userMemberships.map(m => m.team_id);
-
-  const effectiveTeamIds = args.mineOnly
-    ? []
-    // A named team narrows the scope only when the caller belongs to it; a
-    // team id the caller is not a member of scopes to nothing.
-    : args.activeTeamId
-      ? userTeamIds.filter(id => id === args.activeTeamId)
-      : userTeamIds;
-
-  const allTeamUsers: Doc<"users">[] = [];
-  for (const teamId of effectiveTeamIds) {
-    const teamMemberships = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
-      .collect();
-    const memberUsers = await Promise.all(
-      teamMemberships.map(m => ctx.db.get(m.user_id))
-    );
-    allTeamUsers.push(...memberUsers.filter((u): u is Doc<"users"> => u !== null));
-  }
-  const teamUsers = [...new Map(allTeamUsers.map(u => [u._id.toString(), u])).values()];
-  const teamUserIds = new Set(teamUsers.map(u => u._id.toString()));
-  const effectiveTeamIdSet = new Set(effectiveTeamIds.map(id => id.toString()));
-
-  const feedFilters = new Map<string, Awaited<ReturnType<typeof createTeamFeedFilter>>>();
-  for (const teamId of effectiveTeamIds) {
-    feedFilters.set(teamId.toString(), await createTeamFeedFilter(ctx, teamId));
-  }
-
-  // Author identities for result rows: every visible conversation is authored
-  // by the caller or a loaded team member, so no per-result ctx.db.get needed.
-  const userById = new Map<string, Doc<"users">>(teamUsers.map(u => [u._id.toString(), u]));
-  userById.set(userId.toString(), user);
-
-  const isVisible = (conv: Doc<"conversations">): boolean => {
-    if (isRunLog(conv)) return false;
-    if (conv.user_id.toString() === userId.toString()) return true;
-    if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) return false;
-    const filter = feedFilters.get(conv.team_id.toString());
-    if (!filter || !filter.isVisible(conv)) return false;
-    if (!teamUserIds.has(conv.user_id.toString())) return false;
-    return true;
-  };
-
-  return { userById, isVisible, effectiveTeamIds };
+  args: { mineOnly?: boolean; activeTeamId?: Id<"teams">; allTeams?: boolean },
+): Promise<ReadScope> {
+  const scope = await resolveReadScope(ctx, userId, user, {
+    teamId: args.activeTeamId,
+    allTeams: args.allTeams,
+    mineOnly: args.mineOnly,
+  });
+  // A named team the caller is not a member of scopes to their own sessions.
+  if ("error" in scope) return resolveReadScope(ctx, userId, user, { mineOnly: true }) as Promise<ReadScope>;
+  return scope;
 }
 
 // Titles and summaries aren't covered by the message index — search them
@@ -459,7 +530,13 @@ async function loadConversationSearchScope(
 // conversations table, so they stay within budget even when the message
 // full-text search can't (see the fetchMessageSearchPool NOTE) — which is why
 // searchConversationTitles exposes them on their own.
-async function fetchTitleFieldHits(ctx: QueryCtx, terms: ParsedTerms) {
+async function fetchTitleFieldHits(
+  ctx: QueryCtx,
+  terms: ParsedTerms,
+  // How the viewer may read each session (searchableAs): a session whose
+  // content is hidden matches on its listed fields alone.
+  view: (conv: Doc<"conversations">) => Doc<"conversations"> = (conv) => conv,
+) {
   const searchQuery = terms.lookup;
   const fieldHits = await Promise.all([
     ctx.db
@@ -480,7 +557,8 @@ async function fetchTitleFieldHits(ctx: QueryCtx, terms: ParsedTerms) {
   // summary that mentions a Jon. Best coverage first.
   const convs = new Map<string, Doc<"conversations">>();
   const groups = new Map<string, Array<{ content: string }>>();
-  for (const conv of fieldHits.flat()) {
+  for (const hit of fieldHits.flat()) {
+    const conv = view(hit);
     const convId = conv._id.toString();
     if (convs.has(convId)) continue;
     convs.set(convId, conv);
@@ -503,6 +581,8 @@ type SearchCandidate = {
   scores: number[];
   coverage: number;
   relevance: number;
+  /** Query words the session holds nowhere, messages or own fields. */
+  missing: string[];
   /** Worker sessions folded into this row (foldWorkersUnderParents). */
   workers: number;
 };
@@ -512,12 +592,14 @@ function searchCandidate(
   ranked: Partial<Pick<RankedConversation<SearchPoolMessage>, "messages" | "scores" | "evidence">> & { coverage: number },
   terms: ParsedTerms,
 ): SearchCandidate {
+  const evidence = evidenceWithFields({ evidence: ranked.evidence ?? emptyEvidence(terms) }, searchFieldsOf(conv), terms);
   return {
     conv,
     messages: ranked.messages ?? [],
     scores: ranked.scores ?? [],
     coverage: ranked.coverage,
-    relevance: relevanceWithFields({ evidence: ranked.evidence ?? emptyEvidence(terms) }, searchFieldsOf(conv), terms),
+    relevance: relevanceOf(evidence, terms),
+    missing: missingWords(evidence, terms),
     workers: 0,
   };
 }
@@ -526,21 +608,6 @@ function searchCandidate(
 // query, the person's own first, each cut to the stretch that shows it.
 function searchSnippets(c: Pick<SearchCandidate, "messages" | "scores">, terms: ParsedTerms, limit = 5) {
   return bestMessages(c, limit).map((m) => ({ message: m, content: snippetAround(stripWrapperTags(m.content || ""), terms, 300) }));
-}
-
-// The session a worker's results belong under: a subagent's parent, or the
-// primary session of the workflow run a workflow sub ran in.
-async function searchParentId(
-  ctx: QueryCtx,
-  conv: Doc<"conversations">,
-): Promise<Id<"conversations"> | undefined> {
-  if (conv.parent_conversation_id) return conv.parent_conversation_id;
-  if (conv.is_workflow_sub && conv.workflow_run_id) {
-    const run = await ctx.db.get(conv.workflow_run_id);
-    const parent = run?.primary_conversation_id ?? run?.spawner_conversation_id;
-    return parent && parent !== conv._id ? parent : undefined;
-  }
-  return undefined;
 }
 
 // Workers fold into the session that ran them. A worker's brief repeats its
@@ -582,6 +649,8 @@ async function foldWorkersUnderParents(
     }
     host.relevance = Math.max(host.relevance, c.relevance);
     host.coverage = Math.max(host.coverage, c.coverage);
+    // The family holds a word when any member does.
+    host.missing = host.missing.filter((w) => c.missing.includes(w));
     host.workers++;
     folded.add(c.conv._id.toString());
   }
@@ -1007,9 +1076,16 @@ function resolveUserSkills(userSkillsJson: string | undefined, projectPath: stri
  */
 export function conversationForAccess<T extends Record<string, any>>(
   conversation: T,
-  access: AccessLevel,
+  // "summary": a teammate the session is shared with as a summary. They get
+  // the share-link shape minus every field that quotes the conversation.
+  access: AccessLevel | "summary",
 ): T {
   if (access === "owner") return conversation;
+  if (access === "summary") {
+    const summary: Record<string, any> = conversationForAccess(conversation, "shared");
+    for (const key of SUMMARY_HIDDEN_CONVERSATION_FIELDS) delete summary[key];
+    return summary as T;
+  }
   if (access === "team") {
     if (!("peer_transfer" in conversation)) return conversation;
     const { peer_transfer: _ownerOnly, ...teamConversation } = conversation;
@@ -1049,6 +1125,32 @@ const SHARE_HIDDEN_CONVERSATION_FIELDS = [
   "hand_wake_notified_key",
   "title_embedding",
   "peer_transfer",
+] as const;
+
+/**
+ * A session its viewer's team sees as a summary: what it was about (title,
+ * summary, status, owner), none of its content. Null when the viewer may not
+ * see even that. `content_access: "summary"` tells the page to draw the
+ * summary in place of a transcript.
+ */
+async function summaryOnlyConversation(ctx: QueryCtx, viewerId: Id<"users"> | null, conversation: Doc<"conversations">) {
+  if (!viewerId || !(await canTeamMemberReadSummary(ctx, viewerId, conversation))) return null;
+  const owner = await ctx.db.get(conversation.user_id);
+  return sanitizeConvexObjectKeys({
+    ...conversationForAccess(conversation, "summary"),
+    title: conversation.title || (conversation.slug ? formatSlugAsTitle(conversation.slug) : "New Session"),
+    user: conversationAuthorForAccess(owner, "shared"),
+    content_access: "summary" as const,
+  });
+}
+
+/** Conversation fields that quote the conversation itself: a teammate who
+ *  sees a session as a summary never gets them. */
+const SUMMARY_HIDDEN_CONVERSATION_FIELDS = [
+  "first_prompt",
+  "last_message_preview",
+  "image_preview_url",
+  "last_comment_excerpt",
 ] as const;
 
 /** A remote URL without its user:password@ part (an https remote can carry a token). */
@@ -1712,64 +1814,6 @@ export const createQuickSession = mutation({
   },
 });
 
-export const getConversations = query({
-  args: {
-    user_id: v.id("users"),
-  },
-  handler: async (ctx, args) => {
-    const authUserId = await getAuthUserId(ctx);
-    if (!authUserId || authUserId.toString() !== args.user_id.toString()) {
-      return [];
-    }
-    const user = await ctx.db.get(args.user_id);
-    if (!user) {
-      return [];
-    }
-    const memberships = await ctx.db.query("team_memberships")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
-      .collect();
-    const userTeamIds = new Set(memberships.map((m: any) => m.team_id.toString()));
-
-    const feedFilters = new Map<string, Awaited<ReturnType<typeof createTeamFeedFilter>>>();
-    for (const m of memberships) {
-      feedFilters.set(m.team_id.toString(), await createTeamFeedFilter(ctx, m.team_id));
-    }
-
-    const ownConversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", args.user_id))
-      .collect();
-
-    const teamConvArrays = await Promise.all(
-      memberships.map((m: any) =>
-        ctx.db
-          .query("conversations")
-          .withIndex("by_team_id", (q: any) => q.eq("team_id", m.team_id))
-          .collect()
-      )
-    );
-
-    const ownIds = new Set(ownConversations.map((c: any) => c._id.toString()));
-    const allConversations = [...ownConversations];
-    for (const teamConvs of teamConvArrays) {
-      for (const c of teamConvs) {
-        if (!ownIds.has(c._id.toString())) {
-          allConversations.push(c);
-        }
-      }
-    }
-
-    const filtered = allConversations.filter((c) => {
-      const isOwn = c.user_id.toString() === args.user_id.toString();
-      if (isOwn) return true;
-      if (!c.team_id || !userTeamIds.has(c.team_id.toString())) return false;
-      const filter = feedFilters.get(c.team_id.toString());
-      return filter ? filter.isVisible(c) : false;
-    });
-    return filtered.sort((a, b) => b.updated_at - a.updated_at);
-  },
-});
-
 // An anchor's session renders under its bot identity (acting_user_id), not the
 // human host that runs and bills it. Resolve that identity for the author chip;
 // returns null for ordinary sessions so callers fall back to the owner. Cheap:
@@ -1803,36 +1847,70 @@ export async function resolveConversationRef(
   );
 }
 
+/**
+ * A session spawned by `scopeId` that its owner link-shared, read by a viewer
+ * who can open `scopeId` (with `scopeToken` presented, or a redemption). This
+ * is how a shared parent's page names and opens its shared workers: the
+ * child's own link is the grant, and the viewer receives it only from inside
+ * the parent, so an unshared child stays private and rotating the child's
+ * link revokes it here too.
+ */
+async function isSharedChildOf(
+  ctx: QueryCtx,
+  viewerId: Id<"users"> | null,
+  conv: Doc<"conversations">,
+  scopeId: string | undefined,
+  scopeToken: string | undefined,
+): Promise<boolean> {
+  if (!scopeId || !conv.share_token) return false;
+  const parentId = conv.parent_conversation_id ?? conv.spawned_by_conversation_id;
+  if (!parentId || parentId.toString() !== scopeId) return false;
+  const parent = await ctx.db.get(parentId);
+  return !!parent && (await checkConversationAccess(ctx, viewerId, parent, scopeToken)) !== "denied";
+}
+
 export const webGet = query({
   args: {
     short_id: v.optional(v.string()),
     id: v.optional(v.string()),
+    // The conversation the reference is drawn in, and the share token its
+    // viewer presented: lets a share-link viewer resolve that conversation's
+    // shared workers (isSharedChildOf).
+    in_conversation: v.optional(v.string()),
+    share_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
-    if (!userId) return null;
+    if (!userId && !args.in_conversation) return null;
+    const sharedChild = (c: Doc<"conversations">) => isSharedChildOf(ctx, userId, c, args.in_conversation, args.share_token);
 
-    let conv;
+    let conv: Doc<"conversations"> | null = null;
     if (args.short_id) {
-      conv = await resolveConversationRef(ctx, args.short_id, userId);
+      conv = (await resolveConversationRefRanked(ctx, args.short_id, userId ?? "", async (c) =>
+        (userId ? await canTeamMemberAccess(ctx, userId, c as Doc<"conversations">) : false) || (await sharedChild(c as Doc<"conversations">)),
+      )) as Doc<"conversations"> | null;
     } else if (args.id) {
-      try {
-        conv = await ctx.db.get(args.id as Id<"conversations">);
-      } catch {}
+      const id = ctx.db.normalizeId("conversations", args.id);
+      conv = id ? await ctx.db.get(id) : null;
     }
 
     if (!conv) return null;
-    const isOwner = conv.user_id.toString() === userId.toString();
-    if (!(await canOwnerOrTeamAccess(ctx, userId, conv))) return null;
+    const isOwner = !!userId && conv.user_id.toString() === userId.toString();
+    const access: AccessLevel = userId && (await canOwnerOrTeamAccess(ctx, userId, conv))
+      ? (isOwner ? "owner" : "team")
+      : (await sharedChild(conv)) ? "shared" : "denied";
+    if (access === "denied") return null;
 
     // Author identity, only for teammates' sessions (own sessions skip the read).
     // The reference pill/hover use this to show the author's avatar when the
     // session isn't yours — same name/avatar convention as the inbox feed rows.
     // An anchor always shows its bot identity, even on the host's own session.
-    const owner = isOwner ? null : await ctx.db.get(conv.user_id);
+    const owner = isOwner ? null : conversationAuthorForAccess(await ctx.db.get(conv.user_id), access);
     const acting = await resolveActingAuthor(ctx, conv);
 
     return {
+      // A share-link viewer opens the worker through its own link.
+      ...(access === "shared" ? { share_token: conv.share_token } : {}),
       _id: conv._id,
       short_id: conv.short_id,
       title: conv.title,
@@ -1857,7 +1935,7 @@ export const webGet = query({
       is_anchor: !!conv.anchor_id,
       anchor_id: conv.anchor_id ?? null,
       author_name: acting ? acting.name : owner ? (owner.name || owner.email?.split("@")[0] || "Unknown") : null,
-      author_avatar: acting ? acting.avatar : owner ? (owner.image || owner.github_avatar_url || null) : null,
+      author_avatar: acting ? acting.avatar : owner ? owner.avatar_url : null,
       // Summary/context fields (already on the doc — no extra reads). The pill
       // card coalesces these into a one-line summary + last-message preview so
       // an expanded session reference shows what it's about, not just metadata.
@@ -1906,7 +1984,8 @@ export const getConversation = query({
     const conversationId = conversation._id;
     const accessLevel = await checkConversationAccess(ctx, authUserId, conversation, args.share_token);
     if (accessLevel === "denied") {
-      return null;
+      const summary = await summaryOnlyConversation(ctx, authUserId, conversation);
+      return summary && { ...summary, messages: [], has_more_above: false, oldest_timestamp: null, active_plan: null, active_task: null };
     }
 
     const limit = args.limit ?? 100;
@@ -2416,7 +2495,7 @@ export const getConversationWithMeta = query({
 
     const access = await checkConversationAccess(ctx, authUserId, conversation, args.share_token);
     if (access === "denied") {
-      return null;
+      return await summaryOnlyConversation(ctx, authUserId, conversation);
     }
     const isOwner = access === "owner";
 
@@ -2897,7 +2976,7 @@ export const listConversations = query({
       // re-serve rows the client has, and one member's filtered-out band
       // (e.g. a swarm of subagent sessions) can't stall everyone else.
       const visibleMembers = (feedFilter?.memberships ?? []).filter(m => {
-        const visibility = (m as any).visibility || "summary";
+        const visibility = currentMembershipVisibility(m as any);
         return visibility !== "hidden";
       });
 
@@ -3650,7 +3729,10 @@ export const searchConversations = query({
     query: v.string(),
     limit: v.optional(v.number()),
     userOnly: v.optional(v.boolean()),
+    // The workspace to search: unset searches the active team (else personal).
     activeTeamId: v.optional(v.id("teams")),
+    // Every team the caller belongs to, each row labelled with its team.
+    allTeams: v.optional(v.boolean()),
     mineOnly: v.optional(v.boolean()),
     since: v.optional(v.number()),
     sort: v.optional(v.union(v.literal("recent"), v.literal("relevance"))),
@@ -3683,7 +3765,9 @@ export const searchConversations = query({
       ? await searchByOperators(
           ctx,
           { ...parsed, after: Math.max(parsed.after ?? 0, args.since ?? 0) || undefined },
-          { viewerId: userId, users: usersViewerFirst(scope.userById, userId), isVisible: scope.isVisible, teamIds: scope.effectiveTeamIds },
+          // Operators read what a session did (files, commits, its text), so
+          // they only reach sessions whose content the viewer may read.
+          { viewerId: userId, users: usersViewerFirst(scope.userById, userId), contentVisible: scope.contentVisible, teamIds: scope.teamIds },
           { userOnly },
         )
       : null;
@@ -3695,7 +3779,7 @@ export const searchConversations = query({
       ? { pool: [] as SearchPoolMessage[], tier: operatorRun.tier }
       : await fetchMessageSearchPool(ctx, terms, {
           userId,
-          teamIds: scope.effectiveTeamIds,
+          teamIds: scope.teamIds,
         });
     const matchedAt = new Map(operatorRun?.hits.map((h) => [h.conv._id.toString(), h.matchedAt]));
 
@@ -3711,13 +3795,14 @@ export const searchConversations = query({
     const seen = new Set<string>();
     ranked.forEach((r, i) => {
       const conv = matchConvs[i];
-      if (!conv) return;
+      // A message match is the session's content: only where it may show.
+      if (!conv || !scope.contentVisible(conv)) return;
       seen.add(r.convId);
       candidates.push(searchCandidate(conv, r, terms));
     });
     // A session only its title or summaries matched has no message rows.
     if (!userOnly && !operatorRun) {
-      for (const [convId, hit] of await fetchTitleFieldHits(ctx, terms)) {
+      for (const [convId, hit] of await fetchTitleFieldHits(ctx, terms, (c) => searchableAs(scope, c))) {
         if (!seen.has(convId)) candidates.push(hit);
       }
     }
@@ -3772,6 +3857,10 @@ export const searchConversations = query({
       titleMatch: boolean;
       projectPath: string | null;
       agentType: string | null;
+      // The workspace the session belongs to (team:<id> or user:<id>), and its
+      // team's name when the search spans every team.
+      workspace: string;
+      teamName?: string;
       // Who the row is (docs/architecture/session-characters.md S1), so a
       // search result wears the same face as its inbox card.
       identity: Awaited<ReturnType<typeof identityFieldsOf>>;
@@ -3780,10 +3869,11 @@ export const searchConversations = query({
     const totalSessions = scored.length;
     const top = scored.slice(0, limit);
 
-    const firstMsgByConv = await resolveFirstMessageTitles(ctx, top.map((c) => c.conv));
+    const firstMsgByConv = await resolveFirstMessageTitles(ctx, top.map((c) => c.conv).filter(scope.contentVisible));
 
     for (const candidate of top) {
-      const { conv, messages } = candidate;
+      const { conv } = candidate;
+      const messages = scope.contentVisible(conv) ? candidate.messages : [];
       const isOwn = conv.user_id.toString() === userId.toString();
       const conversationUser = scope.userById.get(conv.user_id.toString());
       const firstUserMessage = firstMsgByConv.get(conv._id.toString()) || "";
@@ -3797,7 +3887,7 @@ export const searchConversations = query({
         conversationId: conv._id,
         title,
         matchCount: messages.length,
-        matches: searchSnippets(candidate, terms).map(({ message, content }) => ({
+        matches: searchSnippets({ ...candidate, messages }, terms).map(({ message, content }) => ({
           messageId: message._id,
           content,
           role: message.role,
@@ -3809,11 +3899,13 @@ export const searchConversations = query({
         isOwn,
         messageCount: conv.message_count || 0,
         relevance: candidate.relevance,
-        origin: originMatch(conv, terms),
+        origin: originMatch(searchableAs(scope, conv), terms),
         workerCount: candidate.workers,
         titleMatch: messages.length === 0 && terms.all.length > 0,
         projectPath: conv.project_path || null,
         agentType: conv.agent_type || null,
+        workspace: scope.workspaceOf(conv),
+        ...(scope.teamNameOf(conv) ? { teamName: scope.teamNameOf(conv) } : {}),
         identity: await identityFieldsOf(conv, (id: any) => ctx.db.get(id)),
       });
     }
@@ -3848,6 +3940,7 @@ export const searchConversationTitles = query({
     query: v.string(),
     limit: v.optional(v.number()),
     activeTeamId: v.optional(v.id("teams")),
+    allTeams: v.optional(v.boolean()),
     mineOnly: v.optional(v.boolean()),
     since: v.optional(v.number()),
   },
@@ -3867,7 +3960,7 @@ export const searchConversationTitles = query({
     const terms = parseSearchTerms(searchTerm);
     if (terms.all.length === 0) return empty;
     const scope = await loadConversationSearchScope(ctx, userId, user, args);
-    const hits = await fetchTitleFieldHits(ctx, terms);
+    const hits = await fetchTitleFieldHits(ctx, terms, (c) => searchableAs(scope, c));
 
     const visible = [...hits.values()].filter(({ conv }) => scope.isVisible(conv));
     const scoped = args.since
@@ -3875,7 +3968,7 @@ export const searchConversationTitles = query({
       : visible;
     scoped.sort((a, b) => relevanceTier(b.relevance) - relevanceTier(a.relevance) || b.conv.updated_at - a.conv.updated_at);
     const top = scoped.slice(0, args.limit ?? 20);
-    const firstMsgByConv = await resolveFirstMessageTitles(ctx, top.map(({ conv }) => conv));
+    const firstMsgByConv = await resolveFirstMessageTitles(ctx, top.map(({ conv }) => conv).filter(scope.contentVisible));
 
     const results = await Promise.all(top.map(async ({ conv, relevance }) => {
       const conversationUser = scope.userById.get(conv.user_id.toString());
@@ -3904,6 +3997,8 @@ export const searchConversationTitles = query({
         titleMatch: true,
         projectPath: conv.project_path || null,
         agentType: conv.agent_type || null,
+        workspace: scope.workspaceOf(conv),
+        ...(scope.teamNameOf(conv) ? { teamName: scope.teamNameOf(conv) } : {}),
         identity: await identityFieldsOf(conv, (id: any) => ctx.db.get(id)),
       };
     }));
@@ -4330,6 +4425,31 @@ export const getSessionLinks = mutation({
   },
 });
 
+// What a hit's session did, for the line under its title: commits it made,
+// pull requests it is linked to, tool calls that failed. Absent when none, so
+// the line stays short. Reads only small rows (commits, pull request links),
+// each bounded; a capped count says so.
+const SEARCH_COMMITS_COUNTED = 50;
+async function searchRowFacts(
+  ctx: QueryCtx,
+  conv: Doc<"conversations">,
+  canSeeTeam: (teamId: Id<"teams">) => Promise<boolean>,
+): Promise<{ commits?: number; commits_capped?: boolean; prs?: number[]; prs_capped?: boolean; failed_tools?: number }> {
+  const commitRows = await ctx.db
+    .query("commits")
+    .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+    .take(SEARCH_COMMITS_COUNTED + 1);
+  const shas = new Set(commitRows.slice(0, SEARCH_COMMITS_COUNTED).map((c) => c.sha));
+  const prs = await linkedPullRequestNumbers(ctx, conv._id, canSeeTeam);
+  return {
+    ...(shas.size ? { commits: shas.size } : {}),
+    ...(commitRows.length > SEARCH_COMMITS_COUNTED ? { commits_capped: true } : {}),
+    ...(prs.numbers.length ? { prs: prs.numbers } : {}),
+    ...(prs.capped ? { prs_capped: true } : {}),
+    ...(conv.failed_tool_count ? { failed_tools: conv.failed_tool_count } : {}),
+  };
+}
+
 export const searchForCLI = query({
   args: {
     api_token: v.string(),
@@ -4347,6 +4467,13 @@ export const searchForCLI = query({
     mine_only: v.optional(v.boolean()),
     label: v.optional(v.string()),
     titles_only: v.optional(v.boolean()),
+    // `cast search -g`: every team the caller belongs to, rows labelled by team.
+    all_teams: v.optional(v.boolean()),
+    // The calling session (see resolveSearchSelf). It and its workers are
+    // left out of the results unless include_self is set.
+    self_conversation_id: v.optional(v.string()),
+    self_session_id: v.optional(v.string()),
+    include_self: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -4365,48 +4492,23 @@ export const searchForCLI = query({
       labelConvIds = resolved.convIds;
     }
 
-    const userMemberships = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
-      .collect();
-    const userTeamIds = userMemberships.map(m => m.team_id);
-    if (args.team_id && !userTeamIds.some((id) => String(id) === String(args.team_id))) {
-      return { error: "Unauthorized team" };
-    }
-
-    let resolvedTeamId: Id<"teams"> | undefined;
-    if (args.team_id) {
-      resolvedTeamId = args.team_id;
-    } else if (args.project_path) {
-      const mappings = await ctx.db
-        .query("directory_team_mappings")
-        .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
-        .collect();
-      resolvedTeamId = matchDirectoryMapping(mappings, args.project_path)?.team_id;
-    }
-    const effectiveTeamIds = resolvedTeamId ? [resolvedTeamId] : userTeamIds;
-
-    type UserDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"users">>>>;
-    const allTeamUsers: UserDoc[] = [];
-    for (const teamId of effectiveTeamIds) {
-      const teamMemberships = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
-        .collect();
-      const memberUsers = await Promise.all(
-        teamMemberships.map(m => ctx.db.get(m.user_id))
-      );
-      allTeamUsers.push(...memberUsers.filter((u): u is UserDoc => u !== null));
-    }
-    const teamUsers = [...new Map(allTeamUsers.map(u => [u._id.toString(), u])).values()];
-    const teamUserIds = new Set(teamUsers.map(u => u._id.toString()));
-    const teamUserMap = new Map(teamUsers.map(u => [u._id.toString(), u]));
+    const scope = await resolveReadScope(ctx, authUserId, user, {
+      teamId: args.team_id,
+      projectPath: args.project_path,
+      allTeams: args.all_teams,
+    });
+    if ("error" in scope) return { error: scope.error };
+    const { teamUsers, teamIds: effectiveTeamIds, ownTeamId: resolvedTeamId } = scope;
+    const teamUserMap = scope.userById;
+    // A pull request is readable by its team's members (canAccessPullRequest),
+    // whichever team this read is scoped to.
+    const teamMemberCache = new Map<string, boolean>();
+    const canSeeTeam = async (teamId: Id<"teams">) => {
+      const key = String(teamId);
+      if (!teamMemberCache.has(key)) teamMemberCache.set(key, await isTeamMember(ctx, authUserId, teamId));
+      return teamMemberCache.get(key)!;
+    };
     const effectiveTeamIdSet = new Set(effectiveTeamIds.map(id => id.toString()));
-
-    const cliFeedFilters = new Map<string, Awaited<ReturnType<typeof createTeamFeedFilter>>>();
-    for (const teamId of effectiveTeamIds) {
-      cliFeedFilters.set(teamId.toString(), await createTeamFeedFilter(ctx, teamId));
-    }
 
     let filterUserId: string | null = null;
     if (args.mine_only) {
@@ -4446,14 +4548,9 @@ export const searchForCLI = query({
     // Who this caller may search at all: their own sessions, and teammates'
     // sessions the team feed shows them.
     const isVisibleConv = (conv: any): boolean => {
-      if (isRunLog(conv)) return false;
+      if (!scope.isVisible(conv)) return false;
       const isOwn = conv.user_id.toString() === authUserId.toString();
-      if (!isOwn) {
-        if (!conv.team_id || !effectiveTeamIdSet.has(conv.team_id.toString())) return false;
-        const cliFilter = cliFeedFilters.get(conv.team_id.toString());
-        if (!cliFilter || !cliFilter.isVisible(conv)) return false;
-        if (!teamUserIds.has(conv.user_id.toString())) return false;
-      } else if (resolvedTeamId) {
+      if (isOwn && resolvedTeamId) {
         // Own sessions: filter by team when team is resolved from directory
         const convTeamId = (conv.team_id ?? conv.active_team_id)?.toString();
         if (!convTeamId || !effectiveTeamIdSet.has(convTeamId)) return false;
@@ -4490,6 +4587,95 @@ export const searchForCLI = query({
     const convRank = (conv: any) => recencyRankOf(conv, now);
     const byRankThenRecency = (a: any, b: any) => convRank(a) - convRank(b) || b.updated_at - a.updated_at;
 
+    // The calling session and its workers leave the results unless asked for;
+    // the reply names what it left out, so an empty page never reads as "no
+    // prior work" when the only matches were the caller's own.
+    const selfId = args.include_self
+      ? null
+      : await resolveSearchSelf(ctx, authUserId, { conversation_id: args.self_conversation_id, session_id: args.self_session_id });
+    const inSelfFamily = selfId ? selfFamilyTest(ctx, selfId) : null;
+    const excludedSelf = new Set<string>();
+    const withoutSelf = async <T>(rows: T[], convOf: (row: T) => Doc<"conversations">): Promise<T[]> => {
+      if (!inSelfFamily) return rows;
+      const keep = await Promise.all(rows.map(async (row) => {
+        const conv = convOf(row);
+        if (!(await inSelfFamily(conv))) return true;
+        excludedSelf.add(conv._id.toString());
+        return false;
+      }));
+      return rows.filter((_, i) => keep[i]);
+    };
+    const selfReport = async () => {
+      if (!selfId || excludedSelf.size === 0) return {};
+      const self = await ctx.db.get(selfId);
+      return { excluded_self: { id: self?.short_id || selfId.toString().slice(0, 7), sessions: excludedSelf.size } };
+    };
+
+    // One row shape for every path: what the session is, where it works,
+    // whether it is live, and what it did (searchRowFacts).
+    const deviceLabels = new Map<string, string | undefined>();
+    const machineOf = async (conv: Doc<"conversations">) => {
+      const devId = (conv as any).owner_device_id as string | undefined;
+      if (!devId) return undefined;
+      const devKey = `${conv.user_id.toString()}:${devId}`;
+      if (!deviceLabels.has(devKey)) {
+        const device = await ctx.db
+          .query("devices")
+          .withIndex("by_user_device", (q: any) => q.eq("user_id", conv.user_id).eq("device_id", devId))
+          .first();
+        deviceLabels.set(devKey, device?.label);
+      }
+      return deviceLabels.get(devKey);
+    };
+    type SearchRowMatch = { line: number; message_id?: Id<"messages">; role: string; content: string; timestamp: string; tool_calls_count?: number; tool_results_count?: number };
+    const rowOf = async (
+      conv: Doc<"conversations">,
+      title: string,
+      hit: { relevance: number; coverage: number; workers?: number; matches?: SearchRowMatch[]; title_match?: boolean },
+    ) => {
+      const isOwnConv = conv.user_id.toString() === authUserId.toString();
+      const owner = teamUserMap.get(conv.user_id.toString()) || (isOwnConv ? user : null);
+      const machine = await machineOf(conv);
+      const base = {
+        id: conv.short_id || conv._id.toString().slice(0, 7),
+        title,
+        project_path: conv.project_path || null,
+        updated_at: new Date(conv.updated_at).toISOString(),
+        message_count: conv.message_count || 0,
+        relevance: hit.relevance,
+        coverage: hit.coverage,
+        // What the session began as and was called before, when that answers
+        // the query and the current title may not (searchCore.originMatch).
+        origin: originMatch(searchableAs(scope, conv), terms),
+        // Worker sessions that matched and are folded into this row.
+        ...(hit.workers ? { workers: hit.workers } : {}),
+        user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
+        ...(scope.contentVisible(conv) && conv.recent_files && conv.recent_files.length > 0 ? { recent_files: conv.recent_files } : {}),
+        ...((conv as any).worktree_name &&
+        (conv as any).worktree_status !== "merged" &&
+        (conv as any).worktree_status !== "archived"
+          ? { worktree: (conv as any).worktree_name as string }
+          : {}),
+        ...(machine ? { machine } : {}),
+        ...(await classifier.rowFields(conv)),
+        // What a session did is its content: only where content may show.
+        ...(scope.contentVisible(conv) ? await searchRowFacts(ctx, conv, canSeeTeam) : {}),
+        matches: hit.matches ?? [],
+        context: [] as Array<{ line: number; role: string; content: string }>,
+        ...(hit.title_match ? { title_match: true } : {}),
+        ...scopeLabels(scope, conv),
+      };
+      const row: typeof base & { missing_terms?: string[] } = base;
+      rowConvIds.set(row, conv._id.toString());
+      return row;
+    };
+    const rowConvIds = new WeakMap<object, string>();
+    const titleOf = (conv: Doc<"conversations">, firstMessages: Map<string, string>) =>
+      conv.title
+      || firstMessages.get(conv._id.toString())
+      || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
+      || "New Session";
+
     // titles_only: the reliable half of search — only the conversation-table
     // indexes (title/subtitle/idle_summary), never the messages full-text
     // index, which blows the read budget on common tokens (see the
@@ -4515,8 +4701,9 @@ export const searchForCLI = query({
           viewerId: authUserId,
           users: [user, ...teamUsers.filter((u) => u._id !== authUserId)],
           // Labels stay bounded to this project, as they are for --label.
-          isVisible: (conv) =>
-            isVisibleConv(conv) &&
+          // Operators read what a session did: content-visible sessions only.
+          contentVisible: (conv) =>
+            isVisibleConv(conv) && scope.contentVisible(conv) &&
             (operatorQuery.labels.length === 0 || !projectPath ||
               projectOverlaps(projectPath, conv.project_path) || projectOverlaps(projectPath, conv.git_root)),
           teamIds: effectiveTeamIds,
@@ -4527,52 +4714,39 @@ export const searchForCLI = query({
       );
       if ("error" in operatorRun) return { error: operatorRun.error };
       terms = operatorRun.terms;
-      operatorHits = operatorRun.hits;
+      operatorHits = await withoutSelf(operatorRun.hits, (hit) => hit.conv);
       operatorTruncated = operatorRun.truncated;
     }
 
     if (args.titles_only && !operatorHits) {
-      const hits = await fetchTitleFieldHits(ctx, terms);
+      const hits = await fetchTitleFieldHits(ctx, terms, (c) => searchableAs(scope, c));
       const tierOf = new Map([...hits.values()].map((h) => [h.conv._id.toString(), relevanceTier(h.relevance)]));
-      const visibleConvs = [...hits.values()].map(({ conv }) => conv)
-        .filter(isEligibleConv)
+      const visibleConvs = (await withoutSelf([...hits.values()].map(({ conv }) => conv).filter(isEligibleConv), (conv) => conv))
         .sort((a, b) => tierOf.get(b._id.toString())! - tierOf.get(a._id.toString())! || byRankThenRecency(a, b));
       const page = visibleConvs.slice(offset, offset + limit);
-      const firstMsgByConv = await resolveFirstMessageTitles(ctx, page);
-      const conversations = await Promise.all(page.map(async (conv) => {
-        const isOwnConv = conv.user_id.toString() === authUserId.toString();
-        const owner = teamUserMap.get(conv.user_id.toString()) || (isOwnConv ? user : null);
-        const title = conv.title
-          || firstMsgByConv.get(conv._id.toString())
-          || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
-          || "New Session";
-        return {
-          id: conv.short_id || conv._id.toString().slice(0, 7),
-          title,
-          project_path: conv.project_path || null,
-          updated_at: new Date(conv.updated_at).toISOString(),
-          message_count: conv.message_count || 0,
-          relevance: hits.get(conv._id.toString())?.relevance ?? 0,
-          coverage: 1,
-          origin: originMatch(conv, terms),
-          user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
-          ...(conv.recent_files && conv.recent_files.length > 0 ? { recent_files: conv.recent_files } : {}),
-          ...((conv as any).worktree_name &&
-          (conv as any).worktree_status !== "merged" &&
-          (conv as any).worktree_status !== "archived"
-            ? { worktree: (conv as any).worktree_name }
-            : {}),
-          ...(await classifier.rowFields(conv)),
-          matches: [],
-          context: [],
-          title_match: true,
-        };
-      }));
+      const firstMsgByConv = await resolveFirstMessageTitles(ctx, page.filter(scope.contentVisible));
+      const conversations = await Promise.all(page.map((conv) => rowOf(conv, titleOf(conv, firstMsgByConv), {
+        relevance: hits.get(conv._id.toString())?.relevance ?? 0,
+        coverage: hits.get(conv._id.toString())?.coverage ?? 1,
+        title_match: true,
+      })));
+      // Titles match on half a long query's words too. Messages were not
+      // searched here, so no word is named as held nowhere.
+      const partial = partialCoverage(visibleConvs.map((conv) => ({ missing: hits.get(conv._id.toString())?.missing ?? [] })), terms);
+      if (partial) {
+        partial.missing_everywhere = [];
+        for (const row of conversations) {
+          const missing = hits.get(rowConvIds.get(row) ?? "")?.missing;
+          if (missing?.length) row.missing_terms = missing;
+        }
+      }
       return {
         total_matches: 0,
         conversations,
         search_scope: projectPath || "global",
         titles_only: true,
+        ...(partial ? { partial } : {}),
+        ...(await selfReport()),
       };
     }
 
@@ -4586,47 +4760,50 @@ export const searchForCLI = query({
     // Best-coverage selection: full-coverage conversations first, then partial
     // matches for longer queries, so a natural-language task description degrades
     // to best-match instead of no-match. Quoted phrases stay required.
-    const rankedMatches = rankConversationsByCoverage(groupMessagesByConversation(searchResults, terms, userOnly), terms);
+    const messageGroups = groupMessagesByConversation(searchResults, terms, userOnly);
+    const rankedMatches = rankConversationsByCoverage(messageGroups, terms);
 
-    const results: Array<{
-      id: string;
-      title: string;
-      project_path: string | null;
-      updated_at: string;
-      message_count: number;
-      relevance: number;
-      coverage: number;
-      // What the session began as and was called before, when that answers
-      // the query and the current title may not (searchCore.originMatch).
-      origin?: { started_as?: string; earlier_titles?: string[] };
-      // Worker sessions that matched and are folded into this row.
-      workers?: number;
-      user?: { name: string | null; email: string | null };
-      recent_files?: string[];
-      worktree?: string;
-      machine?: string;
-      matches: Array<{
-        line: number;
-        role: string;
-        content: string;
-        timestamp: string;
-      }>;
-      context: Array<{
-        line: number;
-        role: string;
-        content: string;
-      }>;
-      title_match?: boolean;
-      is_live?: boolean;
-      agent_status?: string;
-      work_state?: WorkState;
-      is_killed?: boolean;
-      is_completed?: boolean;
-      recency_rank?: RecencyRank;
-    }> = [];
+    // Of the words no result holds, the ones nothing searched holds either: a
+    // session below the coverage bar can hold one in its messages, any session
+    // in its title or summaries (which reach all time). A word stays named
+    // only when every session found holding it is out of scope; past a
+    // bounded check it is assumed held, so the claim is never made on a guess.
+    const WORD_HOLDER_CHECKS = 25;
+    const WORDS_TITLE_CHECKED = 3;
+    const wordsNoVisibleSessionHolds = async (words: string[]): Promise<string[]> => {
+      const index = new Map(terms.words.map((w, i) => [w, i]));
+      const holders = new Map<string, string[]>(words.map((w) => [w, []]));
+      for (const [convId, messages] of messageGroups) {
+        const evidence = emptyEvidence(terms);
+        for (const m of messages) addEvidence(evidence, m.content, terms);
+        for (const w of words) if (evidence.best[index.get(w)!] > 0) holders.get(w)!.push(convId);
+      }
+      const visible = new Map<string, boolean>();
+      const isVisibleHolder = async (convId: string) => {
+        if (!visible.has(convId)) {
+          const id = ctx.db.normalizeId("conversations", convId);
+          const conv = id ? await ctx.db.get(id) : null;
+          visible.set(convId, !!conv && isEligibleConv(conv) && !(inSelfFamily && (await inSelfFamily(conv))));
+        }
+        return visible.get(convId)!;
+      };
+      const missing: string[] = [];
+      for (const w of words) {
+        const ids = holders.get(w)!;
+        if (ids.length > WORD_HOLDER_CHECKS) continue;
+        let held = false;
+        for (const id of ids) if ((held = await isVisibleHolder(id))) break;
+        if (held) continue;
+        if (missing.length >= WORDS_TITLE_CHECKED) continue;
+        for (const { conv } of (await fetchTitleFieldHits(ctx, parseSearchTerms(w))).values()) {
+          if ((held = await isVisibleHolder(conv._id.toString()))) break;
+        }
+        if (!held) missing.push(w);
+      }
+      return missing;
+    };
 
-    // Device labels resolved once per (runner, device) pair across the result set.
-    const searchDeviceLabels = new Map<string, string | undefined>();
+    const results: Array<Awaited<ReturnType<typeof rowOf>>> = [];
 
     let totalMatches = 0;
 
@@ -4640,20 +4817,33 @@ export const searchForCLI = query({
     const rankedEligible = lci
       ? rankedMatches.filter((r) => lci.has(r.convId))
       : rankedMatches;
-    const candidates = rankedEligible.slice(0, Math.max(50, offset + limit * 3));
-    const hydratedConvs = await Promise.all(
-      candidates.map(({ messages }) => ctx.db.get(messages[0].conversation_id))
-    );
+    // The caller's own family leaves inside the bound and the bound grows by
+    // what it took, so a session whose workers hold the top candidates still
+    // gets a page of other sessions; at most three bounds' worth of reads.
+    const bound = Math.max(50, offset + limit * 3);
     const matched: SearchCandidate[] = [];
-    candidates.forEach((r, i) => {
-      const conv = hydratedConvs[i];
-      if (!conv) return;
-      if (!isEligibleConv(conv)) return;
-      matched.push(searchCandidate(conv, r, terms));
-    });
+    let taken = 0;
+    let want = bound;
+    while (taken < want && taken < rankedEligible.length && taken < bound * 3) {
+      const chunk = rankedEligible.slice(taken, Math.min(want, bound * 3));
+      taken += chunk.length;
+      const hydratedConvs = await Promise.all(chunk.map(({ messages }) => ctx.db.get(messages[0].conversation_id)));
+      const round: SearchCandidate[] = [];
+      chunk.forEach((r, i) => {
+        const conv = hydratedConvs[i];
+        if (!conv) return;
+        // A message match is the session's content: only where it may show.
+        if (!isEligibleConv(conv) || !scope.contentVisible(conv)) return;
+        round.push(searchCandidate(conv, r, terms));
+      });
+      const kept = await withoutSelf(round, (c) => c.conv);
+      matched.push(...kept);
+      want += round.length - kept.length;
+    }
     // Workers fold into the session that ran them, then relevance tier, then
     // recency rank (live and recent above long-quiet above killed), then the
-    // better answer, then the newer session.
+    // better answer, then the newer session. The caller's family is already
+    // out, so its words never pull its parent onto the page either.
     const eligible = await foldWorkersUnderParents(ctx, matched, terms, isEligibleConv);
     eligible.sort((a, b) =>
       relevanceTier(b.relevance) - relevanceTier(a.relevance) ||
@@ -4662,23 +4852,17 @@ export const searchForCLI = query({
       b.conv.updated_at - a.conv.updated_at);
     // Operator hits arrive ranked: coverage, then the newest matching change.
     if (operatorHits) eligible.push(...operatorHits.map((hit) => ({ ...hit, workers: 0 })));
-
     const page = eligible.slice(offset, offset + limit);
 
-    const pageFirstMessages = await resolveFirstMessageTitles(ctx, page.map(({ conv }) => conv));
+    const pageFirstMessages = await resolveFirstMessageTitles(ctx, page.map(({ conv }) => conv).filter(scope.contentVisible));
 
     for (const candidate of page) {
       const { conv, coverage, relevance, workers } = candidate;
 
-      const title = conv.title
-        || pageFirstMessages.get(conv._id.toString())
-        || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
-        || "New Session";
-
       // Line numbers are the match's rank, not its place in the transcript:
       // exact ones would need every message, which hits read limits. The
       // message id opens the match in place (`cast read <id>#<message_id>`).
-      const formattedMatches = searchSnippets(candidate, terms).map(({ message: m, content }, idx) => ({
+      const formattedMatches = searchSnippets({ ...candidate, messages: scope.contentVisible(conv) ? candidate.messages : [] }, terms).map(({ message: m, content }, idx) => ({
         line: idx + 1,
         message_id: m._id,
         role: m.role,
@@ -4689,47 +4873,12 @@ export const searchForCLI = query({
       }));
       totalMatches += formattedMatches.length;
 
-      const owner = teamUserMap.get(conv.user_id.toString()) || (conv.user_id.toString() === authUserId.toString() ? user : null);
-      const isOwnConv = conv.user_id.toString() === authUserId.toString();
-
-      // Location signals, so a search hit says WHERE the session works before
-      // anyone attributes edits to it (same fields as the feed card).
-      let machineLabel: string | undefined;
-      const devId = (conv as any).owner_device_id as string | undefined;
-      if (devId) {
-        const devKey = `${conv.user_id.toString()}:${devId}`;
-        if (!searchDeviceLabels.has(devKey)) {
-          const device = await ctx.db
-            .query("devices")
-            .withIndex("by_user_device", (q: any) => q.eq("user_id", conv.user_id).eq("device_id", devId))
-            .first();
-          searchDeviceLabels.set(devKey, device?.label);
-        }
-        machineLabel = searchDeviceLabels.get(devKey) ?? undefined;
-      }
-
-      results.push({
-        id: conv.short_id || conv._id.toString().slice(0, 7),
-        title,
-        project_path: conv.project_path || null,
-        updated_at: new Date(conv.updated_at).toISOString(),
-        message_count: conv.message_count || 0,
+      results.push(await rowOf(conv, titleOf(conv, pageFirstMessages), {
         relevance,
         coverage,
-        origin: originMatch(conv, terms),
-        ...(workers ? { workers } : {}),
-        user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
-        ...(conv.recent_files && conv.recent_files.length > 0 ? { recent_files: conv.recent_files } : {}),
-        ...((conv as any).worktree_name &&
-        (conv as any).worktree_status !== "merged" &&
-        (conv as any).worktree_status !== "archived"
-          ? { worktree: (conv as any).worktree_name }
-          : {}),
-        ...(machineLabel ? { machine: machineLabel } : {}),
-        ...(await classifier.rowFields(conv)),
+        workers,
         matches: formattedMatches,
-        context: [],
-      });
+      }));
     }
 
     // A dated window usually points at history the content mirror no longer
@@ -4738,49 +4887,46 @@ export const searchForCLI = query({
     // the conversations table and reach all time. Title hits rank below every
     // content hit and only fill seats the content page left open.
     let windowTitleRows: typeof results = [];
+    const windowTitleMissing = new Map<string, string[]>();
     const hasTimeWindow = !operatorHits && (args.start_time !== undefined || args.end_time !== undefined);
     if (hasTimeWindow) {
-      const titleHits = await fetchTitleFieldHits(ctx, terms);
+      const titleHits = await fetchTitleFieldHits(ctx, terms, (c) => searchableAs(scope, c));
       const contentIds = new Set(eligible.map(({ conv }) => conv._id.toString()));
-      const titleConvs = [...titleHits.values()].map(({ conv }) => conv)
+      const titleConvs = (await withoutSelf([...titleHits.values()].map(({ conv }) => conv)
         .filter((c) => !contentIds.has(c._id.toString()))
-        .filter(isEligibleConv)
+        .filter(isEligibleConv), (conv) => conv))
         .sort(byRankThenRecency);
       // Content pages consume the offset first; title rows page through once
       // the content matches are exhausted.
       const titleOffset = Math.max(0, offset - eligible.length);
       const fill = Math.max(0, limit - page.length);
       const titlePage = titleConvs.slice(titleOffset, titleOffset + fill);
-      const firstMsgByConv = await resolveFirstMessageTitles(ctx, titlePage);
-      windowTitleRows = await Promise.all(titlePage.map(async (conv) => {
-        const isOwnConv = conv.user_id.toString() === authUserId.toString();
-        const owner = teamUserMap.get(conv.user_id.toString()) || (isOwnConv ? user : null);
-        const title = conv.title
-          || firstMsgByConv.get(conv._id.toString())
-          || (conv.slug ? formatSlugAsTitle(conv.slug) : null)
-          || "New Session";
-        return {
-          id: conv.short_id || conv._id.toString().slice(0, 7),
-          title,
-          project_path: conv.project_path || null,
-          updated_at: new Date(conv.updated_at).toISOString(),
-          message_count: conv.message_count || 0,
-          relevance: 0,
-          coverage: 0,
-          origin: originMatch(conv, terms),
-          user: !isOwnConv && owner ? { name: owner.name || null, email: owner.email || null } : undefined,
-          ...(conv.recent_files && conv.recent_files.length > 0 ? { recent_files: conv.recent_files } : {}),
-          ...((conv as any).worktree_name &&
-          (conv as any).worktree_status !== "merged" &&
-          (conv as any).worktree_status !== "archived"
-            ? { worktree: (conv as any).worktree_name }
-            : {}),
-          ...(await classifier.rowFields(conv)),
-          matches: [],
-          context: [],
-          title_match: true,
-        };
-      }));
+      const firstMsgByConv = await resolveFirstMessageTitles(ctx, titlePage.filter(scope.contentVisible));
+      windowTitleRows = await Promise.all(titlePage.map((conv) =>
+        rowOf(conv, titleOf(conv, firstMsgByConv), { relevance: 0, coverage: 0, title_match: true })));
+      for (const conv of titleConvs) {
+        windowTitleMissing.set(conv._id.toString(), missingWords(evidenceWithFields({ evidence: emptyEvidence(terms) }, searchFieldsOf(conv), terms), terms));
+      }
+    }
+
+    // Coverage lets a long query match on half its words. When no result holds
+    // them all, the reply says so before the rows, names the words nothing
+    // holds, and each row names what it lacks.
+    const missingById = new Map<string, string[]>([
+      ...eligible.map((c) => [c.conv._id.toString(), c.missing] as [string, string[]]),
+      ...windowTitleMissing,
+    ]);
+    const partial = partialCoverage([...missingById.values()].map((missing) => ({ missing })), terms);
+    if (partial && partial.missing_everywhere.length > 0) {
+      // Operator hits were ranked inside searchByOperators, whose rejected
+      // sessions are not at hand here: name no word there rather than guess.
+      partial.missing_everywhere = operatorHits ? [] : await wordsNoVisibleSessionHolds(partial.missing_everywhere);
+    }
+    if (partial) {
+      for (const row of [...results, ...windowTitleRows]) {
+        const missing = missingById.get(rowConvIds.get(row) ?? "");
+        if (missing?.length) row.missing_terms = missing;
+      }
     }
 
     const windowPredatesContent =
@@ -4793,6 +4939,8 @@ export const searchForCLI = query({
       // requested window, so title hits are the reliable signal there.
       ...(windowPredatesContent ? { content_window_days: CONTENT_WINDOW_DAYS } : {}),
       ...(operatorTruncated.length ? { truncated: operatorTruncated } : {}),
+      ...(partial ? { partial } : {}),
+      ...(await selfReport()),
     };
   },
 });
@@ -6652,6 +6800,9 @@ export const getMessageFeed = query({
     filter: v.union(v.literal("my"), v.literal("team")),
     limit: v.optional(v.number()),
     cursor: v.optional(v.number()),
+    // The workspace the viewer is looking at; unset reads the active-team
+    // pointer. "team" shows that one team, never every team the viewer is in.
+    activeTeamId: v.optional(v.id("teams")),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -6685,6 +6836,20 @@ export const getMessageFeed = query({
       { conv: ConvDoc; isOwn: boolean; authorName: string }
     >();
 
+    // "team" reads ONE workspace: the active team (membership-proven), else
+    // the viewer's personal workspace. The viewer's own sessions follow their
+    // routing (team_id) into the team view, the same split the activity feed
+    // makes; a teammate's must pass that team's visibility filter. Every row
+    // carries the workspace its conversation belongs to, so a client holding
+    // rows from a workspace it viewed earlier cannot show them in this one.
+    const scopeTeamId =
+      args.filter === "team"
+        ? await resolveInboxTeamScope(ctx, userId, args.activeTeamId)
+        : null;
+    const inScope = (conv: ConvDoc) =>
+      args.filter !== "team" ||
+      (scopeTeamId ? String(conv.team_id ?? "") === String(scopeTeamId) : !conv.team_id);
+
     const ownAuthor = user.name || user.email?.split("@")[0] || "Unknown";
     const ownConvs = await ctx.db
       .query("conversations")
@@ -6692,40 +6857,29 @@ export const getMessageFeed = query({
       .order("desc")
       .take(CONV_CAP);
     for (const conv of ownConvs) {
+      if (!inScope(conv)) continue;
       candidates.set(conv._id.toString(), { conv, isOwn: true, authorName: ownAuthor });
     }
 
-    if (args.filter === "team") {
-      const memberships = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_id", (q) => q.eq("user_id", userId))
-        .collect();
-      const fetchedMembers = new Set<string>([userId.toString()]);
-      for (const membership of memberships) {
-        const ff = await createTeamFeedFilter(ctx, membership.team_id);
-        for (const member of ff.memberships) {
-          const memberId = member.user_id.toString();
-          if (fetchedMembers.has(memberId)) continue;
-          if ((member.visibility || "summary") === "hidden") continue;
-          fetchedMembers.add(memberId);
-
-          const memberUser = await ctx.db.get(member.user_id);
-          const memberAuthor =
-            memberUser?.name || memberUser?.email?.split("@")[0] || "Unknown";
-          const memberConvs = await ctx.db
-            .query("conversations")
-            .withIndex("by_user_updated", (q) => q.eq("user_id", member.user_id))
-            .order("desc")
-            .take(TEAM_MEMBER_CONV_CAP);
-          for (const conv of memberConvs) {
-            if (candidates.has(conv._id.toString())) continue;
-            if (!ff.isVisible(conv as any)) continue;
-            candidates.set(conv._id.toString(), {
-              conv,
-              isOwn: false,
-              authorName: memberAuthor,
-            });
-          }
+    if (scopeTeamId) {
+      const ff = await createTeamFeedFilter(ctx, scopeTeamId);
+      for (const member of ff.memberships) {
+        if (String(member.user_id) === String(userId)) continue;
+        if (currentMembershipVisibility(member) === "hidden") continue;
+        const memberUser = await ctx.db.get(member.user_id);
+        const memberAuthor =
+          memberUser?.name || memberUser?.email?.split("@")[0] || "Unknown";
+        const memberConvs = await ctx.db
+          .query("conversations")
+          .withIndex("by_team_user_updated", (q) =>
+            q.eq("team_id", scopeTeamId).eq("user_id", member.user_id)
+          )
+          .order("desc")
+          .take(TEAM_MEMBER_CONV_CAP);
+        for (const conv of memberConvs) {
+          if (candidates.has(conv._id.toString())) continue;
+          if (!ff.contentVisible(conv as any)) continue; // the feed is prompt text: content, not summary
+          candidates.set(conv._id.toString(), { conv, isOwn: false, authorName: memberAuthor });
         }
       }
     }
@@ -6757,7 +6911,7 @@ export const getMessageFeed = query({
       }
     );
 
-    return await mergeUserMessageFeed({
+    const page = await mergeUserMessageFeed({
       candidates: feedCandidates,
       cursor,
       limit,
@@ -6785,6 +6939,13 @@ export const getMessageFeed = query({
         return first[0]?._id ?? null;
       },
     });
+    return {
+      ...page,
+      messages: page.messages.map((m) => {
+        const conv = candidates.get(String(m.conversation_id))?.conv;
+        return { ...m, workspace: conv?.team_id ? `team:${conv.team_id}` : `user:${userId}` };
+      }),
+    };
   },
 });
 
@@ -6830,6 +6991,10 @@ export const feedForCLI = query({
     live_only: v.optional(v.boolean()),
     state: v.optional(v.string()),
     label: v.optional(v.string()),
+    // `cast feed -g`: every team the caller belongs to, rows labelled by team.
+    // Unset, the feed reads one workspace: the named or mapped team, else the
+    // active team, else personal.
+    all_teams: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -6848,40 +7013,14 @@ export const feedForCLI = query({
     const endTime = args.end_time ?? Date.now();
     const query = args.query?.trim();
 
-    const userMemberships = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
-      .collect();
-    const userTeamIds = userMemberships.map(m => m.team_id);
-    if (args.team_id && !userTeamIds.some((id) => String(id) === String(args.team_id))) {
-      return { error: "Unauthorized team" };
-    }
-
-    let resolvedTeamId: Id<"teams"> | undefined;
-    if (args.team_id) {
-      resolvedTeamId = args.team_id;
-    } else if (args.project_path) {
-      const mappings = await ctx.db
-        .query("directory_team_mappings")
-        .withIndex("by_user_id", (q) => q.eq("user_id", authUserId))
-        .collect();
-      resolvedTeamId = matchDirectoryMapping(mappings, args.project_path)?.team_id;
-    }
-    const effectiveTeamIds = resolvedTeamId ? [resolvedTeamId] : userTeamIds;
-
-    type UserDoc = NonNullable<Awaited<ReturnType<typeof ctx.db.get<"users">>>>;
-    const allTeamUsers: UserDoc[] = [];
-    const cliFeedFilters = new Map<string, Awaited<ReturnType<typeof createTeamFeedFilter>>>();
-    for (const teamId of effectiveTeamIds) {
-      const ff = await createTeamFeedFilter(ctx, teamId);
-      cliFeedFilters.set(teamId.toString(), ff);
-      const memberUsers = await Promise.all(
-        ff.memberships.map(m => ctx.db.get(m.user_id))
-      );
-      allTeamUsers.push(...memberUsers.filter((u): u is UserDoc => u !== null));
-    }
-    const teamUsers = [...new Map(allTeamUsers.map(u => [u._id.toString(), u])).values()];
-    const teamUserMap = new Map(teamUsers.map(u => [u._id.toString(), u]));
+    const scope = await resolveReadScope(ctx, authUserId, user, {
+      teamId: args.team_id,
+      projectPath: args.project_path,
+      allTeams: args.all_teams,
+    });
+    if ("error" in scope) return { error: scope.error };
+    const { teamUsers, teamIds: effectiveTeamIds, ownTeamId: resolvedTeamId } = scope;
+    const teamUserMap = scope.userById;
     const effectiveTeamIdSet = new Set(effectiveTeamIds.map(id => id.toString()));
 
     let filterUserId: string | null = null;
@@ -6959,10 +7098,9 @@ export const feedForCLI = query({
       });
 
       const teamUserIdSet = new Set(teamUsers.filter(u => u._id.toString() !== authUserId.toString()).map(u => u._id.toString()));
+      // A message match is content: only sessions whose content may show.
       queryMatchedTeamConversations = validConvs.filter(c =>
-        teamUserIdSet.has(c.user_id.toString()) &&
-        c.team_id != null && effectiveTeamIdSet.has(c.team_id.toString()) &&
-        (cliFeedFilters.get(c.team_id!.toString())?.isVisible(c) ?? false)
+        teamUserIdSet.has(c.user_id.toString()) && scope.contentVisible(c)
       );
     }
 
@@ -7004,9 +7142,7 @@ export const feedForCLI = query({
       );
 
       const visibleMemberIds = new Set(visibleTeamMembers.map(u => u._id.toString()));
-      const isVisibleTeamConv = (c: typeof ownConversations[number]) =>
-        c.team_id != null && effectiveTeamIdSet.has(c.team_id.toString()) &&
-        (cliFeedFilters.get(c.team_id!.toString())?.isVisible(c) ?? false);
+      const isVisibleTeamConv = (c: typeof ownConversations[number]) => scope.isVisible(c);
 
       if (labelConvIds) {
         teamConversations = labeledConvs.filter(c =>
@@ -7168,6 +7304,8 @@ export const feedForCLI = query({
       git_branch?: string;
       machine?: string;
       last_activity_at?: string;
+      workspace?: string;
+      team?: string;
     }> = [];
 
     // Machine label per unique (runner, device) pair, so a card names the
@@ -7186,13 +7324,18 @@ export const feedForCLI = query({
       if (device?.label) deviceLabels.set(key, device.label);
     }
 
-    // Only load messages for conversations in the final result set
+    // Only load messages for conversations in the final result set, and only
+    // for sessions whose content the caller may read: a teammate's session
+    // shared as a summary shows its title and summary, never its messages.
     for (const conv of allConversations) {
-      const messages = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-        .order("asc")
-        .take(6);
+      const readsContent = scope.contentVisible(conv);
+      const messages = readsContent
+        ? await ctx.db
+            .query("messages")
+            .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+            .order("asc")
+            .take(6)
+        : [];
 
       let firstUserMessage = "";
       for (const msg of messages) {
@@ -7255,11 +7398,13 @@ export const feedForCLI = query({
       const headPreview = preview.slice(0, 2);
       const headMaxLine = headPreview.length > 0 ? headPreview[headPreview.length - 1].line : 0;
       const totalMessages = conv.message_count || 0;
-      const recentMsgs = await ctx.db
-        .query("messages")
-        .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
-        .order("desc")
-        .take(12);
+      const recentMsgs = readsContent
+        ? await ctx.db
+            .query("messages")
+            .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))
+            .order("desc")
+            .take(12)
+        : [];
       const lastActivityAt = recentMsgs[0]?.timestamp;
       const tail: Array<{ line: number; role: string; content: string }> = [];
       for (let i = 0; i < recentMsgs.length && tail.length < 2; i++) {
@@ -7314,7 +7459,7 @@ export const feedForCLI = query({
         preview: tail.length > 0 ? headPreview : preview.slice(0, 4),
         ...(tail.length > 0 ? { tail } : {}),
         ...(conv.idle_summary ? { idle_summary: conv.idle_summary } : {}),
-        ...(conv.recent_files && conv.recent_files.length > 0 ? { recent_files: conv.recent_files } : {}),
+        ...(readsContent && conv.recent_files && conv.recent_files.length > 0 ? { recent_files: conv.recent_files } : {}),
         ...((conv as any).worktree_name &&
         (conv as any).worktree_status !== "merged" &&
         (conv as any).worktree_status !== "archived"
@@ -7325,6 +7470,7 @@ export const feedForCLI = query({
           ? { machine: deviceLabels.get(`${conv.user_id.toString()}:${(conv as any).owner_device_id}`) }
           : {}),
         ...(lastActivityAt ? { last_activity_at: new Date(lastActivityAt).toISOString() } : {}),
+        ...scopeLabels(scope, conv),
       });
     }
 
@@ -7490,7 +7636,7 @@ export async function collectTeammateConversationsSince(
   const feedFilter = await createTeamFeedFilter(ctx, teamId);
   const visibleMembers = feedFilter.memberships.filter((m) =>
     m.user_id.toString() !== viewerId.toString() &&
-    (m.visibility || "summary") !== "hidden"
+    currentMembershipVisibility(m) !== "hidden"
   );
   const take = Math.max(1, perMember(visibleMembers.length));
   const perMemberRows = await Promise.all(
@@ -8271,6 +8417,8 @@ async function enrichInboxSessionRow(
     }
   }
 
+  if (conv.team_summary_only) lastUserMessage = null;
+
   const pinned = !!conv.inbox_pinned_at;
   const dismissed = !!conv.inbox_dismissed_at;
   const stashed = !!conv.inbox_stashed_at;
@@ -8421,6 +8569,20 @@ async function enrichInboxSessionRow(
     }
   }
 
+  // An adopted flow station (shared isAdoptedChild) stands alone in the inbox,
+  // so its row names the flow it works for: its parent is the run's log, and
+  // the run carries the flow's name. Two reads, adopted rows only.
+  let flow_name: string | null = null;
+  let flow_run_id: string | null = null;
+  if (!skip?.refs && isAdoptedChild(conv) && conv.parent_conversation_id) {
+    const log = await getDoc(conv.parent_conversation_id);
+    if (log && isRunLog(log)) {
+      const run = await getDoc(log.workflow_run_id);
+      flow_run_id = String(log.workflow_run_id);
+      flow_name = run?.workflow_name ?? null;
+    }
+  }
+
   // Anchor identity: a personal anchor's bot isn't in the team roster, so the
   // client can't resolve it — stamp the bot's name/avatar here (self-guarded:
   // returns null for ordinary rows) so the sidebar shows the bot chip.
@@ -8504,6 +8666,7 @@ async function enrichInboxSessionRow(
     // The retired marker: classifyWorkState uses it to keep a killed row out of
     // the Working bucket no matter what stale flags it still carries.
     inbox_killed_at: conv.inbox_killed_at ?? null,
+    inbox_adopted_at: conv.inbox_adopted_at ?? null,
     // The daemon's own status: every reader derives what it means at its own
     // clock (trustedStatusAt), since a verdict does not replay (ct-56054).
     agent_status: maps.agentStatusMap.get(conv._id.toString()) ?? null,
@@ -8519,7 +8682,7 @@ async function enrichInboxSessionRow(
     last_user_message: lastUserMessage,
     // Newest image in the conversation (see schema) — the inbox row thumbnail.
     // Presence doubles as "this session has images".
-    image_preview_url: conv.image_preview_url ?? null,
+    image_preview_url: conv.team_summary_only ? null : (conv.image_preview_url ?? null),
     open_comment_threads,
     // Who spoke last in the open threads and what they said — the chip's
     // "Alice: typo in step 2" without any per-row query. author_id is a users
@@ -8560,6 +8723,8 @@ async function enrichInboxSessionRow(
     is_workflow_primary: conv.is_workflow_primary || false,
     workflow_run_status,
     workflow_run_name,
+    flow_name,
+    flow_run_id,
     workflow_run_agents_done,
     workflow_run_agents_total,
     workflow_run_activity,
@@ -8615,6 +8780,10 @@ async function enrichInboxSessionRow(
     // null when it runs on the machine's login. The park card names the
     // account that actually hit the limit from it.
     cc_account: conv.cc_account ?? null,
+    // The Codex account the process is signed in as. Null when the session
+    // never recorded one: that is not the machine's current login, which a
+    // switch can change out from under a still-running process.
+    codex_account: conv.codex_account ?? null,
     // Second-party owner (the member responsible for steering; see schema).
     // author/owner display names are stamped by computeInboxSessions, which
     // caches the user docs across rows.
@@ -8710,6 +8879,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     inbox_snoozed_until: child.inbox_snoozed_until ?? null,
     inbox_stash_hidden: child.inbox_stash_hidden ?? null,
     inbox_killed_at: child.inbox_killed_at ?? null,
+    inbox_adopted_at: child.inbox_adopted_at ?? null,
     // The child's own rest verdict, carried like every other stamp above (the
     // is_deferred/is_pinned twins over it are hardcoded because a child never
     // holds those). Without these three the verdict is write-only on a
@@ -8742,6 +8912,8 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     agent_team_name: child.agent_team_name ?? null,
     agent_name: child.agent_name ?? null,
     owner_device_id: child.owner_device_id ?? null,
+    cc_account: child.cc_account ?? null,
+    codex_account: child.codex_account ?? null,
     cloud_placement: child.cloud_placement ?? null,
     cloud_workspace: child.cloud_workspace ?? null,
     cloud_seed: child.cloud_seed ?? null, local_mirror: child.local_mirror ?? null,
@@ -8928,6 +9100,21 @@ export async function scanInboxConversations(
       return rows.slice(0, INBOX_PINNED_CAP);
     });
 
+  // Nested rows the person adopted (talked to): the one window that admits a
+  // nested row as a member (shared isAdoptedChild), newest adoption first,
+  // inside the same 30-day horizon as the hide windows.
+  const adoptedConversationsQ = noWindows ? Promise.resolve([] as any[]) : ctx.db
+    .query("conversations")
+    .withIndex("by_user_adopted", (q: any) =>
+      q.eq("user_id", userId).gte("inbox_adopted_at", dismissedCutoff)
+    )
+    .order("desc")
+    .take(INBOX_WINDOW_CAPS.adopted + 1)
+    .then((rows: any[]) => {
+      if (rows.length > INBOX_WINDOW_CAPS.adopted) truncated.add("adopted");
+      return rows.slice(0, INBOX_WINDOW_CAPS.adopted);
+    });
+
   // Killed rows are excluded at the index for the same reason: a kill stamps
   // inbox_dismissed_at alongside inbox_killed_at (applyHideTransition), so the
   // dismissed window was mostly retired rows the filter throws away. A pinned
@@ -8999,8 +9186,8 @@ export async function scanInboxConversations(
       ))
       .take(INBOX_WINDOW_CAP)
     : Promise.resolve([]);
-  const [recentConversations, pinnedConversations, dismissedConversations, stashedConversations, snoozedConversations, ownerRows, recentSubagents] =
-    await Promise.all([recentConversationsQ, pinnedConversationsQ, dismissedConversationsQ, stashedConversationsQ, snoozedConversationsQ, ownerRowsQ, recentSubagentsQ]);
+  const [recentConversations, pinnedConversations, dismissedConversations, stashedConversations, snoozedConversations, ownerRows, recentSubagents, adoptedConversations] =
+    await Promise.all([recentConversationsQ, pinnedConversationsQ, dismissedConversationsQ, stashedConversationsQ, snoozedConversationsQ, ownerRowsQ, recentSubagentsQ, adoptedConversationsQ]);
   const ownedByMeIds = new Set<string>(
     ownerRows.map((r: any) => r.conversation_id.toString())
   );
@@ -9037,6 +9224,7 @@ export async function scanInboxConversations(
   for (const c of dismissedConversations) byId.set(c._id.toString(), c);
   for (const c of stashedConversations) byId.set(c._id.toString(), c);
   for (const c of snoozedConversations) byId.set(c._id.toString(), c);
+  for (const c of adoptedConversations) byId.set(c._id.toString(), c);
 
   // Hydrate only the owned conversations the window scans above didn't already
   // fetch (an owned session of my OWN is usually in the recent window — the get
@@ -9118,7 +9306,8 @@ export async function scanInboxConversations(
         if (c.is_subagent || !shouldShowInInbox(c)) continue; // a pinned killed row, a child
         if (viewerHidden.has(c._id.toString())) continue; // the caller's triage of it
         if (!teamFilter.isVisible(c)) continue;
-        byId.set(c._id.toString(), c);
+        // Shared as a summary: the row lists, its prompt text and images do not.
+        byId.set(c._id.toString(), teamFilter.contentVisible(c) ? c : { ...c, team_summary_only: true });
       }
     }
   }
@@ -9235,7 +9424,9 @@ export async function scanInboxConversations(
 // inside the session window or filed inside the dismissed window, never a
 // killed row unless pinned.
 function pooledByWindows(c: any, userId: Id<"users">, now: number): boolean {
-  if (c.is_subagent || c.user_id?.toString() !== userId.toString()) return false;
+  if (c.user_id?.toString() !== userId.toString()) return false;
+  if (isAdoptedChild(c)) return c.inbox_adopted_at >= now - INBOX_DISMISSED_WINDOW_MS;
+  if (c.is_subagent) return false;
   if (c.status !== "active" && c.status !== "completed") return false;
   if (c.inbox_pinned_at) return true;
   if (c.inbox_killed_at) return false;
@@ -9431,6 +9622,9 @@ export async function computeInboxSessions(
       row.below_fold = false;
     };
   }
+  // An adopted child is a top-level row of its own (shared isAdoptedChild),
+  // never emitted a second time as a child row.
+  const topLevelIds = new Set(enrichedRows.map((r) => r.conv._id.toString()));
   for (const r of enrichedRows) {
     if (r.hidden) {
       hiddenCount++;
@@ -9442,6 +9636,7 @@ export async function computeInboxSessions(
     // exposing them now would make active buckets pick them up as orphans.
     if (r.dismissed || r.stashed) continue;
     for (const child of r.subagentChildren) {
+      if (topLevelIds.has(child._id.toString())) continue;
       const childRow = await buildSubagentChildRow(child, maps, now, r.conv._id, (id) => ctx.db.get(id));
       await stampInboxViewerFields(childRow, child, userId, await scan.ownerRowFor(child), getDoc);
       stampChildRow?.(child, childRow);
@@ -9455,7 +9650,7 @@ export async function computeInboxSessions(
   const namedIds = new Set(opts.extraConvIds ?? []);
   for (const child of conversations) {
     const id = child._id.toString();
-    if (!namedIds.has(id) || childRowIds.has(id) || !child.parent_conversation_id) continue;
+    if (!namedIds.has(id) || childRowIds.has(id) || topLevelIds.has(id) || !child.parent_conversation_id) continue;
     if (!(child.is_subagent || !child.parent_message_uuid)) continue;
     const childRow = await buildSubagentChildRow(child, maps, now, child.parent_conversation_id, (docId) => ctx.db.get(docId));
     await stampInboxViewerFields(childRow, child, userId, await scan.ownerRowFor(child), getDoc);

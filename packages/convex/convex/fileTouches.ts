@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
 import { cliSessionClassifier } from "./cliSessionClassifier";
 import { resolveConversationRef } from "./conversations";
+import { resolveSearchSelf, selfFamilyTest } from "./lib/searchSelf";
 import { Doc, Id } from "./_generated/dataModel";
 
 export const recordTouch = internalMutation({
@@ -80,6 +81,11 @@ export const findSimilar = mutation({
     file_path: v.optional(v.string()),
     session_id: v.optional(v.string()),
     limit: v.optional(v.number()),
+    // The calling session (lib/searchSelf): it and its workers are left out
+    // of file matches unless include_self is set, as in searchForCLI.
+    self_conversation_id: v.optional(v.string()),
+    self_session_id: v.optional(v.string()),
+    include_self: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const result = await verifyApiToken(ctx, args.api_token);
@@ -99,15 +105,28 @@ export const findSimilar = mutation({
         .take(100);
 
       const conversationIds = [...new Set(touches.map((t) => t.conversation_id))];
-      const conversations = await Promise.all(
-        conversationIds.slice(0, limit).map((id) => ctx.db.get(id))
-      );
+      const selfId = args.include_self
+        ? null
+        : await resolveSearchSelf(ctx, result.userId, { conversation_id: args.self_conversation_id, session_id: args.self_session_id });
+      const inSelfFamily = selfId ? selfFamilyTest(ctx, selfId) : null;
+      const conversations: Doc<"conversations">[] = [];
+      let excludedSelf = 0;
+      for (const id of conversationIds) {
+        if (conversations.length >= limit) break;
+        const conv = await ctx.db.get(id);
+        if (!conv) continue;
+        if (inSelfFamily && (await inSelfFamily(conv))) { excludedSelf++; continue; }
+        conversations.push(conv);
+      }
 
       // Same liveness fields as a feed or search row, so `cast context` can
       // show whether a file match is live, done, or long gone.
       const classifier = cliSessionClassifier(ctx, Date.now());
-      const results = await Promise.all(conversations.filter(Boolean).map(async (c) => ({
+      const results = await Promise.all(conversations.map(async (c) => ({
         conversation_id: c!._id,
+        // The id `cast read` and search rows use, so a session found both by
+        // text and by file is one row.
+        short_id: c!.short_id || c!._id.toString().slice(0, 7),
         session_id: c!.session_id,
         title: c!.title || "Untitled",
         project_path: c!.project_path,
@@ -118,7 +137,13 @@ export const findSimilar = mutation({
         match_detail: args.file_path,
       })));
 
-      return { sessions: results, count: results.length };
+      const self = excludedSelf && selfId ? await ctx.db.get(selfId) : null;
+      return {
+        sessions: results,
+        count: results.length,
+        // Same shape as searchForCLI's.
+        ...(excludedSelf ? { excluded_self: { id: self?.short_id || String(selfId).slice(0, 7), sessions: excludedSelf } } : {}),
+      };
     }
 
     if (args.session_id) {

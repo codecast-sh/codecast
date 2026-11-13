@@ -19,6 +19,11 @@ const tierOf = (row: { tier?: PrLinkTier }): PrLinkTier => row.tier ?? "observed
  * the session's own. A stronger link replaces a weaker one and never the
  * reverse: rewriting the array keeps a row's tier, and linkPullRequestSessions
  * only ever raises it.
+ *
+ * Each row carries the pull request's number and team too, so a reader that
+ * needs only "which pull requests, and may I see them" (a search hit's pr=#N)
+ * never loads the heavy row. Both are fixed for a pull request's life; a row
+ * written before they were stamped is filled here on the next sync.
  */
 export async function syncPullRequestSessions(ctx: { db: any }, pr: PR): Promise<void> {
   const want = new Set((pr.linked_session_ids ?? []).map(String));
@@ -30,13 +35,40 @@ export async function syncPullRequestSessions(ctx: { db: any }, pr: PR): Promise
   for (const row of rows) {
     const key = String(row.conversation_id);
     if (!want.has(key) || have.has(key)) await ctx.db.delete(row._id);
-    else have.add(key);
+    else {
+      have.add(key);
+      if (row.pr_number !== pr.number || row.team_id !== pr.team_id) {
+        await ctx.db.patch(row._id, { pr_number: pr.number, team_id: pr.team_id });
+      }
+    }
   }
   for (const id of pr.linked_session_ids ?? []) {
     if (have.has(String(id))) continue;
     have.add(String(id));
-    await ctx.db.insert("pull_request_sessions", { pull_request_id: pr._id, conversation_id: id, tier: "observed" });
+    await ctx.db.insert("pull_request_sessions", { pull_request_id: pr._id, conversation_id: id, tier: "observed", pr_number: pr.number, team_id: pr.team_id });
   }
+}
+
+/** The numbers of the pull requests linked to a session that `canSee` lets
+ *  through, newest number first, from the link rows alone. Rows not yet
+ *  stamped with a number are skipped. `capped` when more links exist than
+ *  were read. */
+export async function linkedPullRequestNumbers(
+  ctx: { db: any },
+  conversationId: Id<"conversations">,
+  canSee: (teamId: Id<"teams">) => Promise<boolean>,
+  max = 20,
+): Promise<{ numbers: number[]; capped: boolean }> {
+  const rows = await ctx.db
+    .query("pull_request_sessions")
+    .withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversationId))
+    .take(max + 1);
+  const numbers: number[] = [];
+  for (const row of rows.slice(0, max)) {
+    if (row.pr_number === undefined || !row.team_id || numbers.includes(row.pr_number)) continue;
+    if (await canSee(row.team_id)) numbers.push(row.pr_number);
+  }
+  return { numbers: numbers.sort((a, b) => b - a), capped: rows.length > max };
 }
 
 /**

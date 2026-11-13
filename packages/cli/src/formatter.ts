@@ -138,6 +138,14 @@ interface SearchConversation extends SessionPresence {
   origin?: { started_as?: string; earlier_titles?: string[] };
   /** Worker sessions that matched and are folded into this row. */
   workers?: number;
+  /** What the session did: commits it made (capped), pull requests linked to it, tool calls that failed. */
+  commits?: number;
+  commits_capped?: boolean;
+  prs?: number[];
+  prs_capped?: boolean;
+  failed_tools?: number;
+  /** Query words this session holds nowhere, sent when no session holds them all. */
+  missing_terms?: string[];
 }
 
 interface SearchResult {
@@ -155,6 +163,47 @@ interface SearchResult {
   // Operator walks (file:, repo:, ...) that stopped at a read budget: the rows
   // are the newest part of the answer, and each line says how to reach more.
   truncated?: string[];
+  // No session holds every query word: the rows are near misses.
+  partial?: SearchPartial;
+  // The calling session and its workers, left out of the rows.
+  excluded_self?: ExcludedSelf;
+}
+
+export interface SearchPartial { words: string[]; missing_everywhere: string[] }
+export interface ExcludedSelf { id?: string; sessions: number }
+
+/** What a reader must know before the rows: the results are near misses, or
+ *  the calling session's own matches were left out. Shared by every surface
+ *  that prints /cli/search rows (search, search -l, context). */
+export function searchQualifiers(r: { partial?: SearchPartial; excluded_self?: ExcludedSelf }): string[] {
+  const out: string[] = [];
+  if (r.partial) {
+    const missing = r.partial.missing_everywhere;
+    out.push(`${c.yellow}Partial:${c.reset} no session holds every word of "${r.partial.words.join(" ")}"` +
+      (missing.length ? `; ${missing.map((w) => `"${w}"`).join(", ")} found nowhere searched` : "; each row names what it lacks"));
+  }
+  if (r.excluded_self) {
+    const { id, sessions } = r.excluded_self;
+    out.push(`${c.dim}Left out ${sessions} matching session${sessions === 1 ? "" : "s"}: this one${id ? ` (${id})` : ""} and its workers. --include-self keeps them.${c.reset}`);
+  }
+  return out;
+}
+
+/** One word for whether a session can still answer: live, killed, ended, or
+ *  nothing for an idle one (or a server that sends no liveness). */
+function livenessWord(s: SessionPresence): string {
+  if (s.is_live) return "live";
+  if (s.is_killed) return "killed";
+  return s.is_completed ? "ended" : "";
+}
+
+/** "commits=3 pr=#482,#490 failed=4": what a hit's session did, empty when nothing. */
+export function sessionFacts(conv: Pick<SearchConversation, "commits" | "commits_capped" | "prs" | "prs_capped" | "failed_tools">): string {
+  return [
+    conv.commits ? `commits=${conv.commits}${conv.commits_capped ? "+" : ""}` : "",
+    conv.prs?.length ? `pr=${conv.prs.map((n) => `#${n}`).join(",")}${conv.prs_capped ? "+" : ""}` : "",
+    conv.failed_tools ? `failed=${conv.failed_tools}` : "",
+  ].filter(Boolean).join(" ");
 }
 
 interface SearchOptions {
@@ -170,7 +219,10 @@ function grepCommand(id: string, text: string | undefined): string {
 
 /** `cast search -l`: one line per session, with how many of its messages matched. */
 export function formatSearchSessions(result: SearchResult, options: SearchOptions = {}): string {
-  if (result.conversations.length === 0) return "No matches found. Use --mine for only your sessions, -g for all teams.";
+  const qualifiers = searchQualifiers(result);
+  if (result.conversations.length === 0) {
+    return [...qualifiers, "No matches found. Use --mine for only your sessions, -g for all teams."].join("\n");
+  }
   const lines = result.conversations.map((conv) => {
     const who = conv.user?.name || conv.user?.email;
     // A row with no message snippet matched on its title or summary.
@@ -179,10 +231,19 @@ export function formatSearchSessions(result: SearchResult, options: SearchOption
       `${c.cyan}${truncateId(conv.id)}${c.reset}`,
       hits.padEnd(10),
       conv.title,
-      `${c.dim}${[formatRelativeTime(conv.updated_at), `${conv.message_count} msgs`, truncatePath(conv.project_path), who].filter(Boolean).join(" · ")}${c.reset}`,
+      `${c.dim}${[
+        [livenessWord(conv), formatRelativeTime(conv.updated_at)].filter(Boolean).join(" "),
+        `${conv.message_count} msgs`,
+        truncatePath(conv.project_path),
+        who,
+        conv.workers ? `+${conv.workers} worker${conv.workers === 1 ? "" : "s"}` : "",
+        sessionFacts(conv),
+        conv.missing_terms?.length ? `lacks ${conv.missing_terms.join(",")}` : "",
+      ].filter(Boolean).join(" · ")}${c.reset}`,
     ].join("  ");
   });
   for (const line of result.truncated ?? []) lines.unshift(`${c.yellow}Partial:${c.reset}${c.dim} ${line}${c.reset}`);
+  lines.unshift(...qualifiers);
   if (options.text?.trim()) lines.push(`${c.dim}inside one: ${grepCommand("<id>", options.text)}${c.reset}`);
   return lines.join("\n");
 }
@@ -403,7 +464,9 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
   for (const line of result.truncated ?? []) {
     lines.push(`${c.yellow}Partial:${c.reset}${c.dim} ${line}${c.reset}`);
   }
-  if (result.truncated?.length) lines.push("");
+  const qualifiers = searchQualifiers(result);
+  lines.push(...qualifiers);
+  if (result.truncated?.length || qualifiers.length) lines.push("");
 
   if (result.total_matches === 0 && result.conversations.length === 0) {
     lines.push("No matches found.");
@@ -435,7 +498,9 @@ export function formatSearchResults(result: SearchResult, options: SearchOptions
       `${c.dim}${conv.message_count} msgs${c.reset}`,
       truncatePath(conv.project_path) ? `${c.dim}${truncatePath(conv.project_path)}${c.reset}` : "",
       userDisplay ? `${c.yellow}${userDisplay}${c.reset}` : "",
+      sessionFacts(conv),
       !result.titles_only && conv.title_match ? `${c.dim}title match${c.reset}` : "",
+      conv.missing_terms?.length ? `${c.yellow}lacks ${conv.missing_terms.join(",")}${c.reset}` : "",
     ].filter(Boolean).join(" | ");
     lines.push(meta);
 
@@ -1890,6 +1955,8 @@ interface ContextSession extends SessionPresence {
   match_type: string;
   match_detail?: string;
   files?: string[];
+  /** sessionFacts of the search row (commits, pull requests, failed tools), and the query words it lacks. */
+  facts?: string;
 }
 
 interface ContextRelatedFile {
@@ -1901,6 +1968,8 @@ interface ContextInput {
   query?: string;
   sessions: ContextSession[];
   related_files: ContextRelatedFile[];
+  /** Lines from searchQualifiers, printed before the sessions. */
+  qualifiers?: string[];
 }
 
 export function formatContextResults(input: ContextInput): string {
@@ -1909,6 +1978,7 @@ export function formatContextResults(input: ContextInput): string {
 
   const queryDisplay = query || "(file-based search)";
   lines.push(`<CONTEXT query="${queryDisplay}">`);
+  lines.push(...(input.qualifiers ?? []));
 
   if (sessions.length === 0) {
     lines.push("No relevant sessions found.");
@@ -1927,7 +1997,7 @@ export function formatContextResults(input: ContextInput): string {
     const shortId = truncateId(session.id);
     const title = session.title || "Untitled";
 
-    lines.push(`[${shortId}] ${formatSessionPresence(session)} - "${title}"`);
+    lines.push(`[${shortId}] ${formatSessionPresence(session)} - "${title}"${session.facts ? ` ${c.dim}${session.facts}${c.reset}` : ""}`);
 
     if (session.preview) {
       const previewClean = session.preview.replace(/\n+/g, " ").trim();

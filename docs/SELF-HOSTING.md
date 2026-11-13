@@ -137,9 +137,7 @@ npx convex env set AUTH_APPLE_SECRET "your_apple_jwt_secret"
 # AI features (optional but recommended)
 npx convex env set ANTHROPIC_API_KEY "sk-ant-..."
 
-# Semantic search embeddings (optional)
-npx convex env set VOYAGE_API_KEY "voyage-..."
-# OR
+# Embeddings for grouping findings (optional)
 npx convex env set OPENAI_API_KEY "sk-..."
 
 # GitHub App for PR integration (optional, see Step 7)
@@ -570,19 +568,15 @@ Each is off until its variables are set on the Convex deployment (`npx convex en
 | Signed outbound requests | `CODECAST_SIGNING_KEY` (generate with `bun packages/convex/scripts/codecast-signing-key.ts`) |
 | Sentry issue webhooks | `SENTRY_WEBHOOK_SECRET` |
 
-### Embeddings (Semantic Search)
+### Embeddings (grouping findings)
 
-Codecast uses vector embeddings for semantic search across conversations. Set one of:
+Session search is full text and needs no key. `OPENAI_API_KEY` lets Codecast group similar findings with OpenAI `text-embedding-3-small`:
 
 ```bash
-# Preferred: Voyage AI (better quality, cheaper)
-npx convex env set VOYAGE_API_KEY "voyage-..."
-
-# Fallback: OpenAI
 npx convex env set OPENAI_API_KEY "sk-..."
 ```
 
-If neither is set, semantic search is disabled but full-text search still works.
+Without it, findings are grouped by word overlap.
 
 ---
 
@@ -599,8 +593,7 @@ If neither is set, semantic search is disabled but full-text search still works.
 | `AUTH_APPLE_ID` | For Apple login | Apple Services ID |
 | `AUTH_APPLE_SECRET` | For Apple login | Apple JWT client secret |
 | `ANTHROPIC_API_KEY` | Recommended | AI summaries, title generation, insights |
-| `VOYAGE_API_KEY` | Optional | Vector embeddings (preferred) |
-| `OPENAI_API_KEY` | Optional | Vector embeddings (fallback) |
+| `OPENAI_API_KEY` | Optional | Embeddings for grouping findings |
 | `GITHUB_APP_ID` | For PR integration | GitHub App numeric ID |
 | `GITHUB_APP_PRIVATE_KEY` | For PR integration | GitHub App RSA private key (base64) |
 | `GITHUB_APP_WEBHOOK_SECRET` | For PR integration | Webhook signature verification |

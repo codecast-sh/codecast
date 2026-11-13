@@ -22,7 +22,7 @@ import { verifyApiToken } from "./apiTokens";
 import { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { maybeScheduleTitleGeneration, firstPromptOf, FIRST_PROMPT_STAMP_WINDOW } from "./titleGeneration";
-import { canTeamMemberAccess, checkConversationAccess, teamVisibleConvTeam } from "./privacy";
+import { checkConversationAccess, isConversationOwner, teamVisibleConvTeam } from "./privacy";
 import { computeWorkspaceKey } from "./lib/access";
 import { redactSecrets } from "./redact";
 import { storeHostedReplay } from "./hostedReplay";
@@ -348,6 +348,37 @@ export function mergeRecentFiles(
   const prev = existing ?? [];
   if (capped.length === prev.length && capped.every((p, i) => p === prev[i])) return null;
   return capped;
+}
+
+/** Tool results in a row that came back as errors. */
+const failedResults = (results: ReadonlyArray<{ is_error?: boolean }> | undefined) =>
+  results?.filter((r) => r.is_error).length ?? 0;
+
+/**
+ * Keep conversations.failed_tool_count current as a row's tool_results change.
+ * Counts the change between the row's old and new results, so a re-synced or
+ * re-streamed row adds nothing, a row whose error was rewritten gives it back,
+ * and a deleted row takes its failures with it. A session is counted only from
+ * its first message: one that already had messages when counting began keeps
+ * no count, rather than a partial one that reads as its total.
+ * `conversation` is the row as the mutation first read it; it spares a read on
+ * the common no-op write.
+ */
+export async function bumpFailedTools(
+  ctx: MutationCtx,
+  conversation: Doc<"conversations">,
+  before: ReadonlyArray<{ is_error?: boolean }> | undefined,
+  after: ReadonlyArray<{ is_error?: boolean }> | undefined,
+): Promise<void> {
+  const delta = failedResults(after) - failedResults(before);
+  const counting = conversation.failed_tool_count !== undefined;
+  if (counting && delta === 0) return;
+  if (!counting && conversation.message_count > 0) return;
+  const conv = await ctx.db.get(conversation._id);
+  if (!conv) return;
+  if (conv.failed_tool_count === undefined && conv.message_count > 0) return;
+  const next = Math.max(0, (conv.failed_tool_count ?? 0) + delta);
+  if (next !== conv.failed_tool_count) await ctx.db.patch(conversation._id, { failed_tool_count: next });
 }
 
 /**
@@ -1044,6 +1075,7 @@ export const addMessage = mutation({
           await materializeFileChanges(ctx, args.conversation_id, existing._id, existing.timestamp,
             current.tool_calls, current.tool_results, extractFileChanges([existing]));
         }
+        await bumpFailedTools(ctx, conversation, existing.tool_results, current.tool_results);
         return existing._id;
       }
     }
@@ -1117,6 +1149,7 @@ export const addMessage = mutation({
     await scheduleUserSend(ctx, conversation, sendMsg, msgTimestamp);
     const origin = turnOrigin(conversation, sendMsg);
     await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
+    await bumpFailedTools(ctx, conversation, undefined, safeToolResults);
     await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
     if (args.role === "assistant") await markAnsweredReviewNotes(ctx, args.conversation_id, { _id: messageId, content: contentToStore, timestamp: msgTimestamp });
     if (args.role === "assistant") await relayDecisionReply(ctx, args.conversation_id, { _id: messageId, content: contentToStore, timestamp: msgTimestamp, subtype: args.subtype });
@@ -1718,6 +1751,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
           await materializeFileChanges(ctx, args.conversation_id, existing._id, existing.timestamp,
             current.tool_calls, current.tool_results, extractFileChanges([existing]));
         }
+        await bumpFailedTools(ctx, conversation, existing.tool_results, current.tool_results);
         if (hosted) await storeHostedReplay(ctx, args.conversation_id, existing._id, msg, { thinking: safeThinking, tool_calls: safeToolCalls });
         // A re-upload of a stored turn settles what it echoes: the id makes
         // the retry converge on the one row, whichever upload stamped first.
@@ -1817,6 +1851,7 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
     await scheduleUserSend(ctx, conversation, sendMsg, msgTimestamp);
     lastTurnOrigin = turnOrigin(conversation, sendMsg) ?? lastTurnOrigin;
     await materializeFileChanges(ctx, args.conversation_id, messageId, msgTimestamp, safeToolCalls, safeToolResults);
+    await bumpFailedTools(ctx, conversation, undefined, safeToolResults);
     await materializeConversationImages(ctx, args.conversation_id, messageId, msgTimestamp, contentToStore, images);
     if (msg.role === "assistant") await markAnsweredReviewNotes(ctx, args.conversation_id, { _id: messageId, content: contentToStore, timestamp: msgTimestamp });
     if (msg.role === "assistant") await relayDecisionReply(ctx, args.conversation_id, { _id: messageId, content: contentToStore, timestamp: msgTimestamp, subtype: msg.subtype });
@@ -2134,6 +2169,7 @@ export const deleteMessagesByUuid = mutation({
       if (existing) {
         await ctx.db.delete(existing._id);
         await dropMirroredMessage(ctx, existing._id);
+        await bumpFailedTools(ctx, conversation, existing.tool_results, undefined);
         deleted++;
       }
     }
@@ -2187,11 +2223,11 @@ export const generateMessageShareLink = mutation({
       throw new Error("Conversation not found");
     }
 
-    const isOwner = conversation.user_id.toString() === authUserId.toString();
+    // Publishing messages to anyone with the link is the owner's consent to
+    // give, never a teammate's: reading a session is not leave to publish it.
+    const isOwner = await isConversationOwner(ctx, authUserId, conversation);
     if (!isOwner) {
-      if (!(await canTeamMemberAccess(ctx, authUserId, conversation))) {
-        throw new Error("Unauthorized: can only share messages from your own conversations");
-      }
+      throw new Error("Only the session's owner can share its messages by link");
     }
 
     // Linking the full conversation requires a public share_token on it. Only
@@ -2390,6 +2426,13 @@ export const findMessageByContentPublic = query({
   },
 });
 
+// A message link serves only while the person who made it still owns the
+// session. Links a teammate minted before minting became owner-only stop
+// serving, as does a link whose maker has since lost ownership.
+async function messageShareHolds(ctx: any, share: { user_id: Id<"users"> }, conversation: Doc<"conversations">): Promise<boolean> {
+  return await isConversationOwner(ctx, share.user_id, conversation);
+}
+
 export const getSharedMessage = query({
   args: {
     share_token: v.string(),
@@ -2410,7 +2453,7 @@ export const getSharedMessage = query({
     }
 
     const conversation = await ctx.db.get(message.conversation_id);
-    if (!conversation) {
+    if (!conversation || !(await messageShareHolds(ctx, share, conversation))) {
       return null;
     }
 
@@ -2524,7 +2567,7 @@ export const getSharedMessageMeta = query({
     if (!message) return null;
 
     const conversation = await ctx.db.get(message.conversation_id);
-    if (!conversation) return null;
+    if (!conversation || !(await messageShareHolds(ctx, share, conversation))) return null;
 
     const user = await ctx.db.get(conversation.user_id);
 

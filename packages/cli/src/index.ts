@@ -82,7 +82,7 @@ import {
   cliErrorMessage,
   normalizeGuestName,
 } from "@codecast/shared/contracts";
-import type { SessionPresence } from "./formatter.js";
+import type { ExcludedSelf, SearchPartial, SessionPresence } from "./formatter.js";
 import {
   buildTaskTree,
   referenceGuidance,
@@ -157,6 +157,7 @@ import { findAgentAncestor, ownDaemonPids, snapshotProcessTable } from "./proces
 import { autostartDisabledByEnv, findSystemDaemonUnit, isTemplateInstance, setDaemonWanted, unitUsesWantedFlag } from "./systemdDaemonUnit.js";
 import { expandCommandStdinDashes, readStdinBody, rejectBareDash, stdinText } from "./sendBody.js";
 import { registerDocDraftingCommands } from "./docDraftingCommand.js";
+import { briefKey, docKey, docReadBase, noteDocRevisions, planKey } from "./docReads.js";
 import { commandTree, didYouMean, listDescription, nearMatches, unknownCommandNextStep } from "./commandSuggestion.js";
 import { choiceOption, countOption, exitNotFound, idKindOf, nonNegativeCountOption, notFoundLine, stateOption, unknownActionError, wrongKindIdError, withSessionIdHint, SESSION_ID_HINT, DATE_FORMS } from "./argChecks.js";
 import { requireDestructiveConfirm } from "./destructiveCommands.js";
@@ -434,6 +435,20 @@ function findCurrentSessionFromProcess(projectRoot: string): string | null {
  *  recently active session file", so a stamp made from it is always true. */
 function ownSessionId(projectRoot: string): string | null {
   return sessionIdFromEnv() || findCurrentSessionFromProcess(projectRoot);
+}
+
+/** What a /cli/search call sends about its caller, so the server leaves the
+ *  calling session and its workers out of the results: the conversation id
+ *  the session's harness exported and its own session uuid, both exact
+ *  evidence. A person's own shell has neither and sends nothing. */
+function searchSelfRef(includeSelf?: boolean): Record<string, unknown> {
+  if (includeSelf) return { include_self: true };
+  const conversationId = process.env.CODECAST_CONVERSATION_ID || undefined;
+  const sessionId = ownSessionId(getRealCwd()) || undefined;
+  return {
+    ...(conversationId ? { self_conversation_id: conversationId } : {}),
+    ...(sessionId ? { self_session_id: sessionId } : {}),
+  };
 }
 
 function detectCurrentSessionId(): string | null {
@@ -1143,7 +1158,7 @@ function formatBehind(ms: number): string {
 }
 
 /** An agent_type as the session lists name it (the registry's names, the
- *  hosted Codecast assistant included). */
+ *  hosted Cast agent included). */
 const getAgentLabel = agentDisplayName;
 
 function homeRelPath(p: string): string {
@@ -6867,7 +6882,9 @@ program
     "Use -m <name> to filter by a specific team member.\n" +
     "Use -g to search across all teams.\n" +
     "Use -u to search only user messages.\n" +
-    "Use --keyword for keyword-only, --semantic for semantic-only.\n\n" +
+    "Run from inside a session, it leaves out that session and its workers; --include-self keeps them.\n" +
+    "A query of three or more words matches sessions holding at least half of them; the output says\n" +
+    "first when no session holds them all, and which words matched nothing.\n\n" +
     "Operators narrow which sessions the text is searched in; with no text they list the\n" +
     "matching sessions, newest matching change first. The web /search page reads the same query.\n" +
     SESSION_QUERY_OPERATORS.map((o) => `  ${o.example.padEnd(22)} ${o.hint}`).join("\n") + "\n" +
@@ -6892,8 +6909,7 @@ program
   .option("--mine", "Show only my sessions")
   .option("-m, --member <name>", "Filter by team member name or email")
   .option("--label <name>", "Filter to sessions filed under one of my labels")
-  .option("--keyword", "Use keyword-only search (no semantic matching)")
-  .option("--semantic", "Use semantic-only search (no keyword matching)")
+  .option("--include-self", "Also search the session this runs in and its workers")
   .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday)")
   .option("-e, --end <date>", "End date/time")
   .option("-n, --limit <n>", "Results per page", countOption, 10)
@@ -6902,7 +6918,7 @@ program
   .option("-B, --before <n>", "Show N messages before each match", nonNegativeCountOption, 0)
   .option("-C, --context <n>", "Show N messages before and after each match", nonNegativeCountOption)
   .option("-l, --sessions", "One line per session: its id, how many messages matched, title, age, project")
-  .option("--json", "Machine-readable output: {total_matches, conversations: [{id, title, message_count, updated_at, project_path, matches: [{role, content, message_id}]}]}")
+  .option("--json", "Machine-readable output: {total_matches, partial?: {words, missing_everywhere}, excluded_self?: {id, sessions}, conversations: [{id, title, message_count, updated_at, project_path, commits?, prs?, failed_tools?, missing_terms?, matches: [{role, content, message_id}]}]}")
   .action(async (query, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -6938,17 +6954,6 @@ program
 
     const siteUrl = config.convex_url.replace(".cloud", ".site");
 
-    // Determine search mode: hybrid (default), keyword, or semantic
-    let mode: "hybrid" | "keyword" | "semantic" = "hybrid";
-    if (options.keyword && options.semantic) {
-      console.error("Cannot use both --keyword and --semantic flags");
-      process.exit(1);
-    } else if (options.keyword) {
-      mode = "keyword";
-    } else if (options.semantic) {
-      mode = "semantic";
-    }
-
     try {
       const result = await cliSearchRequest(siteUrl, {
         api_token: config.auth_token,
@@ -6961,10 +6966,11 @@ program
         context_after: contextAfter,
         project_path: projectPath,
         user_only: userOnly,
-        mode,
         member_name: options.member,
         mine_only: options.mine || undefined,
         label: options.label,
+        ...(options.global ? { all_teams: true } : {}),
+        ...searchSelfRef(options.includeSelf),
       });
 
       if (result.error) {
@@ -7063,6 +7069,7 @@ program
           mine_only: options.mine || undefined,
           state: options.state,
           label: options.label,
+          ...(options.global ? { all_teams: true } : {}),
           ...(options.live ? { live_only: true } : {}),
         }),
       });
@@ -7400,6 +7407,7 @@ program
             state: options.state,
             label: options.label,
             limit,
+            ...(options.global ? { all_teams: true } : {}),
           }),
         });
         const feed = await response.json();
@@ -7601,7 +7609,7 @@ program
     } else {
       const projectPath = options.global ? undefined : getRealCwd();
       stateClient.onUpdate("conversations:feedForCLI" as any,
-        { api_token: config.auth_token, project_path: projectPath, team_id: teamId, member_name: options.member, mine_only: options.mine || undefined, state: options.state, label: options.label, limit },
+        { api_token: config.auth_token, project_path: projectPath, team_id: teamId, member_name: options.member, mine_only: options.mine || undefined, state: options.state, label: options.label, limit, ...(options.global ? { all_teams: true } : {}) },
         (feed: any) => { if (feed && !feed.error) onSessions(feedToSessions(feed).sessions); });
     }
     await new Promise(() => {}); // stay alive; WebSocket pushes drive all output
@@ -7669,6 +7677,7 @@ program
           project_path: projectPath,
           member_name: options.member,
           mine_only: options.mine || undefined,
+          ...(options.global ? { all_teams: true } : {}),
         }),
       });
 
@@ -13060,6 +13069,7 @@ program
   .option("-s, --start <date>", "Start date/time (e.g., 7d, 2w, yesterday)")
   .option("-e, --end <date>", "End date/time")
   .option("-d, --debug", "Show context sent to LLM")
+  .option("--include-self", "Also search the session this runs in and its workers")
   .action(async (query, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -13179,6 +13189,8 @@ Question: ${query}`,
           context_before: paddingLines,
           context_after: paddingLines,
           project_path: projectPath,
+          ...(projectPath ? {} : { all_teams: true }),
+          ...searchSelfRef(options.includeSelf),
         });
       };
 
@@ -13213,11 +13225,16 @@ Question: ${query}`,
         console.error(`[ask] conversations after project filter (${conversations.length}): ${sample.join(", ")}`);
       }
 
+      const { searchQualifiers } = await import("./formatter.js");
+      // The query here is model-expanded words nobody typed, so only the
+      // self-exclusion is worth saying, not partial coverage of those words.
+      const qualifiers = searchQualifiers({ excluded_self: searchResult.excluded_self });
       if (conversations.length === 0) {
         if (process.env.ASK_DEBUG) {
           console.error("[ask] search returned empty result after project filter");
         }
         console.log(`<ANSWER query="${query}">`);
+        for (const line of qualifiers) console.log(line);
         console.log("No matching conversations found.");
         if (projectPath) {
           console.log("\nTry: cast ask \"" + query + "\" -g   # search globally");
@@ -13319,6 +13336,7 @@ Answer the question based on the context above. Include specific details like va
       const answer = response.content[0].type === "text" ? response.content[0].text : "";
 
       console.log(`<ANSWER query="${query}">`);
+      for (const line of qualifiers) console.log(line);
       console.log(answer);
       console.log("\nSources:");
       for (const session of sessionDetails) {
@@ -13349,6 +13367,7 @@ program
   .option("--mine", "Show only my sessions")
   .option("-m, --member <name>", "Filter by team member name or email")
   .option("-n, --limit <n>", "Maximum results", countOption, 10)
+  .option("--include-self", "Also list the session this runs in and its workers")
   .action(async (query, options) => {
     const config = readConfig();
     if (!config?.auth_token || !config?.convex_url) {
@@ -13359,6 +13378,10 @@ program
     const siteUrl = config.convex_url.replace(".cloud", ".site");
     const projectPath = options.global ? undefined : getRealCwd();
     const limit = parseInt(options.limit);
+    const selfRef = searchSelfRef(options.includeSelf);
+    // What the reader must know before the rows (formatter.searchQualifiers).
+    let partial: SearchPartial | undefined;
+    let excludedSelf: ExcludedSelf | undefined;
 
     let searchQuery = query;
     let filePaths: string[] = [];
@@ -13417,7 +13440,7 @@ program
     }
 
     try {
-      const { pickSessionPresence } = await import("./formatter.js");
+      const { pickSessionPresence, searchQualifiers, sessionFacts } = await import("./formatter.js");
       const sessions: Map<string, SessionPresence & {
         id: string;
         title: string;
@@ -13428,6 +13451,7 @@ program
         match_type: string;
         match_detail?: string;
         files?: string[];
+        facts?: string;
       }> = new Map();
 
       const relatedFiles: Map<string, number> = new Map();
@@ -13441,6 +13465,8 @@ program
           project_path: projectPath,
           member_name: options.member,
           mine_only: options.mine || undefined,
+          ...(options.global ? { all_teams: true } : {}),
+          ...selfRef,
         });
 
         if (searchResult.error) {
@@ -13459,6 +13485,8 @@ program
           if (searchResult.content_search_error) {
             console.error(`Warning: content search timed out (${searchResult.content_search_error}); matches below are title/summary only.`);
           }
+          partial = searchResult.partial;
+          excludedSelf = searchResult.excluded_self;
           for (const conv of searchResult.conversations) {
             const preview = conv.matches?.[0]?.content ? conv.matches[0].content.slice(0, 100) + "..." : "";
             sessions.set(conv.id, {
@@ -13471,6 +13499,7 @@ program
               preview,
               match_type: conv.title_match ? "title" : "text",
               match_detail: searchQuery,
+              facts: [sessionFacts(conv), conv.missing_terms?.length ? `lacks ${conv.missing_terms.join(",")}` : ""].filter(Boolean).join(" "),
             });
           }
         }
@@ -13484,16 +13513,19 @@ program
             api_token: config.auth_token,
             file_path: filePath,
             limit: limit,
+            ...selfRef,
           }),
         });
 
         const similarResult = await similarResponse.json();
+        if (similarResult.excluded_self && !excludedSelf) excludedSelf = similarResult.excluded_self;
 
         if (!similarResult.error && similarResult.sessions) {
           for (const sess of similarResult.sessions) {
-            if (!sessions.has(sess.conversation_id)) {
-              sessions.set(sess.conversation_id, {
-                id: sess.conversation_id,
+            const id: string = sess.short_id ?? sess.conversation_id;
+            if (!sessions.has(id)) {
+              sessions.set(id, {
+                id,
                 title: sess.title,
                 project_path: sess.project_path,
                 updated_at: sess.updated_at,
@@ -13549,6 +13581,7 @@ program
       const { formatContextResults } = await import("./formatter.js");
       console.log(formatContextResults({
         query: searchQuery,
+        qualifiers: searchQualifiers({ partial, excluded_self: excludedSelf }),
         // Stable: search relevance, then file matches, with killed and
         // long-quiet sessions moved below recent ones (still listed). The
         // server ranks each row (recency_rank) from its wake cost.
@@ -14563,6 +14596,7 @@ const briefCmd = program
     // From the role's own session the read moves the brief's clock (S25):
     // the next read shows what changed since this one.
     const brief = await cliPost("/cli/brief/get", { role_id, from_session: callingSession() });
+    noteDocRevisions(docLedgerSession(), "/cli/brief/get", { role_id }, brief);
     if (!brief) { console.error("Role not found"); process.exit(1); }
     if (options.json) { console.log(JSON.stringify(brief, null, 2)); return; }
     if (options.narrative) { process.stdout.write(String(brief.narrative ?? "").replace(/\s*$/, "\n")); return; }
@@ -14596,6 +14630,10 @@ briefCmd
     const { briefBudget, briefBudgetWords, briefOverBudgetMessage } = await import("@codecast/shared/contracts/rolePlaybook");
     let content = text ?? "";
     let replaced = 0;
+    // The revision the new narrative was computed from: the read just below
+    // when patching, else this session's last `cast brief` (a role runs it at
+    // every wake). The server refuses a save that names none.
+    let base = docReadBase(docLedgerSession(), briefKey(role_id));
     if (patching) {
       // Patched over the narrative as stored, then saved whole: the save is
       // the one write path, so the budget and the state mirror apply as ever.
@@ -14605,11 +14643,14 @@ briefCmd
       const patched = patchBriefNarrative(String(brief.narrative ?? ""), options.old, options.new, !!options.all);
       if ("error" in patched) { console.error(patched.error); process.exit(1); }
       ({ content, replaced } = patched);
+      base = brief.brief_revision ?? undefined;
     }
     const budget = briefBudget(content);
     let result: any;
     try {
-      result = await cliPost("/cli/brief/edit", { role_id, content, from_session: callingSession() }, { throwOnError: true });
+      const body = { role_id, content, from_session: callingSession(), ...(base ? { base } : {}) };
+      result = await cliPost("/cli/brief/edit", body, { throwOnError: true });
+      noteDocRevisions(docLedgerSession(), "/cli/brief/edit", body, result);
     } catch (err) {
       const message = (err as Error).message;
       // The refusal states the exact size, whatever wording the backend has.
@@ -16923,6 +16964,15 @@ async function cliPost(urlPath: string, body: Record<string, any>, opts?: { time
   return result;
 }
 
+// The session whose doc reads a whole-body write is checked against
+// (docReads.ts): looked up once per process, the same way for the read and
+// the write.
+let docLedgerSessionMemo: string | null | undefined;
+function docLedgerSession(): string | null {
+  if (docLedgerSessionMemo === undefined) docLedgerSessionMemo = detectCurrentSessionId();
+  return docLedgerSessionMemo;
+}
+
 // Best-effort variant of cliPost for optional enrichment: returns null on any
 // failure instead of exiting, so a missing/forbidden record can't kill the
 // command that only wanted to decorate its output.
@@ -19112,6 +19162,7 @@ doc
     Object.assign(body, workOriginStamp({ sessionId: detectCurrentSessionId(), human: options.human, stdoutIsTTY: !!process.stdout.isTTY }));
 
     const result = await cliPost("/cli/docs/create", body);
+    noteDocRevisions(docLedgerSession(), "/cli/docs/create", body, result);
     const id = result.id || result._id;
     console.log(`${c.green}ok${c.reset} Created ${options.type} ${c.cyan}${id}${c.reset}: ${title}`);
     if (result.plan_short_id) {
@@ -19190,11 +19241,15 @@ doc
   .action(async (id: string, range: string | undefined, options: any) => {
     const result = await cliPost("/cli/docs/get", { id });
     if (!result) exitNotFound("doc", id, `cast doc search "<words from its title>"`);
+    noteDocRevisions(docLedgerSession(), "/cli/docs/get", { id }, result);
     if (options.clean || options.final) {
       const { stripDrafting } = await import("@codecast/shared/docs/drafting");
       result.content = stripDrafting(result.content || "", { dropGhosts: !!options.final });
     }
     if (options.json) { printJson(result); return; }
+    if (result.live_unsaved) {
+      console.error(`${c.yellow}note${c.reset} someone is typing in this doc in the editor; their last few seconds are not in this copy yet. Read it again before rewriting it whole.`);
+    }
     const lines = (result.content || "").split("\n");
     const total = lines.length;
 
@@ -19296,6 +19351,8 @@ doc
   .option("--content-file <path>", "Full content from file")
   .option("--title <text>", stdinText("Update title (rewrites the document's first heading)"))
   .option("-t, --type <type>", "Change document type")
+  .option("--base <revision>", "With --content: the revision the new content was computed from (default: the one this session last read)")
+  .option("--force", "With --content: write even if the document changed since it was read, discarding that change")
   .action(async (id: string, options: any) => {
     // The charter guard (docs.ts) reads the calling session; stamped the way
     // `cast doc comment` stamps it.
@@ -19308,23 +19365,29 @@ doc
       console.error("--all replaces every occurrence of --old; pass --old \"text to find\" --new \"replacement\" with it");
       process.exit(1);
     }
-    if (options.old && options.all) {
-      // Every occurrence, as one content write: patch replaces only the first.
-      const current = await cliPost("/cli/docs/get", { id });
-      if (!current) exitNotFound("doc", id, `cast doc search "<words from its title>"`);
-      const parts = String(current.content ?? "").split(options.old);
-      if (parts.length === 1) {
-        console.error(`"${options.old}" is not in the document. Check the exact text with: cast doc grep ${id} "${options.old}"`);
+    if (options.old && options.new !== undefined) {
+      // Find and replace runs on the server against the doc as it is now, so
+      // it needs no base and never sends the body back.
+      let result: any;
+      try {
+        result = await cliPost("/cli/docs/patch", {
+          session_id: sessionId ?? undefined,
+          id, old_string: options.old, new_string: options.new,
+          ...(options.all ? { replace_all: true } : {}),
+        }, { throwOnError: true });
+      } catch (err) {
+        const message = (err as Error).message;
+        console.error(/old_string not found/.test(message)
+          ? `"${options.old}" is not in the document. Check the exact text with: cast doc grep ${id} "${options.old}"`
+          : `Error: ${message}`);
         process.exit(1);
       }
-      await cliPost("/cli/docs/update", { id, session_id: sessionId ?? undefined, content: parts.join(options.new) });
-      console.log(`${c.green}ok${c.reset} Replaced ${parts.length - 1} occurrence${parts.length === 2 ? "" : "s"} in doc ${c.cyan}${id}${c.reset}`);
-    } else if (options.old && options.new !== undefined) {
-      const result = await cliPost("/cli/docs/patch", {
-        session_id: sessionId ?? undefined,
-        id, old_string: options.old, new_string: options.new,
-      });
-      console.log(`${c.green}ok${c.reset} Patched doc ${c.cyan}${id}${c.reset} (${result.length} chars)`);
+      if (options.all) {
+        const n = result.replaced ?? 0;
+        console.log(`${c.green}ok${c.reset} Replaced ${n} occurrence${n === 1 ? "" : "s"} in doc ${c.cyan}${id}${c.reset}`);
+      } else {
+        console.log(`${c.green}ok${c.reset} Patched doc ${c.cyan}${id}${c.reset} (${result.length} chars)`);
+      }
     } else {
       const body: Record<string, any> = { id, session_id: sessionId ?? undefined };
       if (options.contentFile) {
@@ -19339,7 +19402,17 @@ doc
         console.error("Provide --old/--new for patch, or --content/--title/--type for full update");
         process.exit(1);
       }
-      await cliPost("/cli/docs/update", body);
+      if (body.content !== undefined) {
+        // The new body was written against some read of the doc: say which,
+        // so the server can refuse it if the doc moved on since.
+        body.base = options.base ?? docReadBase(docLedgerSession(), docKey(id));
+        if (options.force) body.force = true;
+        else if (!body.base) {
+          console.error(`This session has not read doc ${id}, so replacing its whole content could undo edits you have not seen. Read it first with \`cast doc show ${id}\`, then write again (or change part of it with --old/--new).`);
+          process.exit(1);
+        }
+      }
+      noteDocRevisions(docLedgerSession(), "/cli/docs/update", body, await cliPost("/cli/docs/update", body));
       console.log(`${c.green}ok${c.reset} Updated doc ${c.cyan}${id}${c.reset}`);
     }
   });
@@ -19501,6 +19574,7 @@ plan
     body.project_path = getRealCwd();
 
     const result = await cliPost("/cli/plans/create", body);
+    noteDocRevisions(docLedgerSession(), "/cli/plans/create", body, result);
     // --json speaks once, at the end, so a template's tasks ride in the same object.
     const say = (line: string) => { if (!options.json) console.log(line); };
     const createdTasks: Array<{ short_id: string; title: string }> = [];
@@ -19579,7 +19653,8 @@ plan
   .action(async (planId: string, options: any) => {
     const result = await cliPost("/cli/plans/get", { short_id: planId });
     if (!result) exitNotFound("plan", planId, "cast plan ls --all");
-    if (options.json) { printJson(result); return; }
+    // Only the JSON carries the body (doc_content); the summary below does not.
+    if (options.json) { noteDocRevisions(docLedgerSession(), "/cli/plans/get", { short_id: planId }, result); printJson(result); return; }
     const p = result;
     const icon = PLAN_STATUS_ICONS[p.status] || "?";
     const progress = planProgressLabel(p);
@@ -19669,7 +19744,9 @@ plan
   .option("--log <entry>", stdinText("Add progress log entry"))
   .option("--title <text>", stdinText("Update title"))
   .option("-b, --body <text>", stdinText("Update body"))
-  .option("--body-file <path>", "Update body from file (for longer content; '-' for stdin)");
+  .option("--body-file <path>", "Update body from file (for longer content; '-' for stdin)")
+  .option("--base <revision>", "With --body: the revision the body was computed from (default: the one this session last read)")
+  .option("--force", "With --body: write even if the plan doc changed since it was read, discarding that change");
 charterOptions(plan.commands.find((x: any) => x.name() === "update"), false)
   .action(async (planId: string, options: any) => {
     const sessionId = detectCurrentSessionId();
@@ -19690,8 +19767,21 @@ charterOptions(plan.commands.find((x: any) => x.name() === "update"), false)
     if (Object.keys(charter).length || options.title || bodyContent !== undefined) {
       const body: Record<string, any> = { short_id: planId, ...charter };
       if (options.title) body.title = options.title;
-      if (bodyContent !== undefined) body.body = bodyContent;
-      await cliPost("/cli/plans/update", body);
+      if (bodyContent !== undefined) {
+        body.body = bodyContent;
+        // The body was written against some read of the plan (`cast plan
+        // show`): its revision lets the server refuse it if the doc moved on.
+        // Plan bodies are read as their doc (`cast doc show <doc>`) or as
+        // `cast plan show --json`: either read is the base.
+        const docId = options.base || options.force ? undefined : (await cliPost("/cli/plans/get", { short_id: planId }))?.doc_id;
+        body.base = options.base ?? docReadBase(docLedgerSession(), planKey(planId)) ?? (docId ? docReadBase(docLedgerSession(), docKey(String(docId))) : undefined);
+        if (options.force) body.force = true;
+        else if (!body.base && docId) {
+          console.error(`This session has not read the body of plan ${planId}, so replacing it could undo edits you have not seen. Read it first with \`cast doc show ${docId}\`, then write again.`);
+          process.exit(1);
+        }
+      }
+      noteDocRevisions(docLedgerSession(), "/cli/plans/update", body, await cliPost("/cli/plans/update", body));
       console.log(`${c.green}ok${c.reset} Updated plan ${c.cyan}${planId}${c.reset}`);
     }
     if (!options.log && !Object.keys(charter).length && !options.title && bodyContent === undefined) {
@@ -22241,7 +22331,8 @@ workflow
     const r = await cliPost("/cli/workflow-runs/resume", { run_id: row._id, at: plan.at, ...currentFlow, ...(options.queue ? { queue: true } : {}) });
     if (options.json) { printJson({ ...r, note: plan.note }); return; }
     const when = r.queued ? "once its machine has a free run slot" : "now";
-    console.log(`${task}: resumes at ${r.resumed_at} as a new attempt, ${when}${plan.note ? ` (${plan.note})` : ""} (run ${r.run_id}).`);
+    const where = r.from_start ? "starts again from the top (no station of it ever ran)" : `resumes at ${r.resumed_at}`;
+    console.log(`${task}: ${where} as a new attempt, ${when}${plan.note ? ` (${plan.note})` : ""} (run ${r.run_id}).`);
   });
 
 workflow

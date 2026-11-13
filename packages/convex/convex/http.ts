@@ -2,6 +2,8 @@ import { httpRouter } from "convex/server";
 import { ConvexError } from "convex/values";
 import { unsubscribeResponse } from "@platform/email";
 import { httpAction } from "./_generated/server";
+import { CAST_MODEL_PROXY_PATH, castModelProxy } from "./castMachineProxy";
+import { sha256Hex } from "./lib/awsSigV4";
 import { BRAND } from "./emails/render";
 import { auth } from "./auth";
 import { internal, api } from "./_generated/api";
@@ -101,6 +103,12 @@ http.route({
         });
       }
 
+      // A cast machine's first boot redeems the voucher its launch minted:
+      // that names the machine's device (castMachines.bindDevice).
+      if (typeof body.device_id === "string") {
+        await ctx.runMutation(internal.castMachines.bindDevice, { voucher_hash: await sha256Hex(setupToken), device_id: body.device_id });
+      }
+
       return new Response(JSON.stringify(result), {
         status: 200,
         headers: { "Content-Type": "application/json", ...corsHeaders },
@@ -128,6 +136,9 @@ http.route({
     });
   }),
 });
+
+// pi on a cast machine reaches the model through here, with its machine's key.
+http.route({ pathPrefix: CAST_MODEL_PROXY_PATH + "/", method: "POST", handler: castModelProxy });
 
 // `cast auth` registers its sign-in request (cliAuthHttp.cliAuthRequest).
 http.route({ path: "/cli/auth-request", method: "POST", handler: cliAuthRequest });
@@ -561,7 +572,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, query, limit, offset, start_time, end_time, context_before, context_after, project_path, user_only, member_name, mine_only, label, titles_only } = body;
+      const { api_token, query, limit, offset, start_time, end_time, context_before, context_after, project_path, user_only, member_name, mine_only, label, titles_only, all_teams, self_conversation_id, self_session_id, include_self } = body;
 
       if (!api_token || !query) {
         return new Response(JSON.stringify({ error: "Missing api_token or query" }), {
@@ -594,6 +605,10 @@ http.route({
         mine_only,
         label,
         titles_only,
+        all_teams: all_teams === true ? true : undefined,
+        self_conversation_id: typeof self_conversation_id === "string" ? self_conversation_id : undefined,
+        self_session_id: typeof self_session_id === "string" ? self_session_id : undefined,
+        include_self: include_self === true ? true : undefined,
       });
 
       if (result.error) {
@@ -826,7 +841,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, limit, offset, start_time, end_time, query, project_path, member_name, mine_only, live_only, state, label } = body;
+      const { api_token, limit, offset, start_time, end_time, query, project_path, member_name, mine_only, live_only, state, label, all_teams } = body;
 
       if (!api_token) {
         return new Response(JSON.stringify({ error: "Missing api_token" }), {
@@ -857,6 +872,7 @@ http.route({
         live_only,
         state,
         label,
+        all_teams: all_teams === true ? true : undefined,
       });
 
       if (result.error) {
@@ -1962,7 +1978,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, file_path, session_id, limit } = body;
+      const { api_token, file_path, session_id, limit, self_conversation_id, self_session_id, include_self } = body;
 
       if (!api_token) {
         return new Response(JSON.stringify({ error: "Missing api_token" }), {
@@ -1983,6 +1999,9 @@ http.route({
         file_path,
         session_id,
         limit,
+        self_conversation_id: typeof self_conversation_id === "string" ? self_conversation_id : undefined,
+        self_session_id: typeof self_session_id === "string" ? self_session_id : undefined,
+        include_self: include_self === true ? true : undefined,
       });
 
       if (result.error) {
@@ -4794,15 +4813,23 @@ cliRoute("/cli/docs/list", async (ctx, body) => {
 cliRoute("/cli/docs/get", async (ctx, body) => {
   return await ctx.runQuery(api.docs.get, body);
 });
-cliRoute("/cli/docs/update", async (ctx, body) => {
-  const result = await ctx.runMutation(api.docs.update, body);
-  // The mutation returns the content it stored whenever the text changed — a
-  // title edit rewrites the heading line, so it resets the editor snapshot too.
-  if (result.content !== undefined) {
-    await ctx.runMutation(api.docs.resetSync, { api_token: body.api_token, id: body.id, content: result.content });
+// A whole-body write refuses while a person's editor holds steps it has not
+// saved yet (docs.writeDocBody); it saves about a second after the last
+// keystroke, so wait that out before answering. wait_ms bounds the wait.
+async function waitingOutLiveEdits<T>(body: any, run: (args: any) => Promise<T>): Promise<T> {
+  const { wait_ms, ...args } = body;
+  const deadline = Date.now() + (typeof wait_ms === "number" ? Math.min(Math.max(wait_ms, 0), 15_000) : 4_000);
+  for (;;) {
+    try {
+      return await run(args);
+    } catch (e: any) {
+      if (e?.data?.reason !== "live_edit" || Date.now() >= deadline) throw e;
+      await new Promise((r) => setTimeout(r, 400));
+    }
   }
-  return result;
-});
+}
+// Both write the collab snapshot themselves, in the same transaction.
+cliRoute("/cli/docs/update", async (ctx, body) => waitingOutLiveEdits(body, (args) => ctx.runMutation(api.docs.update, args)));
 // Live artifacts: `cast board|sheet|data` (liveArtifacts.ts). Each acts as
 // the session named by session_id, so its cursor shows on the open page.
 cliRoute("/cli/live/elements", async (ctx, body) => await ctx.runQuery(api.liveArtifacts.elementsSince, body));
@@ -4850,13 +4877,7 @@ cliRoute("/cli/docs/delete", async (ctx, body) => {
 // `cast doc lab`: a Lab tool (alternatives, trim, flag, typos) run on the
 // stored doc, its result written in as drafting markup (docLab.runOnDoc).
 cliRoute("/cli/docs/lab", async (ctx, body) => ctx.runAction((api as any).docLab.runOnDoc, body));
-cliRoute("/cli/docs/patch", async (ctx, body) => {
-  const result = await ctx.runMutation(api.docs.patch, body);
-  if (result.content) {
-    await ctx.runMutation(api.docs.resetSync, { api_token: body.api_token, id: body.id, content: result.content });
-  }
-  return result;
-});
+cliRoute("/cli/docs/patch", async (ctx, body) => waitingOutLiveEdits(body, (args) => ctx.runMutation(api.docs.patch, args)));
 
 // Workflows
 cliRoute("/cli/workflows/upsert", async (ctx, body) => ctx.runMutation(api.workflows.upsert, body));
