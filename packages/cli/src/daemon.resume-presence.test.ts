@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { assertResumePaneReplaceable, panePresenceFromProcesses } from "./daemon";
+import { assertResumePaneReplaceable, headlessAgentInPanes, panePresenceFromProcesses } from "./daemon";
 import type { LivenessVerdict } from "@codecast/shared/contracts";
 
 test("a failed or incomplete process snapshot cannot prove an agent exited", () => {
@@ -42,4 +42,19 @@ test("missing panes can start but timed out tmux probes remain pending", async (
   await expect(assertResumePaneReplaceable("pane", {
     exec: async () => { throw new Error("tmux timed out"); }, presence,
   })).rejects.toThrow("AGENT_STDIN_NOT_READY");
+});
+
+// jx74025, 2026-11-12: a spawned trigger run is `bash task.sh` -> `claude -p`.
+// It draws no composer, so delivery must hold rather than retry into it.
+test("a pane running a headless agent run is named; interactive agents are not", () => {
+  const pane = (command: string) => [
+    { pid: 10, ppid: 1, command: "bash /tmp/codecast-task-8fjjes.sh" },
+    { pid: 11, ppid: 10, command },
+  ];
+  expect(headlessAgentInPanes([10], pane("claude -p [Codecast Task: X] --dangerously-skip-permissions --session-id abc"))).toBe("claude -p");
+  expect(headlessAgentInPanes([10], pane("node /usr/local/bin/claude --print hi"))).toBe("claude -p");
+  expect(headlessAgentInPanes([10], pane("/opt/homebrew/bin/codex exec do it"))).toBe("codex exec");
+  expect(headlessAgentInPanes([10], pane("claude --resume abc --dangerously-skip-permissions"))).toBeNull();
+  expect(headlessAgentInPanes([10], pane("codex resume abc"))).toBeNull();
+  expect(headlessAgentInPanes([10], [{ pid: 12, ppid: 1, command: "claude -p elsewhere" }])).toBeNull();
 });
