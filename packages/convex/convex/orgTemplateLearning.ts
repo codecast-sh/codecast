@@ -242,11 +242,11 @@ async function learnStatus(ctx: Ctx, template: any, now: number) {
       instances.push({ on_release: onRelease(row, release), ran: runs.length > 0, failed: runs.some((r) => r.trigger?.last_run_failed), pending: row.pending_upgrade?.to === release.version });
     }
     const lessons_since = lessons.filter((l) => l.source === "learning" && l.release.version === release.version).length;
-    canary = { version: release.version, digest: release.digest, published_at: release.published_at, instances, lessons_since, ...canaryVerdict({ published_at: release.published_at, instances, lessons_since }, now) };
+    canary = { version: release.version, digest: release.digest, published_at: release.published_at, instances, lessons_since, ...canaryVerdict({ published_at: release.published_at, instances }, now) };
   }
   const draft = draftDue(lessons, now);
-  // A canary that taught a lesson or failed a run is fixed by the next draft; one still soaking is not drafted over.
-  const superseded = !!canary && (canary.lessons_since > 0 || canary.instances.some((i) => i.on_release && i.failed));
+  // A canary that failed a run is fixed by the next draft at once; otherwise lessons wait for it to promote, so releases reach stable one by one.
+  const superseded = !!canary && canary.instances.some((i) => i.on_release && i.failed);
   const count = (status: string) => lessons.filter((l) => l.status === status).length;
   return {
     template_id: template.template_id as string, name: template.name as string, latest: template.latest.version as string,

@@ -228,7 +228,7 @@ describe("what the publisher reads", () => {
     expect((await performLearnStatus(ctx(db), ME, { template_id: "growth", now: NOW })).due).toEqual({ pass: true, draft: true, rollout: false, promote: false });
     expect(await performLearnDue(ctx(db), ME, { now: NOW })).toEqual({ due: true, templates: [{ template_id: "growth", due: ["pass", "draft"] }] });
   });
-  test("a canary waits for its instances, then for a clean run and the soak; a lesson learned on it makes the next draft due instead", async () => {
+  test("a canary waits for its instances, then for a clean run and the soak; a lesson learned on it waits for the next draft, a failed run drafts the fix at once", async () => {
     const canary = release("2.0.1", D2, "canary", NOW - 4 * DAY);
     const db = fixtures({ org_templates: [template([release("2.0.0", D1, "stable"), canary])], org_template_instances: [instance({ update_policy: "canary" })], org_template_lessons: [lesson(1), lesson(2), lesson(3)] });
     let status = await performLearnStatus(ctx(db), ME, { template_id: "growth", now: NOW });
@@ -244,7 +244,12 @@ describe("what the publisher reads", () => {
     expect(status.due).toMatchObject({ rollout: false, promote: true, draft: false });
     await db.insert("org_template_lessons", lesson(4, { release: { version: "2.0.1", digest: D2 } }));
     status = await performLearnStatus(ctx(db), ME, { template_id: "growth", now: NOW });
-    expect(status.canary).toMatchObject({ clean: false, lessons_since: 1 });
+    // A lesson learned on the canary waits for the next draft; it does not hold the release back.
+    expect(status.canary).toMatchObject({ clean: true, lessons_since: 1 });
+    expect(status.due).toMatchObject({ promote: true, draft: false });
+    await db.patch("agent_tasks_seo", { last_run_failed: true });
+    status = await performLearnStatus(ctx(db), ME, { template_id: "growth", now: NOW });
+    expect(status.canary).toMatchObject({ clean: false, why: "a canary instance failed its last run on this release" });
     expect(status.due).toMatchObject({ promote: false, draft: true });
   });
 });
