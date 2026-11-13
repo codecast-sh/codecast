@@ -102,6 +102,16 @@ export const ChatComposer = memo(function ChatComposer({
   const canSendSlack = slack?.auth === "ready";
   const onlyHere = localOnly || (offerSlack && !canSendSlack);
   const slackConnect = useSlackConnect(slackLink?.team_id, `/chat/${channelId}${threadRootId ? `?m=${threadRootId}` : ""}`);
+  // A DM Slack will not take replies in (Slackbot's) has nobody on this side
+  // to talk to either, so the room only reads.
+  if (slackLink?.kind === "dm" && slackLink.slack_read_only) {
+    return (
+      <div className={`ch-guest-post${compact ? " ch-guest-post-compact" : ""}`}>
+        <SlackLogo className="w-3.5 h-3.5" muted />
+        <span className="ch-guest-post-text">Read only: Slack does not accept replies here</span>
+      </div>
+    );
+  }
   return (
     <div
       className="ch-composer"

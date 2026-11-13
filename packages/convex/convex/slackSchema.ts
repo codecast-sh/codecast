@@ -107,6 +107,10 @@ export const slackTables = {
       match_people_by_email: v.boolean(), // a Slack person with a teammate's email IS that teammate
     }),
     paused: v.optional(v.boolean()),
+    // Slack refused a post here as read-only (Slackbot's DM, an announcement
+    // channel). The link then flows from Slack only; choosing a direction
+    // again clears it.
+    slack_read_only: v.optional(v.boolean()),
     // Slack ts floor: events older than this are not mirrored (set at link time,
     // moved back by a backfill).
     since_ts: v.string(),
