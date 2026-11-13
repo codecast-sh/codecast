@@ -212,6 +212,45 @@ describe("fleet store (sandboxed $HOME)", () => {
       expect(readFleetState()?.profile).toBe("pool-b");
       expect(launchProfileName(now)).toBe("pool-b");
     });
+
+    // A switch names the hand-installed profile (no share id). The next tick
+    // used to drop that launch and reseed onto whichever pool copy had a
+    // measured meter. The same email's copy is the account the switch asked for.
+    it("stays on the pool copy of the account it was switched to", async () => {
+      process.env.CODECAST_REMOTE_DEVICE = "1";
+      addCopy("pool-musgrave", "m@x.com", "account_shares_m");
+      addCopy("pool-other", "o@x.com", "account_shares_o");
+      writeAccountToken("hand", TOKEN);
+      const indexPath = path.join(home, ".codecast", "cc-accounts.json");
+      const index = JSON.parse(fs.readFileSync(indexPath, "utf-8"));
+      index.profiles.hand = { email: "M@x.com", saved_at: 1 };
+      fs.writeFileSync(indexPath, JSON.stringify(index));
+      fs.writeFileSync(path.join(home, ".codecast", "cc-usage.json"), JSON.stringify({
+        accounts: {
+          "o@x.com": {
+            fetched_at: now,
+            session: { percent: 10, resets_at: now + 3_600_000 },
+            weekly: { percent: 10, resets_at: now + 86_400_000 },
+          },
+        },
+      }));
+      invalidateAccountsCache();
+
+      const switched = await switchFleetTo("hand", now);
+      expect(switched.to).toBe("pool-musgrave");
+      expect(switched.mode).toBe("fleet");
+      expect(readFleetState()?.profile).toBe("pool-musgrave");
+      expect(launchProfileName(now)).toBe("pool-musgrave");
+
+      setLaunchProfile("hand", undefined, now);
+      const did = await maintainFleetStore(now);
+      expect(did).toContain("pool-musgrave");
+      expect(readFleetState()?.profile).toBe("pool-musgrave");
+      expect(launchProfileName(now)).toBe("pool-musgrave");
+
+      await expect(switchFleetTo("tok", now)).rejects.toThrow(/pool copy/);
+      expect(readFleetState()?.profile).toBe("pool-musgrave");
+    });
   });
 
   it("refuses a profile that can carry nothing, leaving the store as it was", async () => {

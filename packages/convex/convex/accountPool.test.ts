@@ -189,6 +189,35 @@ describe("sharing an account into the team's pool", () => {
     expect(overlaid.map((p) => p.name)).toEqual(["jason", "pool-claude4"]);
     expect(overlaid[1].usage?.session?.percent).toBe(12);
     expect(fallbackProfiles(overlaid, "jason@x.com", NOW).map((p) => p.name)).toEqual(["pool-claude4"]);
+    // No holder meter: the copy's own reading stands, so an empty account
+    // the drawer just probed ranks as empty instead of as unknown.
+    const holder = db._tables.devices.find((d: any) => d.device_id === "ashot-laptop");
+    const owned = holder.cc_accounts.profiles.find((p: any) => p.name === "claude4");
+    delete owned.usage;
+    const copy = { name: "pool-claude4", email: "claude4@x.com", pool_share_id: shareId, usage: usage(0) };
+    expect((await poolUsageOverlay({ db }, JASON as any, [copy]))[0].usage?.session?.percent).toBe(0);
+    owned.usage = usage(44);
+    expect((await poolUsageOverlay({ db }, JASON as any, [copy]))[0].usage?.session?.percent).toBe(44);
+    // A holder reading from days ago loses to the probe taken after the move.
+    // An older probe still loses to the holder: a tie, and anything older, keeps it.
+    owned.usage = { ...usage(99), fetched_at: NOW - 2 * DAY };
+    expect((await poolUsageOverlay({ db }, JASON as any, [{ ...copy, usage: usage(100) }]))[0].usage?.session?.percent).toBe(100);
+    owned.usage = usage(44);
+    expect((await poolUsageOverlay({ db }, JASON as any, [{ ...copy, usage: { ...usage(100), fetched_at: NOW - DAY } }]))[0].usage?.session?.percent).toBe(44);
+    // A second copy of the same login, with no share id and no reading of its
+    // own, takes the holder's meter. Left unread, auto-switch scores it unknown
+    // and hops off the account.
+    const bare = { name: "pool-claude4-local", email: "claude4@x.com" };
+    const withBare = await poolUsageOverlay({ db }, JASON as any, [copy, bare]);
+    expect(withBare.find((p) => p.name === "pool-claude4-local")?.usage?.session?.percent).toBe(44);
+    delete owned.usage;
+    const unread = await poolUsageOverlay({ db }, JASON as any, [
+      { name: "pool-claude4", email: "claude4@x.com", pool_share_id: shareId, usage: usage(0) },
+      bare,
+    ]);
+    expect(unread.find((p) => p.name === "pool-claude4")?.usage?.session?.percent).toBe(0);
+    expect(unread.find((p) => p.name === "pool-claude4-local")?.usage).toBeUndefined();
+    owned.usage = usage(44);
     await share(db, []);
     expect(await poolUsageOverlay({ db }, JASON as any, jasonProfiles)).toHaveLength(1);
   });

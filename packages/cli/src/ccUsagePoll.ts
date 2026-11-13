@@ -16,6 +16,7 @@ import {
   parseProfile,
   readAccountTokenValue,
   readActiveCredentialAsync,
+  readFleetState,
   readProfileIndex,
   readProfileSecretAsync,
   readUsageCache,
@@ -131,9 +132,21 @@ export async function refreshUsageSnapshots(
   for (const [name, meta] of Object.entries(index.profiles)) {
     const key = meta.uuid || meta.email;
     if (!key) continue;
-    // A pool copy's meter is read by its holder; probing it here would spend
-    // the shared account's tokens once per machine for a number nobody reads.
-    if (meta.pool_share_id) continue;
+    // A pool copy's meter belongs to its holder, so a drawer does not probe
+    // every copy: that would spend the shared account once per machine. The
+    // account this fleet is running is the exception. The server waits for a
+    // snapshot fetched after the switch, and a holder whose token never
+    // answers leaves the account unmeasured, which ranks it behind every
+    // account with a number, so the loop hops off the one just chosen. One
+    // probe through the setup-token is that snapshot. The key stays even
+    // when this pass skips the probe, or the write below drops the reading.
+    if (meta.pool_share_id) {
+      if (readFleetState()?.profile === name) {
+        knownKeys.add(key);
+        if (!jobs.has(key)) viaSetupToken(key, name);
+      }
+      continue;
+    }
     knownKeys.add(key);
     if (jobs.has(key)) continue; // active covers it with the freshest token
     // The live grant was already judged above. A stale snapshot of the same

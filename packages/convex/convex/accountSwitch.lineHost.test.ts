@@ -139,6 +139,30 @@ describe("a line host on its own fleet store", () => {
     expect(f.scheduled.some((a) => a.device_id)).toBe(false);
   });
 
+  test("ranking skips an account Cloudflare refuses from the line hosts, and can still leave it", async () => {
+    const cam = "r.cameron.musgrave@gmail.com";
+    const meter = (pct: number) => ({ fetched_at: Date.now() - 1_000, session: { percent: pct, resets_at: Date.now() + HOUR }, weekly: { percent: pct, resets_at: Date.now() + 24 * HOUR } });
+    const withCam = (camPercent: number) => {
+      const f = fixture();
+      f.tables.account_shares.push({ _id: "account_shares_cam", user_id: "users_owner", provider: "claude", email: cam, holder_device_id: "mac", team_id: "teams_acme", pools: ["line"], shared_at: f.now });
+      f.host.cc_accounts.profiles.push({ name: "pool-cam", email: cam, pool_share_id: "account_shares_cam", usage: meter(camPercent), setup_token: { stored_at: f.now, expires_at: f.now + 300 * 24 * HOUR } });
+      f.laptop.cc_accounts.profiles.push({ name: "cam", email: cam, usage: meter(camPercent), setup_token: { stored_at: f.now, expires_at: f.now + 300 * 24 * HOUR } });
+      f.laptop.cc_accounts.profiles[1].usage = meter(100);
+      f.laptop.cc_accounts.profiles[2].usage = meter(40);
+      return f;
+    };
+    // Cam's meter is the best headroom on the host. The host still moves to the next account.
+    const parked = withCam(1);
+    expect(await parked.run("line-host")).toMatchObject({ acted: "switch", profile: "pool-b" });
+    const ahead = withCam(1);
+    ahead.laptop.cc_accounts.profiles[1].usage = meter(97);
+    expect(await ahead.ahead("line-host")).toMatchObject({ acted: "switch", profile: "pool-b" });
+    // Already on it, and near a limit: the host leaves. The refusal only blocks arriving.
+    const leaving = withCam(97);
+    leaving.host.cc_accounts.launch_profile = "pool-cam";
+    expect(await leaving.ahead("line-host")).toMatchObject({ acted: "switch", profile: "pool-b" });
+  });
+
   test("switches ahead on the host's own meters, read from each account's holder", async () => {
     const f = fixture({ host: { cc_accounts: { fleet_store: true, launch_profile: "pool-a", profiles: [
       { name: "pool-a", email: "a@x.com", pool_share_id: "account_shares_a" },

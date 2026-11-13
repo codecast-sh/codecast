@@ -56,6 +56,7 @@ import {
   accountTokenFilePath,
   SETUP_TOKEN_LIFETIME_MS,
   extractSetupToken,
+  readAccountTokenValue,
   parseRateLimitFingerprint,
   sameAccountFingerprint,
   attributeFingerprint,
@@ -1126,6 +1127,46 @@ describe("refreshUsageSnapshots (sandboxed $HOME, injected fetch)", () => {
     expect(cache.accounts["uuid-c"]?.session?.percent).toBe(28);
   });
 
+  it("probes the pool copy the fleet is on, and the heartbeat carries that reading", async () => {
+    const token = "sk-ant-oat01-" + "a".repeat(86) + "-" + "bcdefghi";
+    writeAccountToken("pool-m", token);
+    const indexPath = path.join(home, ".codecast", "cc-accounts.json");
+    const index = JSON.parse(fs.readFileSync(indexPath, "utf-8"));
+    index.profiles["pool-m"] = { email: "m@x.com", pool_share_id: "share-m" };
+    fs.writeFileSync(indexPath, JSON.stringify(index));
+    fs.mkdirSync(path.join(home, ".codecast", "cc-fleet"), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, ".codecast", "cc-fleet", "state.json"),
+      JSON.stringify({ profile: "pool-m", via: "token", expires_at: NOW + 10 * 3600_000, written_at: NOW }),
+    );
+    invalidateAccountsCache();
+    const seen: string[] = [];
+    const fetchImpl = (async (url: any, init: any) => {
+      if (String(url).includes("/v1/messages")) {
+        seen.push(String(init?.headers?.Authorization ?? "").replace("Bearer ", ""));
+        return new Response("{}", {
+          status: 200,
+          headers: {
+            "anthropic-ratelimit-unified-5h-utilization": "0",
+            "anthropic-ratelimit-unified-7d-utilization": "0",
+            "anthropic-ratelimit-unified-5h-reset": String(SESSION_RESET_S),
+            "anthropic-ratelimit-unified-7d-reset": "1781400000",
+          },
+        });
+      }
+      return usageFetch([])(url, init);
+    }) as typeof fetch;
+    const res = await refreshUsageSnapshots({ now: NOW, fetchImpl });
+    expect(res.probed).toContain("pool-m");
+    expect(seen[0]).toBe(token);
+    expect(readUsageCache().accounts["m@x.com"]?.session?.percent).toBe(0);
+    expect(readUsageCache().accounts["m@x.com"]?.weekly?.percent).toBe(0);
+    invalidateAccountsCache();
+    const row = getAccountsHeartbeatPayload()?.profiles.find((p) => p.name === "pool-m");
+    expect(row?.pool_share_id).toBe("share-m");
+    expect(row?.usage?.session?.percent).toBe(0);
+  });
+
   it("throttles per-account probes within minIntervalMs", async () => {
     const calls: string[] = [];
     await refreshUsageSnapshots({ now: NOW, fetchImpl: usageFetch(calls) });
@@ -2053,6 +2094,13 @@ describe("minted setup-token file (isolated CODECAST_DIR)", () => {
     expect(info.expires_at - info.stored_at).toBe(SETUP_TOKEN_LIFETIME_MS);
   });
 
+  it("stores the token alone when the secure-storage sentence was glued on", () => {
+    const real = "sk-ant-oat01-" + "a".repeat(86) + "-" + "bcdefghi";
+    const file = writeAccountToken("union", real + "Storethistokensecurely");
+    expect(fs.readFileSync(file, "utf-8")).toBe(`export CLAUDE_CODE_OAUTH_TOKEN='${real}'\n`);
+    expect(readAccountTokenValue("union")).toBe(real);
+  });
+
   it("rejects anything that is not a setup-token (keychain access tokens, API keys, blanks)", () => {
     for (const bad of ["", "sk-ant-api03-abc", "at-123", "sk-ant-oat01-short", "sk-ant-oat01-" + "x".repeat(60) + " trailing"]) {
       expect(() => writeAccountToken("union", bad)).toThrow(CcAccountError);
@@ -2105,6 +2153,16 @@ describe("setup-token extraction + account fingerprint", () => {
     expect(extractSetupToken(pane)).toBe(TOKEN);
     expect(extractSetupToken("sk-ant-api03-" + "x".repeat(60))).toBeNull();
     expect(extractSetupToken("Opening browser to sign in…")).toBeNull();
+  });
+
+  it("drops the 'Store this token securely' line when a joined capture glues it onto the token", () => {
+    // 108 chars, hyphen at index 99: the shape Anthropic actually mints.
+    const real = "sk-ant-oat01-" + "a".repeat(86) + "-" + "bcdefghi";
+    expect(real).toHaveLength(108);
+    expect(real[99]).toBe("-");
+    const glued = real + "Storethistokensecurely";
+    expect(extractSetupToken(glued)).toBe(real);
+    expect(extractSetupToken(`Your OAuth token (valid for 1 year):\n\n${real}\nStore this token securely.`)).toBe(real);
   });
 
   it("reads the unified rate-limit windows off response headers", () => {

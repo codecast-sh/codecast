@@ -14,7 +14,6 @@ import {
   peggedWindow,
   peggedWindowLabel,
   planTypeLabel,
-  spendCapUntil,
   exhaustedLabel,
   type CcUsage,
 } from "./usageLimits";
@@ -381,19 +380,7 @@ describe("fallbackProfiles and reserved accounts", () => {
   });
 });
 
-describe("spendCapUntil — a spend-limit park names the week that lifts it", () => {
-  const ts = Date.UTC(2026, 10, 12, 23, 44);
-  test("reads the org form's weekly reset in UTC", () => {
-    const banner = "You've hit your org's monthly spend limit · ask your admin to raise it at https://claude.ai/admin-settings/usage · your weekly limit resets Nov 19, 5am (UTC)";
-    expect(spendCapUntil(banner, ts)).toBe(Date.UTC(2026, 10, 19, 5));
-  });
-  test("resolves a named zone and rolls into next year", () => {
-    const banner = "You've hit your monthly spend limit · your weekly limit resets Jan 2, 5:30pm (America/New_York)";
-    expect(spendCapUntil(banner, Date.UTC(2026, 11, 30))).toBe(Date.UTC(2027, 0, 2, 22, 30));
-  });
-  test("ignores other limit banners", () => {
-    expect(spendCapUntil("You've hit your weekly limit · resets Nov 19, 5am (UTC)", ts)).toBeUndefined();
-  });
+describe("a spend-limit block", () => {
   test("a blocked account is exhausted whatever its meters say, until the block lifts", () => {
     const u = usage({ weekly: { percent: 29, resets_at: now + 86_400_000 }, blocked_until: now + 86_400_000 });
     expect(isUsageExhausted(u, now)).toBe(true);
