@@ -34,6 +34,7 @@ import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { useInboxSelection } from "../../lib/inboxSelection";
 import { sessionShipSig, sessionShipFromSig } from "../../hooks/useSessionShipState";
 import { resolveImageThumbs, resolveShowBranchPill, resolveShowCharacters } from "../../lib/uiPrefDefaults";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 // The inbox session card's container: the store, the clock, the mutations and
 // every action a gesture reaches. It renders SessionCardView, which draws.
@@ -164,12 +165,12 @@ export const SessionCard = memo(function SessionCard({
     // The roster's own object, Object.is-stable between roster pushes.
     (s) => rosterDeviceOf(s.machineRoster as any, deviceId),
     (s) => localDeviceIdOf(s),
-    (s) => memberListSig(s.teamMembers),
+    (s) => memberListSig(teamMembersOf(s)),
     (s) => anchorIdentitySig((s as any).anchors, anchorId),
     // Teammates who have this session open (their faces in the meta row and
     // a ring on the card). The signature is the viewer id list, so a roster
     // push that changes nothing about who is here wakes nothing.
-    (s) => viewersSig(s.teamMembers, cardId, s.currentUser?._id?.toString?.() ?? null),
+    (s) => viewersSig(teamMembersOf(s), cardId, s.currentUser?._id?.toString?.() ?? null),
     // A hosted conversation that ended on a stop notice: the kind, a string,
     // so a streamed message wakes the card only when the answer changes.
     (s) => (hosted ? hostedStopOf(s.sessions[cardId] ?? session, s.messages[cardId]) : null),
@@ -190,7 +191,7 @@ export const SessionCard = memo(function SessionCard({
   ]);
   const liveTitle = liveCardTitle(st, cardId, hosted, session);
   const meId = st.currentUser?._id?.toString?.() ?? null;
-  const viewers = viewersOf(st.teamMembers, cardId, meId);
+  const viewers = viewersOf(teamMembersOf(st), cardId, meId);
   const stoppedKind = hosted ? hostedStopOf(st.sessions[cardId] ?? session, st.messages[cardId]) : null;
   // The amber blocked chip's revive stamp — read before the clock below so its
   // TTL participates in the clock's re-render signature.
@@ -254,7 +255,7 @@ export const SessionCard = memo(function SessionCard({
   // subscribe to that string, not the whole user doc — the doc's identity
   // churns on daemon heartbeat fields and would re-render every card.
   const currentUser = useMemo(() => (meId ? ({ _id: meId } as any) : null), [meId]);
-  const teamMembers = rosterIdentity(st.teamMembers);
+  const teamMembers = rosterIdentity(teamMembersOf(st));
   const convMetaSig = convAuthorSig(st.conversations[cardId]);
   const convMeta = useMemo(() => {
     if (convMetaSig === null) return null;

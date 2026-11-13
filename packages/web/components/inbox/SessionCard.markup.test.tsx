@@ -17,6 +17,7 @@ import type { InboxSession } from "../../store/inboxStore";
 import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 import { IdentityPrefsOverride } from "../../hooks/useIdentityPrefs";
 import { identityPrefsOf } from "../../lib/sessionIdentity";
+import { withTeamRoster } from "../../test-helpers/teamRoster";
 
 process.env.TZ = "UTC";
 const NOW = Date.UTC(2026, 8, 30, 18, 0);
@@ -35,11 +36,10 @@ const readState = mockInboxStore(() => ({
   machineRosterLive: true,
   localDevice: LOCAL,
   currentUser: { _id: "me" },
-  teamMembers: [
+  ...withTeamRoster([
     { _id: "me", name: "Ashot Petrosian", email: "a@x.org" },
     { _id: "u-ann", name: "Ann Lee", email: "ann@x.org", avatar_url: null, presence_state: "active", viewing_conversation_id: "c-viewed" },
-  ],
-  clientState: { ui: UI },
+  ], { clientState: { ui: UI } }),
   drafts: { "c-draft": { draft_message: "try the retry budget again" } },
   pendingMessages: { "c-pending": [{ _id: "pm1", status: "pending", content: "go" }] },
   sessionCommands: {},
