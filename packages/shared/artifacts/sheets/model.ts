@@ -14,7 +14,7 @@ import { Workbook } from "./engine";
 import { isError, parseLiteral, type ImpliedFormat, type Scalar } from "./values";
 import { parseFormula, type Node } from "./formula";
 import { DEFAULT_TAB, a1, parseKey, parseQualifiedRange, parseRectA1, rectA1, type Rect } from "./refs";
-import type { CellNumberFormat } from "./format";
+import { formatValue, type CellNumberFormat } from "./format";
 
 export const PALETTE = ["red", "orange", "yellow", "green", "cyan", "blue", "violet", "magenta", "gray"] as const;
 export type PaletteColor = (typeof PALETTE)[number];
@@ -262,15 +262,35 @@ export function plainValue(v: Scalar): PlainValue {
 export function readSheetRange(
   elements: readonly ArtifactElement[],
   range: string,
+  /** Dates and times as the grid shows them ("2026-11-28") rather than serial numbers: for a reader that isn't charting them. */
+  opts: { datesAsText?: boolean } = {},
 ): { tab: string; rect: string; values: PlainValue[][] } | { error: string } {
   const model = buildModel(elements);
   const r = resolveRange(model, range);
   if ("error" in r) return r;
   const wb = workbookFor(model);
   const t = model.byId.get(r.tab.id)!;
-  // Whole columns/rows clip to the used area.
-  const rect = { ...r.rect, r1: Math.min(r.rect.r1, Math.max(t.rows, r.rect.r0)), c1: Math.min(r.rect.c1, Math.max(t.cols, r.rect.c0)) };
-  const values = wb.read(r.tab.id, rect).map((row) => row.map(plainValue));
+  // Whole columns/rows clip to the used area, spilled blocks included (a SORT's rows below the last typed cell).
+  let rows = t.rows, cols = t.cols;
+  for (const sp of wb.spillRects(r.tab.id)) {
+    rows = Math.max(rows, sp.r1);
+    cols = Math.max(cols, sp.c1);
+  }
+  const rect = { ...r.rect, r1: Math.min(r.rect.r1, Math.max(rows, r.rect.r0)), c1: Math.min(r.rect.c1, Math.max(cols, r.rect.c0)) };
+  const values = wb.read(r.tab.id, rect).map((row, i) =>
+    row.map((v, j) => {
+      if (opts.datesAsText && typeof v === "number") {
+        const col = rect.c0 + j, row = rect.r0 + i;
+        const el = t.cells.get(cellNum(col, row));
+        const info = wb.cell(r.tab.id, col, row);
+        const own = styleOf(el);
+        const implied = info?.formula ? inheritedFormat(model, r.tab.id, info.input) : info?.implied;
+        const nf = own.nf ?? implied?.nf;
+        if (nf === "date" || nf === "datetime" || nf === "time") return formatValue(v, own, implied);
+      }
+      return plainValue(v);
+    }),
+  );
   return { tab: r.tab.name, rect: rectA1(rect), values };
 }
 
@@ -484,6 +504,38 @@ const FN_FORMATS: Record<string, ImpliedFormat> = {
   PMT: { nf: "currency", dp: 2 },
 };
 
+/** Array functions whose block holds cells of their first argument, column for column. */
+const ROWS_OF_SOURCE = new Set(["FILTER", "SORT", "SORTBY", "UNIQUE", "TAKE", "DROP", "ARRAYFORMULA"]);
+
+/**
+ * The format a cell shows in when it has none of its own: a formula's inherited
+ * one, a spilled cell's from the column of the range its array formula reads
+ * (FILTER(A2:C9) puts C's dollars in its third column), else what its typed
+ * input implies. The one answer the grid, the status bar and exports share.
+ */
+export function displayFormat(model: SheetModel, wb: Workbook, tabId: string, col: number, row: number): ImpliedFormat | undefined {
+  const info = wb.cell(tabId, col, row);
+  if (!info) return undefined;
+  const anchor = info.spilled ? wb.spillAnchor(tabId, col, row) : info.formula && wb.spillRange(tabId, col, row) ? { col, row } : null;
+  if (anchor) {
+    const input = anchor.col === col && anchor.row === row ? info.input : wb.cell(tabId, anchor.col, anchor.row)?.input ?? "";
+    try {
+      // Through nested array functions (SORT(FILTER(A2:C9, ...))) down to the range whose rows they hold.
+      let src: Node | null = parseFormula(input.slice(1));
+      while (src?.t === "fn" && ROWS_OF_SOURCE.has(src.name)) src = src.args[0] ?? null;
+      if (src?.t === "range") {
+        const c = src.c0 + (col - anchor.col);
+        const own = formatOfSource(model, tabId, { ...src, c0: c, c1: c }, 0);
+        if (own) return own;
+      }
+    } catch {
+      // A formula that doesn't parse has no source to read.
+    }
+    if (info.spilled) return undefined;
+  }
+  return info.formula ? inheritedFormat(model, tabId, info.input) ?? info.implied : info.implied;
+}
+
 export function inheritedFormat(model: SheetModel, tabId: string, input: string, depth = 0): ImpliedFormat | undefined {
   if (depth > 4 || !input.startsWith("=")) return undefined;
   let ast: Node;
@@ -533,6 +585,11 @@ export function inheritedFormat(model: SheetModel, tabId: string, input: string,
   const src = source(ast);
   if (!src) return undefined;
   if (src.t === "fn") return FN_FORMATS[src.name];
+  return formatOfSource(model, tabId, src, depth);
+}
+
+/** The format a cell or range reads in: its first cell with a format (a header row above the numbers doesn't count). */
+function formatOfSource(model: SheetModel, tabId: string, src: Node, depth: number): ImpliedFormat | undefined {
   if (src.t !== "ref" && src.t !== "range") return undefined;
   const tab = src.tab !== undefined ? tabByName(model, src.tab) : model.byId.get(tabId)?.meta;
   if (!tab) return undefined;
@@ -545,5 +602,16 @@ export function inheritedFormat(model: SheetModel, tabId: string, input: string,
   if (el.nf && el.nf !== "plain" && el.nf !== "text" && el.nf !== "check") return { nf: el.nf, dp: el.dp, ...(el.cur ? { cur: el.cur } : {}), ...(el.code ? { code: el.code } : {}) };
   if (typeof el.input !== "string") return undefined;
   if (el.input.startsWith("=")) return inheritedFormat(model, tab.id, el.input, depth + 1);
-  return parseLiteral(el.input).implied;
+  const implied = parseLiteral(el.input).implied;
+  // Typed money varies in decimals ($800, $3,400.50): a range reads with the most any of its cells shows, so no cent is rounded away.
+  if (implied && src.t === "range" && (implied.nf === "currency" || implied.nf === "number" || implied.nf === "percent")) {
+    let dp = implied.dp ?? 0;
+    for (const r of rows) {
+      const e = cells?.get(cellNum(col, r));
+      const other = typeof e?.input === "string" && !e.nf ? parseLiteral(e.input).implied : undefined;
+      if (other?.nf === implied.nf) dp = Math.max(dp, other.dp ?? 0);
+    }
+    return { ...implied, dp };
+  }
+  return implied;
 }

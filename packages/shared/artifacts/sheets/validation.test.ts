@@ -286,8 +286,19 @@ describe("copying a dropdown", () => {
     d.verb("write", ["A1"], "Open\nDone");
     d.verb("validate", ["Sheet1!A1:A9", "list", "Open:green,Done:blue"]);
     const m = buildModel(d.elements());
-    d.apply(pasteClipOps(m, "Sheet1", clipOf(m, "Sheet1", { c0: 1, r0: 1, c1: 1, r1: 2 }), { c0: 3, r0: 5, c1: 3, r1: 5 }));
+    // The grid copies with its visible rows listed; without gaps the dropdown comes along.
+    d.apply(pasteClipOps(m, "Sheet1", clipOf(m, "Sheet1", { c0: 1, r0: 1, c1: 1, r1: 2 }, [1, 2]), { c0: 3, r0: 5, c1: 3, r1: 5 }));
     const v = validationAt(buildModel(d.elements()), "Sheet1", 3, 6);
     expect(v).toMatchObject({ rule: "list", options: [{ v: "Open", color: "green" }, { v: "Done", color: "blue" }] });
+  });
+});
+
+describe("rule values as typed", () => {
+  test("50%, $100 and 1,200 compare as numbers; a broken custom formula is refused", async () => {
+    const { valueMeetsRule, betweenOf, condOps } = await import("./ruleOps");
+    expect([valueMeetsRule("gt", "50%", 0.6), valueMeetsRule("gt", "50%", 0.4), valueMeetsRule("lt", "$100", 99), valueMeetsRule("eq", "$1,200", 1200)]).toEqual([true, false, true, true]);
+    expect(betweenOf("$1,200, $2,000")).toEqual([1200, 2000]);
+    const d = doc(sheetSpec.seed!());
+    expect(() => condOps(buildModel(d.elements()), "Sheet1", { c0: 1, r0: 1, c1: 1, r1: 3 }, "formula", "=A1>(")).toThrow(/doesn't read/);
   });
 });

@@ -57,7 +57,7 @@ export function requestPath(p: string, where: { cwd: string; repoRoot: string | 
 /** Ask the laptop for one verb and print its answer; the exit code. (Heavy imports load here, not at startup.) */
 export async function runSyncVerb(op: Op, ref: string | undefined, extra: { paths?: string[]; ref?: string; keep?: "laptop" | "cloud"; mode?: "two_way" | "from_cloud" }): Promise<number> {
   const [{ convexClient }, { awaitCommandOutcome }, { serverErrorLine }] = await Promise.all([
-    import("../remote/convexClient.js"), import("./askLaptop.js"), import("../browser/sync.js"),
+    import("../remote/convexClient.js"), import("./askLaptop.js"), import("../serverError.js"),
   ]);
   const out = (l: string) => console.log(l);
   const bad = (m: string) => { console.error(`${fmt.error(icons.cross)} ${m}`); return 1; };

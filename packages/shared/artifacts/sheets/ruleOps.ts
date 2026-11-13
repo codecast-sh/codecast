@@ -4,6 +4,7 @@
 import type { ArtifactOp, Json } from "../core";
 import { newElementKey } from "../spec";
 import { parseDateText, parseLiteral, todaySerial } from "./values";
+import { parseFormula } from "./formula";
 import { colKey, parseKey, rectA1, rowKey, type Rect } from "./refs";
 import { validationAt, type CondRule, type SheetModel } from "./model";
 
@@ -91,8 +92,16 @@ export function enforceValidation(model: SheetModel, ops: ArtifactOp[]): { ops: 
 export const COND_RULES = ["sign", "scale", "gt", "lt", "between", "eq", "ne", "contains", "empty", "filled", "before", "after", "formula"] as const satisfies readonly CondRule[];
 
 /** The two ends of a "between" rule's value ("10, 20", "10 to 20", "10..20"), low first. */
+/** A rule's value as the number it names, read the way a cell reads typed input ("50%" is 0.5, "$1,200" is 1200). */
+export function ruleNumber(value: string | number | undefined): number {
+  if (typeof value === "number") return value;
+  const v = parseLiteral(String(value ?? "").trim()).value;
+  return typeof v === "number" ? v : NaN;
+}
+
 export function betweenOf(value: string | number | undefined): [number, number] | null {
-  const parts = String(value ?? "").split(/\s*(?:,|\.\.|\bto\b|\band\b)\s*/i).filter(Boolean).map(Number);
+  // Split on " and ", " to ", ".." or a comma that isn't a thousands separator ("1,200" stays one number).
+  const parts = String(value ?? "").split(/\s*(?:,(?!\d{3}\b)|\.\.|\bto\b|\band\b)\s*/i).filter(Boolean).map(ruleNumber);
   if (parts.length !== 2 || parts.some((n) => Number.isNaN(n))) return null;
   return parts[0] <= parts[1] ? [parts[0], parts[1]] : [parts[1], parts[0]];
 }
@@ -162,6 +171,11 @@ export function condOps(model: SheetModel, tabId: string, rect: Rect, rule: Cond
       const f = String(value).trim();
       // Written for the range's top-left cell; it shifts to each cell like a fill ($ pins a column or row).
       fields.value = f.startsWith("=") ? f : `=${f}`;
+      try {
+        parseFormula(String(fields.value).slice(1));
+      } catch (e) {
+        throw new Error(`That formula doesn't read: ${e instanceof Error ? e.message : String(e)}`);
+      }
     } else if (rule === "between") {
       const b = betweenOf(value);
       if (!b) throw new Error('between needs two numbers, like "10, 20"');
@@ -230,7 +244,7 @@ export function valueMeetsRule(rule: CondRule, target: string | number | undefin
   switch (rule) {
     case "eq":
     case "ne": {
-      const same = String(value ?? "").toLowerCase() === String(target ?? "").toLowerCase() || (numeric && value === Number(target));
+      const same = String(value ?? "").toLowerCase() === String(target ?? "").toLowerCase() || (numeric && value === ruleNumber(target));
       return rule === "eq" ? same : !blank && !same;
     }
     case "empty": return blank;
@@ -241,8 +255,8 @@ export function valueMeetsRule(rule: CondRule, target: string | number | undefin
     }
     case "gt":
     case "lt": {
-      const n = typeof target === "number" ? target : Number(target);
-      return numeric && Number.isFinite(n) && target !== "" && (rule === "gt" ? value > n : value < n);
+      const n = ruleNumber(target);
+      return numeric && Number.isFinite(n) && (rule === "gt" ? value > n : value < n);
     }
     case "before":
     case "after": {

@@ -136,6 +136,9 @@ function styleLooks(stylesXml: string, xfs: string[]): Map<number, CellStyle> {
     const font = fonts[Number(attr(xf, "fontId") ?? 0)] ?? "";
     if (/<b(?:\s+val="(?:1|true)")?\s*\/>/.test(font)) style.b = true;
     if (/<i(?:\s+val="(?:1|true)")?\s*\/>/.test(font)) style.i = true;
+    // Points to the sheet's px; Excel's default 11pt (and 10, its near twin) stays the sheet's default.
+    const sz = Number(attr(font.match(/<sz\s[^>]*>/)?.[0] ?? "", "val"));
+    if (sz && sz !== 11 && sz !== 10) style.fs = Math.round(sz / 0.75);
     if (/<u(?:\s+val="(?!none)[^"]*")?\s*\/>/.test(font)) style.u = true;
     const color = snapColor(attr(font.match(/<color\s[^>]*>/)?.[0] ?? "", "rgb"), "text");
     if (color) style.color = color;
@@ -365,7 +368,16 @@ export async function readXlsx(bytes: Uint8Array): Promise<ImportedTable[]> {
       }
     }
     const conds = condsOf(xml, dxfs);
-    tables.push({ name, grid, ...(styles.length ? { styles } : {}), ...(merges.length ? { merges } : {}), ...(lists.length ? { lists } : {}), ...(dates.length ? { dates } : {}), ...(conds.length ? { conds } : {}) });
+    // Frozen panes and column widths (Excel counts width in characters, about 7px each).
+    const pane = xml.match(/<pane\s[^>]*state="frozen"[^>]*>/)?.[0] ?? "";
+    const frozen = pane ? { rows: Number(attr(pane, "ySplit") ?? 0), cols: Number(attr(pane, "xSplit") ?? 0) } : undefined;
+    const widths: NonNullable<ImportTable["widths"]> = [];
+    for (const c of xml.matchAll(/<col\s[^>]*>/g)) {
+      const [min, max, w] = [attr(c[0], "min"), attr(c[0], "max"), attr(c[0], "width")].map(Number);
+      if (!min || !w || !/customWidth="(?:1|true)"/.test(c[0])) continue;
+      for (let i = min; i <= Math.min(max || min, min + 200); i++) widths.push({ col: i, w: Math.round(w * 7) });
+    }
+    tables.push({ name, grid, ...(frozen && (frozen.rows || frozen.cols) ? { frozen } : {}), ...(widths.length ? { widths } : {}), ...(styles.length ? { styles } : {}), ...(merges.length ? { merges } : {}), ...(lists.length ? { lists } : {}), ...(dates.length ? { dates } : {}), ...(conds.length ? { conds } : {}) });
   }
   if (!tables.length) throw new Error("This workbook has no sheets");
   return tables;

@@ -14,6 +14,7 @@
  * machine to release its copy.
  */
 
+import { serverErrorLine } from "./serverError.js";
 import * as fs from "node:fs";
 import { deviceId } from "./remote/device.js";
 
@@ -64,10 +65,7 @@ export function describeResumeOwnership(result: ResumeOwnershipResult, sessionRe
 }
 
 function errorText(err: unknown): string {
-  const raw = err instanceof Error ? err.message : String(err);
-  // Convex wraps server errors as "[Request ID: …] Server Error\nUncaught Error: <message>\n    at …".
-  const uncaught = raw.match(/Uncaught Error:\s*([^\n]+)/);
-  return (uncaught ? uncaught[1] : raw.split("\n")[0]).trim();
+  return serverErrorLine(err instanceof Error ? err.message : String(err));
 }
 
 /** Adopt the conversation for a foreground launch about to run in `projectPath`

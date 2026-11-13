@@ -181,10 +181,10 @@ export function handleSheetKey(e: ReactKeyboardEvent<HTMLTextAreaElement | HTMLI
       } else if (k === "d" && !readOnly) {
         // Fill down from the selection's top row.
         e.preventDefault();
-        if (rect.r1 > rect.r0) apply(fillOps(model, activeTabId, { ...rect, r1: rect.r0 }, rect));
+        if (rect.r1 > rect.r0) apply(fillOps(model, activeTabId, { ...rect, r1: rect.r0 }, rect), { claim: true });
       } else if (k === "r" && !readOnly && !e.shiftKey) {
         e.preventDefault();
-        if (rect.c1 > rect.c0) apply(fillOps(model, activeTabId, { ...rect, c1: rect.c0 }, rect));
+        if (rect.c1 > rect.c0) apply(fillOps(model, activeTabId, { ...rect, c1: rect.c0 }, rect), { claim: true });
       }
       return;
     }

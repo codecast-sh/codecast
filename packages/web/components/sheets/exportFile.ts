@@ -3,7 +3,7 @@
 // bold, and date cells as real dates. Written without a dependency: an .xlsx
 // is a zip of XML parts, stored uncompressed here.
 import type { MutableRefObject } from "react";
-import { a1, betweenOf, cellNum, formatValue, inheritedFormat, isError, rectA1, styleOf, type Rect, type SheetModel, type Workbook } from "./sheetCore";
+import { a1, betweenOf, cellNum, displayFormat, formatValue, isError, rectA1, styleOf, type Rect, type SheetModel, type Workbook } from "./sheetCore";
 import type { LiveExport } from "../live/registry";
 import type { SheetState } from "./sheetActions";
 
@@ -48,8 +48,7 @@ export function shownText(model: SheetModel, wb: Workbook, tabId: string, col: n
   const info = wb.cell(tabId, col, row);
   if (!info) return "";
   const el = model.byId.get(tabId)?.cells.get(cellNum(col, row));
-  const implied = info.formula && !el?.nf ? (inheritedFormat(model, tabId, info.input) ?? info.implied) : info.implied;
-  return formatValue(info.value, styleOf(el), implied);
+  return formatValue(info.value, styleOf(el), el?.nf ? info.implied : displayFormat(model, wb, tabId, col, row));
 }
 
 export function sheetCsv(model: SheetModel, wb: Workbook, tabId: string, rect?: Rect): string {
@@ -145,19 +144,21 @@ class XlsxStyles {
     return id;
   }
 
-  id(o: { bold?: boolean; italic?: boolean; underline?: boolean; color?: string; fill?: string; date?: boolean; numFmt?: number; align?: string; wrap?: boolean; border?: string }): number {
+  id(o: { bold?: boolean; italic?: boolean; underline?: boolean; color?: string; fill?: string; date?: boolean; numFmt?: number; align?: string; wrap?: boolean; border?: string; size?: number }): number {
     const numFmt = o.numFmt ?? (o.date ? 14 : 0);
     // Border letters in Excel's order (left, right, top, bottom), so "tb" and "bt" are one border.
     const bd = [..."lrtb"].filter((x) => o.border?.includes(x)).join("");
-    if (!o.bold && !o.italic && !o.underline && !o.color && !o.fill && !numFmt && !o.align && !o.wrap && !bd) return 0;
-    const key = `${o.bold ? "b" : ""}${o.italic ? "i" : ""}${o.underline ? "u" : ""}|${o.color ?? ""}|${o.fill ?? ""}|${numFmt}|${o.align ?? ""}|${o.wrap ? "w" : ""}|${bd}`;
+    // The sheet sizes text in px; Excel in points (13px is about 10pt; unset stays Excel's 11).
+    const pt = o.size ? Math.round(o.size * 0.75 * 2) / 2 : 11;
+    if (!o.bold && !o.italic && !o.underline && !o.color && !o.fill && !numFmt && !o.align && !o.wrap && !bd && pt === 11) return 0;
+    const key = `${o.bold ? "b" : ""}${o.italic ? "i" : ""}${o.underline ? "u" : ""}|${o.color ?? ""}|${o.fill ?? ""}|${numFmt}|${o.align ?? ""}|${o.wrap ? "w" : ""}|${bd}|${pt}`;
     const known = this.ids.get(key);
     if (known !== undefined) return known;
-    const fontKey = `${o.bold ? "b" : ""}${o.italic ? "i" : ""}${o.underline ? "u" : ""}|${o.color ?? ""}`;
+    const fontKey = `${o.bold ? "b" : ""}${o.italic ? "i" : ""}${o.underline ? "u" : ""}|${o.color ?? ""}|${pt}`;
     let fontId = this.fontIds.get(fontKey);
     if (fontId === undefined) {
       fontId = this.fonts.length;
-      this.fonts.push(`<font>${o.bold ? "<b/>" : ""}${o.italic ? "<i/>" : ""}${o.underline ? "<u/>" : ""}<sz val="11"/>${o.color && PALETTE_HEX[o.color] ? `<color rgb="${PALETTE_HEX[o.color].text}"/>` : ""}<name val="Calibri"/></font>`);
+      this.fonts.push(`<font>${o.bold ? "<b/>" : ""}${o.italic ? "<i/>" : ""}${o.underline ? "<u/>" : ""}<sz val="${pt}"/>${o.color && PALETTE_HEX[o.color] ? `<color rgb="${PALETTE_HEX[o.color].text}"/>` : ""}<name val="Calibri"/></font>`);
       this.fontIds.set(fontKey, fontId);
     }
     let fillId = this.fillIds.get(o.fill ?? "");
@@ -283,8 +284,8 @@ export function sheetXlsx(model: SheetModel, wb: Workbook): Uint8Array {
         const date = style.nf === "date" || style.nf === "datetime" || info?.implied?.nf === "date" || info?.implied?.nf === "datetime";
         const isDate = date && typeof info?.value === "number";
         // A formula's number takes the format it shows in the grid (its own, else the one it inherits from what it reads).
-        const fmt = style.nf ? style : info?.formula ? inheritedFormat(model, meta.id, input) ?? info.implied : info?.implied;
-        const s = styles.id({ bold: style.b, italic: style.i, underline: style.u, color: style.color, fill: style.fill, date: isDate, numFmt: typeof info?.value === "number" ? styles.fmtId(fmt, isDate) : 0, align: style.al, wrap: style.wrap, border: style.bd });
+        const fmt = style.nf ? style : displayFormat(model, wb, meta.id, col, row);
+        const s = styles.id({ bold: style.b, italic: style.i, underline: style.u, color: style.color, fill: style.fill, date: isDate, numFmt: typeof info?.value === "number" ? styles.fmtId(fmt, isDate) : 0, align: style.al, wrap: style.wrap, border: style.bd, size: style.fs });
         const ref = a1(col, row);
         const sAttr = s ? ` s="${s}"` : "";
         // An array formula carries the block it fills, as Excel stores one.

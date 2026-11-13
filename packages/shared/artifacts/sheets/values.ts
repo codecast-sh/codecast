@@ -206,13 +206,16 @@ export function toBool(v: Scalar): boolean | SheetError {
   return v;
 }
 
+/** One collator for every text comparison: building one per call (localeCompare with options) is what made big sorts slow. */
+const TEXT_ORDER = new Intl.Collator(undefined, { sensitivity: "base", numeric: true });
+
 /** Sheets' ordering for comparisons and sort: numbers < text < booleans; empty sorts last in sort. */
 export function compareScalars(a: Scalar, b: Scalar): number {
   const rank = (v: Scalar) => (typeof v === "number" ? 0 : typeof v === "string" ? 1 : typeof v === "boolean" ? 2 : 3);
   const ra = rank(a), rb = rank(b);
   if (ra !== rb) return ra - rb;
   if (typeof a === "number" && typeof b === "number") return a - b;
-  if (typeof a === "string" && typeof b === "string") return a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+  if (typeof a === "string" && typeof b === "string") return TEXT_ORDER.compare(a, b);
   if (typeof a === "boolean" && typeof b === "boolean") return Number(a) - Number(b);
   return 0;
 }

@@ -116,3 +116,34 @@ describe("status bar totals", () => {
     expect(selectionSummary(live.model, live.wb, tab, { c0: 3, r0: 1, c1: 4, r1: 1 }, new Set()).style).toBeUndefined();
   });
 });
+
+describe("typing into a percent cell", () => {
+  test("50 means 50%; 0.5 stays 0.5 (shows 50%)", async () => {
+    const { checkCommit } = await import("./sheetActions");
+    const { LiveSheet } = await import("./sheetCore");
+    const { foldOps, toElement } = await import("@codecast/shared/artifacts");
+    const live = new LiveSheet();
+    live.update([...foldOps(new Map(), [{ k: "tab:S", put: { kind: "tab", name: "S", order: 0 } }, { k: "c:S!A1", put: { kind: "cell", nf: "percent" } }] as never)].map(([k, st]) => toElement(k, st)) as never);
+    const at = (text: string) => checkCommit(live.model, { tab: "S", col: 1, row: 1, text } as never);
+    expect([at("50"), at("0.5"), at("=1")]).toEqual([{ input: "50%" }, { input: "0.5" }, { input: "=1" }]);
+  });
+});
+
+describe("which top row is a header", () => {
+  test("text over figures or a bold row is a header; a row of data is not", async () => {
+    const { isHeaderRow } = await import("./sheetActions");
+    const { LiveSheet } = await import("./sheetCore");
+    const { foldOps, toElement } = await import("@codecast/shared/artifacts");
+    const at = (rows: Array<Array<{ input: string; b?: boolean }>>) => {
+      const ops: unknown[] = [{ k: "tab:S", put: { kind: "tab", name: "S", order: 0 } }];
+      rows.forEach((row, r) => row.forEach((c, i) => ops.push({ k: `c:S!${"ABC"[i]}${r + 1}`, put: { kind: "cell", ...c } })));
+      const live = new LiveSheet();
+      live.update([...foldOps(new Map(), ops as never)].map(([k, st]) => toElement(k, st)) as never);
+      return isHeaderRow(live.wb, "S", { c0: 1, r0: 1, c1: rows[0].length, r1: rows.length }, live.model.byId.get("S")!);
+    };
+    expect(at([[{ input: "Name" }, { input: "Amount" }], [{ input: "Ana" }, { input: "5" }]])).toBe(true);
+    expect(at([[{ input: "Name 5" }, { input: "5" }], [{ input: "Name 3" }, { input: "3" }]])).toBe(false);
+    expect(at([[{ input: "Name" }, { input: "City" }], [{ input: "Ana" }, { input: "Paris" }]])).toBe(false);
+    expect(at([[{ input: "Name", b: true }, { input: "City", b: true }], [{ input: "Ana" }, { input: "Paris" }]])).toBe(true);
+  });
+});

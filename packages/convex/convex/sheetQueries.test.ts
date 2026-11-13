@@ -49,17 +49,17 @@ const cells = async (t: any, doc: Id<"docs">) =>
   );
 
 describe("sheet live query tabs", () => {
-  test("a tasks tab fills from the sheet's workspace, open tasks in creation order, then throttles", async () => {
+  test("a tasks tab fills from the sheet's workspace, open tasks newest first, then throttles", async () => {
     const { t, as, sheet } = await setup();
     await as.mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [{ k: "tab:q", put: { kind: "tab", name: "Open", order: 1, query: { source: "tasks" } } }] });
     const r = await as.mutation(refresh, { doc_id: sheet, tab: "q" });
     expect(r.rows).toBe(2);
     const c = await cells(t, sheet);
     expect(c["c:q!A1"]).toBe("ID");
-    expect(c["c:q!A2"]).toBe("ct-1");
-    expect(c["c:q!B2"]).toBe("'=SUM(A1)");
-    expect(c["c:q!A3"]).toBe("ct-2");
-    expect(c["c:q!F2"]).toBe("a, b");
+    expect(c["c:q!A2"]).toBe("ct-2");
+    expect(c["c:q!A3"]).toBe("ct-1");
+    expect(c["c:q!B3"]).toBe("'=SUM(A1)");
+    expect(c["c:q!F3"]).toBe("a, b");
     expect(Object.values(c)).not.toContain("Rosa's private task");
     expect(Object.values(c)).not.toContain("Finished");
     expect(Object.values(c)).not.toContain("ct-mined");
@@ -81,7 +81,7 @@ describe("sheet live query tabs", () => {
     await as.mutation(api.liveArtifacts.apply, { doc_id: sheet, ops: [{ k: "tab:q", put: { kind: "tab", name: "Open", order: 1, query: { source: "tasks", limit: 3 } } }] });
     await as.mutation(refresh, { doc_id: sheet, tab: "q" });
     let c = await cells(t, sheet);
-    expect([c["c:q!A2"], c["c:q!A3"], c["c:q!A4"]]).toEqual(["ct-new2", "ct-new3", "ct-new4"]);
+    expect([c["c:q!A2"], c["c:q!A3"], c["c:q!A4"]]).toEqual(["ct-new4", "ct-new3", "ct-new2"]);
 
     // Someone touches the oldest task: it is now among the three most recently updated.
     await t.run((ctx: any) => ctx.db.patch(old, { updated_at: 9_000, title: "Revived" }));
@@ -89,9 +89,9 @@ describe("sheet live query tabs", () => {
     await again();
     await as.mutation(refresh, { doc_id: sheet, tab: "q" });
     c = await cells(t, sheet);
-    // Creation order: the revived task sits first, the two newest keep their order below it.
-    expect([c["c:q!A2"], c["c:q!A3"], c["c:q!A4"]]).toEqual(["ct-old", "ct-new3", "ct-new4"]);
-    expect(c["c:q!B2"]).toBe("Revived");
+    // Newest made first: the two newest keep the top, the revived (oldest-made) task sits below them.
+    expect([c["c:q!A2"], c["c:q!A3"], c["c:q!A4"]]).toEqual(["ct-new4", "ct-new3", "ct-old"]);
+    expect(c["c:q!B4"]).toBe("Revived");
 
     // An update to a row already shown changes only that row.
     await t.run(async (ctx: any) => {
@@ -101,7 +101,7 @@ describe("sheet live query tabs", () => {
     await again();
     const r = await as.mutation(refresh, { doc_id: sheet, tab: "q" });
     c = await cells(t, sheet);
-    expect([c["c:q!A2"], c["c:q!A3"], c["c:q!A4"]]).toEqual(["ct-old", "ct-new3", "ct-new4"]);
+    expect([c["c:q!A2"], c["c:q!A3"], c["c:q!A4"]]).toEqual(["ct-new4", "ct-new3", "ct-old"]);
     expect(c["c:q!B3"]).toBe("Renamed");
     // Title + Updated stamp of one row, plus the tab's refreshed_at.
     expect(r.changed).toBeLessThanOrEqual(3);

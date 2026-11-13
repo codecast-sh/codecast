@@ -579,3 +579,12 @@ button.sheet-query-chip.is-menu:hover { background: color-mix(in srgb, var(--sol
 .sheet-find-opt { height: 22px; min-width: 26px; padding: 0 5px; border-radius: 5px; font-size: 12px; font-weight: 600; color: var(--sol-text-dim); }
 .sheet-find-opt:hover { color: var(--sol-text); background: var(--sol-bg-alt); }
 .sheet-find-opt.is-on { color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 14%, transparent); }
+.sheet-fbar-tools { display: flex; align-items: center; gap: 1px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.sheet-fbar-tools::-webkit-scrollbar { display: none; }
+.sheet-formatbar .sheet-ask-btn { flex-shrink: 0; }
+.sheet-query-widen { padding: 1px 7px; border-radius: 4px; font-size: 12px; color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 12%, transparent); }
+.sheet-query-widen:hover { background: color-mix(in srgb, var(--sol-blue) 20%, transparent); }
+.sheet-query-bar { flex-wrap: nowrap; white-space: nowrap; min-width: 0; }
+.sheet-query-bar > * { flex-shrink: 0; }
+.sheet-query-bar > .text-sol-text-dim, .sheet-query-bar > .text-sol-red { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+button.sheet-query-chip.is-folded { flex-shrink: 1; min-width: 0; max-width: 60%; }

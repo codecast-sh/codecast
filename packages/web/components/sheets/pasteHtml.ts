@@ -5,8 +5,11 @@ import { colLetters, type CellStyle, type ImportTable, type Rect } from "./sheet
 import { snapColor } from "./importFile";
 
 /** A CSS color ("rgb(255, 242, 204)", "#fff2cc", "#fc0") as an ARGB hex, or undefined. */
+/** The few color names Excel and web pages write instead of a hex value. */
+const NAMED: Record<string, string> = { black: "#000000", white: "#ffffff", red: "#ff0000", green: "#008000", blue: "#0000ff", yellow: "#ffff00", orange: "#ffa500", purple: "#800080", gray: "#808080", grey: "#808080", silver: "#c0c0c0", navy: "#000080", teal: "#008080", maroon: "#800000", olive: "#808000", lime: "#00ff00", aqua: "#00ffff", fuchsia: "#ff00ff" };
+
 function cssHex(css: string): string | undefined {
-  const c = css.trim().toLowerCase();
+  const c = (NAMED[css.trim().toLowerCase()] ?? css).trim().toLowerCase();
   const rgb = c.match(/^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+))?/);
   if (rgb) {
     if (rgb[4] !== undefined && Number(rgb[4]) === 0) return undefined;
@@ -53,7 +56,19 @@ function cellText(td: HTMLTableCellElement): string {
  */
 export function htmlTable(html: string, at: { col: number; row: number } = { col: 1, row: 1 }): Omit<ImportTable, "name"> | null {
   if (!/<table[\s>]/i.test(html) || typeof DOMParser === "undefined") return null;
-  const table = new DOMParser().parseFromString(html, "text/html").querySelector("table");
+  const page = new DOMParser().parseFromString(html, "text/html");
+  const table = page.querySelector("table");
+  // Excel puts a cell's look in a <style> block of class rules (.xl65 { font-weight: 700; background: #FFFF00 }), not inline.
+  const classes = new Map<string, Map<string, string>>();
+  for (const st of page.querySelectorAll("style"))
+    for (const m of (st.textContent ?? "").matchAll(/\.([\w-]+)\s*\{([^}]*)\}/g)) {
+      const props = classes.get(m[1]) ?? new Map<string, string>();
+      for (const decl of m[2].split(";")) {
+        const i = decl.indexOf(":");
+        if (i > 0) props.set(decl.slice(0, i).trim().toLowerCase(), decl.slice(i + 1).trim());
+      }
+      classes.set(m[1], props);
+    }
   if (!table) return null;
   const grid: string[][] = [];
   const styles: NonNullable<ImportTable["styles"]> = [];
@@ -75,7 +90,8 @@ export function htmlTable(html: string, at: { col: number; row: number } = { col
       line[col - 1] = formula?.startsWith("=") ? r1c1ToA1(formula, at.col + col - 1, at.row + row - 1) : cellText(td);
       // Inline styles on the cell or a single wrapper inside it, as spreadsheets write them.
       const inner = td.children.length === 1 ? (td.children[0] as HTMLElement) : null;
-      const css = (prop: string) => td.style.getPropertyValue(prop) || inner?.style?.getPropertyValue(prop) || "";
+      const fromClass = (prop: string) => [...td.classList].map((c) => classes.get(c)?.get(prop) ?? (prop === "background-color" ? classes.get(c)?.get("background") : undefined)).find(Boolean) ?? "";
+      const css = (prop: string) => td.style.getPropertyValue(prop) || inner?.style?.getPropertyValue(prop) || fromClass(prop);
       const style: CellStyle = {};
       if (td.tagName === "TH" || /^(bold|[6-9]00)$/.test(css("font-weight")) || td.querySelector("b, strong")) style.b = true;
       if (css("font-style") === "italic" || td.querySelector("i, em")) style.i = true;

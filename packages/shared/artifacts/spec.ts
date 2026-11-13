@@ -33,6 +33,14 @@ export type VerbResult = {
   status?: string;
   /** Remote verbs (spec.remote) the CLI runs once the ops are written, in order: work only the server can do (a sheet's query refresh). */
   after?: Array<{ verb: string; args: string[] }>;
+  /** Remote verbs the CLI runs before writing, in order: a judgment only the server's data can make. One that answers `failed` stops the write with its text. */
+  before?: Array<{ verb: string; args: string[] }>;
+  /**
+   * The write rewrites a whole range (a sort, a fill, a paste, a row insert): it claims `scope`
+   * (see ArtifactSpec.claimScope) for all of its batches, so another rewrite or another person's
+   * edit can't interleave with it, and it is refused if the scope changed since it was read.
+   */
+  claim?: { scope: string };
 };
 
 /**
@@ -79,6 +87,14 @@ export type ArtifactSpec = {
    * back to its anchor.
    */
   commentPlaces?(view: ArtifactView, threads: ReadonlyArray<{ key: string; anchor?: unknown }>): Map<string, string | null>;
+  /**
+   * The scope a whole-range rewrite claims for the element at `key` (a sheet's
+   * cell to "tab:<id>"), or null for an element no rewrite covers. `fields`
+   * are the op's own fields when it carries them (a rule element names its
+   * tab). While a rewrite holds a scope, other people's writes into it are
+   * refused.
+   */
+  claimScope?(key: string, fields?: Record<string, unknown>): string | null;
   /** Product verbs beyond the shared ones (create, read, apply, history, ...). */
   verbs?: Record<string, ArtifactVerb>;
   /**

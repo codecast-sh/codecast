@@ -6,14 +6,11 @@ import { newElementKey } from "../spec";
 import { cellKey, rectA1, type Rect } from "./refs";
 import { buildModel, cellNum, workbookFor, type CellStyle, type CondRule, type SheetModel, type TabMeta } from "./model";
 import { condOps, validationOps } from "./ruleOps";
-import { addTabOps, fitWidthOps, gridOps } from "./ops";
+import { addTabOps, colWidthOps, fitWidthOps, gridOps, uniqueTabName } from "./ops";
+import { mapFormulaRefs, refText } from "./rewrite";
 
 type CellFields = Record<string, Json>;
 
-/**
- * Imported tables (a CSV, or each sheet of a workbook) as new tabs after the
- * existing ones, names kept unique, columns fitted to what they hold.
- */
 /** A table read from a file: its typed cells, and what an .xlsx also carries (cell styles, merges, dropdown lists). */
 export type ImportTable = {
   name: string;
@@ -25,6 +22,9 @@ export type ImportTable = {
   dates?: Array<{ rect: Rect; strict?: boolean }>;
   /** Conditional colors. */
   conds?: Array<{ rect: Rect; rule: CondRule; value?: string | number; color?: string }>;
+  /** Frozen header rows and columns, and column widths in px, as the file had them. */
+  frozen?: { rows: number; cols: number };
+  widths?: Array<{ col: number; w: number }>;
 };
 
 /**
@@ -56,12 +56,30 @@ export function placeTableOps(model: SheetModel, tabId: string, col0: number, ro
   return [...cells, ...styled, ...merges, ...lists, ...dates, ...conds];
 }
 
+/**
+ * Imported tables (a CSV, or each sheet of a workbook) as new tabs after the
+ * existing ones, names kept unique. Columns take the file's widths, else are
+ * fitted to what they hold; a workbook's frozen panes come along.
+ */
 export function importTablesOps(model: SheetModel, tables: ImportTable[]): { ops: ArtifactOp[]; tabIds: string[] } {
   const ops: ArtifactOp[] = [];
   const tabIds: string[] = [];
-  let m = model;
+  // Each table's tab name once it is unique ("Orders" may arrive as "Orders 2"); formulas in the
+  // workbook that name a sibling sheet are pointed at that sibling's new name, not at an existing tab.
+  const renamed = new Map<string, string>();
+  const taken: TabMeta[] = [...model.tabs];
   for (const table of tables) {
-    const add = addTabOps(m, table.name);
+    const name = uniqueTabName({ ...model, tabs: taken }, table.name);
+    taken.push({ id: `_${taken.length}`, name, order: 0, frozenRows: 0, frozenCols: 0 });
+    if (name !== table.name) renamed.set(table.name.toLowerCase(), name);
+  }
+  const repoint = (f: string) =>
+    !renamed.size || !f.startsWith("=") ? f : mapFormulaRefs(f, (t) => (t.tab !== undefined && renamed.has(t.tab.toLowerCase()) ? refText({ ...t, tab: renamed.get(t.tab.toLowerCase()) }) : null));
+  let m = model;
+  for (const raw of tables) {
+    const table = renamed.size ? { ...raw, grid: raw.grid.map((row) => row.map(repoint)), conds: raw.conds?.map((c) => (c.rule === "formula" && typeof c.value === "string" ? { ...c, value: repoint(c.value) } : c)) } : raw;
+    const frozen = table.frozen ? { ...(table.frozen.rows ? { frozen_rows: table.frozen.rows } : {}), ...(table.frozen.cols ? { frozen_cols: table.frozen.cols } : {}) } : {};
+    const add = addTabOps(m, table.name, frozen);
     const first = add.ops[0];
     const name = "put" in first && typeof first.put.name === "string" ? first.put.name : table.name;
     const meta: TabMeta = { id: add.id, name, order: Math.max(-1, ...m.tabs.map((t) => t.order)) + 1, frozenRows: 0, frozenCols: 0 };
@@ -70,8 +88,10 @@ export function importTablesOps(model: SheetModel, tables: ImportTable[]): { ops
     // Fit against the imported cells alone: the new tab holds nothing else yet.
     const alone = buildModel([...foldOps(new Map(), [...add.ops, ...cells])].map(([k, st]) => toElement(k, st)));
     const width = Math.max(0, ...table.grid.map((r) => r.length));
-    const fit = fitWidthOps(alone, workbookFor(alone), add.id, Array.from({ length: Math.min(width, 200) }, (_, i) => i + 1));
-    ops.push(...add.ops, ...cells, ...fit);
+    const sized = new Set((table.widths ?? []).map((x) => x.col));
+    const fit = fitWidthOps(alone, workbookFor(alone), add.id, Array.from({ length: Math.min(width, 200) }, (_, i) => i + 1).filter((c) => !sized.has(c)));
+    const widths = (table.widths ?? []).flatMap((x) => colWidthOps(add.id, [x.col], x.w));
+    ops.push(...add.ops, ...cells, ...fit, ...widths);
     tabIds.push(add.id);
   }
   return { ops, tabIds };

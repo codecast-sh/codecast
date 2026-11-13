@@ -239,11 +239,16 @@ export function FormatBar({
   useClaimAsk();
   const barRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
+  const [tight, setTight] = useState(false);
   useMountEffect(() => {
     // Below ~760px of room the rarer controls fold into More.
     const host = barRef.current?.parentElement;
     if (!host) return;
-    const ro = new ResizeObserver(() => setCompact(host.clientWidth < 760));
+    // Below ~520px Ask shrinks to its icon so it always fits beside the controls.
+    const ro = new ResizeObserver(() => {
+      setCompact(host.clientWidth < 760);
+      setTight(host.clientWidth < 520);
+    });
     ro.observe(host);
     return () => ro.disconnect();
   });
@@ -311,6 +316,8 @@ export function FormatBar({
         </div>
       ) : (
         <>
+          {/* The formatting controls scroll sideways when even the compact bar doesn't fit; Ask stays pinned at the end. */}
+          <div className="sheet-fbar-tools">
           {!compact && <Menu title="Font size" trigger={<span className="sheet-fsize">{style.fs ?? 13}</span>}>{sizeItems}</Menu>}
           {!compact && <span className="sheet-fsep" />}
           <Btn title="Bold" shortcut={[mod, "B"]} on={!!style.b} onClick={() => onAction({ type: "toggle", field: "b" })}><Bold className="w-4 h-4" /></Btn>
@@ -416,8 +423,9 @@ export function FormatBar({
             <DropdownMenuSeparator />
             <DropdownMenuItem className={ITEM} onSelect={() => onAction({ type: "clearFormat" })}><Eraser className="w-4 h-4" /> Clear formatting</DropdownMenuItem>
           </Menu>
+          </div>
           <span className="sheet-fsep" />
-          <AskButton data-sheet-ask className="sheet-ask-btn" onMouseDown={(e) => e.preventDefault()} onClick={() => setAsking(true)} label={compact ? "Ask" : selectionLabel.includes(":") ? `Ask about ${selectionLabel}` : "Ask agent"} />
+          <AskButton data-sheet-ask className="sheet-ask-btn" aria-label="Ask agent" title="Ask agent" onMouseDown={(e) => e.preventDefault()} onClick={() => setAsking(true)} label={tight ? "" : compact ? "Ask" : selectionLabel.includes(":") ? `Ask about ${selectionLabel}` : "Ask agent"} />
         </>
       )}
     </div>

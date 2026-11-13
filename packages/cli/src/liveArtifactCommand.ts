@@ -9,6 +9,7 @@
 // /cli/docs/create like `cast doc create`.
 import type { Command } from "commander";
 import { readFileSync } from "fs";
+import { randomUUID } from "crypto";
 import {
   artifactView,
   chunkOps,
@@ -112,10 +113,13 @@ async function readComments(deps: PublishDeps, docId: string) {
 }
 
 /** Write ops as this session, in server-sized batches, moving its cursor to what it wrote. */
-async function writeOps(deps: PublishDeps, spec: ArtifactSpec, docId: string, title: string, ops: ArtifactOp[], opts: { draft?: boolean; position?: ArtifactPosition; status?: string; elements?: ArtifactElement[] }) {
+async function writeOps(deps: PublishDeps, spec: ArtifactSpec, docId: string, title: string, ops: ArtifactOp[], opts: { draft?: boolean; position?: ArtifactPosition; status?: string; elements?: ArtifactElement[]; claim?: { scope: string; base: number } }) {
   let rev = 0;
   const written: string[] = [];
-  for (const batch of chunkOps(ops)) {
+  const batches = chunkOps(ops);
+  // A rewrite's batches share one write id and hold its scope until the last (lib/liveArtifactWrite claimsAfter).
+  const write = opts.claim ? randomUUID() : "";
+  for (const [i, batch] of batches.entries()) {
     const keys = batch.map((o) => o.k);
     const view = artifactView(spec.type, title, opts.elements ?? []);
     const position = opts.position ?? spec.presenceFor?.(view, keys) ?? { key: keys[keys.length - 1] };
@@ -126,6 +130,7 @@ async function writeOps(deps: PublishDeps, spec: ArtifactSpec, docId: string, ti
       position,
       selection: keys.slice(-50),
       ...(opts.status ? { status: opts.status } : {}),
+      ...(opts.claim ? { claim: { scope: opts.claim.scope, write, base: opts.claim.base, first: i === 0, last: i === batches.length - 1 } } : {}),
       ...session(deps),
     });
     rev = r.rev;
@@ -399,7 +404,7 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
         const roots = rows.filter((c: any) => !c.parent);
         const a = roots.length ? await readOwn(id) : null;
         const places = a ? threadPlaces(spec, a.title, a.elements, roots) : new Map<string, string | null>();
-        console.log(JSON.stringify(rows.map((c: any) => (c.parent ? c : { ...c, place: places.get(c.key) ?? null, deleted: places.get(c.key) === null })), null, 2));
+        console.log(JSON.stringify(rows.map((c: any) => (c.parent ? c : { ...c, place: places.get(c.key) ?? null, anchor_deleted: places.get(c.key) === null })), null, 2));
         return;
       }
       const roots = rows.filter((c: any) => !c.parent && (options.all || !c.resolved));
@@ -438,9 +443,18 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
           if (result.status) console.log(result.status);
           return;
         }
+        // Judgments that need the server's data run before anything is written; a failed one stops the write.
+        for (const step of result.before ?? []) {
+          if (!spec.remote?.[step.verb]) throw new Error(`${cli} ${name} asked for "${step.verb}", which is not a ${cli} remote verb`);
+          const out = await apiPost(deps, "/cli/live/remote", { cli, verb: step.verb, doc_id: id, args: step.args, ...session(deps) });
+          if (out?.failed) throw new Error(out.text ?? `${step.verb} refused the write`);
+        }
         // The cursor label takes the status's first line; the agent gets all of it (board verbs end it with the keys they made).
         const label = result.status?.split("\n")[0];
-        const r = await writeOps(deps, spec, id, a.title, result.ops, { draft: options.draft, position: result.position, status: label, elements: a.elements });
+        const r = await writeOps(deps, spec, id, a.title, result.ops, {
+          draft: options.draft, position: result.position, status: label, elements: a.elements,
+          ...(result.claim && !options.draft ? { claim: { scope: result.claim.scope, base: a.head } } : {}),
+        });
         // Server-side follow-ups the verb asked for, once its write has landed.
         const after: string[] = [];
         for (const step of result.after ?? []) {
@@ -474,6 +488,8 @@ function registerGroup(program: Command, deps: LiveDeps, cli: string) {
         const r = await apiPost(deps, "/cli/live/remote", { cli, verb: name, ...(docId ? { doc_id: docId } : {}), args, ...(verb.stdin ? { stdin: readStdin() } : {}), ...session(deps) });
         if (options.json || r?.text === undefined) console.log(JSON.stringify(r?.json ?? r, null, 2));
         else console.log(r.text);
+        // A remote verb that judges something (check) says when the judgment failed; the exit code carries it to scripts.
+        if (r?.failed) process.exitCode = 1;
       }));
   }
 }

@@ -25,6 +25,8 @@ import { DATACENTER_IP_NOTE, explainSyncFailure } from "../cloud/browserSync.js"
 import { deviceId, isRemoteDevice } from "../remote/device.js";
 import { convexClient } from "../remote/cli.js";
 import { fmt, icons } from "../colors.js";
+import { serverErrorLine } from "../serverError.js";
+export { serverErrorLine };
 
 /** The host CLI waits this long for the laptop by default. */
 export const DEFAULT_SYNC_WAIT_S = 150;
@@ -55,14 +57,6 @@ export interface SyncDeps {
   err?: (line: string) => void;
 }
 
-/**
- * The server's own sentence out of a Convex client error, which wraps it in
- * request ids and a stack ("… Server Error\nUncaught Error: <sentence>\n at …").
- */
-export function serverErrorLine(msg: string): string {
-  const m = /Uncaught (?:Error|ConvexError): ([^\n]*)/.exec(msg);
-  return (m ? m[1] : msg.split("\n")[0]).trim();
-}
 
 const OK = `${fmt.success(icons.check)}`;
 const BAD = `${fmt.error(icons.cross)}`;

@@ -7,7 +7,8 @@ import type { LiveHandle } from "./useLiveArtifact";
 export type ScreenPoint = { x: number; y: number; w?: number; h?: number };
 
 export type LiveViewProps = {
-  doc: { _id: string; title: string; doc_type: ArtifactType; project_path?: string; git_root?: string };
+  /** workspace: the access key the doc lives in (team:<id> or user:<id>), which a view scopes its pickers to. */
+  doc: { _id: string; title: string; doc_type: ArtifactType; project_path?: string; git_root?: string; workspace?: string };
   live: LiveHandle;
   selection: string[];
   setSelection: (keys: string[]) => void;

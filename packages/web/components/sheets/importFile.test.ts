@@ -116,7 +116,7 @@ describe("Excel round trip", () => {
     const { foldOps, toElement } = await import("@codecast/shared/artifacts");
     const { sheetXlsx } = await import("./exportFile");
     const ops = [
-      { k: "tab:S", put: { kind: "tab", name: "Plan", order: 0 } },
+      { k: "tab:S", put: { kind: "tab", name: "Plan", order: 0, frozen_rows: 1 } },
       { k: "c:S!A1", put: { kind: "cell", input: "Status", b: true, i: true, u: true, fill: "blue", color: "red", al: "center" } },
       { k: "c:S!B1", put: { kind: "cell", input: "b" } },
       { k: "c:S!B2", put: { kind: "cell", input: "a" } },
@@ -130,6 +130,8 @@ describe("Excel round trip", () => {
       { k: "c:S!F5", put: { kind: "cell", input: "1234.5", nf: "number", dp: 2 } },
       { k: "c:S!F6", put: { kind: "cell", input: "-42", nf: "accounting", dp: 2 } },
       { k: "c:S!F7", put: { kind: "cell", input: "2026-11-20", nf: "custom", code: "mmm d, yyyy" } },
+      { k: "c:S!G1", put: { kind: "cell", input: "Big", fs: 20 } },
+      { k: "col:S!B", put: { kind: "col", w: 180 } },
       { k: "cf1", put: { kind: "cf", tab: "S", range: "B1:B9", rule: "gt", value: 3, color: "red" } },
       { k: "cf2", put: { kind: "cf", tab: "S", range: "C1:C9", rule: "sign" } },
       { k: "cf3", put: { kind: "cf", tab: "S", range: "D1:D9", rule: "between", value: "1, 5", color: "blue" } },
@@ -158,6 +160,9 @@ describe("Excel round trip", () => {
     expect(f(4)?.input).toBe("2026-11-20 14:30:00");
     expect(f(5)).toMatchObject({ input: "1234.5", nf: "number", dp: 2 });
     expect(f(6)).toMatchObject({ nf: "accounting", dp: 2 });
+    expect(tab.cells.get(1 * 32768 + 7)).toMatchObject({ fs: 20 });
+    expect(tab.meta.frozenRows).toBe(1);
+    expect(tab.colWidths.get(2)).toBe(180);
     expect(f(7)).toMatchObject({ input: "2026-11-20", nf: "custom", code: "mmm d, yyyy" });
     const rules = model.conds.map((c) => [c.rule, c.value ?? null, c.color ?? null]);
     expect(rules).toEqual(expect.arrayContaining([["gt", 3, "red"], ["sign", null, null], ["between", "1, 5", "blue"], ["contains", "Stat", "green"], ["empty", null, "orange"], ["formula", '=$A1="x"', "violet"]]));

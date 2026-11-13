@@ -64,7 +64,8 @@ export type PaintContext = {
   /** Whether the cell under a table header holds a number (its header then aligns right). */
   numericAt?: (col: number, row: number) => boolean;
   /** The number format a formula takes from the cell it reads, when it has none of its own. */
-  inherited?: (el: CellEl) => ImpliedFormat | undefined;
+  /** The format a cell without its own shows in (displayFormat: a formula's source, a spilled cell's source column). */
+  inherited?: (col: number, row: number) => ImpliedFormat | undefined;
   /** The header cells of a filter block (they carry a filter button). */
   filterHeader?: (col: number, row: number) => boolean;
   /** min/max per scale rule key, computed once per render pass. */
@@ -81,7 +82,7 @@ export type PaintContext = {
 
 export function paintCell(el: CellEl | undefined, value: Scalar, implied: ImpliedFormat | undefined, col: number, row: number, ctx: PaintContext): Paint {
   const s = styleOf(el);
-  if (!s.nf && el && typeof el.input === "string" && el.input.startsWith("=") && typeof value === "number") implied = ctx.inherited?.(el) ?? implied;
+  if (!s.nf && typeof value === "number" && (!el || (typeof el.input === "string" && el.input.startsWith("=")))) implied = ctx.inherited?.(col, row) ?? implied;
   // A table's header row is labels: a number there reads as typed ("2025", not "2,025"),
   // whatever number format the column carries.
   const inHeader = ctx.tables.some((t) => row === t.rect.r0 && rectContains(t.rect, col, row));

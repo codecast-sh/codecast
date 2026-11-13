@@ -5,7 +5,7 @@ import { createElement } from "react";
 import { toast } from "sonner";
 import { PasteHint } from "./SheetMenus";
 import { htmlTable } from "./pasteHtml";
-import { Workbook, mergeAt, mergeOps, unmergeOps, condOps, hideOps, parseFormula, validateInput, validationAt, a1, borderOps, cellNum, clearOps, clipOf, formatValue, gridOps, inputOps, moveOps, isFormula, tokenize, newElementKey, normRect, parseQualifiedRange, parseTsv, pasteClipOps, rectA1, sortOps, structuralOps, styleOf, styleOps, tabPatchOps, toTsv, inheritedFormat, shiftFormula, placeTableOps, compareScalars, type Scalar, type CellNumberFormat, type TabFilter, type PaletteColor, type Rect, type SheetClip, type SheetModel, type TabData, type QuerySource } from "./sheetCore";
+import { Workbook, mergeAt, mergeOps, unmergeOps, condOps, hideOps, parseFormula, validateInput, validationAt, a1, borderOps, cellNum, clearOps, clipOf, formatValue, gridOps, inputOps, moveOps, isFormula, tokenize, newElementKey, normRect, parseQualifiedRange, parseTsv, pasteClipOps, rectA1, sortOps, structuralOps, styleOf, styleOps, tabPatchOps, toTsv, displayFormat, shiftFormula, placeTableOps, compareScalars, type Scalar, type CellNumberFormat, type TabFilter, type PaletteColor, type Rect, type SheetClip, type SheetModel, type TabData, type QuerySource } from "./sheetCore";
 import { finishInput, type EditStore } from "./editStore";
 import type { AxisLayout } from "./layout";
 import type { FormatAction } from "./FormatBar";
@@ -93,19 +93,25 @@ export function dataRegion(tab: TabData, col: number, row: number): Rect {
     const el = tab.cells.get(cellNum(c, r));
     return !!el && typeof el.input === "string" && el.input !== "";
   };
-  let r: Rect = { c0: col, c1: col, r0: row, r1: row };
+  const rowHas = (r: number, c0: number, c1: number) => {
+    for (let c = c0; c <= c1; c++) if (has(c, r)) return true;
+    return false;
+  };
+  const colHas = (c: number, r0: number, r1: number) => {
+    for (let r = r0; r <= r1; r++) if (has(c, r)) return true;
+    return false;
+  };
+  // Each pass grows every side as far as it goes (a row at a time down a long table, not one row per pass),
+  // so a 10,000-row table is found in a few passes, not 10,000.
+  const r: Rect = { c0: col, c1: col, r0: row, r1: row };
   for (let grew = true; grew; ) {
     grew = false;
-    const tryGrow = (next: Rect, probe: () => boolean) => {
-      if (probe()) {
-        r = next;
-        grew = true;
-      }
-    };
-    tryGrow({ ...r, r1: r.r1 + 1 }, () => range(r.c0, r.c1).some((c) => has(c, r.r1 + 1)));
-    if (r.r0 > 1) tryGrow({ ...r, r0: r.r0 - 1 }, () => range(r.c0, r.c1).some((c) => has(c, r.r0 - 1)));
-    tryGrow({ ...r, c1: r.c1 + 1 }, () => range(r.r0, r.r1).some((rr) => has(r.c1 + 1, rr)));
-    if (r.c0 > 1) tryGrow({ ...r, c0: r.c0 - 1 }, () => range(r.r0, r.r1).some((rr) => has(r.c0 - 1, rr)));
+    const before = `${r.c0},${r.r0},${r.c1},${r.r1}`;
+    while (rowHas(r.r1 + 1, r.c0, r.c1)) r.r1++;
+    while (r.r0 > 1 && rowHas(r.r0 - 1, r.c0, r.c1)) r.r0--;
+    while (colHas(r.c1 + 1, r.r0, r.r1)) r.c1++;
+    while (r.c0 > 1 && colHas(r.c0 - 1, r.r0, r.r1)) r.c0--;
+    grew = before !== `${r.c0},${r.r0},${r.c1},${r.r1}`;
   }
   return r;
 }
@@ -115,14 +121,25 @@ export function range(a: number, b: number): number[] {
 }
 
 /** A first row of text over a column of numbers reads as a header. */
-export function isHeaderRow(wb: Workbook, tabId: string, r: Rect): boolean {
+/**
+ * Whether a table's top row is its header, as Excel guesses it: every cell of
+ * it is text, and either a column below holds numbers or dates (a "Name, Amount"
+ * row over figures) or the row is bold. A top row of data ("Name 5, 5, 5")
+ * sorts with the rest.
+ */
+export function isHeaderRow(wb: Workbook, tabId: string, r: Rect, tab: TabData): boolean {
   if (r.r1 <= r.r0) return false;
-  let textTop = 0, numBelow = 0;
+  let filled = 0, numBelow = false, bold = true;
   for (let c = r.c0; c <= r.c1; c++) {
-    if (typeof wb.value(tabId, c, r.r0) === "string") textTop++;
-    if (typeof wb.value(tabId, c, r.r0 + 1) === "number") numBelow++;
+    const top = wb.value(tabId, c, r.r0);
+    if (top === null || top === "") continue;
+    if (typeof top !== "string") return false;
+    filled++;
+    if (!styleOf(tab.cells.get(cellNum(c, r.r0))).b) bold = false;
+    const below = wb.value(tabId, c, r.r0 + 1);
+    if (typeof below === "number" || typeof below === "boolean") numBelow = true;
   }
-  return textTop === r.c1 - r.c0 + 1 || (textTop > 0 && numBelow > 0);
+  return filled > 0 && (numBelow || bold);
 }
 
 /**
@@ -202,7 +219,7 @@ export function formatSelection(a: FormatAction, c: SheetCtx) {
           cur = shown.includes(".") ? shown.split(".")[1].replace(/\D/g, "").length : 0;
         }
         // Keep what the number reads as (a typed 10% stays a percent).
-        const nf = st.nf ?? info?.implied?.nf ?? (info?.input?.startsWith("=") ? inheritedFormat(model, activeTabId, info.input)?.nf : undefined) ?? "number";
+        const nf = st.nf ?? displayFormat(model, wb, activeTabId, sel.anchor.col, sel.anchor.row)?.nf ?? "number";
         apply(styleOps(model, activeTabId, rect, { dp: Math.max(0, Math.min(10, cur + a.delta)), nf }));
         break;
       }
@@ -241,13 +258,18 @@ export function formatSelection(a: FormatAction, c: SheetCtx) {
       }
       case "sort": {
         // One cell, or a whole column from its header, sorts the table around it with whole rows moving; a drawn range sorts just itself.
-        const wholeCol = rect.r0 <= 1 && rect.r1 >= tab.rows;
-        const firstFilled = wholeCol ? range(1, tab.rows).find((r) => { const el = tab.cells.get(cellNum(sel.anchor.col, r)); return typeof el?.input === "string" && el.input !== ""; }) : undefined;
-        if (wholeCol && firstFilled === undefined) break;
-        const region = wholeCol ? dataRegion(tab, sel.anchor.col, firstFilled!) : rect.r0 === rect.r1 ? dataRegion(tab, rect.c0, rect.r0) : rect;
-        const hasHeader = region.r0 <= tab.meta.frozenRows || (filter && filter.row === region.r0) || isHeaderRow(wb, activeTabId, region);
+        // A column from row 1 down past its table's last row is the whole column, even when rows arrived after it was selected.
+        const firstFilled = rect.r0 <= 1 && rect.c0 === rect.c1 ? range(1, Math.min(rect.r1, tab.rows)).find((r) => { const el = tab.cells.get(cellNum(sel.anchor.col, r)); return typeof el?.input === "string" && el.input !== ""; }) : undefined;
+        const table = firstFilled === undefined ? null : dataRegion(tab, sel.anchor.col, firstFilled);
+        const wholeCol = rect.r0 <= 1 && (rect.r1 >= tab.rows || (!!table && rect.r1 >= table.r1));
+        if (wholeCol && !table) break;
+        const region = wholeCol ? table! : rect.r0 === rect.r1 ? dataRegion(tab, rect.c0, rect.r0) : rect;
+        // A drawn range sorts as drawn (Google's "data has header row" is off for a selection); a table found from
+        // one cell or a column header keeps its header row in place.
+        const drawn = !wholeCol && rect.r0 !== rect.r1;
+        const hasHeader = !drawn && (region.r0 <= tab.meta.frozenRows || (filter && filter.row === region.r0) || isHeaderRow(wb, activeTabId, region, tab));
         const body = { ...region, r0: hasHeader ? region.r0 + 1 : region.r0 };
-        apply(sortOps(model, wb, activeTabId, body, sel.anchor.col, a.desc));
+        if (!apply(sortOps(model, wb, activeTabId, body, sel.anchor.col, a.desc), { claim: true })) break;
         toast(`Sorted ${rectA1(body)} by ${a1(sel.anchor.col, body.r0).replace(/\d+/, "")} ${a.desc ? "Z→A" : "A→Z"}`, { action: { label: "Undo", onClick: () => c.live.undo() } });
         break;
       }
@@ -270,13 +292,13 @@ export function formatSelection(a: FormatAction, c: SheetCtx) {
       case "insert": {
         const at = a.axis === "row" ? (a.after ? rect.r1 + 1 : rect.r0) : a.after ? rect.c1 + 1 : rect.c0;
         const n = a.axis === "row" ? rect.r1 - rect.r0 + 1 : rect.c1 - rect.c0 + 1;
-        apply(structuralOps(model, activeTabId, a.axis, at, n));
+        apply(structuralOps(model, activeTabId, a.axis, at, n), { claim: true });
         break;
       }
       case "delete": {
         const at = a.axis === "row" ? rect.r0 : rect.c0;
         const n = a.axis === "row" ? rect.r1 - rect.r0 + 1 : rect.c1 - rect.c0 + 1;
-        apply(structuralOps(model, activeTabId, a.axis, at, -n));
+        apply(structuralOps(model, activeTabId, a.axis, at, -n), { claim: true });
         break;
       }
       case "clearFormat":
@@ -333,24 +355,25 @@ export function pasteSheetClipboard(e: React.ClipboardEvent, c: SheetCtx) {
       const h = clip.clip.cells.length, w = clip.clip.cells[0]?.length ?? 0;
       if (clip.cut) {
         // A cut is a move: references to the cells follow them, on any tab.
-        apply(moveOps(model, clip.tabId, clip.rect, rect.c0, rect.r0, activeTabId));
+        apply(moveOps(model, clip.tabId, clip.rect, rect.c0, rect.r0, activeTabId), { claim: true });
       } else {
         const target = rect.c1 - rect.c0 + 1 >= w && rect.r1 - rect.r0 + 1 >= h ? rect : { c0: rect.c0, r0: rect.r0, c1: rect.c0 + w - 1, r1: rect.r0 + h - 1 };
-        apply(pasteClipOps(model, activeTabId, clip.clip, target));
+        apply(pasteClipOps(model, activeTabId, clip.clip, target), { claim: true });
       }
       if (clip.cut) lastClip = null;
       select({ anchor: { col: rect.c0, row: rect.r0 }, focus: { col: rect.c0 + w - 1, row: rect.r0 + h - 1 } }, { reveal: false });
     } else if (text) {
-      const grid = parseTsv(text);
+      // A table from a web page or another spreadsheet is read from its HTML: the plain text can't say where a cell
+      // with a line break ends (Chrome writes the break bare). Values-only keeps the table's cells and drops its look.
+      const table = htmlTable(e.clipboardData.getData("text/html"), { col: rect.c0, row: rect.r0 });
+      const grid = table?.grid ?? parseTsv(text);
       if (grid.length === 1 && grid[0].length === 1 && (rect.c0 !== rect.c1 || rect.r0 !== rect.r1)) {
         const cells: Array<{ col: number; row: number; input: string }> = [];
         for (let r = rect.r0; r <= rect.r1; r++) for (let c = rect.c0; c <= rect.c1; c++) cells.push({ col: c, row: r, input: grid[0][0] });
-        apply(inputOps(model, activeTabId, cells));
+        apply(inputOps(model, activeTabId, cells), { claim: cells.length > 1 });
       } else {
-        // A table from a web page or another spreadsheet keeps its look (bold, fills, merges); values-only takes the text.
-        const table = valuesOnly ? null : htmlTable(e.clipboardData.getData("text/html"), { col: rect.c0, row: rect.r0 });
-        const placed = table && table.grid.length === grid.length ? table : { grid };
-        apply(placeTableOps(model, activeTabId, rect.c0, rect.r0, placed));
+        const placed = table && !valuesOnly ? table : { grid };
+        apply(placeTableOps(model, activeTabId, rect.c0, rect.r0, placed), { claim: true });
         const w = Math.max(...placed.grid.map((r) => r.length));
         select({ anchor: { col: rect.c0, row: rect.r0 }, focus: { col: rect.c0 + w - 1, row: rect.r0 + placed.grid.length - 1 } }, { reveal: false });
       }
@@ -371,7 +394,10 @@ export function checkCommit(model: SheetModel, e: { tab: string; col: number; ro
       return { error: x instanceof Error ? x.message : "This formula can't be read" };
     }
   }
-  return validateInput(validationAt(model, e.tab, e.col, e.row), typed);
+  // Typing 50 into a percent cell means 50%, as in Excel (0.5 still reads as 50%).
+  const own = styleOf(model.byId.get(e.tab)?.cells.get(cellNum(e.col, e.row)));
+  const percent = own.nf === "percent" && /^-?\d+(\.\d+)?$/.test(typed.trim()) && Math.abs(Number(typed)) >= 1 ? `${typed.trim()}%` : typed;
+  return validateInput(validationAt(model, e.tab, e.col, e.row), percent);
 }
 
 /** Column widths as the layout takes them: hidden columns at zero. */
@@ -499,6 +525,8 @@ export type SheetState = {
 type Cell = { col: number; row: number };
 
 /** What the sheet's event handlers read and call, refreshed on every render of SheetView. */
+export type ApplyOpts = { claim?: boolean };
+
 export type SheetCtx = {
   S: MutableRefObject<SheetState>;
   edit: EditStore;
@@ -515,7 +543,8 @@ export type SheetCtx = {
   commitToSelection: () => void;
   move: (dc: number, dr: number, extend?: boolean, jump?: boolean) => void;
   beginEdit: (text: string | null, mode: "enter" | "edit", surface?: "cell" | "bar") => void;
-  apply: (ops: ArtifactOp[]) => void;
+  /** Every write from the view; `claim` marks a whole-range rewrite (sort, fill, paste, insert/delete), which claims its tab while it saves. */
+  apply: (ops: ArtifactOp[], opts?: ApplyOpts) => boolean;
   onFormat: (a: FormatAction) => void;
   select: (next: Sel, opts?: { reveal?: boolean }) => void;
   setSel: Dispatch<SetStateAction<Sel>>;
@@ -555,8 +584,7 @@ export function selectionSummary(model: SheetModel, wb: Workbook, tab: TabData, 
       if (typeof v !== "number" || mixed || seen++ > 5000) return;
       const el = tab.cells.get(cellNum(rect.c0 + j, rect.r0 + i));
       const own = styleOf(el);
-      const input = typeof el?.input === "string" ? el.input : "";
-      const fmt = own.nf ? own : input.startsWith("=") ? inheritedFormat(model, tabId, input) : wb.cell(tabId, rect.c0 + j, rect.r0 + i)?.implied;
+      const fmt = own.nf ? own : displayFormat(model, wb, tabId, rect.c0 + j, rect.r0 + i);
       const f: CellNumberFormat = fmt?.nf && fmt.nf !== "plain" ? { nf: fmt.nf, dp: fmt.dp, cur: fmt.cur, code: fmt.code } : { nf: "number" };
       if (!style) style = f;
       else if (style.nf !== f.nf || style.cur !== f.cur || style.code !== f.code) mixed = true;

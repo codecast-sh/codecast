@@ -110,3 +110,38 @@ describe("lookup results read like their column", () => {
     for (const f of ['=VLOOKUP("Ana",A1:B3,2,FALSE)', "=INDEX(A1:B3,2,2)", '=XLOOKUP("Bo",A1:A3,B1:B3)']) expect([f, inheritedFormat(m, "Sheet1", f)?.nf]).toEqual([f, "currency"]);
   });
 });
+
+describe("agent range reads", () => {
+  test("cast sheet range gives dates as they show", async () => {
+    const { sheetSpec } = await import("../sheet");
+    const { doc } = await import("./sheetDoc.testkit");
+    const d = doc(sheetSpec.seed!());
+    d.verb("write", ["A1"], "Due\tQty\n2026-11-28\t5\n=A2+1\t");
+    expect(d.verb("range", ["A1:B3"]).status).toBe("Due\tQty\n2026-11-28\t5\n2026-11-29\t");
+  });
+});
+
+describe("array results read like their source", () => {
+  test("FILTER and SORT blocks show each source column's format", async () => {
+    const { sheetSpec } = await import("../sheet");
+    const { doc } = await import("./sheetDoc.testkit");
+    const { buildModel, workbookFor, displayFormat } = await import("./model");
+    const d = doc(sheetSpec.seed!());
+    d.verb("write", ["A1"], "Name\tAmount\tShare\nAna\t$800\t10%\nBo\t$3,400.50\t25%");
+    d.verb("write", ["E1"], '=FILTER(A2:C3,B2:B3>0)\t\t\t=SORT(B2:B3)\t=SORT(FILTER(B2:C3,C2:C3>0),1,TRUE)');
+    const m = buildModel(d.elements());
+    const wb = workbookFor(m);
+    expect([displayFormat(m, wb, "Sheet1", 5, 1)?.nf, displayFormat(m, wb, "Sheet1", 6, 2)?.nf, displayFormat(m, wb, "Sheet1", 7, 1)?.nf, displayFormat(m, wb, "Sheet1", 8, 2)?.nf, displayFormat(m, wb, "Sheet1", 9, 2)?.nf, displayFormat(m, wb, "Sheet1", 10, 1)?.nf]).toEqual([undefined, "currency", "percent", "currency", "currency", "percent"]);
+  });
+});
+
+describe("reading a spill past the typed cells", () => {
+  test("cast sheet range includes the whole spilled block", async () => {
+    const { sheetSpec } = await import("../sheet");
+    const { doc } = await import("./sheetDoc.testkit");
+    const d = doc(sheetSpec.seed!());
+    d.verb("write", ["A1"], "b\nc\na");
+    d.verb("write", ["C3"], "=SORT(A1:A3)");
+    expect(d.verb("range", ["C3:C6"]).status).toBe("a\nb\nc");
+  });
+});

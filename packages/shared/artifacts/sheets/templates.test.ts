@@ -54,3 +54,18 @@ describe("adding a line to a template", () => {
     expect(formatValue(info?.value ?? null, styleOf(model.byId.get(tab)!.cells.get(9 * 32768 + 2)), info?.implied)).toBe("$26,300");
   });
 });
+
+describe("importing a workbook beside same-named tabs", () => {
+  test("formulas naming a sibling sheet follow it to its new name", async () => {
+    const { importTablesOps } = await import("./importOps");
+    const base = [...foldOps(new Map(), [{ k: "tab:o", put: { kind: "tab", name: "Orders", order: 0 } }])].map(([k, st]) => toElement(k, st));
+    const r = importTablesOps(buildModel(base), [
+      { name: "Orders", grid: [["5"]] },
+      { name: "Notes", grid: [["=Orders!A1*2", "=Elsewhere!A1"]] },
+    ]);
+    const m = buildModel([...foldOps(new Map(base.map((e) => [e.key, { ...e } as never])), r.ops)].map(([k, st]) => toElement(k, st)));
+    const notes = m.tabs.find((t) => t.name === "Notes")!;
+    expect(m.byId.get(notes.id)!.cells.get(1 * 32768 + 1)?.input).toBe("='Orders 2'!A1*2");
+    expect(m.byId.get(notes.id)!.cells.get(1 * 32768 + 2)?.input).toBe("=Elsewhere!A1");
+  });
+});

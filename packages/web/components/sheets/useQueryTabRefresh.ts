@@ -54,10 +54,10 @@ export function useQueryTabRefresh(docId: string, meta: TabMeta, readOnly: boole
  * query names a project by): the project whose path is the sheet's folder or
  * holds it. Undefined when none does, so a new live tab starts on all projects.
  */
-export function useProjectTitleFor(path: string | undefined): string | undefined {
-  const projects = useWorkspaceCollection<{ title?: string; project_path?: string; status?: string }>("projects", (p) => `${p.title}|${p.project_path}|${p.status}`);
+export function useProjectTitleFor(path: string | undefined, workspace: string | undefined): string | undefined {
+  const projects = useWorkspaceCollection<{ title?: string; project_path?: string; status?: string }>("projects", (p) => `${p.title}|${p.project_path}|${p.status}`, workspace ?? null);
   if (!path) return undefined;
-  const hits = projects.filter((p) => p.title && p.project_path && p.status !== "archived" && (path === p.project_path || path.startsWith(`${p.project_path}/`)));
+  const hits = projects.filter((p) => p.title && p.project_path && p.status === "active" && (path === p.project_path || path.startsWith(`${p.project_path}/`)));
   // The deepest folder wins: a project for a package beats one for the whole repo.
   return hits.sort((a, b) => b.project_path!.length - a.project_path!.length)[0]?.title;
 }

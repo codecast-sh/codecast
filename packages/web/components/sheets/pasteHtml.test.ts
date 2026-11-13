@@ -36,3 +36,16 @@ describe("pasting from Google Sheets", () => {
     expect(t.grid[0]).toEqual(["5", "=B3*2", "Line\ntwo"]);
   });
 });
+
+describe("pasting from Excel", () => {
+  test("bold, fill and color from Excel's class rules come through", async () => {
+    const { htmlTable } = await import("./pasteHtml");
+    const html = `<html><head><style>.xl65 { font-weight: 700; background: #FFFF00; mso-pattern: black none; }
+.xl66 { color: red; text-align: center; }</style></head><body><table><tr><td class=xl65>Item</td><td class=xl66>Due</td></tr></table></body></html>`;
+    const t = htmlTable(html)!;
+    expect(t.styles).toEqual([
+      { col: 1, row: 1, style: { b: true, fill: "yellow" } },
+      { col: 2, row: 1, style: { color: "red", al: "center" } },
+    ]);
+  });
+});

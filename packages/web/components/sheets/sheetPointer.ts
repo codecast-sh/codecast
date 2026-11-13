@@ -158,7 +158,7 @@ export function sheetFillStart(e: React.PointerEvent, c: SheetCtx) {
       setFillPreview(null);
       if (dest === src) return;
       const { model, activeTabId } = S.current;
-      apply(fillOps(model, activeTabId, src, dest));
+      apply(fillOps(model, activeTabId, src, dest), { claim: true });
       select({ anchor: { col: dest.c0, row: dest.r0 }, focus: { col: dest.c1, row: dest.r1 } }, { reveal: false });
     };
     window.addEventListener("pointermove", onMove);

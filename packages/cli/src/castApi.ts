@@ -8,6 +8,7 @@
 // group manifest there too. A leaf module with one dependency (cliHttp) ends
 // the class. ct-49546.
 
+import { serverErrorLine } from "./serverError.js";
 import { cliFetch, cliFetchRead } from "./cliHttp.js";
 
 /** Where to POST and who as. index.ts owns both and hands them in, so every
@@ -117,7 +118,9 @@ async function readApiResult(
   // `error` field, only Convex's `code`, so the status decides too.
   const raw = result?.error ?? (response.ok ? null : result?.code ?? `HTTP ${response.status}`);
   if (raw) {
-    const error = opts.describeError ? opts.describeError(String(raw)) : String(raw);
+    // A function's own refusal arrives wrapped in Convex's "Uncaught ConvexError: <sentence>" and a stack: show the sentence.
+    const said = /Uncaught (?:Error|ConvexError): /.test(String(raw)) ? serverErrorLine(String(raw)) : String(raw);
+    const error = opts.describeError ? opts.describeError(said) : said;
     if (opts.exitOnError === false) throw new Error(error);
     console.error(`Error: ${error}`);
     process.exit(1);

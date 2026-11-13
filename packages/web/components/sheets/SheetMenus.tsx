@@ -1,7 +1,7 @@
 // The sheet's menus and small panels: tab and cell menus, the filter panel,
 // the filter buttons and the find bar.
 import { useMemo, useState } from "react";
-import { CalendarDays, Check, ChevronRight, ClipboardPaste, Copy, Eye, EyeOff, MessageSquare, Filter as FilterIcon, ListChecks, Scissors, User, Users, X } from "lucide-react";
+import { CalendarDays, Check, ChevronRight, ClipboardPaste, Copy, Eye, EyeOff, MessageSquare, Filter as FilterIcon, ListChecks, Merge, Scissors, User, Users, X } from "lucide-react";
 import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
 import { a1, type FindOptions, COND_RULE_NAMES, condPlaceholder, condTakesValue, type CondRule, type SheetModel, type TabData } from "./sheetCore";
@@ -34,6 +34,7 @@ export function CellMenu({
   filtered,
   hiddenLines,
   frozen,
+  merged,
   onFormat,
   onClear,
   onCopyHint,
@@ -58,6 +59,8 @@ export function CellMenu({
   /** Whether the tab has hidden columns or rows (Unhide shows only then). */
   hiddenLines?: { cols: boolean; rows: boolean };
   frozen?: boolean;
+  /** The selection touches a merge (the item unmerges). */
+  merged?: boolean;
 }) {
   if (readOnly) return <CtxItem onSelect={onCopyHint}>Copy</CtxItem>;
   return (
@@ -70,6 +73,7 @@ export function CellMenu({
       {kind === "cell" && (
         <>
           <CtxItem icon={MessageSquare} onSelect={onComment} trailing={<Keys k="M" alt />}>Comment</CtxItem>
+          <CtxItem icon={Merge} onSelect={() => onFormat({ type: "merge", on: !merged })}>{merged ? "Unmerge cells" : "Merge cells"}</CtxItem>
           <DropdownMenuSeparator />
         </>
       )}

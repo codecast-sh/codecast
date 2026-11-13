@@ -9,7 +9,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { Radio } from "lucide-react";
 import type { ArtifactOp, ArtifactPresence, Json } from "@codecast/shared/artifacts";
-import { a1, findMatcher, type FindOptions, sortOps, valueMeetsRule, addTabOps, duplicateTabOps, moveTabOps, moveTabToOps, LiveSheet, enforceValidation, replaceOps, expandToMerges, mergeAt, cellNum, deleteTabOps, formatValue, inputOps, isFormula, parseQualifiedRange, quoteTabName, rectA1, renameTabOps, styleOf, tabPatchOps, toTsv, fitWidthOps, inheritedFormat, uniqueTabName, type CellStyle, type Rect, type TabData, type QuerySource } from "./sheetCore";
+import { a1, findMatcher, type FindOptions, sortOps, valueMeetsRule, addTabOps, duplicateTabOps, moveTabOps, moveTabToOps, LiveSheet, enforceValidation, replaceOps, expandToMerges, mergeAt, cellNum, deleteTabOps, formatValue, inputOps, isFormula, parseQualifiedRange, quoteTabName, rectA1, renameTabOps, styleOf, tabPatchOps, toTsv, fitWidthOps, displayFormat, uniqueTabName, type CellStyle, type Rect, type TabData, type QuerySource } from "./sheetCore";
 import type { LiveViewProps } from "../live/registry";
 import { useLiveElements, useLivePresence } from "../live/useLiveArtifact";
 import { sendAsk, pickAskTarget, reopenAsk } from "../live/askAgent";
@@ -33,7 +33,7 @@ import { SheetExtrasView } from "./SheetExtras";
 import { IMPORT_ACCEPT } from "./importFile";
 import { solVar } from "./cellPaint";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { DEF_COL_W, DEF_ROW_H, REF_COLORS, type Sel, type Menu, selRect, parsePosition, visibleRowsOf, clearVisible, QUERY_LABEL, ago, cellNumOfKey, elementsHaveTab, shiftFormulaSafe, columnValues, refsKeyOf, formatSelection, filterEnd, selectionSummary, spillSource, moveSelection, unhideBefore, hideSelection, layoutWidths, writeSheetClipboard, pasteSheetClipboard, sheetClipboardCommand, checkCommit, type SheetState, type SheetCtx } from "./sheetActions";
+import { DEF_COL_W, DEF_ROW_H, REF_COLORS, type Sel, type Menu, selRect, parsePosition, visibleRowsOf, clearVisible, QUERY_LABEL, ago, cellNumOfKey, elementsHaveTab, shiftFormulaSafe, columnValues, refsKeyOf, formatSelection, filterEnd, selectionSummary, spillSource, moveSelection, unhideBefore, hideSelection, layoutWidths, writeSheetClipboard, pasteSheetClipboard, sheetClipboardCommand, checkCommit, type SheetState, type SheetCtx, type ApplyOpts } from "./sheetActions";
 import { TabMenu, CellMenu, FilterPanel, FilterButtons, FindBar, type ClipKind } from "./SheetMenus";
 import { handleSheetKey } from "./sheetKeys";
 import { sheetPointerDown, sheetResizeStart, sheetFillStart } from "./sheetPointer";
@@ -165,11 +165,18 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
   S.current = { model, wb, tab, activeTabId, sel, rect, cols, rows, frozenRows, frozenCols, readOnly, readOnlyDoc, hiddenRows, filter };
 
   // Every write from the view: strict dropdown and date cells refuse what they don't accept, whatever the path (typing, paste, fill).
-  const apply = useCallback((ops: Parameters<typeof live.apply>[0]) => {
-    if (!ops.length) return;
+  const apply = useCallback((ops: Parameters<typeof live.apply>[0], opts?: ApplyOpts): boolean => {
+    if (!ops.length) return false;
+    // A rewrite computed from a sheet still arriving would move only the rows this tab has.
+    if (opts?.claim && !live.ready) {
+      toast("The sheet is still loading; try again when it's in");
+      return false;
+    }
     const held = enforceValidation(S.current.model, ops);
     if (held.refused) toast(`Skipped ${held.refused} value${held.refused === 1 ? "" : "s"} a dropdown doesn't allow`);
-    if (held.ops.length) live.apply(held.ops);
+    // A whole-range rewrite claims its tab while it saves, so two can't interleave into rows neither made.
+    if (held.ops.length) live.apply(held.ops, opts?.claim ? { claim: { scope: `tab:${S.current.activeTabId}` } } : undefined);
+    return held.ops.length > 0;
   }, [live]);
 
   // Selection -> presence (my range, in this tab) and the shell's Ask selection.
@@ -284,7 +291,7 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
         // Formulas shift relative to the active cell, like a fill.
         cells.push({ col: c, row: r, input: isFormula(input) ? shiftFormulaSafe(input, c - e.col, r - e.row) : input });
       }
-    apply(inputOps(model, activeTabId, cells));
+    apply(inputOps(model, activeTabId, cells), { claim: cells.length > 1 });
     sinkRef.current?.focus({ preventScroll: true });
   }, [edit, apply, commitEdit]);
 
@@ -432,7 +439,7 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
         : undefined,
       numericAt: (col: number, row: number) => typeof wb.value(activeTabId, col, row) === "number",
       filterHeader: (col: number, row: number) => !!filter && row === filter.row && col >= filter.c0 && col <= filter.c1,
-      inherited: (el: { input?: string }) => (typeof el.input === "string" ? inheritedFormat(model, activeTabId, el.input) : undefined),
+      inherited: (col: number, row: number) => displayFormat(model, wb, activeTabId, col, row),
       scaleRange: (key: string) => {
         if (ranges.has(key)) return ranges.get(key)!;
         const c = conds.find((x) => x.key === key);
@@ -509,7 +516,11 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
   // ── Tab actions ───────────────────────────────────────────────────────────
   const addTab = useCallback((extra?: { query: { source: QuerySource; project?: string }; name: string }) => {
     const { model } = S.current;
-    const name = extra?.name ?? uniqueTabName(model, `Sheet${model.tabs.length + 1}`);
+    // The lowest "Sheet N" no tab has, as Google names a new sheet.
+    const taken = new Set(model.tabs.map((t) => t.name.toLowerCase()));
+    let n = 1;
+    while (taken.has(`sheet${n}`)) n++;
+    const name = extra?.name ?? uniqueTabName(model, `Sheet${n}`);
     const add = addTabOps(model, name, extra ? { query: extra.query as any, frozen_rows: 1 } : {});
     // The implicit first tab gets an element so the new one sorts after it.
     const ensureFirst = model.tabs.length === 1 && !elementsHaveTab(elements, model.tabs[0].id) ? tabPatchOps(model, model.tabs[0].id, {}) : [];
@@ -546,7 +557,7 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
     return () => { setExports(null); setImport(null); };
   }, [setToolbar, setExports, setImport, importFiles]);
 
-  const projectName = useProjectTitleFor(doc.project_path);
+  const projectName = useProjectTitleFor(doc.project_path, doc.workspace);
 
   ctx.current = { S, edit, pointRef, caretRef, scrollerRef, sinkRef, pasteValuesRef, dragRef, live, docId: doc._id, cancelEdit, commitEdit, commitToSelection, move, beginEdit, apply, onFormat, select, setSel, setCopyRect, setFillPreview, setFindOpen, openPicker, tabRunRef, openCellComment, openRules, setFilter };
 
@@ -585,6 +596,7 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
       />
       {queryTab && (
         <QueryBar
+          workspace={doc.workspace}
           query={tab.meta.query!}
           refreshedAt={tab.meta.refreshedAt}
           error={lastError ?? tab.meta.queryError}
@@ -650,7 +662,7 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
             replace={findOpen === "replace"}
             onReplace={readOnly ? undefined : (q, r, at, opts) => {
               const res = replaceOps(S.current.model, activeTabId, q, r, at, opts);
-              apply(res.ops);
+              apply(res.ops, { claim: !at });
               return res.count;
             }}
             onClose={() => {
@@ -735,12 +747,14 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
                 if (model.tabs.length === 1) return;
                 const name = model.byId.get(m.tabId)?.meta.name ?? "tab";
                 apply(deleteTabOps(model, m.tabId));
-                if (m.tabId === activeTabId) showTab(model.tabs.find((t) => t.id !== m.tabId)!.id);
+                // The active tab hands over to its neighbor (the one after it, else before).
+                const at = model.tabs.findIndex((t) => t.id === m.tabId);
+                if (m.tabId === activeTabId) showTab((model.tabs[at + 1] ?? model.tabs[at - 1]).id);
                 toast(`Deleted ${name}`, { action: { label: "Undo", onClick: () => live.undo() }, duration: 8000 });
               }}
             />
           ) : (
-            <CellMenu filtered={!!filter} hiddenLines={{ cols: !!tab.hiddenCols?.size, rows: !!tab.hiddenRows?.size }} frozen={!!(tab.meta.frozenRows || tab.meta.frozenCols)} kind={m.kind} readOnly={readOnly} onFormat={onFormat} validation={activeValidation?.rule} onValidate={onValidate} onClipboard={onClipboard} onComment={() => openCellComment()} onHide={(axis, hide) => hideSelection(axis, hide, ctx.current)} onClear={() => apply(clearVisible(model, activeTabId, rect, hiddenRows))} onCopyHint={() => {
+            <CellMenu merged={!!activeMerge} filtered={!!filter} hiddenLines={{ cols: !!tab.hiddenCols?.size, rows: !!tab.hiddenRows?.size }} frozen={!!(tab.meta.frozenRows || tab.meta.frozenCols)} kind={m.kind} readOnly={readOnly} onFormat={onFormat} validation={activeValidation?.rule} onValidate={onValidate} onClipboard={onClipboard} onComment={() => openCellComment()} onHide={(axis, hide) => hideSelection(axis, hide, ctx.current)} onClear={() => apply(clearVisible(model, activeTabId, rect, hiddenRows))} onCopyHint={() => {
               const { rect: r, tab: t } = S.current;
               const lines = visibleRowsOf(r, hiddenRows, t.rows).map((row) => {
                 const out: string[] = [];
@@ -773,7 +787,7 @@ export default function SheetView({ doc, live, selection, setSelection, mode, sn
             onSort={(desc) => {
               const { model: m, wb: w, tab: t, filter: f } = S.current;
               if (!f) return;
-              apply(sortOps(m, w, activeTabId, { c0: f.c0, c1: f.c1, r0: f.row + 1, r1: filterEnd(t, f) }, p.col, desc));
+              apply(sortOps(m, w, activeTabId, { c0: f.c0, c1: f.c1, r0: f.row + 1, r1: filterEnd(t, f) }, p.col, desc), { claim: true });
               filterPop.close();
             }}
           />

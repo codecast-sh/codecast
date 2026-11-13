@@ -222,6 +222,15 @@ function pos(tab: TabMeta, rect: Rect): ArtifactPosition {
   return text.includes(":") ? { range: `${tab.id}!${text}` } : { cell: `${tab.id}!${text}` };
 }
 
+/**
+ * A write that rewrites a whole range (a sort, a fill, a block write, a row or
+ * column insert/delete) claims its tab for all of its batches, so a second
+ * rewrite or someone's edit can't interleave into rows neither made.
+ */
+function claimed(r: VerbResult, tabId: string): VerbResult {
+  return { ...r, claim: { scope: `tab:${tabId}` } };
+}
+
 function done(t: Target, ops: ArtifactOp[], status: string): VerbResult {
   // A month and day without a year ("Nov 5") is a date this year, as it is when a person types it.
   const dated = ops.map((op) => {
@@ -366,7 +375,8 @@ const verbs: ArtifactSpec["verbs"] = {
       const width = Math.max(...grid.map((r) => r.length));
       const rect = { c0: t.rect.c0, r0: t.rect.r0, c1: t.rect.c0 + width - 1, r1: t.rect.r0 + grid.length - 1 };
       const tt = { ...t, rect };
-      return done(tt, withFit(view, tt, gridOps(t.model, t.tab.id, t.rect.c0, t.rect.r0, grid)), `wrote ${rectA1(rect)}`);
+      const r = done(tt, withFit(view, tt, gridOps(t.model, t.tab.id, t.rect.c0, t.rect.r0, grid)), `wrote ${rectA1(rect)}`);
+      return grid.length > 1 || width > 1 ? claimed(r, t.tab.id) : r;
     },
   },
   fmt: {
@@ -390,7 +400,7 @@ const verbs: ArtifactSpec["verbs"] = {
       const t = target(view, args[0], "fill <doc> <source> <destination>", false);
       const dest = parseQualifiedRange(args[1] ?? "");
       if (!dest) throw new Error("usage: fill <doc> <source> <destination>");
-      return done({ ...t, rect: dest.rect }, fillOps(t.model, t.tab.id, t.rect, dest.rect), `filling ${rectA1(dest.rect)}`);
+      return claimed(done({ ...t, rect: dest.rect }, fillOps(t.model, t.tab.id, t.rect, dest.rect), `filling ${rectA1(dest.rect)}`), t.tab.id);
     },
   },
   clear: {
@@ -517,7 +527,7 @@ const verbs: ArtifactSpec["verbs"] = {
       const t = target(view, ref, "sort <doc> <range> by <C> [desc]", false);
       const col = colIdx(colArg.replace(/[^A-Za-z]/g, ""));
       const wb = workbookFor(t.model);
-      return done(t, sortOps(t.model, wb, t.tab.id, t.rect, col, dir === "desc"), `sorting ${rectA1(t.rect)}`);
+      return claimed(done(t, sortOps(t.model, wb, t.tab.id, t.rect, col, dir === "desc"), `sorting ${rectA1(t.rect)}`), t.tab.id);
     },
   },
   width: {
@@ -600,7 +610,8 @@ const verbs: ArtifactSpec["verbs"] = {
     run(view, args) {
       const ref = args.find((a) => !a.startsWith("--"));
       if (!ref) throw new Error("usage: range <doc> <Tab!A1:D20> [--json]");
-      const r = readSheetRange(view.elements, ref);
+      // Dates and times read as they show ("2026-11-28"), not as serial numbers an agent would have to decode.
+      const r = readSheetRange(view.elements, ref, { datesAsText: true });
       if ("error" in r) throw new Error(r.error);
       const text = args.includes("--json") ? JSON.stringify(r) : r.values.map((row) => row.map((v) => (v === null ? "" : String(v))).join("\t")).join("\n");
       return { ops: [], status: text };
@@ -629,7 +640,7 @@ function structuralVerb(view: ArtifactView, args: string[], sign: 1 | -1): VerbR
   const usage = sign > 0 ? "insert <doc> rows <Tab!5> [count] | cols <Tab!C> [count]" : "delete <doc> rows <Tab!5:7> | cols <Tab!C:D>";
   const { model, tab, lo, hi, axis } = axisTarget(view, what, ref, usage);
   const count = sign > 0 ? Math.max(1, Number(countArg ?? 1)) : hi - lo + 1;
-  return { ops: structuralOps(model, tab.id, axis, lo, sign * count), status: `${sign > 0 ? "inserted" : "deleted"} ${count} ${what}` };
+  return claimed({ ops: structuralOps(model, tab.id, axis, lo, sign * count), status: `${sign > 0 ? "inserted" : "deleted"} ${count} ${what}` }, tab.id);
 }
 
 function hideVerb(view: ArtifactView, args: string[], hide: boolean): VerbResult {
@@ -647,6 +658,13 @@ export const sheetSpec: ArtifactSpec = {
   presenceFor: (_view, keys) => rangeOf(keys),
   seed: () => [{ k: tabKey(DEFAULT_TAB), put: { kind: "tab", name: DEFAULT_TAB, order: 0 } }],
   // "Tab!A1" (a tab's name or id) or "A1" (the first tab) names that cell, empty or not; a range names its top-left cell.
+  // A rewrite (sort, fill, paste, insert/delete) owns the tab it rewrites: its cells, columns and rows,
+  // the tab itself, and the rules, tables, validations and merges on it.
+  claimScope(key, fields) {
+    const k = parseKey(key);
+    if (k) return `tab:${k.tab}`;
+    return typeof fields?.tab === "string" ? `tab:${fields.tab}` : null;
+  },
   pinComment: (view, anchor, threadKey) => sheetCommentHooks.pinComment(view.elements, anchor, threadKey),
   commentPlaces: (view, threads) => sheetCommentHooks.commentPlaces(view.elements, threads),
   anchorFor(view, ref) {

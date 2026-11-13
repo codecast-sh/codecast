@@ -17,7 +17,8 @@ type CellFields = Record<string, Json>;
 
 function fieldsOf(el: CellEl): CellFields {
   const out: CellFields = {};
-  for (const [k, v] of Object.entries(el)) {
+  for (const k in el) {
+    const v = (el as Record<string, unknown>)[k];
     if (k === "key" || k === "kind" || k === "rev" || k === "by" || k === "at" || v === undefined) continue;
     out[k] = v as Json;
   }
@@ -89,7 +90,8 @@ export function clipOf(model: SheetModel, tabId: string, rect: Rect, rows?: numb
     cells.push(line);
   }
   // A copied dropdown or date column pastes as one, as in Google and Excel (a filtered copy, with gaps, carries values only).
-  const validations = rows
+  const gaps = !!rows && rows.some((r, i) => i > 0 && r !== rows[i - 1] + 1);
+  const validations = gaps
     ? []
     : model.validations
         .filter((v) => v.tab === tabId && v.rect.c0 <= rect.c1 && v.rect.c1 >= rect.c0 && v.rect.r0 <= rect.r1 && v.rect.r1 >= rect.r0)
@@ -432,33 +434,48 @@ export function structuralOps(model: SheetModel, tabId: string, axis: "row" | "c
 export function sortOps(model: SheetModel, wb: Workbook, tabId: string, rect: Rect, byCol: number, desc = false): ArtifactOp[] {
   const t = tabData(model, tabId);
   if (!t) return [];
-  const rows: number[] = [];
-  for (let r = rect.r0; r <= rect.r1; r++) rows.push(r);
-  const keyOf = (r: number): Scalar => wb.value(tabId, byCol, r);
-  const order = [...rows].sort((a, b) => {
-    const va = keyOf(a), vb = keyOf(b);
-    if (va === null || va === "") return vb === null || vb === "" ? a - b : 1;
-    if (vb === null || vb === "") return -1;
+  const n = rect.r1 - rect.r0 + 1;
+  // Each row's key read once, into an array by row offset, not on every comparison.
+  const keys: Scalar[] = Array.from({ length: n }, (_, i) => wb.value(tabId, byCol, rect.r0 + i));
+  const blank = (v: Scalar) => v === null || v === "";
+  const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => {
+    const va = keys[a], vb = keys[b];
+    if (blank(va)) return blank(vb) ? a - b : 1;
+    if (blank(vb)) return -1;
     const c = compareScalars(va, vb);
     return (desc ? -c : c) || a - b;
   });
   const ops: ArtifactOp[] = [];
-  order.forEach((fromRow, i) => {
-    const toRow = rect.r0 + i;
-    if (fromRow === toRow) return;
+  order.forEach((from, i) => {
+    if (from === i) return;
+    const fromRow = rect.r0 + from, toRow = rect.r0 + i;
     for (let c = rect.c0; c <= rect.c1; c++) {
       const src = t.cells.get(cellNum(c, fromRow));
-      const k = cellKey(tabId, c, toRow);
+      const dest = t.cells.get(cellNum(c, toRow));
       if (!src) {
-        if (t.cells.has(cellNum(c, toRow))) ops.push({ k, del: true });
+        if (dest) ops.push({ k: dest.key, del: true });
         continue;
       }
       const fields = fieldsOf(src);
-      if (typeof fields.input === "string" && isFormula(fields.input)) fields.input = shiftFormula(fields.input, 0, toRow - fromRow);
-      ops.push({ k, put: { kind: "cell", ...fields } });
+      if (typeof fields.input === "string" && fields.input.startsWith("=")) fields.input = shiftFormula(fields.input, 0, toRow - fromRow);
+      // A cell landing on an identical one (a status column of "Open"s) writes nothing.
+      if (dest && sameFields(fields, dest)) continue;
+      ops.push({ k: cellKey(tabId, c, toRow), put: { kind: "cell", ...fields } });
     }
   });
   return ops;
+}
+
+/** Whether a cell already holds exactly these fields (input and style), so writing them would change nothing. */
+function sameFields(fields: CellFields, el: CellEl): boolean {
+  let count = 0;
+  for (const k in fields) {
+    if ((el as Record<string, unknown>)[k] !== fields[k]) return false;
+    count++;
+  }
+  let have = 0;
+  for (const k in el) if (k !== "key" && k !== "kind" && k !== "rev" && k !== "by" && k !== "at" && (el as Record<string, unknown>)[k] !== undefined) have++;
+  return have === count;
 }
 
 // ── Tabs ────────────────────────────────────────────────────────────────────
