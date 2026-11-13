@@ -35,6 +35,7 @@ import { setTaskStatusUndoable, triage } from "./issueUndo";
 import { assignItems, compact, fmt, itemFacts, itemGroup, itemGroups, itemHref, itemRef, itemTitle, resolvableGroups, resolveItems, rowEvents, rowUsers, snoozeItems, type RowFact } from "./opsHomeItems";
 import type { FixFacts } from "./opsModel";
 import type { OpsGroup, OpsSource, OpsWatch } from "./opsTypes";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 /** The pill each state wears: the same words as its tile (ATTENTION_FILTERS), singular and lower case. */
 const STATE_WORD: Record<AttentionItem["state"], string> = { alerting: "alerting", check: "check failing", regressed: "regressed", escalating: "escalating", new: "new", firing: "firing", errors: "replay errors", reader: "reader failing", erroring: "watch error", source: "source down", degraded: "degraded" };
@@ -320,7 +321,7 @@ function retryWatch(it: Extract<AttentionItem, { kind: "watch" }>) {
 
 /** Who the Assign menu offers: this person first, then the team. */
 function useAssignees(): { id: string; name: string; me: boolean }[] {
-  const members = useInboxStore((s) => s.teamMembers) as any[] | undefined;
+  const members = useInboxStore(teamMembersOf) as any[] | undefined;
   const me = useInboxStore((s) => s.currentUser) as any;
   return useMemo(() => {
     const out: { id: string; name: string; me: boolean }[] = [];
@@ -447,7 +448,7 @@ export function TaskChip({ taskId, task, mismatch, dissolved }: { taskId: string
   const shortId = task?.short_id;
   const assignee = task?.assignee ?? null;
   // The face from the live roster (lib/liveEntities), never the task's server snapshot.
-  const members = useInboxStore((s) => s.teamMembers);
+  const members = useInboxStore(teamMembersOf);
   const me = useInboxStore((s) => s.currentUser);
   // A role can own a task too: without the org's roles its assignee reads as nobody.
   const { roles } = useOrgRoles();
