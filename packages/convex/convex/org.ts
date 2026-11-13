@@ -31,6 +31,7 @@ import { parseCallRef } from "@codecast/shared/entities";
 import { isActiveTask } from "@codecast/shared/tasks";
 import { findInitiative } from "./lib/initiativeRef";
 import { canReadCall } from "./transcripts";
+import { docLiveState, docRevision } from "./lib/docBody";
 
 // The org page's read side (docs/architecture/org-roles.md S3, S4): one query
 // returns the workspace's reporting tree — people, roles, anchors, and every
@@ -1634,6 +1635,8 @@ export const brief = query({
       facts,
       narrative: briefDoc?.content ?? "",
       brief_doc_id: role.brief_doc_id ?? null,
+      // What `cast brief edit` computed from this read sends back as its base.
+      brief_revision: briefDoc ? docRevision(briefDoc.content, (await docLiveState(ctx, briefDoc._id)).version) : null,
       charter: charterDoc?.content ?? role.charter ?? "",
       charter_doc_id: role.charter_doc_id ?? null,
     };
