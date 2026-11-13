@@ -4796,10 +4796,11 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           }}
           // The list is inverted, so its header is the foot of the transcript:
           // what a hosted conversation waits on the person for.
-          ListHeaderComponent={hostedApprovals.length > 0 || settledAnswer || cardPending ? (
+          ListHeaderComponent={hostedApprovals.length > 0 || settledAnswer || cardPending || (pendingPermissions?.length ?? 0) > 0 ? (
             <RNView style={{ gap: 12, paddingHorizontal: 12, paddingTop: 8, paddingBottom: 4 }}>
               {hostedApprovals.map((d, n) => <ApprovalCard key={d._id} decision={d} index={n} />)}
               {settledAnswer ? <ApprovalSettled label={settledAnswer} /> : cardPending ? <ApprovalPending /> : null}
+              {pendingPermissions?.map((permission) => <PermissionCard key={permission._id} permission={permission} />)}
             </RNView>
           ) : null}
           ListFooterComponent={
@@ -4835,13 +4836,6 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                   <RNText style={{ fontSize: 11, color: Theme.cyan, opacity: 0.7 }}>Spawned from parent session</RNText>
                 </Pressable>
               )}
-              {pendingPermissions && pendingPermissions.length > 0 ? (
-                <RNView style={styles.permissionsContainer}>
-                  {pendingPermissions.map((permission) => (
-                    <PermissionCard key={permission._id} permission={permission} />
-                  ))}
-                </RNView>
-              ) : null}
             </>
           }
           renderItem={({ item, index }) => {
@@ -5188,9 +5182,6 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
   metaChip: { ...chipShell, ...chipQuiet(Theme) },
   metaChipText: { ...chipText, color: Theme.textMuted },
   messageList: S.messageList,
-  permissionsContainer: {
-    marginBottom: 16,
-  },
   messageBubble: S.messageBubble,
   userBubble: {
     ...S.userBubble,
