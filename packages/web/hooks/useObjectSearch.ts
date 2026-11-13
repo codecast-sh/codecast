@@ -19,6 +19,7 @@ import {
   matchRoles, matchRoutines, matchRows, openTasksFirst,
 } from "../lib/universalSearch";
 import { memberDisplayName } from "../lib/liveEntities";
+import { teamMembersOf } from "../lib/activeTeam";
 
 /** The kinds the search page lists, in the order its tabs and groups read. */
 export type ObjectKind = "task" | "plan" | "doc" | "trigger" | "project" | "initiative" | "role" | "person" | "page";
@@ -107,7 +108,7 @@ export function useObjectSearch(query: string, { cap }: { cap: number }): Object
       },
       {
         kind: "person", label: objectKindLabel("person"),
-        hits: matchRows(((st as any).teamMembers ?? []).filter(isPerson), q, (m: any) => [memberDisplayName(m, ""), m.github_username, m.email], cap)
+        hits: matchRows(teamMembersOf(st).filter(isPerson), q, (m: any) => [memberDisplayName(m, ""), m.github_username, m.email], cap)
           .map((m: any) => ({ key: String(m._id), kind: "person" as const, type: "person" as const, entity: m, title: memberDisplayName(m), href: objectHref("person", personRefOf(m)) })),
       },
       {
