@@ -8,6 +8,11 @@
 // Ids in routes come from the world (lib/acmeWorld), never from a real account.
 
 import { MAIN_PAGE } from "./batches/main-page";
+import { RECALL_SHOWING } from "./batches/recall-showing";
+import { MACHINES_SHOTS } from "./batches/machines";
+import { WORKING_TOGETHER_B } from "./batches/working-together-b";
+import { TRACKING } from "./batches/tracking";
+import { WORKING_TOGETHER_A } from "./batches/working-together-a";
 
 export type Step =
   /** An expression run in the page; may return a promise. */
@@ -44,8 +49,8 @@ export type Shot = {
   steps?: Step[];
   /** Waited for before the steps; default the crop selector, else the app shell. */
   ready?: string;
-  /** The whole viewport, or one element with padding in CSS px. Default window. */
-  crop?: "window" | { selector: string; pad?: number };
+  /** The whole viewport, or one element with padding in CSS px (`include` widens it to the last match of another selector). Default window. */
+  crop?: "window" | { selector: string; pad?: number; include?: string };
   /** Show the session rail on the right. Default off. */
   rail?: boolean;
   /** frame.html's kind; "none" writes the raw capture (never under public/docs, where pages show images bare). */
@@ -62,4 +67,9 @@ const batch = (name: string, shots: Shot[]) => shots.map((s) => ({ ...s, batch: 
 
 export const SHOTS: Shot[] = [
   ...batch("main-page", MAIN_PAGE),
+  ...batch("machines", MACHINES_SHOTS),
+  ...batch("working-together-b", WORKING_TOGETHER_B),
+  ...batch("tracking", TRACKING),
+  ...batch("working-together-a", WORKING_TOGETHER_A),
+  ...batch("recall-showing", RECALL_SHOWING),
 ];
