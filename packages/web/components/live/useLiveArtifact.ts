@@ -472,7 +472,8 @@ function dispatchNow(docId: string, layer: LiveLayer, ops: ArtifactOp[], claim?:
   const write = claim ? nanoid(10) : "";
   const claimFor = (i: number): LiveBatchClaim | undefined => (claim ? { scope: claim.scope, write, base: claim.base ?? 0, first: i === 0, last: i === batches.length - 1 } : undefined);
   const [first, ...rest] = batches;
-  const sends = [sendBatch(docId, layer, first, false, claimFor(0))];
+  const firstSend = sendBatch(docId, layer, first, false, claimFor(0));
+  const sends: Promise<unknown>[] = [firstSend];
   const finish = () => {
     const stall = new Promise((r) => setTimeout(r, SEND_STALL_MS));
     void Promise.race([Promise.allSettled(sends), stall]).then(() => {
@@ -487,6 +488,12 @@ function dispatchNow(docId: string, layer: LiveLayer, ops: ArtifactOp[], claim?:
   stageOverlay(docId, layer, rest);
   // The overlay keeps the staged values (the same ones the store takes) until the last batch is in, then
   // steps aside once: one page update for the whole write, not one per batch.
+  const dropStaged = () => {
+    q.staged = [];
+    heldRows.delete(docId);
+    rebuildQueuedOverlay(docId);
+    finish();
+  };
   const pump = () => {
     const item = q.staged.shift();
     if (!item) {
@@ -498,7 +505,10 @@ function dispatchNow(docId: string, layer: LiveLayer, ops: ArtifactOp[], claim?:
     try { sends.push(sendBatch(docId, item.layer, item.ops, true, item.batchClaims?.[0])); } catch (e) { console.error("[live] staged batch failed", e); }
     nextTask(pump);
   };
-  nextTask(pump);
+  // A rewrite holds its scope only once its first batch is in: the rest goes after that answer, and a
+  // refused first batch takes the rest of the write with it (nothing sent, nothing said twice).
+  if (claim) void firstSend.then((outcome) => (outcome === "refused" ? dropStaged() : nextTask(pump)));
+  else nextTask(pump);
 }
 
 /** The next task, without setTimeout's clamping (4 ms nested, a second in a hidden tab), so input runs between batches. */
@@ -513,7 +523,7 @@ function nextTask(fn: () => void) {
  * One server batch: painted in the store now, sent, and settled (or parked, or refused) when it answers.
  * `held`: a staged batch the page reads from its overlay (heldRows), painted with no pending locks.
  */
-function sendBatch(docId: string, layer: LiveLayer, batch: ArtifactOp[], held = false, claim?: LiveBatchClaim): Promise<void> {
+function sendBatch(docId: string, layer: LiveLayer, batch: ArtifactOp[], held = false, claim?: LiveBatchClaim): Promise<"sent" | "parked" | "refused"> {
   const store = useInboxStore.getState() as any;
   const clientId = nanoid(10);
   let pending: unknown;
@@ -527,14 +537,15 @@ function sendBatch(docId: string, layer: LiveLayer, batch: ArtifactOp[], held = 
   const rowIds = batch.map((op) => liveRowId(docId, layer, op.k));
   countUnsettled(docId, 1);
   return Promise.resolve(pending)
-    .then((res: any) => {
+    .then((res: any): "sent" => {
       if (res && typeof res.rev === "number") settleAfter(docId, res.rev, rowIds, before);
       refused.delete(docId);
+      return "sent";
     })
-    .catch((e: any) => {
+    .catch((e: any): "parked" | "refused" => {
       if (!isRefusedDispatchError(e)) {
         park(docId, rowIds);
-        return;
+        return "parked";
       }
       // The store already put the rows back (a held batch has no locks to undo: the server's rows go back over it);
       // say so once, and keep it on the save state.
@@ -542,6 +553,7 @@ function sendBatch(docId: string, layer: LiveLayer, batch: ArtifactOp[], held = 
       const why = refusalText(e);
       if (refused.get(docId) !== why) toast.error(`Not saved: ${why}`);
       refused.set(docId, why);
+      return "refused";
     })
     .finally(() => countUnsettled(docId, -1));
 }

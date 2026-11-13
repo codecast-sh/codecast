@@ -127,6 +127,24 @@ describe("live artifact store", () => {
     expect(calls[1]).toEqual([{ k: "el_new", set: { text: "Write the launch post", x: 5 } }]);
   });
 
+  it("a rewrite whose first batch is refused sends nothing more", async () => {
+    const calls: any[][] = [];
+    s()._clearDispatch(owner);
+    s()._setDispatch(async (action: string, args: any[]) => {
+      if (action !== "applyLiveOps" && action !== "liveSendOps") return null;
+      calls.push(args);
+      throw new Error("Uncaught ConvexError: Sheets is rewriting this range; try again when it's saved");
+    }, { owner });
+    const ops = Array.from({ length: 1000 }, (_, i) => ({ k: `el_r${i}`, put: { kind: "sticky", x: i } }));
+    sendLiveOps(DOC, "main", ops, { claim: { scope: "tab:t1", base: 5 } });
+    await Bun.sleep(50);
+    // Only the first batch went out, carrying the claim; the other 600 ops never left.
+    expect(calls).toHaveLength(1);
+    expect(calls[0][4]).toMatchObject({ scope: "tab:t1", base: 5, first: true, last: false });
+    expect(s().liveElements[liveRowId(DOC, "main", "el_r999")]).toBeUndefined();
+    await whenLiveSent(DOC, 1000);
+  });
+
   it("a write that clears a field shows the field gone while it waits behind another send", async () => {
     const { layerElements } = await import("../../components/live/useLiveArtifact");
     const { applyOp, fromElement } = await import("@codecast/shared/artifacts");

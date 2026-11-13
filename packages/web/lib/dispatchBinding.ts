@@ -124,6 +124,9 @@ const CALLER_REPORTED_ACTIONS = new Set([
   "admitGuestKnock",
   "denyGuestKnock",
   "removeCallGuest",
+  // Live artifact writes: the live layer puts the rows back and says "Not saved: <why>" once per write.
+  "applyLiveOps",
+  "liveSendOps",
 ]);
 
 // The quote record's writes (store saveQuoteDrafts / removeQuoteDrafts). The
