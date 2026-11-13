@@ -152,16 +152,103 @@ export const PERMISSIONS = (now: number) => [
   },
 ];
 
+const call = (id: string, name: string, input: unknown) => ({ id, name, input: JSON.stringify(input) });
+const result = (id: string, content: string) => ({ tool_use_id: id, content });
+
+const RETRY_TS = `const DELAYS_MS = [2_000, 4_000, 8_000, 16_000];
+export const MAX_ATTEMPTS = 5;
+
+/** 5xx, 429 and timeouts are worth another try; a 410 means the endpoint is gone. */
+export function isRetryable(status: number): boolean {
+  return status >= 500 || status === 429 || status === 408;
+}
+
+/** The delay before attempt \`n\`, with up to 20% jitter so retries never arrive together. */
+export function backoff(attempt: number): number {
+  const base = DELAYS_MS[Math.min(attempt - 1, DELAYS_MS.length - 1)];
+  return base + Math.round(base * 0.2 * Math.random());
+}
+
+export async function scheduleRetry(event: WebhookEvent, attempt: number) {
+  if (attempt >= MAX_ATTEMPTS) return deadLetter(event);
+  await queue.add(event, { delay: backoff(attempt), attempt: attempt + 1 });
+}
+`;
+
+const RETRY_TEST_TS = `import { describe, expect, test } from "bun:test";
+import { backoff, isRetryable, MAX_ATTEMPTS } from "./retry";
+
+describe("webhook retries", () => {
+  test("retries 5xx, 429 and timeouts", () => {
+    for (const s of [500, 502, 503, 429, 408]) expect(isRetryable(s)).toBe(true);
+  });
+  test("never retries a 410", () => expect(isRetryable(410)).toBe(false));
+  test("backs off 2s, 4s, 8s, 16s", () => {
+    expect(backoff(1)).toBeGreaterThanOrEqual(2_000);
+    expect(backoff(4)).toBeLessThan(16_000 * 1.21);
+  });
+  test("stops after five attempts", () => expect(MAX_ATTEMPTS).toBe(5));
+});
+`;
+
 export const LEAD_TRANSCRIPT = (now: number) => {
   const t = (minsAgo: number) => now - minsAgo * MIN;
   return [
     { _id: "hero-lead-m1", role: "user", content: "Failed Stripe webhooks should retry instead of dropping. Split the API and the dashboard across workers and keep me posted.", timestamp: t(40) },
     { _id: "hero-lead-m2", role: "assistant", content: "Two workers are on it: the API half builds POST /v2/hooks/retry, the dashboard half adds a Retry button and attempt history.", timestamp: t(38) },
+    // The queue itself, built here: folded tool lines, an edit the diff panel
+    // shows, and the retry suite running in the background.
+    {
+      _id: "hero-lead-m2a",
+      role: "assistant",
+      content: "Reading how a delivery fails today before adding the queue.",
+      tool_calls: [
+        call("hero-lead-tc1", "Read", { file_path: "webhooks/deliver.ts" }),
+        call("hero-lead-tc2", "Grep", { pattern: "deliver\\(", path: "webhooks" }),
+        call("hero-lead-tc3", "Read", { file_path: "webhooks/queue.ts" }),
+      ],
+      tool_results: [
+        result("hero-lead-tc1", "export async function deliver(event: WebhookEvent): Promise<number> {\n  const res = await fetch(event.endpoint, signed(event));\n  return res.status;\n}"),
+        result("hero-lead-tc2", "webhooks/receive.ts:22:  await deliver(event)\nwebhooks/replay.ts:9:  return deliver(event)"),
+        result("hero-lead-tc3", "export const queue = createQueue<WebhookEvent>(\"webhooks\");"),
+      ],
+      timestamp: t(30),
+    },
+    {
+      _id: "hero-lead-m2b",
+      role: "assistant",
+      content: "A failed delivery goes back on the queue with a growing delay. The schedule lives in one function so the dashboard can show the next attempt.",
+      tool_calls: [
+        call("hero-lead-tc4", "Write", { file_path: "webhooks/retry.ts", content: RETRY_TS }),
+        call("hero-lead-tc5", "Edit", { file_path: "webhooks/receive.ts", old_string: "  await deliver(event)", new_string: "  const status = await deliver(event)\n  if (isRetryable(status)) await scheduleRetry(event, 1)" }),
+        call("hero-lead-tc6", "Write", { file_path: "webhooks/retry.test.ts", content: RETRY_TEST_TS }),
+      ],
+      tool_results: [
+        result("hero-lead-tc4", "File created successfully at: webhooks/retry.ts"),
+        result("hero-lead-tc5", "The file webhooks/receive.ts has been updated."),
+        result("hero-lead-tc6", "File created successfully at: webhooks/retry.test.ts"),
+      ],
+      timestamp: t(18),
+    },
+    {
+      _id: "hero-lead-m2c",
+      role: "assistant",
+      content: "Running the retry suite against the real queue in the background; it replays 200 failed deliveries.",
+      tool_calls: [
+        call("hero-lead-tc7", "Bash", { command: "bun test webhooks/retry.test.ts", description: "Run the webhook retry tests", run_in_background: true }),
+        call("hero-lead-tc8", "Bash", { command: "bun run typecheck", description: "Typecheck the billing service" }),
+      ],
+      tool_results: [
+        result("hero-lead-tc7", "Command running in background with ID: b7r2k9. Output is being written to: /tmp/retry-tests.log"),
+        result("hero-lead-tc8", "Checked 214 files, 0 errors. [3.1s]"),
+      ],
+      timestamp: t(6),
+    },
     {
       _id: "hero-lead-m3",
       role: "assistant",
       content:
-        "The retry queue is in. A failed delivery now waits 2s, 4s, 8s, 16s with jitter and stops after the fifth attempt. Both tickets Sarah raised would have landed on the second try.\n\nNext I run the retry suite against the real queue to confirm the schedule holds under load.",
+        "The retry queue is in. A failed delivery now waits 2s, 4s, 8s, 16s with jitter and stops after the fifth attempt. Both tickets Sarah raised would have landed on the second try.\n\nThe retry suite is still running in the background against the real queue; I will post the result when it finishes.",
       timestamp: t(1),
     },
   ];
@@ -169,7 +256,8 @@ export const LEAD_TRANSCRIPT = (now: number) => {
 
 const CANVAS = `\`\`\`cast-canvas
 <div data-canvas-title="Backoff strategies for webhook retries" style="font-family:system-ui;padding:12px;color:var(--sol-text)">
-  <div style="font-size:13px;color:var(--sol-text-muted);margin-bottom:10px">Share of failed deliveries recovered, by attempt</div>
+  <div style="font-size:14px;margin-bottom:6px">Exponential backoff with jitter recovers 96% of failed deliveries by the fifth attempt.</div>
+  <div style="font-size:12px;color:var(--sol-text-muted);margin-bottom:10px">Recovered, by attempt</div>
   <table style="width:100%;border-collapse:collapse;font-size:13px">
     <tr style="color:var(--sol-text-dim)"><td></td><td>1</td><td>2</td><td>3</td><td>5</td></tr>
     <tr><td>Fixed 5s</td><td>41%</td><td>58%</td><td>66%</td><td>71%</td></tr>
@@ -186,7 +274,7 @@ export const UI_TRANSCRIPT = (now: number) => {
     {
       _id: "hero-ui-m2",
       role: "assistant",
-      content: `I replayed last week's 1,284 failed deliveries under each schedule.\n\n${CANVAS}\n\nExponential backoff with jitter recovers 96% by the fifth attempt, so the button uses the same schedule as the queue.`,
+      content: `I replayed last week's 1,284 failed deliveries under each schedule.\n\n${CANVAS}\n\nThe Retry button will use the queue's schedule: 2s, 4s, 8s, 16s with jitter, five attempts at most.`,
       timestamp: t(2),
     },
   ];

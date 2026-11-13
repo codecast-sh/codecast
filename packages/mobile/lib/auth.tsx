@@ -7,7 +7,7 @@ import * as AppleAuthentication from 'expo-apple-authentication';
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import { useAuthActions, useAuthToken } from '@convex-dev/auth/react';
-import { useConvexAuth, useMutation, useQuery } from 'convex/react';
+import { ConvexProviderWithAuth, useConvexAuth, useMutation, useQuery } from 'convex/react';
 import { getDevicePushToken } from './devicePushToken';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { clearProtectedInboxMemory, useInboxStore } from '@codecast/web/store/inboxStore';
@@ -519,11 +519,23 @@ function StoreShotsAuthProvider({ children }: { children: ReactNode }) {
     setSeeded(true);
     void SplashScreen.hideAsync();
   }, [hydrated, seeded]);
+  // Convex itself must also count the viewer as confirmed: the store's
+  // feeders (useSyncCollection) hold at "skip" until useConvexAuth says so,
+  // and ConvexAuthProvider never does without a token. The stub's setAuth
+  // answers signed in without asking the token for anything.
   return (
-    <AuthContext.Provider value={STORE_SHOTS_AUTH}>
-      {seeded ? children : null}
-    </AuthContext.Provider>
+    <ConvexProviderWithAuth client={require('./convex').convex} useAuth={useStoreShotsConvexAuth}>
+      <AuthContext.Provider value={STORE_SHOTS_AUTH}>
+        {seeded ? children : null}
+      </AuthContext.Provider>
+    </ConvexProviderWithAuth>
   );
+}
+
+const storeShotsToken = async () => 'store-shots';
+const STORE_SHOTS_CONVEX_AUTH = { isLoading: false, isAuthenticated: true, fetchAccessToken: storeShotsToken };
+function useStoreShotsConvexAuth() {
+  return STORE_SHOTS_CONVEX_AUTH;
 }
 
 export const AuthProvider = STORE_SHOTS ? StoreShotsAuthProvider : RealAuthProvider;

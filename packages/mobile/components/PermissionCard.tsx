@@ -1,5 +1,6 @@
 import { StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Text } from '@/components/Themed';
+import { themedStyles } from '@/constants/Theme';
 import { Id } from '@codecast/convex/convex/_generated/dataModel';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
@@ -103,4 +104,23 @@ export function PermissionCard({ permission }: PermissionCardProps) {
   );
 }
 
-const styles = StyleSheet.create(PERMISSION_CARD_STYLE);
+// The shared layout, with the words and the arguments well painted from the
+// active palette: its fixed colors are drawn for a dark screen and vanish on a
+// light one.
+const S = PERMISSION_CARD_STYLE;
+const styles = themedStyles((Theme) =>
+  StyleSheet.create({
+    ...S,
+    title: { ...S.title, color: Theme.text },
+    toolName: { ...S.toolName, color: Theme.accentAmber },
+    subagentTag: { ...S.subagentTag, color: Theme.violet },
+    safetyTag: { ...S.safetyTag, color: Theme.orange },
+    intent: { ...S.intent, color: Theme.text },
+    removal: { ...S.removal, color: Theme.text },
+    removalVerb: { ...S.removalVerb, color: Theme.red },
+    removalCount: { ...S.removalCount, color: Theme.red },
+    removalNote: { ...S.removalNote, color: Theme.textMuted },
+    argsContainer: { ...S.argsContainer, backgroundColor: Theme.bgInset },
+    argsText: { ...S.argsText, color: Theme.textSecondary },
+  }),
+);
