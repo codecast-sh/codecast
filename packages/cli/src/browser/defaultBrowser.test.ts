@@ -83,7 +83,8 @@ for (const driver of ["engine", "builtin"] as const) {
       test(`${args[0]} without pairing refuses instead of launching a clone`, async () => {
         const result = await run(driver, args);
         expect(result.code).toBe(1);
-        expect(result.text).toContain("extension setup");
+        expect(result.text).toContain("not set up");
+        expect(result.text).not.toMatch(/in a terminal|extension setup/);
         expect(result.text).toContain(BROWSER_EXTENSION_STORE_URL);
         expect(result.text).not.toContain("CLONE_LAUNCH");
       });
@@ -107,7 +108,8 @@ for (const driver of ["engine", "builtin"] as const) {
     test("old sticky clone choices cannot launch a browser", async () => {
       const result = await run(driver, ["start"], undefined, "clone");
       expect(result.code, result.text).toBe(1);
-      expect(result.text).toContain("extension setup");
+      expect(result.text).toContain("not set up");
+        expect(result.text).not.toMatch(/in a terminal|extension setup/);
       expect(result.text).not.toContain("CLONE_LAUNCH");
     });
 
@@ -117,7 +119,8 @@ for (const driver of ["engine", "builtin"] as const) {
       expect((await run(driver, ["advanced", "clone", "start"], dir)).code).toBe(0);
       const next = await run(driver, ["start"], dir);
       expect(next.code, next.text).toBe(1);
-      expect(next.text).toContain("extension setup");
+      expect(next.text).toContain("not set up");
+      expect(next.text).not.toMatch(/in a terminal|extension setup/);
       expect(next.text).not.toContain("CLONE_LAUNCH");
     });
 
