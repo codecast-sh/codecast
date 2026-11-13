@@ -54,7 +54,7 @@ export const CODECAST_EVENTS = defineCatalog({
   // /welcome), from the marketing page or signup.
   assistant_path_clicked: { location: LOCATION },
   // The empty inbox's first run: which start a person with no machine chose.
-  first_run_start_chosen: { start: { type: "string", values: ["assistant", "machine"] } },
+  first_run_start_chosen: { start: { type: "string", values: ["assistant", "machine", "cast_machine"] } },
   // The landing page tour film: a start, and each jump to a chapter.
   landing_tour_started: { chapter: COUNT },
   landing_tour_chapter: { chapter: COUNT, from: { type: "string", values: ["chapter_list", "section_link"] } },

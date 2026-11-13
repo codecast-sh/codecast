@@ -14,7 +14,7 @@ import type { HostWake } from "../hooks/useHostWake";
  *  first time (convex/castMachines.ts): no device owns it yet, so the steps
  *  come from the machine's own status. */
 function useCastMachineLaunch(ownerDeviceId: string | null | undefined): HostWake | null {
-  const machine = useQueryNoThrow(api.castMachines.mine, ownerDeviceId ? "skip" : {});
+  const { data: machine } = useQueryNoThrow(api.castMachines.mine, ownerDeviceId ? "skip" : {});
   if (ownerDeviceId || !machine || machine.status === "none") return null;
   const since = machine.since ?? Date.now();
   const base = { deviceId: "", host: "Your cloud machine", now: Date.now() };

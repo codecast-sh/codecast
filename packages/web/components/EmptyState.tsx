@@ -391,7 +391,7 @@ function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean
 // nothing to install. Shown to people the backend enables for it; the start
 // opens the composer on Cast, whose create launches or wakes the machine.
 function StartOnCastMachine() {
-  const machine = useQueryNoThrow(api.castMachines.mine, {});
+  const { data: machine } = useQueryNoThrow(api.castMachines.mine, {});
   if (!machine?.enabled) return null;
   const start = () => {
     track("first_run_start_chosen", { start: "cast_machine" });
