@@ -45,7 +45,7 @@ import { LineNavProvider, type LineNav } from "../widgets";
 import { StepPage } from "./step/StepPage";
 import { StageDrawer, StationDrawer } from "./stages/LineDrawer";
 import type { LineViewProps } from "./views/types";
-import { ForYouView } from "./views/ForYouView";
+import { DecisionsMoved } from "./views/DecisionsMoved";
 import { FinderPage } from "./views/finder/FinderPage";
 import { ProblemsView } from "./views/ProblemsView";
 import { RunPage as RunPageView } from "./views/run/RunPage";
@@ -65,7 +65,7 @@ import "./workspace.css";
 // Each is memoized: the shell hosts the line's feeders, so it re-renders on
 // every push, and a view re-renders only when the model, the workspace or the
 // selection it reads moved.
-const ForYou = memo(ForYouView);
+const ForYou = memo(DecisionsMoved);
 const Problems = memo(ProblemsView);
 const RunPage = memo(RunPageView);
 const Finder = memo(FinderPage);

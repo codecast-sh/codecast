@@ -18,9 +18,11 @@ import type { DecisionViewState } from "../../hooks/useDecisionView";
 import { currentViewId, isViewDirty, prefsForSaving, VIEW_ID_KEY } from "../../lib/savedViews";
 import {
   arrangeDecisions, filterCounts, tabCounts, DECISION_AGES, DECISION_AXES, DECISION_AXIS_LABEL, DECISION_KINDS, DECISION_KIND_LABEL,
-  DECISION_SORTS, DECISION_SORT_LABEL, DECISION_TAB_LABEL, SESSION_SOURCE, type DecisionAxis, type DecisionTab,
+  DECISION_SORTS, DECISION_SORT_LABEL, DECISION_TAB_LABEL, SESSION_SOURCE, FLOW_SOURCE, type DecisionAxis, type DecisionTab,
 } from "../../lib/decisions/decisionRows";
 import { DecisionListRow, type DecisionRowCtx } from "./DecisionListRow";
+import { publishDecisionOrder } from "../../lib/decisions/decisionSet";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 
 const TAB_ICON: Record<DecisionTab, any> = { mine: UserRound, team: Inbox, unassigned: UserRound, escalated: ArrowUpRight, answered: Clock };
 const AXIS_ICON: Record<DecisionAxis, ReactNode> = {
@@ -56,9 +58,11 @@ export type DecisionListProps = {
   emptyMessage?: ReactNode;
   /** Draw narrow rows (the list beside a reader). */
   compact?: boolean;
+  /** Hand the rows' order to the decision page's ‹ › (lib/decisions/decisionSet). */
+  publishOrder?: boolean;
 };
 
-export function DecisionList({ title, page, state, rows, tabs = ["mine", "team", "unassigned", "escalated", "answered"], hideAxes = [], routeOf, renderPreview, activeItemId, savedViews, headerExtra, displayExtra, customContent, emptyMessage, compact }: DecisionListProps) {
+export function DecisionList({ title, page, state, rows, tabs = ["mine", "team", "unassigned", "escalated", "answered"], hideAxes = [], routeOf, renderPreview, activeItemId, savedViews, headerExtra, displayExtra, customContent, emptyMessage, compact, publishOrder }: DecisionListProps) {
   const { view, set, prefs, replace } = state;
   const now = useCoarseNow(60_000);
   const me = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
@@ -81,7 +85,7 @@ export function DecisionList({ title, page, state, rows, tabs = ["mine", "team",
       case "owner": return value === "none" ? "Unassigned" : owners.get(value)?.label ?? (value.startsWith("role:") ? "A role" : "Someone");
       case "area": return areaName(value);
       case "kind": return DECISION_KIND_LABEL[value as keyof typeof DECISION_KIND_LABEL] ?? value;
-      case "source": return value === SESSION_SOURCE ? "Sessions" : value;
+      case "source": return value === SESSION_SOURCE ? "Sessions" : value === FLOW_SOURCE ? "Every flow" : value;
       case "category": return categoryLabel(value);
     }
   }, [owners, areaName]);
@@ -98,6 +102,11 @@ export function DecisionList({ title, page, state, rows, tabs = ["mine", "team",
     key: g.key, label: g.label, items: g.items,
     icon: g.axis === "owner" ? (g.value === "none" ? <UserRound className="w-3.5 h-3.5 text-sol-text-dim" /> : <span className="w-4 h-4 flex items-center justify-center">{owners.get(g.value)?.face}</span>) : undefined,
   })) ?? null, [arranged.groups, owners]);
+
+  const order = useMemo(() => (arranged.groups ? arranged.groups.flatMap((g) => g.items) : arranged.items).map((d) => d.short_id ?? d._id).join(","), [arranged]);
+  useWatchEffect(() => {
+    if (publishOrder) publishDecisionOrder(order ? order.split(",") : []);
+  }, [publishOrder, order]);
 
   const axes = DECISION_AXES.filter((a) => !hideAxes.includes(a));
   const grouped = useMemo(() => new Set([view.group, view.sub].filter((a): a is DecisionAxis => a !== "none")), [view.group, view.sub]);
@@ -122,7 +131,7 @@ export function DecisionList({ title, page, state, rows, tabs = ["mine", "team",
       onChange: (v: string) => set({ owner: v }) },
     { key: "area", label: "Area", icon: AXIS_ICON.area, value: view.area, multi: true, options: opts("area", [], areaName), onChange: (v: string) => set({ area: v }) },
     { key: "kind", label: "Kind", icon: AXIS_ICON.kind, value: view.kind, multi: true, options: opts("kind", [...DECISION_KINDS], (k) => label("kind", k)), onChange: (v: string) => set({ kind: v }) },
-    { key: "source", label: "Source", icon: AXIS_ICON.source, value: view.source, multi: true, options: opts("source", [], (k) => label("source", k)), onChange: (v: string) => set({ source: v }) },
+    { key: "source", label: "Source", icon: AXIS_ICON.source, value: view.source, multi: true, options: opts("source", [FLOW_SOURCE], (k) => label("source", k)), onChange: (v: string) => set({ source: v }) },
     { key: "category", label: "Category", icon: AXIS_ICON.category, value: view.category, multi: true, options: opts("category", [], categoryLabel), onChange: (v: string) => set({ category: v }) },
     { key: "blocking", label: "Blocking", icon: <CircleDot className="w-3 h-3" />, value: view.blocking, options: opts("blocking", ["blocking", "advisory"], (k) => (k === "blocking" ? "Blocking" : "Advisory")), onChange: (v: string) => set({ blocking: v }) },
     { key: "age", label: "Waiting", icon: <Clock className="w-3 h-3" />, value: view.age, options: [{ key: "", label: "Any time" }, ...DECISION_AGES.map((a) => ({ key: a.key, label: a.label }))], onChange: (v: string) => set({ age: v }) },

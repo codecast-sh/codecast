@@ -81,7 +81,7 @@ function Holding({ blocks, toggle, show, go, href }: Ctx & { blocks: VolumeBlock
             <span className="vp-block-act">
               {b.act?.kind === "lead" ? <ProjectLeadChip projectId={b.act.project} editable size="xs" />
                 : b.act?.kind === "show" ? <button type="button" className="lw-chip" aria-pressed={show === b.act.show} onClick={() => toggle((b.act as { show: string }).show)}>Open</button>
-                : b.act?.kind === "go" ? <a className="lw-chip" href={href(b.act.patch)} onClick={go(b.act.patch)}>Open For you</a>
+                : b.act?.kind === "go" ? <a className="lw-chip" href={href(b.act.patch)} onClick={go(b.act.patch)}>Open the decisions</a>
                 : b.act?.kind === "page" ? <Link className="lw-chip" href={b.act.href}>{b.act.label}</Link>
                 : null}
             </span>

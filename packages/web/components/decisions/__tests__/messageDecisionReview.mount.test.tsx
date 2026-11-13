@@ -1,8 +1,7 @@
-// A message that names several open decisions gets one review under it. The
-// bar counts what waits; Review walks the decisions one card at a time in the
-// order the message names them; a digit answers the current card (the store
-// action alone paints it, no server is wired), s skips, and when nothing is
-// left the run lists how each went, with the skipped ones still answerable.
+// A message that names several decisions gets one bar under it: every open
+// one it names counts, whoever it is asked of, the bar says how many wait on
+// the viewer, and its button opens the first one as a full page with the
+// message's whole set to flip through, in the order the message names them.
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
 import React, { act } from "react";
 import { JSDOM } from "jsdom";
@@ -21,9 +20,10 @@ const restoreGlobals = replaceGlobals({
 });
 afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 
+const pushed: string[] = [];
 mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => React.createElement("a", { href, ...rest }, children) }));
 mock.module("next/navigation", () => ({
-  useRouter: () => ({ push: () => {}, replace: () => {} }),
+  useRouter: () => ({ push: (href: string) => { pushed.push(href); }, replace: () => {} }),
   useSearchParams: () => new URLSearchParams(), usePathname: () => "/inbox", useParams: () => ({}),
 }));
 const convexReact = await import("convex/react");
@@ -41,12 +41,11 @@ const dec = (n: number, over: Record<string, unknown> = {}) => ({
   options: [{ label: `Yes ${n}` }, { label: `No ${n}` }], blocking: true, status: "pending", created_at: NOW - 60_000, ...over,
 });
 beforeEach(() => {
-  const real = useInboxStore.getInitialState();
+  pushed.length = 0;
   useInboxStore.setState({
-    answerDecision: real.answerDecision, adoptDecision: real.adoptDecision,
-    currentUser: { _id: "u1", name: "Me" }, tasks: {}, decisionStacks: {},
-    // d4 was asked of somebody else: the message names it, the review leaves it out.
-    sessionDecisions: { d1: dec(1), d2: dec(2), d3: dec(3), d4: dec(4, { asked_user_ids: ["u2"] }) },
+    currentUser: { _id: "u1", name: "Me" }, tasks: {}, decisionStacks: {}, decisionDetails: {},
+    // d4 was asked of somebody else and d5 is answered: both still belong to the message's set.
+    sessionDecisions: { d1: dec(1), d2: dec(2), d3: dec(3), d4: dec(4, { asked_user_ids: ["u2"], in_queue: false }), d5: dec(5, { status: "answered" }) },
   } as any);
 });
 
@@ -56,39 +55,41 @@ async function mount(content: string) {
   await act(async () => { root.render(<MessageDecisionReview content={content} messageId="m1" />); });
   return { host, unmount: () => act(async () => root.unmount()) };
 }
-const key = (k: string) => act(async () => { window.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: k, code: /\d/.test(k) ? `Digit${k}` : `Key${k.toUpperCase()}`, bubbles: true })); });
 const button = (host: Element, text: string) => [...host.querySelectorAll("button")].find((b) => b.textContent?.trim() === text);
-const status = (id: string) => (useInboxStore.getState().sessionDecisions as any)[id].status;
 
-test("walks the named decisions one at a time, skips, and summarizes", async () => {
-  const { host, unmount } = await mount("Fix cards: @[Question 3 sd-3], sd-1, sd-4 and sd-2. Then sd-1 again; ct-9 is a task.");
-  expect(host.textContent).toContain("3 decisions");
-  await act(async () => { button(host, "Review")!.click(); });
-  // The message's order, not the store's.
-  expect(host.textContent).toContain("1 of 3");
-  expect(host.textContent).toContain("Question 3?");
-  await key("1");
-  expect(status("d3")).toBe("answered");
-  expect(host.textContent).toContain("Question 1?");
-  await key("s");
-  expect(status("d1")).toBe("pending");
-  expect(host.textContent).toContain("Question 2?");
-  await key("2");
-  expect(status("d2")).toBe("answered");
-  // Nothing left but the skipped one: the summary, with it answerable.
-  expect(host.textContent).toContain("2 of 3 answered");
-  expect(host.textContent).toContain("Yes 3");
-  expect(host.textContent).not.toContain("Question 4?");
-  await act(async () => { button(host, "Answer")!.click(); });
-  expect(host.textContent).toContain("Question 1?");
-  await key("Escape");
-  expect(host.textContent).toContain("1 decision");
-  expect(host.textContent).toContain("2 answered");
+test("counts every named open decision and opens the set full page, in the message's order", async () => {
+  const { host, unmount } = await mount("Fix cards: sd-4, @[Question 3 sd-3], sd-5, sd-1 and sd-2. Then sd-1 again; ct-9 is a task.");
+  expect(host.textContent).toContain("4 open decisions");
+  expect(host.textContent).toContain("3 asked of you");
+  expect(host.textContent).toContain("1 answered");
+  await act(async () => { button(host, "Go through them")!.click(); });
+  expect(pushed).toEqual(["/decisions/sd-3?set=sd-4,sd-3,sd-5,sd-1,sd-2"]);
   await unmount();
 });
 
-test("one named decision gets no review", async () => {
+test("decisions all asked of someone else still get the bar", async () => {
+  useInboxStore.setState({ sessionDecisions: { d6: dec(6, { asked_user_ids: ["u2"], in_queue: false }), d7: dec(7, { asked_user_ids: ["u2"], in_queue: false }) } } as any);
+  const { host, unmount } = await mount("Waiting on Jason: sd-6 and sd-7.");
+  expect(host.textContent).toContain("2 open decisions");
+  expect(host.textContent).toContain("0 asked of you");
+  await act(async () => { button(host, "Go through them")!.click(); });
+  expect(pushed).toEqual(["/decisions/sd-6?set=sd-6,sd-7"]);
+  await unmount();
+});
+
+test("one named decision gets no bar", async () => {
   const { host, unmount } = await mount("Only sd-1 is open, and ct-4 is a task.");
   expect(host.textContent).toBe("");
+  await unmount();
+});
+
+test("a named decision outside the viewer's queue counts once its page row arrives", async () => {
+  useInboxStore.setState({ sessionDecisions: { d8: dec(8) } } as any);
+  const { host, unmount } = await mount("Waiting on you: sd-9: I recommend Ship. sd-8: I recommend Ship.");
+  expect(host.textContent).toBe("");
+  await act(async () => { useInboxStore.setState({ decisionDetails: { d9: { _id: "d9", decision: dec(9) } } } as any); });
+  expect(host.textContent).toContain("2 open decisions");
+  await act(async () => { button(host, "Go through them")!.click(); });
+  expect(pushed).toEqual(["/decisions/sd-9?set=sd-9,sd-8"]);
   await unmount();
 });

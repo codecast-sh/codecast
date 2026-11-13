@@ -44,8 +44,6 @@ const { createRoot } = await import("react-dom/client");
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { DecisionsList } = await import("../DecisionsPage");
 const { DecisionPalette } = await import("../DecisionPalette");
-const { ForYouView } = await import("../../line/workspace/views/ForYouView");
-const { readLineSelection } = await import("../../../lib/line/lineWorkspaceUrl");
 
 const NOW = Date.now();
 const H = 3_600_000;
@@ -148,18 +146,11 @@ test("an answer every picked decision offers answers them all; one some lack is 
   await act(async () => p.unmount());
 });
 
-test("For you lists the flows' decisions as the same rows, with the same owners", async () => {
-  const need = (id: string, sd: string) => ({ key: `decision:${id}`, ref: sd, kind: "decision", counted: true, decisionId: id, projectId: null, process: "line", since: NOW - H, title: "P", line: "P", ask: "P", name: null, problemRef: null, caseId: null, runId: null, decisionRef: sd, cardRef: null, trial: false, note: null, fail: null, why: null });
-  const workspace = { needs: [need("d1", "sd-1"), need("d2", "sd-2")], now: NOW, ready: true, processes: [], projects: [], problems: [], names: new Map(), sources: new Map() } as any;
-  const m = await mount(<ForYouView model={{ steps: {}, runs: [] } as any} workspace={workspace} selection={readLineSelection(new URLSearchParams("view=foryou&group=who"))} select={() => {}} href={() => "/flows"} />);
-  const forYou = rows();
-  // Its problem's people reached and findings stay on the row, read off the decision itself.
+test("Every flow narrows the page to the flows' decisions, rows and owners unchanged", async () => {
+  search = new URLSearchParams("tab=team&source=flows&group=none");
+  const m = await mount(<DecisionsList />);
+  expect(rows().sort()).toEqual(["sd-1@user:u2", "sd-2@none"]);
   const sd1 = host.querySelector('[data-decision-row="sd-1"]')!;
   expect([sd1.querySelector("[data-decision-reach]")?.textContent, sd1.querySelector("[data-decision-findings]")?.textContent]).toEqual(["3", "12"]);
   await m.unmount();
-  const page = await mount(<DecisionsList />);
-  const team = rows().filter((r) => forYou.some((f) => f.split("@")[0] === r.split("@")[0]));
-  expect(forYou).toEqual(["sd-1@user:u2", "sd-2@none"]);
-  expect(forYou).toEqual(team);
-  await page.unmount();
 });

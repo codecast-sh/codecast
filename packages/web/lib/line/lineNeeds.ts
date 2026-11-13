@@ -269,12 +269,6 @@ export const needsOfLine = <N extends Pick<LineNeed, "process" | "projectId">>(n
  *  The one count: the nav entry's, the list's and Problems' "Waiting on you". */
 export const needCount = (needs: ReadonlyArray<LineNeed>): number => needs.reduce((n, x) => n + (x.counted ? 1 : 0), 0);
 
-/** The need a ref names: the URL's `need`, or an older link's decision (sd-N or its row id), trial card or problem. */
-export function needForRef(needs: ReadonlyArray<LineNeed>, ref: string | null | undefined): LineNeed | null {
-  if (!ref) return null;
-  return needs.find((n) => n.ref === ref) ?? needs.find((n) => n.aliases.includes(ref)) ?? needs.find((n) => n.problemRef === ref || n.caseId === ref) ?? null;
-}
-
 /** What waits on the viewer about one problem: its act band and its Problems status read this. */
 /** A problem's own band says an unlanded fix whole (approved, not merged, with its act), so that need is not its band's. */
 export const needOfCase = (needs: ReadonlyArray<LineNeed>, caseId: string | null | undefined): LineNeed | null => (caseId ? needs.find((n) => n.caseId === caseId && n.kind !== "unlanded") ?? null : null);

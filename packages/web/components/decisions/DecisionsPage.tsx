@@ -36,7 +36,7 @@ export function DecisionPeek({ d, onClose }: { d: SessionDecisionItem; onClose: 
   return (
     <div className="w-[560px] min-w-0 flex-shrink h-full border-l border-sol-border/40 overflow-y-auto bg-sol-bg" data-decision-peek={d.short_id ?? d._id}>
       <ErrorBoundary name="DecisionPeek" level="panel">
-        {isFlowDecision(d) ? <LineDecision id={d._id} quiet inline onClose={onClose} /> : <DecisionDocument id={d.short_id ?? d._id} />}
+        {isFlowDecision(d) ? <LineDecision id={d._id} quiet inline onClose={onClose} /> : <DecisionDocument id={d.short_id ?? d._id} pager={false} />}
       </ErrorBoundary>
     </div>
   );
@@ -84,6 +84,7 @@ export function DecisionsList({ activeId }: { activeId?: string }) {
       renderPreview={(d, onClose) => <DecisionPeek d={d} onClose={onClose} />}
       activeItemId={activeId ? rows.mine.find((d) => d.short_id === activeId || d._id === activeId)?._id : undefined}
       savedViews
+      publishOrder
       headerExtra={<>
         {state.view.tab === "team" ? <TeamAreaControls workspace={rows.workspaceKey} /> : step}
         <a href={GUIDE_URL} target="_blank" rel="noreferrer" aria-label="Decisions guide" data-decisions-guide

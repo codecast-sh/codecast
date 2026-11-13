@@ -21,6 +21,7 @@ import { DeployedIn } from "../line/widgets/DeployedIn";
 import { OriginTrail } from "../line/widgets/OriginTrail";
 import "../line/workspace/workspace.css";
 import { OptionPages } from "./OptionPages";
+import { DecisionPager } from "./DecisionPager";
 import { HandoffNote } from "./DecisionParties";
 import { ChangeCardHeadline, ChangeCardVerdictBar, ChangeCardView } from "./ChangeCardView";
 import { ShareControl } from "../ShareControl";
@@ -34,13 +35,13 @@ import { modernButton } from "../ui/modernLook";
 // answers land there first) and the page context from decisionDetails, which
 // useSyncDecisionDetail feeds from getWithDoc. The answer footer is the same
 // store action the compact card and the transcript card use.
-export function DecisionDocument({ id }: { id: string }) {
+export function DecisionDocument({ id, pager = true }: { id: string; pager?: boolean }) {
   const page = useDecisionPage(id);
   if (!page.detail || !page.decision) {
     if (page.missing && page.ready) return <Empty text="This decision does not exist, or it is not yours to read." />;
     return <AppLoader />;
   }
-  return <DocumentBody decision={page.decision} detail={page.detail} answerable={page.answerable} />;
+  return <DocumentBody decision={page.decision} detail={page.detail} answerable={page.answerable} pager={pager} />;
 }
 
 function Empty({ text }: { text: string }) {
@@ -52,7 +53,7 @@ function Empty({ text }: { text: string }) {
   );
 }
 
-function DocumentBody({ decision, detail, answerable }: { decision: SessionDecisionItem; detail: DecisionDetailItem; answerable: boolean }) {
+function DocumentBody({ decision, detail, answerable, pager }: { decision: SessionDecisionItem; detail: DecisionDetailItem; answerable: boolean; pager: boolean }) {
   const a = useDecisionAnswering(decision, detail, answerable);
   const meId = useInboxStore((st) => st.currentUser?._id as string | undefined);
   const { now, pending, rec, answerInOptions, verdictBar, chosen, onAnswer, onDismiss, heldNote, outcome, closed, banner, doubt } = a;
@@ -83,9 +84,12 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
     <div className="h-full overflow-y-auto decision-doc" data-main-scroll>
       {/* One measure for every decision: a change card stacks its proof over its examples, so it needs no wider page. */}
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16">
-        <Link href="/decisions" className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline">
-          <ArrowLeft className="w-3 h-3" /> The queue
-        </Link>
+        <div className="flex items-center gap-3">
+          <Link href="/decisions" className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline">
+            <ArrowLeft className="w-3 h-3" /> The queue
+          </Link>
+          {pager && <span className="ml-auto"><DecisionPager ids={[decision.short_id, decision._id]} /></span>}
+        </div>
 
         {/* ── Header ── */}
         <header className="mt-4">

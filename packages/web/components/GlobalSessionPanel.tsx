@@ -1,4 +1,5 @@
 import { cliNeverConnected } from "../lib/cliConnected";
+import { InboxDecisionsAll, InboxDecisionsHeader } from "./decisions/InboxDecisions";
 import { forkTreeRootId } from "../lib/forkTreeRoot";
 import React, { useState, useCallback, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -3586,7 +3587,9 @@ function SessionListPanelImpl({
           floor: true,
           count: countOf(statusQuestions, placedQuestions, placed.counts.questions),
           onSelect: handleQuestionSelect,
+          headerAction: <InboxDecisionsAll cards={statusQuestions.length} />,
         })}
+        <InboxDecisionsHeader cards={statusQuestions.length} />
         {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { floor: true, count: countOf(statusPinned, pinned, placed.counts.pinned) })}
         {renderSection("New", statusNew, "text-sol-blue", undefined, undefined, { key: "new", floor: true, count: countOf(statusNew, newSessions, placed.counts.newSessions) })}
         {/* Needs You, Done and Dormant take a dragged card: the drop is the

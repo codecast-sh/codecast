@@ -1,7 +1,7 @@
 // Mounts the line app in jsdom (line-journeys.md LJ4, LJ5, LJ8.1): three
-// pages in the nav, For you the landing page with the one count, pages on G
-// then F / P / L and never on a digit, For you's rows opening the need in the
-// reader as a history entry, a step named in the URL opening the shared
+// pages in the nav, Decisions first with the one count and its address handed
+// to the Decisions page, pages on G then F / P / L and never on a digit, a
+// step named in the URL opening the shared
 // drawer, and a `line` fence drawing a live step card, or saying plainly that
 // the viewer cannot open the project it names.
 import { afterAll, beforeEach, expect, mock, test } from "bun:test";
@@ -122,7 +122,7 @@ test("the nav: For you first with its count, then the stages on a rail, the open
   expect(host.querySelector("[data-pipeline-stage='flows']")?.getAttribute("aria-current")).toBe("page");
   expect(host.querySelector("[data-flows-home]")).not.toBeNull();
   // For you counts what the viewer can answer now; no process picker, and the project filter only on Problems.
-  expect(host.querySelector("[data-pipeline-stage='decisions'] .pn-label")?.textContent).toBe("For you");
+  expect(host.querySelector("[data-pipeline-stage='decisions'] .pn-label")?.textContent).toBe("Decisions");
   expect(host.querySelector("[data-pipeline-stage='decisions'] .pn-n")?.textContent).toBe("1");
   expect(host.querySelector("[data-line-view-tab]")).toBeNull();
   expect(host.querySelector("[data-line-graph-pick]")).toBeNull();
@@ -141,16 +141,11 @@ test("the nav: For you first with its count, then the stages on a rail, the open
   await act(async () => { root.unmount(); });
 }, 30_000);
 
-test("keys pressed inside an open decision are the decision's: G then P moves nothing", async () => {
+test("an address naming a flow decision opens it on the Decisions page, in place", async () => {
   search = "need=sd-9";
-  useInboxStore.setState({ sessionDecisions: { d1: { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, task_id: "t1", workflow_run_id: "a", created_at: now - 3_600_000, question: "Ship it?", options: [{ label: "Ship" }, { label: "Drop" }] } } } as any);
-  const { host, root } = await mount(React.createElement(LineWorkspace));
-  const inside = host.querySelector<HTMLElement>("[data-line-foryou-reader] [data-line-decision]")!;
-  expect(inside).not.toBeNull();
-  const press = (k: string) => act(async () => { inside.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: k, bubbles: true })); });
-  await press("g"); await press("p"); await press("j"); await press("k");
+  const { root } = await mount(React.createElement(LineWorkspace));
+  expect(moves).toContain("/decisions/sd-9");
   expect(pushed).toEqual([]);
-  expect((useInboxStore.getState() as any).sessionDecisions.d1.status).toBe("pending");
   await act(async () => { root.unmount(); });
 }, 30_000);
 
@@ -166,29 +161,17 @@ test("Problems carries the project filter, and only Problems", async () => {
   await act(async () => { other.root.unmount(); });
 }, 30_000);
 
-test("Decisions lists the fix decision by what it asks, opens nothing by itself, and a row click is a history entry", async () => {
+test("the Line's Decisions is the Decisions page narrowed to the flows, and an older address opens its decision there", async () => {
   search = "view=foryou";
-  useInboxStore.setState({ sessionDecisions: { d1: { _id: "d1", short_id: "sd-9", status: "pending", blocking: true, task_id: "t1", workflow_run_id: "a", created_at: now - 3_600_000, question: "Ship the resume fix?", options: [{ label: "Ship" }, { label: "Drop" }] } } } as any);
   const { host, root } = await mount(React.createElement(LineWorkspace));
-  const row = host.querySelector<HTMLElement>("[data-decision-row='sd-9']");
-  expect(row?.textContent).toContain("Ship the resume fix?");
-  expect(host.querySelector("[data-line-foryou-reader]")).toBeNull();
-  expect(moves).toEqual([]);
-  await act(async () => { (row!.closest("[data-list-row-state], [data-index] > div") as HTMLElement).click(); });
-  expect(pushed).toEqual(["/flows?need=sd-9"]);
-  await act(async () => { root.unmount(); });
-  pushed.length = 0;
-  search = "need=sd-9";
-  const named = await mount(React.createElement(LineWorkspace));
-  // Opened, the list sits beside the reader, the open row marked, and the reader is the decision itself.
-  expect(named.host.querySelector("[data-decision-row='sd-9']")?.closest("[data-list-row-state]")?.getAttribute("data-list-row-state")).toBe("active");
-  expect(named.host.querySelector("[data-line-foryou-reader] [data-line-decision]")).not.toBeNull();
+  expect(host.querySelector("[data-decision-row]")).toBeNull();
+  expect(moves).toContain("/decisions?tab=team&source=flows");
   expect(pushed).toEqual([]);
-  await act(async () => { named.root.unmount(); });
+  await act(async () => { root.unmount(); });
   moves.length = 0;
   search = "view=inbox&decision=sd-9";
   const again = await mount(React.createElement(LineWorkspace));
-  expect(moves).toContain("/flows?need=sd-9");
+  expect(moves).toContain("/decisions/sd-9");
   expect(pushed).toEqual([]);
   await act(async () => { again.root.unmount(); });
 }, 30_000);

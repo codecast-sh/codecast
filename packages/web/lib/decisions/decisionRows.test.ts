@@ -107,3 +107,17 @@ test("a change card or the flow's decide gate is a Fix, another run's ask a flow
   expect(decisionKindOf({ workflow_run_id: "r", gate_node_id: "review" } as any)).toBe("step");
   expect(decisionKindOf({})).toBe("question");
 });
+
+describe("Every flow", () => {
+  const rows = [
+    row("s", { asked_user_ids: [] }),
+    row("f1", { workflow_run_id: "r1", source_flow: "Fix flow" }),
+    row("f2", { workflow_run_id: "r2" }),
+  ];
+  test("matches a decision from any flow, and counts them together", () => {
+    const view = decisionView({ tab: "team", source: "flows", group: "none" });
+    expect(arrangeDecisions(rows, view, ctx).items.map((d) => d._id).sort()).toEqual(["f1", "f2"]);
+    const counts = Object.fromEntries(filterCounts(rows, decisionView({ tab: "team" }), "u1", NOW, "source"));
+    expect(counts).toEqual({ session: 1, "Fix flow": 1, "A flow": 1, flows: 2 });
+  });
+});
