@@ -3,6 +3,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { applySessionQueryCompletion, sessionQueryCompletion, type SessionQueryCompletion } from "@codecast/shared/search";
 import { useInboxStore } from "../store/inboxStore";
 import { useQueryNoThrow } from "./useQueryNoThrow";
+import { teamMembersOf } from "../lib/activeTeam";
 import {
   reposFromSessions,
   sessionQuerySuggestions,
@@ -36,7 +37,7 @@ export function useSessionQuerySuggestions(
         .sort((a, b) => b.updated_at - a.updated_at)
         .map((b) => b.name);
     } else if (op === "author") {
-      src.people = s.teamMembers ?? [];
+      src.people = teamMembersOf(s);
     } else if (op === "repo") {
       src.repos = reposFromSessions(Object.values(s.sessions ?? {}) as any);
     } else if (op === "pr") {

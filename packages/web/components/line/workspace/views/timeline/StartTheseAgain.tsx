@@ -17,6 +17,7 @@ import { isRunnerCause, runnerHold, runnerMachines, withRunners, type RunnerDevi
 import { useSettingsData } from "../../../../../hooks/useSyncSettings";
 import { deviceDisplayName, useDevices } from "../../../../DeviceBadge";
 import type { LineViewProps } from "../types";
+import { teamMembersOf } from "../../../../../lib/activeTeam";
 
 type TeamBox = { device_id: string; label: string; platform: string; online: boolean; is_bot?: boolean; bot_name: string | null; runner_name?: string | null };
 /** Whose a machine is, as its row says it: "Aivery's agent box", "Jason's machine". */
@@ -54,7 +55,7 @@ export function StartTheseAgain({ again, workspace, projectName, onClose, onRefu
   // whose it is; a machine in neither is named by the account its runner signed in as.
   const { byId: deviceById } = useDevices();
   const teamBoxes = (useSettingsData("agentBoxes").data ?? []) as TeamBox[];
-  const members = useInboxStore((s) => s.teamMembers) as Array<{ _id: string; name?: string | null; is_bot?: boolean }> | undefined;
+  const members = useInboxStore(teamMembersOf) as Array<{ _id: string; name?: string | null; is_bot?: boolean }> | undefined;
   const machines = useMemo(() => {
     if (!isRunnerCause(again.key)) return [];
     const runs = (workspace.rows.runs ?? []) as unknown as Array<RunnerRun & { task_id?: string | null; created_at?: number }>;

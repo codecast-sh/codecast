@@ -12,6 +12,7 @@ import { useInboxStore } from "../store/inboxStore";
 import { roleOfUser, type IdentityPrefs, type RoleRows } from "../lib/sessionIdentity";
 import { useIdentityPrefs } from "./useIdentityPrefs";
 import { roleRowsOf, roleRowsSig } from "../lib/roleRows";
+import { teamMembersOf } from "../lib/activeTeam";
 
 export type RosterIdentity = {
   _id: string;
@@ -88,12 +89,12 @@ export function withRoleIdentities(list: RosterIdentity[], rows: RoleRows | null
 
 /** Subscribe to roster identity only (never presence/counters). */
 export function useTeamRosterIdentity(): RosterIdentity[] {
-  const sig = useInboxStore((s) => memberListSig(s.teamMembers));
+  const sig = useInboxStore((s) => memberListSig(teamMembersOf(s)));
   const rolesSig = useInboxStore((s) => roleRowsSig(s as never));
   const prefs = useIdentityPrefs();
   return useMemo(() => {
     const st = useInboxStore.getState();
-    return withRoleIdentities(rosterIdentity(st.teamMembers), roleRowsOf(st as never), prefs);
+    return withRoleIdentities(rosterIdentity(teamMembersOf(st)), roleRowsOf(st as never), prefs);
   }, [sig, rolesSig, prefs]); // eslint-disable-line react-hooks/exhaustive-deps -- the sigs stand in for the churny arrays
 }
 

@@ -3,6 +3,7 @@ import { memberAvatarUrl } from "../../lib/liveEntities";
 import { useTrackedStore } from "../../store/inboxStore";
 import { memberDisplayName, viewersLabel, viewersOf, viewersSig } from "./memberPresence";
 import "./viewers.css";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 // Who has this session open right now, as a stack of small faces. Figma's
 // avatars on a file: if Ann's face is on the session, she is looking at it
@@ -69,9 +70,9 @@ export function ConversationViewers({
   className?: string;
 }) {
   const st = useTrackedStore([
-    (s) => viewersSig(s.teamMembers, conversationId, s.currentUser?._id?.toString?.() ?? null),
+    (s) => viewersSig(teamMembersOf(s), conversationId, s.currentUser?._id?.toString?.() ?? null),
   ]);
   const me = st.currentUser?._id?.toString?.() ?? null;
-  const viewers = viewersOf(st.teamMembers, conversationId, me);
+  const viewers = viewersOf(teamMembersOf(st), conversationId, me);
   return <ViewerFaces members={viewers} size={size} max={max} className={className} />;
 }

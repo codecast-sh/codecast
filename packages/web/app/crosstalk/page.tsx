@@ -15,6 +15,7 @@ import { formatRelativeTime } from "../../lib/conversationFormat";
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { MarkdownRenderer } from "../../components/tools/MarkdownRenderer";
+import { teamMembersOf } from "../../lib/activeTeam";
 import {
   SessionConstellation,
   hueFor,
@@ -161,7 +162,7 @@ function CrosstalkInner() {
 
   const s = useTrackedStore([
     (st) => liveSig(st.sessions),
-    (st) => st.teamMembers,
+    (st) => teamMembersOf(st),
     (st) => st.currentUser,
   ]);
   const liveKey = liveSig(s.sessions);
@@ -345,7 +346,7 @@ function CrosstalkInner() {
                     <MessageStream
                       links={stream.length > streamLimit ? stream.slice(0, streamLimit) : stream}
                       nodeById={nodeById}
-                      teamMembers={s.teamMembers}
+                      teamMembers={teamMembersOf(s)}
                       onPulse={setPulseKey}
                       onSelectNode={setSelected}
                     />

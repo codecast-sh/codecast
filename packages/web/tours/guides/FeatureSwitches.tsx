@@ -8,18 +8,18 @@
 import { teamFeatureEnabled, type TeamFeatureKey } from "@codecast/shared/contracts";
 import { Switch } from "../../components/ui/switch";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
-import { activeTeamIdOf } from "../../lib/activeTeam";
+import { activeTeamIdOf, teamMembersOf } from "../../lib/activeTeam";
 
 const isAdminRole = (role: unknown) => role === "admin" || role === "owner";
 
 export function FeatureSwitches({ feature, name }: { feature: TeamFeatureKey; name: string }) {
-  const s = useTrackedStore([(st) => st.teams, (st) => activeTeamIdOf(st), (st) => st.teamMembers]);
+  const s = useTrackedStore([(st) => st.teams, (st) => activeTeamIdOf(st), (st) => teamMembersOf(st)]);
   const teams: any[] = (s.teams || []).filter(Boolean);
   const activeId = activeTeamIdOf(s);
   const active = teams.find((t) => String(t._id) === String(activeId)) ?? null;
   const shown = active ? [active] : teams.filter((t) => isAdminRole(t.role));
   const admins = active && !isAdminRole(active.role)
-    ? (s.teamMembers || []).filter((m: any) => m && isAdminRole(m.role)).map((m: any) => m.name || m.github_username).filter(Boolean)
+    ? teamMembersOf(s).filter((m: any) => m && isAdminRole(m.role)).map((m: any) => m.name || m.github_username).filter(Boolean)
     : [];
 
   return (

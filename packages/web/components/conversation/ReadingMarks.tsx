@@ -11,6 +11,7 @@ import { HoverCard } from "../ui/HoverCard";
 import { compactDuration, presenceLine } from "../presence/memberPresence";
 import { composeDocId, typingRows } from "../../lib/composerPresence";
 import { PresenceAvatar } from "../PresenceFacepile";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 // Where each other person is reading this transcript: "look at this" without
 // a link, and a glance tells you whether they have read the agent's last turn
@@ -40,8 +41,8 @@ function sinceLabel(row: PresenceRow, now: number): string {
 }
 
 function ReaderCard({ row, now }: { row: PresenceRow; now: number }) {
-  const st = useTrackedStore([(s) => s.teamMembers]);
-  const member = (st.teamMembers as any[] | undefined)?.find((m) => String(m._id) === row.user_id);
+  const st = useTrackedStore([(s) => teamMembersOf(s)]);
+  const member = (teamMembersOf(st) as any[] | undefined)?.find((m) => String(m._id) === row.user_id);
   const moved = row.anchor_at ? now - row.anchor_at : 0;
   // The same rule as the typing strip: a side question being typed is its author's own.
   const draft = typingRows([row])[0]?.draft_text?.trim();

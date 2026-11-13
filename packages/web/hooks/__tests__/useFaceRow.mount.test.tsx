@@ -4,6 +4,8 @@ import { act } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
+import { FIXTURE_TEAM, withTeamRoster } from "../../test-helpers/teamRoster";
+import { stampRoster } from "../../lib/activeTeam";
 import { useInboxStore } from "../../store/inboxStore";
 import { announceJoin, clearJoinAnnouncement } from "../../lib/calls/joinAnnounce";
 import { resetFaceRow, type FaceRow } from "../../lib/faces/faceRow";
@@ -48,7 +50,7 @@ beforeEach(() => {
   clearJoinAnnouncement();
   useInboxStore.setState({
     currentUser: { _id: ME, name: "Me" },
-    teamMembers: [member(ME, "Me"), member(ANN, "Ann")],
+    ...withTeamRoster([member(ME, "Me"), member(ANN, "Ann")], { clientState: useInboxStore.getState().clientState }),
     callOccupancy: {},
     liveRooms: [],
     myCalls: { incoming: [], outgoing: [], membership: null },
@@ -74,7 +76,7 @@ test("a heartbeat only roster push renders nobody; a face change renders once", 
 
   await act(async () => {
     useInboxStore.setState({
-      teamMembers: [member(ME, "Me"), member(ANN, "Ann", { presence_input_at: Date.now(), daemon_last_seen: Date.now() })],
+      teamMembers: stampRoster([member(ME, "Me"), member(ANN, "Ann", { presence_input_at: Date.now(), daemon_last_seen: Date.now() })], FIXTURE_TEAM),
     } as any);
   });
   expect(renders).toBe(mounted);

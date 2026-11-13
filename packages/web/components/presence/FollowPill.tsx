@@ -13,6 +13,7 @@ import { followersLabel, followersSig, type FollowerRow } from "../../lib/follow
 import { memberDisplayName } from "./memberPresence";
 import { firstName } from "../calls/speakers";
 import { objectHref, personRefOf } from "../../lib/entityLinks";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 // The follow state, in the top bar beside the faces. Following someone:
 // their face, "Following Ann", and a stop. Followed: only the followers'
@@ -29,12 +30,12 @@ export function FollowPill() {
   const blocked = useInboxStore((s) => s.followBlocked);
   const followersKey = useInboxStore((s) => followersSig(s.followedBy));
   const leaderName = useInboxStore((s) =>
-    s.followLeaderId ? memberDisplayName(s.teamMembers.find((m: any) => String(m?._id) === s.followLeaderId)) : "",
+    s.followLeaderId ? memberDisplayName(teamMembersOf(s).find((m: any) => String(m?._id) === s.followLeaderId)) : "",
   );
   const st = { setFollowLeader: useInboxStore.getState().setFollowLeader, followBlocked: blocked, followedBy: useInboxStore.getState().followedBy };
   void followersKey;
   if (leaderId) {
-    const leader = useInboxStore.getState().teamMembers.find((m: any) => String(m?._id) === leaderId);
+    const leader = teamMembersOf(useInboxStore.getState()).find((m: any) => String(m?._id) === leaderId);
     const name = leaderName || memberDisplayName(leader);
     const first = name.split(/\s+/)[0] || name;
     return (
@@ -127,7 +128,7 @@ function FollowersMenu({ followers }: { followers: FollowerRow[] }) {
       </div>
       {followers.map((f, i) => {
         const first = firstName(f.name);
-        const member = useInboxStore.getState().teamMembers.find((m: any) => String(m?._id) === f.user_id) as any;
+        const member = teamMembersOf(useInboxStore.getState()).find((m: any) => String(m?._id) === f.user_id) as any;
         return (
           <div key={f.user_id}>
             {i > 0 && <DropdownMenuSeparator />}

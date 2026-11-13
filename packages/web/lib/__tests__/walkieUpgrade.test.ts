@@ -13,6 +13,7 @@ import {
   youJoinedText,
 } from "../calls/joinAnnounce";
 import { useInboxStore } from "../../store/inboxStore";
+import { withTeamRoster } from "../../test-helpers/teamRoster";
 
 // THE UPGRADE: a burst becoming a call because somebody stepped into it.
 //
@@ -293,9 +294,9 @@ describe("walkie: the sender's claim, derived from the store", () => {
   const ROOM = `dm:${ME}:${THEM}`;
   const NOW = 1_700_000_000_000;
 
-  const store = (over: Record<string, any> = {}) => ({
+  const store = ({ teamMembers = [{ _id: THEM, name: "Jordan Lee" }], ...over }: Record<string, any> = {}) => ({
     currentUser: { _id: ME },
-    teamMembers: [{ _id: THEM, name: "Jordan Lee" }],
+    ...withTeamRoster(teamMembers),
     chatChannels: {},
     chatRail: [],
     conversations: {},

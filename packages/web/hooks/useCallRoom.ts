@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useTrackedStore } from "../store/inboxStore";
 import { describeRoomLive } from "../lib/calls/roomLabels";
+import { teamMembersOf } from "../lib/activeTeam";
 
 type RingRow = { user_id: string; user_name: string; user_image?: string };
 
@@ -66,7 +67,7 @@ export function useRoomDescription(roomKey: string | null) {
   // teamMembers churns on every presence heartbeat and would re-derive the
   // label (and re-render the dock) for nothing.
   const s = useTrackedStore([
-    (st: any) => (st.teamMembers ?? []).map((m: any) => `${m._id}:${m.name ?? m.email ?? ""}`).join("|"),
+    (st: any) => teamMembersOf(st).map((m: any) => `${m._id}:${m.name ?? m.email ?? ""}`).join("|"),
     (st: any) => {
       const id = roomKey ? roomKey.split(":")[1] : "";
       const ch = id ? st.chatChannels?.[id] : undefined;

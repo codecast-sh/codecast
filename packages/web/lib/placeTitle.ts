@@ -12,6 +12,7 @@ import { activeWorkspaceKeyOf } from "./workspaceScope";
 import { canonicalPlacePath, placeOf, placeSessionId, type PlaceNames } from "./navPlace";
 import { lookup } from "./liveEntities";
 import { cleanTitle } from "./conversationProcessor";
+import { teamMembersOf } from "./activeTeam";
 
 /** The store fields a name reads (all optional: a test passes what it needs). */
 export type PlaceState = { [key: string]: any };
@@ -30,7 +31,7 @@ export function placeTitle(s: PlaceState, rawPath: string): string | null {
   const path = canonicalPlacePath(rawPath);
   const sid = placeSessionId(path);
   if (sid) return sessionPlaceTitle(s, sid);
-  const chat = chatTabTitle(path, s.chatChannels, s.teamMembers, s.currentUser?._id ? String(s.currentUser._id) : undefined);
+  const chat = chatTabTitle(path, s.chatChannels, teamMembersOf(s), s.currentUser?._id ? String(s.currentUser._id) : undefined);
   if (chat) return chat;
   if (path.startsWith("/org")) {
     const key = s.clientState ? activeWorkspaceKeyOf(s as any) : null;

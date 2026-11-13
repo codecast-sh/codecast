@@ -32,6 +32,7 @@ const MARKUP = `
 <button class="call-controls-chip" data-k="cc-chip">CC</button>
 <div class="ch">
   <button class="ch-tool" data-k="ch-tool">+</button>
+  <button class="ch-tool ch-members-btn" data-k="ch-members"><span class="ch-dm-faces"><span class="ch-dm-face"></span><span class="ch-dm-face"></span><span class="ch-dm-face"></span></span><span class="ch-members-count">66</span></button>
   <button class="ch-round-btn" data-k="ch-round-btn">Reply</button>
   <span class="ch-round-chip" data-k="ch-round-chip">thread</span>
   <div class="ch-menu"><button class="ch-menu-item" data-k="ch-menu-item">Copy</button></div>
@@ -76,6 +77,11 @@ describe("calls and chat controls in Modern", () => {
     expect(r["ch-search-chip-on"].color).toBe("var(--sol-class-cyan)");
     expect(r["ch-menu-item"]["min-height"]).toBe("var(--control-sm)");
     expect(r["ch-rail-tip"]["box-shadow"]).toBe("var(--shadow-popover)");
+    // An icon tool stays a square. The members control holds a face pile and
+    // a count, so the square would spill both onto the search button.
+    expect(r["ch-tool"].width).toBe("24px");
+    expect(r["ch-members"].width).toBe("auto");
+    expect(r["ch-members"].height).toBe("24px");
   });
 
   test("every Modern rule in these sheets is scoped to .modern-style", () => {

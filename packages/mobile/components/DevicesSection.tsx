@@ -19,6 +19,8 @@ import { deviceDisplayName } from '@codecast/shared/contracts';
 export type Device = {
   device_id: string;
   label: string;
+  /** A name set in Settings. The shared display function prefers it. */
+  display_name?: string | null;
   platform: string;
   last_seen: number;
   is_remote: boolean;

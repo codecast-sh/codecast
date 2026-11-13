@@ -27,6 +27,8 @@ export type FaceArrival = {
   threadRootId?: string;
   /** A reply in a thread, even when the thread's root is not known here. */
   inThread?: boolean;
+  /** A reply also sent to the channel, so the channel timeline shows it. */
+  broadcast?: boolean;
   preview: string;
   at: number;
   /** Addressed to the viewer (chatToastTier "loud"): it stays longer. */
@@ -74,6 +76,17 @@ const fallbacks = new Map<string, () => void>();
 let timer: ReturnType<typeof setTimeout> | null = null;
 let bubbleSeq = 0;
 
+/** A view whose newest line the reader has had on screen, and how far that
+ *  view reached. Lines at or before `through` stay read after they leave the
+ *  screen; a later line in the same view still badges. */
+type ReadCursor = { channelId: string; threadRootId?: string; through: number };
+let cursors: ReadCursor[] = [];
+/** Lines committed to becoming a count but not in `unseen` yet: a bubble
+ *  folding, a burst waiting its turn. A read has to see them, or the timeout
+ *  badges a line the reader already saw. */
+let held: { items: FaceArrival[] }[] = [];
+let epoch = 0;
+
 function set(next: Partial<FaceChatState>) {
   state = { ...state, ...next };
   for (const l of listeners) l();
@@ -85,6 +98,109 @@ function subscribe(l: () => void) {
 function clearTimer() {
   if (timer) clearTimeout(timer);
   timer = null;
+}
+
+/** A thread reply lives in the thread. A root, and a reply also sent to the
+ *  channel, live on the channel timeline. */
+function threadOnly(a: FaceArrival): boolean {
+  return !!a.inThread && !a.broadcast;
+}
+
+function matchesView(a: FaceArrival, channelId: string, threadRootId?: string): boolean {
+  if (a.channelId !== channelId) return false;
+  if (threadRootId) return threadOnly(a) && a.threadRootId === threadRootId;
+  return !threadOnly(a);
+}
+
+function coveredByRead(a: FaceArrival): boolean {
+  for (const c of cursors) {
+    if (matchesView(a, c.channelId, c.threadRootId) && a.at <= c.through) return true;
+  }
+  return false;
+}
+
+/** Read is the newest line actually on screen, recorded by noteFaceContextRead.
+ *  A channel merely being the open route is not that: the reader may be in its
+ *  history, and a line still on its way into the count must keep its badge. */
+function suppressed(a: FaceArrival): boolean {
+  return coveredByRead(a);
+}
+
+/** Hand lines to the count later, and remember them until then so a read in
+ *  between can retire them. */
+function deferUnseen(authorId: string, items: readonly FaceArrival[], delay: number) {
+  const box = { items: items.filter((a) => !suppressed(a)) };
+  if (!box.items.length) return;
+  held.push(box);
+  const epochAt = epoch;
+  setTimeout(() => {
+    const i = held.indexOf(box);
+    if (i >= 0) held.splice(i, 1);
+    if (epochAt !== epoch) return;
+    const live = box.items.filter((a) => !suppressed(a));
+    if (live.length) addUnseen(authorId, live);
+  }, delay);
+}
+
+function sweepRead() {
+  let unseenChanged = false;
+  const nextUnseen: Record<string, readonly FaceArrival[]> = {};
+  for (const id in state.unseen) {
+    const list = state.unseen[id];
+    const keep = list.filter((a) => !suppressed(a));
+    if (keep.length !== list.length) unseenChanged = true;
+    if (keep.length) nextUnseen[id] = keep.length === list.length ? list : keep;
+  }
+  if (queue.some(suppressed)) {
+    const nextQ: FaceArrival[] = [];
+    const nextA: string[] = [];
+    queue.forEach((a, i) => {
+      if (suppressed(a)) return;
+      nextQ.push(a);
+      nextA.push(queueAuthors[i]);
+    });
+    queue = nextQ;
+    queueAuthors = nextA;
+  }
+  for (const box of held) box.items = box.items.filter((a) => !suppressed(a));
+
+  const b = state.bubble;
+  let bubble = b;
+  let bubbleChanged = false;
+  if (b) {
+    const keep = b.items.filter((a) => !suppressed(a));
+    if (keep.length !== b.items.length) {
+      bubbleChanged = true;
+      if (!keep.length) {
+        clearTimer();
+        bubble = null;
+      } else bubble = { ...b, items: keep };
+    }
+  }
+  if (!unseenChanged && !bubbleChanged) return;
+  set({
+    ...(unseenChanged ? { unseen: nextUnseen } : {}),
+    ...(bubbleChanged ? { bubble } : {}),
+  });
+}
+
+/** The newest line of this view is on screen. The header count drops the
+ *  lines that view shows, including one still on its way into the count. A
+ *  thread covers its replies. The channel timeline covers everything else. */
+export function noteFaceContextRead(channelId: string, threadRootId?: string): void {
+  let through = Date.now();
+  const bump = (a: FaceArrival) => {
+    if (matchesView(a, channelId, threadRootId) && a.at > through) through = a.at;
+  };
+  for (const id in state.unseen) for (const a of state.unseen[id]) bump(a);
+  for (const a of state.bubble?.items ?? []) bump(a);
+  for (const a of queue) bump(a);
+  for (const box of held) for (const a of box.items) bump(a);
+  const key = threadRootId ?? "";
+  const prev = cursors.find((c) => c.channelId === channelId && (c.threadRootId ?? "") === key);
+  if (prev) prev.through = Math.max(prev.through, through);
+  else cursors.push({ channelId, threadRootId, through });
+  sweepRead();
 }
 
 export function getFaceChat(): FaceChatState {
@@ -109,10 +225,11 @@ function remember(authorId: string, a: FaceArrival) {
 }
 
 function addUnseen(authorId: string, items: readonly FaceArrival[]) {
-  if (!items.length) return;
-  for (const a of items) fallbacks.delete(a.messageId);
+  const incoming = items.filter((a) => !suppressed(a));
+  if (!incoming.length) return;
+  for (const a of incoming) fallbacks.delete(a.messageId);
   const have = state.unseen[authorId] ?? [];
-  const fresh = items.filter((a) => !have.some((x) => x.messageId === a.messageId));
+  const fresh = incoming.filter((a) => !have.some((x) => x.messageId === a.messageId));
   set({ unseen: { ...state.unseen, [authorId]: [...have, ...fresh] } });
 }
 
@@ -124,6 +241,9 @@ function addUnseen(authorId: string, items: readonly FaceArrival[]) {
 export function deliverChatToFace(authorId: string, a: FaceArrival, fallback: () => void): boolean {
   if (!layer?.canShow(authorId)) return false;
   remember(authorId, a);
+  // Already read in the view that shows it: no bubble and no count. The
+  // caller treats true as handled, so it does not also toast.
+  if (suppressed(a)) return true;
   fallbacks.set(a.messageId, fallback);
   const { bubble, panel } = state;
   if (panel?.authorId === authorId) {
@@ -152,8 +272,10 @@ export function deliverChatToFace(authorId: string, a: FaceArrival, fallback: ()
 }
 
 function openBubble(authorId: string, items: FaceArrival[]) {
+  const live = items.filter((a) => !suppressed(a));
+  if (!live.length) return;
   clearTimer();
-  set({ bubble: { key: ++bubbleSeq, authorId, items: items.slice(-MAX_LINES), phase: "wait", dwellMs: 0, armedAt: 0, held: false } });
+  set({ bubble: { key: ++bubbleSeq, authorId, items: live.slice(-MAX_LINES), phase: "wait", dwellMs: 0, armedAt: 0, held: false } });
 }
 
 /** The layer found the face and placed the bubble under it: start the clock. */
@@ -220,7 +342,7 @@ export function retractFaceBubble() {
   clearTimer();
   if (b.phase === "wait") return faceBubbleFailed(b.key);
   set({ bubble: { ...b, phase: "out" } });
-  setTimeout(() => addUnseen(b.authorId, b.items), RETRACT_MS * 0.6);
+  deferUnseen(b.authorId, b.items, RETRACT_MS * 0.6);
   setTimeout(() => {
     if (state.bubble?.key === b.key) set({ bubble: null });
   }, RETRACT_MS);
@@ -246,13 +368,21 @@ function next(delay = 0) {
     if (authors[i] === leadAuthor) return;
     others.set(authors[i], [...(others.get(authors[i]) ?? []), a]);
   });
-  [...others].forEach(([id, list], i) => setTimeout(() => addUnseen(id, list), delay + 150 * i));
+  [...others].forEach(([id, list], i) => deferUnseen(id, list, delay + 150 * i));
   const mine = items.filter((_, i) => authors[i] === leadAuthor);
+  const box = { items: mine.filter((a) => !suppressed(a)) };
+  if (box.items.length) held.push(box);
+  const epochAt = epoch;
   setTimeout(() => {
-    if (state.panel) return addUnseen(leadAuthor, mine);
-    if (!state.bubble) return openBubble(leadAuthor, mine);
-    queue.push(...mine);
-    queueAuthors.push(...mine.map(() => leadAuthor));
+    if (epochAt !== epoch) return;
+    const i = held.indexOf(box);
+    if (i >= 0) held.splice(i, 1);
+    const live = box.items.filter((a) => !suppressed(a));
+    if (!live.length) return;
+    if (state.panel) return addUnseen(leadAuthor, live);
+    if (!state.bubble) return openBubble(leadAuthor, live);
+    queue.push(...live);
+    queueAuthors.push(...live.map(() => leadAuthor));
     set({});
   }, delay);
 }
@@ -276,7 +406,7 @@ export function openFacePanel(authorId: string, focus = true) {
     const id = pendingAuthors[i];
     if (id !== authorId) others.set(id, [...(others.get(id) ?? []), a]);
   });
-  [...others].forEach(([id, list], i) => setTimeout(() => addUnseen(id, list), 200 + 150 * i));
+  [...others].forEach(([id, list], i) => deferUnseen(id, list, 200 + 150 * i));
   const unreadIds = [...(state.unseen[authorId] ?? []), ...(b?.authorId === authorId ? b.items : [])].map((a) => a.messageId);
   const { [authorId]: _, ...rest } = state.unseen;
   set({ unseen: rest, panel: { authorId, unreadIds, focus } });
@@ -324,8 +454,8 @@ export function useFaceChat(): FaceChatState {
 }
 
 /** A face's count, as one primitive so the seat renders only when it moves:
- *  lines this window showed and the viewer has not opened, plus DM unread the
- *  server knows about beyond those. */
+ *  lines this window showed and the viewer has not opened or read in the
+ *  channel, plus DM unread the server knows about beyond those. */
 export function useFaceChatBadge(authorId: string, dmUnread: number): number {
   const read = useCallback(() => {
     const list = state.unseen[authorId] ?? [];
@@ -355,8 +485,11 @@ export function useFaceChatActive(): string {
 /** Tests only. */
 export function __resetFaceChat() {
   clearTimer();
+  epoch++;
   queue = [];
   queueAuthors = [];
+  cursors = [];
+  held = [];
   fallbacks.clear();
   layer = null;
   state = { unseen: {}, recent: {}, bubble: null, panel: null };

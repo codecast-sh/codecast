@@ -19,6 +19,7 @@ import { groupClass, itemClass, paletteClass, paletteInputClass } from "../palet
 import { answerDecisions, assignDecisions, dismissDecisions, escalateDecisions, passDecisions, sharedAnswers, unassignDecisions } from "../../lib/decisions/decisionBulk";
 import { isOpen, type DecisionOwner } from "../../lib/decisions/decisionRows";
 import { modernButton, modernScrim } from "../ui/modernLook";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 type Step = "root" | "assign" | "answer" | "pass" | "pass_note" | "escalate";
 const STEPS = new Set<string>(["root", "assign", "answer", "pass", "escalate"]);
@@ -44,7 +45,7 @@ export function DecisionPalette({ targets, mode, standalone, onClose }: { target
     if (step !== "escalate") return [];
     const st = useInboxStore.getState();
     const me = String(st.currentUser?._id ?? "");
-    const ids = new Set(rows.flatMap((d) => rosterEscalationTargets(d.holder?.kind === "user" ? d.holder.id : me, windowOrgTree(st)?.people, st.teamMembers, me)));
+    const ids = new Set(rows.flatMap((d) => rosterEscalationTargets(d.holder?.kind === "user" ? d.holder.id : me, windowOrgTree(st)?.people, teamMembersOf(st), me)));
     return people.filter((p) => ids.has(p.key));
   }, [step, rows, people]);
   const label = rows.length === 1 ? rows[0].question : `${counted(rows.length)} selected`;

@@ -27,6 +27,7 @@ import "./chat.css";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { isPerson } from "@codecast/shared/team/memberKind";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 // New message / new huddle.
 //
@@ -88,7 +89,7 @@ export function NewMessageModal({
   const router = useRouter();
   const go = (path: string) => router.push(path);
   const rail = useChatRail();
-  const teamMembers = useInboxStore((s) => s.teamMembers) as Member[];
+  const teamMembers = useInboxStore(teamMembersOf) as Member[];
   // "No people match" is a lie when the window is pointed at a workspace the
   // viewer has left: teams.getTeamMembers answers a non-member with [], not an
   // error, so the roster is empty for a reason the picker would otherwise keep

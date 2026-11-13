@@ -8,6 +8,7 @@ import { useTeamFeed } from '@codecast/web/hooks/useTeamFeed';
 import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { InboxRowEnvProvider, SessionItem, type SessionData } from '@/components/SessionItem';
 import { SessionListSkeleton } from '@/components/SkeletonLoader';
+import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 
 /** The team's sessions, newest first: the web's team Activity feed on the
  *  phone. Rows come from the shared store (useTeamFeed), so a cached feed
@@ -15,7 +16,7 @@ import { SessionListSkeleton } from '@/components/SkeletonLoader';
 export function TeamActivityList({ teamName }: { teamName: string }) {
   const Theme = useTheme();
   const router = useRouter();
-  const members = useInboxStore((s) => s.teamMembers) as any[] | undefined;
+  const members = useInboxStore(teamMembersOf) as any[] | undefined;
   const roster = useMemo(() => (Array.isArray(members) ? members.filter(Boolean) : undefined), [members]);
   const { rows, hasMore, loadMore, loadingMore, isLoading } = useTeamFeed({ members: roster });
 

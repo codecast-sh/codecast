@@ -9,6 +9,7 @@ import { kitTeamLedger } from "../consequential/ledgers";
 import { MachineDots } from "./MachineDots";
 import type { FleetGridRow } from "./fleetRows";
 import { kitKeyOf, setKitReach, useKitReach, type KitItem, type KitReach, type KitConflict, type KitWorkspace, type PendingConsent } from "./useKit";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 export function KitList({
   title,
@@ -35,7 +36,7 @@ export function KitList({
 }) {
   const slugs = useMemo(() => items.map((i) => i.slug), [items]);
   const reach = useKitReach(slugs);
-  const members = useInboxStore((s) => s.teamMembers);
+  const members = useInboxStore(teamMembersOf);
   const me = useInboxStore((s) => s.currentUser);
   const nameOf = (id?: string) => {
     if (!id) return undefined;
@@ -131,7 +132,7 @@ export function ReachControl({
   onChange: (next: KitReach) => void;
 }) {
   const canTeam = ws.kind === "team" && ws.isAdmin;
-  const members = useInboxStore((s) => (s.teamMembers ?? []).length);
+  const members = useInboxStore((s) => teamMembersOf(s).length);
   // A member whose team turned it on reads that as on, labelled Team.
   const shown: KitReach = !canTeam && value === "team" ? "me" : value;
   const ledger = kitTeamLedger({

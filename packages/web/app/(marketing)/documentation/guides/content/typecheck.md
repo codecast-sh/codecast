@@ -9,9 +9,11 @@ Left: every session builds the same program again, and memory runs out. Right: e
 
 ## Turn it on
 
-1. Open **Agent features** from your account menu and pick the computer your agents run on.
-2. Switch on **Typecheck**, under *Hands on the machine*.
+1. Open **Settings** and choose **Agent Features** under *Machines*, then pick the computer your agents run on.
+2. Find **Typecheck** under *Hands on the machine*, switch it on, and confirm with **Turn on Typecheck**.
 3. New sessions on that computer use the shared typecheck from then on.
+
+![The Typecheck card in Agent features, switched on](/documentation/typecheck/typecheck-feature.webp "Typecheck is one switch per computer.")
 
 There's nothing else to set up for a project with one TypeScript configuration. Agents check the project they're working in.
 
@@ -19,7 +21,7 @@ There's nothing else to set up for a project with one TypeScript configuration. 
 
 Nothing new to learn. Ask for a typecheck the way you would anyway ("typecheck the web app and fix what's red"), or just ask for a change: agents check their own TypeScript before calling the work done. The agent reports what it found, project by project, and fixes what's red.
 
-![A conversation where the agent typechecked a small project, found three errors in one file and fixed them](/documentation/typecheck/conversation.webp "Asked to typecheck a small project and fix what is red. The agent found three errors, fixed them where they were, and said the check passes.")
+![A conversation where the agent typechecked a small project, found three errors in one file and fixed them](/documentation/typecheck/conversation.webp "Three errors found, fixed where they were, and the check passes.")
 
 - **The first check is the slow one.** It builds the program, so it takes as long as an ordinary typecheck. Every check after that, from any session in the same checkout, takes seconds.
 - **Your machine stays usable.** With a dozen agents at work, memory holds one program per project instead of one per agent.
@@ -44,3 +46,7 @@ Each separate copy of a repository (a worktree) gets its own shared typecheck, b
 | Hundreds of errors nobody wrote | The project list likely points at the wrong configuration. Ask the agent to compare it with the project's own typecheck script |
 | Errors look stale after installing packages | Ask the agent to restart the typecheck for that project |
 | Agents still run their own typecheck | Check Typecheck is on for that computer, and start a new session |
+
+## For agents and scripts
+
+Agents ask the shared typecheck with `cast check` (all projects, or one by name) and restart a confused one with `cast check --fresh`. `cast guide check` covers `.codecast/check.toml`.

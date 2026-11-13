@@ -27,6 +27,7 @@ import { ImageViewer } from '@/components/chat/ImageViewer';
 import { TypingRow } from '@/components/chat/TypingRow';
 import type { ChatAttachmentArg } from '@/components/chat/chatUpload';
 import { appAlert } from '@/lib/popups';
+import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 
 // One channel. An inverted FlatList (the only scroll model that keeps a chat
 // pinned to the newest message on mobile without fighting the keyboard), the
@@ -74,7 +75,7 @@ export default function ChatChannelScreen() {
     const tip = (s.chatRail ?? []).find((r: any) => String(r.channel_id) === channelId)?.last_message?._id;
     return !!tip && !s.chatMessages[tip];
   });
-  const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
+  const teamMembers = useInboxStore(teamMembersOf) as any[];
   const memberById = useMemo(() => {
     const map = new Map<string, any>();
     for (const m of teamMembers ?? []) if (m) map.set(String(m._id), m);

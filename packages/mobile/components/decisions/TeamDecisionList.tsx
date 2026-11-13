@@ -9,6 +9,7 @@ import { useDecisionRows } from '@codecast/web/hooks/useDecisionRows';
 import { useSyncTeamDecisions, useSyncTeamLineDecisions } from '@codecast/web/hooks/useSyncSessionDecisions';
 import { arrangeDecisions, decisionOwner, decisionView, isEscalated } from '@codecast/web/lib/decisions/decisionRows';
 import { ageShort } from '@codecast/web/lib/lineFlow';
+import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 
 const TEAM_VIEW = decisionView({ tab: 'team', group: 'none' });
 
@@ -23,7 +24,7 @@ export function TeamDecisionList({ header }: { header: React.ReactElement }) {
   useSyncTeamDecisions(rows.workspaceKey);
   useSyncTeamLineDecisions(rows.workspaceKey ? [rows.workspaceKey] : []);
   const me = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
-  const namesSig = useInboxStore((s) => (s.teamMembers ?? []).map((m: any) => `${m._id}\u0001${m.name ?? m.email ?? ''}`).join('\u0002'));
+  const namesSig = useInboxStore((s) => teamMembersOf(s).map((m: any) => `${m._id}\u0001${m.name ?? m.email ?? ''}`).join('\u0002'));
   const names = useMemo(() => new Map(namesSig ? namesSig.split('\u0002').map((x) => x.split('\u0001') as [string, string]) : []), [namesSig]);
   const items = useMemo(() => arrangeDecisions(rows.workspace, TEAM_VIEW, { me, now, label: () => '' }).items, [rows.workspace, me, now]);
   const ownerName = (d: (typeof items)[number]) => {

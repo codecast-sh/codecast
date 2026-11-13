@@ -16,6 +16,7 @@ import { act } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../test-helpers/globals";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
+import { withTeamRoster } from "../../test-helpers/teamRoster";
 import type { FaceCard, FaceEntry, FaceRow as FaceRowModel, Link } from "../../lib/faces/faceRow";
 import type { PushToTalk } from "../../hooks/useWalkie";
 import { teamBarSig } from "../presence/memberPresence";
@@ -196,8 +197,7 @@ beforeEach(() => {
   closeCallStage();
   useInboxStore.setState({
     currentUser: { _id: ME, name: "Me" },
-    teamMembers: [member(ME, "Me"), member(ANN, "Ann"), member(BO, "Bo")],
-    clientState: { ...useInboxStore.getState().clientState, ui: { ...(useInboxStore.getState().clientState?.ui ?? {}), active_team_id: TEAM } },
+    ...withTeamRoster([member(ME, "Me"), member(ANN, "Ann"), member(BO, "Bo")], { team: TEAM, clientState: useInboxStore.getState().clientState }),
     callOccupancy: {},
     liveRooms: [],
     followLeaderId: null,

@@ -32,6 +32,22 @@ describe("resolveDeviceSelector — cast spawn --device", () => {
     expect(resolveDeviceSelector(withHost, "macOS - InterGalactic")).toBe("dev-mini-5");
   });
 
+  test("a name a person set is the name the machine answers to", () => {
+    const named = [{ device_id: "dev-host-4", label: "Linux - ip-172-31-40-243", platform: "linux", is_remote: true, display_name: "Work box" }];
+    expect(resolveDeviceSelector(named, "Work box")).toBe("dev-host-4");
+    expect(resolveDeviceSelector(named, "work box")).toBe("dev-host-4");
+    expect(resolveDeviceSelector(named, "linux - ip-172-31-40-243")).toBe("dev-host-4");
+    expect(() => resolveDeviceSelector(named, "Cloud Linux")).toThrow('Unknown device "Cloud Linux"');
+  });
+
+  test("a stored label wins over another machine's chosen name", () => {
+    const shadowed = [
+      { device_id: "dev-laptop-1", label: "Work box", platform: "darwin" },
+      { device_id: "dev-host-4", label: "Linux - ip-172-31-40-243", platform: "linux", is_remote: true, display_name: "Work box" },
+    ];
+    expect(resolveDeviceSelector(shadowed, "Work box")).toBe("dev-laptop-1");
+  });
+
   test("a stored label wins over another machine's display name", () => {
     const collision = [
       { device_id: "dev-host-4", label: "Linux - ip-172-31-40-243", platform: "linux", is_remote: true },

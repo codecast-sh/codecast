@@ -19,6 +19,7 @@ import { soundRoomKnock } from "../lib/sounds";
 import { isNotificationLeader, notifyNative } from "../lib/desktop";
 
 import { useWatchEffect } from "./useWatchEffect";
+import { teamMembersOf } from "../lib/activeTeam";
 // The huddles data pump, mounted once app-wide (DashboardLayout, beside
 // useChatToasts). Renders nothing; binds the Convex client into callManager
 // and syncs three store fields:
@@ -43,7 +44,7 @@ export function useCallSync(): void {
   // hue + hover card) plus the visible session's room (header chip). Channel
   // rails pass their own keys through the same query via OccupancyChip.
   const s = useTrackedStore([
-    (st: any) => st.teamMembers.map((m: any) => m.in_room_key).filter(Boolean).sort().join("|"),
+    (st: any) => teamMembersOf(st).map((m: any) => m.in_room_key).filter(Boolean).sort().join("|"),
     (st: any) => st.currentSessionId,
     (st: any) => st.call.roomKey,
     (st: any) => st.call.phase,
@@ -58,7 +59,7 @@ export function useCallSync(): void {
   ]);
   const roomKeys = useMemo(() => {
     const keys = new Set<string>();
-    for (const m of s.teamMembers) if (m?.in_room_key) keys.add(m.in_room_key);
+    for (const m of teamMembersOf(s)) if (m?.in_room_key) keys.add(m.in_room_key);
     const current = s.currentSessionId && s.getConvexId(s.currentSessionId);
     if (current) keys.add(sessionRoomKey(current));
     // Chat rooms — the rail is the team's few channels, bounded. A DM or
@@ -70,14 +71,14 @@ export function useCallSync(): void {
     for (const r of s.chatRail ?? []) {
       const ch = r?.channel_id && s.chatChannels?.[r.channel_id];
       if (!ch) continue;
-      keys.add(channelRowRoomKey(ch, r, viewer, s.teamMembers));
+      keys.add(channelRowRoomKey(ch, r, viewer, teamMembersOf(s)));
     }
     // The room I'M in, always — the dock's roster must not depend on a
     // teammate's heartbeat having landed in the strip.
     if (s.call.roomKey) keys.add(s.call.roomKey);
     return [...keys].sort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [s.teamMembers, s.currentSessionId, s.call.roomKey, s.chatRail, s.chatChannels, s.currentUser?._id]);
+  }, [teamMembersOf(s), s.currentSessionId, s.call.roomKey, s.chatRail, s.chatChannels, s.currentUser?._id]);
 
   const { data: occupancy } = useQueryNoThrow(
     api.calls.getRoomOccupancy,

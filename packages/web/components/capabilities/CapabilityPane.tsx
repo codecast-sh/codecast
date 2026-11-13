@@ -14,6 +14,7 @@ import { isBroken, type FleetGridRow } from "./fleetRows";
 import { confidenceFromKind, confidenceFromSurfaces, kindMeta, type CapabilityDevice } from "./kinds";
 import { ReachControl } from "./KitList";
 import { setKitReach, useKitReach, type KitItem, type KitConflict, type KitWorkspace, type PendingConsent } from "./useKit";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 export type Selection = { key: string };
 
@@ -104,7 +105,7 @@ function KitAction({
   const slugs = useMemo(() => [item.slug], [item.slug]);
   const r = useKitReach(slugs)[item.slug] ?? { reach: "off" as const, teamOn: false };
   const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
-  const members = useInboxStore((s) => (ws.kind === "team" ? (s.teamMembers ?? []).length : 1));
+  const members = useInboxStore((s) => (ws.kind === "team" ? teamMembersOf(s).length : 1));
   const remove = useInboxStore((s) => s.removeKitItem);
   const allow = useInboxStore((s) => s.grantKitConsent);
   const adopt = useInboxStore((s) => s.adoptKitItem);
@@ -201,7 +202,7 @@ function KitAction({
 
 function ShareAction({ row, devices, ws }: { row: FleetGridRow; devices: CapabilityDevice[]; ws: KitWorkspace }) {
   const share = useInboxStore((s) => s.shareToKit);
-  const members = useInboxStore((s) => (ws.kind === "team" ? (s.teamMembers ?? []).length : 1));
+  const members = useInboxStore((s) => (ws.kind === "team" ? teamMembersOf(s).length : 1));
   // Upload from a machine that has it, preferring one that is online now.
   const source = devices
     .filter((d) => row.byDevice[d.deviceId]?.present)

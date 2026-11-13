@@ -15,6 +15,7 @@ import { DashboardLayout } from "../../../components/DashboardLayout";
 import { ScopePageInner } from "../../../components/org/scope/ScopePage";
 import { SlackReturnFlash } from "../../../components/anchor/SlackReturnFlash";
 import OrgPage from "../page";
+import { windowOrgTree } from "../../../store/orgSlice";
 
 /** Where an address under Org leads, or null for the chart. A role the store
  *  has not loaded yet is "wait": its session is not known until the tree is. */
@@ -26,8 +27,9 @@ function homeOf(view: string | undefined, id: string | null, st: ReturnType<type
   if (!object) return null;
   if (object.kind === "initiative" || object.kind === "project") return objectHref(object.kind, object.ref);
   if (object.kind === "person") return `/team/${encodeURIComponent(object.ref)}`;
-  if (!st.orgTree) return "wait";
-  const conv = st.orgTree.roles.find((r) => r.short_id?.toLowerCase() === object.ref)?.standing?.conversation_id;
+  const tree = windowOrgTree(st);
+  if (!tree) return "wait";
+  const conv = tree.roles.find((r) => r.short_id?.toLowerCase() === object.ref)?.standing?.conversation_id;
   return conv ? `/conversation/${conv}` : null;
 }
 

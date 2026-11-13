@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, jest, test } from "bun:test";
+import { clearChatFocus, setChatFocus } from "../../chatFocus";
 import {
   __resetFaceChat,
   clearFaceUnseen,
   deliverChatToFace,
+  noteFaceContextRead,
   faceBubbleFailed,
   faceBubbleShown,
   getFaceChat,
@@ -38,7 +40,10 @@ describe("chat from the face", () => {
     __resetFaceChat();
     registerFaceChatLayer({ canShow: (id) => id !== "agent" });
   });
-  afterEach(() => jest.useRealTimers());
+  afterEach(() => {
+    clearChatFocus();
+    jest.useRealTimers();
+  });
 
   test("a line drops from the face, then folds back into a count on it", () => {
     expect(deliverChatToFace("sam", line("gimme a bit longer"), () => {})).toBe(true);
@@ -49,6 +54,90 @@ describe("chat from the face", () => {
     jest.advanceTimersByTime(10_000);
     expect(getFaceChat().bubble).toBeNull();
     expect(unseen("sam")).toEqual(["gimme a bit longer"]);
+  });
+
+  test("reading the channel clears the count the face is wearing", () => {
+    deliverChatToFace("sam", line("gimme a bit longer"), () => {});
+    show();
+    jest.advanceTimersByTime(10_000);
+    expect(unseen("sam")).toEqual(["gimme a bit longer"]);
+    noteFaceContextRead("c-team");
+    expect(unseen("sam")).toEqual([]);
+  });
+
+  test("reading the channel retires a line that is still folding into the count", () => {
+    deliverChatToFace("sam", line("gimme a bit longer"), () => {});
+    show();
+    jest.advanceTimersByTime(getFaceChat().bubble!.dwellMs);
+    // The fold has started and the count has not landed yet.
+    expect(unseen("sam")).toEqual([]);
+    expect(getFaceChat().bubble?.phase).toBe("out");
+    noteFaceContextRead("c-team");
+    expect(getFaceChat().bubble).toBeNull();
+    jest.advanceTimersByTime(1_000);
+    expect(unseen("sam")).toEqual([]);
+  });
+
+  test("a line whose stamp is ahead of this clock still clears when the channel is read", () => {
+    deliverChatToFace("sam", line("ahead", { at: Date.now() + 60_000 }), () => {});
+    show();
+    jest.advanceTimersByTime(getFaceChat().bubble!.dwellMs + 1_000);
+    expect(unseen("sam")).toEqual(["ahead"]);
+    noteFaceContextRead("c-team");
+    expect(unseen("sam")).toEqual([]);
+  });
+
+  test("reading the channel leaves a thread reply counted until that thread is on screen", () => {
+    deliverChatToFace("sam", line("in the thread", { inThread: true, threadRootId: "root-1" }), () => {});
+    show();
+    jest.advanceTimersByTime(10_000);
+    noteFaceContextRead("c-team");
+    expect(unseen("sam")).toEqual(["in the thread"]);
+    noteFaceContextRead("c-team", "root-1");
+    expect(unseen("sam")).toEqual([]);
+  });
+
+  test("a reply also sent to the channel clears with the channel", () => {
+    deliverChatToFace("sam", line("also in the channel", { inThread: true, threadRootId: "root-1", broadcast: true }), () => {});
+    show();
+    jest.advanceTimersByTime(10_000);
+    noteFaceContextRead("c-team");
+    expect(unseen("sam")).toEqual([]);
+  });
+
+  test("reading one channel leaves another channel's count", () => {
+    deliverChatToFace("sam", line("in team"), () => {});
+    show();
+    jest.advanceTimersByTime(10_000);
+    deliverChatToFace("cam", line("other room", { channelId: "c-other" }), () => {});
+    show();
+    jest.advanceTimersByTime(10_000);
+    noteFaceContextRead("c-team");
+    expect(unseen("sam")).toEqual([]);
+    expect(unseen("cam")).toEqual(["other room"]);
+  });
+
+  test("a line that arrives after the channel was read still counts", () => {
+    noteFaceContextRead("c-team");
+    jest.advanceTimersByTime(5);
+    deliverChatToFace("sam", line("later"), () => {});
+    show();
+    jest.advanceTimersByTime(10_000);
+    expect(unseen("sam")).toEqual(["later"]);
+  });
+
+  test("the channel being open does not retire a count the reader has not reached", () => {
+    deliverChatToFace("sam", line("gimme a bit longer"), () => {});
+    show();
+    jest.advanceTimersByTime(10_000);
+    setChatFocus({ channelId: "c-team" });
+    expect(unseen("sam")).toEqual(["gimme a bit longer"]);
+    deliverChatToFace("sam", line("while it is open"), () => {});
+    show();
+    jest.advanceTimersByTime(10_000);
+    expect(unseen("sam")).toEqual(["gimme a bit longer", "while it is open"]);
+    noteFaceContextRead("c-team");
+    expect(unseen("sam")).toEqual([]);
   });
 
   test("looking at the face clears its count", () => {

@@ -22,6 +22,7 @@ import { shareOutLedger, type ShareOutPreview } from "../consequential/ledgers";
 import { KeyCap } from "../KeyCap";
 import { isMac } from "../../shortcuts/registry";
 import { modernButton } from "../ui/modernLook";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 type MapRow = { user_id: string; name: string; takes_decisions: boolean; projects: Array<{ id: string; title: string }> };
 type Mapped = { assignments: MapRow[]; unplaced: string[]; text: string };
@@ -32,14 +33,14 @@ const BUTTON = "flex items-center gap-1.5 h-7 px-2.5 rounded-md border border-so
 function useAdminTeam(workspace: string | null): string | null {
   const admin = useInboxStore((s) => {
     const me = String(s.currentUser?._id ?? "");
-    return (s.teamMembers ?? []).some((m: any) => String(m._id) === me && m.role === "admin");
+    return teamMembersOf(s).some((m: any) => String(m._id) === me && m.role === "admin");
   });
   return admin && workspace?.startsWith("team:") ? workspace.slice(5) : null;
 }
 
 /** The current map, from the store's roster and projects; it wakes on the areas' own fields only. */
 function useCurrentAreas(): MapRow[] {
-  const sig = useInboxStore((s) => (s.teamMembers ?? []).filter((m: any) => !m.is_bot)
+  const sig = useInboxStore((s) => teamMembersOf(s).filter((m: any) => !m.is_bot)
     .map((m: any) => `${m._id}\u0001${m.name ?? m.email ?? ""}\u0001${takesDecisions(m)}\u0001${(m.focus_project_ids ?? []).map((id: string) => `${id}=${(s.projects as any)?.[id]?.title ?? ""}`).join(",")}`).join("\u0002"));
   return useMemo(() => (sig ? sig.split("\u0002") : []).map((line) => {
     const [user_id, name, takes, focus] = line.split("\u0001");

@@ -274,7 +274,8 @@ export async function seedViewer(): Promise<void> {
     callConfig: { enabled: true },
   } as any);
   s.syncTable("teams", [{ _id: TEAM_ID, name: "Degrade Co", role: "admin", features: Object.fromEntries(TEAM_FEATURE_KEYS.map((k) => [k, true])) }] as any);
-  s.syncTable("teamMembers", [{ ...viewer, role: "admin", presence_state: "active" }] as any);
+  const { stampRoster } = await import("../lib/activeTeam");
+  s.syncTable("teamMembers", stampRoster([{ ...viewer, role: "admin", presence_state: "active" }], TEAM_ID) as any);
 }
 
 // A session this browser already holds: its inbox row, its conversation

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { initiativeTabTitle, tabTitle } from "./tabTitle";
+import { withTeamRoster } from "../test-helpers/teamRoster";
 
 const initiatives = {
   team: { title: "Team plan", short_id: "in-1", workspace: "team:a" },
@@ -47,7 +48,7 @@ test("a board by its pj- id, and a role, a person and a project on the Org scree
   const records = {
     projects: { [PROJECT]: { _id: PROJECT, short_id: "pj-mf3k2a", title: "Lead lists" } },
     orgTree: { roles: [{ _id: "r7", short_id: "or-7", name: "Calling lead", handle: "calling" }] },
-    teamMembers: [{ _id: "u1", name: "Samvit", github_username: "samvit" }],
+    ...withTeamRoster([{ _id: "u1", name: "Samvit", github_username: "samvit" }], { team: "a" }),
   };
   const tab = (path: string) => ({ id: "t", path, title: "", createdAt: 0 }) as any;
   expect(tabTitle(tab("/projects/pj-mf3k2a"), {}, {}, [], "me", {}, "team:a", records)).toBe("Lead lists");

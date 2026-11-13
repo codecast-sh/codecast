@@ -22,6 +22,7 @@ import { readPins, isThreadsPin, togglePin } from "../../lib/sidebarPins";
 import { supersededChannelId } from "../../hooks/useChatSync";
 import "./chat.css";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { teamMembersOf } from "../../lib/activeTeam";
 // The one channel-management surface, on the app's one menu system.
 //
 // The menu itself is the shared context-menu primitive (ui/context-menu), so a
@@ -73,7 +74,7 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
           const title = isDm
             ? channelDisplayName(
                 { name: "", kind: "dm", dmMemberIds: dmOtherIds(channel.dm_key, (s as any).currentUser?._id ?? "") },
-                (s as any).teamMembers,
+                teamMembersOf(s),
               )
             : `#${channel.name}`;
           return (

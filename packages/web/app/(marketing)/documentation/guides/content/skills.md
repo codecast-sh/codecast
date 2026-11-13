@@ -2,17 +2,17 @@ Some jobs are the same every time: pick up where yesterday's work stopped, hand 
 
 What makes them worth having is that they reach past one session. A skill can read your task board, your team's earlier sessions, other sessions working right now, pull requests, calls and team chat, which a single agent on its own can't see.
 
-![A conversation started with /cast-second-opinion: the agent sends the change to a second model, checks each finding against the code, fixes the two real bugs and lists what it left alone](/documentation/skills/conversation.webp "/cast-second-opinion on a small change. The skill shows as a pill on your message; the agent got a review from a different model, verified both findings, fixed them, and left two judgment calls to you.")
+![A conversation started with /cast-second-opinion: the agent sends the change to a second model, checks each finding against the code, fixes the two real bugs and lists what it left alone](/documentation/skills/conversation.webp "/cast-second-opinion on a small change: the skill shows as a pill on your message.")
 
 ## Turn it on
 
 Skills work with Claude Code.
 
-1. Open **Agent features** from your account menu and pick the computer your agents run on.
-2. Switch on **Skills**, under *Tracking & automation*.
+1. Open **Settings** and choose **Agent Features** under *Machines*, then pick the computer your agents run on.
+2. Find **Skills** under *Tracking & automation*, switch it on, and confirm with **Turn on Skills**.
 3. Start a new session. The commands are there.
 
-![The Skills feature's detail in Agent features](/documentation/skills/skills-feature.webp "The Skills detail. The switch at the top right turns it on for the selected computer.")
+![The Skills feature's detail in Agent features](/documentation/skills/skills-feature.webp "The Skills detail. Its switch turns it on for the selected computer.")
 
 A skill costs nothing until it runs. Your agent sees a one-line description of each, and reads the steps only when one is used.
 
@@ -20,7 +20,7 @@ A skill costs nothing until it runs. Your agent sees a one-line description of e
 
 Type `/` in the message box of any Claude Code session, in the web app or the Mac app, and a menu lists the commands available there. Keep typing to filter, and pick one with the arrow keys and Enter. Add anything the skill should know after the name: a task, a file and line, a question.
 
-![The slash command menu in the message box, filtered to cast- skills, each with its description](/documentation/skills/slash-menu.webp "Type / to see every skill and command for the session, with what each does.")
+![The slash command menu in the message box, filtered to cast- skills, each with its description](/documentation/skills/slash-menu.webp "Type / to see every skill and command for the session.")
 
 You don't have to remember the names. Ask in plain words and the agent picks the skill that fits: "hand this over to tomorrow's session", "get another model to look at this before I merge", "what did the team do yesterday?"
 

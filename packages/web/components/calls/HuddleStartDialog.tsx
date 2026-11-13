@@ -23,6 +23,7 @@ import { firstName } from "./speakers";
 import { DeviceOptions } from "./DeviceRows";
 import { GuestInvite } from "./GuestDoor";
 import { SegmentedToggle } from "../SegmentedToggle";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 type PreviewKind = "mic" | "camera" | "speaker";
 const DEVICE_KIND = { mic: "audioinput", camera: "videoinput", speaker: "audiooutput" } as const;
@@ -98,7 +99,7 @@ export default function HuddleStartDialog({ req }: { req: HuddleStartRequest }) 
 function Heading({ req, isPrivate, setPrivate }: { req: HuddleStartRequest; isPrivate: boolean; setPrivate: (on: boolean) => void }) {
   const names = useInboxStore((s) =>
     (req.toUserIds ?? [])
-      .map((id) => s.teamMembers.find((m: any) => String(m?._id) === id))
+      .map((id) => teamMembersOf(s).find((m: any) => String(m?._id) === id))
       .filter(Boolean)
       .map((m) => firstName(memberDisplayName(m)))
       .join(", "),

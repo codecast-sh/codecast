@@ -12,6 +12,7 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { AskingSession, PersonChip, CategoryNote } from "../DecisionParties";
 import { categoryMeaning } from "../../../lib/decisionCategory";
 import { closeDomWindow } from "../../../test-helpers/domGlobals";
+import { withTeamRoster } from "../../../test-helpers/teamRoster";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "https://codecast.sh/questions" });
 const restoreGlobals = replaceGlobals({
   window: dom.window,
@@ -33,7 +34,7 @@ afterAll(() => { closeDomWindow(dom); restoreGlobals(); });
 beforeEach(() => {
   useInboxStore.setState({
     sessions: { c1: { _id: "c1", title: "Rate limit investigation", project_path: "/Users/x/src/codecast", status: "running" } },
-    teamMembers: [{ _id: "u1", name: "Jason Benn", github_username: "jasonbenn", image: "https://example.test/j.png" }],
+    ...withTeamRoster([{ _id: "u1", name: "Jason Benn", github_username: "jasonbenn", image: "https://example.test/j.png" }], { clientState: useInboxStore.getState().clientState }),
   } as any);
 });
 

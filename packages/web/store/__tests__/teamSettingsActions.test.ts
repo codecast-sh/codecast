@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { performUndo, _resetUndoStacks } from "@platform/engine";
 import { useInboxStore } from "../inboxStore";
+import { withTeamRoster } from "../../test-helpers/teamRoster";
 
 // Team settings and membership go through store actions (they used to be
 // direct teams.* mutations from the settings pages): each paints the teams
@@ -20,8 +21,7 @@ describe("team settings store actions", () => {
     calls = [];
     useInboxStore.setState({
       teams: [{ _id: TEAM, name: "Old name", icon: "bolt", icon_color: "blue", role: "admin" }],
-      teamMembers: [{ _id: ADA, name: "Ada", role: "member" }],
-      clientState: { ui: { active_team_id: TEAM } },
+      ...withTeamRoster([{ _id: ADA, name: "Ada", role: "member" }], { team: TEAM }),
       pending: {},
     } as any);
     useInboxStore.getState()._setDispatch(async (action: string, args: any[]) => {

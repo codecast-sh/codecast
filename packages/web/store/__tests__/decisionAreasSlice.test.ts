@@ -4,6 +4,7 @@
 // moved decision its new owner's alone.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "../inboxStore";
+import { withTeamRoster } from "../../test-helpers/teamRoster";
 
 const s = () => useInboxStore.getState() as any;
 const ME = "u".repeat(32);
@@ -20,11 +21,11 @@ beforeEach(() => {
   calls = [];
   useInboxStore.setState({
     currentUser: { _id: ME, name: "Ashot" },
-    teamMembers: [
+    ...withTeamRoster([
       { _id: ME, name: "Ashot", role: "admin", focus_project_ids: ["p9"] },
       { _id: SAM, name: "Samvit", role: "member" },
       { _id: BOT, name: "Bot", is_bot: true, focus_project_ids: ["p1"] },
-    ],
+    ], { team: "t1", clientState: useInboxStore.getState().clientState }),
     sessionDecisions: {
       [D1]: { _id: D1, status: "pending", holder: { kind: "user", id: ME }, holder_key: `user:${ME}`, asked_user_ids: [ME], in_queue: true },
       [D2]: { _id: D2, status: "answered", holder: { kind: "user", id: ME }, holder_key: `user:${ME}`, asked_user_ids: [ME] },

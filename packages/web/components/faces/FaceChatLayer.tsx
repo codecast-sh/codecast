@@ -21,6 +21,7 @@ import { markFaceRead } from "../../lib/faces/faceDmUnread";
 import { whereOf } from "../../lib/chat/faceChatText";
 import { Preview } from "./FaceMessages";
 import "./faceChat.css";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 // The header's half of chat from the face (lib/chat/faceChat): the bubble that
 // drops from a teammate's face when they say something. It hangs from the seat
@@ -56,7 +57,7 @@ function placement(a: Anchor, w: number) {
 }
 
 function memberOf(id: string) {
-  return useInboxStore.getState().teamMembers.find((m: any) => String(m?._id) === id);
+  return teamMembersOf(useInboxStore.getState()).find((m: any) => String(m?._id) === id);
 }
 
 /** The bubble's anchor, tracked while it is up: the row moves faces by
@@ -97,7 +98,7 @@ export function FaceChatLayer({ barRef }: { barRef: RefObject<HTMLElement | null
           if (!bar || bar.getClientRects().length === 0) return false;
           const s: any = useInboxStore.getState();
           if (String(s.currentUser?._id ?? "") === id) return false;
-          return peopleOf(s.teamMembers).some((m: any) => String(m._id) === id);
+          return peopleOf(teamMembersOf(s)).some((m: any) => String(m._id) === id);
         },
       }),
     [barRef],

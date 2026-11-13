@@ -6,7 +6,7 @@ With Thread State on, the agent keeps one short note pinned to the session that 
 
 ## Turn it on
 
-Open **Agent features** from your account menu, pick the computer your agents run on, and switch on **Thread State**. Sessions that start after that keep a pinned state. Click **How it works** on the card for what you'll see and a request to try.
+Open **Agent features** (under **More** in the sidebar), pick the computer your agents run on, and switch on **Thread State** in the **Context** group. Sessions that start after that keep a pinned state. Click the card for what you'll see and a request to try.
 
 You don't need to ask for it once it is on, but you can steer it:
 
@@ -23,7 +23,9 @@ You don't need to ask for it once it is on, but you can steer it:
 - Under the header, each detail line sits beside its label. **You** is what the agent needs from you, on amber, with a **Copy** button when it is a command. **Done** is a checklist of what is finished, and **Next** says what happens next and when. A long note folds to **Show all**.
 - Click the header to collapse the panel to the headline. The **×** that appears on hover clears the note; a toast reads *Pinned state cleared* with **Undo**.
 
-**On the inbox card**, the note replaces the generated summary with one line: what the agent needs from you when there is something, otherwise the headline. A small pin marks it, colored by status, and a chip names a blocked, done or dormant session so you can scan the inbox without opening anything.
+**On the inbox card**, the note replaces the generated summary with one line: what the agent needs from you when there is something, otherwise the headline. A small pin marks it, colored by status, and a chip names a blocked, done or dormant session so you can scan the inbox without opening anything. The phone's inbox shows the same line.
+
+![Inbox cards with pinned lines: one under Needs You asking for a staging API key, one under Working on webhook retry backoff](/documentation/thread-state/inbox-card.webp "The pinned line on inbox cards, colored by status.")
 
 ## Who acts next
 
@@ -53,7 +55,7 @@ For its first 60 messages the note is fresh. After that its age turns yellow and
 
 | What you notice | What to do |
 |-----------------|------------|
-| No pinned state on new sessions | Check that **Thread State** is on for the computer the session runs on, in **Agent features** |
+| No pinned state on new sessions | Check that **Thread State** is on for the computer the session runs on, in **Agent features**. Sessions already running when you switched it on don't pick it up |
 | The note says the agent is waiting on something that already happened | Tell the agent. It rewrites the note when it ends that turn |
 | A session sits in Needs You but needed nothing | The agent ended its turn without saying who acts next. Ask it to keep its pinned state current |
 | You cleared a note by mistake | Click **Undo** on the toast, or ask the agent to pin it again |

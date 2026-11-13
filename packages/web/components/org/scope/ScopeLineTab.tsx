@@ -27,6 +27,7 @@ import { useOrgRoles } from "../../../hooks/useOrgRoles";
 import { ORG_STATE_META } from "../orgMeta";
 import { handWorkState, heldDecisionFor, isLiveRun, runForTask, runLiveNode } from "../../../lib/taskLine";
 import { evidenceCount, lineColumns } from "./lineBoard";
+import { teamMembersOf } from "../../../lib/activeTeam";
 
 const heldDecisionSig = (d: SessionDecisionItem) => `${d.status}|${d.blocking ? 1 : 0}|${d.task_id ?? ""}|${d.station ?? ""}|${d.short_id ?? ""}|${d.created_at ?? 0}`;
 const boundDecision = (d: SessionDecisionItem) => !!d.task_id && d.status === "pending" && !!d.blocking;
@@ -108,7 +109,7 @@ function LineCard({ task, run, held, evidence }: { task: TaskItem; run: LineRun 
   const { roles: orgRoles } = useOrgRoles();
   const s = useTrackedStore([
     (st) => { const row = handId ? st.sessions[handId] : undefined; return row ? handWorkState(classifySession(row), null) : null; },
-    (st) => st.teamMembers,
+    (st) => teamMembersOf(st),
     (st) => st.currentUser?._id,
   ]);
   const handRow = handId ? s.sessions[handId] : undefined;
@@ -118,7 +119,7 @@ function LineCard({ task, run, held, evidence }: { task: TaskItem; run: LineRun 
   // the run's own enrichment; a run waiting at a gate with no hand says so.
   const handState = live && (handRow || live.session) ? handWorkState(handRow ? classifySession(handRow) : null, live.session) : null;
   const handMeta = handState ? ORG_STATE_META[handState] : null;
-  const assignee = resolveAssigneeInfo(task.assignee, task.assignee_info, s.teamMembers, s.currentUser, orgRoles);
+  const assignee = resolveAssigneeInfo(task.assignee, task.assignee_info, teamMembersOf(s), s.currentUser, orgRoles);
   const evidenceLine = [evidence.pages ? `${evidence.pages} page${evidence.pages === 1 ? "" : "s"}` : "", evidence.files ? `${evidence.files} file${evidence.files === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
 
   return (

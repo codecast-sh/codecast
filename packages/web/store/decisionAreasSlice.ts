@@ -14,6 +14,7 @@
 // both without a line of its own.
 import { action } from "./mutativeMiddleware";
 import type { AreaAssignment } from "@codecast/shared/contracts/decisionAreas";
+import { teamMembersOf } from "../lib/activeTeam";
 
 export type ShareOutMoveInput = { decision_id: string; to: string };
 
@@ -26,7 +27,7 @@ export function createDecisionAreasSlice(): DecisionAreasSliceActions {
   return {
     applyDecisionAreas: action(function (this: any, _teamId: string, assignments: AreaAssignment[]) {
       const given = new Map(assignments.map((a) => [String(a.user_id), a]));
-      for (const m of this.teamMembers ?? []) {
+      for (const m of teamMembersOf(this)) {
         if (m.is_bot) continue;
         const a = given.get(String(m._id));
         m.focus_project_ids = a ? [...a.project_ids] : [];

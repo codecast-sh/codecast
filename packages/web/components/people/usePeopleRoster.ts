@@ -25,6 +25,7 @@ import {
   type DmBadge,
 } from "./peopleRoster";
 import { peopleOf } from "@codecast/shared/team/memberKind";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 export interface PeopleRosterData {
   /** Coarse clock. Every activity line's duration ticks off this and nothing
@@ -72,7 +73,7 @@ export function usePeopleRoster(): PeopleRosterData {
   // The roster array re-pushes every few seconds on teammates' heartbeat
   // counters. This window shows it forever, so it wakes on a signature of the
   // fields a face draws and reads the array itself out of getState().
-  const sig = useInboxStore((s) => rosterSig(s.teamMembers));
+  const sig = useInboxStore((s) => rosterSig(teamMembersOf(s)));
 
   const fleets = useFleetSummaries();
   const rooms = useLiveRooms();
@@ -82,7 +83,7 @@ export function usePeopleRoster(): PeopleRosterData {
 
   // One walk of the roster: the viewer's own row out, everyone else in.
   const { members, me } = useMemo(() => {
-    const all = peopleOf(useInboxStore.getState().teamMembers as any[]).filter((m: any) => m._id);
+    const all = peopleOf(teamMembersOf(useInboxStore.getState()) as any[]).filter((m: any) => m._id);
     return {
       members: all.filter((m: any) => String(m._id) !== viewerId),
       me: all.find((m: any) => String(m._id) === viewerId) ?? user ?? null,

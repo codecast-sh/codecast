@@ -9,6 +9,7 @@ import React, { act } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../../test-helpers/globals";
 import { closeDomWindow } from "../../../test-helpers/domGlobals";
+import { withTeamRoster } from "../../../test-helpers/teamRoster";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "https://codecast.sh/decisions" });
 const restoreGlobals = replaceGlobals({
@@ -70,8 +71,7 @@ beforeEach(() => {
   useInboxStore.setState({
     passDecision: real.passDecision, unassignDecision: real.unassignDecision, escalateDecision: real.escalateDecision, answerDecision: real.answerDecision,
     currentUser: { _id: "u1", name: "Me" },
-    clientState: { ...useInboxStore.getState().clientState, ui: { active_team_id: "t1" } },
-    teamMembers: [{ _id: "u1", name: "Me" }, { _id: "u2", name: "Sam" }, { _id: "u3", name: "Jo" }],
+    ...withTeamRoster([{ _id: "u1", name: "Me" }, { _id: "u2", name: "Sam" }, { _id: "u3", name: "Jo" }], { team: "t1", clientState: { ...useInboxStore.getState().clientState, ui: {} } }),
     projects: {}, tasks: {}, savedViews: {},
     sessionDecisions: fixture(),
     createSavedView: (opts: any) => savedViews.push(opts),

@@ -30,6 +30,7 @@ import {
   channelFileRepairContext,
   fileRepairPage,
   applyFileRepair,
+  recordOutboundFailure,
 } from "./slackSync";
 import { markdownToSlack, slackToMarkdown } from "./lib/slackText";
 import { USER_SCOPES } from "./lib/slackOAuth";
@@ -846,6 +847,25 @@ describe("link management", () => {
     expect(link.paused).toBe(false);
     expect(link.last_error).toBeUndefined();
     expect(link.direction).toBe("slack_to_codecast");
+  });
+  test("a read-only Slack conversation turns the link one-way instead of erroring forever", async () => {
+    const ctx = context(ALICE);
+    await call(recordOutboundFailure, ctx, { link_id: LINK, error: "restricted_action_read_only_channel" });
+    let link = await ctx.db.get(LINK);
+    expect(link.direction).toBe("slack_to_codecast");
+    expect(link.slack_read_only).toBe(true);
+    expect(link.last_error).toBeUndefined();
+    expect(link.paused).toBeFalsy();
+    await call(updateLink, ctx, { link_id: LINK, direction: "both" });
+    link = await ctx.db.get(LINK);
+    expect(link.slack_read_only).toBeUndefined();
+  });
+  test("other outbound failures still record the error", async () => {
+    const ctx = context(ALICE);
+    await call(recordOutboundFailure, ctx, { link_id: LINK, error: "rate_limited" });
+    const link = await ctx.db.get(LINK);
+    expect(link.last_error).toBe("rate_limited");
+    expect(link.direction).toBe("both");
   });
 });
 

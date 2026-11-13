@@ -39,16 +39,17 @@ mock.module("../../../identity/AssigneeFace", () => ({ AssigneeFace: ({ info }: 
 
 const { useInboxStore } = await import("../../../../store/inboxStore");
 const { ScopeLineTab } = await import("../ScopeLineTab");
+const { withTeamRoster } = await import("../../../../test-helpers/teamRoster");
 
 const ME = "u1";
-const WS = `user:${ME}`;
+const TEAM = "t1";
+const WS = `team:${TEAM}`;
 beforeAll(() => {
   useInboxStore.setState({
     currentUser: { _id: ME, name: "Me" },
     clientStateInitialized: true,
-    clientState: { ...(useInboxStore.getState() as any).clientState, ui: {} },
-    teams: [],
-    teamMembers: [{ _id: "u2", name: "Sam Reviewer" }],
+    teams: [{ _id: TEAM, name: "Acme" }],
+    ...withTeamRoster([{ _id: "u2", name: "Sam Reviewer" }], { team: TEAM, clientState: { ...(useInboxStore.getState() as any).clientState, ui: {} } }),
     sessions: {
       hand1: { _id: "hand1", agent_status: "working", is_connected: true, is_idle: false, updated_at: Date.now() },
     },

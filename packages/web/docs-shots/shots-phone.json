@@ -1,0 +1,152 @@
+[
+ {
+  "file": "/docs/app/mobile.webp",
+  "device": "phone",
+  "surface": "Phone Inbox tab",
+  "state": "The iPhone inbox with session cards for the webhook retries sessions, grouped under Needs You and Working. The tab bar shows Inbox, Chat, Tasks, Alerts and Settings.",
+  "crop": "window",
+  "alt": "codecast on a phone: the inbox of sessions with their status and latest reply",
+  "caption": "The inbox on iPhone.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/docs/app/mobile-session.webp",
+  "device": "phone",
+  "surface": "Phone session screen",
+  "state": "Alex's webhook retries session on the phone: the latest agent reply, a Permission Required card with Approve and Deny for running the retry tests, and the composer.",
+  "crop": "window",
+  "alt": "A session on a phone: the agent's latest reply, a permission card with Approve and Deny, and the composer",
+  "caption": "A session waiting on a permission.",
+  "batch": "main-page"
+ },
+ {
+  "file": "/documentation/decisions/phone-decision.webp",
+  "device": "phone",
+  "surface": "phone decision screen (/decisions/[id]) reached from the 'to decide' badge beside the Inbox title",
+  "state": "One webhook retries decision with its question, the asking session line, two options, and 'Dismiss' and 'Skip \u203a' in the footer",
+  "crop": "window",
+  "alt": "The iPhone decision card with the question, two options and Dismiss and Skip at the bottom",
+  "caption": "A decision on the iPhone.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/calls/phone-call.webp",
+  "device": "phone",
+  "surface": "phone call screen in a live #eng huddle",
+  "state": "Three faces (Alex Rivera, Maya Ortiz, Sarah Chen), mute, camera, speaker and record controls, Invite a guest",
+  "crop": "window",
+  "alt": "The iPhone call screen with three faces, the mute, camera, speaker and record controls, and Invite a guest",
+  "caption": "A huddle on the iPhone.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/team-chat/phone-chat.webp",
+  "device": "phone",
+  "surface": "phone Chat tab",
+  "state": "Acme channels (#eng, #announcements, #support) and DMs with Maya Ortiz and Sarah Chen, unread counts, New message control",
+  "crop": "window",
+  "alt": "The iPhone Chat tab listing Acme's channels and direct messages with unread counts",
+  "caption": "Chat on the iPhone.",
+  "batch": "working-together-a"
+ },
+ {
+  "file": "/documentation/share-a-session/phone-share-sheet.webp",
+  "device": "phone",
+  "surface": "Phone session screen, More actions > Share",
+  "state": "Sharing sheet over a webhook-retries Acme team session that already has a share link: Private, Team sees the summary, Team sees everything (selected), Copy share link, Share link via\u2026",
+  "crop": "window",
+  "alt": "The phone's share sheet over a session: Private, Team sees the summary, Team sees everything, Copy share link and Share link via\u2026",
+  "caption": "Sharing a session from the phone.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/team-sessions/phone-inbox.webp",
+  "device": "phone",
+  "surface": "Phone inbox",
+  "state": "Acme sessions filed under Needs You and Working, webhook-retries work by Alex, Maya and Sarah",
+  "crop": "window",
+  "alt": "The phone inbox with the team's sessions filed under Needs You and Working",
+  "caption": "The same inbox on the phone.",
+  "batch": "working-together-b"
+ },
+ {
+  "file": "/documentation/org-roles/phone.webp",
+  "device": "phone",
+  "surface": "the phone Org screen (opened as Org from the slide-out panel)",
+  "state": "Acme org as a nested list: Sarah Chen, Alex Rivera, Maya Ortiz at the top with the Head of People and @webhooks role and their sessions nested under them.",
+  "crop": "window",
+  "alt": "The org on the iPhone app",
+  "caption": "The org on the phone: people at the top, their roles and sessions nested under them.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/pull-requests/phone.webp",
+  "device": "phone",
+  "surface": "the phone pull request screen",
+  "state": "Webhook retries PR with state and review decision; Checks section titled 'Checks \u00b7 1 failed \u00b7 9/10 passed' with the failing check first; Reviews with Maya Ortiz's review; Sessions with Alex Rivera's session; 'Diff and comments on GitHub' link.",
+  "crop": "window",
+  "alt": "A pull request on the iPhone app",
+  "caption": "A pull request on the phone: the failing check first, then the reviews.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/tasks-and-plans/phone.webp",
+  "device": "phone",
+  "surface": "the phone Tasks tab on the Tasks segment",
+  "state": "Segments Tasks, Plans, Docs, Triggers; Tasks selected listing open webhook retries tasks with status and assignee (Alex Rivera, Maya Ortiz, Sarah Chen).",
+  "crop": "window",
+  "alt": "The Tasks tab on the iPhone app",
+  "caption": "The Tasks tab on the phone, with open tasks at the top.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/triggers/phone.webp",
+  "device": "phone",
+  "surface": "the phone Tasks tab on the Triggers segment",
+  "state": "Acme triggers listed with title, when each runs next and how its last run went, and Pause / Open / Cancel buttons on each row.",
+  "crop": "window",
+  "alt": "Triggers on the iPhone app",
+  "caption": "The Triggers list on the phone, each with its cadence and next firing.",
+  "batch": "tracking"
+ },
+ {
+  "file": "/documentation/ambient-awareness/phone-new-session.webp",
+  "device": "phone",
+  "surface": "phone new session sheet (NewSessionSheet)",
+  "state": "Acme workspace, Alex Rivera. New session sheet open with machine, folder and the Context row showing Auto; ideally the Context picker sheet open with Auto, Team, Solo, Off.",
+  "crop": "window",
+  "alt": "The phone's new session sheet with its Context row",
+  "caption": "On the phone, tap Context to pick Auto, Team, Solo or Off.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/search-sessions-across-machines/phone-search.webp",
+  "device": "phone",
+  "surface": "phone inbox tab with search open",
+  "state": "Acme workspace, Alex Rivera. Search box revealed above the session list with 'webhook' typed and matching sessions (webhook retries by Maya Ortiz, Sarah Chen) as results.",
+  "crop": "window",
+  "alt": "The phone inbox with the search box open above the session list and \"webhook\" typed",
+  "caption": "The phone searches the same history. Pull the list down to reveal the box.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/visual-canvas/phone-canvas.webp",
+  "device": "phone",
+  "surface": "phone session screen",
+  "state": "The same backoff comparison conversation on the phone: the canvas shown as a titled card in the transcript; optionally side by side with the fullscreen canvas modal (source, copy, close buttons).",
+  "crop": "window",
+  "alt": "A canvas card in a phone conversation, and the same canvas open full screen",
+  "caption": "On the phone, tap the card to open the canvas full screen.",
+  "batch": "recall-showing"
+ },
+ {
+  "file": "/documentation/remote-and-cloud-sessions/phone-machine.webp",
+  "device": "phone",
+  "surface": "phone new session sheet",
+  "state": "New session sheet with the Machine picker open listing Alex Rivera's laptop and the awake acme-linux cloud machine",
+  "crop": "window",
+  "alt": "The phone's new session sheet with the Machine picker open",
+  "caption": "On the phone, a new session picks its machine.",
+  "batch": "machines"
+ }
+]

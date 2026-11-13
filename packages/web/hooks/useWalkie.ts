@@ -38,6 +38,7 @@ import { usePagePresence } from "./usePagePresence";
 import { useDesktopWindowRole } from "./useDesktopWindowRole";
 import { focusExistingHuddle, huddleInOtherWindow } from "../lib/calls/huddleWindow";
 import { isNotificationLeader, voiceHostElsewhere } from "../lib/desktop";
+import { teamMembersOf } from "../lib/activeTeam";
 
 export function useWalkieStatus(): WalkieStatus {
   return useSyncExternalStore(subscribeWalkie, getWalkieStatus, getWalkieStatus);
@@ -679,7 +680,7 @@ export function senderHearingFrom(
   const { label, otherIds } = describeRoom(roomKey, state);
   const otherId = otherIds?.[0] ? String(otherIds[0]) : "";
   const member = otherId
-    ? (state.teamMembers ?? []).find((m: any) => String(m?._id) === otherId)
+    ? teamMembersOf(state).find((m: any) => String(m?._id) === otherId)
     : null;
   const out = senderHearing(
     (state.callOccupancy?.[roomKey] as { user_id?: unknown }[]) ?? [],

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { callNeedsPlace, callTitle, describeRoom, describeRoomLive } from "../calls/roomLabels";
 import { chatViewRoomKey } from "../chatViews";
+import { withTeamRoster } from "../../test-helpers/teamRoster";
 
 // One room, one name, everywhere: the dock pill, the stage header, the ring
 // toast's context line and every start button read the room through
@@ -8,12 +9,12 @@ import { chatViewRoomKey } from "../chatViews";
 
 const store = {
   currentUser: { _id: "me" },
-  teamMembers: [
+  ...withTeamRoster([
     { _id: "me", name: "Ashot P" },
     { _id: "ann", name: "Ann Lee" },
     { _id: "bo", name: "Bo Diddley" },
     { _id: "cy", name: "Cy" },
-  ],
+  ]),
   chatChannels: {
     ch1: { _id: "ch1", name: "design", kind: "public" },
     dm1: { _id: "dm1", name: "", kind: "dm" },

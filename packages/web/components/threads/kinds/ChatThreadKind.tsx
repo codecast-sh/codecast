@@ -6,6 +6,7 @@ import type { ChatAttachment } from "../../../store/chatSlice";
 import { useThreadMessages, useThreadSync } from "../../../hooks/useChatSync";
 import { channelDisplayName } from "../../../lib/chatViews";
 import { holdChatFocus } from "../../../lib/chatFocus";
+import { noteFaceContextRead } from "../../../lib/chat/faceChat";
 import type { ThreadCardModel } from "../../../lib/threadCards";
 import { rowOf } from "../../../lib/threadRows";
 import { ChatMessage, ChatNewDivider } from "../../chat/ChatMessage";
@@ -184,9 +185,12 @@ export function ChatExpanded({
   // reader is still looking (last_activity_at moves).
   useWatchEffect(() => {
     if (!seen || sync.loading) return;
+    // The replies are on screen, so the header count for them goes, whether
+    // or not the row still had a number to clear.
+    noteFaceContextRead(channelId, rootId);
     if (entry.last_read_at >= entry.last_activity_at && entry.unread === 0) return;
     useInboxStore.getState().markThreadRead("chat", rootId);
-  }, [seen, sync.loading, rootId, entry.last_activity_at, entry.last_read_at, entry.unread]);
+  }, [seen, sync.loading, rootId, channelId, entry.last_activity_at, entry.last_read_at, entry.unread]);
 
   // The thread on the reader's screen is being read: its own arrivals must not
   // toast at them.

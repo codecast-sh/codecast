@@ -12,6 +12,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { ChatAvatar } from '@/components/chat/MessageRow';
 import { isPerson } from '@codecast/shared/team/memberKind';
+import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 
 // New message: pick one teammate and land in the 1:1, or several and land in
 // the group. openDmChannel is idempotent on the member set and local-first:
@@ -29,7 +30,7 @@ export default function NewMessageScreen() {
   const huddleMode = huddle === '1';
   // The active team's roster, off the store the sync bridge feeds.
   const viewerId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : ''));
-  const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
+  const teamMembers = useInboxStore(teamMembersOf) as any[];
 
   const [q, setQ] = useState('');
   const [picked, setPicked] = useState<string[]>([]);

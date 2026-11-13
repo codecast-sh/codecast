@@ -21,6 +21,7 @@ import { PaneLoader } from "../../../components/PaneLoader";
 import { TaskListContent } from "../page";
 import { useMentionQuery, useActiveMentionScope } from "../../../hooks/useMentionQuery";
 import { useImageUpload } from "../../../hooks/useImageUpload";
+import { teamMembersOf } from "../../../lib/activeTeam";
 // TaskCommandPalette replaced by unified CommandPalette
 import { TaskDecisions } from "../../../components/decisions/TaskDecisions";
 import { useTaskIsBlocked } from "../../../hooks/useTaskDecisions";
@@ -306,7 +307,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
   // A task is only readable by its team's members, so the viewer's own team
   // list always contains the task's team.
   const currentUser = useInboxStore((s) => s.currentUser);
-  const teamMembers = useInboxStore((s) => s.teamMembers.length > 0 ? s.teamMembers : null);
+  const teamMembers = useInboxStore((s) => teamMembersOf(s).length > 0 ? teamMembersOf(s) : null);
   const teamInfo = useInboxStore((s) => (taskTeamId ? (s.teams ?? []).find((t: any) => String(t._id) === taskTeamId) ?? null : null));
   // The project this task is filed under — omitted when the surface around it is
   // already that project, so the chip never repeats the breadcrumb above it.

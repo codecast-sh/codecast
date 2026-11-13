@@ -21,6 +21,7 @@ import { memberListSig } from "../../hooks/useTeamRoster";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import "./chat.css";
 import { peopleOf } from "@codecast/shared/team/memberKind";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 type Person = {
   slack_user_id: string;
@@ -52,11 +53,11 @@ export function SlackPeopleDialog({ teamId, onClose }: { teamId: string; onClose
   // useChatChannelsSync), so the popup opens on what is already here.
   const mapPerson = useMutation(api.slackSync.mapSlackPerson);
   const s = useTrackedStore([
-    (st) => memberListSig(st.teamMembers as any),
+    (st) => memberListSig(teamMembersOf(st) as any),
     (st) => st.currentUser?._id,
     (st) => slackPeopleSig(st.chatSlackPeople, teamId),
   ]);
-  const members = peopleOf(s.teamMembers as ChatMember[]);
+  const members = peopleOf(teamMembersOf(s) as ChatMember[]);
   const me = String(s.currentUser?._id ?? "");
   const rows = useMemo(
     () => Object.values(s.chatSlackPeople ?? {}).filter((p) => p.team_id === teamId).sort(
@@ -67,7 +68,7 @@ export function SlackPeopleDialog({ teamId, onClose }: { teamId: string; onClose
   );
   // Attribution is team wide: an admin may map anyone, a member only claim
   // themselves (the server's rule in mapSlackPerson).
-  const myRole = (s.teamMembers ?? []).find((m: any) => String(m._id) === me)?.role;
+  const myRole = teamMembersOf(s).find((m: any) => String(m._id) === me)?.role;
   const isAdmin = myRole === "admin" || myRole === "owner";
   const data = { people: rows };
   const [q, setQ] = useState("");

@@ -9,6 +9,7 @@
 import { callDisplayTitle, isGuestParticipant, parseRoomKey } from "@codecast/shared/contracts";
 import { meetingTitle } from "./roomGuests";
 import { channelDisplayName } from "../chatViews";
+import { teamMembersOf } from "../activeTeam";
 
 type Store = {
   teamMembers: any[];
@@ -49,7 +50,7 @@ export type RoomDescription = {
 // huddle ("Ann, Bo").
 function peopleLabel(others: string[], s: Store): string {
   if (others.length === 0) return "Huddle";
-  return channelDisplayName({ name: "", kind: "dm", dmMemberIds: others }, s.teamMembers);
+  return channelDisplayName({ name: "", kind: "dm", dmMemberIds: others }, teamMembersOf(s));
 }
 
 /** Naming a room the viewer sees from OUTSIDE (the live-rooms lists). Two

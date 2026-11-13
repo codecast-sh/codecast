@@ -31,6 +31,7 @@ import {
   type Device,
 } from './DevicesSection';
 import { isPerson } from '@codecast/shared/team/memberKind';
+import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 
 /**
  * The unified assignment control for a session — mobile twin of the web's
@@ -86,7 +87,7 @@ export function AssignmentChip({
   // app-wide for the active team by useSyncWorkspaceData), injected into the
   // shared owners hook so the sheet opens with every name already drawn.
   const currentUser = useInboxStore((s) => s.currentUser) as any;
-  const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
+  const teamMembers = useInboxStore(teamMembersOf) as any[];
   const activeTeamId = useInboxStore((s) => (s.clientState.ui?.active_team_id ?? null)) as string | null;
   // The store binding web uses: every owner change and role move rides the one
   // reparent path, so the inbox refiles and open questions follow the owners.

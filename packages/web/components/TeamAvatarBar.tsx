@@ -21,6 +21,7 @@ import { peopleOf } from "@codecast/shared/team/memberKind";
 import { objectHref, personRefOf } from "../lib/entityLinks";
 import { FaceChatLayer } from "./faces/FaceChatLayer";
 import { useFaceChatActive } from "../lib/chat/faceChat";
+import { teamMembersOf } from "../lib/activeTeam";
 
 interface TeamAvatarBarProps {
   teamId?: Id<"teams">;
@@ -65,7 +66,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   // default team would render that team's roster inside the personal space.
   const effectiveTeamId = propTeamId ?? activeTeamId;
   // A scalar: the roster array itself re-pushes on every heartbeat.
-  const rosterCount = useInboxStore((s) => peopleOf(s.teamMembers).length);
+  const rosterCount = useInboxStore((s) => peopleOf(teamMembersOf(s)).length);
   const callsEnabled = useCallsAvailable();
   // THE ROW. One subscription, signature gated: a heartbeat, a level tick or
   // a mute that moves no face hands back the same row and this bar sleeps.
@@ -125,7 +126,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
   };
 
   const selectedMember = memberFilter
-    ? useInboxStore.getState().teamMembers.find((m: any) => String(m?._id) === memberFilter)
+    ? teamMembersOf(useInboxStore.getState()).find((m: any) => String(m?._id) === memberFilter)
     : null;
 
   // The row is floating over the work: one chip, and the pump. The chip
@@ -157,7 +158,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
         const seat = ((e.target as Element | null)?.closest?.("[data-face-id]") as HTMLElement | null) ?? null;
         const face = seat && row.entries.find((f) => f.id === seat.dataset.faceId);
         if (!face) return;
-        const member = useInboxStore.getState().teamMembers.find((m: any) => String(m?._id) === face.id);
+        const member = teamMembersOf(useInboxStore.getState()).find((m: any) => String(m?._id) === face.id);
         ctxMenu.open(e, { id: face.id, profileHref: objectHref("person", personRefOf({ _id: face.id, github_username: member?.github_username })), displayName: face.name });
       }}
     >

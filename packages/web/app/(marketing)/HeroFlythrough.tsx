@@ -19,7 +19,6 @@
 import { useRef, useState, type CSSProperties, type RefObject } from "react";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
-import { DOTS } from "./chapterDots";
 import { useHeroChapters } from "./heroFly/chapters";
 import { createFilmClock, FilmClockContext, POSTER_FRAME } from "./heroFly/filmClock";
 import { STAGE_SIZE as STAGE } from "./heroFly/project";
@@ -479,7 +478,7 @@ export function HeroFlythrough() {
                 aria-label={`Chapter ${i + 1}: ${s.name}`}
                 className="group relative flex min-h-6 w-full items-center gap-1 overflow-hidden rounded-md px-1 py-2.5 text-left transition-colors hover:bg-[#eee8d5]/70 sm:py-1.5"
               >
-                <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: DOTS[i % DOTS.length], opacity: i === scene ? 1 : 0.55 }} />
+                <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: i === scene ? "#002b36" : "#c9c2ad" }} />
                 <span
                   data-name
                   className={`overflow-hidden whitespace-nowrap text-meta ${i === scene ? "text-[#002b36]" : "text-[#93a1a1] group-hover:text-[#586e75]"}`}
@@ -494,7 +493,7 @@ export function HeroFlythrough() {
                   }}
                   className="absolute inset-x-1 bottom-0 h-[2px] origin-left rounded-full"
                   // Constant after mount (the poster's scene, not `scene`), so React never overwrites what the driver wrote.
-                  style={{ backgroundColor: DOTS[i % DOTS.length], transform: `scaleX(${i === POSTER_SCENE ? ((POSTER_T - s.start) / (s.end - s.start)).toFixed(3) : 0})` }}
+                  style={{ backgroundColor: "#002b36", transform: `scaleX(${i === POSTER_SCENE ? ((POSTER_T - s.start) / (s.end - s.start)).toFixed(3) : 0})` }}
                 />
               </button>
             </li>

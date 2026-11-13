@@ -115,7 +115,7 @@ export const PREV = {
 };
 
 export const VIEWER = {
-  model: "claude-opus-4-5",
+  model: "claude-opus-5-5",
   sarah: { _id: PEOPLE.sarah.id, name: PEOPLE.sarah.name, presence_state: "active" },
 };
 

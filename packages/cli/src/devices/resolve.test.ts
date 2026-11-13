@@ -20,10 +20,20 @@ describe("naming a machine", () => {
     expect(matchDevices(roster, "macOS - Mac-mini").map((d) => d.device_id)).toEqual(["0c621d6e4176bed7"]);
   });
 
+  test("the name a person set, and the name the list prints, each name the machine", () => {
+    const named = roster.map((d) => d.device_id === "28d80e225ed21f45" ? { ...d, display_name: "Work box" } : d);
+    expect(matchDevices(named, "Work box").map((d) => d.device_id)).toEqual(["28d80e225ed21f45"]);
+    expect(matchDevices(named, "work").map((d) => d.device_id)).toEqual(["28d80e225ed21f45"]);
+  });
+
+  test("an exact shown name wins over a longer one that contains it", () => {
+    expect(matchDevices(roster, "Mac-mini").map((d) => d.device_id)).toEqual(["0c621d6e4176bed7"]);
+  });
+
   test("an ambiguous name lists the candidates instead of guessing", () => {
-    const r = pickDevice(roster, "mac-mini");
+    const r = pickDevice(roster, "mini");
     expect("error" in r && r.error.split("\n")).toEqual([
-      'device "mac-mini" matches 2 machines; be more specific:',
+      'device "mini" matches 2 machines; be more specific:',
       "  0c621d6e  Mac-mini",
       "  6ebf36a7  Mac-mini 2  offline",
     ]);

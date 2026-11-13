@@ -15,6 +15,7 @@ import { useCallsOn, useLiveRooms } from '@/components/calls/LiveRooms';
 import { useActiveTeam, useSwitchActiveTeam } from '@/hooks/useWorkspaceArgs';
 import { getCallSnapshot, subscribeCall } from '@/lib/calls/callManager';
 import { showActionSheet } from '@/lib/popups';
+import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 
 const TEAM_ICON_EMOJI: Record<string, string> = {
   rocket: '🚀', flame: '🔥', zap: '⚡', star: '⭐', diamond: '💎', crown: '👑',
@@ -57,7 +58,7 @@ export default function ChatScreen() {
   const chatOn = teamFeatureEnabled(activeTeam as any, 'chat');
   const callsOn = useCallsOn();
 
-  const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
+  const teamMembers = useInboxStore(teamMembersOf) as any[];
   const members = useMemo(() => (teamMembers ?? []).filter(Boolean), [teamMembers]);
   const myRoomKey = useSyncExternalStore(subscribeCall, () => getCallSnapshot().roomKey, () => null);
   const liveRooms = useLiveRooms(callsOn);

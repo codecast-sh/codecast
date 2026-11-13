@@ -13,15 +13,18 @@ In the Mac app you may have the main window, a few tabs pulled out into their ow
 
 ## The sync light
 
-A small light in the header tells you whether what you see is current. Hover it for detail.
+When everything on screen matches the server, the header shows nothing. A small light appears beside the header's other controls only when something is catching up, the connection is down, or Codecast on this computer needs a look. Hover it for detail.
 
-| The light | What it means |
-|-----------|---------------|
-| Green | **Up to date.** Everything on screen matches the server |
-| Cyan, pulsing | **Syncing the latest data.** A screen is loading for the first time on this device |
-| Amber, pulsing | **Sync is slow.** Catching up has taken more than about 20 seconds. Your changes are safe and will be sent |
-| Amber, **Reconnecting** | The link to the server dropped. You're looking at your stored copy, and it will sync when the link returns |
-| **Offline** | This device has no network. Everything you've opened before is still there to read, and changes wait until you're back online |
+| The light | Hover panel says | What it means |
+|-----------|------------------|---------------|
+| None | | Up to date. Everything on screen matches the server |
+| Cyan, pulsing | **Syncing the latest data** | A screen is loading for the first time on this device |
+| Amber | **Sync is slow** | Catching up has taken more than 20 seconds. Your changes are safe and will be sent |
+| Amber | **Reconnecting** | The link to the server dropped. You're looking at your stored copy, and it syncs when the link returns |
+| Amber | **Offline** | This device has no network. Everything you've opened before is still there to read, and changes wait until you're back online |
+| Green | A problem with Codecast on this computer | Your data is in sync, but the Codecast app on this machine is stale, offline or quiet. The hover panel says which |
+
+![The sync light's hover panel reading Syncing the latest data, with each part of the workspace and whether it has caught up](/documentation/sync-engine/sync-status.webp "Hover the light to see what is still catching up.")
 
 Coming back after hours or days away, the app catches up on just what changed while you were gone. After a long absence it rebuilds the stored copy quietly in the background, adding what's missing without emptying what you already see.
 
@@ -33,6 +36,6 @@ Your device only ever receives what you're allowed to read. A task kept private 
 
 | What you notice | What to do |
 |-----------------|------------|
-| The light stays amber | Check your connection. If it's fine, reload the window; nothing you changed is lost |
+| The light stays amber | Hover it to see why, and check your connection. If it's fine, reload the window; nothing you changed is lost |
 | One window shows something different from another | Reload the window that looks stale. Windows normally agree within a moment |
 | Something still looks wrong right after codecast updated | Reload once so the window runs the newest version |

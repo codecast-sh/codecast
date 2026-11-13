@@ -32,6 +32,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { slugifyHeading } from "../../lib/vault/parseNote";
 import { filesHref } from "../../lib/vault/vaultHref";
 import { VAULT_HTML_SCHEMA, isAuthorityRelativeUrl } from "../../lib/vault/htmlPolicy";
+import { teamMembersOf } from "../../lib/activeTeam";
 // Render-time-only cycle with VaultHoverPreview (it renders VaultMarkdown
 // inside the card); safe because neither module touches the other at eval.
 import { useHoverPreview } from "./VaultHoverPreview";
@@ -132,7 +133,7 @@ function WikiLinkAnchor({ href, children }: { href: string; children: React.Reac
  *  the handle is readable on its own. */
 function PersonPill({ username }: { username: string }) {
   const member = useInboxStore((s) =>
-    (s.teamMembers || []).find(
+    teamMembersOf(s).find(
       (m: any) => (m.github_username || "").toLowerCase() === username.toLowerCase(),
     ),
   );

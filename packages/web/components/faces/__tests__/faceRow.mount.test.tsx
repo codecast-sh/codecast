@@ -12,6 +12,8 @@ import { act } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../../test-helpers/globals";
 import { closeDomWindow } from "../../../test-helpers/domGlobals";
+import { FIXTURE_TEAM, withTeamRoster } from "../../../test-helpers/teamRoster";
+import { stampRoster } from "../../../lib/activeTeam";
 import type { FaceCard, FaceEntry, FaceRow as FaceRowModel, FaceState, Link, LinkKind } from "../../../lib/faces/faceRow";
 import type { PushToTalk } from "../../../hooks/useWalkie";
 
@@ -162,11 +164,11 @@ let host: HTMLElement | null = null;
 beforeEach(() => {
   useInboxStore.setState({
     currentUser: { _id: ME, name: "Me" },
-    teamMembers: [
+    ...withTeamRoster([
       { _id: ME, name: "Me", presence_state: "active", status: "available" },
       { _id: ANN, name: "Ann", presence_state: "active", github_username: "ann" },
       { _id: BO, name: "Bo", presence_state: "active", github_username: "bo" },
-    ],
+    ], { clientState: useInboxStore.getState().clientState }),
     followLeaderId: null,
   } as any);
 });
@@ -464,7 +466,7 @@ describe("a face opens one card", () => {
 
   test("an agent's face is marked and its card offers no call or message", async () => {
     useInboxStore.setState({
-      teamMembers: [...useInboxStore.getState().teamMembers, { _id: "u-head", name: "Chief", is_bot: true, bot_kind: "anchor" }],
+      teamMembers: [...useInboxStore.getState().teamMembers, ...stampRoster([{ _id: "u-head", name: "Chief", is_bot: true, bot_kind: "anchor" }], FIXTURE_TEAM)],
     } as any);
     const h = await mount(bar(rowOf([entry("u-head", "Chief", { bot: true })])));
     expect(h.circle("u-head").getAttribute("data-bot")).toBe("1");

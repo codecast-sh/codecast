@@ -41,6 +41,7 @@ import { setCamera } from "../lib/calls/callManager";
 import { soundWalkieJoined } from "../lib/sounds";
 import { announceJoin, theyJoinedText } from "../lib/calls/joinAnnounce";
 import { useNowWhen } from "./useCoarseNow";
+import { teamMembersOf } from "../lib/activeTeam";
 
 const api = _api as any;
 
@@ -115,7 +116,7 @@ export function useWalkieSync(): void {
   // One object, changing exactly when the engine's answer could change: a new
   // burst, one ending, or the door opening or closing under the person's feet.
   const report = useMemo(() => {
-    const members = useInboxStore.getState().teamMembers ?? [];
+    const members = teamMembersOf(useInboxStore.getState());
     const rows: LiveBurstRow[] = (bursts ?? []).map((b: any) => ({
       messageId: String(b.message_id),
       channelId: String(b.channel_id),
@@ -255,7 +256,7 @@ function joinerName(room: string): string {
     (m) => !!m?.walkie_joined_at && String(m?.user_id ?? "") !== me,
   );
   if (!seat) return "";
-  const member = (st.teamMembers ?? []).find((m: any) => String(m?._id) === String(seat.user_id ?? ""));
+  const member = teamMembersOf(st).find((m: any) => String(m?._id) === String(seat.user_id ?? ""));
   return memberDisplayName(member, seat.user_name ?? "");
 }
 

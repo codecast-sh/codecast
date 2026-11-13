@@ -12,19 +12,39 @@ export interface NamedDevice {
   platform?: string;
   is_remote?: boolean;
   online?: boolean;
+  /** A name a person set. Matched on its own and as the name the list prints. */
+  display_name?: string | null;
+  cloud_host?: { name?: string | null } | null;
 }
 
-/** Every device the needle names. An exact id or label wins outright, so a
- *  label that is a substring of another ("Mac-mini" vs "Mac-mini 2") stays reachable. */
+function shownName(d: NamedDevice): string {
+  return deviceDisplayName({
+    label: d.label ?? "",
+    platform: d.platform ?? "",
+    is_remote: d.is_remote,
+    display_name: d.display_name,
+    cloud_host: d.cloud_host,
+  });
+}
+
+/** Every device the needle names. An exact id, label, or shown name wins
+ *  outright, so a name that is a substring of another ("Mac-mini" vs
+ *  "Mac-mini 2") stays reachable. */
 export function matchDevices<T extends NamedDevice>(devices: T[], needle: string): T[] {
   const n = needle.trim().toLowerCase();
   if (!n) return [];
-  const exact = devices.filter((d) => d.device_id.toLowerCase() === n || String(d.label ?? "").toLowerCase() === n);
+  const exact = devices.filter((d) =>
+    d.device_id.toLowerCase() === n ||
+    String(d.label ?? "").toLowerCase() === n ||
+    String(d.display_name ?? "").trim().toLowerCase() === n ||
+    shownName(d).toLowerCase() === n);
   if (exact.length) return exact;
   return devices.filter((d) =>
     d.device_id.toLowerCase().startsWith(n) ||
     String(d.label ?? "").toLowerCase().includes(n) ||
+    String(d.display_name ?? "").toLowerCase().includes(n) ||
     String(d.hostname ?? "").toLowerCase().includes(n) ||
+    shownName(d).toLowerCase().includes(n) ||
     (n === "cloud" && !!d.is_remote));
 }
 

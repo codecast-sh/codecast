@@ -20,6 +20,7 @@ import "./chat.css";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { hoverFocus } from "../../shortcuts/focusSource";
+import { teamMembersOf } from "../../lib/activeTeam";
 const api = _api as any;
 
 // Chat search.
@@ -134,7 +135,7 @@ export function ChatSearch({
   const router = useRouter();
   const now = useCoarseNow(30_000);
   const authorLookups = useChatAuthorLookups();
-  const teamMembers = useInboxStore((s) => s.teamMembers) as ChatMember[];
+  const teamMembers = useInboxStore(teamMembersOf) as ChatMember[];
   const viewer = useInboxStore((s) => (s as any).currentUser?._id ?? "");
   const teamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as string | undefined;
 

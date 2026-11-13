@@ -1,4 +1,5 @@
 import { FACE_CARD_WIDTH } from "../../lib/faces/layout";
+import { teamMembersOf } from "../../lib/activeTeam";
 // THE ONE CARD UNDER A FACE (pl-756 F8).
 //
 // A face on the row is the picture; this card is everything else about the
@@ -55,7 +56,7 @@ export function FaceCard({
   onOpenProfile?: (member: any) => void;
   onClose: () => void;
 }) {
-  const member = useInboxStore((s) => s.teamMembers.find((m: any) => String(m?._id) === memberId) ?? null);
+  const member = useInboxStore((s) => teamMembersOf(s).find((m: any) => String(m?._id) === memberId) ?? null);
   if (!member) return null;
   return (
     <ErrorBoundary name="member card" level="inline">

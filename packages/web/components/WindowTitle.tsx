@@ -8,6 +8,7 @@ import { pathLabel } from "../lib/pathLabel";
 import { tabTitle } from "../lib/tabTitle";
 import { activeWorkspaceKey } from "../lib/workspaceScope";
 import { useInboxStore } from "../store/inboxStore";
+import { teamMembersOf } from "../lib/activeTeam";
 
 // The window title's one writer, as a leaf: the title moves with every
 // session switch and every mention, and that must not re-render the shell.
@@ -41,7 +42,7 @@ function useWindowTitle(path: string) {
     const sessionId = inboxish ? s.currentSessionId ?? undefined : undefined;
     // The same arguments the tab strip passes, so a tab and its window name a
     // goal, role, project or person the same way.
-    const rest = tabTitle({ id: "window", path, sessionId, title: "", createdAt: 0 }, s.sessions, s.chatChannels, s.teamMembers, s.currentUser?._id, s.initiatives, activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id), s);
+    const rest = tabTitle({ id: "window", path, sessionId, title: "", createdAt: 0 }, s.sessions, s.chatChannels, teamMembersOf(s), s.currentUser?._id, s.initiatives, activeWorkspaceKey(s.clientState.ui?.active_team_id, s.currentUser?._id), s);
     // An object on the Org screen sits on the Org surface once its name is
     // known ("Codecast Org | Win the private network"); its kind and handle
     // ("Goal in-1") stand in only until the store holds the row.

@@ -6,6 +6,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { FollowPill } from "../presence/FollowPill";
 
 import { closeDomWindow } from "../../test-helpers/domGlobals";
+import { withTeamRoster } from "../../test-helpers/teamRoster";
 const dom = new JSDOM("<!doctype html><html><body></body></html>");
 const restoreGlobals = replaceGlobals({
   window: dom.window,
@@ -45,7 +46,7 @@ describe("FollowPill", () => {
   });
 
   test("following: the leader's face, the name, a stop that ends the follow, and the blocked wording", async () => {
-    useInboxStore.setState({ followLeaderId: "u-ann", teamMembers: [ann] } as any);
+    useInboxStore.setState({ followLeaderId: "u-ann", ...withTeamRoster([ann], { clientState: useInboxStore.getState().clientState }) } as any);
     const r = await render();
     expect(r.container.querySelector("[data-sv-follow-pill='following']")).not.toBeNull();
     expect(r.container.textContent).toContain("Following Ann");

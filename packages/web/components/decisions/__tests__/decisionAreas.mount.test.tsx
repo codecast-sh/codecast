@@ -2,6 +2,7 @@ import { afterAll, beforeEach, expect, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../../test-helpers/globals";
+import { withTeamRoster } from "../../../test-helpers/teamRoster";
 
 // The Team view's area controls (DecisionAreas.tsx). Change areas shows the
 // current map, maps the words through the server (stubbed here) into a
@@ -49,12 +50,12 @@ beforeEach(() => {
   w.document.body.innerHTML = "";
   useInboxStore.setState({
     currentUser: { _id: "u1", name: "Ashot" },
-    teamMembers: [
+    ...withTeamRoster([
       { _id: "u1", name: "Ashot", role: "admin", focus_project_ids: [] },
       { _id: "u2", name: "Samvit", role: "member", focus_project_ids: ["p1"] },
       { _id: "u3", name: "Jason", role: "member", focus_project_ids: [] },
       { _id: "b1", name: "Mr Bot", role: "member", is_bot: true, focus_project_ids: ["p1"] },
-    ],
+    ], { team: "t1", clientState: useInboxStore.getState().clientState }),
     projects: { p1: { _id: "p1", title: "Deal flow" }, p2: { _id: "p2", title: "Desk" } },
     applyDecisionAreas: (...args: any[]) => applied.push(args),
     shareOutDecisions: (...args: any[]) => shared.push(args),

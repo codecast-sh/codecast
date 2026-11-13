@@ -47,6 +47,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { modernTab, modernTabList } from "../../../components/ui/modernLook";
+import { teamMembersOf } from "../../../lib/activeTeam";
 
 const api = _api as any;
 
@@ -136,7 +137,7 @@ export default function PlanDetailPage() {
   // show here until the query re-runs. Overlay the live store rows (canonical
   // helper) so dragged cards, status circles, assignee avatars, the progress
   // bar and the plan status pill all update instantly — same as PlanDetailPanel.
-  const teamMembers = useInboxStore((s) => s.teamMembers);
+  const teamMembers = useInboxStore(teamMembersOf);
   const currentUser = useInboxStore((s) => s.currentUser);
   // The one plan row the address names (by id or short id), not the whole
   // plans collection.

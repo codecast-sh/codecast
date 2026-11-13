@@ -256,13 +256,13 @@ export default function PricingPage() {
 
   const assistantTrack = (
     <>
-      {/* The Codecast assistant: the hosted plans for people who do not
+      {/* Cast: the hosted plans for people who do not
           write code. Every figure and word comes from the PLANS catalog
           through the same plan words Settings > Plan shows. */}
       <section id="assistant" className="max-w-6xl mx-auto px-6 pb-20 scroll-mt-24">
         <div className="text-center max-w-2xl mx-auto mb-10" style={{ fontFamily: UI }}>
           <h2 className="text-[32px] leading-tight mb-3" style={{ color: "var(--pd-ink, #1f1a14)", fontFamily: READ, fontWeight: 500 }}>
-            The Codecast assistant
+            Cast
           </h2>
           <p className="text-lg leading-relaxed" style={{ color: "var(--pd-ink-muted, #6b6152)" }}>
             {/* What it does, once: the hero (or the developer hero) already

@@ -54,6 +54,7 @@ import { TaskHrefProvider } from "../../../lib/taskHrefContext";
 import { findEntityInStore } from "../../../lib/liveEntities";
 import { PageHeader } from "../../../components/ui/page-header";
 import { PlaceCrumbs } from "../../../components/nav/PlaceCrumbs";
+import { windowOrgTree } from "../../../store/orgSlice";
 
 const api = _api as any;
 
@@ -155,7 +156,7 @@ function ProjectDetailContent() {
   const updateProject = useInboxStore((s) => s.updateProject);
   const taskPlace = useProjectTaskPlace(projectRef);
   // Whether the project has a main session (its Inbox count leaves it out).
-  const hasMain = useInboxStore((s) => (storeProject ? !!projectDefaultSessionOf(storeProject, s.sessions, s.orgTree?.roles as any) : false));
+  const hasMain = useInboxStore((s) => (storeProject ? !!projectDefaultSessionOf(storeProject, s.sessions, windowOrgTree(s)?.roles as any) : false));
   // Open tasks, for the Tasks row of the views menu.
   const openTasks = useInboxStore((s) => openTaskCount(s.tasks, projectId));
   // A project opened from another workspace: its tasks, plans, docs and line

@@ -8,6 +8,7 @@ import type { ChatMember } from "../lib/chatViews";
 
 import { useWatchEffect } from "./useWatchEffect";
 import { memberListSig } from "./useTeamRoster";
+import { teamMembersOf } from "../lib/activeTeam";
 // Typing presence, client half. Deliberately OUTSIDE the store: these rows
 // live for seconds, nothing persists them, and their only reader is the
 // composer strip of the channel on screen. Running them through syncTable/IDB
@@ -108,11 +109,11 @@ export function useTypingMembers(
   // The roster's identity fields (what the strip renders), not the array a
   // teammate's presence moves about once a minute each.
   const s = useTrackedStore([
-    (st: any) => memberListSig(st.teamMembers),
+    (st: any) => memberListSig(teamMembersOf(st)),
     (st: any) => st.currentUser?._id,
   ]);
   const viewerId = String(s.currentUser?._id ?? "");
-  const members: ChatMember[] = s.teamMembers ?? [];
+  const members: ChatMember[] = teamMembersOf(s);
   const rosterSig = memberListSig(members);
 
   const wantKey = threadRootId ?? "";

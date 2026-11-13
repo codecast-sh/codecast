@@ -17,6 +17,7 @@ import { namedLead } from "./lineData";
 import { personFacts, roleFacts, type LinePerson } from "./lineFacts";
 import { useLineTree } from "./lineTree";
 import { useIdentityPrefs } from "../../../hooks/useIdentityPrefs";
+import { teamMembersOf } from "../../../lib/activeTeam";
 
 type Named = { kind: OrgObjectKind; ref: string; title: string };
 const projectSig = (p: ProjectItem) => `${p.title}|${p.status}|${p.short_id ?? ""}|${p.owner_role_id ?? ""}|${p.color ?? ""}|${p.target_date ?? ""}`;
@@ -68,7 +69,7 @@ export function usePersonHead(ref: string | null) {
   const memberSig = useInboxStore((s) => {
     if (!key) return "";
     const low = key.toLowerCase();
-    const m = ((s.teamMembers ?? []) as MemberRow[]).find((x) => String(x._id) === key || x.github_username?.toLowerCase() === low);
+    const m = (teamMembersOf(s) as MemberRow[]).find((x) => String(x._id) === key || x.github_username?.toLowerCase() === low);
     return m ? JSON.stringify([String(m._id), m.name ?? "", m.image ?? m.github_avatar_url ?? "", m.github_username ?? "", m.joined_at ?? 0]) : "";
   });
   return useMemo(() => {

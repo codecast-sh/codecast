@@ -25,6 +25,7 @@ import { useInboxStore } from "../../../../../store/inboxStore";
 import type { LineViewProps } from "../types";
 import { useFinders, type FinderSignal } from "./FindTable";
 import "./finder.css";
+import { teamMembersOf } from "../../../../../lib/activeTeam";
 
 /** How many findings a group shows before "Show more". */
 const PAGE = 30;
@@ -155,7 +156,7 @@ function TeamAsks({ asks, open, toggle, who, tasks, onProblem, problemHref }: {
 }) {
   const now = Date.now();
   const causes = useMemo(() => askCauses(asks), [asks]);
-  const members = useInboxStore((st) => st.teamMembers) as Array<{ _id: string; name?: string | null }> | undefined;
+  const members = useInboxStore(teamMembersOf) as Array<{ _id: string; name?: string | null }> | undefined;
   const me = useInboxStore((st) => st.currentUser?._id ?? null);
   const [making, setMaking] = useState<AskCause<FinderSignal & AskSignal> | null>(null);
   const [made, setMade] = useState<Record<string, { id: string; ref: string | null } | { error: string }>>({});

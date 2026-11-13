@@ -23,6 +23,7 @@ import { ImageViewer } from '@/components/chat/ImageViewer';
 import { TypingRow } from '@/components/chat/TypingRow';
 import type { ChatAttachmentArg } from '@/components/chat/chatUpload';
 import { appAlert } from '@/lib/popups';
+import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 
 // One thread: the root as the subject, the replies under it, and a composer
 // that says out loud when a plain reply will reach the anchor. That hint comes
@@ -50,7 +51,7 @@ export default function ChatThreadScreen() {
   const rootRow = useInboxStore((s) => s.chatMessages[rootId]) as any;
   const channelId = (rootRow?.channel_id ?? channelParam) as string | undefined;
   const channel = useInboxStore((s) => (channelId ? s.chatChannels[channelId] : undefined)) as any;
-  const teamMembers = useInboxStore((s) => s.teamMembers) as any[];
+  const teamMembers = useInboxStore(teamMembersOf) as any[];
   const muted = useInboxStore((s) => (channelId ? selectThreadMuted(s, channelId, rootId) : false));
   const memberById = useMemo(() => {
     const map = new Map<string, any>();

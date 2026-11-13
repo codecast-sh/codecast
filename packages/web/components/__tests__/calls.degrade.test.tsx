@@ -12,7 +12,8 @@
 //               forever; the record button and the rest of the page stay
 // Run: cd packages/web && bun test --isolate components/__tests__/calls.degrade.test.tsx
 import { expect, test } from "bun:test";
-import { describeFailures, fixtureId, installDom, installMissingBackend, seedViewer } from "../../test-helpers/missingBackend";
+import { describeFailures, fixtureId, installDom, installMissingBackend, seedViewer, TEAM_ID } from "../../test-helpers/missingBackend";
+import { stampRoster } from "../../lib/activeTeam";
 
 const TEAMMATE = fixtureId("degradeteammate");
 
@@ -26,7 +27,7 @@ const { default: CallsPage } = await import("../../app/calls/page");
 const store = useInboxStore.getState();
 store.syncTable("teamMembers", [
   ...(store.teamMembers as any[]),
-  { _id: TEAMMATE, name: "Sam Teammate", email: "sam@degrade.test", role: "member", presence_state: "active" },
+  ...stampRoster([{ _id: TEAMMATE, name: "Sam Teammate", email: "sam@degrade.test", role: "member", presence_state: "active" }], TEAM_ID),
 ] as any);
 
 test("the calls page and the face row render through every missing query", async () => {

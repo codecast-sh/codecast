@@ -2,22 +2,24 @@ A Claude plan has usage windows: one that resets every five hours and one that r
 
 Codecast treats a limit as a pause with a known end. The session is parked, and once you turn recovery on, it continues on its own: at the reset, or right away on another Claude account you've saved that still has room. You choose which, per computer. Recovery is off until you do. Agents also stop wrapping up early when a limit is near, so the room you have left gets used.
 
-![A usage limit card in a conversation, and the same card once the session continued](/documentation/usage-limits/limit-card.webp "Top: the session window closed on the work account; the machine resumes at the reset, and the button would continue on the personal account now. Bottom: the same card once the session moved on.")
+![A usage limit card in a conversation, and the same card once the session continued](/documentation/usage-limits/limit-card.webp "A Usage limit card while the session is parked, and once it continued.")
 
 ## Turn it on
 
-1. Open **Agent features** from your account menu and pick the computer.
-2. Switch on **Usage limits**, under *Hands on the machine*.
+1. Open **Settings** and choose **Agent Features** under *Machines*, then pick the computer.
+2. Find **Usage limits** under *Hands on the machine*, switch it on, and confirm with **Turn on Usage limits**.
 
 It turns itself on when a computer has more than one saved Claude account, because a limit is then only a short pause. The card's **How it works** shows what it changes.
 
-![The Usage limits detail in Agent features](/documentation/usage-limits/limits-feature.webp "The Usage limits detail. Parked sessions resume at the reset, or move to a saved account with room.")
+![The Usage limits detail in Agent features](/documentation/usage-limits/limits-feature.webp "The Usage limits detail in Agent features.")
 
 ## Save more than one account
 
-Open **Settings → Claude Accounts**. Each computer has its own section listing the Claude accounts saved on it, with how much of each window they have used and a **Switch** button.
+Open **Settings** and choose **Claude Accounts** under *Machines*. Each computer has its own section listing the Claude accounts saved on it, with how much of each window they have used and a **Switch** button.
 
-Codecast saves every Claude account you sign in to automatically. To add one, sign in to that account in Claude Code on the computer (run `claude`, then `/login`); within about 30 seconds it appears on the page. If a **New login** row appears instead, give it a name and click **Save as profile**.
+![Claude Accounts: one computer's saved accounts with their Session and Week usage and a Switch button](/documentation/usage-limits/accounts.webp "Each computer's saved Claude accounts and how much room each has.")
+
+Codecast saves every Claude account you sign in to automatically. Adding one is the one step that happens in a terminal: on that computer, run `claude /login` and pick the other account (the **Add another account** section on the page has the command to copy). Within about 30 seconds it appears on the page. If a **New login** row appears instead, give it a name and click **Save as profile**.
 
 **Switch** moves the computer to that account. Sessions already running keep the account they started on until they restart.
 
@@ -25,7 +27,7 @@ Codecast saves every Claude account you sign in to automatically. To add one, si
 
 At the top of each computer's section on the same page, **When a session stops on its own** sets one choice per computer. It covers every time codecast would type "continue" for you: after a usage limit, after an API or connection error, and after the agent crashed mid-turn.
 
-![The four recovery choices on the Claude Accounts page](/documentation/usage-limits/recovery-mode.webp "One choice per computer. Changing accounts moves every session on that computer, because it runs one Claude login at a time.")
+![The four recovery choices on the Claude Accounts page](/documentation/usage-limits/recovery-mode.webp "One choice per computer, for every session on it.")
 
 | Choice | What codecast does |
 |--------|-----------|
@@ -59,6 +61,10 @@ Codex accounts show in the header chip with their 5 hour and weekly windows, and
 | What you notice | What to do |
 |-----------------|------------|
 | An account shows **login expired** | Click **sign in again** on its row |
-| A session stays parked after the reset | Click **Continue** on its card, or check that the computer isn't set to **Do nothing** |
-| A switch never happens | Save a second account, and set the computer to **Switch automatically** or approve the proposal on the card |
+| A session stays parked after the reset | Click **Continue** on its card, or check that the computer isn't set to **Never continue for me** |
+| A switch never happens | Save a second account, and set the computer to **Continue, and switch accounts automatically**, or approve the proposal on the card |
 | The header says no Claude account is connected | Sign in to Claude Code on that computer |
+
+## For agents and scripts
+
+`cast usage` shows each account's windows, their reset times and which recovery is on.

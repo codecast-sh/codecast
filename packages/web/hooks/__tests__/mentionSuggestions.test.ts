@@ -3,6 +3,7 @@ import { buildMentionItems, chatMentionOffers, mentionItemMatches } from "../use
 import { mergeMentionSuggestions, mentionViewTimes } from "../../lib/mentionRanking";
 import type { MentionItem } from "../../components/editor/MentionList";
 import { useInboxStore } from "../../store/inboxStore";
+import { withTeamRoster } from "../../test-helpers/teamRoster";
 
 const item = (id: string, type = "session", updatedAt = 0): MentionItem => ({ id, type, label: `Mention ${id}`, updatedAt });
 
@@ -75,7 +76,7 @@ describe("mention suggestions", () => {
 
   test("a Slack-only person whose handle a teammate answers to is that teammate's row", () => {
     const state = {
-      teamMembers: [{ _id: "bot1", name: "Aivery", is_bot: true }],
+      ...withTeamRoster([{ _id: "bot1", name: "Aivery", is_bot: true }], { team: "team" }),
       chatSlackPeople: {
         U1: { slack_user_id: "U1", team_id: "team", name: "Aivery", handle: "aivery" },
         U2: { slack_user_id: "U2", team_id: "team", name: "Dana", handle: "dana" },

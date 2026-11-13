@@ -18,6 +18,7 @@ import { useLeaderView } from "./useFollowSurface";
 import { toast } from "sonner";
 import { memberDisplayName } from "../components/presence/memberPresence";
 import { firstName } from "../components/calls/speakers";
+import { teamMembersOf } from "../lib/activeTeam";
 
 // Follow mode, both sides, mounted once in the dashboard.
 //
@@ -98,7 +99,7 @@ export function useFollowMode(): void {
     const st = useInboxStore.getState();
     // The leader stopped sharing their view with this window's person.
     if (view.ended) {
-      const leader = st.teamMembers.find((m: any) => String(m?._id) === leaderId);
+      const leader = teamMembersOf(st).find((m: any) => String(m?._id) === leaderId);
       st.setFollowLeader(null);
       toast(`${firstName(memberDisplayName(leader))} stopped sharing their view`);
       return;
