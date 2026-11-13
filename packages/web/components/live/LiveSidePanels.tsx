@@ -2,7 +2,10 @@
 // version history. Both read the store through the live hooks.
 import { useMemo, useRef, useState } from "react";
 import { Bot, Check, History, Link2, Pencil, Plus, RotateCcw, Trash2, X } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
+import { cleanTitle } from "../../lib/conversationProcessor";
+import { copyText } from "../../lib/copyText";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
 import { artifactSpec, artifactView, type ArtifactElement } from "@codecast/shared/artifacts";
@@ -173,7 +176,14 @@ export function CommentsPanel({
       )}
       <div className="flex-1 overflow-y-auto">
         {shown.length === 0 && <div className="px-3 py-6 text-center text-xs text-sol-text-dim">{tab === "open" ? "No open comments" : "Nothing resolved"}</div>}
-        {shown.map(({ root, replies }) => (
+        {/* Open threads whose element was deleted sit under their own heading, so the tab's count matches the list above it. */}
+        {[...shown].sort((a, b) => Number(tab === "open" && anchorOf(a.root) === null) - Number(tab === "open" && anchorOf(b.root) === null)).map(({ root, replies }, i, all) => (
+          <div key={root.key}>
+          {tab === "open" && anchorOf(root) === null && (i === 0 || anchorOf(all[i - 1].root) !== null) && (
+            <div className="px-3 pt-3 pb-1 text-meta text-sol-text-dim" data-live-detached-heading>
+              {String(root.anchor ?? "").startsWith("c:") ? "Cell" : "Element"} deleted <span className="tabular-nums">{all.length - i}</span>
+            </div>
+          )}
           <Thread
             key={root.key}
             doc={doc}
@@ -187,6 +197,7 @@ export function CommentsPanel({
             anchor={anchorOf(root)}
             onReopened={() => { setTab("open"); onFocus(root.key, anchorOf(root) ?? undefined); }}
           />
+          </div>
         ))}
       </div>
     </div>
@@ -231,9 +242,7 @@ function Thread({ doc, live, me, root, replies, focused, readOnly, onFocus, onRe
   const edit = (c: ArtifactElement, text: string) => live.apply([{ k: c.key, set: { text, edited_at: Date.now() } }], { layer: "comments", undoable: false });
   const copyLink = () => {
     const url = sharePageUrl(`/docs/${live.docId}?c=${root.key}`);
-    void Promise.resolve(navigator.clipboard?.writeText(url))
-      .then(() => toast.success("Link to comment copied"))
-      .catch(() => toast.error("Could not copy the link", { description: url }));
+    void copyText(url, "Link to comment copied");
   };
   return (
     <div
@@ -269,7 +278,7 @@ function Thread({ doc, live, me, root, replies, focused, readOnly, onFocus, onRe
               } else {
                 // Painted at once with the viewer as resolver; the server stamps the same.
                 setRoot({ resolved: true, resolved_by_name: meName ?? "You", resolved_at: Date.now() });
-                toast("Thread resolved", { id: toastId, action: { label: "Undo", onClick: () => setRoot({ resolved: null }) } });
+                toast("Thread resolved", { id: toastId, action: { label: "Undo", onClick: () => { setRoot({ resolved: null }); onReopened(); } } });
               }
             }}
             className="inline-flex items-center gap-1 h-6 px-1.5 rounded text-meta text-sol-text-dim hover:text-sol-green hover:bg-sol-green/10"
@@ -332,14 +341,25 @@ function AnchorLabel({ docId, anchor, inline = false }: { docId: string; anchor:
   return <div className="mb-1 text-meta text-sol-text-dim truncate" data-live-comment-anchor>on {words}</div>;
 }
 
-/** Where an ask stands: with the agent, or answered in this thread. */
+/** Where an ask stands: with which agent (a link to it), or answered in this thread. */
 function AskState({ root }: { root: ArtifactElement }) {
   const answered = !!root.answered_at;
-  return (
-    <div className={`mt-1 inline-flex items-center gap-1 h-5 px-1.5 rounded text-meta ${answered ? "bg-sol-green/10 text-sol-green" : "bg-sol-violet/10 text-sol-violet"}`} data-live-ask-state={answered ? "answered" : "working"}>
-      <Bot className="w-3 h-3" />
-      {answered ? `Answered · ${String(root.answered_by_name ?? "agent")}` : "With agent"}
-    </div>
+  const sentTo = typeof root.sent_to === "string" ? root.sent_to : "";
+  const title = useInboxStore((s: any) => {
+    const c = s.conversations?.[sentTo] ?? s.sessions?.[sentTo];
+    return typeof c?.title === "string" ? c.title : undefined;
+  });
+  // A composer hand-off has no session until the person sends it from there.
+  const words = answered
+    ? `Answered by ${String(root.answered_by_name ?? (title ? cleanTitle(title) : "an agent"))}`
+    : sentTo === "compose" ? "In the composer" : `With ${title ? cleanTitle(title) : "an agent"}`;
+  const cls = `mt-1 inline-flex items-center gap-1 h-5 px-1.5 rounded text-meta max-w-full ${answered ? "bg-sol-green/10 text-sol-green" : "bg-sol-violet/10 text-sol-violet"}`;
+  const body = (<><Bot className="w-3 h-3 shrink-0" /><span className="truncate">{words}</span></>);
+  // The session it went to opens from here (a composer hand-off has none yet).
+  return sentTo && sentTo !== "compose" ? (
+    <Link href={`/conversation/${sentTo}`} onClick={(e) => e.stopPropagation()} className={`${cls} hover:underline`} data-live-ask-state={answered ? "answered" : "working"}>{body}</Link>
+  ) : (
+    <div className={cls} data-live-ask-state={answered ? "answered" : "working"}>{body}</div>
   );
 }
 
@@ -364,7 +384,7 @@ function CommentLine({ docId, c, anchor = c.anchor ? String(c.anchor) : undefine
   return (
     <div>
       <div className="flex items-center gap-1.5 text-meta">
-        <span className={`font-medium truncate min-w-0 ${String(c.author ?? "").startsWith("s:") ? "text-sol-violet" : "text-sol-text"}`}>{String(c.author_name ?? "Someone")}</span>
+        <span className={`font-medium truncate shrink-0 max-w-[55%] ${String(c.author ?? "").startsWith("s:") ? "text-sol-violet" : "text-sol-text"}`}>{String(c.author_name ?? "Someone")}</span>
         {anchor === null ? <span className="text-sol-text-dim italic shrink-0" data-live-comment-detached>its {c.anchor && String(c.anchor).startsWith("c:") ? "cell" : "element"} was deleted</span> : null}{anchor ? <AnchorLabel docId={docId} anchor={anchor} inline /> : null}
         <span className="flex-1" />
         <CommentTime ts={Number(c.created_at ?? c.at ?? 0)} edited={!!c.edited_at} />
@@ -395,6 +415,8 @@ function CommentLine({ docId, c, anchor = c.anchor ? String(c.anchor) : undefine
         <div onClick={(e) => e.stopPropagation()}>
           <textarea
             autoFocus
+            // The caret starts after the words, ready to add to them.
+            onFocus={(e) => { const n = e.currentTarget.value.length; e.currentTarget.setSelectionRange(n, n); }}
             data-live-comment-edit
             value={draft}
             rows={Math.min(6, Math.max(2, draft.split("\n").length))}

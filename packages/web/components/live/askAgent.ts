@@ -149,7 +149,9 @@ export async function sendAsk(doc: AskDoc, req: AskRequest, target: AskTarget): 
   const projectPath = doc.project_path || doc.git_root;
   if (!projectPath) {
     // The composer is its own review: the person picks the project and presses send. The words moved there.
+    // The thread shows it is with an agent; the agent's reply names which (liveComments rebinds "compose").
     store.openCompose(brief, {});
+    record("compose");
     settleDraft(doc, req.slot, true);
     return null;
   }
@@ -159,6 +161,10 @@ export async function sendAsk(doc: AskDoc, req: AskRequest, target: AskTarget): 
   }
   const { stubId } = spawnSessionWithPrompt({ prompt: brief, projectPath, failureLabel: "Failed to start the agent" });
   record(stubId);
+  // The stub becomes a real session: the thread points at that one, so its link opens it.
+  void store.awaitConvexId(stubId).then((real: string) => {
+    if (real && real !== stubId) sendLiveOps(doc._id, "comments", [{ k: thread, set: { sent_to: real } }]);
+  }).catch(() => {});
   toast.success("Agent started");
   settleDraft(doc, req.slot, true);
   return stubId;
