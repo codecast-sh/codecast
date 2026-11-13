@@ -3,6 +3,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useShortcutAction } from "../shortcuts";
 import { X, ChevronUp, ChevronDown } from "lucide-react";
+import { findTextRanges, setHighlight } from "../lib/textFind";
 
 const HIGHLIGHT_NAME = "find-results";
 const HIGHLIGHT_ACTIVE = "find-active";
@@ -18,26 +19,6 @@ function injectHighlightStyles() {
   document.head.appendChild(style);
 }
 
-function findTextRanges(query: string): Range[] {
-  if (!query) return [];
-  const ranges: Range[] = [];
-  const lower = query.toLowerCase();
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  while (walker.nextNode()) {
-    const node = walker.currentNode as Text;
-    const text = node.textContent?.toLowerCase() || "";
-    let idx = 0;
-    while ((idx = text.indexOf(lower, idx)) !== -1) {
-      const range = new Range();
-      range.setStart(node, idx);
-      range.setEnd(node, idx + query.length);
-      ranges.push(range);
-      idx += query.length;
-    }
-  }
-  return ranges;
-}
-
 export function FindBar() {
   const [visible, setVisible] = useState(false);
   const [query, setQuery] = useState("");
@@ -51,8 +32,8 @@ export function FindBar() {
   });
 
   const clearHighlights = useCallback(() => {
-    (CSS as any).highlights?.delete(HIGHLIGHT_NAME);
-    (CSS as any).highlights?.delete(HIGHLIGHT_ACTIVE);
+    setHighlight(HIGHLIGHT_NAME, []);
+    setHighlight(HIGHLIGHT_ACTIVE, []);
     rangesRef.current = [];
     setMatchCount(0);
     setActiveIndex(-1);
@@ -61,13 +42,13 @@ export function FindBar() {
   const highlightAll = useCallback((text: string) => {
     clearHighlights();
     if (!text || !(CSS as any).highlights) return;
-    const ranges = findTextRanges(text);
+    const ranges = findTextRanges(document.body, text);
     rangesRef.current = ranges;
     setMatchCount(ranges.length);
     if (ranges.length > 0) {
-      (CSS as any).highlights.set(HIGHLIGHT_NAME, new (window as any).Highlight(...ranges));
+      setHighlight(HIGHLIGHT_NAME, ranges);
       setActiveIndex(0);
-      (CSS as any).highlights.set(HIGHLIGHT_ACTIVE, new (window as any).Highlight(ranges[0]));
+      setHighlight(HIGHLIGHT_ACTIVE, [ranges[0]]);
       const rect = ranges[0].getBoundingClientRect();
       if (rect.top < 0 || rect.bottom > window.innerHeight) {
         ranges[0].startContainer.parentElement?.scrollIntoView({ block: "center" });
@@ -80,7 +61,7 @@ export function FindBar() {
     if (ranges.length === 0) return;
     const next = (activeIndex + delta + ranges.length) % ranges.length;
     setActiveIndex(next);
-    (CSS as any).highlights?.set(HIGHLIGHT_ACTIVE, new (window as any).Highlight(ranges[next]));
+    setHighlight(HIGHLIGHT_ACTIVE, [ranges[next]]);
     const rect = ranges[next].getBoundingClientRect();
     if (rect.top < 0 || rect.bottom > window.innerHeight) {
       ranges[next].startContainer.parentElement?.scrollIntoView({ block: "center" });

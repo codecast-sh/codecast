@@ -1,0 +1,83 @@
+/* The calls list's search (CallSearch.tsx). */
+.cs-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 6px 0 9px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--sol-text) 5%, transparent);
+  box-shadow: inset 0 0 0 1px transparent;
+  transition: box-shadow 120ms, background 120ms;
+}
+.cs-field:hover {
+  background: color-mix(in srgb, var(--sol-text) 8%, transparent);
+}
+.cs-field:focus-within {
+  background: var(--sol-card);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-cyan) 55%, transparent);
+}
+.modern-style .cs-field {
+  border-radius: var(--radius-control);
+  background-color: color-mix(in srgb, var(--sol-text) 6%, transparent);
+}
+.modern-style .cs-field:focus-within {
+  background-color: var(--sol-card);
+  box-shadow: 0 0 0 1px var(--sol-border), 0 0 0 3px color-mix(in srgb, var(--focus-ring) 35%, transparent);
+}
+
+/* What matched inside a found call, under its row: one line per hit, the
+   offset into the call on the left like the transcript's own clock. */
+.cs-hits {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin-top: -6px;
+  padding: 0 8px 8px 14px;
+}
+.cs-hit {
+  display: flex;
+  gap: 8px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--sol-text-muted);
+  transition: background 120ms, color 120ms;
+}
+.cs-hit:hover {
+  background: color-mix(in srgb, var(--sol-text) 6%, transparent);
+  color: var(--sol-text);
+}
+.cs-hit-time {
+  flex-shrink: 0;
+  min-width: 34px;
+  text-align: right;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  color: var(--sol-text-dim);
+}
+.cs-hit-text {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.cs-mark {
+  border-radius: 2px;
+  padding: 0 1px;
+  background: color-mix(in srgb, var(--sol-yellow) 30%, transparent);
+  color: var(--sol-text);
+}
+.cs-searching {
+  animation: cs-breathe 1.2s ease-in-out infinite alternate;
+}
+@keyframes cs-breathe {
+  from { opacity: 0.45; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cs-searching { animation: none; }
+}

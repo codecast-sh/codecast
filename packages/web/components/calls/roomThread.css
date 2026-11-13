@@ -233,6 +233,95 @@
   box-shadow: 0 1px 0 color-mix(in srgb, var(--sol-text) 14%, transparent);
 }
 
+/* Find in the call (ThreadFind.tsx): a tray the height of the words control,
+   wider while it holds a query or the caret. Its matches paint through the
+   Highlight API, so the thread's text nodes are never touched. */
+.rt-find {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 26px;
+  width: 132px;
+  padding: 0 3px 0 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--sol-text) 5%, transparent);
+  box-shadow: inset 0 0 0 1px transparent;
+  color: var(--sol-text-muted);
+  transition: width 180ms cubic-bezier(0.23, 1, 0.32, 1), box-shadow 120ms, background 120ms;
+}
+.rt-find:hover {
+  background: color-mix(in srgb, var(--sol-text) 8%, transparent);
+}
+.rt-find:focus-within,
+.rt-find[data-filled] {
+  width: 248px;
+}
+.rt-find:focus-within {
+  background: var(--sol-card);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-cyan) 55%, transparent);
+}
+.rt-find-icon {
+  flex-shrink: 0;
+  margin-right: 4px;
+}
+.rt-find-input {
+  min-width: 0;
+  flex: 1;
+  background: transparent;
+  outline: none;
+  font-size: var(--fs-meta);
+  color: var(--sol-text);
+}
+.rt-find-input::placeholder {
+  color: var(--sol-text-dim);
+}
+.rt-find-count {
+  flex-shrink: 0;
+  padding: 0 4px;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+  color: var(--sol-text-muted);
+}
+.rt-find-none {
+  color: var(--sol-red);
+}
+.rt-find-btn {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--sol-text-muted);
+  transition: color 120ms, background 120ms;
+}
+.rt-find-btn:hover:not(:disabled) {
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--sol-text) 10%, transparent);
+}
+.rt-find-btn:disabled {
+  opacity: 0.35;
+}
+.rt-find-btn:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--sol-cyan) 60%, transparent);
+  outline-offset: 1px;
+}
+::highlight(rt-find-hit) {
+  background-color: color-mix(in srgb, var(--sol-yellow) 30%, transparent);
+  color: var(--sol-text);
+}
+::highlight(rt-find-current) {
+  background-color: var(--sol-orange);
+  color: var(--sol-bg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .rt-find {
+    transition: none;
+  }
+}
+
 /* ── The list ───────────────────────────────────────────────────────────── */
 
 /* The list scrolls one way. A scroller with overflow-y auto is scrollable
@@ -912,6 +1001,9 @@ button.rt-event-agent:hover {
 .modern-style .rt-seg-btn { height: 24px; border-radius: 4px; }
 .modern-style .rt-seg-btn[aria-checked="true"] { background-color: var(--sol-card); box-shadow: 0 0 0 1px var(--sol-border); }
 .modern-style .rt-seg-btn-labeled { font-weight: 500; }
+.modern-style .rt-find { height: 28px; border-radius: var(--radius-control); background-color: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.modern-style .rt-find:focus-within { background-color: var(--sol-card); box-shadow: 0 0 0 1px var(--sol-border), 0 0 0 3px color-mix(in srgb, var(--focus-ring) 35%, transparent); }
+.modern-style .rt-find-input { font-family: var(--font-ui, system-ui, sans-serif); }
 .modern-style .rt-btn { height: var(--control-md); padding: 0 14px; border-radius: var(--radius-control); }
 .modern-style .rt-btn:focus-visible,
 .modern-style .rt-seg-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }

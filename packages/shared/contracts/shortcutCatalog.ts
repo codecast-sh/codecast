@@ -155,6 +155,7 @@ export type ShortcutAction =
   | 'vault.quickSwitch'
   | 'vault.search'
   | 'vault.find'
+  | 'call.find'
   | 'vault.toggleEdit'
   | 'vault.sourceMode'
   | 'evals.attribute'
@@ -361,6 +362,9 @@ export const SHORTCUTS: ShortcutDef[] = [
   // through to find.toggle, or to the browser) whenever no note is on screen
   // in reading mode.
   { key: 'ctrl+f', mac: 'meta+f', action: 'vault.find', skipInputCheck: true, description: 'Find in note' },
+  // Find in the open call's thread: it unfolds the passages that hold a
+  // match, which page find cannot. Declines whenever no call page is on screen.
+  { key: 'ctrl+f', mac: 'meta+f', action: 'call.find', skipInputCheck: true, description: 'Find in call' },
   { key: 'meta+f', action: 'find.toggle', when: 'desktop', skipInputCheck: true, description: 'Find in page' },
   // History back/forward, desktop only: in a browser tab these chords belong
   // to the browser, which walks its own history. Mac takes the browser
