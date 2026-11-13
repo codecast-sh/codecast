@@ -326,6 +326,7 @@ function CardShell({
     <div
       role="button"
       tabIndex={0}
+      data-feature-card={slug}
       onClick={onOpen}
       onKeyDown={(e) => {
         if ((e.key === "Enter" || e.key === " ") && e.target === e.currentTarget) {

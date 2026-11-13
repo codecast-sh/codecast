@@ -1,15 +1,13 @@
 // The Convex client both fixture modes hand the app (the phone's store shots,
 // the web docs shots): no socket ever opens. The few queries screens still
 // subscribe to directly answer from the Acme world (./world); every other
-// watch stays loading, and mutations and actions resolve null, so nothing
-// reaches a server. Modeled on the homepage film's stub (web heroFly
+// watch stays loading, and mutations and actions resolve null unless the world
+// answers them by name, so nothing reaches a server. Modeled on the homepage film's stub (web heroFly
 // convexStub.ts). Mobile's Metro reaches this file, so imports stay relative.
 
 import type { ConvexReactClient } from "convex/react";
 import { getFunctionName } from "convex/server";
-import { CHANGES_ANSWERS } from "./changes";
-import { EXTRA_ANSWERS } from "./extras";
-import { PLAN_ANSWERS } from "./plans";
+import { ACME_PARTS } from "./parts";
 import { CAPTIONS, CURRENT_USER } from "./world";
 
 const noop = () => {};
@@ -24,9 +22,7 @@ export const ACME_ANSWERS: AcmeAnswers = {
   "transcripts:getLive": () => CAPTIONS(Date.now()),
   "calls:getMyCalls": () => ({ incoming: [], outgoing: [], membership: null }),
   "users:getCurrentUser": () => CURRENT_USER(Date.now()),
-  ...CHANGES_ANSWERS,
-  ...EXTRA_ANSWERS,
-  ...PLAN_ANSWERS,
+  ...Object.assign({}, ...ACME_PARTS.map((p) => p.answers ?? {})),
 };
 
 export function createAcmeConvex(answers: AcmeAnswers = ACME_ANSWERS): ConvexReactClient {
@@ -37,6 +33,13 @@ export function createAcmeConvex(answers: AcmeAnswers = ACME_ANSWERS): ConvexRea
   // new fixture screen needs (`__acmeAsked` from a console).
   const asked = new Map<string, boolean>();
   (globalThis as any).__acmeAsked = asked;
+  const answerOf = (fn: unknown) => {
+    try {
+      return answers[getFunctionName(fn as never)];
+    } catch {
+      return undefined;
+    }
+  };
   const watch = (query: unknown, args?: unknown) => {
     let name = "";
     try {
@@ -61,8 +64,10 @@ export function createAcmeConvex(answers: AcmeAnswers = ACME_ANSWERS): ConvexRea
     watchQuery: watch,
     watchPaginatedQuery: watch,
     query: async (q: unknown, args?: unknown) => watch(q, args).localQueryResult() ?? null,
-    mutation: async () => null,
-    action: async () => null,
+    // A write the world answers by name (a command id a screen then watches) gets
+    // that answer, unmemoized; every other write resolves null.
+    mutation: async (m: unknown, args?: unknown) => answerOf(m)?.(args ?? {}) ?? null,
+    action: async (a: unknown, args?: unknown) => answerOf(a)?.(args ?? {}) ?? null,
     prewarmQuery: noop,
     connectionState: () => ({ hasInflightRequests: false, isWebSocketConnected: true, timeOfOldestInflightRequest: null, hasEverConnected: true, connectionCount: 1, connectionRetries: 0, inflightMutations: 0, inflightActions: 0 }),
     subscribeToConnectionState: () => noop,

@@ -6,7 +6,7 @@
 
 import { placeInboxRows, sessionPlacement, useInboxStore } from "../../store/inboxStore";
 import { stampRoster } from "../activeTeam";
-import { seedAcmeExtras } from "./extras";
+import { ACME_PARTS } from "./parts";
 import {
   API_TRANSCRIPT,
   CHANNELS,
@@ -37,7 +37,7 @@ function write(label: string, fn: () => void) {
  *  session screen reads. */
 export function stampAcmeSessions(now: number) {
   const st = useInboxStore.getState();
-  const inbox = INBOX(now);
+  const inbox = [...INBOX(now), ...ACME_PARTS.flatMap((p) => p.sessions?.(now) ?? [])];
   st.syncTable("sessions", inbox);
   for (const row of inbox) st.syncRecord("conversations", row._id, row);
 }
@@ -64,10 +64,11 @@ export function seedAcmeWorld({ now = Date.now(), ui = {}, extra = {} }: { now?:
   // Liveness decays: a working row whose heartbeat is older than the trust
   // window reads as stopped (shared/contracts/agentStatus.ts), and a session
   // screen quiet for 5 minutes offers to resume. Re-stamp the sessions so the
-  // world always stands at "now", however long a capture takes.
-  setInterval(() => stampAcmeSessions(Date.now()), 15_000);
+  // world always stands at "now", however long a capture takes. A scene that
+  // empties the inbox (a fresh account) sets __acmeHoldSessions to keep it empty.
+  setInterval(() => (globalThis as any).__acmeHoldSessions || stampAcmeSessions(Date.now()), 15_000);
   write("messages", () => s.applyTailMessages(SESSIONS.api._id, 0, API_TRANSCRIPT(now) as any, null));
-  write("extras", () => seedAcmeExtras(s, now));
+  for (const part of ACME_PARTS) if (part.seed) write(part.name, () => part.seed!(s, now));
 
   write("chatChannels", () =>
     s.syncTable(
