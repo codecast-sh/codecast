@@ -49,6 +49,7 @@ function VideoTrack(props: any) {
 import { Track } from "livekit-client";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Text } from "@/components/Themed";
+import { StatusBar } from "expo-status-bar";
 // The call stage is always dark (Solarized base03), whatever the app scheme:
 // its `Theme.bgAlt` reads are light-on-dark contrast, so pin the light palette.
 import { SolarizedLight as Theme } from "@/constants/Theme";
@@ -167,6 +168,7 @@ export default function CallScreen() {
   if (call.phase === "error") {
     return (
       <View style={[styles.root, { paddingTop: insets.top }]}>
+        <StatusBar style="light" />
         <View style={styles.header}>
           <Text style={styles.headerTitle}>huddle</Text>
         </View>
@@ -202,6 +204,8 @@ export default function CallScreen() {
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
+      {/* The stage is always dark, so the clock and battery are light on any phone scheme. */}
+      <StatusBar style="light" />
       <RingBanner ring={ring} top={insets.top + 6} onJoin={onJoinRing} onDecline={onDeclineRing} switching />
       {/* Header: room context + collapse. */}
       <View style={styles.header}>

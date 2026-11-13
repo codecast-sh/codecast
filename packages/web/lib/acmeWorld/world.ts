@@ -1,19 +1,28 @@
-// The Acme workspace the App Store screenshots show: the same story, people
-// and words as the homepage film (packages/web heroFly fixtures/story.ts,
-// team.ts, work.ts, phone.ts), laid out for the phone's screens. Mirrored
-// here rather than imported: those files sit under a web route, which the
-// native bundle may never reach (lib/bundleGraph.guard.test.ts).
+// The Acme workspace: the fixture world both apps render with no server, for
+// public images. The phone's store shots (packages/mobile/lib/storeShots) and
+// the web docs shots (../docsShots) seed it into the shared store through
+// ./seed. It tells the same story, with the same people and words, as the
+// homepage film (app/(marketing)/heroFly/fixtures), mirrored rather than
+// imported: those files sit under a web route, which the native bundle may
+// never reach (packages/mobile/lib/bundleGraph.guard.test.ts). Mobile's Metro
+// reaches this file too, so its imports stay relative (root CLAUDE.md).
 //
 // Every id is `hero-*`, never Convex-shaped, so nothing here can resolve to
 // a real row. Times are offsets from `now`, taken when the world is seeded.
 
 import { FACES } from "./faces";
 
-const MIN = 60_000;
-const HOUR = 60 * MIN;
+export const MIN = 60_000;
+export const HOUR = 60 * MIN;
 const DAY = 24 * HOUR;
 
-export const TEAM_ID = "hero-team-acme";
+/** A Convex-shaped id (32 lowercase letters and digits). Session and team ids need
+ *  the shape: the inbox treats any other id as a create it is still waiting on and
+ *  shows it as working (store/inboxOverlays.ts), and team feeds skip any
+ *  other team id. Safe here, with no server. */
+export const cid = (name: string) => `hero${name.replace(/[^a-z0-9]/g, "")}`.padEnd(32, "0").slice(0, 32);
+
+export const TEAM_ID = cid("teamacme");
 export const WORKSPACE = `team:${TEAM_ID}`;
 
 export const PEOPLE = {
@@ -46,7 +55,16 @@ export const CURRENT_USER = (now: number) => ({
   status: "available",
 });
 
-export const TEAMS = [{ _id: TEAM_ID, name: "Acme", features: { chat: true, calls: true }, role: "admin" }];
+// A settled team: every feature decided, so no screen offers to turn one on.
+export const TEAMS = [
+  {
+    _id: TEAM_ID,
+    name: "Acme",
+    timezone: "UTC",
+    features: { chat: true, calls: true, org: true, line: true, changes: true, agent_faces: true, agent_realtime: true, ship: true, member_spend: false },
+    role: "admin",
+  },
+];
 
 export const TEAM_MEMBERS = (now: number) =>
   Object.values(PEOPLE).map((p: Person) => ({
@@ -64,11 +82,6 @@ export const TEAM_MEMBERS = (now: number) =>
   }));
 
 /* ── Sessions ──────────────────────────────────────────────────────────── */
-
-/** A Convex-shaped id (32 lowercase letters and digits). Session ids need the
- *  shape: the inbox treats any other id as a create it is still waiting on and
- *  shows it as working (store/inboxOverlays.ts). Safe here, with no server. */
-const cid = (name: string) => `hero${name.replace(/[^a-z0-9]/g, "")}`.padEnd(32, "0").slice(0, 32);
 
 export const SESSIONS = {
   api: { _id: cid("sapi"), short_id: "jx7d2wk", title: "Webhook API half", agent_type: "codex" },
@@ -172,6 +185,8 @@ export const INBOX = (now: number) => [
     project: "~/src/billing",
     messages: 64,
     state: "Retry queue is in, workers on the API and the dashboard\nStatus: 14 of 16 tests green",
+    // Shared with the whole team, with a link already made (the share sheet's full state).
+    extra: { is_private: false, team_visibility: "full", share_token: "acme-retry-webhooks" },
   }),
   session(now, SESSIONS.ui, {
     ago: 40_000,
@@ -316,7 +331,8 @@ export const ENG_MESSAGES = (now: number) =>
     },
     { id: "hero-m-7", who: PEOPLE.maya, ago: 40_000, content: "I'll point support at the retry queue once it ships." },
   ].map((m) => ({
-    _id: m.id,
+    // Convex-shaped: a chat line with any other id reads as an unsent stub (store/chatSlice chatSendState).
+    _id: cid(m.id),
     team_id: TEAM_ID,
     channel_id: "hero-ch-eng",
     user_id: m.who._id,
@@ -327,9 +343,9 @@ export const ENG_MESSAGES = (now: number) =>
   }));
 
 export const ENG_REACTIONS = (now: number) => [
-  { _id: "hero-r-1", message_id: "hero-m-6", channel_id: "hero-ch-eng", user_id: PEOPLE.sarah._id, emoji: "🎉", created_at: now - 90_000 },
-  { _id: "hero-r-2", message_id: "hero-m-6", channel_id: "hero-ch-eng", user_id: PEOPLE.maya._id, emoji: "🙌", created_at: now - 80_000 },
-  { _id: "hero-r-3", message_id: "hero-m-6", channel_id: "hero-ch-eng", user_id: PEOPLE.jordan._id, emoji: "🎉", created_at: now - 70_000 },
+  { _id: "hero-r-1", message_id: cid("hero-m-6"), channel_id: "hero-ch-eng", user_id: PEOPLE.sarah._id, emoji: "🎉", created_at: now - 90_000 },
+  { _id: "hero-r-2", message_id: cid("hero-m-6"), channel_id: "hero-ch-eng", user_id: PEOPLE.maya._id, emoji: "🙌", created_at: now - 80_000 },
+  { _id: "hero-r-3", message_id: cid("hero-m-6"), channel_id: "hero-ch-eng", user_id: PEOPLE.jordan._id, emoji: "🎉", created_at: now - 70_000 },
 ];
 
 const RAIL_PREVIEWS: Record<string, { who: string; preview: string; ago: number; agent?: boolean }> = {
@@ -343,13 +359,31 @@ const RAIL_PREVIEWS: Record<string, { who: string; preview: string; ago: number;
   "hero-dm-maya": { who: PEOPLE.jordan._id, preview: "Load test numbers are in, sharing in #agents", ago: 50 * MIN },
 };
 
+/** Each room's newest line as a held message: the rail's preview, time and
+ *  unread state come from the rows a client holds (store/chatSlice.ts), so a
+ *  room with only a server summary reads "No messages yet". #eng holds its own. */
+export const RAIL_MESSAGES = (now: number) =>
+  CHANNELS.filter((c) => c._id !== "hero-ch-eng").map((c) => {
+    const p = RAIL_PREVIEWS[c._id];
+    return {
+      _id: cid(`${c._id}-last`),
+      team_id: TEAM_ID,
+      channel_id: c._id,
+      user_id: p.who,
+      content: p.preview,
+      created_at: now - p.ago,
+      updated_at: now - p.ago,
+      ...(p.agent ? LEAD_AUTHOR : { author_kind: "user" as const }),
+    };
+  });
+
 export const CHAT_RAIL = (now: number) =>
   CHANNELS.map((c) => {
     const p = RAIL_PREVIEWS[c._id];
     return {
       channel_id: c._id,
       last_message: {
-        _id: `${c._id}-last`,
+        _id: cid(`${c._id}-last`),
         user_id: p.who,
         created_at: now - p.ago,
         preview: p.preview,
@@ -397,11 +431,47 @@ export const CAPTIONS = (now: number) => ({
 
 /* ── Tasks ─────────────────────────────────────────────────────────────── */
 
-const PLAN = { _id: "hero-plan-1", short_id: "pl-312", title: "Webhook reliability" };
+const PLAN = { _id: cid("planwebhooks"), short_id: "pl-312", title: "Webhook reliability" };
 const info = (p: Person) => ({ _id: p._id, name: p.name, image: p.image, github_avatar_url: p.image });
 
+/** The plan's document: what the plan page shows under its charter. */
+const PLAN_DOC = `## Why
+
+Support saw two Stripe events dropped overnight. Both failed on a 502 from the ledger during its restart, and nothing tried them again. A customer whose webhook fails once should never have to notice.
+
+## What ships
+
+- **Retry queue.** A failed delivery is retried with exponential backoff (2s, 4s, 8s, 16s, with jitter), at most 5 attempts.
+- **Signed payloads.** Every event carries an HMAC signature so a receiver can verify it.
+- **Dead letters.** An event that fails all 5 attempts lands in a dead-letter queue with its last response.
+- **Dashboard.** Each failed webhook shows its attempt history and a retry button.
+
+## Open questions
+
+- Does a 410 Gone count as a failed delivery? Asked in the Webhook API half session.
+`;
+
 export const PLANS = (now: number) => [
-  { _id: PLAN._id, short_id: PLAN.short_id, title: PLAN.title, status: "active", goal: "No webhook is ever dropped", workspace: WORKSPACE, team_id: TEAM_ID, created_at: now - 3 * DAY, updated_at: now - 10 * MIN },
+  {
+    _id: PLAN._id,
+    short_id: PLAN.short_id,
+    title: PLAN.title,
+    status: "active",
+    goal: "No webhook is ever dropped: every failed delivery is retried until it lands or is dead-lettered",
+    priority: "p1",
+    success_metrics: ["0 dropped events in a week of ledger restarts", "95% of retries land by the second attempt"],
+    non_goals: ["Changing the webhook payload format"],
+    acceptance_criteria: ["A failed delivery retries at most 5 times with backoff", "Every payload is signed", "Support can see and retry any failed webhook"],
+    doc_id: cid("docwebhookplan"),
+    doc_content: PLAN_DOC,
+    created_from_conversation_id: SESSIONS.lead._id,
+    conversation_ids: [SESSIONS.lead._id, SESSIONS.api._id, SESSIONS.ui._id],
+    author: info(PEOPLE.me),
+    workspace: WORKSPACE,
+    team_id: TEAM_ID,
+    created_at: now - 3 * DAY,
+    updated_at: now - 10 * MIN,
+  },
 ];
 
 export const TASKS = (now: number) => {

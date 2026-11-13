@@ -14,6 +14,7 @@ import { parseSessionQuery, sessionQuerySearches } from "@codecast/shared/search
 import { rememberedResult, useQueryNoThrow } from "./useQueryNoThrow";
 import { useWatchEffect } from "./useWatchEffect";
 import { mergeSearchRows } from "../lib/instantSessionSearch";
+import { useInboxStore } from "../store/inboxStore";
 
 export function useRemoteSearch(query: string, opts: {
   enabled: boolean;
@@ -29,12 +30,18 @@ export function useRemoteSearch(query: string, opts: {
   /** Sessions active since this time. */
   since?: number;
   sort?: "recent" | "relevance";
-  /** One team's sessions instead of every workspace the viewer reads. */
+  /** The team whose sessions to search; unset searches the active team (or
+   *  the personal workspace when none is active). */
   activeTeamId?: string | null;
+  /** Every team the viewer belongs to; each row carries its team. */
+  allTeams?: boolean;
   debounceMs?: number;
 }) {
-  const { enabled, chatTeamId, limit = 10, chatLimit = 5, userOnly, mineOnly, since, sort, activeTeamId, debounceMs = 250 } = opts;
-  const filters = { ...(mineOnly ? { mineOnly } : {}), ...(since ? { since } : {}), ...(activeTeamId ? { activeTeamId: activeTeamId as any } : {}) };
+  const { enabled, chatTeamId, limit = 10, chatLimit = 5, userOnly, mineOnly, since, sort, allTeams, debounceMs = 250 } = opts;
+  // One workspace per search: the named team, else the one the viewer is in.
+  const workspaceTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as string | undefined;
+  const teamId = allTeams ? null : (opts.activeTeamId ?? workspaceTeamId ?? null);
+  const filters = { ...(mineOnly ? { mineOnly } : {}), ...(since ? { since } : {}), ...(teamId ? { activeTeamId: teamId as any } : {}), ...(allTeams ? { allTeams } : {}) };
   const contentArgs = (q: string) => ({ query: q, limit, ...filters, ...(userOnly ? { userOnly } : {}), ...(sort && sort !== "recent" ? { sort } : {}) });
   const titleArgs = (q: string) => ({ query: q, limit, ...filters });
 
