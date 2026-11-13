@@ -55,6 +55,7 @@ import { siteUrl } from "./lib/siteUrl";
 import { movedFields, type OrgLogFields } from "@codecast/shared/contracts/orgChange";
 import { labelsOf, noteOrgChange, noteRoleChange, recordSubject, roleSubject, whereOfRecord, whereOfRole, withOrgChange } from "./lib/orgChangeLog";
 import { capsFor, countersNow, roleStartsOnItsOwn, trustOf } from "./lib/orgCaps";
+import { cliDocWriter, docRevision, writeDocBody } from "./lib/docBody";
 import { COMPANY_REVIEW_EVERY_MS, COMPANY_REVIEW_PROMPT, COMPANY_REVIEW_TITLE, ROLE_CHECK_EVERY_MS, ROLE_CHECK_PROMPT, findRoleNeedsInputTrigger, findRoleRoutine, findRoleRoutineInAnyStatus, isLiveTrigger, liveRoutinesOf, roleRoutineFor } from "./lib/orgRoutine";
 import { autonomyChangeWords, defaultTrustFor, switchFromStageWord, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 
@@ -1955,7 +1956,7 @@ export const markBriefRead = internalMutation({
 
 // brief edit — the narrative from stdin; its first line mirrors into the
 // standing session's thread state (the same four fields stateCommand writes).
-export async function performBriefEdit(ctx: any, userId: Id<"users">, args: { role_id: string; content: string; from_session?: string }): Promise<any> {
+export async function performBriefEdit(ctx: any, userId: Id<"users">, args: { role_id: string; content: string; from_session?: string; base?: string; force?: boolean }): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "access");
   // Who may write: the role's own standing session, or a person who can
   // reshape the role (its parent side).
@@ -1973,14 +1974,21 @@ export async function performBriefEdit(ctx: any, userId: Id<"users">, args: { ro
   if (isOwnSession && budget.over) throw new Error(briefOverBudgetMessage(budget));
   const now = Date.now();
   let briefDocId = role.brief_doc_id;
-  if (!briefDocId) {
+  const briefDoc = briefDocId ? await ctx.db.get(briefDocId) : null;
+  let revision = docRevision(content, 0);
+  if (!briefDoc) {
     briefDocId = await insertRoleDoc(ctx, userId, role, "brief", `Brief: ${role.name}`, content);
     await ctx.db.patch(role._id, { brief_doc_id: briefDocId, updated_at: now });
   } else {
-    await ctx.db.patch(briefDocId, { content, updated_at: now });
+    // `base` is the revision `cast brief` handed out: a person editing the
+    // brief, or another session's save, since then refuses this one.
+    ({ revision } = await writeDocBody(ctx, briefDoc, { content, title: briefDoc.title }, {
+      writer: await cliDocWriter(ctx, userId, args.from_session), base: args.base, force: args.force, requireBase: true,
+      reread: `re-read it with \`cast brief${role.handle ? ` @${role.handle}` : ""}\``,
+    }));
   }
   const mirror = await mirrorBriefState(ctx, role, content);
-  return { role_id: role._id, brief_doc_id: briefDocId, ...mirror };
+  return { role_id: role._id, brief_doc_id: briefDocId, brief_revision: revision, ...mirror };
 }
 
 // tune — a role changes how its own check runs (org-staffing.md S38): how
@@ -2272,7 +2280,7 @@ export const tuneRoutine = mutation({
   handler: async (ctx, { api_token, ...args }) => performTuneRoutine(ctx, await requireCaller(ctx, api_token), args),
 });
 export const briefEdit = mutation({
-  args: { api_token: v.optional(v.string()), role_id: v.string(), content: v.string(), from_session: v.optional(v.string()) },
+  args: { api_token: v.optional(v.string()), role_id: v.string(), content: v.string(), from_session: v.optional(v.string()), base: v.optional(v.string()), force: v.optional(v.boolean()) },
   handler: async (ctx, { api_token, ...args }) => performBriefEdit(ctx, await requireCaller(ctx, api_token), args),
 });
 export const selfForSession = query({
