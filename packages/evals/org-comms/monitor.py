@@ -16,7 +16,7 @@ docs/architecture/agent-comms.md.
         [--user <users id>] [--account <profile>] [--model <id>] [--skip-export]
 
 Whose sessions to read is a Convex users id, given as --user or in
-$CODECAST_ORG_COMMS_USER; it is never written in this file. The first column
+$CODECAST_ORG_COMMS_USER, else the baseline's own user; it is never written in this file. The first column
 of every report is $CODECAST_EVALS_HOME/org-comms/baseline.json (the
 2026-10-06 measurement); the run stops before it exports anything when that
 file is absent.
@@ -132,18 +132,58 @@ def fill_long_lived(convs, short, msgs, user):
     return len(want)
 
 
-def saw_guidance(session_id, transcripts):
-    """Whether a session's start actually showed it the org guidance: Claude
-    Code cuts start-hook output over about 9.8KB to a preview, and a session
-    whose transcript is not on this machine cannot be told."""
-    f = transcripts.get(session_id or "")
-    if not f: return "unknown"
-    head = ""
-    with open(f, errors="ignore") as fh:
-        for i, line in enumerate(fh):
-            if i > 40: break
-            head += line
-    return "saw" if "org-context" in head and "Output too large" not in head else "did not see"
+# The stable-context budget that keeps the org block out of Claude Code's cut
+# shipped in CLI v1.1.179 (2026-10-15 23:27 UTC); before it, 702 of 748 starts
+# were cut to a preview that ended before the org block.
+GUIDANCE_FIX_MS = int(datetime.datetime(2026, 10, 15, 23, 27, tzinfo=datetime.timezone.utc).timestamp() * 1000)
+# Claude Code shows start-hook output whole up to about 9.8KB, a preview past it.
+HOOK_CUT_BYTES = 9_800
+
+
+def load_injections(path):
+    """conversation_id -> what the stable-context hook recorded injecting at
+    the session's start (conversation_context.stable_context), feed cards left out."""
+    out = {}
+    for r in load_jsonl(path):
+        try: d = json.loads(r.get("stable_context") or "{}")
+        except Exception: continue
+        out[r["conversation_id"]] = {k: d.get(k) for k in ("injected_at", "org", "bytes")}
+    return out
+
+
+def saw_guidance(conv, transcripts, injections):
+    """Whether a session's start actually showed it the org guidance: the
+    SessionStart hook's output held the whole <org-context> block and Claude
+    Code did not cut it to a preview ("Output too large").
+
+    Read from, in order:
+    1. the transcript, when it is on this machine: the SessionStart hook's
+       own output, as Claude Code recorded it;
+    2. the injection record the hook writes for every session it runs in
+       (conversation_context): exact when it carries `org`/`bytes` (CLIs after
+       2026-11-13); on older records, a record injected after the budget fix
+       counts as saw and one before it as did not see. Checked against 4,919
+       sessions whose transcripts gave the real answer (2026-11-13): the
+       record agreed on every session that had one (4,631 of 4,631);
+    3. no record: unknown. In the same check 287 of 288 sessions without a
+       record had seen it (their record writes were lost on 2026-11-10), so a
+       missing record says nothing either way."""
+    f = transcripts.get(conv.get("session_id") or "")
+    if f:
+        hook = ""
+        with open(f, errors="ignore") as fh:
+            for i, line in enumerate(fh):
+                if i > 60: break
+                if '"SessionStart"' not in line: continue
+                try: a = json.loads(line).get("attachment") or {}
+                except Exception: continue
+                if a.get("hookEvent") == "SessionStart": hook += str(a.get("content") or a.get("stdout") or "")
+        return "saw" if "</org-context>" in hook and "Output too large" not in hook else "did not see"
+    rec = injections.get(conv.get("_id"))
+    if not rec: return "unknown"
+    if rec.get("org") is not None:
+        return "saw" if rec["org"] and (rec.get("bytes") or 0) <= HOOK_CUT_BYTES else "did not see"
+    return "saw" if (rec.get("injected_at") or 0) >= GUIDANCE_FIX_MS else "did not see"
 
 
 def call_model(run_dir, prompt, system, model, account):
@@ -172,6 +212,7 @@ def main():
     ap.add_argument("--model", default="claude-opus-5-5")
     ap.add_argument("--skip-export", action="store_true")
     a = ap.parse_args()
+    if not a.user and os.path.exists(BASELINE): a.user = json.load(open(BASELINE)).get("user")
     if not a.user: sys.exit(f"monitor.py: no user. Pass --user <users id> or set {USER_ENV} to the Convex users id whose sessions to read.")
     if not os.path.exists(BASELINE): sys.exit(f"monitor.py: {BASELINE} is missing. The baseline report is private and lives in EVALS_HOME, not in git; copy it there before running.")
 
@@ -187,6 +228,9 @@ def main():
         # weeks of every user's sessions in late October); fill_long_lived
         # places the older senders.
         convex_data("conversations", 100000, os.path.join(exp, "convs.jsonl"))
+        # Every session's injection record: the guidance split's source for
+        # senders whose transcript is not on this machine (saw_guidance).
+        convex_data("conversation_context", 100000, os.path.join(exp, "injections.jsonl"))
 
     keep = ["_id", "_creationTime", "short_id", "title", "user_id", "parent_conversation_id", "spawned_by_conversation_id", "standing_role_id", "org_role_id", "session_id"]
     convs = {r["_id"]: {k: r.get(k) for k in keep} for r in load_jsonl(os.path.join(exp, "convs.jsonl"))}
@@ -269,9 +313,13 @@ def main():
         outs = list(ex.map(lambda i: call_model(os.path.join(run, "label", f"b{i:02d}"), "\n\n".join(c for _, c in batches[i]), system, a.model, a.account), range(len(batches))))
     rel_of = {m["_id"]: m["rel"] for m in sample}
     transcripts = {os.path.basename(f)[:-6]: f for f in glob.glob(os.path.expanduser("~/.claude/projects/*/*.jsonl"))}
+    injections = load_injections(os.path.join(exp, "injections.jsonl")) if os.path.exists(os.path.join(exp, "injections.jsonl")) else {}
     def sender_saw(m):
-        cands = [c for c in short.get(m["sender"], []) if c.get("session_id")]
-        return saw_guidance(cands[0]["session_id"], transcripts) if cands else "unknown"
+        # The row names the sending conversation in full; older rows only by
+        # short id, which can name several sessions (the person's own first).
+        fid = m.get("from_conversation_id")
+        cands = [convs.get(fid) or {"_id": fid}] if fid else sorted(short.get(m["sender"], []), key=lambda c: c.get("user_id") != a.user)
+        return saw_guidance(cands[0], transcripts, injections) if cands else "unknown"
     seen_of = {m["_id"]: sender_saw(m) for m in sample}
     labels = [dict(x, rel=rel_of.get(x.get("id")), guidance=seen_of.get(x.get("id"))) for o in outs if o for x in o]
     json.dump(labels, open(os.path.join(run, "labels.json"), "w"), indent=1)
