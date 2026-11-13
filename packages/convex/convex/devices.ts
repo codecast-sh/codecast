@@ -1187,6 +1187,9 @@ export const listDevices = query({
       .map((d: any) => ({
         device_id: d.device_id,
         label: d.label,
+        display_name: d.display_name ?? undefined,
+        icon: d.icon ?? undefined,
+        icon_color: d.icon_color ?? undefined,
         platform: d.platform,
         hostname: d.hostname ?? undefined,
         ssh_host: d.ssh_host ?? undefined,
@@ -1290,7 +1293,7 @@ export type RemoveDevicesResult = {
  * and the caller would read that as a removal that did not stick. The same
  * upsert is why removal needs no undo: a machine whose daemon runs again lists
  * itself, and the row holds nothing the machine does not report except the
- * label and SSH host a person typed.
+ * label, the name and icon a person set, and the SSH host a person typed.
  *
  * Nothing that points at the device is rewritten. Every reader of
  * conversations.owner_device_id resolves the row through by_user_device and
@@ -1485,6 +1488,38 @@ export function sanitizeSshHost(raw: string | undefined | null): string | null {
   return trimmed;
 }
 
+const DISPLAY_NAME_MAX = 64;
+const DEVICE_ICON = /^[a-z0-9-]{1,32}$/;
+const DEVICE_ICON_COLOR = /^[a-z]{1,16}$/;
+
+/** A name typed in Settings. Collapse whitespace, cap at the same 64 the CLI
+ *  uses for device_label, and treat a blank as cleared. */
+export function sanitizeDeviceDisplayName(raw: string | undefined | null): string | null {
+  if (typeof raw !== "string") return null;
+  const cleaned = raw.replace(/\s+/g, " ").trim().slice(0, DISPLAY_NAME_MAX);
+  return cleaned || null;
+}
+
+/** An icon token, or null when the field is cleared. A non-empty value that
+ *  is not a token is a typo, so it throws instead of being stored. The web
+ *  offers the team-icon list; anything else falls back to the platform glyph
+ *  at render time, which is why the server does not import that list. */
+export function sanitizeDeviceIcon(raw: string | undefined | null): string | null {
+  if (typeof raw !== "string") return null;
+  const cleaned = raw.trim().toLowerCase();
+  if (!cleaned) return null;
+  if (!DEVICE_ICON.test(cleaned)) throw new Error("Pick an icon from the list");
+  return cleaned;
+}
+
+export function sanitizeDeviceIconColor(raw: string | undefined | null): string | null {
+  if (typeof raw !== "string") return null;
+  const cleaned = raw.trim().toLowerCase();
+  if (!cleaned) return null;
+  if (!DEVICE_ICON_COLOR.test(cleaned)) throw new Error("Pick a color from the list");
+  return cleaned;
+}
+
 /**
  * The team machines the viewer can start sessions on (listTeamMachines): agent
  * boxes, whose daemon signs in as a bot on one of the viewer's teams, and
@@ -1510,6 +1545,9 @@ export const listAgentBoxes = query({
       team_id: Id<"teams">;
       can_edit: boolean;
       label: string;
+      display_name: string | undefined;
+      icon: string | undefined;
+      icon_color: string | undefined;
       hostname: string | undefined;
       platform: string;
       is_remote: boolean;
@@ -1529,6 +1567,9 @@ export const listAgentBoxes = query({
         team_id: teamId,
         can_edit: canEdit,
         label: d.label,
+        display_name: d.display_name ?? undefined,
+        icon: d.icon ?? undefined,
+        icon_color: d.icon_color ?? undefined,
         hostname: d.hostname ?? undefined,
         platform: d.platform,
         is_remote: d.is_remote ?? false,
@@ -1587,6 +1628,63 @@ export const setDeviceSshHost = mutation({
 });
 
 /**
+ * Set the name and icon a person sees for a machine. Web-set only: the
+ * daemon's heartbeat rewrites `label` and never these fields, so a rename
+ * stored on `label` would last until the next beat. Each argument is
+ * optional; an omitted one is left alone, and an empty string clears it.
+ * Clearing the icon clears its color too.
+ */
+export const setDeviceAppearance = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.string(),
+    display_name: v.optional(v.string()),
+    icon: v.optional(v.string()),
+    icon_color: v.optional(v.string()),
+    // An agent box belongs to a bot account. An admin of the bot's team
+    // names it, the same way they set its SSH host.
+    owner_user_id: v.optional(v.id("users")),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) throw new Error("Authentication required");
+    const ownerId = args.owner_user_id ?? userId;
+    if (ownerId.toString() !== userId.toString()) {
+      const owner = await ctx.db.get(ownerId);
+      if (!owner?.is_bot || !owner.team_id || !(await isTeamAdmin(ctx, userId, owner.team_id))) {
+        throw new Error("Only an admin of the bot's team can name an agent box");
+      }
+    }
+    const device = await ownDevice(ctx, ownerId, args.device_id);
+    if (!device) throw new Error("Unknown device");
+
+    const patch: { display_name?: string; icon?: string; icon_color?: string } = {};
+    if (args.display_name !== undefined) {
+      patch.display_name = sanitizeDeviceDisplayName(args.display_name) ?? undefined;
+    }
+    let iconCleared = false;
+    if (args.icon !== undefined) {
+      const icon = sanitizeDeviceIcon(args.icon);
+      patch.icon = icon ?? undefined;
+      iconCleared = !icon;
+      if (iconCleared) patch.icon_color = undefined;
+    }
+    if (args.icon_color !== undefined && !iconCleared) {
+      const hasIcon = patch.icon ?? device.icon;
+      if (hasIcon) patch.icon_color = sanitizeDeviceIconColor(args.icon_color) ?? undefined;
+    }
+    await ctx.db.patch(device._id, patch);
+    return {
+      display_name: args.display_name !== undefined ? patch.display_name ?? null : device.display_name ?? null,
+      icon: args.icon !== undefined ? patch.icon ?? null : device.icon ?? null,
+      icon_color: iconCleared || args.icon_color !== undefined
+        ? patch.icon_color ?? null
+        : device.icon_color ?? null,
+    };
+  },
+});
+
+/**
  * Tell the team a machine just opened to them: one bell row each, no phone
  * push (news, not an interruption). The device entity routes to Settings →
  * Devices, where Team machines lists it. A re-share of a machine already open
@@ -1598,7 +1696,13 @@ async function announceDeviceShare(ctx: any, userId: Id<"users">, device: any, t
     .query("team_memberships")
     .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId))
     .collect();
-  const machine = deviceDisplayName({ label: device.label, platform: device.platform, is_remote: device.is_remote });
+  const machine = deviceDisplayName({
+    label: device.label,
+    platform: device.platform,
+    is_remote: device.is_remote,
+    display_name: device.display_name,
+    cloud_host: device.cloud_host,
+  });
   for (const m of members) {
     if (m.user_id === userId) continue;
     await ctx.scheduler.runAfter(0, internal.notificationRouter.emit, {
@@ -2135,6 +2239,9 @@ export const ownerDeviceDisplay = query({
     return {
       device_id: row.device_id,
       label: row.label,
+      display_name: row.display_name ?? null,
+      icon: row.icon ?? null,
+      icon_color: row.icon_color ?? null,
       platform: row.platform,
       is_remote: row.is_remote ?? false,
       last_seen: Math.floor(row.last_seen / HOUR_MS) * HOUR_MS,

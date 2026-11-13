@@ -15,6 +15,13 @@ describe("deviceDisplayName", () => {
     expect(deviceDisplayName({ label: "ip-10-0-0-1", platform: "win32" })).toBe("AWS Windows");
   });
 
+  it("shows a name a person set ahead of the cloud host's name and the hostname", () => {
+    const host = { label: "Linux - ip-172-31-34-114", platform: "linux", is_remote: true, cloud_host: { name: "union-line-1" } };
+    expect(deviceDisplayName({ ...host, display_name: "Work box" })).toBe("Work box");
+    expect(deviceDisplayName({ ...host, display_name: "  " })).toBe("union-line-1");
+    expect(deviceDisplayName({ label: "macOS - MacBook-Pro-4.local", platform: "darwin", display_name: "Desk" })).toBe("Desk");
+  });
+
   it("names a cloud host by its own name when its laptop reports one, so eight hosts read apart", () => {
     const host = { label: "Linux - ip-172-31-34-114", platform: "linux", is_remote: true };
     expect(deviceDisplayName({ ...host, cloud_host: { name: "union-line-1" } })).toBe("union-line-1");

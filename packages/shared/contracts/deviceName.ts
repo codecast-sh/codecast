@@ -11,6 +11,8 @@ export type DeviceNameSource = {
   label: string;
   platform: string;
   is_remote?: boolean;
+  /** A name a person set. Wins over the cloud host's name and the hostname. */
+  display_name?: string | null;
   /** A cloud host's own name (its AWS Name tag), reported by the laptop that manages it. */
   cloud_host?: { name?: string | null } | null;
 };
@@ -65,6 +67,10 @@ export function deviceKindLabel(d: DeviceNameSource): string {
 /** A clean display name: chosen names when present, generated hostnames by kind. */
 export function deviceDisplayName(d: DeviceNameSource | undefined | null): string {
   if (!d) return "Unknown device";
+  // A name typed in Settings wins over every generated one, including a
+  // cloud host's AWS Name tag.
+  const chosen = d.display_name?.trim();
+  if (chosen) return chosen;
   // A cloud host someone named (union-line-1, a codecast-linux box) reads by
   // that name; eight hosts that all read "Cloud Linux" cannot be told apart.
   const named = d.cloud_host?.name?.trim();
