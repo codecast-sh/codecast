@@ -138,7 +138,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           type="button"
           data-dock-faces
           onClick={() => floating.setFloating(false)}
-          className="flex h-7 items-center gap-1.5 rounded-full border border-sol-cyan/40 bg-sol-cyan/10 px-2.5 text-meta text-sol-cyan transition-colors hover:bg-sol-cyan/20"
+          className="flex h-7 items-center gap-1.5 rounded-full border border-sol-cyan/40 bg-sol-cyan/10 px-2.5 text-[11px] text-sol-cyan transition-colors hover:bg-sol-cyan/20"
           title={DOCK_FACES_TITLE}
         >
           <PanelTop className="h-3.5 w-3.5" />
@@ -190,7 +190,7 @@ export function TeamAvatarBar({ teamId: propTeamId }: TeamAvatarBarProps) {
           <button
             onClick={() => router.push("/team/activity?filter=team")}
             data-overflow
-            className="ml-0.5 flex h-7 min-w-7 px-1.5 items-center justify-center rounded-full border border-sol-border/60 text-meta tabular-nums text-sol-text-muted transition-colors hover:border-sol-border hover:text-sol-text"
+            className="ml-0.5 flex h-7 min-w-7 px-1.5 items-center justify-center rounded-full border border-sol-border/60 text-[11px] tabular-nums text-sol-text-muted transition-colors hover:border-sol-border hover:text-sol-text"
           >
             +{hidden}
           </button>

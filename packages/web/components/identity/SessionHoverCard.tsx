@@ -31,12 +31,12 @@ export function SessionIdentityHeader({ row: rawRow, size = 36 }: { row: HoverRo
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-1.5 min-w-0">
           <span className="text-xs font-medium text-sol-text truncate">{id.name}</span>
-          {id.kind === "role" && <span className="font-mono text-meta text-sol-text-dim flex-shrink-0">@{id.handle}</span>}
-          {id.kind === "character" && !id.chosen && <span className="text-meta text-sol-text-dim flex-shrink-0">default</span>}
+          {id.kind === "role" && <span className="font-mono text-[10px] text-sol-text-dim flex-shrink-0">@{id.handle}</span>}
+          {id.kind === "character" && !id.chosen && <span className="text-[10px] text-sol-text-dim flex-shrink-0">default</span>}
         </div>
-        {showTitle && <div className="text-meta text-sol-text-secondary leading-snug line-clamp-2">{title}</div>}
+        {showTitle && <div className="text-[11px] text-sol-text-secondary leading-snug line-clamp-2">{title}</div>}
         {id.kind === "character" && id.reportsTo && (
-          <div className="mt-1 flex items-center gap-1 text-meta text-sol-text-dim">
+          <div className="mt-1 flex items-center gap-1 text-[10px] text-sol-text-dim">
             reports to
             <RoleFace role={id.reportsTo} size={12} />
             <span className="text-sol-text-muted">{id.reportsTo.name}</span>

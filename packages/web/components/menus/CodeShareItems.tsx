@@ -43,7 +43,7 @@ export function CodeMenuItem({
 
 export function CodeMenuLabel({ children }: { children: ReactNode }) {
   return (
-    <div className="px-2 pt-1.5 pb-0.5 text-mark uppercase tracking-wider text-sol-text-dim">
+    <div className="px-2 pt-1.5 pb-0.5 text-[10px] uppercase tracking-wider text-sol-text-dim">
       {children}
     </div>
   );

@@ -243,7 +243,7 @@ function WorkspaceRow({ selected, icon, name, detail, badge, onClear, onSelect }
       {icon}
       <span className="flex min-w-0 flex-1 flex-col leading-tight">
         <span className={`truncate ${selected ? "font-medium" : ""}`}>{name}</span>
-        {detail && <span className="truncate text-meta text-sol-text-dim">{detail}</span>}
+        {detail && <span className="truncate text-[11px] text-sol-text-dim">{detail}</span>}
       </span>
       {unread > 0 && (
         <button
@@ -261,7 +261,7 @@ function WorkspaceRow({ selected, icon, name, detail, badge, onClear, onSelect }
         <span
           data-cc-workspace-unread
           title={`Open ${unread} ${unread === 1 ? "thread" : "threads"} waiting on you`}
-          className={`min-w-[18px] rounded-full px-1.5 text-center text-meta font-semibold leading-[18px] transition-shadow hover:ring-2 ${badge.isNew
+          className={`min-w-[18px] rounded-full px-1.5 text-center text-[10px] font-semibold leading-[18px] transition-shadow hover:ring-2 ${badge.isNew
             ? "bg-sol-red text-sol-bg hover:ring-sol-red/40"
             : "bg-sol-bg-alt text-sol-text-muted hover:ring-sol-border"}`}
         >

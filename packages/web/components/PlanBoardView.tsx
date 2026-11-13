@@ -95,7 +95,7 @@ export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortI
             <div className="flex items-center gap-1.5 px-3 py-2.5 border-b border-sol-border/10">
               <ColIcon className={`w-3.5 h-3.5 ${col.color}`} />
               <span className={`text-xs font-medium ${col.color}`}>{col.label}</span>
-              <span className="text-meta text-sol-text-dim/50 ml-auto tabular-nums">
+              <span className="text-[10px] text-sol-text-dim/50 ml-auto tabular-nums">
                 {columnTasks.length}
               </span>
             </div>
@@ -128,7 +128,7 @@ export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortI
                     }`}
                   >
                     <div className="flex items-center gap-1.5 mb-1">
-                      <ShortId id={task.short_id} className="text-meta text-sol-text-dim" />
+                      <ShortId id={task.short_id} className="text-[10px] text-sol-text-dim" />
                       {PriorityIcon && pc && (
                         <PriorityIcon className={`w-3 h-3 ${pc.color}`} />
                       )}
@@ -142,12 +142,12 @@ export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortI
                       </div>
                     )}
                     {task.execution_status === "needs_context" && (
-                      <div className="mt-1 px-1.5 py-0.5 rounded text-meta font-medium bg-sol-orange/15 text-sol-orange">
+                      <div className="mt-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-sol-orange/15 text-sol-orange">
                         Needs you
                       </div>
                     )}
                     {task.execution_status === "blocked" && (
-                      <div className="mt-1 px-1.5 py-0.5 rounded text-meta font-medium bg-sol-red/15 text-sol-red">
+                      <div className="mt-1 px-1.5 py-0.5 rounded text-[9px] font-medium bg-sol-red/15 text-sol-red">
                         Blocked
                       </div>
                     )}
@@ -155,7 +155,7 @@ export function PlanBoardView({ tasks, planShortId }: { tasks: any[]; planShortI
                 );
               })}
               {columnTasks.length === 0 && (
-                <div className="flex items-center justify-center h-16 text-meta text-sol-text-dim/30">
+                <div className="flex items-center justify-center h-16 text-[10px] text-sol-text-dim/30">
                   Drop here
                 </div>
               )}

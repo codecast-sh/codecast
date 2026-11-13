@@ -117,9 +117,9 @@ export function RecentVisitRow({ item, selected = false, trailing }: { item: Res
         <span className="flex items-center gap-2">
           <span className={`truncate text-[13px] ${selected ? "text-sol-text font-medium" : "text-sol-text/85"}`}>{item.title}</span>
           {trailing}
-          <span className="ml-auto text-meta text-sol-text-dim tabular-nums flex-shrink-0">{visitTimeAgo(item.ts)}</span>
+          <span className="ml-auto text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">{visitTimeAgo(item.ts)}</span>
         </span>
-        <span className="flex items-center gap-1.5 text-meta text-sol-text-dim truncate">
+        <span className="flex items-center gap-1.5 text-[11px] text-sol-text-dim truncate">
           {liveness && (
             <>
               <LivenessDot state={liveness} size="xs" />

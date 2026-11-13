@@ -201,7 +201,7 @@ export function ShareOutView({ teamId, readPreview }: { teamId: string; readPrev
       <button type="button" className={BUTTON} onClick={() => void open()} disabled={busy} data-share-out>
         <Shuffle className="w-3 h-3" /><span className="cq-header-collapse">{busy ? "Reading…" : "Share out"}</span>
       </button>
-      {error && <span className="text-meta text-sol-red" role="alert" data-share-out-error>{error}</span>}
+      {error && <span className="text-[11px] text-sol-red" role="alert" data-share-out-error>{error}</span>}
       {preview && (
         <SwitchReview
           ledger={shareOutLedger(preview)}

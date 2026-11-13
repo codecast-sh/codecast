@@ -37,17 +37,15 @@ export function useFlipAnimation({ scale = false, durationMs = ANIMATION_DURATIO
       return;
     }
 
-    // Read every new position first, then write: a style write between two
-    // reads forced a layout per row.
-    const moved: Array<{ el: Element; oldRect: DOMRect; newRect: DOMRect }> = [];
-    containerRef.current.querySelectorAll("[data-flip-key]").forEach((el) => {
+    const children = containerRef.current.querySelectorAll("[data-flip-key]");
+    children.forEach((el) => {
       const key = el.getAttribute("data-flip-key");
       if (!key) return;
+
       const oldRect = oldPositions.get(key);
       if (!oldRect) return;
-      moved.push({ el, oldRect, newRect: el.getBoundingClientRect() });
-    });
-    moved.forEach(({ el, oldRect, newRect }) => {
+
+      const newRect = el.getBoundingClientRect();
       const deltaY = oldRect.top - newRect.top;
       const deltaX = oldRect.left - newRect.left;
 

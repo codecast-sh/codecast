@@ -110,7 +110,7 @@ function MetaChips({ pr }: { pr: any }) {
       {labels.map((label) => (
         <span
           key={label.name}
-          className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-meta"
+          className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px]"
           style={label.color ? { borderColor: `#${label.color}80`, color: `#${label.color}`, background: `#${label.color}14` } : undefined}
         >
           <Tag className="w-3 h-3 opacity-70" />
@@ -118,7 +118,7 @@ function MetaChips({ pr }: { pr: any }) {
         </span>
       ))}
       {assignees.map((login) => (
-        <span key={login} className="inline-flex items-center gap-1 rounded-full border border-sol-border/50 px-2 py-0.5 text-meta text-sol-text-muted" title="Assigned">
+        <span key={login} className="inline-flex items-center gap-1 rounded-full border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text-muted" title="Assigned">
           <UserRound className="w-3 h-3 opacity-70" />
           {login}
         </span>
@@ -146,7 +146,7 @@ function Chip({
   return (
     <span
       title={title}
-      className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-meta font-medium"
+      className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium"
       style={{
         color: accentVar(accent),
         borderColor: accentSoft(accent, 35),
@@ -163,7 +163,7 @@ function CopyRef({ text }: { text: string }) {
   return (
     <button
       type="button"
-      className="pr-branch group inline-flex items-center gap-1.5 max-w-full rounded-md border border-sol-border/40 bg-sol-bg-alt/50 px-2 py-0.5 font-mono text-meta text-sol-text-muted hover:border-sol-border hover:text-sol-text transition-colors"
+      className="pr-branch group inline-flex items-center gap-1.5 max-w-full rounded-md border border-sol-border/40 bg-sol-bg-alt/50 px-2 py-0.5 font-mono text-[11px] text-sol-text-muted hover:border-sol-border hover:text-sol-text transition-colors"
       title="Copy the branch names"
       onClick={async () => {
         await copyToClipboard(text);
@@ -192,7 +192,7 @@ function Figure({ label, children, href, onClick, title }: {
 }) {
   const body = (
     <>
-      <span className="text-mark uppercase tracking-wider text-sol-text-dim group-hover/fig:text-sol-text-muted transition-colors">{label}</span>
+      <span className="text-[10px] uppercase tracking-wider text-sol-text-dim group-hover/fig:text-sol-text-muted transition-colors">{label}</span>
       <span className="text-[12px] text-sol-text flex items-center gap-2">{children}</span>
     </>
   );
@@ -252,7 +252,7 @@ function ShepherdControl({
       <div className="flex items-center gap-2 flex-wrap max-w-full">
         <button
           type="button"
-          className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-sol-border px-2.5 py-0.5 text-meta text-sol-text-muted hover:text-sol-text hover:border-sol-cyan/50 transition-colors"
+          className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-sol-border px-2.5 py-0.5 text-[11px] text-sol-text-muted hover:text-sol-text hover:border-sol-cyan/50 transition-colors"
           title={SHEPHERD_EXPLAINED}
           onClick={() => setPicking((v) => !v)}
         >
@@ -262,13 +262,13 @@ function ShepherdControl({
         {picking && (
           <div className="flex items-center gap-1.5 flex-wrap">
             {sessionChoices.length === 0 ? (
-              <span className="text-meta text-sol-text-dim">No session has worked on this pull request yet</span>
+              <span className="text-[11px] text-sol-text-dim">No session has worked on this pull request yet</span>
             ) : (
               sessionChoices.map((session) => (
                 <button
                   key={session.id}
                   type="button"
-                  className="rounded-full border border-sol-border/50 px-2 py-0.5 text-meta text-sol-text-muted hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors max-w-[220px] truncate"
+                  className="rounded-full border border-sol-border/50 px-2 py-0.5 text-[11px] text-sol-text-muted hover:text-sol-cyan hover:border-sol-cyan/40 transition-colors max-w-[220px] truncate"
                   onClick={() => {
                     onSetShepherd(session.id, true);
                     setPicking(false);
@@ -286,7 +286,7 @@ function ShepherdControl({
 
   return (
     <div
-      className="inline-flex items-center gap-2 max-w-full rounded-full border border-sol-border/50 bg-sol-bg-alt/40 pl-2.5 pr-1 py-0.5 text-meta flex-wrap"
+      className="inline-flex items-center gap-2 max-w-full rounded-full border border-sol-border/50 bg-sol-bg-alt/40 pl-2.5 pr-1 py-0.5 text-[11px] flex-wrap"
       title={pr.shepherd_last_wake_at
         ? `${SHEPHERD_EXPLAINED}\n\nLast woke ${relTimeShort(pr.shepherd_last_wake_at)} ago${pr.shepherd_last_wake_reason ? `: ${pr.shepherd_last_wake_reason}` : ""} (${pr.shepherd_wake_count ?? 1} in all).`
         : SHEPHERD_EXPLAINED}
@@ -360,7 +360,7 @@ export function PRHeader({
 
   return (
     <header className="pr-band border-b border-sol-border/60 px-5 pt-4 pb-3 shrink-0">
-      <div className="pr-rise pr-head text-meta text-sol-text-dim" style={{ ["--d" as string]: "0ms" }}>
+      <div className="pr-rise pr-head text-[11px] text-sol-text-dim" style={{ ["--d" as string]: "0ms" }}>
         <span className="inline-flex items-center gap-2 min-w-0">
           <span className="font-mono">{owner}</span>
           <span className="opacity-40">/</span>

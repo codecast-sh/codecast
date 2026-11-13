@@ -38,7 +38,7 @@ export { GOAL_ENDED };
  *  goalStateWord's, so the line, the map card and the state line agree. */
 export function GoalStateFace({ goal, now, dated = true, className }: { goal: InitiativeRow; now: number; /** The health's date after its word (a line); a tight card leaves it out. */ dated?: boolean; className?: string }) {
   if (goalSaysHealth(goal)) return <HealthChip health={goal.health} at={dated ? goal.health_at : undefined} now={now} lower className={className} />;
-  return <span className={cn("inline-flex items-center gap-1.5 text-meta whitespace-nowrap", className)} style={{ color: "var(--sol-text-secondary)" }} data-goal-status={goal.status}><StatusGlyph status={goal.status} className="h-3 w-3" />{goalStateWord(goal)}</span>;
+  return <span className={cn("inline-flex items-center gap-1.5 text-[11.5px] whitespace-nowrap", className)} style={{ color: "var(--sol-text-secondary)" }} data-goal-status={goal.status}><StatusGlyph status={goal.status} className="h-3 w-3" />{goalStateWord(goal)}</span>;
 }
 
 /** The goal's status, read and set in place: the one status picker the line,
@@ -101,11 +101,11 @@ export function ProjectWork({ counts }: { counts: LineProject["counts"] }) {
  *  quiet active project, so the column only speaks when something happens. */
 export function ProjectState({ project }: { project: Pick<LineProject, "sessions" | "status"> }) {
   const live = project.sessions && (project.sessions.working || project.sessions.needs_input);
-  if (live) return <StateWords counts={project.sessions!} max={1} className="!text-meta" />;
+  if (live) return <StateWords counts={project.sessions!} max={1} className="!text-[11.5px]" />;
   if (!projectStatusSays(project.status)) return null;
   const s = projectStatusOf(project.status);
   return (
-    <span className="inline-flex items-center gap-1.5 text-meta whitespace-nowrap" style={{ color: "var(--sol-text-secondary)" }} data-project-status={project.status}>
+    <span className="inline-flex items-center gap-1.5 text-[11.5px] whitespace-nowrap" style={{ color: "var(--sol-text-secondary)" }} data-project-status={project.status}>
       <span className={cn("h-[7px] w-[7px] shrink-0 rounded-full bg-current", s.color)} aria-hidden />
       {s.label.toLowerCase()}
     </span>
@@ -115,8 +115,8 @@ export function ProjectState({ project }: { project: Pick<LineProject, "sessions
 /** The lead: the editable chip when the project is in the store, its face and name otherwise. */
 export function ProjectLead({ project, editable }: { project: Pick<LineProject, "id" | "lead">; editable: boolean }) {
   if (editable) return <ProjectLeadChip projectId={project.id} size="xs" editable className="max-w-full" />;
-  if (!project.lead) return <span className="italic text-meta" style={{ color: DIM }} data-project-lead="none">No lead</span>;
-  return <span className="inline-flex min-w-0 items-center gap-1.5 text-meta" style={{ color: "var(--sol-text-secondary)" }} data-project-lead={project.lead.handle}><RoleFace role={project.lead} size={14} /><span className="truncate">{project.lead.name}</span></span>;
+  if (!project.lead) return <span className="italic text-[11.5px]" style={{ color: DIM }} data-project-lead="none">No lead</span>;
+  return <span className="inline-flex min-w-0 items-center gap-1.5 text-[11.5px]" style={{ color: "var(--sol-text-secondary)" }} data-project-lead={project.lead.handle}><RoleFace role={project.lead} size={14} /><span className="truncate">{project.lead.name}</span></span>;
 }
 
 export const ProjectGlyph = ({ project, ghost }: { project: Pick<LineProject, "color" | "title">; ghost?: boolean }) => (
@@ -137,7 +137,7 @@ export function RoleState({ role }: { role: OrgRole }) {
       </span>
     );
   }
-  return <StateWords counts={role.counts} max={1} className="!text-meta" />;
+  return <StateWords counts={role.counts} max={1} className="!text-[11.5px]" />;
 }
 
 // ---------------------------------------------------------------- people

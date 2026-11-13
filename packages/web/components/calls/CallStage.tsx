@@ -1,4 +1,4 @@
-import { Fragment, memo, useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import {
@@ -59,7 +59,6 @@ import { STAGE_CTL, STAGE_CTL_IDLE, STAGE_VIEWS, StageHostProvider, type StageHo
 import { GuestInvite, GuestRemoveButton } from "./GuestDoor";
 import { StagePersonMenu, type StagePerson } from "./StagePersonMenu";
 import { useContextMenu } from "../ui/context-menu";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { guestsJoining } from "../../lib/calls/roomGuests";
 import { useStageRoster } from "../../hooks/useStageRoster";
 import { useOutgoingRings, useRoomDescription } from "../../hooks/useCallRoom";
@@ -150,16 +149,7 @@ const MEMBER_STAGE_HOST: StageHost = {
   getRoom,
   FollowChip,
   useFollowLeader: () => useInboxStore((s) => s.followLeaderId),
-  // Each tile asks for its own person, as a boolean: a change of who is
-  // talking redraws the tiles whose answer changed, not the stage.
-  useSpeaking: (identity) => useInboxStore((s) => (s.call.speaking ?? []).includes(identity)),
 };
-
-/** The fields of the call the stage itself draws or branches on. Who is
- *  speaking is not one of them: LiveKit reports it many times a minute, and
- *  the tiles read it themselves (MEMBER_STAGE_HOST.useSpeaking). */
-const callStageSig = (c: any) =>
-  `${c.phase}|${c.roomKey}|${c.muted}|${c.camera}|${c.sharing}|${!!c.reconnecting}|${c.errorFix}|${c.error}`;
 function memberStageHost(roomKey: string | null, openPersonMenu: StageHost["openPersonMenu"]): StageHost {
   if (!roomKey) return MEMBER_STAGE_HOST;
   return {
@@ -221,7 +211,7 @@ export function CallStage({
   // Memoized because it feeds an effect's dependency list: a fresh no-op every
   // render would re-bind the key listener on every render.
   const collapse = useMemo(() => onCollapse ?? (() => {}), [onCollapse]);
-  const s = useTrackedStore([(st: any) => callStageSig(st.call)]);
+  const s = useTrackedStore([(st: any) => st.call]);
   const call = s.call;
   const myUserId = useMyUserId();
   const tiles = useSyncExternalStore(subscribeCallTiles, getCallTiles, () => []);
@@ -229,6 +219,7 @@ export function CallStage({
   // connected (useStageRoster): a guest has no seat, and a guest with no
   // camera was nobody on the stage without the fold.
   const { listed, roster, guestMedia } = useStageRoster(call.roomKey, call.phase === "connected");
+  const speaking = useMemo(() => new Set<string>(call.speaking), [call.speaking]);
 
   // The live transcript, if anyone is scribing: id (for the call-page link),
   // routes (the feed chips), caption tail (captions for non-scribes too).
@@ -299,28 +290,16 @@ export function CallStage({
     if (threadOpen && !prefersReducedMotion()) setRailClosing(true);
     setThreadOpen((o) => !o);
   };
-  const onRailClosed = useCallback(() => setRailClosing(false), []);
   // The agents in the room, for the button: while the rail is closed, the
   // state a person waits on most is "an agent is answering".
   const agentWorking = useAgentsInRoom(live?.routes ?? []).some((a) => a.working);
   const [pinned, setPinned] = useState<string | null>(null);
   // The face SPEAKER view follows when nothing is pinned: whoever spoke last.
-  // Read off the store, not through a render: the stage redraws when the
-  // floor passes to somebody else, not on every speaking report.
-  const [lastSpeaker, setLastSpeaker] = useState<string | null>(
-    () => (useInboxStore.getState().call.speaking?.[0] as string | undefined) ?? null,
-  );
-  const lastSpeakerRef = useRef(lastSpeaker);
-  useWatchEffect(
-    () =>
-      useInboxStore.subscribe(() => {
-        const first = useInboxStore.getState().call.speaking?.[0];
-        if (!first || String(first) === lastSpeakerRef.current) return;
-        lastSpeakerRef.current = String(first);
-        setLastSpeaker(String(first));
-      }),
-    [],
-  );
+  const [lastSpeaker, setLastSpeaker] = useState<string | null>(null);
+  useWatchEffect(() => {
+    const first = call.speaking?.[0];
+    if (first) setLastSpeaker(String(first));
+  }, [call.speaking]);
   // Following someone on the call while the stage follows the speaker moves
   // the follow to that face once they hold the floor for a moment, so a
   // quick interjection does not yank the app away (lib/follow.ts).
@@ -430,7 +409,7 @@ export function CallStage({
             {label}
           </span>
           {roster.length > 0 && (
-            <span className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-px font-mono text-meta text-sol-text-muted">
+            <span className="shrink-0 rounded-full bg-white/[0.06] px-1.5 py-px font-mono text-[10.5px] text-sol-text-muted">
               {roster.length}
             </span>
           )}
@@ -442,7 +421,7 @@ export function CallStage({
               (the green of the thread's transcribing dot). */}
           {transcribing && wordsPublic && (
             <span
-              className="ml-1 flex shrink-0 items-center gap-1 rounded-full bg-sol-green/10 px-1.5 py-px font-mono text-meta text-sol-green"
+              className="ml-1 flex shrink-0 items-center gap-1 rounded-full bg-sol-green/10 px-1.5 py-px font-mono text-[10.5px] text-sol-green"
               title={TRANSCRIPT_SHARED_WORDS}
               aria-label={TRANSCRIPT_SHARED_WORDS}
               role="img"
@@ -619,12 +598,13 @@ export function CallStage({
         <StageHostProvider value={stageHost}>
         <div key={view} className={`flex min-h-0 min-w-0 flex-1 animate-in fade-in duration-200 max-sm:flex-col transition-opacity ${call.reconnecting ? "opacity-50" : ""}`}>
           {view === "grid" ? (
-            <GridStage roster={roster} cameras={cameras} screens={screens} />
+            <GridStage roster={roster} cameras={cameras} screens={screens} speaking={speaking} />
           ) : view === "speaker" ? (
             <SpeakerStage
               roster={roster}
               cameras={cameras}
               screens={screens}
+              speaking={speaking}
               focusId={pinned ?? lastSpeaker}
               pinned={pinned}
               onPin={(id) => setPinned((p) => (p === id ? null : id))}
@@ -634,6 +614,7 @@ export function CallStage({
               roster={roster}
               cameras={cameras}
               screens={screens}
+              speaking={speaking}
               phase={call.phase}
               ringing={arriving}
               settledLine={settledLine}
@@ -653,9 +634,8 @@ export function CallStage({
             panel={panel}
             sinceAt={roster.find((m) => String(m.user_id) === myUserId)?.joined_at}
             closing={railClosing && !threadOpen}
-            onClosed={onRailClosed}
+            onClosed={() => setRailClosing(false)}
             onOpenedSession={collapse}
-            stageMinW={screens.length > 0 ? STAGE_SHARE_MIN_W : STAGE_MIN_W}
           />
         )}
       </div>
@@ -695,44 +675,48 @@ function HeaderRule() {
  * on the header line made it read as three unrelated things.
  */
 function ShrinkMenu({ onSetSize }: { onSetSize: (size: CallWindowSize) => void }) {
-  // The kit's menu: Escape, a press outside and the arrow keys close and
-  // move it, wherever it was opened from. Portaled out of the stage, so it
-  // carries the stage's `dark` itself.
+  const [open, setOpen] = useState(false);
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <StageChromeButton
-          title="Shrink this window to faces floating over your work"
-          className="data-[state=open]:bg-white/10 data-[state=open]:text-sol-text"
-        >
-          <Minimize2 className="h-3.5 w-3.5" />
-          shrink
-        </StageChromeButton>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        align="end"
-        sideOffset={6}
-        collisionPadding={8}
-        className="dark w-[248px] rounded-lg border-0 bg-sol-bg-alt p-1 shadow-2xl ring-1 ring-white/[0.08]"
+    <span className="relative">
+      <StageChromeButton
+        onClick={() => setOpen((o) => !o)}
+        active={open}
+        title="Shrink this window to faces floating over your work"
+        aria-haspopup="menu"
+        aria-expanded={open}
       >
-        {SMALL_CALL_WINDOW_SIZES.map((size) => {
-          const chrome = SMALL_SIZE_CHROME[size];
-          return (
-            <DropdownMenuItem
-              key={size}
-              onSelect={() => onSetSize(size)}
-              className="items-start gap-2.5 rounded-md px-2 py-1.5 text-left focus:bg-white/[0.06] [&>svg]:size-3.5"
-            >
-              <chrome.icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sol-text-muted" />
-              <span className="min-w-0">
-                <span className="block font-mono text-meta text-sol-text">{chrome.label}</span>
-                <span className="block text-meta leading-snug text-sol-text-muted">{chrome.hint}</span>
-              </span>
-            </DropdownMenuItem>
-          );
-        })}
-      </DropdownMenuContent>
-    </DropdownMenu>
+        <Minimize2 className="h-3.5 w-3.5" />
+        shrink
+      </StageChromeButton>
+      {open && (
+        <div
+          role="menu"
+          className="absolute right-0 top-full z-20 mt-1.5 w-[248px] rounded-lg bg-sol-bg-alt p-1 shadow-2xl ring-1 ring-white/[0.08]"
+          onMouseLeave={() => setOpen(false)}
+        >
+          {SMALL_CALL_WINDOW_SIZES.map((size) => {
+            const chrome = SMALL_SIZE_CHROME[size];
+            return (
+              <button
+                key={size}
+                role="menuitem"
+                onClick={() => {
+                  setOpen(false);
+                  onSetSize(size);
+                }}
+                className="flex w-full items-start gap-2.5 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-white/[0.06]"
+              >
+                <chrome.icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sol-text-muted" />
+                <span className="min-w-0">
+                  <span className="block font-mono text-[11.5px] text-sol-text">{chrome.label}</span>
+                  <span className="block text-[10.5px] leading-snug text-sol-text-muted">{chrome.hint}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -740,7 +724,7 @@ function ShrinkMenu({ onSetSize }: { onSetSize: (size: CallWindowSize) => void }
 // reads by brightness (and an accent tint when the surface it opens has
 // one); nothing wears a border.
 const CHROME_BTN =
-  "flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 font-mono text-meta transition-colors";
+  "flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 font-mono text-[11.5px] transition-colors";
 
 function StageChromeButton({
   active,
@@ -778,15 +762,13 @@ function StageChromeButton({
 // was typed, what an agent answered, who came and went. RoomThread renders
 // it; this wrapper owns the reads it needs (the transcript's call record) and
 // the rail's box. The reader drags its left edge to widen it; the stage
-// always keeps STAGE_MIN_W (STAGE_SHARE_MIN_W while a screen is shared, so a
-// share stays readable), so a width saved on a wide window shrinks to fit the
-// panel (about 690px) rather than burying the faces. The rail itself never
-// goes under RAIL_MIN_W. Memoized: the stage redraws for the call's own
-// state, and the thread has nothing to redraw for it.
+// always keeps STAGE_MIN_W, so a width saved on a wide window shrinks to fit
+// the panel (about 690px) rather than burying the faces.
 const RAIL_MIN_W = 280;
 const STAGE_MIN_W = 200;
-const STAGE_SHARE_MIN_W = 360;
-const ThreadRail = memo(function ThreadRail({
+const railMaxWidth = (handle: HTMLElement) =>
+  (handle.parentElement?.parentElement?.clientWidth ?? Infinity) - STAGE_MIN_W;
+function ThreadRail({
   roomKey,
   live,
   rows,
@@ -795,7 +777,6 @@ const ThreadRail = memo(function ThreadRail({
   closing,
   onClosed,
   onOpenedSession,
-  stageMinW,
 }: {
   roomKey: string;
   live: { transcript_id: string } | null;
@@ -808,13 +789,7 @@ const ThreadRail = memo(function ThreadRail({
   onClosed: () => void;
   /** A session opened from the thread: the stage steps aside so it shows. */
   onOpenedSession: () => void;
-  /** What the stage keeps beside the rail. */
-  stageMinW: number;
 }) {
-  const railMaxWidth = useCallback(
-    (handle: HTMLElement) => (handle.parentElement?.parentElement?.clientWidth ?? Infinity) - stageMinW,
-    [stageMinW],
-  );
   const call = useQueryNoThrow(
     api.transcripts.webGetCall,
     live ? { transcript_id: live.transcript_id as any } : "skip",
@@ -827,7 +802,7 @@ const ThreadRail = memo(function ThreadRail({
   });
   return (
     <aside
-      style={{ width: `min(${width}px, max(${RAIL_MIN_W}px, calc(100% - ${stageMinW}px)))` }}
+      style={{ width: `min(${width}px, calc(100% - ${STAGE_MIN_W}px))` }}
       className={`relative flex shrink-0 flex-col overflow-hidden rounded-xl bg-white/[0.04] motion-reduce:animate-none ${
         closing
           ? "animate-out fade-out slide-out-to-right-2 fill-mode-forwards duration-150"
@@ -853,7 +828,7 @@ const ThreadRail = memo(function ThreadRail({
       />
     </aside>
   );
-});
+}
 
 // Attributed captions in a lane of their own at the foot of the stage — for
 // everyone in the room, not just the scribe: the scribe reads its own local
@@ -891,30 +866,23 @@ function CaptionsLane({
       style={{ minHeight: `calc(${CAPTION_LINES} * 13px * 1.375 + ${CAPTION_LINES - 1} * 4px + 16px)` }}
     >
       {shown.length === 0 ? (
-        <div className="font-mono text-meta text-sol-text-dim">
+        <div className="font-mono text-[11px] text-sol-text-dim">
           {scribe.error ?? "listening…"}
         </div>
       ) : (
-        // One grid for the lane, so the speakers make one column as wide as
-        // the longest name (capped) and the words line up beside it. A line
-        // too long for the lane drops its beginning, never its end: the
-        // newest words are the end (an rtl box clips at the left, the words
-        // inside it run ltr).
-        <div className="grid grid-cols-[minmax(3rem,max-content)_minmax(0,1fr)] items-baseline gap-x-3 gap-y-1 leading-snug">
+        <div className="space-y-1">
           {shown.map((c, i, arr) => (
-            <Fragment key={i}>
-              <span className="flex min-w-0 max-w-[9rem] items-center justify-end gap-1 font-mono text-meta text-sol-cyan">
+            <div
+              key={i}
+              className={`flex items-baseline gap-3 text-[13px] leading-snug transition-colors ${
+                i === arr.length - 1 ? "text-sol-text" : "text-sol-text-muted"
+              }`}
+            >
+              <span className="flex w-20 shrink-0 items-center justify-end gap-1 font-mono text-[11px] text-sol-cyan">
                 <PersonName name={c.speaker} tagClassName="!px-0.5" />
               </span>
-              <span
-                dir="rtl"
-                className={`min-w-0 truncate text-left text-[13px] transition-colors ${
-                  i === arr.length - 1 ? "text-sol-text" : "text-sol-text-muted"
-                }`}
-              >
-                <bdi dir="auto">{c.text}</bdi>
-              </span>
-            </Fragment>
+              <span className="min-w-0 truncate">{c.text}</span>
+            </div>
           ))}
         </div>
       )}
@@ -959,7 +927,7 @@ function ControlBar({ call, live }: { call: any; live: { transcript_id: string; 
       {/* Not a setting, a fact: the floating circles either follow a face or
           show the middle of the frame, and only this build knows which. */}
       <DeviceChips
-        footer={<p className="px-2 pb-1 text-meta leading-snug text-sol-text-dim">{faceTrackingNote()}</p>}
+        footer={<p className="px-2 pb-1 text-[10px] leading-snug text-sol-text-dim">{faceTrackingNote()}</p>}
       />
     </div>
   );
@@ -1048,19 +1016,19 @@ function SharePicker({
   return (
     <div
       ref={rootRef}
-      className="absolute bottom-full left-1/2 z-10 mb-3 max-h-[calc(100dvh-120px)] w-[min(440px,calc(100vw-24px))] -translate-x-1/2 overflow-y-auto rounded-xl bg-sol-bg-alt p-2.5 shadow-2xl ring-1 ring-white/5"
+      className="absolute bottom-full left-1/2 z-10 mb-3 w-[440px] -translate-x-1/2 rounded-xl bg-sol-bg-alt p-2.5 shadow-2xl ring-1 ring-white/5"
     >
       {sources === null ? (
-        <div className="px-1 py-6 text-center text-meta text-sol-text-muted">Looking…</div>
+        <div className="px-1 py-6 text-center text-[11px] text-sol-text-muted">Looking…</div>
       ) : sources.length === 0 ? (
-        <div className="px-1 py-6 text-center text-meta text-sol-text-muted">
+        <div className="px-1 py-6 text-center text-[11px] text-sol-text-muted">
           Nothing to share. Check Screen Recording permission in System Settings
         </div>
       ) : (
         <>
           {screens.length > 0 && (
             <section>
-              <div className="mb-1.5 px-1 text-meta font-medium text-sol-text-muted">Entire screen</div>
+              <div className="mb-1.5 px-1 text-[11px] font-medium text-sol-text-muted">Entire screen</div>
               <div className={`grid gap-2 ${screens.length === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
                 {screens.map((src, i) => (
                   <button
@@ -1074,7 +1042,7 @@ function SharePicker({
                       icon={MonitorUp}
                       className={`w-full rounded-md ${screens.length === 1 ? "aspect-[16/7]" : "aspect-video"}`}
                     />
-                    <span className="flex items-center gap-1.5 px-0.5 text-meta text-sol-text-muted group-hover:text-sol-text">
+                    <span className="flex items-center gap-1.5 px-0.5 text-[11px] text-sol-text-muted group-hover:text-sol-text">
                       <MonitorUp className="h-3 w-3 shrink-0" />
                       <span className="truncate">{screens.length === 1 ? "Your entire screen" : `Screen ${i + 1}`}</span>
                     </span>
@@ -1086,7 +1054,7 @@ function SharePicker({
           {windowCount > 0 && (
             <section className={screens.length > 0 ? "mt-3 border-t border-white/5 pt-2.5" : ""}>
               <div className="mb-1.5 flex items-center gap-2 px-1">
-                <span className="text-meta font-medium text-sol-text-muted">
+                <span className="text-[11px] font-medium text-sol-text-muted">
                   Windows <span className="text-sol-text-dim">· {windowCount}</span>
                 </span>
                 <input
@@ -1097,13 +1065,13 @@ function SharePicker({
                     if (e.key === "Enter" && windows[0]) onPick(windows[0].id);
                   }}
                   placeholder="Find a window…"
-                  className="ml-auto h-6 w-40 rounded-md bg-white/5 px-2 text-meta text-sol-text outline-none ring-1 ring-white/5 placeholder:text-sol-text-dim focus:ring-sol-violet/50"
+                  className="ml-auto h-6 w-40 rounded-md bg-white/5 px-2 text-[11px] text-sol-text outline-none ring-1 ring-white/5 placeholder:text-sol-text-dim focus:ring-sol-violet/50"
                   style={{ fontVariantLigatures: "none" }}
                 />
               </div>
               <div className="max-h-[260px] space-y-0.5 overflow-y-auto">
                 {windows.length === 0 ? (
-                  <div className="px-1 py-3 text-center text-meta text-sol-text-muted">No window matches "{query}"</div>
+                  <div className="px-1 py-3 text-center text-[11px] text-sol-text-muted">No window matches "{query}"</div>
                 ) : (
                   windows.map((src, i) => (
                     <button
@@ -1120,7 +1088,7 @@ function SharePicker({
                       ) : (
                         <AppWindow className="h-4 w-4 shrink-0 text-sol-text-dim" />
                       )}
-                      <span className="line-clamp-2 min-w-0 text-meta leading-snug text-sol-text-muted group-hover:text-sol-text">
+                      <span className="line-clamp-2 min-w-0 text-[11px] leading-snug text-sol-text-muted group-hover:text-sol-text">
                         {src.name || "Untitled window"}
                       </span>
                     </button>

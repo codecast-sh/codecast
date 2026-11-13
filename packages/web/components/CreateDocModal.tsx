@@ -1,4 +1,4 @@
-import { useId, useState, useRef } from "react";
+import { useState, useRef } from "react";
 import { useMentionQuery, useActiveMentionScope } from "../hooks/useMentionQuery";
 import { useImageUpload } from "../hooks/useImageUpload";
 import { useWorkspaceArgs, workspaceStamp } from "../hooks/useWorkspaceArgs";
@@ -52,7 +52,6 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
   const [acceptance, setAcceptance] = useState("");
 
   const isPlan = docType === "plan";
-  const fieldId = useId();
   const selectClass = "w-full text-xs px-2 py-1.5 rounded-lg bg-sol-bg border border-sol-border/50 text-sol-text focus:outline-none focus:border-sol-cyan appearance-none";
 
   const handleSubmit = async () => {
@@ -154,7 +153,7 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
             <button
               type="button"
               onClick={() => setShowAdvanced(!showAdvanced)}
-              className="flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-cyan transition-colors"
+              className="flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-cyan transition-colors"
             >
               <ChevronRight className={`w-3 h-3 transition-transform ${showAdvanced ? "rotate-90" : ""}`} />
               Workflow config
@@ -163,9 +162,8 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
             {showAdvanced && (
               <div className="space-y-2 pl-1 border-l-2 border-sol-border/20 ml-1 mt-2">
                 <div>
-                  <label htmlFor={`${fieldId}-acceptance`} className="text-mark font-medium text-sol-text-dim uppercase tracking-wide">Acceptance Criteria</label>
+                  <label className="text-[10px] font-medium text-sol-text-dim uppercase tracking-wide">Acceptance Criteria</label>
                   <textarea
-                    id={`${fieldId}-acceptance`}
                     value={acceptance}
                     onChange={(e) => setAcceptance(e.target.value)}
                     placeholder={"One criterion per line...\ne.g. All tests pass\ne.g. No new lint warnings"}
@@ -174,9 +172,8 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
                   />
                 </div>
                 <div>
-                  <label htmlFor={`${fieldId}-stylesheet`} className="text-mark font-medium text-sol-text-dim uppercase tracking-wide">Model Stylesheet</label>
+                  <label className="text-[10px] font-medium text-sol-text-dim uppercase tracking-wide">Model Stylesheet</label>
                   <textarea
-                    id={`${fieldId}-stylesheet`}
                     value={modelStylesheet}
                     onChange={(e) => setModelStylesheet(e.target.value)}
                     placeholder={"CSS-like model routing rules...\ne.g. * { model: sonnet }\n#planning { model: opus }"}
@@ -186,22 +183,21 @@ export function CreateDocModal({ onClose, initialType }: { onClose: () => void; 
                 </div>
                 <div className="flex gap-2">
                   <div className="flex-1">
-                    <label htmlFor={`${fieldId}-fidelity`} className="text-mark font-medium text-sol-text-dim uppercase tracking-wide">Fidelity</label>
-                    <select id={`${fieldId}-fidelity`} value={fidelity} onChange={(e) => setFidelity(e.target.value)} className={selectClass + " mt-0.5"}>
+                    <label className="text-[10px] font-medium text-sol-text-dim uppercase tracking-wide">Fidelity</label>
+                    <select value={fidelity} onChange={(e) => setFidelity(e.target.value)} className={selectClass + " mt-0.5"}>
                       {FIDELITY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
                   </div>
                   <div className="flex-1">
-                    <label htmlFor={`${fieldId}-join`} className="text-mark font-medium text-sol-text-dim uppercase tracking-wide">Join Policy</label>
-                    <select id={`${fieldId}-join`} value={joinPolicy} onChange={(e) => setJoinPolicy(e.target.value)} className={selectClass + " mt-0.5"}>
+                    <label className="text-[10px] font-medium text-sol-text-dim uppercase tracking-wide">Join Policy</label>
+                    <select value={joinPolicy} onChange={(e) => setJoinPolicy(e.target.value)} className={selectClass + " mt-0.5"}>
                       {JOIN_POLICY_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                     </select>
                   </div>
                   {joinPolicy === "k_of_n" && (
                     <div className="w-16">
-                      <label htmlFor={`${fieldId}-k`} className="text-mark font-medium text-sol-text-dim uppercase tracking-wide">K</label>
+                      <label className="text-[10px] font-medium text-sol-text-dim uppercase tracking-wide">K</label>
                       <input
-                        id={`${fieldId}-k`}
                         type="number"
                         min={1}
                         value={joinK}

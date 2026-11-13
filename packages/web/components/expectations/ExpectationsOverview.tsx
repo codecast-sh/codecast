@@ -43,10 +43,8 @@ export function ExpectationsOverview() {
         ) : (
           <>
             {documents.length > 0 ? (
-              // The four columns need ~43rem; a narrower pane scrolls the table sideways instead of cutting "Broken most" off.
-              <div className="overflow-x-auto rounded-lg border border-sol-border/30" data-expectations-documents>
-                <div className="md:min-w-[43rem]">
-                <div className="hidden grid-cols-[minmax(12rem,1.1fr)_6rem_10rem_minmax(10rem,1.6fr)] gap-x-4 border-b border-sol-border/30 bg-sol-bg-alt/40 px-4 py-1.5 text-meta text-sol-text-dim md:grid">
+              <div className="overflow-hidden rounded-lg border border-sol-border/30" data-expectations-documents>
+                <div className="hidden grid-cols-[minmax(12rem,1.1fr)_6rem_10rem_minmax(14rem,1.6fr)] gap-x-4 border-b border-sol-border/30 bg-sol-bg-alt/40 px-4 py-1.5 text-[11px] text-sol-text-dim md:grid">
                   <span>Project</span>
                   <span className="text-right">Lines</span>
                   <span className="text-right">Breaks, 30 days</span>
@@ -55,7 +53,6 @@ export function ExpectationsOverview() {
                 <ul className="divide-y divide-sol-border/20">
                   {documents.map((r) => <DocumentRow key={r._id} r={r} />)}
                 </ul>
-                </div>
               </div>
             ) : (
               <p className="text-[13px] text-sol-text-muted" data-expectations-overview-empty>No project has expectations yet. Open a project below to start its document.</p>
@@ -84,12 +81,12 @@ export function ExpectationsOverview() {
 function DocumentRow({ r }: { r: ExpectationsOverviewRow }) {
   const quiet = r.active - r.broken;
   return (
-    <li className="grid gap-x-4 gap-y-1 px-4 py-3 md:grid-cols-[minmax(12rem,1.1fr)_6rem_10rem_minmax(10rem,1.6fr)] hover:bg-sol-bg-alt/30" data-expectations-document={ref(r)}>
+    <li className="grid gap-x-4 gap-y-1 px-4 py-3 md:grid-cols-[minmax(12rem,1.1fr)_6rem_10rem_minmax(14rem,1.6fr)] hover:bg-sol-bg-alt/30" data-expectations-document={ref(r)}>
       <div className="min-w-0">
         <Link href={expectationsHref(ref(r))} className="group inline-flex items-center gap-1 text-[13px] font-medium text-sol-text hover:text-sol-blue">
           {r.project.title}<ArrowRight className="h-3 w-3 opacity-0 transition-opacity group-hover:opacity-100" />
         </Link>
-        <div className="text-meta text-sol-text-dim tabular-nums">
+        <div className="text-[11px] text-sol-text-dim tabular-nums">
           version {r.version}{r.applied_at ? `, ${shortDay(r.applied_at)}` : ""}
           {r.open_proposals > 0 && <Link href={expectationsHref(ref(r))} className="ml-1.5 text-sol-yellow hover:underline" data-expectations-waiting>{r.open_proposals} waiting</Link>}
         </div>
@@ -100,8 +97,8 @@ function DocumentRow({ r }: { r: ExpectationsOverviewRow }) {
       </div>
       <div className="text-[12px] tabular-nums md:text-right" title={`${r.broken} of ${r.active} lines broken in 30 days; ${quiet} never cited`}>
         <span className={cn("font-semibold", r.breaks7 ? "text-sol-red" : r.breaks30 ? "text-sol-orange" : "text-sol-text-dim")}>{r.breaks30}</span>
-        {r.breaks7 > 0 && <div className="text-meta text-sol-red/90">{r.breaks7} this week</div>}
-        {r.active > 0 && <div className="text-meta text-sol-text-dim">{quiet} never cited</div>}
+        {r.breaks7 > 0 && <div className="text-[11px] text-sol-red/90">{r.breaks7} this week</div>}
+        {r.active > 0 && <div className="text-[11px] text-sol-text-dim">{quiet} never cited</div>}
       </div>
       <div className="min-w-0 text-[12px]">
         {r.most_broken.length === 0 ? (

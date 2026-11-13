@@ -85,7 +85,7 @@ function SmallChanges({ stories, openKey }: { stories: readonly Story[]; openKey
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
-        className="rounded px-3 py-1 font-mono text-meta text-sol-text-dim hover:bg-sol-bg-alt/60 hover:text-sol-text/80"
+        className="rounded px-3 py-1 font-mono text-[11px] text-sol-text/45 hover:bg-sol-bg-alt/60 hover:text-sol-text/80"
       >
         {open ? "hide" : "+"} {plural(stories.length, "small change")}
       </button>
@@ -103,7 +103,7 @@ function DayHead({ day, meta }: { day: TimelineDay; meta: string }) {
     <>
       {day.summary && <p className="chg-ui text-[17px] font-bold leading-[1.35] tracking-tight text-sol-text [overflow-wrap:anywhere]">{day.summary}</p>}
       {day.standfirst && <p className="chg-ui mt-2 max-w-[44rem] text-[14px] leading-[1.65] text-sol-text/75 [overflow-wrap:anywhere]">{day.standfirst}</p>}
-      <p className={`font-mono text-meta tabular-nums text-sol-text-dim ${day.summary ? "mt-2" : ""}`}>{meta}</p>
+      <p className={`font-mono text-[11px] tabular-nums text-sol-text/45 ${day.summary ? "mt-2" : ""}`}>{meta}</p>
     </>
   );
 }
@@ -113,7 +113,7 @@ function ZoomIn({ onClick, children }: { onClick: () => void; children: React.Re
     <button
       type="button"
       onClick={onClick}
-      className="mt-3 rounded px-2 py-1 -ml-2 font-mono text-meta text-sol-text-dim hover:bg-sol-bg-alt/60 hover:text-sol-text"
+      className="mt-3 rounded px-2 py-1 -ml-2 font-mono text-[11px] text-sol-text/50 hover:bg-sol-bg-alt/60 hover:text-sol-text"
     >
       {children}
     </button>
@@ -144,7 +144,7 @@ function DaySection({ day, today, zoom, openKey, onOpen, onZoomIn }: {
   const top = day.stories.slice(0, 3);
   return (
     <section className="chg-day grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-5 border-t border-sol-border/15 py-6 first:border-t-0" aria-label={label ?? day.date}>
-      <h2 className="sticky top-3 self-start pt-1 font-mono text-[12px] tabular-nums text-sol-text-muted">{label}</h2>
+      <h2 className="sticky top-3 self-start pt-1 font-mono text-[12px] tabular-nums text-sol-text/55">{label}</h2>
       <div className="min-w-0">
         <DayHead day={day} meta={meta} />
         {zoom === "changes" ? (
@@ -194,7 +194,7 @@ function WeekSummary({ week, label, byKey, onOpen, media, days, onZoomIn }: {
   const top = weekTop(week, byKey);
   return (
     <section className="chg-week grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-5 border-t border-sol-border/15 py-6 first:border-t-0" aria-label={label}>
-      <h2 className="sticky top-3 self-start pt-1 font-mono text-[12px] text-sol-text-muted">{label}</h2>
+      <h2 className="sticky top-3 self-start pt-1 font-mono text-[12px] text-sol-text/55">{label}</h2>
       <div className={`min-w-0 ${media ? "" : "rounded-lg bg-sol-bg-alt/50 px-5 py-4"}`}>
         <p className={`chg-ui font-bold leading-[1.3] tracking-tight text-sol-text [overflow-wrap:anywhere] ${media ? "text-[20px]" : "text-[16px]"}`}>{week.headline}</p>
         {week.summary && <p className="chg-ui mt-2 max-w-[44rem] text-[14px] leading-[1.65] text-sol-text/75 [overflow-wrap:anywhere]">{week.summary}</p>}
@@ -482,7 +482,7 @@ export function ChangesPage() {
             filtering ? (
               <div className="mt-10"><NoMatch what="changes" onClear={() => setUrl((s) => clearFilters(s))} /></div>
             ) : (
-              <p className="chg-ui mt-10 text-[14px] text-sol-text-muted">Nothing has landed in the last {plural(chunks * 7, "day")}.</p>
+              <p className="chg-ui mt-10 text-[14px] text-sol-text/55">Nothing has landed in the last {plural(chunks * 7, "day")}.</p>
             )
           ) : (
             <Accordion.Root type="single" collapsible value={url.story ?? ""} onValueChange={(v) => setUrl({ story: v || undefined })} className="mt-4">
@@ -523,7 +523,7 @@ export function ChangesPage() {
                 <button
                   type="button"
                   onClick={() => setChunks((c) => Math.min(MAX_CHUNKS, c + 1))}
-                  className="rounded px-3 py-1 font-mono text-meta text-sol-text-dim hover:bg-sol-bg-alt/60 hover:text-sol-text/80"
+                  className="rounded px-3 py-1 font-mono text-[11px] text-sol-text/45 hover:bg-sol-bg-alt/60 hover:text-sol-text/80"
                 >
                   earlier
                 </button>
@@ -533,7 +533,7 @@ export function ChangesPage() {
           {Array.from({ length: Math.max(0, chunks - 1) }, (_, i) => (
             <ChangesChunkFeed key={i + 1} teamId={teamId} repository={repo} today={today} k={i + 1} />
           ))}
-          {feed.error && cold && <p className="mt-6 font-mono text-meta text-sol-text-muted">Changes could not load: {feed.error.message}</p>}
+          {feed.error && cold && <p className="mt-6 font-mono text-[11px] text-sol-text/55">Changes could not load: {feed.error.message}</p>}
         </StoryCtx.Provider>
       </div>
       </div>

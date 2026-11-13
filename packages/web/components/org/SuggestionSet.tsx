@@ -58,7 +58,7 @@ type Piece =
 export function Age({ at, now, settled }: { at: number; now: number; settled?: boolean }) {
   const stale = !settled && now - at > STALE_PIECE_MS;
   return (
-    <span className="shrink-0 text-meta tabular-nums" style={{ color: stale ? "var(--sol-orange)" : "var(--sol-text-dim)" }} title={new Date(at).toLocaleString()} data-piece-age={stale ? "stale" : "fresh"}>
+    <span className="shrink-0 text-[11.5px] tabular-nums" style={{ color: stale ? "var(--sol-orange)" : "var(--sol-text-dim)" }} title={new Date(at).toLocaleString()} data-piece-age={stale ? "stale" : "fresh"}>
       {ageWords(at, now)}
     </span>
   );
@@ -67,7 +67,7 @@ export function Age({ at, now, settled }: { at: number; now: number; settled?: b
 /** The staged answer on a folded piece: what the send will do with it. */
 function StagedWord({ verdict }: { verdict: "approve" | "reject" | "note" }) {
   const ink = verdict === "approve" ? "var(--ink-green)" : verdict === "reject" ? "var(--ink-red)" : "var(--ink-violet)";
-  return <span className="inline-flex shrink-0 items-center gap-1 text-meta font-medium" style={{ color: ink }} data-piece-staged={verdict}>{verdict === "approve" && <Check className="h-3 w-3" aria-hidden />}{ORG_REPLY_WORDS[verdict].done}</span>;
+  return <span className="inline-flex shrink-0 items-center gap-1 text-[11.5px] font-medium" style={{ color: ink }} data-piece-staged={verdict}>{verdict === "approve" && <Check className="h-3 w-3" aria-hidden />}{ORG_REPLY_WORDS[verdict].done}</span>;
 }
 
 /** One sentence, its subject in bold. */
@@ -84,7 +84,7 @@ function CardPiece({ piece, n, batch, now, open, onOpen }: { piece: Extract<Piec
       {open ? (
         <>
           <button type="button" onClick={() => onOpen(false)} aria-expanded className="flex w-full items-center gap-2.5 pt-2 text-left" data-piece-fold>
-            <span className="min-w-0 flex-1 truncate text-meta" style={{ color: "var(--sol-text-dim)" }}>{piece.proposal.title}</span>
+            <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>{piece.proposal.title}</span>
             {staged && <StagedWord verdict={staged} />}
             <Age at={piece.at} now={now} />
             <ChevronRight className="h-3.5 w-3.5 shrink-0 rotate-90" style={{ color: "var(--sol-text-dim)" }} aria-hidden />
@@ -93,7 +93,7 @@ function CardPiece({ piece, n, batch, now, open, onOpen }: { piece: Extract<Piec
         </>
       ) : (
         <button type="button" onClick={() => onOpen(true)} aria-expanded={false} className="flex w-full items-baseline gap-2.5 py-2 text-left">
-          <span className="w-4 shrink-0 text-right text-meta tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{n}</span>
+          <span className="w-4 shrink-0 text-right text-[11.5px] tabular-nums" style={{ color: "var(--sol-text-dim)" }}>{n}</span>
           <span className="min-w-0 flex-1 text-[13px] leading-[19px] [text-wrap:pretty]" style={{ color: "var(--sol-text-muted)" }}><Sentence card={piece.card} /></span>
           {staged && <StagedWord verdict={staged} />}
           <Age at={piece.at} now={now} />
@@ -171,11 +171,11 @@ function Replaced({ row }: { row: OrgProposalListRow }) {
 function Others({ rows, onOpen, now }: { rows: OrgProposalListRow[]; onOpen: (ref: string) => void; now: number }) {
   return (
     <div className="mt-2 border-t pt-2" style={{ borderColor: LEDGER_HAIR }} data-suggestion-others={rows.length}>
-      <div className="pb-0.5 text-mark font-medium uppercase tracking-wide" style={{ color: "var(--sol-text-dim)" }}>Asked by others</div>
+      <div className="pb-0.5 text-[11px] font-medium uppercase tracking-wide" style={{ color: "var(--sol-text-dim)" }}>Asked by others</div>
       {rows.map((p) => (
         <button key={p._id} type="button" onClick={() => onOpen(p.short_id)} className="-mx-2 flex w-[calc(100%+16px)] items-baseline gap-2.5 rounded-md px-2 py-1.5 text-left hover:bg-sol-bg-highlight" data-org-open-proposal={p.short_id}>
           <span className="min-w-0 flex-1 truncate text-[13px]" style={{ color: "var(--sol-text)" }}>{p.title}</span>
-          <span className="shrink-0 truncate text-meta" style={{ color: "var(--sol-text-dim)" }}>{p.author?.name ?? p.author?.handle ?? ""}</span>
+          <span className="shrink-0 truncate text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>{p.author?.name ?? p.author?.handle ?? ""}</span>
           <Age at={p.created_at} now={now} />
         </button>
       ))}

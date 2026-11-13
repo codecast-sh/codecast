@@ -288,7 +288,7 @@ export function BrowserPane() {
           // What the agent is looking at, in the words the daemon uses for it:
           // its title, then its address. The session uuid is a handle, not a
           // name, so it only stands in while nothing has been streamed yet.
-          <span className="flex-1 min-w-0 flex items-baseline gap-1.5 overflow-hidden text-meta font-mono">
+          <span className="flex-1 min-w-0 flex items-baseline gap-1.5 overflow-hidden text-[11px] font-mono">
             <span className="cc-panel__icon self-center">
               <Globe className="w-3 h-3" />
             </span>
@@ -339,7 +339,7 @@ export function BrowserPane() {
             <button
               type="button"
               onClick={() => setAskedWhy(true)}
-              className="group flex flex-shrink-0 items-center gap-1 px-1 text-meta text-sol-text-dim/70 transition-colors hover:text-sol-text-muted"
+              className="group flex flex-shrink-0 items-center gap-1 px-1 text-[10px] text-sol-text-dim/70 transition-colors hover:text-sol-text-muted"
               aria-label="Page not showing?"
             >
               <CircleHelp className="w-3 h-3" />
@@ -425,7 +425,7 @@ function BlankPane({ onPick }: { onPick: (url: string) => void }) {
                 type="button"
                 onClick={() => onPick(url)}
                 title={url}
-                className="group flex items-center gap-2 rounded-[5px] px-2 py-1 text-left text-meta font-mono text-sol-text-muted transition-colors hover:bg-sol-bg-highlight/60 hover:text-sol-text"
+                className="group flex items-center gap-2 rounded-[5px] px-2 py-1 text-left text-[11px] font-mono text-sol-text-muted transition-colors hover:bg-sol-bg-highlight/60 hover:text-sol-text"
               >
                 <Globe className="h-3 w-3 flex-shrink-0 text-sol-text-dim transition-colors group-hover:text-sol-cyan" />
                 <span className="truncate">{pageAddressLabel(url)}</span>
@@ -635,7 +635,7 @@ function LoopbackBadge({ device, elsewhere }: { device: Device | undefined; else
   // leaving the icon and its tooltip.
   return (
     <ShortcutTooltip label={tip}>
-      <span className="flex flex-shrink-0 items-center gap-1 text-meta text-sol-text-dim/80" aria-label={tip}>
+      <span className="flex flex-shrink-0 items-center gap-1 text-[10px] text-sol-text-dim/80" aria-label={tip}>
         {device ? <DeviceIcon d={device} className="w-3 h-3" /> : <Laptop className="w-3 h-3" />}
         <span className="cq-sq1 max-w-[140px] truncate">{elsewhere ? (name ?? "remote") : `this machine${name ? ` · ${name}` : ""}`}</span>
       </span>

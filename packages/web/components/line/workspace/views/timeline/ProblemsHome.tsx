@@ -8,7 +8,6 @@
 // project is a heading with its line's start control, the control's one home.
 // The filter, sort, window and search are the URL's, so Back returns to them.
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import Link from "next/link";
 import { Search, X } from "lucide-react";
 import { useEventListener } from "../../../../../hooks/useEventListener";
 import { useTabActive } from "../../../../../hooks/usePagePresence";
@@ -294,7 +293,7 @@ function ProjectStart({ sub, workspace, twins }: { sub: ProblemSub; workspace: L
   if (!projectId) return <span className="lwp-sub-note">In no project: nothing starts these</span>;
   if (workspace.trialProjects.has(projectId)) return <TrialStarts projectId={projectId} />;
   if (!admit.admission) return null;
-  if (!admit.admission.role) return <Link className="lw-link" href={`/projects/${projectId}`} data-line-no-lead={projectId}>No lead: set one on the project</Link>;
+  if (!admit.admission.role) return <a className="lw-link" href={`/projects/${projectId}`} data-line-no-lead={projectId}>No lead: set one on the project</a>;
   // Why the ready ones sit idle, in the sweep's order (line off, lead paused, today's sessions, places taken); nothing when it is taking them.
   const hold = sub.ready ? admissionHold(admit.admission) : null;
   return (
@@ -311,7 +310,7 @@ function ProjectStart({ sub, workspace, twins }: { sub: ProblemSub; workspace: L
 /** A trial problem whose run failed rather than stopped: its rerun lives on the trial page's own list, a press away;
  *  while the trial refuses new runs, the link only opens it there. */
 function TrialRerunLink({ projectId, stopped, held }: { projectId: string | null; stopped: boolean; held: boolean }) {
-  return <Link className="lw-act" href={useTrialHref(projectId, null, stopped ? "stopped" : "failed")} data-line-trial-rerun={projectId ?? ""}>{held ? "Open in Trial" : "Rerun in Trial"}</Link>;
+  return <a className="lw-act" href={useTrialHref(projectId, null, stopped ? "stopped" : "failed")} data-line-trial-rerun={projectId ?? ""}>{held ? "Open in Trial" : "Rerun in Trial"}</a>;
 }
 
 /** A trial project's heading: why its problems sit idle when its dispatcher holds (runs used, spend cap, no
@@ -323,7 +322,7 @@ function TrialStarts({ projectId }: { projectId: string }) {
   return (
     <>
       {hold && <span className="lwp-sub-why" title={row?.dispatch?.held ?? hold.why} data-line-hold={projectId}>{hold.short}</span>}
-      <Link className="lw-link" href={href} data-line-trial-link={projectId}>{hold ? "Trial" : "Trial: runs start on their own"}</Link>
+      <a className="lw-link" href={href} data-line-trial-link={projectId}>{hold ? "Trial" : "Trial: runs start on their own"}</a>
     </>
   );
 }

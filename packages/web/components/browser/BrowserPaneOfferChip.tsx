@@ -94,7 +94,7 @@ export function BrowserPaneOfferChip({ conversationId }: { conversationId: strin
   if (!decision.show || !offer) return null;
 
   return (
-    <span className="inline-flex items-center flex-shrink-0 rounded border border-sol-cyan/30 bg-sol-cyan/10 text-meta font-mono text-sol-cyan overflow-hidden">
+    <span className="inline-flex items-center flex-shrink-0 rounded border border-sol-cyan/30 bg-sol-cyan/10 text-[10px] font-mono text-sol-cyan overflow-hidden">
       <button
         type="button"
         onClick={open}

@@ -66,7 +66,7 @@ export function ScopeFeed({ scope, className, fill, lockKinds, plain }: ScopeFee
         <button
           type="button"
           onClick={clearKinds}
-          className={cn("h-[24px] px-2.5 rounded-full text-meta font-medium border transition-colors", kinds.length === 0 ? "border-transparent" : "hover:bg-sol-bg-highlight/70")}
+          className={cn("h-[24px] px-2.5 rounded-full text-[11px] font-medium border transition-colors", kinds.length === 0 ? "border-transparent" : "hover:bg-sol-bg-highlight/70")}
           style={kinds.length === 0 ? { background: "var(--sol-text)", color: "var(--sol-bg)", borderColor: "transparent" } : { borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-text-muted)" }}
         >
           Everything
@@ -81,7 +81,7 @@ export function ScopeFeed({ scope, className, fill, lockKinds, plain }: ScopeFee
               type="button"
               onClick={() => toggleKind(k)}
               aria-pressed={on}
-              className={cn("inline-flex items-center gap-1.5 h-[24px] px-2.5 rounded-full text-meta font-medium border transition-colors", !on && "hover:bg-sol-bg-highlight/70")}
+              className={cn("inline-flex items-center gap-1.5 h-[24px] px-2.5 rounded-full text-[11px] font-medium border transition-colors", !on && "hover:bg-sol-bg-highlight/70")}
               style={on
                 ? { background: "var(--sol-bg-highlight)", borderColor: "color-mix(in srgb, var(--sol-text) 35%, transparent)", color: "var(--sol-text)" }
                 : { borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-text-muted)" }}
@@ -99,7 +99,7 @@ export function ScopeFeed({ scope, className, fill, lockKinds, plain }: ScopeFee
       {rows.length === 0 && loaded && (
         <div className="py-14 text-center">
           <p className="text-[13px]" style={{ color: "var(--sol-text-muted)" }}>Nothing here yet{kinds.length ? " for those kinds" : ""}.</p>
-          <p className="mt-1 text-meta" style={{ color: "var(--sol-text-dim)" }}>Sessions, tasks, plans, pages, artifacts, decisions, updates and commits appear here as they move.</p>
+          <p className="mt-1 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>Sessions, tasks, plans, pages, artifacts, decisions, updates and commits appear here as they move.</p>
         </div>
       )}
       {rows.length === 0 && !loaded && !problem && (
@@ -112,7 +112,7 @@ export function ScopeFeed({ scope, className, fill, lockKinds, plain }: ScopeFee
       <ol className="space-y-1">
         {rows.map((r, i) => <FeedRowView key={`${r.kind}:${r.id}`} row={r} now={now} index={i} onOpenSession={(row) => openLinked({ _id: row.id, short_id: row.short_id, title: row.title })} />)}
       </ol>
-      <div ref={sentinel} className="h-8 flex items-center justify-center text-meta" style={{ color: "var(--sol-text-dim)" }}>
+      <div ref={sentinel} className="h-8 flex items-center justify-center text-[11px]" style={{ color: "var(--sol-text-dim)" }}>
         {problem && rows.length > 0 ? problem : hasMore ? (pending ? "Loading…" : <button type="button" onClick={loadMore} className="hover:underline">Load more</button>) : rows.length > 0 ? "That is everything." : null}
       </div>
     </>
@@ -148,9 +148,9 @@ function FeedRowView({ row, now, index, onOpenSession }: { row: FeedRow; now: nu
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1.5 min-w-0">
           <span className="truncate text-[13px] font-medium" style={{ color: "var(--sol-text)" }}>{row.title || "Untitled"}</span>
-          {row.state && <span className="shrink-0 text-meta px-1.5 min-h-[17px] inline-flex items-center rounded-md border" style={{ borderColor: `color-mix(in srgb, ${stateColor} 45%, transparent)`, color: stateColor }}>{row.state.replace(/_/g, " ")}</span>}
+          {row.state && <span className="shrink-0 text-[10px] px-1.5 h-[17px] inline-flex items-center rounded-md border" style={{ borderColor: `color-mix(in srgb, ${stateColor} 45%, transparent)`, color: stateColor }}>{row.state.replace(/_/g, " ")}</span>}
         </span>
-        <span className="mt-[2px] flex items-center gap-1.5 text-meta min-w-0" style={{ color: "var(--sol-text-dim)" }}>
+        <span className="mt-[2px] flex items-center gap-1.5 text-[10.5px] min-w-0" style={{ color: "var(--sol-text-dim)" }}>
           <span style={{ fontFamily: "var(--font-mono)" }}>{row.short_id ?? m.label}</span>
           {row.actor && (
             <>
@@ -166,7 +166,7 @@ function FeedRowView({ row, now, index, onOpenSession }: { row: FeedRow; now: nu
           )}
         </span>
       </span>
-      <span className="text-meta tabular-nums shrink-0 self-start mt-[3px]" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - row.updated_at)}</span>
+      <span className="text-[10.5px] tabular-nums shrink-0 self-start mt-[3px]" style={{ color: "var(--sol-text-dim)" }}>{compactAge(now - row.updated_at)}</span>
     </>
   );
   const cls = "group w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-xl transition-colors hover:bg-sol-bg-highlight/70 scope-feed-row";

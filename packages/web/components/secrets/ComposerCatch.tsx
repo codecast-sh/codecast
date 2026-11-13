@@ -77,7 +77,7 @@ export function ComposerCatch({
         <div key={f.start} className="flex min-w-0 items-center gap-2">
           <KeyRound size={13} className="shrink-0 text-sol-yellow" />
           <span className="shrink-0 font-medium text-sol-text">{f.label}</span>
-          <span className="min-w-0 truncate font-mono text-meta text-sol-text-dim">{fingerprint(f.value) ?? ""}</span>
+          <span className="min-w-0 truncate font-mono text-[11.5px] text-sol-text-dim">{fingerprint(f.value) ?? ""}</span>
           <span className="ml-auto shrink-0 text-sol-text-muted">as</span>
           <input
             value={names[i]}
@@ -95,7 +95,7 @@ export function ComposerCatch({
             className={`w-[12rem] min-w-0 rounded-md border bg-sol-bg px-2 py-1 font-mono text-[12px] text-sol-text outline-none focus:border-sol-yellow disabled:opacity-60 ${issues[i] ? "border-sol-red/70" : "border-sol-border"}`}
             data-composer-catch-name
           />
-          {saved.has(i) ? <span className="shrink-0 text-meta text-sol-green">Saved</span> : issues[i] && <span className="shrink-0 text-meta text-sol-red">{issues[i]}</span>}
+          {saved.has(i) ? <span className="shrink-0 text-[11.5px] text-sol-green">Saved</span> : issues[i] && <span className="shrink-0 text-[11.5px] text-sol-red">{issues[i]}</span>}
         </div>
       ))}
       <div className="flex flex-wrap items-center gap-2">

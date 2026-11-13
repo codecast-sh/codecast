@@ -23,25 +23,25 @@
 .ovc-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 12px; color: var(--sol-text-dim); }
 .ovc-mark { position: absolute; top: -2px; bottom: 0; border-left: 1px dashed var(--sol-green); pointer-events: none; }
 .ovc-mark-label {
-  position: absolute; top: 0; left: 3px; font-size: var(--fs-meta); line-height: 15px; padding: 0 4px; border-radius: 3px; white-space: nowrap;
+  position: absolute; top: 0; left: 3px; font-size: 10px; line-height: 15px; padding: 0 4px; border-radius: 3px; white-space: nowrap;
   color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 13%, var(--sol-bg)); pointer-events: auto; text-decoration: none;
 }
 a.ovc-mark-label:hover { background: color-mix(in srgb, var(--sol-green) 24%, var(--sol-bg)); }
 .ovc-mark[data-edge="end"] .ovc-mark-label { left: auto; right: 3px; }
-.ovc-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: var(--fs-meta); color: var(--sol-text-muted); }
+.ovc-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--sol-text-muted); }
 .ovc-grid { position: absolute; inset: -8px 0 0 0; pointer-events: none; }
-.ovc-y { position: absolute; left: 0; transform: translateY(-50%); font-size: var(--fs-meta); line-height: 12px; padding-right: 4px; color: var(--sol-text-dim); background: var(--sol-bg); z-index: 2; }
+.ovc-y { position: absolute; left: 0; transform: translateY(-50%); font-size: 9.5px; line-height: 12px; padding-right: 4px; color: var(--sol-text-dim); background: var(--sol-bg); z-index: 2; }
 .ovc-y::after { content: ""; position: absolute; left: 100%; top: 50%; width: 9999px; border-top: 1px dashed color-mix(in srgb, var(--sol-border) 70%, transparent); }
 .ovc-grid { overflow: hidden; }
 .ovc-x { position: relative; height: 13px; margin-top: 2px; }
-.ovc-tick { position: absolute; top: 0; transform: translateX(-50%); font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; }
+.ovc-tick { position: absolute; top: 0; transform: translateX(-50%); font-size: 10px; color: var(--sol-text-dim); white-space: nowrap; }
 .ovc-tick:first-child { transform: none; }
 .ovc-nodata {
   position: absolute; top: 0; bottom: 0; left: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; z-index: 1;
   background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--sol-text-dim) 13%, transparent) 0 1px, transparent 1px 7px);
   border-right: 1px dashed var(--sol-text-dim);
 }
-.ovc-nodata span { font-size: var(--fs-meta); color: var(--sol-text-dim); background: var(--sol-bg); padding: 1px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.ovc-nodata span { font-size: 10.5px; color: var(--sol-text-dim); background: var(--sol-bg); padding: 1px 6px; border-radius: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .ovc-mark-label { max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
 .ovc-mark-label[data-many="true"] { font-weight: 600; }
 .ovc-legend span { display: inline-flex; align-items: center; gap: 5px; }
@@ -59,12 +59,12 @@ a.ovc-mark-label:hover { background: color-mix(in srgb, var(--sol-green) 24%, va
 .otl-clear { display: inline-flex; color: var(--sol-text-dim); }
 .otl-clear:hover { color: var(--sol-text); }
 .otl-key { opacity: 0.6; }
-.otl-count { font-size: var(--fs-mark); white-space: nowrap; }
-.otl-live { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 6px; font-size: var(--fs-meta); border: 1px solid var(--osx-line); color: var(--sol-text-muted); }
+.otl-count { font-size: 11.5px; white-space: nowrap; }
+.otl-live { display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border-radius: 6px; font-size: 11.5px; border: 1px solid var(--osx-line); color: var(--sol-text-muted); }
 .otl-live[data-on="true"] { color: var(--sol-green); border-color: color-mix(in srgb, var(--sol-green) 50%, var(--sol-border)); background: color-mix(in srgb, var(--sol-green) 9%, transparent); }
 .otl-live[data-on="true"] svg { animation: otl-pulse 2.4s ease-in-out 3; }
 @keyframes otl-pulse { 50% { opacity: 0.4; } }
-.otl-span { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-meta); padding: 3px 4px 3px 9px; border-radius: 6px; background: color-mix(in srgb, var(--sol-blue) 12%, transparent); color: var(--sol-text); white-space: nowrap; }
+.otl-span { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; padding: 3px 4px 3px 9px; border-radius: 6px; background: color-mix(in srgb, var(--sol-blue) 12%, transparent); color: var(--sol-text); white-space: nowrap; }
 .otl-span button { display: inline-flex; padding: 2px; border-radius: 4px; color: var(--sol-text-muted); }
 .otl-span button:hover { color: var(--sol-text); }
 .otl-jump { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 26px; border: 1px solid var(--osx-line); border-radius: 6px; color: var(--sol-text-muted); cursor: pointer; }
@@ -74,16 +74,16 @@ a.ovc-mark-label:hover { background: color-mix(in srgb, var(--sol-green) 24%, va
 /* The lanes leave room past the track's right end, so a pill at the window's edge is drawn whole; the chart's plot stops at the same edge. */
 .otl-lanes .ops-tl-axis, .otl-lanes .ops-tl-track { margin-right: 14px; }
 /* What the lanes' counts count, in the gutter over the names: the list's unit, as the facets name it. */
-.otl-lanes-unit { position: absolute; right: 100%; top: 0; bottom: 0; width: var(--otl-gutter); display: flex; align-items: center; padding: 0 12px; font-size: var(--fs-mark); text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; }
+.otl-lanes-unit { position: absolute; right: 100%; top: 0; bottom: 0; width: var(--otl-gutter); display: flex; align-items: center; padding: 0 12px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; }
 
 .otl-body { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 18px; padding: 14px 20px 40px; flex: 1; }
 .otl[data-open="true"] .otl-body { grid-template-columns: 200px minmax(0, 1fr) 340px; }
 .otl-main { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 
 .otl-facets { display: flex; flex-direction: column; gap: 14px; min-width: 0; align-self: start; position: sticky; top: 64px; }
-.otl-facets-unit { font-size: var(--fs-mark); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: -8px; }
-.otl-facet-head { display: flex; align-items: center; justify-content: space-between; font-size: var(--fs-meta); font-weight: 600; color: var(--sol-text-muted); margin-bottom: 4px; }
-.otl-facet-head button { font-size: var(--fs-meta); font-weight: 400; }
+.otl-facets-unit { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: -8px; }
+.otl-facet-head { display: flex; align-items: center; justify-content: space-between; font-size: 11px; font-weight: 600; color: var(--sol-text-muted); margin-bottom: 4px; }
+.otl-facet-head button { font-size: 10.5px; font-weight: 400; }
 .otl-facet-row { position: relative; display: flex; align-items: center; border-radius: 5px; }
 .otl-facet-row:hover { background: color-mix(in srgb, var(--sol-text) 5%, transparent); }
 .otl-facet-pick { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; padding: 3px 6px; font-size: 12px; color: var(--sol-text-muted); text-align: left; }
@@ -91,11 +91,11 @@ a.ovc-mark-label:hover { background: color-mix(in srgb, var(--sol-green) 24%, va
 .otl-check { width: 11px; height: 11px; border-radius: 3px; border: 1px solid color-mix(in srgb, var(--sol-text-muted) 60%, transparent); flex-shrink: 0; }
 .otl-facet-row[data-on="true"] .otl-check { background: var(--sol-blue); border-color: var(--sol-blue); }
 .otl-swatch { width: 7px; height: 7px; border-radius: 2px; flex-shrink: 0; }
-.otl-facet-n { margin-left: auto; font-size: var(--fs-meta); color: var(--sol-text-dim); }
-.otl-only { display: none; position: absolute; right: 4px; font-size: var(--fs-meta); padding: 1px 5px; border-radius: 4px; color: var(--sol-text-muted); background: var(--sol-bg); border: 1px solid var(--osx-line); }
+.otl-facet-n { margin-left: auto; font-size: 11px; color: var(--sol-text-dim); }
+.otl-only { display: none; position: absolute; right: 4px; font-size: 10.5px; padding: 1px 5px; border-radius: 4px; color: var(--sol-text-muted); background: var(--sol-bg); border: 1px solid var(--osx-line); }
 .otl-facet-row:hover .otl-only { display: block; }
 .otl-facet-row:hover .otl-facet-n { visibility: hidden; }
-.otl-more { font-size: var(--fs-meta); color: var(--sol-text-dim); padding: 2px 6px; }
+.otl-more { font-size: 11px; color: var(--sol-text-dim); padding: 2px 6px; }
 .otl-more:hover { color: var(--sol-text); }
 
 .otl-chart { padding: 0 0 6px; }
@@ -125,12 +125,12 @@ a.ovc-mark-label:hover { background: color-mix(in srgb, var(--sol-green) 24%, va
   background: var(--sol-bg); border: 1px solid var(--osx-line); border-radius: 8px; box-shadow: 0 8px 24px color-mix(in srgb, black 22%, transparent);
 }
 .otl-cluster-wrap[data-edge="end"] .otl-pop { left: auto; right: -12px; }
-.otl-pop-row { display: grid; grid-template-columns: 7px 70px minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 4px 6px; font-size: var(--fs-meta); border-radius: 5px; color: var(--sol-text); text-decoration: none; }
+.otl-pop-row { display: grid; grid-template-columns: 7px 70px minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 4px 6px; font-size: 11.5px; border-radius: 5px; color: var(--sol-text); text-decoration: none; }
 a.otl-pop-row:hover { background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
 .otl-pop-row i { width: 7px; height: 7px; border-radius: 2px; }
 .otl-pop-st { color: var(--sol-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.otl-pop-more { font-size: var(--fs-meta); padding: 3px 6px; }
-.otl-pop-zoom { margin: 4px 2px 2px; font-size: var(--fs-meta); padding: 4px 8px; border-radius: 5px; border: 1px solid var(--osx-line); text-align: center; color: var(--sol-text); }
+.otl-pop-more { font-size: 11px; padding: 3px 6px; }
+.otl-pop-zoom { margin: 4px 2px 2px; font-size: 11.5px; padding: 4px 8px; border-radius: 5px; border: 1px solid var(--osx-line); text-align: center; color: var(--sol-text); }
 .otl-pop-zoom:hover { background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
 
 .otl-rows { position: relative; display: flex; flex-direction: column; border-top: 1px solid var(--osx-line); overflow: clip; }
@@ -142,9 +142,9 @@ a.otl-pop-row:hover { background: color-mix(in srgb, var(--sol-text) 6%, transpa
 .otl-row:last-of-type { border-bottom: 0; }
 .otl-row:hover, .otl-row:focus-visible { background: color-mix(in srgb, var(--sol-text) 4%, transparent); outline: none; }
 .otl-row[data-on="true"] { background: color-mix(in srgb, var(--sol-blue) 9%, transparent); box-shadow: inset 2px 0 0 var(--sol-blue); }
-.otl-row-head { height: 28px; cursor: default; font-size: var(--fs-meta); font-weight: 600; color: var(--sol-text-dim); background: var(--sol-bg); }
+.otl-row-head { height: 28px; cursor: default; font-size: 10.5px; font-weight: 600; color: var(--sol-text-dim); background: var(--sol-bg); }
 .otl-row-head:hover { background: var(--sol-bg); }
-.otl-time { font-size: var(--fs-meta); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.otl-time { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* Past two days a time carries its date ("Nov 13, 12:28 PM"): the column takes the longest of them. */
 .otl-rows[data-span="long"] { --otl-t: 118px; }
 /* With the side panel open the title keeps its room: What and Codecast step aside first. */
@@ -153,29 +153,29 @@ a.otl-pop-row:hover { background: color-mix(in srgb, var(--sol-text) 6%, transpa
 .otl-row[data-cursor="true"]:not([data-on="true"]) { box-shadow: inset 2px 0 0 var(--sol-text-muted); }
 /* The message carries the row: Where is a dim aside that takes what is left, never as much as the message. */
 .otl-orow { grid-template-columns: var(--otl-t, 86px) minmax(80px, 120px) 64px minmax(240px, 3fr) 64px minmax(0, 1fr); }
-.otl-where { font-size: var(--fs-meta); min-width: 0; text-align: right; }
+.otl-where { font-size: 11.5px; min-width: 0; text-align: right; }
 .otl-rows-bar { display: flex; align-items: center; gap: 8px; margin-bottom: -6px; }
 .otl-keys { display: inline-flex; gap: 3px; opacity: 0.75; }
-.otl-pre { margin: 0; max-height: 320px; overflow: auto; font-size: var(--fs-meta); white-space: pre; }
+.otl-pre { margin: 0; max-height: 320px; overflow: auto; font-size: 11px; white-space: pre; }
 details.otl-panel-group > summary { cursor: pointer; list-style: revert; }
 /* Outranks .ops-btn (ops.css loads later at the same specificity): the toggle exists only on narrow windows. */
 .otl .otl-filters-btn { display: none; }
 .otl-src { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--sol-text-muted); font-size: 12px; }
 .otl-what { display: inline-flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
-.otl-st { font-size: var(--fs-meta); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
-.otl-kind, .otl-level { font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; }
+.otl-st { font-size: 11px; padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+.otl-kind, .otl-level { font-size: 10.5px; color: var(--sol-text-dim); white-space: nowrap; }
 .otl-level[data-level="fatal"], .otl-level[data-level="error"] { color: var(--sol-red); }
 .otl-level[data-level="warning"], .otl-level[data-level="warn"] { color: var(--sol-orange); }
 .otl-title { min-width: 0; color: var(--sol-text); }
-.otl-id { font-size: var(--fs-meta); white-space: nowrap; overflow: hidden; }
+.otl-id { font-size: 11px; white-space: nowrap; overflow: hidden; }
 .otl-id a { color: var(--sol-text-muted); }
 .otl-id a:hover { color: var(--sol-text); text-decoration: underline; }
 .otl-outcome { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; justify-content: flex-end; }
-.otl-pill { font-size: var(--fs-meta); padding: 1px 6px; border-radius: 4px; color: var(--sol-text-muted); background: color-mix(in srgb, var(--sol-text-muted) 12%, transparent); white-space: nowrap; }
+.otl-pill { font-size: 11px; padding: 1px 6px; border-radius: 4px; color: var(--sol-text-muted); background: color-mix(in srgb, var(--sol-text-muted) 12%, transparent); white-space: nowrap; }
 .otl-pill[data-tone="ok"] { color: var(--sol-green); background: color-mix(in srgb, var(--sol-green) 12%, transparent); }
 .otl-sentinel { display: flex; justify-content: center; padding: 10px; font-size: 12px; }
 .otl-fresh {
-  position: sticky; top: 60px; z-index: 4; align-self: center; margin-bottom: -26px; font-size: var(--fs-meta); padding: 3px 10px; border-radius: 999px;
+  position: sticky; top: 60px; z-index: 4; align-self: center; margin-bottom: -26px; font-size: 11.5px; padding: 3px 10px; border-radius: 999px;
   color: var(--sol-bg); background: var(--sol-blue); box-shadow: 0 2px 8px color-mix(in srgb, black 20%, transparent);
 }
 .otl-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 40px 0; font-size: 13px; }
@@ -188,7 +188,7 @@ details.otl-panel-group > summary { cursor: pointer; list-style: revert; }
 .otl-panel-group .ops-section-label { margin: 0; }
 .otl-panel-issue { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--osx-line); font-size: 12px; color: var(--sol-text); }
 .otl-panel-issue:hover { border-color: var(--sol-text-muted); }
-.otl-panel-facts { font-size: var(--fs-meta); }
+.otl-panel-facts { font-size: 11px; }
 .otl-panel-acts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 
 @media (max-width: 1100px) {
@@ -259,13 +259,13 @@ button.sov-fact small { color: var(--sol-blue); }
 a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--sol-text) 4%, var(--sol-bg)); }
 /* The number never cuts; its comparison wraps under it when the tile is narrow. */
 .sov-fact-v { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 7px; font-size: 19px; font-weight: 600; letter-spacing: -0.02em; white-space: nowrap; min-width: 0; }
-.sov-fact-v small { flex-basis: 100%; font-size: var(--fs-meta); font-weight: 400; letter-spacing: 0; color: var(--sol-text-muted); min-width: 0; white-space: normal; }
+.sov-fact-v small { flex-basis: 100%; font-size: 11.5px; font-weight: 400; letter-spacing: 0; color: var(--sol-text-muted); min-width: 0; white-space: normal; }
 /* On a phone the facts sit two to a row, an odd last one across both. */
 @container (max-width: 560px) {
   .sov-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .sov-fact:last-child:nth-child(odd) { grid-column: 1 / -1; }
 }
-.sov-fact-l { font-size: var(--fs-meta); color: var(--sol-text-dim); }
+.sov-fact-l { font-size: 11px; color: var(--sol-text-dim); }
 .sov-fact[data-tone="bad"] .sov-fact-v { color: var(--sol-red); }
 .sov-fact[data-tone="warn"] .sov-fact-v { color: var(--sol-orange); }
 .sov-fact[data-tone="ok"] .sov-fact-v { color: var(--sol-green); }
@@ -275,7 +275,7 @@ a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--s
 .sov-regressed { color: var(--sol-red); }
 .sov-flapping { color: var(--sol-orange); }
 .sov-work { display: inline-flex; align-items: center; gap: 4px; }
-.sov-work .ops-btn { height: 22px; padding: 0 7px; font-size: var(--fs-meta); gap: 4px; }
+.sov-work .ops-btn { height: 22px; padding: 0 7px; font-size: 11px; gap: 4px; }
 .sov-work .ops-btn[data-tone="primary"] { background: transparent; color: var(--sol-red); border-color: color-mix(in srgb, var(--sol-red) 30%, var(--sol-border)); }
 .sov-work .ops-btn[data-tone="primary"]:hover { background: var(--sol-red); color: var(--sol-bg); }
 .sov-work .ops-home-slot:empty { display: none; }
@@ -284,12 +284,12 @@ a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--s
 .sov-chart-head { display: flex; align-items: center; gap: 8px; margin-bottom: 26px; font-size: 12px; font-weight: 600; }
 .sov-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
 .sov-panel { display: flex; flex-direction: column; min-width: 0; }
-.sov-panel .ops-card-head a { font-weight: 400; color: var(--sol-text-muted); font-size: var(--fs-meta); }
+.sov-panel .ops-card-head a { font-weight: 400; color: var(--sol-text-muted); font-size: 11.5px; }
 .sov-panel .ops-card-head a:hover { color: var(--sol-text); }
 .sov-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12.5px; color: var(--sol-text); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 55%, transparent); }
 .sov-item:last-child { border-bottom: 0; }
 .sov-item:hover { background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
-.sov-item-meta { font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; }
+.sov-item-meta { font-size: 11px; color: var(--sol-text-dim); white-space: nowrap; }
 .sov-none { padding: 14px 12px; font-size: 12px; color: var(--sol-text-dim); }
 .sov-watch { grid-template-columns: auto minmax(0, 1fr) auto auto; }
 .sov-spark { display: inline-flex; width: 56px; }
@@ -302,7 +302,7 @@ a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--s
 .sov-check[data-arrived="true"] .sov-check-wait { color: var(--sol-green); }
 .sov-needs { display: flex; flex-direction: column; gap: 6px; padding-bottom: 32px; }
 /* Linked tasks and sessions on Ops rows take the row's meta size, in a capped slot, never the size of the title they sit beside. */
-.ops-home-acts .entity-ref, .otl-panel-acts .entity-ref, .otl-outcome .entity-ref { font-size: var(--fs-meta); max-width: 180px; }
+.ops-home-acts .entity-ref, .otl-panel-acts .entity-ref, .otl-outcome .entity-ref { font-size: 11.5px; max-width: 180px; }
 .ops-home-acts .entity-ref > .self-baseline, .otl-panel-acts .entity-ref > .self-baseline { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sov-setup { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; font-size: 12px; border: 1px solid var(--osx-line); border-radius: 8px; }
 .sov-setup .ops-mono { color: var(--sol-text-muted); }
@@ -316,8 +316,8 @@ a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--s
 .ops-icon-btn:hover:not(:disabled) { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 7%, transparent); }
 .ops-icon-btn:disabled { opacity: 0.4; cursor: default; }
 .ops-call-filters { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; font-weight: 400; }
-.ops-call-filters .ops-seg button { font-size: var(--fs-meta); padding: 2px 7px; }
-.ops-more-btn { display: block; width: 100%; padding: 7px 12px; font-size: var(--fs-meta); color: var(--sol-text-muted); text-align: left; }
+.ops-call-filters .ops-seg button { font-size: 10.5px; padding: 2px 7px; }
+.ops-more-btn { display: block; width: 100%; padding: 7px 12px; font-size: 11.5px; color: var(--sol-text-muted); text-align: left; }
 .ops-more-btn:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
 
 /* ── settings: the first source ── */
@@ -325,13 +325,13 @@ a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--s
 .ops-provider-card { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px; border: 1px solid var(--osx-line); border-radius: 8px; background: var(--sol-bg); text-align: left; font-size: 12px; color: var(--sol-text-muted); }
 .ops-provider-card b { color: var(--sol-text); font-size: 13px; font-weight: 600; }
 .ops-provider-card:hover { border-color: var(--sol-text-muted); }
-.ops-provider-cta { margin-top: 6px; font-size: var(--fs-meta); color: var(--sol-blue); }
+.ops-provider-cta { margin-top: 6px; font-size: 11.5px; color: var(--sol-blue); }
 .ops-provider-card:not([data-ready]) .ops-provider-cta { color: var(--sol-text-dim); }
 
 /* ── apps: run a reader or an action, and the no-manifest step ── */
 .ops-run { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--osx-line); }
 .ops-run-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
-.ops-run-field { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-meta); color: var(--sol-text-muted); min-width: 0; }
+.ops-run-field { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--sol-text-muted); min-width: 0; }
 .ops-run-field b { color: var(--sol-red); font-weight: 500; }
 .ops-run-field input:not([type="checkbox"]), .ops-run-field select, .ops-run-field textarea {
   height: 28px; padding: 0 8px; font-size: 12px; color: var(--sol-text); background: var(--sol-bg); border: 1px solid var(--osx-line); border-radius: 5px; min-width: 0;
@@ -345,7 +345,7 @@ a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--s
 .ops-run-out { max-height: 280px; overflow: auto; }
 .ops-nomanifest { max-width: 640px; margin: 8px 0; }
 .ops-nomanifest .ops-kv, .ops-nomanifest .ops-run-acts { padding: 10px 12px; }
-.ops-call-fix.ops-btn { height: 22px; padding: 0 7px; font-size: var(--fs-meta); gap: 4px; background: transparent; color: var(--sol-red); border-color: color-mix(in srgb, var(--sol-red) 30%, var(--sol-border)); }
+.ops-call-fix.ops-btn { height: 22px; padding: 0 7px; font-size: 11px; gap: 4px; background: transparent; color: var(--sol-red); border-color: color-mix(in srgb, var(--sol-red) 30%, var(--sol-border)); }
 .ops-call-fix.ops-btn:hover { background: var(--sol-red); color: var(--sol-bg); }
 .otl-source-list { flex-wrap: wrap; justify-content: center; max-width: 640px; }
 
@@ -381,7 +381,7 @@ a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--s
 @container (max-width: 860px) {
   .sov-grid[data-cols] { grid-template-columns: minmax(0, 1fr); }
 }
-.sov-head-btn { display: inline-flex; align-items: center; gap: 3px; font-size: var(--fs-meta); font-weight: 400; color: var(--sol-text-muted); margin-right: 10px; }
+.sov-head-btn { display: inline-flex; align-items: center; gap: 3px; font-size: 11.5px; font-weight: 400; color: var(--sol-text-muted); margin-right: 10px; }
 .sov-head-btn:hover { color: var(--sol-text); }
 .sov-none-act { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .ovc-empty { z-index: 2; pointer-events: none; }
@@ -398,9 +398,9 @@ a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--s
 
 /* The Codecast column: the task chip (id, state, owner), a live dot while a session fixes it, Fix while nobody is on it. */
 .otl-outcome .ops-home-task { flex-shrink: 1; min-width: 0; }
-.otl-fix .ops-btn { height: 22px; padding: 0 7px; font-size: var(--fs-meta); gap: 4px; background: transparent; color: var(--sol-red); border-color: color-mix(in srgb, var(--sol-red) 30%, var(--sol-border)); }
+.otl-fix .ops-btn { height: 22px; padding: 0 7px; font-size: 11px; gap: 4px; background: transparent; color: var(--sol-red); border-color: color-mix(in srgb, var(--sol-red) 30%, var(--sol-border)); }
 .otl-fix .ops-btn:hover { background: var(--sol-red); color: var(--sol-bg); }
-.otl-live-fix { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-meta); color: var(--sol-green); white-space: nowrap; text-decoration: none; }
+.otl-live-fix { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--sol-green); white-space: nowrap; text-decoration: none; }
 .otl-live-fix i { width: 6px; height: 6px; border-radius: 50%; background: var(--sol-green); }
 .otl-live-fix:hover { text-decoration: underline; }
 .otl-id-dot { display: none; width: 6px; height: 6px; border-radius: 50%; margin-right: 5px; vertical-align: 1px; background: var(--sol-text-dim); }
@@ -445,7 +445,7 @@ a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--s
 .otl-req { display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; min-width: 0; white-space: nowrap; vertical-align: bottom; }
 .otl-req > * { flex-shrink: 0; }
 .otl-req > .otl-req-path { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-.otl-req-m { font-size: var(--fs-meta); font-weight: 600; color: var(--sol-text-muted); }
+.otl-req-m { font-size: 10.5px; font-weight: 600; color: var(--sol-text-muted); }
 .otl-req-arrow { color: var(--sol-text-dim); }
 .otl-req-st { font-weight: 600; }
 .otl-req-st[data-level="error"] { color: var(--sol-red); }
@@ -458,20 +458,20 @@ a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--s
 .otl-facet-row[data-off="true"] .otl-facet-pick { opacity: 0.55; }
 .otl-facet-row[data-none="true"] .otl-check { visibility: hidden; }
 .otl-facet-row[data-none="true"] .otl-facet-pick { cursor: default; }
-.otl-rows-gap { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-meta); }
+.otl-rows-gap { display: inline-flex; align-items: center; gap: 8px; font-size: 11.5px; }
 /* Folding repeats: the toggle beside the rows' views, a folded run as one line (chevron, its count, its newest message), its rows indented when opened. */
-.otl-fold { height: 24px; padding: 0 9px; border: 1px solid var(--osx-line); border-radius: 6px; font-size: var(--fs-meta); color: var(--sol-text-muted); white-space: nowrap; }
+.otl-fold { height: 24px; padding: 0 9px; border: 1px solid var(--osx-line); border-radius: 6px; font-size: 11px; color: var(--sol-text-muted); white-space: nowrap; }
 .otl-fold[data-on="true"] { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text-muted) 12%, transparent); }
 .otl-run .otl-run-title { display: flex; align-items: center; gap: 6px; overflow: hidden; }
 .otl-run .otl-run-title > .truncate { min-width: 0; }
 .otl-run-chev { flex-shrink: 0; color: var(--sol-text-dim); transition: transform 120ms ease-out; }
 .otl-run[data-open="true"] .otl-run-chev { transform: rotate(90deg); }
-.otl-run-n { flex-shrink: 0; padding: 0 5px; border-radius: 4px; font-size: var(--fs-meta); font-weight: 600; color: var(--sol-text); background: color-mix(in srgb, var(--sol-text-muted) 16%, transparent); }
+.otl-run-n { flex-shrink: 0; padding: 0 5px; border-radius: 4px; font-size: 11px; font-weight: 600; color: var(--sol-text); background: color-mix(in srgb, var(--sol-text-muted) 16%, transparent); }
 .otl-orow[data-in-run="true"] { background: color-mix(in srgb, var(--sol-text-muted) 4%, transparent); }
 .otl-orow[data-in-run="true"] > .otl-title { padding-left: 18px; }
 
 /* ── Overview panels: watches under one reading, replays with who and what broke ── */
-.sov-more { display: block; padding: 6px 12px; font-size: var(--fs-meta); color: var(--sol-text-muted); text-decoration: none; }
+.sov-more { display: block; padding: 6px 12px; font-size: 11.5px; color: var(--sol-text-muted); text-decoration: none; }
 .sov-more:hover { color: var(--sol-text); background: color-mix(in srgb, var(--sol-text) 4%, transparent); }
 .sov-watch-v[data-stale="true"] { color: var(--sol-text-dim); font-weight: 400; }
 .sov-watch-why[data-verdict="failing"] { color: var(--sol-red); }
@@ -480,15 +480,15 @@ a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--s
 .sov-item-meta[data-verdict="paused"], .sov-item-meta[data-verdict="waiting"] { color: var(--sol-text-dim); }
 .sov-item.sov-replay { grid-template-columns: auto minmax(0, 1fr) auto; }
 .sov-replay-main { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
-.sov-replay-who { font-size: var(--fs-meta); color: var(--sol-text-dim); }
-.sov-replay-facts { display: inline-flex; align-items: center; gap: 8px; font-size: var(--fs-meta); white-space: nowrap; }
+.sov-replay-who { font-size: 11px; color: var(--sol-text-dim); }
+.sov-replay-facts { display: inline-flex; align-items: center; gap: 8px; font-size: 11px; white-space: nowrap; }
 .sov-replay-n { padding: 0 5px; border-radius: 4px; font-weight: 500; }
 .sov-replay-n[data-tone="bad"] { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 12%, transparent); }
 .sov-replay-n[data-tone="warn"] { color: var(--sol-orange); background: color-mix(in srgb, var(--sol-orange) 12%, transparent); }
 /* A source known to be silent: a flat stretch from its last event to now, named, distinct from missing data. */
 .ovc-silence { position: absolute; top: 0; bottom: 0; right: 0; display: flex; align-items: flex-end; justify-content: center; pointer-events: none; z-index: 1; border-left: 1px dashed var(--sol-red); background: color-mix(in srgb, var(--sol-red) 5%, transparent); }
 .ovc-silence::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; border-bottom: 2px solid color-mix(in srgb, var(--sol-red) 55%, transparent); }
-.ovc-silence span { margin-bottom: 8px; font-size: var(--fs-meta); color: var(--sol-red); background: var(--sol-bg); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
+.ovc-silence span { margin-bottom: 8px; font-size: 10.5px; color: var(--sol-red); background: var(--sol-bg); padding: 1px 6px; border-radius: 4px; white-space: nowrap; }
 
 /* ── Apps board: a failing reader as structure (reader, how it fails, the watches it blinds, Fix) ── */
 .ops-app-cause { flex: 1 1 100%; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; padding: 8px 10px; font-size: 12px; border-radius: 6px; background: color-mix(in srgb, var(--sol-red) 6%, transparent); border: 1px solid color-mix(in srgb, var(--sol-red) 22%, transparent); }
@@ -501,7 +501,7 @@ a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--s
 .ops-app-why .ops-row-title { white-space: normal; overflow-wrap: anywhere; min-width: 0; }
 .sov-reason { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .sov-reason.sov-cause { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
-.sov-cause-tag { padding: 0 5px; border-radius: 4px; font-size: var(--fs-meta); color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 11%, transparent); }
+.sov-cause-tag { padding: 0 5px; border-radius: 4px; font-size: 11px; color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 11%, transparent); }
 .sov-cause-blind { color: var(--sol-text-muted); text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--sol-text-dim) 50%, transparent); text-underline-offset: 2px; }
 .sov-cause-blind:hover { color: var(--sol-text); }
 
@@ -584,7 +584,7 @@ a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--s
 /* ── apps: a source with no actions (CI, analytics, a webhook), scoped from the source filter ── */
 .ops-noapp { max-width: 560px; margin: 24px auto; display: flex; flex-direction: column; gap: 12px; padding: 14px 16px; border-radius: 14px; background: var(--sol-card); box-shadow: var(--osx-shadow); }
 .ops-noapp-head { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
-.ops-noapp-head > .ops-dim { margin-left: auto; font-size: var(--fs-meta); }
+.ops-noapp-head > .ops-dim { margin-left: auto; font-size: 11.5px; }
 .ops-noapp-links { display: flex; gap: 12px; }
 .ops-noapp-apps { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 10px; border-top: 1px dashed var(--osx-line); }
 /* A mark at the track's very edge sits inside it: pinned left or right instead of centred on the frame. */
@@ -595,7 +595,7 @@ a.sov-fact:hover, button.sov-fact:hover { background: color-mix(in srgb, var(--s
 .otl-cluster-wrap[data-pin="start"] .ops-tl-cluster:hover { transform: translate(-2px, -50%) scale(1.15); }
 .otl-cluster-wrap[data-pin="end"] .ops-tl-cluster:hover { transform: translate(calc(-100% + 2px), -50%) scale(1.15); }
 /* Narrow lanes: each name sits over its track at full width, so names that share a prefix stay readable; the bubbles take the whole width under it. */
-.otl-lanes-unit-row { padding: 6px 10px 0; font-size: var(--fs-mark); text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-text-dim); }
+.otl-lanes-unit-row { padding: 6px 10px 0; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--sol-text-dim); }
 .otl-lanes[data-stacked="true"] .ops-tl-axis { margin-left: 10px; margin-right: 10px; }
 .otl-lanes[data-stacked="true"] .ops-tl-lane { flex-direction: column; height: auto; }
 .otl-lanes[data-stacked="true"] .ops-tl-name { width: auto; height: 22px; padding: 0 10px; border-right: 0; }

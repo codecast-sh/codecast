@@ -152,7 +152,7 @@ function Step({ n, done, label, value, children }: { n: number; done: boolean; l
   return (
     <div className="flex items-center gap-3 px-4 py-3 sm:px-5" data-mdm-step={n} data-done={done || undefined}>
       <span
-        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border font-mono text-meta ${
+        className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border font-mono text-[10px] ${
           done ? "border-sol-green/40 bg-sol-green/10 text-sol-green" : "border-sol-border text-sol-text-muted"
         }`}
       >

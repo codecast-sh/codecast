@@ -29,13 +29,11 @@
 /* Under ~100px a column, a chip is its mark and number; the key names the color. */
 @container fv (max-width: 1400px) { .fv-chart .fv-drop-w { display: none; } }
 
-/* A step keeps at least 72px: a flow with many steps scrolls sideways rather than running one column into the next. */
-.fv-chart { --fv-h: 200px; display: grid; grid-template-columns: 2.4em repeat(var(--fv-n), minmax(72px, 1fr)); gap: 0 6px; margin: 0; padding: 0; list-style: none; overflow-x: auto; }
+.fv-chart { --fv-h: 200px; display: grid; grid-template-columns: 2.4em repeat(var(--fv-n), minmax(0, 1fr)); gap: 0 6px; margin: 0; padding: 0; list-style: none; }
 /* Fixed rows, so every column's track (the axis's too) starts at the same height. */
 .fv-col { display: grid; grid-template-rows: 2.6em 3.2em var(--fv-h) auto; row-gap: 6px; min-width: 0; }
 .fv-col:not(.fv-axis) + .fv-col { border-left: 1px dashed var(--lw-rule-2); padding-left: 6px; }
-/* Two lines at most in its fixed row (its title holds the whole name). */
-.fv-name { align-self: end; font-size: var(--lw-fs-xs); font-weight: 600; color: var(--lw-ink-2); line-height: 1.25; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.fv-name { align-self: end; font-size: var(--lw-fs-xs); font-weight: 600; color: var(--lw-ink-2); line-height: 1.25; overflow-wrap: anywhere; }
 .fv-col[data-step="signals"] .fv-name { color: var(--lw-ink); }
 .fv-count { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 0; justify-self: start; padding: 2px 6px; margin-left: -6px; border: 1px solid transparent; border-radius: 6px; background: none; font: inherit; color: var(--lw-ink); cursor: pointer; }
 .fv-count b { font-size: var(--lw-fs-xl); font-weight: 650; }

@@ -54,7 +54,7 @@ export function SessionBlameCell({
   const session = range?.session ?? null;
   return (
     <div
-      className={`repo-session-blame w-[17rem] shrink-0 pl-2 pr-2 text-meta ${starts ? "repo-blame-start" : ""}`}
+      className={`repo-session-blame w-[17rem] shrink-0 pl-2 pr-2 text-[10px] ${starts ? "repo-blame-start" : ""}`}
       style={color ? ({ "--session-hue": color } as React.CSSProperties) : undefined}
       data-session={session?.conversation_id}
       title={range ? rangeTitle(range) : undefined}
@@ -84,7 +84,7 @@ function SessionLabel({ session, range }: { session: BlameSession; range: Sessio
       <AuthorAvatar name={session.author_name} avatar={session.author_image} size={12} />
       <span className="truncate">{session.title}</span>
       {session.via === "edit" && (
-        <span className="shrink-0 text-mark uppercase tracking-wide" style={{ color: "var(--session-hue)" }} aria-label="wrote this line">
+        <span className="shrink-0 text-[9px] uppercase tracking-wide" style={{ color: "var(--session-hue)" }} aria-label="wrote this line">
           wrote
         </span>
       )}
@@ -129,7 +129,7 @@ export function SessionBlameStrip({
   const pct = Math.round((summary.attributed / summary.total) * 100);
   return (
     <div className="flex items-center gap-2 px-4 py-1.5 border-b border-sol-border/30 shrink-0 min-w-0 overflow-x-auto">
-      <span className="text-meta text-sol-text-dim tabular-nums shrink-0" title={`${summary.attributed} of ${summary.total} lines trace to a codecast session`}>
+      <span className="text-[11px] text-sol-text-dim tabular-nums shrink-0" title={`${summary.attributed} of ${summary.total} lines trace to a codecast session`}>
         {summary.entries.length === 0
           ? "No lines trace to a codecast session"
           : `${pct}% by ${summary.entries.length} ${summary.entries.length === 1 ? "session" : "sessions"}`}
@@ -142,7 +142,7 @@ export function SessionBlameStrip({
           <span
             key={id}
             data-active={active}
-            className="repo-session-chip flex items-center h-[22px] rounded-full border border-sol-border/40 text-meta text-sol-text-muted shrink-0 max-w-[20rem]"
+            className="repo-session-chip flex items-center h-[22px] rounded-full border border-sol-border/40 text-[11px] text-sol-text-muted shrink-0 max-w-[20rem]"
             style={{ "--session-hue": color } as React.CSSProperties}
             onMouseEnter={() => onFocus(id)}
             onMouseLeave={() => onFocus(null)}

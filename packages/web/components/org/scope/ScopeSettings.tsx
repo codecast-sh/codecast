@@ -72,8 +72,8 @@ function PillSwitch({ on, label, press, reviewing, disabled, data, plain }: { on
 function Section({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
     <section className="rounded-xl border px-4 py-3.5" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 28%, transparent)", background: "var(--sol-card)" }}>
-      <h3 className="text-mark font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>{title}</h3>
-      {hint && <p className="mt-0.5 text-meta" style={{ color: "var(--sol-text-dim)" }}>{hint}</p>}
+      <h3 className="text-[10.5px] font-semibold uppercase tracking-[0.08em]" style={{ color: "var(--sol-text-dim)" }}>{title}</h3>
+      {hint && <p className="mt-0.5 text-[11.5px]" style={{ color: "var(--sol-text-dim)" }}>{hint}</p>}
       <div className="mt-2.5">{children}</div>
     </section>
   );
@@ -249,11 +249,11 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
       <Section title="Name" hint="The name people see, and the handle to mention it by.">
         <div className="grid sm:grid-cols-[1fr_220px] gap-3">
           <div>
-            <div className="text-meta mb-1" style={{ color: "var(--sol-text-dim)" }}>Name</div>
+            <div className="text-[10.5px] mb-1" style={{ color: "var(--sol-text-dim)" }}>Name</div>
             <InlineEdit canEdit={canEdit} value={role.name} onSave={(v) => v && onUpdate({ name: v })} className="text-[15px] font-semibold" style={{ color: "var(--sol-text)", fontFamily: "var(--font-serif)" }} />
           </div>
           <div>
-            <div className="text-meta mb-1" style={{ color: "var(--sol-text-dim)" }}>Handle</div>
+            <div className="text-[10.5px] mb-1" style={{ color: "var(--sol-text-dim)" }}>Handle</div>
             <InlineEdit canEdit={canEdit} value={role.handle} onSave={(v) => v && onUpdate({ handle: v.replace(/^@/, "") })} className="text-[13px]" style={{ color: "var(--sol-violet)", fontFamily: "var(--font-mono)" }} />
           </div>
         </div>
@@ -283,14 +283,14 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
             </SelectBox>
           )}
           {forkOf && (
-            <span className="text-meta" style={{ color: "var(--sol-magenta)" }} data-line-customized-note>
+            <span className="text-[11.5px]" style={{ color: "var(--sol-magenta)" }} data-line-customized-note>
               {forkOf.title ? `${forkOf.title}'s customized steps` : "customized steps"}
             </span>
           )}
-          <Link href={lineSettingsHref({ project: lineProject, section: "stations" })} className="ml-auto text-meta hover:underline" style={{ color: "var(--sol-text-dim)" }} data-line-edit-link>
+          <Link href={lineSettingsHref({ project: lineProject, section: "stations" })} className="ml-auto text-[11.5px] hover:underline" style={{ color: "var(--sol-text-dim)" }} data-line-edit-link>
             Edit steps
           </Link>
-          <Link href={flowHref(role.handle)} className="text-meta hover:underline" style={{ color: "var(--sol-text-dim)" }} data-role-flow-link>
+          <Link href={flowHref(role.handle)} className="text-[11.5px] hover:underline" style={{ color: "var(--sol-text-dim)" }} data-role-flow-link>
             Open its flow
           </Link>
         </div>
@@ -354,7 +354,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
         <div className="mt-2.5 grid grid-cols-3 gap-2">
           {([["hands_per_day", "hands", "sessions started"], ["wakes_per_day", "wakes", "turns"], ["tokens_per_day", "tokens", "tokens"]] as const).map(([k, counter, label]) => (
             <label key={k} className="block">
-              <span className="block text-meta mb-1" style={{ color: "var(--sol-text-dim)" }}>{label}</span>
+              <span className="block text-[10.5px] mb-1" style={{ color: "var(--sol-text-dim)" }}>{label}</span>
               <input
                 type="number"
                 min={0}
@@ -365,7 +365,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
                 className="w-full h-8 rounded-md px-2 border text-[13px] tabular-nums outline-none bg-sol-bg-alt disabled:opacity-60"
                 style={{ borderColor: "color-mix(in srgb, var(--sol-border) 45%, transparent)", color: "var(--sol-text)" }}
               />
-              <span className="block text-meta mt-1 tabular-nums" style={{ color: "var(--sol-text-dim)" }}>today {counters?.[counter] ?? 0}</span>
+              <span className="block text-[10px] mt-1 tabular-nums" style={{ color: "var(--sol-text-dim)" }}>today {counters?.[counter] ?? 0}</span>
             </label>
           ))}
         </div>
@@ -413,7 +413,7 @@ export function ScopeSettings({ tree, role, canEdit, overlaps, hostName, model, 
         {followed.length === 0 && <p className="text-[12px]" style={{ color: "var(--sol-text-dim)" }}>It follows no channel.</p>}
         <ul className="flex flex-wrap gap-1.5" data-followed-channels={followed.length}>
           {followed.map((c) => (
-            <li key={c.id} className="inline-flex items-center gap-1 h-[22px] pl-2 pr-1 rounded-md text-meta" style={{ background: "color-mix(in srgb, var(--sol-cyan) 12%, transparent)", color: "var(--sol-cyan)" }}>
+            <li key={c.id} className="inline-flex items-center gap-1 h-[22px] pl-2 pr-1 rounded-md text-[11px]" style={{ background: "color-mix(in srgb, var(--sol-cyan) 12%, transparent)", color: "var(--sol-cyan)" }}>
               <Hash className="w-3 h-3" />{c.name}
               {canEdit && <button type="button" onClick={() => follow(c.id, false)} aria-label={`Stop following ${c.name}`} className="inline-flex items-center justify-center w-4 h-4 rounded-full hover:bg-sol-bg-highlight"><X className="w-3 h-3" /></button>}
             </li>

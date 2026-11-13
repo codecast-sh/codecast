@@ -13,7 +13,7 @@ import { CHANGE_STATUS_META } from "./staffingModel";
 export function GhostTag({ label, status = "proposed", tone, quiet, className }: { label: string; status?: OrgChangeStatus; /** A colour of its own (a retire reads red, not the proposal violet). */ tone?: string; /** The word alone, no frame: for rows that would otherwise be all dashes. */ quiet?: boolean; className?: string }) {
   const m = tone && status === "proposed" ? { border: `1.5px dashed color-mix(in srgb, ${tone} 70%, transparent)`, color: tone } : CHIP_STATUS[status];
   return (
-    <span className={cn("inline-flex items-center h-[16px] whitespace-nowrap font-medium", quiet ? "text-mark" : "px-1 rounded-sm text-mark uppercase tracking-[0.06em]", className)} style={{ border: quiet ? undefined : m.border, color: m.color }} data-ghost-tag={label}>
+    <span className={cn("inline-flex items-center h-[16px] whitespace-nowrap font-medium", quiet ? "text-[10.5px]" : "px-1 rounded-sm text-[9.5px] uppercase tracking-[0.06em]", className)} style={{ border: quiet ? undefined : m.border, color: m.color }} data-ghost-tag={label}>
       {label}
     </span>
   );
@@ -25,7 +25,7 @@ export function GhostTag({ label, status = "proposed", tone, quiet, className }:
 export function StatusPill({ status }: { status: OrgChangeStatus }) {
   const m = CHANGE_STATUS_META[status];
   return (
-    <span className="inline-flex items-center gap-1 h-[18px] px-1.5 rounded-md text-meta font-medium shrink-0" style={{ background: `color-mix(in srgb, ${m.color} 14%, transparent)`, color: m.color }} data-status={status}>
+    <span className="inline-flex items-center gap-1 h-[18px] px-1.5 rounded-md text-[10px] font-medium shrink-0" style={{ background: `color-mix(in srgb, ${m.color} 14%, transparent)`, color: m.color }} data-status={status}>
       <span className="w-1.5 h-1.5 rounded-full" style={{ background: m.color }} />
       {m.label}
     </span>

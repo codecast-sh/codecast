@@ -91,7 +91,7 @@ function PermissionContext({ permission }: { permission: Pick<PermissionViewItem
         <div data-permission-intent className="text-[12px] text-sol-text">{permission.intent}</div>
       )}
       {removals.map((r, i) => (
-        <div key={i} data-permission-removal className="flex items-baseline gap-2 text-meta font-mono min-w-0">
+        <div key={i} data-permission-removal className="flex items-baseline gap-2 text-[11px] font-mono min-w-0">
           <span className="text-sol-red flex-shrink-0">rm</span>
           <span className="text-sol-text truncate min-w-0" title={r.target}>{r.target}</span>
           <span className={`flex-shrink-0 font-sans ${r.note ? "text-sol-text-dim italic" : r.files || r.dirs ? "text-sol-red" : "text-sol-text-dim"}`}>
@@ -104,7 +104,7 @@ function PermissionContext({ permission }: { permission: Pick<PermissionViewItem
 }
 
 /** Who is asking, beside the tool name (permissionSourceTags). */
-function PermissionSourceTag({ permission, className = "text-meta" }: {
+function PermissionSourceTag({ permission, className = "text-[10px]" }: {
   permission: Pick<PermissionViewItem, "subagent_type" | "subagent_conversation_id" | "safety_check">;
   className?: string;
 }) {
@@ -167,7 +167,7 @@ export function alwaysAllowLabels(permission: Pick<PermissionViewItem, "rule_req
   return permissionRuleLabels(permission.suggestions);
 }
 
-const DENY_CLASS = "px-2.5 py-0.5 text-meta font-medium whitespace-nowrap rounded border border-sol-red/30 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors disabled:opacity-40 disabled:pointer-events-none";
+const DENY_CLASS = "px-2.5 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-sol-red/30 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors disabled:opacity-40 disabled:pointer-events-none";
 
 /** Approves and keeps the rules, each named as its own chip on the button,
  *  so a compound command shows every rule it grants. */
@@ -179,7 +179,7 @@ function AlwaysAllowButton({ permission, onAlwaysAllow, className = "" }: { perm
       onClick={() => onAlwaysAllow(permission._id)}
       title={rules.join("\n")}
       data-always-allow
-      className={`flex min-w-0 max-w-[24rem] items-center gap-1 overflow-hidden py-0.5 text-meta font-medium whitespace-nowrap rounded border border-sol-green/30 text-sol-green hover:bg-sol-green hover:text-sol-bg transition-colors ${className}`}
+      className={`flex min-w-0 max-w-[24rem] items-center gap-1 overflow-hidden py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-sol-green/30 text-sol-green hover:bg-sol-green hover:text-sol-bg transition-colors ${className}`}
     >
       <span className="shrink-0">Always allow</span>
       {rules.map((r) => (
@@ -210,7 +210,7 @@ function DenyReason({ onDeny, onCancel }: { onDeny: (message?: string) => void; 
         }}
         placeholder="Tell the agent why (optional)"
         aria-label="Reason for denying"
-        className="flex-1 min-w-0 px-2 py-0.5 text-meta font-mono rounded border border-sol-border/40 bg-transparent text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-red/50"
+        className="flex-1 min-w-0 px-2 py-0.5 text-[11px] font-mono rounded border border-sol-border/40 bg-transparent text-sol-text placeholder:text-sol-text-dim focus:outline-none focus:border-sol-red/50"
       />
       <button type="submit" className={DENY_CLASS}>Deny</button>
     </form>
@@ -243,7 +243,7 @@ export function PermissionRow({
     <div className="group hover:bg-sol-yellow/[0.04] transition-colors">
       <div className="flex items-center gap-2 py-1 px-2">
         {showToolName && (
-          <ToolName name={permission.tool_name} className="text-meta font-semibold" />
+          <ToolName name={permission.tool_name} className="text-[11px] font-semibold" />
         )}
         <PermissionSourceTag permission={permission} />
         {/* Collapsed, the preview is one truncated line beside the buttons;
@@ -254,7 +254,7 @@ export function PermissionRow({
             onClick={onToggleExpand}
             className="flex-1 min-w-0 text-left"
           >
-            <span className="text-meta font-mono text-sol-text-dim block truncate">
+            <span className="text-[11px] font-mono text-sol-text-dim block truncate">
               {isExpanded ? "hide" : preview}
             </span>
           </button>
@@ -263,7 +263,7 @@ export function PermissionRow({
         <div className="flex items-center gap-1 flex-shrink-0">
           <button
             onClick={onApprove}
-            className="px-2 py-0.5 text-meta font-medium whitespace-nowrap rounded border border-sol-green/40 text-sol-green hover:bg-sol-green hover:text-sol-bg transition-colors"
+            className="px-2 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-sol-green/40 text-sol-green hover:bg-sol-green hover:text-sol-bg transition-colors"
           >
             Approve
           </button>
@@ -271,7 +271,7 @@ export function PermissionRow({
           {!denying && (
             <button
               onClick={() => setDenying(true)}
-              className="px-2 py-0.5 text-meta font-medium whitespace-nowrap rounded border border-sol-red/30 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors"
+              className="px-2 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-sol-red/30 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors"
             >
               Deny
             </button>
@@ -282,7 +282,7 @@ export function PermissionRow({
       {denying && <DenyReason onDeny={onDeny} onCancel={() => setDenying(false)} />}
       {preview && isExpanded && (
         <button onClick={onToggleExpand} className="block w-full px-2 pb-1.5 -mt-0.5 text-left">
-          <span className="text-meta font-mono text-sol-text-dim block whitespace-pre-wrap break-words">
+          <span className="text-[11px] font-mono text-sol-text-dim block whitespace-pre-wrap break-words">
             {preview}
           </span>
         </button>
@@ -403,7 +403,7 @@ export function PermissionStackView<PId extends string>({
     return (
       <button
         onClick={() => setCollapsed(false)}
-        className="w-full flex items-center justify-center gap-2 py-1 text-meta text-sol-yellow hover:text-sol-text transition-colors"
+        className="w-full flex items-center justify-center gap-2 py-1 text-[11px] text-sol-yellow hover:text-sol-text transition-colors"
       >
         <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse" />
         {pending.length} pending permission{pending.length !== 1 ? "s" : ""}
@@ -424,10 +424,10 @@ export function PermissionStackView<PId extends string>({
       <div className="whitespace-nowrap rounded border border-sol-yellow/20 bg-sol-yellow/[0.03] overflow-hidden">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2.5 py-1.5">
           <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse flex-shrink-0" />
-          <ToolName name={p.tool_name} className="text-meta font-semibold" />
+          <ToolName name={p.tool_name} className="text-[11px] font-semibold" />
           <PermissionSourceTag permission={p} />
           {preview && !isLong && (
-            <span className="flex-1 min-w-0 text-meta font-mono text-sol-text-dim truncate">
+            <span className="flex-1 min-w-0 text-[11px] font-mono text-sol-text-dim truncate">
               {preview}
             </span>
           )}
@@ -436,7 +436,7 @@ export function PermissionStackView<PId extends string>({
             <button
               onClick={() => onApprove(p._id)}
               disabled={inflight.has(p._id)}
-              className="px-2.5 py-0.5 text-meta font-medium whitespace-nowrap rounded border border-sol-green/40 text-sol-green hover:bg-sol-green hover:text-sol-bg transition-colors disabled:opacity-40 disabled:pointer-events-none"
+              className="px-2.5 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-sol-green/40 text-sol-green hover:bg-sol-green hover:text-sol-bg transition-colors disabled:opacity-40 disabled:pointer-events-none"
             >
               {inflight.has(p._id) ? "..." : "Approve"}
             </button>
@@ -446,7 +446,7 @@ export function PermissionStackView<PId extends string>({
                 aria-haspopup="dialog"
                 data-allow-all
                 title="Approve this and bypass all future permission prompts in this session"
-                className="px-2.5 py-0.5 text-meta font-medium whitespace-nowrap rounded border border-orange-500/40 text-orange-500 hover:bg-orange-500 hover:text-sol-bg transition-colors"
+                className="px-2.5 py-0.5 text-[11px] font-medium whitespace-nowrap rounded border border-orange-500/40 text-orange-500 hover:bg-orange-500 hover:text-sol-bg transition-colors"
               >
                 Allow all
               </button>
@@ -459,14 +459,14 @@ export function PermissionStackView<PId extends string>({
               </button>
             )}
           </div>
-          <span className="text-meta text-sol-text-dim flex-shrink-0 hidden sm:flex items-center gap-1">
+          <span className="text-[9px] text-sol-text-dim flex-shrink-0 hidden sm:flex items-center gap-1">
             <MenuKeyCaps action="permission.approve" className="contents" />/<MenuKeyCaps action="permission.deny" className="contents" />
           </span>
         </div>
         <PermissionContext permission={p} />
         {preview && isLong && (
           <div className="px-2.5 pb-1.5 -mt-0.5">
-            <span className="text-meta font-mono text-sol-text-dim block whitespace-pre-wrap break-words">
+            <span className="text-[11px] font-mono text-sol-text-dim block whitespace-pre-wrap break-words">
               {preview}
             </span>
           </div>
@@ -481,17 +481,17 @@ export function PermissionStackView<PId extends string>({
     <div className="rounded-lg border border-sol-yellow/20 bg-sol-yellow/[0.03] overflow-hidden">
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2.5 py-1 border-b border-sol-yellow/12">
         <span className="w-1.5 h-1.5 rounded-full bg-sol-yellow animate-pulse flex-shrink-0" />
-        <span className="text-mark font-semibold uppercase tracking-wider text-sol-yellow whitespace-nowrap">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-yellow whitespace-nowrap">
           {pending.length} Permissions
         </span>
         {allSameTool && (
-          <ToolName name={pending[0].tool_name} className="text-meta text-sol-text-dim" />
+          <ToolName name={pending[0].tool_name} className="text-[10px] text-sol-text-dim" />
         )}
         <span className="flex-1" />
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
           <button
             onClick={onApproveAll}
-            className="px-2 py-0.5 text-meta font-medium whitespace-nowrap rounded border border-sol-green/40 text-sol-green hover:bg-sol-green hover:text-sol-bg transition-colors"
+            className="px-2 py-0.5 text-[10px] font-medium whitespace-nowrap rounded border border-sol-green/40 text-sol-green hover:bg-sol-green hover:text-sol-bg transition-colors"
           >
             Approve all
           </button>
@@ -501,7 +501,7 @@ export function PermissionStackView<PId extends string>({
               aria-haspopup="dialog"
               data-allow-all
               title="Approve all and bypass future permission prompts in this session"
-              className="px-2 py-0.5 text-meta font-medium whitespace-nowrap rounded border border-orange-500/40 text-orange-500 hover:bg-orange-500 hover:text-sol-bg transition-colors"
+              className="px-2 py-0.5 text-[10px] font-medium whitespace-nowrap rounded border border-orange-500/40 text-orange-500 hover:bg-orange-500 hover:text-sol-bg transition-colors"
             >
               Allow all tool calls
             </button>
@@ -509,7 +509,7 @@ export function PermissionStackView<PId extends string>({
           {allowAllReview}
           <button
             onClick={onDenyAll}
-            className="px-2 py-0.5 text-meta font-medium whitespace-nowrap rounded border border-sol-border/40 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors"
+            className="px-2 py-0.5 text-[10px] font-medium whitespace-nowrap rounded border border-sol-border/40 text-sol-text-dim hover:bg-sol-red hover:text-sol-bg transition-colors"
           >
             Deny all
           </button>
@@ -541,11 +541,11 @@ export function PermissionStackView<PId extends string>({
       </div>
 
       <div className="flex items-center justify-center gap-3 py-0.5 border-t border-sol-yellow/8">
-        <span className="text-meta text-sol-text-dim flex items-center gap-1">
+        <span className="text-[9px] text-sol-text-dim flex items-center gap-1">
           <MenuKeyCaps action="permission.approve" className="contents" />
           approve all
         </span>
-        <span className="text-meta text-sol-text-dim flex items-center gap-1">
+        <span className="text-[9px] text-sol-text-dim flex items-center gap-1">
           <MenuKeyCaps action="permission.deny" className="contents" />
           deny all
         </span>

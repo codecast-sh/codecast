@@ -120,7 +120,7 @@ export function SwitchReview({ ledger: l, onClose, onConfirm, onPick }: { ledger
             <span className="truncate text-[12.5px] font-normal text-sol-text-muted" title={l.subject} data-switch-subject>{l.subject}</span>
           </DialogTitle>
           {l.shift !== null && (
-            <span className="inline-flex shrink-0 items-center gap-1.5 pt-0.5 text-meta tabular-nums text-sol-text-dim" aria-hidden data-switch-shift>
+            <span className="inline-flex shrink-0 items-center gap-1.5 pt-0.5 text-[11px] tabular-nums text-sol-text-dim" aria-hidden data-switch-shift>
               {l.shift?.[0] ?? "Off"} <span className="text-sol-text-dim/60">→</span> <b className="font-semibold text-sol-orange">{l.shift?.[1] ?? "On"}</b>
             </span>
           )}
@@ -136,11 +136,11 @@ export function SwitchReview({ ledger: l, onClose, onConfirm, onPick }: { ledger
         {l.hands && (
           <div className="grid grid-cols-2 gap-px border-b border-sol-border/60 bg-sol-border/40 text-[12.5px] leading-snug" data-switch-hands data-switch-part>
             <div className="flex min-w-0 flex-col gap-1 px-5 py-3" style={{ background: "color-mix(in srgb, var(--sol-orange) 12%, var(--sol-bg))" }}>
-              <b className="text-mark font-semibold uppercase tracking-wide text-sol-orange">It decides</b>
+              <b className="text-[11px] font-semibold uppercase tracking-wide text-sol-orange">It decides</b>
               {l.hands.its.map((x) => <span key={x} className="text-sol-text">{x}</span>)}
             </div>
             <div className="flex min-w-0 flex-col gap-1 bg-sol-bg px-5 py-3">
-              <b className="text-mark font-semibold uppercase tracking-wide text-sol-green">You decide</b>
+              <b className="text-[11px] font-semibold uppercase tracking-wide text-sol-green">You decide</b>
               {l.hands.yours.map((x) => <span key={x} className="text-sol-text">{x}</span>)}
             </div>
           </div>
@@ -153,7 +153,7 @@ export function SwitchReview({ ledger: l, onClose, onConfirm, onPick }: { ledger
               // Tiles grow to fill their row, so a wrapped last row has no empty cell.
               <div key={f.label} className="flex min-w-0 flex-[1_1_6.5rem] flex-col gap-0.5 bg-sol-bg px-4 py-3">
                 <dd className={`truncate text-[24px] font-semibold leading-none tabular-nums ${f.tone ? TONE[f.tone] : "text-sol-text"}`} title={f.value} data-switch-figure={f.label}>{f.value}</dd>
-                <dt className="text-meta leading-tight text-sol-text-muted">{f.label}</dt>
+                <dt className="text-[11px] leading-tight text-sol-text-muted">{f.label}</dt>
               </div>
             ))}
           </dl>
@@ -179,8 +179,8 @@ export function SwitchReview({ ledger: l, onClose, onConfirm, onPick }: { ledger
               <dt className="truncate text-sol-text-dim">{r.k}</dt>
               <dd className="min-w-0">
                 <span className={`block break-words ${"tone" in r && r.tone ? TONE[r.tone] : "text-sol-text"}`}>{r.v}</span>
-                {"list" in r && r.list?.map((x) => <span key={x} className="block break-words text-meta text-sol-text-muted">{x}</span>)}
-                {"act" in r && r.act && <button type="button" onClick={r.act.press} className="mt-0.5 text-meta text-sol-blue hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-blue/50" data-switch-row-act>{r.act.label}</button>}
+                {"list" in r && r.list?.map((x) => <span key={x} className="block break-words text-[11.5px] text-sol-text-muted">{x}</span>)}
+                {"act" in r && r.act && <button type="button" onClick={r.act.press} className="mt-0.5 text-[11.5px] text-sol-blue hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sol-blue/50" data-switch-row-act>{r.act.label}</button>}
               </dd>
             </div>
           ))}

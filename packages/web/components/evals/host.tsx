@@ -47,7 +47,7 @@ function RetryCountdown({ at }: { at: number }) {
   const now = useCoarseNow(1_000);
   const secs = Math.max(0, Math.ceil((at - now) / 1000));
   return (
-    <span className="text-meta ev-quiet ev-tabular" role="status" data-evals-retry-in={secs}>
+    <span className="text-[11.5px] ev-quiet ev-tabular" role="status" data-evals-retry-in={secs}>
       {secs > 0 ? `Trying again on its own in ${secs}s` : "Trying again..."}
     </span>
   );

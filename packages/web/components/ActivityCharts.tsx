@@ -302,13 +302,13 @@ export function TimelineCharts({
       </div>
     );
   }
-  if (filled.length === 0) return <div className="text-meta text-sol-text-muted/40 text-center py-16">No session data</div>;
+  if (filled.length === 0) return <div className="text-[11px] text-sol-text-muted/40 text-center py-16">No session data</div>;
 
   return (
     <div className="mt-2">
       <div className="flex items-center gap-2 mb-2 flex-wrap">
-        <span className="text-mark text-sol-text-muted uppercase tracking-wider font-semibold">{cfg.heading}</span>
-        <span className="text-meta text-sol-text-muted tabular-nums">
+        <span className="text-[11px] text-sol-text-muted uppercase tracking-wider font-semibold">{cfg.heading}</span>
+        <span className="text-[11px] text-sol-text-muted tabular-nums">
           <span className="text-sol-text font-semibold">{cfg.fmtVal(total)}</span> · {sliced.length} days
         </span>
         <div className="ml-auto flex items-center gap-1.5 scale-[0.82] origin-right">
@@ -404,14 +404,14 @@ function PunchcardChart({ rows, metric }: { rows: PunchRow[]; metric: TimelineMe
         {/* hour-of-day guides + labels */}
         {[0, 6, 12, 18].map((h) => (
           <g key={h}>
-            <text x={padLeft - 4} y={padTop + h * cellH + cellH + 1} textAnchor="end" className="fill-sol-text-muted" style={{ fontSize: 11 }}>{hourLabel(h)}</text>
+            <text x={padLeft - 4} y={padTop + h * cellH + cellH + 1} textAnchor="end" className="fill-sol-text-muted" style={{ fontSize: 8 }}>{hourLabel(h)}</text>
             {h > 0 && <line x1={padLeft} x2={padLeft + plotW} y1={padTop + h * cellH - 0.5} y2={padTop + h * cellH - 0.5} stroke="currentColor" className="text-sol-border/40" strokeWidth={0.5} strokeDasharray="2,3" />}
           </g>
         ))}
         {cells}
         {/* x labels */}
         {xLabels.map((l, i) => (
-          <text key={i} x={l.x} y={chartH - 4} textAnchor="start" className="fill-sol-text-muted" style={{ fontSize: 11 }}>{l.label}</text>
+          <text key={i} x={l.x} y={chartH - 4} textAnchor="start" className="fill-sol-text-muted" style={{ fontSize: 9 }}>{l.label}</text>
         ))}
         {/* hovered cell outline */}
         {hover && (
@@ -518,13 +518,13 @@ function TimelineChart({
           return (
             <g key={i}>
               <line x1={padLeft} x2={containerW - padRight} y1={y} y2={y} stroke="currentColor" className="text-sol-border/40" strokeWidth={0.5} strokeDasharray={i === 0 ? "none" : "2,3"} />
-              <text x={padLeft - 4} y={y + 3} textAnchor="end" className="fill-sol-text-muted" style={{ fontSize: 11 }}>{cfg.fmtAxis(v)}</text>
+              <text x={padLeft - 4} y={y + 3} textAnchor="end" className="fill-sol-text-muted" style={{ fontSize: 8 }}>{cfg.fmtAxis(v)}</text>
             </g>
           );
         })}
         {/* X labels */}
         {xLabels.map((m, i) => (
-          <text key={i} x={m.x} y={chartH - 6} textAnchor="start" className="fill-sol-text-muted" style={{ fontSize: 11 }}>{m.label}</text>
+          <text key={i} x={m.x} y={chartH - 6} textAnchor="start" className="fill-sol-text-muted" style={{ fontSize: 9 }}>{m.label}</text>
         ))}
         {/* Area fill */}
         <path d={areaPath} style={{ fill: cfg.line }} opacity={0.14} />

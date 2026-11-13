@@ -142,7 +142,7 @@ function WorkspaceLine({ row, tree }: { row: OrgProposalListRow; tree: OrgTree |
   const here = where.teamId === activeTeamOf(tree);
   return (
     <span className="flex min-w-0 items-center gap-2 text-[12.5px]" data-org-panel-workspace={where.name} data-org-panel-workspace-here={here || undefined}>
-      <span className="font-mono text-meta" style={{ color: "var(--sol-violet)" }}>{row.short_id}</span>
+      <span className="font-mono text-[11.5px]" style={{ color: "var(--sol-violet)" }}>{row.short_id}</span>
       <span aria-hidden style={{ color: "var(--sol-text-dim)" }}>in</span>
       <span className={cn("truncate font-medium", !here && "rounded px-1.5 py-0.5")} style={here ? { color: "var(--sol-text)" } : { color: "var(--sol-orange)", background: "color-mix(in srgb, var(--sol-orange) 12%, transparent)" }}>{where.name}</span>
       {!here && (
@@ -196,7 +196,7 @@ export function OrgPanel({ tree, target, onTarget, onClose, onFocusChange, onRes
     nav = (
       <>
         <Back onPress={home} label={head ? `Back to ${head.name}` : "Back"} />
-        {proposalRow ? <WorkspaceLine row={proposalRow} tree={tree} /> : <span className="font-mono text-meta" style={{ color: "var(--sol-violet)" }}>{target.ref}</span>}
+        {proposalRow ? <WorkspaceLine row={proposalRow} tree={tree} /> : <span className="font-mono text-[11.5px]" style={{ color: "var(--sol-violet)" }}>{target.ref}</span>}
         <ShareControl label="proposal" path={entityRoute("proposal", target.ref)!} className="ml-auto" />
       </>
     );

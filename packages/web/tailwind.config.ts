@@ -143,21 +143,6 @@ const config: Config = {
   				'serif'
   			]
   		},
-  		// The type scale: seven steps, size and line-height only (weight and
-  		// tracking stay with the element). 12px is the floor for words; `mark`
-  		// (11px) is for glyph-like marks only: a count in a small badge, a key
-  		// cap legend, a label set in capitals. Mirrored as --fs-* on :root in
-  		// app/globals.css for stylesheets. tailwind-merge knows these names
-  		// (lib/utils.ts), so cn() keeps them beside a text colour.
-  		fontSize: {
-  			mark: ['11px', { lineHeight: '14px' }],
-  			meta: ['12px', { lineHeight: '16px' }],
-  			ui: ['13px', { lineHeight: '18px' }],
-  			body: ['14px', { lineHeight: '20px' }],
-  			read: ['15px', { lineHeight: '24px' }],
-  			title: ['18px', { lineHeight: '24px' }],
-  			display: ['24px', { lineHeight: '30px' }]
-  		},
   		typography: {
   			DEFAULT: {
   				css: {

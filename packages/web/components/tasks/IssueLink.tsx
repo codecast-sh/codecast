@@ -34,7 +34,7 @@ export function IssueLink({
       onClick={(e) => e.stopPropagation()}
       title={issueSyncTitle(external)}
       className={`inline-flex items-center gap-1 font-mono rounded border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-[var(--issue-accent)] transition-colors flex-shrink-0 min-w-0 ${
-        sm ? "text-xs px-1.5 py-0.5" : "text-meta px-1.5 py-0"
+        sm ? "text-xs px-1.5 py-0.5" : "text-[10px] px-1.5 py-0"
       } ${className}`}
       style={{ "--issue-accent": look.accent } as CSSProperties}
     >

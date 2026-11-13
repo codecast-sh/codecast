@@ -187,7 +187,7 @@ export const VaultFileView = memo(function VaultFileView({ path }: { path: strin
         {renderBody()}
 
         {kind === "text" && body && !tooLarge && (
-          <div className="mt-4 pt-2 border-t border-sol-border/20 flex items-center gap-3 text-meta text-sol-text-dim">
+          <div className="mt-4 pt-2 border-t border-sol-border/20 flex items-center gap-3 text-[10px] text-sol-text-dim">
             <span className="tabular-nums">{formatSize(size)}</span>
             <span>Read-only</span>
           </div>

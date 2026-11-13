@@ -120,10 +120,10 @@ function Header({ row, title, onAdd }: { row: ProjectExpectationsRow; title: str
 function Stat({ label, value, sub, tone }: { label: string; value: number; sub: string; tone?: "red" | "orange" | "yellow" }) {
   return (
     <div className="bg-sol-bg px-3 py-2.5" data-expectations-stat={label}>
-      <dt className="text-meta text-sol-text-dim">{label}</dt>
+      <dt className="text-[11px] text-sol-text-dim">{label}</dt>
       <dd className="mt-0.5 flex items-baseline gap-2">
         <span className={cn("text-[18px] font-semibold tabular-nums leading-none", tone === "red" ? "text-sol-red" : tone === "orange" ? "text-sol-orange" : tone === "yellow" ? "text-sol-yellow" : "text-sol-text")}>{value}</span>
-        <span className="truncate text-meta text-sol-text-dim">{sub}</span>
+        <span className="truncate text-[11px] text-sol-text-dim">{sub}</span>
       </dd>
     </div>
   );
@@ -140,7 +140,7 @@ function FirstRun({ projectId, row, title, onWrite }: { projectId: string; row: 
       </p>
       <div className="mt-5 rounded-lg border border-sol-border/30 bg-sol-bg-alt/30 px-3.5 py-3" aria-label="What a line looks like">
         <p className="text-[13px] text-sol-text">A new user sees their first result within a minute of signing up.</p>
-        <div className="mt-1 border-l border-sol-border/40 pl-2.5 text-meta text-sol-text-dim">
+        <div className="mt-1 border-l border-sol-border/40 pl-2.5 text-[11.5px] text-sol-text-dim">
           <q className="block italic text-sol-text-muted">if they wait more than a minute for anything, we lost them</q>
           <span>said on a call, with the date and a link to the moment</span>
         </div>
@@ -183,7 +183,7 @@ function History({ row }: { row: ProjectExpectationsRow }) {
         {shown.map((e) => <HistoryRow key={e.kind === "version" ? `v${e.version}` : e.proposal} e={e} now={now} />)}
       </ol>
       {entries.length > shown.length && (
-        <button type="button" onClick={() => setAll(true)} className="mt-2 text-meta text-sol-text-dim hover:text-sol-text-muted">{entries.length - shown.length} earlier</button>
+        <button type="button" onClick={() => setAll(true)} className="mt-2 text-[11.5px] text-sol-text-dim hover:text-sol-text-muted">{entries.length - shown.length} earlier</button>
       )}
     </section>
   );
@@ -196,7 +196,7 @@ function HistoryRow({ e, now }: { e: HistoryEntry; now: number }) {
       <li className="grid grid-cols-[4.5rem_minmax(0,1fr)] gap-x-3 text-[12px] leading-snug" data-expectations-history-entry="closed">
         <span className="tabular-nums text-sol-text-dim">{when}</span>
         <div className="min-w-0 text-sol-text-dim">
-          <span>{e.status === "dropped" ? "Dropped" : "Withdrawn"} </span><span className="font-mono text-meta">{e.proposal}</span>: <span className="text-sol-text-muted">{e.summary}</span>
+          <span>{e.status === "dropped" ? "Dropped" : "Withdrawn"} </span><span className="font-mono text-[10.5px]">{e.proposal}</span>: <span className="text-sol-text-muted">{e.summary}</span>
           {e.reason && <span> ({e.reason})</span>}
         </div>
       </li>
@@ -209,10 +209,10 @@ function HistoryRow({ e, now }: { e: HistoryEntry; now: number }) {
         <div className="flex flex-wrap items-baseline gap-x-2">
           <span className="font-semibold text-sol-text">Version {e.version}</span>
           <span className="text-sol-text-muted">{changePhrase(e)}</span>
-          <span className="text-meta text-sol-text-dim">{e.active} active</span>
+          <span className="text-[11px] text-sol-text-dim">{e.active} active</span>
         </div>
         <div className="text-sol-text-muted line-clamp-2">{e.summary}</div>
-        <div className="text-meta text-sol-text-dim" data-expectations-history-how={e.how}>
+        <div className="text-[11px] text-sol-text-dim" data-expectations-history-how={e.how}>
           {howApplied(e)}
           {e.proposal && <>, from <span className="font-mono">{e.proposal}</span>{e.proposedBy && (e.fromSession || e.proposedBy !== e.by) ? ` proposed by ${e.fromSession ? `${e.proposedBy}'s session` : e.proposedBy}` : ""}</>}
         </div>

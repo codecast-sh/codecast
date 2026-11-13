@@ -73,7 +73,7 @@ export function PendingDeliveryNote({
           onClick={(e) => { e.stopPropagation(); onCancel(); }}
           disabled={cancelling}
           data-testid="pending-message-cancel"
-          className="text-meta text-sol-text-dim/70 hover:text-sol-orange underline underline-offset-2 transition-colors disabled:opacity-60"
+          className="text-[11px] text-sol-text-dim/70 hover:text-sol-orange underline underline-offset-2 transition-colors disabled:opacity-60"
           title="Stop trying to send and discard this message"
         >
           {cancelling ? "Cancelling…" : "Cancel"}

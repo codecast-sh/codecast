@@ -141,7 +141,7 @@ export function TrialFactsStrip({ card: c }: { card: TrialCardRow }) {
     <dl className="flex flex-col gap-2 text-[12px]" data-trial-facts>
       {facts.map((f) => (
         <div key={f.label} className="flex items-baseline justify-between gap-3" title={f.title}>
-          <dt className="text-meta text-sol-text-dim">{f.label}</dt>
+          <dt className="text-[11px] text-sol-text-dim">{f.label}</dt>
           <dd className={cn("text-right font-mono tabular-nums", f.tone ? TONE[f.tone] : "text-sol-text")}>
             {f.opens ? <button type="button" className={link} aria-expanded={open === f.opens} data-trial-fact={f.opens} onClick={() => setOpen((o) => (o === f.opens ? null : f.opens!))}>{f.value}</button>
               : f.href ? <a href={f.href} target={f.href.startsWith("http") ? "_blank" : undefined} rel="noreferrer" className={link} data-trial-fact-link={f.label}>{f.value}</a> : f.value}
@@ -151,19 +151,19 @@ export function TrialFactsStrip({ card: c }: { card: TrialCardRow }) {
       {open && <TrialFactOpen card={c} open={open} />}
       {c.rule && (
         <div className="mt-1 border-t border-sol-border/30 pt-2" data-trial-rule>
-          <dt className="text-meta text-sol-text-dim">Rule</dt>
+          <dt className="text-[11px] text-sol-text-dim">Rule</dt>
           <dd className="mt-0.5 text-sol-text-muted"><code className="font-mono text-sol-text">{ruleId(c.rule.id)}</code> {c.rule.text}</dd>
         </div>
       )}
       {(c.overlaps ?? []).length > 0 && (
         <div className="border-t border-sol-border/30 pt-2" data-trial-overlaps>
-          <dt className="text-meta text-sol-text-dim">Same code as</dt>
+          <dt className="text-[11px] text-sol-text-dim">Same code as</dt>
           <dd className="mt-0.5 flex flex-col gap-1">
             {c.overlaps!.map((o) => {
               const note = overlapNote({ ...o, how: c.proposal?.alongside?.find((a) => a.card === o.card)?.line });
               // A line that concludes the two cannot conflict is a quiet chip, its reasoning a hover away.
               return note.clear ? (
-                <Link key={o.card} href={`/trial?card=${o.card}`} className="w-fit rounded border border-sol-border/40 px-1.5 py-0.5 text-meta text-sol-text-dim hover:text-sol-text" title={note.text} data-trial-overlap="clear">no conflict with {o.card}</Link>
+                <Link key={o.card} href={`/trial?card=${o.card}`} className="w-fit rounded border border-sol-border/40 px-1.5 py-0.5 text-[11px] text-sol-text-dim hover:text-sol-text" title={note.text} data-trial-overlap="clear">no conflict with {o.card}</Link>
               ) : (
                 <Link key={o.card} href={`/trial?card=${o.card}`} className="text-sol-yellow hover:underline" title={o.title} data-trial-overlap="open"><span className="font-mono">{o.card}</span> <span className="text-sol-text-muted">{note.text}</span></Link>
               );

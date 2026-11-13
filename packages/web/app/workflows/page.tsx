@@ -30,10 +30,6 @@ import { lineRunKind } from "../../lib/line/lineStations";
 import { lineSettingsHref } from "../../lib/lineSettings";
 import { CustomizedLineChip } from "../../components/line/CustomizedLineChip";
 import { Button } from "../../components/ui/button";
-import { toast } from "sonner";
-import { SwitchReview } from "../../components/consequential/ConsequentialSwitch";
-import { useRunCost } from "../../components/consequential/useRunCost";
-import { workflowAgentSteps, workflowRunLedger, workflowSteps } from "../../components/work/startLedgers";
 
 const api = _api as any;
 
@@ -96,15 +92,14 @@ interface WorkflowRun {
   updated_at: number;
 }
 
-// Node kinds in theme tokens, so a chip reads in light and dark alike.
 const TYPE_BADGE: Record<string, string> = {
-  agent:           "text-sol-text-muted bg-sol-bg-highlight",
-  prompt:          "text-sol-violet bg-sol-violet/10",
-  command:         "text-sol-green bg-sol-green/10",
-  human:           "text-sol-magenta bg-sol-magenta/10",
-  conditional:     "text-sol-yellow bg-sol-yellow/10",
-  start:           "text-sol-blue bg-sol-blue/10",
-  exit:            "text-sol-blue bg-sol-blue/10",
+  agent:           "text-[#93a1a1] bg-[#073642] dark:text-[#94a3b8] dark:bg-[#1e293b]",
+  prompt:          "text-[#6c71c4] bg-[#1e1b4b]/30 dark:text-[#a5b4fc] dark:bg-[#1e1b4b]",
+  command:         "text-[#859900] bg-[#1a2008]/30 dark:text-[#86efac] dark:bg-[#0f1f10]",
+  human:           "text-[#d33682] bg-[#3a0820]/20 dark:text-[#d8b4fe] dark:bg-[#1e0b3a]",
+  conditional:     "text-[#b58900] bg-[#2d2000]/20 dark:text-[#fcd34d] dark:bg-[#1c1500]",
+  start:           "text-[#268bd2] bg-[#0a1e3a]/20 dark:text-[#93c5fd] dark:bg-[#0c1e3a]",
+  exit:            "text-[#268bd2] bg-[#0a1e3a]/20 dark:text-[#93c5fd] dark:bg-[#0c1e3a]",
 };
 
 const STATUS_STYLES: Record<string, { icon: React.ComponentType<{ className?: string }>; color: string }> = {
@@ -120,7 +115,7 @@ function NodeDetail({ node, onClose }: { node: WFNode; onClose: () => void }) {
   const badgeClass = TYPE_BADGE[node.type] || TYPE_BADGE.agent;
 
   return (
-    <div className="absolute bottom-4 right-4 w-80 max-w-[calc(100%-2rem)] bg-sol-bg-alt border border-sol-border/40 rounded-xl shadow-2xl z-10 overflow-hidden">
+    <div className="absolute bottom-4 right-4 w-80 bg-sol-bg-alt border border-sol-border/40 rounded-xl shadow-2xl z-10 overflow-hidden">
       <div className="flex items-center justify-between px-4 py-3 border-b border-sol-border/30">
         <div className="flex items-center gap-2">
           <span className={`flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-mono ${badgeClass}`}>
@@ -128,17 +123,17 @@ function NodeDetail({ node, onClose }: { node: WFNode; onClose: () => void }) {
             {node.type}
           </span>
           {node.goal_gate && (
-            <span className="text-xs px-1.5 py-0.5 rounded bg-sol-yellow/15 text-sol-yellow font-mono">goal-gate</span>
+            <span className="text-xs px-1.5 py-0.5 rounded bg-[#78350f]/30 text-sol-yellow font-mono">goal-gate</span>
           )}
         </div>
-        <button onClick={onClose} aria-label="Close" title="Close" className="p-1 -m-1 text-sol-text-dim hover:text-sol-text transition-colors">
+        <button onClick={onClose} className="text-sol-text-dim hover:text-sol-text transition-colors">
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
 
       <div className="p-4 space-y-3 max-h-72 overflow-y-auto">
         <div>
-          <div className="text-meta text-sol-text-dim font-mono mb-0.5">{node.id}</div>
+          <div className="text-[10px] text-sol-text-dim font-mono mb-0.5">{node.id}</div>
           <div className="text-sm font-semibold text-sol-text">{node.label}</div>
         </div>
 
@@ -161,7 +156,7 @@ function NodeDetail({ node, onClose }: { node: WFNode; onClose: () => void }) {
 
         {node.prompt && (
           <div className="space-y-1">
-            <div className="text-mark text-sol-text-dim uppercase tracking-wider">Prompt</div>
+            <div className="text-[10px] text-sol-text-dim uppercase tracking-wider">Prompt</div>
             <div className="text-xs text-sol-text-muted bg-sol-bg rounded-lg p-3 max-h-40 overflow-y-auto leading-relaxed whitespace-pre-wrap font-mono">
               {node.prompt}
             </div>
@@ -170,7 +165,7 @@ function NodeDetail({ node, onClose }: { node: WFNode; onClose: () => void }) {
 
         {node.script && (
           <div className="space-y-1">
-            <div className="text-mark text-sol-text-dim uppercase tracking-wider">Script</div>
+            <div className="text-[10px] text-sol-text-dim uppercase tracking-wider">Script</div>
             <div className="text-xs text-sol-green bg-sol-bg rounded-lg p-3 max-h-40 overflow-y-auto leading-relaxed whitespace-pre-wrap font-mono">
               {node.script}
             </div>
@@ -181,44 +176,36 @@ function NodeDetail({ node, onClose }: { node: WFNode; onClose: () => void }) {
   );
 }
 
-function RunDialog({ workflow, onClose }: { workflow: Workflow; onClose: () => void }) {
+function RunDialog({ workflowId, onClose }: { workflowId: string; onClose: () => void }) {
   const [goalOverride, setGoalOverride] = useState("");
   const [projectPath, setProjectPath] = useState(() => {
     try { return localStorage.getItem("wf_last_project_path") || ""; } catch { return ""; }
   });
   const createRun = useMutation(api.workflow_runs.create);
   const [running, setRunning] = useState(false);
-  // Run starts paid agent sessions: it opens the shared review first.
-  const [reviewing, setReviewing] = useState(false);
-  const runCost = useRunCost(null);
 
   const handleRun = async () => {
     setRunning(true);
     if (projectPath) {
       try { localStorage.setItem("wf_last_project_path", projectPath); } catch {}
     }
-    try {
-      await createRun({
-        workflow_id: workflow._id,
-        goal_override: goalOverride || undefined,
-        project_path: projectPath || undefined,
-      });
-      onClose();
-    } catch (e) {
-      toast.error("Couldn't start the run", { description: e instanceof Error ? e.message : undefined });
-    } finally {
-      setRunning(false);
-    }
+    await createRun({
+      workflow_id: workflowId,
+      goal_override: goalOverride || undefined,
+      project_path: projectPath || undefined,
+    });
+    setRunning(false);
+    onClose();
   };
 
   return (
-    <div className="absolute top-12 right-4 z-20 w-80 max-w-[calc(100%-2rem)] bg-sol-bg-alt border border-sol-border/40 rounded-xl shadow-2xl overflow-hidden">
+    <div className="absolute top-12 right-4 z-20 w-80 bg-sol-bg-alt border border-sol-border/40 rounded-xl shadow-2xl overflow-hidden">
       <div className="px-4 py-3 border-b border-sol-border/30">
         <span className="text-xs font-semibold text-sol-text uppercase tracking-wider">Run Workflow</span>
       </div>
       <div className="p-4 space-y-3">
         <div>
-          <label className="text-mark text-sol-text-dim uppercase tracking-wider block mb-1">Project path</label>
+          <label className="text-[10px] text-sol-text-dim uppercase tracking-wider block mb-1">Project path</label>
           <input
             type="text"
             value={projectPath}
@@ -228,7 +215,7 @@ function RunDialog({ workflow, onClose }: { workflow: Workflow; onClose: () => v
           />
         </div>
         <div>
-          <label className="text-mark text-sol-text-dim uppercase tracking-wider block mb-1">Goal override (optional)</label>
+          <label className="text-[10px] text-sol-text-dim uppercase tracking-wider block mb-1">Goal override (optional)</label>
           <input
             type="text"
             value={goalOverride}
@@ -244,25 +231,12 @@ function RunDialog({ workflow, onClose }: { workflow: Workflow; onClose: () => v
           >
             Cancel
           </button>
-          <Button variant="cyan" size="sm" className="flex-1" onClick={() => setReviewing(true)} disabled={running} aria-haspopup="dialog">
+          <Button variant="cyan" size="sm" className="flex-1" onClick={handleRun} disabled={running}>
             {running ? <Loader2 className="animate-spin" /> : <Play />}
             Run
           </Button>
         </div>
       </div>
-      {reviewing && (
-        <SwitchReview
-          ledger={workflowRunLedger({
-            name: workflow.name,
-            subject: goalOverride.trim() || workflow.goal || workflow.name,
-            agentSteps: workflowAgentSteps(workflow.nodes),
-            steps: workflowSteps(workflow.nodes),
-            project: projectPath.trim().split("/").filter(Boolean).pop() ?? null,
-          }, runCost)}
-          onClose={() => setReviewing(false)}
-          onConfirm={() => { setReviewing(false); void handleRun(); }}
-        />
-      )}
     </div>
   );
 }
@@ -302,7 +276,7 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
           <StatusIcon className={`w-3.5 h-3.5 flex-shrink-0 ${st.color} ${run.status === "running" ? "animate-spin" : ""}`} />
           <span className={`text-xs font-semibold capitalize ${st.color}`}>{run.status}</span>
           {(run.status === "running" || run.status === "completed" || run.status === "failed") && (
-            <span className="text-meta text-sol-text-dim tabular-nums">
+            <span className="text-[10px] text-sol-text-dim tabular-nums">
               {formatDuration(run.created_at, run.status !== "running" ? run.updated_at : undefined)}
             </span>
           )}
@@ -313,7 +287,6 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
               onClick={() => cancelRun({ id: run._id as any })}
               className="p-1 text-sol-text-dim hover:text-sol-red transition-colors rounded"
               title="Cancel run"
-              aria-label="Cancel run"
             >
               <Square className="w-3 h-3" />
             </button>
@@ -326,7 +299,7 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
               <ExternalLink className="w-3 h-3" />
             </Link>
           )}
-          <button onClick={onClose} aria-label="Close run" title="Close" className="p-1 text-sol-text-dim hover:text-sol-text transition-colors rounded">
+          <button onClick={onClose} className="p-1 text-sol-text-dim hover:text-sol-text transition-colors rounded">
             <X className="w-3 h-3" />
           </button>
         </div>
@@ -335,32 +308,32 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
       {run.fail_reason && (
         <div className="flex items-start gap-1.5 px-3 py-2 bg-sol-red/5 border-b border-sol-red/15">
           <AlertCircle className="w-3 h-3 text-sol-red flex-shrink-0 mt-0.5" />
-          <span className="text-meta text-sol-red/80">{run.fail_reason}</span>
+          <span className="text-[11px] text-sol-red/80">{run.fail_reason}</span>
         </div>
       )}
 
       {run.status === "paused" && gateId && (
         <div data-run-gate-card className="border-b border-sol-magenta/20 bg-sol-magenta/5 px-2 py-2">
-          <div className="px-1 pb-1 text-mark text-sol-magenta font-semibold uppercase tracking-widest">Gate</div>
+          <div className="px-1 pb-1 text-[9px] text-sol-magenta font-semibold uppercase tracking-widest">Gate</div>
           <RunGate run={run} />
         </div>
       )}
       {/* Runs minted before gates were decisions carry only a prompt. */}
       {run.status === "paused" && run.gate_prompt && !gateId && (
         <div className="border-b border-sol-magenta/20 bg-sol-magenta/5 px-3 py-2 flex items-center gap-2 flex-wrap">
-          <span className="text-mark text-sol-magenta font-semibold uppercase tracking-widest shrink-0">Gate</span>
-          <span className="text-meta text-sol-text-muted truncate flex-1 min-w-0">{run.gate_prompt}</span>
+          <span className="text-[9px] text-sol-magenta font-semibold uppercase tracking-widest shrink-0">Gate</span>
+          <span className="text-[10px] text-sol-text-muted truncate flex-1 min-w-0">{run.gate_prompt}</span>
           {run.gate_choices?.map(choice => (
             <button
               key={choice.key}
               onClick={() => handleChoice(choice.key)}
-              className="shrink-0 px-1.5 py-0.5 text-meta font-mono font-medium text-sol-magenta border border-sol-magenta/30 rounded hover:bg-sol-magenta/10 transition-colors disabled:opacity-40"
+              className="shrink-0 px-1.5 py-0.5 text-[10px] font-mono font-medium text-sol-magenta border border-sol-magenta/30 rounded hover:bg-sol-magenta/10 transition-colors disabled:opacity-40"
             >
               [{choice.key}] {choice.label.replace(/^\[.\]\s*/, "")}
             </button>
           ))}
           {run.primary_session_id && (
-            <Link href={`/conversation/${run.primary_session_id}`} className="shrink-0 text-meta text-sol-text-dim hover:text-sol-cyan transition-colors">
+            <Link href={`/conversation/${run.primary_session_id}`} className="shrink-0 text-[9px] text-sol-text-dim hover:text-sol-cyan transition-colors">
               reply →
             </Link>
           )}
@@ -369,13 +342,13 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
 
       <div className="flex-1 overflow-y-auto py-2">
         <div className="px-3 pb-1">
-          <span className="text-mark text-sol-text-dim uppercase tracking-widest">Steps</span>
+          <span className="text-[9px] text-sol-text-dim uppercase tracking-widest">Steps</span>
         </div>
         <WorkflowRunNodes run={run} workflow={workflow} className="px-1 space-y-2" />
       </div>
 
       <div className="px-3 py-2 border-t border-sol-border/15">
-        <div className="text-meta text-sol-text-dim font-mono truncate">
+        <div className="text-[9px] text-sol-text-dim font-mono truncate">
           {run._id.slice(-12)} · {new Date(run.created_at).toLocaleTimeString()}
         </div>
       </div>
@@ -400,7 +373,7 @@ function RunsPanel({ workflowId, activeRunId, onSelectRun }: {
   return (
     <div className="border-t border-sol-border/20 bg-sol-bg-alt">
       <div className="px-3 py-1.5 border-b border-sol-border/10">
-        <span className="text-mark text-sol-text-dim uppercase tracking-widest">Runs</span>
+        <span className="text-[10px] text-sol-text-dim uppercase tracking-widest">Runs</span>
       </div>
       <div className="max-h-32 overflow-y-auto">
         {runs.map(run => {
@@ -413,10 +386,10 @@ function RunsPanel({ workflowId, activeRunId, onSelectRun }: {
                 onClick={() => onSelectRun(isActive ? null : run._id)}
                 className="flex-1 flex items-center gap-2 px-3 py-1.5 text-left min-w-0"
               >
-                <StatusIcon className={`w-3 h-3 flex-shrink-0 ${st.color}`} />
-                <span className="text-meta text-sol-text-muted font-mono truncate">{run._id.slice(-8)}</span>
-                <span className={`text-meta ${st.color} capitalize`}>{run.status}</span>
-                <span className="text-meta text-sol-text-dim ml-auto">{timeAgo(run.created_at)}</span>
+                <StatusIcon className={`w-3 h-3 flex-shrink-0 ${st.color} ${run.status === "running" ? "animate-spin" : ""}`} />
+                <span className="text-[10px] text-sol-text-muted font-mono truncate">{run._id.slice(-8)}</span>
+                <span className={`text-[10px] ${st.color} capitalize`}>{run.status}</span>
+                <span className="text-[10px] text-sol-text-dim ml-auto">{timeAgo(run.created_at)}</span>
               </button>
               <Link
                 href={`/workflows/runs/${run._id}`}
@@ -499,7 +472,7 @@ function WorkflowsContent() {
       {sidebarOpen && (
         <div className="w-52 flex-shrink-0 border-r border-sol-border/20 flex flex-col bg-sol-bg-alt">
           <div ref={railTitlebarRef} className="px-3 py-2.5 border-b border-sol-border/20">
-            <span className="text-mark text-sol-text-dim uppercase tracking-widest">Routines</span>
+            <span className="text-[10px] text-sol-text-dim uppercase tracking-widest">Routines</span>
           </div>
           <div className="flex-1 overflow-y-auto">
             {workflows.map(w => {
@@ -521,8 +494,8 @@ function WorkflowsContent() {
                     </span>
                   </div>
                   <div className="flex items-center gap-2 mt-0.5 pl-[18px]">
-                    <span className="text-meta text-sol-text-dim">{w.nodes.length} nodes</span>
-                    <span className="text-meta text-sol-text-dim ml-auto flex items-center gap-0.5">
+                    <span className="text-[10px] text-sol-text-dim">{w.nodes.length} nodes</span>
+                    <span className="text-[10px] text-sol-text-dim ml-auto flex items-center gap-0.5">
                       <Clock className="w-2.5 h-2.5" />
                       {timeAgo(w.updated_at)}
                     </span>
@@ -558,13 +531,13 @@ function WorkflowsContent() {
                   <span className="text-xs text-sol-text-dim ml-2">{selected.goal}</span>
                 )}
               </div>
-              <div className="ml-auto flex items-center gap-3 text-meta text-sol-text-dim">
+              <div className="ml-auto flex items-center gap-3 text-[10px] text-sol-text-dim">
                 <span>{selected.nodes.length} nodes</span>
                 <span>{selected.edges.length} edges</span>
                 <span className="font-mono">{selected.slug}</span>
                 <button
                   onClick={() => setShowRunDialog(v => !v)}
-                  className="flex items-center gap-1 px-2 py-1 text-meta font-medium text-sol-cyan border border-sol-cyan/30 rounded-md hover:bg-sol-cyan/10 transition-colors"
+                  className="flex items-center gap-1 px-2 py-1 text-[10px] font-medium text-sol-cyan border border-sol-cyan/30 rounded-md hover:bg-sol-cyan/10 transition-colors"
                 >
                   <Play className="w-3 h-3" />
                   Run
@@ -583,11 +556,11 @@ function WorkflowsContent() {
                   nodeStatuses={nodeStatuses}
                   currentNodeId={currentNodeId}
                 />
-                {selectedNode && !activeRun && !showRunDialog && (
+                {selectedNode && !activeRun && (
                   <NodeDetail node={selectedNode} onClose={() => setSelectedNode(null)} />
                 )}
                 {showRunDialog && (
-                  <RunDialog workflow={selected} onClose={() => setShowRunDialog(false)} />
+                  <RunDialog workflowId={selected._id} onClose={() => setShowRunDialog(false)} />
                 )}
               </div>
               {activeRun && (
@@ -636,22 +609,22 @@ function RunRow({ run, now, onOpen, forks }: { run: LineRun; now: number; onOpen
         className="group w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-xl transition-colors hover:bg-sol-bg-highlight/70 cursor-pointer"
       >
         <span className="w-[3px] self-stretch rounded-full shrink-0" style={{ background: tone }} aria-hidden />
-        <StatusIcon className={`w-3.5 h-3.5 shrink-0 ${st.color}`} />
+        <StatusIcon className={`w-3.5 h-3.5 shrink-0 ${st.color} ${run.status === "running" ? "animate-spin" : ""}`} />
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5 min-w-0">
             <span className="truncate text-[13px] font-medium" style={{ color: "var(--sol-text)" }}>{run.workflow_name || run.workflow_slug || "workflow"}</span>
-            <span className="shrink-0 text-meta px-1.5 min-h-[17px] inline-flex items-center rounded-md border capitalize" style={{ borderColor: `color-mix(in srgb, ${tone} 45%, transparent)`, color: tone }}>{run.status}</span>
+            <span className="shrink-0 text-[10px] px-1.5 h-[17px] inline-flex items-center rounded-md border capitalize" style={{ borderColor: `color-mix(in srgb, ${tone} 45%, transparent)`, color: tone }}>{run.status}</span>
             {line?.kind === "customized" && <CustomizedLineChip project={line.project.title} href={lineSettingsHref({ project: line.project, section: "stations" })} />}
-            {node && <span className="truncate text-meta" style={{ color: "var(--sol-text-muted)" }}>· {node}</span>}
+            {node && <span className="truncate text-[11px]" style={{ color: "var(--sol-text-muted)" }}>· {node}</span>}
             {counts.total > 0 && (
-              <span className="shrink-0 text-meta tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={`${counts.done} of ${counts.total} steps done`}>
+              <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--sol-text-dim)" }} title={`${counts.done} of ${counts.total} steps done`}>
                 {counts.done}/{counts.total}
               </span>
             )}
-            {counts.running > 0 && <span className="shrink-0 text-meta tabular-nums" style={{ color: "var(--sol-green)" }}>{counts.running} live</span>}
-            {counts.failed > 0 && <span className="shrink-0 text-meta tabular-nums" style={{ color: "var(--sol-red)" }}>{counts.failed} failed</span>}
+            {counts.running > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--sol-green)" }}>{counts.running} live</span>}
+            {counts.failed > 0 && <span className="shrink-0 text-[10px] tabular-nums" style={{ color: "var(--sol-red)" }}>{counts.failed} failed</span>}
           </span>
-          <span className="mt-[2px] flex items-center gap-1.5 text-meta min-w-0" style={{ color: "var(--sol-text-dim)" }}>
+          <span className="mt-[2px] flex items-center gap-1.5 text-[10.5px] min-w-0" style={{ color: "var(--sol-text-dim)" }}>
             {run.task_short_id ? (
               <Link href={`/tasks/${run.task_short_id}`} onClick={(e) => e.stopPropagation()} className="inline-flex items-center gap-1 min-w-0 truncate hover:underline" style={{ color: "var(--sol-text-muted)" }}>
                 <CheckSquare className="w-3 h-3 shrink-0" /><span style={{ fontFamily: "var(--font-mono)" }}>{run.task_short_id}</span>{run.task_title && <span className="truncate">{run.task_title}</span>}
@@ -668,7 +641,7 @@ function RunRow({ run, now, onOpen, forks }: { run: LineRun; now: number; onOpen
             )}
           </span>
         </span>
-        <span className="text-meta tabular-nums shrink-0 self-start mt-[3px]" style={{ color: "var(--sol-text-dim)" }} title={new Date(run.created_at).toLocaleString()}>{compactAge(now - run.created_at)}</span>
+        <span className="text-[10.5px] tabular-nums shrink-0 self-start mt-[3px]" style={{ color: "var(--sol-text-dim)" }} title={new Date(run.created_at).toLocaleString()}>{compactAge(now - run.created_at)}</span>
       </div>
     </li>
   );
@@ -688,12 +661,14 @@ export function RunsTab() {
         <div ref={titlebarRef} className="flex items-baseline gap-2 mb-3">
           <Workflow className="w-4 h-4 text-sol-cyan self-center" />
           <h1 className="text-lg font-semibold text-sol-text">Runs</h1>
+          <span className="text-xs text-sol-text-dim">every run of a flow, newest first</span>
           <span className="ml-auto text-xs text-sol-text-dim font-mono">{runs.length}</span>
         </div>
         {runs.length === 0 ? (
           <div className="flex flex-col items-center justify-center gap-2 py-24 text-center">
             <Workflow className="w-8 h-8 text-sol-text-dim" />
             <p className="text-sm text-sol-text-muted">No runs yet</p>
+            <p className="text-xs text-sol-text-dim max-w-xs">A run starts when a role's sweep picks up a task, or when you ask an agent to run a routine on one.</p>
           </div>
         ) : (
           <ul className="space-y-1">

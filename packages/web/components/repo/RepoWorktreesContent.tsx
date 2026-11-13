@@ -48,9 +48,9 @@ function WorktreeRow({ repository, checkout, worktree: w, focused }: { repositor
             ? <Link href={repoTreeHref(repository, w.branch, undefined, "app")} className="font-mono text-xs text-sol-blue truncate max-w-[40ch]">{w.branch}</Link>
             : <span className="text-xs text-sol-text-dim">detached</span>}
           <Link href={commitPageHref(repository, w.head_sha, "app")} className="font-mono text-xs text-sol-text-dim hover:text-sol-text">{w.head_sha.slice(0, 7)}</Link>
-          {w.locked && <span className="text-meta border border-sol-border rounded-full px-2">locked</span>}
+          {w.locked && <span className="text-[10px] border border-sol-border rounded-full px-2">locked</span>}
           {w.manager === "codecast" && !w.state && (
-            <span title="Made with a plain git worktree add, so it has no ports or setup, and cast ws heal and destroy do not know it" className="text-meta border border-sol-border rounded-full px-2 text-sol-text-dim">no cast ws record</span>
+            <span title="Made with a plain git worktree add, so it has no ports or setup, and cast ws heal and destroy do not know it" className="text-[10px] border border-sol-border rounded-full px-2 text-sol-text-dim">no cast ws record</span>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
@@ -102,7 +102,7 @@ function WorktreeGroupBlock({ repository, checkout, group, focus, filtering }: {
         disabled={!folds}
         onClick={() => setOpen((v) => !v)}
         title={group.hint}
-        className="w-full flex items-baseline gap-2 px-4 py-2 text-left text-mark uppercase tracking-wide text-sol-text-dim bg-sol-bg-alt/40 enabled:hover:text-sol-text"
+        className="w-full flex items-baseline gap-2 px-4 py-2 text-left text-[11px] uppercase tracking-wide text-sol-text-dim bg-sol-bg-alt/40 enabled:hover:text-sol-text"
       >
         <span>{group.label}</span>
         <span className="normal-case tracking-normal">{group.worktrees.length}{occupied ? ` · ${occupied} with sessions` : ""}</span>

@@ -65,7 +65,7 @@
  * long one gives way too, down to a few words. */
 .ol-name { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; color: var(--sol-text); text-decoration: none; }
 .ol-name:hover { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
-.ol-sub { flex: 0 0 auto; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-meta); color: var(--sol-text-dim); }
+.ol-sub { flex: 0 0 auto; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--sol-text-dim); }
 /* A long sub (where a goal would move) gives way to the name, down to a few words. */
 .ol-sub:has([data-sub-long]) { flex: 0 1 auto; min-width: 8ch; }
 /* The owner's face after the name: only where the owner column is gone. */
@@ -79,7 +79,7 @@
 .ol-owner, .ol-state { padding-inline: 4px; margin-inline: -4px; }
 .ol-state { grid-area: state; }
 .ol-measure { grid-area: measure; font-variant-numeric: tabular-nums; }
-.ol-date { grid-area: date; display: none; justify-self: end; font-size: var(--fs-meta); color: var(--sol-text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ol-date { grid-area: date; display: none; justify-self: end; font-size: 11.5px; color: var(--sol-text-dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 /* A proposal's line: violet, a dashed rule on the left drawn inside the
  * padding (so every column stays where the live lines put it), and where to
@@ -101,7 +101,7 @@
 /* :where() keeps these spans at the specificity of the plain ghost rule, so
  * the narrow grid's own placement below wins. */
 .ol-line[data-ghost]:where(:not([data-owned])) .ol-title { grid-column: title-start / state-end; }
-.ol-answer { grid-column: measure-start / -1; justify-self: end; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--fs-meta); color: var(--sol-violet); text-decoration: none; }
+.ol-answer { grid-column: measure-start / -1; justify-self: end; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--sol-violet); text-decoration: none; }
 /* "answer in the conversation" only where the measure and date leave room; the title says it at every width. */
 .ol-answer-words { display: none; }
 .ol-answer:hover { text-decoration: underline; text-underline-offset: 3px; }

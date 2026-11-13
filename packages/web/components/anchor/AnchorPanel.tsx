@@ -128,13 +128,13 @@ export function AnchorPanel() {
       </header>
       <PinStrip pins={pins} shownKey={shown?.key ?? null} />
       {shown && !hasGlobalAssistant && !hiring && (
-        <button type="button" onClick={() => setHiring(true)} className="shrink-0 flex items-center gap-2 px-3 py-1.5 text-meta border-b border-sol-border/60 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/40 text-left" data-hire-assistant-cta>
+        <button type="button" onClick={() => setHiring(true)} className="shrink-0 flex items-center gap-2 px-3 py-1.5 text-[11.5px] border-b border-sol-border/60 text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/40 text-left" data-hire-assistant-cta>
           <AnchorAvatar anchor={null} size={16} />
           <span>Hire your Executive Assistant: a right hand across every workspace, pinned here.</span>
         </button>
       )}
       {hiring && (
-        <button type="button" onClick={() => setHiring(false)} className="shrink-0 px-3 py-1.5 text-meta border-b border-sol-border/60 text-sol-text-muted hover:text-sol-text text-left">← Back</button>
+        <button type="button" onClick={() => setHiring(false)} className="shrink-0 px-3 py-1.5 text-[11.5px] border-b border-sol-border/60 text-sol-text-muted hover:text-sol-text text-left">← Back</button>
       )}
       <div className="flex-1 min-h-0">
         <Suspense fallback={<div className="h-full flex items-center justify-center text-sol-text-dim text-sm">Loading…</div>}>
@@ -170,11 +170,11 @@ function RootAgentHead({ current, shown, onOpenFull }: { current: AnchorRow | nu
       <span className="min-w-0">
         <span className="flex items-center gap-1.5 min-w-0 leading-tight">
           <span className="font-semibold text-sm truncate">{shown ? name : "Workspace agent"}</span>
-          {current?.role && <span className="text-meta font-mono text-sol-text-dim truncate">@{current.role.handle}</span>}
+          {current?.role && <span className="text-[10.5px] font-mono text-sol-text-dim truncate">@{current.role.handle}</span>}
           {current && <AnchorScopePill anchor={current} />}
         </span>
         {shown && (
-          <span className="flex items-center gap-1.5 text-meta leading-tight">
+          <span className="flex items-center gap-1.5 text-[11px] leading-tight">
             {current && <span className={`w-1.5 h-1.5 rounded-full ${status.dot}`} />}
             {title && <span className="text-sol-text-muted truncate">{title}</span>}
             {current && <span className={status.text}>· {status.label}</span>}
@@ -421,7 +421,7 @@ function PinChecklist() {
           <span className="flex items-center gap-2 min-w-0">
             <AnchorAvatar anchor={r.anchor} size={16} className="shrink-0" />
             <span className="truncate">{r.name}</span>
-            <span className="truncate text-meta text-sol-text-dim">{r.subtitle}</span>
+            <span className="truncate text-[11px] text-sol-text-dim">{r.subtitle}</span>
           </span>
         </CtxCheckItem>
       ))}
@@ -439,7 +439,7 @@ function PinChecklist() {
           <span className="flex items-center gap-2 min-w-0">
             <SessionPinFace id={currentId!} size={16} />
             <span className="truncate">{current.title || "This session"}</span>
-            <span className="truncate text-meta text-sol-text-dim">this session</span>
+            <span className="truncate text-[11px] text-sol-text-dim">this session</span>
           </span>
         </CtxCheckItem>
       )}
@@ -492,7 +492,7 @@ function PinStrip({ pins, shownKey }: { pins: ResolvedPin[]; shownKey: string | 
             onContextMenu={(e) => menu.open(e, p)}
             title={`${p.name} · ${p.subtitle}`}
             aria-pressed={on}
-            className={`shrink-0 inline-flex items-center gap-1.5 h-6 pl-0.5 pr-2 rounded-full text-meta transition-[color,background-color,opacity] ${drag.className} ${on ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/50"}`}
+            className={`shrink-0 inline-flex items-center gap-1.5 h-6 pl-0.5 pr-2 rounded-full text-[11.5px] transition-[color,background-color,opacity] ${drag.className} ${on ? "bg-sol-bg-highlight text-sol-text" : "text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/50"}`}
           >
             {p.anchor ? <AnchorAvatar anchor={p.anchor} size={18} /> : <SessionPinFace id={p.conversationId ?? ""} size={18} />}
             <span className="truncate max-w-[110px]">{p.name}</span>
@@ -503,7 +503,7 @@ function PinStrip({ pins, shownKey }: { pins: ResolvedPin[]; shownKey: string | 
       <button
         type="button"
         onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); menu.openAt(r.left, r.bottom + 4, null); }}
-        className="ml-auto shrink-0 inline-flex items-center gap-1 h-6 px-2 rounded-full text-meta text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/50"
+        className="ml-auto shrink-0 inline-flex items-center gap-1 h-6 px-2 rounded-full text-[11.5px] text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-highlight/50"
         title="Choose which roles and sessions sit in the header"
         data-pin-picker
       >

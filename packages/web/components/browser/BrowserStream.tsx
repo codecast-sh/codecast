@@ -232,7 +232,7 @@ export function BrowserStream({
       )}
       {driving && <DrivingHint />}
       {paused && frame && (
-        <span className="absolute bottom-2 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full bg-sol-bg/80 border border-sol-border/40 text-meta font-mono tracking-wider text-sol-text-dim">
+        <span className="absolute bottom-2 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full bg-sol-bg/80 border border-sol-border/40 text-[10px] font-mono tracking-wider text-sol-text-dim">
           paused
         </span>
       )}
@@ -314,7 +314,7 @@ function GhostCursor({
         {captionText !== null && (
           <span
             data-sv-ghost-caption
-            className="absolute left-6 top-7 max-w-[240px] truncate px-1.5 py-0.5 rounded bg-sol-bg/90 border border-sol-violet/40 text-meta font-mono text-sol-text whitespace-nowrap"
+            className="absolute left-6 top-7 max-w-[240px] truncate px-1.5 py-0.5 rounded bg-sol-bg/90 border border-sol-violet/40 text-[10px] font-mono text-sol-text whitespace-nowrap"
             style={{ opacity: view.caption !== null ? 1 : 0, transition: "opacity 300ms ease" }}
           >
             {captionText}

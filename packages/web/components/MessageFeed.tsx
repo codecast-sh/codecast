@@ -99,7 +99,7 @@ function AgentMessageCard({
     >
       <div className="flex items-center gap-2 mb-1.5">
         <CornerDownRight className="w-3.5 h-3.5 shrink-0 text-sol-cyan/70" />
-        <span className="text-mark font-semibold uppercase tracking-wider text-sol-cyan/80 shrink-0">
+        <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-cyan/80 shrink-0">
           {label}
         </span>
         {from && from !== "unknown" ? (
@@ -107,11 +107,11 @@ function AgentMessageCard({
         ) : (
           <span className="text-xs text-sol-text-muted">an agent</span>
         )}
-        <span className="text-meta text-sol-text-dim/30">&middot;</span>
+        <span className="text-[10px] text-sol-text-dim/30">&middot;</span>
         <span className="text-xs text-sol-text-muted truncate group-hover:text-sol-text transition-colors">
           {message.conversation_title}
         </span>
-        <span className="text-meta text-sol-text-dim/50 ml-auto shrink-0">
+        <span className="text-[11px] text-sol-text-dim/50 ml-auto shrink-0">
           {getRelativeTime(message.timestamp)}
         </span>
       </div>
@@ -138,14 +138,14 @@ function MessageCard({ message, text }: { message: FeedMessage; text: string }) 
     >
       <div className="relative rounded-lg border border-l-[3px] border-l-sol-blue/50 border-sol-border/20 bg-sol-bg px-4 py-3 transition-all duration-150 hover:border-l-sol-blue hover:bg-sol-bg-alt/40">
         <div className="flex items-center gap-2 mb-1.5">
-          <span className="text-mark font-semibold uppercase tracking-wider text-sol-blue">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-sol-blue">
             {message.is_own ? "you" : message.author_name}
           </span>
-          <span className="text-meta text-sol-text-dim/30">&middot;</span>
+          <span className="text-[10px] text-sol-text-dim/30">&middot;</span>
           <span className="text-xs text-sol-text-muted truncate group-hover:text-sol-text transition-colors">
             {message.conversation_title}
           </span>
-          <span className="text-meta text-sol-text-dim/50 ml-auto shrink-0">
+          <span className="text-[11px] text-sol-text-dim/50 ml-auto shrink-0">
             {getRelativeTime(message.timestamp)}
           </span>
         </div>
@@ -339,7 +339,7 @@ export function MessageFeed({ filter }: MessageFeedProps) {
       {groups.map((group) => (
         <div key={group.label}>
           <div className="pb-2 mb-2">
-            <h2 className="text-mark font-semibold tracking-widest uppercase text-sol-text-dim/60">
+            <h2 className="text-[11px] font-semibold tracking-widest uppercase text-sol-text-dim/60">
               {group.label}
             </h2>
           </div>

@@ -15,7 +15,7 @@ export function AgentStatusPill({
   const spec = agentStatusPillSpec(agentStatus, { disconnected, live });
   if (!spec) return null;
   return (
-    <span data-cc-conv-status className={`inline-flex items-center gap-1 px-1 text-meta flex-shrink-0 ${spec.tone}`} title={spec.quiet ? spec.label : undefined}>
+    <span data-cc-conv-status className={`inline-flex items-center gap-1 px-1 text-[10px] flex-shrink-0 ${spec.tone}`} title={spec.quiet ? spec.label : undefined}>
       <span className={`w-1.5 h-1.5 rounded-full ${spec.dot}`} />
       {!spec.quiet && <>
         <span className="hidden sm:inline cq-sq3">{spec.label}</span>

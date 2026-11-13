@@ -22,8 +22,6 @@ const fit = (s: string, px: number, size: number, mono = false) => {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 };
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-/** One shared "nothing waits" for every step without waits, so memo(Node) keeps them drawn as they are. */
-const NO_WAIT: StepWait = { onYou: 0, others: 0 };
 
 type BarTone = "fwd" | "stop" | "warn" | "bad" | "live";
 const BAR_ORDER: BarTone[] = ["fwd", "stop", "warn", "bad", "live"];
@@ -543,7 +541,7 @@ export const GraphCanvas = memo(function GraphCanvas({ model, layout, uid, lit, 
             exits={exits}
             failed={failed?.get(n.id)}
             passed={passed?.get(n.id)}
-            wait={waits ? waits.get(n.id) ?? NO_WAIT : undefined}
+            wait={waits ? waits.get(n.id) ?? { onYou: 0, others: 0 } : undefined}
             onWaiting={onWaiting}
             order={lit?.order.get(n.id)}
             times={lit?.times.get(n.id)}

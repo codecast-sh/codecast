@@ -22,7 +22,7 @@ function Block({ title, count, section, children }: { title: string; count?: num
     <div className="px-2.5" data-playbook={section}>
       <h4 className="mb-1 flex items-baseline gap-1.5 text-[12.5px] font-semibold text-sol-text">
         {title}
-        {count !== undefined && <span className="text-meta font-normal tabular-nums" style={DIM}>{count}</span>}
+        {count !== undefined && <span className="text-[11px] font-normal tabular-nums" style={DIM}>{count}</span>}
       </h4>
       {children}
     </div>
@@ -37,7 +37,7 @@ function Row({ text, sub, meta, tone }: { text: string; sub?: string | null; met
         <p className="text-[13px] leading-relaxed" style={BODY}>{text}</p>
         {sub && <p className="text-[12px] leading-relaxed" style={DIM}>{sub}</p>}
       </div>
-      {meta && <span className="shrink-0 whitespace-nowrap text-meta tabular-nums" style={DIM}>{meta}</span>}
+      {meta && <span className="shrink-0 whitespace-nowrap text-[11px] tabular-nums" style={DIM}>{meta}</span>}
     </li>
   );
 }
@@ -74,7 +74,7 @@ function Metric({ metric }: { metric: NonNullable<Playbook["metric"]> }) {
           <Trend readings={metric.readings} />
           <p className="min-w-0 text-[13px] leading-snug text-sol-text" data-playbook-latest={latest.written_on ?? ""}>
             <span className="font-semibold">{latest.text}</span>
-            {latest.written_on && <span className="ml-1.5 text-meta tabular-nums" style={DIM}>{shortDay(latest.written_on)}</span>}
+            {latest.written_on && <span className="ml-1.5 text-[11px] tabular-nums" style={DIM}>{shortDay(latest.written_on)}</span>}
           </p>
         </div>
       )}
@@ -152,7 +152,7 @@ export function RolePlaybook({ playbook, narrative, now }: { playbook: Playbook;
         </Block>
       )}
       {budget.near && (
-        <p className="px-2.5 text-meta" style={{ color: budget.over ? "var(--sol-yellow)" : "var(--sol-text-dim)" }} data-playbook-budget={budget.over ? "over" : "near"}>
+        <p className="px-2.5 text-[11px]" style={{ color: budget.over ? "var(--sol-yellow)" : "var(--sol-text-dim)" }} data-playbook-budget={budget.over ? "over" : "near"}>
           Its brief is {briefBudgetWords(budget)}{budget.over ? ": too long, so it condenses at its next check" : ""}.
         </p>
       )}

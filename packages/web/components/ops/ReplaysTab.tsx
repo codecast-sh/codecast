@@ -18,9 +18,8 @@ import { useOpsGroups, useOpsReplays, useOpsReplayTally, useOpsSources, useSyncO
 import { hasOpenModal, isEditableTarget } from "../../shortcuts";
 import { relTimeShort } from "../../lib/utils";
 import { KeyCap } from "../KeyboardShortcutsHelp";
-import { opsHref, sourceConnectHref } from "./opsPaths";
-import { sourceSettingsHref } from "./sourceViewModel";
-import { OpsFeedError, ProviderIcon, SOURCE_PROVIDER_LABEL, pressable } from "./parts";
+import { opsHref } from "./opsPaths";
+import { OpsFeedError, ProviderIcon, SETUP_HREF, SOURCE_PROVIDER_LABEL, pressable } from "./parts";
 import { OpsNotFound } from "./OpsShellParts";
 import type { OpsGroup, OpsReplay, OpsSource } from "./opsTypes";
 import { ReplayImportLine, hasVendorRecordings, isImportDismissed } from "./ReplayImport";
@@ -112,8 +111,6 @@ export function ReplaysTab({ source }: { source: string | null }) {
   const oneSource = !source && new Set(all.map((r) => r.source_name ?? r.provider)).size <= 1;
   const groupById = useMemo(() => new Map(groups.map((g) => [g._id, g])), [groups]);
   const sources = useOpsSources();
-  // The rows read their source from here, never a subscription of their own.
-  const sourceById = useMemo(() => new Map(sources.map((s) => [s._id, s])), [sources]);
   const importable = useMemo(() => sources.filter((s) => hasVendorRecordings(s) && (!source || s.name === source)), [sources, source]);
 
   const setQuery = (patch: Partial<ReplayListQuery>) => {
@@ -372,7 +369,7 @@ export function ReplaysTab({ source }: { source: string | null }) {
               <SortHead className="rp-c-age" label="Started" sorts={["newest", "oldest"]} sort={sort} onSort={(s) => setQuery({ sort: s })} />
             </div>
             {shown.map((r, i) => (
-              <ReplayRow key={r._id} replay={r} now={now} floor={match.active_min_ms ?? 0} floorText={active} focused={i === focus} scoped={!!source || oneSource} groupById={groupById} sourceById={sourceById} onOpen={() => open(r)} onFocus={() => setFocus(i)} onPerson={pickPerson} onEnv={pickEnv} onHover={(el) => hoverRow(r, el)} onLeave={leaveRow} />
+              <ReplayRow key={r._id} replay={r} now={now} floor={match.active_min_ms ?? 0} floorText={active} focused={i === focus} scoped={!!source || oneSource} groupById={groupById} onOpen={() => open(r)} onFocus={() => setFocus(i)} onPerson={pickPerson} onEnv={pickEnv} onHover={(el) => hoverRow(r, el)} onLeave={leaveRow} />
             ))}
           </div>
         )}
@@ -422,7 +419,7 @@ function Picker({ label, value, options, onChange, always, on }: { label: string
   );
 }
 
-function ReplayRow({ replay: r, now, floor, floorText, focused, scoped, groupById, sourceById, onOpen, onFocus, onPerson, onEnv, onHover, onLeave }: {
+function ReplayRow({ replay: r, now, floor, floorText, focused, scoped, groupById, onOpen, onFocus, onPerson, onEnv, onHover, onLeave }: {
   replay: OpsReplay;
   now: number;
   /** The list's active-time floor (0 for none): an issue-linked recording under it is kept, and its active time says so. */
@@ -431,7 +428,6 @@ function ReplayRow({ replay: r, now, floor, floorText, focused, scoped, groupByI
   focused: boolean;
   scoped: boolean;
   groupById: Map<string, OpsGroup>;
-  sourceById: Map<string, OpsSource>;
   onOpen: () => void;
   /** The row took the keyboard's focus (Tab, a click): it becomes the list's focused row, the one j/k, Space and Enter act on. */
   onFocus: () => void;
@@ -488,7 +484,7 @@ function ReplayRow({ replay: r, now, floor, floorText, focused, scoped, groupByI
         {len.known && active !== undefined && (keptShort || active < (r.duration_ms ?? 0) * 0.8) && (
           <span className="rp-active ops-dim" data-kept={keptShort ? "true" : undefined} title={keptShort ? `Under the ${floorText} active filter, kept because it caught an issue` : "Active time: the recording less its idle stretches"}>{wholeSeconds(formatReplayTime(active))} active</span>
         )}
-        {cut !== null && <CutFact replay={r} cut={cut} now={now} source={sourceById.get(r.source_id)} />}
+        {cut !== null && <CutFact replay={r} cut={cut} now={now} />}
       </span>
       <span role="cell" className="rp-c-figs"><ReplayFigures replay={r} compact /></span>
       <span role="cell" className="rp-c-issue"><IssueChip ids={r.group_ids} groupById={groupById} counts={r.counts} /></span>
@@ -504,7 +500,8 @@ function ReplayRow({ replay: r, now, floor, floorText, focused, scoped, groupByI
 }
 
 /** A cut copy's reach and where reading the rest stands, in the replay page's words (restLine). */
-function CutFact({ replay: r, cut, now, source }: { replay: OpsReplay; cut: number; now: number; source: OpsSource | undefined }) {
+function CutFact({ replay: r, cut, now }: { replay: OpsReplay; cut: number; now: number }) {
+  const source = useOpsSources().find((s) => s._id === r.source_id);
   const line = restLine(restState(r, now, source?.replay_rest?.reading), restHold(r, now), false, r.provider === "posthog" ? "PostHog" : r.provider === "sentry" ? "Sentry" : (r.source_name ?? r.provider), now, restQueued(r, source, now));
   return (
     <span className="rp-active rp-cut-fact" data-state={line.tone} title={`Imported 0:00 to ${formatReplayTime(cut)} of ${formatReplayTime(r.duration_ms ?? 0)} · ${line.text}${line.title ? ` (${line.title})` : ""}`}>
@@ -667,9 +664,11 @@ const REPLAY_ON_ERROR_CONFIG = `"replay": { "dom": "onError" }`;
  * none of it carried a recording, and the line of config that turns
  * recording on. It cannot say which: the recorder's mode is not reported.
  */
-function RecorderFeeder({ source: s, open }: { source: OpsSource; /** Its open issues the store holds (ReplaysEmpty counts them once for every feeder). */ open: number }) {
+function RecorderFeeder({ source: s }: { source: OpsSource }) {
   // The same count the Issues tab shows: the open issues themselves once the store holds them, else the server's counter.
-  const issues = open || (s.groups_open ?? 0);
+  const groups = useOpsGroups();
+  const now = useCoarseNow(60_000);
+  const issues = useMemo(() => groups.filter((g) => g.source_id === s._id && laneOf(g, now) !== null).length, [groups, s._id, now]) || (s.groups_open ?? 0);
   return (
     <div className="rp-feeder rp-import" data-feeder={s.provider}>
       <span className="rp-import-name"><ProviderIcon provider={s.provider} className="w-3.5 h-3.5" /><span className="truncate">{s.name}</span></span>
@@ -682,10 +681,10 @@ function RecorderFeeder({ source: s, open }: { source: OpsSource; /** Its open i
         <span className="rp-import-state ops-quiet">No events yet</span>
       )}
       <span className="rp-import-acts">
-        <button type="button" className="rp-config" title={`Copy for codecast.config.json: ${REPLAY_ON_ERROR_CONFIG}`} onClick={() => void copyText(REPLAY_ON_ERROR_CONFIG, "Config line copied")}>
-          Copy config <Copy className="w-3 h-3" aria-hidden />
+        <button type="button" className="rp-config ops-mono" title="Copy: add this to codecast.config.json to keep a recording with each error" onClick={() => void copyText(REPLAY_ON_ERROR_CONFIG, "Config line copied")}>
+          {REPLAY_ON_ERROR_CONFIG} <Copy className="w-3 h-3" aria-hidden />
         </button>
-        <Link className="ops-btn" href={sourceSettingsHref(s.short_id)}>Recorder setup</Link>
+        <a className="ops-btn" href={SETUP_HREF}>Recorder setup</a>
       </span>
     </div>
   );
@@ -726,14 +725,6 @@ function ElsewhereRow({ source: s }: { source: OpsSource }) {
 function ReplaysEmpty({ sources }: { sources: OpsSource[] }) {
   const vendors = sources.filter(hasVendorRecordings);
   const recorders = sources.filter((s) => s.provider === "sdk" || s.provider === "http");
-  // Each recorder's open issues, counted in one pass rather than one store read per feeder row.
-  const groups = useOpsGroups();
-  const now = useCoarseNow(60_000);
-  const openBySource = useMemo(() => {
-    const n = new Map<string, number>();
-    for (const g of groups) if (laneOf(g, now) !== null) n.set(g.source_id, (n.get(g.source_id) ?? 0) + 1);
-    return n;
-  }, [groups, now]);
   return (
     <div className="ops-pad rp-empty" data-ops-replays-empty>
       <h2 className="rp-empty-title">No recordings yet</h2>
@@ -745,13 +736,13 @@ function ReplaysEmpty({ sources }: { sources: OpsSource[] }) {
             </div>
           ))}
           {recorders.map((s) => (
-            <RecorderFeeder key={s._id} source={s} open={openBySource.get(s._id) ?? 0} />
+            <RecorderFeeder key={s._id} source={s} />
           ))}
         </div>
       ) : (
         <div className="rp-providers">
           {(["posthog", "sentry", "sdk"] as const).map((p) => (
-            <Link key={p} href={sourceConnectHref(p)} className="rp-provider"><ProviderIcon provider={p} className="w-4 h-4" />{p === "sdk" ? "Codecast recorder" : SOURCE_PROVIDER_LABEL[p]}</Link>
+            <a key={p} href={SETUP_HREF} className="rp-provider"><ProviderIcon provider={p} className="w-4 h-4" />{p === "sdk" ? "Codecast recorder" : SOURCE_PROVIDER_LABEL[p]}</a>
           ))}
         </div>
       )}

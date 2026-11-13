@@ -130,9 +130,9 @@ export function replayFigures(r: Pick<OpsReplay, "counts" | "shape" | "facts">):
   return out;
 }
 
-// The list's figure cell (replays.css .rp-figs at 12px mono): an icon and its gap, each digit, and the gap between figures.
+// The list's figure cell (replays.css .rp-figs at 11.5px mono): an icon and its gap, each digit, and the gap between figures.
 const FIG_ICON_PX = 15;
-const FIG_CHAR_PX = 7.3;
+const FIG_CHAR_PX = 7;
 const FIG_GAP_PX = 7;
 const FIGS_MIN_PX = 84;
 

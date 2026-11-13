@@ -167,7 +167,7 @@ export default function PublicProfilePage() {
         <section className="reveal reveal-2 mt-10">
           <div className="flex items-center gap-2 mb-3">
             <Pin className="w-3.5 h-3.5 text-sol-text-muted" />
-            <h2 className="text-mark uppercase tracking-wider font-semibold text-sol-text-muted">
+            <h2 className="text-[11px] uppercase tracking-wider font-semibold text-sol-text-muted">
               Pinned sessions
             </h2>
           </div>
@@ -192,7 +192,7 @@ export default function PublicProfilePage() {
           <section className="reveal reveal-3 mt-10">
             <div className="flex items-center gap-2 mb-3">
               <Activity className="w-3.5 h-3.5 text-sol-text-muted" />
-              <h2 className="text-mark uppercase tracking-wider font-semibold text-sol-text-muted">
+              <h2 className="text-[11px] uppercase tracking-wider font-semibold text-sol-text-muted">
                 Recent activity
               </h2>
             </div>
@@ -219,7 +219,7 @@ function FeedDayRow({ day, pins }: { day: FeedDay; pins?: any[] }) {
   return (
     <div className="relative">
       <div className="absolute -left-[26px] top-1.5 w-2 h-2 rounded-full bg-sol-cyan/50 ring-2 ring-sol-bg" />
-      <div className="text-mark font-bold uppercase tracking-wider text-sol-text-muted/80 select-none">
+      <div className="text-[11px] font-bold uppercase tracking-wider text-sol-text-muted/80 select-none">
         {fmtDayLabel(day.date)}
       </div>
       <div className="mt-0.5 text-[13px] text-sol-text-secondary leading-relaxed">
@@ -255,8 +255,8 @@ function FeedPinRow({ pin }: { pin: any }) {
       <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-sol-text">
         {pin.title || "Untitled session"}
       </span>
-      {pin.repo && <span className="hidden sm:inline font-mono text-meta text-sol-green/80 shrink-0">{pin.repo}</span>}
-      <span className="inline-flex items-center gap-1 text-meta text-sol-text-muted shrink-0">
+      {pin.repo && <span className="hidden sm:inline font-mono text-[10px] text-sol-green/80 shrink-0">{pin.repo}</span>}
+      <span className="inline-flex items-center gap-1 text-[10px] text-sol-text-muted shrink-0">
         <MessageSquare className="w-3 h-3" /> {pin.message_count}
       </span>
       <ArrowUpRight className="w-3.5 h-3.5 shrink-0 text-sol-text-muted/40 transition-colors group-hover:text-sol-cyan" />
@@ -277,7 +277,7 @@ function SessionCard({ pin }: { pin: any }) {
       {pin.subtitle && (
         <p className="mt-1 text-xs text-sol-text-muted line-clamp-2 leading-relaxed">{pin.subtitle}</p>
       )}
-      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-meta text-sol-text-muted">
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-sol-text-muted">
         {pin.repo && (
           <span className="inline-flex items-center gap-1 font-mono text-sol-green/90">{pin.repo}</span>
         )}
@@ -300,7 +300,7 @@ function StatChip({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-xl border border-sol-border/25 bg-sol-card/60 px-4 py-3">
       <div className="text-xl font-bold text-sol-text tabular-nums leading-none">{value}</div>
-      <div className="mt-1.5 text-meta text-sol-text-muted">{label}</div>
+      <div className="mt-1.5 text-[11px] text-sol-text-muted">{label}</div>
     </div>
   );
 }

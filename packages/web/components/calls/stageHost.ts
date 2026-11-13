@@ -27,15 +27,9 @@ export type StageHost = {
   /** The viewer's own identity, so their row in a list reads "you" the way
    *  their own tile does. */
   selfIdentity?: string;
-  /** Whether this participant is speaking now, read reactively by the one
-   *  tile that draws them. A host that has it (a member's stage, from the
-   *  store) keeps a change of speaker to the tiles that change; without it
-   *  the views read the `speaking` set they are handed. */
-  useSpeaking?: (identity: string) => boolean;
 };
 
 export const noFollowLeader = () => null;
-const noSpeaking = () => false;
 const NO_HOST: StageHost = { getRoom: () => null };
 const StageHostContext = createContext<StageHost>(NO_HOST);
 
@@ -43,28 +37,6 @@ export const StageHostProvider = StageHostContext.Provider;
 
 export function useStageHost(): StageHost {
   return useContext(StageHostContext);
-}
-
-/** Is this participant speaking: the host's own reactive read when it has
- *  one, else the set the view was handed. A host never gains or loses the
- *  hook between renders, so the hook order holds. */
-export function useIsSpeaking(identity: string, speaking?: ReadonlySet<string>): boolean {
-  const host = useStageHost();
-  const live = (host.useSpeaking ?? noSpeaking)(identity);
-  return host.useSpeaking ? live : !!speaking?.has(identity);
-}
-
-/** The lattice a stage of `n` equal tiles is drawn on: columns by count, and
- *  as many equal rows as the tiles need. Every row is an explicit `1fr` track:
- *  a video tile has no content height, so a tile left to an implicit `auto`
- *  row beside `fr` rows collapses to nothing. */
-export function stageLattice(n: number): { gridTemplateColumns: string; gridTemplateRows: string } {
-  const cols = n <= 1 ? 1 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
-  const rows = Math.max(1, Math.ceil(n / cols));
-  return {
-    gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
-    gridTemplateRows: `repeat(${rows}, minmax(0, 1fr))`,
-  };
 }
 
 // Roster lookup for a tile: is this person muted right now?

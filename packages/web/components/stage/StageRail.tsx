@@ -18,7 +18,7 @@ export function StageRail({ side, title, path, onRestore }: { side: "left" | "ri
       style={{ width: STAGE_RAIL_PX, background: "var(--sol-bg-alt)", borderColor: "var(--cc-panel-rule)", ["--tw-ring-color" as string]: "var(--sol-cyan)" }}
     >
       <PageIcon path={path} className="w-3.5 h-3.5 shrink-0 text-sol-text-dim" />
-      <span className="min-h-0 truncate text-meta font-medium" style={{ color: "var(--sol-text-muted)", writingMode: "vertical-rl" }}>
+      <span className="min-h-0 truncate text-[11px] font-medium" style={{ color: "var(--sol-text-muted)", writingMode: "vertical-rl" }}>
         {title}
       </span>
     </button>

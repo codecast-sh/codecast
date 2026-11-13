@@ -24,24 +24,20 @@ export type CollectionRowsOpts<T> = {
 // The wake signature over the matching rows: a digest per (where, sig) pair,
 // memoized by the collection ref and per row (makeCollectionSig), so the N
 // components reading the same slice share one pass, a write to one row
-// re-reads that row only, and subscribers compare a short string. Weakly
-// keyed by the two functions, so an entry dies with them: a caller that
-// passes a fresh `where` or `sig` each render pays a full pass per render
-// (hoist those to module scope or a memo), but no longer leaks an entry each.
-const NO_FN = {};
-const sliceSigs = new WeakMap<object, WeakMap<object, (collection: Record<string, unknown>) => string>>();
+// re-reads that row only, and subscribers compare a short string.
+const sliceSigs = new Map<unknown, Map<unknown, (collection: Record<string, unknown>) => string>>();
 function sliceSig<T>(
   collection: Record<string, T> | undefined,
   where: ((row: T) => boolean) | undefined,
   sig: ((row: T) => string) | undefined,
 ): string {
   if (!collection) return "";
-  let bySig = sliceSigs.get(where ?? NO_FN);
-  if (!bySig) { bySig = new WeakMap(); sliceSigs.set(where ?? NO_FN, bySig); }
-  let fn = bySig.get(sig ?? NO_FN);
+  let bySig = sliceSigs.get(where);
+  if (!bySig) { bySig = new Map(); sliceSigs.set(where, bySig); }
+  let fn = bySig.get(sig);
   if (!fn) {
     fn = makeCollectionSig<any>((row) => (!row || (where && !where(row)) ? null : sig ? sig(row) : ""));
-    bySig.set(sig ?? NO_FN, fn);
+    bySig.set(sig, fn);
   }
   return fn(collection as Record<string, unknown>);
 }

@@ -173,8 +173,7 @@ export function pathLabel(path: string): string {
     "/community": "Community",
     "/threads": "Threads",
     "/settings": "Settings",
-    // The rail, the palette and the breadcrumb all call it Feed.
-    "/team/activity": "Feed",
+    "/team/activity": "Activity",
   };
   return segments[clean] || clean.split("/").pop() || "Tab";
 }

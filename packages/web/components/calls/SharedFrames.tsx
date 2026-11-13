@@ -63,14 +63,14 @@ function SharedFrameRow({ share }: { share: CallFrameShare }) {
           <button
             type="button"
             onClick={() => takeDownFrameShare(share._id)}
-            className="rounded px-1.5 py-0.5 text-meta font-medium text-sol-red transition-colors hover:bg-sol-red/10"
+            className="rounded px-1.5 py-0.5 text-[11px] font-medium text-sol-red transition-colors hover:bg-sol-red/10"
           >
             Take down
           </button>
           <button
             type="button"
             onClick={() => setConfirming(false)}
-            className="rounded px-1.5 py-0.5 text-meta text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text"
+            className="rounded px-1.5 py-0.5 text-[11px] text-sol-text-muted transition-colors hover:bg-sol-text-muted/10 hover:text-sol-text"
           >
             Keep
           </button>

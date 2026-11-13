@@ -37,7 +37,7 @@ export function GithubInstallDetail({ scope, teamId }: { scope: AppConnectionSco
   }
   return (
     <div className="mt-2.5 rounded-md bg-sol-bg-highlight/30 px-3 py-2.5">
-      <div className="text-mark uppercase tracking-wider text-sol-text-dim">
+      <div className="text-[10px] uppercase tracking-wider text-sol-text-dim">
         Accounts and repositories the App can see
       </div>
       {installations.length === 0 ? (
@@ -56,13 +56,13 @@ export function GithubInstallDetail({ scope, teamId }: { scope: AppConnectionSco
                 <div className="flex items-center justify-between gap-3">
                   <span className="truncate text-xs font-medium text-sol-text">
                     {install.account_login}
-                    <span className="ml-1.5 font-mono text-meta text-sol-text-dim">{install.account_type}</span>
+                    <span className="ml-1.5 font-mono text-[10px] text-sol-text-dim">{install.account_type}</span>
                   </span>
                   <a
                     href={githubInstallSettingsUrl(install)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="shrink-0 text-meta text-sol-cyan hover:underline"
+                    className="shrink-0 text-[11px] text-sol-cyan hover:underline"
                   >
                     Change repositories on GitHub
                   </a>
@@ -80,7 +80,7 @@ export function GithubInstallDetail({ scope, teamId }: { scope: AppConnectionSco
                     {repos.map((repo: any) => (
                       <li key={repo.id} className="flex items-center gap-1.5">
                         <BookMarked className="h-3 w-3 shrink-0 text-sol-text-dim" />
-                        <span className="truncate font-mono text-meta text-sol-text-muted">{repo.full_name}</span>
+                        <span className="truncate font-mono text-[11px] text-sol-text-muted">{repo.full_name}</span>
                       </li>
                     ))}
                   </ul>
@@ -90,7 +90,7 @@ export function GithubInstallDetail({ scope, teamId }: { scope: AppConnectionSco
           })}
         </div>
       )}
-      <p className="mt-2 text-meta leading-relaxed text-sol-text-dim">
+      <p className="mt-2 text-[11px] leading-relaxed text-sol-text-dim">
         A repository owned by an account that is not listed here is invisible to codecast until the App
         is installed on that account. Which repositories an install covers is chosen on GitHub; codecast
         follows the change as soon as GitHub reports it and brings in the pull requests already there.

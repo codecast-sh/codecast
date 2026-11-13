@@ -70,7 +70,7 @@ export function AccessLogPanel({ teamId }: { teamId: Id<"teams"> }) {
       <SettingsSection title="Access log" icon={ScrollText} actions={<span className="tabular-nums text-xs text-sol-text-dim">{rows.length}{status === "CanLoadMore" ? "+" : ""}</span>}>
         <table className="w-full text-xs" data-access-log>
           <thead>
-            <tr className="border-b border-sol-border/40 text-left text-mark uppercase tracking-wide text-sol-text-dim">
+            <tr className="border-b border-sol-border/40 text-left text-[11px] uppercase tracking-wide text-sol-text-dim">
               <th className="py-1.5 pr-3 font-medium">When</th>
               <th className="py-1.5 pr-3 font-medium">Who</th>
               <th className="py-1.5 pr-3 font-medium">What</th>

@@ -39,7 +39,7 @@ import { Input } from "../../../components/ui/input";
 import { Textarea } from "../../../components/ui/textarea";
 import { Switch } from "../../../components/ui/switch";
 import { SelectBox } from "../../../components/ui/select-box";
-import { SettingsBadge, SettingsCallout, SettingsField, SettingsOptionGroup, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
+import { SettingsCallout, SettingsField, SettingsOptionGroup, SettingsPanel, SettingsSection } from "../../../components/settings/ui";
 import { AgentTypeIcon } from "../../../components/AgentTypeIcon";
 
 type DefinitionDraft = AgentDefinitionSpec & { _id?: string; toolsText: string; disallowedText: string };
@@ -475,12 +475,12 @@ export default function AgentLibraryPage() {
               <span className="min-w-0 flex-1">
                 <span className="flex items-center gap-2">
                   <span className="font-mono text-sm text-sol-text">{d.name}</span>
-                  {d.mode === "propose" && <SettingsBadge tone="yellow">read only</SettingsBadge>}
-                  {d.isolated && <SettingsBadge tone="neutral">worktree</SettingsBadge>}
+                  {d.mode === "propose" && <span className="rounded bg-sol-yellow/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-sol-yellow">read only</span>}
+                  {d.isolated && <span className="rounded bg-sol-bg-alt px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-sol-text-dim">worktree</span>}
                 </span>
                 <span className="block truncate text-xs text-sol-text-muted">{d.description}</span>
               </span>
-              <span className="shrink-0 font-mono text-meta text-sol-text-dim">
+              <span className="shrink-0 font-mono text-[11px] text-sol-text-dim">
                 {[d.agent ?? "caller", d.model, d.effort].filter(Boolean).join(" · ")}
               </span>
               <Copy
@@ -532,7 +532,7 @@ export default function AgentLibraryPage() {
                 <span className="font-mono text-sm text-sol-text">{c.name}</span>
                 <span className="block truncate text-xs text-sol-text-muted">{c.description}</span>
               </span>
-              <span className="shrink-0 font-mono text-meta text-sol-text-dim">{c.steps.map((s) => s.agent).join(" → ")}</span>
+              <span className="shrink-0 font-mono text-[11px] text-sol-text-dim">{c.steps.map((s) => s.agent).join(" → ")}</span>
             </button>
           ),
         )}

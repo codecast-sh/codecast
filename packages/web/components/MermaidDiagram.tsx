@@ -1,26 +1,14 @@
 import { useRef, useState } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
-import { useTheme } from "./ThemeProvider";
 import type { Mermaid } from "mermaid";
 
 let mermaidPromise: Promise<Mermaid> | null = null;
 
 function loadMermaid(): Promise<Mermaid> {
   if (mermaidPromise) return mermaidPromise;
-  mermaidPromise = import("mermaid").then((mod) => mod.default);
-  return mermaidPromise;
-}
-
-// Mermaid's config is global, so it is set again only when the page's theme
-// differs from the one the last diagram drew in. A light page draws light
-// diagrams; the dark palette is the one this file always used.
-let configuredTheme: "dark" | "light" | null = null;
-
-function configureMermaid(m: Mermaid, theme: "dark" | "light") {
-  if (configuredTheme === theme) return;
-  configuredTheme = theme;
-  m.initialize(theme === "dark"
-    ? {
+  mermaidPromise = import("mermaid").then((mod) => {
+    const m = mod.default;
+    m.initialize({
       startOnLoad: false,
       theme: "dark",
       themeVariables: {
@@ -34,8 +22,10 @@ function configureMermaid(m: Mermaid, theme: "dark" | "light") {
         tertiaryColor: "#21262d",
       },
       fontFamily: "inherit",
-    }
-    : { startOnLoad: false, theme: "default", fontFamily: "inherit" });
+    });
+    return m;
+  });
+  return mermaidPromise;
 }
 
 let idCounter = 0;
@@ -44,14 +34,13 @@ export function MermaidDiagram({ code }: { code: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
   const id = useRef(`mermaid-${++idCounter}`);
-  const { theme } = useTheme();
 
   useWatchEffect(() => {
     let cancelled = false;
     setError(null);
 
     loadMermaid()
-      .then((m) => { configureMermaid(m, theme); return m.render(id.current, code); })
+      .then((m) => m.render(id.current, code))
       .then(({ svg }) => {
         if (cancelled || !ref.current) return;
         ref.current.innerHTML = svg;
@@ -67,7 +56,7 @@ export function MermaidDiagram({ code }: { code: string }) {
       });
 
     return () => { cancelled = true; };
-  }, [code, theme]);
+  }, [code]);
 
   // Distinct keys on the two branches. Both are a bare <div> in the same
   // position, so without them React REUSES one DOM node across the swap — and
@@ -80,7 +69,7 @@ export function MermaidDiagram({ code }: { code: string }) {
     return (
       <div
         key="error"
-        className="my-3 rounded border border-sol-red/30 bg-sol-red/10 px-3 py-2 text-xs text-sol-red"
+        className="my-3 rounded border border-red-900/50 bg-red-950/20 px-3 py-2 text-xs text-red-400"
       >
         Diagram error: {error}
       </div>

@@ -137,14 +137,14 @@ export function UpdateComposer({ projectId }: { projectId: string }) {
       <div className="flex items-center justify-end gap-2 mt-2 pt-2 border-t border-sol-border/20">
         <button
           onClick={() => setOpen(false)}
-          className="px-2 py-1 rounded-md text-meta text-sol-text-dim hover:text-sol-text transition-colors"
+          className="px-2 py-1 rounded-md text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
         >
           Cancel <KeyCap size="xs">Esc</KeyCap>
         </button>
         <button
           onClick={submit}
           disabled={!body.trim()}
-          className="px-2.5 py-1 rounded-md text-meta bg-sol-bg-highlight text-sol-text border border-sol-border/40 hover:border-sol-border/70 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          className="px-2.5 py-1 rounded-md text-[11px] bg-sol-bg-highlight text-sol-text border border-sol-border/40 hover:border-sol-border/70 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           Post <span className="cc-bar-keys"><KeyCap size="xs">⌘</KeyCap><KeyCap size="xs">↵</KeyCap></span>
         </button>
@@ -159,8 +159,8 @@ function CommentRow({ comment }: { comment: UpdateComment }) {
       <CommentAvatar name={comment.author} isAgent={comment.author_kind === "agent"} size={18} />
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2">
-          <span className="text-meta font-medium text-sol-text">{comment.author}</span>
-          <span className="text-meta text-sol-text-dim tabular-nums">{relTimeShort(comment.created_at)}</span>
+          <span className="text-[11px] font-medium text-sol-text">{comment.author}</span>
+          <span className="text-[10px] text-sol-text-dim tabular-nums">{relTimeShort(comment.created_at)}</span>
         </div>
         <div className="text-xs text-sol-text-muted">
           <MarkdownRenderer content={comment.text} className="cc-cmt-md" />
@@ -218,11 +218,11 @@ export function UpdateCard({ update, currentUserId }: { update: ProjectUpdate; c
           <div className="flex items-baseline gap-2 flex-1 min-w-0">
             <span className="text-xs font-medium text-sol-text truncate">{update.author}</span>
             {digest && (
-              <span className="flex items-center gap-1 text-meta px-1.5 py-px rounded-full bg-sol-violet/10 text-sol-violet border border-sol-violet/20 flex-shrink-0">
+              <span className="flex items-center gap-1 text-[10px] px-1.5 py-px rounded-full bg-sol-violet/10 text-sol-violet border border-sol-violet/20 flex-shrink-0">
                 <Sparkles className="w-2.5 h-2.5" /> digest
               </span>
             )}
-            <span className="text-meta text-sol-text-dim tabular-nums flex-shrink-0">
+            <span className="text-[10px] text-sol-text-dim tabular-nums flex-shrink-0">
               {relTimeShort(update.created_at)}
               {update.edited_at && <span className="text-sol-text-dim/60"> · edited</span>}
             </span>
@@ -246,7 +246,7 @@ export function UpdateCard({ update, currentUserId }: { update: ProjectUpdate; c
                 title={armed ? "Click again to remove" : "Remove"}
               >
                 <Trash2 className="w-3 h-3" />
-                {armed && <span className="text-meta">sure?</span>}
+                {armed && <span className="text-[10px]">sure?</span>}
               </button>
             </div>
           )}
@@ -268,13 +268,13 @@ export function UpdateCard({ update, currentUserId }: { update: ProjectUpdate; c
             <div className="flex items-center justify-end gap-2 mt-1">
               <button
                 onClick={() => { setEditing(false); setBodyDraft(update.body); }}
-                className="px-2 py-1 rounded-md text-meta text-sol-text-dim hover:text-sol-text transition-colors"
+                className="px-2 py-1 rounded-md text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
               >
                 Cancel
               </button>
               <button
                 onClick={saveEdit}
-                className="px-2.5 py-1 rounded-md text-meta bg-sol-bg-highlight text-sol-text border border-sol-border/40 transition-colors"
+                className="px-2.5 py-1 rounded-md text-[11px] bg-sol-bg-highlight text-sol-text border border-sol-border/40 transition-colors"
               >
                 Save <span className="cc-bar-keys"><KeyCap size="xs">⌘</KeyCap><KeyCap size="xs">↵</KeyCap></span>
               </button>
@@ -312,7 +312,7 @@ export function UpdateCard({ update, currentUserId }: { update: ProjectUpdate; c
       {!commenting && (
         <button
           onClick={() => setCommenting(true)}
-          className="flex items-center gap-1.5 px-3 pb-2.5 pt-0 text-meta text-sol-text-dim hover:text-sol-text transition-colors"
+          className="flex items-center gap-1.5 px-3 pb-2.5 pt-0 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors"
         >
           <MessageSquare className="w-3 h-3" />
           {update.comments.length > 0 ? "Reply" : "Comment"}

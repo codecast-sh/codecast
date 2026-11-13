@@ -72,16 +72,16 @@ export function KitList({
                 <button type="button" onClick={() => onOpen(item)} className="min-w-0 flex-1 text-left">
                   <span className="flex items-center gap-2">
                     <span className="font-mono text-[13px] text-sol-text truncate">{item.name}</span>
-                    <span className="text-meta text-sol-text-dim">{kindMeta(item.kind)?.label ?? item.kind}</span>
+                    <span className="text-[10px] text-sol-text-dim">{kindMeta(item.kind)?.label ?? item.kind}</span>
                     {(pending.some((p) => p.slug === item.slug) || conflicts.some((c) => c.slug === item.slug)) && (
-                      <span className="text-meta text-sol-orange">needs you</span>
+                      <span className="text-[10px] text-sol-orange">needs you</span>
                     )}
                     {item.publishing ? (
-                      <span className="inline-flex items-center gap-1 text-meta text-sol-text-dim">
+                      <span className="inline-flex items-center gap-1 text-[10px] text-sol-text-dim">
                         <Loader2 className="h-3 w-3 animate-spin" /> uploading
                       </span>
                     ) : (
-                      <span className="text-meta text-sol-text-dim tabular-nums">
+                      <span className="text-[10px] text-sol-text-dim tabular-nums">
                         v{item.current_version ?? 1}
                         {author ? ` · ${author}` : ""}
                       </span>
@@ -149,7 +149,7 @@ export function ReachControl({
         role="radio"
         aria-checked={active}
         onClick={press}
-        className={`h-6 px-2 rounded text-meta transition-colors ${
+        className={`h-6 px-2 rounded text-[11px] transition-colors ${
           active
             ? key === "off"
               ? "bg-sol-bg-alt text-sol-text"

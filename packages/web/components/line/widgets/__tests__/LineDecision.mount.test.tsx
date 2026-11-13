@@ -24,9 +24,6 @@ const restoreGlobals = replaceGlobals({
   Element: dom.window.Element,
   Node: dom.window.Node,
   KeyboardEvent: dom.window.KeyboardEvent,
-  // The re-ask review is a Radix dialog: its focus scope dispatches the window's own events.
-  Event: dom.window.Event,
-  CustomEvent: dom.window.CustomEvent,
   localStorage: dom.window.localStorage,
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
   requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number,
@@ -351,12 +348,7 @@ test("a run waiting at a step its line dropped offers no answers: one reason, on
   expect(dock.querySelector("[data-line-decision-reask]")!.textContent).not.toContain("cast line trial");
   const reask = dock.querySelector("[data-line-reask='ct-100']") as HTMLButtonElement;
   expect(reask.textContent).toBe("Re-ask");
-  // It stops the run's runner and sets its agent working: the press opens the review, and only its confirm re-asks.
   await act(async () => { reask.click(); });
-  expect((useInboxStore.getState() as any).trialCards.tc3.reask_at ?? 0).toBe(0);
-  const confirm = document.querySelector("[data-switch-review='Re-ask'] [data-switch-confirm]") as HTMLButtonElement;
-  expect(confirm).not.toBeNull();
-  await act(async () => { confirm.click(); });
   expect((useInboxStore.getState() as any).trialCards.tc3.reask_at).toBeGreaterThan(0);
   expect(reask.textContent).toBe("Asking again");
   expect(reask.disabled).toBe(true);

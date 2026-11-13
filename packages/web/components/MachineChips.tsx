@@ -64,7 +64,7 @@ export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen,
           onClick={() => onPick(d)}
           disabled={locked}
           title={locked ? cloudRefusal! : machineChipTitle(d, roster)}
-          className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-meta rounded-md border transition-all ${
+          className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-md border transition-all ${
             selected
               ? `${deviceAccentClasses(d)} font-medium !border-current`
               : `border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70 disabled:cursor-not-allowed disabled:line-through disabled:hover:text-sol-text-dim ${d.online && !locked ? "" : "opacity-50"}`
@@ -84,7 +84,7 @@ export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen,
         type="button"
         onClick={() => onJoin?.(j.id)}
         title={`Join ${j.name}: a user of your own on your team's machine`}
-        className="inline-flex items-center gap-1 rounded-md border border-dashed border-sol-cyan/50 px-2 py-0.5 text-meta text-sol-cyan/90 hover:border-sol-cyan hover:text-sol-cyan"
+        className="inline-flex items-center gap-1 rounded-md border border-dashed border-sol-cyan/50 px-2 py-0.5 text-[11px] text-sol-cyan/90 hover:border-sol-cyan hover:text-sol-cyan"
         data-machine-join={j.name}
       >
         + {j.name}
@@ -94,7 +94,7 @@ export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen,
       <button
         type="button"
         onClick={onShare}
-        className="px-1 text-meta text-sol-text-dim underline decoration-dotted underline-offset-2 hover:text-sol-cyan"
+        className="px-1 text-[10px] text-sol-text-dim underline decoration-dotted underline-offset-2 hover:text-sol-cyan"
       >
         share yours
       </button>
@@ -104,7 +104,7 @@ export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen,
         {own.map(chip)}
         {(team.length > 0 || joinChips.length > 0) && (
           <div className="flex basis-full flex-wrap items-center justify-end gap-1.5">
-            <span className="inline-flex items-center gap-1 text-meta text-sol-cyan/80" title="Machines your team runs sessions on">
+            <span className="inline-flex items-center gap-1 text-[10px] text-sol-cyan/80" title="Machines your team runs sessions on">
               <Users className="w-3 h-3" />
               team
             </span>
@@ -122,7 +122,7 @@ export function MachineChips({ machines: roster, selectedDeviceId, open, onOpen,
     <button
       onClick={onOpen}
       title={`Runs on ${deviceDisplayName(routedMachine)}. Click to choose a machine${teamCount ? ` (your team shared ${teamCount} more)` : ""}`}
-      className="group/machine inline-flex items-center gap-1.5 px-2 py-0.5 text-meta rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70 hover:bg-sol-bg-alt/50 transition-all"
+      className="group/machine inline-flex items-center gap-1.5 px-2 py-0.5 text-[11px] rounded-md border border-sol-border/40 text-sol-text-dim hover:text-sol-text hover:border-sol-border/70 hover:bg-sol-bg-alt/50 transition-all"
     >
       <DeviceIcon d={routedMachine} className="w-3 h-3 shrink-0" />
       <span className="truncate max-w-[14rem]">{chipLabel(routedMachine, roster)}</span>

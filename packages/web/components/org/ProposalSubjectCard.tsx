@@ -198,7 +198,7 @@ export function LedgerReplyField({ value, ask, onChange, onClose, aside, classNa
           if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onClose(); }
         }}
       />
-      <div className={cn("mt-1 flex items-center gap-3 text-meta leading-[16px]", QUIET)}>
+      <div className={cn("mt-1 flex items-center gap-3 text-[11px] leading-[16px]", QUIET)}>
         <span className="inline-flex items-center gap-1"><KeyCap size="xs">return</KeyCap> save</span>
         <span className="inline-flex items-center gap-1"><KeyCap size="xs">shift</KeyCap><KeyCap size="xs">return</KeyCap> new line</span>
         <span className="inline-flex items-center gap-1"><KeyCap size="xs">esc</KeyCap> close</span>
@@ -234,7 +234,7 @@ export function useAnswerField(answer: SubjectAnswer | null | undefined, onAnswe
   // Adjusting can go as far as no: one press turns the words into a rejection, and back.
   const reject = verdict !== "approve" && (
     <LedgerWord
-      className={cn("-mr-2 h-6 text-meta", verdict === "reject" && WORD_PRESSED)}
+      className={cn("-mr-2 h-6 text-[11px]", verdict === "reject" && WORD_PRESSED)}
       aria-pressed={verdict === "reject"}
       onClick={() => onAnswer?.({ verdict: verdict === "reject" ? "note" : "reject", ...(answer?.text ? { text: answer.text } : {}) })}
       data-subject-reject
@@ -271,7 +271,7 @@ export function AnswerControls({ answer, canAccept = true, dense, onAnswer, onOp
   onOpen: (open: boolean) => void;
   open: boolean;
 }) {
-  const tight = dense ? "h-6 px-2 text-meta" : undefined;
+  const tight = dense ? "h-6 px-2 text-[11px]" : undefined;
   const accepted = answer?.verdict === "approve";
   const adjusting = open || answer?.verdict === "note" || answer?.verdict === "reject";
   return (
@@ -310,7 +310,7 @@ const LINE_CLAMP = { 2: "line-clamp-2", 4: "line-clamp-4" } as const;
 /** The word that opens a clamp: "show all" until pressed, "show less" after. */
 function ClampWord({ open, onToggle }: { open: boolean; onToggle: () => void }) {
   return (
-    <button type="button" className={cn(LEDGER_LINK, QUIET, "block text-meta leading-[16px]")} aria-expanded={open} onClick={(e) => { e.stopPropagation(); onToggle(); }} onKeyDown={stop} onPointerDown={stop} data-field-more>
+    <button type="button" className={cn(LEDGER_LINK, QUIET, "block text-[11px] leading-[16px]")} aria-expanded={open} onClick={(e) => { e.stopPropagation(); onToggle(); }} onKeyDown={stop} onPointerDown={stop} data-field-more>
       {open ? "show less" : "show all"}
     </button>
   );
@@ -501,7 +501,7 @@ export function StateWord({ status, words, className }: { status: OrgChangeStatu
  *  came, else that the words reached the author, who answers or revises. */
 export function NotedLine({ answer, author, className }: { answer: OrgChangeAnswer | null; author?: string; className?: string }) {
   if (answer) return <p className={cn("m-0 max-w-[70ch] whitespace-pre-line text-[12.5px] leading-[1.55] [overflow-wrap:anywhere]", className)} data-subject-answer-text><span className={QUIET}>{author ?? "Author"}: </span><span className={TEXT}>{answer.text}</span></p>;
-  return <p className={cn("m-0 text-meta leading-[18px]", QUIET, className)} data-subject-noted>Sent{author ? ` to ${author}` : ""}, waiting for a reply</p>;
+  return <p className={cn("m-0 text-[11px] leading-[18px]", QUIET, className)} data-subject-noted>Sent{author ? ` to ${author}` : ""}, waiting for a reply</p>;
 }
 
 export function FailNote({ note, className }: { note: string; className?: string }) {
@@ -717,7 +717,7 @@ export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, t
         className={cn("grid items-baseline", AT.grid[mode], ordinal != null && AT.pad[mode])}
         style={{ ...(ordinal == null ? { "--num": "0px" } : {}), "--verdict-gap": card.waiting > 0 ? "12px" : "4px" } as React.CSSProperties}
       >
-        {ordinal != null && <span className={cn("col-start-1 text-meta leading-[20px] tabular-nums", EASE, numberTone)} data-subject-ordinal>{ordinal}</span>}
+        {ordinal != null && <span className={cn("col-start-1 text-[11px] leading-[20px] tabular-nums", EASE, numberTone)} data-subject-ordinal>{ordinal}</span>}
         <p className={cn("col-start-2 m-0 font-normal [overflow-wrap:anywhere] [text-wrap:pretty]", SENTENCE, EASE, sentenceTone)} data-subject-sentence>
           {statusOnly && pillRef
             ? <><RecordPill {...pillRef} title={card.title} /><span className="sr-only">{text}</span></>
@@ -725,7 +725,7 @@ export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, t
         </p>
         {top && <div className={cn(SLOT, AT.verdicts[mode])} {...LEDGER_STOP} data-subject-verdicts>{top}</div>}
 
-        {revisedNew && <p className="org-pop-in col-start-2 m-0 mt-1 text-meta leading-[18px] text-[color:var(--ink-violet)]">Revised since you last looked</p>}
+        {revisedNew && <p className="org-pop-in col-start-2 m-0 mt-1 text-[11px] leading-[18px] text-[color:var(--ink-violet)]">Revised since you last looked</p>}
         {looseNotes.map((note) => <FailNote key={note} note={note} className="col-start-2 mt-1.5" />)}
 
         {groups.map((group, i) => {
@@ -758,9 +758,9 @@ export function ProposalSubjectCard({ card, ordinal, layout, answer, onAnswer, t
         {!split && !staged && (() => { const you = storedYou(null); return you && <div className="col-start-2 min-w-0">{you}</div>; })()}
         {!split && !pendingText && noted(card.reply, card.status) && <NotedLine answer={card.answer} author={author} className="col-start-2 mt-1" />}
 
-        {!settled && card.depends.map((line) => <p key={line} className={cn("col-start-2 m-0 mt-1.5 text-meta leading-[18px]", QUIET)} data-subject-depends>{line}</p>)}
+        {!settled && card.depends.map((line) => <p key={line} className={cn("col-start-2 m-0 mt-1.5 text-[11px] leading-[18px]", QUIET)} data-subject-depends>{line}</p>)}
         {!settled && card.revisions.map((rev) => (
-          <div key={rev.seq} className={cn("col-start-2 mt-1.5 min-w-0 text-meta leading-[18px]", revisedNew && "org-pop-in", QUIET)} data-revision={revisionKind(rev.seq)} data-revision-fields={rev.fields.length}>
+          <div key={rev.seq} className={cn("col-start-2 mt-1.5 min-w-0 text-[11px] leading-[18px]", revisedNew && "org-pop-in", QUIET)} data-revision={revisionKind(rev.seq)} data-revision-fields={rev.fields.length}>
             <span className={cn("font-semibold", MUTED)}>{rev.word}</span>{rev.note ? ` ${rev.note}` : ""}
             <Fields fields={rev.fields} faces={card.faces} tone={TEXT} clamp layout={mode} className="mt-1" />
           </div>

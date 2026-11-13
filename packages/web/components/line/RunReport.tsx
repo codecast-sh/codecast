@@ -36,7 +36,7 @@ export function RunOutcomeText({ run, task, className, muted, brief }: { run: Re
 /** A chip in the outcome row: a link to where the thing lives. */
 export function ReportChip({ href, children, title, tone = "default", external }: { href: string; children: ReactNode; title?: string; tone?: "default" | "ship" | "drop" | "revise"; external?: boolean }) {
   const toneCls = tone === "ship" ? "border-sol-green/40 text-sol-green" : tone === "drop" ? "border-sol-red/40 text-sol-red" : tone === "revise" ? "border-sol-yellow/40 text-sol-yellow" : "border-sol-border/50 text-sol-text-muted";
-  const cls = cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-meta max-w-[22rem] min-w-0 hover:bg-sol-bg-alt transition-colors", toneCls);
+  const cls = cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11.5px] max-w-[22rem] min-w-0 hover:bg-sol-bg-alt transition-colors", toneCls);
   const body = <><span className="truncate">{children}</span>{external && <ArrowUpRight className="w-3 h-3 shrink-0" />}</>;
   return external
     ? <a href={href} target="_blank" rel="noreferrer" className={cls} title={title} data-report-chip>{body}</a>
@@ -81,7 +81,7 @@ function PhaseRow({ phase, ended, bare }: { phase: ReportPhase; ended: boolean; 
   // Below sm the phase sits above its steps, so a result gets the row's width.
   return (
     <li className={cn("grid grid-cols-1 gap-x-4 gap-y-0.5", !bare && "sm:grid-cols-[6.5rem_1fr]")} data-run-phase={phase.key} data-phase-state={phase.state}>
-      {!bare && <div className={cn("text-mark font-semibold uppercase tracking-wider sm:pt-0.5", skipped ? "text-sol-text-dim/60" : phase.state === "failed" ? "text-sol-red" : phase.state === "waiting" ? "text-sol-yellow" : phase.state === "live" ? "text-sol-cyan" : "text-sol-text-dim")}>
+      {!bare && <div className={cn("text-[11px] font-semibold uppercase tracking-wider sm:pt-0.5", skipped ? "text-sol-text-dim/60" : phase.state === "failed" ? "text-sol-red" : phase.state === "waiting" ? "text-sol-yellow" : phase.state === "live" ? "text-sol-cyan" : "text-sol-text-dim")}>
         {phase.label}
         {skipped && <span className="sm:hidden ml-2 normal-case tracking-normal font-normal">{notReached}</span>}
       </div>}
@@ -93,7 +93,7 @@ function PhaseRow({ phase, ended, bare }: { phase: ReportPhase; ended: boolean; 
         {!skipped && (phase.folded.length > 0 || phase.routine.length > 0) && (
           <>
             {open && phase.routine.length > 0 && <ul className="mt-1 space-y-1 opacity-75" data-phase-routine>{phase.routine.map((s, i) => <StepRow key={`${s.id}-${i}`} step={s} />)}</ul>}
-            <button type="button" onClick={() => setOpen((o) => !o)} className="mt-0.5 inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text-muted text-left" aria-expanded={open} data-phase-folded={phase.folded.length} data-phase-routine-count={phase.routine.length}>
+            <button type="button" onClick={() => setOpen((o) => !o)} className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text-muted text-left" aria-expanded={open} data-phase-folded={phase.folded.length} data-phase-routine-count={phase.routine.length}>
               <ChevronRight className={cn("w-3 h-3 shrink-0 transition-transform", open && "rotate-90")} />
               {[
                 phase.routine.length ? `${phase.routine.length} routine ${phase.routine.length === 1 ? "step" : "steps"}${open ? "" : " passed"}` : "",
@@ -120,7 +120,7 @@ function StepRow({ step: s }: { step: ReportStep }) {
     <li className="flex items-baseline gap-2 text-[12.5px] min-w-0" data-run-step={s.id} data-step-state={s.state}>
       <Icon className={cn("w-3.5 h-3.5 shrink-0 self-center", mark.cls)} />
       {/* Wide enough for a step's whole plain name; a longer one wraps rather than cuts. */}
-      <span className="hidden sm:inline-block w-32 shrink-0 break-words leading-snug text-meta text-sol-text-dim/60" data-step-label>{s.label}</span>
+      <span className="hidden sm:inline-block w-32 shrink-0 break-words leading-snug text-[11px] text-sol-text-dim/60" data-step-label>{s.label}</span>
       {s.href ? (
         <Link href={s.href} className={cn("group min-w-0 truncate hover:text-sol-blue hover:underline decoration-sol-blue/40 underline-offset-2", tone)} title={s.hrefTitle} data-step-link>
           {s.result}
@@ -129,7 +129,7 @@ function StepRow({ step: s }: { step: ReportStep }) {
       ) : (
         <span className={cn("min-w-0 truncate", tone)}>{s.result}</span>
       )}
-      {s.note && <span className="min-w-0 truncate text-meta text-sol-text-dim" data-step-note>{s.note}</span>}
+      {s.note && <span className="min-w-0 truncate text-[11.5px] text-sol-text-dim" data-step-note>{s.note}</span>}
     </li>
   );
 }
@@ -163,10 +163,10 @@ function CauseRunRow({ run: r, task, current, muted }: { run: ReportRun; task?: 
   return (
     <li>
       <Link href={runHref(r._id)} className={cn("group flex items-baseline gap-3 px-1 py-1.5 text-[12.5px] min-w-0 hover:bg-sol-bg-alt/60 rounded", r._id === current && "bg-sol-bg-alt/50")} data-cause-run={r._id} aria-current={r._id === current ? "page" : undefined}>
-        <span className="w-12 shrink-0 text-meta text-sol-text-dim tabular-nums">{shortDay(r.created_at)}</span>
+        <span className="w-12 shrink-0 text-[11px] text-sol-text-dim tabular-nums">{shortDay(r.created_at)}</span>
         <RunOutcomeText run={r} task={task} muted={muted} brief className="min-w-0 sm:truncate" />
         {r._id === current
-          ? <span className="ml-auto shrink-0 text-meta text-sol-text-dim">this run</span>
+          ? <span className="ml-auto shrink-0 text-[10.5px] text-sol-text-dim">this run</span>
           : <ArrowUpRight className="ml-auto w-3 h-3 shrink-0 self-center text-sol-text-dim/0 group-hover:text-sol-blue" />}
       </Link>
     </li>
@@ -179,7 +179,7 @@ const STRIP_DOT: Record<string, string> = { done: "bg-sol-green", noted: "bg-sol
  *  tail (the watch). The task page heads a cause with it once no run is live. */
 export function PhaseStrip({ phases, tail }: { phases: ReportPhase[]; tail?: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-meta" data-phase-strip>
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px]" data-phase-strip>
       {phases.map((p, i) => (
         <span key={p.key} className="inline-flex items-center gap-1.5" data-strip-phase={p.key} data-strip-state={p.state}>
           {i > 0 && <span className="w-3 h-px bg-sol-border/60" aria-hidden />}
@@ -197,8 +197,8 @@ export function ReportSection({ title, aside, children, id, className }: { title
   return (
     <section id={id} className={cn("scroll-mt-4", className)} data-report-section={title}>
       <div className="flex items-baseline gap-3 mb-2">
-        <h2 className="text-mark font-semibold uppercase tracking-wider text-sol-text-dim">{title}</h2>
-        {aside && <span className="ml-auto text-meta text-sol-text-dim">{aside}</span>}
+        <h2 className="text-[11px] font-semibold uppercase tracking-wider text-sol-text-dim">{title}</h2>
+        {aside && <span className="ml-auto text-[11px] text-sol-text-dim">{aside}</span>}
       </div>
       {children}
     </section>

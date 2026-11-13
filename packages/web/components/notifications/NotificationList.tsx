@@ -47,9 +47,7 @@ export function NotificationList({ notifications, unreadCount, onOpen, onContext
         )}
       </div>
 
-      {/* Below the top bar, the header and the footer: the list gives way so
-          "View all" stays on screen in a short window. */}
-      <div className={`${floating ? "max-h-[min(600px,calc(100dvh-170px))]" : "max-h-[600px]"} overflow-y-auto`}>
+      <div className="max-h-[600px] overflow-y-auto">
         {entries.length === 0 ? (
           <div className="px-5 py-12 text-center text-sol-text-muted">
             No notifications yet

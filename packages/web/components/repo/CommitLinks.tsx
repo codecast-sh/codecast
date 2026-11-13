@@ -22,7 +22,7 @@ export type CommitJoins = {
 };
 
 const PILL =
-  "inline-flex items-center gap-1 h-[18px] px-1.5 rounded border border-sol-border/25 bg-sol-bg-alt/50 text-meta text-sol-text-muted hover:text-sol-text hover:border-sol-border/50 transition-colors max-w-[16rem] truncate";
+  "inline-flex items-center gap-1 h-[18px] px-1.5 rounded border border-sol-border/25 bg-sol-bg-alt/50 text-[10px] text-sol-text-muted hover:text-sol-text hover:border-sol-border/50 transition-colors max-w-[16rem] truncate";
 
 export function CommitLinks({
   repository,
@@ -42,7 +42,7 @@ export function CommitLinks({
   if (!sessionId && tasks.length === 0 && prNumber === null) return null;
 
   return (
-    <div className={`flex items-center gap-1 flex-wrap text-meta ${className ?? ""}`}>
+    <div className={`flex items-center gap-1 flex-wrap text-[11px] ${className ?? ""}`}>
       {sessionId && (joins.session?.href === null ? (
         <span className={PILL} title="This session is not public">
           <Lock className="w-2.5 h-2.5 shrink-0 text-sol-text-dim" />

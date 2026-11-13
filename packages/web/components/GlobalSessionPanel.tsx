@@ -339,7 +339,7 @@ export function SignInCta({
     return (
       <div className="mt-2 flex items-center gap-2.5 rounded-md border border-amber-500/25 bg-amber-500/[0.08] px-3 py-2.5">
         <span className="h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-amber-500/30 border-t-amber-500" aria-hidden />
-        <div className="min-w-0 text-meta leading-snug">
+        <div className="min-w-0 text-[11px] leading-snug">
           <div className="font-semibold text-sol-text">Finish signing in as {flowWho} in your browser</div>
           <div className="text-sol-text-dim">
             The sign-in page opened on {device.label || "your machine"} — the blocked sessions restart on their own once it completes.
@@ -365,7 +365,7 @@ export function SignInCta({
         <svg className="h-3.5 w-3.5 shrink-0 text-sol-green" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5} aria-hidden>
           <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        <div className="min-w-0 text-meta leading-snug">
+        <div className="min-w-0 text-[11px] leading-snug">
           <div className="font-semibold text-sol-text">Signed in{flow?.email ? ` as ${flow.email}` : ""}</div>
           <div className="text-sol-text-dim">
             {revived > 0
@@ -380,7 +380,7 @@ export function SignInCta({
   return (
     <div className="mt-2 rounded-md border border-amber-500/25 bg-amber-500/[0.08] px-3 py-2.5">
       {rejectedRecent && (
-        <div className="mb-1.5 flex items-center gap-1.5 text-meta font-medium text-sol-red">
+        <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium text-sol-red">
           <X className="h-3 w-3 shrink-0" />
           <span className="min-w-0 truncate">
             Sign-in didn&apos;t complete{flow?.reason ? ` — ${flow.reason}` : ""}
@@ -401,7 +401,7 @@ export function SignInCta({
           </svg>
           {rejectedRecent ? `Try signing in as ${who} again` : `Sign in as ${who}`}
         </Button>
-        <span className="text-meta leading-snug text-sol-text-dim">
+        <span className="text-[11px] leading-snug text-sol-text-dim">
           Opens your browser to re-authenticate, then restarts the signed-out session{authSessionIds.length === 1 ? "" : "s"} automatically.
         </span>
       </div>
@@ -835,7 +835,7 @@ function BlockedSessionsBanner({
           </button>
           {latestBlockAt > 0 && (
             <span
-              className="ml-auto text-meta tabular-nums text-sol-text-dim whitespace-nowrap"
+              className="ml-auto text-[10px] tabular-nums text-sol-text-dim whitespace-nowrap"
               title={`${blocked.length > 1 ? "Most recent block: " : "Blocked "}${new Date(latestBlockAt).toLocaleString()}`}
             >
               {blocked.length > 1 ? "latest " : ""}{fmtDuration(Math.max(0, now - latestBlockAt))} ago
@@ -855,7 +855,7 @@ function BlockedSessionsBanner({
           checkbox excludes subagents from the acted set, the excluded
           slice appears here as its own item instead of silently vanishing
           from the math. Every button below reuses these exact counts. */}
-      <div className="mt-0.5 text-meta leading-snug text-sol-text-muted">
+      <div className="mt-0.5 text-[11px] leading-snug text-sol-text-muted">
         {[
           limitCount > 0 ? `${limitCount} hit a usage limit` : null,
           throttleCount > 0 ? `${throttleCount} rate limited by a burst (retried a few at a time)` : null,
@@ -877,7 +877,7 @@ function BlockedSessionsBanner({
       </div>
       {pickable.length > 0 && (
         <div
-          className="mt-0.5 text-meta leading-snug text-sol-text-muted"
+          className="mt-0.5 text-[11px] leading-snug text-sol-text-muted"
           title={restartCostTip}
         >
           {chosen.length === 0
@@ -916,7 +916,7 @@ function BlockedSessionsBanner({
       )}
       {subagents.length > 0 && (
         <label
-          className="mt-1 flex w-fit cursor-pointer items-center gap-1.5 text-meta text-sol-text-dim hover:text-sol-text"
+          className="mt-1 flex w-fit cursor-pointer items-center gap-1.5 text-[11px] text-sol-text-dim hover:text-sol-text"
           title="Subagent workers are skipped by default — their parent session has usually moved on, so reviving them spends the account on work nobody is waiting for. Left unticked, the continue button dismisses them from the blocked set instead."
         >
           <input
@@ -943,7 +943,7 @@ function BlockedSessionsBanner({
           <div className="min-w-0">
             <span className="font-semibold">Switch accounts?</span> {describeDecision(proposal)}
             {!proposedOption ? (
-              <span className="ml-1.5 text-meta text-sol-text-dim">
+              <span className="ml-1.5 text-[11px] text-sol-text-dim">
                 {proposal.target_name ?? proposal.target_email} is not saved on{" "}
                 {executors.length === 1 ? executors[0].label : "the machines owning these sessions"} — pick another
                 account below, or save it there once.
@@ -952,7 +952,7 @@ function BlockedSessionsBanner({
               <button
                 onClick={() => setOnAccount("")}
                 disabled={busy !== null}
-                className="ml-1.5 text-meta text-sol-text-dim underline decoration-dotted hover:text-sol-text disabled:opacity-60"
+                className="ml-1.5 text-[11px] text-sol-text-dim underline decoration-dotted hover:text-sol-text disabled:opacity-60"
                 title="Continue the sessions on the account this machine is signed into now, without switching"
               >
                 stay on {activeEmail ?? "this account"}
@@ -961,7 +961,7 @@ function BlockedSessionsBanner({
               <button
                 onClick={() => setOnAccount(proposedOption.key)}
                 disabled={busy !== null}
-                className="ml-1.5 text-meta text-sol-text-dim underline decoration-dotted hover:text-sol-text disabled:opacity-60"
+                className="ml-1.5 text-[11px] text-sol-text-dim underline decoration-dotted hover:text-sol-text disabled:opacity-60"
               >
                 use {proposedOption.email ?? proposedOption.name}
               </button>
@@ -975,7 +975,7 @@ function BlockedSessionsBanner({
       {expanded && (
         <div className="mt-2 max-h-56 overflow-y-auto scrollbar-auto rounded border border-amber-500/15 bg-sol-bg/40 divide-y divide-sol-border/30">
           {pickable.length > 1 && (
-            <label className="sticky top-0 z-10 flex cursor-pointer items-center gap-2 bg-sol-bg/95 px-2 py-1 text-meta text-sol-text-dim hover:text-sol-text">
+            <label className="sticky top-0 z-10 flex cursor-pointer items-center gap-2 bg-sol-bg/95 px-2 py-1 text-[10px] text-sol-text-dim hover:text-sol-text">
               <input
                 type="checkbox"
                 checked={allPicked}
@@ -1008,18 +1008,18 @@ function BlockedSessionsBanner({
                 title="Open this session"
               >
                 <AuthErrorBadge kind={sess.pending_api_error_kind} agentType={sess.agent_type} />
-                <span className={`min-w-0 flex-1 truncate text-meta ${isSubagentConversation(sess) && !includeSubs ? "text-sol-text-dim" : "text-sol-text"}`}>
+                <span className={`min-w-0 flex-1 truncate text-[11px] ${isSubagentConversation(sess) && !includeSubs ? "text-sol-text-dim" : "text-sol-text"}`}>
                   {cleanTitle(sess.title || "") || "Untitled session"}
                 </span>
                 {isSubagentConversation(sess) && (
-                  <span className="shrink-0 rounded border border-sol-border/50 px-1 text-meta text-sol-text-dim" title={includeSubs ? "Subagent worker — included in the revive" : "Subagent worker — dismissed by the continue button unless included above"}>
+                  <span className="shrink-0 rounded border border-sol-border/50 px-1 text-[9px] text-sol-text-dim" title={includeSubs ? "Subagent worker — included in the revive" : "Subagent worker — dismissed by the continue button unless included above"}>
                     sub
                   </span>
                 )}
-                <span className="shrink-0 text-meta text-sol-text-dim">{getProjectName(sess.git_root, sess.project_path)}</span>
+                <span className="shrink-0 text-[10px] text-sol-text-dim">{getProjectName(sess.git_root, sess.project_path)}</span>
                                 {sess.context_tokens ? (
                   <span
-                    className={`shrink-0 text-meta tabular-nums ${reloads(sess) ? "text-amber-600 dark:text-amber-500" : "text-sol-text-dim"}`}
+                    className={`shrink-0 text-[10px] tabular-nums ${reloads(sess) ? "text-amber-600 dark:text-amber-500" : "text-sol-text-dim"}`}
                     title={`${formatTokens(sess.context_tokens)} tokens${
                       contextWindowOf(sess) ? ` of the ${formatTokens(contextWindowOf(sess)!)} its model holds` : " of context"
                     }${formatShare(contextShareOf(sess)) ? ` (${formatShare(contextShareOf(sess))} full)` : ""}${reloads(sess)
@@ -1035,7 +1035,7 @@ function BlockedSessionsBanner({
                   </span>
                 ) : null}
                 <span
-                  className="shrink-0 text-meta tabular-nums text-sol-text-dim"
+                  className="shrink-0 text-[10px] tabular-nums text-sol-text-dim"
                   title={`Blocked ${new Date(blockAt(sess)).toLocaleString()}`}
                 >
                   {fmtDuration(Math.max(0, now - blockAt(sess)))} ago
@@ -1058,7 +1058,7 @@ function BlockedSessionsBanner({
           folded away, nothing competing. */}
       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1.5">
         {safetyCount > 0 && (
-          <button onClick={() => safetyCount === 1 ? onOpen?.(safetyBlocked[0]) : setExpanded(true)} className="rounded border border-amber-500/40 px-3 py-1 text-meta font-semibold text-amber-700 dark:text-amber-500 hover:bg-amber-500/10">
+          <button onClick={() => safetyCount === 1 ? onOpen?.(safetyBlocked[0]) : setExpanded(true)} className="rounded border border-amber-500/40 px-3 py-1 text-[11px] font-semibold text-amber-700 dark:text-amber-500 hover:bg-amber-500/10">
             Review {safetyCount === 1 ? "safety stop" : `${safetyCount} safety stops`}
           </button>
         )}
@@ -1080,7 +1080,7 @@ function BlockedSessionsBanner({
         </Button>
         {rankedAccounts.length > 0 && (
           <label
-            className="flex min-w-0 max-w-full items-center gap-1.5 text-meta text-sol-text-dim"
+            className="flex min-w-0 max-w-full items-center gap-1.5 text-[11px] text-sol-text-dim"
             title={`Which Claude account the sessions continue on${activeEmail ? ` — currently ${activeEmail}` : activeEmails.length > 1 ? ` — currently ${activeEmails.join(" / ")}` : ""}; only accounts saved on ${executors.length === 1 ? executors[0].label : "the machines owning these sessions"} are offered`}
           >
             on
@@ -1088,7 +1088,7 @@ function BlockedSessionsBanner({
               value={accountKey}
               onChange={(e) => setOnAccount(e.target.value)}
               disabled={busy !== null}
-              className="min-w-0 max-w-[220px] rounded border border-amber-500/25 bg-sol-bg px-1.5 py-0.5 text-meta text-sol-text outline-none hover:border-amber-500/50 focus:border-amber-500 disabled:opacity-60"
+              className="min-w-0 max-w-[220px] rounded border border-amber-500/25 bg-sol-bg px-1.5 py-0.5 text-[11px] text-sol-text outline-none hover:border-amber-500/50 focus:border-amber-500 disabled:opacity-60"
             >
               <option value="">
                 {activeEmail ? `this account (${activeEmail})` : activeEmails.length > 1 ? `current accounts (${activeEmails.join(" / ")})` : "this account"}
@@ -1107,7 +1107,7 @@ function BlockedSessionsBanner({
           onClick={() => handleAcknowledge(blocked.map((sess) => sess._id))}
           disabled={busy !== null}
           title="Never restart these — clear all of them from the blocked set permanently"
-          className="ml-auto rounded px-2 py-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors disabled:opacity-60"
+          className="ml-auto rounded px-2 py-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors disabled:opacity-60"
         >
           {blocked.length === 1 ? "Dismiss it" : `Dismiss all ${blocked.length}`}
         </button>
@@ -1116,8 +1116,8 @@ function BlockedSessionsBanner({
   );
 }
 
-// The folded form of the bars under a card (card_bars "strip"; the default is
-// "hidden", resolveCardBars). ONE line for every bar family the card carries:
+// The folded form of the bars under a card — the resting state (card_bars
+// "strip", the default). ONE line for every bar family the card carries:
 // triggers, a workflow run in flight, live monitors / background commands. The
 // trigger part speaks for the most urgent row (running > flagged > next to
 // fire > paused); the other families append compact segments in their own
@@ -1192,23 +1192,23 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
         <>
           <Zap className="w-2.5 h-2.5 shrink-0 text-sol-amber/70" fill="currentColor" strokeWidth={0} />
           <SchedHealthDot accent={schedAccent(primary.task)} task={primary.task} />
-          <span data-sched-title className={`text-meta text-sol-text-muted ${rows.length === 1 ? "truncate min-w-0" : "shrink-0 whitespace-nowrap"}`}>
+          <span className={`text-[11px] text-gray-400 ${rows.length === 1 ? "truncate min-w-0" : "shrink-0 whitespace-nowrap"}`}>
             {rows.length === 1 ? taskDisplayTitle(primary.task) : `${rows.length} triggers`}
           </span>
           {rows.length > 1 && (
-            <span className="text-meta text-sol-text-dim truncate min-w-0">
+            <span className="text-[10px] text-sol-text-dim truncate min-w-0">
               {rows.map((r) => taskDisplayTitle(r.task)).join(" · ")}
             </span>
           )}
         </>
       )}
       {workflow && (
-        <span className="text-meta text-sol-cyan/80 truncate min-w-0 shrink-[2]">
+        <span className="text-[10px] text-sol-cyan/80 truncate min-w-0 shrink-[2]">
           {primary ? "· " : ""}{session.workflow_run_name || "workflow"}
         </span>
       )}
       {watching.length > 0 && (
-        <span className="text-meta text-sol-blue/80 whitespace-nowrap shrink-0">
+        <span className="text-[10px] text-sol-blue/80 whitespace-nowrap shrink-0">
           {primary || workflow ? "· " : ""}
           {bgCount > 0 ? `${bgCount} running` : ""}
           {bgCount > 0 && monCount > 0 ? " · " : ""}
@@ -1296,22 +1296,22 @@ function WorkflowBar({ session, isActive }: { session: InboxSession; isActive: b
           </span>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5 min-w-0">
-              <span className="text-mark font-semibold uppercase tracking-wider text-sol-cyan/70 shrink-0">Workflow</span>
-              <span className="text-xs truncate min-w-0 text-sol-text-muted font-normal">{session.workflow_run_name || "workflow run"}</span>
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-cyan/70 shrink-0">Workflow</span>
+              <span className="text-xs truncate min-w-0 text-gray-400 font-normal">{session.workflow_run_name || "workflow run"}</span>
               <RunningBadge label="running" />
             </div>
             <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
               {session.workflow_run_activity ? (
-                <span className="flex-1 min-w-0 truncate text-meta leading-snug font-medium text-sol-text-muted">
+                <span className="flex-1 min-w-0 truncate text-[11px] leading-snug font-medium text-sol-text-muted">
                   <span className="mr-0.5 text-sol-cyan/50">&gt;</span>
                   {session.workflow_run_activity}
                 </span>
               ) : (
-                <span className="flex-1 min-w-0 truncate text-meta leading-snug font-mono text-sol-text-dim">
+                <span className="flex-1 min-w-0 truncate text-[11px] leading-snug font-mono text-sol-text-dim">
                   multi-agent workflow
                 </span>
               )}
-              <span className="shrink-0 text-meta tabular-nums text-sol-text-dim">
+              <span className="shrink-0 text-[10px] tabular-nums text-sol-text-dim">
                 {total > 0 ? `${done}/${total} agents` : ""}
                 {session.workflow_run_started_at ? `${total > 0 ? " · " : ""}${fmtDuration(Math.max(0, now - session.workflow_run_started_at))}` : ""}
               </span>
@@ -1365,8 +1365,8 @@ export function MonitorBars({ session, isActive }: {
                 {/* Header line: identity eyebrow, what's being watched, and the
                     live badge with how long the watch has been standing. */}
                 <div className="flex items-center gap-1.5 min-w-0">
-                  <span className="text-mark font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">{family}</span>
-                  <span className="text-xs truncate min-w-0 text-sol-text-muted font-normal">{row.description}</span>
+                  <span className="text-[9px] font-semibold uppercase tracking-wider text-sol-blue/70 shrink-0">{family}</span>
+                  <span className="text-xs truncate min-w-0 text-gray-400 font-normal">{row.description}</span>
                   {/* Header carries ONLY identity + badge — the bar is
                       space-starved (esp. with the panel narrow), so event/time
                       meta lives on the subrow and the persistent chip rides
@@ -1380,16 +1380,16 @@ export function MonitorBars({ session, isActive }: {
                     watch's clock (event count / age) on the right. */}
                 <div className="flex items-baseline gap-1.5 mt-0.5 min-w-0">
                   {row.lastEvent ? (
-                    <span className="flex-1 min-w-0 truncate text-meta leading-snug font-medium text-sol-text-muted">
+                    <span className="flex-1 min-w-0 truncate text-[11px] leading-snug font-medium text-sol-text-muted">
                       <span className="mr-0.5 text-sol-blue/50">&gt;</span>
                       {row.lastEvent}
                     </span>
                   ) : (
-                    <span className="flex-1 min-w-0 truncate text-meta leading-snug font-mono text-sol-text-dim">
+                    <span className="flex-1 min-w-0 truncate text-[11px] leading-snug font-mono text-sol-text-dim">
                       {row.command.split("\n").find((l) => l.trim()) || "background watch"}
                     </span>
                   )}
-                  <span className="shrink-0 text-meta tabular-nums text-sol-text-dim">
+                  <span className="shrink-0 text-[10px] tabular-nums text-sol-text-dim">
                     {row.eventCount > 0
                       ? `${row.eventCount} event${row.eventCount === 1 ? "" : "s"}${row.lastEventAt !== undefined ? ` · ${fmtDuration(Math.max(0, now - row.lastEventAt))} ago` : ""}`
                       : `for ${fmtDuration(Math.max(0, now - row.startedAt))}`}
@@ -1403,7 +1403,7 @@ export function MonitorBars({ session, isActive }: {
       })}
       {(hiddenCount > 0 || watching.length > MAX_MONITOR_BARS) && (
         <button
-          className="w-full text-left cursor-pointer pr-3 pl-7 py-0.5 text-meta text-sol-text-dim hover:text-sol-text-muted transition-colors"
+          className="w-full text-left cursor-pointer pr-3 pl-7 py-0.5 text-[10px] text-sol-text-dim hover:text-sol-text-muted transition-colors"
           onClick={() => setExpanded((v) => !v)}
         >
           {hiddenCount > 0 ? `+${hiddenCount} more running` : "show fewer"}
@@ -1459,7 +1459,7 @@ function RetryStoppedButton({ rows }: { rows: InboxSession[] }) {
           actionFor(kind, id, lastAskOf(messages), upgradesOpen)?.run();
         }
       }}
-      className="text-meta font-medium text-sol-text-muted underline-offset-2 hover:text-sol-text hover:underline disabled:opacity-60 disabled:no-underline"
+      className="text-[11.5px] font-medium text-sol-text-muted underline-offset-2 hover:text-sol-text hover:underline disabled:opacity-60 disabled:no-underline"
     >
       {down ? "Back soon" : sent ? "Trying again…" : count > 1 ? "Try these again" : "Try again"}
     </button>
@@ -1627,7 +1627,7 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
                 full page, and creating a new schedule without hunting for it.
                 Solid alt band (not the row background) so the popup's edge
                 reads against the session list it floats over. */}
-            <div className="sticky top-0 z-10 flex items-center gap-2 px-3 py-1.5 bg-sol-bg-alt/95 backdrop-blur-sm border-b border-sol-border/60 text-meta">
+            <div className="sticky top-0 z-10 flex items-center gap-2 px-3 py-1.5 bg-sol-bg-alt/95 backdrop-blur-sm border-b border-sol-border/60 text-[10px]">
               <span className="font-medium text-sol-text-muted">
                 {rows.length} armed
                 {recurringCount > 0 ? ` · ${recurringCount} recurring` : ""}
@@ -1685,51 +1685,47 @@ function TriggerDock({ rows, unreadCount, nextRunAt, activeSessionId, onOpen, on
         aria-expanded={open}
         aria-haspopup="true"
         aria-label={`Triggers: ${rows.length} armed`}
-        className="w-full flex items-center gap-1.5 overflow-hidden px-3 py-1.5 bg-sol-bg hover:bg-sol-bg-alt/60 transition-colors"
+        className="w-full flex items-center gap-1.5 px-3 py-1.5 bg-sol-bg hover:bg-sol-bg-alt/60 transition-colors"
       >
         <svg className={`w-3 h-3 shrink-0 ${attention ? "text-sol-red" : "text-sol-amber"}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
           <circle cx="12" cy="12" r="9" />
           <path d="M12 7.5V12l3 2" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
-        <span className="shrink-0 whitespace-nowrap text-mark font-semibold uppercase tracking-wider text-sol-amber">
+        <span className="shrink-0 whitespace-nowrap text-[10px] font-semibold uppercase tracking-wider text-sol-amber">
           Triggers <span className="text-sol-amber/60 tabular-nums">{rows.length}</span>
         </span>
-        {/* The next fire and the pills share what is left of the row and clip
-            there, so the chevron keeps its slot on a narrow rail. */}
-        <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden">
         {nextIn !== undefined && (
-          <span className="text-meta text-sol-text-dim truncate min-w-0">
+          <span className="text-[10px] text-sol-text-dim truncate min-w-0">
             · next{nextTask ? <> <span className="text-sol-text-muted">{taskDisplayTitle(nextTask)}</span></> : null}{" "}
             <span className="tabular-nums">{nextIn > 0 ? `in ${fmtDuration(nextIn)}` : "due"}</span>
           </span>
         )}
         {unreadCount > 0 && (
           <ShortcutTooltip label={`${unreadCount} outcome${unreadCount === 1 ? "" : "s"} landed since you last opened this list`} hint="marked inside">
-            <span className="shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30">
+            <span className="shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30">
               {unreadCount} new
             </span>
           </ShortcutTooltip>
         )}
         {runningCount > 0 && (
-          <span className="shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-green/10 text-sol-green border border-sol-green/30">
-            <LivePulseDot still />
+          <span className="shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-green/10 text-sol-green border border-sol-green/30">
+            <LivePulseDot />
             {runningCount} running
           </span>
         )}
         {overdueCount > 0 && (
           <ShortcutTooltip label="Due but unclaimed for over 2 minutes — is the daemon for that machine running?">
-            <span className="shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-red/15 text-sol-red border border-sol-red/30">
+            <span className="shrink-0 inline-flex items-center whitespace-nowrap px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-red/15 text-sol-red border border-sol-red/30">
               {overdueCount} overdue
             </span>
           </ShortcutTooltip>
         )}
         {attention && (
-          <span className="shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30">
+          <span className="shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-cyan/15 text-sol-cyan border border-sol-cyan/30">
             <span className="w-1 h-1 rounded-full bg-sol-cyan" />
             needs attention
           </span>
         )}
-        </span>
         <svg className={`ml-auto shrink-0 w-3 h-3 transition-transform duration-200 [transition-timing-function:cubic-bezier(0.23,1,0.32,1)] text-sol-text-dim ${open ? "rotate-180" : ""}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 15l7-7 7 7" />
         </svg>
@@ -1925,7 +1921,7 @@ function SessionBeacon({
       data-dir={dir}
       data-tone={tone}
       style={style}
-      className={`cc-session-beacon absolute left-1/2 z-30 flex items-center gap-1.5 rounded-full border bg-sol-bg/90 py-1 pl-2 pr-2.5 text-meta font-medium backdrop-blur-md ${dir === "up" ? "top-9" : "bottom-2"}`}
+      className={`cc-session-beacon absolute left-1/2 z-30 flex items-center gap-1.5 rounded-full border bg-sol-bg/90 py-1 pl-2 pr-2.5 text-[10px] font-medium backdrop-blur-md ${dir === "up" ? "top-9" : "bottom-2"}`}
       title={label}
       aria-label={label}
     >
@@ -2049,13 +2045,6 @@ function SessionListPanelImpl({
     // trigger rather than whichever one a row click last focused.
     useInboxStore.getState().setTriggerStripRequest({ convId: session._id, taskId: null, expand: false, nonce: Date.now() });
   }, [onSessionSelect]);
-
-  // A Decisions card opens the answer view on a plain click; ⌘/shift-click
-  // still selects, as on every other card.
-  const handleQuestionSelect = useCallback((session: InboxSession, e?: React.MouseEvent) => {
-    if (e && selectionGesture(e)) handleSelect(session, e);
-    else router.push(`/decisions?s=${session._id}`);
-  }, [handleSelect, router]);
 
   // The multi-selection (lib/inboxSelection): ids that still have a row here.
   const selectedIdsRaw = useInboxSelection((sel) => sel.ids);
@@ -2589,13 +2578,6 @@ function SessionListPanelImpl({
   // so the whole panel stays bounded no matter how many sessions accumulate. Every
   // session stays in the store — this only limits how many are MOUNTED at once.
   const GLOBAL_CARD_BUDGET = 100;
-  // The fixed status sections (Needs You, Done, Working, Dormant…) each keep a
-  // few cards past the global budget: a header with nothing under it hides the
-  // running agents a person scans for behind a click. Their number is fixed, so
-  // the floor bounds the total at GLOBAL_CARD_BUDGET + 8 × SECTION_CARD_FLOOR.
-  const SECTION_CARD_FLOOR = 8;
-  // A trigger's runs under its row in the "by trigger" view, before "Show more".
-  const TRIGGER_SUB_ROW_CAP = 5;
   const [sectionLimits, setSectionLimits] = useState<Record<string, number>>({});
   const [globalCardExtra, setGlobalCardExtra] = useState(0);
   // Reset each render; renderSection (a closure over this) consumes it in call order.
@@ -3039,13 +3021,13 @@ function SessionListPanelImpl({
             onClick={onToggle}
             className="flex-1 min-w-0 pl-3 py-1.5 flex items-center text-left"
           >
-            <span data-sv-hidden-label className="text-mark font-semibold uppercase tracking-wider text-sol-text-dim">
+            <span data-sv-hidden-label className="text-[10px] font-semibold uppercase tracking-wider text-sol-text-dim">
               {/* The count wears the section headers' markup (SectionHeader). */}
               {label}{items.length > 0 ? ` (${items.length})` : null}
             </span>
             {liveCount > 0 && (
-              <span className="ml-1.5 shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-meta font-semibold bg-sol-green/10 text-sol-green border border-sol-green/30 normal-case tracking-normal">
-                <LivePulseDot still />
+              <span className="ml-1.5 shrink-0 inline-flex items-center whitespace-nowrap gap-1 px-1.5 py-0 rounded-full text-[9px] font-semibold bg-sol-green/10 text-sol-green border border-sol-green/30 normal-case tracking-normal">
+                <LivePulseDot />
                 {liveCount} running
               </span>
             )}
@@ -3127,7 +3109,7 @@ function SessionListPanelImpl({
             {hHidden > 0 && (
               <button
                 onClick={() => setSectionLimits((prev) => ({ ...prev, [hkey]: (prev[hkey] ?? SECTION_RENDER_CAP) + SECTION_RENDER_STEP }))}
-                className="w-full px-3 py-1.5 text-meta font-medium text-sol-text-dim hover:text-sol-cyan transition-colors text-left border-b border-sol-border/30"
+                className="w-full px-3 py-1.5 text-[10px] font-medium text-sol-text-dim hover:text-sol-cyan transition-colors text-left border-b border-sol-border/30"
               >
                 Show {Math.min(hHidden, SECTION_RENDER_STEP)} more · {hHidden} hidden
               </button>
@@ -3168,16 +3150,13 @@ function SessionListPanelImpl({
       // Route a card's click somewhere other than the inbox pane (Questions
       // opens the full-width answer view anchored on the clicked session).
       // Sub-session rows keep the default select — they aren't the question.
-      onSelect?: (session: InboxSession, e?: React.MouseEvent) => void;
+      onSelect?: (session: InboxSession) => void;
       // One text action in the header (Couldn't finish's Try again).
       headerAction?: React.ReactNode;
       // The org lenses: a role's face before the label, and the group's
       // work-state tallies.
       icon?: React.ReactNode;
       states?: Partial<Record<ReturnType<typeof sessionWorkState>, number>>;
-      // A status section: it always shows its first SECTION_CARD_FLOOR cards,
-      // even when the sections above it spent the global budget.
-      floor?: boolean;
     },
   ) => {
     const isDropTarget = !!opts?.onDropSession;
@@ -3236,7 +3215,7 @@ function SessionListPanelImpl({
           // top-priority sections fill first); the active row is force-kept below
           // even when the budget is spent.
           const globalRemaining = Math.max(0, GLOBAL_CARD_BUDGET + globalCardExtra - globalRenderedCards);
-          const limit = Math.max(Math.min(sectionCap, globalRemaining), opts?.floor ? Math.min(items.length, SECTION_CARD_FLOOR) : 0);
+          const limit = Math.min(sectionCap, globalRemaining);
           let visibleItems = items.length > limit ? items.slice(0, limit) : items;
           // Never let the active row (or the parent hosting the active subagent)
           // fall past the cap — it must stay mounted for auto-scroll and so the
@@ -3368,7 +3347,7 @@ function SessionListPanelImpl({
                 {hiddenCount > 0 && (
                   <button
                     onClick={() => setExpandedSubSessions((prev) => ({ ...prev, [session._id]: true }))}
-                    className="w-full px-2 py-0.5 text-meta text-sol-text-dim hover:text-sol-violet transition-colors text-left pl-[26px]"
+                    className="w-full px-2 py-0.5 text-[10px] text-gray-500 hover:text-violet-400 transition-colors text-left pl-[26px]"
                   >
                     +{hiddenCount} more {standingRoleIdOf(session) ? "session" : "sub-session"}{hiddenCount > 1 ? "s" : ""}
                   </button>
@@ -3376,7 +3355,7 @@ function SessionListPanelImpl({
                 {subsExpanded && subs.length > 2 && (
                   <button
                     onClick={() => setExpandedSubSessions((prev) => ({ ...prev, [session._id]: false }))}
-                    className="w-full px-2 py-0.5 text-meta text-sol-text-dim hover:text-sol-violet transition-colors text-left pl-[26px]"
+                    className="w-full px-2 py-0.5 text-[10px] text-gray-500 hover:text-violet-400 transition-colors text-left pl-[26px]"
                   >
                     collapse
                   </button>
@@ -3388,7 +3367,7 @@ function SessionListPanelImpl({
             <button
               onClick={() => { setSectionLimits((prev) => ({ ...prev, [key]: (prev[key] ?? sectionCap) + SECTION_RENDER_STEP })); setGlobalCardExtra((g) => g + SECTION_RENDER_STEP); }}
               data-sv-show-more
-              className="w-full px-3 py-1.5 text-meta font-medium text-sol-text-dim hover:text-sol-cyan transition-colors text-left border-b border-sol-border/30"
+              className="w-full px-3 py-1.5 text-[10px] font-medium text-sol-text-dim hover:text-sol-cyan transition-colors text-left border-b border-sol-border/30"
             >
               Show {Math.min(hiddenCount, SECTION_RENDER_STEP)} more · {hiddenCount} hidden
             </button>
@@ -3418,9 +3397,9 @@ function SessionListPanelImpl({
             title="Back to inbox"
           >
             <Star className="w-3.5 h-3.5 fill-current" />
-            <span className="text-mark font-semibold uppercase tracking-wider">Favorites</span>
+            <span className="text-[11px] font-semibold uppercase tracking-wider">Favorites</span>
             {favoriteGroups && favoriteGroups.count > 0 && (
-              <span className="text-meta text-sol-text-dim font-medium">{favoriteGroups.count}</span>
+              <span className="text-[10px] text-sol-text-dim font-medium">{favoriteGroups.count}</span>
             )}
             <X className="w-3 h-3 text-sol-text-dim group-hover:text-sol-text" />
           </button>
@@ -3446,7 +3425,7 @@ function SessionListPanelImpl({
               data-cc-keep
               onClick={openBlockedBanner}
               title={`${blockedSessions.length} session${blockedSessions.length === 1 ? "" : "s"} blocked on usage, login, connection, API errors, a full context window, or safety review — view blockers`}
-              className={`flex items-center gap-1 px-1.5 py-[3px] rounded-[5px] text-meta font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30 hover:bg-amber-500/20 transition-colors ${blockedIncidentTs > 0 ? "cc-blocked-pill-pulse" : ""}`}
+              className={`flex items-center gap-1 px-1.5 py-[3px] rounded-[5px] text-[10px] font-semibold bg-amber-500/10 text-amber-500 border border-amber-500/30 hover:bg-amber-500/20 transition-colors ${blockedIncidentTs > 0 ? "cc-blocked-pill-pulse" : ""}`}
             >
               <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                 <path d="M6 3h12M6 21h12M8 3v3.5c0 2 4 4 4 5.5s-4 3.5-4 5.5V21M16 3v3.5c0 2-4 4-4 5.5s4 3.5 4 5.5V21" strokeLinecap="round" strokeLinejoin="round" />
@@ -3497,7 +3476,7 @@ function SessionListPanelImpl({
                   ? s.chipFilterExclude ? "No favorites outside this project" : "No favorites in this project"
                   : "No favorites yet"}
               </div>
-              <div className="text-meta text-sol-text-dim max-w-[220px] leading-relaxed">
+              <div className="text-[11px] text-sol-text-dim max-w-[220px] leading-relaxed">
                 {s.activeProjectFilter
                   ? s.chipFilterExclude
                     ? "Every kept session lives in the excluded project. Clear the filter to see them."
@@ -3505,7 +3484,7 @@ function SessionListPanelImpl({
                   : "Star a conversation to keep it here for later — it stays no matter how old it gets, and it’s one keystroke to jump back in."}
               </div>
               {s.activeProjectFilter && (
-                <button onClick={() => s.setActiveProjectFilter(null)} className="mt-1 text-meta text-sol-cyan hover:underline">
+                <button onClick={() => s.setActiveProjectFilter(null)} className="mt-1 text-[11px] text-sol-cyan hover:underline">
                   Show all favorites
                 </button>
               )}
@@ -3526,7 +3505,7 @@ function SessionListPanelImpl({
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <div className="text-xs font-semibold text-sol-text">Clear out your working set?</div>
-                <div className="mt-0.5 text-meta leading-snug text-sol-text-muted">
+                <div className="mt-0.5 text-[11px] leading-snug text-sol-text-muted">
                   <span className="font-semibold text-sol-yellow">{staleSessions.length}</span> sessions have had
                   no activity since {formatShortDate(staleCutoff)}. Dismissing them clears the inbox; they stay
                   searchable and open by link. Pinned sessions are kept.
@@ -3544,7 +3523,7 @@ function SessionListPanelImpl({
             <div className="mt-2 flex items-center gap-3">
               <button
                 onClick={() => setStaleListOpen((v) => !v)}
-                className="flex items-center gap-1 text-meta font-semibold text-sol-yellow transition-colors hover:text-sol-yellow/80"
+                className="flex items-center gap-1 text-[11px] font-semibold text-sol-yellow transition-colors hover:text-sol-yellow/80"
                 aria-expanded={staleListOpen}
               >
                 <ChevronRight className={`h-3 w-3 transition-transform ${staleListOpen ? "rotate-90" : ""}`} />
@@ -3553,13 +3532,13 @@ function SessionListPanelImpl({
               <button
                 onClick={handleDismissStale}
                 disabled={dismissingStale}
-                className="rounded bg-sol-yellow/15 px-2.5 py-1 text-meta font-semibold text-sol-yellow transition-colors hover:bg-sol-yellow/25 disabled:opacity-60"
+                className="rounded bg-sol-yellow/15 px-2.5 py-1 text-[11px] font-semibold text-sol-yellow transition-colors hover:bg-sol-yellow/25 disabled:opacity-60"
               >
                 {dismissingStale ? "Dismissing…" : `Dismiss all ${staleSessions.length}`}
               </button>
               <button
                 onClick={snoozeStalePrompt}
-                className="text-meta text-sol-text-dim transition-colors hover:text-sol-text"
+                className="text-[11px] text-sol-text-dim transition-colors hover:text-sol-text"
               >
                 Not now
               </button>
@@ -3640,24 +3619,10 @@ function SessionListPanelImpl({
             dedicated page; clicking a sub row opens that session. A trigger
             with no visible sessions keeps its row: the trigger is the citizen,
             its work may be folded away or not yet run. */}
-        {triggerView.triggerGroups.map(({ key, row, items }) => {
-          // A recurring trigger can drive hundreds of runs: its sub rows take
-          // from the same per-section cap and global budget as every section,
-          // keeping the active row mounted past the cap.
-          const tkey = `trigger_${key}`;
-          const tcap = sectionLimits[tkey] ?? TRIGGER_SUB_ROW_CAP;
-          const tlimit = Math.min(tcap, Math.max(0, GLOBAL_CARD_BUDGET + globalCardExtra - globalRenderedCards));
-          let visibleRuns = items.length > tlimit ? items.slice(0, tlimit) : items;
-          if (visibleRuns.length < items.length && activeSessionId) {
-            const active = items.find((i) => i._id === activeSessionId);
-            if (active && !visibleRuns.includes(active)) visibleRuns = [...visibleRuns, active];
-          }
-          const hiddenRuns = items.length - visibleRuns.length;
-          globalRenderedCards += visibleRuns.length;
-          return (
+        {triggerView.triggerGroups.map(({ key, row, items }) => (
           <div key={key}>
             <TriggerRowItem row={row} activeSessionId={activeSessionId} onOpen={openTriggerPage} />
-            {visibleRuns.map((session) => (
+            {items.map((session) => (
               <div key={session._id} className="border-b border-sol-border/30">
                 <SessionCard
                   session={session}
@@ -3682,18 +3647,8 @@ function SessionListPanelImpl({
                 />
               </div>
             ))}
-            {hiddenRuns > 0 && (
-              <button
-                onClick={() => { setSectionLimits((prev) => ({ ...prev, [tkey]: (prev[tkey] ?? tcap) + SECTION_RENDER_STEP })); setGlobalCardExtra((g) => g + SECTION_RENDER_STEP); }}
-                data-sv-show-more
-                className="w-full px-3 py-1.5 text-meta font-medium text-sol-text-dim hover:text-sol-cyan transition-colors text-left border-b border-sol-border/30"
-              >
-                Show {Math.min(hiddenRuns, SECTION_RENDER_STEP)} more · {hiddenRuns} hidden
-              </button>
-            )}
           </div>
-          );
-        })}
+        ))}
         {/* Sessions no trigger drives group by project — the same fallback tier
             the label and plan views use. */}
         {triggerView.projectGroups.map(({ name, items }) => (
@@ -3712,33 +3667,31 @@ function SessionListPanelImpl({
             answering advances to the next — same flow for one or many. */}
         {renderSection("Decisions", statusQuestions, "text-sol-violet", undefined, undefined, {
           key: "questions",
-          floor: true,
           count: countOf(statusQuestions, placedQuestions, placed.counts.questions),
-          onSelect: handleQuestionSelect,
+          onSelect: (session) => router.push(`/decisions?s=${session._id}`),
         })}
-        {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { floor: true, count: countOf(statusPinned, pinned, placed.counts.pinned) })}
-        {renderSection("New", statusNew, "text-sol-blue", undefined, undefined, { key: "new", floor: true, count: countOf(statusNew, newSessions, placed.counts.newSessions) })}
+        {renderSection("Pinned", statusPinned, "text-sol-magenta", undefined, undefined, { count: countOf(statusPinned, pinned, placed.counts.pinned) })}
+        {renderSection("New", statusNew, "text-sol-blue", undefined, undefined, { key: "new", count: countOf(statusNew, newSessions, placed.counts.newSessions) })}
         {/* Needs You, Done and Dormant take a dragged card: the drop is the
             user's rest verdict (setSessionRest), the same stamp the context
             menu and the dormant chord write. Working is not a target — nobody
             can file a row as "the agent is producing". */}
-        {renderSection("Needs You", statusNeedsInput, "text-sol-yellow", undefined, undefined, { key: "needs_input", floor: true, count: countOf(statusNeedsInput, needsInput, placed.counts.needsInput), onDropSession: dropSessionOnRest.needs_input })}
+        {renderSection("Needs You", statusNeedsInput, "text-sol-yellow", undefined, undefined, { key: "needs_input", count: countOf(statusNeedsInput, needsInput, placed.counts.needsInput), onDropSession: dropSessionOnRest.needs_input })}
         {renderSection(STOPPED_SECTION.label, filteredStopped, "text-sol-red", undefined, undefined, {
           key: "hosted_stopped",
-          floor: true,
           headerAction: <RetryStoppedButton rows={filteredStopped} />,
         })}
         {/* Sections read top-down as "who acts next": you (Questions, Needs
             Input, Done to review), the agent right now (Working), then a
             machine event (Dormant). Nothing below Dormant is anyone's move. */}
-        {renderSection("Done", statusDone, "text-sol-cyan", undefined, undefined, { floor: true, count: countOf(statusDone, done, placed.counts.done), onDropSession: dropSessionOnRest.done })}
-        {renderSection("Working", statusWorking, "text-sol-green", "working", undefined, { floor: true, count: countOf(statusWorking, working, placed.counts.working) })}
+        {renderSection("Done", statusDone, "text-sol-cyan", undefined, undefined, { count: countOf(statusDone, done, placed.counts.done), onDropSession: dropSessionOnRest.done })}
+        {renderSection("Working", statusWorking, "text-sol-green", "working", undefined, { count: countOf(statusWorking, working, placed.counts.working) })}
         {/* Dormant is the section nobody needs to watch: one quiet line per
             session (the compact list's layout, whatever the person's own
             setting) plus the line saying what wakes it and when. */}
         <div className="inbox-compact" data-dormant-section>
           <div data-sv-rail>
-            {renderSection("Dormant", statusDormant, "text-sol-text-dim", undefined, undefined, { key: "dormant", floor: true, count: countOf(statusDormant, dormant, placed.counts.dormant), onDropSession: dropSessionOnRest.dormant })}
+            {renderSection("Dormant", statusDormant, "text-sol-text-dim", undefined, undefined, { key: "dormant", count: countOf(statusDormant, dormant, placed.counts.dormant), onDropSession: dropSessionOnRest.dormant })}
           </div>
         </div>
         </>
@@ -3766,7 +3719,7 @@ function SessionListPanelImpl({
           headerAction: (
             <button
               onClick={handleKillAllStashed}
-              className={`px-1.5 py-0.5 rounded text-mark font-semibold uppercase tracking-wider transition-all shrink-0 ${
+              className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase tracking-wider transition-all shrink-0 ${
                 killAllArmed
                   ? "text-sol-bg bg-sol-red hover:bg-sol-red/90"
                   : "text-sol-text-dim opacity-40 hover:opacity-100 hover:text-sol-red hover:bg-sol-red/10"
@@ -3805,13 +3758,13 @@ function SessionListPanelImpl({
           // screen offers nothing.
           footer: noMachineYet && filteredDismissed.length === 0 && s.killedShelf.ids.length === 0 ? undefined : s.killedShelf.complete ? (
             s.killedShelf.ids.length > 0 && (
-              <div className="w-full px-3 py-1.5 text-meta text-sol-text-dim/60 border-b border-sol-border/30">No older kills</div>
+              <div className="w-full px-3 py-1.5 text-[10px] text-sol-text-dim/60 border-b border-sol-border/30">No older kills</div>
             )
           ) : (
             <button
               onClick={() => { void loadMoreKilledSessions(convex); }}
               disabled={s.killedShelf.loading}
-              className="w-full px-3 py-1.5 text-meta font-medium text-sol-text-dim hover:text-sol-cyan disabled:hover:text-sol-text-dim disabled:opacity-60 transition-colors text-left border-b border-sol-border/30"
+              className="w-full px-3 py-1.5 text-[10px] font-medium text-sol-text-dim hover:text-sol-cyan disabled:hover:text-sol-text-dim disabled:opacity-60 transition-colors text-left border-b border-sol-border/30"
             >
               {s.killedShelf.loading ? "Loading older kills…" : "Load older kills"}
             </button>

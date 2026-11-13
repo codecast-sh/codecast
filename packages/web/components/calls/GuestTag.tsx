@@ -15,7 +15,7 @@ export function GuestTag({ className = "", title = PARTICIPANT_MARKS.guest.title
   return (
     <span
       title={title}
-      className={`inline-flex shrink-0 items-center rounded-[4px] bg-sol-yellow/15 px-1 py-px font-mono text-meta font-medium leading-none tracking-wide text-sol-yellow ring-1 ring-inset ring-sol-yellow/25 ${className}`}
+      className={`inline-flex shrink-0 items-center rounded-[4px] bg-sol-yellow/15 px-1 py-px font-mono text-[9.5px] font-medium leading-none tracking-wide text-sol-yellow ring-1 ring-inset ring-sol-yellow/25 ${className}`}
     >
       {PARTICIPANT_MARKS.guest.word}
     </span>
@@ -30,7 +30,7 @@ export function AgentTag({ className = "", title = PARTICIPANT_MARKS.agent.title
   return (
     <span
       title={title}
-      className={`inline-flex shrink-0 items-center rounded-[4px] bg-sol-violet/15 px-1 py-px font-mono text-meta font-medium leading-none tracking-wide text-sol-violet ring-1 ring-inset ring-sol-violet/25 ${className}`}
+      className={`inline-flex shrink-0 items-center rounded-[4px] bg-sol-violet/15 px-1 py-px font-mono text-[9.5px] font-medium leading-none tracking-wide text-sol-violet ring-1 ring-inset ring-sol-violet/25 ${className}`}
     >
       {PARTICIPANT_MARKS.agent.word}
     </span>

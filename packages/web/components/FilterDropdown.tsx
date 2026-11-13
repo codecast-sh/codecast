@@ -115,7 +115,7 @@ export function FilterOptionList({
         return (
           <Fragment key={opt.key}>
           {heading && (
-            <div className="px-3 pt-2 pb-1 text-mark font-semibold uppercase tracking-widest text-sol-text-dim/70">{heading}</div>
+            <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-widest text-sol-text-dim/70">{heading}</div>
           )}
           <button
             onClick={() => handleClick(opt.key)}
@@ -127,7 +127,7 @@ export function FilterOptionList({
             {opt.face ?? (OptIcon && <OptIcon className={`w-3.5 h-3.5 flex-shrink-0 ${opt.color || ""}`} />)}
             <span className="flex-1 text-left truncate">{opt.label}</span>
             {opt.count != null && opt.count > 0 && (
-              <span className="text-meta tabular-nums text-sol-text-dim flex-shrink-0">{opt.count}</span>
+              <span className="text-[10px] tabular-nums text-sol-text-dim flex-shrink-0">{opt.count}</span>
             )}
             {sel && <Check className="w-3 h-3 text-sol-cyan flex-shrink-0" />}
           </button>
@@ -202,7 +202,7 @@ export function FilterDropdown({
         <div className="flex items-center h-7 rounded-md border border-sol-cyan/30 bg-sol-cyan/5 text-sol-cyan text-xs">
           <button onClick={() => setOpen((o) => !o)} className="flex items-center gap-1 pl-1.5 pr-1 h-full" title={`Edit ${label}`}>
             {icon}
-            <span className="whitespace-nowrap truncate max-w-[12rem]" title={buttonLabel}>{buttonLabel}</span>
+            <span className="whitespace-nowrap">{buttonLabel}</span>
           </button>
           <button onClick={() => onChange("")} className="flex items-center pr-1.5 pl-0.5 h-full hover:text-sol-text transition-colors" title={`Remove ${label} filter`}>
             <X className="w-3 h-3 opacity-70" />
@@ -224,7 +224,7 @@ export function FilterDropdown({
         }`}
       >
         {icon}
-        <span className="whitespace-nowrap truncate max-w-[12rem]" title={buttonLabel}>{buttonLabel}</span>
+        <span className="whitespace-nowrap">{buttonLabel}</span>
         <ChevronDown className="w-3 h-3 opacity-60 -ml-0.5 flex-shrink-0" />
       </button>
       {optionsPopover}

@@ -53,14 +53,14 @@ export function TaskContextPanel({ task: ref, sessionId }: {
       {expanded && (
         <RailDetail data-cc-task-detail="">
           <div className="px-4 py-2.5 space-y-2.5 max-h-[60vh] overflow-y-auto">
-            <div className="flex items-center gap-3 text-meta min-w-0">
+            <div className="flex items-center gap-3 text-[11px] min-w-0">
               <div className="-ml-2 flex-shrink-0"><TaskStatusPicker task={task as any} /></div>
               <span className="ml-auto flex items-center gap-1 flex-shrink-0">
                 {finishedAhead && (
                   <button
                     type="button"
                     onClick={() => void useInboxStore.getState().updateTaskStatus(task.short_id!, "in_review")}
-                    className="h-5 px-2 rounded border border-sol-violet/40 bg-sol-violet/10 text-meta text-sol-violet hover:bg-sol-violet/20 transition-colors"
+                    className="h-5 px-2 rounded border border-sol-violet/40 bg-sol-violet/10 text-[10px] text-sol-violet hover:bg-sol-violet/20 transition-colors"
                     title="This session marked its work complete"
                   >
                     Move to review
@@ -69,7 +69,7 @@ export function TaskContextPanel({ task: ref, sessionId }: {
                 <button
                   type="button"
                   onClick={() => switchFace(path)}
-                  className="flex items-center gap-1 h-5 px-1.5 rounded text-meta text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
+                  className="flex items-center gap-1 h-5 px-1.5 rounded text-[10px] text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
                   title="Open the task here"
                 >
                   <ArrowUpRight className="w-3 h-3" /> Open task
@@ -77,7 +77,7 @@ export function TaskContextPanel({ task: ref, sessionId }: {
                 <button
                   type="button"
                   onClick={() => { if (!openBeside(path)) switchFace(path); }}
-                  className="flex items-center gap-1 h-5 px-1.5 rounded text-meta text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
+                  className="flex items-center gap-1 h-5 px-1.5 rounded text-[10px] text-sol-text-dim hover:text-sol-cyan hover:bg-sol-bg-alt transition-colors"
                   title="Open the task beside this session"
                 >
                   <Columns2 className="w-3 h-3" /> Beside

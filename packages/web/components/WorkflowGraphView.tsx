@@ -183,19 +183,19 @@ function WorkflowNode({ data, selected }: { data: any; selected?: boolean }) {
       <Handle id="right"  type="source" position={Position.Right}  style={{ background: colors.border, width: 5, height: 5, border: "none" }} />
       <Handle id="bottom-source" type="source" position={Position.Bottom} style={{ background: "transparent", border: "none", width: 1, height: 1 }} />
       <Handle id="bottom-target" type="target" position={Position.Bottom} style={{ background: "transparent", border: "none", width: 1, height: 1 }} />
-      <div style={{ fontSize: 11, opacity: 0.5, fontFamily: "monospace", lineHeight: 1, color: p.textDim }}>
+      <div style={{ fontSize: 9, opacity: 0.5, fontFamily: "monospace", lineHeight: 1, color: p.textDim }}>
         {node.id}
       </div>
-      <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.2, textAlign: "center", padding: "0 8px", color: p.text }}>
-        {node.label.length > 20 ? node.label.slice(0, 19) + "…" : node.label}
+      <div style={{ fontSize: 11, fontWeight: 600, lineHeight: 1.2, textAlign: "center", padding: "0 8px", color: p.text }}>
+        {node.label.length > 22 ? node.label.slice(0, 20) + "…" : node.label}
       </div>
       {marked && (
-        <div data-marked style={{ position: "absolute", top: 2, left: 6, fontSize: 11, color: p.magenta, fontFamily: "monospace", letterSpacing: 0.3 }}>
+        <div data-marked style={{ position: "absolute", top: 2, left: 6, fontSize: 7, color: p.magenta, fontFamily: "monospace", letterSpacing: 0.3 }}>
           edited
         </div>
       )}
       {node.goal_gate && (
-        <div style={{ position: "absolute", top: 2, right: 5, fontSize: 11, color: p.yellow, opacity: 0.8, fontFamily: "monospace" }}>
+        <div style={{ position: "absolute", top: 2, right: 5, fontSize: 7, color: p.yellow, opacity: 0.8, fontFamily: "monospace" }}>
           gate
         </div>
       )}
@@ -245,7 +245,7 @@ function WorkflowEdge({ source, target, sourceHandleId, targetHandleId, sourceX,
               left: labelX,
               top: labelY,
               transform: "translate(-50%, -50%)",
-              fontSize: 11,
+              fontSize: 9,
               color: data.labelColor,
               fontFamily: "monospace",
               background: data.bg,

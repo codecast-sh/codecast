@@ -90,12 +90,12 @@ export function TeamShareModePicker({
         <span className="text-xs font-medium text-sol-text-muted">
           {team?.name ? <>Team <span className="text-sol-text">{team.name}</span></> : "Team"}
         </span>
-        {isUpdating && <span className="text-meta text-sol-text-dim">Saving…</span>}
+        {isUpdating && <span className="text-[11px] text-sol-text-dim">Saving…</span>}
       </div>
       <SegmentedChoice label="What the team sees" options={MODES} value={mode} onPick={pick} disabled={isUpdating} />
       <p className="text-xs leading-snug text-sol-text-muted">{MODE_HINT[mode]}</p>
       {gated && (
-        <p className="text-meta leading-snug text-sol-text-dim">
+        <p className="text-[11px] leading-snug text-sol-text-dim">
           Your level for this team keeps all your sessions out of its feed.{" "}
           <Link href="/settings/sync" className="text-sol-cyan hover:underline" onClick={onNavigate}>
             Change team visibility
@@ -103,7 +103,7 @@ export function TeamShareModePicker({
         </p>
       )}
       {mode !== "private" && sharedVia && (
-        <p className="text-meta leading-snug text-sol-text-dim">
+        <p className="text-[11px] leading-snug text-sol-text-dim">
           Shared automatically: the repo{" "}
           <span className="font-mono text-sol-text-muted">{sharedVia.split("/").pop() || sharedVia}</span>{" "}
           is shared with this team.{" "}
@@ -126,7 +126,7 @@ export function TeamShareModePicker({
           type="button"
           onClick={press}
           aria-haspopup="dialog"
-          className="text-meta text-sol-cyan hover:underline text-left"
+          className="text-[11px] text-sol-cyan hover:underline text-left"
         >
           Share all new sessions with {team.name} in full
         </button>

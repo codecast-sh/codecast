@@ -11,7 +11,6 @@
 // to Problems' Not started: what the line has not taken. The finders sit
 // under it, a row each opening the finder's page.
 import { memo, useMemo, type ReactNode } from "react";
-import Link from "next/link";
 import { LINE_MODES, LINE_MODE_LABELS, type LineMode } from "../../../../lib/line/lineWorkspaceUrl";
 import { stepTableFigures, type StepTableRow } from "../../../../lib/line/stepTable";
 import { useStepTable } from "../step/useStepFacts";
@@ -82,7 +81,7 @@ const StepsPage = memo(function StepsPage({ model, workspace: ws, selection, sel
         <h2 className="lst-h">Steps</h2>
         <span className="lst-facts">
           {/* What waits on the viewer in this line, whichever step (or none) holds it: it opens For you on exactly those. */}
-          {onYou > 0 && <Link className="lst-fact" data-tone="you" data-line-steps-onyou={onYou} href={href({ view: "foryou", process: line, step: null, show: null })}><b className="lw-num">{onYou}</b> waiting on you</Link>}
+          {onYou > 0 && <a className="lst-fact" data-tone="you" data-line-steps-onyou={onYou} href={href({ view: "foryou", process: line, step: null, show: null })}><b className="lw-num">{onYou}</b> waiting on you</a>}
           {fig.others > 0 && <span className="lst-fact" data-line-steps-others={fig.others}><b className="lw-num">{fig.others}</b> with someone else</span>}
           {fig.running > 0 && <span className="lst-fact" data-line-steps-running={fig.running}><i className="lw-dot" data-pulse="" style={{ color: "var(--lw-live)" }} aria-hidden /><b className="lw-num">{fig.running}</b> running</span>}
           {fig.failed > 0 && <span className="lst-fact" data-tone="bad" data-line-steps-failed={fig.failed}><b className="lw-num">{fig.failed}</b> step {fig.failed === 1 ? "failure" : "failures"}</span>}

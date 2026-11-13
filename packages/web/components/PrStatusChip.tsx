@@ -23,7 +23,7 @@ export function PrStatusChip({
   if (!status) return null;
   const { label, accent } = shepherdStyle(status.state);
   const href = prPath({ repository: status.repository, number: status.number });
-  const text = size === "panel" ? "text-meta" : "text-meta";
+  const text = size === "panel" ? "text-[10px]" : "text-[9px]";
   const body = (
     <>
       <GitPullRequest className={size === "panel" ? "w-3 h-3" : "w-2.5 h-2.5"} />

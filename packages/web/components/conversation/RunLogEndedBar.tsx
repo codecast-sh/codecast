@@ -41,7 +41,7 @@ function useRunDecisions(runId: string, gateDecisionId?: string, gateShortId?: s
   return rows;
 }
 
-const chip = "inline-flex items-center gap-0.5 rounded-md border border-sol-border/50 px-2 py-0.5 text-meta text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt transition-colors";
+const chip = "inline-flex items-center gap-0.5 rounded-md border border-sol-border/50 px-2 py-0.5 text-[11.5px] text-sol-text-muted hover:text-sol-text hover:bg-sol-bg-alt transition-colors";
 
 export function RunLogEndedBar({ run }: { run: ReportRun & { gate_decision_id?: string } }) {
   const decisions = useRunDecisions(run._id, run.gate_decision_id, run.gate_decision_short_id);

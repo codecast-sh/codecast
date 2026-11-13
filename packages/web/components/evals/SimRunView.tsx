@@ -20,7 +20,6 @@ import "./sim.css";
 import { PLAY_STEP_MS } from "./simModel";
 import { isJobStalled, type JobState } from "./simJobState";
 import { Button } from "../ui/button";
-import { ShareControl } from "../ShareControl";
 
 export type ShrinkState = JobState;
 
@@ -126,8 +125,6 @@ export function SimRunView({ data, shrink, onShrink, keysActive = true }: SimRun
             </EvalsLink>
           )}
         </span>
-        {/* The run has its own address: the header shares it. */}
-        {run.dir && <ShareControl label="sim run" path={evalsHref.simRun(session.id, run.dir)} />}
         <div className="evs-head-stats">
           <div className="evs-stat">
             <b>{timeline.count}</b>
@@ -339,7 +336,7 @@ function ShrinkBar({ minimal, shrinking, shrink, onShrink, recorded }: { minimal
               ? "The shrink's minimal order is above; a new one replaces it."
               : `Finds the shortest delivery order that still fails the same invariant on the same row. Up to 400 attempts or 10 minutes over ${recorded} deliveries.`}
           </span>
-          {shrink.state === "failed" && <span className="ev-fail text-meta">{shrink.error}</span>}
+          {shrink.state === "failed" && <span className="ev-fail text-[11.5px]">{shrink.error}</span>}
           {shrink.state === "failed" && <LogTail lines={shrink.logTail ?? []} label="What the shrink printed before it ended" data-evs-shrink-log />}
         </>
       )}

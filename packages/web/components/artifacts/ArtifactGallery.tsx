@@ -184,7 +184,7 @@ export function ArtifactGallery() {
             <section key={d.key}>
               <div className="flex items-baseline gap-2 px-2 pb-1 mb-1 border-b border-sol-border/30">
                 <h2 className="text-xs font-semibold text-sol-text-muted">{d.label}</h2>
-                <span className="text-meta text-sol-text-dim font-mono tabular-nums">{d.rows.length}</span>
+                <span className="text-[11px] text-sol-text-dim font-mono tabular-nums">{d.rows.length}</span>
               </div>
               {d.rows.map((a) => (
                 <ArtifactCard

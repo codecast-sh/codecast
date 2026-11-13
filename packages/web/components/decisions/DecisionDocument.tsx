@@ -1,7 +1,7 @@
 "use client";
 
 import { gateDoc } from "@codecast/shared/contracts/changeCard";
-import { useState } from "react";
+import { useRef, useState, type WheelEvent } from "react";
 import Link from "next/link";
 import { ArrowLeft, Check, MessageSquare, MessagesSquare } from "lucide-react";
 import { useInboxStore, type SessionDecisionItem, type DecisionDetailItem } from "../../store/inboxStore";
@@ -60,10 +60,21 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   const discussion = useDecisionThread(decision._id);
   const [discussOpen, setDiscussOpen] = useState(false);
 
-  // The thread that asked opens from its own button ("Talk to the session").
-  // An upward scroll no longer does: on a short decision, or in the peek, a
-  // small flick left the page with nothing on screen saying it would.
+  // The page stands on the thread that asked: scrolling up off its top opens
+  // that thread at the ask, the way the sheet in a session hands its pane
+  // back. Only a scroll that STARTS at the top counts, so coasting back up a
+  // long decision never leaves the page.
   const jumpToAsk = useJumpToDecisionAsk(decision.conversation_id, decision._id, decision.question);
+  const pull = useRef({ last: 0, armed: false, sum: 0 });
+  const onWheel = (e: WheelEvent<HTMLDivElement>) => {
+    const p = pull.current;
+    if (e.timeStamp - p.last > 200) { p.armed = e.currentTarget.scrollTop <= 0; p.sum = 0; }
+    p.last = e.timeStamp;
+    if (e.deltaY > 0) p.armed = false;
+    if (!p.armed) return;
+    p.sum -= e.deltaY;
+    if (p.sum > 80) { p.armed = false; void jumpToAsk(); }
+  };
 
   // Who asked, who may answer, who holds it. A change card leads with the
   // change and its proof, so for one these facts follow the card.
@@ -78,17 +89,17 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
   const body = hasWords && !restated ? <DecisionBody decision={decision} detail={detail} report={false} /> : null;
 
   return (
-    <div className="h-full overflow-y-auto decision-doc" data-main-scroll>
+    <div className="h-full overflow-y-auto decision-doc" data-main-scroll onWheel={onWheel}>
       {/* One measure for every decision: a change card stacks its proof over its examples, so it needs no wider page. */}
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16">
-        <Link href="/decisions" className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline">
+        <Link href="/decisions" className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text transition-colors no-underline">
           <ArrowLeft className="w-3 h-3" /> The queue
         </Link>
 
         {/* ── Header ── */}
         <header className="mt-4">
           {banner && <div className="decision-status-banner mb-3" role="status" data-decision-banner={decision.status}>{banner}</div>}
-          <div className="flex items-center gap-2 flex-wrap text-meta text-sol-text-dim">
+          <div className="flex items-center gap-2 flex-wrap text-[11px] text-sol-text-dim">
             {/* The wait leads, as its consequence for the reader; a settled
                 card says its verdict once, as the card's last line with who
                 and when, so the header keeps only the age. */}
@@ -225,8 +236,8 @@ function DocumentBody({ decision, detail, answerable }: { decision: SessionDecis
                 ) : undefined}
                 tags={(i) => (
                   <>
-                    {rec === i && <span className="text-meta px-1.5 py-0.5 rounded border border-sol-cyan/40 text-sol-cyan">a lead recommends</span>}
-                    {decision.default_option === i && !decision.blocking && <span className="text-meta px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">the agent's default</span>}
+                    {rec === i && <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-cyan/40 text-sol-cyan">a lead recommends</span>}
+                    {decision.default_option === i && !decision.blocking && <span className="text-[10px] px-1.5 py-0.5 rounded border border-sol-border text-sol-text-dim">the agent's default</span>}
                   </>
                 )}
               />

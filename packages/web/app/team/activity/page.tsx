@@ -1,4 +1,4 @@
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { useSearchParams } from "next/navigation";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { ActivityFeed } from "../../../components/ActivityFeed";
@@ -6,7 +6,6 @@ import { ErrorBoundary } from "../../../components/ErrorBoundary";
 import { LoadingSkeleton } from "../../../components/LoadingSkeleton";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { useInboxStore } from "../../../store/inboxStore";
-import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
@@ -18,9 +17,7 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 //   ?dir=<path> → scope the feed to a single workspace (sidebar "Workspaces").
 export default function TeamActivityPage() {
   const searchParams = useSearchParams();
-  // The store's copy (local-first): a warm cache paints the feed at once,
-  // and offline it still paints.
-  const { user } = useCurrentUser();
+  const user = useQuery(api.users.getCurrentUser);
   const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as Id<"teams"> | undefined;
   const teamId = activeTeamId || user?.active_team_id || user?.team_id;
 
@@ -39,8 +36,7 @@ export default function TeamActivityPage() {
     return () => { void markTeamSeen({}); };
   }, [mode, teamId, markTeamSeen]);
 
-  // A skeleton only for a genuinely cold cache: nobody known and no team.
-  if (!user && !teamId) {
+  if (!user) {
     return (
       <DashboardLayout>
         <div className="flex items-center justify-center min-h-[60vh]">

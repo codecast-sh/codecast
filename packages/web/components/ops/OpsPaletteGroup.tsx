@@ -97,9 +97,9 @@ export function OpsPaletteGroup({ query, navigate }: { query: string; navigate: 
         return (
           <CommandPrimitive.Item key={`ops-${r.key}`} value={`${r.live ? PALETTE_LIVE : "__entity__"} ${r.ref} ${r.title}|||ops-${r.key}`} data-palette-type={`ops_${r.kind}`} data-palette-short-id={r.ref} onSelect={() => navigate(r.href)} className={itemClass}>
             <Icon className="w-4 h-4 flex-shrink-0 text-sol-red" />
-            <span className="font-mono text-meta text-sol-text-dim flex-shrink-0">{r.ref}</span>
+            <span className="font-mono text-[11px] text-sol-text-dim flex-shrink-0">{r.ref}</span>
             <span className="flex-1 truncate">{r.title}</span>
-            {r.status && <span className={`text-meta flex-shrink-0 ${r.live ? "text-sol-red font-semibold" : r.kind === "source" ? "text-sol-orange font-semibold" : "text-sol-text-dim"}`}>{r.status}</span>}
+            {r.status && <span className={`text-[10px] flex-shrink-0 ${r.live ? "text-sol-red font-semibold" : r.kind === "source" ? "text-sol-orange font-semibold" : "text-sol-text-dim"}`}>{r.status}</span>}
             <KeyCap size="xs">↵</KeyCap>
           </CommandPrimitive.Item>
         );

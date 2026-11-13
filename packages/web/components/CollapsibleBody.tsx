@@ -151,7 +151,7 @@ export function CollapsibleBody({
       {overflows && (
         <button
           onClick={() => setExpanded((e) => !e)}
-          className={`shrink-0 flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text-muted transition-colors ${toggleClassName}`}
+          className={`shrink-0 flex items-center gap-1 text-[10px] text-sol-text-dim hover:text-sol-text-muted transition-colors ${toggleClassName}`}
         >
           {expanded ? <ChevronUp className="w-2.5 h-2.5" /> : <ChevronDown className="w-2.5 h-2.5" />}
           {expanded ? collapseLabel : expandLabel}

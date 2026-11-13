@@ -17,10 +17,6 @@ const graphTakesBranch = (w: { source?: string | null }) => flowGraphAttr(w?.sou
 
 const api = _api as any;
 
-// Module-level: a fresh select per render re-applied the same payload on every
-// render of the host (useSyncCollection keys its sync callback on it).
-const ONE_ROW = { select: (row: any) => (row ? [row] : []) };
-
 export function useSyncWorkflows(enabled = true) {
   return useSyncCollection("workflows", api.workflows.webList, enabled ? {} : "skip");
 }
@@ -74,7 +70,7 @@ export function useSyncWorkflowBySlug(slug: string | null | undefined) {
     "workflows",
     api.workflows.webGetBySlug,
     slug ? { slug } : "skip",
-    ONE_ROW,
+    { select: (row: any) => (row ? [row] : []) },
   );
 }
 
@@ -99,7 +95,7 @@ export function useSyncRunGraph(runId: string | null | undefined) {
     "workflows",
     api.workflow_runs.graphOfRun,
     runId ? { run_id: runId } : "skip",
-    ONE_ROW,
+    { select: (row: any) => (row ? [row] : []) },
   );
 }
 
@@ -136,7 +132,7 @@ export function useSyncWorkflowRun(runId: string | null | undefined) {
     api.workflow_runs.get,
     runId ? { id: runId } : "skip",
     // A single row → the collection's overlay takes an array.
-    ONE_ROW,
+    { select: (row: any) => (row ? [row] : []) },
   );
 }
 
@@ -178,7 +174,7 @@ export function useSyncWorkflow(id: string | null | undefined) {
     "workflows",
     api.workflows.webGet,
     id ? { id } : "skip",
-    ONE_ROW,
+    { select: (row: any) => (row ? [row] : []) },
   );
 }
 

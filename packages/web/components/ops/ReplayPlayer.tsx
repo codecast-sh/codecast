@@ -486,8 +486,8 @@ function RecordingPlayer({ replay, events, reading = false, initialT, issueMarks
             <button type="button" className="rp-toggle" aria-pressed={skip} data-on={skip ? "true" : undefined} onClick={toggleSkip} title="Jump over stretches where nothing happens">
               <FastForward className="w-3 h-3" aria-hidden /> <span className="rp-toggle-word">Skip idle</span>
             </button>
-            <span className="ops-dim text-meta truncate ops-mono flex-1 min-w-0 rp-bar-path" title={url ?? undefined}>{url ? routeOf(pathOf(url)) : ""}</span>
-            {stage.size && <span className="ops-dim text-meta ops-num whitespace-nowrap rp-viewport" title="The recorded window">{stage.size.width}×{stage.size.height}</span>}
+            <span className="ops-dim text-[11px] truncate ops-mono flex-1 min-w-0 rp-bar-path" title={url ?? undefined}>{url ? routeOf(pathOf(url)) : ""}</span>
+            {stage.size && <span className="ops-dim text-[11px] ops-num whitespace-nowrap rp-viewport" title="The recorded window">{stage.size.width}×{stage.size.height}</span>}
             {stage.remoteAssets && (
               <button type="button" className="rp-icon-btn" aria-pressed={stage.remoteAssets.on} data-on={stage.remoteAssets.on ? "true" : undefined} onClick={stage.remoteAssets.toggle} aria-label={stage.remoteAssets.on ? "Stop loading the page's images" : "Load the page's images"} title={stage.remoteAssets.on ? "Images and fonts load from the sites the page names. Press to stop." : "Load images and fonts from the sites the page names (they see that you opened it)"}>
                 {stage.remoteAssets.on ? <ImageIcon className="w-3.5 h-3.5" /> : <ImageOff className="w-3.5 h-3.5" />}

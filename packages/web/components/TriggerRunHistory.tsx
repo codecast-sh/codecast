@@ -91,20 +91,20 @@ function SkippedRunRow({ run, num, now }: { run: TriggerRun; num: number; now: n
     >
       <div
         data-testid="trigger-run-skipped"
-        className="relative flex items-center gap-2 w-full min-w-0 rounded-md py-1 pr-1.5 text-left text-meta opacity-80"
+        className="relative flex items-center gap-2 w-full min-w-0 rounded-md py-1 pr-1.5 text-left text-[11px] opacity-80"
       >
         <span className="w-4 h-4 shrink-0 flex items-center justify-center">
           <span className="w-[7px] h-[7px] rounded-full border border-sol-text-dim/70 bg-sol-bg" />
         </span>
-        <span className="shrink-0 w-[34px] font-mono text-meta tabular-nums text-sol-text-dim">
+        <span className="shrink-0 w-7 font-mono text-[10px] tabular-nums text-sol-text-dim">
           #{num}
         </span>
         <ShortcutTooltip label={new Date(run.created_at).toLocaleString()}>
-          <span className="shrink-0 w-[5.75rem] text-meta text-sol-text-dim tabular-nums">
+          <span className="shrink-0 w-[4.75rem] text-[10px] text-sol-text-dim tabular-nums">
             {fmtDuration(Math.max(0, now - run.created_at))} ago
           </span>
         </ShortcutTooltip>
-        <span className="shrink-0 px-1 rounded border border-sol-border bg-sol-bg-alt/60 text-meta text-sol-text-dim">
+        <span className="shrink-0 px-1 rounded border border-sol-border bg-sol-bg-alt/60 text-[9px] text-sol-text-dim">
           skipped
         </span>
         <span className="truncate min-w-0 text-sol-text-dim">{run.title}</span>
@@ -180,7 +180,7 @@ export function TriggerRunList({
                   if (ensureInboxRoute) router.push(`/inbox?s=${run._id}`);
                   onOpened?.();
                 }}
-                className="group/run relative flex items-center gap-2 w-full min-w-0 rounded-md py-1 pr-1.5 text-left text-meta hover:bg-sol-cyan/10 transition-colors"
+                className="group/run relative flex items-center gap-2 w-full min-w-0 rounded-md py-1 pr-1.5 text-left text-[11px] hover:bg-sol-cyan/10 transition-colors"
               >
                 {/* Fixed-height dot slot keeps every center on the spine even
                     though the latest dot is a size up. */}
@@ -194,14 +194,14 @@ export function TriggerRunList({
                   />
                 </span>
                 <span
-                  className={`shrink-0 w-[34px] font-mono text-meta tabular-nums ${
+                  className={`shrink-0 w-7 font-mono text-[10px] tabular-nums ${
                     latest ? "text-sol-text-muted" : "text-sol-text-dim"
                   }`}
                 >
                   #{num}
                 </span>
                 <ShortcutTooltip label={new Date(run.created_at).toLocaleString()}>
-                  <span className="shrink-0 w-[5.75rem] text-meta text-sol-text-dim tabular-nums">
+                  <span className="shrink-0 w-[4.75rem] text-[10px] text-sol-text-dim tabular-nums">
                     {fmtDuration(Math.max(0, now - run.created_at))} ago
                   </span>
                 </ShortcutTooltip>
@@ -213,7 +213,7 @@ export function TriggerRunList({
                   {label}
                 </span>
                 {here && (
-                  <span className="shrink-0 px-1 rounded border border-sol-orange/40 bg-sol-orange/10 text-meta text-sol-orange">
+                  <span className="shrink-0 px-1 rounded border border-sol-orange/40 bg-sol-orange/10 text-[9px] text-sol-orange">
                     this session
                   </span>
                 )}
@@ -229,7 +229,7 @@ export function TriggerRunList({
             e.stopPropagation();
             setLimit((l) => l + PAGE);
           }}
-          className="text-meta text-sol-cyan hover:underline underline-offset-2 mt-0.5 pl-6"
+          className="text-[10px] text-sol-cyan hover:underline underline-offset-2 mt-0.5 pl-6"
         >
           show {Math.min(PAGE, runs.length - limit)} more · {runs.length - limit} older
         </button>
@@ -268,7 +268,7 @@ export function TriggerRunRail({
   const msToNext = nextRunAt !== undefined ? nextRunAt - now : undefined;
   return (
     <div className={`flex items-center gap-2 min-w-0 ${className ?? ""}`}>
-      <span className="shrink-0 text-mark font-semibold uppercase tracking-wider text-sol-text-dim">
+      <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wider text-sol-text-dim">
         {sessions.length} run{sessions.length === 1 ? "" : "s"}
       </span>
       <div className="flex items-center min-w-0 overflow-x-auto">
@@ -277,7 +277,7 @@ export function TriggerRunRail({
             <ShortcutTooltip label={`Next fire at ${fmtClock(nextRunAt!)}`}>
               <span className="flex items-center gap-[3px] px-1 shrink-0 cursor-default">
                 <span className="w-2 h-2 rounded-full border-[1.5px] border-sol-orange bg-sol-bg animate-pulse motion-reduce:animate-none" />
-                <span className="text-meta leading-none text-sol-orange tabular-nums whitespace-nowrap">
+                <span className="text-[9px] leading-none text-sol-orange tabular-nums whitespace-nowrap">
                   {msToNext > 0 ? shortAgo(msToNext) : "due"}
                 </span>
               </span>
@@ -322,7 +322,7 @@ export function TriggerRunRail({
                     }`}
                   />
                   <span
-                    className={`text-meta leading-none tabular-nums whitespace-nowrap ${
+                    className={`text-[9px] leading-none tabular-nums whitespace-nowrap ${
                       here ? "font-semibold text-sol-orange" : "text-sol-text-dim"
                     }`}
                   >

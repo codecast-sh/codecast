@@ -49,8 +49,8 @@ function DaemonHealthPill({ view, machine, quiet = false }: { view: DaemonHealth
       </StatusPanelSection>
       <StatusPanelSection className="p-0">
         <button type="button" onClick={handleClick} className="group flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-sol-bg-alt/60">
-          <code className="rounded border border-sol-border/60 bg-sol-bg-alt px-1.5 py-px font-mono text-meta text-sol-text">{view.command}</code>
-          <span className="ml-auto shrink-0 text-meta text-sol-text-dim group-hover:text-sol-text">{copied ? "Copied" : "Copy"}</span>
+          <code className="rounded border border-sol-border/60 bg-sol-bg-alt px-1.5 py-px font-mono text-[11px] text-sol-text">{view.command}</code>
+          <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim group-hover:text-sol-text">{copied ? "Copied" : "Copy"}</span>
         </button>
       </StatusPanelSection>
     </div>

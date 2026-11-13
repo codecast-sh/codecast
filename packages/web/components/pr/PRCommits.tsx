@@ -28,7 +28,7 @@ function CommitRows({ repository, commits, total }: { repository: string; commit
   }
   return (
     <div className="px-5 py-4">
-      {total !== undefined && total > rows.length && <p className="mb-3 text-meta text-sol-text-dim">Showing {rows.length} of {total} commits</p>}
+      {total !== undefined && total > rows.length && <p className="mb-3 text-[11px] text-sol-text-dim">Showing {rows.length} of {total} commits</p>}
       <ol className="divide-y divide-sol-border/40 rounded-xl border border-sol-border/50 bg-sol-card">
         {rows.map((commit, index) => {
           // The Codecast-Session trailer reads as the session's pill, not a URL in the body.
@@ -43,12 +43,12 @@ function CommitRows({ repository, commits, total }: { repository: string; commit
                   <Link href={`/commit/${repository}/${commit.sha}`} className="text-[13px] text-sol-text hover:text-sol-cyan truncate transition-colors">
                     {subject}
                   </Link>
-                  <span className="ml-auto shrink-0 text-meta text-sol-text-dim">
+                  <span className="ml-auto shrink-0 text-[11px] text-sol-text-dim">
                     {commit.committed_at ? relTimeShort(commit.committed_at) : ""}
                   </span>
                 </div>
                 {body && <p className="mt-0.5 text-[12px] text-sol-text-dim line-clamp-2 whitespace-pre-line">{body}</p>}
-                <div className="mt-0.5 flex items-center gap-2 text-meta text-sol-text-dim">
+                <div className="mt-0.5 flex items-center gap-2 text-[11px] text-sol-text-dim">
                   <span>{commit.author_login ?? commit.author_name}</span>
                   <Link href={`/commit/${repository}/${commit.sha}`} className="font-mono hover:text-sol-cyan transition-colors">{commit.sha.slice(0, 7)}</Link>
                   {session && <EntityIdPill type="session" id={session} />}

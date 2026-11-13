@@ -2,10 +2,9 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { ArrowRight, Download, Menu } from "lucide-react";
+import { ArrowRight, Download } from "lucide-react";
 import { AppleIcon } from "@/components/marketing/AppBadges";
 import { Button } from "@/components/ui/button";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Logo } from "@/components/Logo";
 import { useLocalAuth } from "@/lib/localAuth";
 import { RepoPulseChip } from "@/components/marketing/RepoPulseChip";
@@ -37,13 +36,6 @@ const MARKETING_NAV_LINKS = [
 /** The assistant's own page: the campaign door (/everyone redirects here),
  *  set in the family's interface face. The developer bar does not link it. */
 const EVERYONE_HREF = "/?for=assistant";
-
-/** What the phone menu adds to the bar's links: the footer's two, which the
- *  bar leaves out for room at a laptop's width. */
-const PHONE_EXTRA_LINKS = [
-  { href: "/security", label: "Security" },
-  { href: "/support", label: "Support" },
-] as const;
 const WAY_FONT = { fontFamily: "var(--pd-font-ui, ui-sans-serif, system-ui, sans-serif)" } as const;
 
 const INK = "#002b36";
@@ -188,64 +180,29 @@ export function MarketingNav({
           {!mounted ? (
             <span aria-hidden className="block h-9 w-[7.5rem] shrink-0" />
           ) : signedIn ? (
-            <Button asChild className="font-medium text-[#fdf6e3] gap-1.5 hover:bg-[#073642]" style={{ backgroundColor: INK }}>
-              <Link href="/inbox">
+            <Link href="/inbox">
+              <Button className="font-medium text-[#fdf6e3] gap-1.5 hover:bg-[#073642]" style={{ backgroundColor: INK }}>
                 Open app
                 <ArrowRight className="w-4 h-4" />
-              </Link>
-            </Button>
+              </Button>
+            </Link>
           ) : (
             <>
-              {/* Phones have room for one auth button; sign in is in the menu. */}
-              <Button asChild variant="ghost" className="hidden sm:inline-flex font-medium text-[#657b83] hover:text-[#002b36] hover:bg-[#eee8d5]">
-                <Link href="/login">Sign in</Link>
-              </Button>
-              <Button asChild className="max-[379px]:px-3 font-medium text-[#fdf6e3] hover:bg-[#073642]" style={{ backgroundColor: INK }}>
-                <Link href="/signup">Get started</Link>
-              </Button>
+              {/* Phones have room for one auth button; signup links to sign in. */}
+              <Link href="/login" className="hidden sm:block">
+                <Button variant="ghost" className="font-medium text-[#657b83] hover:text-[#002b36] hover:bg-[#eee8d5]">
+                  Sign in
+                </Button>
+              </Link>
+              <Link href="/signup">
+                <Button className="max-[379px]:px-3 font-medium text-[#fdf6e3] hover:bg-[#073642]" style={{ backgroundColor: INK }}>
+                  Get started
+                </Button>
+              </Link>
             </>
           )}
-          {mounted && <PhoneNavMenu active={active} signedIn={signedIn} />}
         </div>
       </div>
     </nav>
-  );
-}
-
-/** Below md the bar's links fold into one menu, so Docs, Features, Pricing
- *  and Blog are a tap away on a phone rather than only in the footer. */
-function PhoneNavMenu({ active, signedIn }: { active?: string; signedIn: boolean }) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label="Menu"
-          className="flex md:hidden h-9 w-9 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-[#eee8d5]"
-          style={{ color: INK }}
-        >
-          <Menu className="w-5 h-5" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" sideOffset={8} collisionPadding={12} className="w-56 border-[#eee8d5] bg-[#fdf6e3] p-1.5">
-        {[...MARKETING_NAV_LINKS, ...PHONE_EXTRA_LINKS].map(({ href, label }) => (
-          <DropdownMenuItem key={href} asChild className="font-medium focus:bg-[#eee8d5]">
-            <Link href={href} aria-current={href === active ? "page" : undefined} style={{ color: href === active ? INK : MUTED }}>
-              {label}
-            </Link>
-          </DropdownMenuItem>
-        ))}
-        {!signedIn && (
-          <>
-            <DropdownMenuSeparator className="bg-[#eee8d5]" />
-            <DropdownMenuItem asChild className="font-medium focus:bg-[#eee8d5]">
-              <Link href="/login" style={{ color: INK }}>
-                Sign in
-              </Link>
-            </DropdownMenuItem>
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }

@@ -64,7 +64,7 @@ function DelegationSettings({ source }: { source: any }) {
     <div className="mt-2 space-y-2 rounded-md bg-sol-bg-highlight/30 px-3 py-2.5">
       <div className="grid gap-2 sm:grid-cols-2">
         <label className="block">
-          <span className="text-mark uppercase tracking-wider text-sol-text-dim">Delegate label</span>
+          <span className="text-[10px] uppercase tracking-wider text-sol-text-dim">Delegate label</span>
           <input
             type="text"
             defaultValue={source.delegate_label ?? "agent"}
@@ -77,7 +77,7 @@ function DelegationSettings({ source }: { source: any }) {
           />
         </label>
         <label className="block">
-          <span className="text-mark uppercase tracking-wider text-sol-text-dim">Delegate assignee</span>
+          <span className="text-[10px] uppercase tracking-wider text-sol-text-dim">Delegate assignee</span>
           <input
             type="text"
             defaultValue={source.delegate_assignee ?? ""}
@@ -153,7 +153,7 @@ function SourceRow({ source }: { source: any }) {
               <ChevronDown className={`h-3 w-3 shrink-0 text-sol-text-dim transition-transform ${open ? "" : "-rotate-90"}`} />
               <span className="truncate">{source.name}</span>
             </button>
-            <span className="shrink-0 rounded bg-sol-bg-highlight px-1.5 py-[1px] font-mono text-meta text-sol-text-dim">
+            <span className="shrink-0 rounded bg-sol-bg-highlight px-1.5 py-[1px] font-mono text-[10px] text-sol-text-dim">
               {KIND_LABEL[source.kind] ?? source.kind}
             </span>
             <StatusDot tone={tone}>{label}</StatusDot>
@@ -181,7 +181,7 @@ function SourceRow({ source }: { source: any }) {
             ]}
           />
           {source.last_error && (
-            <p className="mt-1 pl-[18px] text-meta leading-relaxed text-sol-red">{source.last_error}</p>
+            <p className="mt-1 pl-[18px] text-[11px] leading-relaxed text-sol-red">{source.last_error}</p>
           )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -192,7 +192,7 @@ function SourceRow({ source }: { source: any }) {
           <button
             type="button"
             onClick={() => update(source._id, { status: paused ? "active" : "paused" })}
-            className="text-meta text-sol-text-muted hover:text-sol-text"
+            className="text-[11px] text-sol-text-muted hover:text-sol-text"
           >
             {paused ? "Resume" : "Pause"}
           </button>
@@ -291,10 +291,10 @@ function ImportPicker({ provider, onDone }: { provider: Provider; onDone: () => 
                   } disabled:cursor-not-allowed disabled:opacity-45`}
                 >
                   <span className="truncate">{c.name}</span>
-                  <span className="shrink-0 font-mono text-meta text-sol-text-dim">
+                  <span className="shrink-0 font-mono text-[10px] text-sol-text-dim">
                     {KIND_LABEL[c.kind] ?? c.kind}
                   </span>
-                  {taken && <span className="ml-auto shrink-0 text-meta text-sol-text-dim">imported</span>}
+                  {taken && <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim">imported</span>}
                 </button>
               );
             })}
@@ -302,7 +302,7 @@ function ImportPicker({ provider, onDone }: { provider: Provider; onDone: () => 
           {picked && (
             <div className="mt-2.5 border-t border-sol-border/40 pt-2.5">
               <label className="block">
-                <span className="text-mark uppercase tracking-wider text-sol-text-dim">
+                <span className="text-[10px] uppercase tracking-wider text-sol-text-dim">
                   Its tasks land in
                 </span>
                 <select
@@ -325,7 +325,7 @@ function ImportPicker({ provider, onDone }: { provider: Provider; onDone: () => 
                 <button
                   type="button"
                   onClick={onDone}
-                  className="text-meta text-sol-text-muted hover:text-sol-text"
+                  className="text-[11px] text-sol-text-muted hover:text-sol-text"
                 >
                   Cancel
                 </button>
@@ -352,7 +352,7 @@ export function IssueSyncSources({ provider, connected }: { provider: Provider; 
   return (
     <div className="mt-3 border-t border-sol-border/40 pt-2.5">
       <div className="flex items-center justify-between gap-3">
-        <h4 className="text-mark font-semibold uppercase tracking-[0.14em] text-sol-text-muted">
+        <h4 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-sol-text-muted">
           Issues as tasks
         </h4>
         <QuietButton onClick={() => setImporting((v) => !v)}>

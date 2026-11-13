@@ -47,11 +47,11 @@ function WorktreeHoverContent({ found, repository }: { found: FoundWorktree; rep
   const { worktree: w, checkout } = found;
   const where = [checkout.device_label, !checkout.mine && checkout.owner?.name].filter(Boolean).join(" · ");
   return (
-    <div className="p-3 text-meta text-sol-text-muted space-y-2">
+    <div className="p-3 text-[11px] text-sol-text-muted space-y-2">
       <div className="flex items-center gap-1.5 text-[12px] text-sol-text">
         <FolderGit2 className="size-3.5 shrink-0 text-sol-cyan" />
         <span className="font-mono font-medium truncate">{w.name}</span>
-        {where && <span className="ml-auto shrink-0 text-meta text-sol-text-dim">{where}</span>}
+        {where && <span className="ml-auto shrink-0 text-[10px] text-sol-text-dim">{where}</span>}
       </div>
       {w.branch && (
         <div className="flex items-center gap-1.5 font-mono">
@@ -64,8 +64,8 @@ function WorktreeHoverContent({ found, repository }: { found: FoundWorktree; rep
       {w.subject && <div className="truncate">{w.subject}{!!w.committed_at && <span className="text-sol-text-dim"> · {relTimeShort(w.committed_at)}</span>}</div>}
       {!!w.ports && <div className="font-mono text-sol-text-dim">{Object.entries(w.ports).map(([name, port]) => `${name} :${port}`).join("  ")}</div>}
       <WorktreeSessions sessions={w.sessions} />
-      <div className="font-mono text-meta text-sol-text-dim break-all">{w.path}</div>
-      <Link href={repoWorktreesHref(repository, w.name)} className="block pt-1 text-meta text-sol-blue no-underline hover:underline">All worktrees of {repository}</Link>
+      <div className="font-mono text-[10px] text-sol-text-dim break-all">{w.path}</div>
+      <Link href={repoWorktreesHref(repository, w.name)} className="block pt-1 text-[10px] text-sol-blue no-underline hover:underline">All worktrees of {repository}</Link>
     </div>
   );
 }

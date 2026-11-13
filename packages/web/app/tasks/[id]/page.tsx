@@ -10,7 +10,7 @@ import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useTabActive } from "../../../hooks/usePagePresence";
 import { useParams, useRouter } from "next/navigation";
 import { useInboxStore, TaskDetail, TaskItem, resolveAssigneeInfo } from "../../../store/inboxStore";
-import { lookup, resolveTaskLinkedConversations, resolveTaskRelatedDocs, taskLinkedConversationIds, taskOwnerOf } from "../../../lib/liveEntities";
+import { resolveTaskLinkedConversations, resolveTaskRelatedDocs, taskLinkedConversationIds, taskOwnerOf } from "../../../lib/liveEntities";
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
 import { useSyncTasks, useSyncTaskDetail } from "../../../hooks/useSyncTasks";
 import { useSyncTaskExternalEvents, useExternalEvents, externalEventsOldestFirst } from "../../../hooks/useSyncExternalEvents";
@@ -58,7 +58,9 @@ import { projectDotClass } from "../../../lib/projectColors";
 import {
   Circle,
   CircleDot,
+  CircleDotDashed,
   CheckCircle2,
+  XCircle,
   AlertTriangle,
   ArrowUp,
   ArrowDown,
@@ -78,7 +80,15 @@ import { DocDates } from "../../../components/DocDates";
 import { keyBelongsElsewhere } from "../../../shortcuts/keyOwnership";
 import { matchesAction } from "../../../shortcuts";
 import { useFollowScroll } from "../../../hooks/useFollowSurface";
-import { useTaskHref } from "../../../lib/taskHrefContext";
+
+const STATUS_OPTIONS = [
+  { key: "backlog", icon: CircleDotDashed, label: "Backlog", color: "text-sol-text-dim" },
+  { key: "open", icon: Circle, label: "Open", color: "text-sol-blue" },
+  { key: "in_progress", icon: CircleDot, label: "In Progress", color: "text-sol-yellow" },
+  { key: "in_review", icon: CircleDot, label: "In Review", color: "text-sol-violet" },
+  { key: "done", icon: CheckCircle2, label: "Done", color: "text-sol-green" },
+  { key: "dropped", icon: XCircle, label: "Dropped", color: "text-sol-text-dim" },
+] as const;
 
 const PRIORITY_OPTIONS = [
   { key: "urgent", icon: AlertTriangle, label: "Urgent", color: "text-sol-red" },
@@ -88,6 +98,7 @@ const PRIORITY_OPTIONS = [
   { key: "none", icon: Minus, label: "None", color: "text-sol-text-dim" },
 ] as const;
 
+const STATUS_MAP: Record<string, typeof STATUS_OPTIONS[number]> = Object.fromEntries(STATUS_OPTIONS.map((s) => [s.key, s]));
 
 // The doc fields the related-docs list renders or filters on; a body edit
 // must not wake it (updated_at is left out on purpose: the server snapshot
@@ -228,14 +239,6 @@ function ExecutionDetailsSection({ data }: { data: any }) {
   );
 }
 
-// The relations block resolves blockers and parents against every task the
-// store holds, so it is the one part of the page that reads the whole
-// collection; its own subscription keeps the rest of the page off it.
-function TaskRelationsLive({ task, onAdd }: { task: TaskItem; onAdd: React.ComponentProps<typeof TaskRelations>["onAdd"] }) {
-  const tasks = useInboxStore((s) => s.tasks);
-  return <TaskRelations task={task} tasks={tasks} onAdd={onAdd} />;
-}
-
 export default function TaskDetailPage() {
   return (
     <AuthGuard>
@@ -296,20 +299,9 @@ function RecordFold({ on, count, children }: { on: boolean; count?: number; chil
   );
 }
 
-export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, closeHref = "/tasks" }: {
-  taskId?: string;
-  variant?: "page" | "inline";
-  onClose?: () => void;
-  onOpen?: () => void;
-  /** The list this page closes back to (✕ and the back key): a project's
-   *  task returns to the project, not to /tasks. */
-  closeHref?: string;
-} = {}) {
+export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen }: { taskId?: string; variant?: "page" | "inline"; onClose?: () => void; onOpen?: () => void } = {}) {
   const params = useParams();
   const router = useRouter();
-  // Where another task opens from here: inside the host's place (a project's
-  // own task stays in the project), else its own page.
-  const taskHref = useTaskHref();
   const openLinkedSession = useOpenLinkedSession();
   const id = taskId ?? (params?.id as string);
   const isInline = variant === "inline";
@@ -317,10 +309,8 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
   const directData = useSyncTaskDetail(id);
   useSyncTasks();
 
-  // The one row the address names (by id or short id), not the whole tasks
-  // collection: a write to any other task must not repaint this page.
-  const storeRow = useInboxStore((s) => (id ? lookup(s.tasks, id) : undefined));
-  const data = (storeRow || directData) as TaskDetail | undefined;
+  const allTasks = useInboxStore((s) => s.tasks);
+  const data = (allTasks[id] || Object.values(allTasks).find((t: any) => t.short_id === id) || directData) as TaskDetail | undefined;
   const taskTeamId = data?.team_id as string | undefined;
   // A blocking question outranks the description: nothing in the body can be
   // acted on until it is answered, so the body folds and the card comes up
@@ -347,14 +337,19 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
   // list always contains the task's team.
   const currentUser = useInboxStore((s) => s.currentUser);
   const teamMembers = useInboxStore((s) => s.teamMembers.length > 0 ? s.teamMembers : null);
-  const teamInfo = useInboxStore((s) => (taskTeamId ? (s.teams ?? []).find((t: any) => String(t._id) === taskTeamId) ?? null : null));
+  const storeTeams = useInboxStore((s) => s.teams);
+  const teamInfo = useMemo(
+    () => (taskTeamId ? storeTeams.find((t: any) => String(t._id) === taskTeamId) ?? null : null),
+    [storeTeams, taskTeamId],
+  );
   // The project this task is filed under — omitted when the surface around it is
   // already that project, so the chip never repeats the breadcrumb above it.
-  const taskProjectId = (data as any)?.project_id as string | undefined;
-  const taskProject = useInboxStore((s) => {
-    if (!taskProjectId || params?.id === taskProjectId) return null;
-    return (s.projects as any)[taskProjectId] ?? null;
-  });
+  const allProjects = useInboxStore((s) => s.projects);
+  const taskProject = useMemo(() => {
+    const pid = (data as any)?.project_id;
+    if (!pid || params?.id === pid) return null;
+    return (allProjects as any)[pid] ?? null;
+  }, [allProjects, data, params?.id]);
   // Derived so an optimistic re-assignment shows instantly (see resolveAssigneeInfo).
   // A role can own a task (org-roles-run-work.md R5): the roster of roles
   // resolves its face, and AssigneeFace puts its card one hover away (R3).
@@ -445,8 +440,11 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
 
   // The parent breadcrumb resolves live from the store, so a re-parent
   // elsewhere updates the chip instantly.
-  const parentId = (data as any)?.parent_id as string | undefined;
-  const parentRow = useInboxStore((s) => (parentId ? ((s.tasks[String(parentId)] as TaskItem | undefined) ?? null) : null));
+  const parentRow = useMemo(() => {
+    const pid = (data as any)?.parent_id;
+    if (!pid) return null;
+    return (allTasks[String(pid)] as TaskItem | undefined) ?? null;
+  }, [allTasks, (data as any)?.parent_id]);
 
   // The comment composer owns its draft and uploads (components/tasks/TaskCommentStream);
   // the page's drop zone hands dropped files to it through this ref.
@@ -484,14 +482,10 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
   }, [data, openPalette]);
 
   const paneActive = useTabActive();
-  // The page's keys. The inline peek registers none: the list around it owns
-  // every key for the peeked row. Esc is not here either: DetailSplitLayout
-  // (every page host) owns it and closes to the host's own list.
   useWatchEffect(() => {
-    if (!paneActive || paletteOpen || isInline) return;
+    if (!paneActive || paletteOpen) return;
     if (shortcutsPanelOpen) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.defaultPrevented) return;
       if (keyBelongsElsewhere(e.target)) return;
 
       const stop = () => { e.preventDefault(); };
@@ -522,12 +516,15 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
         startEditTitle();
       } else if (matchesAction(e, "task.back")) {
         stop();
-        router.push(closeHref);
+        router.push("/tasks");
+      } else if (e.key === "Escape" && !e.metaKey && !e.ctrlKey) {
+        stop();
+        router.push("/tasks");
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [paneActive, paletteOpen, shortcutsPanelOpen, isInline, data, openCmd, startEditTitle, router, closeHref]);
+  }, [paneActive, paletteOpen, shortcutsPanelOpen, data, openCmd, startEditTitle, router]);
 
   if (!data) {
     // directData === null: webGetTaskDetail resolved but the id is not a task
@@ -539,7 +536,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
         return <PaneLoader />;
       }
       return (
-        <div className={`flex flex-col items-center justify-center h-full gap-3 text-center px-6 ${isInline ? "w-[480px] min-w-0 flex-shrink border-l border-sol-border/30 bg-sol-bg" : ""}`}>
+        <div className={`flex flex-col items-center justify-center h-full gap-3 text-center px-6 ${isInline ? "w-[480px] flex-shrink-0 border-l border-sol-border/30 bg-sol-bg" : ""}`}>
           <div className="text-sol-text-muted text-sm">This task doesn&apos;t exist.</div>
           <div className="text-sol-text-dim text-xs font-mono break-all">{id}</div>
           {sessionForBadId && (
@@ -550,12 +547,12 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
           {isInline && onClose ? (
             <button onClick={onClose} className="text-xs text-sol-cyan hover:underline">← Close</button>
           ) : (
-            <Link href={closeHref} className="text-xs text-sol-cyan hover:underline">← Back to tasks</Link>
+            <Link href="/tasks" className="text-xs text-sol-cyan hover:underline">← Back to tasks</Link>
           )}
         </div>
       );
     }
-    return <PaneLoader className={isInline ? "w-[480px] min-w-0 flex-shrink border-l border-sol-border/30 min-h-[16rem] h-full" : "min-h-[16rem] h-full"} />;
+    return <PaneLoader className={isInline ? "w-[480px] flex-shrink-0 border-l border-sol-border/30 min-h-[16rem] h-full" : "min-h-[16rem] h-full"} />;
   }
 
   const status = statusVisual(taskStatusOf(data as any, taskStatuses), taskStatuses);
@@ -565,7 +562,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
 
   return (
         <div
-          className={isInline ? "w-[480px] min-w-0 flex-shrink h-full flex flex-col relative min-w-0 border-l border-sol-border/30 bg-sol-bg" : "flex-1 h-full flex flex-col relative min-w-0"}
+          className={isInline ? "w-[480px] flex-shrink-0 h-full flex flex-col relative min-w-0 border-l border-sol-border/30 bg-sol-bg" : "flex-1 h-full flex flex-col relative min-w-0"}
           onDragEnter={(e) => { e.preventDefault(); dragCounterRef.current++; setIsDragging(true); }}
           onDragOver={(e) => { e.preventDefault(); }}
           onDragLeave={(e) => { e.preventDefault(); dragCounterRef.current--; if (dragCounterRef.current <= 0) { dragCounterRef.current = 0; setIsDragging(false); } }}
@@ -591,7 +588,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
               </button>
               {data.external && <IssueLink external={data.external} size="sm" />}
               {teamInfo && (
-                <span className="px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-meta truncate min-w-0">{teamInfo.name}</span>
+                <span className="px-1.5 py-0.5 rounded bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20 text-[10px] truncate min-w-0">{teamInfo.name}</span>
               )}
               {/* Where this task lives. A link, because the project is a place
                   you can work from — and suppressed when you are already inside
@@ -599,7 +596,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
               {taskProject && (
                 <Link
                   href={`/projects/${taskProject._id}`}
-                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/30 text-meta text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors truncate min-w-0"
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-sol-bg-alt border border-sol-border/30 text-[10px] text-sol-text-dim hover:text-sol-text hover:border-sol-border transition-colors truncate min-w-0"
                   title={`Open project: ${taskProject.title}`}
                 >
                   <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${projectDotClass(taskProject)}`} />
@@ -609,10 +606,10 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
               {/* The call this task was pulled from: its recap and sibling tasks. */}
               {data.from_call && <><TaskCallChip callId={data.from_call} size="head" /><CallListFeeder /></>}
               {!taskTeamId && (
-                <span className="px-1.5 py-0.5 rounded bg-sol-text-dim/10 text-sol-text-dim border border-sol-text-dim/20 text-meta whitespace-nowrap flex-shrink-0">Personal</span>
+                <span className="px-1.5 py-0.5 rounded bg-sol-text-dim/10 text-sol-text-dim border border-sol-text-dim/20 text-[10px] whitespace-nowrap flex-shrink-0">Personal</span>
               )}
               {data.source === "insight" && (
-                <span className="px-1.5 py-0.5 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 text-meta whitespace-nowrap flex-shrink-0">mined</span>
+                <span className="px-1.5 py-0.5 rounded bg-sol-violet/10 text-sol-violet border border-sol-violet/20 text-[10px] whitespace-nowrap flex-shrink-0">mined</span>
               )}
             </div>
             <div className="flex items-center gap-1 flex-shrink-0">
@@ -624,10 +621,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
                 <WatchButton entityType="task" entityId={data._id} variant="menuItem" />
               </OverflowMenu>
               <button
-                onClick={() => { if (isInline && onClose) onClose(); else router.push(closeHref); }}
+                onClick={() => { if (isInline && onClose) onClose(); else router.push("/tasks"); }}
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt transition-colors"
-                title="Close"
-                aria-label="Close"
+                title="Close (Esc)"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -641,7 +637,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
           {/* Parent breadcrumb — a subtask never renders context-free */}
           {(data as any).parent_id && (
             <button
-              onClick={() => parentRow && router.push(taskHref(parentRow._id))}
+              onClick={() => parentRow && router.push(`/tasks/${parentRow._id}`)}
               className="flex items-center gap-1.5 mb-2 text-xs text-sol-text-dim hover:text-sol-cyan transition-colors group"
               title={parentRow ? `Open ${parentRow.short_id}` : "Parent task"}
             >
@@ -672,7 +668,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
                 <h1
                   className={`text-lg font-semibold text-sol-text leading-snug cursor-text hover:text-sol-cyan/90 transition-colors `}
                   onClick={startEditTitle}
-                  title="Rename"
+                  title="Click to edit (e)"
                 >
                   {data.title}
                 </h1>
@@ -800,7 +796,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
                   {data.labels.map((l: string) => {
                     const lc = getLabelColor(l);
                     return (
-                      <Link key={l} href={`/tasks?label=${encodeURIComponent(l)}`} className={`inline-flex items-center gap-1 text-meta px-2 py-0.5 rounded-full border ${lc.bg} ${lc.border} ${lc.text} hover:brightness-110 transition-all cursor-pointer`}>
+                      <Link key={l} href={`/tasks?label=${encodeURIComponent(l)}`} className={`inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full border ${lc.bg} ${lc.border} ${lc.text} hover:brightness-110 transition-all cursor-pointer`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${lc.dot}`} />
                         {l}
                       </Link>
@@ -811,7 +807,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
             )}
 
             {/* The task graph (task-graph.md TG12): blockers and waits, then links and the parent */}
-            <TaskRelationsLive task={data} onAdd={openCmd} />
+            <TaskRelations task={data} tasks={allTasks} onAdd={openCmd} />
           </div>
 
           {/* Decisions bound to this task (D3): open cards, settled ones
@@ -868,7 +864,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
           <ExecutionDetailsSection data={data} />
 
           {/* Subtasks — Linear's sub-issue section, always present */}
-          <SubtasksSection task={data} onNavigate={(tid) => router.push(taskHref(tid))} />
+          <SubtasksSection task={data} onNavigate={(tid) => router.push(`/tasks/${tid}`)} />
 
           <TaskSessionList
             sessions={ownerSession ? linkedConversations.filter((c: any) => c._id !== ownerSession._id) : linkedConversations}
@@ -886,7 +882,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
               </h2>
               <div className="border border-sol-border/30 rounded-lg p-4 bg-sol-bg-alt/20 border-l-2 border-l-sol-violet/30">
                 <div className="flex items-center gap-2 mb-2">
-                  <Badge variant="outline" className="text-meta text-sol-cyan border-sol-cyan/30">
+                  <Badge variant="outline" className="text-[10px] text-sol-cyan border-sol-cyan/30">
                     {data.source_insight.outcome_type}
                   </Badge>
                 </div>
@@ -894,7 +890,7 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
                 {data.source_insight.themes?.length > 0 && (
                   <div className="flex gap-1 mt-2">
                     {data.source_insight.themes.map((t: string) => (
-                      <span key={t} className="text-meta px-1.5 rounded bg-sol-bg-highlight text-sol-text-dim">{t}</span>
+                      <span key={t} className="text-[10px] px-1.5 rounded bg-sol-bg-highlight text-sol-text-dim">{t}</span>
                     ))}
                   </div>
                 )}
@@ -912,8 +908,8 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
               >
                 <CircleDot className="w-4 h-4 text-sol-cyan flex-shrink-0" />
                 <span className="text-sm font-medium text-sol-cyan">{(data as any).plan.title}</span>
-                <ShortId id={(data as any).plan.short_id} className="text-meta text-sol-text-dim" />
-                <Badge variant="outline" className="text-meta px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto">{(data as any).plan.status}</Badge>
+                <ShortId id={(data as any).plan.short_id} className="text-[10px] text-sol-text-dim" />
+                <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-sol-cyan border-sol-cyan/30 ml-auto">{(data as any).plan.status}</Badge>
               </Link>
             </div>
           )}
@@ -926,9 +922,9 @@ export function TaskDetailContent({ taskId, variant = "page", onClose, onOpen, c
                 {relatedDocs.map((doc: any) => (
                   <Link key={doc._id} href={`/docs/${doc._id}`} className="flex items-center gap-3 px-4 py-2.5 hover:bg-sol-bg-alt/50 transition-colors">
                     <FileText className="w-4 h-4 text-sol-violet flex-shrink-0" />
-                    <span className="text-sm text-sol-text truncate">{(doc as any).display_title || doc.title || "Untitled"}</span>
-                    <DocDates doc={doc} className="text-meta text-sol-text-dim ml-auto" />
-                    <Badge variant="outline" className="text-meta px-1.5 py-0 text-sol-violet border-sol-violet/30">{doc.doc_type}</Badge>
+                    <span className="text-sm text-sol-text truncate">{doc.title}</span>
+                    <DocDates doc={doc} className="text-[10px] text-sol-text-dim ml-auto" />
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-sol-violet border-sol-violet/30">{doc.doc_type}</Badge>
                   </Link>
                 ))}
               </div>

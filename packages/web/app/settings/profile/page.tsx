@@ -1,5 +1,4 @@
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
-import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { useShallow } from "zustand/react/shallow";
@@ -289,9 +288,9 @@ function SoundsLinkRow() {
 
 // ── daemon ─────────────────────────────────────────────────────────────────
 
-function relativeTime(timestamp: number | undefined, now: number): string {
+function relativeTime(timestamp: number | undefined): string {
   if (!timestamp) return "Never";
-  const diff = now - timestamp;
+  const diff = Date.now() - timestamp;
   const minutes = Math.floor(diff / 60000);
   const hours = Math.floor(diff / 3600000);
   const days = Math.floor(diff / 86400000);
@@ -302,10 +301,7 @@ function relativeTime(timestamp: number | undefined, now: number): string {
 }
 
 function DaemonSection({ user }: { user: any }) {
-  // A clock the section ticks on, so "Connected" turns to "Not connected"
-  // when the daemon stops, not only when something else redraws the panel.
-  const now = useCoarseNow(15_000);
-  const connected = user.daemon_last_seen && now - user.daemon_last_seen < 60000;
+  const connected = user.daemon_last_seen && Date.now() - user.daemon_last_seen < 60000;
   return (
     <SettingsSection title="Daemon" icon={Activity} description="The background process that connects your machines.">
       <SettingsRow label="Status">
@@ -315,7 +311,7 @@ function DaemonSection({ user }: { user: any }) {
         </span>
       </SettingsRow>
       <SettingsRow label="Last seen">
-        {user.daemon_last_seen ? `${relativeTime(user.daemon_last_seen, now)} · ${new Date(user.daemon_last_seen).toLocaleString()}` : "Never"}
+        {user.daemon_last_seen ? `${relativeTime(user.daemon_last_seen)} · ${new Date(user.daemon_last_seen).toLocaleString()}` : "Never"}
       </SettingsRow>
     </SettingsSection>
   );

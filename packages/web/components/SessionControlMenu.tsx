@@ -38,7 +38,7 @@ import { canSwitchClaudeBackend } from "../lib/claudeBackendControl";
 // The overflow menu and the Cmd+K palette point at the same actions; this is
 // the surface designed as one piece.
 
-const SECTION_LABEL = "px-3 pt-2 pb-1 text-mark uppercase tracking-wider text-sol-text-dim";
+const SECTION_LABEL = "px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-sol-text-dim";
 
 const MOVE_VERB_ICON: Record<MoveVerb, typeof Split> = { switch: ArrowRightLeft, fork: Split, handoff: Send };
 
@@ -65,7 +65,7 @@ function StepHeader({ onBack, children }: { onBack: () => void; children: ReactN
       <button
         type="button"
         onClick={onBack}
-        className="flex items-center gap-1 rounded px-1 py-0.5 text-meta text-sol-text-dim transition-colors hover:bg-sol-bg-alt hover:text-sol-text"
+        className="flex items-center gap-1 rounded px-1 py-0.5 text-[11px] text-sol-text-dim transition-colors hover:bg-sol-bg-alt hover:text-sol-text"
       >
         <ArrowLeft className="h-3 w-3" />
         Back
@@ -109,8 +109,8 @@ function AgentPickStep({
           >
             <AgentMark type={o.type} current={o.current} />
             <span className={`whitespace-nowrap text-xs ${o.disabledReason ? "text-sol-text-secondary" : "text-sol-text"}`}>{o.label}</span>
-            {o.disabledReason && <span className="ml-auto shrink truncate pl-2 text-meta text-sol-text-dim">{o.disabledReason}</span>}
-            {!o.disabledReason && o.current && <span className="ml-auto text-meta text-sol-text-dim">current</span>}
+            {o.disabledReason && <span className="ml-auto shrink truncate pl-2 text-[10px] text-sol-text-dim">{o.disabledReason}</span>}
+            {!o.disabledReason && o.current && <span className="ml-auto text-[10px] text-sol-text-dim">current</span>}
           </DropdownMenuItem>
         ))}
       </div>
@@ -183,7 +183,7 @@ function HandoffStep({
           />
         </div>
       ) : (
-        <div className="px-3 py-2 text-meta text-sol-text-dim">{label} launches with its own configured model.</div>
+        <div className="px-3 py-2 text-[10px] text-sol-text-dim">{label} launches with its own configured model.</div>
       )}
       <DropdownMenuSeparator />
       <div className={SECTION_LABEL}>Direction</div>
@@ -201,7 +201,7 @@ function HandoffStep({
           placeholder="What should the next session do first?"
           className="w-full resize-none rounded-md border border-sol-border/40 bg-sol-bg-alt/40 px-2 py-1.5 text-xs text-sol-text placeholder:text-sol-text-dim/60 outline-none transition-colors focus:border-sol-cyan/50"
         />
-        <p className="mt-1.5 text-meta leading-snug text-sol-text-dim">{HANDOFF_EXPLAINER}</p>
+        <p className="mt-1.5 text-[10px] leading-snug text-sol-text-dim">{HANDOFF_EXPLAINER}</p>
         <button
           type="button"
           onClick={submit}
@@ -350,7 +350,7 @@ export function SessionControlPanel({
             {modelText && <span className="truncate font-mono text-sol-text-secondary" title={model}>{modelText}</span>}
             {glyph && <span className="text-sol-text-dim/80" title={`${effort} effort`}>{glyph}</span>}
           </div>
-          <span data-session-state className="text-meta text-sol-text-dim">{stateLine}</span>
+          <span data-session-state className="text-[10px] text-sol-text-dim">{stateLine}</span>
         </div>
       </div>
 
@@ -377,7 +377,7 @@ export function SessionControlPanel({
             <Split className="h-3.5 w-3.5 shrink-0 text-sol-text-dim transition-colors group-focus:text-sol-cyan" />
             <span className="flex min-w-0 flex-col">
               <span className="text-xs text-sol-text">Switch attempt</span>
-              <span className="truncate text-meta text-sol-text-dim">Each attempt is a branch: open the branch map</span>
+              <span className="truncate text-[10px] text-sol-text-dim">Each attempt is a branch: open the branch map</span>
             </span>
             <MenuKeyCaps action="conv.toggleTree" className="ml-auto flex shrink-0 gap-0.5" />
           </DropdownMenuItem>
@@ -406,7 +406,7 @@ export function SessionControlPanel({
               <span className="flex min-w-0 flex-col">
                 <span className="text-xs text-sol-text">{meta.label}</span>
                 {/* A fork of an SDK session starts in tmux (the SDK path has no fork). */}
-                <span className="truncate text-meta text-sol-text-dim">{verb === "fork" && backend === "sdk" ? "A copy on another agent, in a terminal" : meta.hint}</span>
+                <span className="truncate text-[10px] text-sol-text-dim">{verb === "fork" && backend === "sdk" ? "A copy on another agent, in a terminal" : meta.hint}</span>
               </span>
               <ChevronRight className="ml-auto h-3 w-3 shrink-0 text-sol-text-dim/60 transition-transform group-focus:translate-x-0.5" />
             </DropdownMenuItem>
@@ -524,7 +524,7 @@ export function HeaderModelControl({
               type="button"
               data-session-control-trigger="composer"
               onMouseDown={(e) => e.preventDefault()}
-              className="group -my-0.5 flex items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-meta text-sol-text-dim transition-colors hover:bg-sol-bg-alt hover:text-sol-text data-[state=open]:bg-sol-bg-alt data-[state=open]:text-sol-text"
+              className="group -my-0.5 flex items-center gap-1.5 rounded px-1.5 py-0.5 font-mono text-[11px] text-sol-text-dim transition-colors hover:bg-sol-bg-alt hover:text-sol-text data-[state=open]:bg-sol-bg-alt data-[state=open]:text-sol-text"
               title={title}
             >
               <AgentTypeIcon agentType={agentType || "claude_code"} className="h-3 w-3" />

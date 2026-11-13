@@ -50,10 +50,10 @@ export function SummaryFrame({ kind, glyph, title, sub, idRef, facts, serves, ca
       <div className="flex min-w-0 items-baseline gap-2">
         <span className="inline-flex w-5 shrink-0 justify-center self-center" aria-hidden>{glyph}</span>
         <span className="min-w-0 shrink truncate text-[13px] font-semibold" style={{ color: "var(--sol-text)" }} data-summary-title>{title}</span>
-        {sub && <span className="min-w-0 truncate text-meta" style={{ color: "var(--sol-text-muted)" }} title={sub} data-summary-sub>{sub}</span>}
-        {idRef && <span className="shrink-0 font-mono text-meta" style={{ color: DIM }} data-summary-id>{idRef}</span>}
+        {sub && <span className="min-w-0 truncate text-[11.5px]" style={{ color: "var(--sol-text-muted)" }} title={sub} data-summary-sub>{sub}</span>}
+        {idRef && <span className="shrink-0 font-mono text-[10.5px]" style={{ color: DIM }} data-summary-id>{idRef}</span>}
       </div>
-      {hasFacts(facts) && <FactsLine facts={facts} className="mt-1.5 text-meta" data-summary-facts="" />}
+      {hasFacts(facts) && <FactsLine facts={facts} className="mt-1.5 text-[11.5px]" data-summary-facts="" />}
       {serves.length > 0 && (
         <div className="mt-1.5 flex min-w-0 items-baseline gap-2" data-summary-serves>
           <span className="shrink-0" style={{ color: DIM }}>Serves</span>

@@ -4,7 +4,7 @@
 // the header's revision ticks as it does.
 
 import { useMemo, useRef, useState } from "react";
-import { DynamicIcon } from "./ModIcon";
+import { DynamicIcon } from "lucide-react/dynamic";
 import type { ModSurface } from "@codecast/shared/contracts/mods";
 import { ModSurfaceView } from "./ModSurface";
 import { modNavigate } from "../../lib/mods/host";
@@ -48,7 +48,7 @@ export function ModPaneEmbed({ mod, pane, caption }: { mod: string; pane?: strin
       >
         <DynamicIcon name={(row?.manifest.icon ?? "blocks") as any} size={14} className="shrink-0 text-sol-violet" />
         <span className="truncate text-[12.5px] font-medium text-sol-text">{row?.title ?? mod}{paneTitle && paneTitle !== row?.title ? ` · ${paneTitle}` : ""}</span>
-        {row ? <span className={`font-mono text-meta ${fresh ? "text-sol-violet" : "text-sol-text-dim"}`}>rev {row.rev}</span> : null}
+        {row ? <span className={`font-mono text-[10.5px] ${fresh ? "text-sol-violet" : "text-sol-text-dim"}`}>rev {row.rev}</span> : null}
         {runtime?.status === "ready" ? <span className="size-1.5 rounded-full bg-sol-green" title="running" /> : null}
         <button onClick={() => modNavigate(note && row ? "/mods" : href)} className="ml-auto text-[12px] text-sol-blue hover:underline">
           {note && row ? "Mods" : "Open"}

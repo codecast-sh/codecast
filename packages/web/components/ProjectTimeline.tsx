@@ -284,7 +284,7 @@ export function ProjectTimeline({ projectId, composer = true }: { projectId: str
     return (
       <div className="max-w-3xl mx-auto py-12 text-center">
         <p className="text-xs text-sol-text-dim">The timeline could not load.</p>
-        <button onClick={retry} className="mt-2 text-meta text-sol-cyan hover:underline">
+        <button onClick={retry} className="mt-2 text-[11px] text-sol-cyan hover:underline">
           Try again
         </button>
       </div>
@@ -315,7 +315,7 @@ export function ProjectTimeline({ projectId, composer = true }: { projectId: str
           <p className="text-xs text-sol-text-dim">
             {filter === "all" ? "Nothing here yet" : "No matching activity"}
           </p>
-          <p className="text-meta text-sol-text-dim/60 mt-1">
+          <p className="text-[11px] text-sol-text-dim/60 mt-1">
             {filter === "all"
               ? "Task changes, updates and comments in this project will land here as they happen"
               : filter === "people"

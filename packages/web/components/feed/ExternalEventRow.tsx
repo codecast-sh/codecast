@@ -59,7 +59,7 @@ export function Pill({
   title?: string;
 }) {
   const cls =
-    "inline-flex items-center gap-1 px-1.5 h-[18px] rounded border border-sol-border/25 bg-sol-bg-alt/50 text-meta text-sol-text-muted hover:text-sol-text hover:border-sol-border/50 transition-colors max-w-[16rem] truncate";
+    "inline-flex items-center gap-1 px-1.5 h-[18px] rounded border border-sol-border/25 bg-sol-bg-alt/50 text-[10px] text-sol-text-muted hover:text-sol-text hover:border-sol-border/50 transition-colors max-w-[16rem] truncate";
   if (!href) return <span className={cls} title={title}>{children}</span>;
   if (external) {
     return (
@@ -87,7 +87,7 @@ export function ActorFace({ actor, size }: { actor: ExternalEvent["actor"]; size
   const px = { width: size, height: size };
   const fallback = (
     <span
-      className="inline-flex items-center justify-center rounded-full text-meta font-medium text-white flex-shrink-0"
+      className="inline-flex items-center justify-center rounded-full text-[8px] font-medium text-white flex-shrink-0"
       style={{ ...px, background: hueFor(name || "?") }}
     >
       {initials(name, 1)}
@@ -109,7 +109,7 @@ export function ActorFace({ actor, size }: { actor: ExternalEvent["actor"]; size
 export function AccentWord({ accent, children }: { accent: ExternalEventAccent; children: React.ReactNode }) {
   return (
     <span
-      className="px-1 rounded text-meta font-medium flex-shrink-0"
+      className="px-1 rounded text-[10px] font-medium flex-shrink-0"
       style={{ color: accentVar(accent), background: accentSoft(accent, 12) }}
     >
       {children}
@@ -236,7 +236,7 @@ export function ExternalEventRow({
       </span>
 
       <div className="flex-1 min-w-0">
-        <div className="flex items-baseline gap-1.5 flex-wrap text-meta leading-5">
+        <div className="flex items-baseline gap-1.5 flex-wrap text-[11px] leading-5">
           {showActor && event.actor ? (
             <span className="inline-flex items-center gap-1 flex-shrink-0 self-center">
               <ActorFace actor={event.actor} size={14} />
@@ -265,10 +265,10 @@ export function ExternalEventRow({
           <OutcomeWord event={event} />
           {detail ? <span className="text-sol-text-dim/80 flex-shrink-0">{detail}</span> : null}
           {branch ? (
-            <span className="font-mono text-meta text-sol-text-dim/80 flex-shrink-0">{branch}</span>
+            <span className="font-mono text-[10px] text-sol-text-dim/80 flex-shrink-0">{branch}</span>
           ) : null}
           <span
-            className="ml-auto text-meta text-sol-text-dim tabular-nums flex-shrink-0 pl-1"
+            className="ml-auto text-[10px] text-sol-text-dim tabular-nums flex-shrink-0 pl-1"
             title={formatDateFull(event.at)}
           >
             {relTimeShort(event.at, now)}
@@ -277,7 +277,7 @@ export function ExternalEventRow({
 
         {summary && !compact ? (
           <div
-            className={`text-meta text-sol-text-muted leading-5 ${showSummary ? "whitespace-pre-wrap" : "truncate"} ${
+            className={`text-[11px] text-sol-text-muted leading-5 ${showSummary ? "whitespace-pre-wrap" : "truncate"} ${
               density === "feed" ? "cursor-pointer" : ""
             }`}
             onClick={density === "feed" ? () => setExpanded((v) => !v) : undefined}
@@ -314,7 +314,7 @@ export function EventRefPills({
   onNavigate?: (path: string) => void;
 }) {
   return (
-    <div className="flex items-center gap-1 flex-wrap mt-1 empty:mt-0 text-meta leading-5" onClick={(e) => e.stopPropagation()}>
+    <div className="flex items-center gap-1 flex-wrap mt-1 empty:mt-0 text-[11px] leading-5" onClick={(e) => e.stopPropagation()}>
       {sessionIds.map((id) => (
         <EntityIdPill key={id} id={id} type="session" />
       ))}

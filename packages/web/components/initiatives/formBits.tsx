@@ -4,7 +4,7 @@ import type { Plus } from "lucide-react";
 
 export function GhostButton({ icon: Icon, children, onClick, ...rest }: { icon?: typeof Plus; children: React.ReactNode; onClick?: () => void } & Record<`data-${string}`, string | undefined>) {
   return (
-    <button type="button" onClick={onClick} className="h-6 inline-flex items-center gap-1 px-1.5 rounded-md text-meta hover:bg-sol-bg-highlight/70 transition-colors" style={{ color: "var(--sol-text-muted)" }} {...rest}>
+    <button type="button" onClick={onClick} className="h-6 inline-flex items-center gap-1 px-1.5 rounded-md text-[11.5px] hover:bg-sol-bg-highlight/70 transition-colors" style={{ color: "var(--sol-text-muted)" }} {...rest}>
       {Icon && <Icon className="w-3 h-3" />} {children}
     </button>
   );

@@ -26,7 +26,7 @@ export function ProjectInboxFilter({ projectId, hasMain }: { projectId: string; 
       title={on ? "The inbox shows only this project. Click to show everything" : total ? `Show this project's ${total} other session${total === 1 ? "" : "s"} in the inbox` : "Show only this project's sessions in the inbox"}
       data-project-inbox-filter={on ? "on" : "off"}
       className={cn(
-        "inline-flex items-center gap-1 h-6 px-2 rounded-md text-meta transition-colors",
+        "inline-flex items-center gap-1 h-6 px-2 rounded-md text-[11px] transition-colors",
         on ? "bg-sol-cyan/15 text-sol-cyan" : "text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt/60",
       )}
     >

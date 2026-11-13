@@ -35,10 +35,10 @@ function Disclosure({ label, children }: { label: React.ReactNode; children: Rea
   const [open, setOpen] = React.useState(false);
   return (
     <div>
-      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text">
+      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className="inline-flex items-center gap-1 text-[11px] text-sol-text-dim hover:text-sol-text">
         <ChevronRight className={cn("h-3 w-3 transition-transform", open && "rotate-90")} />{label}
       </button>
-      {open && <div className="mt-2 space-y-3 pl-4 text-meta text-sol-text-muted">{children}</div>}
+      {open && <div className="mt-2 space-y-3 pl-4 text-[11px] text-sol-text-muted">{children}</div>}
     </div>
   );
 }
@@ -75,7 +75,7 @@ function LoadBar({ label, before, after }: { label: string; before?: number; aft
   const rising = end > before;
   const tone = end > 100 ? "bg-sol-red" : end > SPREAD_CEILING ? "bg-sol-yellow" : "bg-sol-cyan";
   return (
-    <div className="flex items-center gap-2.5 text-meta">
+    <div className="flex items-center gap-2.5 text-[11px]">
       <span className="w-12 shrink-0 text-sol-text-dim">{label}</span>
       <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-sol-border/25">
         <div className={cn("absolute inset-y-0 left-0 rounded-full transition-[width] duration-300", rising ? "bg-sol-text-dim/50" : tone)} style={{ width: `${lo}%` }} />
@@ -127,7 +127,7 @@ function LoadDial({ value, count, freed, onChange }: { value: number; count: num
   const fill = { background: `linear-gradient(to right, var(--sol-cyan) ${value}%, color-mix(in srgb, var(--sol-border) 25%, transparent) ${value}%)` };
   return (
     <div className="space-y-2 rounded-xl bg-sol-bg-alt px-3.5 py-3" data-dial>
-      <div className="flex items-baseline gap-2 text-meta">
+      <div className="flex items-baseline gap-2 text-[11px]">
         <span className="text-sol-text-dim">Move off</span>
         <span className="text-[20px] font-semibold tabular-nums leading-none text-sol-text">{value}%</span>
         <span className="text-sol-text-dim">of session load</span>
@@ -147,7 +147,7 @@ function LoadDial({ value, count, freed, onChange }: { value: number; count: num
         style={fill}
         className="h-1.5 w-full cursor-pointer appearance-none rounded-full [&::-moz-range-thumb]:h-4 [&::-moz-range-thumb]:w-4 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border-2 [&::-moz-range-thumb]:border-sol-bg [&::-moz-range-thumb]:bg-sol-cyan [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border-2 [&::-webkit-slider-thumb]:border-sol-bg [&::-webkit-slider-thumb]:bg-sol-cyan"
       />
-      <div className="flex justify-between text-meta tabular-nums text-sol-text-dim">
+      <div className="flex justify-between text-[10px] tabular-nums text-sol-text-dim">
         {[0, 25, 50, 75, 100].map((n) => (
           <button key={n} type="button" onClick={() => onChange(n)} className={cn("hover:text-sol-text", n === value && "text-sol-text")}>{n}%</button>
         ))}
@@ -163,14 +163,14 @@ function LoadDial({ value, count, freed, onChange }: { value: number; count: num
  */
 function RehearsalLine({ rehearsal, bring, onBring, disabled }: { rehearsal?: OffloadRehearsal; bring: string[]; onBring: (path: string, on: boolean) => void; disabled?: boolean }) {
   if (!rehearsal) return null;
-  if (rehearsal.status === "pending") return <div className="pb-2 pl-10 pr-3.5 text-meta text-sol-text-dim" data-rehearsal="pending">checking the move on this machine</div>;
-  if (rehearsal.status === "failed") return <div className="truncate pb-2 pl-10 pr-3.5 text-meta text-sol-text-dim" title={rehearsal.error} data-rehearsal="failed">not checked: {rehearsal.error}</div>;
+  if (rehearsal.status === "pending") return <div className="pb-2 pl-10 pr-3.5 text-[10px] text-sol-text-dim" data-rehearsal="pending">checking the move on this machine</div>;
+  if (rehearsal.status === "failed") return <div className="truncate pb-2 pl-10 pr-3.5 text-[10px] text-sol-text-dim" title={rehearsal.error} data-rehearsal="failed">not checked: {rehearsal.error}</div>;
   const r = rehearsal.result;
   const running = r.services.filter((sv) => sv.running);
   const lacks = r.tools.missing.filter((t) => !r.tools.installs.includes(t));
   if (!r.missing.length && !running.length && !lacks.length && !r.tools.installs.length && !r.machine.length) return null;
   return (
-    <div className="flex flex-wrap items-center gap-1 pb-2 pl-10 pr-3.5 text-meta" data-rehearsal="done">
+    <div className="flex flex-wrap items-center gap-1 pb-2 pl-10 pr-3.5 text-[10px]" data-rehearsal="done">
       {r.missing.map((m) => {
         const on = bring.includes(m.path);
         return (
@@ -218,14 +218,14 @@ function CandidateRow({ c, title, checked, elsewhere, onCheck, rehearsal, bring,
       <span className="min-w-[6rem] flex-1">
         <span className="block truncate text-[13px] text-sol-text">{title}</span>
         {outside.length > 0 && (
-          <span className="block truncate text-meta text-sol-orange" title={`Also stops what it left running outside its process tree: ${namedStops(outside, 20)}`}>
+          <span className="block truncate text-[10px] text-sol-orange" title={`Also stops what it left running outside its process tree: ${namedStops(outside, 20)}`}>
             also stops {outside.length} outside its tree
           </span>
         )}
       </span>
-      {c.disruption === "mid_turn" && <span className="shrink-0 text-meta text-sol-yellow">working</span>}
-      {elsewhere && <span className="inline-flex min-w-0 max-w-[7rem] shrink items-center gap-1 text-meta text-sol-text-muted" title={elsewhere.name}>{destIcon(elsewhere)}<span className="truncate">{elsewhere.name}</span></span>}
-      <span className="shrink-0 text-meta tabular-nums text-sol-text-dim">
+      {c.disruption === "mid_turn" && <span className="shrink-0 text-[10px] text-sol-yellow">working</span>}
+      {elsewhere && <span className="inline-flex min-w-0 max-w-[7rem] shrink items-center gap-1 text-[10px] text-sol-text-muted" title={elsewhere.name}>{destIcon(elsewhere)}<span className="truncate">{elsewhere.name}</span></span>}
+      <span className="shrink-0 text-[11px] tabular-nums text-sol-text-dim">
         {[c.relief.cpu !== undefined ? fmtCpu(c.relief.cpu) : undefined, c.relief.rssHigh !== undefined ? fmtBytes(c.relief.rssHigh) : undefined].filter(Boolean).join(" · ")}
       </span>
     </label>
@@ -241,9 +241,9 @@ function StayingRow({ s, title, disabled, onBackground }: { s: StayingSession; t
     <div className="flex items-center gap-3 px-3.5 py-2.5" data-staying={s.sessionId}>
       <span className="min-w-[6rem] flex-1">
         <span className="block truncate text-[13px] text-sol-text">{title}</span>
-        <span className="block truncate text-meta text-sol-text-dim" title={s.reason}>{s.reason}</span>
+        <span className="block truncate text-[10px] text-sol-text-dim" title={s.reason}>{s.reason}</span>
       </span>
-      <span className="shrink-0 text-meta tabular-nums text-sol-text-dim">{fmtCpu(s.cpu)} · {fmtBytes(s.rss)}</span>
+      <span className="shrink-0 text-[11px] tabular-nums text-sol-text-dim">{fmtCpu(s.cpu)} · {fmtBytes(s.rss)}</span>
       <button
         type="button"
         aria-pressed={s.background}
@@ -251,7 +251,7 @@ function StayingRow({ s, title, disabled, onBackground }: { s: StayingSession; t
         title={disabled ?? (s.background ? (applied ? `${s.lowered} of ${s.processCount} processes at background priority` : "Waiting for the machine to apply it") : "Run at background priority: it gives way to everything else")}
         onClick={() => onBackground?.(!s.background)}
         className={cn(
-          "inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-meta transition-colors disabled:cursor-not-allowed disabled:opacity-40",
+          "inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] transition-colors disabled:cursor-not-allowed disabled:opacity-40",
           s.background ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-text" : "border-sol-border/40 text-sol-text-muted hover:text-sol-text",
         )}
       >
@@ -290,7 +290,7 @@ function CandidateDetail({ c, session, plan, destinationId, onDestination }: {
                 title={!movable(r) ? r?.blockers.join("\n") : undefined}
                 onClick={() => onDestination(d.deviceId)}
                 className={cn(
-                  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-meta disabled:cursor-not-allowed disabled:opacity-40",
+                  "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] disabled:cursor-not-allowed disabled:opacity-40",
                   picked ? "border-sol-cyan/60 bg-sol-cyan/10 text-sol-text" : "border-sol-border/40 hover:text-sol-text",
                 )}
               >
@@ -442,7 +442,7 @@ export function OffloadReview({ plan: livePlan, sessions, sourceName, now, initi
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 pb-4">
         <div className="space-y-1.5 rounded-xl bg-sol-bg-alt px-3.5 py-3" data-load="source">
-          <div className="flex items-center gap-2 text-meta text-sol-text-dim">
+          <div className="flex items-center gap-2 text-[11px] text-sol-text-dim">
             <Laptop className="h-3.5 w-3.5" /><span className="truncate">{sourceName}</span>
             {going.length > 0 && (
               <span className="ml-auto tabular-nums" title={namedStops(stopping, 20)}>
@@ -465,7 +465,7 @@ export function OffloadReview({ plan: livePlan, sessions, sourceName, now, initi
         ) : (
           <>
             <div>
-              <div className="mb-1.5 flex items-center px-1 text-meta text-sol-text-dim">
+              <div className="mb-1.5 flex items-center px-1 text-[11px] text-sol-text-dim">
                 <span>Move to</span>
                 {reachable.length > 1 && (
                   <label className="relative ml-auto inline-flex items-center gap-1 text-sol-text-secondary hover:text-sol-text">
@@ -483,7 +483,7 @@ export function OffloadReview({ plan: livePlan, sessions, sourceName, now, initi
                   const shift = d.sample ? loadShift(d.sample, sumOf(cs), 1) : undefined;
                   return (
                     <div key={d.deviceId} className="space-y-1.5 rounded-xl bg-sol-bg-alt px-3.5 py-3" data-load={d.deviceId}>
-                      <div className="flex items-center gap-2 text-meta">
+                      <div className="flex items-center gap-2 text-[11px]">
                         <span className="text-sol-cyan">{destIcon(d, "h-3.5 w-3.5")}</span>
                         <span className="truncate font-medium text-sol-text">{d.name}</span>
                         <span className="text-sol-text-dim">{d.asleep ? "asleep, wakes on move" : !d.online ? "offline" : ""}</span>
@@ -496,7 +496,7 @@ export function OffloadReview({ plan: livePlan, sessions, sourceName, now, initi
                           <LoadBar label="CPU" before={shift.before.cpu} after={cs.length ? shift.after.cpu : undefined} />
                           <LoadBar label="Memory" before={shift.before.memory} after={cs.length ? shift.after.memory : undefined} />
                         </>
-                      ) : <div className="text-meta text-sol-text-dim">Load not measured yet</div>}
+                      ) : <div className="text-[11px] text-sol-text-dim">Load not measured yet</div>}
                     </div>
                   );
                 })}
@@ -505,7 +505,7 @@ export function OffloadReview({ plan: livePlan, sessions, sourceName, now, initi
 
             {plan.staying.length > 0 && (
               <div>
-                <div className="mb-1.5 flex items-baseline px-1 text-meta text-sol-text-dim">
+                <div className="mb-1.5 flex items-baseline px-1 text-[11px] text-sol-text-dim">
                   <span>{plural(plan.staying.length, "busy session")} staying here</span>
                   <span className="ml-auto tabular-nums">{fmtCpu(plan.staying.reduce((n, s) => n + s.cpu, 0))}</span>
                 </div>
@@ -525,7 +525,7 @@ export function OffloadReview({ plan: livePlan, sessions, sourceName, now, initi
 
             {canMove.length > 0 && (
               <div>
-                <div className="mb-1.5 flex items-baseline px-1 text-meta text-sol-text-dim">
+                <div className="mb-1.5 flex items-baseline px-1 text-[11px] text-sol-text-dim">
                   <span>{plural(canMove.length, "session")}</span>
                   {canMove.length > 1 && (
                     <button type="button" className="ml-auto hover:text-sol-text" onClick={() => setAll(!allChecked)}>{allChecked ? "Select none" : "Select all"}</button>
@@ -566,7 +566,7 @@ export function OffloadReview({ plan: livePlan, sessions, sourceName, now, initi
                   {midTurn && (
                     <label className="flex items-center gap-1.5">
                       Working sessions move after their turn; wait up to
-                      <select value={wait} onChange={(e) => setWait(Number(e.target.value))} className="rounded border border-sol-border/40 bg-sol-bg px-1 py-0.5 text-meta text-sol-text">
+                      <select value={wait} onChange={(e) => setWait(Number(e.target.value))} className="rounded border border-sol-border/40 bg-sol-bg px-1 py-0.5 text-[11px] text-sol-text">
                         {SAFE_WAITS.map((p) => <option key={p.value} value={p.value}>{p.label.toLowerCase().replace(/^wait up to /, "")}</option>)}
                       </select>
                     </label>
@@ -601,7 +601,7 @@ export function OffloadReview({ plan: livePlan, sessions, sourceName, now, initi
           >
             Move {going.length > 0 ? plural(going.length, "session") : "sessions"}
           </Button>
-          {moveBlocked && off && <div className="text-center text-meta text-sol-text-dim">{off}</div>}
+          {moveBlocked && off && <div className="text-center text-[10px] text-sol-text-dim">{off}</div>}
         </footer>
       )}
     </section>
@@ -617,11 +617,11 @@ function RunRows({ run, byId, destinations, actions, actionsDisabledReason, stac
   return (
     <>
       {run.rows.map((r) => (
-        <div key={r.sessionId} className={cn("grid items-start gap-x-3 text-meta", stacked ? "grid-cols-[minmax(0,1fr)_auto_auto]" : "grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1fr)_9rem_auto_4.5rem]")} data-run-row={r.sessionId}>
+        <div key={r.sessionId} className={cn("grid items-start gap-x-3 text-[11px]", stacked ? "grid-cols-[minmax(0,1fr)_auto_auto]" : "grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1fr)_9rem_auto_4.5rem]")} data-run-row={r.sessionId}>
           {stacked ? (
             <span className="min-w-0">
               <span className="block truncate text-[13px] text-sol-text">{byId.get(r.sessionId)?.title ?? r.sessionId}</span>
-              <span className="block truncate text-meta text-sol-text-dim">→ {destinations.get(r.destinationId) ?? r.destinationId}</span>
+              <span className="block truncate text-[10px] text-sol-text-dim">→ {destinations.get(r.destinationId) ?? r.destinationId}</span>
             </span>
           ) : (
             <>
@@ -635,7 +635,7 @@ function RunRows({ run, byId, destinations, actions, actionsDisabledReason, stac
               ? <button type="button" className="inline-flex items-center gap-1 text-sol-cyan hover:underline" onClick={() => actions.onRetry!(run.batchId, r.sessionId)}><RotateCcw className="h-3 w-3" />Retry</button>
               : <span className="text-sol-text-dim" title={actionsDisabledReason}>Retry</span>)}
           </span>
-          {r.error && <span className="col-span-full flex gap-1 pl-2 text-meta text-sol-red/90"><AlertTriangle className="mt-px h-3 w-3 shrink-0" />{r.error}</span>}
+          {r.error && <span className="col-span-full flex gap-1 pl-2 text-[10px] text-sol-red/90"><AlertTriangle className="mt-px h-3 w-3 shrink-0" />{r.error}</span>}
         </div>
       ))}
     </>
@@ -647,7 +647,7 @@ function RunRelief({ run }: { run: OffloadRun }) {
   const b = run.measured?.before; const a = run.measured?.after;
   if (!b) return null;
   return (
-    <div className="text-meta text-sol-text-muted">
+    <div className="text-[10px] text-sol-text-muted">
       {a && run.finishedAt !== undefined && a.at > run.finishedAt && run.rows.every((r) => isRowTerminal(r.status))
         ? <>Measured on this machine: memory in use {fmtBytes(memoryUsed(b))} → {fmtBytes(memoryUsed(a))} ({memoryUsed(b) - memoryUsed(a) >= 0 ? "−" : "+"}{fmtBytes(Math.abs(memoryUsed(b) - memoryUsed(a)))}), CPU {b.cpuPercent?.toFixed(0) ?? "n/a"}% → {a.cpuPercent?.toFixed(0) ?? "n/a"}%. Other work on the machine moves these numbers too.</>
         : <>Relief is measured from the first sample after every session has finished moving.</>}
@@ -686,7 +686,7 @@ export function OffloadProgress({ runs, sourceName, onClose, ...rowProps }: RunP
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 pb-4">
         <div className="space-y-2 rounded-xl bg-sol-bg-alt px-3.5 py-3" data-progress>
-          <div className="flex items-baseline gap-2 text-meta">
+          <div className="flex items-baseline gap-2 text-[11px]">
             <span className="text-[20px] font-semibold tabular-nums leading-none text-sol-text">{stages.done}<span className="text-sol-text-dim">/{rows.length}</span></span>
             <span className="text-sol-text-dim">moved</span>
             <span className="ml-auto flex gap-3 tabular-nums text-sol-text-muted">
@@ -746,7 +746,7 @@ export function OffloadRuns({ runs, sessions, destinations, now, actions, action
         const failed = run.rows.filter((r) => r.status === "failed").length;
         return (
           <div key={run.batchId} className="px-4 py-2.5" data-run={run.batchId}>
-            <div className="flex flex-wrap items-center gap-x-3 text-meta">
+            <div className="flex flex-wrap items-center gap-x-3 text-[11px]">
               <span className="font-medium text-sol-text">Offload {active ? "in progress" : "finished"}</span>
               <span className="text-sol-text-muted">{done}/{run.rows.length} moved{failed ? `, ${failed} failed` : ""} · started {fmtAgo(run.createdAt, now)} · waits up to {Math.round(run.waitForTurnMs / 60_000)} min per turn, never interrupts</span>
               {active && (actions?.onCancel && !run.cancelUnavailable

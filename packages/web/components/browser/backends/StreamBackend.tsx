@@ -193,7 +193,7 @@ export function StreamBackend({
         // control surface; only its two children catch them.
         <div className="absolute top-2 left-2 right-2 flex items-center gap-2 pointer-events-none">
           <span
-            className="min-w-0 inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-full bg-sol-bg/75 border border-sol-border/40 text-meta font-mono tracking-wider text-sol-text-dim backdrop-blur-sm pointer-events-auto"
+            className="min-w-0 inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-full bg-sol-bg/75 border border-sol-border/40 text-[9px] font-mono tracking-wider text-sol-text-dim backdrop-blur-sm pointer-events-auto"
             title={
               machineName
                 ? `Streaming from ${machineName}, the machine this agent's browser runs on`
@@ -215,7 +215,7 @@ export function StreamBackend({
         </div>
       )}
       {tabNote && !failed && (
-        <span className="absolute bottom-2 left-2 px-1.5 py-0.5 rounded bg-sol-bg/85 border border-sol-red/30 text-meta font-mono text-sol-red/80">
+        <span className="absolute bottom-2 left-2 px-1.5 py-0.5 rounded bg-sol-bg/85 border border-sol-red/30 text-[10px] font-mono text-sol-red/80">
           {tabNote}
         </span>
       )}

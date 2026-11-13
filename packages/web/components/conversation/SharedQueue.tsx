@@ -43,12 +43,12 @@ export const SharedQueue = memo(function SharedQueue({ conversationId, canSteerQ
   return (
     <div data-sv-shared-queue className="mx-auto conv-col px-2 sm:px-4">
       <div className="mb-1 rounded-xl border border-sol-border/40 bg-sol-bg-alt/40 overflow-hidden">
-        <div className="flex items-center gap-2 px-3 pt-1.5 pb-1 text-mark uppercase tracking-wider text-sol-text-dim">
+        <div className="flex items-center gap-2 px-3 pt-1.5 pb-1 text-[10px] uppercase tracking-wider text-sol-text-dim">
           <span>Up next</span>
           <span className="tabular-nums">{rows.length}</span>
           <span className="normal-case tracking-normal">· goes in when this turn ends</span>
           {canSteerQueue && (
-            <button type="button" onClick={release} className="ml-auto normal-case tracking-normal text-meta text-sol-cyan hover:underline">
+            <button type="button" onClick={release} className="ml-auto normal-case tracking-normal text-[10px] text-sol-cyan hover:underline">
               Send now
             </button>
           )}
@@ -99,7 +99,7 @@ function QueueButton({ label, disabled, onClick, children }: { label: string; di
       aria-label={label}
       disabled={disabled}
       onClick={onClick}
-      className="inline-flex items-center h-5 px-1.5 rounded text-meta text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt disabled:opacity-30 disabled:pointer-events-none"
+      className="inline-flex items-center h-5 px-1.5 rounded text-[10px] text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-alt disabled:opacity-30 disabled:pointer-events-none"
     >
       {children}
     </button>

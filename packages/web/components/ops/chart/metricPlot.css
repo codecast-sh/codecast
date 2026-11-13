@@ -20,8 +20,8 @@
 .mp-pin[data-kind="crossed"] .mp-pin-head, .mp-pin[data-kind="recovered"] .mp-pin-head { width: 8px; height: 8px; left: -4px; border-radius: 2px; transform: rotate(45deg); }
 
 .mp-ship { top: auto; bottom: 0; --mk: var(--sol-text-dim); }
-.mp-ship-head { position: absolute; bottom: 0; left: -1px; min-width: 2px; height: 9px; border-radius: 1px; background: var(--mk); display: grid; place-items: center; cursor: pointer; font: 600 var(--fs-mark)/1 var(--font-mono); color: var(--sol-bg); }
-.mp-ship-head:not(:empty) { left: -8px; min-width: 16px; height: 15px; padding: 0 3px; border-radius: 4px; }
+.mp-ship-head { position: absolute; bottom: 0; left: -1px; min-width: 2px; height: 9px; border-radius: 1px; background: var(--mk); display: grid; place-items: center; cursor: pointer; font: 600 9px/1 var(--font-mono); color: var(--sol-bg); }
+.mp-ship-head:not(:empty) { left: -7px; min-width: 14px; height: 13px; padding: 0 3px; border-radius: 4px; }
 .mp-ship:hover, .mp-ship:focus-within { --mk: var(--sol-text); z-index: 4; }
 
 .mp-card {
@@ -46,11 +46,11 @@
 .mp-ship-list li { display: flex; gap: 8px; min-width: 0; }
 .mp-ship-list li > :first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; color: var(--sol-text); }
 
-.mp-gap { position: absolute; top: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: var(--fs-meta); color: var(--sol-text-dim); text-align: center; }
-.mp-drag { position: absolute; top: 4px; left: 50%; transform: translateX(-50%); padding: 3px 9px; border-radius: 7px; background: var(--sol-red); color: #fff; font: 600 var(--fs-meta) var(--font-mono); pointer-events: none; }
+.mp-gap { position: absolute; top: 0; bottom: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 11.5px; color: var(--sol-text-dim); text-align: center; }
+.mp-drag { position: absolute; top: 4px; left: 50%; transform: translateX(-50%); padding: 3px 9px; border-radius: 7px; background: var(--sol-red); color: #fff; font: 600 11px var(--font-mono); pointer-events: none; }
 .mp-loading { position: absolute; left: 0; right: 0; top: -6px; height: 2px; overflow: hidden; border-radius: 1px; background: color-mix(in srgb, var(--sol-cyan) 14%, transparent); pointer-events: none; }
 .mp-loading::after { content: ""; position: absolute; top: 0; bottom: 0; width: 30%; background: var(--sol-cyan); animation: mp-loading 1.1s ease-in-out infinite; }
 @keyframes mp-loading { from { left: -30%; } to { left: 100%; } }
 @media (prefers-reduced-motion: reduce) { .mp-loading::after { animation: none; width: 100%; opacity: .5; } }
-.mp-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: var(--fs-meta); color: var(--sol-text-dim); pointer-events: none; }
-.mp-start { position: absolute; left: 0; bottom: -2px; padding-right: 4px; font: var(--fs-meta) var(--font-mono); line-height: 1; color: var(--sol-text-dim); pointer-events: none; background: var(--mp-bg, var(--sol-bg)); }
+.mp-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--sol-text-dim); pointer-events: none; }
+.mp-start { position: absolute; left: 0; bottom: -2px; padding-right: 4px; font: 10px var(--font-mono); line-height: 1; color: var(--sol-text-dim); pointer-events: none; background: var(--mp-bg, var(--sol-bg)); }

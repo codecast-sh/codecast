@@ -389,7 +389,7 @@ export function SessionConstellation({
                       stroke="var(--sol-bg)" strokeWidth={3}>
                       {title.length > 26 ? title.slice(0, 24) + "…" : title}
                     </text>
-                    <text y={r + 29} textAnchor="middle" fontSize={11} fontFamily="var(--font-mono)"
+                    <text y={r + 29} textAnchor="middle" fontSize={9.5} fontFamily="var(--font-mono)"
                       fill="var(--sol-text-dim)" style={{ pointerEvents: "none" }}>
                       {nd.shortId}
                     </text>

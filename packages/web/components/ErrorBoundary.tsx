@@ -1,5 +1,5 @@
 import { Component, ReactNode } from "react";
-import { RefreshCw, X } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { captureError } from "@/lib/analytics";
 import { describeError, errorSummary, rootError } from "@/lib/errorCause";
 import { showErrorToast } from "@/lib/errorToast";
@@ -100,9 +100,9 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
     if (level === "inline") {
       return (
-        <div className="relative px-3 py-2 text-xs text-sol-text-dim">
+        <div className="relative px-3 py-2 text-xs text-gray-400">
           <div className="flex items-center gap-2">
-            <button onClick={this.toggleDetails} className="hover:text-sol-text cursor-pointer" title="Show error details">
+            <button onClick={this.toggleDetails} className="hover:text-gray-300 cursor-pointer" title="Show error details">
               Failed to load{name ? ` ${name}` : ""}
             </button>
             <button onClick={this.retry} className="text-sol-cyan hover:underline">{this.state.isChunk ? "reload" : "retry"}</button>
@@ -110,16 +110,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           {this.state.showDetails && this.state.error && (
             <div className="absolute bottom-full left-2 right-2 mb-1 z-50 rounded-lg border border-sol-border bg-sol-bg shadow-xl shadow-black/40 max-w-lg">
               <div className="flex items-center justify-between px-3 py-1.5 border-b border-sol-border/60">
-                <span className="text-mark font-semibold uppercase tracking-wider text-sol-text-dim">
+                <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-500">
                   {name || "Error"} Stack Trace
                 </span>
-                <button onClick={this.toggleDetails} className="text-sol-text-dim hover:text-sol-text" aria-label="Close error details">
-                  <X className="w-3.5 h-3.5" />
-                </button>
+                <button onClick={this.toggleDetails} className="text-gray-500 hover:text-gray-300 text-xs">x</button>
               </div>
               <div className="p-3 max-h-64 overflow-auto">
                 <p className="text-xs text-sol-red font-mono break-all mb-2">{errorSummary(this.state.error)}</p>
-                <pre className="text-meta text-sol-text-dim font-mono whitespace-pre-wrap break-all">
+                <pre className="text-[10px] text-gray-500 font-mono whitespace-pre-wrap break-all">
                   {describeError(this.state.error)}
                 </pre>
               </div>
@@ -132,7 +130,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     return (
       <div data-error-boundary={name || "app"} className="h-full flex items-center justify-center p-4">
         <div className="text-center space-y-2">
-          <p className="text-sm text-sol-text-dim">
+          <p className="text-sm text-gray-400">
             {name ? `${name} crashed` : "Something went wrong"}
           </p>
           <button

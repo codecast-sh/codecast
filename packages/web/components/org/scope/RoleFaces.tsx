@@ -36,21 +36,21 @@ export function RoleFaces({ role, canEdit }: { role: OrgRole; canEdit: boolean }
         <figure className="flex items-center gap-3 min-w-0" data-role-face="character">
           <RoleAvatar avatar={avatar} size={FACE} title={words.name} />
           <figcaption className="min-w-0">
-            <div className="text-meta" style={{ color: "var(--sol-text-dim)" }}>Character</div>
+            <div className="text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}>Character</div>
             <div className="truncate text-[13px] font-medium" style={{ color: "var(--sol-text)" }}>{words.name}</div>
-            <div className="truncate text-meta" style={{ color: "var(--sol-text-muted)" }}>{AVATAR_LABELS[avatar]}</div>
+            <div className="truncate text-[11px]" style={{ color: "var(--sol-text-muted)" }}>{AVATAR_LABELS[avatar]}</div>
           </figcaption>
         </figure>
         <figure className="flex items-center gap-3 min-w-0" data-role-face="icon">
           <RoleIconTile tile={tile} size={FACE} />
           <figcaption className="min-w-0">
-            <div className="text-meta" style={{ color: "var(--sol-text-dim)" }}>Icon</div>
+            <div className="text-[10.5px]" style={{ color: "var(--sol-text-dim)" }}>Icon</div>
             <div className="truncate text-[13px] font-medium" style={{ color: "var(--sol-text)" }}>{words.subtitle}</div>
-            <div className="truncate text-meta" style={{ color: "var(--sol-text-muted)" }} data-role-icon-concept>{drawing ? "Drawing…" : tile.icon ? tile.icon.concept : "Not drawn yet"}</div>
+            <div className="truncate text-[11px]" style={{ color: "var(--sol-text-muted)" }} data-role-icon-concept>{drawing ? "Drawing…" : tile.icon ? tile.icon.concept : "Not drawn yet"}</div>
           </figcaption>
         </figure>
       </div>
-      {redraw.rationale && !drawing && <p className="text-meta" style={{ color: "var(--sol-text-muted)" }} data-role-icon-rationale>{redraw.rationale}</p>}
+      {redraw.rationale && !drawing && <p className="text-[11.5px]" style={{ color: "var(--sol-text-muted)" }} data-role-icon-rationale>{redraw.rationale}</p>}
       {preview && (
         <a href={preview} target="_blank" rel="noreferrer" className="block overflow-hidden rounded-lg border" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 35%, transparent)" }} data-role-icon-preview>
           <img src={preview} alt={`${words.subtitle}'s icon beside the other roles' icons`} className="block w-full" />

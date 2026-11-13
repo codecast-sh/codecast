@@ -11,7 +11,7 @@ export function UnreadCount({ count, agent = false, className = "" }: { count: n
   return (
     <span
       key={`${label}:${agent}`}
-      className={`min-w-[18px] rounded-full px-1 text-center font-mono text-mark font-semibold leading-[18px] tabular-nums text-sol-base03 ${
+      className={`min-w-[16px] rounded-full px-1 text-center font-mono text-[9.5px] font-semibold leading-4 tabular-nums text-sol-base03 ${
         agent ? "arrival-ring bg-sol-violet" : "bg-sol-cyan animate-in zoom-in-75 fade-in duration-150 motion-reduce:animate-none"
       } ${className}`}
       aria-hidden="true"

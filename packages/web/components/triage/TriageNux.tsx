@@ -75,13 +75,13 @@ function MiniCard({ card, focused, cleared, clearedBy }: {
         )}
       >
         <div className="flex items-center gap-2">
-          <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", meta.dot)} />
+          <span className={cn("w-1.5 h-1.5 rounded-full shrink-0", meta.dot, card.state === "working" && "animate-pulse")} />
           <span className="text-xs text-sol-text truncate">{card.title}</span>
-          <span className={cn("ml-auto text-mark uppercase tracking-[0.08em] shrink-0", meta.text)}>
+          <span className={cn("ml-auto text-[9px] uppercase tracking-[0.08em] shrink-0", meta.text)}>
             {clearedBy ? clearedBy.done.toLowerCase() : meta.label}
           </span>
         </div>
-        <div className="mt-0.5 pl-3.5 text-meta text-sol-text-dim truncate">{card.sub}</div>
+        <div className="mt-0.5 pl-3.5 text-[10px] text-sol-text-dim truncate">{card.sub}</div>
       </div>
     </div>
   );
@@ -151,7 +151,7 @@ function StepStates() {
           </div>
         ))}
       </div>
-      <p className="mt-5 text-meta text-sol-text-dim flex items-center gap-1.5 flex-wrap">
+      <p className="mt-5 text-[11px] text-sol-text-dim flex items-center gap-1.5 flex-wrap">
         <Caps action="session.jumpIdle" /> jumps to the top card that needs you.
       </p>
     </StepShell>
@@ -175,7 +175,7 @@ function StepVerbs() {
             >
               <Icon className={cn("w-3.5 h-3.5 shrink-0", v.text)} strokeWidth={1.75} />
               <span className={cn("w-14 shrink-0 text-[12px] font-medium", v.text)}>{v.label}</span>
-              <span className="text-meta text-sol-text-muted leading-snug flex-1">{v.blurb}</span>
+              <span className="text-[11px] text-sol-text-muted leading-snug flex-1">{v.blurb}</span>
               <Caps action={v.action} />
             </div>
           );
@@ -187,7 +187,7 @@ function StepVerbs() {
         >
           <MoreHorizontal className="w-3.5 h-3.5 shrink-0 mt-[1px] text-sol-text-dim" strokeWidth={1.75} />
           <span className="w-14 shrink-0 text-[12px] font-medium text-sol-text-dim">More</span>
-          <span className="flex-1 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-meta text-sol-text-muted leading-snug">
+          <span className="flex-1 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11px] text-sol-text-muted leading-snug">
             {SECONDARY_VERBS.map((v) => (
               <span key={v.id} className="flex items-center gap-1.5">
                 <span className={v.text}>{v.label}</span>
@@ -197,7 +197,7 @@ function StepVerbs() {
           </span>
         </div>
       </div>
-      <p className="mt-4 text-meta text-sol-text-dim flex items-center gap-1.5">
+      <p className="mt-4 text-[11px] text-sol-text-dim flex items-center gap-1.5">
         Every verb is undoable: <Caps action="ui.undo" />
       </p>
     </StepShell>
@@ -236,7 +236,7 @@ function StepPractice({ cleared, clearedBy, onClear, onFinish }: {
           >
             Start triaging
           </button>
-          <p className="mt-3 text-meta text-sol-text-dim flex items-center gap-1.5">
+          <p className="mt-3 text-[10px] text-sol-text-dim flex items-center gap-1.5">
             <Caps action="ui.undo" /> still brings the last one back
           </p>
         </div>
@@ -251,7 +251,7 @@ function StepPractice({ cleared, clearedBy, onClear, onFinish }: {
               clearedBy={clearedBy[c.id] ?? null}
             />
           ))}
-          <div className="mt-4 flex items-center justify-center gap-1.5 text-meta text-sol-text-dim min-h-[24px]">
+          <div className="mt-4 flex items-center justify-center gap-1.5 text-[11px] text-sol-text-dim min-h-[24px]">
             {suggested && (
               <>
                 try <Caps action={suggested.action} />
@@ -267,7 +267,7 @@ function StepPractice({ cleared, clearedBy, onClear, onFinish }: {
           {/* The same buttons the real bar carries, so the mouse path teaches
               the bar's location as it clears the cards. */}
           <div className="mt-1.5 flex items-center justify-center gap-1">
-            <span className="text-meta text-sol-text-dim/70 mr-1">or click</span>
+            <span className="text-[10px] text-sol-text-dim/70 mr-1">or click</span>
             {PRIMARY_VERBS.map((v) => {
               const Icon = v.icon;
               return (
@@ -276,7 +276,7 @@ function StepPractice({ cleared, clearedBy, onClear, onFinish }: {
                   type="button"
                   onClick={() => onClear(v)}
                   className={cn(
-                    "flex items-center gap-1 h-6 px-1.5 rounded-[5px] text-meta text-sol-text-muted transition-colors",
+                    "flex items-center gap-1 h-6 px-1.5 rounded-[5px] text-[10px] text-sol-text-muted transition-colors",
                     v.hover,
                   )}
                 >
@@ -406,11 +406,8 @@ export function TriageNux() {
       <div
         ref={containerRef}
         tabIndex={-1}
-        // Never taller than the window: the body scrolls and the footer
-        // (Skip, Back, Next) stays reachable on a short or zoomed window.
-        className="relative flex max-h-[calc(100dvh-2rem)] w-full max-w-[600px] flex-col rounded-2xl border border-sol-border/60 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden outline-none animate-in fade-in-0 zoom-in-95 duration-200"
+        className="relative w-full max-w-[600px] rounded-2xl border border-sol-border/60 bg-sol-bg shadow-2xl shadow-black/40 overflow-hidden outline-none animate-in fade-in-0 zoom-in-95 duration-200"
       >
-        <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="min-h-[380px]">
           {step === 0 && <StepInbox />}
           {step === 1 && <StepStates />}
@@ -424,16 +421,15 @@ export function TriageNux() {
             />
           )}
         </div>
-        </div>
 
-        <div className="flex shrink-0 items-center px-8 py-4 border-t border-sol-border/30">
+        <div className="flex items-center px-8 py-4 border-t border-sol-border/30">
           {/* Once practice is cleared the body's "Start triaging" owns the
               close; a skip here would record a dismissal after a completion. */}
           <button
             type="button"
             onClick={() => close("skipped")}
             className={cn(
-              "text-meta text-sol-text-dim hover:text-sol-text-muted transition-colors",
+              "text-[11px] text-sol-text-dim hover:text-sol-text-muted transition-colors",
               practiceDone && "invisible",
             )}
           >
@@ -459,7 +455,7 @@ export function TriageNux() {
               <button
                 type="button"
                 onClick={() => setStep((s) => s - 1)}
-                className="px-3 h-7 rounded-md text-meta text-sol-text-muted hover:bg-sol-bg-alt transition-colors"
+                className="px-3 h-7 rounded-md text-[11px] text-sol-text-muted hover:bg-sol-bg-alt transition-colors"
               >
                 Back
               </button>
@@ -468,12 +464,12 @@ export function TriageNux() {
               <button
                 type="button"
                 onClick={() => setStep((s) => s + 1)}
-                className="px-3.5 h-7 rounded-md bg-sol-cyan/15 text-sol-cyan text-meta font-medium hover:bg-sol-cyan/25 transition-colors"
+                className="px-3.5 h-7 rounded-md bg-sol-cyan/15 text-sol-cyan text-[11px] font-medium hover:bg-sol-cyan/25 transition-colors"
               >
                 Next
               </button>
             ) : practiceDone ? null : (
-              <span className="text-meta text-sol-text-dim tabular-nums">
+              <span className="text-[10px] text-sol-text-dim tabular-nums">
                 {DEMO_CARDS.filter((c) => !cleared[c.id]).length} left
               </span>
             )}

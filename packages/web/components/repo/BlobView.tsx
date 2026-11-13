@@ -105,7 +105,7 @@ export function BlobView({
                 )}
                 {blameOn && (
                   <div
-                    className={`repo-blame w-[15rem] shrink-0 px-2 truncate text-meta ${
+                    className={`repo-blame w-[15rem] shrink-0 px-2 truncate text-[10px] ${
                       startsBlameRange(range, number) ? "repo-blame-start" : ""
                     }`}
                     title={range?.message}

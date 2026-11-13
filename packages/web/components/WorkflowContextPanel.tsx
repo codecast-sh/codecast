@@ -102,7 +102,7 @@ export function WorkflowRunPanel({ run, workflow, defaultExpanded = false }: { r
             </span>
           </div>
           {run.fail_reason && (
-            <p className="mx-1 text-meta text-sol-red bg-sol-red/10 rounded px-2 py-1 border border-sol-red/20">
+            <p className="mx-1 text-[11px] text-sol-red bg-sol-red/10 rounded px-2 py-1 border border-sol-red/20">
               {run.fail_reason}
             </p>
           )}
@@ -113,7 +113,7 @@ export function WorkflowRunPanel({ run, workflow, defaultExpanded = false }: { r
 
           <Link
             href={runHref}
-            className="block mx-1 text-meta text-sol-violet hover:underline pt-1"
+            className="block mx-1 text-[10px] text-sol-violet hover:underline pt-1"
           >
             Open the run
           </Link>
@@ -148,18 +148,18 @@ export function RunGate({ run, className }: {
       ) : gateDecisionId ? (
         <Link
           href={`/decisions/${run.gate_decision_short_id ?? gateDecisionId}`}
-          className="inline-flex items-center gap-1.5 px-2 py-1 rounded border border-sol-yellow/40 text-meta text-sol-text hover:bg-sol-yellow/10"
+          className="inline-flex items-center gap-1.5 px-2 py-1 rounded border border-sol-yellow/40 text-[11px] text-sol-text hover:bg-sol-yellow/10"
         >
           <Pause className="w-3 h-3 text-sol-orange" />
           Answer the gate{run.gate_decision_short_id ? ` · ${run.gate_decision_short_id}` : ""}
         </Link>
       ) : run.gate_prompt ? (
         <div className="flex items-center gap-1.5 flex-wrap">
-          <span className="text-meta text-sol-magenta font-semibold">Gate</span>
-          <span className="text-meta text-sol-text-muted truncate flex-1">{run.gate_prompt}</span>
+          <span className="text-[10px] text-sol-magenta font-semibold">Gate</span>
+          <span className="text-[10px] text-sol-text-muted truncate flex-1">{run.gate_prompt}</span>
           {run.gate_response
-            ? <span className="text-meta text-sol-green">Responded: {run.gate_response}</span>
-            : <span className="text-meta text-sol-text-dim">· reply in the conversation</span>}
+            ? <span className="text-[10px] text-sol-green">Responded: {run.gate_response}</span>
+            : <span className="text-[10px] text-sol-text-dim">· reply in the conversation</span>}
         </div>
       ) : null}
     </div>

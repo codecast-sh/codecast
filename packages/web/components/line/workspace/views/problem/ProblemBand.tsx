@@ -221,7 +221,7 @@ export function ProblemBand(p: ProblemBandProps) {
         {/* What became of the go-on the run before waited on: this run took over, its step kept or done again. */}
         {p.replaces && <Fact k="Replaces" tone="warn">Run {p.replaces.n}: {stepDone(p.replaces.step).toLowerCase()}, waited on a go-on{p.replaces.redone ? ` · ${p.replaces.step} again` : p.replaces.redone === false ? ` · ${p.replaces.step} kept` : ""}</Fact>}</>;
       acts = <>
-        {over && b.sessionId && <Link className="lw-act" data-primary="" href={`/conversation/${b.sessionId}`} data-line-band-session>Open the session</Link>}
+        {over && b.sessionId && <a className="lw-act" data-primary="" href={`/conversation/${b.sessionId}`} data-line-band-session>Open the session</a>}
         {over && b.runId && <StopRun runId={b.runId} ledger={stopRunLedger({ problem, step: b.step, ms: b.ms, usual: ms })} />}
         {b.runId && <button type="button" className="lw-link" onClick={() => p.onRun(b.runId!, p.taskId)}>Open the run</button>}
       </>;
@@ -264,7 +264,7 @@ export function ProblemBand(p: ProblemBandProps) {
       // The line's merge step, read from its role when the org is on hand, else from what the ship step said.
       const off = merge ? !merge.on : b.mergeOff;
       facts = <>
-        <Fact k="Approved">{[b.by, b.at != null ? dayTimeWords(b.at) : null].filter(Boolean).join(" · ") || "Yes"}{b.ref && <Link className="lw-link pb-out" href={`/decisions/${encodeURIComponent(b.ref)}`}>{b.ref}</Link>}</Fact>
+        <Fact k="Approved">{[b.by, b.at != null ? dayTimeWords(b.at) : null].filter(Boolean).join(" · ") || "Yes"}{b.ref && <a className="lw-link pb-out" href={`/decisions/${encodeURIComponent(b.ref)}`}>{b.ref}</a>}</Fact>
         {/* Which change is not merged: this run's branch. A commit a later finding calls merged is another change. */}
         <Fact k="Merged" tone="warn">No{branch && <> · <BranchName name={branch} /></>}</Fact>
         {b.behind && <Fact k="Landing" tone="warn">Refused: branch behind {b.behind}</Fact>}
@@ -327,7 +327,7 @@ export function ProblemBand(p: ProblemBandProps) {
           {/* Serving no goal, every run parks it again: closing it, or a goal that covers it, are what change that. */}
           {b.noGoal ? <>
             <CloseProblem taskRef={p.taskRef ?? p.taskId} title="Close it: it serves no goal, so every run parks it" label="Close: serves no goal" />
-            <Link className="lw-act" href="/goals" data-line-band-goals="">Add a goal it serves</Link>
+            <a className="lw-act" href="/goals" data-line-band-goals="">Add a goal it serves</a>
           </> : <StartRunAct taskId={p.taskId} projectId={p.projectId} problem={problem} label="Start again…" primary={b.readiness !== "not_actionable"} />}
         </>}
         <button type="button" className="lw-link" onClick={() => p.onRun(b.runId, p.taskId)} data-line-band-run>Open the run</button>
@@ -336,7 +336,7 @@ export function ProblemBand(p: ProblemBandProps) {
     case "trial":
       // A trial records the answer and ships nothing: what was chosen, what the fix changes, and closing it.
       facts = <>
-        <Fact k="You chose" tone="ok">{b.verb}{b.at != null ? ` · ${dayWords(b.at)}` : ""}{b.ref && <Link className="lw-link pb-out" href={`/decisions/${encodeURIComponent(b.ref)}`}>{b.ref}</Link>}</Fact>
+        <Fact k="You chose" tone="ok">{b.verb}{b.at != null ? ` · ${dayWords(b.at)}` : ""}{b.ref && <a className="lw-link pb-out" href={`/decisions/${encodeURIComponent(b.ref)}`}>{b.ref}</a>}</Fact>
         <Fact k="Shipped">No, a trial ships nothing</Fact>
         {b.change && b.change.files > 0 && <Fact k="Change"><span className="pb-stat">{b.change.files} {b.change.files === 1 ? "file" : "files"} <b data-k="add">+{b.change.added}</b> <b data-k="del">−{b.change.removed}</b></span>{b.change.pr && <Out href={b.change.pr}>the pull request</Out>}</Fact>}
       </>;
@@ -392,7 +392,7 @@ export function ProblemBand(p: ProblemBandProps) {
       } else if (b.lineOn == null) {
         // No role starts this project's line: the step that sets one up.
         facts = <>{b.reason && <Fact k="Waiting on">{b.reason}</Fact>}<Fact k="Flow" tone="warn">Not set up</Fact></>;
-        acts = p.projectId && <Link className="lw-act" data-primary="" href={lineSettingsHref({ project: p.projectId })} data-line-band-setup>Set up {p.projectTitle ? `${p.projectTitle}'s` : "its"} line</Link>;
+        acts = p.projectId && <a className="lw-act" data-primary="" href={lineSettingsHref({ project: p.projectId })} data-line-band-setup>Set up {p.projectTitle ? `${p.projectTitle}'s` : "its"} line</a>;
       } else {
         // Queued: it starts when the line has a free place; the line-wide queue is not this problem's.
         facts = <>{b.reason ? <Fact k="Waiting on">{b.reason}</Fact> : <Fact k="Starts">When the flow has a free place</Fact>}<Fact k="Flow" tone="ok">On</Fact></>;

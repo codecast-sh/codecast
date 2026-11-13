@@ -92,7 +92,7 @@ export function ReviewSession({ review, onBack, back }: { review: string; onBack
       {t === null && <div className="lw-empty"><b>No transcript kept</b>this review's session was not handed back whole</div>}
       {t && t.turns.map((turn, i) => (
         <Section key={i} title={i === 0 ? "The review" : "Its findings"}>
-          <ol className="lw-rt-list">{turn.map((e, j) => <Entry key={j} e={e} />)}</ol>
+          <ol className="rt-list">{turn.map((e, j) => <Entry key={j} e={e} />)}</ol>
         </Section>
       ))}
     </div>
@@ -100,11 +100,11 @@ export function ReviewSession({ review, onBack, back }: { review: string; onBack
 }
 
 function Entry({ e }: { e: TranscriptEntry }) {
-  if (e.kind === "text") return <li className="lw-rt-text">{e.text}</li>;
+  if (e.kind === "text") return <li className="rt-text">{e.text}</li>;
   const label = e.kind === "prompt" ? `Prompt · ${e.text.length.toLocaleString("en-US")} characters` : e.kind === "thinking" ? "Thinking" : e.kind === "tool_use" ? e.name ?? "Tool" : e.error ? "Error" : "Result";
   const head = e.kind === "tool_use" ? toolLine(e.text) : e.text.replace(/\s+/g, " ").slice(0, 140);
   return (
-    <li className="lw-rt-fold" data-kind={e.kind} data-error={e.error ? "" : undefined}>
+    <li className="rt-fold" data-kind={e.kind} data-error={e.error ? "" : undefined}>
       <details>
         <summary><b>{label}</b><span className="lw-mono">{head}</span></summary>
         <pre>{e.text}</pre>

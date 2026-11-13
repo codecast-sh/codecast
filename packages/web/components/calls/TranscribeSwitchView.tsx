@@ -7,7 +7,7 @@ export function TranscribeSwitchView({ on, onToggle, className = "" }: { on: boo
       onClick={onToggle}
       role="switch"
       aria-checked={on}
-      className={`flex items-center gap-1.5 rounded-full px-2 py-0.5 font-mono text-meta transition-colors ${
+      className={`flex items-center gap-1.5 rounded-full px-2 py-0.5 font-mono text-[10.5px] transition-colors ${
         on
           ? "bg-sol-green/10 text-sol-green hover:bg-sol-red/10 hover:text-sol-red"
           : "bg-white/[0.06] text-sol-text-muted hover:bg-sol-green/10 hover:text-sol-green"

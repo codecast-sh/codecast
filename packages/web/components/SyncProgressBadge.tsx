@@ -13,7 +13,7 @@ export function SyncProgressBadge({ scope }: { scope: string }) {
   if (!progress?.loading) return null;
   return (
     <span
-      className="flex items-center gap-1.5 text-meta font-mono text-sol-text-dim/70 whitespace-nowrap flex-shrink-0"
+      className="flex items-center gap-1.5 text-[11px] font-mono text-sol-text-dim/70 whitespace-nowrap flex-shrink-0"
       title="Syncing the full list for this team — older items are still streaming in"
     >
       <Loader2 className="w-3 h-3 animate-spin opacity-60" />

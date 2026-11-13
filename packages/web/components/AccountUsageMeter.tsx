@@ -82,7 +82,7 @@ export function UsageMeterRow({
       className="flex items-center gap-2"
       title={rolledNote ?? title ?? `${label}: ${Math.round(percent)}% used${resetNote ? ` — ${resetNote}` : ""}`}
     >
-      <span className="w-14 shrink-0 text-mark uppercase tracking-wider text-sol-text-dim">{label}</span>
+      <span className="w-12 shrink-0 text-[10px] uppercase tracking-wider text-sol-text-dim">{label}</span>
       <div className="h-[5px] min-w-0 flex-1 overflow-hidden rounded-full bg-sol-bg-inset">
         <div
           className="h-full rounded-full transition-[width] duration-500"
@@ -95,10 +95,10 @@ export function UsageMeterRow({
         />
       </div>
       {rolled ? (
-        <span className="w-9 shrink-0 text-right font-mono text-meta text-sol-text-dim">reset</span>
+        <span className="w-9 shrink-0 text-right font-mono text-[10px] text-sol-text-dim">reset</span>
       ) : (
         <span
-          className="w-9 shrink-0 text-right font-mono text-meta tabular-nums"
+          className="w-9 shrink-0 text-right font-mono text-[11px] tabular-nums"
           style={{ color: live >= 80 ? tone : "var(--sol-text-muted)" }}
         >
           {Math.round(live)}%
@@ -114,7 +114,7 @@ export function UsageMeterRow({
 export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: number }) {
   if (!usage) {
     return (
-      <div className="text-meta italic text-sol-text-dim">
+      <div className="text-[11px] italic text-sol-text-dim">
         No usage data yet — reported by the daemon within a few minutes.
       </div>
     );
@@ -134,26 +134,26 @@ export function AccountUsageBars({ usage, now }: { usage?: CcUsage | null; now: 
         />
       )}
       {usage.extra && extraSpendDollars(usage.extra) && (
-        <div className={`pt-0.5 text-meta ${usage.extra.spend_limit_reached ? "text-sol-red" : "text-sol-text-dim"}`}>
+        <div className={`pt-0.5 text-[10px] ${usage.extra.spend_limit_reached ? "text-sol-red" : "text-sol-text-dim"}`}>
           {extraSpendDollars(usage.extra)}
           {usage.extra.spend_limit_reached ? " · extra spend cap reached" : !usage.extra.enabled ? " · extra spend off" : null}
         </div>
       )}
       {usage.credits && (usage.credits.has_credits || usage.credits.unlimited) && (
-        <div className="pt-0.5 text-meta text-sol-text-dim">
+        <div className="pt-0.5 text-[10px] text-sol-text-dim">
           Credits: {usage.credits.unlimited ? "unlimited" : usage.credits.balance ?? "available"}
         </div>
       )}
       {usage.reset_credits && usage.reset_credits.available > 0 && (
         <div
-          className="pt-0.5 text-meta text-sol-cyan"
+          className="pt-0.5 text-[10px] text-sol-cyan"
           title="Codex has granted a free rate-limit reset — redeemable from the Codex CLI when a window pegs"
         >
           {usage.reset_credits.available} rate-limit reset credit
           {usage.reset_credits.available > 1 ? "s" : ""} available
         </div>
       )}
-      {stale && <div className="pt-0.5 text-meta text-sol-text-dim">as of {formatAgo(now - usage.fetched_at)}</div>}
+      {stale && <div className="pt-0.5 text-[10px] text-sol-text-dim">as of {formatAgo(now - usage.fetched_at)}</div>}
     </div>
   );
 }
@@ -169,7 +169,7 @@ export function LoginExpiredBadge({ profile }: { profile: Omit<SignInProfile, "n
   if (!profileNeedsSignIn(profile, now)) return null;
   return (
     <span
-      className="shrink-0 rounded bg-sol-red/10 px-1.5 py-0.5 text-meta text-sol-red"
+      className="shrink-0 rounded bg-sol-red/10 px-1.5 py-0.5 text-[10px] text-sol-red"
       title="The saved login for this account no longer works — sign into it again and sessions can use it"
     >
       login expired
@@ -183,7 +183,7 @@ export function ReservedBadge({ profile }: { profile: { reserved_for?: string | 
   if (!profile.reserved_for) return null;
   return (
     <span
-      className="shrink-0 rounded bg-sol-violet/10 px-1.5 py-0.5 text-meta text-sol-violet"
+      className="shrink-0 rounded bg-sol-violet/10 px-1.5 py-0.5 text-[10px] text-sol-violet"
       title={`Kept for ${profile.reserved_for}: auto-switch never moves this machine's sessions onto it`}
     >
       kept for {profile.reserved_for}
@@ -226,7 +226,7 @@ export function ProfileSignInButton({
         type="button"
         onClick={() => open(false)}
         title="Open the sign-in: relaunch it, or finish it from here with a code"
-        className={`inline-flex max-w-full items-center gap-1 text-meta text-amber-500 hover:text-amber-400 ${className ?? ""}`}
+        className={`inline-flex max-w-full items-center gap-1 text-[10px] text-amber-500 hover:text-amber-400 ${className ?? ""}`}
       >
         <SpinnerDot />
         <span className="min-w-0 break-words underline decoration-dotted underline-offset-2">sign-in pending on {machine}</span>
@@ -243,7 +243,7 @@ export function ProfileSignInButton({
           ? `The last sign-in didn't complete${device.login_flow?.reason ? `: ${device.login_flow.reason}` : ""}. Opens the browser on ${machine} for ${profile.email ?? profile.name}; the machine's current login stays as it is.`
           : `Opens the browser on ${machine} for ${profile.email ?? profile.name}; the machine's current login stays as it is`
       }
-      className={`shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-meta font-medium text-amber-500 hover:bg-amber-500/20 ${className ?? ""}`}
+      className={`shrink-0 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-500 hover:bg-amber-500/20 ${className ?? ""}`}
     >
       {failed ? "sign in again · retry" : "sign in again"}
     </button>
