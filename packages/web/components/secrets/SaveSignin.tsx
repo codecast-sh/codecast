@@ -33,6 +33,7 @@ import { shareSigninLedger } from "../../lib/secretLedgers";
 import { vaultFailure } from "./vaultModel";
 import { useSampleVault, type SampleVault } from "./sampleVault";
 import { modernButton } from "../ui/modernLook";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 type Team = { id: string; name: string } | null;
 type Saved = { short_id: string; name: string; host: string; cookies: number; action: "created" | "rotated" | "filled"; account_hint?: string };
@@ -113,7 +114,7 @@ function useLaptopCommand<T>(check: boolean) {
 function useSigninWays({ host, name, team, onSaved }: { host: string; name: string; team: Team; onSaved?: (s: Saved) => void }) {
   const devices = useDevices();
   const onlineLocals = useSampleVault() ? SAMPLE_LAPTOPS : devices.onlineLocals;
-  const people = useInboxStore((s) => peopleOf(s.teamMembers).length);
+  const people = useInboxStore((s) => peopleOf(teamMembersOf(s)).length);
   const [picked, setPicked] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const check = useLaptopCommand<Checked>(true);
