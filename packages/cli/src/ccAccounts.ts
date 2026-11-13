@@ -1345,24 +1345,13 @@ export async function probeSecureStorageSupport(
   return verdict;
 }
 
-// ---------------------------------------------------------------------------
-// Per-account setup-token (`claude setup-token`), minted on request
-//
-// A setup-token is a static one-year OAuth token that Claude Code reads from
-// CLAUDE_CODE_OAUTH_TOKEN, which outranks both the keychain login and a
-// credential store. Nothing about it rotates, so none of the refresh /
-// save-on-switch / split-grant machinery above applies: it is a string in a
-// 0600 file, sourced into ONE session's env at launch. The credential store is
-// the default way a saved login carries sessions; a token is the fixed
-// alternative a person mints on purpose (Settings, "mint a token"): a refresh
-// race, a keychain reset, an expired saved login or a Claude Code that ignores
-// the store variable cannot strand it. Anthropic issues it only through a
-// browser sign-in, so minting is always a guided, explicit act — never
-// automatic. The token can only make model requests (no profile/usage scope),
-// so identity and usage still come from the profile snapshot.
-// ---------------------------------------------------------------------------
+// A setup-token is a static one-year token in a 0600 file, sourced into one
+// session. It outranks the keychain and the store, nothing rotates, and it
+// can only make model requests. Identity and usage stay on the profile.
 
 const SETUP_TOKEN_PREFIX = "sk-ant-oat01-";
+const SETUP_TOKEN_LENGTH = 108;
+const SETUP_TOKEN_HYPHEN_AT = 99;
 /** Anthropic mints setup-tokens for one year and never warns before expiry;
  *  the file mtime (written at store time) is the only clock we have. */
 export const SETUP_TOKEN_LIFETIME_MS = 365 * 24 * 60 * 60 * 1000;
@@ -1380,12 +1369,14 @@ export function accountTokenFilePath(name: string): string {
  *  access token or API key can't be sourced into a session by mistake. */
 export function writeAccountToken(name: string, token: string): string {
   const t = token.trim();
-  if (!t.startsWith(SETUP_TOKEN_PREFIX) || /\s/.test(t) || t.length < SETUP_TOKEN_PREFIX.length + 20) {
+  const extracted = extractSetupToken(t);
+  const glued = !!extracted && t !== extracted && t.startsWith(extracted) && extracted.length === SETUP_TOKEN_LENGTH && !/\s/.test(t);
+  if (!extracted || (t !== extracted && !glued)) {
     throw new CcAccountError(`Not a Claude setup-token (expected ${SETUP_TOKEN_PREFIX}…) — mint one with: claude setup-token`);
   }
   const file = accountTokenFilePath(name);
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  atomicWriteFile(file, renderProviderEnvFile({ CLAUDE_CODE_OAUTH_TOKEN: t }), { mode: 0o600 });
+  atomicWriteFile(file, renderProviderEnvFile({ CLAUDE_CODE_OAUTH_TOKEN: extracted }), { mode: 0o600 });
   invalidateAccountsCache();
   return file;
 }
@@ -1501,28 +1492,10 @@ export function launchProfileName(now = Date.now()): string | undefined {
   return launchRecordInEffect(undefined, now)?.profile;
 }
 
-// ---------------------------------------------------------------------------
-// Fleet store: one credential store every codecast-launched session reads
-//
-// Claude Code reads its credential store again about every 30 seconds
-// (measured on 2.1.286: a store rewritten between two turns of one process
-// served the second turn from the new account, with no restart). A launch
-// credential fixed at process start (a setup-token in the env, or a profile's
-// own store) can never follow a switch, so every switch was a kill and a
-// resume, and a spent account reached the session first: Claude Code's grace
-// window, its "wrap up this turn" note, and a session that stops to report it.
-//
-// So sessions launch on ONE store the daemon owns, and a switch rewrites it:
-// every running session is on the new account within half a minute, mid-turn.
-// The store carries a bearer only, never a refresh token: the profile's
-// setup-token when it has one (a year, nothing to rotate), else its saved
-// login's access token while that has time left. Claude Code therefore never
-// rotates anything in it, so no session can strand a saved login; the daemon
-// keeps the access token current from the profile's own grant.
-//
-// The launch record names the account the store carries. The keychain login
-// is left alone: `claude` started by hand keeps using it.
-// ---------------------------------------------------------------------------
+// Fleet store: one credential store every codecast-launched session reads.
+// Claude Code re-reads it about every 30s, so a switch moves a running
+// session without a restart. The store carries a bearer only, never a refresh
+// token. The launch record names the account; the keychain login stays put.
 
 /** A login access token with less than this left is not written to the store.
  *  The daemon refreshes a dormant fleet login an hour before it lapses, and
@@ -1708,12 +1681,18 @@ export async function putFleetOn(name: string, now = Date.now()): Promise<FleetS
  */
 export async function maintainFleetStore(now = Date.now()): Promise<string | null> {
   if (!fleetStoreEnabled()) return null;
-  // A host carries only pool copies, never the login its laptop pushes.
+  // A host carries only pool copies. Read the launch before launchProfileName
+  // drops one whose profile has no share id: the switch meant that email's copy.
+  const recorded = isRemoteDevice() ? readLaunchRecord()?.profile : undefined;
   const name = launchProfileName(now) ?? (isRemoteDevice() ? undefined : activeProfileName());
   if (!name) {
     if (!isRemoteDevice()) return null;
-    // A host that just drew its first pool copy starts on the best of them;
-    // the server's recovery moves it from there.
+    const copy = recorded ? poolCopyForAccount(recorded) : null;
+    if (copy) {
+      try {
+        return `moved the ${describeFleetWrite(await putFleetOn(copy, now))} onto its pool copy`;
+      } catch { /* the copy cannot carry; rank the rest */ }
+    }
     const state = await moveFleetToFallback(undefined, now);
     return state && `started the ${describeFleetWrite(state)} from the pool`;
   }
@@ -1854,11 +1833,15 @@ export function accountTokenInfo(name: string): AccountTokenInfo | null {
   }
 }
 
-/** The token as it appears in `claude setup-token`'s output (or any pane /
- *  clipboard text). Tokens are ~100 chars of URL-safe base64. */
+/** Token text from `claude setup-token` or a pane capture. A joined capture
+ *  glues "Store this token securely" onto the 108-char token; the hyphen at
+ *  index 99 is the token's end, and the rest is dropped. */
 export function extractSetupToken(text: string): string | null {
   const m = /sk-ant-oat01-[A-Za-z0-9_-]{40,}/.exec(text);
-  return m ? m[0] : null;
+  if (!m) return null;
+  const raw = m[0];
+  if (raw.length > SETUP_TOKEN_LENGTH && raw[SETUP_TOKEN_HYPHEN_AT] === "-") return raw.slice(0, SETUP_TOKEN_LENGTH);
+  return raw;
 }
 
 // ---------------------------------------------------------------------------
@@ -2220,14 +2203,34 @@ export function switchProfile(name: string, now = Date.now()): SwitchResult & { 
   throw new CcAccountError(`Profile "${name}" has no usable login and no live setup-token`);
 }
 
+/** A remote drawing the pool resolves a profile with no share id to the pool
+ *  copy of that email that has a live token. No such copy is null. A laptop,
+ *  and a remote whose fleet store is off, returns the name unchanged. */
+export function poolCopyForAccount(name: string): string | null {
+  if (!isRemoteDevice() || !fleetStoreEnabled()) return name;
+  const profiles = readProfileIndex().profiles;
+  const meta = profiles[name];
+  if (!meta) return null;
+  if (meta.pool_share_id) return name;
+  const want = (meta.email ?? "").trim().toLowerCase();
+  if (!want) return null;
+  return Object.keys(profiles).find((n) => {
+    const p = profiles[n];
+    return !!p.pool_share_id && (p.email ?? "").trim().toLowerCase() === want && !!readAccountTokenValue(n);
+  }) ?? null;
+}
+
 /** Switch the fleet: on the fleet store the store is rewritten and every
  *  running session follows it (putFleetOn), the keychain login untouched;
- *  otherwise switchProfile. The one entry point for the daemon and the CLI. */
+ *  otherwise switchProfile. The one entry point for the daemon and the CLI.
+ *  On a pool host, a profile with no share id lands on its pool copy. */
 export async function switchFleetTo(name: string, now = Date.now()): Promise<SwitchResult & { mode: SwitchMode }> {
   if (!fleetStoreEnabled()) return switchProfile(name, now);
+  const target = poolCopyForAccount(name);
+  if (!target) throw new CcAccountError(`"${name}" has no pool copy of that account on this host`);
   const from = readFleetState()?.profile ?? null;
-  await putFleetOn(name, now);
-  return { from, to: name, toEmail: readProfileIndex().profiles[name]?.email, mode: "fleet" };
+  await putFleetOn(target, now);
+  return { from, to: target, toEmail: readProfileIndex().profiles[target]?.email, mode: "fleet" };
 }
 
 // ---------------------------------------------------------------------------
@@ -3143,7 +3146,8 @@ function accountsPayload(active: ReturnType<typeof activeAccountIdentity>): Acco
         email,
         tier,
         subscription,
-        usage: pool_share_id ? undefined : publishableUsage(usage[uuid || email || ""]),
+        // This machine's probe. The server keeps whichever reading is newer, and the holder's when they tie.
+        usage: publishableUsage(usage[uuid || email || ""]),
         ...(tok ? { token: { stored_at: tok.stored_at, expires_at: tok.expires_at } } : {}),
         ...(setup ? { setup_token: { stored_at: setup.stored_at, expires_at: setup.expires_at } } : {}),
         ...(login_expired_at ? { login_expired_at } : {}),

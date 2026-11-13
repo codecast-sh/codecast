@@ -591,6 +591,7 @@ export async function tellHearingRole(
   role: Doc<"org_roles"> | null,
   row: { _id: Id<"session_decisions">; short_id?: string; question: string; conversation_id?: Id<"conversations"> },
   now: number,
+  silentLead?: string,
 ) {
   if (!role) return [];
   const conv = row.conversation_id ? await ctx.db.get(row.conversation_id) : null;
@@ -600,6 +601,7 @@ export async function tellHearingRole(
     why: "decision",
     since: now,
     decision: row.short_id ?? String(row._id),
+    ...(silentLead ? { silent_lead: silentLead } : {}),
     state: row.question.split("\n")[0].slice(0, 200),
   }, `decision:${row._id}:${role._id}`);
   if (!id) return [];
@@ -648,9 +650,12 @@ export async function rehearSilentCore(ctx: Ctx, decisionId: Id<"session_decisio
   }
   const people = await headOfPeopleIn(ctx, { team_id: row.team_id });
   if (people) candidates.push(people);
+  // The first rung is the lead the session reports to; the role told next
+  // reads that, so it never takes the card for one filed under nobody.
+  const lead: Doc<"org_roles"> | null = await ctx.db.get(hops[0].role_id);
   for (const next of candidates) {
     if (String(next._id) === String(roleId) || !(await reachableRole(ctx, next._id))) continue;
-    if (!(await tellHearingRole(ctx, next, row, now)).length) continue;
+    if (!(await tellHearingRole(ctx, next, row, now, lead?.handle)).length) continue;
     if (!hops.some((h) => String(h.role_id) === String(next._id))) {
       await ctx.db.patch(row._id, { hops: [...hops, { role_id: next._id, at: now }] });
     }

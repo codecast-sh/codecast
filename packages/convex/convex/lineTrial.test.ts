@@ -586,7 +586,7 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
   // The 16:31Z poll failure (ledger verify round 7): nine runs died waiting at their own cards.
   const lostAt = (w: ReturnType<typeof world>, id: string, node: string, kind: "gate" | "card" = "gate") => {
     w.tables.tasks.push(task(id, "in_review", { workflow_run_id: `workflow_runs_${id}`, execution_status: "blocked", execution_concerns: "x" }));
-    w.tables.workflow_runs.push(run(id, "failed", NOW - 300, { runner_device: "dev-mac", current_node_id: node, fail_reason: `no outgoing edge from ${node} (outcome failure, review_verdict none)` }));
+    w.tables.workflow_runs.push(run(id, "failed", NOW - 300, { runner_device: "dev-mac", current_node_id: node, node_statuses: [{ node_id: "investigate", status: "completed" }, { node_id: node, status: "failed" }], fail_reason: `no outgoing edge from ${node} (outcome failure, review_verdict none)` }));
     w.tables.trial_cards.push({ _id: `trial_cards_${id}`, short_id: `tc-${id}`, project_id: TRIAL, task_id: `tasks_${id}`, run_id: `workflow_runs_${id}`, node_id: node, kind, status: "closed", options: [], created_at: NOW - 400 });
     w.tables.signals.push(...findings(id, 22, 8));
   };
@@ -636,7 +636,7 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
   test("a failed run resumes at a named station on its own branch, as a new attempt, inside the spend cap (cast line trial rerun --at)", async () => {
     const w = world(1000);
     w.tables.tasks.find((t: any) => t._id === "tasks_stale").workflow_run_id = "workflow_runs_stale";
-    Object.assign(w.tables.workflow_runs.find((x: any) => x._id === "workflow_runs_stale"), { runner_device: "dev-mac", current_node_id: "implement", fail_reason: "max_visits=3 exceeded on implement" });
+    Object.assign(w.tables.workflow_runs.find((x: any) => x._id === "workflow_runs_stale"), { runner_device: "dev-mac", current_node_id: "implement", node_statuses: [{ node_id: "implement", status: "failed" }], fail_reason: "max_visits=3 exceeded on implement" });
     const before = w.tables.workflow_runs.length;
     expect(await rerunCore(w.ctx, HOST, "ct-stale", NOW, false, "verify")).toEqual({ task: "ct-stale", run_id: "workflow_runs_stale", resumed_at: "verify" });
     expect(w.tables.workflow_runs.find((x: any) => x._id === "workflow_runs_stale")).toMatchObject({ status: "running", current_node_id: "verify", visits_reset_at: NOW, fail_reason: undefined });
@@ -668,7 +668,7 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
   /** A problem paused at its change card: the card's author read `read` and its fix reaches `covers`. */
   function carded(w: ReturnType<typeof world>, id: string, n: number, reach: { read: string[]; covers: string[] }, extra: Record<string, any> = {}) {
     w.tables.tasks.push(task(id, "in_review", { workflow_run_id: `workflow_runs_${id}`, user_id: HOST, team_id: TEAM, task_type: "task", priority: "medium", ...extra }));
-    w.tables.workflow_runs.push(run(id, "paused", NOW - 100, { runner_device: "dev-mac", current_node_id: "decide", gate_node_id: "decide" }));
+    w.tables.workflow_runs.push(run(id, "paused", NOW - 100, { runner_device: "dev-mac", current_node_id: "decide", gate_node_id: "decide", node_statuses: [{ node_id: "card_write", status: "completed" }, { node_id: "decide", status: "running" }] }));
     w.tables.trial_cards.push({ _id: `trial_cards_${id}`, short_id: `tc-${id}`, run_id: `workflow_runs_${id}`, task_id: `tasks_${id}`, project_id: TRIAL, node_id: "decide", kind: "card", status: "waiting", card: { reach }, created_at: NOW - 60, updated_at: NOW - 60 });
     w.tables.signals.push(...findings(id, n, 6));
     w.tables.task_comments = w.tables.task_comments ?? [];

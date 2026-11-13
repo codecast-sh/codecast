@@ -10,6 +10,7 @@ import * as path from "path";
 import { fileURLToPath } from "url";
 import { codecastPath } from "../codecastDir.js";
 import { isPidAlive } from "../workspace/chrome.js";
+import { tookPastStart } from "@codecast/shared/contracts/runStart";
 import type { NodeOutcome, WorkflowGraph, WorkflowRunState } from "./types";
 
 // ─── The runner's claim on a run ──────────────────────────
@@ -250,8 +251,7 @@ export interface ResumeRow {
 
 /** A row is mid-run when it is live and a runner reported past its start. */
 export function isMidRun(row: ResumeRow): boolean {
-  return (row.status === "running" || row.status === "paused") && !!row.current_node_id
-    && (row.node_statuses ?? []).some((n) => n.node_id !== row.current_node_id || n.status !== "pending");
+  return (row.status === "running" || row.status === "paused") && tookPastStart(row);
 }
 
 export interface ResumePoint {

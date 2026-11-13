@@ -528,6 +528,15 @@ describe("requestAccountSwitch scoped to conversation ids", () => {
     });
     expect(f.device.cc_auto_switch_state.last_decision.at).toBe(f.device.cc_auto_switch_state.last_action_at);
   });
+  test("a continue of the whole fleet is not cut off at 30", async () => {
+    const f = fixture();
+    const rows = Array.from({ length: 31 }, (_, i) => f.conversation(`conversations_b${i}`, "limit"));
+    f.tables.conversations.push(...rows);
+    const res = await (requestAccountSwitch as any)._handler({ db: f.db, auth }, {});
+    expect(res.conversations).toBe(31);
+    const args = JSON.parse(f.tables.daemon_commands[0].args);
+    expect([...(args.conversation_ids ?? []), ...(args.follow_ids ?? [])]).toHaveLength(31);
+  });
   test("a named worker is acted on, an unblocked id is ignored", async () => {
     const f = fixture();
     const worker = f.conversation("conversations_worker", "limit", { is_subagent: true });

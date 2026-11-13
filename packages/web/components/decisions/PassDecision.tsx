@@ -10,6 +10,7 @@ import { useRolesAndPeopleOptions } from "../../hooks/useRolesAndPeopleOptions";
 import { FilterOptionList } from "../FilterDropdown";
 import { KeyCap } from "../KeyboardShortcutsHelp";
 import { modernButton } from "../ui/modernLook";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 type Step = { kind: "pick" } | { kind: "note"; to: { kind: "user" | "role"; id: string; label: string } } | { kind: "escalate" };
 
@@ -38,7 +39,7 @@ export function PassDecision({ decisionId, open, onOpenChange, onPassed, keys = 
   const passDecision = useInboxStore((s) => s.passDecision);
   const escalateDecision = useInboxStore((s) => s.escalateDecision);
   const orgPeople = useInboxStore((s) => windowOrgTree(s)?.people);
-  const members = useInboxStore((s) => s.teamMembers);
+  const members = useInboxStore(teamMembersOf);
 
   const options = useMemo(() => [
     ...people.filter((p) => p.key !== meId && holderKey !== `user:${p.key}`).map((p) => ({ ...p, section: "People" })),

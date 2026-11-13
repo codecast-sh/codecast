@@ -56,7 +56,7 @@ function WaitingSessionLine({ waiting: w, firedAt, words, wordsClass = "text-sol
   return (
     <div className="mx-3 mb-1.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12px]" data-waiting-session={w.short_id}>
       <EntityIdPill shortId={w.short_id} compact />
-      {w.role && <span className="text-sol-text-dim">@{w.role}</span>}
+      {(w.role ?? w.silent_lead) && <span className="text-sol-text-dim">@{w.role ?? w.silent_lead}</span>}
       <span className={wordsClass} title={w.since ? formatFullTimestamp(w.since) : undefined}>{words ?? waitingWords(w, firedAt)}</span>
       {w.state && <span className="basis-full truncate text-sol-text" title={w.state}>{w.state}</span>}
     </div>

@@ -242,7 +242,7 @@ describe("orgLine admission (LE6)", () => {
     test("a host an operator holds out of the line takes no new run and no queued resume, whatever its slots say, until the hold is released", async () => {
       // Oct 27: Cam's union-shared box had no Codex for the Review hand, so every run that reached Review there failed.
       const held = { why: "no Codex for Review (ct-74380)", at: NOW - 1_000 };
-      const queuedThere = { _id: "workflow_runs_q1", user_id: HOST, status: "failed", org_role_id: ROLE, task_id: "tasks_q1", runner_device: "h1", project_path: "/home/ubuntu/h1/growth", current_node_id: "review", fail_reason: "hand could not start", node_statuses: [], resume_queued: { at: "review", by: HOST, since: NOW - 2_000 } };
+      const queuedThere = { _id: "workflow_runs_q1", user_id: HOST, status: "failed", org_role_id: ROLE, task_id: "tasks_q1", runner_device: "h1", project_path: "/home/ubuntu/h1/growth", current_node_id: "review", fail_reason: "hand could not start", node_statuses: [{ node_id: "review", status: "failed" }], resume_queued: { at: "review", by: HOST, since: NOW - 2_000 } };
       const { ctx, tables } = fixtures({
         role: caps({ hands_per_day: 100 }),
         extra: { initiatives, tasks: [...causes(4), cause({ _id: "tasks_q1", short_id: "ct-q1", status: "in_review" })], devices: [laptop, host("h1", 3, { line_hold: held }), host("h2", 2)], workflow_runs: [queuedThere] },
@@ -260,7 +260,7 @@ describe("orgLine admission (LE6)", () => {
     test("a held live flow still resumes a queued run, since a hold is for the flow's new runs; a flow switched off resumes nothing", async () => {
       // Oct 29: a Prove hand held Union's flow for two days on a spent eval wallet, and the approved work queued to
       // resume waited behind it along with every new problem.
-      const queuedRun = { _id: "workflow_runs_q1", user_id: HOST, status: "failed", org_role_id: ROLE, task_id: "tasks_q1", runner_device: "h1", project_path: "/home/ubuntu/h1/growth", current_node_id: "card_write", fail_reason: "card_write is waiting on a person", node_statuses: [], resume_queued: { at: "eval", by: HOST, since: NOW - 2_000 } };
+      const queuedRun = { _id: "workflow_runs_q1", user_id: HOST, status: "failed", org_role_id: ROLE, task_id: "tasks_q1", runner_device: "h1", project_path: "/home/ubuntu/h1/growth", current_node_id: "card_write", fail_reason: "card_write is waiting on a person", node_statuses: [{ node_id: "card_write", status: "failed" }], resume_queued: { at: "eval", by: HOST, since: NOW - 2_000 } };
       const flow = (over: Record<string, any>) => ({ _id: "live_flows_1", workspace: `team:${TEAM}`, team_id: TEAM, workflow_id: "workflows_spine", on: true, changed_by: HOST, changed_at: 1, created_at: 1, ...over });
       const setup = (over: Record<string, any>) =>
         fixtures({
@@ -280,7 +280,7 @@ describe("orgLine admission (LE6)", () => {
     test("a failed run queued to resume goes back on its own host once that host has a slot, ahead of new starts", async () => {
       const queued = (id: string, device: string, since: number) => ({
         _id: `workflow_runs_${id}`, user_id: HOST, status: "failed", org_role_id: ROLE, task_id: `tasks_${id}`, runner_device: device,
-        project_path: `/home/ubuntu/${device}/growth`, current_node_id: "build", fail_reason: "max_visits=3 exceeded on build", node_statuses: [],
+        project_path: `/home/ubuntu/${device}/growth`, current_node_id: "build", fail_reason: "max_visits=3 exceeded on build", node_statuses: [{ node_id: "build", status: "failed" }],
         resume_queued: { at: "build", by: HOST, since },
       });
       const { ctx, tables } = fixtures({
@@ -306,6 +306,36 @@ describe("orgLine admission (LE6)", () => {
       const next = await sweepCore(ctx, NOW + 60_000);
       expect(next.resumed).toEqual([{ run_id: "workflow_runs_q2", device: "h2" }]);
       expect(next.started.filter((s) => s.place?.device === "h2")).toEqual([]);
+      expect(tables.daemon_commands.filter((c) => c.target_device_id === "h2")).toHaveLength(1);
+    });
+
+    test("a run a person started by hand, outside the role's line, queued to resume, goes back on its own host once that host has a slot", async () => {
+      // Nov 13: ct-57876's run, started by hand for the Calling lead, was queued to resume on its host; the sweep
+      // passed it over every time for want of a role, and it waited with nothing to say why.
+      const byHand = {
+        _id: "workflow_runs_hand", user_id: HOST, status: "failed", task_id: "tasks_hand", runner_device: "h2", project_path: "/home/ubuntu/h2/growth",
+        workspace: `team:${TEAM}`, team_id: TEAM, current_node_id: "queue", fail_reason: "Stopped: the problem was closed by a person",
+        node_statuses: [{ node_id: "triage", status: "completed" }, { node_id: "queue", status: "running" }], resume_queued: { at: "queue", by: HOST, since: NOW - 1_000 },
+      };
+      const { ctx, tables } = fixtures({
+        role: caps({ hands_per_day: 100 }),
+        extra: {
+          initiatives,
+          tasks: [...causes(2), cause({ _id: "tasks_hand", short_id: "ct-hand", status: "open" })],
+          devices: [laptop, host("h1", 2), host("h2", 1)],
+          workflow_runs: [{ ...byHand }, ...working(1, { runner_device: "h2", project_path: "/home/ubuntu/h2/growth" })],
+        },
+      });
+      // h2 is full: the run waits for its own host, and new problems go to h1.
+      const res = await sweepCore(ctx, NOW);
+      expect(res.resumed ?? []).toEqual([]);
+      expect(res.started.map((s) => s.place?.device)).toEqual(["h1", "h1"]);
+      expect(tables.workflow_runs.find((r) => r._id === "workflow_runs_hand")!.status).toBe("failed");
+      // h2's run finishes: the run started by hand resumes there, at the station it was queued for.
+      tables.workflow_runs.find((r) => r._id === "workflow_runs_w0")!.status = "completed";
+      const next = await sweepCore(ctx, NOW + 60_000);
+      expect(next.resumed).toEqual([{ run_id: "workflow_runs_hand", device: "h2" }]);
+      expect(tables.workflow_runs.find((r) => r._id === "workflow_runs_hand")).toMatchObject({ status: "running", current_node_id: "queue" });
       expect(tables.daemon_commands.filter((c) => c.target_device_id === "h2")).toHaveLength(1);
     });
 

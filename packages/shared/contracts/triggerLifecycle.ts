@@ -10,6 +10,15 @@ import { roleFocusBlock } from "./rolePlaybook";
 // shows (the conversation's trigger block).
 export const STASHED_RUN_NOTE = `\n\nThis session is STASHED: the user will not see this run or its output. End your turn with cast state --status done|dormant to stay quietly out of their inbox; declare --status blocked ONLY if a human must act — that returns the session to their inbox.`;
 
+// A decision that climbed past a silent lead (sessionDecisions.rehearSilent)
+// wakes the next role with the same needs-input trigger, whose prompt opens
+// "A session that reports to you". Said first, the fact the frame carries:
+// whose session it is and why its card is here.
+function silentLeadNote(waiting: WaitingSession | null | undefined): string | null {
+  const lead = waiting?.silent_lead;
+  return lead ? `This session reports to @${lead}. Its decision comes to you because @${lead} has written nothing on it for an hour.` : null;
+}
+
 /** A trigger run's body as a person reads it: without the agent-only note. */
 export function withoutStashedRunNote(body: string): string {
   const i = body.indexOf(STASHED_RUN_NOTE.trim());
@@ -108,7 +117,7 @@ export function triggerRunFrame(
   const focus = orgReviewFocusOf(task.requested_run_focus);
   // A role's own focus for its check (org-staffing.md S38) follows the
   // routine's prompt: the prompt is the product's, the focus is the role's.
-  const body = [focus?.prompt, task.prompt, roleFocusBlock(task.role_focus), pendingEventsBlock(task.pending_events), precheckMessageBlock(task.precheck_message), triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n") + (read.stashed ? STASHED_RUN_NOTE : "");
+  const body = [silentLeadNote(read.waiting), focus?.prompt, task.prompt, roleFocusBlock(task.role_focus), pendingEventsBlock(task.pending_events), precheckMessageBlock(task.precheck_message), triggerLifecycleInstructions(task)].filter(Boolean).join("\n\n") + (read.stashed ? STASHED_RUN_NOTE : "");
   return formatScheduledTask({
     title: task.title || "",
     task_id: String(task._id),

@@ -1013,6 +1013,11 @@ describe("a decision goes up the reporting line", () => {
     const next = await rehearSilentCore(ctx, silent[0].args.decision_id, "org_roles_lead" as any, NOW + LEAD_ACT_DEADLINE_MS);
     expect(next).toBe("org_roles_head");
     expect(linesIn(tables, "conversations_head").length).toBe(1);
+    // The next lead reads whose session it is, so it never refiles one that
+    // was filed all along (sd-3125, 2026-11-13).
+    const wake = parseScheduledTask(linesIn(tables, "conversations_head")[0]);
+    expect(wake?.waiting).toMatchObject({ why: "decision", decision: "sd-1", silent_lead: "growth" });
+    expect(wake?.body).toStartWith("This session reports to @growth. Its decision comes to you because @growth has written nothing on it for an hour.");
     const r = await recommendCore(ctx, { userId: HOST }, { decision_id: "sd-1", session_id: "sess-head", recommendation: 0, note: "the lead below went quiet" });
     expect(r.error).toBeUndefined();
     expect(tables.session_decisions[0].hops.find((h: any) => h.role_id === "org_roles_head")?.recommendation).toBe(0);

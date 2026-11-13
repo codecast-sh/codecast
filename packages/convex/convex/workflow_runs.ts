@@ -10,6 +10,7 @@ import { askCore, finalizeAnswer, joinStack, normalizeVerdict, personMayResolve,
 import { createStackCore } from "./decisionStacks";
 import { projectLeadRole } from "./lib/orgAccess";
 import { CARD_GATE_NODE_ID, costParts, lineRunOutcome, mergeLeft, type ChangeCard } from "@codecast/shared/contracts/changeCard";
+import { tookPastStart } from "@codecast/shared/contracts/runStart";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { canAccessTask, canAccessPlan, computeWorkspaceKey, requireAccessiblePlan, requireAccessibleTask, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 import { patchTask } from "./lib/taskWrite";
@@ -1580,9 +1581,10 @@ export async function failStrandedPendingRuns(ctx: Ctx, userId: Id<"users">, now
     .filter((r: any) => r.user_id === userId && now - r.updated_at > STRANDED_PENDING_MS);
   const failed: string[] = [];
   for (const run of stale) {
-    // The run's command is queued with the run, so it executed after the run was created.
+    // The run's command is queued with the run, so it executed after the run was created, or after the resume that
+    // put it back to pending as a new attempt (resumeRunAt): a command its first launch took does not count again.
     const commands = await ctx.db.query("daemon_commands")
-      .withIndex("by_user_pending", (q: any) => q.eq("user_id", userId).gte("executed_at", run.created_at))
+      .withIndex("by_user_pending", (q: any) => q.eq("user_id", userId).gte("executed_at", run.visits_reset_at ?? run.created_at))
       .take(500);
     const taken = commands.some((c: any) => {
       if (c.command !== "run_workflow" || !c.args) return false;
@@ -1624,13 +1626,18 @@ export async function resumeRunCore(ctx: Ctx, userId: Id<"users">, runId: Id<"wo
  * A run goes back to `node` and its machine's daemon drives it from there, keeping what it made. Nothing it asked
  * stays on the row, a problem its failure blocked is unblocked, and `fresh_branch` has the machine read the line's
  * graph as it is now. A decision the run waited on is the caller's to settle after, once the run no longer waits on it.
+ * A run no runner took past its start made nothing to keep, and no runner continues it (runStart.ts): it goes back to
+ * pending, as a new run is, a new attempt its machine starts from the top. `from_start` says it did.
  */
-export async function resumeRunAt(ctx: Ctx, _by: Id<"users">, run: Doc<"workflow_runs">, node: string, now: number, opts: { newAttempt?: boolean } = {}): Promise<void> {
-  await ctx.db.patch(run._id, { status: "running", current_node_id: node, fail_reason: undefined, fresh_branch: true, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, gate_decision_id: undefined, resume_queued: undefined, ...(opts.newAttempt ? { visits_reset_at: now } : {}), updated_at: now });
+export async function resumeRunAt(ctx: Ctx, _by: Id<"users">, run: Doc<"workflow_runs">, node: string, now: number, opts: { newAttempt?: boolean } = {}): Promise<{ from_start: boolean }> {
+  const fromStart = !tookPastStart(run);
+  const at = fromStart ? { status: "pending" as const, current_node_id: undefined } : { status: "running" as const, current_node_id: node };
+  await ctx.db.patch(run._id, { ...at, fail_reason: undefined, fresh_branch: true, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, gate_decision_id: undefined, resume_queued: undefined, ...(opts.newAttempt || fromStart ? { visits_reset_at: now } : {}), updated_at: now });
   const task = run.task_id ? await ctx.db.get(run.task_id) : null;
   if (task?.execution_status === "blocked") await patchTask(ctx, task, { execution_status: undefined, execution_concerns: undefined });
   // The machine's daemon takes commands for its own account: the run's, whoever asked for the resume.
   await queueRunOnDaemon(ctx, run.user_id, run._id, { device: run.runner_device!, now });
+  return { from_start: fromStart };
 }
 
 /**

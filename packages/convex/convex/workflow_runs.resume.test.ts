@@ -131,7 +131,7 @@ describe("resumeFailedRunCore (cast workflow resume)", () => {
 
   test("a failed run goes on from the named station on its machine, as a new attempt, its problem unblocked", async () => {
     const { ctx, tables } = await failed();
-    expect(await resumeFailedRunCore(ctx, HOST, RUN, "verify", {}, NOW + 1)).toEqual({ run_id: RUN, task: "ct-9", resumed_at: "verify", queued: false });
+    expect(await resumeFailedRunCore(ctx, HOST, RUN, "verify", {}, NOW + 1)).toEqual({ run_id: RUN, task: "ct-9", resumed_at: "verify", queued: false, from_start: false });
     expect(tables.workflow_runs[0]).toMatchObject({ status: "running", current_node_id: "verify", visits_reset_at: NOW + 1, fresh_branch: true });
     expect(tables.workflow_runs[0].fail_reason).toBeUndefined();
     expect(tables.tasks[0].execution_status).toBeUndefined();

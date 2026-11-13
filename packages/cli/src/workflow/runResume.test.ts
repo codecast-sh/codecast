@@ -488,6 +488,8 @@ describe("workflow/runResume resumePoint", () => {
 
   test("a row stands mid-run once a runner reported past its start, and not before", () => {
     expect(isMidRun({ status: "pending", node_statuses: [] })).toBe(false);
+    // Running at a station no runner ever reported on: run-daemon refuses it, so a resume leaves such a run pending.
+    expect(isMidRun({ status: "running", current_node_id: "bind", node_statuses: [] })).toBe(false);
     expect(isMidRun({ status: "running", current_node_id: "decide", node_statuses: [{ node_id: "start", status: "completed" }] })).toBe(true);
     expect(isMidRun({ status: "completed", current_node_id: "exit", node_statuses: [{ node_id: "exit", status: "completed" }] })).toBe(false);
     expect(resumePoint(graph(), { status: "running", current_node_id: "gone" }, null)).toBeNull();

@@ -384,6 +384,10 @@ export interface WaitingSession {
   role?: string;
   /** The decision it posted (sd-N), when that is what it waits on. */
   decision?: string;
+  /** The lead the session reports to, when the wake reaches another role
+   *  because that lead wrote nothing on the decision for an hour
+   *  (sessionDecisions.rehearSilent). */
+  silent_lead?: string;
   /** The first line of its pinned state, or the decision's question. */
   state: string;
 }
@@ -470,7 +474,7 @@ export function formatScheduledTask(f: ScheduledTaskFrame): string {
   const head = tagAttrs([["title", f.title], ["task-id", f.task_id], ["trigger", f.trigger], ["event", f.event], ["focus", f.focus]]);
   const w = f.waiting;
   const waiting = w
-    ? `\n<waiting-session ${tagAttrs([["id", w.short_id], ["title", w.title], ["why", w.why], ["since", String(w.since)], ["role", w.role], ["decision", w.decision]])}>${w.state.trim()}</waiting-session>\n\n`
+    ? `\n<waiting-session ${tagAttrs([["id", w.short_id], ["title", w.title], ["why", w.why], ["since", String(w.since)], ["role", w.role], ["decision", w.decision], ["silent-lead", w.silent_lead]])}>${w.state.trim()}</waiting-session>\n\n`
     : "";
   const c = f.change;
   const change = c
@@ -530,6 +534,7 @@ export function parseScheduledTask(rawContent: string | null | undefined): Sched
       since: Number(tagAttr(w[1], "since")) || 0,
       ...(tagAttr(w[1], "role") ? { role: tagAttr(w[1], "role") } : {}),
       ...(tagAttr(w[1], "decision") ? { decision: tagAttr(w[1], "decision") } : {}),
+      ...(tagAttr(w[1], "silent-lead") ? { silent_lead: tagAttr(w[1], "silent-lead") } : {}),
       state: w[2].trim(),
     };
   }

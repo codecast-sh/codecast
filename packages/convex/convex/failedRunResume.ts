@@ -5,6 +5,7 @@
 import { ConvexError, v } from "convex/values";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { endedFailing, endedUnmerged } from "@codecast/shared/contracts/changeCard";
+import { tookPastStart } from "@codecast/shared/contracts/runStart";
 import { mutation } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
@@ -39,14 +40,16 @@ export async function resumeFailedRunCore(ctx: Ctx, userId: Id<"users">, runId: 
   // A run reads the flow versions it started on, resume included; --current-flow moves it onto the current ones first
   // (a queued resume moves when it resumes, onto the versions current then).
   if (opts.currentFlow) await repinRunForResume(ctx, run, node, { check: opts.check || opts.queue });
-  if (opts.check) return { run_id: run._id, task: task?.short_id ?? null, resumed_at: node, queued: false };
+  // A run no runner took past its start starts again from the top, whatever station is named (resumeRunAt).
+  const from_start = !tookPastStart(run);
+  if (opts.check) return { run_id: run._id, task: task?.short_id ?? null, resumed_at: node, queued: false, from_start };
   // --queue: the line's sweep resumes it once its own machine has a free run slot, ahead of new starts (orgLine.planSweep).
   if (opts.queue) {
     await ctx.db.patch(run._id, { resume_queued: { at: node, ...(opts.currentFlow ? { current_flow: true } : {}), by: userId, since: now }, updated_at: now });
-    return { run_id: run._id, task: task?.short_id ?? null, resumed_at: node, queued: true };
+    return { run_id: run._id, task: task?.short_id ?? null, resumed_at: node, queued: true, from_start };
   }
   await resumeRunAt(ctx, userId, run, node, now, { newAttempt: true });
-  return { run_id: run._id, task: task?.short_id ?? null, resumed_at: node, queued: false };
+  return { run_id: run._id, task: task?.short_id ?? null, resumed_at: node, queued: false, from_start };
 }
 
 /**

@@ -14,6 +14,17 @@ describe("the trigger run frame", () => {
     expect(parseScheduledTask(text)).toEqual(frame);
   });
 
+  test("a decision that climbed past its silent lead names that lead, and reads back whole", () => {
+    const frame: ScheduledTaskFrame = {
+      title: "A session under you needs input", task_id: "t1", trigger: "tr-9", event: "session_needs_input",
+      role: null,
+      waiting: { short_id: "jx7hand", title: "Fix the parser", why: "decision", since: 5, decision: "sd-4", silent_lead: "agent-quality", state: "Ship the fix?" },
+      body: "A session that reports to you is waiting.",
+    };
+    expect(formatScheduledTask(frame)).toContain('silent-lead="agent-quality"');
+    expect(parseScheduledTask(formatScheduledTask(frame))).toEqual(frame);
+  });
+
   test("a role with no scope is told it runs its routine; a run with no role has no card", () => {
     const text = formatScheduledTask({ title: "Check X's area", role: { handle: "x", name: "X", reports_to: "Ada", scope: [], goals: [] }, body: "Check." });
     expect(text).toContain("Looks after no area of its own");

@@ -400,11 +400,21 @@ const CLIENT_AUTH_ERROR_RE =
 const CODEX_PLAN_WINDOW_BODY_RE =
   /you['’]ve hit your usage limit\b[\s\S]{0,240}?purchase more credits/i;
 
+// The headless SDK (the claude-sdk backend) leads an authentication_failed
+// turn with its own words before the provider's: "Failed to authenticate. API
+// Error: 403 Attention Required! | Cloudflare", "Failed to authenticate. API
+// Error: 401 OAuth access token has expired.", "Failed to authenticate: OAuth
+// token revoked." Read with the lead, none was a banner, so no row parked and
+// a fleet switch revived nothing: 39 Union line sessions sat on the 403 for
+// three hours after the fleet had moved to a working account (2026-11-13).
+// Without it, the rules below read what the interactive CLI shows.
+const SDK_AUTH_LEAD_RE = /^failed to authenticate[.:]\s*(?=api error\b|oauth\b)/i;
+
 export function classifyApiErrorBanner(
   content: string | null | undefined,
 ): ApiErrorBannerKind | null {
   if (!content) return null;
-  const trimmed = content.trim();
+  const trimmed = content.trim().replace(SDK_AUTH_LEAD_RE, "");
   if (trimmed.startsWith(SAFETY_BANNER_PREFIX) || isCodexSafetyError({ message: trimmed })) return "safety";
   if (/^api error:?\s*\(?403\b/i.test(trimmed) && /"code"\s*:\s*"misalignment_policy_violation"/.test(trimmed)) return "safety";
   // Marked client-error messages (opencode/pi) — gate on the exact marker, then

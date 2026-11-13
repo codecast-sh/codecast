@@ -519,18 +519,24 @@ const QUEUED_RESUMES_READ = 200;
  * machine has a free slot. They plan before any new start in the pass and take its slots: finishing work comes before
  * starting it. A team whose live flow is off resumes nothing, as it starts nothing; a hold is for the flow's new runs, so
  * work queued to resume goes on through one. Only a machine that offers the line's checkout (a pool slot) takes a
- * queued resume.
+ * queued resume. A run a person started by hand, outside any role's line, resumes on its own machine all the same,
+ * counted from that machine's slot (queuedPlace).
  */
 async function planQueuedResumes(ctx: Ctx, now: number, roles: any[], loads: LineLoads, featureOn: Map<string, boolean>, flowsByTeam: Map<string, any>): Promise<Array<{ run_id: string; device: string }>> {
   const queued: any[] = await ctx.db.query("workflow_runs").withIndex("by_resume_queued", (q: any) => q.gt("resume_queued.since", 0)).take(QUEUED_RESUMES_READ);
   const out: Array<{ run_id: string; device: string }> = [];
   for (const run of queued) {
     if (out.length >= MAX_STARTS_PER_SWEEP) break;
-    const role = roles.find((r) => String(r._id) === String(run.org_role_id));
-    if (!role || role.status !== "active" || !run.runner_device) continue;
-    const flow = flowsByTeam.get(String(role.team_id ?? ""));
+    if (!run.runner_device) continue;
+    const role = run.org_role_id ? roles.find((r) => String(r._id) === String(run.org_role_id)) : null;
+    if (run.org_role_id && role?.status !== "active") continue;
+    const flow = flowsByTeam.get(String((role ?? run).team_id ?? ""));
     if (flow && !flow.on) continue;
-    if (!(await linesRunIn(ctx, role, featureOn))) continue;
+    if (!(await linesRunIn(ctx, role ?? { team_id: run.team_id, scope_user_id: run.team_id ? undefined : run.user_id }, featureOn))) continue;
+    if (!role) {
+      if (!out.some((o) => o.device === run.runner_device) && (await slotStillFree(ctx, null, queuedPlace(run)))) out.push({ run_id: String(run._id), device: run.runner_device });
+      continue;
+    }
     const load = await lineLoadFor(ctx, role, now, loads, roles);
     const slot = load.pool?.slots.find((s) => s.device === run.runner_device);
     if (!slot || slot.runs - slot.working <= 0) continue;
@@ -541,12 +547,15 @@ async function planQueuedResumes(ctx: Ctx, now: number, roles: any[], loads: Lin
   return out;
 }
 
+/** A queued run's own machine and checkout; with no role to seat it, counted for the run's owner. */
+const queuedPlace = (run: any): RunPlace => ({ device: run.runner_device, ...(run.org_role_id ? {} : { user: String(run.user_id) }), project_path: run.project_path ?? "" });
+
 /** One planned resume, checked again: still queued, and its machine's slot still free (slotStillFree). */
 export async function resumePlanned(ctx: Ctx, runId: string, now = Date.now()): Promise<string | null> {
   const run = await ctx.db.get(runId);
   const role = run?.org_role_id ? await ctx.db.get(run.org_role_id) : null;
-  if (!run?.resume_queued || !run.runner_device || !role) return null;
-  if (!(await slotStillFree(ctx, role, { device: run.runner_device, project_path: run.project_path ?? "" }))) return null;
+  if (!run?.resume_queued || !run.runner_device || (run.org_role_id && !role)) return null;
+  if (!(await slotStillFree(ctx, role, queuedPlace(run)))) return null;
   return resumeQueuedRun(ctx, run._id, now);
 }
 
