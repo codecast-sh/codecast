@@ -14,6 +14,7 @@ import {
   ArrowDownToLine,
   ArrowUpToLine,
   Bold,
+  LayoutGrid,
   Copy,
   CornerDownRight,
   ExternalLink,
@@ -43,6 +44,7 @@ export type BarAction =
   | { type: "set"; fields: Record<string, any>; kinds?: string[] }
   | { type: "align"; mode: AlignMode }
   | { type: "distribute"; axis: "h" | "v" }
+  | { type: "tidy" }
   | { type: "group" }
   | { type: "ungroup" }
   | { type: "order"; where: "front" | "back" }
@@ -141,6 +143,8 @@ export const BoardSelectionBar = memo(function BoardSelectionBar({ selected, at,
           {n >= 3 && <span className="board-bar-sep" />}
           {n >= 3 && <Btn label="Space evenly across" onClick={() => act({ type: "distribute", axis: "h" })}><AlignHorizontalSpaceAround {...I} /></Btn>}
           {n >= 3 && <Btn label="Space evenly down" onClick={() => act({ type: "distribute", axis: "v" })}><AlignVerticalSpaceAround {...I} /></Btn>}
+          <span className="board-bar-sep" />
+          <Btn label="Tidy up into a grid" onClick={() => act({ type: "tidy" })}><LayoutGrid {...I} /></Btn>
         </div>
       )}
 

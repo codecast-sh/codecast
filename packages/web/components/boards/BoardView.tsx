@@ -22,11 +22,13 @@ import {
   stickyIconHeight,
   templateOps,
   type BoardTemplate,
+  clearOffset,
   cloneOps,
   connectorGeometry,
   elbowObstacles,
   frameAround,
   distributeBoxes,
+  tidyBoxes,
   elementBounds,
   elementBox,
   intersects,
@@ -46,6 +48,7 @@ import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { KeyCap } from "../KeyCap";
 import { BoardElementView, ConnectorView } from "./BoardElements";
 import { BOARD_ASK_SLOT, MOD, SHIFT, editField } from "./boardModel";
+import { plainText } from "./boardMarks";
 import { BoardContextMenu, type BoardMenuItem, type BoardMenuPayload } from "./BoardContextMenu";
 import { useContextMenu } from "../ui/context-menu";
 import { isMac } from "../../shortcuts";
@@ -276,6 +279,11 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
         if (el?.kind === "text" && !String(el.text ?? "").trim()) live.apply([{ k: editing, del: true }], { undoable: false });
         // A blur that lands after Tab opened the next sticky must not close that one.
         setEditing((cur) => (cur === editing ? null : cur));
+        // Esc or Enter out of the text: the keyboard goes back to the board, not the page. A click elsewhere keeps its own focus.
+        requestAnimationFrame(() => {
+          const a = document.activeElement;
+          if (!a || a === document.body) cam.rootRef.current?.focus({ preventScroll: true });
+        });
       },
     };
   }, [editing, live]);
@@ -352,7 +360,18 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   const duplicate = () => {
     if (!selectedEls.length) return;
     const els = withFrameContents(selection, byKeyRef.current).map((k) => byKeyRef.current.get(k)!).filter(Boolean);
-    const { ops, map } = cloneOps(els, 24, 24, nextZ({ elements: allEls() }), (k) => byKeyRef.current.has(k));
+    // The copy lands beside the original (a gap to its right), or the nearest clear spot from there,
+    // so neither covers the other or a neighbour.
+    const box = unionBox(els.filter((e) => e.kind !== "connector").map(elementBounds));
+    let dx = 24, dy = 24;
+    if (box) {
+      const inFrame = new Set(els.map((e) => e.key));
+      const taken = allEls().filter((e) => !inFrame.has(e.key) && e.kind !== "frame" && e.kind !== "connector" && e.kind !== "pen").map(elementBounds).concat(box);
+      const off = clearOffset({ ...box, x: box.x + box.w + 24 }, taken, 40);
+      dx = Math.round(box.w + 24 + off.x);
+      dy = Math.round(off.y);
+    }
+    const { ops, map } = cloneOps(els, dx, dy, nextZ({ elements: allEls() }), (k) => byKeyRef.current.has(k));
     live.apply(ops);
     setSelection(selection.map((k) => map.get(k)).filter((k): k is string => !!k));
   };
@@ -371,6 +390,9 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
         return;
       case "align":
         live.apply([...alignBoxes(boxes, a.mode)].map(([k, p]) => ({ k, set: { x: p.x, y: p.y } })));
+        return;
+      case "tidy":
+        live.apply([...tidyBoxes(boxes)].map(([k, p]) => ({ k, set: { x: p.x, y: p.y } })));
         return;
       case "distribute":
         live.apply([...distributeBoxes(boxes, a.axis)].map(([k, p]) => ({ k, set: { x: p.x, y: p.y } })));
@@ -585,6 +607,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
       paste,
       { label: "Duplicate", keys: [MOD, "D"], run: duplicate },
       "sep",
+      ...(selectedEls.length > 1 ? [{ label: "Tidy up", run: () => runBar({ type: "tidy" }) }] : []),
       { label: "Bring to front", keys: ["]"], run: () => runBar({ type: "order", where: "front" }) },
       { label: "Send to back", keys: ["["], run: () => runBar({ type: "order", where: "back" }) },
       ...(selectedEls.length > 1 && !grouped ? [{ label: "Group", keys: [MOD, "G"], run: () => runBar({ type: "group" }) }] : []),
@@ -660,7 +683,7 @@ export default function BoardView({ doc, live, selection, setSelection, mode, sn
   const announce = useMemo(() => {
     if (selectedEls.length !== 1) return selectedEls.length ? `${selectedEls.length} selected` : "";
     const e = selectedEls[0];
-    const words = String(e.text ?? e.title ?? e.label ?? e.ref ?? e.emoji ?? "").replace(/\s+/g, " ").slice(0, 120);
+    const words = plainText(String(e.text ?? e.title ?? e.label ?? e.ref ?? e.emoji ?? "")).replace(/\s+/g, " ").slice(0, 120);
     return `${e.kind}${e.shape ? ` ${e.shape}` : ""}${words ? `: ${words}` : ""}`;
   }, [selectedEls]);
 

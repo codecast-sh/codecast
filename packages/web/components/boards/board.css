@@ -343,8 +343,8 @@ html.light .board-root {
 
 /* ── Comment pins ──────────────────────────────────────────────────────── */
 
-/* A pin on an element's face stays small and see-through until hovered or open, so the words under it read. */
-.board-pin.is-on-face:not(.is-open):not(:hover) { opacity: 0.55; transform: translate(0, -100%) scale(calc(0.72 / var(--z))); }
+/* A pin on an element's face stays small until hovered or open, so it covers few of the words under it. */
+.board-pin.is-on-face:not(.is-open):not(:hover) { transform: translate(0, -100%) scale(calc(0.72 / var(--z))); }
 .board-pin {
   position: absolute;
   transform-origin: 0 100%;
@@ -352,9 +352,10 @@ html.light .board-root {
   width: 30px;
   height: 30px;
   border-radius: 15px 15px 15px 3px;
-  background: var(--sol-card);
-  box-shadow: 0 0 0 1.5px var(--sol-blue), var(--board-chrome-shadow);
-  color: var(--sol-text);
+  /* A solid bubble with a light ring reads on any surface: the canvas, a dark shape, a pastel sticky. */
+  background: var(--sol-blue);
+  box-shadow: 0 0 0 2px var(--sol-bg), var(--board-chrome-shadow);
+  color: white;
   font-size: var(--fs-mark);
   font-weight: 650;
   display: flex;
@@ -363,8 +364,8 @@ html.light .board-root {
   cursor: pointer;
   transition: box-shadow 120ms ease-out;
 }
-.board-pin.is-agent { box-shadow: 0 0 0 1.5px var(--sol-violet), var(--board-chrome-shadow); }
-.board-pin.is-open { box-shadow: 0 0 0 3px var(--sol-blue), var(--board-chrome-shadow); }
+.board-pin.is-agent { background: var(--sol-violet); }
+.board-pin.is-open { box-shadow: 0 0 0 2px var(--sol-bg), 0 0 0 4px var(--sol-blue), var(--board-chrome-shadow); }
 .board-pin em {
   position: absolute;
   top: -5px;
@@ -375,8 +376,10 @@ html.light .board-root {
   height: 15px;
   padding: 0 3px;
   border-radius: 8px;
-  background: var(--sol-blue);
-  color: #fff;
+  /* The reply count: a light chip on the solid pin. */
+  background: var(--sol-card);
+  color: var(--sol-text);
+  box-shadow: 0 0 0 1.5px var(--sol-bg);
   display: flex;
   align-items: center;
   justify-content: center;

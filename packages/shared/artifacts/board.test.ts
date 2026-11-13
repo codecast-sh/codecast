@@ -504,3 +504,19 @@ describe("connector labels", () => {
     expect(labelSpot({ points: [{ x: 0, y: 0 }, { x: 90, y: 0 }], mid: { x: 45, y: 0 } }, "after email verify")).toEqual({ x: 45, y: -20 });
   });
 });
+
+describe("tidy up", () => {
+  test("a pile becomes a near-square grid from its top-left, in reading order", async () => {
+    const { tidyBoxes } = await import("./boardLayout");
+    const pile = new Map([["a", { x: 10, y: 10, w: 200, h: 160 }], ["b", { x: 30, y: 25, w: 200, h: 160 }], ["c", { x: 50, y: 40, w: 200, h: 160 }], ["d", { x: 70, y: 55, w: 200, h: 160 }]]);
+    const out = tidyBoxes(pile);
+    expect([...out.entries()].map(([k, p]) => `${k}:${p.x},${p.y}`).sort()).toEqual(["a:10,10", "b:234,10", "c:10,194", "d:234,194"]);
+  });
+  test("ragged rows keep their length and line up", async () => {
+    const { tidyBoxes } = await import("./boardLayout");
+    const rows = new Map([["a", { x: 0, y: 0, w: 100, h: 80 }], ["b", { x: 130, y: 12, w: 100, h: 80 }], ["c", { x: 260, y: -6, w: 100, h: 80 }], ["d", { x: 5, y: 120, w: 100, h: 80 }]]);
+    const out = tidyBoxes(rows);
+    expect(out.get("b")).toEqual({ x: 124, y: -6 });
+    expect(out.get("d")).toEqual({ x: 0, y: 98 });
+  });
+});

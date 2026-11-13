@@ -28,3 +28,10 @@ describe("rich editor text", () => {
     expect(fromHtml("a<b> bold </b>b")).toBe("a **bold** b");
   });
 });
+
+describe("a mark over a whole list line", () => {
+  test("the bullet stays list formatting, outside the link or bold", () => {
+    expect(fromHtml('<div><a href="https://x.dev/d">• see dashboard</a></div>')).toBe("- [see dashboard](https://x.dev/d)");
+    expect(fromHtml("<div><b>• ship it</b></div>")).toBe("- **ship it**");
+  });
+});

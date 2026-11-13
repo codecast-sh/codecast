@@ -29,6 +29,18 @@ const PAD = 40;
 
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
+/**
+ * A computed `color(srgb r g b / a)` (what a color-mix resolves to) as rgb()/rgba(), the form every
+ * SVG reader takes; anything else passes through.
+ */
+export function srgbToRgb(v: string): string {
+  const m = /^color\(srgb\s+([\d.e-]+)\s+([\d.e-]+)\s+([\d.e-]+)(?:\s*\/\s*([\d.e-]+%?))?\)$/.exec(v.trim());
+  if (!m) return v;
+  const ch = (x: string) => Math.round(Math.max(0, Math.min(1, Number(x))) * 255);
+  const a = m[4] === undefined ? 1 : m[4].endsWith("%") ? Number(m[4].slice(0, -1)) / 100 : Number(m[4]);
+  return a >= 1 ? `rgb(${ch(m[1])}, ${ch(m[2])}, ${ch(m[3])})` : `rgba(${ch(m[1])}, ${ch(m[2])}, ${ch(m[3])}, ${Math.round(a * 1000) / 1000})`;
+}
+
 /** A CSS color value (a var(), a color-mix) as the page computes it right now. */
 function resolver(root: HTMLElement): (css: string) => string {
   const probe = document.createElement("span");
@@ -41,7 +53,7 @@ function resolver(root: HTMLElement): (css: string) => string {
     if (v === undefined) {
       probe.style.color = "";
       probe.style.color = css;
-      v = getComputedStyle(probe).color || css;
+      v = srgbToRgb(getComputedStyle(probe).color || css);
       cache.set(css, v);
     }
     return v;

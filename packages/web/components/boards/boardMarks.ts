@@ -185,5 +185,15 @@ export function editorToMarks(root: Node): string {
     cur = (cur ?? "") + inlineMarks(n);
   }
   if (cur !== null) lines.push(cur);
-  return lines.flatMap((l) => l.split("\n")).map((l) => l.replace(/^• /, "- ")).join("\n").replace(/\n+$/, "");
+  // A bullet is list formatting, never part of a mark: a link or bold laid over a whole list line
+  // ("[• see](url)") keeps its "• " outside, so the line stays a list item.
+  return lines.flatMap((l) => l.split("\n")).map((l) => l.replace(/^((?:\*\*|~~|\*|\[)+)• /, "• $1").replace(/^• /, "- ")).join("\n").replace(/\n+$/, "");
+}
+
+/** Text with its marks read as words, for a screen reader: "**Ship** [docs](url)" is "Ship docs". */
+export function plainText(text: string): string {
+  return text.split("\n").map((raw) => {
+    const li = richLines(raw)[0];
+    return markRuns(li.text).map((r) => r.t).join("");
+  }).join("\n");
 }

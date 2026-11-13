@@ -190,6 +190,33 @@ export function squareCols(n: number, max = 6): number {
   return Math.max(1, Math.min(max, Math.ceil(Math.sqrt(n))));
 }
 
+/**
+ * Tidy up (FigJam's): a loose set of boxes laid into an even grid from its
+ * top-left corner, in reading order. Rows the set already has keep their
+ * length; a pile with no rows becomes a near-square grid.
+ */
+export function tidyBoxes(boxes: ReadonlyMap<string, { x: number; y: number; w: number; h: number }>, gap = 24): Map<string, Pt> {
+  const entries = [...boxes.entries()];
+  const out = new Map<string, Pt>();
+  if (entries.length < 2) return out;
+  // Reading order: rows are boxes whose middles sit within half a box height of the row's first.
+  const byY = entries.sort((a, b) => a[1].y + a[1].h / 2 - (b[1].y + b[1].h / 2));
+  const rows: (typeof entries)[] = [];
+  for (const e of byY) {
+    const row = rows[rows.length - 1];
+    const mid = e[1].y + e[1].h / 2;
+    if (row && Math.abs(mid - (row[0][1].y + row[0][1].h / 2)) < Math.min(row[0][1].h, e[1].h) / 2) row.push(e);
+    else rows.push([e]);
+  }
+  for (const row of rows) row.sort((a, b) => a[1].x - b[1].x);
+  const order = rows.flat();
+  const cols = rows.length > 1 && rows[0].length > 1 ? rows[0].length : squareCols(order.length, 8);
+  const at = { x: Math.min(...order.map(([, b]) => b.x)), y: Math.min(...order.map(([, b]) => b.y)) };
+  const spots = gridPositions(order.map(([, b]) => b), { cols, gap, at });
+  order.forEach(([k], i) => out.set(k, { x: Math.round(spots[i].x), y: Math.round(spots[i].y) }));
+  return out;
+}
+
 /** Put ops for items at the given positions, each above the last. Returns keys in order. */
 export function placeItems(items: readonly BoardItem[], at: readonly Pt[], z0: number): { ops: ArtifactOp[]; keys: string[] } {
   const ops: ArtifactOp[] = [];
