@@ -8,6 +8,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { useRolesAndPeopleOptions } from "../../hooks/useRolesAndPeopleOptions";
 import { creditedTask } from "./issuesModel";
 import type { OpsGroup, OpsSource } from "./opsTypes";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 const NO_MEMBERS: any[] = [];
 
@@ -15,7 +16,7 @@ export type OwnerOption = { key: string; label: string; info: AssigneeInfo; you:
 
 /** The people and roles an issue can go to, the viewer first. */
 export function useOwnerOptions(): OwnerOption[] {
-  const teamMembers = useInboxStore((s) => s.teamMembers as any[]) ?? NO_MEMBERS;
+  const teamMembers = useInboxStore((s) => teamMembersOf(s) as any[]) ?? NO_MEMBERS;
   const me = useInboxStore((s) => (s as any).currentUser?._id as string | undefined);
   const { people, roles } = useRolesAndPeopleOptions(teamMembers);
   return useMemo(() => {
