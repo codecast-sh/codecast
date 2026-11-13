@@ -1,5 +1,7 @@
 import { FOREIGN_TEXT_CAPS, fenceForeignText, inlineForeignText } from "@codecast/shared/contracts";
 import { requireArtifactEditor } from "./lib/liveArtifactAccess";
+import { isArtifactDocType } from "@codecast/shared/artifacts";
+import { ensureLiveSearch } from "./liveSearch";
 import { FOREIGN_PLAN_CAPS, foreignProse, referenceGuidance, foreignTaskSource } from "@codecast/shared/tasks";
 import type { RegisteredQuery } from "convex/server";
 import { resolveActor } from "./lib/actor";
@@ -25,6 +27,8 @@ import {
   canAccessDoc,
   canAccessPlan,
   canAccessTask,
+  accessJudgeFor,
+  activeTeamMembershipFor,
   isSameWorkspace,
   parseWorkspaceKey,
   resolveWorkspaceKey,
@@ -37,7 +41,8 @@ import {
 } from "./lib/access";
 import { notFound } from "./lib/auth";
 import { claimShareToken } from "./lib/shareToken";
-import { packSnapshotContent } from "./lib/docSnapshot";
+import { cliDocWriter, docLiveState, docRevision, markdownToDoc, rewriteCollab, writeDocBody, type DocWriter } from "./lib/docBody";
+export { markdownToDoc, writeDocBody, docRevision } from "./lib/docBody";
 import { docTitleFromContent, docTypeChangeAllowed, draftTextNodes, renderDocMentionExcerpt, setTitleHeading, withTitleHeading } from "@codecast/shared/docs";
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
 import { conversationProjectRoot, knownCheckoutRoots } from "./projectPaths";
@@ -277,80 +282,6 @@ async function buildWebDocList(
   return { docs: withAuthors, projectPaths };
 }
 
-type DocNode = { type: string; attrs?: Record<string, any>; content?: DocNode[]; text?: string };
-
-export function markdownToDoc(text: string): DocNode {
-  const lines = text.split("\n");
-  const content: DocNode[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-
-    if (line.startsWith("```")) {
-      const lang = line.slice(3).trim();
-      const codeLines: string[] = [];
-      i++;
-      while (i < lines.length && !lines[i].startsWith("```")) {
-        codeLines.push(lines[i]);
-        i++;
-      }
-      i++;
-      const node: DocNode = { type: "codeBlock" };
-      if (lang) node.attrs = { language: lang };
-      if (codeLines.length > 0) node.content = [{ type: "text", text: codeLines.join("\n") }];
-      content.push(node);
-      continue;
-    }
-
-    if (/^---+$/.test(line.trim())) { content.push({ type: "horizontalRule" }); i++; continue; }
-
-    const hm = line.match(/^(#{1,3})\s+(.+)/);
-    if (hm) {
-      content.push({ type: "heading", attrs: { level: hm[1].length }, content: draftTextNodes(hm[2]) });
-      i++;
-      continue;
-    }
-
-    if (line.startsWith("> ")) {
-      const ql: string[] = [];
-      while (i < lines.length && lines[i].startsWith("> ")) { ql.push(lines[i].slice(2)); i++; }
-      content.push({ type: "blockquote", content: [{ type: "paragraph", content: draftTextNodes(ql.join("\n")) }] });
-      continue;
-    }
-
-    if (/^[-*]\s/.test(line)) {
-      const items: DocNode[] = [];
-      while (i < lines.length && /^[-*]\s/.test(lines[i])) {
-        items.push({ type: "listItem", content: [{ type: "paragraph", content: draftTextNodes(lines[i].replace(/^[-*]\s/, "")) }] });
-        i++;
-      }
-      content.push({ type: "bulletList", content: items });
-      continue;
-    }
-
-    if (line.trim() === "") { i++; continue; }
-
-    const paraLines: string[] = [];
-    while (i < lines.length && lines[i].trim() !== "" &&
-           !lines[i].startsWith("#") && !lines[i].startsWith("```") &&
-           !lines[i].startsWith("> ") && !/^[-*]\s/.test(lines[i]) &&
-           !/^---+$/.test(lines[i].trim())) {
-      paraLines.push(lines[i]);
-      i++;
-    }
-    const pc: DocNode[] = [];
-    paraLines.forEach((pl, idx) => {
-      if (idx > 0) pc.push({ type: "hardBreak" });
-      // Drafting spans (@codecast/shared/docs drafting) open as live editor marks.
-      pc.push(...draftTextNodes(pl));
-    });
-    if (pc.length > 0) content.push({ type: "paragraph", content: pc });
-  }
-
-  if (content.length === 0) content.push({ type: "paragraph" });
-  return { type: "doc", content };
-}
 
 /**
  * A doc is one text and its title is its leading heading (@codecast/shared/docs).
@@ -462,7 +393,7 @@ export const create = mutation({
         if ((args.source || existing.source) === "plan_mode") {
           await syncDocToPlanEntity(ctx, existing._id, content, auth.userId, userTeamId, existing.project_id, existing.conversation_id);
         }
-        return { id: existing._id, updated: true };
+        return { id: existing._id, updated: true, revision: docRevision(content, (await docLiveState(ctx, existing._id)).version) };
       }
     }
 
@@ -483,6 +414,7 @@ export const create = mutation({
       created_at: now,
       updated_at: now,
     });
+    if (isArtifactDocType(args.doc_type)) await ensureLiveSearch(ctx, id);
 
     // Auto-create plan entity for plan_mode docs
     let plan_short_id: string | undefined;
@@ -490,7 +422,7 @@ export const create = mutation({
       plan_short_id = await syncDocToPlanEntity(ctx, id, args.content, auth.userId, team_id, project_id, conversation_id);
     }
 
-    return { id, updated: false, plan_short_id };
+    return { id, updated: false, plan_short_id, revision: docRevision(content, 0) };
   },
 });
 
@@ -643,7 +575,11 @@ export const get = query({
     // Owner-or-team, matching web (docs.webGet) — the CLI must see exactly what
     // the same human sees in the browser.
     if (!doc || !(await canAccessDoc(ctx, auth.userId, doc))) return null;
-    return doc;
+    // The revision a whole-body write computed from this read sends back as
+    // its base (writeDocBody). live_unsaved: the editor holds steps that are
+    // not in `content` yet, so this copy trails what the person sees.
+    const live = await docLiveState(ctx, doc._id);
+    return { ...doc, revision: docRevision(doc.content, live.version), live_unsaved: !!live.unsaved };
   },
 });
 
@@ -675,6 +611,10 @@ export const update = mutation({
     overflow: v.optional(v.string()),
     // The session the CLI runs inside, when any (the charter guard reads it).
     session_id: v.optional(v.string()),
+    // The revision (docs.get) the new content was computed from, and the
+    // deliberate overwrite that skips the check (writeDocBody).
+    base: v.optional(v.string()),
+    force: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -685,7 +625,19 @@ export const update = mutation({
     await refuseRoleCharterWrite(ctx, auth.userId, doc, args.session_id);
 
     const text = docTextUpdates(doc, { title: args.title || undefined, content: args.content });
-    const updates: any = { updated_at: Date.now(), ...text };
+    let revision: string | undefined;
+    if (text.content !== undefined) {
+      ({ revision } = await writeDocBody(ctx, doc, { content: text.content, title: text.title ?? doc.title }, {
+        writer: await cliDocWriter(ctx, auth.userId, args.session_id), base: args.base, force: args.force,
+        // A body the caller sent was computed from some read of the doc; a
+        // title alone is rewritten here from the stored text.
+        requireBase: args.content !== undefined,
+      }));
+      // A brief mirrors its first line into the standing session's state; a
+      // charter wakes its role at once (org-roles-standing.md T2, T3).
+      await afterRoleDocWrite(ctx, doc, text.content);
+    }
+    const updates: any = { updated_at: Date.now(), ...(text.content === undefined ? text : {}) };
     if (args.doc_type) {
       if (!docTypeChangeAllowed(doc.doc_type, args.doc_type)) throw new Error(`A ${doc.doc_type} cannot become a ${args.doc_type}`);
       updates.doc_type = args.doc_type;
@@ -710,14 +662,10 @@ export const update = mutation({
     }
 
     await ctx.db.patch(args.id, updates);
-
-    // A brief mirrors its first line into the standing session's state; a
-    // charter wakes its role at once (org-roles-standing.md T2, T3).
-    if (text.content !== undefined) await afterRoleDocWrite(ctx, doc, text.content);
-
-    // The HTTP route resets the collab snapshot from the returned content, so a
-    // title edit (which rewrites the heading line) reaches open editors too.
-    return { success: true, content: text.content };
+    // The revision comes back only for a body the caller wrote itself: a
+    // title or type change computed here from text it has not seen must not
+    // become the base of its next whole-body write.
+    return { success: true, content: text.content, ...(args.content !== undefined ? { revision } : {}) };
   },
 });
 
@@ -759,6 +707,9 @@ export const addComment = mutation({
   },
 });
 
+// Rewrite a doc's collab history from `content`. Kept for older callers;
+// docs.update and docs.patch now rewrite it themselves, in the same
+// transaction as the write (writeDocBody).
 export const resetSync = mutation({
   args: {
     api_token: v.string(),
@@ -771,40 +722,7 @@ export const resetSync = mutation({
     // Owner-or-team, matching the sibling `patch` mutation. Without this, any caller
     // could wipe a doc's deltas and overwrite its snapshot content by id.
     await requireAccessibleDoc(ctx, auth.userId, args.id);
-    const docId = args.id as string;
-    const snapshots = await ctx.db
-      .query("doc_snapshots")
-      .withIndex("id_version", (q: any) => q.eq("id", docId))
-      .collect();
-    const deltas = await ctx.db
-      .query("doc_deltas")
-      .withIndex("id_version", (q: any) => q.eq("id", docId))
-      .collect();
-    for (const d of deltas) await ctx.db.delete(d._id);
-
-    const json = JSON.stringify(markdownToDoc(args.content || ""));
-    // Past every version an open editor can hold, snapshots AND deltas: the
-    // newest snapshot often trails the deltas. A version at or below one a tab
-    // already reached would let that tab keep syncing steps written against
-    // the old content on top of the new (docSync's stepsAfter refuses only
-    // clients behind the rewrite).
-    const version = Math.max(0, ...snapshots.map((s: any) => s.version), ...deltas.map((d: any) => d.version)) + 1;
-
-    if (snapshots.length > 0) {
-      const latest = snapshots.reduce((a: any, b: any) => a.version > b.version ? a : b);
-      // Write the compressed form and drop any legacy uncompressed content so the
-      // row carries exactly one representation (see doc_snapshots in schema.ts).
-      await ctx.db.patch(latest._id, {
-        content_gz: packSnapshotContent(json),
-        content: undefined,
-        version,
-      });
-      for (const s of snapshots) {
-        if (s._id !== latest._id) await ctx.db.delete(s._id);
-      }
-    } else {
-      await ctx.db.insert("doc_snapshots", { id: docId, version, content_gz: packSnapshotContent(json) });
-    }
+    await rewriteCollab(ctx, args.id, args.content || "", (await docLiveState(ctx, args.id)).version + 1);
     await ctx.db.patch(args.id, { cli_edited_at: Date.now() });
     return { success: true };
   },
@@ -816,6 +734,8 @@ export const patch = mutation({
     id: v.id("docs"),
     old_string: v.string(),
     new_string: v.string(),
+    // Every occurrence rather than the first.
+    replace_all: v.optional(v.boolean()),
     // The session the CLI runs inside, when any (the charter guard reads it).
     session_id: v.optional(v.string()),
   },
@@ -827,18 +747,19 @@ export const patch = mutation({
     await requireArtifactEditor(ctx, doc, auth.userId);
     await refuseRoleCharterWrite(ctx, auth.userId, doc, args.session_id);
 
+    // Computed here from the stored text, so it needs no base; writeDocBody
+    // still refuses while the editor holds steps that text lacks.
     const content = doc.content || "";
-    const idx = content.indexOf(args.old_string);
-    if (idx === -1) throw new Error("old_string not found in document content");
-
-    const newContent = content.slice(0, idx) + args.new_string + content.slice(idx + args.old_string.length);
-    const now = Date.now();
-    await ctx.db.patch(args.id, {
-      content: newContent,
-      title: docTitleFromContent(newContent, doc.title),
-      updated_at: now,
-      cli_edited_at: now,
+    const parts = args.old_string ? content.split(args.old_string) : [content];
+    if (parts.length === 1) throw new Error("old_string not found in document content");
+    const replaced = args.replace_all ? parts.length - 1 : 1;
+    const newContent = args.replace_all
+      ? parts.join(args.new_string)
+      : parts[0] + args.new_string + parts.slice(1).join(args.old_string);
+    const { revision } = await writeDocBody(ctx, doc, { content: newContent, title: docTitleFromContent(newContent, doc.title) }, {
+      writer: await cliDocWriter(ctx, auth.userId, args.session_id),
     });
+    await afterRoleDocWrite(ctx, doc, newContent);
 
     if (doc.plan_id) {
       const plan = await ctx.db.get(doc.plan_id);
@@ -848,7 +769,7 @@ export const patch = mutation({
       }
     }
 
-    return { success: true, length: newContent.length, content: newContent };
+    return { success: true, length: newContent.length, content: newContent, replaced, revision };
   },
 });
 
@@ -1392,14 +1313,20 @@ export const webUpdate = mutation({
 });
 
 /** Update a doc as `userId`, the way the web's update does. The hosted
- *  assistant's write_doc runs this same path. */
-export async function updateDocAs(ctx: MutationCtx, userId: Id<"users">, args: ObjectType<typeof webUpdateArgs>) {
+ *  assistant's write_doc runs this same path, naming itself as `agent`: its
+ *  body writes then go through writeDocBody, so they never land over a
+ *  person's unsaved typing and reach an open editor. */
+export async function updateDocAs(ctx: MutationCtx, userId: Id<"users">, args: ObjectType<typeof webUpdateArgs>, agent?: { writer: DocWriter; base?: string; requireBase?: boolean; reread?: string }) {
   const doc = await ctx.db.get(args.id);
   if (!doc) throw new Error("Doc not found");
   if (!(await canAccessDoc(ctx, userId, doc))) throw new Error("Unauthorized");
   await requireArtifactEditor(ctx, doc, userId);
 
-  const updates: any = { updated_at: Date.now(), ...docTextUpdates(doc, args) };
+  const text = docTextUpdates(doc, args);
+  if (agent && text.content !== undefined) {
+    await writeDocBody(ctx, doc, { content: text.content, title: text.title ?? doc.title }, agent);
+  }
+  const updates: any = { updated_at: Date.now(), ...(agent && text.content !== undefined ? {} : text) };
   if (args.doc_type !== undefined && docTypeChangeAllowed(doc.doc_type, args.doc_type)) updates.doc_type = args.doc_type;
   if (args.labels !== undefined) updates.labels = args.labels;
   if (args.pinned !== undefined) updates.pinned = args.pinned;
@@ -1493,6 +1420,13 @@ export const webMentionList = query({
       const id = String(d._id);
       if (!seen.has(id)) { seen.add(id); docs.push(d); }
     };
+    // by_team_id is the ROUTING index: a doc routed to a team can still be
+    // private to its owner (workspace user:<owner>), so every team row passes
+    // the access judge before its title is returned.
+    const judge = await accessJudgeFor(ctx, userId);
+    const pushReadable = async (rows: any[]) => {
+      for (const d of rows) if (await judge("docs", d)) pushUnique(d);
+    };
 
     if (args.workspace === "all") {
       // The person's own rows first (tasks.webMentionList does the same):
@@ -1514,7 +1448,7 @@ export const webMentionList = query({
           .withIndex("by_team_id", (q: any) => q.eq("team_id", m.team_id))
           .order("desc")
           .take(MAX_PER_TEAM);
-        for (const d of teamDocs) pushUnique(d);
+        await pushReadable(teamDocs);
       }
     } else if (args.workspace === "team" && args.team_id) {
       const teamDocs = await ctx.db
@@ -1522,7 +1456,7 @@ export const webMentionList = query({
         .withIndex("by_team_id", (q: any) => q.eq("team_id", args.team_id))
         .order("desc")
         .take(MAX_TOTAL);
-      for (const d of teamDocs) pushUnique(d);
+      await pushReadable(teamDocs);
     } else {
       const userDocs = await ctx.db
         .query("docs")
@@ -1569,7 +1503,6 @@ export const mentionSearch = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return [];
 
-    const user = await ctx.db.get(userId);
     const db = await createDataContext(ctx, {
       userId,
       project_path: args.projectPath,
@@ -1578,8 +1511,7 @@ export const mentionSearch = query({
       ? undefined
       : (args.teamId
           || (db.workspace.type === "team" ? db.workspace.teamId : undefined)
-          || user?.active_team_id
-          || (user as any)?.team_id);
+          || (await activeTeamMembershipFor(ctx, userId))?.teamId);
     // teamId can be client-supplied: every team-scoped branch below reads that
     // team's rows directly (members, task/doc/plan titles), so membership is
     // mandatory — without this check any authenticated user holding a team id
@@ -1590,6 +1522,15 @@ export const mentionSearch = query({
     // teamless items, so filter those out when no team scope applies.
     const personalOnly = <T extends { team_id?: any }>(rows: T[]): T[] =>
       rows.filter((r) => !r.team_id);
+    // Team rows come off the ROUTING index (by_team_id) or a team_id filter on
+    // a search index: a row routed to the team can still be private to its
+    // owner (workspace user:<owner>), so each one passes the access judge.
+    const judge = await accessJudgeFor(ctx, userId);
+    const readable = async <T,>(table: string, rows: T[]): Promise<T[]> => {
+      const out: T[] = [];
+      for (const r of rows) if (await judge(table, r)) out.push(r);
+      return out;
+    };
     const q = args.query.toLowerCase();
     const limit = args.limit || 10;
     const types = args.types || ["person", "doc", "task", "session", "plan"];
@@ -1674,7 +1615,7 @@ export const mentionSearch = query({
           .order("desc")
           .take(perType * 5);
       }
-      if (!teamId) tasks = personalOnly(tasks);
+      tasks = teamId ? await readable("tasks", tasks) : personalOnly(tasks);
       for (const task of tasks.sort(byUpdated).slice(0, perType)) {
         results.push({
           id: String(task._id),
@@ -1744,6 +1685,7 @@ export const mentionSearch = query({
           .order("desc")
           .take(perType * 5);
       }
+      if (teamId) docs = await readable("docs", docs);
       if (!teamId) {
         // Docs derive their workspace from a linked conversation: a raw-teamless
         // doc born from a team-visible session is EFFECTIVELY that team's and
@@ -1785,7 +1727,7 @@ export const mentionSearch = query({
       const filtered = q
         ? plans.filter((p: any) => p.title?.toLowerCase().includes(q))
         : plans;
-      for (const plan of (teamId ? filtered : personalOnly(filtered)).sort(byUpdated).slice(0, perType)) {
+      for (const plan of (teamId ? await readable("plans", filtered) : personalOnly(filtered)).sort(byUpdated).slice(0, perType)) {
         results.push({
           id: String(plan._id),
           type: "plan",
@@ -2250,6 +2192,8 @@ export async function createDocAs(ctx: MutationCtx, userId: Id<"users">, args: O
     parent_id: args.parent_id,
     sort_order,
   });
+  // A board, sheet or dashboard is findable by its title from the moment it exists, written to or not.
+  if (isArtifactDocType(args.doc_type)) await ensureLiveSearch(ctx, id as Id<"docs">);
 
   // The row rides back with the receipt so the client seeds its store before
   // navigating: the doc page paints from the store, never waiting on the

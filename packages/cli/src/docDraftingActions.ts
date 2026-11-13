@@ -41,14 +41,22 @@ function nth(options: { nth?: string }): number | undefined {
   return options.nth ? Math.max(1, parseInt(options.nth, 10) || 1) : undefined;
 }
 
+// The revision each doc was loaded at in this command: a content save sends it
+// as its base, so a person's edit between the load and the save refuses the
+// save instead of being written over (convex lib/docBody.ts).
+const loadedAt = new Map<string, string>();
+
 async function load(deps: DocDraftingDeps, id: string): Promise<{ content: string; title: string; overflow: string }> {
   const doc = await deps.post("/cli/docs/get", { id });
   if (!doc) fail("Doc not found");
+  if (doc.revision) loadedAt.set(id, doc.revision);
   return { content: doc.content ?? "", title: doc.title ?? "", overflow: doc.overflow ?? "" };
 }
 
 async function save(deps: DocDraftingDeps, id: string, fields: { content?: string; overflow?: string }) {
-  await deps.post("/cli/docs/update", { id, session_id: deps.sessionId() ?? undefined, ...fields });
+  const base = fields.content !== undefined ? loadedAt.get(id) : undefined;
+  const result = await deps.post("/cli/docs/update", { id, session_id: deps.sessionId() ?? undefined, ...fields, ...(base ? { base } : {}) });
+  if (result?.revision) loadedAt.set(id, result.revision);
 }
 
 function fail(message: string): never {

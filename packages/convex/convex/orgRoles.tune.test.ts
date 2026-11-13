@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { docRevision } from "./lib/docBody";
 import { makeFakeDb } from "./testDb";
 import { performBriefEdit, performCreateRole, performProvisionRole, performTuneRoutine } from "./orgRoles";
 import { listEntries, performUndo } from "./orgChanges";
@@ -31,7 +32,7 @@ function world() {
       { _id: "peers", user_id: PEER, session_id: "s-peer", short_id: "jxpeer1", status: "active", agent_type: "claude_code", updated_at: NOW, message_count: 2, team_id: TEAM, project_path: "/repo" },
     ],
     agent_tasks: [], agent_task_revisions: [], pending_messages: [], managed_sessions: [], session_owners: [], messages: [], user_presence: [], devices: [],
-    docs: [], projects: [], plans: [], tasks: [], session_decisions: [], decision_inbox: [], decision_grants: [],
+    docs: [], doc_snapshots: [], doc_deltas: [], projects: [], plans: [], tasks: [], session_decisions: [], decision_inbox: [], decision_grants: [],
   };
   const db = makeFakeDb(tables);
   // One mutation is one ctx: a history entry is what one ctx wrote, so each
@@ -182,8 +183,10 @@ describe("the brief's budget", () => {
     const { own, role } = await lead(ctx, tables);
     const over = `Infra: steady\n\n## Rules learned\n${"- A rule. Learned from: a mistake. (2026-10-01)\n".repeat(Math.ceil(BRIEF_BUDGET_CHARS / 40))}`;
     await expect(performBriefEdit(ctx, ME as any, { ...own, content: over })).rejects.toThrow(/over its budget, so it was not saved/);
-    const saved = await performBriefEdit(ctx, ME as any, { ...own, content: "Infra: steady\n\n## Rules learned\n- A rule. Learned from: a mistake. (2026-10-01)" });
+    // Each save names the revision it was written from, as `cast brief` hands it out.
+    const base = () => { const d = tables.docs.find((x) => x.doc_type === "brief")!; return docRevision(d.content, Math.max(0, ...tables.doc_snapshots.filter((x) => x.id === d._id).map((x) => x.version))); };
+    const saved = await performBriefEdit(ctx, ME as any, { ...own, content: "Infra: steady\n\n## Rules learned\n- A rule. Learned from: a mistake. (2026-10-01)", base: base() });
     expect(saved.brief_doc_id).toBeTruthy();
-    await expect(performBriefEdit(ctx, ME as any, { role_id: String(role._id), content: over })).resolves.toBeTruthy();
+    await expect(performBriefEdit(ctx, ME as any, { role_id: String(role._id), content: over, base: base() })).resolves.toBeTruthy();
   });
 });

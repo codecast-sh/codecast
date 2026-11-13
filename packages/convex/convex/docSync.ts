@@ -141,6 +141,14 @@ export const submitSnapshot = mutation({
       )
       .first();
     if (existing) return;
+    // A snapshot older than one already saved (a slow or stale tab) would
+    // write older text over the newer markdown mirror; agents read that mirror
+    // as the doc's current text (lib/docBody.ts), so it must never move back.
+    const newer = await ctx.db
+      .query("doc_snapshots")
+      .withIndex("id_version", (q: any) => q.eq("id", args.id).gt("version", args.version))
+      .first();
+    if (newer) return;
 
     // Parse once and guard against a racy empty overwrite BEFORE writing
     // anything. Otherwise an empty snapshot from a not-yet-loaded editor would
@@ -521,6 +529,7 @@ export const submitSteps = mutation({
       version: args.version + args.steps.length,
       clientId: args.clientId,
       steps: args.steps,
+      user_id: userId,
     });
     return { status: "synced" as const };
   },

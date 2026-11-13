@@ -22,6 +22,10 @@ import { scopedFetch } from "../../data";
 import { resolveWorkspaceKey, workspaceKey } from "../../lib/access";
 import { createTaskAs, updateTaskAs } from "../../tasks";
 import { createDocAs, ownDocsBySourceFile, updateDocAs } from "../../docs";
+import { docLiveState, docRevision } from "../../lib/docBody";
+
+// The name a refused write gives for the assistant's own body writes.
+const ASSISTANT_WRITER = { name: "Your assistant" };
 import { applyCancel, insertTask, logVerb } from "../../agentTasks";
 import { hostedHomeStamp, hostedOwnerRefusal } from "../routines";
 import { cadenceOf, firstCadenceRun, plainCadence } from "@platform/assistant/cadence";
@@ -222,6 +226,7 @@ export const readDoc = internalQuery({
     return {
       found: true as const,
       id: String(doc!._id),
+      revision: docRevision(content, (await docLiveState(ctx, doc!._id)).version),
       title: doc!.title,
       updated: iso(doc!.updated_at),
       content: content.slice(0, DOC_READ_MAX_CHARS),
@@ -240,6 +245,8 @@ export const writeDoc = internalMutation({
     title: v.optional(v.string()),
     content: v.string(),
     append: v.optional(v.boolean()),
+    // The revision read_doc handed out for this doc in this run, when it did.
+    base: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     if (!args.id) {
@@ -260,7 +267,9 @@ export const writeDoc = internalMutation({
     const shown = args.append ? await publicCopy(ctx, "docs", doc) : null;
     if (shown) throw new Error(`Doc "${doc.title}" ${shown.reason}. Use replace_doc, which shows the person the new text first.`);
     const content = args.append ? `${(doc.content ?? "").trimEnd()}\n\n${args.content}` : args.content;
-    await updateDocAs(ctx, args.user_id, { id: doc._id, content, ...(args.title?.trim() ? { title: args.title.trim() } : {}) });
+    await updateDocAs(ctx, args.user_id, { id: doc._id, content, ...(args.title?.trim() ? { title: args.title.trim() } : {}) }, {
+      writer: ASSISTANT_WRITER, base: args.append ? undefined : args.base, requireBase: !args.append, reread: "read it again with read_doc",
+    });
     return { id: String(doc._id), created: false };
   },
 });
@@ -305,7 +314,7 @@ export const remember = internalMutation({
     if (content.length > MEMORY_MAX_CHARS) {
       throw new Error(`"${MEMORY_DOC_TITLE}" is full. Ask the person to tidy it before adding more.`);
     }
-    await updateDocAs(ctx, args.user_id, { id: doc._id, content });
+    await updateDocAs(ctx, args.user_id, { id: doc._id, content }, { writer: ASSISTANT_WRITER, reread: "try again in a moment" });
     return { doc_id: String(doc._id) };
   },
 });

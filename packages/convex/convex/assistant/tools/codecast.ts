@@ -59,6 +59,10 @@ const json = (value: unknown) => JSON.stringify(value, null, 1);
 const literals = <T extends string>(values: readonly T[]) => Type.Union(values.map((v) => Type.Literal(v)));
 
 export function codecastTools(deps: CodecastDeps): Tool[] {
+  // The revision each doc was read at in this run, for a replace_doc that
+  // does not name one. A replacement resumed after the person approves it
+  // runs with fresh tools, so the revision also rides in its own arguments.
+  const readAt = new Map<string, string>();
   const user = { user_id: deps.userId };
   const here = { ...user, conversation_id: deps.conversationId };
   return [
@@ -122,9 +126,10 @@ export function codecastTools(deps: CodecastDeps): Tool[] {
       run: async (args) => {
         const doc = await deps.runQuery(ops.readDoc, { ...user, ...args });
         if (!doc.found) return { content: `No note of yours has a title matching "${args.query}".`, details: { found: false } };
+        readAt.set(doc.id, doc.revision);
         const others = doc.others.length ? `\n\nOther matches: ${doc.others.map((o: any) => `${o.title} (${o.id})`).join("; ")}` : "";
         return {
-          content: `Doc ${doc.id}: ${doc.title} (updated ${doc.updated})\n\n${doc.content}${doc.truncated ? "\n[cut: the doc goes on]" : ""}${others}`,
+          content: `Doc ${doc.id}: ${doc.title} (updated ${doc.updated}, revision ${doc.revision})\n\n${doc.content}${doc.truncated ? "\n[cut: the doc goes on]" : ""}${others}`,
           details: { doc_id: doc.id },
         };
       },
@@ -154,10 +159,12 @@ export function codecastTools(deps: CodecastDeps): Tool[] {
         id: Type.String(),
         content: Type.String({ description: "The note's new text in full, Markdown." }),
         title: Type.Optional(Type.String({ description: "A new title, if it changes." })),
+        base: Type.Optional(Type.String({ description: "The revision read_doc showed for the text you rewrote." })),
       }),
       risk: "write",
-      run: async ({ id, content, title }) => {
-        const done = await deps.runMutation(ops.writeDoc, { ...user, id, content, ...(title ? { title } : {}) });
+      run: async ({ id, content, title, base: named }) => {
+        const base = named ?? readAt.get(id);
+        const done = await deps.runMutation(ops.writeDoc, { ...user, id, content, ...(title ? { title } : {}), ...(base ? { base } : {}) });
         return { content: `Rewrote doc ${done.id}.`, details: { doc_id: done.id } };
       },
     }),
