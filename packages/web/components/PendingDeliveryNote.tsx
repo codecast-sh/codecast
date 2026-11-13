@@ -6,6 +6,23 @@ import { copyToClipboard } from "../lib/utils";
 import { useConversationOwnerDevice } from "../hooks/useConversationOwnerDevice";
 import { useHostWake } from "../hooks/useHostWake";
 import { HostWakeNote } from "./HostWakeStatus";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
+import { api } from "@codecast/convex/convex/_generated/api";
+import type { HostWake } from "../hooks/useHostWake";
+
+/** A Cast session waiting on the person's cloud machine to come up for the
+ *  first time (convex/castMachines.ts): no device owns it yet, so the steps
+ *  come from the machine's own status. */
+function useCastMachineLaunch(ownerDeviceId: string | null | undefined): HostWake | null {
+  const machine = useQueryNoThrow(api.castMachines.mine, ownerDeviceId ? "skip" : {});
+  if (ownerDeviceId || !machine || machine.status === "none") return null;
+  const since = machine.since ?? Date.now();
+  const base = { deviceId: "", host: "Your cloud machine", now: Date.now() };
+  if (machine.status === "failed") return { ...base, stage: "failed", since, error: machine.error ?? "LaunchFailed", retry: false };
+  if (machine.status === "launching" || machine.status === "waiting_capacity") return { ...base, stage: "requested", since };
+  if (machine.status === "booting") return { ...base, stage: "starting", since };
+  return machine.online ? null : { ...base, stage: "connecting", since };
+}
 
 // Wraps the per-message pending UI ("starting up…" / "hasn't reached the agent"
 // + kill & restart). When the DAEMON is the reason the message is late, it
@@ -33,7 +50,9 @@ export function PendingDeliveryNote({
   // (sessions.owner_device_id); health is judged for that daemon alone.
   const ownerDeviceId = useConversationOwnerDevice(conversationId);
   const health = useDaemonHealth(ownerDeviceId);
-  const wake = useHostWake(ownerDeviceId);
+  const hostWake = useHostWake(ownerDeviceId);
+  const launch = useCastMachineLaunch(ownerDeviceId);
+  const wake = hostWake ?? launch;
   const [copied, setCopied] = useState(false);
   // The host is asleep or waking: say where the wake is from the first moment,
   // not after the stuck-message grace, and never offer a restart that cannot

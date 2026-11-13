@@ -24,7 +24,7 @@ const ACCENTS: Record<string, AgentAccent> = {
   pi: { text: "text-teal-400", ring: "ring-teal-400/70", chip: "bg-teal-500/20 text-teal-400 border-teal-500/50" },
   grok: { text: "text-sol-text", ring: "ring-sol-text/60", chip: "bg-sol-text/15 text-sol-text border-sol-text/40" },
   muse: { text: "text-emerald-400", ring: "ring-emerald-400/70", chip: "bg-emerald-500/15 text-emerald-400 border-emerald-500/40" },
-  // The hosted Codecast assistant.
+  // The hosted Cast agent.
   codecast: { text: "text-sol-cyan", ring: "ring-sol-cyan/70", chip: "bg-sol-cyan/15 text-sol-cyan border-sol-cyan/45" },
 };
 

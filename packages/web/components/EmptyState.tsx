@@ -8,7 +8,8 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { cliJustConnected, markCliConnected } from "../lib/cliConnected";
 import { bridge, type DaemonSetupState } from "../lib/desktop";
 import { useMountEffect } from "../hooks/useMountEffect";
-import { MessageSquare, TerminalSquare } from "lucide-react";
+import { Cloud, MessageSquare, TerminalSquare } from "lucide-react";
+import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useInboxStore } from "../store/inboxStore";
 import { useIsModernStyle } from "../hooks/useVisualStyle";
 import { Button } from "./ui/button";
@@ -374,6 +375,7 @@ function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean
                     </p>
                     <SetupThisMachine onConnected={onConnected} onStart={chooseMachine} />
                   </section>
+                  <StartOnCastMachine />
                   <StartTeamLink />
                 </div>
               </>
@@ -382,6 +384,28 @@ function OnboardingEmptyState({ hasOtherSessions }: { hasOtherSessions?: boolean
         </div>
       </div>
     </div>
+  );
+}
+
+// Cast on a cloud machine of the person's own (convex/castMachines.ts):
+// nothing to install. Shown to people the backend enables for it; the start
+// opens the composer on Cast, whose create launches or wakes the machine.
+function StartOnCastMachine() {
+  const machine = useQueryNoThrow(api.castMachines.mine, {});
+  if (!machine?.enabled) return null;
+  const start = () => {
+    track("first_run_start_chosen", { start: "cast_machine" });
+    useInboxStore.getState().openCompose(undefined, { agentType: "codecast" });
+  };
+  return (
+    <section className="mt-3 flex flex-col rounded-xl border border-sol-border/70 bg-sol-bg-alt/40 p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <Cloud aria-hidden className="h-5 w-5 text-sol-cyan" />
+        <h3 className="text-sm font-semibold text-sol-text">Start on a cloud machine</h3>
+      </div>
+      <p className="mb-4 text-sm leading-relaxed text-sol-text-muted">Nothing to install. Cast works on a machine of your own.</p>
+      <Button onClick={start}>Start a session</Button>
+    </section>
   );
 }
 

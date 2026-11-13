@@ -1110,7 +1110,7 @@ export const LOCAL_AGENT_CLIENTS: Record<LocalAgentClientId, AgentClientDescript
 export const HOSTED_AGENT_CLIENTS: { codecast: HostedAgentClientDescriptor } = {
   codecast: {
     id: "codecast",
-    displayName: "Codecast assistant",
+    displayName: "Cast",
     convexId: "codecast",
     // Off the developer's agent row until pinned. It still shows wherever it
     // is the default agent (an account with no machine), because a picker

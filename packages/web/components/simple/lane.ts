@@ -519,7 +519,7 @@ export const LANE_COPY = {
   /** Where a person starts with the assistant: an empty inbox in hosted
    *  mode and the new conversation sheet, on the web and the phone. */
   intro: {
-    title: "Ask the Codecast assistant",
+    title: "Ask Cast",
     /** The compose sheet's heading: the person already chose to ask. */
     sheetTitle: "What's next?",
     lede: (mailConnected: boolean) =>

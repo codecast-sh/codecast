@@ -10,7 +10,7 @@ export function agentLogoBg(agentType?: string): string {
   const bg = agentType ? MOBILE_AGENT_LOGO_BG[agentType] : undefined;
   if (bg) return bg;
   if (agentType === 'grok') return Theme.text;
-  // The hosted Codecast assistant wears codecast's cyan, as on the web.
+  // The hosted Cast agent wears codecast's cyan, as on the web.
   if (isHostedAgentType(agentType)) return Theme.cyan;
   return '#cb4b16';
 }

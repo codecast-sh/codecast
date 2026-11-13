@@ -2,7 +2,7 @@ import { toolVisual, type ToolColorToken } from "@codecast/shared/render";
 import { AGENT_CLIENTS, fromConvexAgentType } from "@codecast/shared/contracts";
 
 /** The name above an assistant turn: the registry's name for the client
- *  (the hosted Codecast assistant included); an unknown agent_type reads as
+ *  (the hosted Cast agent included); an unknown agent_type reads as
  *  Claude, as legacy rows always have. */
 export function assistantLabel(agentType?: string): string {
   if (!agentType) return "Assistant";

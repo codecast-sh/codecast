@@ -893,7 +893,7 @@ export function addUserToHost(
 }
 
 /** Run a multi-line script on the box via `bash -s` over stdin (or `command`, e.g. as another user). */
-function runScript(host: RemoteHost, script: string, timeoutMs: number, command = "bash -s"): string {
+export function runScript(host: RemoteHost, script: string, timeoutMs: number, command = "bash -s"): string {
   try {
     return execFileSync(
       "ssh",

@@ -2,7 +2,8 @@ import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
-import { CloudWakeAwsError, findCloudWakeHost, parseCloudWakeAllowlist, startCloudInstance } from "./cloudWakeAws";
+import { CloudWakeAwsError, findCloudWakeHost, parseCloudWakeAllowlist, startCloudInstance, type CloudWakeHost } from "./cloudWakeAws";
+import { castCredentials, castMachineCapacityLeft, castMachineWakeHost } from "./lib/castMachineAws";
 
 type WakeCtx = { db: any; scheduler?: { runAfter(delay: number, fn: any, args: any): Promise<unknown> } };
 type WakeRequest = { ownerUserId: string; deviceId: string; requestAt: number };
@@ -22,6 +23,15 @@ export function configuredCloudWakeHosts() {
 
 export function serverOwnsCloudWake(ownerUserId: string, deviceId: string): boolean {
   return !!findCloudWakeHost(configuredCloudWakeHosts(), ownerUserId, deviceId);
+}
+
+/** The host this backend wakes for a device: an allowlisted one
+ *  (CAST_CLOUD_WAKE_HOSTS), or a cast machine (castMachines.ts). */
+async function serverWakeHost(ctx: WakeCtx, ownerUserId: string, deviceId: string): Promise<{ host: CloudWakeHost; cast: boolean } | undefined> {
+  const listed = findCloudWakeHost(configuredCloudWakeHosts(), ownerUserId, deviceId);
+  if (listed) return { host: listed, cast: false };
+  const cast = await castMachineWakeHost(ctx, ownerUserId, deviceId);
+  return cast ? { host: cast, cast: true } : undefined;
 }
 
 async function getDevice(ctx: WakeCtx, ownerUserId: string, deviceId: string) {
@@ -45,7 +55,7 @@ const answered = (device: any, requestAt: number) =>
   device.last_seen >= requestAt || device.wake_requested_at !== requestAt;
 
 export async function scheduleCloudWake(ctx: WakeCtx, device: any, requestAt: number): Promise<boolean> {
-  if (!device.is_remote || !serverOwnsCloudWake(device.user_id, device.device_id)) return false;
+  if (!device.is_remote || !(await serverWakeHost(ctx, device.user_id, device.device_id))) return false;
   if (device.cloud_wake?.request_at === requestAt) return true;
   if (!ctx.scheduler) throw new Error("Cloud wake requires a scheduler");
   const now = Date.now();
@@ -58,8 +68,8 @@ export async function scheduleCloudWake(ctx: WakeCtx, device: any, requestAt: nu
 }
 
 export async function claimCloudWake(ctx: WakeCtx, args: WakeRequest) {
-  const host = findCloudWakeHost(configuredCloudWakeHosts(), args.ownerUserId, args.deviceId);
-  if (!host) return { claimed: false as const, reason: "NotAllowlisted" };
+  const target = await serverWakeHost(ctx, args.ownerUserId, args.deviceId);
+  if (!target) return { claimed: false as const, reason: "NotAllowlisted" };
   const device = await getDevice(ctx, args.ownerUserId, args.deviceId);
   if (!device?.is_remote) return { claimed: false as const, reason: "NotRemote" };
   const state = device.cloud_wake;
@@ -79,7 +89,7 @@ export async function claimCloudWake(ctx: WakeCtx, args: WakeRequest) {
   await ctx.db.patch(device._id, { cloud_wake: {
     ...state, status: "starting", attempt: state.attempt + 1, lease_token: token, lease_until: now + LEASE_MS,
   } });
-  return { claimed: true as const, host, token };
+  return { claimed: true as const, host: target.host, cast: target.cast, token };
 }
 
 export const claim = internalMutation({ args: requestArgs, handler: claimCloudWake });
@@ -118,7 +128,7 @@ export function cloudWakeFailure(error: unknown) {
   ].includes(code) };
 }
 
-export async function performCloudWake(ctx: any, args: WakeRequest, start = startCloudInstance): Promise<
+export async function performCloudWake(ctx: any, args: WakeRequest, start = startCloudInstance, capacityLeft = castMachineCapacityLeft): Promise<
   | { claimed: false; reason: string }
   | { claimed: true; error?: string; retryable?: boolean; requestId?: string }
 > {
@@ -126,12 +136,15 @@ export async function performCloudWake(ctx: any, args: WakeRequest, start = star
   if (!claimed.claimed) return claimed;
   let outcome: { error?: string; retryable?: boolean; requestId?: string };
   try {
-    const accessKeyId = process.env.CAST_CLOUD_WAKE_AWS_ACCESS_KEY_ID;
-    const secretAccessKey = process.env.CAST_CLOUD_WAKE_AWS_SECRET_ACCESS_KEY;
-    if (!accessKeyId || !secretAccessKey) throw new CloudWakeAwsError("MissingCredentials");
-    const result = await start(claimed.host, {
-      accessKeyId, secretAccessKey, sessionToken: process.env.CAST_CLOUD_WAKE_AWS_SESSION_TOKEN,
-    });
+    // A cast machine wakes on codecast's cast-machine keys, and only while
+    // the running cap has room (castMachineAws.ts).
+    const credentials = claimed.cast ? castCredentials() : {
+      accessKeyId: process.env.CAST_CLOUD_WAKE_AWS_ACCESS_KEY_ID, secretAccessKey: process.env.CAST_CLOUD_WAKE_AWS_SECRET_ACCESS_KEY,
+      sessionToken: process.env.CAST_CLOUD_WAKE_AWS_SESSION_TOKEN,
+    };
+    if (!credentials?.accessKeyId || !credentials.secretAccessKey) throw new CloudWakeAwsError("MissingCredentials");
+    if (claimed.cast && !(await capacityLeft())) throw new CloudWakeAwsError("InsufficientInstanceCapacity");
+    const result = await start(claimed.host, credentials as { accessKeyId: string; secretAccessKey: string; sessionToken?: string });
     outcome = { requestId: result.requestId };
   } catch (error) {
     outcome = cloudWakeFailure(error);
@@ -144,7 +157,7 @@ export async function performCloudWake(ctx: any, args: WakeRequest, start = star
 export const wake = internalAction({ args: requestArgs, handler: (ctx, args) => performCloudWake(ctx, args) });
 
 export async function recoverPendingCloudWake(ctx: WakeCtx, args: { ownerUserId: string; deviceId: string; cursor?: string }) {
-  if (!serverOwnsCloudWake(args.ownerUserId, args.deviceId)) return false;
+  if (!(await serverWakeHost(ctx, args.ownerUserId, args.deviceId))) return false;
   const device = await getDevice(ctx, args.ownerUserId, args.deviceId);
   const now = Date.now();
   if (!device?.is_remote || now - device.last_seen < DEVICE_ONLINE_MS) return false;
@@ -236,7 +249,7 @@ export async function requestRemoteWake(ctx: { db: any; scheduler?: { runAfter(d
   if (!device?.is_remote) return false;
   const now = Date.now();
   const pending = typeof device.wake_requested_at === "number" && device.wake_requested_at > device.last_seen;
-  const retryFailed = device.cloud_wake?.status === "failed" && serverOwnsCloudWake(device.user_id, device.device_id);
+  const retryFailed = device.cloud_wake?.status === "failed" && !!(await serverWakeHost(ctx, device.user_id, device.device_id));
   const requestAt = pending && !retryFailed ? device.wake_requested_at : Math.max(now, device.last_seen + 1, (device.wake_requested_at ?? 0) + 1);
   if (requestAt !== device.wake_requested_at) await ctx.db.patch(device._id, { wake_requested_at: requestAt });
   await scheduleCloudWake(ctx, device, requestAt);

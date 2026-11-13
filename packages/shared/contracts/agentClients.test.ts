@@ -539,7 +539,7 @@ describe("picker options vs launch options", () => {
     expect(AGENT_PICKER_OPTIONS.map((o) => o.id)).toEqual(Object.keys(AGENT_CLIENTS) as Array<keyof typeof AGENT_CLIENTS>);
     expect(AGENT_PICKER_OPTIONS.filter((o) => !o.hosted).map((o) => o.id)).toEqual(AGENT_LAUNCH_OPTIONS.map((o) => o.id));
     const hosted = AGENT_PICKER_OPTIONS.filter((o) => o.hosted);
-    expect(hosted).toEqual([{ id: "codecast", convexType: "codecast", label: "Codecast assistant", hosted: true }]);
+    expect(hosted).toEqual([{ id: "codecast", convexType: "codecast", label: "Cast", hosted: true }]);
     for (const o of AGENT_PICKER_OPTIONS) {
       expect(o.convexType).toBe(AGENT_CLIENTS[o.id].convexId);
       expect(o.label).toBe(AGENT_CLIENTS[o.id].displayName);
@@ -560,7 +560,7 @@ describe("agentDisplayName", () => {
     expect(agentDisplayName(undefined)).toBe("Claude");
     expect(agentDisplayName("codex_cli")).toBe("Codex");
     expect(agentDisplayName("muse")).toBe("Muse Spark");
-    expect(agentDisplayName("codecast")).toBe("Codecast assistant");
+    expect(agentDisplayName("codecast")).toBe("Cast");
   });
 
   it("passes through a value the registry does not know", () => {
@@ -577,7 +577,7 @@ describe("the hosted codecast client", () => {
   it("translates both ways and is the only hosted client", () => {
     expect(fromConvexAgentType("codecast")).toBe("codecast");
     expect(toConvexAgentType("codecast")).toBe("codecast");
-    expect(AGENT_CLIENTS.codecast.displayName).toBe("Codecast assistant");
+    expect(AGENT_CLIENTS.codecast.displayName).toBe("Cast");
     expect(Object.keys(AGENT_CLIENTS).filter((id) => isHostedAgentType(id))).toEqual(["codecast"]);
     expect(isHostedAgentType("claude_code")).toBe(false);
     expect(isHostedAgentType(undefined)).toBe(false);

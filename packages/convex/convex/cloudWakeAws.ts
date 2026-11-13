@@ -97,11 +97,22 @@ export async function buildStartInstancesRequest(
   }
   if (!(now instanceof Date) || !Number.isFinite(now.getTime()) || now.getUTCFullYear() < 1970
     || now.getUTCFullYear() > 9999 || typeof dryRun !== "boolean") throw new CloudWakeAwsError("InvalidRequest");
-  const timestamp = amzTimestamp(now);
-  const date = timestamp.slice(0, 8);
-  const hostname = `ec2.${target.region}.amazonaws.com`;
   const body = new URLSearchParams({ Action: "StartInstances", Version: "2016-11-15", "InstanceId.1": target.instanceId });
   if (dryRun) body.set("DryRun", "true");
+  return signEc2Request(target.region, { accessKeyId, secretAccessKey, sessionToken }, body, now);
+}
+
+/** One signed EC2 Query API request (SigV4, form body). The caller has
+ *  validated the region and the credentials' shape. */
+export async function signEc2Request(
+  region: string,
+  { accessKeyId, secretAccessKey, sessionToken }: AwsWakeCredentials,
+  body: URLSearchParams,
+  now: Date,
+): Promise<{ url: string; method: "POST"; headers: Record<string, string>; body: string }> {
+  const timestamp = amzTimestamp(now);
+  const date = timestamp.slice(0, 8);
+  const hostname = `ec2.${region}.amazonaws.com`;
   const payload = body.toString();
   const headers: Record<string, string> = {
     "content-type": "application/x-www-form-urlencoded; charset=utf-8",
@@ -112,11 +123,11 @@ export async function buildStartInstancesRequest(
   const names = Object.keys(headers).sort();
   const signedHeaders = names.join(";");
   const canonicalHeaders = names.map((name) => `${name}:${headers[name]}\n`).join("");
-  const scope = `${date}/${target.region}/ec2/aws4_request`;
+  const scope = `${date}/${region}/ec2/aws4_request`;
   try {
     const canonical = ["POST", "/", "", canonicalHeaders, signedHeaders, await sha256Hex(payload)].join("\n");
     const toSign = ["AWS4-HMAC-SHA256", timestamp, scope, await sha256Hex(canonical)].join("\n");
-    const signature = await sigV4Signature(secretAccessKey, date, target.region, "ec2", toSign);
+    const signature = await sigV4Signature(secretAccessKey, date, region, "ec2", toSign);
     headers.authorization = `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
   } catch {
     throw new CloudWakeAwsError("SigningFailed");

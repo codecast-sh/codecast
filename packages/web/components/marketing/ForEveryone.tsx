@@ -38,7 +38,7 @@ export function ForEveryone() {
         <div>
           {/* Who is talking, before the headline speaks as "I". */}
           <p className="mb-3 text-[14px] font-medium" style={{ color: "var(--pd-ink-muted, #6b6152)" }}>
-            <span style={{ color: "var(--pd-ink, #1f1a14)" }}>The Codecast assistant</span>, for people who don&apos;t write code
+            <span style={{ color: "var(--pd-ink, #1f1a14)" }}>Cast</span>, for people who don&apos;t write code
           </p>
           <h2 className="text-[34px] leading-[1.12] sm:text-[42px]" style={{ fontFamily: READ, fontWeight: 500 }}>{ASSISTANT_HEADLINE}</h2>
           <p className="mt-4 max-w-md text-[16px] leading-relaxed" style={{ color: "var(--pd-ink-muted, #6b6152)" }}>

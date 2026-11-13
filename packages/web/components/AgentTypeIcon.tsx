@@ -51,7 +51,7 @@ export function AgentTypeIcon({ agentType, className = "w-3 h-3", mono = false }
       </svg>
     );
   } else if (isHostedAgentType(agentType)) {
-    // The hosted Codecast assistant wears the codecast mark knocked out of a
+    // The hosted Cast agent wears the codecast mark knocked out of a
     // solid disc: the bare mark's open ring read as a loading spinner at row
     // size, so an idle conversation looked busy.
     return (

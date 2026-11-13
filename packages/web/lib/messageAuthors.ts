@@ -42,7 +42,7 @@ export function messageAgentTypes(messages: readonly Message[], currentAgent?: s
     const change = switches.get(message._id);
     if (change) agent = change.to;
     // Clients that run other providers' models: the model names the vendor,
-    // never the author. The hosted Codecast assistant is one of them.
+    // never the author. The hosted Cast agent is one of them.
     const multiProvider = agent === "cursor" || agent === "opencode" || agent === "pi" || isHostedAgentType(agent);
     const author = switches.size > 0 || multiProvider
       ? agent ?? agentFromModel(message.model)

@@ -1,6 +1,6 @@
-// Starting a conversation with the hosted assistant (the Codecast assistant)
-// from a surface that holds only the text: the command palette's "Ask the
-// Codecast assistant", /welcome's first result, the phone. The same optimistic
+// Starting a conversation with the hosted assistant (Cast)
+// from a surface that holds only the text: the command palette's "Ask
+// Cast", /welcome's first result, the phone. The same optimistic
 // create every new-session entry point uses (inboxStore.beginOptimisticSession):
 // the stub row and the person's first message render at once, and
 // createSessionFromStub makes the real row with the stub's id as its
