@@ -27,6 +27,7 @@ import { DeclineRequest, ValueEditor } from "./ValueForm";
 import { askFirstOffLedger, deleteLedger, restoreLedger, rotateLedger, type LedgerTeam } from "../../lib/secretLedgers";
 import { EVENT_TONE, EVENT_VERB, HEALTH, envVars, formatIn, isStub, nameIssue, namesIn, isStaged, secretHealth, splitList, withPendingAskFirst } from "./vaultModel";
 import { modernButton } from "../ui/modernLook";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 const FOOTER_ACT = "h-7 rounded-md px-2.5 text-[12px] text-sol-text-dim hover:bg-sol-red/10 hover:text-sol-red";
 
@@ -443,7 +444,7 @@ function ShortIdButton({ id }: { id: string | undefined }) {
 /** `over` when it covers the list (a narrow page): a back row on top takes the close button's place. */
 export function SecretDetail({ row, rows, team, over, onClose }: { row: SecretMeta; rows: SecretMeta[]; team: { id: string; name: string } | null; over?: boolean; onClose: () => void }) {
   const { updateMeta, remove } = useVaultActions();
-  const people = useInboxStore((s) => peopleOf(s.teamMembers).length);
+  const people = useInboxStore((s) => peopleOf(teamMembersOf(s)).length);
   const now = useCoarseNow(60_000);
   const health = secretHealth(row, now);
   const [rotating, setRotating] = useState(false);
