@@ -182,8 +182,9 @@ describe("Modern header", () => {
     const modern = css.slice(start, css.indexOf("end of MODERN · THE CONVERSATION"));
     expect(start).toBeGreaterThan(0);
     expect(modern).toMatch(/\.modern-style \[data-sv-convhead\] \.cc-panel__title \{[^}]*font-size: var\(--fs-read\);[^}]*font-weight: 600;/);
-    expect(modern).toMatch(/\.modern-style \[data-sv-convhead\] \[data-cc-conv-status\] \{[^}]*border-radius: 9999px;/);
-    expect(modern).toMatch(/\[data-cc-conv-actions\] > :is\(button, a\) \{[^}]*min-height: 28px;/);
+    // Live pills (the status among them) share one round 22px shape.
+    expect(modern).toMatch(/\.modern-style \[data-sv-convhead\] :is\(\[data-cc-conv-status\][^)]*\) \{[^}]*height: 22px;[^}]*border-radius: 9999px;/);
+    expect(modern).toMatch(/\[data-cc-conv-actions\] > :is\(button, a\)[^{]*\{[^}]*min-height: 28px;/);
     expect(modern).not.toMatch(/cq-squeeze-row[^{]*\{[^}]*flex-wrap:\s*wrap/);
     // Every Modern rule is scoped to the style.
     for (const rule of modern.replace(/\/\*[\s\S]*?(\*\/|$)/g, "").matchAll(/([^{}@]+)\{[^{}]*\}/g)) {

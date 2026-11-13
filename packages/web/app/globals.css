@@ -200,11 +200,13 @@
    get the room. No dividers inside a fact. */
 [data-sv-convhead] [data-cc-facts] .divide-x > .cq-sq1 { display: none !important; }
 [data-sv-convhead] [data-cc-facts] .divide-x > * { border-left-width: 0 !important; }
-[data-sv-convhead] [data-cc-facts] > * + *::before {
+[data-sv-convhead] [data-cc-facts] > * + *::before,
+[data-sv-convhead] [data-cc-facts] [data-cc-fact-run] > * + *::before {
   content: "·";
   margin: 0 5px 0 4px;
   color: color-mix(in srgb, var(--sol-text-dim) 55%, transparent);
   flex: 0 0 auto;
+  align-self: center;
 }
 [data-sv-convhead] [data-cc-facts] .rounded-full,
 [data-sv-convhead] [data-cc-facts] .rounded {
@@ -215,6 +217,11 @@
   padding-left: 4px;
   padding-right: 4px;
 }
+/* A chip fact pads its own links for their hover fill, so the dot ahead of
+   it gives up its trailing margin and the chip its leading padding: the
+   space after every dot is the same. */
+[data-sv-convhead] [data-cc-facts] > :is(.rounded-full, .rounded):has(> :is(a, button)) { padding-left: 0; }
+[data-sv-convhead] [data-cc-facts] > :is(.rounded-full, .rounded):has(> :is(a, button))::before { margin-right: 0; }
 [data-sv-convhead] [data-cc-facts] .rounded-full:hover,
 [data-sv-convhead] [data-cc-facts] .rounded:hover {
   background: color-mix(in srgb, var(--sol-text) 6%, transparent);
@@ -3356,6 +3363,13 @@ diffs-container {
 .cc-fline[data-placement="outdated"] { border-left-color: color-mix(in srgb, var(--sol-yellow) 45%, transparent); }
 
 .cc-inline { margin: 0.4rem 0 0.55rem; }
+
+/* Layout frames never scroll. overflow: hidden still scrolls programmatically:
+   focusing a field that sits past the frame's edge (the comment rail's composer
+   mid slide-in) scrolls the nearest hidden ancestor to reveal it, and the page
+   stays shifted sideways. clip cannot be scrolled. Resizable groups set
+   overflow: hidden inline, hence !important. */
+[data-cc-shell], [data-group] { overflow: clip !important; }
 
 /* ── Right-docked rail (the conversation-wide thread) ─────────────────────── */
 .cc-railx {
@@ -7716,22 +7730,43 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   letter-spacing: -0.01em;
   color: var(--sol-text);
 }
-.modern-style [data-sv-convhead] [data-cc-facts] { color: var(--sol-text-muted); }
+/* The facts read as one line in one face: model, account and branch are
+   words here, not code. */
+.modern-style [data-sv-convhead] [data-cc-facts],
+.modern-style [data-sv-convhead] [data-cc-facts] .font-mono {
+  font-family: var(--font-ui);
+  color: var(--sol-text-muted);
+}
 .modern-style [data-sv-convhead] [data-cc-facts] :is(.rounded-full, .rounded) { color: var(--sol-text-muted); }
-.modern-style [data-sv-convhead] [data-cc-facts] [data-session-control-trigger] { font-family: var(--font-ui); }
-.modern-style [data-sv-convhead] [data-cc-conv-status] {
+/* Live pills (status, the machine, the backend, the image count) share one
+   shape: 22px, round, tinted, no ring. */
+.modern-style [data-sv-convhead] :is([data-cc-conv-status], [data-cc-runner], [data-sdk-pill], [data-cc-image-pill]) {
   height: 22px;
-  gap: 6px;
-  padding: 0 9px;
   border-radius: 9999px;
-  background: color-mix(in srgb, currentColor 12%, transparent);
+  border-color: transparent !important;
   font-size: var(--fs-meta);
   font-weight: 500;
 }
-.modern-style [data-sv-convhead] [data-cc-runner] { border-color: transparent; }
+.modern-style [data-sv-convhead] [data-cc-conv-status] {
+  gap: 6px;
+  padding: 0 9px;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+}
+.modern-style [data-sv-convhead] :is([data-sdk-pill], [data-cc-image-pill]) {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 9px;
+}
+.modern-style [data-sv-convhead] [data-cc-image-pill] > svg { width: 13px; height: 13px; }
+.modern-style [data-sv-convhead] [data-cc-runner] { background: color-mix(in srgb, var(--sol-text) 6%, transparent); }
+.modern-style [data-sv-convhead] [data-cc-runner] [data-runner-device] { height: 100% !important; }
+.modern-style [data-sv-convhead] [data-cc-runner] [data-runner-device] > span { align-items: center; }
 .modern-style [data-sv-convhead] [data-cc-runner] > * + * { border-left-color: transparent; }
-.modern-style [data-sv-convhead] [data-cc-conv-actions] { gap: 2px; }
-.modern-style [data-sv-convhead] [data-cc-conv-actions] > :is(button, a) {
+.modern-style [data-sv-convhead] [data-cc-conv-actions] { gap: 4px; }
+/* Actions are 28px ghost buttons with a 16px glyph. */
+.modern-style [data-sv-convhead] [data-cc-conv-actions] > :is(button, a):not([data-cc-image-pill]),
+.modern-style [data-sv-convhead] [data-cc-conv-actions] [data-share-trigger] {
   min-width: 28px;
   min-height: 28px;
   display: inline-flex;
@@ -7739,7 +7774,8 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   justify-content: center;
   border-radius: var(--radius-control, 6px);
 }
-.modern-style [data-sv-convhead] [data-cc-conv-actions] > :is(button, a) > svg {
+.modern-style [data-sv-convhead] [data-cc-conv-actions] > :is(button, a):not([data-cc-image-pill]) > svg,
+.modern-style [data-sv-convhead] [data-cc-conv-actions] [data-share-trigger] > svg {
   width: 16px;
   height: 16px;
 }
