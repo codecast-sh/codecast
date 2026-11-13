@@ -2378,6 +2378,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
         textareaRef.current?.blur();
         return;
       }
+      // While a turn runs the status line reads "Esc stop", so Escape stops it
+      // at once, and a quick second press (a double tap to be sure) stops
+      // nothing more and opens nothing. The double press that opens the branch
+      // map is for a session at rest.
+      if (turnRunning && !hasText && queuedMessages.length === 0) {
+        interruptTurn();
+        escapeQuietUntilRef.current = Date.now() + 400;
+        return;
+      }
       if (escapeTimerRef.current) {
         clearTimeout(escapeTimerRef.current);
         escapeTimerRef.current = null;

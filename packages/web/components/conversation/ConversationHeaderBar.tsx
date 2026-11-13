@@ -42,13 +42,12 @@ export function ConversationHeaderTitle({
       {text}
     </h1>
   );
-  if (!lead) return title;
-  return (
-    <span className="flex min-w-0 flex-1 items-center gap-2">
-      {lead}
-      {title}
-    </span>
-  );
+  // The mark sits beside the title in the squeeze row, never around it: the
+  // row's rules size the title as its own flex item (globals.css). Wrapped,
+  // the wrapper shrank to nothing while the title kept its full width inside
+  // it, so the title painted over the facts and the squeeze never saw an
+  // overflow to shed for.
+  return <>{lead}{title}</>;
 }
 
 /**

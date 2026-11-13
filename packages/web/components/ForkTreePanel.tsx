@@ -10,6 +10,9 @@ import { KeyCap } from "./KeyboardShortcutsHelp";
 import { relativeTime } from "./BranchSelector";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { hoverFocus } from "../shortcuts/focusSource";
+import { buildNavigatorRows, MACHINE_KIND_LABEL, type NavigatorRow } from "../lib/messageNavigator";
+import { resolveSessionTitle } from "../lib/sessionTitle";
+import { MachineKindIcon, MachineSourceLabel } from "./MessageBrowserPopover";
 import {
   useForkTree,
   branchDisplayCount,
@@ -155,13 +158,14 @@ function BranchRow({
   );
 }
 
+// One fork point. A prompt the person typed carries its number among their
+// prompts; a message a machine delivered (another session, a trigger, a
+// teammate) names its sender instead, the way the message browser draws it.
 function MessageRow({
-  msg, num, isSelected, isCurrentBranch, onClick, onFork, onMouseEnter, rowRef,
+  row, isSelected, onClick, onFork, onMouseEnter, rowRef,
 }: {
-  msg: NavMsg;
-  num: number;
+  row: NavigatorRow;
   isSelected: boolean;
-  isCurrentBranch: boolean;
   onClick: () => void;
   // Absent when this message is not a fork point for the branch's client
   // (a native-fork client forks only from its tip).
@@ -169,18 +173,31 @@ function MessageRow({
   onMouseEnter: () => void;
   rowRef?: React.Ref<HTMLDivElement>;
 }) {
+  const machine = row.kind !== "user";
   return (
     <div
       ref={rowRef}
       onClick={onClick}
       onMouseEnter={onMouseEnter}
       className={`group w-full flex items-start gap-2 pl-2 pr-1 py-1.5 rounded text-xs text-left transition-colors relative cursor-pointer ${
-        isSelected ? "bg-sol-cyan/15 text-sol-text" : "hover:bg-sol-bg-alt text-sol-text-secondary"
+        isSelected ? "bg-sol-cyan/15 text-sol-text" : machine ? "hover:bg-sol-bg-alt text-sol-text-dim" : "hover:bg-sol-bg-alt text-sol-text-secondary"
       }`}
     >
       {isSelected && <span className="absolute left-0 top-0.5 bottom-0.5 w-0.5 rounded-full bg-sol-cyan" />}
-      <span className={`font-mono text-meta mt-0.5 w-5 text-right flex-shrink-0 tabular-nums ${isSelected ? "text-sol-cyan" : "text-sol-text-dim/50"}`}>{num}</span>
-      <span className="flex-1 min-w-0 line-clamp-2 leading-snug">{msg.content}</span>
+      {row.kind !== "user" ? (
+        <span className="mt-0.5 w-6 flex-shrink-0 flex justify-end text-sol-violet/70"><MachineKindIcon kind={row.kind} /></span>
+      ) : (
+        <span className={`font-mono text-meta mt-0.5 w-6 text-right flex-shrink-0 tabular-nums ${isSelected ? "text-sol-cyan" : "text-sol-text-dim/50"}`}>{row.originalIndex + 1}</span>
+      )}
+      <span className="flex-1 min-w-0">
+        {row.kind !== "user" && (
+          <span className="flex items-center gap-1.5 text-meta min-w-0">
+            <span className="text-sol-violet/80 flex-shrink-0">{MACHINE_KIND_LABEL[row.kind]}</span>
+            {row.source && <span className="text-sol-text-muted truncate min-w-0"><MachineSourceLabel kind={row.kind} source={row.source} /></span>}
+          </span>
+        )}
+        {row.display && <span className={`block leading-snug ${machine ? "line-clamp-1" : "line-clamp-2"} ${row.isCmd ? "font-mono" : ""}`}>{row.display}</span>}
+      </span>
       {onFork && <button
         onClick={(e) => { e.stopPropagation(); onFork(); }}
         title="Fork from this message"
@@ -193,6 +210,8 @@ function MessageRow({
 }
 
 type Mode = "branches" | "messages";
+// The least a squeezed tray keeps: its two header rows, a few rows, the key hints.
+const TRAY_MIN_PX = 200;
 
 function ForkTreeContent({
   conversation, conversationId, currentBranchId, open, initialDrillId, containerRef, onClose, onSwitchToConversation, onForkFromBranch, forkAnyMessage, onRewindCurrent,
@@ -291,12 +310,22 @@ function ForkTreeContent({
     arr.sort((a, b) => a.timestamp - b.timestamp); // oldest → newest
     return arr;
   }, [drillMsgsRaw]);
+  // What the list shows: the same rows the message browser builds, so a
+  // message another session or a trigger delivered reads as its sender and
+  // its words, never as the wire tag it travelled in.
+  const drillRows = useMemo(() => buildNavigatorRows(drillMsgs, undefined, resolveSessionTitle), [drillMsgs]);
+  // Each row's place in the whole branch, which a rewind counts back from.
+  const rawIndexById = useMemo(() => new Map(drillMsgs.map((m, i) => [m._id, i])), [drillMsgs]);
   const visibleMsgs = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    if (!q) return drillMsgs;
-    return drillMsgs.filter((m) => (m.content || "").toLowerCase().includes(q));
-  }, [drillMsgs, filter]);
-  const selectedMsg: NavMsg | undefined = visibleMsgs[msgSel];
+    if (!q) return drillRows;
+    return drillRows.filter((r) => `${r.display} ${r.source ?? ""}`.toLowerCase().includes(q));
+  }, [drillRows, filter]);
+  const rawOf = useCallback((row: NavigatorRow | undefined): NavMsg | undefined => {
+    const i = row ? rawIndexById.get(row._id) : undefined;
+    return i === undefined ? undefined : drillMsgs[i];
+  }, [rawIndexById, drillMsgs]);
+  const selectedMsg: NavMsg | undefined = rawOf(visibleMsgs[msgSel]);
 
   // Default message selection to the newest (tip) whenever the list (re)loads.
   useWatchEffect(() => {
@@ -350,17 +379,17 @@ function ForkTreeContent({
     onClose();
   }, [onForkFromBranch, onClose]);
 
-  const rewindToMsg = useCallback((branchId: string, idx: number, list: NavMsg[]) => {
-    const m = list[idx];
+  const rewindToMsg = useCallback((branchId: string, m: NavMsg | undefined) => {
     if (!m?.message_uuid) return;
     if (branchId === currentBranchId) {
-      onRewindCurrent(m.message_uuid, list.length - 1 - idx);
+      // Counted in the whole branch, not in the rows a filter left showing.
+      onRewindCurrent(m.message_uuid, drillMsgs.length - 1 - (rawIndexById.get(m._id) ?? drillMsgs.length - 1));
       onClose();
     } else {
       // Can't rewind a branch you're not on — forking is the safe equivalent.
       forkFromMsg(branchId, m);
     }
-  }, [currentBranchId, onRewindCurrent, onClose, forkFromMsg]);
+  }, [currentBranchId, onRewindCurrent, onClose, forkFromMsg, drillMsgs, rawIndexById]);
 
   // Keep focus inside the [data-owns-keys] container whenever the panel isn't in
   // its filter input — on open, and after leaving filter mode (blurring the
@@ -376,13 +405,17 @@ function ForkTreeContent({
   useWatchEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
-      if (filtering) return; // the filter input owns keys while active
+      // The filter input owns keys while the caret is in it. A press on a row
+      // takes the caret out with the filter still on; the map's own keys work
+      // again from there, or Escape and the arrows would reach nothing at all.
+      if (filtering && document.activeElement === filterRef.current) return;
       const k = e.key;
       const stop = () => { e.preventDefault(); e.stopPropagation(); };
       if (k === "/") { stop(); enterFilter(); return; }
       if (k === "Escape") {
         stop();
-        if (mode === "messages") messagesBack();
+        if (filtering) exitFilter();
+        else if (mode === "messages") messagesBack();
         else onClose();
         return;
       }
@@ -411,7 +444,7 @@ function ForkTreeContent({
         }
       } else {
         if (k === "f" || k === "F") { stop(); if (drillId) forkFromMsg(drillId, selectedMsg); return; }
-        if (k === "Enter") { stop(); if (drillId) rewindToMsg(drillId, msgSel, visibleMsgs); return; }
+        if (k === "Enter") { stop(); if (drillId) rewindToMsg(drillId, selectedMsg); return; }
         if (k === "h" || k === "ArrowLeft") { stop(); backToBranches(); return; }
       }
       // The map owns the keyboard while open: swallow stray plain keys as
@@ -425,7 +458,7 @@ function ForkTreeContent({
     window.addEventListener("keydown", handler, true);
     return () => window.removeEventListener("keydown", handler, true);
   }, [open, filtering, mode, branchIdx, visibleBranches, selectedBranch, visibleMsgs, msgSel, drillId, selectedMsg,
-      enterFilter, backToBranches, messagesBack, onClose, switchToBranch, drillInto, forkFromMsg, rewindToMsg]);
+      enterFilter, exitFilter, backToBranches, messagesBack, onClose, switchToBranch, drillInto, forkFromMsg, rewindToMsg]);
 
   // Filter input: drives selection while typing.
   const onFilterKey = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -516,15 +549,13 @@ function ForkTreeContent({
         ) : visibleMsgs.length === 0 ? (
           <div className="py-6 text-center text-meta text-sol-text-dim">{filter ? "No messages match" : "No messages on this branch"}</div>
         ) : (
-          visibleMsgs.map((m, idx) => (
+          visibleMsgs.map((row, idx) => (
             <MessageRow
-              key={m._id}
-              msg={m}
-              num={idx + 1}
+              key={row._id}
+              row={row}
               isSelected={idx === msgSel}
-              isCurrentBranch={drillId === currentBranchId}
               onClick={() => setMsgSel(idx)}
-              onFork={forkAnyMessage || m === drillMsgs[drillMsgs.length - 1] ? () => drillId && forkFromMsg(drillId, m) : undefined}
+              onFork={forkAnyMessage || row._id === drillMsgs[drillMsgs.length - 1]?._id ? () => drillId && forkFromMsg(drillId, rawOf(row)) : undefined}
               onMouseEnter={hoverFocus(() => setMsgSel(idx)).onMouseEnter}
               rowRef={idx === msgSel ? rowRef : undefined}
             />
@@ -589,19 +620,48 @@ export function ForkMapBox({
     typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null,
   );
   useWatchEffect(() => () => restoreFocusRef.current?.focus?.(), []);
-  // Close on a mousedown outside the box (and outside the toggle control, so a
+  // Close on a press outside the box (and outside the toggle control, so a
   // click on the header icon toggles rather than close-then-reopen).
   useWatchEffect(() => {
     if (!open) return;
-    const handle = (e: MouseEvent) => {
+    const handle = (e: PointerEvent) => {
       const t = e.target as Node;
       if (boxRef.current?.contains(t)) return;
       if (getIgnore?.()?.contains(t)) return;
       onClose();
     };
-    const raf = requestAnimationFrame(() => document.addEventListener("mousedown", handle));
-    return () => { cancelAnimationFrame(raf); document.removeEventListener("mousedown", handle); };
+    // The press itself, in the capture phase: a surface that cancels its own
+    // pointerdown (which also suppresses the mousedown after it) or stops the
+    // event cannot keep the map open.
+    const raf = requestAnimationFrame(() => document.addEventListener("pointerdown", handle, true));
+    return () => { cancelAnimationFrame(raf); document.removeEventListener("pointerdown", handle, true); };
   }, [open, onClose, getIgnore]);
+  // The tray grows the composer upward, and the session's column scrolls as a
+  // whole once its fixed parts outgrow the window: with a task or plan detail
+  // open above, the map's own header slid out of view and the composer below
+  // the fold. So the tray gives back exactly what the column overflows by.
+  useWatchEffect(() => {
+    if (!tray || !open) return;
+    const el = boxRef.current;
+    let scroller = el?.parentElement ?? null;
+    while (scroller && !/auto|scroll/.test(getComputedStyle(scroller).overflowY)) scroller = scroller.parentElement;
+    if (!el || !scroller || typeof ResizeObserver === "undefined") return;
+    const column = scroller;
+    let raf = 0;
+    const fit = () => {
+      el.style.maxHeight = "";
+      const over = column.scrollHeight - column.clientHeight;
+      if (over > 0) el.style.maxHeight = `${Math.max(TRAY_MIN_PX, el.offsetHeight - over)}px`;
+    };
+    const queue = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(fit); };
+    const ro = new ResizeObserver(queue);
+    ro.observe(el);
+    ro.observe(column);
+    // The parts stacked with the composer: a detail opening above resizes one.
+    for (const part of el.closest("main")?.children ?? []) ro.observe(part);
+    fit();
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); el.style.maxHeight = ""; };
+  }, [tray, open]);
   // Tray mode mirrors the quote tray (.cc-review-tray): negative margins bleed it
   // to the composer box edges (which pads px-4 py-2), a faint cyan tint sets it
   // apart from the input, and only the top corners round to match the box.

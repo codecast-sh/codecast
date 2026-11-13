@@ -1243,8 +1243,21 @@ const ConversationViewInner = (
 
   // Double-Esc opens the unified branch map drilled straight into the current
   // branch's messages (the old standalone navigator is retired into the map).
+  const mapClosedAtRef = useRef(0);
+  const closeMap = useCallback(() => {
+    mapClosedAtRef.current = Date.now();
+    setTreePopoverOpen(false);
+  }, []);
+  // The map belongs to the session it was opened on: moving to another
+  // session closes it, or it would sit over that one listing the last
+  // session's messages.
+  useWatchEffect(() => { setTreePopoverOpen(false); }, [stableConvKey]);
   const handleOpenNavigator = useCallback(() => {
     if (!isOwner || !conversation?._id) return;
+    // Escape pressed again and again to get out closes the map on the first
+    // press; the presses after it are still leaving, never a new double press
+    // that opens it again.
+    if (Date.now() - mapClosedAtRef.current < 600) return;
     // Always open — even a disconnected/finished session or one with no user
     // messages yet drills into its (possibly empty) message list. The drilled
     // view fetches its own messages, so it doesn't depend on session status.
@@ -5123,7 +5136,7 @@ const ConversationViewInner = (
           currentBranchId={conversation._id.toString()}
           open={treePopoverOpen}
           initialDrillId={mapDrill}
-          onClose={() => setTreePopoverOpen(false)}
+          onClose={closeMap}
           onSwitchToConversation={handleTreeSwitchConversation}
           onForkFromBranch={handleForkFromBranch}
           forkAnyMessage={forkAnyMessage}
@@ -5224,7 +5237,7 @@ const ConversationViewInner = (
                   conversationId={conversation._id.toString()}
                   currentBranchId={conversation._id.toString()}
                   initialDrillId={mapDrill}
-                  onClose={() => setTreePopoverOpen(false)}
+                  onClose={closeMap}
                   onSwitchToConversation={handleTreeSwitchConversation}
                   onForkFromBranch={handleForkFromBranch}
                   forkAnyMessage={forkAnyMessage}

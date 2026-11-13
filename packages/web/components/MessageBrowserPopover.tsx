@@ -35,13 +35,13 @@ const SHORT_ID_RE = /^[a-z0-9]{7}$/;
 // Source label for a machine-delivered row. A session source that the store
 // couldn't resolve (sender pruned/dismissed locally) still renders as a bare
 // short id here — resolve it server-side the same way EntityIdPill does.
-function MachineSourceLabel({ kind, source }: { kind: HiddenKind; source: string }) {
+export function MachineSourceLabel({ kind, source }: { kind: HiddenKind; source: string }) {
   const needsLookup = kind === "session" && SHORT_ID_RE.test(source);
   const resolved = useQueryNoThrow(api.conversations.webGet, needsLookup ? { short_id: source } : "skip").data;
   return <>{(needsLookup && resolved?.title) || source}</>;
 }
 
-function MachineKindIcon({ kind }: { kind: HiddenKind }) {
+export function MachineKindIcon({ kind }: { kind: HiddenKind }) {
   const d =
     kind === "schedule"
       ? "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
