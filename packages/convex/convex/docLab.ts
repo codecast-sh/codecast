@@ -235,8 +235,9 @@ export const runOnDoc = action({
     const result = await runLab({ ctx, scope: { workspace: doc.workspace ?? null, apiToken: args.api_token } }, req.tool === "alternatives" ? { ...req, context } : req, clean);
     const landed = applyLabResult(md, result, { target: req.tool === "alternatives" ? req.target : undefined, occurrence: args.occurrence });
     if (landed.md !== md) {
-      await ctx.runMutation(api.docs.update, { api_token: args.api_token, id: args.id, content: landed.md, session_id: args.session_id });
-      await ctx.runMutation(api.docs.resetSync, { api_token: args.api_token, id: args.id, content: landed.md });
+      // The model ran for seconds on the text read above: a person typing or
+      // another writer since then refuses this write rather than losing theirs.
+      await ctx.runMutation(api.docs.update, { api_token: args.api_token, id: args.id, content: landed.md, session_id: args.session_id, base: doc.revision });
     }
     return {
       result,
