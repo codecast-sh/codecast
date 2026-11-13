@@ -41,6 +41,7 @@ import { ReviewBar } from "./ReviewBar";
 import { useReviewComposer } from "./reviewContext";
 import { appendToDraft } from "../lib/quoteFormat";
 import { attachReviewToMessage } from "../lib/reviewActions";
+import { teamMembersOf } from "../lib/activeTeam";
 // ── Live composer co-presence ────────────────────────────────────────────────
 // Thin wrapper over the shared doc_presence hook (hooks/useDocPresence) keyed by a
 // synthetic "compose:<conversationId>" id, so each side sees who else is in the box
@@ -123,7 +124,7 @@ export function CollabPresenceBar({ present, showHere, boxed = false, joint, sha
   /** The chat with the people on this conversation (ConversationChat), at the row's end. */
   chat?: ReactNode;
 }) {
-  const roster = useInboxStore((s) => rosterIdentity(s.teamMembers)) as ChatMember[];
+  const roster = useInboxStore((s) => rosterIdentity(teamMembersOf(s))) as ChatMember[];
   const typing = shared ? [] : typingRows(present);
   const writer = typing[0];
   const coWriters = shared ? present.filter(inSharedDraft) : [];

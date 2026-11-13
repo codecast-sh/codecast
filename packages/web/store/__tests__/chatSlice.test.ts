@@ -514,6 +514,20 @@ describe("chat store slice", () => {
       expect(calls[0].args).toEqual([CHANNEL, realId]);
     });
 
+    it("keeps a stamp that sits ahead of this clock, so that line does not stay unread", () => {
+      const realId = serverId("msg-ahead");
+      const ahead = Date.now() + 5_000;
+      useInboxStore.getState().syncTable("chatMessages", [{
+        _id: realId, channel_id: CHANNEL, user_id: THEM, content: "hi", created_at: ahead, updated_at: ahead,
+      }]);
+
+      useInboxStore.getState().markChannelRead(CHANNEL, realId);
+
+      const read = Object.values(useInboxStore.getState().chatReads)
+        .find((r) => r.channel_id === CHANNEL)!;
+      expect(read.last_read_at).toBe(ahead);
+    });
+
     it("never moves the mark backwards", () => {
       const older = serverId("msg1");
       const newer = serverId("msg2");
