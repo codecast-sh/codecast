@@ -124,7 +124,8 @@ async function runJudge(prompt: string, dir: string): Promise<JudgedVerdict> {
   if (r.isError) throw new Error(`the judge run failed (exit ${r.exitCode}${r.text ? `: ${r.text.slice(0, 200)}` : ''}); see ${r.dir}`);
   const parsed = parseJsonBlock(r.text) as { score?: unknown; reasoning?: unknown } | null;
   const score = typeof parsed?.score === 'number' ? Math.max(0, Math.min(1, parsed.score)) : null;
-  if (score === null) return { score: 0, pass: false, reasoning: `the judge returned no score: ${r.text.slice(0, 200)}`, costUsd: r.costUsd, model: JUDGE_MODEL };
+  // Nor does a judge whose answer holds no score it can be read by: the rep is a crash and runs again.
+  if (score === null) throw new Error(`the judge returned no score (${r.text.slice(0, 200)}); see ${r.dir}`);
   return { score, pass: score >= PASS_AT, reasoning: typeof parsed?.reasoning === 'string' ? parsed.reasoning : null, costUsd: r.costUsd, model: JUDGE_MODEL };
 }
 
