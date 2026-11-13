@@ -18,6 +18,7 @@ import { isForeignSession } from "./liveEntities";
 import { activeTeamIdOf } from "./activeTeam";
 import { formatShortDate } from "./utils";
 import { featurePageRedirect } from "./teamFeatures";
+import { teamMembersOf } from "./activeTeam";
 
 // What a visit points at, resolved live so a row can show the object's own
 // detail (a task's status, a plan's progress, a label's session count).
@@ -60,7 +61,7 @@ function resolvePageObject(state: any, path: string): { objectType: VisitObjectT
         entity: channel,
         title: channelDisplayName(
           { name: "", kind: "dm", dmMemberIds: dmOtherIds(channel.dm_key, String(state.currentUser?._id ?? "")) },
-          state.teamMembers,
+          teamMembersOf(state),
         ),
       };
     }

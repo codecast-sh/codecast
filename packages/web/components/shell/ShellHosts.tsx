@@ -6,6 +6,7 @@ import { useMountEffect } from "../../hooks/useMountEffect";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useCallsAvailable, useTeamFeature } from "../../lib/teamFeatures";
 import { useInboxStore, type CreateModalKind } from "../../store/inboxStore";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 const CommandPalette = lazy(() =>
   import("../CommandPalette").then((module) => ({ default: module.CommandPalette })),
@@ -51,7 +52,7 @@ function CloseCreateModalOnCrash() {
 function CreateModal({ kind }: { kind: CreateModalKind }) {
   const router = useRouter();
   const { user: currentUser } = useCurrentUser();
-  const teamMembers = useInboxStore((s) => s.teamMembers);
+  const teamMembers = useInboxStore(teamMembersOf);
   const defaults = useInboxStore((s) => s.createModalDefaults);
   const closeCreateModal = useInboxStore((s) => s.closeCreateModal);
   // Per-team opt-ins: no channel dialog without chat, no huddle without calls.
