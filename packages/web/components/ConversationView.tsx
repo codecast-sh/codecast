@@ -29,6 +29,7 @@ import { useStorageImageUrls } from "../hooks/useStorageImageUrl";
 import { extractSessionImages, mergeSessionImages, type SessionImageEntry } from "../lib/sessionImages";
 import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { getShareTokenScope, shareTokenArg } from "../lib/shareTokenScope";
+import { ReferenceScopeContext } from "../lib/entityDisplay";
 import { useRecordConversationOpen } from "../lib/accessLogOpen";
 import { BrowserPaneOfferChip } from "./browser/BrowserPaneOfferChip";
 import { BrowserSessionContext } from "../hooks/useBrowserTabActions";
@@ -178,7 +179,8 @@ import { COMPACT_TAIL_HEIGHT, EMPTY_CHILD_CONVERSATIONS, EMPTY_RECEIPT_ENTRIES }
 import { FOLD_KEPT_USER_KINDS, canAnchorForkChips, classifyUserMessage, cleanStickyContent, stickyCommand, extractCompactionSummaryContent, isAlwaysVisibleToolCall, isHiddenStubMessage, isStickyWorthy, isToolReceiptRow, normalizePendingContent, parseCastCommand, parseWorkflowEventContent, sameStringArray, stripSystemTags } from "./conversation/classify";
 import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversationFormat";
 import { PeerTransferStrip } from "./conversation/PeerTransferStrip";
-import { ConversationAgeMenuItems, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
+import { ConversationAgeMenuItems, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SummaryOnlyState, SessionGalleryButton, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
+import { SessionAccountLine } from "./conversation/SessionAccountLabel";
 import { HeaderModelControl } from "./SessionControlMenu";
 import { DENSITY_BY_CONVERSATION, DENSITY_OPTIONS, FEED_DENSITY_CYCLE, defaultDensity } from "../lib/conversationDensity";
 import { followRestoredConversation } from "../lib/followRestoredConversation";
@@ -614,7 +616,12 @@ const ConversationViewInner = (
   const onTargetSettledRef = useRef(onTargetSettled);
   onTargetSettledRef.current = onTargetSettled;
 
-  const convLink = useCallback((id: string) => `/conversation/${id}`, []);
+  // A link to a conversation this tab opened through its share link presents
+  // that link again (a guest going from a worker back to its parent).
+  const convLink = useCallback((id: string) => {
+    const token = getShareTokenScope(id);
+    return `/conversation/${id}${token ? `?share=${encodeURIComponent(token)}` : ""}`;
+  }, []);
 
   const generateShareLink = useMutation(api.messages.generateMessageShareLink);
   const pinToProfile = useMutation(api.conversations.pinToProfile);
@@ -898,6 +905,10 @@ const ConversationViewInner = (
     setShareSelectionMode(true);
     setSelectedMessageIds(new Set([messageId]));
   }, []);
+
+  // Sharing messages by link is the owner's to do (the server refuses anyone
+  // else), so the control exists only for them.
+  const startShareSelection = isOwner && !guest ? handleStartShareSelection : undefined;
 
   const handleToggleMessageSelection = useCallback((messageId: string) => {
     setSelectedMessageIds(prev => {
@@ -2152,6 +2163,15 @@ const ConversationViewInner = (
     copyToClipboard(url).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy"));
   }, [conversation?._id]);
   usePaneShortcutAction('conv.copyLink', copyConversationLink);
+  // A share-link viewer resolves this conversation's session references
+  // through it, so its shared workers name and open (ReferenceScopeContext).
+  const scopeConvId = conversation?._id ? String(conversation._id) : null;
+  const scopeToken = getShareTokenScope(scopeConvId);
+  const viaShare = !!scopeToken || conversation?.access_level === "shared";
+  const referenceScope = useMemo(
+    () => (scopeConvId && viaShare ? { conversationId: scopeConvId, shareToken: scopeToken } : null),
+    [scopeConvId, viaShare, scopeToken],
+  );
 
   usePaneShortcutAction('conv.favorite', useCallback(() => {
     if (!conversation || !isOwner) return;
@@ -3692,7 +3712,7 @@ const ConversationViewInner = (
     if (msg.role === "system") {
       if (foldWorkingTurns && !cleanKeepsSystemRow(msg.content, msg.subtype)) return null;
       if (isLimitNoticeSuperseded(msg.content, msg.subtype, getPreviousNonToolResultMessage(index), isRecoveryContinue(nextMessage(index)))) return null;
-      return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} timestamp={msg.timestamp} messageUuid={msg.message_uuid} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
+      return <SystemBlock key={msg._id} content={msg.content || ""} subtype={msg.subtype} timestamp={msg.timestamp} messageUuid={msg.message_uuid} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={startShareSelection} />;
     }
 
     if (msg.role === "user") {
@@ -3781,7 +3801,7 @@ const ConversationViewInner = (
         case 'compaction_summary':
           return <CompactionSummaryBlock key={msg._id} content={msg.content!} />;
         case 'plan':
-          return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={false} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={handleStartShareSelection} />;
+          return <PlanBlock key={msg._id} content={kind.planContent} timestamp={msg.timestamp} collapsed={false} messageId={msg._id} conversationId={conversation?._id} onStartShareSelection={startShareSelection} />;
         case 'teammate_events':
           return <TeammateEventsBlock key={msg._id} content={msg.content || ""} timestamp={msg.timestamp} spawnedByConversationId={(conversation as any)?.spawned_by_conversation_id} agentNameToChildMap={agentNameToChildMap} />;
         case 'direct_user':
@@ -3821,7 +3841,7 @@ const ConversationViewInner = (
           // option; the footer carries the question and the way back to the ask.
           const decision = kind.kind === 'decision_answer' ? kind.decision : undefined;
           const forkSeedParent = isForkSeedClientId(msg.client_id) ? conversation?.forked_from : undefined;
-          const userPrompt = <UserPrompt key={msg._id} bubble={foldWorkingTurns} content={kind.kind === 'direct_user' ? kind.body : decision ? decision.answer : (msg.content || "")} decision={decision} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender ? msgSender.avatar_url : directFrom ? null : conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={handleStartShareSelection} onForkFromMessage={forkHandlerFor(msg.message_uuid)} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
+          const userPrompt = <UserPrompt key={msg._id} bubble={foldWorkingTurns} content={kind.kind === 'direct_user' ? kind.body : decision ? decision.answer : (msg.content || "")} decision={decision} images={msg.images} timestamp={msg.timestamp} messageId={msg._id} messageUuid={msg.message_uuid} conversationId={conversation?._id} collapsed={false} userName={userName} avatarUrl={msgSender ? msgSender.avatar_url : directFrom ? null : conversation?.user?.avatar_url} isHighlighted={highlightedMessageId === msg._id} shareSelectionMode={shareSelectionMode} isSelectedForShare={selectedMessageIds.has(msg._id)} onToggleShareSelection={handleToggleMessageSelection} onStartShareSelection={startShareSelection} onForkFromMessage={forkHandlerFor(msg.message_uuid)} forkChildren={msg.message_uuid ? forkPointMap[msg.message_uuid] : undefined} onBranchSwitch={handleBranchSwitch} activeBranchId={activeBranchId} loadingBranchId={loadingBranchId} isPending={!!msg._isOptimistic} isQueued={!!msg._isQueued} agentStatus={isSessionDisconnected || conversation?.status !== "active" ? undefined : (managedSession?.agent_status as LiveAgentStatus | undefined)} mainDivergentPreview={msg.message_uuid ? conversation?.main_divergent_previews_by_fork?.[msg.message_uuid] : undefined} />;
           // A permission ask's answer reads as its one-line record instead.
           const prompt = decision ? <PermissionAnswer key={msg._id} decision={decision}>{userPrompt}</PermissionAnswer> : userPrompt;
           // A clean thread shows the agent took the message while it works on a reply.
@@ -3936,7 +3956,7 @@ const ConversationViewInner = (
           shareSelectionMode={shareSelectionMode}
           isSelectedForShare={selectedMessageIds.has(msg._id)}
           onToggleShareSelection={handleToggleMessageSelection}
-          onStartShareSelection={handleStartShareSelection}
+          onStartShareSelection={startShareSelection}
           agentType={messageAuthors.get(msg._id)}
           taskSubjectMap={taskSubjectMap}
           taskRecordMap={taskRecordMap}
@@ -4094,6 +4114,7 @@ const ConversationViewInner = (
   ) : null;
 
   const el = (
+    <ReferenceScopeContext.Provider value={referenceScope}>
     <HighlightContext.Provider value={highlightQuery}>
     <FilePathContext.Provider value={filePathCtx}>
     <WorktreesProvider repository={codeRepository}>
@@ -4556,6 +4577,7 @@ const ConversationViewInner = (
                       <>
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Session</DropdownMenuLabel>
+                    <SessionAccountLine conversationId={conversation?._id} />
                       </>
                     )}
                     {/* The header shows a huddle only while one is live; starting one lives here. */}
@@ -4908,7 +4930,9 @@ const ConversationViewInner = (
         ) : (!conversation || timeline.length === 0) ? (
           <div className={`flex-1 flex flex-col items-center gap-3 ${newSessionPage ? "justify-end pt-6 pb-5" : hideHeader ? "justify-start pt-6" : "justify-start pt-16"}`}>
             {conversation && (
-              (conversation.fork_status === "copying" || (conversation.message_count ?? 0) > 0) ? (
+              (conversation as any).content_access === "summary" ? (
+                <SummaryOnlyState conversation={conversation as any} />
+              ) : (conversation.fork_status === "copying" || (conversation.message_count ?? 0) > 0) ? (
                 <MessagesUnavailableState
                   messageCount={conversation.message_count ?? 0}
                   forkStatus={conversation.fork_status}
@@ -5473,6 +5497,7 @@ const ConversationViewInner = (
     </WorktreesProvider>
     </FilePathContext.Provider>
     </HighlightContext.Provider>
+    </ReferenceScopeContext.Provider>
   );
   devCountElements("ConversationView2", el, performance.now() - renderStart);
   return el;

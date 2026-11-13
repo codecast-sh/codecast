@@ -21,11 +21,11 @@ const T2 = 2_000;
 const T3 = 3_000;
 
 describe("effectiveMembershipVisibility", () => {
-  test("no history: every session reads at the current level; a missing level is summary", () => {
+  test("no history: every session reads at the current level; a missing level is full", () => {
     expect(effectiveMembershipVisibility({ visibility: "full" }, 5)).toBe("full");
-    expect(effectiveMembershipVisibility({}, 5)).toBe("summary");
-    expect(effectiveMembershipVisibility(null, 5)).toBe("summary");
-    expect(effectiveMembershipVisibility({ visibility: "bogus" }, 5)).toBe("summary");
+    expect(effectiveMembershipVisibility({}, 5)).toBe("full");
+    expect(effectiveMembershipVisibility(null, 5)).toBe("full");
+    expect(effectiveMembershipVisibility({ visibility: "bogus" }, 5)).toBe("full");
   });
 
   test("a session started before the boundary keeps the pinned level; at or after it reads current", () => {

@@ -42,5 +42,5 @@ export const TEAM_VISIBILITY_OPTIONS: TeamVisibilityOption[] = [
 ];
 
 export function teamVisibilityOption(level: string | null | undefined): TeamVisibilityOption {
-  return TEAM_VISIBILITY_OPTIONS.find((o) => o.value === level) ?? TEAM_VISIBILITY_OPTIONS[2];
+  return TEAM_VISIBILITY_OPTIONS.find((o) => o.value === level) ?? TEAM_VISIBILITY_OPTIONS[3];
 }

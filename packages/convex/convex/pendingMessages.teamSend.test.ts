@@ -113,10 +113,10 @@ function world(opts: { bobLive?: boolean; bobIdle?: boolean; bobDaemonOnline?: b
     ],
     teams: [{ _id: "tA" }],
     team_memberships: [
-      { _id: "mAlice", user_id: "uAlice", team_id: "tA", visibility: "summary" },
-      { _id: "mBob", user_id: "uBob", team_id: "tA", visibility: "summary" },
-      { _id: "mBot", user_id: "uBot", team_id: "tA", visibility: "summary" },
-      { _id: "mBot2", user_id: "uBot2", team_id: "tA", visibility: "summary" },
+      { _id: "mAlice", user_id: "uAlice", team_id: "tA", visibility: "full" },
+      { _id: "mBob", user_id: "uBob", team_id: "tA", visibility: "full" },
+      { _id: "mBot", user_id: "uBot", team_id: "tA", visibility: "full" },
+      { _id: "mBot2", user_id: "uBot2", team_id: "tA", visibility: "full" },
     ],
     conversations: [
       { _id: "convAlice", user_id: "uAlice", short_id: "jxalice", session_id: "sess-alice", is_private: true, status: "active" },

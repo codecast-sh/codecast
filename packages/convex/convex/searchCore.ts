@@ -18,7 +18,7 @@ import {
   type Evidence,
 } from "@codecast/shared/search";
 
-export { contentMatchesSearch, contentMatchesAnyTerm, type ParsedTerms, type Evidence };
+export { contentMatchesSearch, contentMatchesAnyTerm, relevanceOf, type ParsedTerms, type Evidence };
 export const parseSearchTerms = parseQueryTerms;
 
 export function conversationMatchesAllTerms(
@@ -86,13 +86,13 @@ export function rankConversationsByCoverage<M extends RankableMessage>(
   return ranked.sort((a, b) => b.coverage - a.coverage);
 }
 
-/** Relevance of a ranked conversation once its own fields (title, summaries,
+/** A ranked conversation's evidence once its own fields (title, summaries,
  *  opening prompt, earlier titles) count as text the person wrote. */
-export function relevanceWithFields(
+export function evidenceWithFields(
   ranked: { evidence: Evidence },
   fields: Array<string | null | undefined>,
   terms: ParsedTerms,
-): number {
+): Evidence {
   const evidence: Evidence = {
     ...ranked.evidence,
     best: [...ranked.evidence.best],
@@ -101,7 +101,33 @@ export function relevanceWithFields(
     phrases: [...ranked.evidence.phrases],
   };
   for (const field of fields) addEvidence(evidence, field, terms, { own: true });
-  return relevanceOf(evidence, terms);
+  return evidence;
+}
+
+/** Relevance of a ranked conversation once its own fields count (evidenceWithFields). */
+export function relevanceWithFields(
+  ranked: { evidence: Evidence },
+  fields: Array<string | null | undefined>,
+  terms: ParsedTerms,
+): number {
+  return relevanceOf(evidenceWithFields(ranked, fields, terms), terms);
+}
+
+/** The query words a session holds nowhere, in its messages or its own fields. */
+export function missingWords(evidence: Evidence, terms: ParsedTerms): string[] {
+  return terms.words.filter((_, i) => !(evidence.best[i] > 0));
+}
+
+/** What a page of word-coverage results must say before its rows: when no
+ *  session holds every word, the rows are near misses, not answers. Names the
+ *  words no session holds at all. null when some session holds them all. */
+export function partialCoverage(
+  rows: Array<{ missing: string[] }>,
+  terms: ParsedTerms,
+): { words: string[]; missing_everywhere: string[] } | null {
+  if (rows.length === 0 || rows.some((r) => r.missing.length === 0)) return null;
+  const missing_everywhere = terms.words.filter((w) => rows.every((r) => r.missing.includes(w)));
+  return { words: terms.words, missing_everywhere };
 }
 
 /** The messages that show the query best, best first; ties keep pool order. */

@@ -137,6 +137,35 @@ function isConversationTeamVisibleSync(
   return false;
 }
 
+// How much of a session its team may read. "summary" is what each session was
+// about (title, summary, activity); "content" adds the conversation itself
+// (messages, tool calls, file changes, images, diffs). The session's own
+// team_visibility wins; else the owner's level in that team when it started.
+export type TeamReadLevel = "none" | "summary" | "content";
+
+export function teamReadLevelSync(
+  conversation: { is_private: boolean; team_visibility?: string; team_id?: any; user_id: any },
+  ownerMembershipVisibility: string
+): TeamReadLevel {
+  if (!isConversationTeamVisibleSync(conversation, ownerMembershipVisibility)) return "none";
+  const mode = conversation.team_visibility === "summary" || conversation.team_visibility === "full"
+    ? conversation.team_visibility
+    : ownerMembershipVisibility;
+  return mode === "full" ? "content" : "summary";
+}
+
+export async function teamReadLevel(ctx: DbCtx, conversation: ConversationForAccess): Promise<TeamReadLevel> {
+  if (!conversation.team_id) return "none";
+  const membership = await getOwnerMembership(ctx, conversation.user_id, conversation.team_id);
+  return teamReadLevelSync(conversation, effectiveMembershipVisibility(membership, conversation.started_at));
+}
+
+// THE team gate for a single session, and it fails closed: a teammate gets
+// access only to a session whose content is shared with them. Every caller
+// that hands back messages, tool calls, files or diffs goes through here
+// (directly or via checkConversationAccess / canAccessConversation), so a
+// session shared as a summary is unreadable by construction. Surfaces that
+// show only what a session was about ask canTeamMemberReadSummary instead.
 export async function canTeamMemberAccess(
   ctx: DbCtx,
   viewerId: Id<"users">,
@@ -144,7 +173,19 @@ export async function canTeamMemberAccess(
 ): Promise<boolean> {
   if (!conversation.team_id) return false;
   if (!(await isTeamMember(ctx, viewerId, conversation.team_id))) return false;
-  return isConversationTeamVisible(ctx, conversation);
+  return (await teamReadLevel(ctx, conversation)) === "content";
+}
+
+/** A teammate may see what this session was about: its title, summary and
+ *  activity, never its content. */
+export async function canTeamMemberReadSummary(
+  ctx: DbCtx,
+  viewerId: Id<"users">,
+  conversation: ConversationForAccess
+): Promise<boolean> {
+  if (!conversation.team_id) return false;
+  if (!(await isTeamMember(ctx, viewerId, conversation.team_id))) return false;
+  return (await teamReadLevel(ctx, conversation)) !== "none";
 }
 
 // Owner-or-team gate for a signed-in viewer. "Owner" is the same definition
@@ -232,7 +273,11 @@ type ConversationForFeed = {
 };
 
 export type TeamFeedFilter = {
+  /** The session is listed for this team (its title and summary may show). */
   isVisible: (conversation: ConversationForFeed) => boolean;
+  /** The session's CONTENT (prompts, messages, snippets) may show to this
+   *  team. A feed or search that returns message text gates on this. */
+  contentVisible: (conversation: ConversationForFeed) => boolean;
   /** The member's CURRENT level: the most they show for any session. Use it
    *  for member-level gates ("is this member hidden"); a conversation's own
    *  level is getVisibilityFor. */
@@ -258,14 +303,19 @@ export async function createTeamFeedFilter(
   const getVisibilityFor = (conversation: ConversationForFeed): string =>
     effectiveMembershipVisibility(membershipMap.get(conversation.user_id.toString()), conversation.started_at);
 
+  // Visible to THIS team only: a member of several teams shares each session
+  // with the one team it is routed to, never with every team they belong to.
   const isVisible = (conversation: ConversationForFeed): boolean => {
-    if (!conversation.team_id) return false;
+    if (!conversation.team_id || String(conversation.team_id) !== String(teamId)) return false;
     return isConversationTeamVisibleSync(conversation as any, getVisibilityFor(conversation));
   };
 
+  const contentVisible = (conversation: ConversationForFeed): boolean =>
+    isVisible(conversation) && teamReadLevelSync(conversation as any, getVisibilityFor(conversation)) === "content";
+
   const getVisibility = (userId: string): string => currentMembershipVisibility(membershipMap.get(userId));
 
-  return { isVisible, getVisibility, getVisibilityFor, memberships };
+  return { isVisible, contentVisible, getVisibility, getVisibilityFor, memberships };
 }
 
 // ── Profile activity visibility ──
@@ -303,8 +353,9 @@ export async function getProfileVisibilityPredicate(
   const isMember = filter.memberships.some(
     (m) => m.user_id.toString() === viewerId.toString()
   );
-  return (conversation) =>
-    profileConversationVisible(false, isMember, filter.getVisibilityFor(conversation), conversation);
+  // The feed filter's own rule, so a profile read under this team shows only
+  // what the owner shares with THIS team.
+  return (conversation) => isMember && filter.isVisible(conversation);
 }
 
 // ── Public profile visibility (the third, anonymous tier) ──

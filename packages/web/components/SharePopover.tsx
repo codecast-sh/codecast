@@ -3,7 +3,7 @@ import { Button } from "./ui/button";
 import { Forward, Link as LinkIcon } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from "./ui/tooltip";
-import { copyToClipboard } from "../lib/utils";
+import { copyText } from "../lib/copyText";
 import { openForwardToChat } from "../lib/forwardToChat";
 import { useTeamFeature } from "../lib/teamFeatures";
 import { toast } from "sonner";
@@ -57,7 +57,7 @@ function getShareStatus(isPrivate: boolean, teamVisibility: string | null | unde
   color: string;
 } {
   const isTeamShared = hasTeam && !isPrivate;
-  const mode = isPrivate ? "private" : (teamVisibility || "summary");
+  const mode = isPrivate ? "private" : (teamVisibility || "full");
 
   if (!isTeamShared && !hasShareToken) {
     return { label: "", color: "text-sol-text-dim" };
@@ -115,7 +115,7 @@ export function SharePopover({
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const [isUpdatingLink, setIsUpdatingLink] = useState(false);
 
-  const currentMode: VisibilityMode = isPrivate ? "private" : (teamVisibility as VisibilityMode || "summary");
+  const currentMode: VisibilityMode = isPrivate ? "private" : (teamVisibility as VisibilityMode || "full");
   const status = getShareStatus(isPrivate, teamVisibility, hasShareToken, hasTeam);
 
   // One link. Restricted, it is the page link: it opens for signed-in people
@@ -140,9 +140,9 @@ export function SharePopover({
 
   const handleCopyLink = async () => {
     if (!link) return;
+    // Copy while the popover still holds focus (a blurred page's clipboard refuses), then close; either way it says what happened.
+    await copyText(link, "Link copied");
     setIsOpen(false);
-    await copyToClipboard(link);
-    toast.success("Link copied");
   };
 
   const tooltipLabel = canManage ? (status.label || "Share settings") : "Share";

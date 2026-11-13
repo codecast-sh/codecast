@@ -19,14 +19,15 @@
 // (any of the contributor's machines that keeps the token, sealerFor) seals a
 // copy to each drawing machine's provider_key_pubkey (account_pool_copies); that machine
 // opens it and keeps the account as a `pool-…` profile, so the fleet store,
-// pins and auto-switch treat it as one more saved account. Usage has one
-// home, the holder's heartbeat; a copy carries none, and every read of a pool
-// profile's meter goes through poolUsageOverlay.
+// pins and auto-switch treat it as one more saved account. Every read of a
+// pool profile's meter goes through poolUsageOverlay, which keeps the newer
+// of the holder's heartbeat and the drawing machine's probe.
 
 import { mutation, query } from "./functions";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
+import { spendCapsOf, withSpendCap } from "./lib/spendCaps";
 import { isTeamMember } from "./privacy";
 import { profileHasSetupToken } from "./ccAccountsShared";
 import { normalizeEmail } from "./lib/sessionAccount";
@@ -448,27 +449,125 @@ export const storePoolCopies = mutation({
 // Reading the pool
 // ---------------------------------------------------------------------------
 
+function usageMeasured(usage: { fetched_at?: number } | null | undefined): boolean {
+  return typeof usage?.fetched_at === "number" && usage.fetched_at > 0;
+}
+
+/** The meter a ranking reads. The holder's reading stands when it is at least
+ *  as new as the drawer's. The drawer's stands when the drawer probed later,
+ *  which is the reading taken after the fleet moved onto the copy. A tie keeps
+ *  the holder: its OAuth meter is the better instrument. */
+function accountUsage(holderUsage: any, drawerUsage: any): any {
+  const holderAt = usageMeasured(holderUsage) ? holderUsage.fetched_at : 0;
+  const drawerAt = usageMeasured(drawerUsage) ? drawerUsage.fetched_at : 0;
+  if (holderAt > 0 && holderAt >= drawerAt) return holderUsage;
+  return drawerUsage ?? holderUsage;
+}
+
+/** Newest holder meter for this email on any share the viewer may draw.
+ *  One login is often two shares (a teammate's and the viewer's) plus a
+ *  local copy the pool pass never stamped. A copy whose own holder has no
+ *  reading must not be the meter: auto-switch scores "no reading" as unknown
+ *  and leaves the account for whichever other login has a number. */
+async function bestSharedUsage(ctx: Ctx, userId: Id<"users">, emails: readonly string[]): Promise<any | undefined> {
+  const want = normalizeEmail(emails[0] ?? "");
+  if (!want) return undefined;
+  const userIds = new Set<string>([String(userId)]);
+  const memberships = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
+    .collect();
+  for (const membership of memberships) {
+    if (!membership.team_id) continue;
+    const members = await ctx.db
+      .query("team_memberships")
+      .withIndex("by_team_id", (q: any) => q.eq("team_id", membership.team_id))
+      .collect();
+    for (const member of members) userIds.add(String(member.user_id));
+  }
+  let best: { at: number; usage: any } | undefined;
+  for (const uid of userIds) {
+    const seen = new Set<string>();
+    for (const raw of emails) {
+      for (const share of await accountRows(ctx, uid as Id<"users">, raw)) {
+        if (seen.has(String(share._id)) || normalizeEmail(share.email) !== want) continue;
+        seen.add(String(share._id));
+        if (!(await mayDraw(ctx, share, userId))) continue;
+        const holder = holderProfile(await holderDevice(ctx, share), share.email);
+        const usage = holder?.usage;
+        const at = usage?.fetched_at;
+        if (!usage || typeof at !== "number" || at <= 0) continue;
+        if (!best || at > best.at) best = { at, usage };
+      }
+    }
+  }
+  return best?.usage;
+}
+
+/** A profile of `email` that still has no reading takes the best holder meter
+ *  any drawable share of that login has. Only pool copies, and local profiles
+ *  named like one (`pool-…`), so an ordinary account that has not been probed
+ *  yet does not pay for a team scan. */
+async function fillUnmeasuredSharedUsage<P extends { name?: string; email?: string; pool_share_id?: string; usage?: any }>(
+  ctx: Ctx,
+  userId: Id<"users">,
+  profiles: P[],
+): Promise<P[]> {
+  const poolEmails = new Set(
+    profiles.filter((p) => p.pool_share_id && p.email).map((p) => normalizeEmail(p.email!)),
+  );
+  const rawByEmail = new Map<string, string[]>();
+  const need = new Set<string>();
+  for (const p of profiles) {
+    if (!p.email || usageMeasured(p.usage)) continue;
+    const key = normalizeEmail(p.email);
+    const raws = rawByEmail.get(key) ?? [];
+    if (!raws.includes(p.email)) raws.push(p.email);
+    rawByEmail.set(key, raws);
+    if (p.pool_share_id || poolEmails.has(key) || (p.name ?? "").startsWith("pool-")) need.add(key);
+  }
+  if (need.size === 0) return profiles;
+  const meters = new Map<string, any>();
+  for (const key of need) {
+    const usage = await bestSharedUsage(ctx, userId, rawByEmail.get(key) ?? []);
+    if (usage) meters.set(key, usage);
+  }
+  if (meters.size === 0) return profiles;
+  return profiles.map((p) => {
+    if (!p.email || usageMeasured(p.usage)) return p;
+    const usage = meters.get(normalizeEmail(p.email));
+    return usage ? { ...p, usage } : p;
+  });
+}
+
 /**
- * A machine's saved profiles with every pool copy read through its share: the
- * holder's meter in place of none, and copies whose share no longer counts
- * for `userId` left out (the machine has not dropped them yet). Auto-switch
- * and the web read a pool profile's usage only through here.
+ * A machine's saved profiles with every pool copy read through its share.
+ * The newer of the holder's meter and the drawer's probe stands, and the
+ * holder stands on a tie. A weekly-limit or spend-limit banner still in a
+ * parked session blocks the account whose week resets then, so a stale
+ * sub-100 reading cannot be chosen again while that reset is ahead. Copies
+ * whose share no longer counts for `userId` are left out. Auto-switch and
+ * the web read a pool profile's usage only through here.
  */
-export async function poolUsageOverlay<P extends { pool_share_id?: string; usage?: any }>(
+export async function poolUsageOverlay<P extends { name?: string; email?: string; pool_share_id?: string; usage?: any }>(
   ctx: Ctx,
   userId: Id<"users">,
   profiles: readonly P[],
 ): Promise<P[]> {
-  if (!profiles.some((p) => p.pool_share_id)) return [...profiles];
   const out: P[] = [];
-  for (const p of profiles) {
-    if (!p.pool_share_id) { out.push(p); continue; }
-    const share = await shareById(ctx, p.pool_share_id);
-    if (!share || !(await mayDraw(ctx, share, userId))) continue;
-    const holder = holderProfile(await holderDevice(ctx, share), share.email);
-    out.push({ ...p, usage: holder?.usage });
+  if (profiles.some((p) => p.pool_share_id)) {
+    for (const p of profiles) {
+      if (!p.pool_share_id) { out.push(p); continue; }
+      const share = await shareById(ctx, p.pool_share_id);
+      if (!share || !(await mayDraw(ctx, share, userId))) continue;
+      const holder = holderProfile(await holderDevice(ctx, share), share.email);
+      out.push({ ...p, usage: accountUsage(holder?.usage, p.usage) });
+    }
+  } else {
+    out.push(...profiles);
   }
-  return out;
+  const filled = await fillUnmeasuredSharedUsage(ctx, userId, out);
+  return withSpendCap(filled, await spendCapsOf(ctx, userId, Date.now()));
 }
 
 /**

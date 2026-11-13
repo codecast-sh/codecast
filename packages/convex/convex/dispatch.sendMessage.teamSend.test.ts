@@ -58,8 +58,8 @@ function world() {
     users: [{ _id: "uAlice" }, { _id: "uBob" }, { _id: "uCarol" }, { _id: "uDave" }],
     teams: [{ _id: "tA" }],
     team_memberships: [
-      { _id: "mAlice", user_id: "uAlice", team_id: "tA", visibility: "summary" },
-      { _id: "mBob", user_id: "uBob", team_id: "tA", visibility: "summary" },
+      { _id: "mAlice", user_id: "uAlice", team_id: "tA", visibility: "full" },
+      { _id: "mBob", user_id: "uBob", team_id: "tA", visibility: "full" },
     ],
     conversations: [
       { _id: "convBob", user_id: "uBob", owner_user_id: "uDave", team_id: "tA", short_id: "jxbob01", session_id: "sess-bob", is_private: false, status: "active" },

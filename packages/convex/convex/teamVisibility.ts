@@ -30,7 +30,7 @@ export type MembershipVisibilityFacts = {
 
 export type VisibilityChangeMode = "everything" | "going_forward";
 
-export const DEFAULT_TEAM_VISIBILITY: TeamVisibilityLevel = "summary";
+export const DEFAULT_TEAM_VISIBILITY: TeamVisibilityLevel = "full";
 
 export const TEAM_VISIBILITY_RANK: Record<TeamVisibilityLevel, number> = {
   hidden: 0,

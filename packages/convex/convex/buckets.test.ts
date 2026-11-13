@@ -275,8 +275,8 @@ describe("buckets v2 complete view and command receipts", () => {
         { _id: "private", user_id: "someone-else", team_id: "t1", is_private: true },
       ],
       team_memberships: [
-        { user_id: USER, team_id: "t1", visibility: "summary" },
-        { user_id: "someone-else", team_id: "t1", visibility: "summary" },
+        { user_id: USER, team_id: "t1", visibility: "full" },
+        { user_id: "someone-else", team_id: "t1", visibility: "full" },
       ],
     });
     const ctx = webCtx(db);

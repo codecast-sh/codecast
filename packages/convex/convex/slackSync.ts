@@ -655,7 +655,10 @@ export const updateLink = mutation({
     const channel = await loadChannel(ctx, userId, link.chat_channel_id);
     if (!(await mayManageChannel(ctx, userId, channel))) chatFail("FORBIDDEN", "Not allowed to manage this channel");
     const patch: Partial<Link> = { updated_at: Date.now() };
-    if (args.direction) patch.direction = args.direction;
+    if (args.direction) {
+      patch.direction = args.direction;
+      patch.slack_read_only = undefined;
+    }
     let restartImport = !!args.reimport;
     if (args.options) {
       patch.options = mergeLinkOptions(link.options, args.options);
@@ -3185,6 +3188,12 @@ export const recordOutboundFailure = internalMutation({
   handler: async (ctx, args) => {
     const link = await ctx.db.get(args.link_id);
     if (!link) return;
+    // Slack will never take a line here, so the mirror turns one-way and stops
+    // reporting a failure nobody can fix.
+    if (args.error.includes("restricted_action_read_only_channel")) {
+      await ctx.db.patch(link._id, { direction: "slack_to_codecast", slack_read_only: true, last_error: undefined, last_error_at: undefined, updated_at: Date.now() });
+      return;
+    }
     const fatal = ["channel_not_found", "is_archived", "account_inactive", "token_revoked", "invalid_auth"];
     const patch: Partial<Link> = { last_error: args.error.slice(0, 300), last_error_at: Date.now(), updated_at: Date.now() };
     if (fatal.some((f) => args.error.includes(f))) patch.paused = true;

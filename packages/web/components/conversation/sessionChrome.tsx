@@ -13,6 +13,7 @@ import { LivePulseDot } from "../SessionActivityLine";
 import { AgentTypeIcon, formatAgentType } from "../AgentTypeIcon";
 import { HeaderModelControl } from "../SessionControlMenu";
 import { useLiveSessionMeta } from "../../hooks/useLiveSessionMeta";
+import { SessionAccountFact } from "./SessionAccountLabel";
 import { DropdownMenuItem, DropdownMenuSeparator } from "../ui/dropdown-menu";
 import { OwnerAvatar, type HandoffInfo } from "../OwnersBadge";
 import { HEADER_CHIP } from "../../lib/headerChip";
@@ -82,6 +83,7 @@ export function SessionGalleryButton({ items }: { items: GalleryItem[] }) {
           items={images}
           label={images.length === 1 ? "1 image" : `${images.length} images`}
           className="bg-sol-magenta/10 text-sol-magenta border-sol-magenta/30 hover:bg-sol-magenta/20"
+          pill
           icon={
             <svg className="w-3 h-3 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
@@ -101,7 +103,7 @@ export function SessionGalleryButton({ items }: { items: GalleryItem[] }) {
   );
 }
 
-function GalleryPill({ items, label, className, icon }: { items: GalleryItem[]; label: string; className: string; icon: ReactNode }) {
+function GalleryPill({ items, label, className, icon, pill }: { items: GalleryItem[]; label: string; className: string; icon: ReactNode; pill?: boolean }) {
   const gallery = useImageGallery();
   return (
     <ShortcutTooltip label={`View ${label}`} side="bottom">
@@ -109,6 +111,7 @@ function GalleryPill({ items, label, className, icon }: { items: GalleryItem[]; 
         onClick={() => gallery?.openList(items, items.length - 1)}
         className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-meta font-medium flex-shrink-0 border transition-colors ${className}`}
         aria-label={`View ${label}`}
+        data-cc-image-pill={pill || undefined}
       >
         {icon}
         <span className="tabular-nums">{items.length}</span>
@@ -276,6 +279,18 @@ export function MessagesUnavailableState({
   // keeps trying every second. Just show the loader; if it never lands the user
   // will see this indicator rather than a misleading error.
   return <MessagesLoading />;
+}
+
+/** A teammate's session shared with this team as a summary: what it was
+ *  about, in place of a transcript the server does not send. */
+export function SummaryOnlyState({ conversation }: { conversation: { subtitle?: string | null; idle_summary?: string | null; user?: { name?: string | null } | null } }) {
+  const about = conversation.idle_summary || conversation.subtitle;
+  return (
+    <div className="max-w-xl w-full px-6 flex flex-col gap-2 text-center">
+      <span className="text-xs uppercase tracking-wide text-sol-text-dim">Shared as summary{conversation.user?.name ? ` by ${conversation.user.name}` : ""}</span>
+      {about && <p className="text-sm text-sol-text">{about}</p>}
+    </div>
+  );
 }
 
 /** The loader a transcript shows while its messages are on the way. */
@@ -665,6 +680,8 @@ export function ConversationMetadata({
   onControlOpenChange?: (open: boolean) => void;
 }) {
   const live = useLiveSessionMeta(conversationId);
+  // Modern's title already wears the agent in the session mark beside it.
+  const modern = useIsModernStyle();
   const resolvedAgent = live?.agentType ?? agentType;
   const resolvedModel = live ? (live.model ?? undefined) : model;
   if (!resolvedAgent && !resolvedModel) return null;
@@ -672,8 +689,9 @@ export function ConversationMetadata({
   return (
     // flex-shrink-0 inside the header's facts strip, which shrinks and fades
     // its tail ([data-cc-facts] in globals.css) until the squeeze removes it.
-    <div className="flex items-center gap-1 text-meta sm:text-xs text-sol-text-dim flex-shrink-0">
-      {resolvedAgent && (
+    // Its parts are facts of their own: the strip's dots separate them.
+    <div data-cc-fact-run className="flex items-center text-meta sm:text-xs text-sol-text-dim flex-shrink-0">
+      {resolvedAgent && !modern && (
         <div
           className="flex items-center flex-shrink-0 cursor-default"
           title={formatAgentType(resolvedAgent)}
@@ -697,6 +715,7 @@ export function ConversationMetadata({
           onOpenChange={onControlOpenChange}
         />
       )}
+      <SessionAccountFact conversationId={conversationId} />
     </div>
   );
 }

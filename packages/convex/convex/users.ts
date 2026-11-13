@@ -1,4 +1,5 @@
 import { lineSlotsValidator } from "./lib/lineSlotsValidator";
+import { currentMembershipVisibility } from "./teamVisibility";
 import { heartbeatTailnetPatch, tailnetValidator } from "./lib/heartbeatTailnet";
 import { distributionValidator, selfUpdateBeatPatch, updateRequestFor, updateStatusValidator } from "./lib/deviceUpdate";
 import { getUserOrToken } from "./lib/auth";
@@ -1492,32 +1493,6 @@ export const getUserActivity = query({
         // getPublicPinnedSessions.
         repo: basenameOf(c.git_root || c.project_path),
       }));
-  },
-});
-
-export const getUserStats = query({
-  args: {
-    user_id: v.id("users"),
-  },
-  handler: async (ctx, args) => {
-    const user = await ctx.db.get(args.user_id);
-    if (!user || user.hide_activity || !user.public_profile_enabled) {
-      return null;
-    }
-    const conversations = await ctx.db
-      .query("conversations")
-      .withIndex("by_user_private", (q) =>
-        q.eq("user_id", args.user_id).eq("is_private", false)
-      )
-      .order("desc")
-      .take(10);
-    const totalMessages = conversations.reduce((sum, conv) => sum + conv.message_count, 0);
-    const activeCount = conversations.filter((c) => c.status === "active").length;
-    return {
-      total_conversations: conversations.length,
-      total_messages: totalMessages,
-      active_conversations: activeCount,
-    };
   },
 });
 
@@ -3455,7 +3430,7 @@ export const getSuggestedTeamProjects = query({
       team_name: team?.name || "Team",
       team_icon: team?.icon || null,
       team_icon_color: team?.icon_color || null,
-      current_visibility: membership.visibility || "summary",
+      current_visibility: currentMembershipVisibility(membership),
       suggestions,
       team_only_repos: teamOnlyRepos.slice(0, 6),
     };
@@ -3717,7 +3692,7 @@ export const getTeamsForCLI = query({
           icon_color: team.icon_color,
           features: team.features,
           role: m.role,
-          visibility: m.visibility || "summary",
+          visibility: currentMembershipVisibility(m),
         };
       })
     );

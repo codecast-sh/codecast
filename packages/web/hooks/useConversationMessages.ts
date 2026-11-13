@@ -481,6 +481,9 @@ export function useConversationMessages(
       // While a fork copy is in flight the local seeded window is the complete
       // view and the server count is a moving partial — nothing to recover.
       if ((meta as any)?.fork_status === "copying") return;
+      // Shared with this viewer as a summary: the server holds the messages
+      // back on purpose, so there is nothing to recover.
+      if ((meta as any)?.content_access === "summary") return;
       // Backfill edit behind the tail anchor: the revision moved, the tail
       // can't see it — refetch the page. First observation per conversation
       // only records the baseline.

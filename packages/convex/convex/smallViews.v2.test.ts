@@ -253,7 +253,7 @@ describe("small v2 complete-view envelopes", () => {
     const result = await (getUserTeamsV2 as any)._handler(ctx, {});
     expect(result.teams.map((row: any) => row._id)).toEqual(["team-a", "team-z"]);
     expect(result.teams[0]).toMatchObject({ role: "member", visibility: "full" });
-    expect(result.teams[1]).toMatchObject({ role: "admin", visibility: "summary" });
+    expect(result.teams[1]).toMatchObject({ role: "admin", visibility: "full" });
     expect(result.teams.some((row: any) => "invite_code" in row)).toBe(false);
 
     const legacy = await (getUserTeams as any)._handler(ctx, {});
@@ -261,7 +261,7 @@ describe("small v2 complete-view envelopes", () => {
     expect(legacy[0]).toEqual(expect.objectContaining({
       _id: "team-z",
       role: "admin",
-      visibility: "summary",
+      visibility: "full",
     }));
   });
 
@@ -322,8 +322,8 @@ describe("small v2 complete-view envelopes", () => {
       grantKeys: [`team-membership-grant:${TEAM}`],
       viewRevision: 7,
       memberships: [
-        { _id: "membership-owner", user_id: OWNER, role: "admin", visibility: "summary" },
-        { _id: "membership-member", user_id: MEMBER, role: "member", visibility: "summary" },
+        { _id: "membership-owner", user_id: OWNER, role: "admin", visibility: "full" },
+        { _id: "membership-member", user_id: MEMBER, role: "member", visibility: "full" },
       ],
     });
     expect("name" in granted.memberships[0]).toBe(false);

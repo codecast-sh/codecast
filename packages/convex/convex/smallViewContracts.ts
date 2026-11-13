@@ -1,4 +1,5 @@
 import type { Id } from "./_generated/dataModel";
+import { currentMembershipVisibility } from "./teamVisibility";
 import type { ViewCoverageTarget } from "./localViewRevisions";
 
 export const CURRENT_USER_VIEW_CONTRACT_ID = "users.current/v2";
@@ -100,7 +101,7 @@ export function projectPrincipalTeam(team: Record<string, any>, membership: Reco
     ...(team.default_flow !== undefined ? { default_flow: team.default_flow } : {}),
     role: membership.role,
     joined_at: membership.joined_at,
-    visibility: membership.visibility || "summary",
+    visibility: currentMembershipVisibility(membership),
     ...(membership.visibility_history !== undefined ? { visibility_history: membership.visibility_history } : {}),
   };
 }
@@ -113,7 +114,7 @@ export function projectTeamMembership(membership: Record<string, any>) {
     team_id: membership.team_id,
     role: membership.role,
     joined_at: membership.joined_at,
-    visibility: membership.visibility || "summary",
+    visibility: currentMembershipVisibility(membership),
     ...(membership.visibility_history !== undefined ? { visibility_history: membership.visibility_history } : {}),
   };
 }

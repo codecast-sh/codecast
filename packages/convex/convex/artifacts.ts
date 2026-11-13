@@ -18,6 +18,7 @@
 // the same artifact in place — the URL is stable across revisions — unless the
 // caller forces a fresh one (`cast publish --new`).
 
+import { currentMembershipVisibility } from "./teamVisibility";
 import { v } from "convex/values";
 import { MAX_ARTIFACT_BYTES, MAX_ARTIFACT_MB, MAX_DOCUMENT_BYTES, MAX_DOCUMENT_MB, accessSummary, artifactUrl, lineDiff, teamGateRefusal, type DiffOp } from "./lib/artifactRules";
 export { MAX_ARTIFACT_BYTES, MAX_ARTIFACT_MB, MAX_DOCUMENT_BYTES, MAX_DOCUMENT_MB, accessSummary, artifactUrl, lineDiff, teamGateRefusal, type DiffOp };
@@ -1738,7 +1739,7 @@ async function teammatesWhoCanSee(ctx: { db: QueryCtx["db"] }, artifact: Doc<"ar
     .query("team_memberships")
     .withIndex("by_user_team", (q) => q.eq("user_id", artifact.user_id).eq("team_id", teamId))
     .first();
-  if (!ownerMembership || !isVisibilityShareable(ownerMembership.visibility || "summary")) return seen;
+  if (!ownerMembership || !isVisibilityShareable(currentMembershipVisibility(ownerMembership))) return seen;
   const teamMembers = await ctx.db
     .query("team_memberships")
     .withIndex("by_team_id", (q) => q.eq("team_id", teamId))
@@ -1801,7 +1802,7 @@ async function visibleOwnersFor(ctx: { db: QueryCtx["db"] }, viewerId: Id<"users
       if (tm.user_id === viewerId) continue;
       // The OTHER member is the potential artifact owner — their opt-out in
       // this shared team is what governs.
-      if (!isVisibilityShareable(tm.visibility || "summary")) continue;
+      if (!isVisibilityShareable(currentMembershipVisibility(tm))) continue;
       const key = tm.user_id.toString();
       const entry = owners.get(key) ?? { id: tm.user_id, teams: new Set<string>() };
       entry.teams.add(`team:${mine.team_id}`);

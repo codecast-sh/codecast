@@ -2315,6 +2315,46 @@ export const webGetCall = query({
   },
 });
 
+/** How many calls the words search reaches: the list's own window. */
+const CALL_SEARCH_CALLS = 100;
+/** The lines a call's match shows, most relevant first. */
+const CALL_SEARCH_LINES = 3;
+
+// The calls page's search over what was said. It searches the same calls the
+// list shows (listCallsCore: access and the silent-huddle rule already
+// applied), one search per call filtered to that call, so a hit can only
+// come from a call the viewer may read. Titles, people and summaries are
+// matched on the client from the list it already holds.
+export const webSearchCalls = query({
+  args: { q: v.string() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    const q = args.q.trim().slice(0, 200);
+    if (!userId || q.length < 2) return [];
+    const calls = await listCallsCore(ctx, userId, CALL_SEARCH_CALLS);
+    const found = await Promise.all(
+      calls.map(async (c) => {
+        const rows = await ctx.db
+          .query("transcript_segments")
+          .withSearchIndex("search_text", (s) => s.search("text", q).eq("transcript_id", c._id))
+          .take(CALL_SEARCH_LINES + 1);
+        return {
+          _id: c._id,
+          more: rows.length > CALL_SEARCH_LINES,
+          lines: rows.slice(0, CALL_SEARCH_LINES).map((r) => ({
+            seq: r.seq,
+            speaker_id: r.speaker_id,
+            speaker_name: r.speaker_name,
+            text: r.text,
+            t0: r.t0,
+          })),
+        };
+      }),
+    );
+    return found.filter((f) => f.lines.length > 0);
+  },
+});
+
 // A session's calls: every call whose words reached it (a live feed or a sent
 // excerpt) that the viewer may read. The header pill's way back to the call.
 export const webCallsForConversation = query({

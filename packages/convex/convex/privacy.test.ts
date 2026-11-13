@@ -448,6 +448,17 @@ describe("membership visibility history is read per conversation", () => {
     expect(filter.getVisibility(owner)).toBe("full");
   });
 
+  test("a session shared with another team is not visible to this one, nor on a profile read here", async () => {
+    const ctx = {
+      db: makeFakeDb({
+        team_memberships: [pinnedMembership, { _id: "m2", user_id: "u_viewer", team_id: "t1", visibility: "summary" }],
+      }),
+    } as any;
+    const elsewhere = { ...newConv, team_id: "t2" };
+    expect((await createTeamFeedFilter(ctx, "t1" as any)).isVisible(elsewhere)).toBe(false);
+    expect((await getProfileVisibilityPredicate(ctx, "u_viewer" as any, owner as any, "t1" as any))(elsewhere)).toBe(false);
+  });
+
   test("a teammate's profile view follows the same split", async () => {
     const ctx = {
       db: makeFakeDb({

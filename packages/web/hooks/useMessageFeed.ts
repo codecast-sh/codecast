@@ -6,14 +6,14 @@
 import { useCallback, useMemo, useState } from "react";
 import { useConvex } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore } from "../store/inboxStore";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { useSyncCollection } from "./useSyncCollection";
-import { useCollectionRows } from "./useCollectionRows";
+import { useWorkspaceCollection } from "./useWorkspaceCollection";
 
 const api = _api as any;
 const PAGE = 100;
 
-const feedKey = (filter: "my" | "team") => `msg:${filter}`;
+const feedKey = (filter: "my" | "team", team: string | undefined) => `msg:${filter}:${team ?? "personal"}`;
 const byTimestampDesc = (a: any, b: any) => (b.timestamp ?? 0) - (a.timestamp ?? 0);
 const msgSig = (m: any) => `${m.content?.length ?? 0}|${m.conversation_title ?? ""}|${m.author_name ?? ""}`;
 
@@ -24,7 +24,11 @@ export function useMessageFeed(filter: "my" | "team"): {
   isLoadingMore: boolean;
   loadMore: () => void;
 } {
-  const key = feedKey(filter);
+  // The workspace the feed reads: the subscription names it, so a switch is a
+  // new query, and the paging cursor is kept per workspace.
+  const activeTeamId = useInboxStore((s) => s.clientState.ui?.active_team_id) as string | undefined;
+  const teamArg = activeTeamId && isConvexId(activeTeamId) ? activeTeamId : undefined;
+  const key = feedKey(filter, teamArg);
   const convex = useConvex();
   const setFeedCursor = useInboxStore((s) => s.setFeedCursor);
   const setFeedHasMore = useInboxStore((s) => s.setFeedHasMore);
@@ -48,10 +52,13 @@ export function useMessageFeed(filter: "my" | "team"): {
     },
     [cursor, key, setFeedCursor, setFeedHasMore],
   );
-  const { ready } = useSyncCollection("messageFeed", api.conversations.getMessageFeed, { filter, limit: PAGE }, { select });
+  const { ready } = useSyncCollection("messageFeed", api.conversations.getMessageFeed, { filter, limit: PAGE, activeTeamId: teamArg }, { select });
 
-  const where = useMemo(() => (filter === "my" ? (m: any) => !!m.is_own : undefined), [filter]);
-  const messages = useCollectionRows<any>("messageFeed", { where, sig: msgSig, sort: byTimestampDesc });
+  const rows = useWorkspaceCollection<any>("messageFeed", msgSig);
+  const messages = useMemo(
+    () => (filter === "my" ? rows.filter((m) => m.is_own) : rows).sort(byTimestampDesc),
+    [rows, filter],
+  );
 
   const [isLoadingMore, setLoadingMore] = useState(false);
   const loadMore = useCallback(() => {
@@ -62,7 +69,7 @@ export function useMessageFeed(filter: "my" | "team"): {
     if (!from) return;
     setLoadingMore(true);
     void convex
-      .query(api.conversations.getMessageFeed, { filter, limit: PAGE, cursor: from })
+      .query(api.conversations.getMessageFeed, { filter, limit: PAGE, cursor: from, activeTeamId: teamArg })
       .then((page: any) => {
         useInboxStore.getState().syncTable("messageFeed", page?.messages ?? []);
         setFeedCursor(key, page?.nextCursor == null ? null : String(page.nextCursor));
@@ -70,7 +77,7 @@ export function useMessageFeed(filter: "my" | "team"): {
       })
       .catch(() => {})
       .finally(() => setLoadingMore(false));
-  }, [convex, cursor, filter, isLoadingMore, key, messages, setFeedCursor, setFeedHasMore]);
+  }, [convex, cursor, filter, isLoadingMore, key, messages, setFeedCursor, setFeedHasMore, teamArg]);
 
   return { messages, ready, hasMore: hasMoreStored !== false && cursor !== null, isLoadingMore, loadMore };
 }

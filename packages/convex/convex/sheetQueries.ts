@@ -39,11 +39,12 @@ const cell = (value: unknown): string => {
 const stamp = (ms: number | undefined) => (ms ? new Date(ms).toISOString().slice(0, 16).replace("T", " ") : "");
 const newestFirst = (a: any, b: any) => (b.updated_at ?? b._creationTime) - (a.updated_at ?? a._creationTime);
 /**
- * A query picks the most recently updated rows, then shows them in creation
- * order: an update rewrites that row's cells in place, a new row appends at
- * the bottom, and formulas pointing into the tab keep their rows.
+ * A query picks the most recently updated rows, then shows them newest first
+ * by when each was made: a new task, session or pull request appears at the
+ * top, and an update rewrites that row's cells in place without moving it
+ * (ordering by updated_at would reshuffle the tab on every edit).
  */
-const stableOrder = <T extends { _creationTime: number }>(rows: T[]): T[] => rows.sort((a, b) => a._creationTime - b._creationTime);
+const stableOrder = <T extends { _creationTime: number }>(rows: T[]): T[] => rows.sort((a, b) => b._creationTime - a._creationTime);
 
 async function tasksGrid(ctx: any, scope: Scope, q: TabQuery, limit: number): Promise<string[][]> {
   const status = q.status?.trim().toLowerCase();

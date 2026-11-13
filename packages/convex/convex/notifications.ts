@@ -16,7 +16,7 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { canAccessConversation, canAccessDoc, canAccessPlan, canAccessTask } from "./lib/access";
-import { isConversationTeamVisible } from "./privacy";
+import { teamReadLevel } from "./privacy";
 import { ENTITY_TYPE, NOTIFICATION_TYPE } from "./lib/notificationTypes";
 import { isAgentSpawnedConversation, isSubagentConversation } from "./ccAccountsShared";
 import {
@@ -188,7 +188,8 @@ export const notifyTeamSessionStart = internalMutation({
       return;
     }
 
-    if (!(await isConversationTeamVisible(ctx, conversation))) {
+    const readLevel = await teamReadLevel(ctx, conversation);
+    if (readLevel === "none") {
       return;
     }
 
@@ -210,7 +211,9 @@ export const notifyTeamSessionStart = internalMutation({
 
     const actorName = user.name || user.email || "Someone";
     let body = conversation.title || conversation.project_path?.split("/").pop() || "New session";
-    if (!conversation.title) {
+    // The first prompt is content: it names an untitled session only for a
+    // team the session's content is shared with.
+    if (!conversation.title && readLevel === "content") {
       const firstMsg = await ctx.db
         .query("messages")
         .withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", args.conversation_id))

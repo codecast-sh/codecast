@@ -9,6 +9,7 @@ import { isTeamAdmin, shareATeam } from "./privacy";
 import { dropOwnerRow, endMembership, ownerGrantHolds } from "./lib/teamMembershipEnd";
 import { INVITE_CODE_TTL_MS, recordAdminRemoval, removedSinceCodeIssued } from "./lib/teamInvites";
 import {
+  currentMembershipVisibility,
   nextMembershipVisibility,
   type TeamVisibilityLevel,
   type VisibilityChangeMode,
@@ -147,7 +148,7 @@ export const getUserTeams = query({
           policy: team.policy,
           role: m.role,
           joined_at: m.joined_at,
-          visibility: m.visibility || "summary",
+          visibility: currentMembershipVisibility(m),
           visibility_history: m.visibility_history,
           // Sharing settings and the share-in-full nudge: a level only matters
           // when someone else is on the team and a project flows to it.
