@@ -7,6 +7,7 @@ import { sessionAwakeAt } from "../../lib/liveness";
 import { memberDisplayName } from "../../lib/liveEntities";
 import { fixPlan, resolverWords, type FixPlan, type FixSessionFact, type FixStage, type Resolver } from "./issuesModel";
 import type { OpsGroup } from "./opsTypes";
+import { teamMembersOf } from "../../lib/activeTeam";
 
 export type TaskRow = {
   _id: string;
@@ -76,7 +77,7 @@ export function useResolverWords(resolver: Resolver, provider?: string): string 
   const name = useInboxStore((s) => {
     if (resolver.via !== "person" || !resolver.by) return null;
     if ((s as any).currentUser?._id === resolver.by) return "you";
-    const m = (s.teamMembers as any[]).find((x) => x && String(x._id) === resolver.by);
+    const m = (teamMembersOf(s) as any[]).find((x) => x && String(x._id) === resolver.by);
     return m ? memberDisplayName(m) : null;
   });
   return resolverWords(resolver, name, provider);
