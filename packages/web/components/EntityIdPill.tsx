@@ -1342,7 +1342,8 @@ export function EntityIdPill({
   const handleOpen = useCallback(
     (e: React.MouseEvent) => {
       closeNow();
-      if (!isSession || !entity?._id) return;
+      // A session read through its share link opens at its href, which presents the link.
+      if (!isSession || !entity?._id || entity.share_token) return;
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
       openLinkedSession(entity);
@@ -1372,7 +1373,7 @@ export function EntityIdPill({
   );
   // A session click takes the stage instead of routing. The href is still
   // real (cmd-click, copy link).
-  const clickStaysHere = !!entity && isSession;
+  const clickStaysHere = !!entity && isSession && !entity.share_token;
 
   // A reference to a Flows page in a workspace with Flows off stays the text
   // it was written as: a pill would open a page the person cannot otherwise
