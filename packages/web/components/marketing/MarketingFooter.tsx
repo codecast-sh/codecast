@@ -11,7 +11,7 @@ export function MarketingFooter() {
         <div className="grid grid-cols-2 md:grid-cols-6 gap-8">
           <div>
             <Link href="/" aria-label="Codecast home" className="inline-block mb-4">
-              <Logo size="md" className="[--logo-c:#444444] text-[#002b36]" />
+              <Logo size="md" mono className="text-[#002b36]" />
             </Link>
             <p className="text-sm">Watch, steer, and search every agent session.</p>
           </div>

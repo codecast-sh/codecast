@@ -69,10 +69,10 @@ export function InstallTabs({ location = "unknown", showAlternatives = true, com
         </code>
         <button
           onClick={handleCopy}
-          className={`group ${compact ? "p-1.5 rounded-md" : "p-2 rounded-lg"} shrink-0 transition-all duration-200 hover:-translate-y-px hover:brightness-110 active:translate-y-0 active:brightness-95`}
+          className={`group ${compact ? "p-1.5 rounded-md" : "p-2 rounded-lg"} shrink-0 transition-colors duration-150 hover:brightness-125`}
           style={copied
-            ? { backgroundColor: '#859900', color: '#fdf6e3', boxShadow: '0 2px 12px rgba(133,153,0,0.45)' }
-            : { background: 'linear-gradient(135deg, #e86c5d 0%, #cb4b16 100%)', color: '#fdf6e3', boxShadow: '0 2px 12px rgba(203,75,22,0.4)' }
+            ? { backgroundColor: '#859900', color: '#fdf6e3' }
+            : { backgroundColor: '#073642', color: '#eee8d5', boxShadow: 'inset 0 0 0 1px #586e75' }
           }
           title="Copy to clipboard"
         >

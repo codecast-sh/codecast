@@ -18,119 +18,71 @@ import { useRouteMeta } from "./pageMeta";
 import { PhoneFrame } from "./productMocks";
 import { HeroFlythrough } from "./HeroFlythrough";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
-import { AppBadges, AppleIcon } from "@/components/marketing/AppBadges";
+import { AppBadges } from "@/components/marketing/AppBadges";
 import { TourSection, WatchChapter } from "./TourFilm";
 import { SUITE } from "./suite";
 import { earlyAccessMailto } from "@/lib/siteLinks";
 
-function Highlight({ children, color }: { children: React.ReactNode; color: "amber" | "green" | "blue" | "rose" | "violet" | "cyan" }) {
-  const colors: Record<string, string> = {
-    amber: "bg-[#b58900]/30",
-    green: "bg-[#859900]/30",
-    blue: "bg-[#268bd2]/30",
-    rose: "bg-[#d33682]/30",
-    violet: "bg-[#6c71c4]/30",
-    cyan: "bg-[#2aa198]/30",
-  };
-  const transforms: Record<string, { rotate: number; translate: string }> = {
-    amber: { rotate: -2.1, translate: "-2px, 1px" },
-    green: { rotate: 1.8, translate: "1px, -2px" },
-    blue: { rotate: -1.5, translate: "2px, 1px" },
-    rose: { rotate: 2.2, translate: "-1px, -1px" },
-    violet: { rotate: -1.8, translate: "1px, 1px" },
-    cyan: { rotate: 1.6, translate: "-2px, -1px" },
-  };
-  const t = transforms[color];
+/** The agents codecast reads today: the hero's list and the stats row both count this one list. */
+const AGENTS = ["Claude Code", "Codex", "Cursor", "OpenCode", "pi"];
+
+/** The surfaces the hero names, in the suite's own order and marks: the team half of the pitch, drawn as the workspace's parts. */
+const HERO_SURFACES = new Set(["Chat", "Calls", "Tasks and plans", "Docs", "Pull requests", "Decisions"]);
+
+/** One highlighter stroke behind a phrase: the page's single hand-drawn mark. */
+function Marker({ children }: { children: React.ReactNode }) {
   return (
     <span className="relative inline-block">
       <span
-        className={`absolute inset-0 ${colors[color]}`}
-        style={{
-          transform: `rotate(${t.rotate}deg) translate(${t.translate})`,
-          top: "-0.28em",
-          bottom: "-0.25em",
-          left: "-0.4em",
-          right: "-0.4em",
-          clipPath: "polygon(1% 8%, 99% 2%, 98% 94%, 2% 97%)",
-        }}
+        aria-hidden
+        className="absolute mk-swipe"
+        style={{ inset: "-0.1em -0.18em -0.04em", backgroundColor: "rgba(181,137,0,0.26)", transform: "rotate(-1.4deg)", clipPath: "polygon(1% 10%, 99% 3%, 98% 93%, 2% 97%)" }}
       />
       <span className="relative">{children}</span>
     </span>
   );
 }
 
-const TYPING_PHRASES = [
-  "a call's action items filed as tasks, each linked to the line that was said",
-  "an agent fixing the review comments on its own pull request",
-  "mentioning a session in #eng and getting the answer from the agent that wrote the code",
-  "approving a migration from your phone while three agents keep going",
-  "asking the team's history how auth works, across every agent",
-  "a Codex session handing the API half of a plan to a Cursor session",
-];
+/** The hero's entrance: each block rises in turn on first paint, once. */
+const ENTRANCE_CSS = [
+  "@keyframes mk-rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}",
+  "@keyframes mk-swipe{from{clip-path:polygon(1% 10%,1% 3%,2% 93%,2% 97%)}}",
+  ".mk-rise{animation:mk-rise 700ms cubic-bezier(0.16,1,0.3,1) both}",
+  ".mk-swipe{animation:mk-swipe 650ms cubic-bezier(0.65,0,0.35,1) 350ms both}",
+  "@media (prefers-reduced-motion:reduce){.mk-rise,.mk-swipe{animation:none}}",
+].join("");
+const rise = (i: number) => ({ animationDelay: `${i * 90}ms` });
 
-const PLATFORM_CHIPS = [
-  { label: "Web", href: "/signup", color: "#268bd2" },
-  { label: "Mac", href: "/download", color: "#2aa198" },
-  { label: "iOS", href: "https://apps.apple.com/app/id6757820850", color: "#b58900", external: true },
-  { label: "CLI", href: "/features", color: "#6c71c4" },
-];
-
-const LONGEST_TYPING_PHRASE = TYPING_PHRASES.reduce((a, b) => (b.length > a.length ? b : a), "");
-
-function TypingEffect() {
-  const [phraseIndex, setPhraseIndex] = useState(0);
-  const [charIndex, setCharIndex] = useState(0);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [isPaused, setIsPaused] = useState(false);
-
-  useWatchEffect(() => {
-    const phrase = TYPING_PHRASES[phraseIndex];
-
-    if (isPaused) {
-      const pauseTimeout = setTimeout(() => {
-        setIsPaused(false);
-        setIsDeleting(true);
-      }, 2000);
-      return () => clearTimeout(pauseTimeout);
-    }
-
-    if (isDeleting) {
-      if (charIndex === 0) {
-        setIsDeleting(false);
-        setPhraseIndex((prev) => (prev + 1) % TYPING_PHRASES.length);
-        return;
-      }
-      const deleteTimeout = setTimeout(() => {
-        setCharIndex((prev) => prev - 1);
-      }, 30);
-      return () => clearTimeout(deleteTimeout);
-    }
-
-    if (charIndex === phrase.length) {
-      setIsPaused(true);
-      return;
-    }
-
-    const typeTimeout = setTimeout(() => {
-      setCharIndex((prev) => prev + 1);
-    }, 50);
-    return () => clearTimeout(typeTimeout);
-  }, [charIndex, isDeleting, isPaused, phraseIndex]);
-
-  return (
-    <span style={{ color: '#cb4b16' }}>
-      {TYPING_PHRASES[phraseIndex].slice(0, charIndex)}
-      <span className="animate-pulse">|</span>
-    </span>
-  );
-}
+const INK = "#002b36";
+const BODY = "#586e75";
+const MUTED = "#93a1a1";
+const RULE = "#e4ddc8";
+const ACCENT = "#cb4b16";
+/** Prose sets in the bundled interface sans; headings, code and product mocks keep the mono. */
+const SANS = { fontFamily: '"Instrument Sans Variable", "Instrument Sans", ui-sans-serif, system-ui, sans-serif' } as const;
 
 function StatCard({ value, label }: { value: string; label: string }) {
   return (
-    <div className="text-center">
-      <div className="text-3xl font-bold font-mono" style={{ color: '#002b36' }}>{value}</div>
-      <div className="text-sm mt-1" style={{ color: '#657b83' }}>{label}</div>
+    <div>
+      <div className="text-2xl font-semibold font-mono tracking-tight" style={{ color: INK }}>{value}</div>
+      <div className="text-sm mt-1" style={{ color: BODY }}>{label}</div>
     </div>
+  );
+}
+
+/** A list row's marker: a short rule, quieter than a check icon. */
+function Bullet() {
+  return <span aria-hidden className="mt-[0.75em] h-px w-3 shrink-0" style={{ backgroundColor: MUTED }} />;
+}
+
+function ArrowLink({ href, children }: { href: string; children: React.ReactNode }) {
+  return (
+    <Link href={href} className="group inline-flex items-center gap-1.5 text-sm font-medium transition-colors hover:text-[#cb4b16]" style={{ color: INK }}>
+      {children}
+      <svg className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden>
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
+      </svg>
+    </Link>
   );
 }
 
@@ -190,135 +142,97 @@ export default function LandingPage() {
     <main className="min-h-screen w-full overflow-x-hidden" style={{ backgroundColor: '#fdf6e3' }}>
       <MarketingNav active="/" />
 
-      {/* Hero: the headline, the pitch and the install strip, then the film, then the ways in. */}
+      {/* Hero: the claim, what it works with, one primary action and the install strip, then the film. */}
       <section className="mx-auto px-6 pt-10 lg:pt-14 pb-6">
-        <div className="text-center max-w-3xl mx-auto">
-          {/* One line from 1280px up, two balanced lines below it. */}
-          <h1 className="font-mono font-bold text-[32px] sm:text-[40px] lg:text-[44px] leading-[1.12] tracking-[-0.035em] mb-7 [text-wrap:balance] xl:whitespace-nowrap xl:-mx-56" style={{ color: '#002b36' }}>
-            Run all your <Highlight color="amber">coding agents</Highlight> in one workspace<span aria-hidden className="inline-block w-[0.48em] h-[0.8em] ml-[0.14em] align-baseline translate-y-[0.08em] motion-safe:animate-pulse" style={{ backgroundColor: '#cb4b16' }} />
-            <span className="block mt-5 font-normal text-lg sm:text-[21px] tracking-normal whitespace-normal" style={{ color: '#657b83' }}>On your own, or with your whole team.</span>
+        <style>{ENTRANCE_CSS}</style>
+        <div className="text-center max-w-5xl mx-auto">
+          <h1 className="mk-rise font-mono font-bold text-[34px] sm:text-[44px] lg:text-[54px] leading-[1.08] tracking-[-0.045em] [text-wrap:balance]" style={{ color: INK, ...rise(0) }}>
+            Your team and its <span className="whitespace-nowrap"><Marker>coding agents</Marker>,</span> in one workspace<span aria-hidden className="inline-block w-[0.46em] h-[0.78em] ml-[0.12em] align-baseline translate-y-[0.06em] motion-safe:animate-pulse" style={{ backgroundColor: ACCENT }} />
           </h1>
-
-          <p className="text-[15px] leading-[1.75] mb-8 lg:-mx-24" style={{ color: '#657b83' }}>
-            <span className="whitespace-nowrap"><Highlight color="amber">Claude Code</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="green">Codex</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="blue">Cursor</Highlight>,</span> <Highlight color="violet">OpenCode</Highlight> and <Highlight color="cyan">pi</Highlight>, on any machine, in one place you can search and steer from your phone, each linked to the code it wrote. Bring your team in and your agents work beside you in <span className="whitespace-nowrap"><Highlight color="rose">chat</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="blue">calls</Highlight>,</span> <span className="whitespace-nowrap"><Highlight color="green">tasks</Highlight>,</span> <Highlight color="violet">docs</Highlight> and <span className="whitespace-nowrap"><Highlight color="amber">pull requests</Highlight>.</span>
+          <p className="mk-rise mt-6 text-lg sm:text-xl leading-relaxed max-w-2xl mx-auto [text-wrap:pretty]" style={{ ...SANS, color: BODY, ...rise(1) }}>
+            Every {AGENTS.slice(0, -1).join(", ")} and {AGENTS[AGENTS.length - 1]} session, on any machine, searchable and
+            linked to the code it wrote. Start on your own. Bring your team in, and the agents work beside you.
           </p>
-          <div className="max-w-xl mx-auto mb-2">
-            <div className="relative">
-              <div className="absolute -inset-2 bg-gradient-to-r from-[#b58900]/25 via-[#cb4b16]/25 to-[#dc322f]/25 rounded-2xl blur-lg opacity-60"></div>
-              <div className="relative">
-                <InstallTabs location="landing_hero" showAlternatives={false} compact />
-              </div>
+          <ul className="mk-rise mt-7 flex flex-wrap justify-center gap-2" style={rise(2)} aria-label="What the workspace holds">
+            {SUITE.filter((x) => HERO_SURFACES.has(x.name)).map(({ name, mark, color, href }) => (
+              <li key={name}>
+                <Link
+                  href={href ?? "#suite"}
+                  className="inline-flex items-center gap-2 h-8 px-3 rounded-full font-mono text-[13px] transition-colors hover:bg-[#eee8d5]"
+                  style={{ border: `1px solid ${RULE}`, color: INK }}
+                >
+                  <span aria-hidden style={{ color }}>{mark}</span>
+                  {name === "Tasks and plans" ? "Tasks" : name}
+                </Link>
+              </li>
+            ))}
+          </ul>
+
+          <div className="mk-rise mt-9 flex flex-col sm:flex-row items-center justify-center gap-4" style={rise(3)}>
+            <Button asChild className="shrink-0 text-[15px] px-6 h-11 font-semibold text-[#fdf6e3] border-0 transition-colors hover:bg-[#073642]" style={{ backgroundColor: INK }}>
+              <Link href="/signup">Get started free</Link>
+            </Button>
+            <div className="w-full sm:max-w-md text-left">
+              <InstallTabs location="landing_hero" showAlternatives={false} compact />
             </div>
-            <p className="mt-3 text-xs" style={{ color: '#93a1a1' }}>One command. Your agents join as they are.</p>
           </div>
+          <p className="mk-rise mt-2.5 text-xs" style={{ ...SANS, color: MUTED, ...rise(3) }}>No config. Sessions you already run show up.</p>
         </div>
-        {/* The first screen goes to the film: its width follows the viewport's height (about 200px of headline, 64px of pitch and 166px of install strip; on a short laptop screen the scrubber sits at the fold, so the windows stay readable; the buttons follow the film), between 640px and 1240px, and a phone gets the full width. */}
-        <div className="relative mx-auto" style={{ width: "min(100%, clamp(640px, min(100vw - 96px, (100svh - 430px) * 1280 / 760), 1240px))" }}>
+        {/* The first screen goes to the film: its width follows the viewport's height (the headline, pitch, surface row and the button beside the install strip take about 470px; on a short laptop screen the scrubber sits at the fold, so the windows stay readable), between 640px and 1240px, and a phone gets the full width. */}
+        <div className="relative mx-auto mt-10" style={{ width: "min(100%, clamp(640px, min(100vw - 96px, (100svh - 470px) * 1280 / 760), 1240px))" }}>
           <HeroFlythrough />
         </div>
-        <div className="flex flex-wrap gap-3 justify-center items-center mt-8">
-          <Button asChild className="text-[15px] px-6 h-11 font-semibold text-[#fdf6e3] border-0 transition-all hover:-translate-y-px hover:brightness-110" style={{ background: 'linear-gradient(135deg, #e86c5d 0%, #cb4b16 100%)', boxShadow: '0 6px 20px -6px rgba(203,75,22,0.55)' }}>
-            <Link href="/signup">Get started free</Link>
-          </Button>
-          <Button asChild className="text-[15px] px-6 h-11 font-semibold gap-2 text-[#fdf6e3] border-0 transition-all hover:-translate-y-px hover:brightness-125" style={{ backgroundColor: '#002b36', boxShadow: '0 6px 20px -8px rgba(0,43,54,0.6)' }}>
-            <Link href="/download">
-              <AppleIcon className="w-4 h-4" />
-              Download for Mac
-            </Link>
-          </Button>
-          <Button asChild variant="outline" className="bg-transparent text-[15px] px-6 h-11 font-semibold gap-2 border-[#93a1a1] text-[#586e75] hover:bg-[#eee8d5] hover:text-[#002b36] transition-colors">
-            <Link href="#tour">
-              <svg className="w-3 h-3" viewBox="0 0 10 10" fill="currentColor" aria-hidden><path d="M2 1.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1L2.9.7a.6.6 0 0 0-.9.5z" /></svg>
-              Watch the tour
-            </Link>
-          </Button>
-        </div>
       </section>
 
-      <section className="max-w-6xl mx-auto px-6 pt-6 pb-20">
-        <div className="text-center max-w-3xl mx-auto">
-          {/* The longest phrase sits invisibly under the one being typed, so
-              the line holds its final height and nothing below it moves as
-              a phrase wraps onto more lines and back. */}
-          <p className="grid text-lg mb-8 font-mono" style={{ color: '#586e75' }}>
-            <span aria-hidden className="invisible col-start-1 row-start-1">
-              Imagine {LONGEST_TYPING_PHRASE}|
-            </span>
-            <span className="col-start-1 row-start-1">
-              Imagine <TypingEffect />
-            </span>
-          </p>
-
-          <div className="flex flex-wrap gap-3 justify-center">
-            {PLATFORM_CHIPS.map(({ label, href, color, external }) => {
-              const chip = (
-                <>
-                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }}></span>
-                  <span className="tracking-wider font-mono text-mark uppercase font-medium">{label}</span>
-                </>
-              );
-              const className = "inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md transition-all hover:brightness-95";
-              const style = { backgroundColor: `color-mix(in srgb, ${color} 10%, transparent)`, color };
-              return external ? (
-                <a key={label} href={href} onClick={() => track("ios_app_clicked", { location: "landing_chip" })} target="_blank" rel="noopener noreferrer" className={className} style={style}>{chip}</a>
-              ) : (
-                <Link key={label} href={href} className={className} style={style}>{chip}</Link>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-
+      <div className="[&_h2]:[text-wrap:balance] [&_p]:[text-wrap:pretty]" style={SANS}>
       <TourSection />
 
       {/* ── The suite: one tile per surface ─────────────────────────────── */}
-      <section id="suite" className="max-w-6xl mx-auto px-6 py-20">
-        <div className="text-center mb-12 max-w-3xl mx-auto">
-          <h2 className="text-3xl sm:text-4xl font-bold mb-4 font-mono" style={{ color: '#002b36' }}>
-            Everything your team works in. Agents included.
+      <section id="suite" className="max-w-6xl mx-auto px-6 py-20" style={{ borderTop: `1px solid ${RULE}` }}>
+        <div className="mb-12 max-w-2xl">
+          <h2 className="text-3xl font-bold mb-4 font-mono tracking-tight" style={{ color: INK }}>
+            One workspace for people and agents
           </h2>
-          <p className="text-lg leading-relaxed" style={{ color: '#657b83' }}>
-            Not a chat app, a tracker, a docs tool and a terminal that never talk to each other.
-            One workspace on one record, where agents use every surface the way people do.
+          <p className="text-lg leading-relaxed" style={{ color: BODY }}>
+            Chat, calls, tasks, docs, pull requests and pages on one record. Agents are members. They get
+            mentioned, assigned and reviewed like anyone else, and everything they touch links back to its session.
           </p>
         </div>
 
-        <div className="grid gap-px sm:grid-cols-2 lg:grid-cols-5 rounded-xl overflow-hidden" style={{ backgroundColor: '#e4ddc8', border: '1px solid #e4ddc8' }}>
+        <div className="grid gap-px sm:grid-cols-2 lg:grid-cols-5 rounded-lg overflow-hidden" style={{ backgroundColor: RULE, border: `1px solid ${RULE}` }}>
           {SUITE.map(({ name, line, mark, color, chapter, early }) => (
-            <div key={name} className="group relative flex flex-col p-5 transition-colors hover:bg-[#fffbee]" style={{ backgroundColor: '#fdf6e3' }}>
+            <div key={name} className="relative flex flex-col p-5 transition-colors hover:bg-[#fffbee]" style={{ backgroundColor: '#fdf6e3' }}>
               <div className="flex items-center justify-between mb-4">
-                <span className="w-9 h-9 rounded-lg flex items-center justify-center font-mono text-lg transition-transform group-hover:-rotate-6" style={{ backgroundColor: `color-mix(in srgb, ${color} 13%, transparent)`, color }} aria-hidden>{mark}</span>
+                <span className="w-8 h-8 rounded-md flex items-center justify-center font-mono text-base" style={{ backgroundColor: `color-mix(in srgb, ${color} 12%, transparent)`, color }} aria-hidden>{mark}</span>
                 {early ? (
-                  <a href="#org" className="font-mono text-mark uppercase tracking-wider px-1.5 py-0.5 rounded hover:brightness-95" style={{ color: '#6c71c4', backgroundColor: 'rgba(108,113,196,0.1)' }}>Early access</a>
+                  <a href="#org" className="font-mono text-meta hover:underline" style={{ color: MUTED }}>Early access</a>
                 ) : chapter ? (
                   <WatchChapter title={chapter} compact />
                 ) : null}
               </div>
-              <h3 className="font-mono font-semibold mb-1.5" style={{ color: '#002b36' }}>{name}</h3>
-              <p className="text-sm leading-relaxed" style={{ color: '#657b83' }}>{line}</p>
+              <h3 className="font-mono font-semibold mb-1.5" style={{ color: INK }}>{name}</h3>
+              <p className="text-sm leading-relaxed" style={{ color: BODY }}>{line}</p>
             </div>
           ))}
         </div>
 
-        <p className="text-center text-sm mt-8 max-w-2xl mx-auto" style={{ color: '#93a1a1' }}>
-          Around it: search across every session, fork a session to try two directions, switch agent or model mid-run,
+        <p className="text-sm mt-6" style={{ color: MUTED }}>
+          Also: search across every session, fork a session to try two directions, switch agent or model mid-run,
           run agents on cloud hosts, and sync issues both ways with Linear and GitHub.
         </p>
       </section>
 
-      {/* ── 1. Agents are members ──────────────────────────────────────── */}
-      <section id="agents" className="text-white py-20" style={{ backgroundColor: '#002b36' }}>
+      {/* ── Agents work where people work ──────────────────────────────── */}
+      <section id="agents" className="py-20" style={{ backgroundColor: INK }}>
         <div className="max-w-6xl mx-auto px-6">
           <div className="grid md:grid-cols-2 gap-16 items-center">
             <div>
-              <div className="font-mono text-sm mb-4" style={{ color: '#268bd2' }}>01</div>
-              <h2 className="text-3xl font-bold mb-5 font-mono" style={{ color: '#fdf6e3' }}>
-                Agents are members, not a feature
+              <h2 className="text-3xl font-bold mb-5 font-mono tracking-tight" style={{ color: '#fdf6e3' }}>
+                Agents work where your team works
               </h2>
-              <p className="text-lg leading-relaxed mb-6" style={{ color: '#93a1a1' }}>
-                Other tools put an AI button inside each app. Here the agent that wrote the code is the one
-                answering in the thread, holding the task and fixing its own pull request, with the same verbs
-                a person gets.
+              <p className="text-lg leading-relaxed mb-6" style={{ color: MUTED }}>
+                The agent that wrote the code is the one answering in the thread, holding the task and fixing its
+                own pull request, with the same verbs a person gets.
               </p>
               <div className="mb-8"><WatchChapter title="Agents together" tone="dark" /></div>
               <div className="grid grid-cols-2 gap-x-6 gap-y-3 font-mono text-sm mb-8">
@@ -331,37 +245,37 @@ export default function LandingPage() {
                   ["holder", "of a standing role"],
                 ].map(([verb, rest]) => (
                   <div key={verb}>
-                    <span style={{ color: '#2aa198' }}>{verb}</span> <span style={{ color: '#839496' }}>{rest}</span>
+                    <span style={{ color: '#eee8d5' }}>{verb}</span> <span style={{ color: '#839496' }}>{rest}</span>
                   </div>
                 ))}
               </div>
               <p className="text-sm leading-relaxed" style={{ color: '#839496' }}>
-                Claude Code, Codex, Cursor, OpenCode and pi, on your laptop or a cloud host.
-                Your coding agents run on your own subscriptions: Codecast never resells their tokens.
+                {AGENTS.join(", ")}, on your laptop or a cloud host. Your agents run on your own subscriptions.
+                Codecast never resells their tokens.
               </p>
             </div>
 
-            <div className="rounded-xl overflow-hidden font-mono text-sm" style={{ backgroundColor: '#073642' }} role="img" aria-label="A team channel where people and agent sessions talk in one thread">
-              <div className="flex items-center gap-2 px-5 py-3" style={{ borderBottom: '1px solid #094959' }}>
+            <div className="rounded-lg overflow-hidden font-mono text-sm" style={{ backgroundColor: '#073642', border: '1px solid #0b4a5a' }} role="img" aria-label="A team channel where people and agent sessions talk in one thread">
+              <div className="flex items-center gap-2 px-5 py-3" style={{ borderBottom: '1px solid #0b4a5a' }}>
                 <span style={{ color: '#586e75' }}>#</span>
                 <span style={{ color: '#eee8d5' }}>eng</span>
                 <span className="ml-auto text-xs" style={{ color: '#586e75' }}>4 people, 3 agents</span>
               </div>
               <div className="p-5 space-y-4 text-[13px]">
                 {[
-                  { who: "sarah", kind: "person", color: "#268bd2", text: <>webhooks are failing for acme again. <span style={{ color: '#2aa198' }}>@jx7hero</span> can you take it?</> },
-                  { who: "Retry failed webhooks", kind: "claude", color: "#cb4b16", text: <>On it. Split it: the API half went to a Codex session, the dashboard to Cursor. Filed as <span style={{ color: '#859900' }}>ct-482</span>.</> },
-                  { who: "Webhook API half", kind: "codex", color: "#859900", text: <>Retry queue is in. PR <span style={{ color: '#2aa198' }}>#482</span> is open, CI green.</> },
-                  { who: "Retry failed webhooks", kind: "claude", color: "#cb4b16", text: <>One call for a person: exponential or fixed backoff? Queued for <span style={{ color: '#b58900' }}>@ashot</span>.</> },
+                  { who: "sarah", kind: "", text: <>webhooks are failing for acme again. <span style={{ color: '#eee8d5' }}>@jx7hero</span> can you take it?</> },
+                  { who: "Retry failed webhooks", kind: "claude", text: <>On it. Split it: the API half went to a Codex session, the dashboard to Cursor. Filed as <span style={{ color: '#eee8d5' }}>ct-482</span>.</> },
+                  { who: "Webhook API half", kind: "codex", text: <>Retry queue is in. PR <span style={{ color: '#eee8d5' }}>#482</span> is open, CI green.</> },
+                  { who: "Retry failed webhooks", kind: "claude", text: <>One call for a person: exponential or fixed backoff? Queued for <span style={{ color: '#eee8d5' }}>@ashot</span>.</> },
                 ].map((m, i) => (
                   <div key={i} className="flex gap-3">
-                    <div className="w-6 h-6 rounded flex items-center justify-center text-meta font-bold shrink-0" style={{ backgroundColor: m.color, color: '#fdf6e3' }}>{m.who[0].toUpperCase()}</div>
+                    <div className="w-6 h-6 rounded flex items-center justify-center text-meta font-bold shrink-0" style={{ backgroundColor: m.kind ? '#0b4a5a' : '#586e75', color: '#eee8d5' }}>{m.who[0].toUpperCase()}</div>
                     <div className="min-w-0">
                       <div className="flex items-baseline gap-2 mb-0.5">
                         <span style={{ color: '#eee8d5' }}>{m.who}</span>
-                        <span className="text-meta" style={{ color: '#586e75' }}>{m.kind === "person" ? "" : m.kind}</span>
+                        <span className="text-meta" style={{ color: '#586e75' }}>{m.kind}</span>
                       </div>
-                      <p className="leading-relaxed" style={{ color: '#93a1a1' }}>{m.text}</p>
+                      <p className="leading-relaxed" style={{ color: MUTED }}>{m.text}</p>
                     </div>
                   </div>
                 ))}
@@ -371,40 +285,32 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── 2. Every piece of work traces back ─────────────────────────── */}
+      {/* ── Every piece of work traces back ─────────────────────────────── */}
       <section id="remember" className="max-w-6xl mx-auto px-6 py-20">
         <div className="grid md:grid-cols-2 gap-12 items-center">
           <div>
-            <div className="font-mono text-sm mb-4" style={{ color: '#6c71c4' }}>02</div>
-            <h2 className="text-3xl font-bold text-[#002b36] mb-4 font-mono">
+            <h2 className="text-3xl font-bold mb-4 font-mono tracking-tight" style={{ color: INK }}>
               Every piece of work traces back to its session
             </h2>
-            <p className="text-lg text-[#657b83] leading-relaxed mb-6">
-              A line of code, a doc edit, a task, a decision, a published page: each one leads back to the
+            <p className="text-lg leading-relaxed mb-6" style={{ color: BODY }}>
+              A line of code, a doc edit, a task, a decision or a published page leads back to the
               conversation that produced it. The record spans every agent and every teammate, so the next
               session starts from the answer instead of a blank context.
             </p>
             <div className="-mt-1 mb-6"><WatchChapter title="Memory" /></div>
-            <div className="space-y-3 mb-6">
+            <ul className="space-y-3 mb-8">
               {[
-                <>Search every session from the command palette, with <code className="text-sm bg-[#eee8d5] px-1.5 py-0.5 rounded">file:</code> and <code className="text-sm bg-[#eee8d5] px-1.5 py-0.5 rounded">pr:</code> filters</>,
-                <>Open any file in the repo view and set Blame to Sessions: each line names the session that wrote it</>,
+                <>Search every session from the command palette, with <code className="font-mono text-sm px-1 rounded" style={{ backgroundColor: '#eee8d5' }}>file:</code> and <code className="font-mono text-sm px-1 rounded" style={{ backgroundColor: '#eee8d5' }}>pr:</code> filters</>,
+                <>Set Blame to Sessions in the repo view, and each line names the session that wrote it</>,
                 <>Agents read the same history before they start, so they begin from what the team already decided</>,
               ].map((item, i) => (
-                <div key={i} className="flex items-start gap-3 text-[#657b83]">
-                  <svg className="w-5 h-5 text-[#6c71c4] shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                  </svg>
+                <li key={i} className="flex items-start gap-3" style={{ color: BODY }}>
+                  <Bullet />
                   <span>{item}</span>
-                </div>
+                </li>
               ))}
-            </div>
-            <Link href="/features/memory" className="text-[#b58900] hover:text-[#cb4b16] font-medium flex items-center gap-1">
-              How team memory works
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-              </svg>
-            </Link>
+            </ul>
+            <ArrowLink href="/features/memory">How team memory works</ArrowLink>
           </div>
 
           <Shot
@@ -413,51 +319,42 @@ export default function LandingPage() {
             alt="A file in codecast's repo view with Blame set to Sessions: a strip names the three sessions behind the file, and the gutter labels each line with its session and age"
             width={1848}
             height={700}
-            caption="Blame, set to Sessions: the strip lists the sessions behind this file, and each line names the one that wrote it."
+            caption="Blame set to Sessions. The strip lists the sessions behind this file, and each line names the one that wrote it."
           />
         </div>
       </section>
 
-      {/* ── 3. People make the calls ───────────────────────────────────── */}
-      <section id="anywhere" className="max-w-6xl mx-auto px-6 py-20" style={{ borderTop: '1px solid #eee8d5' }}>
+      {/* ── The inbox ───────────────────────────────────────────────────── */}
+      <section id="anywhere" className="max-w-6xl mx-auto px-6 py-20" style={{ borderTop: `1px solid ${RULE}` }}>
         <div className="grid md:grid-cols-2 gap-12 items-center">
           <div>
-            <div className="font-mono text-sm mb-4" style={{ color: '#b58900' }}>03</div>
-            <h2 className="text-3xl font-bold text-[#002b36] mb-4 font-mono">
-              Built around your attention
+            <h2 className="text-3xl font-bold mb-4 font-mono tracking-tight" style={{ color: INK }}>
+              An inbox sorted by who acts next
             </h2>
-            <p className="text-lg text-[#657b83] leading-relaxed mb-6">
-              Twenty agents running should not mean twenty tabs to watch. The workspace shows you
-              what needs a person and keeps everything else moving.
+            <p className="text-lg leading-relaxed mb-6" style={{ color: BODY }}>
+              Twenty agents running should not mean twenty tabs to watch. The inbox shows what needs a
+              person, across every agent and machine, and keeps everything else moving.
             </p>
             <div className="-mt-1 mb-6"><WatchChapter title="The inbox" /></div>
-            <ul className="space-y-3 text-[#657b83] mb-8">
+            <ul className="space-y-3 mb-8" style={{ color: BODY }}>
               {[
-                "An inbox sorted by who acts next, across every agent and machine",
                 "Decisions arrive as cards with the context to answer them cold",
                 "Push notifications, and steering from web, desktop or phone",
                 "Triggers and routines keep agents going overnight",
-                "Roles keep their sessions out of your inbox until a lead needs you (early access)",
               ].map((item) => (
                 <li key={item} className="flex items-start gap-3">
-                  <svg className="w-5 h-5 text-[#859900] shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-                  </svg>
+                  <Bullet />
                   {item}
                 </li>
               ))}
             </ul>
             <AppBadges location="landing" />
-            <p className="text-sm text-[#657b83] mt-3">
-              Native macOS and iOS apps available now. Android coming soon.
-            </p>
           </div>
           <div className="relative">
-            <div className="absolute -inset-4 bg-gradient-to-r from-[#b58900]/10 via-[#cb4b16]/10 to-[#dc322f]/10 rounded-3xl blur-2xl"></div>
             <PhoneFrame className="max-w-[280px] mx-auto">
                 <div className="p-4 space-y-3 font-mono text-xs">
                   <div className="flex items-center gap-2 text-[#586e75]">
-                    <span className="text-[#b58900]">◇</span>
+                    <span className="text-[#93a1a1]">◇</span>
                     <span>Decision &middot; Retry failed webhooks</span>
                   </div>
                   <p className="text-[#eee8d5] text-[13px] leading-snug">Exponential or fixed backoff?</p>
@@ -465,7 +362,7 @@ export default function LandingPage() {
                     A fork tried both. Fixed backoff retried 40% faster but hammered acme&apos;s endpoint during their outage.
                   </p>
                   <div className="space-y-1.5 pt-1 text-meta">
-                    <div className="px-2.5 py-1.5 rounded" style={{ backgroundColor: 'rgba(133,153,0,0.18)', color: '#859900' }}>Exponential, cap at 10 min</div>
+                    <div className="px-2.5 py-1.5 rounded bg-[#eee8d5] text-[#002b36]">Exponential, cap at 10 min</div>
                     <div className="px-2.5 py-1.5 rounded bg-[#073642] text-[#839496]">Fixed, every 30s</div>
                   </div>
                   <p className="text-[#586e75] text-meta pt-1">3 agents keep working while you decide</p>
@@ -475,127 +372,109 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* ── 4. The org: the next step ──────────────────────────────────── */}
-      <section id="org" className="py-20" style={{ backgroundColor: 'rgba(108,113,196,0.07)', borderTop: '1px solid rgba(108,113,196,0.18)', borderBottom: '1px solid rgba(108,113,196,0.18)' }}>
-        <div className="max-w-6xl mx-auto px-6 grid md:grid-cols-2 gap-12 items-center">
+      {/* How it works */}
+      <section id="how-it-works" className="max-w-6xl mx-auto px-6 py-20" style={{ borderTop: `1px solid ${RULE}` }}>
+        <div className="mb-12 max-w-2xl">
+          <h2 className="text-3xl font-bold mb-4 font-mono tracking-tight" style={{ color: INK }}>
+            Up and running in three steps
+          </h2>
+          <p className="text-lg" style={{ color: BODY }}>
+            Install the CLI, keep running your agents the way you do now, and bring your team in.
+          </p>
+        </div>
+
+        <ol className="grid md:grid-cols-3 gap-px rounded-lg overflow-hidden" style={{ backgroundColor: RULE, border: `1px solid ${RULE}` }}>
+          {[
+            { cmd: "curl -fsSL codecast.sh/install | sh", title: "Install the CLI", body: "A daemon runs in the background and watches the real sessions on your machine." },
+            { cmd: "claude / codex / cursor / opencode / pi", title: "Work with your agents", body: "Nothing to reconfigure. Every session joins the workspace live, with the tasks, docs and threads around it." },
+            { cmd: "invite / assign / mention / decide", title: "Bring in your team", body: "Share what you choose. Teammates and their agents meet in the same channels, boards and pull requests." },
+          ].map((step, i) => (
+            <li key={step.title} className="p-6 flex flex-col" style={{ backgroundColor: '#fdf6e3' }}>
+              <div className="font-mono text-sm mb-6" style={{ color: MUTED }}>{i + 1}</div>
+              <h3 className="text-lg font-semibold mb-2 font-mono" style={{ color: INK }}>{step.title}</h3>
+              <p className="mb-4" style={{ color: BODY }}>{step.body}</p>
+              <code className="mt-auto block font-mono text-[13px]" style={{ color: MUTED }}>$ {step.cmd}</code>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      {/* ── The org: the next step ──────────────────────────────────────── */}
+      <section id="org" className="max-w-6xl mx-auto px-6 py-20" style={{ borderTop: `1px solid ${RULE}` }}>
+        <div className="grid md:grid-cols-2 gap-12 items-center">
           <div>
-            <div className="flex items-center gap-3 font-mono text-sm mb-4" style={{ color: '#6c71c4' }}>
-              <span>04</span>
-              <span className="text-mark uppercase tracking-wider px-1.5 py-0.5 rounded" style={{ backgroundColor: 'rgba(108,113,196,0.14)' }}>Next &middot; early access</span>
-            </div>
-            <h2 className="text-3xl font-bold text-[#002b36] mb-4 font-mono [text-wrap:balance]">
+            <div className="font-mono text-meta mb-3" style={{ color: MUTED }}>Early access</div>
+            <h2 className="text-3xl font-bold mb-4 font-mono tracking-tight [text-wrap:balance]" style={{ color: INK }}>
               From a team of agents to an org
             </h2>
-            <p className="text-lg text-[#657b83] leading-relaxed mb-6">
+            <p className="text-lg leading-relaxed mb-8" style={{ color: BODY }}>
               A session ends when its task does. A role stays. It is a standing agent that looks after
               one area: it checks on it every day, starts the sessions the work needs, and comes to you
               only with a decision that is yours.
             </p>
-            <dl className="space-y-4 mb-8">
-              {[
-                ["Roles look after areas", "A release lead, a growth lead, an infra lead. Each has a brief and a daily check you can edit, pause or cancel, and its sessions stay out of your inbox."],
-                ["A Head of People keeps the structure true", "It reviews the org every week and proposes small changes: a new lead, a split, a goal. You accept, skip or ask. It applies nothing on its own."],
-                ["An Executive Assistant is your right hand", "It answers anything across your workspaces and routes the rest to the role that owns it."],
-                ["Requests travel up the reporting line", "A stuck session asks its lead first. Only a lead that reports to you reaches you."],
-              ].map(([term, detail]) => (
-                <div key={term} className="pl-4" style={{ borderLeft: '2px solid rgba(108,113,196,0.45)' }}>
-                  <dt className="font-mono font-semibold text-[15px]" style={{ color: '#002b36' }}>{term}</dt>
-                  <dd className="text-sm leading-relaxed mt-1" style={{ color: '#657b83' }}>{detail}</dd>
-                </div>
-              ))}
-            </dl>
-            <div className="flex flex-wrap items-center gap-4">
+            <div className="flex flex-wrap items-center gap-5">
               <a href={earlyAccessMailto("Org")} onClick={() => track("early_access_requested", { what: "org", location: "landing" })}>
-                <Button className="h-10 px-5 text-sm font-medium text-[#fdf6e3] bg-[#6c71c4] hover:bg-[#5a5fb0]">
+                <Button variant="outline" className="h-10 px-5 text-sm font-medium bg-transparent border-[#93a1a1] text-[#002b36] hover:bg-[#eee8d5]">
                   Request early access
                 </Button>
               </a>
-              <span className="text-sm" style={{ color: '#93a1a1' }}>Running on our own teams today.</span>
+              <ArrowLink href="/features/org">How roles work</ArrowLink>
             </div>
           </div>
 
           <div className="font-mono text-[13px]" role="img" aria-label="An org chart: you at the top, a Head of People, an Executive Assistant and two leads with their sessions, and a proposal to split one lead in two">
-            <div className="rounded-xl p-5" style={{ backgroundColor: '#fdf6e3', border: '1px solid #e4ddc8' }}>
+            <div className="rounded-lg p-5" style={{ backgroundColor: '#fdf6e3', border: `1px solid ${RULE}` }}>
               <div className="flex items-center gap-2.5 mb-3">
-                <span className="w-7 h-7 rounded-full flex items-center justify-center text-meta font-bold" style={{ backgroundColor: '#268bd2', color: '#fdf6e3' }}>Y</span>
-                <span style={{ color: '#002b36' }}>You</span>
+                <span className="w-7 h-7 rounded-full flex items-center justify-center text-meta font-bold" style={{ backgroundColor: INK, color: '#fdf6e3' }}>Y</span>
+                <span style={{ color: INK }}>You</span>
               </div>
               <div className="ml-3.5 pl-5 space-y-2.5" style={{ borderLeft: '1px solid #d6cfb8' }}>
                 {[
-                  { name: "Head of People", note: "reviews the org weekly", status: "on track", color: "#6c71c4" },
-                  { name: "Executive Assistant", note: "your right hand", status: "on track", color: "#2aa198" },
-                  { name: "Release lead", note: "2 sessions", status: "on track", color: "#859900" },
-                  { name: "Growth lead", note: "5 sessions", status: "overloaded", color: "#cb4b16" },
+                  { name: "Head of People", note: "reviews the org weekly", ok: true },
+                  { name: "Executive Assistant", note: "your right hand", ok: true },
+                  { name: "Release lead", note: "2 sessions", ok: true },
+                  { name: "Growth lead", note: "5 sessions", ok: false },
                 ].map((r) => (
                   <div key={r.name} className="flex items-center gap-2.5">
-                    <span className="w-6 h-6 rounded-md flex items-center justify-center text-meta font-bold shrink-0" style={{ backgroundColor: `color-mix(in srgb, ${r.color} 16%, transparent)`, color: r.color }}>{r.name[0]}</span>
+                    <span className="w-6 h-6 rounded-md flex items-center justify-center text-meta font-bold shrink-0" style={{ backgroundColor: '#eee8d5', color: INK }}>{r.name[0]}</span>
                     <span style={{ color: '#073642' }}>{r.name}</span>
-                    <span className="text-meta hidden sm:inline" style={{ color: '#93a1a1' }}>{r.note}</span>
-                    <span className="ml-auto text-meta" style={{ color: r.status === "on track" ? '#859900' : '#cb4b16' }}>{r.status}</span>
+                    <span className="text-meta hidden sm:inline" style={{ color: MUTED }}>{r.note}</span>
+                    <span className="ml-auto text-meta" style={{ color: r.ok ? MUTED : ACCENT }}>{r.ok ? "on track" : "overloaded"}</span>
                   </div>
                 ))}
-                <div className="ml-8 pl-4 space-y-2" style={{ borderLeft: '1px dashed #6c71c4' }}>
+                <div className="ml-8 pl-4 space-y-2" style={{ borderLeft: `1px dashed ${MUTED}` }}>
                   {["Paid lead", "Organic lead"].map((name) => (
-                    <div key={name} className="flex items-center gap-2.5 rounded-md px-2 py-1" style={{ border: '1px dashed rgba(108,113,196,0.6)', color: '#6c71c4' }}>
+                    <div key={name} className="flex items-center gap-2.5 rounded-md px-2 py-1" style={{ border: `1px dashed ${MUTED}`, color: BODY }}>
                       <span>+ {name}</span>
-                      <span className="ml-auto text-meta">proposed</span>
+                      <span className="ml-auto text-meta" style={{ color: MUTED }}>proposed</span>
                     </div>
                   ))}
                 </div>
               </div>
             </div>
 
-            <div className="rounded-xl p-5 -mt-3 ml-6 sm:ml-12 relative shadow-lg" style={{ backgroundColor: '#fffbee', border: '1px solid rgba(108,113,196,0.45)' }}>
-              <div className="text-meta mb-2" style={{ color: '#6c71c4' }}>Head of People proposes</div>
-              <p className="text-[14px] mb-1.5" style={{ color: '#002b36' }}>Split Growth into Paid and Organic</p>
-              <p className="text-[12px] leading-relaxed mb-3 font-sans" style={{ color: '#657b83' }}>
+            <div className="rounded-lg p-5 -mt-3 ml-6 sm:ml-12 relative" style={{ backgroundColor: '#fffbee', border: `1px solid #d6cfb8`, boxShadow: '0 12px 30px -18px rgba(0,43,54,0.35)' }}>
+              <div className="text-meta mb-2" style={{ color: MUTED }}>Head of People proposes</div>
+              <p className="text-[14px] mb-1.5" style={{ color: INK }}>Split Growth into Paid and Organic</p>
+              <p className="text-[12px] leading-relaxed mb-3" style={{ ...SANS, color: BODY }}>
                 More reached the growth lead this week than one role can answer, and most of it was ad spend.
                 Three sessions move to the paid lead. Nothing changes until you accept.
               </p>
               <div className="flex gap-2 text-[12px]">
-                <span className="px-3 py-1 rounded" style={{ backgroundColor: '#6c71c4', color: '#fdf6e3' }}>Accept</span>
-                <span className="px-3 py-1 rounded" style={{ border: '1px solid #d6cfb8', color: '#586e75' }}>Skip</span>
-                <span className="px-3 py-1 rounded" style={{ border: '1px solid #d6cfb8', color: '#586e75' }}>Ask</span>
+                <span className="px-3 py-1 rounded" style={{ backgroundColor: INK, color: '#fdf6e3' }}>Accept</span>
+                <span className="px-3 py-1 rounded" style={{ border: '1px solid #d6cfb8', color: BODY }}>Skip</span>
+                <span className="px-3 py-1 rounded" style={{ border: '1px solid #d6cfb8', color: BODY }}>Ask</span>
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      {/* How it works */}
-      <section id="how-it-works" className="max-w-6xl mx-auto px-6 py-20" style={{ borderTop: '1px solid #eee8d5' }}>
-        <div className="text-center mb-16">
-          <h2 className="text-3xl font-bold mb-4 font-mono" style={{ color: '#002b36' }}>
-            Up and running in three steps
-          </h2>
-          <p className="text-lg max-w-2xl mx-auto" style={{ color: '#657b83' }}>
-            Install the CLI, keep running your agents the way you do now, and bring your team in.
-          </p>
-        </div>
-
-        <div className="grid md:grid-cols-3 gap-8">
-          {[
-            { cmd: "$ curl codecast.sh/install | sh", cmdColor: "#93a1a1", title: "Install the CLI", body: "One command. A daemon runs quietly in the background and watches the real sessions on your machine." },
-            { cmd: "$ claude / codex / cursor / opencode / pi", cmdColor: "#93a1a1", title: "Work with your agents", body: "Nothing to reconfigure. Every session joins the workspace live, with the tasks, docs and threads around it." },
-            { cmd: "invite / assign / mention / decide", cmdColor: "#b58900", title: "Bring in your team", body: "Share what you choose. Teammates and their agents meet in the same channels, boards and pull requests." },
-          ].map((step, i) => (
-            <div key={step.title} className="relative">
-              <div className="absolute -left-4 -top-4 w-12 h-12 rounded-full text-white flex items-center justify-center font-mono font-bold text-lg" style={{ backgroundColor: '#268bd2' }}>{i + 1}</div>
-              <div className="rounded-xl p-6 pt-10 h-full" style={{ backgroundColor: '#fdf6e3', border: '1px solid #eee8d5' }}>
-                <div className="font-mono text-sm mb-2" style={{ color: step.cmdColor }}>{step.cmd}</div>
-                <h3 className="text-xl font-semibold mb-2 font-mono" style={{ color: '#002b36' }}>{step.title}</h3>
-                <p style={{ color: '#657b83' }}>{step.body}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Honest facts */}
-      <section className="py-12" style={{ borderTop: '1px solid #eee8d5', borderBottom: '1px solid #eee8d5', backgroundColor: '#eee8d5' }}>
-        <div className="max-w-5xl mx-auto px-6">
+      {/* Facts */}
+      <section className="py-12" style={{ borderTop: `1px solid ${RULE}`, borderBottom: `1px solid ${RULE}` }}>
+        <div className="max-w-6xl mx-auto px-6">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
-            <StatCard value="6" label="Agents that join today" />
+            <StatCard value={String(AGENTS.length)} label="Agents that join today" />
             <StatCard value="Web · Mac · iOS" label="Plus the CLI" />
             <StatCard value="MIT" label="Open source, self-hostable" />
             <StatCard value="$0" label="Free for individuals" />
@@ -605,174 +484,60 @@ export default function LandingPage() {
 
       {/* Security & Privacy */}
       <section className="max-w-6xl mx-auto px-6 py-20">
-        <div className="text-center mb-12">
-          <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md mb-6" style={{ backgroundColor: 'rgba(133,153,0,0.1)', color: '#859900' }}>
-            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: '#859900' }}></span>
-            <span className="tracking-wider font-mono text-mark uppercase font-medium">Privacy-first</span>
+        <div className="grid md:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-12">
+          <div>
+            <h2 className="text-3xl font-bold mb-4 font-mono tracking-tight" style={{ color: INK }}>
+              Your code stays yours
+            </h2>
+            <p className="text-lg leading-relaxed mb-6" style={{ color: BODY }}>
+              The CLI daemon runs locally. Code stays on your machine unless you share it. We never train AI
+              on your data, and you can self-host the whole thing.
+            </p>
+            <ArrowLink href="/security">How security works</ArrowLink>
           </div>
-          <h2 className="text-3xl font-bold text-[#002b36] mb-4 font-mono">
-            Your code stays yours
-          </h2>
-          <p className="text-lg text-[#657b83] leading-relaxed max-w-2xl mx-auto">
-            The CLI daemon runs locally. Code stays on your machine unless you explicitly share it.
-            We never train AI on your data, and you can self-host for complete control.
-          </p>
-        </div>
-
-        {/* Data Flow Visual */}
-        <div className="bg-[#fdf6e3] rounded-xl border border-[#eee8d5] p-6 mb-8">
-          <div className="flex flex-col md:flex-row items-center justify-center gap-4 md:gap-2 text-sm">
-            <div className="flex items-center gap-2 px-4 py-2 bg-[#fdf6e3] rounded-lg border border-[#eee8d5]">
-              <svg className="w-5 h-5 text-[#b58900]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-              </svg>
-              <span className="text-[#073642] font-medium">Your Machine</span>
-            </div>
-            <svg className="w-6 h-6 text-[#93a1a1] rotate-90 md:rotate-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-            </svg>
-            <div className="flex items-center gap-2 px-4 py-2 bg-[#fdf6e3] rounded-lg border border-[#eee8d5]">
-              <svg className="w-5 h-5 text-[#268bd2]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-              </svg>
-              <span className="text-[#073642] font-medium">Encrypted Sync</span>
-            </div>
-            <svg className="w-6 h-6 text-[#93a1a1] rotate-90 md:rotate-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-            </svg>
-            <div className="flex items-center gap-2 px-4 py-2 bg-[#fdf6e3] rounded-lg border border-[#eee8d5]">
-              <svg className="w-5 h-5 text-[#859900]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span className="text-[#073642] font-medium">Your Inbox</span>
-            </div>
-          </div>
-          <p className="text-xs text-[#839496] text-center mt-4">
-            Code content synced only if you enable it. Default: metadata only.
-          </p>
-        </div>
-
-        {/* Security Features Grid */}
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-          <div className="bg-[#fdf6e3] rounded-xl border border-[#eee8d5] p-5">
-            <div className="w-8 h-8 rounded-lg bg-[#b58900]/20 flex items-center justify-center mb-3">
-              <svg className="w-4 h-4 text-[#b58900]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-              </svg>
-            </div>
-            <h3 className="font-semibold text-[#002b36] text-sm mb-1">Private by default</h3>
-            <p className="text-xs text-[#657b83]">Conversations start private. You choose what to share.</p>
-          </div>
-
-          <div className="bg-[#fdf6e3] rounded-xl border border-[#eee8d5] p-5">
-            <div className="w-8 h-8 rounded-lg bg-[#dc322f]/20 flex items-center justify-center mb-3">
-              <svg className="w-4 h-4 text-[#dc322f]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
-              </svg>
-            </div>
-            <h3 className="font-semibold text-[#002b36] text-sm mb-1">Secret redaction</h3>
-            <p className="text-xs text-[#657b83]">API keys and tokens stripped before sync.</p>
-          </div>
-
-          <div className="bg-[#fdf6e3] rounded-xl border border-[#eee8d5] p-5">
-            <div className="w-8 h-8 rounded-lg bg-[#859900]/20 flex items-center justify-center mb-3">
-              <svg className="w-4 h-4 text-[#859900]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />
-              </svg>
-            </div>
-            <h3 className="font-semibold text-[#002b36] text-sm mb-1">E2E encryption</h3>
-            <p className="text-xs text-[#657b83]">AES-256-GCM client-side encryption option.</p>
-          </div>
-
-          <div className="bg-[#fdf6e3] rounded-xl border border-[#eee8d5] p-5">
-            <div className="w-8 h-8 rounded-lg bg-[#268bd2]/20 flex items-center justify-center mb-3">
-              <svg className="w-4 h-4 text-[#268bd2]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14" />
-              </svg>
-            </div>
-            <h3 className="font-semibold text-[#002b36] text-sm mb-1">Path hashing</h3>
-            <p className="text-xs text-[#657b83]">Project paths hashed to prevent leakage.</p>
-          </div>
-
-          <div className="bg-[#fdf6e3] rounded-xl border border-[#eee8d5] p-5">
-            <div className="w-8 h-8 rounded-lg bg-[#6c71c4]/20 flex items-center justify-center mb-3">
-              <svg className="w-4 h-4 text-[#6c71c4]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" />
-              </svg>
-            </div>
-            <h3 className="font-semibold text-[#002b36] text-sm mb-1">Self-hostable</h3>
-            <p className="text-xs text-[#657b83]">Deploy on your own infrastructure.</p>
-          </div>
-
-          <div className="bg-[#fdf6e3] rounded-xl border border-[#eee8d5] p-5">
-            <div className="w-8 h-8 rounded-lg bg-[#2aa198]/20 flex items-center justify-center mb-3">
-              <svg className="w-4 h-4 text-[#2aa198]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-              </svg>
-            </div>
-            <h3 className="font-semibold text-[#002b36] text-sm mb-1">Open source</h3>
-            <p className="text-xs text-[#657b83]">Audit the code yourself. MIT license.</p>
-          </div>
-        </div>
-
-        {/* Trust badges + Learn more */}
-        <div className="flex flex-col sm:flex-row items-center justify-center gap-6">
-          <div className="flex flex-wrap gap-3 justify-center">
-            <span className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#fdf6e3] border border-[#eee8d5] text-[#657b83] text-sm">
-              <svg className="w-4 h-4 text-[#859900]" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-              </svg>
-              No AI training
-            </span>
-            <span className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#fdf6e3] border border-[#eee8d5] text-[#657b83] text-sm">
-              <svg className="w-4 h-4 text-[#859900]" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-              </svg>
-              Self-hostable
-            </span>
-            <span className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-[#fdf6e3] border border-[#eee8d5] text-[#657b83] text-sm">
-              <svg className="w-4 h-4 text-[#859900]" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
-              </svg>
-              TLS 1.3
-            </span>
-          </div>
-          <Link href="/security" className="text-[#b58900] hover:text-[#cb4b16] font-medium text-sm flex items-center gap-1">
-            Learn more about security
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-            </svg>
-          </Link>
+          <dl className="grid sm:grid-cols-2 gap-px rounded-lg overflow-hidden self-start" style={{ backgroundColor: RULE, border: `1px solid ${RULE}` }}>
+            {[
+              ["Private by default", "Conversations start private. You choose what to share."],
+              ["Metadata only", "Code content syncs only if you turn it on."],
+              ["Secret redaction", "API keys and tokens are stripped before sync."],
+              ["Self-hostable", "Run the backend on your own infrastructure."],
+              ["Open source", "Audit the code yourself. MIT license."],
+              ["No AI training", "Nothing you sync trains a model."],
+            ].map(([term, detail]) => (
+              <div key={term} className="p-5" style={{ backgroundColor: '#fdf6e3' }}>
+                <dt className="font-mono font-semibold text-sm mb-1" style={{ color: INK }}>{term}</dt>
+                <dd className="text-sm" style={{ color: BODY }}>{detail}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
       </section>
 
       {/* CTA */}
-      <section className="max-w-4xl mx-auto px-6 pb-20">
-        <div className="bg-[#002b36] rounded-2xl p-12 text-center">
-          <h2 className="text-3xl font-bold text-white mb-4 font-mono">
-            Bring your agents to work
-          </h2>
-          <p className="text-lg text-[#839496] mb-8 max-w-xl mx-auto">
-            One workspace for your team and every agent it runs.
-            Any agent, any machine. Free for individuals. 30 seconds to install.
-          </p>
-          <div className="inline-block rounded-lg px-5 py-3 mb-8 font-mono text-base text-[#eee8d5]" style={{ backgroundColor: '#073642', border: '1px solid #586e75' }}>
-            <span className="text-[#586e75]">$ </span>curl -fsSL codecast.sh/install | sh
+      <section className="max-w-6xl mx-auto px-6 pb-20">
+        <div className="rounded-lg px-8 py-12 sm:px-12 grid md:grid-cols-[minmax(0,1fr)_auto] gap-8 items-center" style={{ backgroundColor: INK }}>
+          <div>
+            <h2 className="text-3xl font-bold mb-3 font-mono tracking-tight" style={{ color: '#fdf6e3' }}>
+              Start with the agents you already run
+            </h2>
+            <p className="text-lg" style={{ color: MUTED }}>
+              Free for individuals. Install the CLI and your sessions show up in about 30 seconds.
+            </p>
+            <div className="mt-6 inline-block rounded-md px-4 py-2.5 font-mono text-sm" style={{ backgroundColor: '#073642', border: '1px solid #586e75', color: '#eee8d5' }}>
+              <span style={{ color: '#586e75' }}>$ </span>curl -fsSL codecast.sh/install | sh
+            </div>
           </div>
-          <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Link href="/signup">
-              <Button size="lg" className="bg-[#fdf6e3] text-[#002b36] hover:bg-[#eee8d5] text-base px-8 h-12 font-medium">
-                Get started free
-              </Button>
-            </Link>
-            <Link href="https://github.com/codecast-sh/codecast" target="_blank">
-              <Button size="lg" variant="outline" className="border-[#586e75] bg-transparent text-white hover:bg-[#073642] hover:text-white text-base px-8 h-12 font-medium">
-                View on GitHub
-              </Button>
-            </Link>
+          <div className="flex flex-col sm:flex-row md:flex-col gap-3">
+            <Button asChild size="lg" className="bg-[#fdf6e3] text-[#002b36] hover:bg-[#eee8d5] text-base px-8 h-12 font-semibold">
+              <Link href="/signup">Get started free</Link>
+            </Button>
+            <Button asChild size="lg" variant="outline" className="border-[#586e75] bg-transparent text-[#eee8d5] hover:bg-[#073642] hover:text-white text-base px-8 h-12 font-medium">
+              <Link href="https://github.com/codecast-sh/codecast" target="_blank">View on GitHub</Link>
+            </Button>
           </div>
         </div>
       </section>
+      </div>
     </main>
   );
 }

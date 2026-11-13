@@ -4,6 +4,8 @@ interface LogoProps {
   size?: "sm" | "md" | "lg" | "xl";
   showText?: boolean;
   className?: string;
+  /** The geometric one-color mark (MonoMark) in currentColor, beside a wordmark in the same color. */
+  mono?: boolean;
 }
 
 const sizes = {
@@ -51,14 +53,28 @@ export function LogoMark({
   );
 }
 
-export function Logo({ size = "md", showText = true, className = "" }: LogoProps) {
+/**
+ * The mark redrawn from geometry, in one color: a C cut from two circles and
+ * a notched play arrow, the same proportions as the traced original. It takes
+ * currentColor, so it follows whatever ink it sits in.
+ */
+export function MonoMark({ size = 24, className = "" }: { size?: number; className?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 1 38 32" fill="currentColor" xmlns="http://www.w3.org/2000/svg" className={className} aria-hidden>
+      <path d="M21 3.25A15 15 0 1 0 21 30.75V23.97A9.2 9.2 0 1 1 21 10.03Z" />
+      <path d="M24.3 5.2L36.8 17L24.3 28.8V21.6L28.9 17L24.3 12.4Z" />
+    </svg>
+  );
+}
+
+export function Logo({ size = "md", showText = true, className = "", mono = false }: LogoProps) {
   const { icon, text } = sizes[size];
 
   return (
-    <div className={`flex items-center gap-1.5 ${className}`}>
-      <LogoMark size={icon} className="shrink-0" />
+    <div className={`flex items-center ${mono ? "gap-2" : "gap-1.5"} ${className}`}>
+      {mono ? <MonoMark size={icon - 2} className="shrink-0" /> : <LogoMark size={icon} className="shrink-0" />}
       {showText && (
-        <span className={`font-semibold tracking-tight ${text} text-sol-text`}>
+        <span className={`font-semibold tracking-tight ${text} ${mono ? "" : "text-sol-text"}`}>
           codecast
         </span>
       )}

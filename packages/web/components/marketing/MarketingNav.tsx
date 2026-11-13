@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Logo } from "@/components/Logo";
 import { useLocalAuth } from "@/lib/localAuth";
-import { RepoPulseChip } from "@/components/marketing/RepoPulseChip";
+import { RepoChip } from "@/components/marketing/RepoChip";
 import { useMountEffect } from "@/hooks/useMountEffect";
 import { visitorPlatform } from "@/lib/visitorPlatform";
 import { HostedWordmark } from "@/components/HostedWordmark";
@@ -151,7 +151,7 @@ export function MarketingNav({
       <div className={`${containerClassName} mx-auto px-4 sm:px-6 ${crumb ? "py-3" : "py-4"} flex items-center justify-between gap-2`}>
         <div className="flex items-center gap-6 shrink-0">
           <Link href="/" aria-label="Codecast home">
-            <Logo size="md" className="[--logo-c:#444444] text-[#002b36]" />
+            <Logo size="md" mono className="text-[#002b36]" />
           </Link>
           {crumb && (
             <div className="hidden md:flex items-center gap-1">
@@ -184,7 +184,7 @@ export function MarketingNav({
             <span className="hidden sm:inline">Download</span>
             <span className="sm:hidden max-[379px]:hidden">Apps</span>
           </Link>
-          <RepoPulseChip className="hidden sm:flex" />
+          <RepoChip className="hidden sm:flex" />
           {!mounted ? (
             <span aria-hidden className="block h-9 w-[7.5rem] shrink-0" />
           ) : signedIn ? (

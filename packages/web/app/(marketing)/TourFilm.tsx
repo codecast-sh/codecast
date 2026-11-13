@@ -5,7 +5,6 @@ import { track } from "@/lib/analytics";
 import { useWatchEffect } from "@/hooks/useWatchEffect";
 import { loadCastPlayer } from "@/lib/loadCastPlayer";
 import { MEDIA_ORIGIN } from "@codecast/shared/contracts/castPlayer";
-import { DOTS } from "./chapterDots";
 
 // The hand drawn tour (videos/codecast-explainer), hosted on media.codecast.sh
 // and played by the same <cast-player> published pages use. One chapter per
@@ -98,27 +97,19 @@ export function TourSection() {
 
   return (
     <section id="tour" className="max-w-6xl mx-auto px-6 pb-20 scroll-mt-20">
-      <div className="text-center max-w-2xl mx-auto mb-10">
-        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-md mb-4" style={{ backgroundColor: "rgba(203,75,22,0.1)", color: "#cb4b16" }}>
-          <svg className="w-2.5 h-2.5" viewBox="0 0 10 10" fill="currentColor" aria-hidden><path d="M2 1.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1L2.9.7a.6.6 0 0 0-.9.5z" /></svg>
-          <span className="tracking-wider font-mono text-mark uppercase font-medium">The tour &middot; {Math.round(TOTAL / 60)} minutes, drawn by hand</span>
-        </div>
-        <h2 className="text-3xl font-bold text-[#002b36] mb-4 font-mono">
-          From one agent in the dark to a team that remembers
+      <div className="max-w-2xl mb-10">
+        <h2 className="text-3xl font-bold text-[#002b36] mb-4 font-mono tracking-tight">
+          The {Math.round(TOTAL / 60)}-minute tour
         </h2>
-        <p className="text-lg text-[#657b83] leading-relaxed">
-          Five steps take a single isolated session to agents that search and talk to each other.
-          Then every part of the product, in order. Press play and it runs straight through, or
-          jump to the chapter you care about.
+        <p className="text-lg text-[#586e75] leading-relaxed">
+          One isolated session grows into agents that search and talk to each other, then every part
+          of the product in order. Play it through, or jump to a chapter.
         </p>
       </div>
 
       <div className="grid lg:grid-cols-[minmax(0,1fr)_300px] gap-8 lg:gap-10 items-start">
         <div className="relative">
-          <div className="absolute -inset-4 bg-gradient-to-r from-[#268bd2]/15 via-[#6c71c4]/15 to-[#cb4b16]/15 rounded-2xl blur-xl opacity-60" />
-          <div className="relative rounded-xl p-2.5 sm:p-3" style={{ backgroundColor: "#fffdf6", border: "1px solid #eee8d5", boxShadow: "0 24px 50px -28px rgba(0,43,54,0.45)" }}>
-            <span aria-hidden className="absolute -top-3 left-[12%] w-28 h-6 -rotate-3 z-10" style={{ backgroundColor: "rgba(181,137,0,0.22)", clipPath: "polygon(2% 10%, 98% 0, 100% 90%, 0 100%)" }} />
-            <span aria-hidden className="absolute -bottom-3 right-[10%] w-24 h-6 rotate-2 z-10" style={{ backgroundColor: "rgba(42,161,152,0.22)", clipPath: "polygon(0 0, 100% 12%, 97% 100%, 3% 88%)" }} />
+          <div className="relative rounded-xl p-2.5 sm:p-3" style={{ backgroundColor: "#fffdf6", border: "1px solid #e4ddc8" }}>
             <div
               ref={host}
               className="[&>cast-player]:block aspect-video rounded-lg overflow-hidden"
@@ -138,7 +129,7 @@ export function TourSection() {
                 aria-current={i === active ? "true" : undefined}
               >
                 <span className="flex items-baseline gap-2.5">
-                  <span className="font-mono text-meta w-4 text-right shrink-0" style={{ color: DOTS[i % DOTS.length] }}>{i}</span>
+                  <span className="font-mono text-meta w-4 text-right shrink-0" style={{ color: "#93a1a1" }}>{i}</span>
                   <span className={`flex-1 min-w-0 text-sm leading-snug truncate lg:whitespace-normal ${i === active ? "text-[#002b36] font-medium" : "text-[#586e75]"}`}>{c.title}</span>
                   <span className="font-mono text-meta text-[#93a1a1] tabular-nums shrink-0">{clock(STARTS[i])}</span>
                 </span>
@@ -146,7 +137,7 @@ export function TourSection() {
                   ref={(b) => { bars.current[i] = b; }}
                   aria-hidden
                   className="absolute left-0 bottom-0 h-[2px] w-full origin-left"
-                  style={{ backgroundColor: "#cb4b16", transform: "scaleX(0)" }}
+                  style={{ backgroundColor: "#002b36", transform: "scaleX(0)" }}
                 />
               </button>
             </li>
@@ -171,7 +162,7 @@ export function WatchChapter({ title, tone = "light", compact = false }: { title
         style={{ color }}
         aria-label={`Watch "${c.title}"`}
       >
-        <svg className="w-2 h-2" viewBox="0 0 10 10" fill="#cb4b16" aria-hidden><path d="M2 1.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1L2.9.7a.6.6 0 0 0-.9.5z" /></svg>
+        <svg className="w-2 h-2" viewBox="0 0 10 10" fill="currentColor" aria-hidden><path d="M2 1.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1L2.9.7a.6.6 0 0 0-.9.5z" /></svg>
         <span className="tabular-nums">{clock(c.duration)}</span>
       </button>
     );
@@ -180,13 +171,13 @@ export function WatchChapter({ title, tone = "light", compact = false }: { title
     <button
       type="button"
       onClick={() => playChapter(i, "section_link")}
-      className="group inline-flex items-center gap-2.5 font-mono text-sm transition-colors"
+      className={`group inline-flex items-center gap-2.5 font-mono text-sm transition-colors ${tone === "dark" ? "hover:text-[#eee8d5]" : "hover:text-[#002b36]"}`}
       style={{ color }}
     >
-      <span className="w-7 h-7 rounded-full flex items-center justify-center transition-transform group-hover:scale-110" style={{ backgroundColor: "rgba(203,75,22,0.14)", color: "#cb4b16" }}>
+      <span className="w-7 h-7 rounded-full flex items-center justify-center transition-transform group-hover:scale-110" style={tone === "dark" ? { backgroundColor: "rgba(253,246,227,0.1)", color: "#eee8d5" } : { backgroundColor: "rgba(0,43,54,0.07)", color: "#002b36" }}>
         <svg className="w-2.5 h-2.5 ml-0.5" viewBox="0 0 10 10" fill="currentColor" aria-hidden><path d="M2 1.2v7.6a.6.6 0 0 0 .9.5l6.1-3.8a.6.6 0 0 0 0-1L2.9.7a.6.6 0 0 0-.9.5z" /></svg>
       </span>
-      <span className="underline decoration-dotted underline-offset-4 decoration-[#93a1a1] group-hover:decoration-[#cb4b16] group-hover:text-[#cb4b16]">
+      <span className="underline decoration-dotted underline-offset-4 decoration-[#93a1a1] group-hover:decoration-current">
         Watch &ldquo;{c.title}&rdquo;
       </span>
       <span className="text-meta text-[#93a1a1] tabular-nums">{clock(c.duration)}</span>
