@@ -123,8 +123,15 @@ export async function notifyLiveComments(
         if (p) people.add(p);
       }
       for (const p of people) await emit("comment_reply", p as Id<"users">, `${caller.name} replied on the ${noun} "${title}"`);
-      if (caller.kind === "agent" && root?.fields?.sent_to && !root.fields.answered_at) {
-        followUps.push({ k: c.parent, set: { answered_at: Date.now(), answered_by: caller.actor, answered_by_name: caller.name } });
+      // The session the ask went to answers it. An ask whose session was not known yet (handed to the
+      // composer, or a start that never resolved its id) is answered by the first agent to reply, which it now names.
+      const sentTo = root?.fields?.sent_to;
+      if (caller.kind === "agent" && typeof sentTo === "string" && sentTo && !root.fields.answered_at) {
+        const known = ctx.db.normalizeId("conversations", sentTo) !== null;
+        if (!known || caller.actor === `s:${sentTo}`) {
+          const conv = caller.actor.startsWith("s:") ? caller.actor.slice(2) : null;
+          followUps.push({ k: c.parent, set: { answered_at: Date.now(), answered_by: caller.actor, answered_by_name: caller.name, ...(!known && conv ? { sent_to: conv } : {}) } });
+        }
       }
     } else if (!named && String(doc.user_id) !== String(caller.userId)) {
       await emit("doc_commented", doc.user_id, `${caller.name} commented on the ${noun} "${title}"`);
