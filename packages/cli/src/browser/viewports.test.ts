@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { DEVICES, type DeviceProfile } from "./actions.js";
+import { DEVICES, type DeviceProfile } from "./devices.js";
 import type { PageSession } from "./instance.js";
 import {
   captureAtViewports, eachViewport, pageViewportCapture, parseViewport, parseViewportList, runViewportRow,

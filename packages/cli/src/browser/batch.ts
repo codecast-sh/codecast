@@ -23,9 +23,10 @@ import { isMutatingStep } from "./autoShot.js";
 import { runSteps, type StepResult } from "../stepBatch.js";
 import { snapshotPage, matchRefs, nearMatches, type Snapshot } from "./snapshot.js";
 import {
-  clearViewport, click, DEVICES, evaluate, focus, hover, pressKey,
-  scroll, selectOption, setViewport, type, type DeviceProfile,
+  click, evaluate, focus, hover, pressKey,
+  scroll, selectOption, type,
 } from "./actions.js";
+import { clearViewport, DEVICES, setViewport, type DeviceProfile } from "./devices.js";
 
 export { tokenize, type StepResult } from "../stepBatch.js";
 

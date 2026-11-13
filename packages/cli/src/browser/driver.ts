@@ -10,7 +10,7 @@ import {
   attachToTarget, probeLiveness, readState, type InstanceState, type PageSession,
 } from "./instance.js";
 import { armRecorder } from "./observe.js";
-import { setViewport } from "./actions.js";
+import { setViewport } from "./devices.js";
 import { BrowserNotLive, isReachable } from "./recovery.js";
 import { mark } from "./timing.js";
 

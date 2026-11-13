@@ -15,9 +15,8 @@
  */
 
 import * as path from "node:path";
-import {
-  clearViewport, DEVICES, evaluate, screenshot, setViewport, type DeviceProfile, type ShotOptions,
-} from "./actions.js";
+import { evaluate, screenshot, type ShotOptions } from "./actions.js";
+import { clearViewport, DEVICES, setViewport, type DeviceProfile } from "./devices.js";
 import { settle, type PageSession } from "./instance.js";
 import { SHOT_TEMP_KIND, writeShotFile } from "./shotFile.js";
 import { agentTempPath } from "../tempFiles.js";

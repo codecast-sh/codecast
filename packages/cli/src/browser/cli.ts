@@ -37,9 +37,10 @@ import {
 } from "./profile.js";
 import { matchRefs, nearMatches, pickOrdinal, refLabel, snapshotJson, snapshotPage, splitOrdinalQuery } from "./snapshot.js";
 import {
-  clearViewport, click, clickAt, DEVICES, evaluate, focus, hover, locate, pressKey,
-  screenshot, scroll, selectOption, setViewport, type, uploadFiles,
+  click, clickAt, evaluate, focus, hover, locate, pressKey,
+  screenshot, scroll, selectOption, type, uploadFiles,
 } from "./actions.js";
+import { clearViewport, DEVICES, setViewport } from "./devices.js";
 import { armRecorder, clearRecording, readRecording } from "./observe.js";
 import { emitFailureContext } from "./capture.js";
 import { pageViewportCapture, parseViewport, runViewportRow, ViewportArgError, viewportChoices } from "./viewports.js";
