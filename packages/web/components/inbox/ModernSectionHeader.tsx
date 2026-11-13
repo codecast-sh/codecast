@@ -27,6 +27,8 @@ export function ModernSectionHeader({
   icon,
   states,
   facts,
+  nameLabel,
+  hideCount,
 }: {
   label: string;
   count: number;
@@ -40,6 +42,8 @@ export function ModernSectionHeader({
   icon?: ReactNode;
   states?: Partial<Record<WorkState, number>>;
   facts?: ReactNode;
+  nameLabel?: boolean;
+  hideCount?: boolean;
 }) {
   const status = SECTION_HEADER_STATUS[sectionKey];
   // A section that is not a state (a label, a project, Pinned) keeps its own
@@ -49,10 +53,10 @@ export function ModernSectionHeader({
   const caption = (
     <>
       <span className="flex shrink-0 items-center">{lead}</span>
-      <span className={monoLabel ? "min-w-0 truncate font-mono text-meta font-medium text-sol-text-muted" : "min-w-0 truncate text-mark font-semibold uppercase tracking-[0.08em] text-sol-text-muted"}>
+      <span className={nameLabel ? "min-w-0 truncate text-sm font-medium text-sol-text" : monoLabel ? "min-w-0 truncate font-mono text-meta font-medium text-sol-text-muted" : "min-w-0 truncate text-mark font-semibold uppercase tracking-[0.08em] text-sol-text-muted"}>
         {label}
       </span>
-      <span className="shrink-0 text-mark tabular-nums text-sol-text-dim">{count}</span>
+      {!hideCount && <span className="shrink-0 text-mark tabular-nums text-sol-text-dim">{count}</span>}
       {facts}
       {states && TALLY.map(([k, s]) => (states[k] ?? 0) > 0 && (
         <span key={k} title={`${states[k]} ${k === "needs_input" ? "need you" : "working"}`} className="flex shrink-0 items-center gap-1 text-mark tabular-nums text-sol-text-dim">
