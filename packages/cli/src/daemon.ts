@@ -256,6 +256,7 @@ import {
   collectAncestorPids,
   hasCodexSessionFileOpen,
   isRecognizedAgentComm,
+  headlessAgentOfCommand,
   isResumeInvocation,
   matchStartedConversation,
   parseLsofPidPaths,
@@ -1587,6 +1588,10 @@ const WATCHDOG_STALE_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
 const VERSION_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 const LOG_FLUSH_INTERVAL_MS = 15 * 1000; // 15 seconds - flush more frequently
 const MAX_LOG_QUEUE_SIZE = 500;
+// Set while paced continues from a switch are still being enqueued. A later
+// switch_account must not move the fleet out from under them: the continues
+// would land on the account it moved to. Cleared when the pace finishes.
+let pacedAccountRevive: { profile: string; pending: number } | null = null;
 const LOG_QUEUE_FILE = path.join(CONFIG_DIR, "log-queue.json");
 const EVENT_LOOP_CHECK_INTERVAL_MS = 30 * 1000; // 30 seconds
 const EVENT_LOOP_LAG_THRESHOLD_MS = 60 * 1000; // 1 minute of lag = frozen
@@ -8230,6 +8235,15 @@ async function executeRemoteCommand(
         const continueClientIds: Record<string, string> =
           parsed.client_ids && typeof parsed.client_ids === "object" ? parsed.client_ids : {};
 
+        // A mass continue paces one resume every 20s. Moving the fleet in the
+        // middle of that pace is how a click onto an empty account lasted
+        // thirty seconds and the continues came back on the spent one.
+        if (profile && pacedAccountRevive && pacedAccountRevive.profile !== profile) {
+          log(`[ACCOUNTS] not moving the fleet to "${profile}": paced continues are still going out on "${pacedAccountRevive.profile}"`);
+          result = JSON.stringify({ switched: null, killed: 0, continued: 0, held_for: pacedAccountRevive.profile });
+          break;
+        }
+
         // save_as mode: snapshot the CURRENT login as a named profile (the web
         // Settings "save as profile" button). Pure save — no swap, no kills.
         if (typeof parsed.save_as === "string" && parsed.save_as) {
@@ -8487,14 +8501,28 @@ async function executeRemoteCommand(
             for (const convId of immediate) if (await enqueueContinue(convId)) continued++;
             if (rest.length > 0) {
               continued += rest.length;
+              if (profile) {
+                pacedAccountRevive = {
+                  profile,
+                  pending: (pacedAccountRevive?.profile === profile ? pacedAccountRevive.pending : 0) + rest.length,
+                };
+              }
+              const paceProfile = profile;
               void (async () => {
-                if (followWaitMs) await new Promise((resolve) => setTimeout(resolve, followWaitMs));
-                let sent = 0;
-                for (const [i, convId] of rest.entries()) {
-                  if (i > 0 || immediate.length > 0) await new Promise((resolve) => setTimeout(resolve, SWITCH_CONTINUE_SPACING_MS));
-                  if (await enqueueContinue(convId)) sent++;
+                try {
+                  if (followWaitMs) await new Promise((resolve) => setTimeout(resolve, followWaitMs));
+                  let sent = 0;
+                  for (const [i, convId] of rest.entries()) {
+                    if (i > 0 || immediate.length > 0) await new Promise((resolve) => setTimeout(resolve, SWITCH_CONTINUE_SPACING_MS));
+                    if (await enqueueContinue(convId)) sent++;
+                  }
+                  log(`[ACCOUNTS] paced continues done: ${sent}/${rest.length} enqueued ${SWITCH_CONTINUE_SPACING_MS / 1000}s apart after switch=${switched ?? "none"}`);
+                } finally {
+                  if (paceProfile && pacedAccountRevive?.profile === paceProfile) {
+                    pacedAccountRevive.pending -= rest.length;
+                    if (pacedAccountRevive.pending <= 0) pacedAccountRevive = null;
+                  }
                 }
-                log(`[ACCOUNTS] paced continues done: ${sent}/${rest.length} enqueued ${SWITCH_CONTINUE_SPACING_MS / 1000}s apart after switch=${switched ?? "none"}`);
               })();
             }
           }
@@ -16726,8 +16754,16 @@ export function resolveTurnEndStatus(sessionId: string, transcript?: SessionFile
 // declared verdict (17 live sessions demoted in one restart, 2026-08-31). The
 // transcript is the durable record of delivered input; a stamp newer than the
 // last user turn is the CURRENT turn's declaration, whatever the daemon's age.
+//
+// A long turn (large tool output, an image) pushes its own start out of the
+// window. Then the turn began before every line the window holds, so the
+// window's oldest timestamp is a safe stand-in: a stamp at or after it was
+// written inside the current turn, and an older stamp stays untrusted. Without
+// this a restart demoted a turn's declared `done` to idle once the turn ran
+// past 64 KB (2026-11-13, a 1.7 MB turn).
 export function transcriptTailTurnStartTs(tailContent: string, currentSessionId?: string): number | null {
   let latest: number | null = null;
+  let oldest: number | null = null;
   for (const rawLine of tailContent.split("\n")) {
     const line = rawLine.trim();
     if (!line) continue;
@@ -16737,14 +16773,16 @@ export function transcriptTailTurnStartTs(tailContent: string, currentSessionId?
     } catch {
       continue; // partial/corrupt line (mid-write tail, or the cut first line) -> skip
     }
-    if (d.type !== "user" || d.message?.role !== "user") continue;
     if (currentSessionId && d.sessionId && d.sessionId !== currentSessionId) continue;
+    const ts = d.timestamp ? Date.parse(d.timestamp) : NaN;
+    if (isNaN(ts)) continue;
+    if (oldest === null || ts < oldest) oldest = ts;
+    if (d.type !== "user" || d.message?.role !== "user") continue;
     const content = d.message?.content;
     if (Array.isArray(content) && content.some((b) => (b as { type?: string })?.type === "tool_result")) continue;
-    const ts = d.timestamp ? Date.parse(d.timestamp) : NaN;
-    if (!isNaN(ts) && (latest === null || ts > latest)) latest = ts;
+    if (latest === null || ts > latest) latest = ts;
   }
-  return latest;
+  return latest ?? oldest;
 }
 
 // True when the newest real message in a Claude JSONL tail is the synthetic
@@ -17201,6 +17239,28 @@ export function panePresenceFromProcesses(panePids: number[], procs: ProcRow[]):
   return unknown ? "unverifiable" : "exited";
 }
 
+/** The headless agent (`claude -p`, `codex exec`) running in one of these panes, or null. */
+export function headlessAgentInPanes(panePids: number[], procs: ProcRow[]): string | null {
+  for (const pid of panePids) {
+    const root = procs.find(r => r.pid === pid);
+    if (!root) continue;
+    for (const row of [root, ...descendantRows(procs, pid)]) {
+      const agent = headlessAgentOfCommand(row.command);
+      if (agent) return agent;
+    }
+  }
+  return null;
+}
+
+async function paneHeadlessAgent(target: string): Promise<string | null> {
+  try {
+    const panePids = await targetPanePids(target);
+    return panePids.length ? headlessAgentInPanes(panePids, await snapshotProcessTableAsync({ timeout: 3000 })) : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function assertResumePaneReplaceable(target: string, deps = { exec: tmuxExec, presence: panePresenceVerdict }): Promise<void> {
   try {
     await deps.exec(["has-session", "-t", target], { timeout: 3000, killSignal: "SIGKILL" });
@@ -17517,7 +17577,7 @@ export function holdScreen(pane: string): string {
 // No fallback (a resume, a repair, a second pane) may swallow one of these and
 // write the message somewhere else.
 export function isDeliveryVerdict(err: unknown): boolean {
-  if (err instanceof InputBlockedError || err instanceof TmuxDeliveryUncertainError || err instanceof TmuxDeliveryExhaustedError) return true;
+  if (err instanceof InputBlockedError || err instanceof TerminalHoldError || err instanceof TmuxDeliveryUncertainError || err instanceof TmuxDeliveryExhaustedError) return true;
   return /^(AGENT_STDIN_NOT_READY|TMUX_SERVER_BUSY|INJECT_UNVERIFIED|INJECT_EXHAUSTED):/.test(err instanceof Error ? err.message : String(err));
 }
 
@@ -17709,6 +17769,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
     if (state === "interrupted") { await escapeOnce("Interrupted dialog", `Clearing Interrupted dialog in ${target}`); continue; }
     if (state === "rewind") { await escapeOnce("Rewind dialog", `Cancelling Rewind dialog in ${target} (Escape, never Enter)`); continue; }
     if (state === "limit_dialog") { await escapeOnce("limit dialog", `Dismissing limit dialog in ${target} (Escape, never an option)`); continue; }
+    if (state === "offer_dialog") { await escapeOnce("agent suggestion dialog", `Declining agent suggestion dialog in ${target} (Escape, never Enter)`); continue; }
     // Escape, never Enter: the cursor sits on "Update now", so Enter would run
     // a package install inside the agent's pane. See classifyTmuxLiveState.
     if (state === "update_menu") { await escapeOnce("update menu", `Dismissing agent update menu in ${target} (Escape, never Enter)`, 800); continue; }
@@ -17740,6 +17801,13 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
         log(`Unrecognized live UI in ${target} AND no agent process in the pane — treating as exited: ${region.replace(/\s+/g, " ").slice(0, 160)}`);
         throw new Error(DEAD_PANE_ERROR);
       }
+      // A headless run (`claude -p` from a spawned trigger run, `codex exec`)
+      // draws no composer, so no repaint will ever make it typeable: delivery
+      // retried into one every 5s for hours (jx74025, 2026-11-12). Hold the
+      // message with that reason; once the run exits, the next attempt
+      // resumes the session interactively and delivers it.
+      const headless = await paneHeadlessAgent(target);
+      if (headless) throw new TerminalHoldError(`a headless ${headless} run`, "it goes out when the run ends");
       log(`Unrecognized live UI in ${target}, deferring: ${region.replace(/\s+/g, " ").slice(0, 240)}`);
       throw new Error("AGENT_UNKNOWN_STATE: deferring");
     }
