@@ -123,6 +123,9 @@ export interface FilePathContextValue {
    *  path relative to somewhere other than their working directory (a sibling
    *  repo, the parent of the checkout); these say where it really is. */
   knownPaths?: readonly string[];
+  /** The conversation the mentions were written in. Its machine is where the
+   *  Files page reads a path this machine lacks. */
+  conversationId?: string;
 }
 
 /** The absolute and `~/` paths named anywhere in these tool call inputs
@@ -190,7 +193,7 @@ export const FilePathContext = createContext<FilePathContextValue | null>(null);
  */
 export function filePathHref(path: string, line: number | undefined, ctx?: FilePathContextValue | null): string {
   const abs = resolveMentionPath(path, ctx);
-  return filesHref({ localPath: abs ?? path, line });
+  return filesHref({ localPath: abs ?? path, line, conversation: ctx?.conversationId });
 }
 
 /** Reads a mention back out of a link the plugin minted, so a component can
