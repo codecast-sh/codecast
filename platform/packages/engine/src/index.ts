@@ -62,7 +62,7 @@ export {
   type DetailRecord,
 } from "./idbCache";
 export { createKVCache, type KVStore } from "./kvCache";
-export { diffCollection, type CollectionDiff } from "./idbCollectionDiff";
+export { diffCollection, diffPatchedRows, patchedIds, createCoalescedWriter, type CollectionDiff } from "./idbCollectionDiff";
 export { partitionCacheRetention, type CacheRetentionPolicy } from "./cacheRetention";
 
 export { stableRefId, rowSigExcluding, makeCollectionSig } from "./wakeSig";
