@@ -72,20 +72,22 @@ import {
   runsPushedLogin,
   runsOwnFleet,
 } from "./ccAccountsShared";
-import { decideSwitchAhead } from "./ccSwitchAhead";
+import { awaitsManualTarget, decideSwitchAhead, dropLineHostRefused, fleetHostFollowsSwitch, holdsManualTarget } from "./ccSwitchAhead";
 import { poolUsageOverlay } from "./accountPool";
 import { deliverSessionNotificationToParties } from "./lib/sessionNotify";
 import { canOwnerOrTeamAccess } from "./privacy";
 import { recoveryFleet } from "./lib/hostRecovery";
 import { withSafetyBlock, describeDecision, peggedWindowLabel, oauthApprovalCode, CONTEXT_RECOVERY_DELAY_MS } from "@codecast/shared/contracts";
-import { spendCapsOf, withSpendCap } from "./lib/accountSpendCaps";
+import { spendCapsOf, withSpendCap } from "./lib/spendCaps";
 
 
 // A revive targets the CURRENT incident, not history: pending_api_error flags
 // linger on sessions that died mid-banner weeks ago (first live run selected 51
 // conversations, 50 of them stale). The window is BLOCKED_WINDOW_MS, judged on
-// when the block landed (isCurrentBlock); the cap bounds the resume stampede
-// a mass-revive can trigger (each continue may spawn a `claude --resume`).
+// when the block landed (isCurrentBlock). Automatic passes stay at MAX_REVIVE
+// so a loop cannot stampede resumes. A person's own continue (the banner, the
+// CLI) passes no cap: they asked for the whole incident, and the daemon paces
+// the resumes so the provider's per-minute cap still holds.
 const MAX_REVIVE = 30;
 
 // Blocked conversations split by standing: subagents (workers spawned by/for
@@ -100,6 +102,9 @@ async function listBlockedConversations(
   userId: Id<"users">,
   includeSubagents: boolean,
   includeSafety = false,
+  // null: the person named this revive (requestAccountSwitch, continueAllBlocked).
+  // The default bounds every automatic caller.
+  cap: number | null = MAX_REVIVE,
 ): Promise<{
   blocked: Doc<"conversations">[];
   skipped: Doc<"conversations">[];
@@ -122,9 +127,10 @@ async function listBlockedConversations(
   const all: Doc<"conversations">[] = recent.map(withSafetyBlock).filter((c: Doc<"conversations">) => isBlockedConversation(c) && isCurrentBlock(c, now));
   const topLevel = all.filter((c: Doc<"conversations">) => !isSubagentConversation(c));
   const subagents = all.filter(isSubagentConversation);
-  const selected = (includeSafety
+  const acted = includeSafety
     ? includeSubagents ? [...topLevel, ...subagents] : topLevel
-    : actedBlockedConversations(all, includeSubagents)).slice(0, MAX_REVIVE);
+    : actedBlockedConversations(all, includeSubagents);
+  const selected = cap === null ? acted : acted.slice(0, cap);
   return {
     blocked: selected,
     skipped: skippedBlockedWorkers(all, includeSubagents),
@@ -284,7 +290,7 @@ export const continueAllBlocked = mutation({
     // 429/5xx, self-retrying) never enters the selection at all.
     const kinds = new Set(args.kinds ?? CONTINUE_BANNER_KINDS);
     const { blocked: candidates, skipped, topLevelCount, subagentCount, totalBlocked } =
-      await listBlockedConversations(ctx, userId, args.include_subagents === true);
+      await listBlockedConversations(ctx, userId, args.include_subagents === true, false, null);
     const blocked = actedBlockedConversations(candidates, args.include_subagents === true)
       .filter((c) => kinds.has(c.pending_api_error_kind ?? "error"));
     if (args.dry_run) {
@@ -380,7 +386,7 @@ export const requestAccountSwitch = mutation({
     const scope = args.conversation_ids ? new Set<string>(args.conversation_ids) : null;
     const includeSubagents = args.include_subagents === true || scope !== null;
     const listed = reviveWanted
-      ? await listBlockedConversations(ctx, userId, includeSubagents)
+      ? await listBlockedConversations(ctx, userId, includeSubagents, false, null)
       : { blocked: [], skipped: [], topLevelCount: 0, subagentCount: 0, totalBlocked: 0 };
     const { topLevelCount, subagentCount, totalBlocked } = listed;
     const candidates = scope ? listed.blocked.filter((c) => scope.has(c._id)) : listed.blocked;
@@ -425,6 +431,7 @@ export const requestAccountSwitch = mutation({
       continueBlocked: args.continue_blocked !== false,
       now,
       continueClientIds: args.continue_client_ids,
+      switchFleetHosts: !!(args.profile || args.email),
     });
     // A switch that no device could execute is a failure, not a quiet no-op:
     // tell the caller which machines lack the account instead of letting the
@@ -446,8 +453,24 @@ export const requestAccountSwitch = mutation({
       );
     }
 
-    if (primary && (res.devices > 0 || res.messaged > 0)) {
-      await recordManualRecovery(ctx, primary, blocked, now, { profile: args.profile, email: args.email });
+    if (res.devices > 0 || res.messaged > 0) {
+      const targeted: Doc<"devices">[] = [];
+      for (const id of res.commandIds) {
+        const row = await ctx.db.get(id);
+        const device = row
+          ? onlineById.get(row.target_device_id) ?? (primary?.device_id === row.target_device_id ? primary : undefined)
+          : undefined;
+        if (device) targeted.push(device);
+      }
+      if (primary) targeted.push(primary);
+      const email = args.email ?? targetAccountEmail(primary?.cc_accounts, { profile: args.profile, email: args.email });
+      await stampManualRecovery(
+        ctx,
+        targeted,
+        blocked,
+        now,
+        (args.profile || args.email) ? { profile: args.profile, email } : undefined,
+      );
     }
 
     return {
@@ -496,7 +519,9 @@ async function recordManualRecovery(
       ...state,
       last_action_at: now,
       last_action: "manual",
-      last_decision: blocked.length > 0
+      // A switch with nothing parked still names its target, so the hold has
+      // a decision to keep even when the banner was already empty.
+      last_decision: blocked.length > 0 || switching
         ? recoveryDecision(device, switching ? "switch" : "continue", blocked.length, now, target ?? { email: targetEmail })
         : undefined,
       exhausted_at: undefined,
@@ -504,6 +529,67 @@ async function recordManualRecovery(
     },
   });
 }
+
+// The laptop that sent the switch is not the only machine the loop reads.
+// Each cloud host decides from its own row (recoveryFleet), so a hold written
+// only on the laptop leaves those hosts free to hop the moment their next
+// check runs.
+async function stampManualRecovery(
+  ctx: { db: any },
+  devices: Doc<"devices">[],
+  blocked: Doc<"conversations">[],
+  now: number,
+  switchTo?: { profile?: string; email?: string },
+): Promise<void> {
+  const seen = new Set<string>();
+  for (const device of devices) {
+    if (seen.has(device.device_id)) continue;
+    seen.add(device.device_id);
+    await recordManualRecovery(ctx, device, blocked, now, switchTo);
+  }
+}
+
+// Claude Code re-reads the fleet store on its own interval. A continue that
+// arrives before that re-read resumes on the account the fleet just left.
+// The daemon waits this long (FLEET_REREAD_WAIT_MS in daemon.ts) and then
+// spaces the resumes. Its count is recorded before the enqueue, and that
+// enqueue dies with the handler's fire-and-forget, so the server sends the
+// same continues under the same client id. Whichever insert lands first wins;
+// the other is the client-id dedupe.
+const FLEET_REREAD_WAIT_MS = 40_000;
+
+export const enqueueSwitchContinue = internalMutation({
+  args: {
+    user_id: v.id("users"),
+    command_id: v.id("daemon_commands"),
+    conversation_ids: v.array(v.id("conversations")),
+    index: v.number(),
+    client_ids: v.optional(v.record(v.string(), v.string())),
+  },
+  handler: async (ctx, args) => {
+    const conversationId = args.conversation_ids[args.index];
+    if (!conversationId) return;
+    const conv = await ctx.db.get(conversationId);
+    const clientId = args.client_ids?.[conversationId] ?? `acct-switch-${args.command_id}-${conversationId}`;
+    // A continue already waiting is the retry. One already delivered under
+    // this client id comes back from the dedupe inside enqueuePendingMessage,
+    // so a daemon that did enqueue and a server backup do not double.
+    if (conv && !(await hasUndeliveredContinue(ctx, conv._id))) {
+      await enqueuePendingMessage(ctx, conv, args.user_id, {
+        content: "continue",
+        client_id: clientId,
+      });
+    }
+    if (args.index + 1 >= args.conversation_ids.length) return;
+    await ctx.scheduler.runAfter(THROTTLE_CONTINUE_SPACING_MS, internal.accountSwitch.enqueueSwitchContinue, {
+      user_id: args.user_id,
+      command_id: args.command_id,
+      conversation_ids: args.conversation_ids,
+      index: args.index + 1,
+      client_ids: args.client_ids,
+    });
+  },
+});
 
 // The switch/revive execution plan shared by the manual mutation and the
 // auto-switch loop: route each blocked conversation to its online owner device
@@ -525,6 +611,11 @@ export async function insertSwitchCommands(
     primary: Doc<"devices"> | undefined;
     continueBlocked: boolean;
     now: number;
+    // A person's switch moves every cloud host that keeps its own fleet and
+    // has the account saved, not only the hosts that currently own a parked
+    // session. Otherwise the hosts with nothing parked stay on the account
+    // the loop last picked and hop again.
+    switchFleetHosts?: boolean;
     // conversation id -> the client_id the CALLER already painted its optimistic
     // "continue" bubble with (the web's revive buttons). Handed to the daemon so
     // its post-kill enqueue carries the same id and the server echo replaces that
@@ -610,6 +701,13 @@ export async function insertSwitchCommands(
   ) {
     groups.set(opts.primary.device_id, []);
   }
+  if (opts.switchFleetHosts && switchRequested) {
+    for (const device of opts.online) {
+      if (groups.has(device.device_id) || !runsOwnFleet(device)) continue;
+      if (!fleetHostFollowsSwitch(device, { profile: opts.profile, email: targetEmail })) continue;
+      groups.set(device.device_id, []);
+    }
+  }
 
   // A remote runs whatever account the primary pushes, so its sessions can
   // only continue "on the new account" if the primary itself can swap to it.
@@ -660,8 +758,8 @@ export async function insertSwitchCommands(
     // a hand-typed continue would send.
     // On the fleet store a switch moves every session that follows the store,
     // so only the ones bound at launch (signed out, or pinned) restart; the
-    // rest follow the store and get their continue from the daemon once
-    // Claude Code has re-read it.
+    // rest follow the store. Their continue waits out the re-read, then goes
+    // out from the daemon and, on the same client id, from the server.
     const followsStore = switchRequested && !isRemote && device?.cc_accounts?.fleet_store === true;
     const restart = switchRequested && !followsStore
       ? convs
@@ -713,6 +811,28 @@ export async function insertSwitchCommands(
         target_device_id: deviceId,
       }),
     );
+    // The daemon reports `continued` before it enqueues, then does the enqueue
+    // after this handler has already returned. When that loop never lands, the
+    // sessions stay parked on the account they were switched to. This chain
+    // sends the same client id the daemon would, paced the same way.
+    const paced = opts.continueBlocked ? [...restart, ...follow] : [];
+    const commandId = commandIds[commandIds.length - 1];
+    // Callers that drive this with a fake db (the recovery tests) pass no
+    // scheduler. A present runAfter is the production mutation ctx.
+    const runAfter = (ctx as { scheduler?: { runAfter?: (delayMs: number, fn: any, args: any) => Promise<unknown> } }).scheduler?.runAfter;
+    if (paced.length > 0 && runAfter && switchRequested) {
+      await runAfter(
+        follow.length > 0 ? FLEET_REREAD_WAIT_MS : 0,
+        internal.accountSwitch.enqueueSwitchContinue,
+        {
+          user_id: userId,
+          command_id: commandId,
+          conversation_ids: paced.map((c) => c._id),
+          index: 0,
+          ...(opts.continueClientIds ? { client_ids: opts.continueClientIds } : {}),
+        },
+      );
+    }
   }
   return { devices: commandIds.length, routed, restarted, messaged, unswitchable, unswitchableDevices, commandIds };
 }
@@ -1774,14 +1894,30 @@ export const switchAheadCheck = internalMutation({
     if (!primary || !accounts?.fleet_store || recoveryModeOf(primary) !== "auto") return { acted: "off" };
     const state = primary.cc_auto_switch_state ?? {};
     const fleet = fleetAccount(accounts, now);
+    const models = await runningClaudeModels(ctx, args.user_id, now);
+    const profiles = dropLineHostRefused(await poolUsageOverlay(ctx, args.user_id, accounts.profiles), primary, fleet.email);
+    const fleetUsage = profiles.find((p) => p.email && p.email === fleet.email)?.usage;
+    // The person just put the fleet here. Leaving it now continues the drain
+    // onto the next account. In flight, the fleet email is still the account
+    // they are leaving, and that meter's headroom must not pick the next hop.
+    const manualHold = {
+      now,
+      fleetEmail: fleet.email,
+      usage: fleetUsage,
+      models,
+      lastAction: state.last_action,
+      lastActionAt: state.last_action_at,
+      decision: state.last_decision,
+    };
+    if (holdsManualTarget(manualHold) || awaitsManualTarget(manualHold)) return { acted: "stay" };
     const decision = decideSwitchAhead({
       now,
       fleetEmail: fleet.email,
       fleetSince: accounts.active_since,
-      profiles: await poolUsageOverlay(ctx, args.user_id, accounts.profiles),
+      profiles,
       attempts: state.attempts ?? [],
       lastActionAt: state.last_action_at,
-      models: await runningClaudeModels(ctx, args.user_id, now),
+      models,
     });
     if (!decision) return { acted: "stay" };
     await insertSwitchCommands(ctx, args.user_id, {
@@ -1849,6 +1985,21 @@ export const autoSwitchCheck = internalMutation({
     if (mode === "off") return { acted: "off" };
 
     let state = primary.cc_auto_switch_state ?? {};
+    // Before any selection: a person's switch is still the account, including
+    // while the fleet file has not moved yet. Acting here would resume the
+    // parked sessions on the account they are leaving, or hop to another, and
+    // dismiss the workers the switch is about to continue.
+    const heldFleet = fleetAccount(primary.cc_accounts, now);
+    const heldProfiles = await poolUsageOverlay(ctx, args.user_id, primary.cc_accounts?.profiles ?? []);
+    const manualHold = {
+      now,
+      fleetEmail: heldFleet.email,
+      usage: heldProfiles.find((p) => p.email && p.email === heldFleet.email)?.usage,
+      lastAction: state.last_action,
+      lastActionAt: state.last_action_at,
+      decision: state.last_decision,
+    };
+    if (holdsManualTarget(manualHold) || awaitsManualTarget(manualHold)) return { acted: "stay" };
     const attempts = state.attempts ?? [];
     // A host on its own fleet answers for its own Claude parks; everything
     // else (Codex parks included: their logins are per machine and the laptop
@@ -1949,10 +2100,10 @@ export const autoSwitchCheck = internalMutation({
     // card can explain the account change instead of it happening silently.
     // Pool copies read their holder's meter and drop out once their share
     // stops counting (poolUsageOverlay): one ranking over own and pool alike.
-    const activeProfiles = await poolUsageOverlay(ctx, args.user_id, primary.cc_accounts?.profiles ?? []);
     // The account the fleet runs on: the keychain login, or the launch profile
     // after a token switch (fleetAccount). Every "active" read below means this.
     const activeEmail = fleetAccount(primary.cc_accounts, now).email;
+    const activeProfiles = dropLineHostRefused(await poolUsageOverlay(ctx, args.user_id, primary.cc_accounts?.profiles ?? []), primary, activeEmail);
     const activeProfile = activeProfiles.find((p) => p.email && p.email === activeEmail);
     const buildDecision = (kind: RecoveryDecisionKind, target?: DecisionTarget) =>
       recoveryDecision(primary, kind, claudeLimit.length + authSwitch.length, now, target);
@@ -2147,7 +2298,18 @@ export const autoSwitchCheck = internalMutation({
       return { acted: "wait", next_check_at: retryAt };
     }
 
-    if (decision.action === "continue") {
+    // A switch the loop would take while the person is still draining continues
+    // onto the account they picked. The hold already refused a near-limit account.
+    const stayForManual = decision.action === "switch" && holdsManualTarget({
+      now,
+      fleetEmail: activeEmail,
+      usage: activeProfiles.find((p) => p.email && p.email === activeEmail)?.usage,
+      models: parkedModels,
+      lastAction: state.last_action,
+      lastActionAt: state.last_action_at,
+      decision: state.last_decision,
+    });
+    if (decision.action === "continue" || stayForManual) {
       // Same no-switch revive the banner uses: a message where one can
       // reach the session, a restart (pin corrected) where it cannot. Two or
       // more rows go out in stages behind a probe (continueLimitParks).
