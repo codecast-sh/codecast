@@ -300,7 +300,7 @@ async function verifyStanding(deps: OrgInitDeps, tree: any, receipt: TemplateRec
   const id = anchors[0].conversation_id;
   if (receipt.role?.sessionId && receipt.role.sessionId !== id) throw new Error("Standing session identity changed; routine bindings need explicit review");
   const sessions = await request(deps, "/cli/sessions", { session_ids: [id] });
-  if (!sessions.conversations?.some((c: any) => c.conversation_id === id && c.project_path && canonicalDirectory(c.project_path) === receipt.project.dir)) throw new Error("Standing session does not run in the pinned project directory");
+  if (!sessions.conversations?.some((c: any) => c.conversation_id === id && c.project_path && fs.existsSync(c.project_path) && canonicalDirectory(c.project_path) === receipt.project.dir)) throw new Error(`Standing session does not run in the pinned project directory ${receipt.project.dir}; run this on the machine that holds its folder`);
   return id;
 }
 async function ensureRoutines(deps: OrgInitDeps, receipt: TemplateReceipt): Promise<void> {

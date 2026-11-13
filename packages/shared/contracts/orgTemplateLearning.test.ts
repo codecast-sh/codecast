@@ -99,13 +99,12 @@ describe("from lessons to a release", () => {
   test("a canary is clean only when an instance ran it without failure, nothing was learned on it, and it soaked", () => {
     const ran = { on_release: true, ran: true, failed: false };
     const published_at = NOW - 4 * DAY;
-    expect(canaryVerdict({ published_at, instances: [ran], lessons_since: 0 }, NOW).clean).toBe(true);
-    expect(canaryVerdict({ published_at, instances: [], lessons_since: 0 }, NOW)).toMatchObject({ clean: false, why: "no instance follows canary: a person promotes" });
-    expect(canaryVerdict({ published_at, instances: [{ ...ran, on_release: false }], lessons_since: 0 }, NOW).clean).toBe(false);
-    expect(canaryVerdict({ published_at, instances: [ran, { ...ran, failed: true }], lessons_since: 0 }, NOW).clean).toBe(false);
-    expect(canaryVerdict({ published_at, instances: [ran, { ...ran, ran: false }], lessons_since: 0 }, NOW).clean).toBe(false);
-    expect(canaryVerdict({ published_at, instances: [ran], lessons_since: 1 }, NOW).clean).toBe(false);
-    expect(canaryVerdict({ published_at: NOW - DAY, instances: [ran], lessons_since: 0 }, NOW)).toMatchObject({ clean: false, why: "canary for 24 hours of 72" });
+    expect(canaryVerdict({ published_at, instances: [ran] }, NOW).clean).toBe(true);
+    expect(canaryVerdict({ published_at, instances: [] }, NOW)).toMatchObject({ clean: false, why: "no instance follows canary: a person promotes" });
+    expect(canaryVerdict({ published_at, instances: [{ ...ran, on_release: false }] }, NOW).clean).toBe(false);
+    expect(canaryVerdict({ published_at, instances: [ran, { ...ran, failed: true }] }, NOW).clean).toBe(false);
+    expect(canaryVerdict({ published_at, instances: [ran, { ...ran, ran: false }] }, NOW).clean).toBe(false);
+    expect(canaryVerdict({ published_at: NOW - DAY, instances: [ran] }, NOW)).toMatchObject({ clean: false, why: "canary for 24 hours of 72" });
   });
   test("a draft takes the next patch after the newest release", () => {
     expect(nextPatch(["2.0.0", "2.1.3", "2.1.0"])).toBe("2.1.4");

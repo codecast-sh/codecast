@@ -251,15 +251,15 @@ export function draftDue(lessons: Array<{ status: string; created_at: number }>,
 export type CanaryInstance = { on_release: boolean; ran: boolean; failed: boolean };
 /**
  * Whether a canary release ran clean: it soaked, at least one canary instance
- * runs it, each of those completed a routine run on it, none failed its last
- * run, and no lesson learned since names that version. With no canary
- * instance on it nothing is known, so a person promotes.
+ * runs it, each of those completed a routine run on it, and none failed its
+ * last run. A lesson learned on it is the next draft's input, not a defect in
+ * this release. With no canary instance on it nothing is known, so a person
+ * promotes.
  */
-export function canaryVerdict(input: { published_at: number; instances: CanaryInstance[]; lessons_since: number }, now = Date.now()): { clean: boolean; why: string } {
+export function canaryVerdict(input: { published_at: number; instances: CanaryInstance[] }, now = Date.now()): { clean: boolean; why: string } {
   const on = input.instances.filter((i) => i.on_release);
   if (!on.length) return { clean: false, why: input.instances.length ? "no canary instance has taken the release yet" : "no instance follows canary: a person promotes" };
   if (on.some((i) => i.failed)) return { clean: false, why: "a canary instance failed its last run on this release" };
-  if (input.lessons_since) return { clean: false, why: `${input.lessons_since} lesson${input.lessons_since === 1 ? " was" : "s were"} learned on this release` };
   if (on.some((i) => !i.ran)) return { clean: false, why: "a canary instance has not completed a run on this release yet" };
   const soaked = now - input.published_at;
   if (soaked < LEARNING.canary_soak_ms) return { clean: false, why: `canary for ${Math.floor(soaked / 3_600_000)} hours of ${LEARNING.canary_soak_ms / 3_600_000}` };

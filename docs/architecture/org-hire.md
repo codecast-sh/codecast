@@ -564,8 +564,9 @@ a person.
 
 **Clean** is decided in code (`canaryVerdict`): the release has been canary
 for three days, at least one canary instance runs it, every one of them has
-completed a routine run on it, none has a failed last run, and no lesson
-learned since names that version. With no canary instance, nothing promotes
+completed a routine run on it, and none has a failed last run. A lesson
+learned on the canary goes into the next draft, which waits until this
+release promotes; a failed run makes the fixing draft due at once. With no canary instance, nothing promotes
 without a person.
 
 The commands, left for a Codecast admin to run (none of them has run in prod):

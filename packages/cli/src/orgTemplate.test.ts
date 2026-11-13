@@ -346,6 +346,9 @@ describe("proposal and lifecycle fake API", () => {
   test("wrong standing path, scope drift and failed pause prevent ready", async () => {
     const f = fixture(); await f.install(); f.server.approve(); f.server.standingPath = tmp();
     await expect(f.reconcile()).rejects.toThrow("pinned project directory"); expect(f.server.triggers).toHaveLength(0);
+    // A standing session on another machine names a folder that does not exist here: the same refusal, not a crash.
+    f.server.standingPath = "/home/ubuntu/src/product";
+    await expect(f.reconcile()).rejects.toThrow("run this on the machine that holds its folder");
     f.server.standingPath = f.dir; f.server.pauseWorks = false; f.server.honorsPausedCreate = false;
     await expect(f.reconcile()).rejects.toThrow("Pause verification failed"); expect(readReceipt(f.dir, "product").phase).toBe("provisioning"); expect(f.server.calls.filter((c) => c.endpoint === "/cli/tasks/pause")).toHaveLength(1);
     f.server.pauseWorks = true; f.server.honorsPausedCreate = true; await f.reconcile();
