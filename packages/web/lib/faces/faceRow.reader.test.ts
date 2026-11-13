@@ -5,13 +5,15 @@ import { useInboxStore } from "../../store/inboxStore";
 import { dmUnreadOf } from "./faceDmUnread";
 import { faceRowInputSig, isInCall, readFaceRow, resetFaceRow } from "./faceRow";
 import { NOW, ME, ANN, BOB, DM_ANN, member, burstRoom, order, entry } from "./faceRowFixtures";
+import { FIXTURE_TEAM, withTeamRoster } from "../../test-helpers/teamRoster";
+import { stampRoster } from "../activeTeam";
 
 describe("the shared reader", () => {
   beforeEach(() => {
     resetFaceRow();
     useInboxStore.setState({
       currentUser: { _id: ME, name: "Me" },
-      teamMembers: [member(ME, "Me"), member(ANN, "Ann"), member(BOB, "Bob")],
+      ...withTeamRoster([member(ME, "Me"), member(ANN, "Ann"), member(BOB, "Bob")], { clientState: useInboxStore.getState().clientState }),
       callOccupancy: {},
       liveRooms: [],
       myCalls: { incoming: [], outgoing: [], membership: null },
@@ -23,7 +25,7 @@ describe("the shared reader", () => {
     const first = readFaceRow();
     expect(order(first)).toEqual([ANN, BOB]);
     useInboxStore.setState({
-      teamMembers: [member(ME, "Me"), member(ANN, "Ann", { presence_input_at: NOW } as any), member(BOB, "Bob")],
+      teamMembers: stampRoster([member(ME, "Me"), member(ANN, "Ann", { presence_input_at: NOW } as any), member(BOB, "Bob")], FIXTURE_TEAM),
     } as any);
     expect(readFaceRow()).toBe(first);
   });
