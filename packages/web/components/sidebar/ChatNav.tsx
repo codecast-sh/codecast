@@ -115,12 +115,21 @@ function useChatNavRows(pathname: string | null, onMobileClose?: () => void) {
   return {
     rail,
     unpinned,
+    toRow,
     pinned: pinnedRooms.map(toRow),
     channels: unpinned.filter((c) => c.kind !== "dm").map(toRow),
     dms: unpinned.filter((c) => c.kind === "dm").map(toRow),
     suggested,
     channelMenu,
   };
+}
+
+/** Unread rooms listed under a door-style Chat row before the rest fold into "N more". */
+const UNREAD_LISTED_MAX = 6;
+
+/** Unread the way the Chat badge counts it: a mention always, chatter unless muted. */
+function isUnreadRoom(c: ChatRailChannel): boolean {
+  return (c.mentionCount ?? 0) > 0 || ((c.unreadCount ?? 0) > 0 && !c.muted);
 }
 
 // Chat's sidebar row. Isolated for the same reason NeedsInputCountBadge is: the
@@ -155,10 +164,23 @@ export const ChatNavRow = memo(function ChatNavRow({
   onMobileClose?: () => void;
 }) {
   const rows = useChatNavRows(pathname, onMobileClose);
-  // Count what the pins don't already show: a pinned DM's mentions badge its
-  // pinned row, and repeating them on Chat points at a list that hides them.
-  // A door hides the pins' rows too once you go in, so it counts everything.
-  const { channels, mentions } = chatUnreadTotals(pinsShown && !onDrill ? rows.unpinned : rows.rail);
+  const visible = pinsShown ? rows.unpinned : rows.rail;
+  // A door lists nothing but what moved: the rooms with unread messages sit
+  // under Chat, so reading one is a click, not a trip into the room list. The
+  // room you are reading stays listed until you leave it, so opening a row
+  // doesn't make it vanish under the pointer.
+  const unread = onDrill
+    ? visible
+        .filter((c) => isUnreadRoom(c) || pathname === `/chat/${c.id}`)
+        .sort((a, b) => Number((b.mentionCount ?? 0) > 0) - Number((a.mentionCount ?? 0) > 0))
+    : [];
+  const listed = unread.slice(0, UNREAD_LISTED_MAX);
+  const listedIds = new Set(listed.map((c) => c.id));
+  // Count what no row on screen already shows: a pinned room badges its pinned
+  // row, a listed room badges itself, and repeating either on Chat points at
+  // nothing new. What's left is the overflow past the list.
+  const { channels, mentions } = chatUnreadTotals(visible.filter((c) => !listedIds.has(c.id)));
+  const overflow = unread.length - listed.length;
   return (
     <>
       <ChatNavSectionView
@@ -170,13 +192,30 @@ export const ChatNavRow = memo(function ChatNavRow({
         // Channels first, then direct messages: the icon carries the
         // distinction (a hash is a room, a face is a person), so the sublist
         // needs no group headers. A pinned room already has its row up top.
-        items={onDrill ? undefined : [...rows.channels, ...rows.dms, ...rows.suggested]}
+        items={
+          onDrill
+            ? [
+                ...listed.map(rows.toRow),
+                ...(overflow > 0
+                  ? [{
+                      id: "chat-unread-more",
+                      name: `${overflow} more`,
+                      title: "Every room with unread messages",
+                      icon: <MoreHorizontal className="w-3 h-3 flex-shrink-0 opacity-60" />,
+                      dim: true,
+                      onSelect: () => onDrill(),
+                    } satisfies SectionRowSpec]
+                  : []),
+              ]
+            : [...rows.channels, ...rows.dms, ...rows.suggested]
+        }
+        alwaysOpen={!!onDrill}
         headerAction={<AppPopOutButton app="chat" className="mr-1" />}
         expanded={expanded}
         onToggle={onToggle}
         onDrill={onDrill}
       />
-      {!onDrill && <ChannelContextMenu state={rows.channelMenu} />}
+      <ChannelContextMenu state={rows.channelMenu} />
     </>
   );
 });

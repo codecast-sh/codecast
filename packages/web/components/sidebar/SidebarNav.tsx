@@ -124,11 +124,14 @@ export function ChatNavSectionView({
   expanded,
   onToggle,
   onDrill,
+  alwaysOpen,
 }: {
   isActive: boolean;
   isNarrow: boolean;
   onMobileClose?: () => void;
   onDrill?: () => void;
+  /** The rows are what moved, not a list to fold: they show with no chevron. */
+  alwaysOpen?: boolean;
   /** Channels with unread messages. */
   channels: number;
   mentions: number;
@@ -159,6 +162,7 @@ export function ChatNavSectionView({
       expanded={expanded}
       onToggle={onToggle}
       onDrill={onDrill}
+      alwaysOpen={alwaysOpen}
     />
   );
 }

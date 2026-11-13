@@ -261,12 +261,12 @@ export function NavSection({
           </svg>
         ) : <span className="w-4 flex-shrink-0" aria-hidden="true" />)}
       </div>
-      {/* Views of the section: plain rows on a guide line from this row's
-          icon, text aligned with the label above. */}
+      {/* Rows that always show: on a guide line from this row's icon, each
+          row's own icon starting under the label above. */}
       {hasChildren && alwaysOpen && (
         <div className="ml-[27px] mb-0.5 border-l border-sol-border/60">
           {items!.map((child) => (
-            <SectionRow key={child.id} row={child} className="pl-[14px]" />
+            <SectionRow key={child.id} row={child} className="-ml-0.5" />
           ))}
         </div>
       )}
