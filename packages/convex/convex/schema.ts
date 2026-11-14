@@ -806,6 +806,10 @@ export default defineSchema({
     // The owner lets anonymous viewers of the share link suggest messages
     // (guestSuggestions.ts). Each one waits for the owner to send it.
     guest_suggestions: v.optional(v.boolean()),
+    // false: teammates send straight in even while the owner is in the
+    // session. Absent: a teammate's message waits as a suggestion while an
+    // owner is attending the session (teamSuggestions.ts).
+    team_suggestions: v.optional(v.boolean()),
     parent_message_uuid: v.optional(v.string()),
     parent_conversation_id: v.optional(v.id("conversations")),
     // A cloud agent session whose agent is archived on the provider's site
@@ -2953,7 +2957,9 @@ export default defineSchema({
     // with every addMessages pending-write → OCC stampede → 60s sync timeouts).
     .index("by_status", ["status"])
     .index("by_conversation_sequence", ["conversation_id", "conversation_sequence"])
-    .index("by_conversation_client_id", ["conversation_id", "client_id"]),
+    .index("by_conversation_client_id", ["conversation_id", "client_id"])
+    // `cast send --status`: one sender's sends into one target, newest first.
+    .index("by_from_conversation", ["from_conversation_id", "conversation_id"]),
 
   // One authoritative ordering/fencing row per conversation. Convex OCC on
   // this row serializes enqueue, delivery-slot acquisition, terminal-prefix
@@ -5596,23 +5602,41 @@ export default defineSchema({
     created_at: v.number(),
   }).index("by_conversation_created", ["conversation_id", "created_at"]),
 
-  // One message a guest proposed for a session. Nothing reaches the session
+  // One message a guest, or a teammate while the owner is in the session
+  // (teamSuggestions.ts), proposed for a session. Nothing reaches the session
   // until its owner sends it.
   guest_suggestions: defineTable({
     conversation_id: v.id("conversations"),
-    guest_id: v.id("session_guests"),
-    // Snapshot of the guest's name so the owner's card renders without a join.
+    // Set for a guest; a teammate's row has author_user_id instead.
+    guest_id: v.optional(v.id("session_guests")),
+    author_user_id: v.optional(v.id("users")),
+    // Snapshot of the author's name so the owner's card renders without a join.
     guest_name: v.string(),
+    // Absent: a message. "answer": a reply to the agent's open question
+    // (tool_use_id names it; body is the answer as the card would send it).
+    // "permission": approve or deny one pending permission.
+    kind: v.optional(v.union(v.literal("answer"), v.literal("permission"))),
+    tool_use_id: v.optional(v.string()),
+    permission_id: v.optional(v.id("pending_permissions")),
+    decision: v.optional(v.union(v.literal("approved"), v.literal("denied"))),
+    // The proposing client's key for its optimistic copy (store altKey).
+    client_key: v.optional(v.string()),
+    // A teammate's "Queue for later" that waited as a suggestion: sent, it
+    // still waits for the end of the agent's turn.
+    queued: v.optional(v.boolean()),
     owner_user_id: v.id("users"),
     body: v.string(),
-    status: v.union(v.literal("pending"), v.literal("sent"), v.literal("dismissed"), v.literal("withdrawn")),
+    // closed: what a proposal answered (a question, a prompt) ended some
+    // other way, or its author can no longer send here.
+    status: v.union(v.literal("pending"), v.literal("sent"), v.literal("dismissed"), v.literal("withdrawn"), v.literal("closed")),
     // What the owner actually sent, when they edited it first.
     sent_body: v.optional(v.string()),
     created_at: v.number(),
     decided_at: v.optional(v.number()),
   })
     .index("by_conversation_status", ["conversation_id", "status"])
-    .index("by_guest", ["guest_id"]),
+    .index("by_guest", ["guest_id"])
+    .index("by_author_conversation", ["author_user_id", "conversation_id"]),
 
   github_webhook_events: defineTable({
     delivery_id: v.string(),
@@ -5850,6 +5874,17 @@ export default defineSchema({
     role_id: v.optional(v.id("org_roles")),
     // The role whose pause paused this trigger; its resume brings back only these (org-staffing.md S25).
     paused_by_role_id: v.optional(v.id("org_roles")),
+    // The project this trigger feeds (project sources): pausing the project
+    // pauses it, and unless project_spawn each run is a turn in the project's
+    // main session, resolved at the firing (projectSources.fireProjectTrigger),
+    // so it never stores originating_conversation_id.
+    project_id: v.optional(v.id("projects")),
+    // `--spawn` on a project trigger: runs start fresh sessions as any spawn trigger does.
+    project_spawn: v.optional(v.boolean()),
+    // The project whose pause paused this trigger; its resume brings back only these.
+    paused_by_project_id: v.optional(v.id("projects")),
+    // The key a web add painted its stub under; this row supersedes it (agentTasks collection altKey).
+    client_key: v.optional(v.string()),
 
     status: v.union(
       v.literal("scheduled"),
@@ -5928,7 +5963,8 @@ export default defineSchema({
     // a trigger armed from a session is findable from that session even when a
     // different account (a remote daemon's bot login) owns the trigger row.
     .index("by_created_by_conversation", ["created_by_conversation_id"])
-    .index("by_originating_conversation", ["originating_conversation_id"]),
+    .index("by_originating_conversation", ["originating_conversation_id"])
+    .index("by_project", ["project_id"]),
 
   // Version history + audit log for trigger edits. One row per edit — both
   // `cast trigger update` and the web edit dialog write through
@@ -5997,6 +6033,9 @@ export default defineSchema({
     short_id: v.optional(v.string()),
     title: v.string(),
     description: v.optional(v.string()),
+    // Standing instructions every session in the project starts with
+    // (session-projects.md SP6), verbatim. Capped by PROJECT_INSTRUCTIONS_MAX.
+    instructions: v.optional(v.string()),
     status: v.union(
       v.literal("planning"),
       v.literal("active"),
@@ -7780,6 +7819,20 @@ export default defineSchema({
     updated_at: v.number(),
   }).index("by_user_device_target", ["user_id", "device_id", "target"]),
 
+  // The clipboard offer for one relayed pane: the newest tmux paste buffer the
+  // daemon saw appear while the viewer typed, redacted (paneStream.ts
+  // clipboardWatch). Its own table, keyed like terminal_frames, so a frame
+  // patch (several a second while typing) neither rewrites the text nor
+  // re-runs the viewer's clipboard query. Read back only inside
+  // PANE_CLIPBOARD_TTL_MS; pruneStaleFrames deletes what outlives it.
+  terminal_clipboards: defineTable({
+    user_id: v.id("users"),
+    device_id: v.string(),
+    target: v.string(),
+    text: v.string(),
+    at: v.number(),
+  }).index("by_user_device_target", ["user_id", "device_id", "target"]),
+
   // Live picture of the browser tab one session drives on one machine: the
   // relay that lets a viewer on ANOTHER machine watch it (the loopback watch
   // socket only reaches the machine the viewer sits at). Same lease protocol
@@ -8132,7 +8185,8 @@ export default defineSchema({
         v.literal("failed"),
       ),
     ),
-    // A recording (`rec:` room key) its creator shared into a team. Absent or
+    // A recording (`rec:` room key) or a meeting bot's call (`meet:`) its
+    // creator shared into a team. Absent or
     // false is every recording's birth state: private to the creator, whatever
     // team_id says (team_id is routing, never access — canReadCall is the
     // gate). Meaningless on huddles, which have the room's own rules.
@@ -8948,6 +9002,26 @@ export default defineSchema({
     .index("by_role", ["role_id"])
     .index("by_conversation", ["conversation_id"]),
 
+  // The DMs (or one thread of a DM) a session, or a role for its standing
+  // session and hands, was brought into by chat: a person's mention, a
+  // relayed reply, a hand-off.
+  // What lets a session read a DM with its person's token (chatAccess
+  // sessionChatScope); written only for kind "dm" rooms.
+  chat_session_rooms: defineTable({
+    channel_id: v.id("chat_channels"),
+    conversation_id: v.optional(v.id("conversations")),
+    role_id: v.optional(v.id("org_roles")),
+    // Set when the grant is one thread's (a reply relayed into the session
+    // that started it); absent for the whole room (a person's @mention, a
+    // hand-off).
+    thread_root_id: v.optional(v.id("chat_messages")),
+    via: v.union(v.literal("wake"), v.literal("mention"), v.literal("relay"), v.literal("backfill")),
+    created_at: v.number(),
+  })
+    .index("by_conversation_channel", ["conversation_id", "channel_id", "thread_root_id"])
+    .index("by_role_channel", ["role_id", "channel_id", "thread_root_id"])
+    .index("by_channel", ["channel_id"]),
+
   chat_messages: defineTable({
     // Denormalized from the channel so scope checks and the search index don't
     // need a second read. Derived on insert, never a mutation argument.
@@ -9103,6 +9177,10 @@ export default defineSchema({
     // passes (its turn ends without a reply here), or is skipped.
     round: v.optional(chatRoundValidator),
     fork_conversation_id: v.optional(v.id("conversations")),
+    // The session a person handed this thread to (chatHandoff.ts), set on the
+    // thread ROOT only. Replies route to it ahead of origin_session_id, and the
+    // thread shows it live. A later hand replaces it.
+    bound_session_id: v.optional(v.string()),
     // Slack provenance (slackSync). "inbound": the line was written in Slack and
     // mirrored here; `client_id` is then the derived `slack:<workspace>:<channel>:<ts>`
     // key, so the existing by_channel_client_id index is the lookup for the edit,
