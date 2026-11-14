@@ -8,13 +8,16 @@ import { v, type Infer } from "convex/values";
 // event_type is a trigger name (shared/contracts/triggerEvents.ts) or a raw
 // webhook kind. repository and pr_number narrow the pull request events;
 // source narrows the ingestion events to one event_sources name
-// (docs/architecture/external-data.md X4).
+// (docs/architecture/external-data.md X4); channel_id names the one team
+// channel a chat_message trigger watches (an id once stored; a "#name" ref is
+// resolved and access-checked at save by agentTasks.storedEventFilter).
 export const eventFilterValidator = v.object({
   event_type: v.string(),
   action: v.optional(v.string()),
   repository: v.optional(v.string()),
   pr_number: v.optional(v.number()),
   source: v.optional(v.string()),
+  channel_id: v.optional(v.string()),
 });
 
 export type EventFilter = Infer<typeof eventFilterValidator>;
@@ -33,6 +36,8 @@ export const pendingEventValidator = v.object({
   at: v.number(),
   /** Fired while a run held the trigger, so that run never saw it: completion re-arms for it. */
   after_claim: v.optional(v.boolean()),
+  /** The session that wrote the line a chat event is about: a run resolved into that same session drops it. */
+  origin_conversation_id: v.optional(v.string()),
 });
 
 export type PendingEvent = Infer<typeof pendingEventValidator>;
