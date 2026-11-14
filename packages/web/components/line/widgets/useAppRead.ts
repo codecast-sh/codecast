@@ -6,6 +6,7 @@ import { useAction } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useActiveWorkspaceKey } from "../../../hooks/useWorkspaceCollection";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
+import { scopeArgsOf } from "../../../lib/workspaceScope";
 
 export type AppRead = { ok: true; text: string } | { ok: false; error: string };
 const reads = new Map<string, Promise<AppRead>>();
@@ -21,7 +22,7 @@ export function useAppRead(app: string, reader: string, args: Record<string, unk
     if (!workspace || !want) return;
     let p = reads.get(key);
     if (!p) {
-      const scope = workspace.startsWith("team:") ? { workspace: "team" as const, team_id: workspace.slice(5) as never } : { workspace: "personal" as const };
+      const scope = scopeArgsOf(workspace);
       p = run({ ...scope, source: app, reader, args_json: argsJson })
         .then((r): AppRead => (r.ok && r.text ? { ok: true, text: r.text } : { ok: false, error: r.error ?? "no answer" }))
         .catch((): AppRead => ({ ok: false, error: "could not reach codecast" }));

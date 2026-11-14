@@ -79,6 +79,8 @@ Two separate fields, and conflating them is the bug class this replaced.
 
 ## Writing for users (docs, blog posts, marketing pages)
 
+Read `docs/brand/facts.md` before claiming anything about codecast in public, and `docs/brand/voice.md` for how it should sound. When a fact in facts.md has gone stale, fix it in the same change.
+
 Most people use codecast through the app (web, desktop, phone), not the CLI. User-facing writing describes a feature the way they meet it: the screen, the menu, the button, what it shows and what happens next, with screenshots of the real UI. A CLI command can appear as a small aside for people who script or for agents, never as the spine of a piece, its section headings, or its main illustrations. When a feature has a UI, show the UI; when it is CLI-only today, say so plainly rather than presenting terminal output as the experience.
 
 ## UI conventions

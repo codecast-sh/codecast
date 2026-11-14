@@ -31,10 +31,9 @@ import { liveRolesByHandle } from "./lib/orgAccess";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { readBudget } from "./lib/teamBudget";
 import { projectModelSpend } from "./lib/modelSpend";
-import { turnCost } from "./lib/usageDaily";
+import { newSessionPrice, priceRun, type SessionPrice } from "./lib/sessionCost";
 import { fleetAccount } from "./ccAccountsShared";
 import { formatCountdown, labeledUsageWindows, livePercent, nextPressuredReset, USAGE_WARN_PERCENT, worstUsagePercent } from "@codecast/shared/contracts";
-import { findConversationByAnyRef } from "./conversationSessionLookup";
 import { BASE_CHECK, CARD_GATE_NODE_ID, validateChangeCard, verdictOfOption, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { findingConversation } from "@codecast/shared/contracts/judges";
 import { proposalOptions, sameCode, sameFile, validateProposalCard, whereParts, type ProposalCard } from "@codecast/shared/contracts/proposalCard";
@@ -567,66 +566,6 @@ export const cards = query({
   },
 });
 
-type KeyPrice = { sessions: number; tokens: number; usd: number };
-type RunPrice = { sessions: number; usd: number; tokens: number; unpriced_tokens: number; key: KeyPrice; providers: string[]; device?: string };
-const newRunPrice = (): RunPrice => ({ sessions: 0, usd: 0, tokens: 0, unpriced_tokens: 0, key: { sessions: 0, tokens: 0, usd: 0 }, providers: [] });
-
-/**
- * What a session's tokens were billed to. Claude Code and Codex sessions run
- * on the machine's subscription login (the launcher never hands them an API
- * key: cli providerKeyLaunch.ts), so they spend an account's quota and bill
- * nothing. Every other agent reads a provider key, which bills money.
- */
-export function sessionBilling(agentType: string | undefined): { provider: "claude" | "codex" } | null {
-  if (agentType === "claude_code") return { provider: "claude" };
-  if (agentType === "codex") return { provider: "codex" };
-  return null;
-}
-
-/**
- * A line run's station sessions priced from their token totals (the Spend
- * chart's prices), added into `into`. A session already counted (`seen`) is
- * skipped; one on a model the price table does not name adds its tokens to
- * `unpriced_tokens`, never a guess. A session on a metered key also adds to
- * `key`; the rest name the subscription provider they ran on.
- */
-async function priceRun(ctx: Ctx, run: Doc<"workflow_runs">, seen: Set<string>, into: RunPrice): Promise<RunPrice> {
-  if (run.runner_device) into.device ??= run.runner_device;
-  const convs: any[] = [];
-  for (const node of run.node_statuses ?? []) {
-    if (!node.session_id || seen.has(node.session_id)) continue;
-    seen.add(node.session_id);
-    convs.push(await findConversationByAnyRef(ctx as any, node.session_id, run.user_id));
-  }
-  // A station asked again (a re-ask at Present, a second build) leaves only its newest session on the node; every
-  // visit's session is nested under the run's primary conversation, so the cost of a run never falls when it re-asks.
-  if (run.primary_conversation_id) {
-    convs.push(...(await ctx.db.query("conversations").withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", run.primary_conversation_id)).collect()));
-  }
-  for (const conv of convs) {
-    // Counted once, by the conversation itself: a node may name its session by any of its ids.
-    if (!conv || seen.has(`conv:${conv._id}`)) continue;
-    seen.add(`conv:${conv._id}`);
-    // Its account carries the run's quota whether or not the session reported tokens (Codex sessions report none).
-    const billing = sessionBilling(conv.agent_type);
-    if (billing && !into.providers.includes(billing.provider)) into.providers.push(billing.provider);
-    const u = conv.usage_totals;
-    if (!u) continue;
-    into.sessions++;
-    const tokens = u.input + u.output + u.cache_read + u.cache_write;
-    into.tokens += tokens;
-    const usd = turnCost(conv.model, { input_tokens: u.input, output_tokens: u.output, cache_read_input_tokens: u.cache_read, cache_creation_input_tokens: u.cache_write });
-    if (usd > 0) into.usd += usd;
-    else into.unpriced_tokens += tokens;
-    if (!billing) {
-      into.key.sessions++;
-      into.key.tokens += tokens;
-      into.key.usd += Math.max(0, usd);
-    }
-  }
-  return into;
-}
-
 /** A run's working minutes: the time its stations ran, start to finish, gates left out (their time is waiting on a person). */
 export function workMinutes(run: Pick<Doc<"workflow_runs">, "node_statuses">, isGate: (node: string) => boolean): number {
   let ms = 0;
@@ -648,7 +587,7 @@ export function workMinutes(run: Pick<Doc<"workflow_runs">, "node_statuses">, is
  */
 export async function problemCost(ctx: Ctx, task: Doc<"tasks">) {
   const runs: Doc<"workflow_runs">[] = await ctx.db.query("workflow_runs").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).collect();
-  const priced = newRunPrice();
+  const priced = newSessionPrice();
   const seen = new Set<string>();
   for (const run of runs) await priceRun(ctx, run, seen, priced);
   const findings: Doc<"signals">[] = [
@@ -887,14 +826,19 @@ export const priceRuns = internalQuery({
     for (const { run: id, project } of args.runs) {
       const run: Doc<"workflow_runs"> | null = await ctx.db.get(id);
       if (!run) continue;
-      const price = await priceRun(ctx, run, new Set(), newRunPrice());
+      const price = storedRunPrice(await priceRun(ctx, run, new Set(), newSessionPrice()));
       out.push({ run: id, project, run_created_at: run.created_at, updated_at: run.updated_at, priced: { ...price, at: now, settled: !isLiveRunStatus(run.status) && now - run.updated_at > RUN_SETTLE_MS } });
     }
     return out;
   },
 });
 
-const pricedV = v.object({
+/** A run's price as trial_run_prices stores it: `uncounted` is for the task page, and pricedV rejects it. */
+export function storedRunPrice({ uncounted: _uncounted, ...price }: SessionPrice) {
+  return price;
+}
+
+export const pricedV = v.object({
   sessions: v.number(), usd: v.number(), tokens: v.number(), unpriced_tokens: v.number(),
   key: v.object({ sessions: v.number(), tokens: v.number(), usd: v.number() }), providers: v.array(v.string()), device: v.optional(v.string()),
   at: v.number(), settled: v.boolean(),
@@ -936,12 +880,12 @@ export const spendDrift = internalQuery({
     const runs = await trialRunsOf(ctx, project);
     const prices = await runPricesOf(ctx, project);
     const byRun = new Map(prices.map((r) => [String(r.run_id), r]));
-    const live = newRunPrice();
+    const live = newSessionPrice();
     const seen = new Set<string>();
     let alone = 0;
     for (const run of runs) {
       await priceRun(ctx, run, seen, live);
-      alone += (await priceRun(ctx, run, new Set(), newRunPrice())).sessions;
+      alone += (await priceRun(ctx, run, new Set(), newSessionPrice())).sessions;
     }
     let walked = 0;
     for (const t of (await ctx.db.query("tasks").withIndex("by_project_id", (q: any) => q.eq("project_id", project._id)).collect()) as Doc<"tasks">[]) {

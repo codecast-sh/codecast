@@ -9,7 +9,8 @@ import { makeFakeDb } from "./testDb";
 import { causeDescription, refreshCauseDescription } from "./signals";
 import { pauseAtGateCore } from "./workflow_runs";
 import { askCore } from "./sessionDecisions";
-import { answerTrialCardCore, gateGone, workMinutes, dropAtCardCore, reaskRoute, gateLossOf, repeatedOutside, rerunCore, rerunFromMainCore, OUTSIDE_REPEAT_MS, coverageOf, supersedeMerged, dispatchPass, dueProblems, sweepClosed, evalsOwedBy, gatherDue, GATHER_NOTE, isTrialRun, overlapOf, sameCode, stopOf, toolingOf, routeOf, trialProjectOf, trialSpend, priceStale, RUN_SETTLE_MS, TRIAL_RUNNING_CAP, sessionBilling, quotaHold, UNNAMED_BILLER, problemCost } from "./lineTrial";
+import { answerTrialCardCore, gateGone, workMinutes, dropAtCardCore, reaskRoute, gateLossOf, repeatedOutside, rerunCore, rerunFromMainCore, OUTSIDE_REPEAT_MS, coverageOf, supersedeMerged, dispatchPass, dueProblems, sweepClosed, evalsOwedBy, gatherDue, GATHER_NOTE, isTrialRun, overlapOf, sameCode, stopOf, toolingOf, routeOf, trialProjectOf, trialSpend, priceStale, RUN_SETTLE_MS, TRIAL_RUNNING_CAP, quotaHold, UNNAMED_BILLER, problemCost, storedRunPrice, pricedV } from "./lineTrial";
+import { newSessionPrice, sessionBilling } from "./lib/sessionCost";
 import { problemEvidence } from "./lib/problemEvidence";
 
 const HOST = "users_host" as any;
@@ -455,6 +456,12 @@ describe("the trial dispatcher starts the problems most in need of a run", () =>
     expect(sessionBilling("codex")).toEqual({ provider: "codex" });
     expect(sessionBilling("opencode")).toBeNull();
     expect(sessionBilling("pi")).toBeNull();
+  });
+
+  test("a run's stored price carries only the fields trial_run_prices accepts", () => {
+    const stored = storedRunPrice({ ...newSessionPrice(), uncounted: 2, device: "mac" });
+    const allowed = Object.keys((pricedV as any).fields);
+    expect(Object.keys(stored).filter((k) => !allowed.includes(k))).toEqual([]);
   });
 
   /** The runner machine's Claude account, its 5h window at `percent`. */

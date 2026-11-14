@@ -27,6 +27,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { toast } from "sonner";
 import { noticedCount, severityWord } from "./impact";
 import { cardAsRead, evidenceGone, fateWords, goneWhere } from "../../lib/trialEvidence";
+import { scopeArgsOf } from "../../lib/workspaceScope";
 import { holdReasons } from "../decisions/ChangeCardView";
 import { evalsOwed } from "@codecast/shared/contracts/changeCard";
 import type { TrialWithdrawn } from "../../hooks/useSyncTrial";
@@ -189,7 +190,7 @@ export function ProblemSummary({ task }: { task: ProblemTask }) {
 
   // What it has cost (convex lineTrial.cost): money billed (judging, its runs' call nodes and key sessions), and its runs'
   // subscription sessions at API list price beside it, an equivalent never added to the money.
-  const scope = workspace?.startsWith("team:") ? { workspace: "team" as const, team_id: workspace.slice(5) } : { workspace: "personal" as const };
+  const scope = scopeArgsOf(workspace);
   const { data: cost } = useQueryNoThrow((api as any).lineTrial.cost, workspace && task.cause ? { ...scope, task: task.short_id } : "skip");
   const spent = cost as { billed_usd?: number; judge_usd: number; run_billed_usd: number; run_list_usd: number; runs: number; sessions: number; unpriced_tokens: number } | null | undefined;
   const priced = spent?.billed_usd !== undefined && spent.billed_usd + spent.run_list_usd > 0 ? spent : null;

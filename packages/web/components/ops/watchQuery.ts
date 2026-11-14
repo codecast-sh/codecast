@@ -10,12 +10,13 @@ import type { SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { spanLabel, type Pt } from "./metricModel";
 import { hogqlFirstCell, volumePreview } from "./metricEditing";
 import type { OpsSource, OpsWatch } from "./opsTypes";
+import { scopeArgsOf } from "../../lib/workspaceScope";
 
 const api = _api as any;
 
 /** The scope args a source's own workspace key names, for the reads the CLI makes as its caller. */
-export function scopeOfSource(source: Pick<OpsSource, "workspace">): { workspace: "team"; team_id: string } | { workspace: "personal" } {
-  return source.workspace?.startsWith("team:") ? { workspace: "team", team_id: source.workspace.slice(5) } : { workspace: "personal" };
+export function scopeOfSource(source: Pick<OpsSource, "workspace">) {
+  return scopeArgsOf(source.workspace);
 }
 
 /** Whether a source can host watches, and which kinds. */
