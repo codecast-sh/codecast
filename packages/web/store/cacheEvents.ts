@@ -4,10 +4,11 @@
 // wipe and refill could only be reconstructed from Chromium's own leveldb LOG,
 // and which code path deleted the database stayed a guess.
 //
-// Every event goes three places: the console, a small ring buffer in
-// localStorage (read it with `__cacheEvents()` in any window of the origin,
-// and it survives the reload that usually follows), and Sentry for the kinds
-// that mean the cache was lost or destroyed.
+// Every event goes to a small ring buffer in localStorage (read it with
+// `__cacheEvents()` in any window of the origin, and it survives the reload
+// that usually follows). The kinds that mean the cache was lost or destroyed
+// also go to the console and Sentry; an ordinary first boot's db-created does
+// not.
 import { captureMessage } from "@sentry/react";
 
 export type CacheEventKind =
@@ -56,7 +57,8 @@ export function recordCacheEvent(kind: CacheEventKind, detail: Record<string, un
     path: typeof location !== "undefined" ? location.pathname : "",
     detail,
   };
-  console.warn(`[cache] ${kind}`, detail);
+  const report = opts?.report ?? REPORTED.has(kind);
+  if (report) console.warn(`[cache] ${kind}`, detail);
   try {
     const events = readCacheEvents();
     events.push(event);
@@ -64,7 +66,7 @@ export function recordCacheEvent(kind: CacheEventKind, detail: Record<string, un
   } catch {
     // A full or blocked localStorage loses the record, never the caller.
   }
-  if (opts?.report ?? REPORTED.has(kind)) {
+  if (report) {
     try {
       captureMessage(`cache ${kind}`, { level: "warning", tags: { source: "idb-cache", cache_event: kind }, extra: { ...detail, path: event.path } });
     } catch {
