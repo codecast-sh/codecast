@@ -15,11 +15,12 @@ import { isTeamMember } from "./privacy";
 import { nextShortId } from "./counters";
 import { eventFilterValidator, type EventFilter, type PendingEvent } from "./lib/eventFilterValidator";
 import { PENDING_EVENTS_CAP, sourceFilterAdmits } from "@codecast/shared/contracts/ingest";
-import { canAccessConversation, workspaceGrantsAccess } from "./lib/access";
+import { canAccessConversation, canAccessProject, workspaceGrantsAccess } from "./lib/access";
+import { canAccessChannel } from "./chatAccess";
 import { restoreToInbox } from "./inboxFilters";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage, reachableRole } from "./pendingMessages";
-import { isHostedAgentType, triggerFiringSource, triggerFiringContinues, TRIGGER_PRECHECK_MESSAGE_CHARS, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerRunFrame, formatScheduledTask, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
+import { isHostedAgentType, triggerFiringSource, triggerFiringContinues, TRIGGER_PRECHECK_MESSAGE_CHARS, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerRunFrame, formatScheduledTask, isChatTriggerEvent, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
 import type { AreaChange } from "@codecast/shared/contracts/orgAreas";
 import { isOrgReviewFocusKey, type OrgReviewFocusKey } from "@codecast/shared/contracts/orgReview";
 import { findRoleEventTrigger, ROLE_NEEDS_INPUT_SPEC, roleEventSpecsFor, roleMachineAway, type RoleEventSpec } from "./lib/orgRoutine";
@@ -36,7 +37,7 @@ import { nextCadenceRun } from "@platform/assistant/cadence";
 import { startHostedConversationFor } from "./assistant/start";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { HOSTED_TITLE_MAX_CHARS } from "@codecast/shared/contracts/assistant";
-import { type TaskCtx, refreshArmedTriggerKind, patchTask, nextRecurringRun, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, tasksOriginatedBy, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill } from "./lib/agentTaskRows";
+import { type TaskCtx, projectQuiet, refreshArmedTriggerKind, patchTask, nextRecurringRun, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, tasksOriginatedBy, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill, projectRunsInline, scheduleProjectFire } from "./lib/agentTaskRows";
 export { refreshArmedTriggerKind, patchTask, applyReactivate, stampRunConversation, cancelTasksBoundToConversation, cancelTasksOriginatingFrom, reactivateTasksCanceledOnKill };
 
 const DEFAULT_MAX_RETRIES = 3;
@@ -127,8 +128,8 @@ async function hostedThreadRefusal(ctx: TaskCtx, routine: HostedThreads & { user
 
 export async function applyPause(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   if (task.status !== "scheduled" && task.status !== "running") return false;
-  // A pause by hand clears any role's stamp; a role pause stamps after this.
-  await patchTask(ctx, task, { status: "paused", paused_by_role_id: undefined });
+  // A pause by hand clears any role's or project's stamp; a role pause stamps after this.
+  await patchTask(ctx, task, { status: "paused", paused_by_role_id: undefined, paused_by_project_id: undefined });
   return true;
 }
 
@@ -140,6 +141,7 @@ export async function applyResume(ctx: TaskCtx, task: Doc<"agent_tasks">) {
   await patchTask(ctx, task, {
     status: "scheduled",
     run_at: task.schedule_type === "event" ? task.run_at : task.run_at || Date.now(),
+    paused_by_project_id: undefined,
   });
   return true;
 }
@@ -477,6 +479,9 @@ interface NewTaskArgs {
   wake_creator?: boolean;
   /** The org role whose routine this is. */
   role_id?: Id<"org_roles">;
+  /** The project this trigger feeds; with project_spawn its runs spawn, else they are turns in its main session. */
+  project_id?: Id<"projects">;
+  project_spawn?: boolean;
   /** Created paused (org-hire.md H8): a routine a person activates later. Never for event triggers. */
   status?: "scheduled" | "paused";
   /** The weekdays (0 is Sunday) a hosted routine runs on, at run_at's time
@@ -522,6 +527,10 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
   });
 
   const event_filter = await storedEventFilter(ctx, userId, args.project_path, args.event_filter);
+  const project = args.project_id ? await ctx.db.get(args.project_id) : null;
+  if (args.project_id && !(project && (await canAccessProject(ctx as any, userId, project)))) throw new Error("Project not found");
+  // A project trigger's inline runs are found at each firing, so it binds no session.
+  const projectInline = !!project && !args.project_spawn;
   const short_id = await nextShortId(ctx.db, "tr");
 
   const taskId = await ctx.db.insert("agent_tasks", {
@@ -530,7 +539,7 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
     title: args.title,
     prompt: args.prompt,
     context_summary: args.context_summary,
-    originating_conversation_id: args.originating_conversation_id
+    originating_conversation_id: args.originating_conversation_id && !projectInline
       ? args.originating_conversation_id as Id<"conversations">
       : undefined,
     hosted_home: hosted || undefined,
@@ -560,6 +569,7 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
     precheck_mode: args.precheck?.trim() ? args.precheck_mode : undefined,
     wake_creator: args.wake_creator || undefined,
     role_id: args.role_id,
+    ...(project ? { project_id: project._id, ...(args.project_spawn ? { project_spawn: true } : {}) } : {}),
     status: paused ? ("paused" as const) : ("scheduled" as const),
     retry_count: 0,
     max_retries: args.max_retries ?? DEFAULT_MAX_RETRIES,
@@ -567,8 +577,14 @@ export async function insertTask(ctx: TaskCtx, userId: Id<"users">, args: NewTas
     created_at: now,
     ...(args.display_summary ? { display_summary: args.display_summary, summary_for_person: true } : {}),
   });
-  if (args.originating_conversation_id) {
+  if (args.originating_conversation_id && !projectInline) {
     await refreshArmedTriggerKind(ctx, args.originating_conversation_id as Id<"conversations">);
+  }
+  if (project && !paused) {
+    // Born into a quiet project, it waits with the project's others.
+    const row = await ctx.db.get(taskId);
+    if (row && projectQuiet(project.status)) await patchTask(ctx, row, { status: "paused", paused_by_project_id: project._id });
+    else if (row) await scheduleProjectFire(ctx, row, run_at);
   }
   // Distill a readable display_title/display_summary from the prompt (the
   // summarizer section below) — the stored title is usually prompt.slice(0,60).
@@ -669,6 +685,10 @@ export const createTask = mutation({
     // for --spawn triggers, so a spawn trigger still traces to its parent.
     // Best-effort: an unresolvable ref never fails creation.
     created_by_session_ref: v.optional(v.string()),
+    // `cast trigger add --project <ref>`: the project this trigger feeds, and
+    // with --spawn (project_spawn) its runs start fresh sessions instead.
+    project_id: v.optional(v.id("projects")),
+    project_spawn: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token);
@@ -787,10 +807,22 @@ export const listTasks = query({
   args: {
     api_token: v.string(),
     status: v.optional(v.string()),
+    // `cast trigger ls --project`: the project's triggers the caller may
+    // manage, whoever armed them, instead of the caller's own.
+    project_id: v.optional(v.id("projects")),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
     if (!auth) throw new Error("Unauthorized");
+
+    if (args.project_id) {
+      const project = await ctx.db.get(args.project_id);
+      if (!project || !(await canAccessProject(ctx, auth.userId, project))) throw new Error("Project not found");
+      const rows = await ctx.db.query("agent_tasks").withIndex("by_project", (q) => q.eq("project_id", args.project_id)).collect();
+      const visible: Doc<"agent_tasks">[] = [];
+      for (const t of rows) if ((!args.status || t.status === args.status) && (await canViewTask(ctx, auth.userId, t))) visible.push(t);
+      return await withChannelNames(ctx, auth.userId, await withResolvedRunConversations(ctx, auth.userId, visible));
+    }
 
     const tasks = args.status
       ? await ctx.db
@@ -804,9 +836,19 @@ export const listTasks = query({
           .withIndex("by_user_status", (q) => q.eq("user_id", auth.userId))
           .collect();
 
-    return await withResolvedRunConversations(ctx, auth.userId, tasks);
+    return await withChannelNames(ctx, auth.userId, await withResolvedRunConversations(ctx, auth.userId, tasks));
   },
 });
+
+/** A chat trigger's channel, named for the reader when they can read it, so
+ *  `cast trigger ls` says which channel it watches. Joined at read, never stored. */
+async function withChannelNames<T extends { event_filter?: EventFilter }>(ctx: TaskCtx, userId: Id<"users">, tasks: T[]): Promise<Array<T & { channel_name?: string }>> {
+  return await Promise.all(tasks.map(async (t) => {
+    const id = t.event_filter?.channel_id ? ctx.db.normalizeId("chat_channels", t.event_filter.channel_id) : null;
+    const channel = id ? await ctx.db.get(id) : null;
+    return channel && (await canAccessChannel(ctx as any, userId, channel)) ? { ...t, channel_name: channel.name } : t;
+  }));
+}
 
 export const getTask = query({
   args: {
@@ -963,15 +1005,35 @@ export async function fireRoleEvent(
 ): Promise<Id<"pending_messages"> | null> {
   const hearing = await roleHearing(ctx, roleId, spec);
   if (!hearing) return null;
-  const { standing, task } = hearing;
-  const now = Date.now();
-  const id = await enqueuePendingMessage(ctx as any, standing, task.user_id, {
-    content: await triggerFrameFor(ctx, task, standing, about.waiting, about.change),
+  return deliverTriggerRun(ctx, hearing.task, hearing.standing, clientId, about);
+}
+
+/** One run written straight into a session by the server (a role's event, a
+ *  project's source): its frame queued as the session's next turn, and the
+ *  trigger's run settled as on any run. `pending_events` overrides the row's
+ *  when the writer dropped some (a line the session wrote itself). */
+export async function deliverTriggerRun(
+  ctx: TaskCtx,
+  task: Doc<"agent_tasks">,
+  conversation: Doc<"conversations">,
+  clientId: string,
+  about: { waiting?: WaitingSession; change?: AreaChange; pending_events?: PendingEvent[] } = {},
+): Promise<Id<"pending_messages">> {
+  const frameTask = about.pending_events ? { ...task, pending_events: about.pending_events } : task;
+  const id = await enqueuePendingMessage(ctx as any, conversation, task.user_id, {
+    content: await triggerFrameFor(ctx, frameTask, conversation, about.waiting, about.change),
     origin: "scheduler",
     client_id: clientId,
   });
-  await patchTask(ctx, task, { ...completedTaskRunFields(task, now, { conversation_id: String(standing._id) }), ...claimRunSourceFields(task) });
+  await patchTask(ctx, task, { ...completedTaskRunFields(task, Date.now(), { conversation_id: String(conversation._id) }), ...claimRunSourceFields(task) });
   return id;
+}
+
+/** A firing that could not run (a project trigger with nowhere it may land):
+ *  settled as a failed run naming why, and re-armed for its next event. */
+export async function failTriggerFiring(ctx: TaskCtx, task: Doc<"agent_tasks">, why: string): Promise<void> {
+  const now = Date.now();
+  await patchTask(ctx, task, { ...completedTaskRunFields(task, now, {}), ...claimRunSourceFields(task), last_run_failed: true, last_run_summary: why });
 }
 
 // A session under a role waits: fire the trigger of the role that hears for
@@ -1157,6 +1219,7 @@ export const getDueTasks = query({
       if (task.status !== "scheduled" || task.user_id !== auth.userId || task.run_at === undefined || !(task.run_at <= now)) continue;
       if (await cloudTriggerConversation(ctx, task)) continue;
       if (await roleTriggerHeld(ctx, task)) continue;
+      if (projectRunsInline(task)) continue;
       dueTasks.push(task);
     }
     return dueTasks.slice(0, args.limit || 5);
@@ -1181,6 +1244,7 @@ export const claimTask = mutation({
     if (task.status !== "scheduled") return null;
     if (await cloudTriggerConversation(ctx, task)) return null;
     if (await roleTriggerHeld(ctx, task)) return null;
+    if (projectRunsInline(task)) return null;
 
     const now = Date.now();
     const sourceFields = claimRunSourceFields(task);
@@ -2710,6 +2774,10 @@ async function triggerWorkspaceKey(ctx: { db: any }, task: Pick<Doc<"agent_tasks
  * instead of arming a trigger that never fires. Create and edit both run it.
  */
 export async function storedEventFilter(ctx: TaskCtx, userId: Id<"users">, project_path: string | undefined, filter: EventFilter | undefined): Promise<EventFilter | undefined> {
+  if (filter && isChatTriggerEvent(filter.event_type)) {
+    if (!filter.channel_id?.trim()) throw new Error("A chat_message trigger watches one channel: name it with --channel <#name|id>");
+    filter = { ...filter, channel_id: String((await triggerChannel(ctx, userId, filter.channel_id))._id) };
+  }
   if (!filter || filter.source === undefined) return filter;
   if (!filter.source.trim()) {
     const { source: _blank, ...rest } = filter;
@@ -2719,6 +2787,37 @@ export async function storedEventFilter(ctx: TaskCtx, userId: Id<"users">, proje
   if (!workspaceKey) throw new Error("Could not resolve the workspace this trigger fires in, so its --source cannot be checked");
   return { ...filter, source: await triggerSourceName(ctx, userId, workspaceKey, filter.source) };
 }
+
+/**
+ * The team channel a chat_message trigger watches, from an id or "#name" (in
+ * any team the owner is on; a name two of them hold must be given by id).
+ * Only a channel the owner can read; never a direct message room.
+ */
+async function triggerChannel(ctx: TaskCtx, userId: Id<"users">, ref: string): Promise<Doc<"chat_channels">> {
+  const trimmed = ref.trim();
+  let found: Doc<"chat_channels">[] = [];
+  if (trimmed.startsWith("#")) {
+    const name = trimmed.slice(1).toLowerCase();
+    const memberships = await ctx.db.query("team_memberships").withIndex("by_user_id", (q: any) => q.eq("user_id", userId)).collect();
+    for (const m of memberships) {
+      const ch = await ctx.db.query("chat_channels").withIndex("by_team_name", (q: any) => q.eq("team_id", m.team_id).eq("name", name)).first();
+      if (ch) found.push(ch);
+    }
+  } else {
+    const id = ctx.db.normalizeId("chat_channels", trimmed);
+    const ch = id ? await ctx.db.get(id) : null;
+    if (ch) found = [ch];
+  }
+  const readable: Doc<"chat_channels">[] = [];
+  for (const ch of found) if (ch.kind !== "dm" && !ch.archived_at && (await canAccessChannel(ctx as any, userId, ch))) readable.push(ch);
+  if (readable.length === 0) throw new Error(`No channel you can read matches "${trimmed}" (cast chat channels lists them)`);
+  if (readable.length > 1) throw new Error(`"${trimmed}" names a channel in ${readable.length} of your teams: pass its id (cast chat channels)`);
+  return readable[0];
+}
+
+/** How long a chat_message firing waits for the rest of its burst: every line
+ *  inside the window rides the one run (pending_events). */
+export const CHAT_COALESCE_MS = 20_000;
 
 export const matchTaskTriggers = internalMutation({
   args: {
@@ -2748,6 +2847,11 @@ export const matchTaskTriggers = internalMutation({
     // (canReadCall: a recording is its creator's, a private huddle its
     // people's), so only an owner that rule admits can be woken.
     call_id: v.optional(v.id("transcripts")),
+    // The channel a chat event landed in: only a trigger watching it fires,
+    // and only for an owner who can still read it (canAccessChannel).
+    channel_id: v.optional(v.id("chat_channels")),
+    // The session that wrote the line, when one did: it never wakes itself.
+    origin_conversation_id: v.optional(v.string()),
     // What fired, appended to each matched trigger's pending_events so the
     // run knows what woke it. Omitted by the git events, which carry their
     // context in the session they wake.
@@ -2769,19 +2873,22 @@ export const matchTaskTriggers = internalMutation({
     // A call event whose call is gone wakes nobody.
     const call = args.call_id ? await ctx.db.get(args.call_id) : null;
     if (args.call_id && !call) return 0;
+    const channel = args.channel_id ? await ctx.db.get(args.channel_id) : null;
+    if (isChatTriggerEvent(args.event_type) && !channel) return 0;
 
     // One lookup per distinct owner, not per task: a user with several armed
     // triggers is the normal case.
     const ownerVerdicts = new Map<string, boolean>();
     const ownerMayBeWoken = async (userId: Id<"users">): Promise<boolean> => {
-      if (!args.team_id && !args.workspace && !call) return true;
+      if (!args.team_id && !args.workspace && !call && !channel) return true;
       const key = String(userId);
       const known = ownerVerdicts.get(key);
       if (known !== undefined) return known;
       const verdict =
         (!args.team_id || (await isTeamMember(ctx, userId, args.team_id))) &&
         (!args.workspace || (await workspaceGrantsAccess(ctx, userId, args.workspace))) &&
-        (!call || (await canReadCall(ctx, userId, call)));
+        (!call || (await canReadCall(ctx, userId, call))) &&
+        (!channel || (await canAccessChannel(ctx as any, userId, channel)));
       ownerVerdicts.set(key, verdict);
       return verdict;
     };
@@ -2795,17 +2902,24 @@ export const matchTaskTriggers = internalMutation({
       if (task.event_filter.repository && normalizeRepository(task.event_filter.repository) !== normalizeRepository(args.repository)) continue;
       if (task.event_filter.pr_number != null && task.event_filter.pr_number !== args.pr_number) continue;
       if (!sourceFilterAdmits(task.event_filter.source, args.source)) continue;
+      if (channel && task.event_filter.channel_id !== String(channel._id)) continue;
+      if (args.origin_conversation_id && String(task.originating_conversation_id ?? "") === args.origin_conversation_id) continue;
       // Last, because they are the only checks that read the database.
       if (!(await ownerMayBeWoken(task.user_id))) continue;
       if (args.workspace && (await triggerWorkspaceKey(ctx, task)) !== args.workspace) continue;
 
       const running = task.status === "running";
-      const patch: Partial<Doc<"agent_tasks">> = running ? {} : { run_at: now };
+      // A chat line opens a window the rest of its burst joins; an open
+      // window keeps its end, so a steady channel still fires.
+      const windowOpen = !!channel && task.run_at !== undefined && task.run_at > now;
+      const runAt = channel ? (windowOpen ? task.run_at! : now + CHAT_COALESCE_MS) : now;
+      const patch: Partial<Doc<"agent_tasks">> = running ? {} : { run_at: runAt };
       if (args.event_ref) {
-        const event: PendingEvent = { ...args.event_ref, event_type: args.event_type, at: now, ...(running ? { after_claim: true } : {}) };
+        const event: PendingEvent = { ...args.event_ref, event_type: args.event_type, at: now, ...(running ? { after_claim: true } : {}), ...(args.origin_conversation_id ? { origin_conversation_id: args.origin_conversation_id } : {}) };
         patch.pending_events = [...(task.pending_events ?? []), event].slice(-PENDING_EVENTS_CAP);
       }
       await ctx.db.patch(task._id, patch);
+      if (!running && !windowOpen) await scheduleProjectFire(ctx, task, runAt);
       matched++;
     }
 

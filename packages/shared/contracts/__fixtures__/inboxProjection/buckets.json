@@ -228,6 +228,26 @@
       "has_pending_messages": true
     },
     {
+      "_id": "dead_before_trigger",
+      "status": "active",
+      "updated_at": "E-46m",
+      "message_count": 5,
+      "agent_status": "stopped",
+      "is_idle": true,
+      "thread_state_status": "dormant",
+      "armed_trigger_kind": "standing",
+      "last_turn_allows_park": true
+    },
+    {
+      "_id": "dead_after_dormant_no_wake",
+      "status": "active",
+      "updated_at": "E-47m",
+      "message_count": 5,
+      "agent_status": "stopped",
+      "is_idle": true,
+      "thread_state_status": "dormant"
+    },
+    {
       "_id": "dead_blank",
       "status": "active",
       "updated_at": "E-22m",
@@ -493,9 +513,9 @@
         "questions": 1,
         "pinned": 3,
         "new": 2,
-        "needs_input": 23,
+        "needs_input": 24,
         "done": 5,
-        "dormant": 6,
+        "dormant": 7,
         "working": 4,
         "idle": 0,
         "snoozed": 1,
@@ -518,7 +538,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "1eb636f462b06964",
+    "set_digest": "38f5377a95106796",
     "placements": {
       "anchorblockedz130000000000000000": [
         "needs_input",
@@ -568,6 +588,16 @@
       "deadafterdonez130000000000000000": [
         "done",
         "done",
+        false
+      ],
+      "deadafterdormantnowakez220000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "deadbeforetriggerz17000000000000": [
+        "dormant",
+        "dormant",
         false
       ],
       "deadblankz9000000000000000000000": [
@@ -777,6 +807,8 @@
       "boundarykeepsdonez17000000000000": -540000,
       "completedcontentz160000000000000": -2220000,
       "deadafterdonez130000000000000000": -1380000,
+      "deadafterdormantnowakez220000000": -2820000,
+      "deadbeforetriggerz17000000000000": -2760000,
       "deadblankz9000000000000000000000": -1320000,
       "deadz400000000000000000000000000": -1260000,
       "declaredblockedz1500000000000000": -1020000,
@@ -826,6 +858,7 @@
         "deadafterdonez130000000000000000"
       ],
       "dormant": [
+        "deadbeforetriggerz17000000000000",
         "userdormantz11000000000000000000",
         "loopfreshz9000000000000000000000",
         "oncehomedonez1200000000000000000",
@@ -853,6 +886,7 @@
         "anchordeadz100000000000000000000",
         "completedcontentz160000000000000",
         "forkchildz9000000000000000000000",
+        "deadafterdormantnowakez220000000",
         "hibernatedaskz130000000000000000",
         "hibernatedz100000000000000000000",
         "unresponsivenotidlez190000000000",
