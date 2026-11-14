@@ -1750,6 +1750,13 @@ async function teammatesWhoCanSee(ctx: { db: QueryCtx["db"] }, artifact: Doc<"ar
   return seen;
 }
 
+/** Whether `viewerId` sees this page in their gallery: its owner, or a teammate
+ * by teammatesWhoCanSee. Surfaces that list pages beside other work use this. */
+export async function viewerSeesPage(ctx: { db: QueryCtx["db"] }, viewerId: Id<"users">, artifact: Doc<"artifacts">): Promise<boolean> {
+  if (artifact.user_id === viewerId) return true;
+  return (await teammatesWhoCanSee(ctx, artifact)).has(viewerId.toString());
+}
+
 /** Whether a team-gated page's member token admits whoever presents it: it
  * must be a genuine token for this page, and the person it was handed to must
  * still be the owner or a member of the gate team today. */
