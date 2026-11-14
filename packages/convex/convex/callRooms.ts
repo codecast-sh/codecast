@@ -79,6 +79,7 @@ import { checkGuestRoster, endGuestAdmissions, roomHasGuestLinks } from "./lib/c
 import {
   CALL_MEMBER_STALE_MS,
   isRecRoomKey,
+  isRoomlessKey,
   parseRoomKey,
   type ParsedRoomKey,
 } from "@codecast/shared/contracts";
@@ -158,12 +159,18 @@ export function isSeat(row: { prewarm?: boolean }): boolean {
 // needs opt in. `openRoomDoor` returns null before it reads anything, which
 // means no call_members row can be created for a rec key, which in turn is why
 // getLiveRooms and getRoomOccupancy cannot list one: they enumerate that table.
+//
+// `meet:<uuid>` is the same shape for a meeting on another platform that a
+// Recall bot attends (meetingBots.ts). Every door is shut on it too
+// (isRoomlessKey); its owner is whoever sent the bot, and its transcript is
+// begun by the server when the bot is sent, so an unclaimed meet key is
+// refused rather than handed to whoever asks first.
 
 /** The transcript a rec key belongs to, or null while the id is unclaimed. The
  *  LIVE one wins over an older ended row, so a recording in progress can never
  *  have its ownership answered by some earlier transcript that happened to use
  *  the same id. */
-async function recTranscript(ctx: any, roomKey: string): Promise<Doc<"transcripts"> | null> {
+async function roomlessTranscript(ctx: any, roomKey: string): Promise<Doc<"transcripts"> | null> {
   const rows: Doc<"transcripts">[] = await ctx.db
     .query("transcripts")
     .withIndex("by_room", (q: any) => q.eq("room_key", roomKey))
@@ -180,7 +187,7 @@ async function recTranscript(ctx: any, roomKey: string): Promise<Doc<"transcript
  *  visible to its creator alone whatever team it bills to. A team the person
  *  has actually joined, because a stale active-team pointer would file the row
  *  where their own list never looks. */
-async function recRoutingTeam(
+export async function recRoutingTeam(
   ctx: any,
   userId: Id<"users">,
 ): Promise<Id<"teams"> | null> {
@@ -193,6 +200,29 @@ async function recRoutingTeam(
     .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
     .first();
   return firstMembership?.team_id ?? null;
+}
+
+/** May this user read a call with no room behind it (a `rec:` recording or a
+ *  `meet:` meeting a bot attended)? The call's own record is the whole answer,
+ *  since there is no room to ask: its creator always; a teammate the bot
+ *  heard speak in a meeting (filed under their codecast id when Recall
+ *  matched their email, meetingBots.speakerOf) or whose calendar the bot
+ *  attended for (recorded_people); and teammates once the
+ *  creator shared it into the team. Team membership and the calls feature
+ *  hold for everyone but the creator. transcripts.canReadCall and the call's
+ *  chat (callChat.list) both answer through here. */
+export async function canReadRoomlessCall(
+  ctx: any,
+  userId: Id<"users">,
+  t: Pick<Doc<"transcripts">, "room_key" | "started_by" | "team_id" | "participants" | "rec_shared" | "recorded_people">,
+): Promise<boolean> {
+  if (String(t.started_by) === String(userId)) return true;
+  const heard =
+    parseRoomKey(t.room_key)?.kind === "meet" &&
+    ((t.participants ?? []).some((p) => String(p.id) === String(userId)) ||
+      (t.recorded_people ?? []).some((id) => String(id) === String(userId)));
+  if (!heard && !t.rec_shared) return false;
+  return (await isTeamMember(ctx, userId, t.team_id)) && (await teamHasFeature(ctx, t.team_id, "calls"));
 }
 
 // A team every one of `users` belongs to, walking the first user's
@@ -367,7 +397,7 @@ export async function stampRoomWordsPublic(
   call: Pick<Doc<"transcripts">, "room_key" | "team_id" | "started_by" | "status" | "share_token">,
   opts: { ending?: boolean } = {},
 ): Promise<void> {
-  if (isRecRoomKey(call.room_key)) return;
+  if (isRoomlessKey(call.room_key)) return;
   if (call.status !== "live" && !opts.ending) return;
   const wordsPublic = call.status === "live" && !opts.ending && !!call.share_token;
   if (!!(await readRoomState(ctx, call.room_key))?.words_public === wordsPublic) return;
@@ -404,7 +434,7 @@ export async function openRoomDoor(
   // here rather than relying on the empty table is what makes that structural
   // — a stray call_members row could never turn a recording into a huddle
   // anyone may walk into.
-  if (parsed.kind === "rec") return null;
+  if (parsed.kind === "rec" || parsed.kind === "meet") return null;
   if (parsed.kind === "channel") {
     // The one room the open door does not touch: a channel's standing room is
     // that channel's own space, so a private channel or group thread keeps its
@@ -487,7 +517,7 @@ export async function authorizeRoomNoGrant(
   // a recording answers each elsewhere: nobody can be rung into one, and its
   // record belongs to its creator alone (transcripts.canReadCall, which
   // settles a rec transcript before it ever calls this).
-  if (parseRoomKey(roomKey)?.kind === "rec") {
+  if (isRoomlessKey(roomKey)) {
     return { ok: false, reason: "a recording is not a room" };
   }
   const auth = await authorizeRoomMembership(ctx, userId, roomKey);
@@ -537,8 +567,8 @@ export async function authorizeRoom(
   // unless a caller says `{ rec: true }` means the transcription paths opt in
   // one at a time and everything else, including whatever is written next, is
   // shut without having to remember.
-  if (!opts.rec && parseRoomKey(roomKey)?.kind === "rec") {
-    return { ok: false, reason: "a recording is not a room" };
+  if (!opts.rec && isRoomlessKey(roomKey)) {
+    return { ok: false, reason: isRecRoomKey(roomKey) ? "a recording is not a room" : "a meeting on another platform is not a room" };
   }
   let auth = await authorizeRoomMembership(ctx, userId, roomKey);
   if (!auth.ok) {
@@ -546,7 +576,7 @@ export async function authorizeRoom(
     if (!parsed) return auth;
     // No grant and no open door for a recording: refusal by the transcript's
     // owner is the whole answer, and there is no second layer under it.
-    if (parsed.kind === "rec") return auth;
+    if (parsed.kind === "rec" || parsed.kind === "meet") return auth;
     // The open door first: it is the common case now and the cheaper read.
     // The grant is tried regardless because it survives a lock — whoever was
     // rung in was let in deliberately.
@@ -597,7 +627,7 @@ export async function authorizeRoomMembership(
     // Owner only, and the transcript says who that is. An unclaimed id is not
     // a room standing open — it is a uuid this caller just generated, and the
     // `start` it is about to make is what claims it.
-    const t = await recTranscript(ctx, roomKey);
+    const t = await roomlessTranscript(ctx, roomKey);
     if (t) {
       if (String(t.started_by) !== String(userId)) {
         return { ok: false, reason: "not your recording" };
@@ -607,6 +637,15 @@ export async function authorizeRoomMembership(
     const teamId = await recRoutingTeam(ctx, userId);
     if (!teamId) return { ok: false, reason: "no team to file this recording under" };
     return { ok: true, teamId, parsed };
+  }
+
+  if (parsed.kind === "meet") {
+    // Whoever sent the bot. The server begins the transcript when it sends
+    // one, so a key with no transcript is nobody's.
+    const t = await roomlessTranscript(ctx, roomKey);
+    if (!t) return { ok: false, reason: "meeting not found" };
+    if (String(t.started_by) !== String(userId)) return { ok: false, reason: "not your meeting" };
+    return { ok: true, teamId: t.team_id, parsed };
   }
 
   if (parsed.kind === "channel") {

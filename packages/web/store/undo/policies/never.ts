@@ -108,6 +108,10 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   resolvePermission: never("send: the agent acts on an approved or denied tool call the moment it lands"),
   sendGuestSuggestion: never("send: the message is in the session the moment it lands"),
   dismissGuestSuggestion: never("decision: the guest sees it dismissed at once; they can suggest it again"),
+  sendTeamSuggestionNow: never("send: the message is in the session the moment it lands"),
+  withdrawTeamSuggestion: never("decision: the owner's card leaves at once; suggest it again to bring it back"),
+  proposeAnswer: never("send: the owner sees the proposal at once; a new pick replaces it"),
+  proposePermission: never("send: the owner sees the proposal at once; a new pick replaces it"),
   respondToGate: never("send: a gate answer resumes the run and posts into its session"),
 
   // Local echoes of sends (sync creators a component calls)
@@ -319,6 +323,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setObjectShareLink: SHARING,
   setShareLink: SHARING,
   setGuestSuggestions: SHARING,
+  setTeamSuggestions: SHARING,
   setTeamMembershipVisibility: SHARING,
 
   // The project's line.toml, written on the checkout's machine by the daemon
@@ -335,6 +340,11 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   editLineGraph: never("machine control: the daemon rewrites the graph on its host, and the step is set back in the same editor"),
   setLiveFlowOn: never("machine control: the switch starts or stops the team's flow runs; the same switch is the way back"),
   startLiveFlow: CREATE,
+  sendMeetingBot: CREATE,
+  setCalendarMeetingChoice: never("machine control: switching a meeting on schedules a paid bot; the same switch takes it back"),
+  setMeetingBotJoinAll: never("machine control: join-all schedules paid bots for every meeting; the same switch takes them back"),
+  cancelMeetingBot: never("machine control: the bot leaves the meeting at once; sending a new bot is the way back"),
+  discardMeetingBotStub: never("internal: takes back a send the server refused, which never landed"),
   moveLiveFlow: never("machine control: it decides which graph every new run of the team's flow takes; moving it back is the way back"),
   clearLiveFlowHold: never("machine control: lifting the hold lets queued runs start at once; a new hold is the way back"),
   saveSessionFlow: never("create: saving writes a new library version, and the library keeps the earlier one to switch back to"),

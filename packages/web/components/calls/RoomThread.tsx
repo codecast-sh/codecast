@@ -8,6 +8,7 @@ import {
   callAnchorKey,
   callPathRef,
   humanizeConvexError,
+  isMeetRoomKey,
   isRecRoomKey,
   sessionRoomConversationId,
   type CallAnchor,
@@ -433,7 +434,9 @@ export const RoomThread = memo(function RoomThread({
     [panel, onOpenedSession],
   );
 
-  const composer = !recording;
+  // A meeting on another platform is talked in where it happens: its chat
+  // reaches this thread through the bot, and nothing typed here could reach it.
+  const composer = !recording && !isMeetRoomKey(roomKey);
   // The stage's box holds about 27 characters a line at the 272px rail (less
   // in a monospace theme), and a placeholder that wraps looks like a two line
   // draft: the promise that an agent hears a typed line is kept short there,

@@ -24,9 +24,9 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
-import { huddleChatLineHeader, isAskDelivery, isHuddlePass, isRecRoomKey, isToolResultCarrier, reportedWorkIds } from "@codecast/shared/contracts";
+import { huddleChatLineHeader, isAskDelivery, isHuddlePass, isMeetRoomKey, isRecRoomKey, isRoomlessKey, isToolResultCarrier, reportedWorkIds } from "@codecast/shared/contracts";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
-import { authorizeRoom } from "./callRooms";
+import { authorizeRoom, canReadRoomlessCall } from "./callRooms";
 import { MAX_ATTACHMENTS } from "./chatText";
 import { chatAttachmentValidator } from "./lib/chatAttachment";
 import { scheduleFaceLeave, scheduleFaceTell } from "./callFace";
@@ -60,8 +60,14 @@ export const list = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
-    const auth = await authorizeRoom(ctx, userId, args.room_key);
-    if (!auth.ok) return null;
+    // A call with no room (a meeting a bot attended) is read by its record's
+    // own rule, and only one call at a time: its key names no room to list.
+    if (isRoomlessKey(args.room_key)) {
+      const t = args.transcript_id ? await ctx.db.get(args.transcript_id) : null;
+      if (!t || t.room_key !== args.room_key || !(await canReadRoomlessCall(ctx, userId, t))) return null;
+    } else if (!(await authorizeRoom(ctx, userId, args.room_key)).ok) {
+      return null;
+    }
     const take = Math.min(args.limit ?? PAGE, PAGE);
     const rows = args.transcript_id
       ? (
@@ -101,12 +107,12 @@ export const list = query({
       return {
         _id: r._id,
         user_id: String(r.user_id),
-        user_name: spoken ? agent.name : (r.event_guest_name ?? u.name),
-        user_image: spoken || r.event_guest_name ? undefined : u.image,
+        user_name: spoken ? agent.name : (r.author_name ?? r.event_guest_name ?? u.name),
+        user_image: spoken || r.event_guest_name || r.author_name ? undefined : u.image,
         text: r.text,
         attachments: r.attachments,
         at: r._creationTime,
-        mine: !agent && !r.event && String(r.user_id) === String(userId),
+        mine: !agent && !r.event && !r.author_name && String(r.user_id) === String(userId),
         transcript_id: r.transcript_id ? String(r.transcript_id) : null,
         agent,
         event: (r.event ?? null) as RoomEvent | null,
@@ -271,33 +277,43 @@ export const post = mutation({
       attachments: attachments.length > 0 ? attachments : undefined,
       ...(named && named.room_key === args.room_key ? { transcript_id: named._id } : {}),
     });
-    // The agents in the room hear the line too. Relayed as the transcript's
-    // routes deliver (as the feed's adder, off the request path), so a
-    // session the poster could not message directly still hears its huddle,
-    // and a relay that fails never loses the chat line itself.
     const live = await liveTranscriptFor(ctx, args.room_key);
     if (!live) return;
-    const feeds: Doc<"call_agent_feeds">[] = await ctx.db
-      .query("call_agent_feeds")
-      .withIndex("by_transcript", (q) => q.eq("transcript_id", live._id))
-      .collect();
-    if (feeds.length === 0) return;
     const poster = await ctx.db.get(userId);
-    const name = poster?.name ?? poster?.email ?? "Someone";
-    const imageIds = attachments.map((a) => a.storage_id);
-    const line = text
-      ? `**${name}**: ${text}`
-      : `**${name}** attached ${imageIds.length === 1 ? "an image" : `${imageIds.length} images`}.`;
-    for (const feed of feeds) {
-      await ctx.scheduler.runAfter(0, internal.transcripts.deliverToSession, {
-        as_user: feed.added_by,
-        to: String(feed.conversation_id),
-        body: `${huddleChatLineHeader(name)}\n\n${line}`,
-        image_storage_ids: imageIds.length > 0 ? imageIds : undefined,
-      });
-    }
+    await relayLineToFeeds(ctx, live._id, poster?.name ?? poster?.email ?? "Someone", text, attachments.map((a) => a.storage_id));
   },
 });
+
+/** A line typed in a live call's chat reaches the agents fed that call.
+ *  Relayed as the transcript's routes deliver (as the feed's adder, off the
+ *  request path), so a session the poster could not message directly still
+ *  hears its call, and a relay that fails never loses the chat line itself.
+ *  The huddle's own chat (post) and a meeting's chat on another platform
+ *  (meetingBots.applyChatLine) both relay through here. */
+export async function relayLineToFeeds(
+  ctx: any,
+  transcriptId: Id<"transcripts">,
+  name: string,
+  text: string,
+  imageIds: Id<"_storage">[] = [],
+): Promise<void> {
+  const feeds: Doc<"call_agent_feeds">[] = await ctx.db
+    .query("call_agent_feeds")
+    .withIndex("by_transcript", (q: any) => q.eq("transcript_id", transcriptId))
+    .collect();
+  if (feeds.length === 0) return;
+  const line = text
+    ? `**${name}**: ${text}`
+    : `**${name}** attached ${imageIds.length === 1 ? "an image" : `${imageIds.length} images`}.`;
+  for (const feed of feeds) {
+    await ctx.scheduler.runAfter(0, internal.transcripts.deliverToSession, {
+      as_user: feed.added_by,
+      to: String(feed.conversation_id),
+      body: `${huddleChatLineHeader(name)}\n\n${line}`,
+      image_storage_ids: imageIds.length > 0 ? imageIds : undefined,
+    });
+  }
+}
 
 export async function liveTranscriptFor(ctx: any, roomKey: string): Promise<Doc<"transcripts"> | null> {
   const rows: Doc<"transcripts">[] = await ctx.db
@@ -444,6 +460,14 @@ export const mirrorAgentTurn = internalMutation({
     }
     await ctx.db.patch(feed._id, { last_mirrored_message_id: replies[replies.length - 1]._id });
     if (posted.length === 0) return { mirrored: false, reason: "passed" };
+    // A meeting on another platform has its own chat, where its people
+    // actually are: the bot says the reply there too (meetingBots.sayInMeeting).
+    if (isMeetRoomKey(feed.room_key)) {
+      await ctx.scheduler.runAfter(0, internal.meetingBots.sayInMeeting, {
+        transcript_id: feed.transcript_id,
+        texts: posted.map((m) => agentLineText(m)),
+      });
+    }
     // Its voice says only what answers someone who asked (callFace.ts tell):
     // while an ask is open, every reply to a turn someone asked for. A first
     // "on it" line and the worker result that follows both count.

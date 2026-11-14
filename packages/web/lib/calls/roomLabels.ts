@@ -109,6 +109,12 @@ export function describeRoom(
     return { label: "Recording", otherIds: [] };
   }
 
+  // A meeting on another platform a bot attended: the same fallback, named
+  // for what it is.
+  if (parsed.kind === "meet") {
+    return { label: "Meeting", otherIds: [] };
+  }
+
   // session
   const conv =
     s.conversations?.[parsed.conversationId] ??

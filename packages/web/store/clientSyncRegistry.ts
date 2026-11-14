@@ -438,6 +438,16 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, deepFields: ["doc", "versions", "proposals", "usage", "sources", "routine", "project"] },
     feeds: ["expectations.forProject"],
   },
+  // A project's outputs (ct-94262): projectOutputs.get's pull requests, pages,
+  // docs and images, one row per project viewed, keyed by the project's Convex
+  // id. Delta: each project page feeds its own row. Everything on the row is
+  // a nested list, compared by content.
+  projectOutputs: {
+    persistence: { kind: "collection", key: "projectOutputs" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["project", "prs", "pages", "docs", "images"] },
+    feeds: ["projectOutputs.get"],
+  },
   // Every project's expectations in a workspace, one summary row each
   // (expectations.overview): the /expectations page. Snapshot: the query is
   // the workspace's complete set. Rows carry the workspace key.
@@ -705,7 +715,8 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "agentTasks" },
     hydration: { phase: "deferred" },
     localFirst: true,
-    sync: {},
+    // A project's new source paints a stub keyed by its client_key; the server row carrying it supersedes it.
+    sync: { altKey: "client_key" },
     feeds: ["agentTasks.webList"],
   },
   // The roster's blind spot, filled: triggers armed under ANOTHER account (a
@@ -1127,12 +1138,28 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   // The PR page feeds one row into the same collection, so opening a PR paints
   // from whatever the timeline already cached and the single row refreshes it.
+  // pull_requests.sessionCardPRs carries only the fields a chip draws; its
+  // feeder lays them over the cached row (useSyncSessionCardBucket,
+  // lib/cardPullRequestRows). A row only that feed wrote has no body.
   pullRequests: {
     writtenBy: ["prShepherd"],
     persistence: { kind: "collection", key: "pullRequests" },
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
-    feeds: ["pull_requests.getPRsForTimeline", "pull_requests.getPRByNumber", "pull_requests.getPRsForConversation", "pull_requests.webGet"],
+    feeds: ["pull_requests.getPRsForTimeline", "pull_requests.getPRByNumber", "pull_requests.getPRsForConversation", "pull_requests.webGet", "pull_requests.sessionCardPRs"],
+  },
+  // Which sessions link which pull requests, and how strongly ("committed":
+  // the session's own commit is on it; "observed": it sat on the branch): the
+  // server's pull_request_sessions rows, for the sessions the inbox lists and
+  // the one a window has open. Each answer is complete for the sessions it was
+  // asked about, so its feeder prunes absent rows of exactly those sessions.
+  // The cards' chips join these to pullRequests at read time.
+  pullRequestSessions: {
+    persistence: { kind: "collection", key: "pullRequestSessions" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true },
+    indexes: "_id, conversation_id",
+    feeds: ["pull_requests.sessionCardPRs"],
   },
   // Code comments (review_comments): a comment on a file and line in a repo,
   // with or without a PR. Each feed is a window onto the table (one PR's set,
@@ -1347,17 +1374,20 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { altKey: "rule_key" },
     feeds: ["permissionRules.list"],
   },
-  // Messages guests suggested for one of the owner's shared sessions
-  // (guestSuggestions.listPending), the cards above the owner's composer.
-  // localFirst like pendingPermissions: Send or Dismiss removes the row, and
-  // the exclude it plants keeps a racing push from bringing the card back.
+  // Suggestions for a session: what guests and teammates proposed for one of
+  // the owner's sessions (guestSuggestions.listPending, the cards above the
+  // owner's composer), and a teammate's own with what became of each
+  // (teamSuggestions.listMine). localFirst like pendingPermissions: Send,
+  // Dismiss or Withdraw removes the row, and the exclude it plants keeps a
+  // racing push from bringing the card back. A proposed answer paints a stub
+  // keyed by client_key that the server row supersedes.
   guestSuggestions: {
     persistence: { kind: "collection", key: "guestSuggestions" },
     hydration: { phase: "deferred" },
     localFirst: true,
     indexes: "_id, conversation_id",
-    sync: { isDelta: true },
-    feeds: ["guestSuggestions.listPending"],
+    sync: { isDelta: true, altKey: "client_key" },
+    feeds: ["guestSuggestions.listPending", "teamSuggestions.listMine"],
   },
   // Delivery status of the viewer's in-flight message per conversation
   // (getConversationPendingMessage). One row keyed by conversation id;
@@ -1576,6 +1606,45 @@ export const CLIENT_SYNC_REGISTRY = {
     hydration: { phase: "deferred" },
     sync: { isDelta: true },
     feeds: ["transcripts.webListCalls"],
+  },
+  // The meeting bots the viewer sent (meetingBots.listMine, newest first): the
+  // calls page's meeting link field lists the ones still on their way in.
+  // Snapshot: the answer is the viewer's newest bots whole. localFirst: Send
+  // paints a stub keyed by its client_key, which the server row carries back
+  // (altKey), and Remove flips status on the draft (store/meetingBotsSlice.ts).
+  meetingBots: {
+    persistence: { kind: "collection", key: "meetingBots" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    // The server moves these on its own (Recall's webhooks), never waiting on a press.
+    unprotectedFields: ["status_words", "transcript_id", "updated_at"],
+    sync: { altKey: "client_key" },
+    feeds: ["meetingBots.listMine"],
+    writtenBy: ["meetingBots"],
+  },
+  // The viewer's upcoming meetings with links from their connected Google
+  // Calendar (meetingCalendar.listUpcoming, soonest first). Snapshot: the
+  // answer is the whole upcoming window. localFirst: a meeting's switch
+  // (choice) paints on the press; the calendar's own facts move on the sweep.
+  meetingCalendarEvents: {
+    persistence: { kind: "collection", key: "meetingCalendarEvents" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    unprotectedFields: ["title", "starts_at", "ends_at", "meeting_url", "platform", "meet_id", "updated_at"],
+    sync: {},
+    feeds: ["meetingCalendar.listUpcoming"],
+    writtenBy: ["meetingCalendar"],
+  },
+  // The viewer's meeting bot settings as one row (meetingCalendar.getSettings):
+  // whether a calendar is connected, and join-all, which paints on the press.
+  meetingBotSettings: {
+    persistence: { kind: "collection", key: "meetingBotSettings" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    unprotectedFields: ["calendar"],
+    sync: {},
+    feeds: ["meetingCalendar.getSettings"],
+    writtenBy: ["meetingCalendar"],
   },
   callDetails: {
     persistence: { kind: "collection", key: "callDetails" },
@@ -1957,6 +2026,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   sideAnswers: "shared",
   taskEvidence: "shared",
   projectExpectations: "shared",
+  projectOutputs: "shared",
   expectationsOverview: "shared",
   trialCards: "shared",
   trialProjects: "shared",
@@ -2056,6 +2126,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   orgLogRows: "shared",
   commits: "shared",
   pullRequests: "shared",
+  pullRequestSessions: "shared",
   codeComments: "shared",
   quoteDrafts: "shared",
   projectUpdates: "shared",
@@ -2096,6 +2167,9 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   callRecordingCalls: "local",
   callFrameShares: "local",
   callList: "shared",
+  meetingBots: "shared",
+  meetingCalendarEvents: "shared",
+  meetingBotSettings: "shared",
   callDetails: "shared",
   clientState: "shared",
   liveInboxIdList: "shared",

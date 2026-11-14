@@ -7,6 +7,9 @@ crons.interval("recover pending sync delivery", { minutes: 1 }, (internal as any
 
 // Read Expo push receipts, where a revoked APNs key shows (pushReceipts.ts).
 crons.interval("check push receipts", { minutes: 30 }, (internal as any).pushReceipts.sweep, {});
+// Meeting bots from connected calendars: read each a week ahead, schedule
+// the bots people switched on (meetingCalendar.ts).
+crons.interval("meeting bot calendars", { minutes: 10 }, (internal as any).meetingCalendar.syncAll, {});
 
 // The session lifecycle trail keeps 60 days (conversationEvents.ts).
 crons.interval("prune conversation events", { hours: 6 }, (internal as any).conversationEvents.prune, {});

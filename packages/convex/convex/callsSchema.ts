@@ -200,6 +200,11 @@ export const callTables = {
     // as the guest's. On guest_admitted / guest_removed it is the guest the
     // doorkeeper (user_id) let in or put out.
     event_guest_name: v.optional(v.string()),
+    // Said in the meeting's own chat on another platform by someone who is
+    // not on codecast (a meeting bot relays it, meetingBots.applyChatLine):
+    // the name the meeting showed. The row is owned by the bot's sender, as
+    // a line needs a user, and is shown as this person's, never "mine".
+    author_name: v.optional(v.string()),
     // The recording run a record_on / record_off / record_deleted line is
     // about (callRecordingRuns.runIdOf), so the thread can tell which run a
     // delete removed and mark that run's start and stop as gone. Absent on
@@ -242,6 +247,97 @@ export const callTables = {
   })
     .index("by_conversation", ["conversation_id"])
     .index("by_transcript", ["transcript_id"]),
+
+  // A Recall.ai bot sent to a meeting on another platform (meetingBots.ts).
+  // The bot's meeting becomes an ordinary call once it is in and recording:
+  // a transcripts row under room key `meet:<meet_id>`, begun by the server,
+  // owned by the sender. Before that (sent, scheduled, joining, waiting to be
+  // let in) and after a refusal, this row is the whole story, so it carries
+  // the status a person sees and Recall's reason in plain words.
+  meeting_bots: defineTable({
+    meet_id: v.string(),
+    // Who sent it: the owner of the call it becomes. Routing team copied the
+    // way a recording's is (team_id is routing, never access).
+    user_id: v.id("users"),
+    team_id: v.id("teams"),
+    meeting_url: v.string(),
+    platform: v.string(),
+    // Recall's id, set once its create answers.
+    bot_id: v.optional(v.string()),
+    status: v.union(
+      v.literal("requested"),
+      v.literal("scheduled"),
+      v.literal("joining"),
+      v.literal("waiting_room"),
+      v.literal("in_call"),
+      v.literal("recording"),
+      v.literal("ended"),
+      v.literal("failed"),
+      v.literal("cancelled"),
+    ),
+    // Why it ended or failed, in words (lib/recall.recallSubCodeWords).
+    status_words: v.optional(v.string()),
+    // When the bot should join; absent means now.
+    join_at: v.optional(v.number()),
+    // A session to feed the meeting's words to live, as a huddle's own
+    // session hears its huddle: the session the bot was sent from.
+    feed_conversation_id: v.optional(v.id("conversations")),
+    transcript_id: v.optional(v.id("transcripts")),
+    // The web's optimistic row for the send, keyed by this; the server row
+    // carries it back so the stub folds into it (store sendMeetingBot).
+    client_key: v.optional(v.string()),
+    // Create attempts so far; a 507 (no warm bot free) or 5xx is asked again.
+    attempts: v.optional(v.number()),
+    // The meeting's video, copied from Recall into the recordings bucket once
+    // the bot is done (meetingBots.saveVideo) and filed as the call's
+    // call_recordings row: "saving" while it copies, then "saved", "none"
+    // (Recall made no video) or "failed". Absent until the bot is done.
+    video_status: v.optional(v.union(v.literal("saving"), v.literal("saved"), v.literal("none"), v.literal("failed"))),
+    video_attempts: v.optional(v.number()),
+    // A bot the calendar scheduled (meetingCalendar.ts): the event it joins,
+    // as meeting_calendar_events.event_id. Absent on a bot sent by hand.
+    calendar_event_id: v.optional(v.string()),
+    // Teammates who turned on the same meeting in their own calendar: one
+    // bot attends for all of them, and each can read its call (their ids go
+    // onto the call's recorded_people when it begins).
+    also_for: v.optional(v.array(v.id("users"))),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_meet_id", ["meet_id"])
+    .index("by_bot_id", ["bot_id"])
+    .index("by_user_created", ["user_id", "created_at"])
+    // A teammate's calendar asking for a meeting another bot already attends.
+    .index("by_url", ["meeting_url"]),
+
+  // A person's upcoming meetings from their connected Google Calendar that a
+  // bot could join (meetingCalendar.ts): only events with a link to a
+  // platform bots support, refreshed by the sweep. `choice` is the person's
+  // own switch for this meeting; absent follows their join-all setting
+  // (meeting_bot_prefs), which is off unless they turn it on. `meet_id` is
+  // the bot attending it, once one is scheduled (24 hours ahead).
+  meeting_calendar_events: defineTable({
+    user_id: v.id("users"),
+    event_id: v.string(),
+    title: v.string(),
+    starts_at: v.number(),
+    ends_at: v.number(),
+    meeting_url: v.string(),
+    platform: v.string(),
+    choice: v.optional(v.union(v.literal("on"), v.literal("off"))),
+    meet_id: v.optional(v.string()),
+    updated_at: v.number(),
+  })
+    .index("by_user_starts", ["user_id", "starts_at"])
+    .index("by_user_event", ["user_id", "event_id"]),
+
+  // A person's meeting bot settings. `join_all`: a bot joins every meeting
+  // with a link on their calendar unless they switched that one off.
+  meeting_bot_prefs: defineTable({
+    user_id: v.id("users"),
+    join_all: v.boolean(),
+    updated_at: v.number(),
+  }).index("by_user", ["user_id"]),
 
   // Every session a call's words reached, kept for good: the way from a call
   // to its agents and from an agent back to its call. call_agent_feeds dies

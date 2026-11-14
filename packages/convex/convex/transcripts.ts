@@ -35,6 +35,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import {
   authorizeRoom,
   authorizeRoomNoGrant,
+  canReadRoomlessCall,
   isRoomTranscribeOff,
   liveMembers,
   readRoomState,
@@ -63,7 +64,9 @@ import {
   formatHuddleSummaryTag,
   formatTranscriptChunk as formatChunk,
   guestIdFromIdentity,
+  isMeetRoomKey,
   isRecRoomKey,
+  isRoomlessKey,
   isRecordingActive,
   lineSaidAt,
   liveFeedChunkHeader,
@@ -486,7 +489,7 @@ export async function beginCallRecord(
     await postEvent(ctx, { room_key: args.roomKey, team_id: args.teamId, user_id: args.userId, event: "transcribe_on" });
   }
   // What was typed in the room since this huddle began is this huddle's.
-  if (!isRecRoomKey(args.roomKey)) {
+  if (!isRoomlessKey(args.roomKey)) {
     const seats = liveMembers(
       await ctx.db
         .query("call_members")
@@ -580,7 +583,7 @@ export const addRoute = mutation({
     // owner and nothing else. Checked against THIS row rather than the room:
     // a rec key is a uuid, and the room's answer could be some later
     // transcript that reused it.
-    if (isRecRoomKey(t.room_key) && String(t.started_by) !== String(userId)) {
+    if (isRoomlessKey(t.room_key) && String(t.started_by) !== String(userId)) {
       throw new Error("Transcript not found");
     }
     if (t.status !== "live") throw new Error("Transcript has ended");
@@ -644,7 +647,7 @@ export const removeRoute = mutation({
     const isAdder = route.added_by && String(route.added_by) === String(userId);
     const inRoom =
       t.status === "live" &&
-      !isRecRoomKey(t.room_key) &&
+      !isRoomlessKey(t.room_key) &&
       (await authorizeRoom(ctx, userId, t.room_key)).ok;
     if (!isScribe && !isAdder && !inRoom) throw new Error("Not your route");
     await dropRoute(ctx, t, args.kind, args.target);
@@ -1078,7 +1081,7 @@ export async function endTranscript(
   // The huddle is over, so is its video. Usually already stopped when the
   // room emptied (calls.leaveRoom); this covers the record the orphan sweep
   // or a later join ends.
-  if (!isRecRoomKey(t.room_key)) await stopRoomRecording(ctx, t.room_key, { reason: "huddle_ended", transcriptId: t._id });
+  if (!isRoomlessKey(t.room_key)) await stopRoomRecording(ctx, t.room_key, { reason: "huddle_ended", transcriptId: t._id });
   await ctx.db.patch(t._id, {
     status: "ended",
     ended_at: Math.max(t.started_at, endedAt),
@@ -1195,6 +1198,16 @@ export const sweepOrphanedLive = internalMutation({
         ended++;
         continue;
       }
+      // A meeting bot's call has no seats either. Recall ends it (bot
+      // call_ended, meetingBots.ts); this is the backstop for a status
+      // webhook that never came. Every Recall event beats the lease, and a
+      // meeting can sit silent for long stretches, so the window is long.
+      if (isMeetRoomKey(t.room_key)) {
+        if (now - (t.last_beat ?? t.started_at) < MEET_LEASE_MS) continue;
+        await endTranscript(ctx, t, t.last_beat ?? t.started_at);
+        ended++;
+        continue;
+      }
       const seated = await ctx.db
         .query("call_members")
         .withIndex("by_room", (q) => q.eq("room_key", t.room_key))
@@ -1222,6 +1235,12 @@ export const sweepOrphanedLive = internalMutation({
 // and the summary/action items generate within seconds of stop.
 
 // Below this many words there is nothing worth summarizing.
+/** How long a meeting bot's call stays live with no word from Recall at all
+ *  (no status change, no transcript line). Recall's own silence detection
+ *  takes the bot out after an hour of quiet, so two hours of nothing means
+ *  the call-ended webhook was lost. */
+export const MEET_LEASE_MS = 2 * 60 * 60_000;
+
 export const SUMMARY_MIN_WORDS = 40;
 // Transcript text sent to the model is capped; long calls get the tail
 // (decisions and action items live at the end far more often than the start).
@@ -1375,16 +1394,16 @@ export const setSummary = internalMutation({
     // the action items land minutes later with nothing on screen to see them
     // on. A huddle is the opposite — everyone was just in it — so it does not
     // push, and nobody but the recording's creator can read it anyway.
-    if (args.summary_status !== "done" || !isRecRoomKey(t.room_key)) return;
+    if (args.summary_status !== "done" || !isRoomlessKey(t.room_key)) return;
     const owner = await ctx.db.get(t.started_by);
     if (!owner) return;
     await enqueuePush(ctx, {
       user: owner,
       type: RECORDING_SUMMARY_PUSH_TYPE,
-      title: args.title || "Recording ready",
+      title: args.title || (isMeetRoomKey(t.room_key) ? "Meeting notes ready" : "Recording ready"),
       body: args.summary
         ? args.summary.slice(0, 200)
-        : "Your recording has been transcribed.",
+        : isMeetRoomKey(t.room_key) ? "Your meeting has been transcribed." : "Your recording has been transcribed.",
       data: { type: RECORDING_SUMMARY_PUSH_TYPE, recordingId: String(t._id) },
     });
   },
@@ -1803,14 +1822,9 @@ export async function canReadCall(
   // them has not published anything to anybody. `rec_shared` is the creator
   // having said otherwise: the recording was triaged into its team, and
   // teammates read it under the ordinary team door, feature gate included.
-  if (isRecRoomKey(t.room_key)) {
-    if (String(t.started_by) === String(userId)) return true;
-    return (
-      !!t.rec_shared &&
-      (await isTeamMember(ctx, userId, t.team_id)) &&
-      (await teamHasFeature(ctx, t.team_id, "calls"))
-    );
-  }
+  // A MEETING BOT'S CALL is its sender's the same way, plus a participant
+  // door for a teammate the bot heard speak (callRooms.canReadRoomlessCall).
+  if (isRoomlessKey(t.room_key)) return await canReadRoomlessCall(ctx, userId, t);
   // The people in it: whoever spoke, whoever scribed it (started_by), and
   // whoever a recording of it showed
   // (recorded_people: seated while it was filmed, the presser included,
@@ -1935,7 +1949,7 @@ async function listCallsCore(ctx: any, userId: Id<"users">, limit: number) {
         .query("transcripts")
         .withIndex("by_creator_started", (q: any) => q.eq("started_by", userId))
         .order("desc"),
-      (t) => isRecRoomKey(t.room_key),
+      (t) => isRoomlessKey(t.room_key),
     )),
   );
   rows.sort((a, b) => b.started_at - a.started_at);
@@ -1957,7 +1971,7 @@ async function listCallsCore(ctx: any, userId: Id<"users">, limit: number) {
  *  it out, unless it was filmed (the video is content). A recording is
  *  never silent here: its words can arrive after it ends. */
 async function isSilentHuddle(ctx: any, t: Doc<"transcripts">): Promise<boolean> {
-  if (t.status === "live" || isRecRoomKey(t.room_key) || t.last_seq > 0) return false;
+  if (t.status === "live" || isRoomlessKey(t.room_key) || t.last_seq > 0) return false;
   // A huddle that was filmed and never transcribed is still a call: its
   // video is the content. The same rule the Video glyph reads.
   if (callFilmed(t)) return false;
@@ -2330,7 +2344,7 @@ export const setRecordingScope = mutation({
     const t = await ctx.db.get(args.transcript_id);
     // One error for "no row", "not a recording", and "not yours": naming
     // which of the three failed would confirm the row exists.
-    if (!t || !isRecRoomKey(t.room_key) || String(t.started_by) !== String(userId)) {
+    if (!t || !isRoomlessKey(t.room_key) || String(t.started_by) !== String(userId)) {
       throw new Error("Recording not found");
     }
     if (!args.team_id) {

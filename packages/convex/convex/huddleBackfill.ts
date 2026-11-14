@@ -20,7 +20,7 @@ import { internal } from "./_generated/api";
 import type { Doc } from "./_generated/dataModel";
 import { HUDDLE_GRACE_MS } from "./transcripts";
 import { retireCallDigest } from "./chat";
-import { isRecRoomKey } from "@codecast/shared/contracts";
+import { isRoomlessKey } from "@codecast/shared/contracts";
 
 const OFF_GAP_MS = 15 * 60_000;
 
@@ -32,7 +32,7 @@ export const rooms = internalQuery({
   handler: async (ctx) => {
     const keys = new Set<string>();
     for await (const t of ctx.db.query("transcripts")) {
-      if (!isRecRoomKey(t.room_key)) keys.add(t.room_key);
+      if (!isRoomlessKey(t.room_key)) keys.add(t.room_key);
     }
     return [...keys];
   },
@@ -42,7 +42,7 @@ export const run = internalMutation({
   args: { room_key: v.string(), dryRun: v.optional(v.boolean()) },
   handler: async (ctx, args) => {
     const dryRun = args.dryRun ?? true;
-    if (isRecRoomKey(args.room_key)) return { groups: [], stamped: 0 };
+    if (isRoomlessKey(args.room_key)) return { groups: [], stamped: 0 };
     const records = (
       await ctx.db
         .query("transcripts")

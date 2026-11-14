@@ -124,6 +124,8 @@ const CALLER_REPORTED_ACTIONS = new Set([
   "admitGuestKnock",
   "denyGuestKnock",
   "removeCallGuest",
+  // The meeting link field takes its stub back, puts the link back and says the server's words (calls MeetingBotField).
+  "sendMeetingBot",
   // Live artifact writes: the live layer puts the rows back and says "Not saved: <why>" once per write.
   "applyLiveOps",
   "liveSendOps",

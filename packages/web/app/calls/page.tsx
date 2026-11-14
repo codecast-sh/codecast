@@ -31,7 +31,7 @@ import { useCallDetail, useCallList, useCallPlaces } from "../../hooks/useSyncCa
 import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { toast } from "sonner";
-import { CALL_LINK_REFUSED_WORDS, callAnchorHref, callPathRef, callViewParam, humanizeConvexError, isRecRoomKey, lineFrameMs, lineSeekMs, parseCallAnchor, parseCallMomentParam, parseCallShareParam, parseCallViewParam, type CallView } from "@codecast/shared/contracts";
+import { CALL_LINK_REFUSED_WORDS, callAnchorHref, callPathRef, callViewParam, humanizeConvexError, isMeetRoomKey, isRecRoomKey, isRoomlessKey, lineFrameMs, lineSeekMs, parseCallAnchor, parseCallMomentParam, parseCallShareParam, parseCallViewParam, type CallView } from "@codecast/shared/contracts";
 import { callRefId } from "@codecast/shared/entities";
 import { joinCall } from "../../lib/calls/callManager";
 import { callTitle, type CallPlace } from "../../lib/calls/roomLabels";
@@ -60,6 +60,8 @@ import {
 } from "../../lib/calls/callVideo";
 import { deleteRecordingRun, toVideoFile, useCallRecordings, useRoomRecordingOn } from "../../hooks/useRoomRecording";
 import { LiveNowSection, RecordMeetingButton, SeatedHuddleRecord } from "../../components/calls/CallsPageAside";
+import { MeetingBotField } from "../../components/calls/MeetingBotField";
+import { MeetingCalendarList } from "../../components/calls/MeetingCalendarList";
 import {
   CallVideoNoticeLine,
   CallVideoPlaceholder,
@@ -94,6 +96,7 @@ import {
 } from "../../components/ui/dropdown-menu";
 import {
   ArrowDownToLine,
+  Bot,
   Check,
   ChevronLeft,
   Copy,
@@ -133,7 +136,7 @@ const NO_CALLS: any[] = [];
 function RecordingScopeChip({ call }: { call: any }) {
   const me = useMyUserId();
   const teams = useInboxStore((s) => s.teams);
-  if (!isRecRoomKey(call.room_key) || !me || call.started_by !== me) return null;
+  if (!isRoomlessKey(call.room_key) || !me || call.started_by !== me) return null;
   if (!call.rec_shared) {
     return (
       <span className="flex shrink-0 items-center gap-1 text-meta text-sol-text-dim">
@@ -156,6 +159,8 @@ function CallListRow({ call, selected, place, below }: { call: any; selected: bo
   // microphone rather than a telephone, because one voice in a room is not
   // the same thing as a huddle.
   const recording = isRecRoomKey(call.room_key);
+  // A meeting on another platform our bot sat in wears the bot.
+  const meeting = isMeetRoomKey(call.room_key);
   // A huddle somebody filmed wears a camera where the others wear a phone
   // (`filmed` comes off the record, so the list reads no recordings), and
   // one being filmed right now says REC by its clock, from the room's flag
@@ -164,7 +169,7 @@ function CallListRow({ call, selected, place, below }: { call: any; selected: bo
   const filmingNow = useRoomRecordingOn(live && !recording ? call.room_key : null);
   const people: any[] = call.participants || [];
   // Nobody spoke and nothing was filmed: only typed lines keep it listed.
-  const silent = !recording && !live && !filmed && people.length === 0;
+  const silent = !recording && !meeting && !live && !filmed && people.length === 0;
   // A string out of the selector, so the row re-renders only when the name
   // itself changes, not on every write to the collections it reads.
   const title = useInboxStore((s) =>
@@ -189,6 +194,10 @@ function CallListRow({ call, selected, place, below }: { call: any; selected: bo
           </span>
         ) : recording ? (
           <Mic className="h-3 w-3 shrink-0 text-sol-text-dim" />
+        ) : meeting ? (
+          <span className="flex shrink-0" title="Meeting a bot attended" aria-label="Meeting a bot attended" role="img">
+            <Bot className="h-3 w-3 text-sol-text-dim" aria-hidden="true" />
+          </span>
         ) : filmed ? (
           <span className="flex shrink-0" title="Has video" aria-label="Has video" role="img">
             <Video className="h-3 w-3 text-sol-text-muted" aria-hidden="true" />
@@ -260,7 +269,7 @@ function RecordingScopePicker({ call }: { call: any }) {
   const me = useMyUserId();
   const teams = useInboxStore((s) => s.teams);
   const setScope = useMutation(api.transcripts.setRecordingScope);
-  if (!isRecRoomKey(call.room_key) || !me || call.started_by !== me) return null;
+  if (!isRoomlessKey(call.room_key) || !me || call.started_by !== me) return null;
 
   // A just-created team carries an optimistic stub id until the server row
   // lands; sharing against it would 404 — same rule as TeamSwitcher's invite.
@@ -366,6 +375,11 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
   // A recording has no room: nobody can join it, nobody else can see it, and
   // the room chat those affordances open would have no second person in it.
   const recording = isRecRoomKey(call?.room_key);
+  // No room behind it at all (a recording, or a meeting a bot attended on
+  // another platform): nobody to join. A meeting still has a chat (its own,
+  // relayed by the bot, and its agents' replies) and a video (the bot's, once
+  // copied); a recording has neither.
+  const roomless = isRoomlessKey(call?.room_key);
   const sendExcerpt = useSendExcerpt();
   const isLive = call?.status === "live";
   // This huddle's thread: what was typed and what the agents answered. Read
@@ -772,8 +786,8 @@ function CallDetail({ id, preview, lead }: { id: string; preview?: any; lead?: R
             }
           />
   );
-  const guestRoom = live && !recording ? call.room_key : null;
-  const onJoin = live && !recording && !inThisRoom ? () => void joinCall(call.room_key, { intent: "deliberate" }) : null;
+  const guestRoom = live && !roomless ? call.room_key : null;
+  const onJoin = live && !roomless && !inThisRoom ? () => void joinCall(call.room_key, { intent: "deliberate" }) : null;
   const onSend = turns.length > 0 ? () => openFeedTargetPicker({ title: "Send the whole call to…", gesture: "send", withNote: true, onPick: onPick("all") }) : null;
 
   return (
@@ -1098,7 +1112,7 @@ export default function CallsPage() {
   const hideList = selectedId ? () => setListOpen(false) : undefined;
   // What a voice note is and who sees it is on the button's title and the
   // row's privacy chip, not in a paragraph here.
-  const records = <><SeatedHuddleRecord /><RecordMeetingButton /></>;
+  const records = <><SeatedHuddleRecord /><RecordMeetingButton />{callsOn && <><MeetingBotField /><MeetingCalendarList /></>}</>;
   // Huddles off: a state with its way to act, Settings › Team.
   const huddlesOff = !callsOn && (
     <button

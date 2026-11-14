@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { callDisplayTitle, callLength } from "./callRoomKeys";
+import { callDisplayTitle, callLength, isMeetRoomKey, isRecRoomKey, isRoomlessKey, meetRoomKey, parseRoomKey } from "./callRoomKeys";
 
 describe("callDisplayTitle", () => {
   test("a call's own title wins over every place name", () => {
@@ -36,6 +36,15 @@ describe("callDisplayTitle", () => {
     expect(callDisplayTitle({ room_key: "rec:1fad0bfc-1234", participants: people })).toBe("Untitled voice note");
   });
 
+  test("a meeting bot's call is named after the people it heard", () => {
+    const people = [
+      { id: "me", name: "Ann Lee" },
+      { id: "recall:b1:2", name: "Cam Ortiz" },
+    ];
+    expect(callDisplayTitle({ room_key: "meet:1fad0bfc-1234", participants: people }, { viewerId: "me" })).toBe("Meeting with Cam");
+    expect(callDisplayTitle({ room_key: "meet:1fad0bfc-1234" })).toBe("Untitled meeting");
+  });
+
   test("a place name of the wrong kind is ignored", () => {
     expect(callDisplayTitle({ room_key: "dm:a:b" }, { sessionTitle: "Fix auth" })).toBe("Untitled huddle");
   });
@@ -51,5 +60,23 @@ describe("callLength", () => {
     expect(callLength(0, 74 * 60_000)).toBe("1h 14m");
     expect(callLength(0, 120 * 60_000)).toBe("2h");
     expect(callLength(0, null)).toBe("live");
+  });
+});
+
+describe("meet room keys", () => {
+  test("a meeting key parses, and is roomless without being a recording", () => {
+    const key = meetRoomKey("1fad0bfc-1234");
+    expect(parseRoomKey(key)).toEqual({ kind: "meet", meetId: "1fad0bfc-1234" });
+    expect(isMeetRoomKey(key)).toBe(true);
+    expect(isRoomlessKey(key)).toBe(true);
+    expect(isRecRoomKey(key)).toBe(false);
+    expect(isRoomlessKey("rec:1fad0bfc-1234")).toBe(true);
+    expect(isRoomlessKey("session:abc")).toBe(false);
+  });
+
+  test("a meeting key cannot smuggle separators or length", () => {
+    expect(parseRoomKey("meet:a:b")).toBeNull();
+    expect(parseRoomKey("meet:short")).toBeNull();
+    expect(parseRoomKey(`meet:${"a".repeat(65)}`)).toBeNull();
   });
 });

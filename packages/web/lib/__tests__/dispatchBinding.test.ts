@@ -29,10 +29,11 @@ describe("dispatch binding", () => {
       return { __syncAckV1: ack, result: { ok: 1 } };
     });
     try {
-      const res = await dispatch("pinSession", [ID], patches, undefined);
+      const res = await dispatch("pinSession", [ID], patches, undefined, undefined, { locks: [{ key: `sessions:${ID}:is_pinned`, lock: "L1" }] });
       expect(res).toEqual({ ok: 1 });
       expect(calls).toEqual([{ action: "pinSession", args: [ID], patches, result: undefined, ack_positions: true }]);
-      expect(stamps).toEqual([[patches, ack, 1_700_000_000_000]]);
+      // The ack is stamped on the send's own locks only (by lock id).
+      expect(stamps).toEqual([[patches, ack, 1_700_000_000_000, { lockIds: new Set(["L1"]) }]]);
     } finally {
       now.mockRestore();
     }

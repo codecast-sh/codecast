@@ -270,6 +270,9 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   orgTemplateInstances: "Written only by answerOrgTemplateInput, a hire answer that queues the host step on the role's machine; changed back on the same row, never undoable.",
   lineTries: "Written only by tryLineStep, which has the graph's machine run each case at once; never undoable.",
   liveFlows: "Written only by setLiveFlowOn and clearLiveFlowHold, which start or stop runs, moveLiveFlow, which picks the graph new runs take, and startLiveFlow, a create; never undoable.",
+  meetingCalendarEvents: "Written only by setCalendarMeetingChoice, the viewer's switch on one meeting, which schedules or takes back a paid bot; changed back with the same switch, never undoable.",
+  meetingBotSettings: "Written only by setMeetingBotJoinAll, a setting that schedules or takes back paid bots; changed back with the same switch, never undoable.",
+  meetingBots: "Written only by sendMeetingBot, a create that sends a paid bot to a meeting, cancelMeetingBot, which takes the bot out of the meeting, and discardMeetingBotStub, which takes back a refused send; never undoable.",
   sessionFlows: "Written only by saveSessionFlow, which writes a new library version; never undoable.",
   liveElements:
     "Written only by applyLiveOps and liveDraft, neither undoable here: a board, sheet or dashboard takes an edit back through its own undo stack of inverse ops, which it writes as ordinary applyLiveOps.",
@@ -301,7 +304,7 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
     "Written only by setSessionGoal, pauseSessionGoal, resumeSessionGoal and clearSessionGoal, which steer an agent working toward the goal; machine control, never undoable.",
   pendingPermissions: "Written only by resolvePermission, an answer the agent acts on at once; never undoable.",
   guestSuggestions:
-    "Written only by sendGuestSuggestion, a send, and dismissGuestSuggestion, an answer the guest sees at once; never undoable.",
+    "Written only by sendGuestSuggestion, a send, dismissGuestSuggestion, an answer the author sees at once, withdrawTeamSuggestion and sendTeamSuggestionNow, and proposeAnswer/proposePermission, proposals the owner sees at once; never undoable.",
   accountPool: "Written only by setAccountShares and setAccountDevices, settings changed back in the same control; never undoable.",
   workflowRuns: "Written only by respondToGate, a gate answer that resumes the run; never undoable.",
   currentUser: "Profile and preference settings; never undoable, and the undo binding ignores the key.",
