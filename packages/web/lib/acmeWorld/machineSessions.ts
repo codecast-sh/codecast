@@ -531,10 +531,11 @@ function installScenes() {
         runDaemonSetup: async () => ({ ok: true }),
       };
     },
-    /** Maya's cloud session as an inbox card. */
-    cloudCard() {
-      const row = MACHINE_SESSION_ROWS(Date.now()).find((r) => r._id === MS.cloud._id)!;
-      st().syncRecord("sessions", row._id, row);
+    /** One of these sessions as an inbox row: the conversation pane draws a
+     *  transcript only for a session the inbox holds. */
+    open(id: string) {
+      const row = MACHINE_SESSION_ROWS(Date.now()).find((r) => r._id === id);
+      if (row) st().syncRecord("sessions", row._id, row);
     },
   };
 }
