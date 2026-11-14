@@ -1,5 +1,6 @@
-// The screenshots taken in the last day, as one-tap attachments under the new
-// session sheet's composer: a screenshot is usually why a session starts.
+// The screenshots taken in the last day, under the new session sheet's
+// composer: a screenshot is usually why a session starts. A tap on one opens
+// it full screen; its + badge attaches it.
 //
 // Reads the library only when the person has already granted access (the
 // attach button asks for it); opening the sheet never prompts. A binary built
@@ -10,6 +11,7 @@ import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
 import { themedStyles } from '@/constants/Theme';
 import { optionalNative } from '@/lib/optionalNative';
+import { ImageGallery } from '@/components/ImageGallery';
 
 const MediaLibrary: typeof import('expo-media-library') | null = optionalNative(
   'ExpoMediaLibrary',
@@ -20,6 +22,8 @@ const WINDOW_MS = 24 * 60 * 60 * 1000;
 const MAX_SHOTS = 8;
 
 type Shot = { id: string; uri: string; mime: string };
+
+const shotSrc = (shot: Shot) => shot.uri;
 
 async function loadRecentScreenshots(): Promise<Shot[]> {
   // The screenshot subtype is an iOS Photos notion.
@@ -56,28 +60,48 @@ export function RecentScreenshots({ attachedUris, onAttach }: {
     return () => { live = false; };
   }, []);
 
+  const [viewing, setViewing] = useState<number | null>(null);
+
   const offered = shots.filter((s) => !attachedUris.includes(s.uri));
   if (offered.length === 0) return null;
+  const attach = (shot: Shot) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    onAttach(shot);
+  };
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={styles.row} contentContainerStyle={styles.rowContent}>
-      {offered.map((shot) => (
-        <TouchableOpacity
-          key={shot.id}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-          accessibilityLabel="Attach screenshot"
-          onPress={() => {
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-            onAttach(shot);
-          }}
-        >
-          <Image source={{ uri: shot.uri }} style={styles.thumb} />
-          <RNView style={styles.badge}>
-            <Feather name="plus" size={11} color="#fff" />
+    <>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled" style={styles.row} contentContainerStyle={styles.rowContent}>
+        {offered.map((shot, index) => (
+          <RNView key={shot.id}>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              accessibilityRole="imagebutton"
+              accessibilityLabel="View screenshot"
+              onPress={() => setViewing(index)}
+            >
+              <Image source={{ uri: shot.uri }} style={styles.thumb} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.badge}
+              hitSlop={8}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Attach screenshot"
+              onPress={() => attach(shot)}
+            >
+              <Feather name="plus" size={13} color="#fff" />
+            </TouchableOpacity>
           </RNView>
-        </TouchableOpacity>
-      ))}
-    </ScrollView>
+        ))}
+      </ScrollView>
+      <ImageGallery
+        items={offered}
+        useSrc={shotSrc}
+        initialIndex={viewing ?? 0}
+        visible={viewing !== null}
+        onClose={() => setViewing(null)}
+      />
+    </>
   );
 }
 
@@ -91,8 +115,8 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     paddingRight: 8,
   },
   thumb: {
-    width: 44,
-    height: 80,
+    width: 56,
+    height: 100,
     borderRadius: 6,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.borderLight,
@@ -100,11 +124,11 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   badge: {
     position: 'absolute',
-    right: 3,
-    bottom: 3,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
+    right: 4,
+    bottom: 4,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(0,0,0,0.6)',

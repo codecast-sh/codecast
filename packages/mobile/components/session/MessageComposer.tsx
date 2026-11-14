@@ -16,6 +16,7 @@ import { MOBILE_SESSION_STYLE as S } from '@codecast/shared/render/mobileSession
 import { mixColor } from '@/lib/solColor';
 import { GestureHandlerRootView, NativePressable } from '@/lib/gestureHandler';
 import { PulsingDot } from '@/components/SessionItem';
+import { ImageGallery } from '@/components/ImageGallery';
 import { useInboxStore, type OptimisticImage } from '@codecast/web/store/inboxStore';
 import { awaitUpload, releaseUpload } from '@codecast/web/lib/pendingUploads';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
@@ -123,6 +124,8 @@ export function useComposerImages(setMessage: (update: (text: string) => string)
 
 export type ComposerStatus = { color: string; dot?: string; label: string };
 
+const composerImageSrc = (img: ComposerImage) => img.uri;
+
 export function MessageComposer({
   field, images, placeholder, canSend, onSend, stop, status, attach = true,
   error, onDismissError, suggestion, above, cardStyle, inputStyle,
@@ -163,6 +166,8 @@ export function MessageComposer({
   // The suggestion owns the empty box: its text is the placeholder, so it
   // wraps and grows the box like typed words, and typing replaces it.
   const ghost = !message && !showStop ? suggestion ?? null : null;
+  // The picked image open full screen, by its place in the strip.
+  const [viewing, setViewing] = useState<number | null>(null);
 
   // Shared between the inline card and the fullscreen editor so both modes show
   // the same attachments/errors and drive the same send.
@@ -181,7 +186,9 @@ export function MessageComposer({
     <ScrollView horizontal style={styles.imagePreviewContainer} showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always">
       {images.selectedImages.map((img, index) => (
         <RNView key={index} style={styles.imagePreview}>
-          <Image source={{ uri: img.uri }} style={styles.previewImage} />
+          <TouchableOpacity activeOpacity={0.8} onPress={() => setViewing(index)} accessibilityRole="imagebutton" accessibilityLabel="View image">
+            <Image source={{ uri: img.uri }} style={styles.previewImage} />
+          </TouchableOpacity>
           {img.uploading && (
             <RNView style={styles.imageUploadingOverlay}>
               <ActivityIndicator size="small" color="#fff" />
@@ -201,6 +208,18 @@ export function MessageComposer({
       ))}
     </ScrollView>
   ) : null;
+
+  // iOS presents a modal only from the frontmost one, so the gallery opens
+  // from whichever of the inline card and the fullscreen editor is showing.
+  const galleryEl = (inEditor: boolean) => (
+    <ImageGallery
+      items={images.selectedImages}
+      useSrc={composerImageSrc}
+      initialIndex={viewing ?? 0}
+      visible={viewing !== null && expanded === inEditor && images.selectedImages.length > 0}
+      onClose={() => setViewing(null)}
+    />
+  );
 
   const actionsRowEl = (
     <RNView style={styles.composerActions}>
@@ -261,6 +280,7 @@ export function MessageComposer({
     <>
       {errorBannerEl}
       {imageStripEl}
+      {galleryEl(false)}
       {above}
       <RNView style={[styles.composerCard, cardStyle]}>
         <TextInput
@@ -321,6 +341,7 @@ export function MessageComposer({
             </RNView>
             {errorBannerEl}
             {imageStripEl}
+            {galleryEl(true)}
             <TextInput
               key={epoch}
               style={styles.expandedInput}
