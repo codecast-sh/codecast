@@ -50,7 +50,8 @@ export const messagesSig = makeCollectionSig<ChatMessageRow>(
     // The Slack mark: direction + permalink arrive after the post, on their own
     // patch, so they must wake the row that shows them.
     `|${m.external ? `${m.external.direction}:${m.external.ts}:${m.external.permalink ? 1 : 0}` : ""}` +
-    `|${m.sync_local_only ? 1 : 0}|${m.external_author?.name ?? ""}:${m.external_author?.avatar_url ?? ""}`,
+    `|${m.sync_local_only ? 1 : 0}|${m.external_author?.name ?? ""}:${m.external_author?.avatar_url ?? ""}` +
+    `|${m.bound_session_id ?? ""}`,
 );
 
 /** What the RAIL counts, and nothing else.
