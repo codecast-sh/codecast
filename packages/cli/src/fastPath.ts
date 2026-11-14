@@ -119,6 +119,15 @@ export function runFastPath(argv: string[]): boolean {
       .catch(fail);
     return true;
   }
+  if (argv[2] === "computer") {
+    // An agent runs `cast computer` once per step, so the CLI around the helper
+    // request is paid on every step. Through index.ts that was 1.2 to 1.6 s of
+    // module evaluation plus a token decrypt (an ioreg spawn and a scrypt) for
+    // the per-command server log. computer/entry.ts parses the one group the
+    // way index.ts would, policy guard included, and loads nothing else.
+    import("./computer/entry.js").then(({ runComputerEntry }) => runComputerEntry(argv)).catch(fail);
+    return true;
+  }
   if (argv[2] === "_session-trailer") {
     // Claude Code PreToolUse hook (sessionTrailerHook.ts). Stdout is read as
     // the hook's JSON answer, so nothing else may print: no Commander, no
