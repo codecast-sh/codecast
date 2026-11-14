@@ -50,6 +50,29 @@ describe("withSpendCap — the printed reset marks that account", () => {
     expect(marked[1].usage.blocked_until).toBeUndefined();
     expect(marked[2].usage.blocked_until).toBeUndefined();
   });
+
+  // 2026-11-14: claude2's weekly banner (resets 10:00) blocked mike, whose
+  // week resets at 09:00 and who was running sessions at 32%.
+  test("blocks only the nearest account when weeks reset close together", () => {
+    const nine = Date.UTC(2026, 10, 21, 9);
+    const ten = Date.UTC(2026, 10, 21, 10);
+    const pool = [
+      { name: "mike", usage: { weekly: { resets_at: nine } } },
+      { name: "claude3", usage: { weekly: { resets_at: nine } } },
+      { name: "claude2", usage: { weekly: { resets_at: ten } } },
+    ];
+    const marked = withSpendCap(pool, [ten]);
+    expect(marked.map((p) => p.usage.blocked_until)).toEqual([undefined, undefined, ten]);
+  });
+
+  test("blocks neither account when two weeks reset at the banner's time", () => {
+    const nine = Date.UTC(2026, 10, 21, 9);
+    const pool = [
+      { name: "mike", usage: { weekly: { resets_at: nine } } },
+      { name: "claude3", usage: { weekly: { resets_at: nine } } },
+    ];
+    expect(withSpendCap(pool, [nine]).map((p) => p.usage.blocked_until)).toEqual([undefined, undefined]);
+  });
 });
 
 describe("spendCapsOf — an earlier weekly banner still blocks after a later hop", () => {

@@ -21,8 +21,8 @@ function zonedWallToUtc(y: number, mo: number, d: number, h: number, mi: number,
 /** A spend-limit banner ("You've hit your org's monthly spend limit · … ·
  *  your weekly limit resets Nov 19, 5am (UTC)") names the week whose reset
  *  puts the account back on its plan, which is what lifts the block. That
- *  instant also identifies the account: only one account's week resets then,
- *  and the account a host claims to run can differ from the token the process
+ *  instant also identifies the account (withSpendCap matches it to the
+ *  nearest weekly reset), and the account a host claims to run can differ from the token the process
  *  holds (an inherited CLAUDE_CODE_OAUTH_TOKEN, 2026-11-12). Undefined for any
  *  other banner. */
 export function spendCapUntil(content: string | null | undefined, bannerTs: number): number | undefined {
@@ -56,7 +56,7 @@ export function weeklyLimitUntil(content: string | null | undefined, bannerTs: n
   return resetInstant(month, Number(m[2]), Number(m[3]), Number(m[4] ?? "0"), m[5], m[6], bannerTs);
 }
 
-// The account whose week resets within this of a banner's printed reset is the capped one.
+// A banner's printed reset can sit this far from the meter's resets_at and still name that account.
 const SPEND_CAP_MATCH_MS = 90 * 60_000;
 
 export async function spendCapsOf(ctx: { db: any }, userId: Id<"users">, now: number): Promise<number[]> {
@@ -85,11 +85,26 @@ export async function spendCapsOf(ctx: { db: any }, userId: Id<"users">, now: nu
   return caps;
 }
 
+/** Each banner's reset blocks the one account whose week resets nearest to
+ *  it, within SPEND_CAP_MATCH_MS. Several accounts can reset close together
+ *  (mike and claude3 both at 09:00, claude2 at 10:00), so a looser match would
+ *  block every one of them for one account's banner. When two accounts tie
+ *  for nearest, the banner cannot say which it was and blocks neither: a
+ *  wrong block takes a working account out of the pool, while a missed one
+ *  only lets a session park again. */
 export function withSpendCap<P extends { usage?: any }>(profiles: P[], caps: number[]): P[] {
   if (!caps.length) return profiles;
+  const blocked = new Map<P, number>();
+  for (const cap of caps) {
+    const near = profiles
+      .map((p) => ({ p, d: Math.abs(cap - (p.usage?.weekly?.resets_at ?? Infinity)) }))
+      .filter((x) => x.d <= SPEND_CAP_MATCH_MS);
+    const best = Math.min(...near.map((x) => x.d));
+    const nearest = near.filter((x) => x.d === best);
+    if (nearest.length === 1) blocked.set(nearest[0].p, Math.max(cap, blocked.get(nearest[0].p) ?? 0));
+  }
   return profiles.map((p) => {
-    const reset = p.usage?.weekly?.resets_at;
-    const until = reset != null ? caps.find((c) => Math.abs(c - reset) <= SPEND_CAP_MATCH_MS) : undefined;
+    const until = blocked.get(p);
     return until === undefined ? p : { ...p, usage: { ...p.usage, blocked_until: until } };
   });
 }
