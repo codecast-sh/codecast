@@ -186,3 +186,15 @@
   border: 1px solid color-mix(in srgb, var(--sol-text-dim) 35%, var(--sol-border));
   background: color-mix(in srgb, var(--sol-text-dim) 8%, transparent);
 }
+
+/* The decision page's way through the queue, pinned so it is never a scroll away. */
+.decision-doc { --decision-nav-h: 2.75rem; }
+.decision-doc .decision-nav {
+  position: sticky; top: 0; z-index: 11;
+  height: var(--decision-nav-h);
+  margin: -1.5rem -1rem 0; padding: 0 1rem;
+  background: color-mix(in srgb, var(--sol-bg) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 50%, transparent);
+}
+.decision-doc.decision-doc-nav .cc-verdict-bar { top: var(--decision-nav-h); }
