@@ -28,11 +28,11 @@ import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { verifyApiToken } from "./apiTokens";
 import { findSessionCommandByRequest, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, isTeamMember, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
-import { DAEMON_COMMAND_TTL_MS, repositoryKeyOfRemote } from "@codecast/shared/contracts";
+import { DAEMON_COMMAND_TTL_MS, isUnattendedConversation, repositoryKeyOfRemote } from "@codecast/shared/contracts";
 import { activeTeamMembershipFor, canAccessTask, canAccessDoc, workspaceGrantsAccess } from "./lib/access";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { canReleaseCommandClaim, commandVisibleToClaimer, decideCommandClaim } from "./lib/daemonCommandClaim";
-import { stripMessageTags, isUserMessageNoise, fetchUserSendDays } from "./lib/userSend";
+import { stripMessageTags, isUserMessageNoise, fetchUserSendDays, isProgramLaunched } from "./lib/userSend";
 import { bucketActivityDays, loadUserActivity } from "./lib/profileActivity";
 import { canSeeMemberSpend, fetchUserUsageDays } from "./lib/usageDaily";
 import { bucketPunchcardRows } from "./lib/activityPunchcard";
@@ -3491,13 +3491,19 @@ export async function performGetRecentProjectPaths(
       // picker; the value only drives a sort and a relative age. Invalidation is
       // unchanged.
       const lastActive = bucketTs(conv.updated_at)!;
+      // Only a session the person started counts toward the folder's rank. A
+      // spawned worker, a subagent, a workflow agent or a trigger run counts 0,
+      // so a folder that only agents work in stays listed (behind "other")
+      // without earning a chip: one lead's thirty reviewers outvoted every
+      // repo its person actually opens.
+      const started = isProgramLaunched(conv) || isUnattendedConversation(conv) ? 0 : 1;
       const existing = pathCounts.get(path);
       if (existing) {
-        existing.count++;
+        existing.count += started;
         existing.lastActive = Math.max(existing.lastActive, lastActive);
         existing.repository ??= conversationRepository(conv);
       } else {
-        pathCounts.set(path, { count: 1, lastActive, repository: conversationRepository(conv) });
+        pathCounts.set(path, { count: started, lastActive, repository: conversationRepository(conv) });
       }
     }
 
@@ -3530,7 +3536,7 @@ export async function performGetRecentProjectPaths(
           0.65 * (stats.count / maxCount) +
           0.35 * ((stats.lastActive - windowStart) / ageRange),
       }))
-      .sort((a, b) => b.score - a.score)
+      .sort((a, b) => Number(b.count > 0) - Number(a.count > 0) || b.score - a.score)
       .slice(0, limit);
     const recents: { path: string; count: number; lastActive: number; suggested?: true; repository?: string; team_id?: Id<"teams"> | null; team_name?: string | null }[] = [];
     for (const { path, count, lastActive, repository } of ranked) {

@@ -100,15 +100,17 @@ export function mergeRecentProjectPaths(
 
 /**
  * The resting chip row next to the current project: the few folders the user
- * actually uses most, capped tight. Machine-root suggestions (count 0, never
- * used through codecast) never appear here — they live behind the full picker.
+ * actually uses most, capped tight. A folder with count 0 never appears here:
+ * a machine-root suggestion (never used through codecast) or a folder only
+ * agents started sessions in (the server counts only sessions a person
+ * started). Both live behind the full picker.
  */
 export function frequentProjectChips<T extends { path: string; count: number; suggested?: boolean }>(
   projects: T[],
   max = 4,
 ): T[] {
   return projects
-    .filter((p) => !p.suggested)
+    .filter((p) => !p.suggested && p.count > 0)
     .sort((a, b) => b.count - a.count)
     .slice(0, max);
 }

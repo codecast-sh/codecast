@@ -87,6 +87,34 @@ describe("performGetRecentProjectPaths", () => {
     expect(projects.filter((p) => !p.suggested).map((p) => p.path.split("/").pop())).toEqual(["lb-0", "memex"]);
   });
 
+  // Regression from real data: a lead's spawned reviewers in a second clone,
+  // and workflow agents in a scratch folder, outranked the two repos their
+  // person actually starts sessions in.
+  test("only sessions a person started rank a folder", async () => {
+    const product = `${WORK}/GitHub/lb-product`;
+    const scratch = `${WORK}/scratch`;
+    const spawned = { spawned_by_conversation_id: "lead" };
+    const workflowAgent = { is_subagent: true, parent_conversation_id: "run" };
+    const projects = await performGetRecentProjectPaths(
+      ctxWith([
+        ...repeat(4, session(`${WORK}/GitHub/littlebird`, LB_REMOTE)),
+        ...repeat(2, session(`${HOME}/code/memex`, "https://github.com/a/memex.git")),
+        ...repeat(30, { ...session(undefined, undefined, product), ...spawned }),
+        ...repeat(20, { ...session(undefined, undefined, scratch), ...workflowAgent }),
+        { ...session(undefined, undefined, scratch), agent_task_id: "trigger" },
+        { ...session(undefined, undefined, scratch), cli_flags: "--print" },
+      ], roots),
+      USER,
+      { limit: 50, device_id: "studio" },
+    );
+    expect(projects.filter((p) => !p.suggested).map((p) => [p.path, p.count])).toEqual([
+      [`${WORK}/GitHub/littlebird`, 4],
+      [`${HOME}/code/memex`, 2],
+      [product, 0],
+      [scratch, 0],
+    ]);
+  });
+
   test("a checkout outside the machine's roots is still hidden", async () => {
     const projects = await performGetRecentProjectPaths(
       ctxWith([session("/Users/other/src/app", "https://github.com/acme/app.git")], roots),

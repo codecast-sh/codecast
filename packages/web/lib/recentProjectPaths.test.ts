@@ -67,6 +67,13 @@ describe("frequentProjectChips", () => {
       { path: "/dev/one", count: 2, lastActive: 10 },
     ]).map((p) => p.path)).toEqual(["/dev/one"]);
   });
+
+  test("leaves out a folder only agents started sessions in", () => {
+    expect(frequentProjectChips([
+      { path: "/dev/agents-only", count: 0, lastActive: 99 },
+      { path: "/dev/mine", count: 3, lastActive: 10 },
+    ]).map((p) => p.path)).toEqual(["/dev/mine"]);
+  });
 });
 
 describe("browseProjectOrder", () => {
