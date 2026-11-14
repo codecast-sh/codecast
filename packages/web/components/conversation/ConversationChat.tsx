@@ -10,6 +10,7 @@ import { useOpenChatPath } from "../../hooks/useOpenDm";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { activeTeamIdOf } from "../../lib/activeTeam";
+import { useTeamFeature } from "../../lib/teamFeatures";
 import { memberName, type ChatMember } from "../../lib/chatViews";
 import { ViewerFaces } from "../presence/ViewerFaces";
 import { Popover, PopoverAnchor, PopoverContent } from "../ui/popover";
@@ -43,7 +44,10 @@ export const ConversationChat = memo(function ConversationChat({
   const ids = people.map((p) => String(p._id));
   const idsKey = ids.join(",");
   const st = useTrackedStore([activeTeamIdOf, (s) => s.currentUser?._id]);
-  const teamId = activeTeamIdOf(st);
+  // The room is team chat: with the team's chat off there is no room to show
+  // and chat.openDm would refuse it, so the chip is not drawn at all.
+  const chatOn = useTeamFeature("chat");
+  const teamId = chatOn ? activeTeamIdOf(st) : undefined;
   const me = st.currentUser?._id ? String(st.currentUser._id) : "";
   const dmKey = teamId && me ? dmKeyFor(teamId, [me, ...ids]) : null;
   const found = useInboxStore((s) => (dmKey ? findDmChannelId(s.chatChannels, dmKey) : null));
