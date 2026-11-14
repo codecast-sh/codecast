@@ -262,6 +262,7 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   projectUpdates:
     "Written by editProjectUpdate, whose spec carries an inverse with the prior body; posts, comments and deletes are never undoable.",
   sessionReads: "Read state; never undoable.",
+  sessionNotify: "Written only by setSessionNotify, a setting changed back in the same menu; never undoable.",
   trialCards: "Written only by trialAnswer, which moves a paused trial run on, and trialReask, which has its machine ask it again; like answerDecision, never undoable.",
   trialRuns: "Written only by trialRerun, which starts a new run, and trialClose, which closes the problem for everyone watching; never undoable.",
   weeklyCards: "Written only by setWeeklyCardOptions, a setting, and setObjectShareLink, a sharing change; neither is undoable.",
@@ -281,7 +282,7 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   agentDefinitions: "Written only by deletes, which are never undoable.",
   teamKitItems: "Written only by shareToKit, a publish that creates the item, and removeKitItem, which uninstalls it on every machine; both never undoable.",
   agentChains: "Written only by deletes, which are never undoable.",
-  secrets: "Written by updateSecretMeta, whose spec carries an inverse naming the prior fields; the create stub, removeSecret and setSecretAskFirst (its off direction goes through a confirm) are never undoable.",
+  secrets: "Written by updateSecretMeta, whose spec carries an inverse naming the prior fields; the create stub, removeSecret, setSecretAskFirst and setSecretTouchId (their off direction goes through a confirm) are never undoable.",
   issueSyncSources: "Integration settings (add, update, remove a source); settings are never undoable.",
   notifications: "Read state (mark read, mark all read); never undoable.",
   callRooms: "Live call controls (lock, transcription, recording) act on a call in progress; never undoable.",
