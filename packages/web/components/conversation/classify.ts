@@ -1,6 +1,6 @@
 import { parseGoalMessage } from "@codecast/shared/contracts/sessionGoal";
 import { isCommandMessage, isStrippedCommand, isSkillExpansion, isBackgroundAgentStoppedNotice, backgroundAgentStoppedName, parseBashInput, parseBashOutput, commandExpansionName, isCodexTurnAbortedMessage, isInterruptNotice } from "../../lib/conversationProcessor";
-import { hasAgentSetupMarker, isBootstrapPrompt, isPollResponsePayload, parseWorkflowHarnessFrame } from "@codecast/shared/contracts";
+import { hasAgentSetupMarker, isBootstrapPrompt, isPollResponsePayload, parseWorkflowHarnessFrame, sessionMessageIntentOf } from "@codecast/shared/contracts";
 import { classifyApiErrorBanner, isNoResponseStub, CLIENT_ERROR_BANNER_PREFIX, parseDecisionAnswer, parseVaultReady, isSessionEscalationMessage, parseSessionEscalation, isAgentSwitchNotice, parseAgentSwitchNotice, isMachineSwitchNotice, parseMachineSwitchNotice, isModelSwitchCommandName, isModelSwitchStdout, modelSwitchStdoutLabel } from "@codecast/shared/contracts";
 import { isAskTool, isPlanWriteToolCall, isShellTool } from "@codecast/shared/render";
 import { isBackgroundBashToolCall, parseTaskNotificationBlock } from "../monitorRows";
@@ -388,7 +388,7 @@ export function classifyUserMessage(
     // session-message rail, but it is a call artifact, not a teammate's words.
     const huddle = parseHuddleSummaryTag(sessionMsg.body);
     if (huddle) return { kind: 'huddle_summary', huddle };
-    return { kind: 'session_message', from: sessionMsg.from, body: sessionMsg.body, name: sessionMsg.name };
+    return { kind: 'session_message', from: sessionMsg.from, body: sessionMsg.body, name: sessionMsg.name, intent: sessionMsg.intent };
   }
   // Truncated wrappers (a preview slice, a torn JSONL line) still carry the
   // opening tag with `from=`, which is enough to keep them off the human rail.
@@ -397,7 +397,8 @@ export function classifyUserMessage(
     if (authored) {
       const huddle = parseHuddleSummaryTag(authored.body);
       if (huddle) return { kind: 'huddle_summary', huddle };
-      return { kind: 'session_message', from: authored.from, body: authored.body };
+      const intent = sessionMessageIntentOf(t);
+      return { kind: 'session_message', from: authored.from, body: authored.body, ...(intent !== 'request' ? { intent } : {}) };
     }
   }
   // A subagent reporting back to its parent arrives in the same shape under its

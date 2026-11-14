@@ -1,5 +1,5 @@
 import type { GoalFrame } from "@codecast/shared/contracts/sessionGoal";
-import type { ThreadStateFields, DecisionAnswerMessage, SessionEscalationMessage, VaultReadyMessage } from "@codecast/shared/contracts";
+import type { ThreadStateFields, DecisionAnswerMessage, SessionEscalationMessage, VaultReadyMessage, SessionMessageIntent } from "@codecast/shared/contracts";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import type { SentFileData } from "@codecast/shared/files";
 import type { ChatWakePrompt, HuddleSummaryTag } from "../sessionMessage";
@@ -414,7 +414,7 @@ export type UserMessageKind =
   // `variant: 'agent'` is a subagent's report to the session that launched it
   // (<agent-message from="…">): the same card, chrome that says so, and a sender
   // that is an agent name rather than a session short id.
-  | { kind: 'session_message'; from: string; body: string; name?: string; variant?: 'agent' }
+  | { kind: 'session_message'; from: string; body: string; name?: string; variant?: 'agent'; intent?: SessionMessageIntent }
   // A person typed this into the session from the dashboard (<user-message
   // from="Name">): a normal user bubble attributed to that person.
   | { kind: 'direct_user'; from: string; body: string }
