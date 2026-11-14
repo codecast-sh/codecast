@@ -57,7 +57,7 @@ function sharedConversation(_id = CONVERSATION) {
 
 function memberships() {
   return [
-    { _id: "membership-owner", user_id: OWNER, team_id: TEAM, visibility: "summary" },
+    { _id: "membership-owner", user_id: OWNER, team_id: TEAM, visibility: "full" },
     { _id: "membership-member", user_id: MEMBER, team_id: TEAM, visibility: "summary" },
   ];
 }
