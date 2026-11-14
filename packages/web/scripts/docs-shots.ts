@@ -154,6 +154,10 @@ async function captureApp(tab: CastTab, shot: Shot): Promise<string> {
   // Let images and fonts land, and clear toasts nothing in the shot asked for.
   await tab.evaluate(`document.fonts.ready.then(() => new Promise((r) => setTimeout(r, 1200))).then(() => window.__toast?.dismiss())`);
   await Bun.sleep(400);
+  // A reload after the steps (anyone's edit) leaves the boot splash: retry rather than keep it.
+  if (!(await tab.evaluate<boolean>(`!!(${BOOTED}) && !!document.querySelector(${JSON.stringify(ready)}) && !document.querySelector(".app-loader")`).catch(() => false))) {
+    throw new Error(`${shot.name}: the page reloaded before the capture`);
+  }
   const include = shot.crop && shot.crop !== "window" ? shot.crop.include : undefined;
   const box = await tab.evaluate<{ x: number; y: number; width: number; height: number } | null>(boxOf(selector, include));
   if (!box) throw new Error(`${shot.name}: no element matches ${selector}`);
