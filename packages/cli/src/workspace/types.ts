@@ -136,6 +136,38 @@ export interface HostSpec {
  * (cloud/syncSide.ts). Everything travels by default, gitignored files too,
  * except dependency and build folders, oversized files and process files.
  */
+/**
+ * [run]: commands `cast run` sends to a cloud host while the session stays
+ * here (run/cli.ts). `install` builds the warm dependency tree a run starts
+ * with, keyed by the content of `deps_key` files; each [[run.jobs]] entry
+ * matches an argv prefix and says what comes back and how big it is.
+ */
+export interface RunSpec {
+  /** Commands that install dependencies in a fresh tree. Default: [setup] install. */
+  install?: string[];
+  /** Repo-relative paths or globs whose content keys the warm dependency tree. Default: the lockfiles found. */
+  depsKey?: string[];
+  /** Warm dependency trees a host keeps per repo before the least recently used goes. */
+  keepDeps: number;
+  /** Refuse a snapshot that would upload more than this beyond what origin has. */
+  maxUploadMb: number;
+  jobs: RunJob[];
+}
+
+export interface RunJob {
+  name: string;
+  /** Leading argv words a command must start with to be this job. */
+  argv: string[];
+  /** Repo-relative paths or globs copied back after the run. */
+  outputs: string[];
+  /** Memory the run needs on the host; admission waits for it. */
+  memoryGb?: number;
+  /** The host kills a run that takes longer. */
+  timeoutMin?: number;
+  /** The command starts helpers meant to outlive it (cast check's typecheck watchers): no memory scope, so they stay warm between runs. */
+  keepDaemons?: boolean;
+}
+
 export interface SyncSpec {
   /** Paths or globs that travel even where a default rule would leave them. */
   always: string[];
@@ -181,6 +213,8 @@ export interface WorkspaceManifest {
   host?: HostSpec;
   /** [sync]: what travels between a laptop and a cloud host beyond the defaults. */
   sync?: SyncSpec;
+  /** [run]: commands sent to a cloud host with `cast run`. */
+  run?: RunSpec;
   setup: SetupSpec;
   /** Named ports keyed by short name (e.g., "web", "api", "db"). */
   ports: Record<string, PortSpec>;

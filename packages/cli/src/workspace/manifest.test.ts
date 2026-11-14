@@ -321,3 +321,51 @@ describe("[vault]", () => {
     expect(refusal(`vault = "x"\n`)).toContain("[vault] must be a table");
   });
 });
+
+describe("[run]", () => {
+  test("jobs parse with defaults; argv may be a string", () => {
+    const m = parseManifestText(`[run]
+deps_key = ["bun.lock", "patches/**"]
+
+[[run.jobs]]
+argv = ["bun", "test"]
+outputs = ["packages/*/coverage/**"]
+memory_gb = 4
+
+[[run.jobs]]
+name = "check"
+argv = "cast check"
+timeout_min = 10
+keep_daemons = true
+`);
+    expect(m.run).toEqual({
+      depsKey: ["bun.lock", "patches/**"],
+      keepDeps: 3,
+      maxUploadMb: 50,
+      jobs: [
+        { name: "bun test", argv: ["bun", "test"], outputs: ["packages/*/coverage/**"], memoryGb: 4 },
+        { name: "check", argv: ["cast", "check"], outputs: [], timeoutMin: 10, keepDaemons: true },
+      ],
+    });
+  });
+
+  test("absent [run] stays absent", () => {
+    expect(parseManifestText(`[setup]\ninstall = ["bun install"]\n`).run).toBeUndefined();
+  });
+
+  test.each([
+    [`[run]\nbogus = 1\n`, "unknown key in [run]: 'bogus'"],
+    [`[[run.jobs]]\nargv = []\n`, "run.jobs[0].argv"],
+    [`[[run.jobs]]\nargv = ["x"]\noutputs = ["../escape"]\n`, "run.jobs[0].outputs[0]"],
+    [`[[run.jobs]]\nargv = ["x"]\noutputs = ["/abs"]\n`, "run.jobs[0].outputs[0]"],
+    [`[[run.jobs]]\nargv = ["x"]\noutputs = [".git/config"]\n`, "run.jobs[0].outputs[0]"],
+    [`[[run.jobs]]\nargv = ["x"]\nmemory_gb = 0\n`, "run.jobs[0].memory_gb"],
+    [`[[run.jobs]]\nargv = ["x"]\n\n[[run.jobs]]\nargv = ["x"]\n`, "repeats job 'x'"],
+    [`[[run.jobs]]\nargv = ["x"]\nwhat = 1\n`, "unknown key in [[run.jobs]]: 'what'"],
+    [`[run]\nkeep_deps = 1.5\n`, "run.keep_deps"],
+    [`[run]\ndeps_key = ["../lock"]\n`, "run.deps_key[0]"],
+    [`[[run.jobs]]\nargv = ["x"]\nkeep_daemons = "yes"\n`, "run.jobs[0].keep_daemons"],
+  ])("refuses %p", (text, needle) => {
+    expect(() => parseManifestText(text)).toThrow(needle);
+  });
+});
