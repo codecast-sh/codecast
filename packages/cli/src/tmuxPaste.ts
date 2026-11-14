@@ -112,9 +112,11 @@ const TYPED_CHUNK_CHARS = 128;
 const TYPED_ECHO_BUDGET_MS = 5_000;
 const TYPED_ECHO_TAIL_CHARS = 24;
 
-/** Text with whitespace and box-drawing frame glyphs removed, so a composer's
- *  soft wraps and borders never break a comparison with the payload. */
-export const stripComposerChrome = (s: string) => s.replace(/[\s─-╿]+/g, "");
+/** Text with whitespace, box-drawing frame glyphs and scrollbar glyphs
+ *  removed, so a composer's soft wraps, borders and scrollbar never break a
+ *  comparison with the payload. Grok draws a scrollbar inside its composer box
+ *  once a draft outgrows it (`█` thumb, `▴`/`▾` ends), one glyph per row. */
+export const stripComposerChrome = (s: string) => s.replace(/[\s─-▟▴▾]+/g, "");
 
 async function awaitTypedEcho(exec: TmuxExec, target: string, typedSoFar: string, budgetMs: number): Promise<void> {
   const tail = stripComposerChrome(typedSoFar).slice(-TYPED_ECHO_TAIL_CHARS);

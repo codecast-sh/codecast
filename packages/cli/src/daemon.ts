@@ -412,7 +412,7 @@ import { setBackgroundSessions, setGovernorBackground, holdForDelivery, isDelive
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
 import { followsCredentialStore, terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import { resumeEffortFlagFromFile, resumeModelFlagFromFile } from "./resumeCommand.js";
-import { CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
+import { CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isAgentLoginScreen, isCodexLoginScreen, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState } from "./tmuxPaneState.js";
 import {
   fetchExport,
   hasResumableMessages,
@@ -15785,6 +15785,22 @@ async function checkForInteractivePrompt(
 
     log(`Interactive prompt detected in session ${sessionId.slice(0, 8)}: "${prompt.question}" with ${prompt.options.length} options (confirmation=${!!prompt.isConfirmation})`);
 
+    // An agent's login screen is not a question: its options start a browser
+    // login on this machine that nobody at a card can finish. Delivery holds
+    // with the login step (signedOutError); no card.
+    if (isAgentLoginScreen(paneContent)) {
+      log(`Session ${sessionId.slice(0, 8)} is at its agent's login screen; no card`);
+      return;
+    }
+    // Codex's update menu is the agent's own startup banner, not a question.
+    // A card for it held every message behind it, and its first option runs a
+    // global package install. Escape skips it, as ensureTmuxReady does.
+    if (isCodexUpdateDialog(paneContent)) {
+      await tmuxExec(["send-keys", "-t", tmuxTarget, "Escape"]);
+      log(`Dismissed Codex update menu in ${tmuxTarget} (Escape, never Enter)`);
+      return;
+    }
+
     // Codex's working-directory picker is a launch artifact (see
     // isResumeCwdPicker), answered here rather than minted as a card the user
     // would have to clear on every resume.
@@ -17566,6 +17582,14 @@ class InputBlockedError extends Error {
   }
 }
 
+// An agent at its own login screen: nothing typed into the pane can sign it
+// in, so the message is held with the one step that frees it.
+function signedOutError(agentType: string | undefined, screen?: string): InputBlockedError {
+  const agent = agentType === "cursor" ? "cursor-agent" : agentType ?? "the agent";
+  const login = agentType === "cursor" ? "cursor-agent login" : agentType === "codex" ? "codex login" : "its login";
+  return new InputBlockedError(`${agent} is signed out on this machine`, `${agent} is signed out on this machine: run \`${login}\` there, then restart the session`, screen);
+}
+
 // The bottom of a pane, where a dialog and the composer under it sit,
 // redacted: it syncs beside the held message and goes to daemon.log.
 const HOLD_SCREEN_ROWS = 40;
@@ -17609,6 +17633,7 @@ function assertPromptAbsent(pane: string, ownText?: string, pastDialog = false):
   // delivery on a dialog the launch path already knows how to dismiss.
   // The Rewind picker is a modal ensureTmuxReady cancels with Escape, not a question.
   if (isGrokTrustDialog(pane) || isCodexTrustDialog(pane) || isCodexUpdateDialog(pane) || limitDialogOnPane(pane) || isClaudeRewindDialog(pane)) return;
+  if (isAgentLoginScreen(pane)) throw signedOutError(isCodexLoginScreen(pane) ? "codex" : "cursor", holdScreen(pane));
   const prompt = parseInteractivePrompt(pane, true);
   if (prompt && !promptIsOwnText(prompt, ownText)) throw new InputBlockedError("terminal is waiting for a human answer", undefined, holdScreen(pane));
 }
@@ -17727,7 +17752,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
       if (pastDialog) return { busy: false };
       throw new InputBlockedError("terminal is waiting for a human answer", undefined, holdScreen(stdout));
     }
-    if (state === "signed_out") throw new InputBlockedError(`${agentType ?? "the agent"} is signed out on this machine`, `${agentType === "cursor" ? "cursor-agent" : "the agent"} is signed out on this machine: run \`${agentType === "cursor" ? "cursor-agent login" : "its login"}\` there, then restart the session`);
+    if (state === "signed_out") throw signedOutError(agentType, holdScreen(stdout));
 
     // Grok is glyphless, so the skip below would swallow this as "still booting"
     // and never send `y`. Answer it here, before that continue.
@@ -18431,23 +18456,33 @@ function composerShowsOnlyPayloadTail(composer: string, payload: string): boolea
   return shown.length > 0 && shown.length < whole.length && whole.endsWith(shown);
 }
 
-// Reads the pane at the daemon's own window size, then hands the size back to
-// whichever client set it. resize-window flips the window to manual sizing, so
-// unsetting the option lets `window-size largest` return it to the attached
-// client, the same repair the terminal viewer makes when it detaches. A window
-// already at full size has nothing more to show. The TUI redraws after the
-// resize, which takes over a second on a loaded machine, so the wait runs to
-// the caller's deadline.
-async function matchAtFullWindowSize(exec: typeof tmuxExec, target: string, matches: (pane: string) => boolean, deadline: number): Promise<boolean> {
+// Reads the pane at a size that fits the whole payload, then hands the size
+// back to whichever client set it. resize-window flips the window to manual
+// sizing, so unsetting the option lets `window-size largest` return it to the
+// attached client, the same repair the terminal viewer makes when it detaches.
+// The height follows the payload, not a fixed size: Grok's composer grows with
+// the window to about half its height, so a 3 KB scheduled task showed only its
+// tail at 220x50 and was written three times, then dropped, while it sat whole
+// in the composer (jx75w1x, 2026-11-14). The TUI redraws after the resize,
+// which takes over a second on a loaded machine, so the wait runs to the
+// caller's deadline.
+export function composerReadHeight(payload: string, width = Number(TMUX_WINDOW_WIDTH)): number {
+  const usable = Math.max(40, width - 12);
+  const rows = payload.split("\n").reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / usable)), 0);
+  return Math.min(400, Math.max(Number(TMUX_WINDOW_HEIGHT), 2 * rows + 20));
+}
+
+async function matchAtFullWindowSize(exec: typeof tmuxExec, target: string, payload: string, matches: (pane: string) => boolean, deadline: number): Promise<boolean> {
+  const height = composerReadHeight(payload);
   try {
     const { stdout } = await exec(["display-message", "-p", "-t", target, "#{window_width}|#{window_height}"]);
-    const [width, height] = stdout.trim().split("|").map(part => parseInt(part, 10));
-    if (width >= Number(TMUX_WINDOW_WIDTH) && height >= Number(TMUX_WINDOW_HEIGHT)) return false;
+    const [width, current] = stdout.trim().split("|").map(part => parseInt(part, 10));
+    if (width >= Number(TMUX_WINDOW_WIDTH) && current >= height) return false;
   } catch {
     return false;
   }
   try {
-    await exec(["resize-window", "-t", target, ...TMUX_SIZE_ARGS]);
+    await exec(["resize-window", "-t", target, "-x", TMUX_WINDOW_WIDTH, "-y", String(height)]);
     while (Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 150));
       if (matches(await captureTmuxComposerPane(exec, target, 40))) return true;
@@ -18549,7 +18584,7 @@ export async function awaitTmuxComposerPayload(
     if (opts.typed && composerShowsOnlyPayloadTail(composer, payload)) return "matched";
     if (!readAtFullSize && composerShowsOnlyPayloadTail(composer, payload)) {
       readAtFullSize = true;
-      if (await matchAtFullWindowSize(exec, target, matches, deadline)) return "matched";
+      if (await matchAtFullWindowSize(exec, target, payload, matches, deadline)) return "matched";
     }
 
     if (!glyphLine.trim()) {
@@ -26265,6 +26300,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
             logDelivery(`Auto-resume ${shortId}: answered Claude's idle-resume dialog for a machine wake`);
             continue;
           }
+          if (!parsePollMessage(content) && isAgentLoginScreen(paneContent)) throw signedOutError(agentType, holdScreen(paneContent));
           if (!parsePollMessage(content) && parseInteractivePrompt(paneContent, true)) {
             throw new InputBlockedError("terminal is waiting for a human answer");
           }
@@ -33873,11 +33909,11 @@ async function main(): Promise<void> {
             // human must answer, and a paste would answer it. Re-pend without
             // spending the retry budget, skip the conversation for a short
             // hold, and re-drive when the prompt closes.
-            logDelivery(`HELD: msg=${msg._id.slice(0, 8)} waiting for a human answer in conv=${msg.conversation_id.slice(0, 12)}; retrying when the prompt closes`);
-            holdConversationForPrompt(msg.conversation_id);
             const hold = err instanceof InputBlockedError
               ? { holdReason: err.holdReason, holdScreen: err.screen }
               : { holdReason: "waiting for a human answer in the terminal" };
+            logDelivery(`HELD: msg=${msg._id.slice(0, 8)} ${hold.holdReason} in conv=${msg.conversation_id.slice(0, 12)}; retrying when the screen changes`);
+            holdConversationForPrompt(msg.conversation_id);
             rependAfterAttempt(syncService, msg._id, hold).catch(logConvexFailure);
           } else if (err instanceof CloudAgentHoldError || err instanceof SwapHeldError || err instanceof ForeignWriterHoldError || err instanceof TerminalHoldError || err instanceof BackendSwitchHoldError) {
             // A cloud agent that cannot take the message yet (its setup is

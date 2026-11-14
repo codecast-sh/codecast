@@ -50,8 +50,8 @@ export function isResumeCwdPicker(text: string): boolean {
 // wording, so a cold codex pane in an untrusted directory classified "booting"
 // for its whole 120s budget and never bound (ct-49609, ct-49749).
 export function isCodexTrustDialog(text: string): boolean {
-  return /^[^\S\n]*[›❯>]?[^\S\n]*\d+[.)][^\S\n]*Yes,\s*continue\b/im.test(text)
-    && /^[^\S\n]*[›❯>]?[^\S\n]*\d+[.)][^\S\n]*No,\s*quit\b/im.test(text);
+  return /^[^\S\n]*(?:[›❯>][^\S\n]*)?\d+[.)][^\S\n]*Yes,\s*continue\b/im.test(text)
+    && /^[^\S\n]*(?:[›❯>][^\S\n]*)?\d+[.)][^\S\n]*No,\s*quit\b/im.test(text);
 }
 
 // Claude Code's one-time warning when it starts with
@@ -94,9 +94,9 @@ export function isIdleResumeOptionRow(line: string, label = MACHINE_WAKE_IDLE_RE
 }
 
 export function isCodexUpdateDialog(text: string): boolean {
-  return /^[^\S\n]*[›❯>]?[^\S\n]*\d+[.)][^\S\n]*Update now\b/im.test(text)
-    && /^[^\S\n]*[›❯>]?[^\S\n]*\d+[.)][^\S\n]*Skip[^\S\n]*$/im.test(text)
-    && /^[^\S\n]*[›❯>]?[^\S\n]*\d+[.)][^\S\n]*Skip until next version[^\S\n]*$/im.test(text)
+  return /^[^\S\n]*(?:[›❯>][^\S\n]*)?\d+[.)][^\S\n]*Update now\b/im.test(text)
+    && /^[^\S\n]*(?:[›❯>][^\S\n]*)?\d+[.)][^\S\n]*Skip[^\S\n]*$/im.test(text)
+    && /^[^\S\n]*(?:[›❯>][^\S\n]*)?\d+[.)][^\S\n]*Skip until next version[^\S\n]*$/im.test(text)
     && /Press enter to continue/i.test(text);
 }
 
@@ -139,6 +139,29 @@ export function isCursorTrustDialog(text: string): boolean {
 // never typed into, until the machine's cursor-agent is logged in again.
 export function isCursorLoginScreen(text: string): boolean {
   return /Press any key to log in/i.test(text);
+}
+
+// Codex's signed-out screen, drawn when its login can no longer refresh
+// (codex 0.167/0.169, MacBook-Pro-2, 2026-11-14):
+//
+//     Choose how you want to use Codex.
+//   > 1. Sign in with ChatGPT
+//     2. Sign in with Device Code
+//     3. Sign in another way
+//     Press enter to continue
+//
+// Same shape as the update menu (numbered rows, a cursor, the same footer), so
+// it read as that menu or as a question for a person, and every message waited
+// behind a card whose answer starts a browser login on another machine. The
+// machine has to log codex in; nothing typed into this pane can.
+export function isCodexLoginScreen(text: string): boolean {
+  return /^[^\S\n]*(?:[›❯>][^\S\n]*)?\d+[.)][^\S\n]*Sign in with (?:ChatGPT|Device Code)\b/im.test(text)
+    && /Press enter to continue|Sign in another way|Provide your own API key/i.test(text);
+}
+
+// The agent's own login screen, whichever agent draws it.
+export function isAgentLoginScreen(text: string): boolean {
+  return isCursorLoginScreen(text) || isCodexLoginScreen(text);
 }
 
 // How many tmux history rows a grok classifier must see to reach the y/n
@@ -334,6 +357,8 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // Checked before the update-menu rule: same '›' + numbered rows + "Press
   // enter to continue" shape, but Escape here quits the resume into a bare
   // shell, and the next delivery would then paste into that shell.
+  // Before the update-menu rule, which would press Escape at it.
+  if (isCodexLoginScreen(region)) return "signed_out";
   if (isResumeCwdPicker(region)) return "cwd_picker";
   const regionLines = region.split("\n");
   const numberedCursorRow = regionLines.some((line, i) => /^\s*[›❯>]\s*\d+[.)]\s/.test(line) && !isComposerRow(regionLines, i));
@@ -411,7 +436,7 @@ export function classifyGlyphlessClientPaneState(
   // classified "unknown" (no ❯ yet) and ensureTmuxReady's glyphless skip polled
   // until timeout, never sending the `y` the dialog asks for.
   if (isGrokTrustDialog(paneContent) || isCursorTrustDialog(paneContent)) return "trust";
-  if (isCursorLoginScreen(paneContent)) return "signed_out";
+  if (isAgentLoginScreen(paneContent)) return "signed_out";
   // cursor-agent's tool approval menu ("Run this command?" … "Skip & tell the
   // agent what to do instead") when it runs without --force: only a person
   // can answer it, and its "→ Run (once)" row is not the composer.

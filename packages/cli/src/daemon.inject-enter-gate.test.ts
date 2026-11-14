@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { DRAIN_MAX_CYCLES, awaitTmuxComposerPayload, drainTmuxComposer, tmuxComposerHoldsPayload, tmuxComposerText, tmuxWatchablePrefix } from "./daemon.js";
+import { DRAIN_MAX_CYCLES, awaitTmuxComposerPayload, composerReadHeight, drainTmuxComposer, tmuxComposerHoldsPayload, tmuxComposerText, tmuxWatchablePrefix } from "./daemon.js";
 
 // ct-40212 / ct-47277: a painted composer does not prove stdin is being read,
 // and a foreign probe character typed to prove it can outrace any screen-based
@@ -685,6 +685,40 @@ describe("awaitTmuxComposerPayload in a short window", () => {
       exec: pane.exec,
     })).rejects.toThrow("INJECT_UNVERIFIED");
     expect(pane.calls.some(c => c[0] === "resize-window")).toBe(false);
+  });
+
+  // Grok's composer grows with the window to about half its height and draws a
+  // scrollbar in its box once a draft outgrows it. A 3 KB scheduled task sat
+  // whole in an idle 220x50 composer showing only its last 23 rows, was written
+  // three times and then dropped (jx75w1x, 2026-11-14): the window was already
+  // "full size", so the whole composer was never read.
+  test("a grok composer taller than a full-size window is read at the payload's height", async () => {
+    const lines = Array.from({ length: 40 }, (_, i) => `${i + 1}. step number ${i + 1} of the scheduled task, long enough to read as a real line`);
+    const payload = lines.join("\n");
+    const grokBox = (rows: string[], scrollbar: boolean) => [
+      " ╭" + "─".repeat(60) + "╮",
+      ...rows.map((row, i) => ` │ ${i === 0 ? "❯" : " "} ${row.padEnd(150)}${scrollbar ? (i === 0 ? "▴" : i === rows.length - 1 ? "▾" : i < 3 ? "█" : "─") : " "} │`),
+      " ╰" + "─".repeat(60) + "╯",
+      " Ctrl+x:shortcuts",
+    ].join("\n");
+    const calls: Args[] = [];
+    let height = 50;
+    const exec = (async (args: Args) => {
+      calls.push(args);
+      if (args[0] === "display-message") return { stdout: `220|${height}\n` };
+      if (args[0] === "resize-window") height = Number(args[args.indexOf("-y") + 1]);
+      if (args[0] === "set-option") height = 50;
+      const fits = Math.floor(height / 2) - 2;
+      return { stdout: args[0] === "capture-pane" ? grokBox(lines.slice(-fits), fits < lines.length) : "" };
+    }) as any;
+    expect(composerReadHeight(payload)).toBeGreaterThanOrEqual(2 * lines.length + 4);
+    expect(await awaitTmuxComposerPayload("t:0.0", payload, {
+      allowRePaste: false, budgetMs: 2_000,
+      rePaste: async () => { throw new Error("must not repeat the paste"); },
+      exec,
+    })).toBe("matched");
+    expect(calls.some(c => c[0] === "resize-window")).toBe(true);
+    expect(height).toBe(50);
   });
 
   test("a scrolled composer whose full view is not the payload is refused", async () => {
