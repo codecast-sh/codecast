@@ -6,7 +6,7 @@ import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useMutation, useConvexAuth } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { Send, GitFork, Loader2, Check, ShieldQuestion, Lock } from "lucide-react";
+import { Send, GitFork, Loader2, Check, ShieldQuestion, Lock, Lightbulb, X, Clock } from "lucide-react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useRunnerSilence } from "../hooks/useRunnerSilence";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -35,7 +35,11 @@ import { ConversationChat } from "./conversation/ConversationChat";
 import { useConversationChatPeople } from "../hooks/useConversationChatPeople";
 import { roleAuthorOf } from "../lib/sessionIdentity";
 import { useLiveIdentityRow } from "../hooks/useLiveIdentityRow";
-import { useGuestSuggestions } from "../hooks/useGuestSuggestions";
+import { useGuestSuggestions, useSessionSuggestions, useSyncMyTeamSuggestions } from "../hooks/useGuestSuggestions";
+import { attendingOwnerId } from "../lib/steering";
+import { compactDuration, memberDisplayName } from "./presence/memberPresence";
+import { useCoarseNow } from "../hooks/useCoarseNow";
+import { serverErrorText } from "../lib/errorCause";
 import { useIdentityPrefs } from "../hooks/useIdentityPrefs";
 import { ReviewBar } from "./ReviewBar";
 import { useReviewComposer } from "./reviewContext";
@@ -263,6 +267,7 @@ export const CollabComposer = memo(function CollabComposer({
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [sentHint, setSentHint] = useState<string | null>(null);
+  const [hintFailed, setHintFailed] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useMountEffect(() => { if (autoFocusInput) textareaRef.current?.focus(); });
@@ -304,6 +309,20 @@ export const CollabComposer = memo(function CollabComposer({
   // A session whose machine stopped beating is not live: what is sent waits
   // in the queue until that machine is back, so the strip says where it waits.
   const runnerSilence = useRunnerSilence(conversation._id.toString(), canSend && isConvexId(conversation._id.toString()));
+  // An owner in the session now: what I send waits for them as a suggestion
+  // (convex teamSuggestions.ts). The roster says so before the press; the
+  // server decides at send time.
+  const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
+  // An assigned owner steers with owner rights: their words go straight in.
+  const steeringOwnerId = useInboxStore((s) => (level === "team" ? attendingOwnerId(teamMembersOf(s), conversation as any, meId) : null));
+  const steeringName = useInboxStore((s) => {
+    if (!steeringOwnerId) return null;
+    const m = teamMembersOf(s).find((x: any) => String(x?._id) === steeringOwnerId);
+    return m ? memberDisplayName(m) : owner;
+  });
+  const steering = !!steeringOwnerId;
+  useSyncMyTeamSuggestions(convKey, meId, canSend);
+  const mySuggestions = useSessionSuggestions(convKey, meId);
 
   // Announce myself in the shared box and watch the owner (and any other
   // collaborator) form their draft live.
@@ -337,16 +356,26 @@ export const CollabComposer = memo(function CollabComposer({
       const res = await sendToSession({ to: convId, body, direct: true, ...(queue ? { queue: true } : {}) });
       if (together) claimSent(candidates);
       setMessage("");
-      setSentHint(queue ? "Queued for when this turn ends" : res?.target_live === false
+      setHintFailed(false);
+      setSentHint(res?.suggestion_id ? `Suggested to ${steeringName ?? owner}` : queue ? "Queued for when this turn ends" : res?.target_live === false
         ? "Sent — their session looks offline, they'll get it when back"
         : "Sent into the live session");
       setTimeout(() => setSentHint(null), 4000);
     } catch (e: any) {
       // The batch was already taken out of the tray; keep it as text in the box.
       setMessage(mine);
-      setSentHint(e?.message?.includes("granted") ? "Access was revoked" : "Couldn't send");
+      setHintFailed(true);
+      setSentHint(e?.message?.includes("granted") ? "Access was revoked" : /waiting|together|characters/.test(e?.message ?? "") ? serverErrorText(e) : "Couldn't send");
       setTimeout(() => setSentHint(null), 4000);
     } finally { setBusy(false); }
+  }
+
+  // The owner left with my suggestion still waiting: take it back and send it
+  // the ordinary way (it waits again if they came back meanwhile).
+  const sendSuggestionNow = useInboxStore((s) => s.sendTeamSuggestionNow);
+  // The row leaves; the transcript (or a new waiting row, if they came back) shows what happened.
+  function sendNow(row: { _id: string; body: string }) {
+    sendSuggestionNow(row._id, convKey);
   }
 
   // A proposal ledger in the thread presses this composer's send (reviewContext).
@@ -377,7 +406,7 @@ export const CollabComposer = memo(function CollabComposer({
   }
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
-    if (e.key === "Enter" && e.altKey && (isMac ? e.metaKey : e.ctrlKey && e.shiftKey) && canSend && candidates.length > 0) {
+    if (e.key === "Enter" && e.altKey && (isMac ? e.metaKey : e.ctrlKey && e.shiftKey) && canSend && !steering && candidates.length > 0) {
       e.preventDefault();
       handleSend(true);
       return;
@@ -401,6 +430,7 @@ export const CollabComposer = memo(function CollabComposer({
     switch (level) {
       case "granted":
       case "team":
+        if (steering) return { tone: "violet", icon: <Lightbulb className="w-3 h-3" />, text: <>Suggesting to <b>{steeringName}</b>{runnerSilence ? <span className="text-sol-text-dim"> · their machine: {runnerSilence}</span> : null}</> };
         return runnerSilence ? { tone: "muted", icon: <Send className="w-3 h-3" />, text: <>What you send waits for <b>{owner}</b>'s machine: {runnerSilence}.</> } : null;
       case "requested":
         return { tone: "amber", icon: <Loader2 className="w-3 h-3 animate-spin" />, text: <>Waiting for <b>{owner}</b> to allow you to send…</> };
@@ -420,6 +450,8 @@ export const CollabComposer = memo(function CollabComposer({
     ? "text-sol-cyan border-sol-cyan/15 bg-sol-cyan/5"
     : strip.tone === "amber"
     ? "text-amber-400 border-amber-500/15 bg-amber-500/5"
+    : strip.tone === "violet"
+    ? "text-sol-violet border-sol-violet/15 bg-sol-violet/5"
     : "text-sol-text-dim border-sol-border/30 bg-sol-bg-alt/40";
 
   if (level === "anonymous") {
@@ -436,10 +468,11 @@ export const CollabComposer = memo(function CollabComposer({
   return (
     <div className="bg-sol-bg">
       {isConvexId(conversation._id.toString()) && <SharedQueue conversationId={conversation._id.toString()} canSteerQueue={canSend} />}
+      {canSend && <MySuggestions rows={mySuggestions} ownerName={steeringName ?? owner} ownerHere={steering} onSendNow={sendNow} />}
       <CollabPresenceBar
         present={present}
         showHere={!!conversation.share_token}
-        joint={canSend ? { candidates, mineEmpty: !message.trim(), onSend: () => handleSend(true) } : undefined}
+        joint={canSend && !steering ? { candidates, mineEmpty: !message.trim(), onSend: () => handleSend(true) } : undefined}
         shared={shared.active ? { editors: shared.editors } : null}
         chat={people.length > 0 ? <ConversationChat conversationId={conversation._id.toString()} people={people} /> : null}
       />
@@ -447,8 +480,8 @@ export const CollabComposer = memo(function CollabComposer({
         {strip && <span className="shrink-0">{strip.icon}</span>}
         {strip && <span className="truncate">{strip.text}</span>}
         {sentHint && (
-          <span className="ml-auto inline-flex items-center gap-1 text-meta font-medium text-sol-green shrink-0">
-            <Check className="w-3 h-3" />{sentHint}
+          <span className={`ml-auto inline-flex items-center gap-1 text-meta font-medium shrink-0 ${hintFailed ? "text-sol-red" : "text-sol-green"}`}>
+            {hintFailed ? <X className="w-3 h-3" /> : <Check className="w-3 h-3" />}{sentHint}
           </span>
         )}
       </div>}
@@ -467,7 +500,7 @@ export const CollabComposer = memo(function CollabComposer({
               onChange={(e) => setMessage(e.target.value)}
               onKeyDown={handleKeyDown}
               disabled={busy}
-              placeholder={canSend ? `Message ${target}…` : "Write together…"}
+              placeholder={canSend ? (steering ? `Suggest to ${steeringName}…` : `Message ${target}…`) : "Write together…"}
               rows={1}
               className="[grid-area:1/1] w-full bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 text-sol-text"
             />
@@ -496,8 +529,8 @@ export const CollabComposer = memo(function CollabComposer({
                   : "border-sol-cyan/50 bg-sol-cyan/20 text-sol-cyan hover:bg-sol-cyan/30 hover:border-sol-cyan"
               }`}
             >
-              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-              Send
+              {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : steering ? <Lightbulb className="w-3.5 h-3.5" /> : <Send className="w-3.5 h-3.5" />}
+              {steering ? "Suggest" : "Send"}
             </button>
           ) : level === "requested" ? (
             <button type="button" disabled className="shrink-0 h-8 px-3 rounded-full flex items-center gap-1.5 text-xs font-medium border border-amber-500/40 text-amber-400/80 cursor-default">
@@ -543,7 +576,8 @@ export const CollabRequestBanner = memo(function CollabRequestBanner({
 
   const pending = (requests ?? []).filter((r) => r.status === "requested");
   const granted = (requests ?? []).filter((r) => r.status === "granted");
-  const suggestions = useGuestSuggestions(conversationId);
+  const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
+  const suggestions = useGuestSuggestions(conversationId, true, meId).filter((r) => !r.kind && String(r.author_user_id) !== meId);
   if (pending.length === 0 && granted.length === 0 && suggestions.length === 0) return null;
 
   async function act(fn: () => Promise<unknown>, id: string) {
@@ -594,7 +628,15 @@ export const CollabRequestBanner = memo(function CollabRequestBanner({
 // One message a guest suggested for this session (convex guestSuggestions.ts).
 // Nothing reaches the session until Send; Edit lets the owner fix it first.
 // The card leaves at once on either press (store send/dismissGuestSuggestion).
-function GuestSuggestionCard({ suggestion }: { suggestion: { _id: string; guest_name: string; body: string } }) {
+function GuestSuggestionCard({ suggestion }: { suggestion: { _id: string; guest_name: string; body: string; author_user_id?: string | null; created_at?: number } }) {
+  // A held message can sit while its owner is away; its age says how stale it may be.
+  const now = useCoarseNow(60_000);
+  const age = suggestion.created_at && now - suggestion.created_at >= 5 * 60_000 ? compactDuration(now - suggestion.created_at) : null;
+  const authorImage = useInboxStore((s) => {
+    if (!suggestion.author_user_id) return undefined;
+    const m = teamMembersOf(s).find((x: any) => String(x?._id) === String(suggestion.author_user_id));
+    return m?.image || m?.github_avatar_url || undefined;
+  });
   const send = useInboxStore((s) => s.sendGuestSuggestion);
   const dismiss = useInboxStore((s) => s.dismissGuestSuggestion);
   const [draft, setDraft] = useState<string | null>(null);
@@ -602,18 +644,21 @@ function GuestSuggestionCard({ suggestion }: { suggestion: { _id: string; guest_
   const submit = () => {
     const body = editing ? draft.trim() : suggestion.body;
     if (!body) return;
-    send(suggestion._id, body !== suggestion.body ? body : undefined);
+    void send(suggestion._id, body !== suggestion.body ? body : undefined)
+      .then((res: any) => { if (res?.status === "closed") toast(`Not sent: ${suggestion.guest_name} can no longer send here`); })
+      .catch(() => {});
   };
   return (
     <div data-guest-suggestion className="flex items-start gap-2.5 px-3 py-2 rounded-xl border border-sol-violet/30 bg-sol-violet/10 shadow-lg">
-      <Avatar name={suggestion.guest_name} />
+      <Avatar name={suggestion.guest_name} image={authorImage} />
       <div className="flex-1 min-w-0">
         <div className="text-meta text-sol-text-muted">
-          <b className="text-sol-violet">{suggestion.guest_name}</b> <span className="text-sol-text-dim">guest</span>
+          <b className="text-sol-violet">{suggestion.guest_name}</b> <span className="text-sol-text-dim">{suggestion.author_user_id ? "suggests" : "guest"}{age ? ` · ${age} ago` : ""}</span>
         </div>
         {editing ? (
           <textarea
             autoFocus
+            aria-label={`Edit ${suggestion.guest_name}'s suggestion`}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
@@ -660,5 +705,56 @@ function Avatar({ name, image }: { name?: string; image?: string }) {
         </div>
       }
     />
+  );
+}
+
+// A teammate's own suggestions in this session and what became of each
+// (convex teamSuggestions.listMine). Waiting ones can be taken back, or sent
+// the ordinary way once the owner has left; decided ones stay a while so the
+// author sees the outcome.
+const DECIDED_SHOWN_MS = 10 * 60_000;
+function MySuggestions({ rows, ownerName, ownerHere, onSendNow }: {
+  rows: any[];
+  ownerName: string;
+  ownerHere: boolean;
+  onSendNow: (row: { _id: string; body: string }) => void;
+}) {
+  const now = useCoarseNow(30_000);
+  const withdraw = useInboxStore((s) => s.withdrawTeamSuggestion);
+  // Every waiting one (so each can be taken back), and the last few decided.
+  const decided = rows.filter((r) => !r.kind && r.status !== "pending" && now - (r.decided_at ?? r.created_at ?? 0) < DECIDED_SHOWN_MS).slice(-3);
+  const shown = [...decided, ...rows.filter((r) => !r.kind && r.status === "pending")];
+  if (shown.length === 0) return null;
+  const first = ownerName.split(/\s+/)[0] || ownerName;
+  return (
+    <div className="mx-auto conv-col px-2 sm:px-4 pt-1.5 space-y-1" data-my-suggestions>
+      {shown.map((r) => {
+        const state = r.status === "pending"
+          ? { icon: <Clock className="w-3 h-3" />, tone: "text-sol-violet", label: `Waiting for ${first}` }
+          : r.status === "sent"
+          ? { icon: <Check className="w-3 h-3" />, tone: "text-sol-green", label: r.edited ? `${first} sent an edit` : `${first} sent it` }
+          : r.status === "closed"
+          ? { icon: <X className="w-3 h-3" />, tone: "text-sol-text-dim", label: "Not sent" }
+          : { icon: <X className="w-3 h-3" />, tone: "text-sol-text-dim", label: `${first} passed` };
+        return (
+          <div key={r._id} data-suggestion-status={r.status} className="flex items-center gap-2 px-3 py-1.5 rounded-xl border border-sol-border/40 bg-sol-bg-alt/50 text-meta">
+            <span className={`shrink-0 inline-flex items-center gap-1 font-medium ${state.tone}`}>{state.icon}{state.label}</span>
+            <span className="flex-1 min-w-0 truncate text-sol-text-muted" title={r.body}>{r.body}</span>
+            {r.status === "pending" && !ownerHere && (
+              <button
+                onClick={() => onSendNow(r)}
+                className="shrink-0 h-6 px-2.5 rounded-full font-medium border border-sol-cyan/40 text-sol-cyan hover:bg-sol-cyan/15 transition-colors"
+              >Send now</button>
+            )}
+            {r.status === "pending" && (
+              <button
+                onClick={() => withdraw(r._id, r.conversation_id)}
+                className="shrink-0 h-6 px-2.5 rounded-full font-medium border border-sol-border text-sol-text-dim hover:text-sol-text transition-colors"
+              >Withdraw</button>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }

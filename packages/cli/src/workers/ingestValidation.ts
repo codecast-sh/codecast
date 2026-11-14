@@ -7,7 +7,7 @@ import type { ParsedMessage } from '../parser.js';
 const messageFields = Object.keys({
   uuid: true, role: true, content: true, timestamp: true, thinking: true,
   toolCalls: true, toolResults: true, images: true, files: true, subtype: true,
-  stopReason: true, model: true, usage: true, apiMessageId: true,
+  stopReason: true, model: true, usage: true, apiMessageId: true, sourceUuid: true,
 } satisfies Record<keyof ParsedMessage, true>);
 
 // A result that fails this schema fails it again on the same bytes: a parser and
@@ -31,7 +31,7 @@ function strings(value: Record<string, any>, names: string[]): void {
 function* message(value: unknown): Generator<void> {
   fields(value,messageFields);
   requireValue(['user','assistant','system'].includes(value.role) && typeof value.content === 'string' && Number.isFinite(value.timestamp));
-  strings(value,['uuid','thinking','subtype','stopReason','model']);
+  strings(value,['uuid','thinking','subtype','stopReason','model','sourceUuid']);
   if (value.usage !== undefined) {
     const usage = value.usage;
     fields(usage,['input_tokens','output_tokens','cache_creation_input_tokens','cache_read_input_tokens']);

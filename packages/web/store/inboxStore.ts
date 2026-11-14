@@ -115,6 +115,7 @@ import {
   roleLeadIdsOf,
   isUnderRole,
   isHardBlocked,
+  rowArmedHomes,
   DEAD_AGENT_STATUSES,
   fnv1a32Update,
   FNV1A32_OFFSET,
@@ -354,6 +355,7 @@ import { taskCreateStub, taskStubId } from "./taskStub";
 import { createExpectationsSlice, type ExpectationsSliceActions } from "./expectationsSlice";
 import { createOpsSlice, type OpsSliceActions } from "./opsSlice";
 import { createLiveArtifactsSlice, type LiveArtifactsSliceActions } from "./liveArtifactsSlice";
+import { createMeetingBotsSlice, type MeetingBotsSliceActions } from "./meetingBotsSlice";
 import { createComposeSlice, type ComposeInstance, type ComposeSliceState } from "./composeSlice";
 // Re-exported so chat surfaces import their selectors from the store, like every
 // other view does, instead of reaching into the slice file.
@@ -590,6 +592,8 @@ export type ProjectItem = {
   client_key?: string;
   title: string;
   description?: string;
+  /** Standing instructions every session in the project starts with (session-projects.md SP6). */
+  instructions?: string;
   status: string;
   /** Workspace truth (server row field): set = team project, absent = personal. */
   team_id?: string | null;
@@ -1838,6 +1842,9 @@ export type AnchorPanelTarget = { kind: "anchor"; id: string } | { kind: "sessio
 
 export type ClientUI = {
   theme?: "light" | "dark";
+  // Sessions whose canvas is on (lib/sessionCanvas): conversation id → the
+  // page the person pinned, null for "the latest page". Absent is off.
+  session_canvas?: Record<string, { pin: string | null; at: number }>;
   // Personal sheet filters, by "<docId>:<tabId>" (components/sheets/useSheetFilter):
   // a person's own view of a tab's rows, hidden from nobody else.
   sheet_filters?: Record<string, unknown>;
@@ -3192,7 +3199,7 @@ export function isSessionEffectivelyIdle(session: InboxSession): boolean {
 // attention. No pinned exemption: placement of pinned rows is the caller's
 // concern (they never leave the Pinned group).
 export function isSessionHardBlocked(
-  session: AgentStatusFacts & Pick<InboxSession, "_id" | "message_count" | "awaiting_input" | "is_unresponsive" | "pending_api_error" | "inbox_killed_at" | "thread_state_status">,
+  session: AgentStatusFacts & Pick<InboxSession, "_id" | "message_count" | "awaiting_input" | "is_unresponsive" | "pending_api_error" | "inbox_killed_at" | "thread_state_status" | "armed_trigger_kind" | "loop_state" | "agent_type" | "last_user_message" | "last_turn_allows_park">,
   sessionsWithQueuedMessages?: Set<string>,
   now = Date.now(),
 ): boolean {
@@ -3207,6 +3214,13 @@ export function isSessionHardBlocked(
     declaredStatus: session.thread_state_status ?? null,
     // A row with queued messages already returned above.
     hasPending: false,
+    ...rowArmedHomes({
+      armed_trigger_kind: session.armed_trigger_kind ?? null,
+      loop_state: session.loop_state ?? null,
+      agent_type: session.agent_type,
+      last_turn_allows_park: session.last_turn_allows_park ?? null,
+      last_user_message: session.last_user_message ?? null,
+    }, now),
   });
 }
 
@@ -5873,7 +5887,7 @@ function dropGuestKnock(draft: any, guestId: string): void {
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
 // typed `Record<string, any>` slot here by registration alone; the explicit
 // fields below narrow the ones with a real row type.
-interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, LineWorkflowSliceActions, LineSliceActions, TrialSliceActions, ExpectationsSliceActions, OpsSliceActions, LiveArtifactsSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
+interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, LineWorkflowSliceActions, LineSliceActions, TrialSliceActions, ExpectationsSliceActions, OpsSliceActions, LiveArtifactsSliceActions, MeetingBotsSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -6238,8 +6252,18 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** Let anonymous viewers of the share link suggest messages for this session. */
   setGuestSuggestions: (id: string, enabled: boolean) => void;
   /** Send a guest's suggestion into the session (optionally as edited); the card leaves at once. */
-  sendGuestSuggestion: (suggestionId: string, body?: string) => void;
+  sendGuestSuggestion: (suggestionId: string, body?: string) => Promise<unknown>;
   dismissGuestSuggestion: (suggestionId: string) => void;
+  /** A teammate takes back their own suggestion before the owner decides it. */
+  withdrawTeamSuggestion: (suggestionId: string, conversationId: string) => void;
+  /** The owner left with my suggestion waiting: take it back and send it the ordinary way. */
+  sendTeamSuggestionNow: (suggestionId: string, conversationId: string) => void;
+  /** A teammate's answer to the agent's open question, for the owner to submit. */
+  proposeAnswer: (conversationId: string, toolUseId: string, body: string, clientKey: string, authorName: string) => Promise<unknown>;
+  /** A teammate's allow or deny on a pending permission, for the owner to press. */
+  proposePermission: (conversationId: string, permissionId: string, decision: "approved" | "denied", clientKey: string, authorName: string) => Promise<unknown>;
+  /** Owner: whether teammates' messages wait as suggestions while they are in the session. */
+  setTeamSuggestions: (id: string, enabled: boolean) => void;
   setObjectShareLink: (kind: PublicShareKind, id: string, token: string | null) => void;
   setWeeklyCardEnabled: (enabled: boolean) => void;
   setWeeklyCardOptions: (cardId: string, opts: { show_projects?: boolean; show_tokens?: boolean }) => void;
@@ -6349,7 +6373,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   applyHealedSessions: (ids: string[], rows: InboxSession[]) => void;
   markServerDeleted: (convId: string) => void;
   // -- Sync-log write acks (docs/architecture/sync-log-migration.md D8) --
-  stampSyncAck: (patches: any, ack: Array<{ scope_key: string; position: number }>, sentAt: number, opts?: { local?: boolean }) => void;
+  stampSyncAck: (patches: any, ack: Array<{ scope_key: string; position: number }>, sentAt: number, opts?: { local?: boolean; lockIds?: ReadonlySet<string> | readonly string[] }) => void;
   retireAckedPending: (scopeKey: string, upTo: number, opts?: { restore?: boolean }) => void;
   /** A follower's own write echoed by the host: its locks on these cells (and on every field of these rows) forget the host rows they recorded before. */
   forgetLockSeen: (keys: string[], rowPrefixes?: string[]) => void;
@@ -6697,6 +6721,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
     focus?: string,
   ) => void;
   deleteTrigger: (taskId: string) => void;
+  /** Attach a source to a project (projectSources.webAddSource): a channel, or an event by name. Paints a stub keyed by `clientKey`. */
+  addProjectSource: (projectId: string, source: { channel_id?: string; event?: string; title: string }, clientKey: string) => void;
   /** A hosted conversation's Stop: the row settles at once, and the engine
    *  ends its running turn (dispatch stopHostedTurn). */
   stopHostedTurn: (conversationId: string) => void;
@@ -7111,7 +7137,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   updatePlan: (shortId: string, fields: { title?: string; project_id?: string; goal?: string; acceptance_criteria?: string[]; status?: string; task_ids?: string[]; context_pointers?: Array<{ label: string; path_or_url: string }>; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[] }) => void;
   /** Name (or clear) a project's lead; adds the project to the role's scope when it is missing. */
   setProjectLead: (projectId: string, roleId: string | null, opts?: { leave_sessions?: boolean }) => Promise<{ scope?: string; took_over?: string } | null | undefined>;
-  updateProject: (id: string, fields: { title?: string; description?: string; status?: string; color?: string; icon?: string; target_date?: number | null; goal?: string; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[]; risks?: string[]; budget?: { tokens_per_day?: number; hands_per_day?: number } | null; project_path?: string | null; metrics?: InitiativeMetric[] }) => void;
+  updateProject: (id: string, fields: { title?: string; description?: string; instructions?: string; status?: string; color?: string; icon?: string; target_date?: number | null; goal?: string; success_metrics?: string[]; priority?: "p0" | "p1" | "p2" | "p3" | null; owner_role_id?: string | null; non_goals?: string[]; risks?: string[]; budget?: { tokens_per_day?: number; hands_per_day?: number } | null; project_path?: string | null; metrics?: InitiativeMetric[] }) => void;
 
   // -- Issue sync sources (docs/architecture/issue-sync.md S1.3) --
   addIssueSyncSource: (opts: { provider: "linear" | "github"; kind: "linear_project" | "linear_team" | "github_repo"; external_id: string; external_key?: string; name: string; url?: string; project_id?: string; project_name?: string }) => Promise<any>;
@@ -9115,7 +9141,9 @@ function stampSyncAckInDraft(
   patches: any,
   ack: Array<{ scope_key: string; position: number }>,
   sentAt: number,
+  lockIds?: ReadonlySet<string> | readonly string[],
 ): boolean {
+  const ids = lockIds ? new Set(lockIds) : undefined;
   if (!patches || typeof patches !== "object" || !Array.isArray(ack) || ack.length === 0) return false;
   const compact = ack.map((a) => ({ s: a.scope_key, p: a.position }));
   const stamp = (key: string) => {
@@ -9145,12 +9173,21 @@ function stampSyncAckInDraft(
           // write changed it, values differ and we skip — value-echo
           // retirement owns that entry. Objects compare by JSON because both
           // sides may have crossed an IDB structured-clone boundary.
-          const v = entry.value;
-          const same = v === sentValue ||
-            (v !== null && sentValue !== null &&
-             typeof v === "object" && typeof sentValue === "object" &&
-             JSON.stringify(v) === JSON.stringify(sentValue));
-          if (!same || (entry.ts ?? 0) > sentAt) continue;
+          // A lock that carries its id answers to its own send only: a value
+          // match alone also takes in a newer write of the same value (true,
+          // false, true: the first send's ack would retire the third's lock
+          // while it is still in flight, and the third then lands over the
+          // user's next write).
+          if (ids && entry.lock !== undefined) {
+            if (!ids.has(entry.lock)) continue;
+          } else {
+            const v = entry.value;
+            const same = v === sentValue ||
+              (v !== null && sentValue !== null &&
+               typeof v === "object" && typeof sentValue === "object" &&
+               JSON.stringify(v) === JSON.stringify(sentValue));
+            if (!same || (entry.ts ?? 0) > sentAt) continue;
+          }
           stamp(key);
           const twin = storeKey === "sessions" ? ACK_DERIVED_TWINS[field] : undefined;
           if (twin) stamp(`${storeKey}:${docId}:${twin}`);
@@ -9411,7 +9448,7 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
   }
 
   if (msg.kind === "ack") {
-    stampSyncAckInDraft(draft, msg.patches, msg.ack, msg.sentAt);
+    stampSyncAckInDraft(draft, msg.patches, msg.ack, msg.sentAt, msg.lockIds);
     return;
   }
 
@@ -10153,6 +10190,24 @@ const inboxStoreConfig = (set: any, get: any) => ({
   deleteTrigger: action(function (this: Draft, taskId: string) {
     delete (this.agentTasks as any)[taskId];
     delete (this.foreignTriggers as any)[taskId];
+  }),
+  // The stub the server row supersedes through the agentTasks altKey (client_key).
+  addProjectSource: action(function (this: Draft, projectId: string, source: { channel_id?: string; event?: string; title: string }, clientKey: string) {
+    const event_type = source.channel_id ? "chat_message" : source.event!;
+    (this.agentTasks as any)[clientKey] = {
+      _id: clientKey,
+      client_key: clientKey,
+      project_id: projectId,
+      title: source.title,
+      prompt: "",
+      schedule_type: "event",
+      event_filter: { event_type, ...(source.channel_id ? { channel_id: source.channel_id } : {}) },
+      status: "scheduled",
+      mode: "apply",
+      retry_count: 0,
+      run_count: 0,
+      created_at: Date.now(),
+    };
   }),
   stopHostedTurn: action(function (this: Draft, conversationId: string) {
     const row = (this.sessions as any)[conversationId];
@@ -10983,11 +11038,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
     patches: any,
     ack: Array<{ scope_key: string; position: number }>,
     sentAt: number,
-    opts?: { local?: boolean },
+    opts?: { local?: boolean; lockIds?: ReadonlySet<string> | readonly string[] },
   ) {
-    if (!stampSyncAckInDraft(this, patches, ack, sentAt)) return;
+    if (!stampSyncAckInDraft(this, patches, ack, sentAt, opts?.lockIds)) return;
     if (!opts?.local) {
-      broadcastGesture({ kind: "ack", patches, ack, sentAt, ts: Date.now() }, bridgeUserId(this));
+      // A sibling stamps by the same lock ids (a lock with none falls back to the value guard).
+      const lockIds = opts?.lockIds ? [...opts.lockIds] : undefined;
+      broadcastGesture({ kind: "ack", patches, ack, sentAt, ts: Date.now(), ...(lockIds ? { lockIds } : {}) }, bridgeUserId(this));
     }
   }),
 
@@ -11435,11 +11492,48 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // `guestSuggestions` is localFirst, so removing the row plants an exclude
   // that holds over pushes racing the write. The side effects run
   // guestSuggestions.sendGuestSuggestionFor / dismissGuestSuggestionFor.
-  sendGuestSuggestion: action(function (this: Draft, suggestionId: string, _body?: string) {
+  // Awaitable: an answer proposal's card closes only once the server says it went in.
+  sendGuestSuggestion: asyncAction(function (this: Draft, suggestionId: string, _body?: string) {
     delete this.guestSuggestions[suggestionId];
   }),
   dismissGuestSuggestion: action(function (this: Draft, suggestionId: string) {
     delete this.guestSuggestions[suggestionId];
+  }),
+  withdrawTeamSuggestion: action(function (this: Draft, suggestionId: string, _conversationId: string) {
+    delete this.guestSuggestions[suggestionId];
+  }),
+  // The row leaves at once; the server sends it (or parks it again, if an
+  // owner came back) and the session's own feeds show which.
+  sendTeamSuggestionNow: action(function (this: Draft, suggestionId: string, _conversationId: string) {
+    delete this.guestSuggestions[suggestionId];
+  }),
+  // One live proposal per author per question or permission: the stub takes
+  // the place of the one it replaces, as the server does.
+  // Awaitable: a refused proposal takes its painted stub back and says why.
+  proposeAnswer: asyncAction(function (this: Draft, conversationId: string, toolUseId: string, body: string, clientKey: string, authorName: string) {
+    const me = this.currentUser?._id ? String(this.currentUser._id) : null;
+    for (const [id, r] of Object.entries(this.guestSuggestions) as Array<[string, any]>) {
+      if (r?.kind === "answer" && r.tool_use_id === toolUseId && r.status === "pending" && String(r.author_user_id) === me) delete this.guestSuggestions[id];
+    }
+    this.guestSuggestions[clientKey] = {
+      _id: clientKey, client_key: clientKey, conversation_id: conversationId, author_user_id: me, guest_name: authorName,
+      kind: "answer", tool_use_id: toolUseId, body: body.trim(), status: "pending", created_at: Date.now(),
+    };
+  }),
+  proposePermission: asyncAction(function (this: Draft, conversationId: string, permissionId: string, decision: "approved" | "denied", clientKey: string, authorName: string) {
+    const me = this.currentUser?._id ? String(this.currentUser._id) : null;
+    for (const [id, r] of Object.entries(this.guestSuggestions) as Array<[string, any]>) {
+      if (r?.kind === "permission" && String(r.permission_id) === permissionId && r.status === "pending" && String(r.author_user_id) === me) delete this.guestSuggestions[id];
+    }
+    this.guestSuggestions[clientKey] = {
+      _id: clientKey, client_key: clientKey, conversation_id: conversationId, author_user_id: me, guest_name: authorName,
+      kind: "permission", permission_id: permissionId, decision, body: decision === "approved" ? "Allow" : "Deny", status: "pending", created_at: Date.now(),
+    };
+  }),
+  setTeamSuggestions: action(function (this: Draft, id: string, enabled: boolean) {
+    patchConversationRows(this, id, (c) => {
+      c.team_suggestions = enabled ? null : false;
+    });
   }),
 
   // The same switch for every other shareable kind (convex publicShare.ts),
@@ -15644,6 +15738,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   ...createOpsSlice(),
   // Live artifact writes (store/liveArtifactsSlice.ts): element batches, drafts, checkpoints.
   ...createLiveArtifactsSlice(),
+  // Meeting bot writes (store/meetingBotsSlice.ts): send to a pasted link, remove.
+  ...createMeetingBotsSlice(),
 
 });
 

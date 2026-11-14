@@ -9,15 +9,23 @@ import * as path from "node:path";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/codecastDir.js";
 import * as os from "node:os";
 import { spawnSync } from "node:child_process";
+import { countFloorWatchers } from "./watcherMemory.js";
 import { heapCapMb, heapDeath, isNativeFrame, tscNodeOptions, TSC_HEAP_MB } from "./checkHeap.js";
-import { checkProject, lastLogLine, logPath, classifyWatchLine, filesNotAsChecked, tscFileVersion, unlistedChanges, eventsPath, projectsTouching, buildInfoPath, IDLE_EXIT_MS, listQueue, makeRoom, WANTED_MS, shouldIdleExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
+import { CheckFailure, summarize } from "./checkOutcome.js";
+import { acquireFileLock } from "./lockFile.js";
+import { EXIT_BUSY } from "./infraExit.js";
+import { capacityFor, listWatchers, machineCapacity, removeOwnState, statePath, stopWatcher, watcherIdentity, checkProject, lastLogLine, logPath, classifyWatchLine, filesNotAsChecked, tscFileVersion, unlistedChanges, eventsPath, projectsTouching, buildInfoPath, IDLE_EXIT_MS, listQueue, makeRoom, WANTED_MS, shouldIdleExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
 
 let isolation: IsolatedCodecastDir;
+const realIdentity = watcherIdentity.matches;
 beforeEach(() => {
   isolation = isolateCodecastDir("cast-check-test-");
+  // These tests stand in for a watcher with their own pid.
+  watcherIdentity.matches = (command, pid) => pid === process.pid || realIdentity(command, pid);
 });
 afterEach(() => {
   isolation.restore();
+  watcherIdentity.matches = realIdentity;
 });
 
 describe("classifyWatchLine", () => {
@@ -162,7 +170,9 @@ describe("an answer describes the files on disk", () => {
   test("a watcher that never sees the change is named as behind, with the way out, and nothing is stopped", async () => {
     const { tree } = treeWithPass("export const x = 1;\n", "export const x = 1;\nexport const y = 2;\n", 1);
     const killed: number[] = [];
-    await expect(checkProject({ name: "app", tsconfig: "x" }, tree, { start: () => {}, kill: (pid) => killed.push(pid), unseenGraceMs: 300 })).rejects.toThrow(/has not checked a\.ts as it is on disk.*cast check --fresh app/);
+    const err = await checkProject({ name: "app", tsconfig: "x" }, tree, { start: () => {}, kill: (pid) => killed.push(pid), unseenGraceMs: 300 }).catch((e) => e);
+    expect(err.message).toMatch(/has not checked a\.ts as it is on disk/);
+    expect(summarize([{ project: "app", failure: err }])).toEqual({ exit: EXIT_BUSY, hint: expect.stringContaining("cast check --fresh app") });
     expect(killed).toEqual([]);
   });
 
@@ -193,14 +203,16 @@ describe("an answer describes the files on disk", () => {
 describe("a corrected tsconfig path", () => {
   test("a watcher built on another tsconfig is replaced, not trusted", async () => {
     const dir = watchDir("/tree", "cli");
-    writeWatchState(dir, { pid: process.pid, project: "cli", tsconfig: "packages/cli/tsconfig.json", root: "/tree", startedAt: 1, inProgress: false, finishedAt: Date.now(), errors: 149 });
+    const old = Bun.spawn(["bash", "-c", "exec -a 'codecast check-watch /tree cli x' sleep 30"]);
+    await new Promise((r) => setTimeout(r, 200));
+    writeWatchState(dir, { pid: old.pid, project: "cli", tsconfig: "packages/cli/tsconfig.json", root: "/tree", startedAt: 1, inProgress: false, finishedAt: Date.now(), errors: 149 });
     fs.writeFileSync(outputPath(dir), "old.ts(1,1): error TS6059\n");
     const notes: string[] = [];
     const killed: number[] = [];
     let starts = 0;
     const r = await checkProject({ name: "cli", tsconfig: "packages/cli/tsconfig.typecheck.json" }, "/tree", {
       note: (l) => notes.push(l),
-      kill: (pid) => killed.push(pid),
+      kill: (pid) => { killed.push(pid); process.kill(pid, "SIGKILL"); },
       start: () => {
         starts++;
         writeWatchState(dir, { pid: process.pid, project: "cli", tsconfig: "packages/cli/tsconfig.typecheck.json", root: "/tree", startedAt: Date.now(), inProgress: false, finishedAt: Date.now(), errors: 1 });
@@ -208,7 +220,7 @@ describe("a corrected tsconfig path", () => {
       },
     });
     expect(starts).toBe(1);
-    expect(killed).toEqual([process.pid]);
+    expect(killed).toEqual([old.pid]);
     expect(r.errors).toBe(1);
     expect(r.diagnostics).toContain("TS2353");
     expect(notes.some((n) => /now names packages\/cli\/tsconfig\.typecheck\.json/.test(n))).toBe(true);
@@ -407,7 +419,7 @@ describe("the machine wide watcher cap", () => {
     await expect(checkProject({ name: "next", tsconfig: "x" }, "/tree", {
       maxWatchers: 1, budgetMs: 1, kill: (pid) => killed.push(pid), start: () => { starts++; }, note: (l) => notes.push(l),
     })).rejects.toThrow("still queued");
-    expect(notes.some((l) => l.startsWith("queued:"))).toBe(true);
+    expect(notes.some((l) => l.startsWith("queued for the 1 typecheck slot:"))).toBe(true);
     expect(killed).toEqual([]);
     expect(starts).toBe(0);
     expect(readWatchState(watchDir("/tree", "busy"))).not.toBeNull();
@@ -485,6 +497,264 @@ describe("the machine wide watcher cap", () => {
     writeWatchState(watchDir("/t3", "z"), { pid: 999999999, project: "z", tsconfig: "x", root: "/t3", startedAt: 1, inProgress: true });
     expect(makeRoom(2, () => {})).toEqual([]);
     expect(readWatchState(watchDir("/t3", "z"))).toBeNull();
+  });
+});
+
+describe("admission by memory", () => {
+  const GB = 2 ** 30;
+  const seed = (project: string, extra: Partial<WatchState> = {}) =>
+    writeWatchState(watchDir("/tree", project), { pid: process.pid, project, tsconfig: "x", root: "/tree", startedAt: 1, inProgress: false, finishedAt: 1, firstFinishedAt: 1, errors: 0, askedAt: 1, ...extra });
+  const sizes: Record<string, number> = { web: 6 * GB, cli: 2 * GB, convex: 3 * GB };
+  const capacity = (needBytes: number, budget = 12 * GB) => ({ maxWatchers: 16, budgetBytes: budget, needBytes, holdOf: (w: WatchState) => sizes[w.project] ?? 0 });
+
+  test("small watchers no longer count as whole slots: a new one starts beside them while memory fits", () => {
+    seed("web");
+    seed("cli");
+    expect(makeRoom(capacity(3 * GB), () => {})).toEqual([]);
+  });
+
+  test("past the budget, the least recently asked are stopped until the need fits, and the event names the memory", () => {
+    seed("web", { askedAt: 3 });
+    seed("cli", { askedAt: 1 });
+    seed("convex", { askedAt: 2 });
+    const evicted = makeRoom(capacity(4 * GB), () => {});
+    expect(evicted?.map((w) => w.project)).toEqual(["cli", "convex"]);
+    expect(fs.readFileSync(eventsPath(), "utf-8")).toMatch(/evict cli \/tree .*11\.0 GB reserved of 12\.0 GB, need 4\.0 GB, frees 2\.0 GB/);
+    // The victim's log ends saying so, so an asker still waiting on it retries instead of reporting a death.
+    expect(lastLogLine(watchDir("/tree", "cli"))).toMatch(/^stopped to make room for another watcher \(cap 16, 11\.0 GB reserved/);
+  });
+
+  test("an ask behind the first gets no empty-machine pass: it must fit beside the first's need", () => {
+    expect(makeRoom({ ...capacity(13 * GB), strict: true }, () => {}, Date.now(), new Set(), false)).toBeNull();
+    expect(makeRoom({ ...capacity(12 * GB), strict: true }, () => {}, Date.now(), new Set(), false)).toEqual([]);
+    expect(makeRoom(capacity(13 * GB), () => {}, Date.now(), new Set(), false)).toEqual([]);
+  });
+
+  test("an ask further back in line starts if it fits as things are, and never stops anything to fit", () => {
+    seed("web", { askedAt: 3 });
+    const killed: number[] = [];
+    expect(makeRoom(capacity(5 * GB), (pid) => killed.push(pid), Date.now(), new Set(), false)).toEqual([]);
+    expect(makeRoom(capacity(7 * GB), (pid) => killed.push(pid), Date.now(), new Set(), false)).toBeNull();
+    expect(killed).toEqual([]);
+  });
+
+  test("a need that only fits by stopping a wanted pass waits, and stops nothing", () => {
+    seed("web", { inProgress: true, askedAt: Date.now() });
+    const killed: number[] = [];
+    expect(makeRoom(capacity(7 * GB), (pid) => killed.push(pid))).toBeNull();
+    expect(killed).toEqual([]);
+  });
+
+  test("a watcher written before memory admission (no repo, no peak) is read and held by what it measures", () => {
+    const dir = watchDir("/tree", "legacy");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(statePath(dir), JSON.stringify({ pid: process.pid, project: "legacy", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: false, finishedAt: 1, firstFinishedAt: 1, errors: 0 }));
+    const cap = machineCapacity("/tree", "next", 16);
+    const [w] = listWatchers();
+    expect(w!.repo).toBeUndefined();
+    const held = cap.holdOf!(w!);
+    expect(held).toBeGreaterThan(10 * 2 ** 20);
+    expect(held).toBeLessThan(cap.ceilingBytes);
+  });
+
+  describe("through the machine's own measurements", () => {
+    // A budget of 0.3 GB: this test process (the "watcher") measures more than that with any need beside it.
+    let before: string | undefined;
+    beforeEach(() => {
+      before = process.env.CAST_CHECK_RESERVE_GB;
+      process.env.CAST_CHECK_RESERVE_GB = String(os.totalmem() / GB - 0.3);
+    });
+    afterEach(() => {
+      if (before === undefined) delete process.env.CAST_CHECK_RESERVE_GB;
+      else process.env.CAST_CHECK_RESERVE_GB = before;
+    });
+
+    // The count rule always admits its number (one per 12 GB): memory decides only past it, so the machine is filled to it first.
+    const floor = () => countFloorWatchers(os.totalmem());
+
+    test("past the count rule's number, an ask queues for memory behind wanted passes, and gives up as busy", async () => {
+      for (let i = 0; i < floor(); i++) seed(`busy${i}`, { inProgress: true, askedAt: Date.now(), peakRssBytes: GB });
+      const notes: string[] = [];
+      const err = await checkProject({ name: "next", tsconfig: "x" }, "/tree", { budgetMs: 1, start: () => { throw new Error("must not start"); }, note: (l) => notes.push(l) }).catch((e) => e);
+      expect(err).toBeInstanceOf(CheckFailure);
+      expect(err.kind).toBe("busy");
+      expect(notes.some((l) => /^queued for typecheck memory \(needs 0\.\d GB of 0\.3 GB\): the live watchers hold passes someone is waiting on \(busy/.test(l))).toBe(true);
+    });
+
+    test("a queued ask answers 75 within the queue's own wait, however long the caller would have waited", async () => {
+      for (let i = 0; i < floor(); i++) seed(`busy${i}`, { inProgress: true, askedAt: Date.now(), peakRssBytes: GB });
+      const t = Date.now();
+      const err = await checkProject({ name: "next", tsconfig: "x" }, "/tree", { budgetMs: 60_000, queueWaitMs: 1_500, start: () => { throw new Error("must not start"); } }).catch((e) => e);
+      expect(err.kind).toBe("busy");
+      expect(Date.now() - t).toBeLessThan(10_000);
+      expect(summarize([{ project: "next", failure: err }]).exit).toBe(EXIT_BUSY);
+    });
+
+    test("past the count rule's number, an idle watcher is stopped to make room, by the peak it reached", async () => {
+      for (let i = 0; i < floor(); i++) seed(`idle${i}`, { peakRssBytes: GB, askedAt: i + 1 });
+      const killed: number[] = [];
+      const notes: string[] = [];
+      const start = (root: string, project: { name: string; tsconfig: string }) =>
+        writeWatchState(watchDir(root, project.name), { pid: process.pid, project: project.name, tsconfig: project.tsconfig, root, startedAt: Date.now(), inProgress: false, finishedAt: Date.now(), errors: 0 });
+      const r = await checkProject({ name: "next", tsconfig: "x" }, "/tree", { kill: (pid) => killed.push(pid), start, note: (l) => notes.push(l) });
+      expect(r).toMatchObject({ project: "next", started: true, firstPass: true });
+      expect(killed).toEqual([process.pid]);
+      expect(notes).toContain("stopped the idle0 watcher for /tree (idle longest) to stay within the 0.3 GB typecheck watchers share on this machine");
+    });
+  });
+
+  test("each finished pass hands its hooks the moment to record a peak, before the state is written", () => {
+    const dir = watchDir("/tree", "cli");
+    const state: WatchState = { pid: process.pid, project: "cli", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: true };
+    const events: string[] = [];
+    const reduce = watchReducer(dir, state, { onStart: () => events.push("start"), onDone: () => { events.push("done"); state.peakRssBytes = 123; } });
+    reduce("[9:41:02 AM] Starting compilation in watch mode...");
+    reduce("Found 0 errors. Watching for file changes.");
+    expect(events).toEqual(["start", "done"]);
+    expect(readWatchState(dir)?.peakRssBytes).toBe(123);
+  });
+});
+
+describe("the 128 GB machine the first version throttled (MacBook-Pro-182, 2026-11-14)", () => {
+  const GB = 2 ** 30;
+  // Learned there: web 5.4 GB, mobile 3.8, backend 6.4 (p95); cli unmeasured.
+  const learned: Record<string, number> = { web: 5.4, mobile: 3.8, backend: 6.4 };
+  const peaksFor = (project: string) => (learned[project] ? [1, 2, 3].map((at) => ({ at, bytes: learned[project]! * GB, outcome: "clean" as const })) : []);
+  const projects = ["web", "mobile", "backend", "cli"];
+
+  /** Start watchers one by one, every one a first pass someone is waiting on (none can be stopped), until admission says no. */
+  function concurrent(opts: { env?: NodeJS.ProcessEnv; learnedP95s?: number[]; peaks?: (p: string) => ReturnType<typeof peaksFor>; use?: (p: string) => number }): number {
+    const peaks = opts.peaks ?? peaksFor;
+    const use = new Map<string, number>();
+    let started = 0;
+    for (let i = 0; i < 40; i++) {
+      const project = projects[i % projects.length]!;
+      const cap = capacityFor({
+        totalBytes: 128 * GB, maxWatchers: 16, env: opts.env ?? {},
+        needPeaks: () => peaks(project), peaksOf: (w) => peaks(w.project),
+        learnedP95s: opts.learnedP95s ?? Object.values(learned).map((g) => g * GB),
+        measure: (w) => use.get(w.dir) ?? 0,
+      });
+      if (makeRoom(cap, () => { throw new Error("nothing here may be stopped"); }) === null) break;
+      const root = `/wt${i}`;
+      writeWatchState(watchDir(root, project), { pid: process.pid, project, tsconfig: "x", root, startedAt: Date.now(), inProgress: true, askedAt: Date.now() });
+      use.set(watchDir(root, project), (opts.use ?? ((p) => (learned[p] ?? 2) * GB * 0.6))(project));
+      started++;
+    }
+    return started;
+  }
+
+  test("with the learned sizes, all 16 slots fill: more than the 10 the count rule allowed", () => {
+    expect(concurrent({})).toBe(16);
+  });
+
+  test("with nothing learned yet (the rollout moment that broke), still at least 10", () => {
+    expect(concurrent({ learnedP95s: [], peaks: () => [] })).toBeGreaterThanOrEqual(10);
+  });
+
+  test("even when memory says the machine is full, the count rule's 10 always run", () => {
+    expect(concurrent({ env: { CAST_CHECK_RESERVE_GB: "127" }, use: () => 8 * GB })).toBe(10);
+  });
+
+  test("the numbers check-status showed then are now a machine with room", () => {
+    const cap = capacityFor({ totalBytes: 128 * GB, maxWatchers: 16, env: {}, needPeaks: () => [], peaksOf: (w) => peaksFor(w.project), learnedP95s: Object.values(learned).map((g) => g * GB), measure: () => 0 });
+    expect(cap.budgetBytes).toBe(Math.round(128 * GB * 0.8));
+    expect(cap.minWatchers).toBe(10);
+    expect(cap.coldBytes).toBe(5.4 * GB);
+    expect(cap.needBytes).toBe(5.4 * GB);
+  });
+});
+
+describe("a watcher stopped for --fresh", () => {
+  test("a lock another live ask holds times out in the words lockFor reads as contention", async () => {
+    const file = path.join(watchDir("/tree", "web"), "start.lock");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const release = await acquireFileLock(file, { describe: "cast check web" });
+    try {
+      await expect(acquireFileLock(file, { describe: "cast check web", waitMs: 300 })).rejects.toThrow(/\bhas held\b|\bwas still taking\b/);
+    } finally {
+      release();
+    }
+  });
+
+  test("an old watcher that will not stop is left running and named, never doubled", async () => {
+    const dir = watchDir("/tree", "web");
+    const stuck = Bun.spawn(["bash", "-c", "exec -a 'codecast check-watch /tree web x' sleep 30"]);
+    await new Promise((r) => setTimeout(r, 200));
+    try {
+      writeWatchState(dir, { pid: stuck.pid, project: "web", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: false, finishedAt: 1, errors: 0 });
+      const err = await stopWatcher(dir, stuck.pid, () => {}, 300).catch((e) => e);
+      expect(err).toBeInstanceOf(CheckFailure);
+      expect(err.kind).toBe("stuck");
+      expect(err.detail.pid).toBe(stuck.pid);
+      expect(err.detail.pgid).toBeGreaterThan(0);
+      expect(summarize([{ project: "web", failure: err }]).hint).toBe(`stop the old watcher (\`kill -9 -- -${err.detail.pgid}\`), then run \`cast check --fresh web\``);
+      expect(readWatchState(dir)?.pid).toBe(stuck.pid);
+    } finally {
+      stuck.kill(9);
+    }
+  });
+
+  test("an ask never waits on a pid another program now holds: it starts a watcher of its own", async () => {
+    const dir = watchDir("/tree", "web");
+    const other = Bun.spawn(["sleep", "30"]);
+    try {
+      writeWatchState(dir, { pid: other.pid, project: "web", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: true, errors: 0 });
+      let starts = 0;
+      const start = () => { starts++; writeWatchState(dir, { pid: process.pid, project: "web", tsconfig: "x", root: "/tree", startedAt: Date.now(), inProgress: false, finishedAt: Date.now(), errors: 0 }); };
+      const r = await checkProject({ name: "web", tsconfig: "x" }, "/tree", { start, maxWatchers: 4, budgetMs: 5_000 });
+      expect(r).toMatchObject({ started: true, errors: 0 });
+      expect(starts).toBe(1);
+    } finally {
+      other.kill(9);
+    }
+  });
+
+  test("a dead watcher's pid now held by another program is never signalled, counted, called stuck, nor named to kill", async () => {
+    const dir = watchDir("/tree", "web");
+    const other = Bun.spawn(["sleep", "30"]);
+    try {
+      writeWatchState(dir, { pid: other.pid, project: "web", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: true, errors: 0 });
+      expect(listWatchers()).toEqual([]);
+      expect(readWatchState(dir)).toBeNull();
+      writeWatchState(dir, { pid: other.pid, project: "web", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: false, finishedAt: 1, errors: 0 });
+      const killed: number[] = [];
+      await stopWatcher(dir, other.pid, (pid) => killed.push(pid), 300);
+      expect(killed).toEqual([]);
+      expect(readWatchState(dir)).toBeNull();
+    } finally {
+      other.kill(9);
+    }
+  });
+
+  test("a start that never comes up reads only what was logged since the attempt", () => {
+    const dir = watchDir("/tree", "web");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(logPath(dir), "tsc ran out of memory on web at its 8 GB heap cap (x). Asking again\n");
+    const from = fs.statSync(logPath(dir)).size;
+    expect(lastLogLine(dir, from)).toBeNull();
+    fs.appendFileSync(logPath(dir), "tsc did not start: spawn EACCES\n");
+    expect(lastLogLine(dir, from)).toBe("tsc did not start: spawn EACCES");
+  });
+
+  test("cleaning up late never removes its successor's state", () => {
+    const dir = watchDir("/tree", "web");
+    writeWatchState(dir, { pid: 4242, project: "web", tsconfig: "x", root: "/tree", startedAt: 2, inProgress: true });
+    removeOwnState(dir, 999999999);
+    expect(readWatchState(dir)?.pid).toBe(4242);
+    removeOwnState(dir, 4242);
+    expect(readWatchState(dir)).toBeNull();
+  });
+
+  test("the ask waits for the old watcher to exit before the new one starts", async () => {
+    const dir = watchDir("/tree", "web");
+    const child = Bun.spawn(["bash", "-c", "exec -a 'codecast check-watch /tree web x' sleep 30"]);
+    await new Promise((r) => setTimeout(r, 200));
+    writeWatchState(dir, { pid: child.pid, project: "web", tsconfig: "x", root: "/tree", startedAt: 1, inProgress: false, finishedAt: 1, errors: 0 });
+    const t = Date.now();
+    await stopWatcher(dir, child.pid, (pid) => setTimeout(() => process.kill(pid, "SIGKILL"), 400));
+    expect(Date.now() - t).toBeGreaterThanOrEqual(350);
+    expect(readWatchState(dir)).toBeNull();
   });
 });
 

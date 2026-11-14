@@ -43,7 +43,8 @@ import { dmKeyFor, dmOtherIds, endRound, isSettledLine, isThreadMuted, plainPrev
 import { normalizeChannelName } from "@codecast/convex/convex/chatText";
 import { humanizeConvexError } from "@codecast/shared/contracts";
 import { mirrorState, mergeLinkOptions, nextSlackMembers, type SlackDirection, type SlackLinkOptions, type SlackMemberWriter, type SlackSendAuth } from "@codecast/convex/convex/lib/slackMirror";
-import { action, asyncAction, sync } from "./mutativeMiddleware";
+import { action, asyncAction, isParkedDispatchError, sync } from "./mutativeMiddleware";
+import { toast } from "sonner";
 import { awaitUpload, deliverableAttachments, hasPendingUploads, releaseUpload } from "../lib/pendingUploads";
 import type { PendingEntry } from "./syncProtocol";
 import { isConvexId } from "../lib/entityLinks";
@@ -231,6 +232,8 @@ export type ChatMessageRow = {
   /** The room's agents taking turns on this thread (root rows only). */
   round?: ChatRound;
   fork_conversation_id?: string;
+  /** The session a person handed this thread to (root rows only). */
+  bound_session_id?: string;
   // Slack mirror provenance. "inbound" rows were written in Slack: `user_id` is
   // then a mapped teammate or the workspace's bridge identity, and
   // `external_author` carries the real name and face to render. "outbound"
@@ -491,9 +494,55 @@ export type ChatSendOptions = {
   onSent?: (result: ChatSendResult | undefined) => void;
 };
 
+export type HandToAgentInput = {
+  /** The handed line's server id, or the promise of it for a line still sending. */
+  message: string | Promise<string>;
+  /** The thread root's row key, where the pill shows. */
+  rootKey: string;
+  agentType: string;
+  projectPath?: string;
+  targetDeviceId?: string | null;
+};
+
+const HAND_SEND_WAIT_MS = 2 * 60_000;
+type SentWaiter = { resolve: (id: string) => void; reject: (e: unknown) => void };
+const sentWaiters = new Map<string, SentWaiter>();
+const settledSends = new Map<string, string | Error>();
+function settleSend(clientId: string, outcome: string | Error) {
+  const waiter = sentWaiters.get(clientId);
+  if (waiter) {
+    sentWaiters.delete(clientId);
+    if (typeof outcome === "string") waiter.resolve(outcome);
+    else waiter.reject(outcome);
+    return;
+  }
+  settledSends.set(clientId, outcome);
+  if (settledSends.size > 50) settledSends.delete(settledSends.keys().next().value!);
+}
+
+/** The server id of a line this window sent, once it lands. */
+export function sentChatMessageId(clientId: string, timeoutMs = HAND_SEND_WAIT_MS): Promise<string> {
+  const settled = settledSends.get(clientId);
+  if (settled !== undefined) {
+    settledSends.delete(clientId);
+    return typeof settled === "string" ? Promise.resolve(settled) : Promise.reject(settled);
+  }
+  return new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      sentWaiters.delete(clientId);
+      reject(new Error("The message has not been delivered yet"));
+    }, timeoutMs);
+    sentWaiters.set(clientId, {
+      resolve: (id) => { clearTimeout(timer); resolve(id); },
+      reject: (e) => { clearTimeout(timer); reject(e); },
+    });
+  });
+}
+
 /** chat.sendMessage's answer, the part a surface acts on. */
 export type ChatSendResult = {
   message_id?: string;
+  session_relay?: { delivered?: boolean; skipped?: string | null };
   mention_wakes?: { roles: number; sessions: number; folded: number; skipped: string[] };
 };
 
@@ -508,6 +557,11 @@ export type ChatSliceActions = {
    *  until they settle. Rewrites the content of a row already painted. */
   paintChatSend: (channelId: string, content: string, clientId: string, opts?: ChatSendOptions) => void;
   retryChatSend: (rowId: string) => void;
+  /** Hand to agent: start a session briefed with the thread holding `message`
+   *  and bound to it. Returns the session's stub id. */
+  handThreadToAgent: (o: HandToAgentInput) => string;
+  stampThreadHand: (rootKey: string, sessionKey: string) => void;
+  unstampThreadHand: (rootKey: string, sessionKey: string, before?: string) => void;
   markChatSendFailed: (rowId: string, reason?: string) => void;
   discardChatSend: (rowId: string) => void;
 
@@ -785,6 +839,12 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
         const sent = get().dispatchChatSend(channelId, text, clientId, sendOpts) as
           | Promise<ChatSendResult | undefined>
           | undefined;
+        if (sent && typeof sent.then === "function") {
+          sent.then(
+            (res) => settleSend(clientId, res?.message_id ? String(res.message_id) : new Error("The message was not delivered")),
+            (e) => settleSend(clientId, e instanceof Error ? e : new Error(String(e))),
+          );
+        }
         // (The impl type says void because the BODY returns nothing; the
         // middleware wraps an asyncAction to resolve with the dispatch result.)
         if (onSent && sent && typeof sent.then === "function") {
@@ -857,6 +917,48 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       const existing = this.chatMessages[clientId];
       if (existing) existing.content = content;
       else paintOptimisticSend(this, channelId, content, clientId, opts);
+    }),
+
+    handThreadToAgent: (o: HandToAgentInput) => {
+      const st = get();
+      const path = o.projectPath;
+      const { stubId, ready } = st.beginOptimisticSession({
+        agentType: o.agentType,
+        projectPath: path,
+        gitRoot: path,
+        create: async (sid: string) => st.createSession({
+          agent_type: o.agentType,
+          project_path: path,
+          git_root: path,
+          session_id: sid,
+          ...(o.targetDeviceId ? { target_device_id: o.targetDeviceId } : {}),
+          linked_object: { type: "chat_thread", id: await Promise.resolve(o.message).catch(() => { throw new Error("The message did not reach the server, so no agent started"); }) },
+        }),
+      });
+      const before = get().chatMessages[o.rootKey]?.bound_session_id as string | undefined;
+      get().stampThreadHand(o.rootKey, stubId);
+      ready.catch((error: unknown) => {
+        if (isParkedDispatchError(error)) return;
+        get().unstampThreadHand(o.rootKey, stubId, before);
+        get().pruneGhostSessions([stubId]);
+        toast.error(humanizeConvexError(error, "The agent did not start"));
+      });
+      return stubId;
+    },
+
+    stampThreadHand: sync(function (this: ChatDraft, rootKey: string, sessionKey: string) {
+      let row = this.chatMessages[rootKey];
+      if (!row) for (const id in this.chatMessages) if (this.chatMessages[id].client_id === rootKey) { row = this.chatMessages[id]; break; }
+      if (row) row.bound_session_id = sessionKey;
+    }),
+
+    unstampThreadHand: sync(function (this: ChatDraft, rootKey: string, sessionKey: string, before?: string) {
+      for (const id in this.chatMessages) {
+        const row = this.chatMessages[id];
+        if ((id !== rootKey && row.client_id !== rootKey) || row.bound_session_id !== sessionKey) continue;
+        if (before) row.bound_session_id = before;
+        else delete row.bound_session_id;
+      }
     }),
 
     retryChatSend: (rowId: string) => {

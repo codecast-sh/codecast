@@ -189,10 +189,96 @@ export function isAgentContextMessage(rawContent: string | null | undefined): bo
 //
 // The body is another session's text, so it cannot carry a frame tag of its
 // own (neutralizeFrameTags): the wrapper ends only at its real close.
-export function formatSessionMessage(from: string, body: string, opts: { name?: string; subagent?: boolean } = {}): string {
+//
+// `intent` says what the sender wants back. A request (the default) is never
+// written; `inform` needs no reply, and `done` closes the exchange and must
+// not be answered (the standing guidance in snippets.ts says so). Idea from
+// flopwire's intent="request|inform|done" (internal/busrender/busrender.go).
+export function formatSessionMessage(from: string, body: string, opts: { name?: string; subagent?: boolean; intent?: SessionMessageIntent } = {}): string {
   const nameAttr = opts.name ? ` name="${neutralizeFrameTags(opts.name.replace(/"/g, "'").replace(/[\r\n]+/g, " "))}"` : "";
   const subagentAttr = opts.subagent ? ' subagent="true"' : "";
-  return `<session-message from="${from}"${nameAttr}${subagentAttr}>\n${neutralizeFrameTags(body)}\n</session-message>`;
+  const intentAttr = opts.intent && opts.intent !== "request" ? ` intent="${opts.intent}"` : "";
+  return `<session-message from="${from}"${nameAttr}${subagentAttr}${intentAttr}>\n${neutralizeFrameTags(body)}\n</session-message>`;
+}
+
+export const SESSION_MESSAGE_INTENTS = ["request", "inform", "done"] as const;
+export type SessionMessageIntent = typeof SESSION_MESSAGE_INTENTS[number];
+
+// A session message's whole opening tag, read attribute by attribute: a
+// sender name may contain ">", never a double quote (formatSessionMessage).
+export const SESSION_MESSAGE_OPEN_TAG = /^<session-message(?:\s+[a-z_]+="[^"]*")*\s*>\n?/;
+
+// The intent on a session message's opening tag; a tag without one is a request.
+export function sessionMessageIntentOf(rawContent: string | null | undefined): SessionMessageIntent {
+  const open = rawContent ? stripInjectionNoise(rawContent).match(SESSION_MESSAGE_OPEN_TAG)?.[0] : undefined;
+  const intent = open?.match(/\sintent="([a-z]+)"/)?.[1];
+  return intent === "inform" || intent === "done" ? intent : "request";
+}
+
+// When a `cast send` reaches its target, decided at send time from facts the
+// server already holds. Idea from flopwire's send receipt `arrives`
+// (docs/messaging.md step 3).
+//   now            live and settled: the daemon types it in right away
+//   next_tool_call live and mid-turn, and it reads input between tool calls:
+//                  Claude Code takes type-ahead with its next tool result (a
+//                  turn that makes no further call takes it when it ends)
+//   end_of_turn    live and mid-turn (or compacting)
+//   after_prompt   live, with a permission prompt or question open: delivered
+//                  once someone answers it
+//   after_start    its process is still starting or resuming
+//   on_resume      no running agent, its machine is up: the daemon resumes it to deliver
+//   when_online    its machine is offline: delivered when the daemon comes back
+//   held           the session's safety stop holds all input until a person clears it
+//   with_owner     a teammate's words while an owner is in the session: they wait
+//                  as a suggestion that owner sends, edits or dismisses (teamSuggestions.ts)
+//   never          a workflow run's log: it has no agent, so the message stays on its record
+export type SendArrival = "now" | "next_tool_call" | "end_of_turn" | "after_prompt" | "after_start" | "on_resume" | "when_online" | "held" | "with_owner" | "never";
+
+// One live process behind the target: its status after trust decay
+// (trustedAgentStatus), whether it would take a message now, and whether it
+// reads input mid-turn.
+export type SendArrivalSession = { status?: string; ready: boolean; typeAhead: boolean };
+
+export function sendArrival(t: {
+  safetyBlocked: boolean;
+  runLog: boolean;
+  hosted: boolean;
+  sessions: SendArrivalSession[];
+  queued: boolean;
+  ownerOnline: boolean;
+}): SendArrival {
+  if (t.runLog) return "never";
+  if (t.safetyBlocked) return "held";
+  // A hosted conversation's turn engine is woken by the enqueue itself.
+  if (t.hosted) return "now";
+  if (t.sessions.some((s) => s.ready)) return "now";
+  // Several live rows can disagree (an old row still heartbeating beside the
+  // current process): the soonest any of them takes the message wins.
+  const running = t.sessions.filter((s) => s.status !== "stopped" && s.status !== "hibernated");
+  if (running.length === 0) return t.ownerOnline ? "on_resume" : "when_online";
+  const busy = running.filter((s) => !SLOWER_THAN_A_TURN.includes(s.status ?? ""));
+  // "Queue for later" is held for the end of the turn on purpose.
+  if (busy.length > 0) return !t.queued && busy.some((s) => s.typeAhead && s.status !== "compacting") ? "next_tool_call" : "end_of_turn";
+  return running.some((s) => s.status !== "permission_blocked") ? "after_start" : "after_prompt";
+}
+
+// Live statuses that take a message later than the end of a turn would.
+const SLOWER_THAN_A_TURN = ["permission_blocked", "starting", "resuming", "connected"];
+
+// The receipt's words for each arrival, completing "arrives …".
+export function sendArrivalPhrase(arrives: SendArrival): string {
+  switch (arrives) {
+    case "now": return "now";
+    case "next_tool_call": return "at its next tool call";
+    case "end_of_turn": return "when its current turn ends";
+    case "after_prompt": return "once someone answers the prompt open in it";
+    case "after_start": return "once it finishes starting";
+    case "on_resume": return "once its machine resumes it";
+    case "when_online": return "when its machine comes back online";
+    case "held": return "only after a person clears its safety stop";
+    case "with_owner": return "if its owner sends your suggestion";
+    case "never": return "never: a run's log has no agent, so it stays on the run's record";
+  }
 }
 
 // Lightweight detection that a user message is actually an inbound
@@ -238,6 +324,39 @@ export function formatUserMessage(fromName: string, body: string): string {
 export function isUserMessage(rawContent: string | null | undefined): boolean {
   if (!rawContent) return false;
   return /^<user-message\s+from="/.test(stripInjectionNoise(rawContent));
+}
+
+// The daemon writes the pending row id into a frame at hand-over and pairs the
+// agent's recorded turn by it (cli deliveryEchoLedger); uploads strip it again.
+// Every top-level frame of a row (a joint row holds several), each opening at
+// the start or right after the previous one closes; bodies cannot open one.
+const FRAME_OPEN = /(^\s*|<\/(?:session-message|user-message)>\s*)(<(?:session-message|user-message))((?:\s+[a-z-]+="[^"]*")*)>/g;
+// Only where a frame can start: the turn's opening (inside Claude Code's paste
+// wrapper, after a few leaked keystroke bytes), a new line (sends a busy agent
+// took together), or right after another frame closes; never mid-line.
+const FRAME_LEAD = String.raw`(^(?:<pasted_content[^>]*>)?[\s\x00-\x1f]*[^<\s]{0,2}|\n[\t \x00-\x09\x0b-\x1f]*|(?<=<\/(?:session-message|user-message)>)\s*)`;
+const FRAME_DELIVERY = new RegExp(FRAME_LEAD + String.raw`(<(?:session-message|user-message)(?:\s+[a-z-]+="[^"]*")*?)\s+delivery="([A-Za-z0-9_-]{1,64})"`, "g");
+const FRAME_SPAN = new RegExp(FRAME_LEAD + String.raw`(<(session-message|user-message)(?:\s+[a-z-]+="[^"]*")*>[^]*?<\/\3>)`, "g");
+
+export function stampDeliveryId(content: string, messageId: string): string {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(messageId)) return content;
+  return content.replace(FRAME_OPEN, (_, lead: string, tag: string, attrs: string) =>
+    `${lead}${tag}${attrs.replace(/\s+delivery="[^"]*"/g, "")} delivery="${messageId}">`);
+}
+
+export function deliveryIdsOf(content: string | undefined): string[] {
+  return content?.includes(' delivery="') ? [...content.matchAll(FRAME_DELIVERY)].map((m) => m[3]) : [];
+}
+
+/** The text without the frames that name these deliveries, so what is left can pair by its words. */
+export function withoutDeliveryFrames(content: string, ids: readonly string[]): string {
+  return content.replace(FRAME_SPAN, (all, lead: string, frame: string) => (ids.includes(deliveryIdsOf(frame)[0]) ? lead : all));
+}
+
+/** The text with the delivery ids (these, or every one) taken out of the frames that carry them; anything else is left as written. */
+export function withoutDeliveryId(content: string, ids?: readonly string[]): string {
+  if (!content.includes(' delivery="')) return content;
+  return content.replace(FRAME_DELIVERY, (all, lead: string, open: string, id: string) => (!ids || ids.includes(id) ? lead + open : all));
 }
 
 // Sender name and body. Tolerates a missing close tag (a preview sliced

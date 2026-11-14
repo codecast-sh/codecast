@@ -110,7 +110,8 @@ describe("freshRunBranch", () => {
     const home = path.join(root, "codecast-home");
     const before = process.env.CODECAST_DIR;
     process.env.CODECAST_DIR = home;
-    const tsc = spawn("perl", ["-e", "sleep 60"], { cwd: path.join(tree), detached: true, stdio: "ignore" });
+    // Named as a real watcher is: only a process running check-watch is a watcher to stop.
+    const tsc = spawn("perl", ["-e", '$0 = "codecast check-watch tree backend tsconfig.json"; sleep 60'], { cwd: path.join(tree), detached: true, stdio: "ignore" });
     try {
       for (let i = 0; i < 50 && !processesIn(tree).some((p) => p.pid === tsc.pid); i++) await new Promise((r) => setTimeout(r, 100));
       writeWatchState(watchDir(tree, "backend"), { pid: tsc.pid!, project: "backend", tsconfig: "tsconfig.json", root: tree, startedAt: Date.now(), inProgress: false });

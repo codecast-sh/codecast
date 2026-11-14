@@ -66,6 +66,8 @@ export interface ClaudeSessionEntry {
     prompt?: string | ContentBlock[];
     commandMode?: string;
     origin?: { kind?: string };
+    /** The uuid the absorbed turn was sent under (an SDK host's send). */
+    source_uuid?: string;
   };
 }
 
@@ -116,6 +118,11 @@ export interface ParsedMessage {
   /** Claude's API message id (assistant records). One turn spans several
    *  records that share it; the server counts usage once per id. */
   apiMessageId?: string;
+  /** The uuid a user turn was sent under when Claude recorded it under its
+   *  own: a message absorbed mid-turn is an attachment:queued_command with a
+   *  fresh uuid, and the uuid codecast sent it with is attachment.source_uuid.
+   *  The echo ledger pairs an exact-uuid delivery by either. */
+  sourceUuid?: string;
 }
 
 export interface ClaudeUsage {
@@ -291,12 +298,14 @@ export function extractMessages(entries: ClaudeSessionEntry[], onEmit?: ClaudeEm
         if (prompt.trim() || promptImages.length > 0) {
           const deliveredAt = lastDequeue && lastDequeue.content === promptText ? lastDequeue.timestamp : 0;
           const queuedTimestamp = Math.max(timestamp, deliveredAt, lastEmittedTimestamp);
+          const sourceUuid = typeof entry.attachment.source_uuid === "string" && entry.attachment.source_uuid !== entry.uuid ? entry.attachment.source_uuid : undefined;
           messages.push({
             uuid: entry.uuid,
             role: "user",
             content: prompt,
             timestamp: queuedTimestamp,
             images: promptImages.length > 0 ? promptImages : undefined,
+            ...(sourceUuid ? { sourceUuid } : {}),
           });
           const matchedDequeue = lastDequeue?.content === promptText ? lastDequeue : undefined;
           const queuedReceiptTimestamp = Math.max(receiptTimestamp, matchedDequeue?.receiptTimestamp ?? 0, lastEmittedReceiptTimestamp);

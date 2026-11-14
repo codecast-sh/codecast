@@ -87,9 +87,9 @@ async function walk(values: Generator<number>, checkpoint: () => void): Promise<
 function* input(value: unknown, origin: PreparationOrigin): Generator<number> {
   requireValue(Array.isArray(value));
   for (const msg of value) {
-    fields(msg, ['uuid', 'messageUuid', 'role', 'content', 'timestamp', 'thinking', 'toolCalls', 'toolResults', 'images', 'files', 'subtype', 'model', 'stopReason']);
+    fields(msg, ['uuid', 'messageUuid', 'sourceUuid', 'role', 'content', 'timestamp', 'thinking', 'toolCalls', 'toolResults', 'images', 'files', 'subtype', 'model', 'stopReason']);
     requireValue(typeof msg.role === 'string' && (origin === 'transcript' || ['human', 'assistant', 'system'].includes(msg.role)) && typeof msg.content === 'string' && Number.isFinite(msg.timestamp));
-    strings(msg, ['uuid', 'messageUuid', 'thinking', 'subtype', 'model', 'stopReason']);
+    strings(msg, ['uuid', 'messageUuid', 'sourceUuid', 'thinking', 'subtype', 'model', 'stopReason']);
     for (const key of ['toolCalls', 'toolResults', 'images', 'files']) requireValue(msg[key] === undefined || Array.isArray(msg[key]));
     for (const call of msg.toolCalls ?? []) {
       fields(call, ['id', 'name', 'input']);

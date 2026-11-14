@@ -51,6 +51,7 @@ export const DATA_SCOPE = {
   shipTargets: "entity",
   taskEvidence: "entity",
   projectExpectations: "entity",
+  projectOutputs: "entity",
   expectationsOverview: "workspace",
   trialCards: "workspace",
   trialProjects: "workspace",
@@ -154,6 +155,8 @@ export const DATA_SCOPE = {
   // Pull requests span teams by product design (a PR is read by repo and
   // number wherever the viewer can see it).
   pullRequests: "viewer",
+  // A session's links to its pull requests, read by the session's id (lib/sessionPullRequests).
+  pullRequestSessions: "entity",
   codeComments: "entity",
   quoteDrafts: "entity",
   projectUpdates: "entity",
@@ -195,6 +198,9 @@ export const DATA_SCOPE = {
   callRecordingCalls: "entity",
   callFrameShares: "entity",
   callList: "viewer",
+  meetingBots: "viewer",
+  meetingCalendarEvents: "viewer",
+  meetingBotSettings: "viewer",
   callDetails: "entity",
   clientState: "viewer",
   lastFocusedConversationId: "viewer",

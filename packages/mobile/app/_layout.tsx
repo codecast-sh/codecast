@@ -309,14 +309,18 @@ function RootLayoutNav() {
                       gestureEnabled: false,
                     })}
                   />
+                  <Stack.Screen name="terminal/[id]" options={{ headerShown: false }} />
                   <Stack.Screen name="task/[id]" options={{ title: 'Task' }} />
                   <Stack.Screen name="plan/[id]" options={{ title: 'Plan' }} />
+                  <Stack.Screen name="project/[id]" options={{ title: 'Project' }} />
+                  <Stack.Screen name="goal/[id]" options={{ title: 'Goal' }} />
                   <Stack.Screen name="doc/[id]" options={{ title: 'Doc' }} />
                   <Stack.Screen name="org/index" options={{ title: 'Org' }} />
                   {/* A role's page is the session screen on its standing
                       conversation, which draws its own header. */}
                   <Stack.Screen name="org/[id]/index" options={{ headerShown: false }} />
                   <Stack.Screen name="org/[id]/board" options={{ title: 'Board' }} />
+                  <Stack.Screen name="person/[id]" options={{ title: 'Person' }} />
                   {/* Both draw their own header (a back chevron and a title),
                       so the nav header would be a second one stacked on top. */}
                   <Stack.Screen name="record" options={{ headerShown: false }} />

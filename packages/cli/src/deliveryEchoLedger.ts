@@ -7,9 +7,12 @@
 // before upload. The server then settles the row by id in the same write that
 // stores the turn (messages.ts stampedEchoRows and settleEchoesOn) and never compares text.
 //
-// A backend that lets us choose the record's id (Claude cloud events, the
-// Codex app-server turn the daemon writes itself) passes it as `exactUuid`, and the turn carrying that uuid is the
-// delivery: a fact the harness reports. A terminal pane cannot carry an id,
+// A backend that lets us choose the record's id (Claude cloud events, a
+// Claude SDK host's send, the Codex app-server turn the daemon writes itself)
+// passes it as `exactUuid`, and the turn carrying that uuid is the delivery: a
+// fact the harness reports. Claude keeps the id even when it absorbs a send
+// mid-turn and records it under a fresh uuid: ours is then the record's
+// source_uuid (EchoCandidate.sourceUuid), and either one pairs. A terminal pane cannot carry an id,
 // so a pane delivery is paired with a later user turn of the same conversation
 // whose words are the typed payload's words: for a terminal the pairing is the
 // daemon's, made once, next to the bytes it typed, and every other party works
@@ -20,7 +23,7 @@ import { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { canonicalSlashCommand, stripPastedContent } from "@codecast/shared/contracts";
+import { canonicalSlashCommand, deliveryIdsOf, stripPastedContent, withoutDeliveryFrames } from "@codecast/shared/contracts";
 import { defaultConfigDir } from "./config/configDir.js";
 import { redactSecrets } from "./redact.js";
 
@@ -42,7 +45,8 @@ export function isHarnessEmittedUserTurn(content: string | undefined): boolean {
 
 /** The words of a message as letters and digits, the form a delivery and its echo share whatever the terminal did. */
 export function echoSignature(text: string | undefined): string {
-  let t = stripPastedContent(redactSecrets(text ?? ""));
+  // A delivery id is never words of the message, wherever its frame sits.
+  let t = stripPastedContent(redactSecrets(text ?? "")).replace(/(<(?:session-message|user-message)(?:\s+[a-z-]+="[^"]*")*?)\s+delivery="[A-Za-z0-9_-]{1,64}"/g, "$1");
   t = canonicalSlashCommand(t.trim()) ?? t;
   // A `!cmd` send is recorded as the command alone, inside <bash-input>.
   t = t.replace(/<\/?bash-input>/g, "").replace(/^\s*!/, "");
@@ -55,6 +59,8 @@ export function echoSignature(text: string | undefined): string {
 
 export type EchoCandidate = {
   messageUuid?: string;
+  /** The uuid the turn was sent under when the record carries another (a queued_command absorbed mid-turn). */
+  sourceUuid?: string;
   role: string;
   content: string;
   timestamp: number;
@@ -63,8 +69,8 @@ export type EchoCandidate = {
 };
 
 /** Parsed transcript turns in the form the ledger pairs. */
-export function echoCandidatesOf(turns: ReadonlyArray<{ uuid?: string; role: string; content: string; timestamp: number; toolResults?: readonly unknown[] }>): EchoCandidate[] {
-  return turns.map((m) => ({ messageUuid: m.uuid, role: m.role, content: m.content, timestamp: m.timestamp, toolResults: m.toolResults }));
+export function echoCandidatesOf(turns: ReadonlyArray<{ uuid?: string; sourceUuid?: string; role: string; content: string; timestamp: number; toolResults?: readonly unknown[] }>): EchoCandidate[] {
+  return turns.map((m) => ({ messageUuid: m.uuid, sourceUuid: m.sourceUuid, role: m.role, content: m.content, timestamp: m.timestamp, toolResults: m.toolResults }));
 }
 
 type DeliveryRow = {
@@ -97,9 +103,28 @@ function echoKeyOf(message: EchoCandidate, occurrence: number): string {
  * carry the same words, which take the newer ones. A turn that is several sends the agent
  * took together is their words joined, in the order they were handed over.
  */
-function pairTurn(open: DeliveryRow[], message: EchoCandidate, laterSameWords = 0): DeliveryRow[] {
-  const exact = message.messageUuid ? open.find((d) => d.exactUuid === message.messageUuid) : undefined;
+function pairTurn(open: DeliveryRow[], message: EchoCandidate, laterSameWords: number, known: ReadonlySet<string>): DeliveryRow[] {
+  // The record's own uuid, or the uuid it was sent under: a busy Claude
+  // absorbs a send mid-turn into a queued_command record with a fresh uuid
+  // and keeps ours as source_uuid.
+  const ids = [message.messageUuid, message.sourceUuid].filter((id): id is string => !!id);
+  const exact = ids.length ? open.find((d) => !!d.exactUuid && ids.includes(d.exactUuid)) : undefined;
   if (exact) return [exact];
+  // A frame naming a delivery this ledger holds is that delivery, open or already paired; one it never
+  // handed over (a quote from elsewhere) is only words. An exact-uuid delivery is the record carrying its uuid.
+  const named = deliveryIdsOf(message.content).filter((id) => known.has(id));
+  if (!named.length) return pairByWords(open, message, laterSameWords);
+  const byId = open.filter((d) => named.includes(d.messageId) && !d.exactUuid);
+  const rest = withoutDeliveryFrames(message.content, named);
+  // Only frames: a copy of a delivery already paired takes nothing by its words.
+  if (!echoSignature(rest)) return byId;
+  // A person's own words around a quoted frame are their send, quote included.
+  if (!byId.length) return pairByWords(open, message, laterSameWords);
+  return [...byId, ...pairByWords(open.filter((d) => !byId.includes(d)), { ...message, content: rest }, laterSameWords)]
+    .sort((a, b) => a.submittedAt - b.submittedAt);
+}
+
+function pairByWords(open: DeliveryRow[], message: EchoCandidate, laterSameWords: number): DeliveryRow[] {
   const echo = echoSignature(message.content).slice(0, SIGNATURE_CAP);
   const candidates = open.filter((d) => !d.exactUuid
     && d.submittedAt - ECHO_CLOCK_SKEW_MS <= message.timestamp
@@ -190,8 +215,17 @@ export class DeliveryEchoLedger {
   stamp<T extends EchoCandidate>(conversationId: string, messages: readonly T[]): Array<T & { deliveryIds?: string[] }> {
     if (!messages.some((m) => isUserRole(m.role))) return [...messages];
     return this.db.transaction(() => {
-      let open: DeliveryRow[] | null = null;
-      const userSigs = messages.map((m) => (isUserRole(m.role) ? echoSignature(m.content).slice(0, SIGNATURE_CAP) : null));
+      // A turn that is only frames of known deliveries has no words left to pair, so it never counts as a later copy.
+      let open = this.db.query<DeliveryRow, [string]>(
+        "SELECT * FROM deliveries WHERE conversationId = ? AND echoKey IS NULL ORDER BY submittedAt").all(conversationId);
+      const known = new Set(this.db.query<{ messageId: string }, [string]>(
+        "SELECT messageId FROM deliveries WHERE conversationId = ?").all(conversationId).map((d) => d.messageId));
+      const userSigs = messages.map((m) => {
+        if (!isUserRole(m.role)) return null;
+        const named = deliveryIdsOf(m.content).filter((id) => known.has(id));
+        const sig = echoSignature(named.length ? withoutDeliveryFrames(m.content, named) : m.content).slice(0, SIGNATURE_CAP);
+        return named.length && !sig ? null : sig;
+      });
       const seen = new Map<string, number>();
       return messages.map((message, index) => {
         if (!isUserRole(message.role)) return message;
@@ -204,10 +238,8 @@ export class DeliveryEchoLedger {
         if (bound.length) return { ...message, deliveryIds: bound.map((b) => b.messageId) };
         // A tool's result rides a user-role record and is nobody's send.
         if (isHarnessEmittedUserTurn(message.content) || message.toolResults?.length) return message;
-        open ??= this.db.query<DeliveryRow, [string]>(
-          "SELECT * FROM deliveries WHERE conversationId = ? AND echoKey IS NULL ORDER BY submittedAt").all(conversationId);
         const laterSameWords = userSigs.slice(index + 1).filter((sig) => sig === userSigs[index]).length;
-        const paired = pairTurn(open, message, laterSameWords);
+        const paired = pairTurn(open, message, laterSameWords, known);
         if (!paired.length) return message;
         const now = Date.now();
         for (const d of paired) this.db.query("UPDATE deliveries SET echoKey = ?, echoedAt = ? WHERE messageId = ?").run(key, now, d.messageId);
@@ -227,6 +259,22 @@ export class DeliveryEchoLedger {
 let ledger: DeliveryEchoLedger | undefined;
 export function deliveryEchoLedger(): DeliveryEchoLedger {
   return ledger ??= new DeliveryEchoLedger(join(defaultConfigDir(), "delivery-echoes.sqlite"));
+}
+
+/** Whether a transcript's text records the send made under `uuid`: as the
+ *  record written under it, or as a queued_command absorbed mid-turn that names
+ *  it as its source_uuid. A retried send that finds either has already landed.
+ *  Only a record's own fields count: the same id inside a tool's input is not
+ *  a delivery. Only lines that mention the id are parsed. */
+export function transcriptRecordsSend(text: string, uuid: string): boolean {
+  for (const line of text.split("\n")) {
+    if (!line.includes(uuid)) continue;
+    let record: { uuid?: unknown; attachment?: { type?: unknown; source_uuid?: unknown } };
+    try { record = JSON.parse(line); } catch { continue; }
+    if (record.uuid === uuid) return true;
+    if (record.attachment?.type === "queued_command" && record.attachment.source_uuid === uuid) return true;
+  }
+  return false;
 }
 
 /** A record id derived from the delivery id, for a backend that takes one (Claude cloud events). */

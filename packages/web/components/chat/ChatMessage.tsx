@@ -1,6 +1,6 @@
 import { memo, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
-import { SmilePlus, MessageSquare, MoreHorizontal, RotateCw, AlertTriangle, Link2, Pencil, Trash2, Forward, PhoneCall, EyeOff, ExternalLink } from "lucide-react";
+import { SmilePlus, MessageSquare, MoreHorizontal, RotateCw, AlertTriangle, Link2, Pencil, Trash2, Forward, PhoneCall, EyeOff, ExternalLink, Bot } from "lucide-react";
 import { SlackLogo } from "../SlackLogo";
 import { parseHuddleDigestContent } from "@codecast/shared/contracts";
 import { mentionRoles, mentionSessions, mentionSlack, type ChatRoleMention, type ChatSlackMention } from "@codecast/shared/chat";
@@ -30,6 +30,8 @@ import "../editor/editor.css";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useInboxStore } from "../../store/inboxStore";
 import { RoundStrip } from "./RoundStrip";
+import { HandToAgentReview } from "./HandToAgent";
+import { isConvexId } from "../../lib/entityLinks";
 // One chat message.
 //
 // The row is a two column grid: a fixed gutter (--ch-gutter in chat.css) and the body. When a message
@@ -252,6 +254,7 @@ export const ChatMessage = memo(function ChatMessage({
   const [menuOpen, setMenuOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [handing, setHanding] = useState(false);
   const [draft, setDraft] = useState(message.content);
 
   // The SESSION user-message pipeline (USER_MD_REMARK: entity pills + tight
@@ -349,6 +352,7 @@ export const ChatMessage = memo(function ChatMessage({
   // theirs to correct.
   const canEdit = !!mine && !!onEdit && !message.deletedAt && !author.isAgent && !message.voice && !message.call;
   const canDelete = !!mine && !!onDelete && !message.deletedAt;
+  const canHand = !!channelId && !!onReact && isConvexId(message.id) && !message.deletedAt && !message.voice && !message.call && !message.agentStatus;
 
   const react = (emoji: string) => {
     setPickerOpen(false);
@@ -631,6 +635,13 @@ export const ChatMessage = memo(function ChatMessage({
           </div>
         )}
 
+        {message.boundSessionId && !message.threadRootId && !message.deletedAt && (
+          <div className="ch-handed" data-hand-pill>
+            <Bot className="w-3 h-3" aria-hidden="true" />
+            <EntityIdPill type="session" id={message.boundSessionId} />
+          </div>
+        )}
+
         {!inThread && <RoundStrip rootId={message.id} round={message.round} openOnly />}
         {!inThread && !!message.replyCount && message.replyCount > 0 && (
           <button type="button" className="ch-thread-link" onClick={() => onOpenThread?.(message.id)}>
@@ -727,6 +738,21 @@ export const ChatMessage = memo(function ChatMessage({
 
           {menuOpen && (
             <div className="ch-menu" role="menu" aria-label="Message actions">
+              {canHand && (
+                <button
+                  type="button"
+                  className="ch-menu-item"
+                  role="menuitem"
+                  data-hand-to-agent
+                  onClick={() => {
+                    setMenuOpen(false);
+                    setHanding(true);
+                  }}
+                >
+                  <Bot className="w-3 h-3" />
+                  Hand to agent
+                </button>
+              )}
               {permalink && (
                 <button
                   type="button"
@@ -820,6 +846,15 @@ export const ChatMessage = memo(function ChatMessage({
             </div>
           )}
         </div>
+      )}
+      {handing && channelId && (
+        <HandToAgentReview
+          channelId={channelId}
+          rootKey={message.threadRootId ?? message.id}
+          message={message.id}
+          preview={message.threadRootId ? message.content : undefined}
+          onClose={() => setHanding(false)}
+        />
       )}
     </div>
   );

@@ -21,6 +21,8 @@
 // not in returns nothing rather than someone else's chat.
 
 import { internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
+import { scheduleTriggerMatch } from "./lib/triggerMatch";
+import { siteUrl } from "./lib/siteUrl";
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
@@ -29,7 +31,7 @@ import { canSendProductMessage, enqueuePendingMessage, getAuthenticatedUserId, t
 import { canOwnerOrTeamAccess, isConversationOwner, isTeamAdmin, isTeamMember } from "./privacy";
 import { activeTeamMembershipFor } from "./lib/access";
 import { requireTeamFeature, teamHasFeature } from "./teamFeatures";
-import { canAccessChannel, canReadChannelAnonymously, channelAgentRows, channelMemberIds, isChannelMember, isCommunity, isRestricted } from "./chatAccess";
+import { canAccessChannel, canReadChannelAnonymously, channelAgentRows, channelMemberIds, chatReadOriginArgs, isChannelMember, isCommunity, isRestricted, sessionChatScope, sessionDmRefusal, sessionMayReadChannel, primeSessionListing, grantSessionRoom, grantTargetOf, type ChatReadOrigin, type SessionChatScope } from "./chatAccess";
 import {
   dmKeyFor,
   isAgentTurnInFlight,
@@ -86,11 +88,12 @@ import {
   searchSnippet, holdsQueryPhrases, emailLocalHandle, memberHandle } from "./chatText";
 import { peopleOf } from "@codecast/shared/team/memberKind";
 import { parseQueryTerms } from "@codecast/shared/search";
-import { chatMentionClientId, chatRelayClientId } from "./lib/chatWakeIds";
+import { chatMentionClientId, chatRelayClientId, parseChatMentionClientId, parseChatRelayClientId } from "./lib/chatWakeIds";
 import { nextChatStamp, patchChat } from "./lib/chatRows";
 import { closeSessionReplyOnAnswer, openSessionReply } from "./chatSessionReplies";
 import { buildAnchorWake, buildChatWake, buildSessionRelay } from "./chatWakePrompts";
 import { collectChatExcerpt } from "./chatExcerpt";
+import { mayHandTo } from "./chatHandoff";
 import { onRoomLine, roomTakesTurns, type RoundResult } from "./chatRounds";
 import { openaiFetch } from "./lib/openai";
 
@@ -213,6 +216,31 @@ export async function readChannel(
   if (!(await canAccessChannel(ctx, userId, channel))) return null;
   return channel;
 }
+
+// A read stamped as a session's (chatAccess sessionChatScope) opens a DM only
+// when the session is part of it, and the refusal tells the agent why and
+// what its person can do. Unstamped reads (the apps, a person at a terminal)
+// never reach the scope.
+async function requireSessionMayRead(
+  ctx: ReadCtx,
+  userId: Id<"users"> | null,
+  channel: Doc<"chat_channels">,
+  origin: ChatReadOrigin,
+  readCommand: string,
+  opts: { scope?: SessionChatScope | null; thread?: Id<"chat_messages"> } = {},
+): Promise<void> {
+  if (!userId || origin.origin !== "agent" || channel.kind !== "dm") return;
+  const scope = opts.scope ?? await sessionChatScope(ctx, userId, origin);
+  if (await sessionMayReadChannel(ctx, scope, channel, { deep: true, thread: opts.thread })) return;
+  const withNames: string[] = [];
+  let personInRoom = false;
+  for (const id of await channelMemberIds(ctx, channel._id)) {
+    if (String(id) === String(userId)) personInRoom = true;
+    else withNames.push(oneLine(displayName(await ctx.db.get(id)), 40));
+  }
+  chatFail("FORBIDDEN", sessionDmRefusal(scope!, { withNames, readCommand, personInRoom }));
+}
+
 
 // The CLI prints a message as a short prefix of its id (`cast chat read`), so
 // every verb that takes a message id also takes that prefix. A full id passes
@@ -567,6 +595,7 @@ export const listChannels = query({
   args: {
     api_token: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
+    ...chatReadOriginArgs,
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
@@ -591,9 +620,15 @@ export const listChannels = query({
     const myRestricted = new Set(myMemberRows.map((r) => r.channel_id.toString()));
     // A private room the caller is not in must not exist for them — not as a
     // name in the rail, not as a row in the cache.
-    const channels = teamChannels.filter(
+    const visibleToPerson = teamChannels.filter(
       (c) => !isRestricted(c) || myRestricted.has(c._id.toString()),
     );
+    // A session listing its person's rooms sees the DMs it is part of and no
+    // others: no name, no preview, no unread line, no count.
+    const scope = await sessionChatScope(ctx, userId, args);
+    await primeSessionListing(ctx, scope, visibleToPerson.filter((c) => c.kind === "dm").map((c) => c._id));
+    const channels: Doc<"chat_channels">[] = [];
+    for (const c of visibleToPerson) if (await sessionMayReadChannel(ctx, scope, c)) channels.push(c);
 
     const { reads, rail, unread_dm_messages } = await railFor(ctx, userId, channels);
     // Slack mirrors for the channels on this page (slackSync). Rides the same
@@ -851,6 +886,7 @@ export const listMessages = query({
     // The previous page's `next_cursor`. Opaque: it is an index position.
     cursor: v.optional(v.string()),
     limit: v.optional(v.number()),
+    ...chatReadOriginArgs,
   },
   handler: async (ctx, args) => {
     const empty = {
@@ -871,6 +907,7 @@ export const listMessages = query({
     // sendMessage then refuses. One flag for missing and for forbidden, on the
     // same terms as loadChannel.
     if (!channel) return { ...empty, unavailable: true };
+    await requireSessionMayRead(ctx, userId, channel, args, `cast chat read --channel ${channel._id}${args.limit ? ` -n ${args.limit}` : ""}`);
 
     const limit = Math.min(Math.max(args.limit ?? 50, 1), 100);
     const page = await ctx.db
@@ -1038,6 +1075,7 @@ export const getThread = query({
     root_id: v.id("chat_messages"),
     cursor: v.optional(v.string()),
     limit: v.optional(v.number()),
+    ...chatReadOriginArgs,
   },
   handler: async (ctx, args) => {
     const empty = {
@@ -1062,6 +1100,7 @@ export const getThread = query({
     if (!root) return { ...empty, unavailable: true };
     const channel = await readChannel(ctx, userId, root.channel_id);
     if (!channel) return { ...empty, unavailable: true };
+    await requireSessionMayRead(ctx, userId, channel, args, `cast chat thread ${root._id}`, { thread: root._id });
 
     const limit = Math.min(Math.max(args.limit ?? 200, 1), 300);
     const page = await ctx.db
@@ -1106,13 +1145,15 @@ export const getThread = query({
 // One message by id — the permalink read, and what the CLI uses to see what it
 // is replying to. Same gate as everything else.
 export const getMessage = query({
-  args: { api_token: v.optional(v.string()), message_id: v.id("chat_messages") },
+  args: { api_token: v.optional(v.string()), message_id: v.id("chat_messages"), ...chatReadOriginArgs },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
     const message = await ctx.db.get(args.message_id);
     if (!message) return null;
     const channel = await readChannel(ctx, userId, message.channel_id);
     if (!channel) return null;
+    const thread = message.thread_root_id ?? message._id;
+    await requireSessionMayRead(ctx, userId, channel, args, `cast chat thread ${thread}`, { thread });
     return { message, channel, permalink: chatPermalink(channel._id.toString(), message._id.toString()) };
   },
 });
@@ -1129,6 +1170,7 @@ export const searchMessages = query({
     from_user_id: v.optional(v.id("users")),
     q: v.string(),
     limit: v.optional(v.number()),
+    ...chatReadOriginArgs,
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx as any, args.api_token);
@@ -1139,11 +1181,15 @@ export const searchMessages = query({
     } catch {
       return { results: [] };
     }
+    // A session's search skips the DMs it is not part of (no refusal: it
+    // asked about words, not about a room), unless it named the room.
+    const scope = await sessionChatScope(ctx, userId, args);
     if (args.channel_id) {
       const channel = await readChannel(ctx, userId, args.channel_id);
       if (!channel || channel.team_id.toString() !== teamId.toString()) {
         return { results: [] };
       }
+      await requireSessionMayRead(ctx, userId, channel, args, `cast chat read --channel ${channel._id}`, { scope });
     }
 
     const limit = Math.min(Math.max(args.limit ?? 30, 1), 50);
@@ -1151,7 +1197,8 @@ export const searchMessages = query({
     // rows post-index, so it widens the pool rather than starving the page.
     // Quoted phrases filter post-index too (the index has no phrases), so they
     // widen it the same way.
-    const narrowed = !!args.from_user_id || parseQueryTerms(args.q).phrases.length > 0;
+    // A session's search drops its person's DM hits post-index too.
+    const narrowed = !!args.from_user_id || parseQueryTerms(args.q).phrases.length > 0 || !!scope;
     const take = limit * (narrowed ? 6 : 2);
     const hits = await ctx.db
       .query("chat_messages")
@@ -1182,7 +1229,8 @@ export const searchMessages = query({
       if (!meta) {
         const channel = await ctx.db.get(row.channel_id);
         meta = {
-          allowed: await canAccessChannel(ctx, userId, channel),
+          allowed: await canAccessChannel(ctx, userId, channel)
+            && !!channel && await sessionMayReadChannel(ctx, scope, channel),
           name: channel?.name ?? "unknown",
           kind: channel?.kind,
           dm_key: channel?.dm_key,
@@ -1406,7 +1454,7 @@ export const openDm = mutation({
     const { speaker, session } = args.origin === "agent"
       ? await sessionSpeaker(ctx, userId, args.origin_session_id)
       : { speaker: userId, session: null };
-    const { room, others } = await openPeopleRoom(ctx, {
+    const { room, others, sessionRoom } = await openPeopleRoom(ctx, {
       teamId, speaker, session, ids: args.member_ids ?? [], handles: args.handles ?? [], limitedUser: userId, clientId: args.client_id,
     });
     // Re-opening is joining: the caller may have left the read row behind. No
@@ -1414,7 +1462,9 @@ export const openDm = mutation({
     // notifies (chat_dm), which is the moment something was actually said.
     if (speaker === userId) await upsertRead(ctx, userId, teamId, room.channel._id, Date.now(), undefined, undefined);
     const names = await Promise.all(others.map(async (id) => displayName(await ctx.db.get(id))));
-    return { channel_id: room.channel._id, created: room.created, team_id: teamId, with: names };
+    // Whose room this is: the session's own, a role's (its bot speaks), or the person's.
+    const room_of = sessionRoom ? "session" : speaker !== userId ? "role" : "person";
+    return { channel_id: room.channel._id, created: room.created, team_id: teamId, with: names, room_of };
   },
 });
 
@@ -1468,13 +1518,15 @@ async function openPeopleRoom(
     teamId: Id<"teams">; speaker: Id<"users">; session?: Doc<"conversations"> | null;
     ids: Id<"users">[]; handles: string[]; limitedUser: Id<"users">; clientId?: string;
   },
-): Promise<{ room: { channel: Doc<"chat_channels">; created: boolean }; others: Id<"users">[] }> {
+): Promise<{ room: { channel: Doc<"chat_channels">; created: boolean }; others: Id<"users">[]; sessionRoom: boolean }> {
   const { others, namedSelf } = await dmOthers(ctx, opts.teamId, opts.speaker, opts.ids, opts.handles);
   await chatRateLimit(ctx, opts.limitedUser, "chat.channel_create", CHANNEL_CREATE_LIMIT);
-  const room = opts.session && !namedSelf
-    ? await ensureDmRoom(ctx, opts.teamId, others, opts.speaker, { client_id: opts.clientId, session: opts.session })
+  const session = namedSelf ? null : opts.session ?? null;
+  const sessionRoom = !!session;
+  const room = session
+    ? await ensureDmRoom(ctx, opts.teamId, others, opts.speaker, { client_id: opts.clientId, session })
     : await ensureDmRoom(ctx, opts.teamId, [opts.speaker, ...others], opts.speaker, { client_id: opts.clientId });
-  return { room, others };
+  return { room, others, sessionRoom };
 }
 
 /** The people a direct message reaches besides `selfId`, from ids and handles
@@ -2648,6 +2700,15 @@ export const sendMessage = mutation({
 });
 
 
+// The session a line came from, for the trigger match: the session that typed
+// it, or the seat session of the anchor (a role's standing session) voicing
+// it, so a project's main session never wakes on its own reply.
+async function lineSessionId(ctx: MutationCtx, originSessionId: string | undefined, anchorId: Id<"anchors"> | undefined): Promise<{ origin_conversation_id?: string }> {
+  if (originSessionId) return { origin_conversation_id: originSessionId };
+  const anchor = anchorId ? await ctx.db.get(anchorId) : null;
+  return anchor?.conversation_id ? { origin_conversation_id: String(anchor.conversation_id) } : {};
+}
+
 // The one insert-and-notify path for a chat line, whether a person or the
 // anchor wrote it. Everything that makes a message a message lives here — the
 // per-channel monotonic stamp, mention resolution, the read mark, and the
@@ -2802,7 +2863,95 @@ export async function postChatMessage(
       actorUserId: voiced ? authorUserId : undefined,
     });
 
+  // A project watching this channel hears the line (trigger event
+  // chat_message). History is not news, and a DM room is nobody's source.
+  if (!opts.history && channel.kind !== "dm") {
+    await scheduleTriggerMatch(ctx, {
+      event_type: "chat_message",
+      team_id: channel.team_id,
+      channel_id: channel._id,
+      ...(await lineSessionId(ctx, originSession?.id, agent?.anchorId)),
+      event_ref: {
+        group_short_id: `#${channel.name}`,
+        title: `${actorName}: ${oneLine(content, 280)}`,
+        url: `${siteUrl()}/chat/${channel._id}`,
+      },
+    });
+  }
+
   return { messageId, mentions, roles: resolved.roles, sessions: resolved.sessions, hereCount, actorName, createdAt: now };
+}
+
+// One-time backfill of chat_session_rooms from the wakes chat delivered before
+// grants were written: a person's mention opens the room, a relayed reply its
+// thread. Pages through pending_messages and schedules itself until done.
+// Run once, by an admin, after the deploy that adds the table.
+export const backfillSessionRooms = internalMutation({
+  args: {
+    cursor: v.optional(v.string()),
+    granted: v.optional(v.number()),
+    // Second pass: a person's mention that folded queued no wake, so its
+    // grant is read off the line's own mentions.
+    phase: v.optional(v.literal("mentions")),
+  },
+  handler: async (ctx, args) => {
+    if (args.phase === "mentions") return await backfillMentionGrants(ctx, args.cursor, args.granted ?? 0);
+    // Wake rows carry whole prompts: bound the page by bytes as well as rows.
+    const page = await ctx.db.query("pending_messages").paginate({ numItems: 200, cursor: args.cursor ?? null, maximumBytesRead: 4_000_000 });
+    let granted = args.granted ?? 0;
+    for (const wake of page.page) {
+      const relay = parseChatRelayClientId(wake.client_id);
+      const mention = relay ? null : parseChatMentionClientId(wake.client_id);
+      const messageId = relay ?? mention?.message;
+      const normalized = messageId ? ctx.db.normalizeId("chat_messages", messageId) : null;
+      const message = normalized ? await ctx.db.get(normalized) : null;
+      if (!message) continue;
+      const channel = await ctx.db.get(message.channel_id);
+      const target = await ctx.db.get(wake.conversation_id);
+      if (!channel || channel.kind !== "dm" || !target) continue;
+      // A hand-off's brief rides a relay key too (chatHandoff): the thread's
+      // root names the session it was handed to, and a hand-off opens the room
+      // whoever wrote the handed line.
+      const root = message.thread_root_id ? await ctx.db.get(message.thread_root_id) : message;
+      if (relay && root?.bound_session_id === String(target._id)) {
+        if (await grantSessionRoom(ctx, channel, grantTargetOf(target), "backfill")) granted++;
+        continue;
+      }
+      if (message.origin === "agent" || message.author_kind === "agent") continue;
+      // A room member's wake (the member rail) grants nothing live: membership answers.
+      if ((await channelAgentRows(ctx, channel._id)).some((row) => String(row.conversation_id ?? "") === String(target._id))) continue;
+      if (await grantSessionRoom(ctx, channel, grantTargetOf(target), "backfill", relay ? message.thread_root_id ?? message._id : undefined)) granted++;
+    }
+    if (!page.isDone) await ctx.scheduler.runAfter(0, internal.chat.backfillSessionRooms, { cursor: page.continueCursor, granted });
+    else await ctx.scheduler.runAfter(0, internal.chat.backfillSessionRooms, { phase: "mentions", granted });
+  },
+});
+
+async function backfillMentionGrants(ctx: MutationCtx, cursor: string | undefined, grantedSoFar: number): Promise<void> {
+  const page = await ctx.db.query("chat_messages").paginate({ numItems: 200, cursor: cursor ?? null, maximumBytesRead: 4_000_000 });
+  let granted = grantedSoFar;
+  const kinds = new Map<string, Doc<"chat_channels"> | null>();
+  for (const row of page.page) {
+    if (!row.mentions?.length || row.origin === "agent" || row.author_kind === "agent") continue;
+    const key = String(row.channel_id);
+    if (!kinds.has(key)) kinds.set(key, await ctx.db.get(row.channel_id));
+    const channel = kinds.get(key);
+    if (channel?.kind !== "dm") continue;
+    for (const m of row.mentions as any[]) {
+      if (typeof m !== "object" || !m) continue;
+      if (m.kind === "session") {
+        const target = await ctx.db.get(m.conversation_id as Id<"conversations">);
+        if (target && await grantSessionRoom(ctx, channel, grantTargetOf(target), "backfill")) granted++;
+      } else if (m.kind === "role") {
+        const role = await ctx.db.get(m.role_id as Id<"org_roles">);
+        const anchor = role?.anchor_id ? await ctx.db.get(role.anchor_id) : null;
+        const answerer = anchor?.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
+        if (answerer && await grantSessionRoom(ctx, channel, grantTargetOf(answerer), "backfill")) granted++;
+      }
+    }
+  }
+  if (!page.isDone) await ctx.scheduler.runAfter(0, internal.chat.backfillSessionRooms, { phase: "mentions", cursor: page.continueCursor, granted });
+  else console.log(`backfillSessionRooms: ${granted} grants written`);
 }
 
 export const repairMissingOriginSession = internalMutation({
@@ -3920,7 +4069,7 @@ async function maybeRelayToOriginSession(
   } else if (opts.message.origin === "agent" || opts.message.author_kind === "agent") {
     return no("agent_authored");
   } else {
-    targetRef = root.origin_session_id ?? null;
+    targetRef = root.bound_session_id ?? root.origin_session_id ?? null;
     if (!targetRef) return no(null);
     // The session's own line under its own root is not a reply to itself.
     if (opts.message.origin_session_id === targetRef) return no(null);
@@ -3930,8 +4079,12 @@ async function maybeRelayToOriginSession(
   // caller's ref before storing it); historical rows may still hold a native
   // session id, and the shared resolver accepts either. Access is decided
   // below, so any conversation is accepted here.
-  const conversation = await findConversationByAnyRefWhere(ctx, targetRef, () => true);
+  let conversation = await findConversationByAnyRefWhere(ctx, targetRef, () => true);
+  if ((!conversation || conversation.inbox_killed_at) && !mentionReply && root.bound_session_id && root.origin_session_id) {
+    conversation = (await findConversationByAnyRefWhere(ctx, root.origin_session_id, () => true)) ?? conversation;
+  }
   if (!conversation) return no("session_not_found");
+  if (conversation.inbox_killed_at && root.bound_session_id === String(conversation._id)) return no("session_ended");
   // A member of a room that takes turns hears this thread through its round.
   const roomRows = await channelAgentRows(ctx, opts.channel._id);
   if (roomTakesTurns(opts.channel, roomRows) && roomRows.some((row) => String(row.conversation_id) === String(conversation._id))) {
@@ -3986,6 +4139,10 @@ async function maybeRelayToOriginSession(
     // The session's own earlier lines read as its own words.
     isSelf: (row) => !!row.origin_session_id && row.origin_session_id === String(conversation._id),
   });
+  // A DM the session is not part of opens to it one thread at a time
+  // (chatAccess): the wake carries the thread, never the room's other lines.
+  const roomOpen = opts.channel.kind !== "dm" || await sessionMayReadChannel(
+    ctx, await sessionChatScope(ctx, conversation.user_id, { origin: "agent", origin_session_id: String(conversation._id) }), opts.channel);
   const team = await ctx.db.get(opts.channel.team_id);
   const wakeId = await enqueuePendingMessage(ctx, conversation, opts.senderId, {
     content: buildSessionRelay({
@@ -3997,13 +4154,19 @@ async function maybeRelayToOriginSession(
       threadRootId: root._id,
       askerName: opts.senderName,
       entries,
-      channelEntries,
+      channelEntries: roomOpen ? channelEntries : [],
       nonce,
       mentionReply,
+      handed: !mentionReply && root.bound_session_id === String(conversation._id),
+      fromOutsider: !mentionReply && root.bound_session_id === String(conversation._id) && !mayHandTo(opts.senderId, conversation),
+      roomOpen,
+      // A relay to the thread's starter opens the thread (openSessionReply
+      // below); an answer to a mention the session made opens nothing.
+      threadOpen: roomOpen || !mentionReply,
     }),
     client_id: key,
   });
-  await openSessionReply(ctx, { channel: opts.channel, threadRootId: root._id, wakeId });
+  await openSessionReply(ctx, { channel: opts.channel, threadRootId: root._id, wakeId, grant: mentionReply ? false : "thread" });
   return {
     delivered: true,
     skipped: null,
@@ -4341,6 +4504,13 @@ function mentionWakeQuotas(senderKey: string, targetKey: string): { key: string;
 // the chat message, capped per sender and per target per hour; over a cap the
 // mention FOLDS — the row is stamped mention_folded and the party reads the line
 // on its next wake instead of being woken for it.
+// A person's mention of a role opens the room to the session that answers for
+// it (the role's anchor session), the same grant a delivered wake writes.
+async function grantRoleAnswerer(ctx: MutationCtx, channel: Doc<"chat_channels">, anchor: Doc<"anchors">): Promise<void> {
+  const answerer = anchor.conversation_id ? await ctx.db.get(anchor.conversation_id) : null;
+  if (answerer) await grantSessionRoom(ctx, channel, grantTargetOf(answerer), "mention");
+}
+
 export async function wakeMentionedParties(
   ctx: MutationCtx,
   opts: {
@@ -4383,6 +4553,9 @@ export async function wakeMentionedParties(
 
   const underCaps = async (targetKey: string) =>
     (await takeQuotas(ctx, hour, mentionWakeQuotas(String(opts.senderId), targetKey))).ok;
+  // A person's mention lets the session read the DM even when it folds; a
+  // session's own line never opens a room for another (chatAccess).
+  const personLine = opts.message.origin !== "agent" && opts.message.author_kind !== "agent";
   const quoted = (lead: string, tail: string[]) => buildChatWake({
     channelName: opts.channel.name,
     channelKind: opts.channel.kind,
@@ -4398,7 +4571,9 @@ export async function wakeMentionedParties(
   const replyTail = [
     "Reply in the thread with:",
     `  cast chat send --channel ${opts.channel._id} --thread ${threadRootId} "<your reply>"`,
-    `Read more: cast chat thread ${threadRootId} · cast chat read --channel ${opts.channel._id}`,
+    // Another session's line in a DM opens nothing to the session it names
+    // (chatAccess), so it is not pointed at reads that would be refused.
+    ...(opts.channel.kind === "dm" && !personLine ? [] : [`Read more: cast chat thread ${threadRootId} · cast chat read --channel ${opts.channel._id}`]),
     "Answer once, concisely, and only if the line wants something from you.",
   ];
 
@@ -4409,8 +4584,17 @@ export async function wakeMentionedParties(
     const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
     if (anchor?.conversation_id && selfSession && String(anchor.conversation_id) === selfSession) continue;
     if (!anchor) { out.skipped.push(`role_has_no_session:${role.handle}`); continue; }
-    if (anchor.conversation_id && delivered(anchor.conversation_id)) { out.skipped.push(`relayed:${role.handle}`); continue; }
-    if (!(await underCaps(String(role._id)))) { out.folded++; continue; }
+    if (anchor.conversation_id && delivered(anchor.conversation_id)) {
+      // The relay opened the thread; a person's mention opens the room.
+      if (personLine) await grantRoleAnswerer(ctx, opts.channel, anchor);
+      out.skipped.push(`relayed:${role.handle}`);
+      continue;
+    }
+    if (!(await underCaps(String(role._id)))) {
+      if (personLine) await grantRoleAnswerer(ctx, opts.channel, anchor);
+      out.folded++;
+      continue;
+    }
     const text = quoted(
       `${opts.senderName} mentioned @${role.handle} in ${opts.channel.kind === "dm" ? "a direct message" : `#${opts.channel.name}`}.`,
       replyTail,
@@ -4427,7 +4611,7 @@ export async function wakeMentionedParties(
     if (!rowId) out.skipped.push(`delivery_failed:${role.handle}`);
     else {
       out.roles++;
-      await openSessionReply(ctx, { channel: opts.channel, threadRootId, wakeId: rowId });
+      await openSessionReply(ctx, { channel: opts.channel, threadRootId, wakeId: rowId, grant: personLine ? "room" : false });
     }
   }
 
@@ -4435,8 +4619,16 @@ export async function wakeMentionedParties(
     if (selfSession && String(conversation._id) === selfSession) continue;
     if (opts.members?.has(String(conversation._id))) continue;
     const shortId = (conversation as any).short_id ?? String(conversation._id).slice(0, 7);
-    if (delivered(conversation._id)) { out.skipped.push(`relayed:${shortId}`); continue; }
-    if (!(await underCaps(String(conversation._id)))) { out.folded++; continue; }
+    if (delivered(conversation._id)) {
+      if (personLine) await grantSessionRoom(ctx, opts.channel, grantTargetOf(conversation), "mention");
+      out.skipped.push(`relayed:${shortId}`);
+      continue;
+    }
+    if (!(await underCaps(String(conversation._id)))) {
+      if (personLine) await grantSessionRoom(ctx, opts.channel, grantTargetOf(conversation), "mention");
+      out.folded++;
+      continue;
+    }
     const body = quoted(`${opts.senderName} mentioned @${shortId} in #${opts.channel.name}.`, replyTail);
     const where = opts.channel.kind === "dm" ? "dm" : `#${opts.channel.name}`;
     const wakeId = await enqueuePendingMessage(ctx, conversation, opts.senderId, {
@@ -4444,7 +4636,7 @@ export async function wakeMentionedParties(
       client_id: chatMentionClientId(opts.message._id, conversation._id),
     });
     out.sessions++;
-    await openSessionReply(ctx, { channel: opts.channel, threadRootId, wakeId });
+    await openSessionReply(ctx, { channel: opts.channel, threadRootId, wakeId, grant: personLine ? "room" : false });
   }
 
   if (out.folded > 0 && !opts.message.mention_folded) {
@@ -4518,7 +4710,7 @@ async function deliverToChannelAgents(
         });
         if (rowId) {
           out.roles++;
-          await openSessionReply(ctx, { channel: opts.channel, threadRootId, wakeId: rowId });
+          await openSessionReply(ctx, { channel: opts.channel, threadRootId, wakeId: rowId, grant: false });
         } else out.skipped.push(`role_has_no_session:${row.short_id}`);
         continue;
       }
@@ -4531,7 +4723,7 @@ async function deliverToChannelAgents(
         human: true,
       });
       out.sessions++;
-      await openSessionReply(ctx, { channel: opts.channel, threadRootId, wakeId });
+      await openSessionReply(ctx, { channel: opts.channel, threadRootId, wakeId, grant: false });
     } catch {
       out.skipped.push(`delivery_failed:${row.short_id}`);
     }
@@ -4614,6 +4806,7 @@ export async function collectLinesSince(
   channelIds: Id<"chat_channels">[],
   since: number,
   limitArg: number | undefined,
+  scope: SessionChatScope | null = null,
 ): Promise<{ lines: ChatLineSince[]; truncated: boolean }> {
   const limit = Math.min(Math.max(limitArg ?? 20, 1), 100);
   // Read past the cap so a silent placeholder or a tombstone in the window
@@ -4626,6 +4819,7 @@ export async function collectLinesSince(
   for (const channelId of channelIds.slice(0, 20)) {
     const channel = await readChannel(ctx as any, userId, channelId);
     if (!channel || channel.archived_at) continue;
+    if (!(await sessionMayReadChannel(ctx as any, scope, channel))) continue;
     const rows = await ctx.db
       .query("chat_messages")
       .withIndex("by_channel_created", (q: any) =>
@@ -4678,10 +4872,19 @@ export const linesSince = query({
     channel_ids: v.array(v.id("chat_channels")),
     since: v.number(),
     limit: v.optional(v.number()),
+    ...chatReadOriginArgs,
   },
   handler: async (ctx, args) => {
     const userId = await requireCaller(ctx, args.api_token);
-    return collectLinesSince(ctx, userId, args.channel_ids, args.since, args.limit);
+    // One room named (`cast chat read --channel X --since`) is refused aloud;
+    // a wake frame's many rooms drop a closed DM silently, as an unreadable
+    // room already does.
+    const scope = await sessionChatScope(ctx, userId, args);
+    if (args.channel_ids.length === 1) {
+      const channel = await readChannel(ctx, userId, args.channel_ids[0]);
+      if (channel) await requireSessionMayRead(ctx, userId, channel, args, `cast chat read --channel ${channel._id} --since ${args.since}`, { scope });
+    }
+    return collectLinesSince(ctx, userId, args.channel_ids, args.since, args.limit, scope);
   },
 });
 

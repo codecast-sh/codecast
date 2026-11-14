@@ -17,7 +17,7 @@ import { performGoalControl, performSetGoal } from "./sessionGoals";
 import { askCore as askDecisionCore, commentCore, deleteCore as deleteDecisionCommentCore, editCore as editDecisionCommentCore, resolveCore as resolveDecisionThreadCore } from "./decisionThread";
 import { sendLineChatCore } from "./lineChat";
 import { askCore as askSideQuestionCore } from "./sideAnswers";
-import { clearHoldCore, moveLiveFlowCore, setOnCore, startLiveFlowCore } from "./liveFlows";
+import { clearHoldCore, libraryFlowId, moveLiveFlowCore, setOnCore, startLiveFlowCore, type LibraryFlowRef } from "./liveFlows";
 import type { ThreadKind } from "./threadReads";
 import { ConvexError, v } from "convex/values";
 import { resolveSpawnDefinition } from "./spawn";
@@ -27,6 +27,8 @@ import { performSetDeviceAppearance, type DeviceAppearanceChange } from "./devic
 import { enqueueStartSession, performRemoveDevices, performSetDeviceShares, performSetDeviceSnippet, performRequestDeviceUpdate, performSetProviderKey } from "./devices";
 import { performJoinTeamHost, performRemoveTeamHostMember, performRenameTeamHost, performUnregisterTeamHost } from "./teamHosts";
 import { performSetAccountDevices, performSetAccountShares } from "./accountPool";
+import { cancelBot, requestBot } from "./meetingBots";
+import { setJoinAllFor, setMeetingChoiceFor } from "./lib/meetingCalendarCore";
 import type { DeviceSnippetChange, ProviderKeyCommand } from "@codecast/shared/contracts";
 import { upsertBinding } from "./capabilityBindings";
 import { Id } from "./_generated/dataModel";
@@ -95,7 +97,9 @@ import { askLineAgentCore, editLineGraphCore, reaskTrialRunCore, tryLineStepCore
 import { cancelRunByPerson, landAgainCore, resumeRunCore } from "./workflow_runs";
 import { pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
 import { dismissGuestSuggestionFor, sendGuestSuggestionFor, writeGuestSuggestions } from "./guestSuggestions";
+import { proposeAnswerFor, proposePermissionFor, sendMineNowFor, withdrawTeamSuggestionFor, writeTeamSuggestions } from "./teamSuggestions";
 import { answerPresence, charterWire, deepMergeField, isServerId, linkConversationToObject, liveSecretWrite, opsRowId, type HandlerCtx } from "./dispatchHelpers";
+import { assertMayBind, handIsPrivate, handThreadToSession, handableThread } from "./chatHandoff";
 import { DISPATCHABLE_CONVERSATION_FIELDS, CLOUD_SESSION_SOURCES, type CloudSessionSource } from "@codecast/shared/contracts";
 import { claimProjectDefaultSession, readableProject } from "./sessionProjects";
 import { insertProject } from "./projects";
@@ -972,10 +976,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // A hosted conversation (the simple lane's assistant) runs in this
     // backend: no device, no daemon command. Its start queues the first
     // message in the same transaction, idempotent on session_id like below.
+    const handThread = opts.linked_object?.type === "chat_thread" ? opts.linked_object.id : null;
     // Cast for a person with a cast machine: the same start, as a pi session
     // on their own cloud machine (castMachines.ts) instead of in this backend.
     const onCastMachine = isHostedAgentType(opts.agent_type) && castMachinesEnabledFor(userId);
     if (onCastMachine) opts = { ...opts, agent_type: "pi", target_device_id: undefined, cloud_device_id: undefined };
+    if (handThread && isHostedAgentType(opts.agent_type)) throw new Error("A thread can only be handed to an agent on a machine");
     if (isHostedAgentType(opts.agent_type)) {
       const started = await startHostedConversationFor(ctx as any, userId, {
         session_id: opts.session_id,
@@ -1005,7 +1011,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         // Older ContextChat created first and linked in a second dispatch. If
         // that follow-up was lost, an idempotent replay must repair the source
         // relation instead of returning before it has a chance to converge.
-        if (opts.linked_object?.id) {
+        if (opts.linked_object?.id && !handThread) {
           await linkConversationToObject(
             ctx,
             userId,
@@ -1018,6 +1024,12 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       }
     }
     await checkRateLimit(ctx as any, userId, "createConversation");
+    const handFacts = handThread ? await handableThread(ctx as any, userId, handThread) : null;
+    const handChannel = handFacts?.channel ?? null;
+    if (handFacts) {
+      await assertMayBind(ctx as any, userId, handFacts.root);
+      if (handIsPrivate(handFacts.channel)) opts = { ...opts, private: true };
+    }
     const now = Date.now();
     // The compose bar's "as <definition>" pick: the definition's client, model
     // and effort fill whatever the row left unset, and the rest of it (tools,
@@ -1031,8 +1043,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     if (asDef.definition) {
       opts = { ...opts, agent_type: asDef.agentType ?? opts.agent_type, model: asDef.model, effort: asDef.effort, isolated: asDef.isolated };
     }
+    if (handThread && isHostedAgentType(opts.agent_type)) throw new Error("A thread can only be handed to an agent on a machine");
     const agentType = (opts.agent_type || "claude_code") as ConvexAgentType;
     const runnerUserId = await sessionLaunchRunner(ctx, userId, opts.target_device_id);
+    if (handChannel && handIsPrivate(handChannel) && String(runnerUserId) !== String(userId)) throw new Error("A thread from a private room can only run on your own machine");
     // "Run in the cloud" names one of the RUNNER's own wake-on-use hosts; an
     // agent box (runner ≠ caller) or a foreign/laptop device id is refused
     // before any row exists.
@@ -1105,6 +1119,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const project = newProjectId ? await ctx.db.get(newProjectId) : await readableProject(ctx, userId, opts.project_id);
     const projectId = project?._id ?? null;
     if (project?.team_id && !resolvedTeamId && (await isTeamMember(ctx as any, userId, project.team_id))) resolvedTeamId = project.team_id;
+    if (handChannel && String(resolvedTeamId ?? "") !== String(handChannel.team_id)) opts = { ...opts, private: true };
     const conversationId = await ctx.db.insert("conversations", {
       user_id: runnerUserId,
       ...(runnerUserId !== userId ? { author_user_id: userId } : {}),
@@ -1150,7 +1165,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     // transaction as creation. A parked asyncAction has no later Promise result
     // for the client to hang a link continuation from, so post-create linking
     // would lose doc/plan context across an unwired window.
-    if (opts.linked_object?.id) {
+    if (opts.linked_object?.id && !handThread) {
       await linkConversationToObject(
         ctx,
         userId,
@@ -1159,6 +1174,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         conversationId,
       );
     }
+    if (handThread) await handThreadToSession(ctx as any, userId, (await ctx.db.get(conversationId))!, handThread);
 
     const daemonType = fromConvexAgentType(agentType);
     // Per-session model/effort (validated against the shared contract; "default"
@@ -1489,6 +1505,24 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   dismissGuestSuggestion: async (ctx, userId, [suggestionId]: [string]) => {
     return await dismissGuestSuggestionFor(ctx, userId, suggestionId);
+  },
+  // A teammate's side of the same cards (teamSuggestions.ts): take one back,
+  // propose an answer to the agent's question or a permission, and the
+  // owner's switch for whether teammates suggest while they are here.
+  withdrawTeamSuggestion: async (ctx, userId, [suggestionId, convId]: [string, string?]) => {
+    return await withdrawTeamSuggestionFor(ctx, userId, suggestionId, convId);
+  },
+  sendTeamSuggestionNow: async (ctx, userId, [suggestionId, convId]: [string, string?]) => {
+    return await sendMineNowFor(ctx, userId, suggestionId, convId);
+  },
+  proposeAnswer: async (ctx, userId, [convId, toolUseId, body, clientKey]: [string, string, string, string?]) => {
+    return await proposeAnswerFor(ctx, userId, convId, toolUseId, body, clientKey);
+  },
+  proposePermission: async (ctx, userId, [_convId, permissionId, decision, clientKey]: [string, string, "approved" | "denied", string?]) => {
+    return await proposePermissionFor(ctx, userId, permissionId, decision, clientKey);
+  },
+  setTeamSuggestions: async (ctx, userId, [convId, enabled]: [string, boolean]) => {
+    await writeTeamSuggestions(ctx, userId, convId, !!enabled);
   },
 
   // The same switch for docs, plans, tasks and calls (publicShare.ts).
@@ -2361,6 +2395,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   deleteTrigger: async (ctx, userId, [taskId]: [string]) => {
     await (ctx as any).runMutation(api.agentTasks.webDelete, { task_id: taskId });
+  },
+  // A project's new source (store addProjectSource); the row carries the stub's key.
+  addProjectSource: async (ctx, userId, [projectId, source, clientKey]: [string, { channel_id?: string; event?: string }, string]) => {
+    return await (ctx as any).runMutation(api.projectSources.webAddSource, {
+      project_id: projectId,
+      ...(source.channel_id ? { channel_id: source.channel_id } : { event: source.event }),
+      client_key: clientKey,
+    });
   },
   // A hosted conversation's Stop (store stopHostedTurn): the client settled
   // the row on its draft; the engine ends the running turn
@@ -3292,10 +3334,21 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const flowId = ctx.db.normalizeId("live_flows", id);
     await setOnCore(ctx, userId, flowId ? await ctx.db.get(flowId) : null, on);
   },
-  startLiveFlow: async (ctx, userId, [team_id, workflow_id, client_key]: [string, string, string]) => {
-    await startLiveFlowCore(ctx, userId, { team_id, workflow_id, client_key });
+  startLiveFlow: async (ctx, userId, [team_id, flow, client_key]: [string, LibraryFlowRef, string]) => {
+    await startLiveFlowCore(ctx, userId, { team_id, workflow_id: libraryFlowId(flow), client_key });
   },
-  moveLiveFlow: async (ctx, userId, [id, to]: [string, string]) => { const f = ctx.db.normalizeId("live_flows", id); await moveLiveFlowCore(ctx, userId, f ? await ctx.db.get(f) : null, to); },
+  // The calls page's meeting link field (meetingBots.ts): the web paints a
+  // stub row keyed by client_key, which the server row carries back. Sending
+  // a bad link throws the server's own words to the caller.
+  sendMeetingBot: async (ctx, userId, [meeting_url, client_key]: [string, string]) =>
+    requestBot(ctx, userId, { meeting_url, client_key }),
+  cancelMeetingBot: async (ctx, userId, [meet_id]: [string]) => cancelBot(ctx, userId, meet_id),
+  // The calls page's calendar meetings (meetingCalendar.ts): one meeting's
+  // switch, and join-all. Both bring the person's bots in line at once.
+  setCalendarMeetingChoice: async (ctx, userId, [id, choice]: [string, "on" | "off" | null]) =>
+    setMeetingChoiceFor(ctx, userId, id, choice),
+  setMeetingBotJoinAll: async (ctx, userId, [join_all]: [boolean]) => setJoinAllFor(ctx, userId, !!join_all),
+  moveLiveFlow: async (ctx, userId, [id, to]: [string, LibraryFlowRef]) => { const f = ctx.db.normalizeId("live_flows", id); await moveLiveFlowCore(ctx, userId, f ? await ctx.db.get(f) : null, libraryFlowId(to)); },
   clearLiveFlowHold: async (ctx, userId, [id]: [string]) => {
     const flowId = ctx.db.normalizeId("live_flows", id);
     await clearHoldCore(ctx, userId, flowId ? await ctx.db.get(flowId) : null);
@@ -3350,3 +3403,9 @@ const SESSION_COMMANDS = {
   stopAndSendToSession: api.conversations.stopAndSendToSession,
   resumeSession: api.users.resumeSession,
 };
+
+/** Start a session the way the composer does (createSession), for server code
+ *  with no client to dispatch from: a project trigger's first run when the
+ *  project has no main session yet (projectSources.fireProjectTrigger). */
+export const startSessionAsComposer = (ctx: HandlerCtx, userId: Id<"users">, opts: Record<string, any>): Promise<Id<"conversations">> =>
+  SIDE_EFFECTS.createSession(ctx, userId, [opts]);

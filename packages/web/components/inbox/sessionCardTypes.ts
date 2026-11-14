@@ -7,6 +7,7 @@ import type { Device } from "../DeviceBadge";
 import type { IdentityPrefs, IdentityRow } from "../../lib/sessionIdentity";
 import type { AnchorIdentity } from "../../hooks/useSyncAnchors";
 import type { SessionShip } from "../../lib/ship/sessionShip";
+import type { LinkedPr } from "../../lib/sessionPullRequests";
 
 // The props of the inbox session card (SessionCardView): the row, its chrome
 // toggles, its live facts and the handlers every gesture leaves through.
@@ -47,6 +48,12 @@ export type SessionCardLiveness = {
 
 export type SessionCardViewProps = {
   session: InboxSession;
+  /** Every pull request the session links (lib/sessionPullRequests). */
+  linkedPrs?: readonly LinkedPr[];
+  /** Running Task subagents whose rows the inbox folds away (the subagent toggle is off). */
+  hiddenRunningSubagents?: number;
+  /** The newest of them, which the count opens. */
+  foldedSubagentId?: string | null;
   /** The project it works in (lib/workProjectSig). */
   workProject?: string;
   isActive: boolean;

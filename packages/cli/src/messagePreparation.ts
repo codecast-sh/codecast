@@ -7,6 +7,7 @@ export type { SyncFile as PreparationFile } from './userFiles.js';
 export type PreparationMessage = {
   uuid?: string;
   messageUuid?: string;
+  sourceUuid?: string;
   role: string;
   content: string;
   timestamp: number;
@@ -36,6 +37,7 @@ export function validResolvedPreparationImage(img: PreparationImage): boolean {
 export function beginMessagePreparation(messages: PreparationMessage[], origin: PreparationOrigin): PreparationMessage[] {
   return messages.map(msg => origin === 'service' ? { ...msg } : {
     messageUuid: msg.uuid,
+    sourceUuid: msg.sourceUuid,
     role: msg.role === 'user' ? 'human' : msg.role === 'system' ? 'system' : 'assistant',
     content: redactSecrets(msg.content),
     timestamp: msg.timestamp,

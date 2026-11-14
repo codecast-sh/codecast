@@ -53,8 +53,9 @@ export interface RemotePaneHandlers {
 /** What a live relay connection lets the caller do. */
 export interface RemotePaneConnection {
   /** Queue keystrokes for the pane. Bytes as xterm produced them (a string of
-   *  char codes 0-255), coalesced and sent in order. */
-  write: (data: string) => void;
+   *  char codes 0-255), coalesced and sent in order. `onQueued` runs once the
+   *  relay has accepted the send that carries them (never on a refusal). */
+  write: (data: string, onQueued?: () => void) => void;
   /** Tell the relay whether a human is focused here, which is what buys the
    *  fast poll that keeps typing responsive. */
   setInteractive: (on: boolean) => void;
@@ -106,6 +107,7 @@ export function connectRemotePane(
   // sends strictly ordered — two in flight at once could reach the row in
   // either order and silently transpose what someone typed.
   let outbox = "";
+  let outboxQueued: Array<() => void> = [];
   let flushTimer: ReturnType<typeof setTimeout> | null = null;
   let chain: Promise<unknown> = Promise.resolve();
 
@@ -115,11 +117,16 @@ export function connectRemotePane(
     const bytes = new Uint8Array(outbox.length);
     for (let i = 0; i < outbox.length; i++) bytes[i] = outbox.charCodeAt(i) & 0xff;
     outbox = "";
+    const queued = outboxQueued;
+    outboxQueued = [];
     const data = bytesToHex(bytes);
     chain = chain
       .then(() => src.convex.mutation(api.terminalStream.sendPaneInput, { ...args, data }))
       .then((res: any) => {
-        if (!res || res.ok) return;
+        if (!res || res.ok) {
+          for (const cb of queued) cb();
+          return;
+        }
         // Every refusal means the keystroke did NOT land, so each one has to
         // say so — a terminal that silently drops input is worse than one that
         // is plainly disconnected.
@@ -157,9 +164,10 @@ export function connectRemotePane(
   });
 
   return {
-    write: (data) => {
+    write: (data, onQueued) => {
       if (stopped || !data) return;
       outbox += data;
+      if (onQueued) outboxQueued.push(onQueued);
       if (!flushTimer) flushTimer = setTimeout(flush, INPUT_COALESCE_MS);
     },
     setInteractive: (on) => {

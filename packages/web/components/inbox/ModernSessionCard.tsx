@@ -25,8 +25,9 @@ import { IdentityFace, SessionIdentityLine } from "../identity";
 import { WorkspaceTile } from "../identity/WorkspaceTile";
 import { SessionTaskChip } from "../work/SessionTaskChip";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
+import { LinkedPrChips } from "../PrStatusChip";
 import { badgeVariants } from "../ui/badge";
-import { AssignedPingStrip, ForkCorner, SelectTick } from "./SessionCardParts";
+import { AssignedPingStrip, FoldedSubagentsMark, ForkCorner, SelectTick } from "./SessionCardParts";
 import { ModernAuthorChip, ModernBranchChip, ModernCardToolbar, ModernCommentsChip, ModernFactChip, ModernLinkChip, ModernPinGlyph, ModernProjectChip, ModernFlowChip } from "./ModernCardParts";
 import { SessionStatusMark, SessionStatusWord } from "./SessionStatusMark";
 import type { SessionCardViewProps } from "./SessionCardView";
@@ -94,6 +95,9 @@ export function ModernSessionCardView({
   placeDevice,
   thumbSrc,
   ship = null,
+  linkedPrs,
+  hiddenRunningSubagents = 0,
+  foldedSubagentId = null,
   onSelect,
   onDismiss,
   onStash,
@@ -225,6 +229,7 @@ export function ModernSessionCardView({
   } else {
     chips.push(<ModernBranchChip key="branch" session={session} showBranch={chrome.showBranchPill} className="shrink-[100] min-w-[3rem]" />);
   }
+  if (linkedPrs?.length) chips.push(<LinkedPrChips key="prs" prs={linkedPrs} shepherdedId={ship ? null : session.pr_status?.pr_id} max={1} className="shrink-0" />);
   if (session.active_task) {
     chips.push(<SessionTaskChip key="task" task={session.active_task} className={`${chipClass} shrink-[10] min-w-[3rem]`} />);
   } else if (session.active_plan) {
@@ -250,6 +255,7 @@ export function ModernSessionCardView({
   }
   if (author && !nested) chips.push(<ModernAuthorChip key="author" author={author} prefs={chrome.prefs} className="shrink min-w-[2.5rem]" />);
   if (viewers.length > 0) chips.push(<ViewerFaces key="viewers" members={viewers} size={16} max={3} className="shrink-0" />);
+  if (hiddenRunningSubagents > 0) chips.push(<FoldedSubagentsMark key="subagents" count={hiddenRunningSubagents} onOpen={foldedSubagentId && onOpenParent ? () => onOpenParent(foldedSubagentId) : undefined} />);
   chips.push(<ModernCommentsChip key="comments" session={session} viewerId={viewerId} onOpenComments={onOpenComments} />);
 
   const lead = nested ? (

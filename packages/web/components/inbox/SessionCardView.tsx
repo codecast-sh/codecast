@@ -29,7 +29,8 @@ import { sessionIdentity } from "../../lib/sessionIdentity";
 import { RoleFace } from "../org/RoleFace";
 import { AuthErrorBadge } from "../AuthErrorBadge";
 import { BranchCodeLink } from "../repo/RepositoryLinks";
-import { PrStatusChip } from "../PrStatusChip";
+import { LinkedPrChips, PrStatusChip } from "../PrStatusChip";
+import type { LinkedPr } from "../../lib/sessionPullRequests";
 import { SessionShipChip } from "../ship/SessionShipChip";
 import type { SessionCardViewProps } from "./sessionCardTypes";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
@@ -44,11 +45,14 @@ import {
   CardStartupLine,
   CardStatusSignals,
   CommentThreadsChip,
+  FoldedSubagentsMark,
   ForkCorner,
   SessionProjectChip,
   SelectTick,
   UnreadDot,
 } from "./SessionCardParts";
+
+const NO_PRS: readonly LinkedPr[] = [];
 
 // The inbox session card as a pure view: everything it draws arrives as props,
 // and every gesture that reaches past the card leaves through a handler. The
@@ -87,6 +91,9 @@ export function SessionCardView({
   placeDevice,
   thumbSrc,
   ship = null,
+  linkedPrs = NO_PRS,
+  hiddenRunningSubagents = 0,
+  foldedSubagentId = null,
   onSelect,
   onDismiss,
   onStash,
@@ -698,6 +705,7 @@ export function SessionCardView({
             {showBranchPill && <BranchCodeLink session={session} className="max-w-[110px]" detail={false} />}
             <SessionShipChip ship={ship} />
             <PrStatusChip status={session.pr_status} />
+            <LinkedPrChips prs={linkedPrs} shepherdedId={session.pr_status?.pr_id} max={session.pr_status ? 0 : 1} />
             <BrowserPaneOfferGlyph offer={session.browser_pane_offer} />
             {isFork(session) && (
               <span data-simple-hide className="inline-flex items-center gap-0.5 px-1 py-0 rounded text-meta font-medium bg-sol-cyan/10 text-sol-cyan border border-sol-cyan/20" title="Fork">
@@ -725,6 +733,7 @@ export function SessionCardView({
             {/* A running workflow renders as its own ↳ WorkflowBar under the
                 card (same family as schedule/monitor bars) — no chip here. */}
             <CommentThreadsChip session={session} viewerId={viewerId} onOpenComments={onOpenComments} />
+            <FoldedSubagentsMark count={hiddenRunningSubagents} onOpen={foldedSubagentId && onOpenParent ? () => onOpenParent(foldedSubagentId) : undefined} />
             <CardPinMark session={session} onPin={onPin} />
             <CardStatusSignals
               session={session}

@@ -18,7 +18,7 @@ import { hashPath } from "./hash.js";
 import { isManagedExcludedPath, POLICY_EXCLUDED_SESSION } from "./config/managedPolicy.js";
 import { currentTranscriptDeadline } from "./workers/ingestDeadline.js";
 import type { OpenTaskReport, AgentStatus, TriggerFiringSource, TriggerPrecheckResult } from "@codecast/shared/contracts";
-import { argumentValidationProblem } from "@codecast/shared/contracts";
+import { argumentValidationProblem, withoutDeliveryId } from "@codecast/shared/contracts";
 import type { DeliveryEchoLedger } from "./deliveryEchoLedger.js";
 import { MAX_USER_FILE_SIZE, fileBasename, mediaTypeForFile } from "@codecast/shared/files";
 import { filesForWire, type SyncFile } from "./userFiles.js";
@@ -39,7 +39,8 @@ const MAX_TOOL_RESULT_SIZE = 50_000;
 // Max serialized bytes of one addMessages batch (~0.9MB, well under the 5MB
 // that triggered isolate OOM/timeouts in the 2026-05-13 stuck-sync incident).
 const MAX_BATCH_BYTES = 900_000;
-export const MAX_IMAGE_SIZE = 5_000_000;
+import { MAX_IMAGE_SIZE } from "./imageDownscale.js";
+export { MAX_IMAGE_SIZE };
 
 // Markdown image/link whose target is an absolute (or ~/) local path with a
 // raster extension — the "dead screenshot link" shape rescueLocalImageLinks
@@ -1354,7 +1355,7 @@ export class SyncService {
     await this.offloadImages(imageHolder);
     const fileHolder = [{ files: params.files ? params.files.map((file) => ({ ...file })) : undefined }];
     await this.offloadFiles(fileHolder);
-    const redactedContent = truncate(redactSecrets(params.content), MAX_CONTENT_SIZE);
+    const redactedContent = truncate(redactSecrets(params.role === "human" ? withoutDeliveryId(params.content) : params.content), MAX_CONTENT_SIZE);
     const redactedThinking = params.thinking
       ? truncate(redactSecrets(params.thinking), MAX_CONTENT_SIZE)
       : undefined;
@@ -1438,6 +1439,8 @@ export class SyncService {
       model?: string;
     usage?: import("./parser.js").ClaudeUsage;
     apiMessageId?: string;
+    /** The uuid the turn was sent under, when Claude recorded it under its own (parser.ts ParsedMessage.sourceUuid). Read by the ledger stamp; never uploaded. */
+    sourceUuid?: string;
     /** Set by the ledger stamp below; a caller never passes it. */
     deliveryIds?: string[];
     }>;
@@ -1450,6 +1453,7 @@ export class SyncService {
     }
     const echoes = this.deliveryEchoes;
     if (echoes) params = { ...params, messages: echoes.stamp(params.conversationId, params.messages) };
+    params = { ...params, messages: params.messages.map((m) => (m.role === "human" && m.content.includes(' delivery="') ? { ...m, content: withoutDeliveryId(m.content) } : m)) };
     await this.rescueLocalImageLinks(params.messages);
     await this.offloadImages(params.messages);
     await this.offloadFiles(params.messages);

@@ -1,4 +1,5 @@
 import { UNCONFIRMED_DELIVERY_REASON } from "@codecast/shared/contracts";
+import { steeringOwnerFor, suggestFromTeammate } from "./teamSuggestions";
 import { unreachableTerminalOf } from "@codecast/shared/contracts/deliveryHold";
 import { isWorkflowRunLog } from "./lib/runLog";
 import { clientRunAnswerRefusal } from "./lib/commandRuns";
@@ -19,7 +20,7 @@ import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter,
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
 import { insertEnqueuedPendingMessage, releaseQueuedRows, reviveConversationOnDelivery } from "./pendingMessageWrites";
-import { answeredThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isReviveClientId, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage } from "@codecast/shared/contracts";
+import { answeredThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isReviveClientId, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage, sendArrival, sessionMessageIntentOf, trustedAgentStatus, restoreFrameTags, SESSION_MESSAGE_OPEN_TAG, type SendArrival, type SessionMessageIntent } from "@codecast/shared/contracts";
 import { autoRecoveryEnabled, listOnlineDevices } from "./ccAccountsShared";
 import { resolveOwnerDeviceView } from "./lib/ownerDevice";
 import {
@@ -840,21 +841,6 @@ async function wroteTo(ctx: { db: any }, writer: any, recipient: any): Promise<b
   return recent.some((row: any) => String(row.from_conversation_id ?? "") === String(writer._id));
 }
 
-// True if the conversation has at least one managed session that has beaten its heartbeat
-// recently — i.e. a daemon is alive and could deliver right now. Used to give the sender an
-// immediate "looks offline" hint and to decide whether a stuck cross-user send has truly failed.
-export async function conversationHasLiveSession(
-  ctx: { db: any },
-  conversationId: Id<"conversations">,
-  now: number
-): Promise<boolean> {
-  const sessions = await ctx.db
-    .query("managed_sessions")
-    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId))
-    .collect();
-  return sessions.some((s: any) => now - (s.last_heartbeat ?? 0) < HEARTBEAT_ALIVE_MS);
-}
-
 // Send a message from one of the user's sessions to another — your own OR a teammate's. The
 // target must be a session you can already see (own it, or it's shared to a team you're in); the
 // access rule is exactly the feed-visibility rule (checkConversationAccess). The text is injected
@@ -875,17 +861,24 @@ export async function performSessionSend(
   authUserId: Id<"users">,
   // `target`: a session the caller already resolved and checked (a role's
   // standing session behind `cast role wake`); it skips the `to` lookup.
-  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean; queue?: boolean; image_storage_ids?: Id<"_storage">[]; target?: any }
+  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean; queue?: boolean; intent?: SessionMessageIntent; image_storage_ids?: Id<"_storage">[]; target?: any }
 ): Promise<{
-  message_id: Id<"pending_messages">;
+  // null when the send waits as a suggestion for the owner (suggestion_id).
+  message_id: Id<"pending_messages"> | null;
+  suggestion_id?: Id<"guest_suggestions">;
   to_short_id: string;
   from_short_id: string;
   cross_user: boolean;
   target_live: boolean;
+  arrives: SendArrival;
   auto_owned: boolean;
 }> {
   const body = args.body ?? "";
   if (!body.trim()) throw new Error("Message body is empty");
+  // An intent rides the session-message wrapper; a raw or direct send has none.
+  if (args.intent && args.intent !== "request" && (args.raw || args.direct)) {
+    throw new Error("--done and --fyi mark a message from a session; they do not apply to --raw or direct sends");
+  }
 
   // `--raw` exists so a live session can receive `/model opus` as its own
   // user's slash command. A report body sent `--raw` is injected without
@@ -923,6 +916,27 @@ export async function performSessionSend(
 
   const isCrossUser = target.user_id.toString() !== authUserId.toString();
   const senderUser = isCrossUser || args.direct ? await ctx.db.get(authUserId) : null;
+
+  // A person typing into a teammate's session from the dashboard while one of
+  // its owners is in it: the words wait as a suggestion that owner sends,
+  // edits or dismisses (teamSuggestions.ts). Unattended sessions take them
+  // straight in, below.
+  if (args.direct && !args.target && !args.raw && !args.image_storage_ids?.length && senderUser && !senderUser.is_bot) {
+    const steeringOwner = await steeringOwnerFor(ctx, target, authUserId, Date.now());
+    if (steeringOwner) {
+      const suggestionId = await suggestFromTeammate(ctx, target, senderUser, steeringOwner, body, !!args.queue);
+      return {
+        message_id: null,
+        suggestion_id: suggestionId,
+        to_short_id: target.short_id ?? target._id.toString().slice(0, 7),
+        from_short_id: "unknown",
+        cross_user: isCrossUser,
+        target_live: true,
+        arrives: "with_owner" as SendArrival,
+        auto_owned: false,
+      };
+    }
+  }
 
   // A raw send is the text as typed — the rail the web's model/effort picker
   // rides for `/model <alias>` — so it reads to the agent as its own user's
@@ -1015,7 +1029,7 @@ export async function performSessionSend(
       ? body
       : args.direct
       ? (await jointTurnVouched(ctx, target._id, senderName, body) ? body : formatUserMessage(senderName ?? "a teammate", body))
-      : formatSessionMessage(fromShortId, body, { name: fromName }),
+      : formatSessionMessage(fromShortId, body, { name: fromName, intent: args.intent }),
     image_storage_ids: args.image_storage_ids?.length ? args.image_storage_ids : undefined,
     client_id: args.client_id,
     // The failure-feedback channel: the stuck-message cron tells this session when the send sits
@@ -1035,10 +1049,9 @@ export async function performSessionSend(
   // rather than the sender only finding out via the cron's delayed notice. The
   // daemon that owns the session delivers it, and an idle session's own
   // heartbeat goes quiet while that daemon is still online and resumes it.
+  // `arrives` says when it lands; `target_live` stays for CLIs that predate it.
   const now = Date.now();
-  const targetLive =
-    (await conversationHasLiveSession(ctx, target._id, now)) ||
-    (await resolveOwnerDeviceView(ctx, target as any, now)).owner_online;
+  const { arrives, live: targetLive } = await arrivalFor(ctx, target, !!args.queue && !!args.direct, now);
 
   return {
     message_id: messageId,
@@ -1046,6 +1059,7 @@ export async function performSessionSend(
     from_short_id: fromShortId,
     cross_user: isCrossUser,
     target_live: targetLive,
+    arrives,
     auto_owned: autoOwned,
   };
 }
@@ -1111,6 +1125,8 @@ export const sendSessionMessage = mutation({
     // A person's "Queue for later": held for the end of the agent's turn in
     // the session's shared queue (enqueuePendingMessage.queue). Direct sends only.
     queue: v.optional(v.boolean()),
+    // What the sender wants back (formatSessionMessage): request is the default.
+    intent: v.optional(v.union(v.literal("request"), v.literal("inform"), v.literal("done"))),
   },
   handler: async (ctx, args) => {
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -1118,6 +1134,67 @@ export const sendSessionMessage = mutation({
       throw new Error("Authentication failed: invalid token or session");
     }
     return await performSessionSend(ctx, authUserId, args);
+  },
+});
+
+// `cast send --status <session>`: this session's recent sends into that one,
+// newest first. Both stamps are the server's: `typed_in_at` when the daemon saw
+// its paste accepted in the composer, `delivered_at` when the row was
+// confirmed delivered (the transcript echo, or the daemon's own delivery ack).
+// The target resolves under the same rule a send does, so a sender that could
+// no longer message it cannot read its delivery state either.
+export const SEND_STATUS_LIMIT = 10;
+export async function sendStatusFor(
+  ctx: { db: any },
+  authUserId: Id<"users">,
+  args: { to: string; from: string },
+): Promise<{ to_short_id: string; sends: Array<{ created_at: number; status: string; typed_in_at?: number; delivered_at?: number; reason?: string; intent: SessionMessageIntent; preview: string }> }> {
+  const sender = await findConversationByAnyRef(ctx, args.from, authUserId);
+  if (!sender) throw new Error(`Sender session "${args.from}" not found; pass --from <your session short id>`);
+  const roleTarget = await standingSessionForHandle(ctx, authUserId, args.to);
+  const target = roleTarget
+    ? ((await canSendProductMessage(ctx, authUserId, roleTarget)) ? roleTarget : null)
+    : await findConversationByAnyRefWhere(ctx, args.to, async (conversation) =>
+      await canSendProductMessage(ctx, authUserId, conversation)
+        || (await wroteTo(ctx, conversation, sender) && await standsWithRunner(ctx, authUserId, conversation.user_id)));
+  if (!target) throw new Error(`No session found for "${args.to}" that you can message`);
+  const rows = await ctx.db
+    .query("pending_messages")
+    .withIndex("by_from_conversation", (q: any) => q.eq("from_conversation_id", sender._id).eq("conversation_id", target._id))
+    .order("desc")
+    .take(SEND_STATUS_LIMIT);
+  return {
+    to_short_id: target.short_id ?? String(target._id).slice(0, 7),
+    sends: rows.map((row: any) => ({
+      created_at: row.created_at,
+      status: sendStatusOf(row),
+      typed_in_at: row.paste_verified_at,
+      reason: row.status === "delivered" || isUnconfirmedRow(row) ? undefined : row.delivery_disposition_reason,
+      delivered_at: row.status === "delivered" ? row.delivered_at : undefined,
+      intent: sessionMessageIntentOf(row.content),
+      preview: restoreFrameTags(String(row.content ?? "").replace(SESSION_MESSAGE_OPEN_TAG, "").replace(/\n?<\/session-message>\s*$/, ""))
+        .replace(/\s+/g, " ").trim().slice(0, 80),
+    })),
+  };
+}
+
+// A send that may have landed reads "unconfirmed", never "failed" or
+// "cancelled": its paste was accepted but no echo confirmed it (failed as
+// unconfirmed, then cancelled by the 24h expiry), or a fenced delivery was
+// abandoned as ambiguous. A sender told "failed" resends, and the recipient
+// reads it twice.
+function sendStatusOf(row: any): string {
+  if (isUnconfirmedRow(row)) return "unconfirmed";
+  if (row.status === "cancelled" && !row.merged_into && (row.paste_verified_at || /ambiguous/.test(row.delivery_status ?? ""))) return "unconfirmed";
+  return row.status;
+}
+
+export const sendStatus = query({
+  args: { to: v.string(), from: v.string(), api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) throw new Error("Authentication failed: invalid token or session");
+    return await sendStatusFor(ctx, authUserId, args);
   },
 });
 
@@ -2022,14 +2099,48 @@ async function liveAndReadyConversationIds(
   for (const s of sessions) {
     if (!s.conversation_id) continue;
     live.add(s.conversation_id.toString());
-    const transitionAt = s.agent_status_updated_at ?? s.agent_started_at ?? s._creationTime;
-    const stalledTransition = ["starting", "resuming", "connected"].includes(s.agent_status)
-      && typeof transitionAt === "number" && now - transitionAt >= 5 * 60_000;
-    if (s.agent_status === "idle" || SETTLE_VERDICT_STATUSES.has(s.agent_status) || stalledTransition) {
-      ready.add(s.conversation_id.toString());
-    }
+    if (managedSessionReady(s, now)) ready.add(s.conversation_id.toString());
   }
   return { ready, live };
+}
+
+// A live managed session that would take a message now: settled, or stuck in
+// a start-up state long enough that waiting on it is pointless.
+function managedSessionReady(s: any, now: number): boolean {
+  const transitionAt = s.agent_status_updated_at ?? s.agent_started_at ?? s._creationTime;
+  const stalledTransition = ["starting", "resuming", "connected"].includes(s.agent_status)
+    && typeof transitionAt === "number" && now - transitionAt >= 5 * 60_000;
+  return s.agent_status === "idle" || SETTLE_VERDICT_STATUSES.has(s.agent_status) || stalledTransition;
+}
+
+// Claude Code takes a message mid-turn with its next tool result, both typed
+// into its pane and queued into an SDK host (seen on 2.1.322-323 as a
+// queued_command attachment). A Claude process with neither has no way in.
+function readsTypeAhead(target: any, s: any): boolean {
+  return target.agent_type === "claude_code" && (!!s.tmux_session || s.backend === "sdk");
+}
+
+// When a send to `target` will arrive, from its live managed sessions (status
+// after the same trust decay the inbox applies, so a stale "working" left by a
+// lost hook reads as settled) and its owner's daemon (sendArrival).
+async function arrivalFor(ctx: { db: any }, target: any, queued: boolean, now: number): Promise<{ arrives: SendArrival; live: boolean }> {
+  const live = (await ctx.db
+    .query("managed_sessions")
+    .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", target._id))
+    .collect()).filter((s: any) => now - (s.last_heartbeat ?? 0) < HEARTBEAT_ALIVE_MS);
+  const ownerOnline = live.length > 0 || (await resolveOwnerDeviceView(ctx, target, now)).owner_online;
+  const arrives = sendArrival({
+    safetyBlocked: isConversationSafetyBlocked(target),
+    runLog: isWorkflowRunLog(target),
+    hosted: isHostedAgentType(target.agent_type),
+    sessions: live.map((s: any) => {
+      const status = trustedAgentStatus(s.agent_status, s.agent_status_updated_at, now);
+      return { status, ready: managedSessionReady({ ...s, agent_status: status }, now), typeAhead: readsTypeAhead(target, s) };
+    }),
+    queued,
+    ownerOnline,
+  });
+  return { arrives, live: ownerOnline };
 }
 
 // How long a session's message may sit undelivered before we tell the sending session.
@@ -2112,7 +2223,7 @@ export async function notifyStuckSend(
   const targetLabel = targetConv?.short_id ?? msg.conversation_id.toString().slice(0, 7);
   // One line: a quote ends at its first newline, so a multi-line preview spilled its later
   // lines out of the quote as loose text.
-  const flat = (msg.content ?? "").replace(/<\/?session-message[^>]*>/g, "").replace(/\s+/g, " ").trim();
+  const flat = (msg.content ?? "").replace(SESSION_MESSAGE_OPEN_TAG, "").replace(/<\/session-message>\s*$/, "").replace(/\s+/g, " ").trim();
   const preview = flat.length > 140 ? `${flat.slice(0, 139).trimEnd()}…` : flat;
   const body = reach === "gone"
     ? `Your message to session ${targetLabel} could not be delivered — that session no longer exists, so the message was dropped.\n\n> ${preview}`
