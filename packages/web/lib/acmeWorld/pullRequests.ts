@@ -277,6 +277,23 @@ export const PR_COMMENTS = (now: number) => [
     author_avatar_url: PEOPLE.maya.image,
     github_review_id: 77_002,
   },
+  // The viewer's review in progress: two notes held, not sent yet.
+  ...[
+    { id: "ccheld1", line: 8, content: "Cap the jitter at 20% of the delay so the fifth attempt stays under a minute." },
+    { id: "ccheld2", line: 21, content: "A 410 Gone should return here too: the endpoint is gone and a retry can never land." },
+  ].map((n, i) => ({
+    _id: cid(n.id),
+    pull_request_id: PR_RETRY._id,
+    repository: REPO,
+    ...anchor("src/billing/retry.ts", n.line),
+    content: n.content,
+    created_at: now - (4 - i) * MIN,
+    author_kind: "user" as const,
+    author_github_username: "alexrivera",
+    author_user_id: PEOPLE.me._id,
+    author_avatar_url: PEOPLE.me.image,
+    pending_review: true,
+  })),
 ];
 
 const forPr = <T extends { pull_request_id?: string; pr_id?: string }>(rows: T[], id: unknown) =>

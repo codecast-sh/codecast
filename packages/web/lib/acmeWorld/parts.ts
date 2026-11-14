@@ -24,6 +24,7 @@ import { PLAN_ANSWERS } from "./plans";
 import { PULL_REQUESTS_PART } from "./pullRequests";
 import { TRIGGERS_PART } from "./triggers";
 import { RETRIES_PLAN_PART } from "./retriesPlan";
+import { WORKFLOWS_PART } from "./workflows";
 import { SHARING_ANSWERS } from "./sharing";
 import { TEAM_ACTIVITY_PART } from "./teamActivity";
 import { CONVERSATIONS_PART } from "./conversations";
@@ -53,6 +54,7 @@ export const ACME_PARTS: AcmePart[] = [
   PULL_REQUESTS_PART,
   TRIGGERS_PART,
   RETRIES_PLAN_PART,
+  WORKFLOWS_PART,
   { name: "sharing", answers: SHARING_ANSWERS },
   TEAM_ACTIVITY_PART,
   CONVERSATIONS_PART,

@@ -17,7 +17,7 @@ export const MAC_ID = "acme-mac";
 
 /** The features switched on on Alex's laptop: the hands-on-the-machine set and the everyday ones. */
 const LAPTOP_SNIPPETS = Object.fromEntries(
-  ["browser", "computer", "check", "vault", "limits", "skills", "memory", "messaging", "tasks", "state", "pr", "decide", "publish", "visual"].map((s) => [s, true]),
+  ["browser", "computer", "check", "vault", "limits", "skills", "memory", "messaging", "tasks", "state", "pr", "decide", "publish", "visual", "triggers", "workflows", "orchestration"].map((s) => [s, true]),
 );
 
 export const MACHINE_ROSTER = (now: number) => {
