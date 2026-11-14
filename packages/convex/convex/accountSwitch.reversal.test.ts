@@ -83,7 +83,8 @@ describe("account recovery keeps limit evidence separate from activity", () => {
     await (requestAccountSwitch as any)._handler({ ...f.ctx, auth }, {
       profile: "claude2", device_id: "mac", continue_blocked: false,
     });
-    expect(await f.run()).toMatchObject({ acted: "cooldown" });
+    // The fleet has not moved to claude2 yet (awaitsManualTarget): recovery stays put.
+    expect(await f.run()).toMatchObject({ acted: "stay" });
     expect(f.tables.daemon_commands).toHaveLength(1);
     expect(f.tables.pending_messages).toHaveLength(0);
     expect(f.device.cc_auto_switch_state.attempts).toEqual([]);

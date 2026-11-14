@@ -352,6 +352,11 @@ function createCliCtx(opts: {
             },
           };
         }
+        // get reports the collab revision (docLiveState); these docs have no editor history.
+        if (table === "doc_deltas" || table === "doc_snapshots") {
+          const empty: any = { withIndex: () => empty, order: () => empty, async first() { return null; } };
+          return empty;
+        }
         throw new Error(`unexpected query on ${table}`);
       },
     },

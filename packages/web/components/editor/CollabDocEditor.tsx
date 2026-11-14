@@ -321,18 +321,29 @@ function EditorInner({
 
   useMountEffect(() => {
     if (!editor) return;
-    const sendPresence = () => {
+    // `edited`: a change to the text, sent even when the cursor stayed put
+    // (forward delete, formatting), because the server reads a fresh presence
+    // as typing whose steps may still be on their way (convex lib/docBody.ts).
+    let sentAt = 0;
+    const sendPresence = (edited = false) => {
       if (!editor || editor.isDestroyed) return;
       const { from, to } = editor.state.selection;
-      if (from === lastPosRef.current.cursor && to === lastPosRef.current.anchor) return;
+      if (!edited && from === lastPosRef.current.cursor && to === lastPosRef.current.anchor) return;
+      sentAt = performance.now();
       lastPosRef.current = { cursor: from, anchor: to };
       updatePresence({ doc_id: docId, cursor_pos: from, anchor_pos: to });
     };
-    presenceTimerRef.current = setInterval(sendPresence, 2000);
-    editor.on("selectionUpdate", sendPresence);
+    const onSelection = () => sendPresence();
+    // One send per keystroke, whichever of the two events a transaction
+    // fires first: the other sees the send and stays quiet.
+    const onEdit = () => { if (performance.now() - sentAt > 50) sendPresence(true); };
+    presenceTimerRef.current = setInterval(onSelection, 2000);
+    editor.on("selectionUpdate", onSelection);
+    editor.on("update", onEdit);
     return () => {
       if (presenceTimerRef.current) clearInterval(presenceTimerRef.current);
-      editor.off("selectionUpdate", sendPresence);
+      editor.off("selectionUpdate", onSelection);
+      editor.off("update", onEdit);
       removePresence({ doc_id: docId });
     };
   });

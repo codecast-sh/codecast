@@ -57,10 +57,11 @@ const MEMBER = "u_member" as Id<"users">;
 const STRANGER = "u_stranger" as Id<"users">;
 const TEAM = "t_team" as Id<"teams">;
 
-// Owner is a member of the team with a shareable visibility (so team-visible
-// conversations actually surface to teammates). MEMBER is also on the team.
+// Owner shares full content with the team (canAccessConversation is the
+// content gate, so a summary share would not open a session). MEMBER is also
+// on the team.
 const memberships: Membership[] = [
-  { user_id: OWNER, team_id: TEAM, visibility: "summary" },
+  { user_id: OWNER, team_id: TEAM, visibility: "full" },
   { user_id: MEMBER, team_id: TEAM, visibility: "summary" },
 ];
 
@@ -160,8 +161,14 @@ describe("canAccessConversation", () => {
     expect(await canAccessConversation(mockCtx(memberships), STRANGER, sharedConv)).toBe(false);
   });
   test("a team_visibility override reveals an otherwise-private conversation to a member", async () => {
-    const overridden = { ...privateConv, team_visibility: "team" };
+    const overridden = { ...privateConv, team_visibility: "full" };
     expect(await canAccessConversation(mockCtx(memberships), MEMBER, overridden)).toBe(true);
+  });
+  test("a session shared only as a summary is not readable by a member", async () => {
+    const summaryOwner = memberships.map((m) => (m.user_id === OWNER ? { ...m, visibility: "summary" } : m));
+    expect(await canAccessConversation(mockCtx(summaryOwner), MEMBER, sharedConv)).toBe(false);
+    const summaryOverride = { ...privateConv, team_visibility: "summary" };
+    expect(await canAccessConversation(mockCtx(memberships), MEMBER, summaryOverride)).toBe(false);
   });
 });
 

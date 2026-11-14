@@ -1,4 +1,4 @@
-// A CLI/API edit (docs.resetSync) rewrites a doc's collab history: it deletes
+// A CLI/API edit (lib/docBody.ts writeDocBody) rewrites a doc's collab history: it deletes
 // every delta and stores the new content as a snapshot. A tab that opened the
 // doc before the rewrite still holds the old content. Its steps used to be
 // accepted as if they followed the rewrite, and every other editor then
@@ -8,7 +8,7 @@ import { describe, expect, test } from "bun:test";
 import schema from "./schema";
 import { makeFakeDb, schemaIndexes } from "./testDb";
 import { getSteps, latestVersion, submitSteps } from "./docSync";
-import { resetSync } from "./docs";
+import { writeDocBody } from "./lib/docBody";
 import { DOC_REWRITTEN_ERROR } from "@codecast/shared/docs";
 
 const OWNER = "u_owner";
@@ -40,21 +40,24 @@ function world() {
     scheduler: { runAfter: async () => null },
   } as any;
   const run = (fn: any, args: any) => fn._handler(ctx, args);
-  return { t, run };
+  // A CLI or API write over the open editors' history: the steps it discards
+  // are the point here, so it is forced past the unsaved-steps refusal.
+  const rewrite = async () => writeDocBody(ctx, await db.get(DOC as any), { content: "new body", title: "Doc" }, { writer: { name: "Agent" }, force: true });
+  return { t, run, rewrite };
 }
 
 describe("collab history across a CLI rewrite", () => {
   test("the rewrite lands past every version an open editor holds", async () => {
-    const { t, run } = world();
-    await run(resetSync, { api_token: "tok", id: DOC, content: "new body" });
+    const { t, run, rewrite } = world();
+    await rewrite();
     expect(t.doc_deltas).toEqual([]);
     expect(t.doc_snapshots.map((s) => s.version)).toEqual([4]);
     expect(await run(latestVersion, { id: DOC })).toBe(4);
   });
 
   test("a tab from before the rewrite cannot submit steps", async () => {
-    const { t, run } = world();
-    await run(resetSync, { api_token: "tok", id: DOC, content: "new body" });
+    const { t, run, rewrite } = world();
+    await rewrite();
     await expect(
       run(submitSteps, { id: DOC, version: 3, clientId: "a", steps: ["stale"] }),
     ).rejects.toThrow(DOC_REWRITTEN_ERROR);
@@ -62,8 +65,8 @@ describe("collab history across a CLI rewrite", () => {
   });
 
   test("a stale tab is refused even after fresh editors have written", async () => {
-    const { run } = world();
-    await run(resetSync, { api_token: "tok", id: DOC, content: "new body" });
+    const { run, rewrite } = world();
+    await rewrite();
     expect(await run(submitSteps, { id: DOC, version: 4, clientId: "b", steps: ["new-1"] })).toEqual({
       status: "synced",
     });
@@ -77,7 +80,7 @@ describe("collab history across a CLI rewrite", () => {
   });
 
   test("an unbroken history still rebases and replays as before", async () => {
-    const { run } = world();
+    const { run, rewrite } = world();
     expect(await run(submitSteps, { id: DOC, version: 2, clientId: "b", steps: ["x"] })).toEqual({
       status: "needs-rebase",
       steps: ["old-2"],

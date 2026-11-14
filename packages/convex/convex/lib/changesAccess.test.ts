@@ -48,14 +48,15 @@ describe("teamVisibleInputs: conversation visibility", () => {
     expect(out.size).toBe(0);
   });
 
-  test("an auto-shared session passes at the member's default summary level", async () => {
+  test("an auto-shared session passes at the member's default full level", async () => {
     const out = await gate({ conversations: [conv("c1", { auto_shared: true })], members: [{ user_id: "u1" }] });
     const input = out.get("c1")!;
-    expect(input.mode).toBe("summary");
-    expect(input.membership_level).toBe("summary");
+    expect(input.mode).toBe("full");
+    expect(input.membership_level).toBe("full");
     expect(input.owner_id as any).toBe("u1");
     expect(input.insight).toEqual({
       _id: "i_c1" as any, generated_at: 5, headline: "headline c1", summary: "summary c1", outcome_type: "progress",
+      turns: [{ ask: "ask", did: ["did"] }],
     });
   });
 
