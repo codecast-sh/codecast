@@ -17,8 +17,8 @@ import { COMMAND_GROUPS, groupForToken, type CommandGroup, type GroupDeps } from
  * names the bug. Registered where the real registrations used to sit, so the
  * root help keeps its order.
  */
-export function registerGroupStubs(program: Command): void {
-  for (const group of COMMAND_GROUPS) {
+export function registerGroupStubs(program: Command, groups: readonly CommandGroup[] = COMMAND_GROUPS): void {
+  for (const group of groups) {
     const cmd = program.command(group.token, { hidden: group.hidden === true }).description(group.description);
     for (const alias of group.aliases ?? []) cmd.alias(alias);
     for (const arg of group.args ?? []) cmd.argument(arg);
