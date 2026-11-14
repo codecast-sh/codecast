@@ -419,7 +419,7 @@ export default function DocsPage() {
           </P>
           <Screenshot
             src="/docs/app/inbox-cards.webp"
-            alt="The inbox column: session cards under Needs you, Working and Dormant, each with a title, a status line and the project"
+            alt="The inbox column: session cards under Decisions, Pinned, Done and Working, each with a title, a status line and the project"
             caption="Session cards, grouped by what each one needs from you."
           />
 
